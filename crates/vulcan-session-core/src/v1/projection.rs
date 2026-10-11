@@ -27,6 +27,36 @@ use crate::v1::errors::DomainError;
 use crate::v1::event::*;
 use crate::v1::ids::{ApiCallId, ResourceId, Seq, ToolCallId, TurnId};
 
+/// Provider-visible text of a user input that carries resources but no prompt text.
+/// 只携带资源、没有提示词文字的用户输入在 Provider 侧可见的文字。
+///
+/// The durable event keeps its empty text; only the projection substitutes this note, so the model
+/// learns that nothing was typed and no consumer ever receives a blank resource-bearing prompt.
+/// 可靠事件保持空文字；只有投影替换为此说明，使模型知道用户未输入文字，且任何消费者都不会收到
+/// 带资源的空白提示词。
+pub const RESOURCE_ONLY_INPUT_TEXT: &str =
+    "[No prompt text was entered; the user sent only the attached resources.]";
+
+/// Returns the Provider-visible text of one user input.
+/// 返回一条用户输入在 Provider 侧可见的文字。
+///
+/// # Parameters
+/// 参数
+/// `text` is the durable input text and `resource_ids` its attached resources.
+/// `text` 是可靠输入文字，`resource_ids` 是其附带资源。
+///
+/// # Returns
+/// 返回值
+/// `RESOURCE_ONLY_INPUT_TEXT` for a blank input with resources; otherwise `text` unchanged.
+/// 空白且带资源时返回 `RESOURCE_ONLY_INPUT_TEXT`；否则原样返回 `text`。
+pub fn provider_visible_user_input_text(text: &str, resource_ids: &[ResourceId]) -> String {
+    if text.trim().is_empty() && !resource_ids.is_empty() {
+        String::from(RESOURCE_ONLY_INPUT_TEXT)
+    } else {
+        text.to_string()
+    }
+}
+
 /// System-layer role hint used by the projection.
 /// 投影使用的系统层角色提示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -701,7 +731,7 @@ fn project_items_with_policy(
                     source_from_seq: event.seq,
                     source_to_seq: event.seq,
                     item: ProjectedItem::UserInput {
-                        text: input.text.clone(),
+                        text: provider_visible_user_input_text(&input.text, &input.resource_ids),
                         resource_ids: input.resource_ids.clone(),
                     },
                 };
@@ -1059,6 +1089,19 @@ mod tests_projection {
     use super::*;
     use crate::v1::document::{SessionDocument, ToolCompletion};
     use crate::v1::stats::UsageSnapshot;
+
+    /// Only a blank input with resources receives the resource-only note.
+    /// 只有带资源的空白输入才会得到仅资源说明。
+    #[test]
+    fn resource_only_input_projects_the_fixed_note() {
+        let resources = [ResourceId::try_new(3).unwrap()];
+        assert_eq!(
+            provider_visible_user_input_text(" \n", &resources),
+            RESOURCE_ONLY_INPUT_TEXT
+        );
+        assert_eq!(provider_visible_user_input_text("look", &resources), "look");
+        assert_eq!(provider_visible_user_input_text("", &[]), "");
+    }
 
     fn build_document() -> SessionDocument {
         let mut document = SessionDocument::new("sess", "project", "title", 1_700_000_000_000);
@@ -1566,7 +1609,7 @@ mod tests_projection {
         assert!(matches!(
             &items[0],
             ProjectedItem::UserInput { text, resource_ids }
-                if text.is_empty() && resource_ids == &vec![first_resource, second_resource]
+                if text == RESOURCE_ONLY_INPUT_TEXT && resource_ids == &vec![first_resource, second_resource]
         ));
         let coverage = document.events().last().unwrap().seq();
         let original = provider_visible_fingerprint(document.events(), coverage).unwrap();
@@ -1615,7 +1658,7 @@ mod tests_projection {
         assert!(matches!(
             &supplementary_items[1],
             ProjectedItem::UserInput { text, resource_ids }
-                if text.is_empty() && resource_ids == &vec![supplementary_resource]
+                if text == RESOURCE_ONLY_INPUT_TEXT && resource_ids == &vec![supplementary_resource]
         ));
         let retained_items = project_document(&in_turn, Some(promoted), &[]).unwrap();
         assert_eq!(retained_items.len(), 1);
@@ -1645,7 +1688,7 @@ mod tests_projection {
         assert!(matches!(
             queued_items.last().unwrap(),
             ProjectedItem::UserInput { text, resource_ids }
-                if text.is_empty() && resource_ids == &vec![queued_resource]
+                if text == RESOURCE_ONLY_INPUT_TEXT && resource_ids == &vec![queued_resource]
         ));
     }
 

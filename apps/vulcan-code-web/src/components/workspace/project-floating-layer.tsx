@@ -71,6 +71,20 @@ export interface ProjectFloatingLayerProps {
   // Floating surface body.
   // 浮动表面主体。
   children: React.ReactNode;
+  // Preferred first-open size; omitted surfaces use the desktop terminal default.
+  // 首次打开的期望尺寸；省略时使用桌面终端默认尺寸。
+  defaultSize?: FloatingLayerPreferredSize;
+}
+
+// FloatingLayerPreferredSize caps the first-open surface size in CSS pixels.
+// FloatingLayerPreferredSize 以 CSS 像素限定首次打开的表面尺寸。
+export interface FloatingLayerPreferredSize {
+  // Maximum first-open width.
+  // 首次打开的最大宽度。
+  width: number;
+  // Maximum first-open height.
+  // 首次打开的最大高度。
+  height: number;
 }
 
 // FloatingLayerGenieDirection identifies whether the surface is entering or leaving the top-bar anchor.
@@ -380,6 +394,7 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
       const initialLayout = createDefaultProjectFloatingLayout(
         measuredBoundary.width,
         measuredBoundary.height,
+        props.defaultSize,
       );
       // initializedState uses the same normal rectangle for current and maximize restoration geometry.
       // initializedState 为当前几何与最大化还原几何使用同一个普通矩形。
@@ -391,7 +406,7 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
       saveProjectFloatingWindowState(props.projectId, initializedState);
       return initializedState;
     });
-  }, [props.projectId, surfaceMounted]);
+  }, [props.defaultSize, props.projectId, surfaceMounted]);
   React.useEffect(() => () => {
     dragCleanupRef.current?.();
     // activeAnimation is detached from callbacks before cancellation so unmount never schedules state updates.
@@ -899,14 +914,15 @@ function measuredFloatingLayout(surface: HTMLDivElement): FloatingLayerLayout {
 export function createDefaultProjectFloatingLayout(
   boundaryWidth: number,
   boundaryHeight: number,
+  preferredSize: FloatingLayerPreferredSize = { width: 760, height: 620 },
 ): FloatingLayerLayout {
-  // preferredWidth matches the desktop default while leaving a compact outer margin when space permits.
-  // preferredWidth 匹配桌面默认宽度，并在空间允许时保留紧凑外边距。
-  const preferredWidth = Math.min(760, Math.max(0, boundaryWidth - 40));
+  // preferredWidth matches the requested default while leaving a compact outer margin when space permits.
+  // preferredWidth 匹配请求的默认宽度，并在空间允许时保留紧凑外边距。
+  const preferredWidth = Math.min(preferredSize.width, Math.max(0, boundaryWidth - 40));
   // preferredHeight scales with the safe workspace and retains the existing 340px normal desktop minimum.
   // preferredHeight 随安全工作区缩放，并保留现有的 340px 普通桌面最小高度。
   const preferredHeight = Math.min(
-    620,
+    preferredSize.height,
     Math.max(Math.min(340, boundaryHeight), Math.round(boundaryHeight * 0.58)),
   );
   return clampFloatingLayout({

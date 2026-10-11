@@ -136,10 +136,16 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
   const projectsById = React.useMemo(() => {
     return new Map(props.projects.map((project) => [project.id, project]));
   }, [props.projects]);
+  // listedConversations excludes sessions floating as assistants; they live in the top-bar assistant dock.
+  // listedConversations 排除作为助手浮动的会话；它们位于顶部助手停靠中。
+  const listedConversations = React.useMemo(
+    () => props.conversations.filter((conversation) => !conversation.assistantName),
+    [props.conversations],
+  );
   // conversationsByProject groups conversations beneath their owning project folder.
   // conversationsByProject 将会话归组到所属项目文件夹下。
   const conversationsByProject = React.useMemo(() => {
-    return props.conversations.reduce<Record<string, ConversationSummary[]>>((groups, conversation) => {
+    return listedConversations.reduce<Record<string, ConversationSummary[]>>((groups, conversation) => {
       const projectId = conversation.projectId;
       if (!projectId || !projectIds.has(projectId)) {
         return groups;
@@ -148,17 +154,17 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
       groups[projectId].push(conversation);
       return groups;
     }, {});
-  }, [projectIds, props.conversations]);
+  }, [projectIds, listedConversations]);
   // unlinkedConversations keeps conversations without a valid project owner in a diagnostic group.
   // unlinkedConversations 将没有有效项目归属的会话保留在诊断分组中。
   const unlinkedConversations = React.useMemo(() => {
-    return props.conversations.filter((conversation) => {
+    return listedConversations.filter((conversation) => {
       if (props.pinnedConversationIds.has(conversation.id)) {
         return false;
       }
       return !conversation.projectId || !projectIds.has(conversation.projectId);
     });
-  }, [projectIds, props.conversations, props.pinnedConversationIds]);
+  }, [projectIds, listedConversations, props.pinnedConversationIds]);
   // sortedConversationsByProject keeps the service-provided recency order for each project.
   // sortedConversationsByProject 保留服务端提供的项目内最近活动顺序。
   const sortedConversationsByProject = React.useMemo(() => {
@@ -167,8 +173,8 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
   // pinnedConversations renders conversation pins in an independent section above pinned projects.
   // pinnedConversations 将置顶会话渲染到置顶项目上方的独立分区。
   const pinnedConversations = React.useMemo(() => {
-    return props.conversations.filter((conversation) => props.pinnedConversationIds.has(conversation.id));
-  }, [props.conversations, props.pinnedConversationIds]);
+    return listedConversations.filter((conversation) => props.pinnedConversationIds.has(conversation.id));
+  }, [listedConversations, props.pinnedConversationIds]);
   // nowMs refreshes relative time labels without touching hover or confirmation state.
   // nowMs 刷新相对时间标签且不触碰悬停或确认状态。
   const [nowMs, setNowMs] = React.useState(() => Date.now());

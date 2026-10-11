@@ -1,8 +1,8 @@
 import type { AnswerMode } from "@/service/answer-mode";
 import type { PermissionMode } from "@/service/permission-mode";
 import type { DedicatedToolAccess } from "@/service/conversation-event-window-client";
-import type { LocaleCode } from "@/i18n";
-import { pickBilingualText } from "@/i18n-locales";
+import type { TranslationKey } from "@/i18n";
+import type { ComposerSettingsSection } from "@/components/composer/composer-settings-request";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
@@ -156,7 +156,7 @@ export interface ComposerSubmission {
 
 // ComposerSlashCommandOpenTarget names existing composer popups opened by slash commands.
 // ComposerSlashCommandOpenTarget 命名 slash 指令可打开的现有输入区弹窗。
-export type ComposerSlashCommandOpenTarget = "model" | "reasoning";
+export type ComposerSlashCommandOpenTarget = "model" | "reasoning" | "goal" | "settings";
 
 // ComposerSlashCommandResult describes the routed effect of one slash command activation.
 // ComposerSlashCommandResult 描述单个 slash 指令激活后的路由效果。
@@ -170,6 +170,65 @@ export interface ComposerSlashCommandResult {
   // Optional existing popup opened by command activation.
   // 指令激活后打开的可选现有弹窗。
   openTarget?: ComposerSlashCommandOpenTarget;
+  // Settings submenu opened together with the settings menu; null opens only the menu.
+  // 与设置菜单一同打开的子菜单；为 null 时只打开菜单。
+  settingsSection?: ComposerSettingsSection | null;
+}
+
+// ComposerSlashCommandDedicatedSupport states whether a command applies to dedicated sessions.
+// ComposerSlashCommandDedicatedSupport 说明指令是否适用于专职会话。
+// "never" covers settings frozen at creation or features dedicated sessions do not use;
+// "tools" applies only when the session was created with general tools.
+// "never" 覆盖创建时冻结的设置及专职会话不使用的功能；"tools" 仅适用于以通用工具创建的会话。
+type ComposerSlashCommandDedicatedSupport = "always" | "never" | "tools";
+
+// ComposerSlashCommandDescriptor binds one routable command id to its catalog text and scope.
+// ComposerSlashCommandDescriptor 把一个可路由指令标识绑定到目录文案与适用范围。
+interface ComposerSlashCommandDescriptor {
+  descriptionKey: TranslationKey;
+  dedicated: ComposerSlashCommandDedicatedSupport;
+}
+
+// COMPOSER_SLASH_COMMAND_DESCRIPTORS lists every command id this client can route.
+// COMPOSER_SLASH_COMMAND_DESCRIPTORS 列出本客户端可路由的全部指令标识。
+const COMPOSER_SLASH_COMMAND_DESCRIPTORS: Readonly<Record<string, ComposerSlashCommandDescriptor>> = {
+  model: { descriptionKey: "composer.slash.model", dedicated: "always" },
+  reasoning: { descriptionKey: "composer.slash.reasoning", dedicated: "always" },
+  compact: { descriptionKey: "composer.slash.compact", dedicated: "never" },
+  plan: { descriptionKey: "composer.slash.plan", dedicated: "never" },
+  goal: { descriptionKey: "composer.slash.goal", dedicated: "never" },
+  settings: { descriptionKey: "composer.slash.settings", dedicated: "always" },
+  style: { descriptionKey: "composer.slash.style", dedicated: "never" },
+  answer: { descriptionKey: "composer.slash.answer", dedicated: "never" },
+  knowledge: { descriptionKey: "composer.slash.knowledge", dedicated: "never" },
+  semantic: { descriptionKey: "composer.slash.semantic", dedicated: "never" },
+  collapse: { descriptionKey: "composer.slash.collapse", dedicated: "always" },
+  thinking: { descriptionKey: "composer.slash.thinking", dedicated: "always" },
+  memory: { descriptionKey: "composer.slash.memory", dedicated: "never" },
+  skill: { descriptionKey: "composer.slash.skill", dedicated: "tools" },
+  skills: { descriptionKey: "composer.slash.skills", dedicated: "tools" },
+};
+
+// composerSlashCommandsForSession keeps the routable commands that apply to the current session.
+// composerSlashCommandsForSession 保留适用于当前会话的可路由指令。
+// Parameters: commands is the service catalog; dedicatedToolAccess is null for ordinary sessions and drafts.
+// 参数：commands 是服务目录；普通会话与草稿的 dedicatedToolAccess 为 null。
+// Returns: commands in catalog order, without ids this client cannot route.
+// 返回值：按目录顺序排列的指令，不含本客户端无法路由的标识。
+export function composerSlashCommandsForSession(
+  commands: ComposerSlashCommandSummary[],
+  dedicatedToolAccess: DedicatedToolAccess | null,
+): ComposerSlashCommandSummary[] {
+  return commands.filter((command) => {
+    const descriptor = COMPOSER_SLASH_COMMAND_DESCRIPTORS[normalizedComposerSlashCommandId(command)];
+    if (!descriptor) {
+      return false;
+    }
+    if (dedicatedToolAccess === null || descriptor.dedicated === "always") {
+      return true;
+    }
+    return descriptor.dedicated === "tools" && dedicatedToolAccess === "standard";
+  });
 }
 
 // SLASH_SKILL_PROMPT matches the native workbench prompt inserted by /skill.
@@ -204,10 +263,12 @@ export function normalizedComposerSlashCommandId(command: ComposerSlashCommandSu
   return command.command.replace(/^\/+/, "").trim().toLowerCase();
 }
 
-// composerSlashCommandDescription returns the locale-specific description for one command row.
-// composerSlashCommandDescription 返回单个指令行的当前语言说明。
-export function composerSlashCommandDescription(command: ComposerSlashCommandSummary, locale: LocaleCode): string {
-  return pickBilingualText(locale, command.descriptionZh, command.descriptionEn);
+// composerSlashCommandDescriptionKey returns the catalog key describing one routable command.
+// composerSlashCommandDescriptionKey 返回描述单个可路由指令的目录键。
+// Returns null for ids this client cannot route; such commands are never listed.
+// 对本客户端无法路由的标识返回 null；这类指令不会被列出。
+export function composerSlashCommandDescriptionKey(command: ComposerSlashCommandSummary): TranslationKey | null {
+  return COMPOSER_SLASH_COMMAND_DESCRIPTORS[normalizedComposerSlashCommandId(command)]?.descriptionKey ?? null;
 }
 
 // composerSlashCommandMatchesInput mirrors the native slash-command prefix matching rule.

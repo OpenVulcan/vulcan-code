@@ -312,7 +312,31 @@ CREATE TABLE IF NOT EXISTS session_dedicated_index_v1 (
     session_id TEXT PRIMARY KEY
         REFERENCES session_index_v1(session_id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS session_assistant_index_v1 (
+    session_id TEXT PRIMARY KEY
+        REFERENCES session_dedicated_index_v1(session_id) ON DELETE CASCADE,
+    name TEXT NOT NULL
+);
 "#;
+
+/// Upper bound, in characters, of a trimmed floating-assistant display name.
+/// 去除首尾空白后的浮动助手显示名称上限（字符数）。
+pub const SESSION_ASSISTANT_NAME_MAX_CHARS: usize = 48;
+
+/// SQL that projects the authoritative dedicated kind before an assistant row references it.
+/// 在助手记录引用之前投影权威专职种类的 SQL。
+const ENSURE_SESSION_DEDICATED_INDEX_V1_SQL: &str =
+    "INSERT OR IGNORE INTO session_dedicated_index_v1 (session_id) VALUES (?1);";
+
+/// SQL that converts one dedicated session into a floating assistant or renames it.
+/// 将一个专职会话转换为浮动助手或为其改名的 SQL。
+const UPSERT_SESSION_ASSISTANT_INDEX_V1_SQL: &str = "INSERT INTO session_assistant_index_v1 (session_id, name) VALUES (?1, ?2) ON CONFLICT(session_id) DO UPDATE SET name = excluded.name;";
+
+/// SQL that returns one floating assistant to the ordinary session list.
+/// 将一个浮动助手还原到普通会话列表的 SQL。
+const DELETE_SESSION_ASSISTANT_INDEX_V1_SQL: &str =
+    "DELETE FROM session_assistant_index_v1 WHERE session_id = ?1;";
 
 /// SQL that marks one indexed session as dedicated; the creation-frozen profile is the authority.
 /// 将一条已索引会话标记为专职会话的 SQL；权威来源是创建时冻结的专职配置。
@@ -366,7 +390,9 @@ pub async fn insert_session_index_v1(
     .await;
     match execution {
         Ok(()) => Ok(()),
-        Err(detail) => Err(classify_failed_session_index_v1_insert(host_runtime, row, detail).await),
+        Err(detail) => {
+            Err(classify_failed_session_index_v1_insert(host_runtime, row, detail).await)
+        }
     }
 }
 
@@ -403,6 +429,74 @@ fn insert_session_index_v1_rows(
         )?;
         if marked != 1 {
             return Err(rusqlite::Error::StatementChangedRows(marked));
+        }
+    }
+    transaction.commit()
+}
+
+/// Sets or clears the floating-assistant projection of one dedicated session.
+/// 设置或清除一个专职会话的浮动助手投影。
+///
+/// # Parameters / 参数
+///
+/// - `session_id`: Indexed session the caller already proved dedicated from its metadata.
+///   `session_id`：调用方已依据 metadata 证明为专职会话的已索引会话。
+/// - `name`: Validated display name, or `None` to return the session to the ordinary list.
+///   `name`：已校验的显示名称；为 `None` 时将会话还原到普通列表。
+///
+/// # Returns / 返回值
+///
+/// Success once the marker and assistant row commit together; a missing locator row fails.
+/// 专职标记与助手记录一同提交后返回成功；缺失定位记录时失败。
+pub async fn set_session_index_assistant_v1(
+    host_runtime: &HostRuntimeHandle,
+    session_id: &str,
+    name: Option<&str>,
+) -> Result<(), SessionIndexV1Error> {
+    let owned_session_id = session_id.to_string();
+    let owned_name = name.map(str::to_string);
+    local_sql::with_connection_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        move |connection| {
+            write_session_assistant_v1_rows(connection, &owned_session_id, owned_name.as_deref())
+                .map_err(|error| error.to_string())
+        },
+    )
+    .await
+    .map_err(|detail| SessionIndexV1Error::Write {
+        session_id: session_id.to_string(),
+        detail,
+    })
+}
+
+/// Writes the dedicated marker and the assistant row, or removes the row, in one transaction.
+/// 在同一事务中写入专职标记与助手记录，或移除助手记录。
+pub(super) fn write_session_assistant_v1_rows(
+    connection: &mut rusqlite::Connection,
+    session_id: &str,
+    name: Option<&str>,
+) -> rusqlite::Result<()> {
+    let transaction = connection.transaction()?;
+    match name {
+        Some(name) => {
+            transaction.execute(
+                ENSURE_SESSION_DEDICATED_INDEX_V1_SQL,
+                rusqlite::params![session_id],
+            )?;
+            let written = transaction.execute(
+                UPSERT_SESSION_ASSISTANT_INDEX_V1_SQL,
+                rusqlite::params![session_id, name],
+            )?;
+            if written != 1 {
+                return Err(rusqlite::Error::StatementChangedRows(written));
+            }
+        }
+        None => {
+            transaction.execute(
+                DELETE_SESSION_ASSISTANT_INDEX_V1_SQL,
+                rusqlite::params![session_id],
+            )?;
         }
     }
     transaction.commit()

@@ -61,6 +61,7 @@ import { useWorkbenchRevisionGates, useWorkbenchServiceSync } from "@/components
 import { useProjectTerminalRunningCounts } from "@/components/workspace/workbench-layout/use-project-terminal-running-counts";
 import { useProjectLifecycleConfirmation } from "@/components/workspace/workbench-layout/use-project-lifecycle-confirmation";
 import { useConversationMenuActions } from "@/components/workspace/workbench-layout/use-conversation-menu-actions";
+import { UnsupportedSessionDeleteDialog } from "@/components/project/unsupported-session-delete-dialog";
 import { useConversationSelectionNavigation } from "@/components/workspace/workbench-layout/use-conversation-selection-navigation";
 import { PermissionJudgeEntryContext, type PermissionJudgeEntry } from "@/components/composer/permission-judge-entry-context";
 import { useSetupGuide } from "@/components/features/onboarding/use-setup-guide";
@@ -93,6 +94,7 @@ import { useConversationLiveStreamStore } from "@/state/conversation-live-stream
 import type {
   ComposerSlashCommandSummary,
   FeatureAreaSummary,
+  ConversationSummary,
   MainAreaId,
   ProjectSummary,
   SettingsSubAreaId,
@@ -150,6 +152,12 @@ import {
   workbenchWithSelectedConversationProjection,
 } from "@/state/workbench-state";
 import { toast } from "sonner";
+import { AssistantDockContext } from "@/components/assistant/assistant-dock-context";
+import { useAssistantDockController } from "@/components/assistant/use-assistant-dock-controller";
+
+// AssistantFloatingLayer loads only once at least one session floats as an assistant.
+// AssistantFloatingLayer 仅在至少一个会话作为助手浮动后加载。
+const AssistantFloatingLayer = React.lazy(() => import("@/components/assistant/assistant-floating-layer"));
 
 // WorkbenchDialogs loads project and question dialogs only after one actually opens.
 // WorkbenchDialogs 仅在项目或提问对话框真正打开后加载其界面。
@@ -702,6 +710,20 @@ export function WorkbenchLayout(props: {
     setActiveProjectId(project.id);
     handleCreateConversation(project);
   }, [handleCreateConversation]);
+  // handleLeaveConvertedConversation moves the main view off a session that just became an assistant,
+  // onto a new draft in its project rather than an arbitrary sibling the user did not pick.
+  // handleLeaveConvertedConversation 将主视图从刚转为助手的会话移到其项目的新草稿，而不是用户未选择的任意同级会话。
+  const handleLeaveConvertedConversation = React.useCallback((conversation: ConversationSummary) => {
+    if (selectedConversationIdRef.current !== conversation.id) return;
+    const project = workbenchStateRef.current.projects.find((candidate) => candidate.id === conversation.projectId);
+    if (project) handleCreateConversationForProject(project);
+  }, [handleCreateConversationForProject]);
+  const assistantDock = useAssistantDockController({
+    workbench: workbenchState,
+    applySnapshot: applyProjectActionSnapshot,
+    onLeaveConverted: handleLeaveConvertedConversation,
+    onRestored: handleSelectConversation,
+  });
 
   const {
     handleSaveSessionGoal,
@@ -758,7 +780,7 @@ export function WorkbenchLayout(props: {
 
   // conversationMenu executes conversation-tree context menu commands and keeps the local pin set.
   // conversationMenu 执行会话树右键菜单命令并保存本地置顶集合。
-  const { pinnedConversationIds, handleConversationMenuAction } = useConversationMenuActions({
+  const { pinnedConversationIds, handleConversationMenuAction, unsupportedDelete } = useConversationMenuActions({
     translate: i18n.t,
     workbenchState,
     setRenameTarget,
@@ -1016,6 +1038,24 @@ export function WorkbenchLayout(props: {
       case "compact":
         void handleCompactSelectedConversationContext();
         return { handled: true };
+      case "goal":
+        return { handled: true, openTarget: "goal" };
+      case "settings":
+        return { handled: true, openTarget: "settings", settingsSection: null };
+      case "style":
+        return { handled: true, openTarget: "settings", settingsSection: "style" };
+      case "answer":
+        return { handled: true, openTarget: "settings", settingsSection: "answer" };
+      case "knowledge":
+        return { handled: true, openTarget: "settings", settingsSection: "knowledge" };
+      case "semantic":
+        return { handled: true, openTarget: "settings", settingsSection: "semantic" };
+      case "collapse":
+        return { handled: true, openTarget: "settings", settingsSection: "tools" };
+      case "thinking":
+        return { handled: true, openTarget: "settings", settingsSection: "thinking" };
+      case "memory":
+        return { handled: true, openTarget: "settings", settingsSection: "memory" };
       default:
         return { handled: false };
     }
@@ -1073,6 +1113,7 @@ export function WorkbenchLayout(props: {
         </div>
       ) : null}
       <PermissionJudgeEntryContext.Provider value={permissionJudgeEntry}>
+      <AssistantDockContext.Provider value={assistantDock}>
       <main className="workspace">
         {showConsoleSidebar ? (
           <WorkspaceShell
@@ -1237,8 +1278,13 @@ export function WorkbenchLayout(props: {
           project={activeProject}
           projects={workbenchState.projects}
         />
+        {assistantDock.assistants.length > 0 ? (
+          <React.Suspense fallback={null}><AssistantFloatingLayer /></React.Suspense>
+        ) : null}
+        <UnsupportedSessionDeleteDialog {...unsupportedDelete} />
         {showStartupOverlay ? <StartupOverlay startup={props.startup} /> : null}
       </main>
+      </AssistantDockContext.Provider>
       </PermissionJudgeEntryContext.Provider>
       {setupGuide.open ? <React.Suspense fallback={null}><SetupGuideDialog open onOpenChange={setupGuide.setOpen}
         onOpenProviderSettings={() => {

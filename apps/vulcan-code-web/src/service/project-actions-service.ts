@@ -160,6 +160,21 @@ export async function deleteArchivedConversations(conversationIds: string[]): Pr
   return serviceClient.request<WorkbenchSnapshot>("service_delete_archived_conversations", { conversationIds });
 }
 
+// deleteUnsupportedConversation deletes one active conversation whose stored format this build cannot read.
+// deleteUnsupportedConversation 删除一个存储格式本构建无法读取的活动会话。
+export async function deleteUnsupportedConversation(conversationId: string): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Service runtime is unavailable; the conversation was not deleted.");
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_delete_unsupported_conversation", { conversationId });
+}
+
+// isUnsupportedSessionFormatError recognizes the storage code for a session written by an older development format.
+// isUnsupportedSessionFormatError 识别由旧开发格式写入的会话所对应的存储错误码。
+export function isUnsupportedSessionFormatError(error: unknown): boolean {
+  return (error instanceof Error ? error.message : String(error)).includes("unsupported_development_format");
+}
+
 // markConversationRead asks the desktop shell to persist one conversation as read.
 // markConversationRead 请求桌面壳将单个会话持久化标记为已读。
 export async function markConversationRead(conversationId: string): Promise<WorkbenchSnapshot | null> {

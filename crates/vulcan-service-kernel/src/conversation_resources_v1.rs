@@ -4,14 +4,15 @@
 use vulcan_service_api::{
     ComposerAttachmentSummary, SESSION_RESOURCE_LIST_V1_MAX_ITEMS, ServiceMediaResponse,
     SessionResourceContentV1Request, SessionResourceListV1Request, SessionResourceListV1Response,
-    SessionResourceSummaryV1, build_service_project_resource_response,
+    SessionResourcePathV1Request, SessionResourceSummaryV1,
+    build_service_project_resource_response,
     service_media_error_response,
 };
 use vulcan_session_core::v1::ids::ResourceId;
 use vulcan_workbench_model::SessionId;
 use vulcan_workspace_store::workspace_store::{
     ProjectResourceResolution, SessionV1StorageLocator, load_project_resource_catalog,
-    locate_session_v1_storage, resolve_project_resource,
+    locate_session_v1_storage, resolve_project_resource, resolve_project_resource_source,
 };
 
 use crate::session_runtime_registry_v1::{SessionRuntimeError, SessionRuntimeRegistry};
@@ -56,6 +57,33 @@ pub(crate) async fn service_session_resource_list_v1(
         session_id: locator.session_id().to_string(),
         resources,
     })
+}
+
+/// Resolves the host file path of one V1 project resource for an explicit user copy action.
+/// 为用户的显式复制操作解析一个 V1 项目资源的宿主文件路径。
+///
+/// # Parameters
+/// 参数
+/// `state` owns exact locator authority and `request` names one session and resource.
+/// `state` 拥有精确定位权威，`request` 指定一个会话与资源。
+///
+/// # Returns
+/// 返回值
+/// Returns the canonical entity path, or an error when the resource is missing or redirected.
+/// 返回规范实体路径；资源缺失或被重定向时返回错误。
+pub(crate) async fn service_session_resource_path_v1(
+    state: SharedServiceBridgeState,
+    request: SessionResourcePathV1Request,
+) -> Result<String, String> {
+    let locator = resolve_session_resource_locator(&state, &request.session_id).await?;
+    let project_directory = locator.project_directory();
+    let catalog = load_project_resource_catalog(&project_directory)
+        .map_err(|error| format!("failed to load project resource catalog: {error}"))?;
+    let resource_id = checked_resource_id(request.resource_id)?;
+    let source = resolve_project_resource_source(&project_directory, &catalog, resource_id)
+        .map_err(|error| format!("failed to resolve project resource: {error}"))?
+        .ok_or_else(|| format!("project resource {} is missing", request.resource_id))?;
+    Ok(source.path.display().to_string())
 }
 
 /// Resolves one controlled V1 project-resource content response.

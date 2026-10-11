@@ -63,6 +63,49 @@ pub(crate) fn composer_attachment_capabilities(
         .collect()
 }
 
+/// Returns the attachment gates of one exact model route, independent of the selected session.
+/// 返回一条精确模型路线的附件门控，与当前选中会话无关。
+///
+/// # Parameters
+/// 参数
+/// `provider_id`, `connection_id` and `model_id` name the route a session persisted.
+/// `provider_id`、`connection_id` 与 `model_id` 指定会话持久化的路线。
+///
+/// # Returns
+/// 返回值
+/// Gates whose `native` flag is exact for that route; `bridged` stays false because understanding
+/// tools are a per-session selection.
+/// 其 `native` 对该路线精确的门控；`bridged` 保持 false，因为理解工具属于逐会话选择。
+pub(crate) fn service_model_attachment_capabilities(
+    state: SharedServiceBridgeState,
+    provider_id: String,
+    connection_id: String,
+    model_id: String,
+) -> Result<Vec<ComposerAttachmentCapabilitySummary>, String> {
+    let runtime = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_ref()
+            .ok_or_else(|| String::from("Agent runtime is not ready."))?;
+        std::sync::Arc::clone(&agent_runtime.public_ai_runtime)
+    };
+    let configuration = runtime.configuration_snapshot()?;
+    let selection = runtime.resolve_connection_model_selection(
+        &configuration,
+        &connection_id,
+        &provider_id,
+        &model_id,
+    )?;
+    Ok(composer_attachment_capabilities(
+        Some(selection.route.protocol_route.protocol_profile_id.as_str()),
+        Some(&selection.model.capabilities),
+        &BTreeSet::new(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

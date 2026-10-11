@@ -4,7 +4,12 @@ import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar";
 import { formatWorkbenchTranslation } from "@/components/workspace/workbench-layout/types";
 import type { TranslationKey } from "@/i18n";
-import { archiveConversation, openProjectDirectoryPath } from "@/service/project-actions-service";
+import {
+  archiveConversation,
+  deleteUnsupportedConversation,
+  isUnsupportedSessionFormatError,
+  openProjectDirectoryPath,
+} from "@/service/project-actions-service";
 import { projectForConversation } from "@/state/workbench-selectors";
 import type { ConversationSummary, WorkbenchSnapshot } from "@/types";
 
@@ -37,6 +42,18 @@ export interface ConversationMenuActions {
   // Executes one context-menu command for one conversation.
   // 为单个会话执行一个右键菜单命令。
   handleConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => Promise<void>;
+  // Delete confirmation offered when archiving fails because the session format is no longer supported.
+  // 归档因会话格式不再受支持而失败时提供的删除确认。
+  unsupportedDelete: UnsupportedDeleteRequest;
+}
+
+// UnsupportedDeleteRequest drives the confirmation dialog for one unreadable old-format conversation.
+// UnsupportedDeleteRequest 驱动一个无法读取的旧格式会话的确认弹窗。
+export interface UnsupportedDeleteRequest {
+  conversation: ConversationSummary | null;
+  deleting: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
 }
 
 // useConversationMenuActions owns conversation-tree context-menu commands and their archive request locks.
@@ -59,6 +76,10 @@ export function useConversationMenuActions(options: ConversationMenuActionsOptio
   // conversationArchivePendingIdsRef blocks duplicate archive RPCs until failure or visible lifecycle convergence.
   // conversationArchivePendingIdsRef 在失败或可见生命周期收敛前阻止重复归档 RPC。
   const conversationArchivePendingIdsRef = React.useRef<Set<string>>(new Set());
+  // unsupportedTarget is the old-format conversation awaiting the user's delete decision.
+  // unsupportedTarget 是等待用户决定是否删除的旧格式会话。
+  const [unsupportedTarget, setUnsupportedTarget] = React.useState<ConversationSummary | null>(null);
+  const [deletingUnsupported, setDeletingUnsupported] = React.useState(false);
 
   // handleConversationMenuAction executes conversation-tree context menu commands.
   // handleConversationMenuAction 执行会话树右键菜单命令。
@@ -102,6 +123,11 @@ export function useConversationMenuActions(options: ConversationMenuActionsOptio
           }
           archiveCommitted = true;
           toast.success(formatWorkbenchTranslation(translate, "workbenchConversation.archived", { conversation: conversation.title }));
+        } catch (archiveError) {
+          // An old-format session can be neither opened nor archived; offer to delete it instead.
+          // 旧格式会话既无法打开也无法归档；改为提供删除。
+          if (!isUnsupportedSessionFormatError(archiveError)) throw archiveError;
+          setUnsupportedTarget(conversation);
         } finally {
           if (!archiveCommitted) {
             conversationArchivePendingIdsRef.current.delete(conversation.id);
@@ -157,5 +183,28 @@ export function useConversationMenuActions(options: ConversationMenuActionsOptio
     }
   }, [workbenchState.conversations]);
 
-  return { pinnedConversationIds, handleConversationMenuAction };
+  // confirmUnsupportedDelete removes the old-format conversation the user confirmed.
+  // confirmUnsupportedDelete 删除用户确认的旧格式会话。
+  const confirmUnsupportedDelete = React.useCallback(async () => {
+    if (!unsupportedTarget) return;
+    setDeletingUnsupported(true);
+    try {
+      const snapshot = await deleteUnsupportedConversation(unsupportedTarget.id);
+      if (!applyProjectActionSnapshot(snapshot)) applyLifecycleResponseSnapshot(snapshot, [unsupportedTarget.id]);
+      toast.success(formatWorkbenchTranslation(translate, "workbenchConversation.unsupportedDeleted", { conversation: unsupportedTarget.title }));
+      setUnsupportedTarget(null);
+    } catch (deleteError) {
+      toast.error(deleteError instanceof Error ? deleteError.message : String(deleteError));
+    } finally {
+      setDeletingUnsupported(false);
+    }
+  }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, translate, unsupportedTarget]);
+
+  const unsupportedDelete: UnsupportedDeleteRequest = {
+    conversation: unsupportedTarget,
+    deleting: deletingUnsupported,
+    onConfirm: () => void confirmUnsupportedDelete(),
+    onCancel: () => setUnsupportedTarget(null),
+  };
+  return { pinnedConversationIds, handleConversationMenuAction, unsupportedDelete };
 }

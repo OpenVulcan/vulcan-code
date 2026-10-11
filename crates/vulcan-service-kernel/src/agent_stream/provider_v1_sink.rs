@@ -186,7 +186,9 @@ fn provider_history_attachments_from_resource_ids(
             let kind = media::attachment_kind(resource_kind_from_mime(&mime), Some(&mime));
             // asset_id preserves logical V1 identity without exposing one host path or Provider upload reference.
             // asset_id 保留逻辑 V1 身份，同时不暴露宿主路径或 Provider 上传引用。
-            let asset_id = format!("project-resource-{}", resource_id.value());
+            let asset_id = vulcan_agent_runtime::attachment_asset_index::project_resource_asset_id(
+                resource_id.value(),
+            );
             Ok(ConversationAttachment {
                 kind,
                 file_name: entry.original_name.clone(),

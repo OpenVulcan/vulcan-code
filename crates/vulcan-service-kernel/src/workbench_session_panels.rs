@@ -894,6 +894,8 @@ mod tests {
             unread,
             attention: None,
             project_id: None,
+            dedicated: false,
+            assistant_name: None,
         }
     }
 

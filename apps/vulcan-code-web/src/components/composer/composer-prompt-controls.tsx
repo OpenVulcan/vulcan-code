@@ -28,9 +28,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { useI18n, type LocaleCode, type TranslationKey } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import type { ComposerSlashCommandSummary, PendingPromptSummary } from "@/types";
-import { composerSlashCommandDescription } from "@/components/composer/composer-model";
+import { composerSlashCommandDescriptionKey } from "@/components/composer/composer-model";
 
 import type { ComposerTraceCallback } from "./composer-control-types";
 import { useVerticalSortableItem } from "./composer-sortable";
@@ -254,9 +254,6 @@ export function ComposerSlashCommandPanel(props: {
   // Highlighted command row index.
   // 当前高亮的指令行索引。
   highlightedIndex: number;
-  // Current interface language.
-  // 当前界面语言。
-  locale: LocaleCode;
   // Activates one command row.
   // 激活单个指令行。
   onActivate: (command: ComposerSlashCommandSummary) => void;
@@ -264,9 +261,12 @@ export function ComposerSlashCommandPanel(props: {
   // 更新高亮指令行。
   onHighlight: (index: number) => void;
 }) {
+  const { t } = useI18n();
   return (
-    <div className="composer-slash-panel" role="listbox" aria-label="Slash commands">
-      {props.commands.map((command, index) => (
+    <div className="composer-slash-panel" role="listbox" aria-label={t("composer.slash.panel")}>
+      {props.commands.map((command, index) => {
+        const descriptionKey = composerSlashCommandDescriptionKey(command);
+        return (
         <button
           aria-selected={index === props.highlightedIndex}
           className={cn("composer-slash-row", index === props.highlightedIndex && "active")}
@@ -277,9 +277,10 @@ export function ComposerSlashCommandPanel(props: {
           type="button"
         >
           <span className="composer-slash-command">{command.command}</span>
-          <span className="composer-slash-description">{composerSlashCommandDescription(command, props.locale)}</span>
+          <span className="composer-slash-description">{descriptionKey ? t(descriptionKey) : null}</span>
         </button>
-      ))}
+        );
+      })}
     </div>
   );
 }

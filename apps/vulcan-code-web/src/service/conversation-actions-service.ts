@@ -1,5 +1,6 @@
 import type {
   CommandSessionSummary,
+  ComposerAttachmentCapabilitySummary,
   ComposerAttachmentPreparationSummary,
   ComposerAttachmentSummary,
   PendingPromptEditOutcome,
@@ -780,6 +781,23 @@ export async function stageComposerAttachmentBytes(
     fileName: file.name || "clipboard-attachment",
     mimeType: file.type || "",
     dataBase64,
+  });
+}
+
+// fetchModelAttachmentCapabilities reads the attachment gates of one exact model route; `bridged` is always false.
+// fetchModelAttachmentCapabilities 读取一条精确模型路线的附件门控；`bridged` 恒为 false。
+export async function fetchModelAttachmentCapabilities(
+  providerId: string,
+  connectionId: string,
+  modelId: string,
+): Promise<ComposerAttachmentCapabilitySummary[]> {
+  if (!hasServiceRuntime()) {
+    return [];
+  }
+  return serviceClient.request<ComposerAttachmentCapabilitySummary[]>("service_model_attachment_capabilities", {
+    providerId,
+    connectionId,
+    modelId,
   });
 }
 

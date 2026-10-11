@@ -28,6 +28,12 @@
 工作台快照读取失败或格式错误时同样清空可编辑槽位，并禁止其他局部增量重新发布旧设置；只有完整权威快照恢复后才重新发布。
 完整文档写入串行等待权威刷新；重连会重送当前页面加载器。
 
+侧栏会话命令（重命名、归档等）是类型化 `Command`，由工作线程直接调用对应 RPC。归档返回存储错误码
+`unsupported_development_format`（会话以旧格式保存，无法加载或归档）时，工作线程发出
+`BackendEvent::UnsupportedConversation`，应用层弹出共享键 `workbenchConversation.unsupportedDelete.*` 的危险确认框；
+确认后发送 `Command::DeleteUnsupportedConversation`，对应 WebUI `deleteUnsupportedConversation` 与
+`service_delete_unsupported_conversation`（见[会话元数据版本](session-metadata-migrations.md)）。
+
 追踪设置继续使用 `service_save_provider_request_trace_settings`：
 `enabled` 控制完整记录，可选 `errorsEnabled` 控制会话错误独立记录，省略或空值保留原设置。
 工作台对应字段是 `providerRequestTraceEnabled` 与 `providerErrorTraceEnabled`。

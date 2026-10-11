@@ -66,6 +66,19 @@ pub enum SessionResourceSummaryV1 {
     },
 }
 
+/// Requests the host file path of one project resource, for an explicit user copy action.
+/// 为用户的显式复制操作请求一个项目资源的宿主文件路径。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionResourcePathV1Request {
+    /// Session identity resolved only through the V1 locator.
+    /// 仅通过 V1 定位器解析的会话身份。
+    pub session_id: String,
+    /// Project-scoped resource id.
+    /// 项目级资源 ID。
+    pub resource_id: u64,
+}
+
 /// Internal host request for one controlled session-resource content response.
 /// 单个受控会话资源内容响应的宿主内部请求。
 #[derive(Debug, Clone, PartialEq, Eq)]

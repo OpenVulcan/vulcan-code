@@ -12,6 +12,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_plan_composer_attachments",
     "service_discard_composer_attachment_plans",
     "service_prepare_composer_attachment",
+    "service_model_attachment_capabilities",
     "service_stop_conversation_run",
     "service_stop_command_session",
     "service_get_command_session_snapshot",
@@ -36,6 +37,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_set_session_plan_mode",
     "service_set_session_answer_mode",
     "service_set_dedicated_memory_lock",
+    "service_convert_conversation_to_assistant",
+    "service_restore_assistant_conversation",
     "service_draft_dedicated_prompt",
     "service_set_session_permission_mode",
     "service_set_session_unattended",
@@ -87,10 +90,33 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_model_attachment_capabilities" => {
+            rpc_json_result(crate::attachments::service_model_attachment_capabilities(
+                state,
+                rpc_required_param(params, "providerId")?,
+                rpc_required_param(params, "connectionId")?,
+                rpc_required_param(params, "modelId")?,
+            ))
+        }
         "service_set_dedicated_memory_lock" => rpc_json_result(
             crate::dedicated_session::service_set_dedicated_memory_lock(
                 state,
                 rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_convert_conversation_to_assistant" => rpc_json_result(
+            crate::dedicated_session::service_convert_conversation_to_assistant(
+                state,
+                rpc_required_param(params, "conversationId")?,
+                rpc_required_param(params, "name")?,
+            )
+            .await,
+        ),
+        "service_restore_assistant_conversation" => rpc_json_result(
+            crate::dedicated_session::service_restore_assistant_conversation(
+                state,
+                rpc_required_param(params, "conversationId")?,
             )
             .await,
         ),

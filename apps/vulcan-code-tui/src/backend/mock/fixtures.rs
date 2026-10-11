@@ -37,6 +37,7 @@ pub fn conversations() -> Vec<ConversationSummary> {
         last_updated_label: label.into(),
         unread: false,
         attention: false,
+        dedicated: false,
     };
     let mut list = vec![
         row("c-tui", "TUI 框架與顯示 demo", Some("p-tui"), "now"),

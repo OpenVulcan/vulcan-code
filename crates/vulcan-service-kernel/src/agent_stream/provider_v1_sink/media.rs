@@ -1150,7 +1150,9 @@ async fn materialize_resource(
                 id: if source_kind == ResourceSourceKind::ProviderFileId {
                     reference.clone()
                 } else {
-                    format!("project-resource-{}", planned.id.value())
+                    vulcan_agent_runtime::attachment_asset_index::project_resource_asset_id(
+                        planned.id.value(),
+                    )
                 },
                 kind: planned.kind,
                 media_type: Some(

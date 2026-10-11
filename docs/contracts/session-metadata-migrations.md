@@ -25,6 +25,11 @@ V0.1.x 是发布前版本，不保留任何元数据迁移：
 `mode.access.unattended`（无人值守模式，保存开启时用户确认的 `deny_policy` 快照，缺省表示关闭）。更新到新版本后，
 旧版本的本地会话将无法打开。
 
+旧版本会话无法加载，因此也无法走“先归档再删除”。唯一清理入口是 `service_delete_unsupported_conversation`：
+在会话生命周期守卫内先以 `session_v1_format_is_unsupported` 只读元数据确认其为 `UnsupportedDevelopmentFormat`，
+再经 `delete_session_v1` 删除会话目录与索引记录。可读会话返回 `ERR_SESSION_FORMAT_SUPPORTED`，损坏或缺失仍是
+错误，绝不当作旧格式处理。WebUI 在归档返回该错误码时弹出确认框，用户确认后才删除。
+
 发布锁是协作式锁，进程退出会自动释放；锁文件本身永久保留，不能因“看起来为空”而删除。
 
 ## 新增或修改字段的固定步骤

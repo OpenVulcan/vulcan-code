@@ -747,7 +747,9 @@ export function ConversationRenderItemView(props: {
             }}
           />
         ) : null}
-        <div className="user-bubble">
+        {/* A resource-only input has no prompt text, so no empty bubble is drawn. */}
+        {/* 仅资源的输入没有提示词文字，因此不绘制空气泡。 */}
+        {userBody ? <div className="user-bubble">
           {userBody ? (
             <ConversationMeasuredCollapse
               collapseId={`user-prompt-body:${userPromptKey}`}
@@ -777,7 +779,7 @@ export function ConversationRenderItemView(props: {
               )}
             </button>
           ) : null}
-        </div>
+        </div> : null}
         <div className="user-message-meta">
           <DedicatedUserMessageMarks body={userBody} metadata={props.item.userMessage?.metadata} />
           {userTimestamp && userTimestampMs ? (

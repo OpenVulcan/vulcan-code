@@ -32,6 +32,8 @@ async fn selecting_active_session_does_not_require_lifecycle_quiescence() {
             unread: false,
             attention: None,
             project_id: Some(String::from("project-a")),
+            dedicated: false,
+            assistant_name: None,
         });
     start_webui_session_kernel_user_turn(&mut service_state, session_id, "active-selection-turn")
         .expect("active session turn should start");

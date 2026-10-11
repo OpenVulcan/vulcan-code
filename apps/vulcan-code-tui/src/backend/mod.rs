@@ -136,6 +136,8 @@ pub enum Command {
     },
     /// `archiveConversation`
     ArchiveConversation { conversation_id: ConversationId },
+    /// `deleteUnsupportedConversation`
+    DeleteUnsupportedConversation { conversation_id: ConversationId },
     /// `stopSubagentTask`
     StopSubagentTask {
         parent_conversation_id: ConversationId,
@@ -334,6 +336,13 @@ pub enum BackendEvent {
     /// The conversation was archived or deleted and leaves the sidebar.
     /// 会话已归档或删除，从侧边栏移除。
     ConversationRemoved(ConversationId),
+    /// Archiving failed because the session was saved in a format this build no longer reads;
+    /// the user decides whether to delete it.
+    /// 归档失败，因为会话以本构建已不再读取的格式保存；由用户决定是否删除。
+    UnsupportedConversation {
+        conversation_id: ConversationId,
+        title: String,
+    },
     /// `browseProjectDirectories` or local file listing result.
     /// 浏览项目目录或本地文件列表的结果。
     Directory(DirectoryListing),
@@ -391,6 +400,9 @@ pub enum Notice {
     ProjectRemoved(String),
     Archived(String),
     ArchivedCount(usize),
+    /// An old-format conversation was deleted; carries its title.
+    /// 已删除一个旧格式会话；携带其标题。
+    UnsupportedDeleted(String),
     Renamed,
     MemorySuppressed,
     MemoryDeleted,

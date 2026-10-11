@@ -77,6 +77,10 @@ const WORKBENCH_SLOT_KEYS: [&str; 25] = [
 /// Prefix of local draft conversation ids; drafts exist only until their first submission.
 /// 本地草稿会话 ID 前缀；草稿只存在到首次提交为止。
 const DRAFT_PREFIX: &str = "draft:";
+/// Storage error code for a session saved in a format this build no longer reads; the authority is
+/// `vulcan_workspace_store::workspace_store::SessionV1StorageErrorCode::UnsupportedDevelopmentFormat`.
+/// 会话以本构建不再读取的格式保存时的存储错误码；权威为工作区存储层的 `UnsupportedDevelopmentFormat`。
+const UNSUPPORTED_SESSION_FORMAT_CODE: &str = "unsupported_development_format";
 
 /// Everything the worker reacts to.
 /// 工作线程响应的全部输入。
@@ -845,11 +849,14 @@ impl Worker {
 
     /// Sidebar rows: service conversations with pending-question attention, then local drafts.
     /// 侧栏行：带等待提问标记的服务会话，以及本地草稿。
+    /// Floating assistants live in the WebUI top bar and stay out of the session list.
+    /// 浮动助手位于 WebUI 顶部栏，不进入会话列表。
     fn conversation_rows(&self) -> Vec<ConversationSummary> {
         let mut rows: Vec<ConversationSummary> = self
             .wb
             .iter()
             .flat_map(|wb| &wb.conversations)
+            .filter(|conversation| conversation.assistant_name.is_none())
             .map(map::conversation)
             .collect();
         for row in &mut rows {
@@ -1891,12 +1898,47 @@ impl Worker {
                     .summary(&conversation_id)
                     .map(|c| c.title)
                     .unwrap_or_default();
-                if let Some(snapshot) = self.call_as(
+                let Some(client) = self.client.clone() else {
+                    self.emit(BackendEvent::Notice(Notice::NotConnected));
+                    return;
+                };
+                match client.call(
                     "service_archive_conversation",
                     json!({ "conversationId": conversation_id }),
                 ) {
+                    Ok(value) => {
+                        if let Some(snapshot) = self.read("service_archive_conversation", value) {
+                            self.apply_snapshot(snapshot);
+                            self.emit(BackendEvent::Notice(Notice::Archived(title)));
+                        }
+                    }
+                    // An old-format session can be neither opened nor archived; offer deletion instead.
+                    // 旧格式会话既无法打开也无法归档；改为提供删除。
+                    Err(error)
+                        if !error.transport
+                            && error.message.contains(UNSUPPORTED_SESSION_FORMAT_CODE) =>
+                    {
+                        self.emit(BackendEvent::UnsupportedConversation {
+                            conversation_id,
+                            title,
+                        });
+                    }
+                    Err(error) => self.failed(error),
+                }
+            }
+            Command::DeleteUnsupportedConversation { conversation_id } => {
+                // Title.
+                // 当前标题。
+                let title = self
+                    .summary(&conversation_id)
+                    .map(|c| c.title)
+                    .unwrap_or_default();
+                if let Some(snapshot) = self.call_as(
+                    "service_delete_unsupported_conversation",
+                    json!({ "conversationId": conversation_id }),
+                ) {
                     self.apply_snapshot(snapshot);
-                    self.emit(BackendEvent::Notice(Notice::Archived(title)));
+                    self.emit(BackendEvent::Notice(Notice::UnsupportedDeleted(title)));
                 }
             }
             Command::StopSubagentTask {
@@ -2389,6 +2431,7 @@ fn draft_row(id: &str, draft: &Draft) -> ConversationSummary {
         last_updated_label: String::new(),
         unread: false,
         attention: false,
+        dedicated: false,
     }
 }
 
@@ -2762,6 +2805,101 @@ mod tests {
         assert!(
             matches!(&received[0],BackendEvent::Slot{slot:Slot::VceJob,value,..} if value["sequence"] == 4)
         );
+        server.thread.join().unwrap();
+    }
+
+    /// Archiving an old-format session asks for deletion instead of failing, and the confirmed
+    /// deletion calls the dedicated RPC for that exact session.
+    /// 归档旧格式会话时改为请求删除而不是直接失败，确认后的删除对该会话调用专用 RPC。
+    #[test]
+    fn unsupported_archive_offers_deletion() {
+        let session_id = "11111111-1111-4111-8111-111111111111";
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = seen.clone();
+        let server = RpcServer::start(2, move |request| {
+            let method = request.body["method"].as_str().unwrap().to_string();
+            record.lock().unwrap().push((
+                method.clone(),
+                request.body["params"]["conversationId"].clone(),
+            ));
+            match method.as_str() {
+                "service_archive_conversation" => json!({"ok":false,"error":{"message":
+                    "Failed to archive session: unsupported_development_format: metadata schema 5"}}),
+                "service_delete_unsupported_conversation" => json!({"ok":true,"result":{
+                    "revision": 2, "appVersion": "", "modules": [], "projects": [],
+                    "projectSettingsRevisions": api::ProjectSettingsRevisionSnapshot::default(),
+                    "conversations": [], "toolCalls": [], "plugins": [], "settings": [],
+                    "providers": [], "memories": [], "commandSessions": [], "logs": []}}),
+                _ => panic!("unexpected synthetic RPC method"),
+            }
+        });
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        worker.handle(Command::ArchiveConversation {
+            conversation_id: session_id.to_string(),
+        });
+        let offered: Vec<String> = events
+            .try_iter()
+            .filter_map(|event| match event {
+                BackendEvent::UnsupportedConversation {
+                    conversation_id, ..
+                } => Some(conversation_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(offered, [session_id]);
+        worker.handle(Command::DeleteUnsupportedConversation {
+            conversation_id: session_id.to_string(),
+        });
+        assert!(
+            events
+                .try_iter()
+                .any(|event| matches!(event, BackendEvent::Notice(Notice::UnsupportedDeleted(_))))
+        );
+        server.thread.join().unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                (
+                    "service_archive_conversation".to_string(),
+                    json!(session_id)
+                ),
+                (
+                    "service_delete_unsupported_conversation".to_string(),
+                    json!(session_id)
+                ),
+            ]
+        );
+    }
+
+    /// Assistant sessions stay out of the sidebar rows; ordinary sessions remain.
+    /// 助手会话不进入侧栏行；普通会话保留。
+    #[test]
+    fn assistant_sessions_leave_the_sidebar_rows() {
+        let server = RpcServer::start(0, |_| Value::Null);
+        let (mut worker, _events, _) = worker_fixture(server.client.clone());
+        let row = |id: &str| {
+            json!({"id": id, "title": id, "status": "idle", "runPhase": "idle",
+                "lastUpdatedLabel": "", "lastUpdatedAt": "", "unread": false})
+        };
+        let mut assistant = row("assistant");
+        assistant["dedicated"] = json!(true);
+        assistant["assistantName"] = json!("Helper");
+        let snapshot = serde_json::from_value(json!({
+            "revision": 1, "appVersion": "", "modules": [], "projects": [],
+            "projectSettingsRevisions": api::ProjectSettingsRevisionSnapshot::default(),
+            "conversations": [row("plain"), assistant],
+            "toolCalls": [], "plugins": [], "settings": [], "providers": [], "memories": [],
+            "commandSessions": [], "logs": []
+        }))
+        .expect("synthetic snapshot matches the shared DTO");
+        worker.apply_snapshot(snapshot);
+        let ids: Vec<String> = worker
+            .conversation_rows()
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(ids, ["plain"]);
+        drop(worker);
         server.thread.join().unwrap();
     }
 

@@ -129,7 +129,7 @@
   "crates/vulcan-agent-runtime/src/agent_runtime/runtime_stream_setup.rs": 1,
   "crates/vulcan-agent-runtime/src/agent_runtime/session_goal_prompt.rs": 1,
   "crates/vulcan-agent-runtime/src/agent_runtime/tool_request_stream.rs": 2,
-  "crates/vulcan-agent-runtime/src/agent_runtime/tool_runtime_bridge/tests.rs": 8,
+  "crates/vulcan-agent-runtime/src/agent_runtime/tool_runtime_bridge/tests.rs": 7,
   "crates/vulcan-agent-runtime/src/luaskills_runtime/runlua/result_markdown.rs": 1,
   "crates/vulcan-agent-runtime/src/skills/session.rs": 3,
   "crates/vulcan-agent-runtime/src/tooling/native/submit_plan.rs": 2,

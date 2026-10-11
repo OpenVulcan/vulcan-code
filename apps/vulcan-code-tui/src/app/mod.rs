@@ -1417,6 +1417,24 @@ impl App {
                 self.accept_catalog(crate::service_api::Slot::Workbench);
                 self.fix_sidebar_cursor();
             }
+            BackendEvent::UnsupportedConversation {
+                conversation_id,
+                title,
+            } => {
+                self.overlay = Some(Overlay::Confirm(Box::new(action::ConfirmDialog {
+                    title: tr!("workbenchConversation.unsupportedDelete.title"),
+                    body: tr!(
+                        "workbenchConversation.unsupportedDelete.description",
+                        conversation = title
+                    ),
+                    confirm_label: tr!("workbenchConversation.unsupportedDelete.confirm"),
+                    danger: true,
+                    then: action::UiAction::Send(Command::DeleteUnsupportedConversation {
+                        conversation_id,
+                    }),
+                    focus_confirm: false,
+                })));
+            }
             BackendEvent::ConversationRemoved(id) => {
                 self.conversations.retain(|c| c.id != id);
                 self.sessions.remove(&id);
@@ -1602,6 +1620,13 @@ impl App {
             Notice::ArchivedCount(count) => (
                 NoticeSeverity::Info,
                 tr!("tui.notice.archivedCount", count = count),
+            ),
+            Notice::UnsupportedDeleted(title) => (
+                NoticeSeverity::Info,
+                tr!(
+                    "workbenchConversation.unsupportedDeleted",
+                    conversation = title
+                ),
             ),
             Notice::Renamed => (NoticeSeverity::Info, tr!("tui.notice.renamed")),
             Notice::MemorySuppressed => (

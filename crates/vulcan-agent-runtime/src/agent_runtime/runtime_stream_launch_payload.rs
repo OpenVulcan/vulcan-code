@@ -230,6 +230,13 @@ fn controller_effective_prompt_for_launch(
         return Ok(prompt);
     }
     let raw_prompt = request.prompt.trim().to_string();
+    // A resource-only input reaches the controller as its projected note, never as a blank prompt.
+    // 仅资源输入以其投影说明进入控制器，绝不作为空白提示词。
+    let raw_prompt = if raw_prompt.is_empty() && current_turn_is_resource_only(core_snapshot) {
+        String::from(vulcan_session_core::v1::projection::RESOURCE_ONLY_INPUT_TEXT)
+    } else {
+        raw_prompt
+    };
     Ok(core_snapshot
         .messages
         .last()
@@ -239,6 +246,35 @@ fn controller_effective_prompt_for_launch(
         })
         .filter(|text| projected_user_prompt_matches_request(text, &raw_prompt))
         .unwrap_or(raw_prompt))
+}
+
+/// Returns whether the trailing user messages of the controller snapshot hold a resource-only input.
+/// 判断控制器快照末尾的用户消息中是否包含仅资源输入。
+///
+/// # Parameters
+/// 参数
+/// `core_snapshot` is the provider-visible snapshot already prepared for the controller.
+/// `core_snapshot` 是已经为控制器准备好的 Provider 可见快照。
+///
+/// # Returns
+/// 返回值
+/// `true` when a user message after the last non-user message carries the resource-only note.
+/// 当最后一条非用户消息之后的某条用户消息带有仅资源说明时返回 `true`。
+fn current_turn_is_resource_only(core_snapshot: &CoreConversationSnapshot) -> bool {
+    core_snapshot
+        .messages
+        .iter()
+        .rev()
+        .map_while(|message| match &message.payload {
+            CoreConversationPayload::UserText { text, .. } => Some(text),
+            _ => None,
+        })
+        .any(|text| {
+            projected_user_prompt_matches_request(
+                text,
+                vulcan_session_core::v1::projection::RESOURCE_ONLY_INPUT_TEXT,
+            )
+        })
 }
 
 /// Returns whether one projected user prompt can safely stand in for the raw request prompt.
@@ -1174,6 +1210,63 @@ mod tests {
             launch.effective_prompt,
             "INFO: Attachment \"image.png\" is kept locally.\n\n请分析主入口文件"
         );
+    }
+
+    /// A blank request whose turn holds the resource-only note reaches the controller as that note.
+    /// 回合含仅资源说明的空白请求以该说明进入控制器。
+    #[test]
+    fn launch_payload_uses_resource_only_note_for_blank_prompt() {
+        let note = vulcan_session_core::v1::projection::RESOURCE_ONLY_INPUT_TEXT;
+        for trailing_host_message in [false, true] {
+            let mut request = build_test_request();
+            request.prompt = String::new();
+            let mut bootstrap = build_test_bootstrap();
+            bootstrap.core_snapshot.messages = vec![CoreConversationMessage {
+                id: String::from("v1-item-0"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from(note),
+                    attachments: Vec::new(),
+                },
+            }];
+            if trailing_host_message {
+                bootstrap
+                    .core_snapshot
+                    .messages
+                    .push(CoreConversationMessage {
+                        id: String::from("runtime-host:context"),
+                        payload: CoreConversationPayload::UserText {
+                            text: String::from("<vulcan_context_update />"),
+                            attachments: Vec::new(),
+                        },
+                    });
+            }
+
+            let launch = build_runtime_stream_launch_payload(&request, bootstrap, None)
+                .expect("valid runtime stream launch payload");
+
+            assert_eq!(launch.effective_prompt, note);
+        }
+    }
+
+    /// A blank request without a resource-only turn stays blank so the controller rejects it.
+    /// 没有仅资源回合的空白请求保持空白，由控制器拒绝。
+    #[test]
+    fn launch_payload_keeps_blank_prompt_without_resources() {
+        let mut request = build_test_request();
+        request.prompt = String::new();
+        let mut bootstrap = build_test_bootstrap();
+        bootstrap.core_snapshot.messages = vec![CoreConversationMessage {
+            id: String::from("v1-item-0"),
+            payload: CoreConversationPayload::UserText {
+                text: String::new(),
+                attachments: Vec::new(),
+            },
+        }];
+
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap, None)
+            .expect("valid runtime stream launch payload");
+
+        assert!(launch.effective_prompt.is_empty());
     }
 
     /// Falls back to the request prompt when the latest projected user text belongs to history.

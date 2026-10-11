@@ -39,6 +39,7 @@ fn workbench(ids: &[&str], selected: Option<&str>) -> BackendEvent {
                 last_updated_label: String::new(),
                 unread: false,
                 attention: false,
+                dedicated: false,
             })
             .collect(),
         selected_conversation_id: selected.map(Into::into),

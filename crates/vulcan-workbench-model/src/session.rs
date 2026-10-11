@@ -89,6 +89,9 @@ pub struct SessionSummary {
     /// Whether the session was created as a dedicated session; the kind never changes afterwards.
     /// 会话是否以专职会话创建；该种类创建后永不改变。
     pub dedicated: bool,
+    /// Display name while the dedicated session floats as an assistant outside the session list.
+    /// 专职会话作为浮动助手移出会话列表时的显示名称。
+    pub assistant_name: Option<String>,
 }
 
 impl SessionSummary {
@@ -121,6 +124,7 @@ impl SessionSummary {
             last_updated_label: last_updated_label.into(),
             updated_at: String::new(),
             dedicated: false,
+            assistant_name: None,
         }
     }
 
@@ -128,6 +132,13 @@ impl SessionSummary {
     /// 记录已索引会话是否为专职会话。
     pub fn with_dedicated(mut self, dedicated: bool) -> Self {
         self.dedicated = dedicated;
+        self
+    }
+
+    /// Records the floating-assistant name of the indexed session, if converted.
+    /// 记录已索引会话转换后的浮动助手名称。
+    pub fn with_assistant_name(mut self, assistant_name: Option<String>) -> Self {
+        self.assistant_name = assistant_name;
         self
     }
 

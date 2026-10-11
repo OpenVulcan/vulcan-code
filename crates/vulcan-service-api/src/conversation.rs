@@ -85,6 +85,10 @@ pub struct ConversationSummary {
     /// 是否为专职会话；该种类在创建时固定。
     #[serde(default)]
     pub dedicated: bool,
+    /// Floating-assistant name; a named dedicated session leaves the ordinary session list.
+    /// 浮动助手名称；具名的专职会话不再出现在普通会话列表中。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_name: Option<String>,
 }
 
 /// Describes one conversation-level action marker for cross-session navigation.

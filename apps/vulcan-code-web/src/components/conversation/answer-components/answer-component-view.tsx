@@ -1,6 +1,7 @@
 import React from "react";
 import { Check, CircleAlert, CircleCheck, CircleX, Info, Play, TriangleAlert } from "lucide-react";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media-types";
+import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
 import { formatMessage, useI18n } from "@/i18n";
 import "@/styles/answer-components.css";
 import { AnswerChartView, formatChartNumber } from "./answer-chart";
@@ -297,7 +298,9 @@ function GalleryItem({ caption, host, path }: { caption?: string; host: AnswerCo
     : undefined;
   return (
     <figure>
-      {open ? <button className="answer-gallery-media" onClick={open} type="button">{preview}</button> : <div className="answer-gallery-media">{preview}</div>}
+      <MediaPathContextMenu locator={source}>
+        {open ? <button className="answer-gallery-media" onClick={open} type="button">{preview}</button> : <div className="answer-gallery-media">{preview}</div>}
+      </MediaPathContextMenu>
       {caption ? <figcaption>{caption}</figcaption> : null}
     </figure>
   );

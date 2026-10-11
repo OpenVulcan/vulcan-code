@@ -81,6 +81,9 @@ pub struct ConversationSummary {
     /// A pending question or failure needs the user.
     /// 有等待中的提问或失败需要用户处理。
     pub attention: bool,
+    /// Dedicated session, a kind fixed at creation.
+    /// 专职会话；该种类在创建时固定。
+    pub dedicated: bool,
 }
 
 /// One entry of a directory listing used by the folder and attachment pickers.

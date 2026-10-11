@@ -74,6 +74,7 @@ import { ComposerPermissionModeControl } from "@/components/composer/composer-pe
 import { useComposerAttachmentPreparation } from "@/components/composer/composer-panel/use-composer-attachment-preparation";
 import { useComposerAttachmentRemoval } from "@/components/composer/composer-panel/use-composer-attachment-removal";
 import { useComposerAttachmentSubmissionGate } from "@/components/composer/composer-panel/attachment-submission-gate";
+import { useComposerSlashSession } from "@/components/composer/composer-panel/use-composer-slash-session";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
@@ -775,6 +776,7 @@ export function ComposerPanel(props: {
     onSubmitCreatedGoal: submitCreatedGoal,
   });
 
+  const slashSession = useComposerSlashSession(props.slashCommands, openGoalDialog);
   // Slash controller owns filtering, navigation, activation, and Enter-key priority.
   // slash 控制器管理筛选、导航、激活与 Enter 键优先级。
   const {
@@ -790,12 +792,14 @@ export function ComposerPanel(props: {
   } = useComposerSlashCommands({
     input: draftInput,
     setInput: setDraftInput,
-    commands: props.slashCommands,
+    commands: slashSession.commands,
     planModeEnabled,
     onSetPlanMode: handlePlanModeChange,
     onRouteCommand: props.onSlashCommand,
     onOpenModelPicker: openModelPicker,
     onOpenReasoningPicker: openReasoningPicker,
+    onOpenGoal: slashSession.openGoal,
+    onOpenSettings: slashSession.openSettings,
     onSend: handleComposerSend,
   });
 
@@ -894,7 +898,6 @@ export function ComposerPanel(props: {
           <ComposerSlashCommandPanel
             commands={visibleSlashCommands}
             highlightedIndex={Math.min(slashHighlightedIndex, visibleSlashCommands.length - 1)}
-            locale={locale}
             onActivate={activateSlashCommand}
             onHighlight={setSlashHighlightedIndex}
           />
@@ -948,6 +951,7 @@ export function ComposerPanel(props: {
               onPick={handleAttachmentPicker}
               onThinkingDisplayModeChange={props.onThinkingDisplayModeChange}
               onOpenGoal={() => void openGoalDialog()}
+              settingsRequest={slashSession.settingsRequest}
               onPlanModeChange={(enabled) => void handlePlanModeChange(enabled)}
               onVmmPolicyChange={(policy, mode) => {
                 if (props.conversationId) {

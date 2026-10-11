@@ -22,6 +22,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n";
+import { MediaPathContextMenu } from "./media-path-context-menu";
 import { cn } from "@/lib/utils";
 import type {
   GeneratedMediaAttachment,
@@ -339,6 +340,7 @@ function GeneratedMediaPlayerContent(props: {
             </Button>
           </span>
         </header>
+        <MediaPathContextMenu locator={props.attachment.kind === "document" ? null : props.attachment.localPath}>
         <div className={cn("generated-media-player-body", isImage && "image")}>
           {loadFailed || !source ? (
             <div className="flex min-h-40 flex-col items-center justify-center gap-3 p-4 text-center" role="alert">
@@ -435,6 +437,7 @@ function GeneratedMediaPlayerContent(props: {
             </a>
           )}
         </div>
+        </MediaPathContextMenu>
       </DialogContent>
     </Dialog>
   );

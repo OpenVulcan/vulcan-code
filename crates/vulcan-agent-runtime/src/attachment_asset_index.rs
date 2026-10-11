@@ -58,7 +58,8 @@ pub use lifecycle::{
 };
 pub use media_references::{find_attachment_media_reference, record_attachment_media_reference};
 pub use replay::{
-    load_attachment_asset_record_for_attachment, resolve_attachment_replay_status,
+    is_project_resource_attachment, load_attachment_asset_record_for_attachment,
+    project_resource_asset_id, resolve_attachment_replay_status,
     resolve_indexed_attachment_resource, resolve_owned_attachment_resource,
 };
 pub(crate) use replay::{

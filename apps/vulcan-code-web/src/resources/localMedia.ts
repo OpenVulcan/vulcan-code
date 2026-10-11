@@ -11,6 +11,19 @@ export function encodeBase64UrlUtf8(value: string): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+// decodeBase64UrlUtf8 reverses encodeBase64UrlUtf8 and returns null for malformed input.
+// decodeBase64UrlUtf8 是 encodeBase64UrlUtf8 的逆运算，输入格式错误时返回 null。
+export function decodeBase64UrlUtf8(value: string): string | null {
+  try {
+    const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
 // localPathFromFileUrl extracts a filesystem path from a legacy file URL.
 // localPathFromFileUrl 从旧版 file URL 中提取文件系统路径。
 export function localPathFromFileUrl(value: string): string | null {

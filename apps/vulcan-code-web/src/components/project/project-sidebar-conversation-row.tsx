@@ -1,6 +1,7 @@
 import React from "react";
 import {
   Archive,
+  Bot,
   CircleHelp,
   ClipboardList,
   LoaderCircle,
@@ -52,10 +53,15 @@ export function ConversationTreeRow(props: {
   // 置顶会话行使用的可选所属项目。
   project?: ProjectSummary;
 }) {
+  const { t } = useI18n();
   // archiveConfirming tracks the inline archive confirmation state.
   // archiveConfirming 跟踪行内归档确认状态。
   const [archiveConfirming, setArchiveConfirming] = React.useState(false);
   const resetArchiveConfirming = React.useCallback(() => setArchiveConfirming(false), []);
+  // Dedicated sessions carry a kind mark so they read apart from ordinary conversations.
+  // 专职会话带有种类标记，以便与普通对话区分。
+  const dedicated = props.conversation.dedicated === true;
+  const kindLabel = dedicated ? t("composer.draft.kindDedicated") : null;
   return (
     <SidebarMenuItem key={props.conversation.id} onMouseLeave={resetArchiveConfirming}>
       <ConversationContextMenu
@@ -71,7 +77,7 @@ export function ConversationTreeRow(props: {
             props.compactPinned && "with-pinned-icon",
           )}
           onClick={() => props.onSelectConversation(props.conversation.id)}
-          tooltip={`${props.conversation.title}\n${props.conversation.status}`}
+          tooltip={[props.conversation.title, kindLabel, props.conversation.status].filter(Boolean).join("\n")}
         >
           {props.compactPinned ? (
             <span className="conversation-tree-project-icon">
@@ -85,8 +91,11 @@ export function ConversationTreeRow(props: {
             isSelected={props.isSelected}
             onAction={props.onAction}
           />
-          <span className="vcn-sidebar-label conversation-tree-label">
-            <strong>{props.conversation.title}</strong>
+          <span className={cn("vcn-sidebar-label conversation-tree-label", dedicated && "dedicated")}>
+            {kindLabel ? (
+              <Bot aria-label={kindLabel} className="shrink-0 text-primary" role="img" size={13} />
+            ) : null}
+            <strong className="min-w-0 flex-1">{props.conversation.title}</strong>
           </span>
           <ConversationRowTrailing
             archiveConfirming={archiveConfirming}

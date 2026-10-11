@@ -1091,6 +1091,7 @@ impl World {
                     last_updated_label: "now".into(),
                     unread: false,
                     attention: false,
+                    dedicated: false,
                 };
                 self.conversations.insert(0, row.clone());
                 self.ensure_log(&id);
@@ -1350,6 +1351,24 @@ impl World {
                     self.emit(BackendEvent::Notice(Notice::Archived(title)));
                     self.emit_workbench_slot();
                 }
+            }
+            // Scripted sessions are never old-format; deletion simply drops the row.
+            // 脚本会话从不是旧格式；删除只移除该行。
+            Command::DeleteUnsupportedConversation { conversation_id } => {
+                let Some(index) = self
+                    .conversations
+                    .iter()
+                    .position(|c| c.id == conversation_id)
+                else {
+                    return;
+                };
+                let row = self.conversations.remove(index);
+                if self.selected.as_deref() == Some(conversation_id.as_str()) {
+                    self.selected = None;
+                }
+                self.emit(BackendEvent::ConversationRemoved(conversation_id));
+                self.emit(BackendEvent::Notice(Notice::UnsupportedDeleted(row.title)));
+                self.emit_workbench_slot();
             }
             Command::StopSubagentTask {
                 parent_conversation_id,

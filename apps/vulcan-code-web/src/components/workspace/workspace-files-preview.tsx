@@ -14,6 +14,7 @@ import { escapeHtml, tokenSpansToHtml } from "@/diff/diff-shiki-shared";
 import type { DiffFile, DiffLine } from "@/diff/types";
 import { Button } from "@/components/ui/button";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
 import { workspaceFileTreeExtensionLabel } from "@/components/workspace/workspace-file-tree-drawer";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceFileEntrySummary, WorkspaceFileReadResponse } from "@/types";
@@ -108,7 +109,9 @@ export function WorkspaceFilePreview(props: {
     return (
       <div className="workspace-file-preview media">
         <WorkspaceFilePreviewHeader preview={props.preview} onClosePreview={props.onClosePreview} />
-        <img alt={props.preview.relativePath} decoding="async" src={props.resolveMediaSourceUrl(props.preview.path)} />
+        <MediaPathContextMenu locator={props.preview.path}>
+          <img alt={props.preview.relativePath} decoding="async" src={props.resolveMediaSourceUrl(props.preview.path)} />
+        </MediaPathContextMenu>
       </div>
     );
   }
@@ -116,7 +119,9 @@ export function WorkspaceFilePreview(props: {
     return (
       <div className="workspace-file-preview media">
         <WorkspaceFilePreviewHeader preview={props.preview} onClosePreview={props.onClosePreview} />
-        <video aria-label={props.preview.relativePath} controls preload="metadata" src={props.resolveMediaSourceUrl(props.preview.path)} />
+        <MediaPathContextMenu locator={props.preview.path}>
+          <video aria-label={props.preview.relativePath} controls preload="metadata" src={props.resolveMediaSourceUrl(props.preview.path)} />
+        </MediaPathContextMenu>
       </div>
     );
   }

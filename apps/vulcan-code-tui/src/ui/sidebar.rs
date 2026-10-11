@@ -252,7 +252,10 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
                 } else {
                     format!(" {} ", conversation.last_updated_label)
                 };
-                let title_width = width.saturating_sub(width_of(&tail) + 5);
+                // Dedicated sessions lead their title with a kind glyph, mirroring the WebUI mark.
+                // 专职会话在标题前带有种类符号，与 WebUI 标记一致。
+                let kind = if conversation.dedicated { "◆ " } else { "" };
+                let title_width = width.saturating_sub(width_of(&tail) + 5 + width_of(kind));
                 let title = truncate(&conversation.title, title_width);
                 let pad = title_width.saturating_sub(width_of(&title));
                 let title_style = if selected {
@@ -275,6 +278,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
                     Span::raw("  "),
                     Span::styled(marker, marker_style),
                     Span::raw(" "),
+                    Span::styled(kind, theme.primary_text()),
                     Span::styled(title, title_style),
                     Span::raw(" ".repeat(pad)),
                     Span::styled(tail.clone(), Style::new().fg(theme.faint_fg(theme.sidebar))),

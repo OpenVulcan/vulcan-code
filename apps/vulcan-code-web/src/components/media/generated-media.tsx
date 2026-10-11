@@ -12,6 +12,7 @@ import {
   useGeneratedMediaSource,
 } from "./generated-media-utils";
 import { useI18n } from "@/i18n";
+import { MediaPathContextMenu } from "./media-path-context-menu";
 
 export { GeneratedMediaPlayerWindow } from "./generated-media-player";
 export type {
@@ -67,15 +68,18 @@ function GeneratedMediaInlineCard(props: {
   const MediaIcon = generatedMediaIcon(props.attachment.kind);
   if (props.attachment.kind === "image") {
     return (
-      <button className="generated-media-card image" onClick={() => props.onOpenMedia(props.attachment)} type="button">
-        <img alt={props.attachment.fileName} decoding="async" loading="lazy" src={source} />
-        <span>{props.attachment.fileName}</span>
-      </button>
+      <MediaPathContextMenu locator={props.attachment.localPath}>
+        <button className="generated-media-card image" onClick={() => props.onOpenMedia(props.attachment)} type="button">
+          <img alt={props.attachment.fileName} decoding="async" loading="lazy" src={source} />
+          <span>{props.attachment.fileName}</span>
+        </button>
+      </MediaPathContextMenu>
     );
   }
   if (props.attachment.kind === "video") {
     const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
     return (
+      <MediaPathContextMenu locator={props.attachment.localPath}>
       <button
         className="generated-media-card video"
         onClick={() => props.onOpenMedia(props.attachment)}
@@ -97,14 +101,17 @@ function GeneratedMediaInlineCard(props: {
         </span>
         <span>{props.attachment.fileName}</span>
       </button>
+      </MediaPathContextMenu>
     );
   }
   if (props.attachment.kind === "audio") {
     const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
     return (
-      <div className="generated-media-card audio">
-        <audio aria-label={props.attachment.fileName} controls preload="metadata" src={mediaSource} />
-      </div>
+      <MediaPathContextMenu locator={props.attachment.localPath}>
+        <div className="generated-media-card audio">
+          <audio aria-label={props.attachment.fileName} controls preload="metadata" src={mediaSource} />
+        </div>
+      </MediaPathContextMenu>
     );
   }
   return (
@@ -148,13 +155,15 @@ export function GeneratedMediaDetail(props: {
         ) : null}
       </header>
       {primary.kind === "image" ? (
-        <div className="generated-media-image-preview">
-          <img
-            alt={primary.fileName}
-            src={primarySource}
-            style={{ transform: `scale(${zoom})` }}
-          />
-        </div>
+        <MediaPathContextMenu locator={primary.localPath}>
+          <div className="generated-media-image-preview">
+            <img
+              alt={primary.fileName}
+              src={primarySource}
+              style={{ transform: `scale(${zoom})` }}
+            />
+          </div>
+        </MediaPathContextMenu>
       ) : primary.kind === "video" ? (
         <button
           className="generated-media-open-player"
@@ -170,7 +179,9 @@ export function GeneratedMediaDetail(props: {
           </span>
         </button>
       ) : primary.kind === "audio" ? (
-        <audio aria-label={primary.fileName} className="generated-media-audio-preview" controls src={primarySource} />
+        <MediaPathContextMenu locator={primary.localPath}>
+          <audio aria-label={primary.fileName} className="generated-media-audio-preview" controls src={primarySource} />
+        </MediaPathContextMenu>
       ) : (
         <a className="generated-media-document-link" href={primarySource} rel="noreferrer" target="_blank">
           <FileText size={18} />

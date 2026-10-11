@@ -2,15 +2,9 @@ export interface ComposerSlashCommandSummary {
   // Stable command identifier used by WebUI routing.
   // WebUI 路由使用的稳定指令标识。
   id: string;
-  // Canonical English slash trigger shown in the composer.
-  // 输入区展示的规范英文 slash 触发词。
+  // Canonical English slash trigger shown in the composer; the description comes from the catalog by id.
+  // 输入区展示的规范英文 slash 触发词；说明按 id 从语言目录读取。
   command: string;
-  // Chinese command description.
-  // 中文指令说明。
-  descriptionZh: string;
-  // English command description.
-  // 英文指令说明。
-  descriptionEn: string;
 }
 
 // SubagentNavigationSnapshot describes the backend-routed subagent surface state.

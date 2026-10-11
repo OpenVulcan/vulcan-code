@@ -27,43 +27,9 @@ export const browserFallbackStartup: StartupSnapshot = {
 // browserFallbackSlashCommands mirrors the service-projected command catalog for preview mode.
 // browserFallbackSlashCommands 在预览模式中镜像 service 投影出的指令目录。
 const browserFallbackSlashCommands: ComposerSlashCommandSummary[] = [
-  {
-    id: "model",
-    command: "/model",
-    descriptionZh: "选择当前模型",
-    descriptionEn: "Select the current model",
-  },
-  {
-    id: "compact",
-    command: "/compact",
-    descriptionZh: "压缩当前会话上下文",
-    descriptionEn: "Compact the current conversation context",
-  },
-  {
-    id: "reasoning",
-    command: "/reasoning",
-    descriptionZh: "选择当前思考级别",
-    descriptionEn: "Select the current reasoning level",
-  },
-  {
-    id: "plan",
-    command: "/plan",
-    descriptionZh: "切换当前会话计划模式",
-    descriptionEn: "Toggle Plan mode for the current conversation",
-  },
-  {
-    id: "skill",
-    command: "/skill",
-    descriptionZh: "插入技能加载指令",
-    descriptionEn: "Insert the prompt-skill loading instruction",
-  },
-  {
-    id: "skills",
-    command: "/skills",
-    descriptionZh: "打开技能面板",
-    descriptionEn: "Open the prompt skills panel",
-  },
-];
+  "model", "reasoning", "compact", "plan", "goal", "settings", "style", "answer",
+  "knowledge", "semantic", "collapse", "thinking", "memory", "skill", "skills",
+].map((id) => ({ id, command: `/${id}` }));
 
 // BrowserFallbackWorkbench is used when the WebUI runs outside Tauri during frontend development.
 // BrowserFallbackWorkbench 用于 WebUI 在 Tauri 外部进行前端开发时展示。

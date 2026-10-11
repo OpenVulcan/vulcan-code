@@ -374,6 +374,7 @@ pub async fn load_workspace_index_report(
     let mut valid_rows = Vec::new();
     let mut seen_sessions = BTreeSet::new();
     let mut dedicated_session_ids = BTreeSet::new();
+    let mut assistant_names = BTreeMap::new();
     if session_index_available {
         match super::index_read::list_workspace_rows(&host_runtime).await {
             Ok(report) => {
@@ -381,6 +382,7 @@ pub async fn load_workspace_index_report(
                 // 保留可用的启动记录，同时保存全部解码问题供严格刷新判定。
                 issues.extend(report.issues);
                 dedicated_session_ids = report.dedicated_session_ids;
+                assistant_names = report.assistant_names;
                 for row in report.rows {
                     let Some(project) = project_by_id.get(row.project_id.as_str()) else {
                         continue;
@@ -497,6 +499,7 @@ pub async fn load_workspace_index_report(
         };
         append_indexed_session(projects, positions, project_id, project_name, session_id);
         let dedicated = dedicated_session_ids.contains(&row.session_id);
+        let assistant_name = assistant_names.remove(&row.session_id);
         let session_summary = SessionSummary::new(
             session_id,
             Some(project_id.to_string()),
@@ -510,7 +513,8 @@ pub async fn load_workspace_index_report(
         .with_title_source(SessionTitleSource::Manual)
         .with_created_at(row.created_at_ms.to_string())
         .with_updated_at(row.updated_at_ms.to_string())
-        .with_dedicated(dedicated);
+        .with_dedicated(dedicated)
+        .with_assistant_name(assistant_name);
         session_updated_at.insert(session_id, row.updated_at_ms);
 
         if archived {

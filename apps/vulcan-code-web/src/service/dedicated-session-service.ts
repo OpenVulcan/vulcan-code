@@ -1,5 +1,6 @@
 import { serviceClient } from "@/service/webui-service-runtime";
 import type { DedicatedSessionProfileV1 } from "@/service/conversation-event-window-client";
+import type { WorkbenchSnapshot } from "@/types";
 import {
   DEDICATED_PROMPT_DRAFT_PROGRESS_TOPIC,
   type DedicatedPromptDraftProgressEvent,
@@ -35,6 +36,18 @@ export function setDedicatedMemoryLock(
   return serviceClient.request("service_set_dedicated_memory_lock", {
     request: { sessionId, locked },
   });
+}
+
+/** Converts a memory-locked dedicated session into a named floating assistant.
+ * 将记忆已锁定的专职会话转换为具名浮动助手。 */
+export function convertConversationToAssistant(conversationId: string, name: string): Promise<WorkbenchSnapshot> {
+  return serviceClient.request<WorkbenchSnapshot>("service_convert_conversation_to_assistant", { conversationId, name });
+}
+
+/** Returns a floating assistant to the ordinary session list.
+ * 将浮动助手还原到普通会话列表。 */
+export function restoreAssistantConversation(conversationId: string): Promise<WorkbenchSnapshot> {
+  return serviceClient.request<WorkbenchSnapshot>("service_restore_assistant_conversation", { conversationId });
 }
 
 /** Material for drafting or revising a dedicated base prompt on the selected model.

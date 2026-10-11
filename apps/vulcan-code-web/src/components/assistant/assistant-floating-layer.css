@@ -1,0 +1,214 @@
+/* Floating assistant windows; loaded only with the lazy assistant layer chunk. */
+/* 浮动助手窗口；只随懒加载助手图层分块载入。 */
+
+.assistant-window-header {
+  display: flex;
+  height: 40px;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+}
+
+.assistant-window-title {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.assistant-window-title > strong,
+.assistant-window-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-window-title > strong {
+  font-size: var(--vcn-font-size-md);
+  font-weight: 500;
+}
+
+.assistant-window-title > span {
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+}
+
+.assistant-window-body {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.assistant-window-main {
+  min-width: 0;
+  flex: 1;
+}
+
+/* Merged windows switch assistants through this column of initials. */
+/* 合并窗口通过这一列首字头像切换助手。 */
+.assistant-rail {
+  display: flex;
+  width: 44px;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  overflow-y: auto;
+  padding: 8px 0;
+  border-right: 1px solid var(--border);
+  background: var(--card);
+}
+
+.assistant-rail-item {
+  padding: 2px;
+  border: 0;
+  border-radius: var(--vcn-radius-pill);
+  background: transparent;
+  outline: none;
+  cursor: pointer;
+}
+
+.assistant-rail-item[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 40%, transparent);
+}
+
+.assistant-rail-item:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.assistant-rail-item .assistant-rail-avatar {
+  width: 28px;
+  height: 28px;
+}
+
+.assistant-conversation {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--background);
+}
+
+.assistant-conversation-scroll {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.assistant-conversation-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: var(--vcn-font-size-xs);
+}
+
+.assistant-conversation-hint {
+  margin: 0;
+  padding: 24px 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+  text-align: center;
+}
+
+.assistant-prompt {
+  max-width: 85%;
+  margin-left: auto;
+  padding: 8px 12px;
+  border-radius: var(--vcn-radius-lg);
+  background: var(--muted);
+  font-size: var(--vcn-font-size-md);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.assistant-step {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.assistant-thinking-text {
+  max-height: 192px;
+  overflow-y: auto;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.assistant-tool-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.assistant-tool-chip {
+  padding: 2px 6px;
+  border-radius: var(--vcn-radius-sm);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: var(--vcn-font-size-2xs);
+}
+
+.assistant-usage-line {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.assistant-step-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.assistant-step-footer .assistant-usage-line {
+  flex: 1;
+  min-width: 0;
+}
+
+.assistant-copy-button {
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
+
+.assistant-usage-line.assistant-turn-total {
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.assistant-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.assistant-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.assistant-conversation .composer-attachment-strip {
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.assistant-composer .assistant-composer-input {
+  min-height: 36px;
+  max-height: 128px;
+  padding-block: 8px;
+  resize: none;
+  font-size: var(--vcn-font-size-md);
+}

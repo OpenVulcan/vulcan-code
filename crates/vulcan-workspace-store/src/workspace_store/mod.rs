@@ -76,8 +76,10 @@ pub use session_v1_store::{
     list_archived_sessions_v1, load_session_v1_for_runtime, load_session_v1_full,
     load_session_v1_tail, locate_embedded_task_session_v1, locate_optional_session_v1_storage,
     locate_session_v1_storage, preflight_session_v1_storage, project_resource_directory_v1,
-    project_session_lifecycle_v1, publish_edit_session_v1, set_session_unread_v1,
+    project_session_lifecycle_v1, publish_edit_session_v1, session_v1_format_is_unsupported,
+    set_session_assistant_v1, set_session_unread_v1,
 };
+pub use session_index_v1::SESSION_ASSISTANT_NAME_MAX_CHARS;
 pub use session_vmm_v1::{load_session_vmm_state, persist_session_vmm_state};
 pub use vce_batch_artifacts::persist_vce_batch_artifact;
 

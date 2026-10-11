@@ -266,6 +266,8 @@ pub(crate) fn commit_materialized_submission_activation(
         unread,
         attention: None,
         project_id: session_summary_project_id_owned(session),
+        dedicated: session.dedicated,
+        assistant_name: session.assistant_name.clone(),
     };
     // revision and event payloads are produced from the same exclusive shared-state transaction.
     // revision 与事件载荷由同一个独占共享状态事务产生。

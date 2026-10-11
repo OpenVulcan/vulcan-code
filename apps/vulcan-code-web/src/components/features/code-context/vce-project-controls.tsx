@@ -2,6 +2,7 @@ import { ScanSearch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator,
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "@/components/ui/dropdown-menu";
+import { RequestedSettingsSub } from "@/components/composer/composer-settings-request";
 import { useI18n, type Translate, type TranslationKey } from "@/i18n";
 import { VceJobProgress, vceActiveJobStatusLabel, vceSynchronizationControl } from "./vce-job-progress";
 import { useVceProjectSurface, type VceSurfaceGate } from "./vce-project-surface";
@@ -41,7 +42,7 @@ export function VceComposerMenu() {
   const activeJobLabel = vceActiveJobStatusLabel(surface.jobState.job, t);
   const openGate = surface.gate === "engine_off" ? surface.openEngineSettings
     : surface.gate === "unavailable" ? surface.reload : surface.openProjectSettings;
-  return <DropdownMenuSub>
+  return <RequestedSettingsSub section="semantic">
     <DropdownMenuSubTrigger><ScanSearch size={15} /><span>{t("codeContext.project.contextengine")}</span></DropdownMenuSubTrigger>
     <DropdownMenuSubContent>
       {surface.gate === "ready" && surface.activity !== null ? <>
@@ -66,7 +67,7 @@ export function VceComposerMenu() {
         {activeJobLabel ?? t("codeContext.project.jobInProgress")}{t("codeContext.project.viewDetails")}
       </DropdownMenuItem></> : null}
     </DropdownMenuSubContent>
-  </DropdownMenuSub>;
+  </RequestedSettingsSub>;
 }
 
 // Render the semantic node independently from Git repository detection.

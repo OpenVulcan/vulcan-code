@@ -6,10 +6,10 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
+import { RequestedSettingsSub } from "./composer-settings-request";
 import {
   getSessionKnowledgeLibraries,
   listKnowledgeLibraries,
@@ -266,7 +266,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
   const selectionDisabled = loading || Boolean(error) || !selection || !props.projectId
     || (!props.conversationId && !props.onDraftSelectionChange);
   return (
-    <DropdownMenuSub onOpenChange={(open) => {
+    <RequestedSettingsSub section="knowledge" onOpenChange={(open) => {
       if (open) void refresh();
     }}>
       <DropdownMenuSubTrigger aria-label={t("knowledge.composer.aria")}>
@@ -335,6 +335,6 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
           })
         )}
       </DropdownMenuSubContent>
-    </DropdownMenuSub>
+    </RequestedSettingsSub>
   );
 }

@@ -49,10 +49,29 @@
 - 解锁后从解锁点重新累积记忆；锁定期间的不记忆回合不会被带回。再次锁定产生新区间，之后每轮以
   “全部已记忆内容”为基准。
 
+## 浮动助手
+
+- 记忆处于锁定状态的专职会话可以转换为浮动助手：它离开会话列表，以用户另取的名称作为以项目为归属、全局
+  可用的浮动窗口出现。这只是列表与呈现状态，会话种类、元数据与事件历史都不变，因此不违反“种类不可转换”。
+- 状态只存放在 AppState 库的 `session_assistant_index_v1`（主键外键级联于 `session_dedicated_index_v1`），
+  与 `unread` 同类，不写入会话元数据，`METADATA_SCHEMA_VERSION` 不变。转换时一并补写专职标记，因此该标记表
+  引入前创建的专职会话同样可以转换。名称上限只在 `SESSION_ASSISTANT_NAME_MAX_CHARS` 定义，经
+  `SessionSummary.assistant_name` → `ConversationSummary.assistantName` 下发。
+- 服务入口：`service_convert_conversation_to_assistant`（`conversationId`、`name`）在生命周期过渡锁内校验
+  专职会话（`ERR_DEDICATED_SESSION_REQUIRED`）、记忆已锁定（`ERR_DEDICATED_ASSISTANT_REQUIRES_LOCK`）与名称
+  （`ERR_DEDICATED_ASSISTANT_NAME_REQUIRED` / `_NAME_TOO_LONG`），重复转换即改名；
+  `service_restore_assistant_conversation`（`conversationId`）删除该行，会话回到列表。两者都返回刷新后的工作台
+  快照。
+- 助手状态下解锁记忆返回 `ERR_DEDICATED_ASSISTANT_UNLOCK_REFUSED`：先还原为会话再解锁。
+
 ## 界面语义
 
 - 不记忆回合照常显示并标注“不记忆”；锁定、解锁通知显示为时间线标记。
 - 基础提示词在时间线开头以用户消息样式显示，并标注其实际作为系统提示词发送。
+- 会话列表以种类标记区分专职会话。列表投影来自 AppState 库的 `session_dedicated_index_v1`（外键级联于
+  `session_index_v1`），只在 `create_indexed_session_v1` 按 `metadata.dedicated` 写入，经
+  `SessionSummary.dedicated` → `ConversationSummary.dedicated` 下发；列表加载不逐个读取元数据文件。
+  该表引入前创建的专职会话没有标记（V0.1.x 不迁移）。
 
 ### WebUI
 
@@ -67,6 +86,30 @@
 - **已创建会话**：输入区上方显示记忆锁定条，回合进行中禁用切换。创建时冻结的设置在菜单中直接隐藏（Goal、
   Plan、回答模式、输出风格、知识库、VMM、供应商工具与 AI 能力开关），`none` 另隐藏权限模式，不提供会被服务
   拒绝的操作。
+- **快速指令**：服务目录只提供稳定 `id` 与 `command`，说明文案为共享键 `composer.slash.<id>`。
+  `composerSlashCommandsForSession`（`components/composer/composer-model.ts`）按会话种类筛选：专职会话隐藏
+  被冻结或不适用的指令（`/compact`、`/plan`、`/goal`、`/style`、`/answer`、`/knowledge`、`/semantic`、
+  `/memory`），`/skill` 与 `/skills` 仅在 `standard` 工具开放方式下显示；未知 `id` 一律不显示。
+- **侧栏标记**：专职会话行在标题前显示 `Bot` 图标，提示文字为 `composer.draft.kindDedicated`。
+- **浮动助手**（`components/assistant/`）：记忆锁定条在锁定后提供“转换为助手”并弹出命名对话框；转换的会话
+  若正被选中，主视图移到同项目的新草稿（不自动选择用户未选的其他会话）。侧栏列表排除带 `assistantName` 的会话，但它们仍留在
+  `workbench.conversations` 中供停靠控制器使用。
+  - 顶部栏在终端按钮旁显示助手按钮（存在助手时）：悬停列出助手，点击某个助手显示或隐藏；窗口以相同的
+    精灵动画最小化收入该按钮。
+  - 每个窗口容纳一个或多个助手；多于一个时左侧首字栏切换。新显示的助手加入最近使用的窗口；标题栏提供
+    分离到独立窗口、合并其他窗口、还原为会话、从窗口隐藏与关闭窗口。窗口布局只存在于界面内存，几何位置
+    沿用浮动图层的本地存储。
+  - 运行状态取自工作台行的实时 `runPhase`（与主输入区相同的 `conversationIsRunning`），不读事件窗口的
+    `open_turn_id`，后者只在加载时更新。
+  - 窗口只显示最后一轮（`assistant-last-turn.ts`）：思考在流式输出时内联展开、结束后收起；每次请求下方以
+    一行文字写出用量，本轮合计固定在输入框上方，均不使用悬停提示。每段已完成的回答在用量行旁提供复制按钮，
+    复制其 Markdown 原文。完整内容仍在会话中实时同步。
+  - 输入框接受粘贴多模态素材，复用主输入区的 `useComposerAttachments` 暂存与附件条；可以只发送素材不带文字。
+    门控来自 `service_model_attachment_capabilities`（`providerId`、`connectionId`、`modelId`，取自
+    `session_config.current_request`），只描述该路线本身，`bridged` 恒为 false。`tool_access` 为 `none` 时只接受
+    `native` 类别，被拒的素材以 `assistantDock.attachmentNativeOnly` 提示；`standard` 时与普通会话接受相同类别。
+    最后一轮的提示词附件以只读附件条显示。
+  - 窗口样式 `assistant-floating-layer.css` 随懒加载分块载入，不进入首屏样式预算。
 - **实时锁定状态**：事件窗口的 `session_config` 只在加载时更新，因此生效区间由加载时的
   `session_config.dedicated.locked_spans` 加上其最后端点之后到达的 `memory_locked` / `memory_unlocked` 通知
   派生（`service/dedicated-memory.ts`）；判定规则与上文“不记忆回合”一致，当前开放回合从不标注。
@@ -77,3 +120,6 @@
 
 - TUI 不提供创建或锁定入口；锁定、解锁通知以共享键 `conversation.dedicatedNotice.locked` / `.unlocked`
   显示在记录区（`backend/service/map.rs`），不显示原始 `reason_code`。
+- 侧栏会话行以 `ConversationSummary.dedicated` 在标题前显示主色 `◆` 种类标记（`ui/sidebar.rs`）。
+- TUI 没有浮动助手界面；带 `assistantName` 的会话不进入侧栏行（`backend/service/worker.rs`
+  `conversation_rows`），转换与还原只在 WebUI 进行。

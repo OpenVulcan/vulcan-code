@@ -9,6 +9,10 @@ const DEDICATED_ERROR_KEYS: ReadonlyArray<[code: string, key: TranslationKey]> =
   ["ERR_DEDICATED_PROMPT_DRAFT_REASONING_INVALID", "composer.dedicated.error.draftReasoning"],
   ["ERR_DEDICATED_PROMPT_DRAFT_FAILED", "composer.dedicated.error.draftFailed"],
   ["ERR_DEDICATED_MEMORY_LOCK_TURN_OPEN", "composer.dedicated.error.lockTurnOpen"],
+  ["ERR_DEDICATED_ASSISTANT_REQUIRES_LOCK", "composer.dedicated.error.assistantRequiresLock"],
+  ["ERR_DEDICATED_ASSISTANT_NAME_REQUIRED", "composer.dedicated.error.assistantNameRequired"],
+  ["ERR_DEDICATED_ASSISTANT_NAME_TOO_LONG", "composer.dedicated.error.assistantNameTooLong"],
+  ["ERR_DEDICATED_ASSISTANT_UNLOCK_REFUSED", "composer.dedicated.error.assistantUnlockRefused"],
   ["ERR_DEDICATED_SESSION_REQUIRED", "composer.dedicated.error.lockFailed"],
   ["ERR_DEDICATED_MEMORY_LOCK_FAILED", "composer.dedicated.error.lockFailed"],
 ];

@@ -10,6 +10,10 @@ import {
   type ResourceId,
 } from "@/service/conversation-event-window-store";
 
+/** Service route that serves one session resource's content.
+ * 提供单个会话资源内容的服务路由。 */
+const SESSION_RESOURCE_CONTENT_ROUTE = "/v1/session-resources/";
+
 /** Browser-safe metadata for one available project resource.
  * 单个可用项目资源的浏览器安全元数据。 */
 export interface AvailableSessionResourceV1 {
@@ -104,8 +108,38 @@ export class ServiceSessionResourceClientV1 implements SessionResourceRpcV1 {
     }
     const baseUrl = resolveBrowserServiceBaseUrl();
     const query = new URLSearchParams({ token });
-    return `${baseUrl}/v1/session-resources/${encodeURIComponent(sessionId)}/${currentResourceId}?${query.toString()}`;
+    return `${baseUrl}${SESSION_RESOURCE_CONTENT_ROUTE}${encodeURIComponent(sessionId)}/${currentResourceId}?${query.toString()}`;
   }
+}
+
+/** Reads the session and resource identity back out of one content URL built by `contentUrl`.
+ * 从 `contentUrl` 构建的内容 URL 中读回会话与资源身份。
+ *
+ * @param value any media locator.
+ *              任意媒体定位值。
+ * @returns the identity, or null when the value is not a session-resource content URL.
+ *          身份；不是会话资源内容 URL 时返回 null。 */
+export function sessionResourceFromContentUrl(value: string): { sessionId: string; resourceId: ResourceId } | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  const index = url.pathname.indexOf(SESSION_RESOURCE_CONTENT_ROUTE);
+  if (index < 0) return null;
+  const [rawSession, rawResource, ...rest] = url.pathname.slice(index + SESSION_RESOURCE_CONTENT_ROUTE.length).split("/");
+  if (!rawSession || !rawResource || rest.length > 0 || !/^\d+$/.test(rawResource)) return null;
+  return { sessionId: decodeURIComponent(rawSession), resourceId: resourceId(Number(rawResource)) };
+}
+
+/** Asks the service for the host file path of one project resource, for an explicit copy action.
+ * 为显式复制操作向服务请求一个项目资源的宿主文件路径。 */
+export async function sessionResourceFilePath(sessionId: string, currentResourceId: ResourceId): Promise<string> {
+  return serviceClient.request<string>("service_session_resource_path_v1", {
+    sessionId,
+    resourceId: currentResourceId,
+  });
 }
 
 /** Shared production resource client over the process-wide service facade.

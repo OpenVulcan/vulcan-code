@@ -5,7 +5,9 @@ use crate::agent_runtime::provider_attachment::{
     build_attachment_provider_tool_hint, build_attachment_transport_error_text,
     build_missing_attachment_replay_text,
 };
-use crate::attachment_asset_index::{AttachmentReplayStatus, resolve_attachment_replay_status};
+use crate::attachment_asset_index::{
+    AttachmentReplayStatus, is_project_resource_attachment, resolve_attachment_replay_status,
+};
 use vulcan_ai_contract::{ModelCapabilities, ResourceKind, StructuredOutputCapability};
 use vulcan_core::types::{
     ConversationAttachment, ConversationAttachmentDeliveryMode, ConversationAttachmentKind,
@@ -87,10 +89,13 @@ pub fn normalize_provider_user_input_for_model_with_tool_bridges(
     let mut diagnostic_lines = Vec::new();
 
     for attachment in attachments.iter().cloned() {
-        let replayable = !matches!(
-            resolve_attachment_replay_status(&attachment),
-            AttachmentReplayStatus::Missing | AttachmentReplayStatus::Purged
-        );
+        // A V1 project resource has no managed copy; its media boundary delivers the bytes.
+        // V1 项目资源没有托管副本；其字节由媒体边界投递。
+        let replayable = is_project_resource_attachment(&attachment)
+            || !matches!(
+                resolve_attachment_replay_status(&attachment),
+                AttachmentReplayStatus::Missing | AttachmentReplayStatus::Purged
+            );
         // protocolSupported includes both content-block shape and the actual media MIME encoder.
         // protocolSupported 同时包含内容块形态与实际媒体 MIME 编码器。
         let protocol_supported =
@@ -442,6 +447,32 @@ mod tests {
 
         assert!(normalized.attachments.is_empty());
         assert!(normalized.text.contains("selected model"));
+    }
+
+    /// Keeps an attachment-only V1 project resource as a blank seed instead of a missing-file notice.
+    /// 将仅附件的 V1 项目资源保留为空白播种，而不是缺失文件提示。
+    #[test]
+    fn project_resource_attachment_stays_a_blank_seed() {
+        let capabilities = ModelCapabilities {
+            input_resources: vec![ResourceKind::Image],
+            ..ModelCapabilities::default()
+        };
+        let mut attachment =
+            test_attachment(ConversationAttachmentKind::Image, "shot.png", "image/png");
+        attachment.local_path = String::new();
+        attachment.source_path = None;
+        attachment.resource_path = Some(String::from("resources/shot.png"));
+        attachment.asset_id = Some(crate::attachment_asset_index::project_resource_asset_id(1));
+        let normalized = normalize_provider_user_input_for_model_with_tool_bridges(
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
+            Some(&capabilities),
+            "",
+            &[attachment],
+            &[],
+        );
+
+        assert!(normalized.text.is_empty());
+        assert_eq!(normalized.attachments.len(), 1);
     }
 
     /// Downgrades unsupported image input to the exact visible image-understanding host tool.

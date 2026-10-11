@@ -77,6 +77,7 @@ pub fn conversation(conversation: &api::ConversationSummary) -> ConversationSumm
         last_updated_label: conversation.last_updated_label.clone(),
         unread: conversation.unread,
         attention: conversation.attention.is_some(),
+        dedicated: conversation.dedicated,
     }
 }
 

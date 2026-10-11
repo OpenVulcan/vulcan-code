@@ -267,6 +267,8 @@ fn insert_test_workbench_conversation(state: &mut ServiceBridgeState, session_id
         unread: false,
         attention: None,
         project_id: Some(String::from("project-a")),
+        dedicated: false,
+        assistant_name: None,
     });
 }
 

@@ -6,7 +6,7 @@ use super::{
     session_index_v1::SessionIndexV1Row,
 };
 use crate::{data_plane::HostRuntimeHandle, local_database_runtime::LogicalDatabase, local_sql};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One statement's decoded rows and explicit row-local failures; query failures remain errors.
 /// 同一查询中成功解码的记录和明确的行级失败；查询级失败仍返回错误。
@@ -18,6 +18,9 @@ pub(super) struct WorkspaceIndexRows {
     /// Admitted rows whose session carries a creation-frozen dedicated profile.
     /// 已准入记录中带有创建时冻结专职配置的会话。
     pub dedicated_session_ids: BTreeSet<String>,
+    /// Display names of admitted dedicated sessions converted into floating assistants.
+    /// 已准入、已转换为浮动助手的专职会话显示名称。
+    pub assistant_names: BTreeMap<String, String>,
     /// Corrupt records excluded from rows but retained for incomplete-load reporting.
     /// 未放入有效记录、但保留用于不完整加载报告的损坏记录。
     pub issues: Vec<WorkspaceIndexLoadIssue>,
@@ -41,7 +44,7 @@ fn read_rows(connection: &rusqlite::Connection) -> rusqlite::Result<WorkspaceInd
     // Retain a single SQL snapshot instead of retrying each project after a decode error.
     // 保留单次 SQL 快照，避免解码失败后逐项目重试。
     let mut statement = connection.prepare(
-        "SELECT session_id, project_id, project_tag, storage_partition, relative_path, title, created_at_ms, updated_at_ms, archived_at_ms, unread, EXISTS (SELECT 1 FROM session_dedicated_index_v1 AS marker WHERE marker.session_id = session_index_v1.session_id) AS dedicated FROM session_index_v1 WHERE project_id IN (SELECT id FROM projects) ORDER BY session_id"
+        "SELECT session_id, project_id, project_tag, storage_partition, relative_path, title, created_at_ms, updated_at_ms, archived_at_ms, unread, EXISTS (SELECT 1 FROM session_dedicated_index_v1 AS marker WHERE marker.session_id = session_index_v1.session_id) AS dedicated, (SELECT assistant.name FROM session_assistant_index_v1 AS assistant WHERE assistant.session_id = session_index_v1.session_id) AS assistant_name FROM session_index_v1 WHERE project_id IN (SELECT id FROM projects) ORDER BY session_id"
     )?;
     // Cursor failures abort the snapshot; only typed decoding failures isolate one row.
     // 游标读取失败终止快照；仅强类型解码失败隔离单条记录。
@@ -51,15 +54,27 @@ fn read_rows(connection: &rusqlite::Connection) -> rusqlite::Result<WorkspaceInd
     let mut report = WorkspaceIndexRows {
         rows: Vec::new(),
         dedicated_session_ids: BTreeSet::new(),
+        assistant_names: BTreeMap::new(),
         issues: Vec::new(),
     };
     while let Some(row) = cursor.next()? {
-        match decode_row(row).and_then(|decoded| Ok((decoded, row.get::<_, bool>("dedicated")?))) {
-            Ok((decoded, dedicated)) => {
+        match decode_row(row).and_then(|decoded| {
+            Ok((
+                decoded,
+                row.get::<_, bool>("dedicated")?,
+                row.get::<_, Option<String>>("assistant_name")?,
+            ))
+        }) {
+            Ok((decoded, dedicated, assistant_name)) => {
                 if dedicated {
                     report
                         .dedicated_session_ids
                         .insert(decoded.session_id.clone());
+                }
+                if let Some(name) = assistant_name {
+                    report
+                        .assistant_names
+                        .insert(decoded.session_id.clone(), name);
                 }
                 report.rows.push(decoded);
             }
@@ -144,7 +159,9 @@ fn prune_rows(
 
 #[cfg(test)]
 mod tests {
-    use super::super::session_index_v1::SESSION_INDEX_V1_SCHEMA_SQL;
+    use super::super::session_index_v1::{
+        SESSION_INDEX_V1_SCHEMA_SQL, write_session_assistant_v1_rows,
+    };
     use super::*;
 
     fn fixture() -> rusqlite::Connection {
@@ -199,6 +216,47 @@ mod tests {
             })
             .expect("count markers");
         assert_eq!(remaining, 0, "a pruned locator must not leave its dedicated marker");
+    }
+
+    /// Converting projects the dedicated kind with the name, restoring clears only the name,
+    /// an unindexed session is refused, and pruning the locator removes the assistant row.
+    /// 转换时同时投影专职种类与名称，还原只清除名称，未索引会话被拒绝，清理定位记录时移除助手记录。
+    #[test]
+    fn assistant_row_follows_its_dedicated_marker() {
+        let mut connection = fixture();
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON")
+            .expect("enforce foreign keys");
+        write_session_assistant_v1_rows(&mut connection, "a", Some("Helper"))
+            .expect("convert indexed session");
+        write_session_assistant_v1_rows(&mut connection, "a", Some("Renamed"))
+            .expect("rename assistant");
+        let report = read_rows(&connection).expect("typed rows");
+        assert_eq!(
+            report.dedicated_session_ids,
+            BTreeSet::from([String::from("a")])
+        );
+        assert_eq!(
+            report.assistant_names,
+            BTreeMap::from([(String::from("a"), String::from("Renamed"))])
+        );
+        assert!(
+            write_session_assistant_v1_rows(&mut connection, "missing", Some("Ghost")).is_err(),
+            "an unindexed session cannot become an assistant"
+        );
+        write_session_assistant_v1_rows(&mut connection, "a", None).expect("restore session");
+        let restored = read_rows(&connection).expect("restored rows");
+        assert!(restored.assistant_names.is_empty());
+        assert_eq!(restored.dedicated_session_ids.len(), 1);
+        write_session_assistant_v1_rows(&mut connection, "a", Some("Again"))
+            .expect("convert again");
+        prune_rows(&mut connection, &restored.rows).expect("prune observed rows");
+        let remaining: i64 = connection
+            .query_row("SELECT COUNT(*) FROM session_assistant_index_v1", [], |row| {
+                row.get(0)
+            })
+            .expect("count assistants");
+        assert_eq!(remaining, 0, "a pruned locator must not leave its assistant row");
     }
 
     /// A newer locator or lifecycle prevents stale deletion and rolls back earlier batch removals.

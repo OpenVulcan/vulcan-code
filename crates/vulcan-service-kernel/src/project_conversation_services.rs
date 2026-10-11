@@ -14,9 +14,9 @@ pub(super) use collaboration_grants::{
 
 pub(super) use conversation_services::{
     service_archive_conversation, service_delete_archived_conversations,
-    service_mark_conversation_read, service_rename_conversation,
-    service_restore_archived_conversations, service_select_conversation,
-    sync_selected_conversation_fields_for_retained_workbench,
+    service_delete_unsupported_conversation, service_mark_conversation_read,
+    service_rename_conversation, service_restore_archived_conversations,
+    service_select_conversation, sync_selected_conversation_fields_for_retained_workbench,
 };
 pub use project_services::service_add_project_initial_directory;
 pub(super) use project_services::{

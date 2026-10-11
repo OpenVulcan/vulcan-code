@@ -84,6 +84,7 @@ import {
   type WorkspaceContextTabStateEntry,
 } from "@/components/workspace/workspace-shell/context-tabs";
 import { useWorkspaceGitState } from "@/components/workspace/workspace-shell/use-workspace-git-state";
+import { AssistantDockButton } from "@/components/assistant/assistant-dock-button";
 import { useWorkspacePanelLayout } from "@/components/workspace/workspace-shell/use-workspace-panel-layout";
 import {
   WORKSPACE_FEATURE_AREAS,
@@ -924,12 +925,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onTrace={props.onTrace}
       />
     ),
-    headerRightActions: projectTerminalAction || hasSelectedChatConversation ? (
-      <>
-        {projectTerminalAction}
-        {hasSelectedChatConversation ? contextPanelToggleAction : null}
-      </>
-    ) : undefined,
+    headerRightActions: <>
+      <AssistantDockButton />
+      {projectTerminalAction}
+      {hasSelectedChatConversation ? contextPanelToggleAction : null}
+    </>,
     toolPanels: [{
       className: "conversation-session-tool-adaptive-panel",
       contentClassName: "conversation-session-tool-content",

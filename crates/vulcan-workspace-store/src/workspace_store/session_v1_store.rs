@@ -34,7 +34,8 @@ use super::session_index_v1::{
     SessionIndexV1Row, compose_relative_path, delete_session_index_v1,
     ensure_session_index_v1_schema, insert_session_index_v1, list_active_session_index_v1,
     list_archived_session_index_v1, locate_session_index_v1, project_session_lifecycle_index_v1,
-    set_session_index_unread_v1, validate_new_session_index_v1, validate_project_partition,
+    set_session_index_assistant_v1, set_session_index_unread_v1, validate_new_session_index_v1,
+    validate_project_partition,
     validate_relative_path,
 };
 use super::session_v1::event_window::{
@@ -1147,6 +1148,35 @@ pub async fn delete_session_v1(
     })
 }
 
+/// Reports whether one indexed session's metadata uses a format this build no longer reads.
+/// 报告一个索引会话的元数据是否采用本构建已不再读取的格式。
+///
+/// Only the metadata file is opened. Readable metadata returns `false`; every other storage
+/// failure (missing row, corrupt file, I/O) stays an error so callers never treat damage as an old format.
+/// 只打开元数据文件。可读元数据返回 `false`；其他存储失败（记录缺失、文件损坏、读写错误）仍为错误，
+/// 调用方绝不把损坏当作旧格式。
+pub async fn session_v1_format_is_unsupported(
+    host_runtime: &HostRuntimeHandle,
+    session_id: &str,
+) -> Result<bool, SessionV1StoreError> {
+    let locator = locate_session_v1_storage(host_runtime, session_id).await?;
+    let metadata_path = locator.layout.metadata_path();
+    index_probe::run_io(move || {
+        match super::session_v1::documents::read_metadata(&metadata_path) {
+            Ok(_) => Ok(false),
+            Err(error) if error.code == SessionV1StorageErrorCode::UnsupportedDevelopmentFormat => {
+                Ok(true)
+            }
+            Err(error) => Err(SessionV1StoreError::from(error)),
+        }
+    })
+    .await
+    .map_err(|detail| SessionIndexV1Error::Read {
+        session_id: Some(session_id.to_string()),
+        detail,
+    })?
+}
+
 /// Updates the lightweight unread projection for one exact indexed V1 session.
 /// 更新一个精确索引 V1 会话的轻量未读投影。
 ///
@@ -1169,6 +1199,22 @@ pub async fn set_session_unread_v1(
     unread: bool,
 ) -> Result<(), SessionV1StoreError> {
     set_session_index_unread_v1(host_runtime, session_id, unread)
+        .await
+        .map_err(SessionV1StoreError::from)
+}
+
+/// Converts one dedicated session into a named floating assistant, or returns it to the list.
+/// 将一个专职会话转换为具名浮动助手，或将其还原到会话列表。
+///
+/// The SQLite row is the sole durable owner of this presentation choice; callers prove the
+/// dedicated profile and memory lock from metadata before converting.
+/// SQLite 记录是该展示选择的唯一持久化所有者；调用方在转换前依据 metadata 证明专职配置与记忆锁定。
+pub async fn set_session_assistant_v1(
+    host_runtime: &HostRuntimeHandle,
+    session_id: &str,
+    name: Option<&str>,
+) -> Result<(), SessionV1StoreError> {
+    set_session_index_assistant_v1(host_runtime, session_id, name)
         .await
         .map_err(SessionV1StoreError::from)
 }
@@ -3034,9 +3080,38 @@ END;
 
         let delete_metadata = MetadataDocument::new("session-delete", "project-tag", "title", 9);
         let delete_request = creation_fixture(&delete_metadata, &runtime_lock);
-        create_indexed_session_v1(&host_runtime, &delete_request)
+        let delete_created = create_indexed_session_v1(&host_runtime, &delete_request)
             .await
             .expect("create deletion fixture");
+        assert!(
+            !session_v1_format_is_unsupported(&host_runtime, "session-delete")
+                .await
+                .expect("inspect readable metadata"),
+            "current metadata must not be reported as an unsupported format"
+        );
+        let delete_metadata_path = delete_created.locator.layout.metadata_path();
+        let mut raw_metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&delete_metadata_path).expect("read metadata"))
+                .expect("parse metadata");
+        raw_metadata["schema_version"] =
+            (vulcan_session_core::v1::config::METADATA_SCHEMA_VERSION - 1).into();
+        fs::write(
+            &delete_metadata_path,
+            serde_json::to_vec(&raw_metadata).expect("encode metadata"),
+        )
+        .expect("write older metadata schema");
+        assert!(
+            session_v1_format_is_unsupported(&host_runtime, "session-delete")
+                .await
+                .expect("inspect older metadata"),
+            "an older metadata schema must be reported as unsupported"
+        );
+        assert!(
+            session_v1_format_is_unsupported(&host_runtime, "session-missing")
+                .await
+                .is_err(),
+            "a missing row must stay an error rather than an unsupported format"
+        );
         assert_eq!(
             delete_session_v1(&host_runtime, "session-delete")
                 .await

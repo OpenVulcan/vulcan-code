@@ -2979,6 +2979,21 @@ async fn service_start_conversation_execution(
     {
         return Err(String::from("ERR_DEDICATED_SESSION_NOT_CONVERTIBLE"));
     }
+    if dedicated_creation.is_some() {
+        // The list entry carries the same kind the root publication installs.
+        // 列表项携带与根发布安装一致的会话种类。
+        crate::workspace_session_summary_for_session_mut(
+            &mut workspace_snapshot,
+            materialized_session.session_id,
+        )
+        .ok_or_else(|| {
+            format!(
+                "created conversation `{}` is missing from its workspace slice",
+                materialized_session.session_id
+            )
+        })?
+        .dedicated = true;
+    }
     // Resolve the new-session default against the actual selected model before publishing the root.
     // 在发布根输入前，按实际所选模型解析新会话默认窗口。
     let new_session_context_window_node_id =

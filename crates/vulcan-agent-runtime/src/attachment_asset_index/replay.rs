@@ -2,6 +2,35 @@ use super::*;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
+/// Prefix of the asset id carried by an attachment that names one V1 project resource.
+/// 指向一个 V1 项目资源的附件所携带资产 id 的前缀。
+const PROJECT_RESOURCE_ASSET_ID_PREFIX: &str = "project-resource-";
+
+/// Builds the asset id that names one V1 project resource by its catalog id.
+/// 按目录 id 构建指向一个 V1 项目资源的资产 id。
+pub fn project_resource_asset_id(resource_id: u64) -> String {
+    format!("{PROJECT_RESOURCE_ASSET_ID_PREFIX}{resource_id}")
+}
+
+/// Returns whether one attachment is a logical V1 project resource rather than a managed copy.
+/// 返回附件是否为逻辑 V1 项目资源而非托管副本。
+///
+/// Such an attachment has no local replay path: the V1 media boundary reads and delivers its
+/// bytes for each physical request, so a missing managed copy says nothing about availability.
+/// 此类附件没有本地回放路径：V1 媒体边界为每次物理请求读取并投递其字节，因此缺少托管副本
+/// 并不说明资源不可用。
+pub fn is_project_resource_attachment(attachment: &ConversationAttachment) -> bool {
+    attachment.local_path.trim().is_empty()
+        && attachment
+            .source_path
+            .as_deref()
+            .is_none_or(|path| path.trim().is_empty())
+        && attachment
+            .asset_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with(PROJECT_RESOURCE_ASSET_ID_PREFIX))
+}
+
 /// Resolves whether one attachment can replay from the managed asset copy, source fallback, or neither.
 /// 判断一个附件可从托管资产副本、来源回退路径还是都不可用来回放。
 pub fn resolve_attachment_replay_status(

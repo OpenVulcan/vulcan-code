@@ -13,6 +13,7 @@ import { AnswerFrame } from "@/components/conversation/answer-components/answer-
 import { markdownTable, numericCells } from "@/components/conversation/answer-components/answer-markdown-table";
 import { splitStreamingMarkdownBlocks, STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS } from "@/components/conversation/streaming-markdown-blocks";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
+import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
 import {
   highlightedDiffLineSpansForLanguage,
   useHighlightedCodeBlockRevision,
@@ -247,6 +248,7 @@ function MarkdownContentRenderer(props: {
       const imageStyle = width ? { width, maxWidth: 800 } : undefined;
       if (imageAttachment && props.onOpenMedia) {
         return (
+          <MediaPathContextMenu locator={imageSource}>
           <button
             className="markdown-image-button"
             onClick={() => props.onOpenMedia?.(imageAttachment)}
@@ -260,16 +262,19 @@ function MarkdownContentRenderer(props: {
               src={imageSource}
             />
           </button>
+          </MediaPathContextMenu>
         );
       }
       return (
-        <img
-          alt={alt ?? ""}
-          decoding="async"
-          loading="lazy"
-          src={imageSource}
-          style={imageStyle}
-        />
+        <MediaPathContextMenu locator={imageSource}>
+          <img
+            alt={alt ?? ""}
+            decoding="async"
+            loading="lazy"
+            src={imageSource}
+            style={imageStyle}
+          />
+        </MediaPathContextMenu>
       );
     },
     pre: ({ children, node }: { children?: React.ReactNode } & ExtraProps) => (

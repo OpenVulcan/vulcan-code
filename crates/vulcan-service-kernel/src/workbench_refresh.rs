@@ -1273,6 +1273,8 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                         Some(session.updated_at.clone()),
                     ),
                     project_id: session_summary_project_id_owned(session),
+                    dedicated: session.dedicated,
+                    assistant_name: session.assistant_name.clone(),
                 }
             })
             .collect(),
@@ -1304,6 +1306,8 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 unread: false,
                 attention: None,
                 project_id: session_summary_project_id_owned(session),
+                dedicated: session.dedicated,
+                assistant_name: session.assistant_name.clone(),
             })
             .collect(),
         selected_conversation_id,

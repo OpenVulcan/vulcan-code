@@ -23,6 +23,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_archive_conversation",
     "service_restore_archived_conversations",
     "service_delete_archived_conversations",
+    "service_delete_unsupported_conversation",
     "service_mark_conversation_read",
     "service_select_conversation",
     "service_list_collaboration_grants",
@@ -134,6 +135,13 @@ pub(super) async fn dispatch(
             service_delete_archived_conversations(
                 state,
                 rpc_required_param(params, "conversationIds")?,
+            )
+            .await,
+        ),
+        "service_delete_unsupported_conversation" => rpc_json_result(
+            service_delete_unsupported_conversation(
+                state,
+                rpc_required_param(params, "conversationId")?,
             )
             .await,
         ),

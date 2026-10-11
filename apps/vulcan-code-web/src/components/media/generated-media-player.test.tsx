@@ -7,7 +7,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { GeneratedMediaPlayerWindow } from "./generated-media-player";
 import type { GeneratedMediaAttachment } from "./generated-media-types";
 
-vi.mock("@/resources/localMedia", () => ({ localMediaSourceUrl: (path: string) => `/synthetic/${path}` }));
+vi.mock("@/resources/localMedia", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/resources/localMedia")>(),
+  localMediaSourceUrl: (path: string) => `/synthetic/${path}`,
+}));
 
 // root and host mount real portal controls without loading any local user media.
 // root 与 host 挂载真实门户控件，而不加载任何用户本地媒体。

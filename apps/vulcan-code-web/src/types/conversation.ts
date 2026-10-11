@@ -86,6 +86,12 @@ export interface ConversationSummary {
   // Optional owning project identifier.
   // 可选所属项目标识。
   projectId?: string | null;
+  // Whether this is a dedicated session; the kind is fixed at creation.
+  // 是否为专职会话；该种类在创建时固定。
+  dedicated?: boolean;
+  // Floating-assistant name; a named dedicated session leaves the ordinary session list.
+  // 浮动助手名称；具名的专职会话不再出现在普通会话列表中。
+  assistantName?: string | null;
 }
 
 // ConversationMessage is the in-memory presentation record consumed by the restored conversation UI.

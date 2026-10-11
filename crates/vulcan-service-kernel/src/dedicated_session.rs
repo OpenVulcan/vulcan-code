@@ -3,8 +3,9 @@
 
 use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionMutationAdmission, SessionMutationChange, SessionRuntimeError,
+    SessionRuntimeRegistry,
 };
-use crate::{SharedServiceBridgeState, current_v1_unix_millis, parse_session_id};
+use crate::{SessionId, SharedServiceBridgeState, current_v1_unix_millis, parse_session_id};
 use vulcan_agent_runtime::agent_runtime::provider_reasoning::{
     resolve_effective_public_reasoning_effort, validate_exact_wire_reasoning_effort,
 };
@@ -15,8 +16,13 @@ use vulcan_ai_contract::{
 use vulcan_service_api::{
     DedicatedMemoryLockRequest, DedicatedMemoryLockResponse, DedicatedPromptDraftProgressEvent,
     DedicatedPromptDraftRequest, DedicatedPromptDraftResponse, ServiceEvent, ServiceEventEmitter,
+    WorkbenchSnapshot,
 };
 use vulcan_session_core::v1::{DEDICATED_BASE_PROMPT_MAX_CHARS, DomainError};
+use vulcan_workspace_store::data_plane::HostRuntimeHandle;
+use vulcan_workspace_store::workspace_store::{
+    SESSION_ASSISTANT_NAME_MAX_CHARS, set_session_assistant_v1,
+};
 
 /// Locks or unlocks dedicated-session memory through the unique session writer.
 /// 通过唯一会话写入器锁定或解锁专职会话记忆。
@@ -56,6 +62,13 @@ pub(crate) async fn service_set_dedicated_memory_lock(
         .acquire_lifecycle_transition(session_id)
         .await
         .map_err(|error| error.to_string())?;
+    // Checked under the lifecycle transition so a concurrent conversion cannot slip between.
+    // 在生命周期切换内检查，避免并发转换插入其间。
+    if !request.locked && session_is_assistant(&state, session_id)? {
+        return Err(String::from(
+            "ERR_DEDICATED_ASSISTANT_UNLOCK_REFUSED: restore the assistant to a session before unlocking its memory.",
+        ));
+    }
     let handle =
         crate::session_goal_lifecycle::session_v1_handle_from_state(&state, session_id).await?;
     let now_ms = current_v1_unix_millis()?;
@@ -85,6 +98,179 @@ pub(crate) async fn service_set_dedicated_memory_lock(
         note_seq: receipt.value.1,
         dedicated: receipt.value.2,
     })
+}
+
+/// Converts one memory-locked dedicated session into a named floating assistant.
+/// 将一个记忆已锁定的专职会话转换为具名浮动助手。
+///
+/// # Parameters
+/// 参数
+/// `conversation_id` names an active regular session; `name` is the requested display name.
+/// `conversation_id` 指定一个活动常规会话；`name` 是请求的显示名称。
+///
+/// # Returns
+/// 返回值
+/// Returns the reloaded workbench, or a stable error code when the name is invalid, the session
+/// is not dedicated, or its memory is not locked.
+/// 返回重新加载的工作台；名称无效、会话不是专职会话或记忆未锁定时返回稳定错误码。
+pub(crate) async fn service_convert_conversation_to_assistant(
+    state: SharedServiceBridgeState,
+    conversation_id: String,
+    name: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let name = normalized_assistant_name(&name)?;
+    let owner = assistant_session_owner(&state, &conversation_id)?;
+    let lifecycle = owner
+        .registry
+        .acquire_lifecycle_transition(owner.session_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let handle =
+        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, owner.session_id)
+            .await?;
+    let locked = handle
+        .read(|document| {
+            document
+                .dedicated_profile()
+                .map(|profile| profile.is_locked())
+        })
+        .map_err(|error| error.to_string())?;
+    match locked {
+        None => {
+            return Err(String::from(
+                "ERR_DEDICATED_SESSION_REQUIRED: only dedicated sessions can become assistants.",
+            ));
+        }
+        Some(false) => {
+            return Err(String::from(
+                "ERR_DEDICATED_ASSISTANT_REQUIRES_LOCK: lock the memory before converting the session into an assistant.",
+            ));
+        }
+        Some(true) => {}
+    }
+    set_session_assistant_v1(
+        &owner.controller_runtime,
+        &owner.session_id.to_string(),
+        Some(&name),
+    )
+    .await
+    .map_err(|error| format!("Failed to convert the session into an assistant: {error}"))?;
+    // The refresh takes the selected session's lifecycle guard, which is usually this session.
+    // 刷新会获取选中会话的生命周期守卫，而选中会话通常就是本会话。
+    drop(lifecycle);
+    crate::refresh_workbench_snapshot(state).await
+}
+
+/// Returns one floating assistant to the ordinary session list.
+/// 将一个浮动助手还原到普通会话列表。
+///
+/// # Parameters
+/// 参数
+/// `conversation_id` names the active regular session behind the assistant.
+/// `conversation_id` 指定助手背后的活动常规会话。
+///
+/// # Returns
+/// 返回值
+/// Returns the reloaded workbench; restoring a session that is not an assistant changes nothing.
+/// 返回重新加载的工作台；还原非助手会话不产生变化。
+pub(crate) async fn service_restore_assistant_conversation(
+    state: SharedServiceBridgeState,
+    conversation_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let owner = assistant_session_owner(&state, &conversation_id)?;
+    let lifecycle = owner
+        .registry
+        .acquire_lifecycle_transition(owner.session_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    set_session_assistant_v1(
+        &owner.controller_runtime,
+        &owner.session_id.to_string(),
+        None,
+    )
+    .await
+    .map_err(|error| format!("Failed to restore the assistant to a session: {error}"))?;
+    // Released before the refresh, which takes the selected session's lifecycle guard.
+    // 在刷新前释放，因为刷新会获取选中会话的生命周期守卫。
+    drop(lifecycle);
+    crate::refresh_workbench_snapshot(state).await
+}
+
+/// Trims one assistant name and enforces the stored length bound.
+/// 去除助手名称首尾空白并执行存储长度上限。
+fn normalized_assistant_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(String::from(
+            "ERR_DEDICATED_ASSISTANT_NAME_REQUIRED: the assistant name is empty.",
+        ));
+    }
+    if trimmed.chars().count() > SESSION_ASSISTANT_NAME_MAX_CHARS {
+        return Err(format!(
+            "ERR_DEDICATED_ASSISTANT_NAME_TOO_LONG: the assistant name exceeds {SESSION_ASSISTANT_NAME_MAX_CHARS} characters."
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Owners an assistant transition needs for one active regular session.
+/// 助手切换针对一个活动常规会话所需的归属对象。
+struct AssistantSessionOwner {
+    /// Exact session identity.
+    /// 精确会话身份。
+    session_id: SessionId,
+    /// Runtime owning the application SQLite binding.
+    /// 持有应用 SQLite 绑定的运行时。
+    controller_runtime: HostRuntimeHandle,
+    /// Registry serializing lifecycle transitions of the session.
+    /// 串行化会话生命周期切换的注册表。
+    registry: std::sync::Arc<SessionRuntimeRegistry>,
+}
+
+/// Resolves the owners of an active regular session for an assistant transition.
+/// 为助手切换解析活动常规会话的归属对象。
+fn assistant_session_owner(
+    state: &SharedServiceBridgeState,
+    conversation_id: &str,
+) -> Result<AssistantSessionOwner, String> {
+    let session_id = parse_session_id(conversation_id)
+        .ok_or_else(|| String::from("Invalid assistant session identity."))?;
+    let guard = state
+        .lock()
+        .map_err(|error| format!("Failed to lock service state: {error}"))?;
+    let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+        String::from("Service is still starting; controller runtime is not ready.")
+    })?;
+    let workspace = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("Workspace is not ready."))?;
+    if !crate::workspace_snapshot_contains_regular_session(workspace, session_id) {
+        return Err(String::from(
+            "Assistant conversion requires an active regular session.",
+        ));
+    }
+    Ok(AssistantSessionOwner {
+        session_id,
+        controller_runtime,
+        registry: std::sync::Arc::clone(&guard.session_runtime_registry),
+    })
+}
+
+/// Returns whether the retained workspace lists the session as a floating assistant.
+/// 返回保留的工作区是否将该会话列为浮动助手。
+fn session_is_assistant(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<bool, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("Failed to lock service state: {error}"))?;
+    Ok(guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| crate::workspace_session_summary_for_session(workspace, session_id))
+        .is_some_and(|summary| summary.assistant_name.is_some()))
 }
 
 /// Maps a lock failure onto a stable code the clients can localize, keeping the detail.

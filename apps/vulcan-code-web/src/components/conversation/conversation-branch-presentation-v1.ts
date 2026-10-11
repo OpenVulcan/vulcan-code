@@ -578,7 +578,7 @@ function userInputMessage(
 
 // composerAttachmentForResource converts browser-safe V1 resource metadata into the restored attachment strip model.
 // composerAttachmentForResource 将浏览器安全的 V1 资源元数据转换为恢复后的附件条模型。
-function composerAttachmentForResource(
+export function composerAttachmentForResource(
   currentResourceId: ResourceId,
   resources: ConversationSessionResourceCatalogV1,
 ): ComposerAttachmentSummary {

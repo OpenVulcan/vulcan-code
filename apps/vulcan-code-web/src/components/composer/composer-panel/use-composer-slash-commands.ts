@@ -5,6 +5,7 @@ import {
   normalizedComposerSlashCommandId,
   type ComposerSlashCommandResult,
 } from "@/components/composer/composer-model";
+import type { ComposerSettingsSection } from "@/components/composer/composer-settings-request";
 import type { ComposerSlashCommandSummary } from "@/types";
 
 // UseComposerSlashCommandsOptions defines the input state and routed actions owned outside slash selection.
@@ -34,6 +35,12 @@ export interface UseComposerSlashCommandsOptions {
   // Opens the existing reasoning picker.
   // 打开现有推理选择器。
   onOpenReasoningPicker: () => void;
+  // Opens the session goal editor.
+  // 打开会话目标编辑器。
+  onOpenGoal: () => void;
+  // Opens the conversation settings menu, optionally at one submenu.
+  // 打开对话设置菜单，可选地直接展开某个子菜单。
+  onOpenSettings: (section: ComposerSettingsSection | null) => void;
   // Sends the current composer draft when Enter is not consumed by the slash panel.
   // 当 Enter 未被 slash 面板消费时发送当前输入区草稿。
   onSend: () => Promise<void>;
@@ -159,9 +166,17 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
     if (result.openTarget === "reasoning") {
       options.onOpenReasoningPicker();
     }
+    if (result.openTarget === "goal") {
+      options.onOpenGoal();
+    }
+    if (result.openTarget === "settings") {
+      options.onOpenSettings(result.settingsSection ?? null);
+    }
   }, [
+    options.onOpenGoal,
     options.onOpenModelPicker,
     options.onOpenReasoningPicker,
+    options.onOpenSettings,
     options.onRouteCommand,
     options.onSetPlanMode,
     options.planModeEnabled,

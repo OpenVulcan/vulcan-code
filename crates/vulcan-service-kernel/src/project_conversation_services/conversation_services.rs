@@ -7,7 +7,8 @@ use crate::session_v1_lifecycle::{
     restore_session_lifecycle_v1,
 };
 use vulcan_workspace_store::workspace_store::{
-    SessionV1StoragePreflightOutcome, preflight_session_v1_storage, set_session_unread_v1,
+    SessionV1StoragePreflightOutcome, delete_session_v1, preflight_session_v1_storage,
+    session_v1_format_is_unsupported, set_session_unread_v1,
 };
 
 /// Returns the current Unix millisecond timestamp within the V1 signed contract.
@@ -310,6 +311,55 @@ pub(crate) async fn service_delete_archived_conversations(
 ) -> Result<WorkbenchSnapshot, String> {
     let session_ids = parse_archived_conversation_ids(conversation_ids)?;
     apply_archived_conversation_batch(state, session_ids, ArchivedConversationAction::Delete).await
+}
+
+/// Deletes one active session whose metadata uses a format this build no longer reads.
+/// 删除一个元数据格式已不受本构建支持的活动会话。
+///
+/// # Parameters
+/// 参数
+/// `conversation_id` is the exact session UUID the user confirmed for deletion.
+/// `conversation_id` 是用户确认删除的精确会话 UUID。
+///
+/// # Returns
+/// 返回值
+/// Returns the reloaded workbench. Such a session can be neither loaded nor archived, so its
+/// directory and index row are removed directly; readable sessions are refused and keep the
+/// archive-then-delete path with its collaboration checks.
+/// 返回重新加载的工作台。此类会话既无法加载也无法归档，因此直接删除其目录与索引记录；
+/// 可读会话一律拒绝，继续走带协作检查的“先归档再删除”路径。
+pub(crate) async fn service_delete_unsupported_conversation(
+    state: SharedServiceBridgeState,
+    conversation_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let session_id = conversation_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
+    let _lifecycle_guard =
+        begin_session_lifecycle_transition(&state, [session_id], "delete unsupported")?;
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    let unsupported =
+        session_v1_format_is_unsupported(&controller_runtime, &session_id.to_string())
+            .await
+            .map_err(|error| format!("Failed to inspect session `{session_id}`: {error}"))?;
+    if !unsupported {
+        return Err(format!(
+            "ERR_SESSION_FORMAT_SUPPORTED: session `{session_id}` is readable; archive it before deleting."
+        ));
+    }
+    if let Some(runtime) = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.public_ai_runtime.clone())
+    {
+        runtime.clear_session_selection_leases(session_id.to_string().as_str())?;
+    }
+    delete_session_v1(&controller_runtime, &session_id.to_string())
+        .await
+        .map_err(|error| format!("Failed to delete session `{session_id}`: {error}"))?;
+    refresh_workbench_snapshot(state).await
 }
 
 /// Builds the ordered lifecycle delta that represents one committed archive refresh.
@@ -706,6 +756,8 @@ mod tests {
             unread: false,
             attention: None,
             project_id: Some(String::from("project-a")),
+            dedicated: false,
+            assistant_name: None,
         };
         // workbench supplies the authoritative lifecycle domain after refresh commit.
         // workbench 提供刷新提交后的权威生命周期领域。

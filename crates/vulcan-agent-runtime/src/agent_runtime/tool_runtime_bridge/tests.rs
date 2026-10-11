@@ -25,7 +25,7 @@ use vulcan_core::tool::{AllowAllToolPolicy, VulcanToolExecutor};
 use vulcan_core::types::{
     ControllerConfig, ConversationPayload, ConversationSnapshot, ConversationToolCall,
     CoreError as VulcanCoreError, ProviderRequestSnapshot, ProviderTurnResponse,
-    ToolInvocationRequest, ToolInvocationResult,
+    ToolInvocationRequest, ToolInvocationResult, TranscriptRole,
 };
 use vulcan_session_core::v1::document::PreparedToolReceipt;
 use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
@@ -1151,14 +1151,19 @@ fn managed_tool_runtime_bridge_integrates_with_core_controller_loop() {
         &controller.snapshot().messages[2].payload,
         ConversationPayload::ToolResult { text, .. } if text.contains("\"src/main.rs\"")
     ));
+    // The tool record is identified by its structured metadata, never by its display title.
+    // 工具记录通过结构化元数据识别，绝不依赖其显示标题。
     assert!(controller.snapshot().records.iter().any(|record| {
-        record.title == "调用 demo_tool 工具"
-            && record
+        let metadata_text = |key: &str| {
+            record
                 .metadata
                 .as_ref()
-                .and_then(|metadata| metadata.get("kind"))
+                .and_then(|metadata| metadata.get(key))
                 .and_then(serde_json::Value::as_str)
-                == Some("change_set")
+        };
+        record.role == TranscriptRole::Tool
+            && metadata_text("tool_name") == Some("demo_tool")
+            && metadata_text("kind") == Some("change_set")
     }));
 }
 

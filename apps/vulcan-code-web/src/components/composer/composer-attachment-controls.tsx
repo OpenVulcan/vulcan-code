@@ -5,6 +5,7 @@ import { setConversationToolCollapseOverride, useToolCollapsePreference } from "
 import { setConversationThinkingPopupOverride, useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
 import { composerAttachmentMedia } from "./composer-attachment-media";
 import { VceComposerMenu } from "@/components/features/code-context/vce-project-controls";
+import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
 import { MemoryBrainIcon } from "@/components/shell/memory-brain-icon";
 import { composerAttachmentIdentity } from "@/service/composer-attachment-reference";
 import {
@@ -65,6 +66,12 @@ import type {
 import type { ComposerAttachmentPreviewMedia } from "./composer-control-types";
 import type { ComposerKnowledgeSelectionSnapshot } from "./composer-model";
 import { ComposerKnowledgeControl } from "./composer-knowledge-control";
+import {
+  ComposerSettingsRequestContext,
+  RequestedSettingsSub,
+  type ComposerSettingsRequest,
+  type ComposerSettingsSection,
+} from "./composer-settings-request";
 import { useDedicatedComposer } from "./dedicated/dedicated-session-controls";
 import type { ComposerAnswerModeController } from "./composer-panel/use-composer-answer-mode";
 
@@ -142,6 +149,9 @@ export function ComposerAttachmentMenu(props: {
   // Applies one output-style selection without changing the active prompt context.
   // 应用输出风格选择，但不直接改变当前提示词上下文。
   onOutputStyleChange: (styleId: string | null) => void;
+  // Latest slash-command request to open the settings menu, optionally at one submenu.
+  // 最近一次由 slash 指令发起的设置菜单打开请求，可指定子菜单。
+  settingsRequest?: ComposerSettingsRequest | null;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -240,10 +250,24 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
   // Settings frozen with a dedicated session (style, answer mode, knowledge, semantic engine, memory) are hidden.
   // 随专职会话冻结的设置（风格、回答模式、知识库、语意引擎、记忆）不再显示。
   const dedicated = useDedicatedComposer();
-  return <DropdownMenu>
+  // Slash commands open this menu, optionally at one submenu; closing it clears the request.
+  // slash 指令可打开本菜单并直接展开某个子菜单；关闭菜单即清除该请求。
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const [requestedSection, setRequestedSection] = React.useState<ComposerSettingsSection | null>(null);
+  React.useEffect(() => {
+    if (props.settingsRequest) {
+      setRequestedSection(props.settingsRequest.section);
+      setMenuOpen(true);
+    }
+  }, [props.settingsRequest]);
+  return <DropdownMenu open={menuOpen} onOpenChange={(open) => {
+    setMenuOpen(open);
+    if (!open) setRequestedSection(null);
+  }}>
     <DropdownMenuTrigger asChild>
       <Button aria-label={t("composer.sessionSettings")} className="workspace-settings-button" size="sm" type="button" variant="ghost"><Settings size={14} /><span>{t("composer.sessionSettings")}</span></Button>
     </DropdownMenuTrigger>
+    <ComposerSettingsRequestContext.Provider value={requestedSection}>
     <DropdownMenuContent align="start" className="composer-settings-menu" side="top" sideOffset={8}>
         {dedicated ? null : <>
         <OutputStyleSubMenu
@@ -263,7 +287,7 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
         />
         <VceComposerMenu />
         </>}
-        <DropdownMenuSub>
+        <RequestedSettingsSub section="tools">
           <DropdownMenuSubTrigger><Workflow size={15} /><span>{t("composer.collapseTools")}</span></DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="composer-thinking-menu">
             <DropdownMenuRadioGroup value={toolCollapse.override === undefined ? "inherit" : toolCollapse.override ? "enabled" : "disabled"}>
@@ -278,8 +302,8 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
               }}>{t("composer.inheritSystem")}</DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSub>
+        </RequestedSettingsSub>
+        <RequestedSettingsSub section="thinking">
           <DropdownMenuSubTrigger>
             {/* Same sparkle as the conversation's thinking trigger. */}
             {/* 与对话中思考入口相同的闪光星形图标。 */}
@@ -300,9 +324,9 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
             }}>{t("composer.inheritSystem")}</DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
-        </DropdownMenuSub>
+        </RequestedSettingsSub>
         {!dedicated && (props.vmmAvailable || props.onOpenMemorySettings) ? (
-          <DropdownMenuSub>
+          <RequestedSettingsSub section="memory">
             <DropdownMenuSubTrigger>
               {/* Same brain as the memory area in the activity rail. */}
               {/* 与活动栏记忆区域相同的大脑图标。 */}
@@ -327,9 +351,10 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
               </> : null}
               {props.onOpenMemorySettings ? <DropdownMenuItem onSelect={props.onOpenMemorySettings}>{t("memory.workspace.settings")}</DropdownMenuItem> : null}
             </DropdownMenuSubContent>
-          </DropdownMenuSub>
+          </RequestedSettingsSub>
         ) : null}
     </DropdownMenuContent>
+    </ComposerSettingsRequestContext.Provider>
   </DropdownMenu>;
 }
 
@@ -351,7 +376,7 @@ function OutputStyleSubMenu(props: {
     ? pickBilingualText(locale, globalEntry.labelZh, globalEntry.labelEn)
     : props.catalog.selectedId;
   return (
-    <DropdownMenuSub>
+    <RequestedSettingsSub section="style">
       <DropdownMenuSubTrigger>
         <Palette size={15} />
         <span>{t("composer.outputStyle.menuTitle")}</span>
@@ -379,7 +404,7 @@ function OutputStyleSubMenu(props: {
           {t("composer.outputStyle.savedPending")}
         </p> : null}
       </DropdownMenuSubContent>
-    </DropdownMenuSub>
+    </RequestedSettingsSub>
   );
 }
 
@@ -393,7 +418,7 @@ function AnswerModeSubMenu(props: { controller: ComposerAnswerModeController }) 
     { value: "interactive", label: "answerMode.interactive", hint: "answerMode.interactiveHint" },
   ] as const;
   return (
-    <DropdownMenuSub>
+    <RequestedSettingsSub section="answer">
       <DropdownMenuSubTrigger disabled={!available}>
         <LayoutPanelTop size={15} />
         <span>{t("answerMode.label")}</span>
@@ -413,7 +438,7 @@ function AnswerModeSubMenu(props: { controller: ComposerAnswerModeController }) 
           {t("answerMode.pending")}
         </p> : null}
       </DropdownMenuSubContent>
-    </DropdownMenuSub>
+    </RequestedSettingsSub>
   );
 }
 
@@ -571,13 +596,16 @@ export function ComposerAttachmentStrip(props: {
         const degraded = preparation?.deliveryPlan === "metadata_only"
           || preparation?.phase === "failed";
         return (
+        <MediaPathContextMenu
+          key={`${attachment.localPath}-${index}`}
+          locator={attachment.kind === "image" || attachment.kind === "video" || attachment.kind === "audio" ? attachment.localPath : null}
+        >
         <div
           className={cn("composer-attachment-tile", {
             "image-attachment": attachment.kind === "image",
             "attachment-preparing": preparation?.blocksSubmission,
             "attachment-degraded": degraded,
           })}
-          key={`${attachment.localPath}-${index}`}
         >
           <button
             aria-label={previewAvailable ? attachment.fileName : `${attachment.fileName} · ${t("composer.attachment.previewUnavailable")}`}
@@ -655,6 +683,7 @@ export function ComposerAttachmentStrip(props: {
             </>
           ) : null}
         </div>
+        </MediaPathContextMenu>
         );
       })}
       {props.imageCompression && props.attachments.some((attachment) => attachment.kind === "image") ? (
