@@ -117,7 +117,8 @@
         "credential_directory_visibility": {
           "enum": [
             "configured_only",
-            "pinned_onboarding"
+            "pinned_onboarding",
+            "core_account"
           ]
         },
         "promotion": {
@@ -243,7 +244,9 @@
                             "google_gemini",
                             "mini_max_global_token_plan",
                             "mini_max_china_token_plan",
-                            "kimi_coding_plan"
+                            "kimi_coding_plan",
+                            "open_vulcan_china",
+                            "open_vulcan_global"
                           ]
                         }
                       }
@@ -551,7 +554,7 @@
                 },
                 "binding_id": {"type": "string", "minLength": 1, "maxLength": 128},
                 "endpoint_path": {"type": "string", "minLength": 1, "maxLength": 256},
-                "projection": {"enum": ["compatible", "routed_compatible", "alibaba_text_rerank", "system_one"]},
+                "projection": {"enum": ["compatible", "routed_compatible", "alibaba_text_rerank", "system_one", "open_vulcan"]},
                 "service_origin_base_path": {"type": "string", "minLength": 1, "maxLength": 256},
                 "requires_service_origin_override": {"type": "boolean"},
                 "rerank_truncation": {"enum": ["provider_default", "disabled", "start", "end"]},
@@ -668,7 +671,8 @@
                   "anthropic",
                   "anthropic_compatible",
                   "gemini",
-                  "google_code_assist"
+                  "google_code_assist",
+                  "open_vulcan"
                 ]
               },
               "path": {
@@ -753,7 +757,8 @@
                     "anthropic",
                     "anthropic_compatible",
                     "gemini",
-                    "google_code_assist"
+                    "google_code_assist",
+                    "open_vulcan"
                   ]
                 },
                 "model_discovery_path": {

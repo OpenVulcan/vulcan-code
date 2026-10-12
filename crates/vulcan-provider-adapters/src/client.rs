@@ -14,6 +14,11 @@ mod account_usage;
 mod http;
 mod minimax_registration;
 mod model_discovery;
+mod openvulcan;
+pub use openvulcan::{
+    OpenVulcanAccountIdentity, OpenVulcanUsagePage, query_openvulcan_identity,
+    query_openvulcan_usage_page,
+};
 mod secondary_routes;
 
 use account_usage::{
@@ -507,6 +512,9 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                 }
             };
         let result = match credential_profile.account_usage_query {
+            AccountUsageQueryKind::OpenVulcan => {
+                openvulcan::query_usage(&self.http, entry, secret).await
+            }
             AccountUsageQueryKind::Unsupported => {
                 return unsupported_usage(connection.credential_id.as_str());
             }

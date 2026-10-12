@@ -10294,6 +10294,7 @@ dependencies = [
  "uuid",
  "vulcan-ai-contract",
  "vulcan-context",
+ "vulcan-i18n",
  "vulcan-llm-core",
  "vulcan-runtime-assets",
  "workspace-hack",

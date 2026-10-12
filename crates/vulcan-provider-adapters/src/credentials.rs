@@ -7,7 +7,20 @@ use std::collections::BTreeSet;
 
 /// Current persisted credential-secret format version.
 /// 当前持久化凭据秘密格式版本。
-pub const CREDENTIAL_SECRET_FORMAT_VERSION: u32 = 1;
+pub const CREDENTIAL_SECRET_FORMAT_VERSION: u32 = 2;
+
+/// Identifies the isolated OpenVulcan authorization deployment.
+/// 标识相互隔离的 OpenVulcan 授权部署。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenVulcanRegion {
+    /// International account authority.
+    /// 国际账户授权端。
+    Global,
+    /// China account authority.
+    /// 中国账户授权端。
+    China,
+}
 
 /// Identifies the trusted MiniMax account and API region.
 /// 标识可信的 MiniMax 账号及 API 区域。
@@ -43,6 +56,25 @@ pub struct CredentialSecretEnvelope {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CredentialSecretMaterial {
+    /// Rotating OpenVulcan device authorization without a separate refresh token.
+    /// 没有独立刷新令牌的 OpenVulcan 轮换设备授权。
+    OpenVulcanAuth {
+        /// Exact credential issued by the selected authority.
+        /// 所选授权端签发的准确凭据。
+        access_token: String,
+        /// Permanent device authorization identity preserved across rotations.
+        /// 轮换期间保持不变的永久设备授权身份。
+        authorization_id: String,
+        /// Region fixed at initial authorization.
+        /// 初次授权时固定的区域。
+        region: OpenVulcanRegion,
+        /// Server-owned absolute expiry in Unix milliseconds.
+        /// 服务端持有的 Unix 毫秒绝对过期时间。
+        expires_at_unix_ms: u64,
+        /// Durable single-use rotation fence; true requires a new authorization after interruption.
+        /// 持久单次轮换栅栏；为 true 时，中断后必须重新授权。
+        rotation_pending: bool,
+    },
     /// User-managed API key.
     /// 用户管理的 API Key。
     ApiKey {
@@ -180,6 +212,9 @@ pub struct OAuthTokenSet {
 /// 标识解析后的秘密材料必须如何投影到鉴权。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialExecutionSecretKind {
+    /// OpenVulcan's exact Auth scheme, never interchangeable with Bearer.
+    /// OpenVulcan 的准确 Auth 方案，不能与 Bearer 互换。
+    OpenVulcanAuth,
     /// API-key material whose exact header is selected by the service entry.
     /// 由服务入口选择精确请求头的 API Key 材料。
     ApiKey,
@@ -213,6 +248,9 @@ pub struct CredentialExecutionSecret {
     /// Optional provider-visible device identity required by account metadata requests.
     /// 账号元数据请求所需的可选供应商可见设备身份。
     provider_device_id: Option<String>,
+    /// Native credential deployment, preventing cross-region credential forwarding.
+    /// 原生凭据部署，防止跨区域转发凭据。
+    openvulcan_region: Option<OpenVulcanRegion>,
 }
 
 impl CredentialSecretEnvelope {
@@ -351,6 +389,7 @@ impl CredentialSecretEnvelope {
             | CredentialSecretMaterial::GoogleOAuth { .. }
             | CredentialSecretMaterial::MiniMaxOAuth { .. }
             | CredentialSecretMaterial::KimiCodingPlanOAuth { .. }
+            | CredentialSecretMaterial::OpenVulcanAuth { .. }
             | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => CredentialMode::Auth,
         }
     }
@@ -371,6 +410,7 @@ impl CredentialSecretEnvelope {
                 | CredentialSecretMaterial::GoogleOAuth { .. }
                 | CredentialSecretMaterial::MiniMaxOAuth { .. }
                 | CredentialSecretMaterial::KimiCodingPlanOAuth { .. }
+                | CredentialSecretMaterial::OpenVulcanAuth { .. }
         )
     }
 
@@ -383,8 +423,31 @@ impl CredentialSecretEnvelope {
     /// 返回不可调试输出的秘密值及其冻结修订号。
     pub fn execution_secret(&self) -> Result<CredentialExecutionSecret, String> {
         self.validate()?;
+        if matches!(
+            &self.material,
+            CredentialSecretMaterial::OpenVulcanAuth {
+                rotation_pending: true,
+                ..
+            }
+        ) {
+            return Err(String::from(
+                "OpenVulcan rotation did not complete; sign in again.",
+            ));
+        }
         let (kind, value, account_id, quota_project_id, project_id, provider_device_id) =
             match &self.material {
+                CredentialSecretMaterial::OpenVulcanAuth {
+                    access_token,
+                    authorization_id,
+                    ..
+                } => (
+                    CredentialExecutionSecretKind::OpenVulcanAuth,
+                    access_token.clone(),
+                    None,
+                    None,
+                    None,
+                    Some(authorization_id.clone()),
+                ),
                 CredentialSecretMaterial::ApiKey { value } => (
                     CredentialExecutionSecretKind::ApiKey,
                     value.clone(),
@@ -469,6 +532,10 @@ impl CredentialSecretEnvelope {
                 ),
             };
         Ok(CredentialExecutionSecret {
+            openvulcan_region: match &self.material {
+                CredentialSecretMaterial::OpenVulcanAuth { region, .. } => Some(*region),
+                _ => None,
+            },
             revision: self.revision,
             kind,
             value,
@@ -494,7 +561,20 @@ impl CredentialSecretEnvelope {
     /// `true` only for OAuth material at or inside the requested refresh window.
     /// 仅当 OAuth 材料已经进入指定刷新窗口时返回 `true`。
     pub fn requires_refresh(&self, now_unix_ms: u64, refresh_skew_ms: u64) -> bool {
+        if let CredentialSecretMaterial::OpenVulcanAuth {
+            expires_at_unix_ms,
+            rotation_pending,
+            ..
+        } = &self.material
+        {
+            return *rotation_pending
+                || *expires_at_unix_ms
+                    <= now_unix_ms.saturating_add(crate::openvulcan::REFRESH_AHEAD_MS);
+        }
         let expires_at_unix_ms = match &self.material {
+            CredentialSecretMaterial::OpenVulcanAuth {
+                expires_at_unix_ms, ..
+            } => *expires_at_unix_ms,
             CredentialSecretMaterial::OpenAiCodexOAuth { tokens, .. }
             | CredentialSecretMaterial::ClaudeCodeOAuth { tokens }
             | CredentialSecretMaterial::GoogleOAuth { tokens, .. }
@@ -529,6 +609,28 @@ impl CredentialSecretEnvelope {
             ));
         }
         match &self.material {
+            CredentialSecretMaterial::OpenVulcanAuth {
+                access_token,
+                authorization_id,
+                expires_at_unix_ms,
+                ..
+            } => {
+                if access_token.len() != 43
+                    || !access_token
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+                {
+                    return Err(String::from(
+                        "OpenVulcan Auth credential has an invalid format.",
+                    ));
+                }
+                if uuid::Uuid::parse_str(authorization_id).is_err() || *expires_at_unix_ms == 0 {
+                    return Err(String::from(
+                        "OpenVulcan device authorization metadata is invalid.",
+                    ));
+                }
+                Ok(())
+            }
             CredentialSecretMaterial::ApiKey { value } => {
                 validate_non_empty_secret("API key", value)
             }
@@ -653,6 +755,11 @@ impl OAuthTokenSet {
 }
 
 impl CredentialExecutionSecret {
+    /// Returns the fixed OpenVulcan deployment when this is a native Auth credential.
+    /// 当本凭据为原生 Auth 时返回固定的 OpenVulcan 部署。
+    pub fn openvulcan_region(&self) -> Option<OpenVulcanRegion> {
+        self.openvulcan_region
+    }
     /// Returns the frozen secret-store revision.
     /// 返回冻结的秘密存储修订号。
     ///

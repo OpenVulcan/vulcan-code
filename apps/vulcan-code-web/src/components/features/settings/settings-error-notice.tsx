@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { InlineDisclosure } from "@/components/ui/disclosure"
 import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
+import "@/styles/settings-error-notice.css"
 
 // SettingsErrorNoticeProps describes one failed settings action: a plain-language outcome plus the raw error.
 // SettingsErrorNoticeProps 描述一次失败的设置操作：通俗的结果说明加原始错误。
@@ -18,12 +19,15 @@ export interface SettingsErrorNoticeProps {
   // className keeps page-specific hooks used by layouts and tests.
   // className 保留页面布局与测试使用的特定类名。
   className?: string
+  // action offers a contextual recovery operation after the diagnostic disclosure.
+  // action 在诊断展开区后提供当前情境的恢复操作。
+  action?: React.ReactNode
 }
 
 // SettingsErrorNotice renders a calm inline error with folded technical details and a copy action.
 // SettingsErrorNotice 渲染克制的行内错误提示，技术细节默认收起并提供复制操作。
-// Parameters: props provides the readable message, optional raw detail and a page hook class.
-// 参数：props 提供可读的说明、可选的原始错误与页面钩子类名。
+// Parameters: props provides the readable message, optional raw detail, recovery action and page hook class.
+// 参数：props 提供可读说明、可选原始错误、恢复操作及页面钩子类名。
 // Returns an alert region so assistive technology announces the failure once.
 // 返回 alert 区域，使辅助技术播报一次失败信息。
 export function SettingsErrorNotice(props: SettingsErrorNoticeProps) {
@@ -46,6 +50,7 @@ export function SettingsErrorNotice(props: SettingsErrorNoticeProps) {
             <Copy size={12} />{copied === "copied" ? t("settings.errors.copied") : copied === "failed" ? t("settings.errors.copyFailedSelectManually") : t("settings.errors.copyError")}
           </Button>
         </InlineDisclosure> : null}
+        {props.action ? <div className="settings-error-notice-action">{props.action}</div> : null}
       </div>
     </div>
   )

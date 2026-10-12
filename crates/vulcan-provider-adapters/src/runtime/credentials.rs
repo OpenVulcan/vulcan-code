@@ -211,9 +211,38 @@ impl ProviderExecutionCredentialLease {
         &self,
         current: &CredentialSecretEnvelope,
     ) -> Result<CredentialExecutionSecret, String> {
+        // native_checkpoint is durable before consuming the single-use Auth rotation. A crash or
+        // unknown network outcome therefore cannot replay the old credential on restart.
+        // native_checkpoint 在消费单次 Auth 轮换前持久化；崩溃或未知网络结果因此不能在重启后重放旧凭据。
+        let native_checkpoint = if let crate::CredentialSecretMaterial::OpenVulcanAuth {
+            rotation_pending,
+            ..
+        } = &current.material
+        {
+            if *rotation_pending {
+                return Err(String::from(
+                    "OpenVulcan rotation was interrupted; sign in again.",
+                ));
+            }
+            let mut fenced_material = current.material.clone();
+            if let crate::CredentialSecretMaterial::OpenVulcanAuth {
+                rotation_pending, ..
+            } = &mut fenced_material
+            {
+                *rotation_pending = true;
+            }
+            let fenced = current.advance_with_material(fenced_material)?;
+            self.secrets
+                .replace_secret(&self.secret_reference, current.revision, &fenced)
+                .await?;
+            Some(fenced)
+        } else {
+            None
+        };
         // material is the provider-specific refreshed credential returned by the OAuth runtime.
         // material 是 OAuth 运行时返回的供应商专属刷新凭据。
         let material = self.oauth.refresh(&current.material).await?;
+        let current = native_checkpoint.as_ref().unwrap_or(current);
         // refreshed advances the secure-store revision exactly once for this material.
         // refreshed 为该凭据材料精确推进一次安全仓库修订号。
         let refreshed = current.advance_with_material(material)?;
@@ -286,6 +315,57 @@ pub trait CredentialSecretResolver: Send + Sync {
 /// 通过宿主所有的比较替换边界修改版本化秘密。
 #[async_trait]
 pub trait CredentialSecretStore: CredentialSecretResolver {
+    /// Captures `secret_reference` for repair without requiring executable credential material.
+    /// 捕获 `secret_reference` 供修复使用，不要求凭据材料可执行。
+    /// Returns an optional opaque before-image; host stores override this to retain raw records.
+    /// 返回可选不透明前镜像；宿主仓库覆盖此方法以保留原始记录。
+    async fn capture_secret(
+        &self,
+        secret_reference: &str,
+    ) -> Result<Option<super::CredentialSecretSnapshot>, String> {
+        self.read_optional_secret(secret_reference)
+            .await?
+            .map(|secret| {
+                super::CredentialSecretSnapshot::new(secret_reference, secret.revision, secret)
+            })
+            .transpose()
+    }
+
+    /// Restores `snapshot` at the absent `secret_reference` after an explicit removal fails.
+    /// 显式移除失败后，在缺失的 `secret_reference` 恢复 `snapshot`。
+    /// Returns the storage result; unsupported records remain unsupported for normal execution.
+    /// 返回存储结果；不受支持的记录对正常执行仍然不受支持。
+    async fn restore_snapshot(
+        &self,
+        secret_reference: &str,
+        snapshot: &super::CredentialSecretSnapshot,
+    ) -> Result<(), String> {
+        self.restore_secret(secret_reference, snapshot.record(secret_reference)?)
+            .await
+    }
+
+    /// Restores `snapshot` only if `expected_revision` still owns `secret_reference`.
+    /// 仅当 `expected_revision` 仍持有 `secret_reference` 时恢复 `snapshot`。
+    /// Returns a compare-and-replace result with a strictly increasing revision to prevent ABA.
+    /// 返回修订号严格递增的比较替换结果，防止 ABA 问题。
+    async fn rollback_replacement(
+        &self,
+        secret_reference: &str,
+        expected_revision: u64,
+        snapshot: &super::CredentialSecretSnapshot,
+    ) -> Result<(), String> {
+        // Before-image material is restored only by the owning backend, never projected to a request.
+        // 前镜像材料仅由所属后端恢复，绝不投影到请求。
+        let mut previous = snapshot
+            .record::<CredentialSecretEnvelope>(secret_reference)?
+            .clone();
+        previous.revision = expected_revision
+            .checked_add(1)
+            .ok_or_else(|| String::from("AI credential secret revision is exhausted."))?;
+        self.replace_secret(secret_reference, expected_revision, &previous)
+            .await
+    }
+
     /// Creates one secret only when the opaque reference is absent.
     /// 仅在不透明引用不存在时创建一个秘密。
     ///
@@ -608,6 +688,25 @@ impl CredentialSecretStore for UnavailableCredentialSecretResolver {
 mod tests;
 
 impl PublicAiRuntime {
+    /// Resolves a native account's current credential under the shared rotation lock.
+    /// 在共享轮换锁下解析原生账户当前凭据。
+    /// configuration/connection_id select the persisted account; the returned secret remains backend-only.
+    /// configuration/connection_id 选择持久账户；返回秘密仅限后端使用。
+    pub async fn resolve_openvulcan_account_credential(
+        &self,
+        configuration: &crate::PersistedAiConfiguration,
+        connection_id: &str,
+    ) -> Result<CredentialExecutionSecret, String> {
+        let (_, entry, connection) =
+            self.resolve_connection_metadata(configuration, connection_id)?;
+        if entry.authentication != crate::AuthenticationProjection::OpenVulcanAuth {
+            return Err(String::from(
+                "Selected connection is not an OpenVulcan account.",
+            ));
+        }
+        self.resolve_fresh_execution_secret(connection_id, &connection.secret_reference)
+            .await
+    }
     /// Resolves one access secret after coordinating any required OAuth refresh.
     /// 在协调完成任何所需 OAuth 刷新后解析一个访问秘密。
     ///

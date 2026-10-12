@@ -157,6 +157,7 @@ pub(super) fn service_entry_model_directory_kind(
             ModelDiscoveryKind::Manual => has_manual = true,
             ModelDiscoveryKind::ManifestStatic => has_fixed = true,
             ModelDiscoveryKind::OpenRouter
+            | ModelDiscoveryKind::OpenVulcan
             | ModelDiscoveryKind::OpenAi
             | ModelDiscoveryKind::OpenAiCodex
             | ModelDiscoveryKind::Anthropic

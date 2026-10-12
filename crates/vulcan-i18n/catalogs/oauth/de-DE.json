@@ -1,0 +1,17 @@
+{
+  "openvulcan.callback.accepted.title": "Browser-Autorisierung abgeschlossen",
+  "openvulcan.callback.accepted.description": "Deine Autorisierung wurde sicher an Vulcan Code auf diesem Gerät übergeben.",
+  "openvulcan.callback.accepted.next": "Die App prüft dein Konto und speichert die Anmeldung. Prüfe das endgültige Ergebnis in der App.",
+  "openvulcan.callback.failed.title": "Autorisierung konnte nicht abgeschlossen werden",
+  "openvulcan.callback.failed.description": "Kehre zu Vulcan Code zurück und melde dich erneut an.",
+  "openvulcan.callback.failed.next": "Wähle im Kontofenster einen Anmeldeweg. Lade diese Seite nicht neu und verwende den alten Autorisierungslink nicht erneut.",
+  "openvulcan.callback.rejected.title": "Dieser Autorisierungsrückruf ist ungültig",
+  "openvulcan.callback.rejected.description": "Diese Seite konnte der aktuellen Anmeldeanfrage nicht zugeordnet werden.",
+  "openvulcan.callback.rejected.next": "Fahre auf der gerade geöffneten Autorisierungsseite fort. Falls du sie geschlossen hast, melde dich in der App erneut an.",
+  "openvulcan.callback.nextTitle": "Zurück zu Vulcan Code",
+  "openvulcan.callback.close": "Diese Seite schließen",
+  "openvulcan.callback.closeHelp": "Falls der Browser die Seite nicht schließt, schließe den Tab und wechsle zurück zu Vulcan Code.",
+  "openvulcan.callback.footer": "Anmeldung durch das OpenVulcan-Benutzerzentrum autorisiert",
+  "openvulcan.callback.china": "Zugang zur China-Version",
+  "openvulcan.callback.global": "Internationaler Zugang"
+}

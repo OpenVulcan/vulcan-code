@@ -3,6 +3,7 @@
 
 mod catalog_projection;
 mod connections;
+mod credential_repair;
 mod custom_models;
 mod custom_providers;
 mod general_settings;
@@ -14,6 +15,7 @@ mod media_delivery_settings;
 mod model_selection;
 mod model_settings;
 mod oauth;
+pub(crate) mod openvulcan_account;
 mod provider_synchronization;
 mod provider_tasks;
 mod provider_tools;

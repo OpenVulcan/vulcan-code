@@ -2,11 +2,17 @@
 //! 公共 AI 凭据的进程内 SQLite 存储。
 
 use async_trait::async_trait;
+
+#[cfg(test)]
+pub(crate) mod repair_tests;
+#[cfg(test)]
+mod sqlite_tests;
 use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_provider_adapters::{
     BrowserCallbackSecretProjection, CredentialSecretEnvelope, CredentialSecretMaterial,
-    CredentialSecretResolver, CredentialSecretStore, MiniMaxRegion, OAuthTokenSet,
+    CredentialSecretResolver, CredentialSecretSnapshot, CredentialSecretStore, MiniMaxRegion,
+    OAuthTokenSet,
 };
 use vulcan_workspace_store::{
     data_plane::HostRuntimeHandle,
@@ -61,6 +67,65 @@ impl CredentialSecretResolver for SqliteAiCredentialSecretStore {
 
 #[async_trait]
 impl CredentialSecretStore for SqliteAiCredentialSecretStore {
+    /// Captures the exact optional row for `secret_reference` without decoding its credential format.
+    /// 为 `secret_reference` 捕获精确可选记录，不解码其凭据格式。
+    /// Returns an opaque repair snapshot or an explicit database/revision error.
+    /// 返回不透明修复快照，或明确的数据库／修订号错误。
+    async fn capture_secret(
+        &self,
+        secret_reference: &str,
+    ) -> Result<Option<CredentialSecretSnapshot>, String> {
+        load_ai_credential_secret_record(&self.controller, secret_reference)
+            .await?
+            .map(|record| {
+                // Only relational identity is needed to replace or remove an unsupported envelope.
+                // 替换或移除不受支持的封装仅需关系化身份。
+                let revision = u64::try_from(record.revision)
+                    .map_err(|_| String::from("Invalid stored AI credential revision."))?;
+                CredentialSecretSnapshot::new(secret_reference, revision, record)
+            })
+            .transpose()
+    }
+
+    /// Restores `snapshot` at an absent `secret_reference` without interpreting its material.
+    /// 在缺失的 `secret_reference` 恢复 `snapshot`，不解释其材料。
+    /// Returns the exact row restoration result; regular reads still enforce the current format.
+    /// 返回精确记录恢复结果；常规读取仍执行当前格式校验。
+    async fn restore_snapshot(
+        &self,
+        secret_reference: &str,
+        snapshot: &CredentialSecretSnapshot,
+    ) -> Result<(), String> {
+        restore_ai_credential_secret_record(&self.controller, snapshot.record(secret_reference)?)
+            .await
+    }
+
+    /// Rolls back a replacement at `expected_revision` using the raw `snapshot` for `secret_reference`.
+    /// 使用 `secret_reference` 的原始 `snapshot` 回滚 `expected_revision` 的替换。
+    /// Returns a revision-checked restore with the original format and monotonically advanced revision.
+    /// 返回保留原始格式且修订号单调递增的受修订号保护恢复结果。
+    async fn rollback_replacement(
+        &self,
+        secret_reference: &str,
+        expected_revision: u64,
+        snapshot: &CredentialSecretSnapshot,
+    ) -> Result<(), String> {
+        // Raw restoration is compensation, not credential migration or permission to execute it.
+        // 原始恢复属于补偿，不是凭据迁移，也不授予执行权限。
+        let mut record = snapshot
+            .record::<AiCredentialSecretRecord>(secret_reference)?
+            .clone();
+        // SQLite owns the actual revision range used by compare-and-replace.
+        // SQLite 持有比较替换实际使用的修订号范围。
+        let expected_revision = i64::try_from(expected_revision)
+            .map_err(|_| String::from("AI credential revision exceeds SQLite range."))?;
+        record.revision = expected_revision
+            .checked_add(1)
+            .ok_or_else(|| String::from("AI credential secret revision is exhausted."))?;
+        record.updated_at_unix_ms = current_unix_millis()?;
+        replace_ai_credential_secret_record(&self.controller, expected_revision, &record).await
+    }
+
     /// Creates one new revision-one credential only in SQLite.
     /// 仅在 SQLite 中创建一个修订号为一的新凭据。
     async fn create_secret(
@@ -147,6 +212,28 @@ fn credential_record_from_envelope(
         updated_at_unix_ms: timestamp,
     };
     match &secret.material {
+        CredentialSecretMaterial::OpenVulcanAuth {
+            access_token,
+            authorization_id,
+            region,
+            expires_at_unix_ms,
+            rotation_pending,
+        } => {
+            record.material_kind = String::from("openvulcan_auth");
+            record.authorization_kind = rotation_pending.then(|| String::from("rotation_pending"));
+            record.access_token = Some(access_token.clone());
+            // The device authorization UUID is the provider-visible installation identity.
+            // 设备授权 UUID 是供应商可见的安装身份。
+            record.provider_device_id = Some(authorization_id.clone());
+            record.provider_region = Some(match region {
+                vulcan_provider_adapters::OpenVulcanRegion::China => String::from("china"),
+                vulcan_provider_adapters::OpenVulcanRegion::Global => String::from("global"),
+            });
+            record.expires_at_unix_ms = Some(
+                i64::try_from(*expires_at_unix_ms)
+                    .map_err(|_| String::from("OpenVulcan expiry exceeds SQLite range."))?,
+            );
+        }
         CredentialSecretMaterial::ApiKey { value } => {
             record.material_kind = String::from("api_key");
             record.secret_value = Some(value.clone());
@@ -240,6 +327,30 @@ fn credential_envelope_from_record(
         record.material_kind.as_str(),
         record.authorization_kind.as_deref(),
     ) {
+        ("openvulcan_auth", None | Some("rotation_pending")) => {
+            CredentialSecretMaterial::OpenVulcanAuth {
+                rotation_pending: record.authorization_kind.is_some(),
+                access_token: required_record_text(
+                    &record.access_token,
+                    "OpenVulcan Auth credential",
+                )?,
+                authorization_id: required_record_text(
+                    &record.provider_device_id,
+                    "OpenVulcan authorization id",
+                )?,
+                region: match required_record_text(&record.provider_region, "OpenVulcan region")?
+                    .as_str()
+                {
+                    "china" => vulcan_provider_adapters::OpenVulcanRegion::China,
+                    "global" => vulcan_provider_adapters::OpenVulcanRegion::Global,
+                    _ => return Err(String::from("Stored OpenVulcan region is invalid.")),
+                },
+                expires_at_unix_ms: required_record_u64(
+                    record.expires_at_unix_ms,
+                    "OpenVulcan expiry",
+                )?,
+            }
+        }
         ("api_key", Some("browser_callback")) => {
             CredentialSecretMaterial::BrowserCallbackAuthorization {
                 secret: required_record_text(&record.secret_value, "browser callback API key")?,
@@ -419,6 +530,166 @@ fn current_unix_millis() -> Result<i64, String> {
 mod tests {
     use super::*;
 
+    /// With no inputs, verifies real SQLite creation, rotation, reopening and deletion for both regions.
+    /// 无需参数，验证两区域凭据的真实 SQLite 创建、轮换、重新打开和删除，成功时正常返回。
+    #[tokio::test]
+    async fn openvulcan_native_material_round_trips_with_rotation_fence() {
+        for region in [
+            vulcan_provider_adapters::OpenVulcanRegion::China,
+            vulcan_provider_adapters::OpenVulcanRegion::Global,
+        ] {
+            // fixture owns each regional database through shutdown and reopening without user credentials.
+            // fixture 持有各区域数据库，覆盖关闭和重新打开，完全不接触用户凭据。
+            let fixture = repair_tests::CredentialRepairFixture::new().await;
+            // original retains the device identity throughout all compare-and-replace operations.
+            // original 在所有比较替换操作中保留设备身份。
+            let original =
+                CredentialSecretEnvelope::new(CredentialSecretMaterial::OpenVulcanAuth {
+                    access_token: "a".repeat(43),
+                    authorization_id: uuid::Uuid::new_v4().to_string(),
+                    region,
+                    expires_at_unix_ms: 2_000_000_000_000,
+                    rotation_pending: false,
+                })
+                .expect("native fixture");
+            // reference identifies the single synthetic account in this private database.
+            // reference 标识当前私有数据库中唯一的合成账户。
+            let reference = "native-fixture";
+            fixture
+                .store
+                .create_secret(reference, &original)
+                .await
+                .expect("persist native credential");
+            assert!(
+                fixture
+                    .store
+                    .read_secret(reference)
+                    .await
+                    .expect("read native credential")
+                    == original
+            );
+
+            // pending_material closes execution before a refresh request can consume the old token.
+            // pending_material 在刷新请求可能消费旧令牌前关闭执行入口。
+            let mut pending_material = original.material.clone();
+            if let CredentialSecretMaterial::OpenVulcanAuth {
+                rotation_pending, ..
+            } = &mut pending_material
+            {
+                *rotation_pending = true;
+            }
+            // pending advances the revision used by the durable rotation fence.
+            // pending 递增持久化轮换占用标记的修订号。
+            let pending = original
+                .advance_with_material(pending_material)
+                .expect("rotation fence");
+            fixture
+                .store
+                .replace_secret(reference, original.revision, &pending)
+                .await
+                .expect("persist rotation fence");
+            assert!(
+                fixture
+                    .store
+                    .replace_secret(reference, original.revision, &pending)
+                    .await
+                    .is_err()
+            );
+
+            // Release the host's exclusive ownership before recreating its database runtime.
+            // 重建数据库运行时之前，先释放宿主的独占所有权。
+            fixture.store.controller.local.shutdown();
+            // reopened owns a new database runtime on the same private file, as a restarted host would.
+            // reopened 为同一私有文件创建新数据库运行时，模拟宿主重启。
+            let reopened = SqliteAiCredentialSecretStore::new(HostRuntimeHandle::new_for_test(
+                vulcan_workspace_store::data_plane::HostRuntimeMetadata {
+                    data_root: fixture.directory.path().to_path_buf(),
+                    sqlite_path: fixture.store.controller.sqlite_path.clone(),
+                    sqlite_binding_id: String::from("native-reopened"),
+                    system_statistics_sqlite_path: fixture
+                        .store
+                        .controller
+                        .system_statistics_sqlite_path
+                        .clone(),
+                    system_statistics_sqlite_binding_id: String::from("native-reopened-usage"),
+                },
+            ));
+            // restored_pending must prevent replay after process-local state has been discarded.
+            // restored_pending 必须在进程内状态丢弃后仍阻止重放。
+            let restored_pending = reopened
+                .read_secret(reference)
+                .await
+                .expect("read durable rotation fence");
+            assert!(restored_pending == pending);
+            assert!(restored_pending.execution_secret().is_err());
+
+            // rotated_material records a new token while preserving the permanent regional identity.
+            // rotated_material 保存新令牌并保留永久区域身份。
+            let mut rotated_material = original.material.clone();
+            if let CredentialSecretMaterial::OpenVulcanAuth {
+                access_token,
+                expires_at_unix_ms,
+                ..
+            } = &mut rotated_material
+            {
+                *access_token = "b".repeat(43);
+                *expires_at_unix_ms += 1;
+            }
+            // rotated is the next revision after the pending checkpoint.
+            // rotated 是待轮换检查点之后的下一修订。
+            let rotated = pending
+                .advance_with_material(rotated_material)
+                .expect("rotated credential");
+            reopened
+                .replace_secret(reference, pending.revision, &rotated)
+                .await
+                .expect("persist rotated credential");
+            assert!(
+                reopened
+                    .read_secret(reference)
+                    .await
+                    .expect("read rotated credential")
+                    == rotated
+            );
+            assert!(rotated.execution_secret().is_ok());
+
+            // snapshot exercises compensation against the same native table used by login.
+            // snapshot 验证与登录使用同一原生凭据表的补偿过程。
+            let snapshot = reopened
+                .capture_secret(reference)
+                .await
+                .expect("capture native record")
+                .expect("native record");
+            reopened
+                .delete_secret(reference)
+                .await
+                .expect("delete native credential");
+            assert!(
+                reopened
+                    .read_optional_secret(reference)
+                    .await
+                    .expect("read deleted credential")
+                    .is_none()
+            );
+            reopened
+                .restore_snapshot(reference, &snapshot)
+                .await
+                .expect("restore native credential");
+            assert!(
+                reopened
+                    .read_secret(reference)
+                    .await
+                    .expect("read restored credential")
+                    == rotated
+            );
+            reopened
+                .delete_secret(reference)
+                .await
+                .expect("final delete");
+            reopened.controller.local.shutdown();
+        }
+    }
+
     /// Builds one reusable valid OAuth token fixture.
     /// 构建一份可复用的有效 OAuth Token 测试数据。
     fn oauth_tokens() -> OAuthTokenSet {
@@ -487,10 +758,12 @@ mod tests {
         );
     }
 
-    /// Verifies that every currently supported credential material remains lossless in relational storage.
-    /// 验证当前支持的全部凭据材料在关系化存储中保持无损。
-    #[test]
-    fn every_supported_credential_material_round_trips() {
+    /// With no inputs, verifies all supported materials survive actual SQL writes; returns on success.
+    /// 无需参数，验证所有受支持材料经过真实 SQL 写入后保持无损，成功时正常返回。
+    #[tokio::test]
+    async fn every_supported_credential_material_round_trips() {
+        // secrets cover static, renewable and browser callback material projections.
+        // secrets 覆盖静态、可续期及浏览器回调材料投影。
         let secrets = vec![
             CredentialSecretEnvelope::new_api_key(String::from("api-key"))
                 .expect("API key fixture should be valid"),
@@ -545,14 +818,31 @@ mod tests {
             .expect("browser Bearer fixture should be valid"),
         ];
 
+        // fixture exercises the complete production SQL boundary for every supported material.
+        // fixture 为每一种受支持材料执行完整的生产 SQL 边界。
+        let fixture = repair_tests::CredentialRepairFixture::new().await;
         for (index, secret) in secrets.into_iter().enumerate() {
+            // reference isolates each credential independently of fixture ordering.
+            // reference 将各凭据隔离，断言不依赖夹具顺序。
             let reference = format!("secret-{index}");
-            let record = credential_record_from_envelope(reference.as_str(), &secret)
-                .expect("credential fixture should map to relational fields");
-            let restored = credential_envelope_from_record(record)
-                .expect("relational fields should reconstruct the credential envelope");
-
+            fixture
+                .store
+                .create_secret(&reference, &secret)
+                .await
+                .expect("persist supported material");
+            // restored comes from SQLite, including its actual material and authorization constraints.
+            // restored 来自 SQLite，涵盖其实际的材料类别及授权约束。
+            let restored = fixture
+                .store
+                .read_secret(&reference)
+                .await
+                .expect("read persisted material");
             assert!(restored == secret);
+            fixture
+                .store
+                .delete_secret(&reference)
+                .await
+                .expect("delete supported material");
         }
     }
 }

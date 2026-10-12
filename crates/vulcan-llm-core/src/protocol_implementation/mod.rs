@@ -11,9 +11,11 @@ pub mod interactions;
 mod media_capabilities;
 pub mod openai;
 pub(crate) mod openai_stream;
+mod openvulcan;
 pub mod registry;
 pub mod shared;
 pub mod systemone;
+pub use openvulcan::{OPENVULCAN_NATIVE_PROFILE_ID, OpenVulcanNativeProfile};
 
 pub use anthropic::*;
 pub use cohere::*;

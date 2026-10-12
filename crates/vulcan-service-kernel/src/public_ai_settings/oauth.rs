@@ -3,7 +3,7 @@
 
 use serde::Deserialize;
 use vulcan_provider_adapters::{
-    CredentialMode, CredentialSecretEnvelope, CredentialSecretResolver, CredentialSecretStore,
+    CredentialMode, CredentialSecretEnvelope, CredentialSecretSnapshot, CredentialSecretStore,
     OAuthAuthorizationChallenge, OAuthClientConfiguration, OAuthTransactionPhase,
     OAuthTransactionSnapshot, credential_authorization_binding,
 };
@@ -84,6 +84,7 @@ pub(crate) async fn service_start_public_ai_oauth(
     state: SharedServiceBridgeState,
     request: PublicAiOAuthStartRequest,
 ) -> Result<OAuthAuthorizationChallenge, String> {
+    super::openvulcan_account::reject_generic_provider_mutation(&state, &request.provider_id)?;
     validate_non_empty("providerId", request.provider_id.as_str())?;
     validate_non_empty("serviceEntryId", request.service_entry_id.as_str())?;
     validate_non_empty(
@@ -211,6 +212,7 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
     state: SharedServiceBridgeState,
     request: PublicAiOAuthCommitRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    super::openvulcan_account::reject_generic_provider_mutation(&state, &request.provider_id)?;
     validate_non_empty("transactionId", request.transaction_id.as_str())?;
     validate_non_empty("providerId", request.provider_id.as_str())?;
     validate_non_empty("displayName", request.display_name.as_str())?;
@@ -286,34 +288,12 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
             ));
         }
         let secret_store = runtime.credential_secret_store();
-        let previous = CredentialSecretResolver::read_optional_secret(
+        let (previous, replacement) = super::credential_repair::replace_credential_material(
             secret_store.as_ref(),
             current.secret_reference.as_str(),
+            material,
         )
         .await?;
-        let replacement = match previous.as_ref() {
-            Some(previous) => previous.advance_with_material(material)?,
-            None => CredentialSecretEnvelope::new(material)?,
-        };
-        match previous.as_ref() {
-            Some(previous) => {
-                CredentialSecretStore::replace_secret(
-                    secret_store.as_ref(),
-                    current.secret_reference.as_str(),
-                    previous.revision,
-                    &replacement,
-                )
-                .await?;
-            }
-            None => {
-                CredentialSecretStore::create_secret(
-                    secret_store.as_ref(),
-                    current.secret_reference.as_str(),
-                    &replacement,
-                )
-                .await?;
-            }
-        }
         let connection_id = connection_id.to_string();
         let update_request = PublicAiConnectionUpdateRequest {
             connection_id: connection_id.clone(),
@@ -465,18 +445,14 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
 async fn rollback_oauth_reauthorization_secret(
     secret_store: &dyn CredentialSecretStore,
     secret_reference: &str,
-    previous: Option<&CredentialSecretEnvelope>,
+    previous: Option<&CredentialSecretSnapshot>,
     replacement: &CredentialSecretEnvelope,
 ) -> Result<(), String> {
-    let Some(previous) = previous else {
-        return CredentialSecretStore::delete_secret(secret_store, secret_reference).await;
-    };
-    let rollback = replacement.advance_with_material(previous.material.clone())?;
-    CredentialSecretStore::replace_secret(
+    super::credential_repair::rollback_credential_replacement(
         secret_store,
         secret_reference,
-        replacement.revision,
-        &rollback,
+        previous,
+        replacement,
     )
     .await
 }

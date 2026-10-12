@@ -1,0 +1,17 @@
+{
+  "openvulcan.callback.accepted.title": "瀏覽器授權已完成",
+  "openvulcan.callback.accepted.description": "授權資訊已安全交給本機的 Vulcan Code。",
+  "openvulcan.callback.accepted.next": "應用程式將繼續驗證帳戶並儲存登入。請在應用程式中確認最終結果。",
+  "openvulcan.callback.failed.title": "授權未能完成",
+  "openvulcan.callback.failed.description": "請返回 Vulcan Code，重新發起登入。",
+  "openvulcan.callback.failed.next": "在帳戶視窗重新選擇登入入口。請勿重新整理此頁面或重複使用舊授權連結。",
+  "openvulcan.callback.rejected.title": "此授權回呼無效",
+  "openvulcan.callback.rejected.description": "此頁面未能通過目前登入請求的驗證。",
+  "openvulcan.callback.rejected.next": "請繼續使用剛剛開啟的授權頁面；若已關閉，請在應用程式中重新登入。",
+  "openvulcan.callback.nextTitle": "返回 Vulcan Code",
+  "openvulcan.callback.close": "關閉此頁面",
+  "openvulcan.callback.closeHelp": "如果瀏覽器未自動關閉，可以直接關閉此分頁並切回 Vulcan Code。",
+  "openvulcan.callback.footer": "登入由 OpenVulcan 使用者中心授權",
+  "openvulcan.callback.china": "中文版入口",
+  "openvulcan.callback.global": "國際版入口"
+}

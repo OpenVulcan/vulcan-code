@@ -11,6 +11,7 @@ use vulcan_sqlite_engine::{
     runtime::{SqliteOpenOptions, open_sqlite_connection},
     sql_exec::{SqliteValue, query_json},
 };
+use vulcan_workspace_store::data_plane::AI_CREDENTIAL_SECRETS_TABLE;
 use vulcan_workspace_store::workspace_store::{
     AiCredentialSecretRecord, restore_ai_credential_secret_record,
 };
@@ -114,7 +115,9 @@ async fn run_live_saved_fixed_model_acceptance() {
         // rows 不离开当前进程且不进入测试输出；筛选条件使用绑定，不进行插值。
         let rows = query_json(
             &connection,
-            "SELECT * FROM ai_credential_secrets WHERE secret_reference = ?1 LIMIT 1",
+            &format!(
+                "SELECT * FROM {AI_CREDENTIAL_SECRETS_TABLE} WHERE secret_reference = ?1 LIMIT 1"
+            ),
             &[SqliteValue::Text(
                 selection.route.connection.secret_reference.clone(),
             )],

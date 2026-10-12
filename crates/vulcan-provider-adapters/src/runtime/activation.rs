@@ -999,6 +999,51 @@ impl PublicAiRuntime {
         connection_ids: &[String],
         transaction: &ProviderCatalogActivationTransaction,
     ) -> Result<ProviderRuntimeActivationSnapshot, String> {
+        self.activate_manifest_catalogs_with_connection_isolation(
+            configuration,
+            connection_ids,
+            transaction,
+            false,
+        )
+        .await
+    }
+
+    /// Publishes startup catalogs while retaining per-connection failures for explicit repair.
+    /// 发布启动目录，同时保留逐连接失败供显式修复。
+    /// `configuration` is the saved image; `connection_ids` names the exact startup projection set.
+    /// `configuration` 是保存的镜像；`connection_ids` 指定精确启动投影集合。
+    /// Returns one coherent publication; configuration and publication errors still abort startup.
+    /// 返回一次一致发布；配置和发布错误仍终止启动。
+    pub async fn activate_startup_manifest_catalogs(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        connection_ids: &[String],
+    ) -> Result<ProviderRuntimeActivationSnapshot, String> {
+        // Startup has no prior healthy publication to preserve when one account fails.
+        // 单个账号失败时，启动阶段没有可保留的先前健康发布。
+        let transaction = self.begin_catalog_activation_transaction().await;
+        self.activate_manifest_catalogs_with_connection_isolation(
+            configuration,
+            connection_ids,
+            &transaction,
+            true,
+        )
+        .await
+    }
+
+    /// Builds one candidate for `configuration` and `connection_ids` under the owned `transaction`.
+    /// 在所属 `transaction` 中为 `configuration` 和 `connection_ids` 构建候选。
+    /// `isolate_connection_failures` is enabled only at startup; runtime updates remain all-or-nothing.
+    /// `isolate_connection_failures` 仅在启动时启用；运行中更新保持全有或全无。
+    /// Returns the atomically published candidate or an explicit construction/publication failure.
+    /// 返回原子发布的候选，或明确的构建／发布失败。
+    async fn activate_manifest_catalogs_with_connection_isolation(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        connection_ids: &[String],
+        transaction: &ProviderCatalogActivationTransaction,
+        isolate_connection_failures: bool,
+    ) -> Result<ProviderRuntimeActivationSnapshot, String> {
         if !Arc::ptr_eq(&self.catalog_refresh_flight, &transaction.owner) {
             return Err(String::from(
                 "The provider catalog activation transaction belongs to another runtime.",
@@ -1019,7 +1064,7 @@ impl PublicAiRuntime {
         // this exact staged generation; the persisted repair image remains untouched.
         // runtimeConfiguration 只移除当前精确暂存代际中没有可执行权威的供应商身份；
         // 持久化修复镜像保持不变。
-        let runtime_configuration = runtime_configuration_for_manifest_catalog(
+        let mut runtime_configuration = runtime_configuration_for_manifest_catalog(
             configuration,
             staged_system_manifests.as_ref(),
         );
@@ -1045,6 +1090,19 @@ impl PublicAiRuntime {
             // 已停用凭据保留既有来源证据，但绝不执行激活阶段 I/O。
             if !runtime_configuration.connection_is_enabled(connection_id.as_str()) {
                 continue;
+            }
+            if isolate_connection_failures {
+                // Static catalogs and provider tools also require usable storage records; catalog discovery alone does not read them.
+                // 静态目录和供应商工具也要求可用的存储记录；仅做目录发现不会读取它们。
+                let connection = &runtime_configuration.connection_graph.connections[connection_id];
+                if let Err(error) = isolated_runtime
+                    .secrets
+                    .read_secret(&connection.secret_reference)
+                    .await
+                {
+                    failures.insert(connection_id.clone(), error);
+                    continue;
+                }
             }
             // Provider-tool entries own credentials and tools but intentionally have no
             // conversation model catalog; generation activation must not project one for them.
@@ -1076,7 +1134,7 @@ impl PublicAiRuntime {
                 failures.insert(connection_id.clone(), error);
             }
         }
-        if !failures.is_empty() {
+        if !failures.is_empty() && !isolate_connection_failures {
             // failureSummary is deterministic because BTreeMap preserves stable connection order.
             // failureSummary 具有确定性，因为 BTreeMap 保持稳定连接顺序。
             let failure_summary = failures
@@ -1087,6 +1145,20 @@ impl PublicAiRuntime {
             return Err(format!(
                 "Provider manifest connection projection failed before publication: {failure_summary}"
             ));
+        }
+        for (connection_id, error) in failures {
+            // Disable only the detached executable projection; never persist a user's failed account as disabled.
+            // 仅停用独立的可执行投影；绝不把用户的失败账号持久化为停用。
+            runtime_configuration.set_connection_enabled(&connection_id, false)?;
+            isolated_runtime.remove_connection_catalog(&connection_id)?;
+            isolated_runtime.remove_connection_usage(&connection_id)?;
+            isolated_runtime.record_catalog_refresh_failure(
+                &connection_id,
+                1,
+                super::current_unix_millis()?,
+                super::CatalogDiscoveryFailureKind::Failed,
+                &error,
+            )?;
         }
         isolated_runtime.reapply_model_catalog_overlays_with_manifests(
             configuration,

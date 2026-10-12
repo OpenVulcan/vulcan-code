@@ -1,0 +1,17 @@
+{
+  "openvulcan.callback.accepted.title": "ブラウザーでの認証が完了しました",
+  "openvulcan.callback.accepted.description": "認証情報はこの端末の Vulcan Code に安全に渡されました。",
+  "openvulcan.callback.accepted.next": "アプリがアカウントを確認し、ログインを保存します。最終結果はアプリで確認してください。",
+  "openvulcan.callback.failed.title": "認証を完了できませんでした",
+  "openvulcan.callback.failed.description": "Vulcan Code に戻り、ログインをやり直してください。",
+  "openvulcan.callback.failed.next": "アカウント画面でログイン先を選び直してください。このページの再読み込みや古い認証リンクの再利用は避けてください。",
+  "openvulcan.callback.rejected.title": "この認証コールバックは無効です",
+  "openvulcan.callback.rejected.description": "現在のログイン要求との照合に失敗しました。",
+  "openvulcan.callback.rejected.next": "先ほど開いた認証ページで続けてください。閉じた場合はアプリでログインをやり直してください。",
+  "openvulcan.callback.nextTitle": "Vulcan Code に戻る",
+  "openvulcan.callback.close": "このページを閉じる",
+  "openvulcan.callback.closeHelp": "ブラウザーが自動で閉じない場合は、タブを閉じて Vulcan Code に戻ってください。",
+  "openvulcan.callback.footer": "OpenVulcan ユーザーセンターによるログイン認証",
+  "openvulcan.callback.china": "中国版入口",
+  "openvulcan.callback.global": "国際版入口"
+}

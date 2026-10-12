@@ -538,7 +538,7 @@ impl PublicAiRuntime {
     /// 返回值
     /// Success after both error and typed status maps are updated.
     /// 在错误与强类型状态映射均更新后返回成功。
-    fn record_catalog_refresh_failure(
+    pub(super) fn record_catalog_refresh_failure(
         &self,
         connection_id: &str,
         generation: u64,

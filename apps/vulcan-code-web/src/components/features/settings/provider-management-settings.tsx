@@ -1,3 +1,4 @@
+import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
 import * as React from "react"
 import { Trash2 } from "lucide-react"
@@ -27,6 +28,9 @@ import { CustomProviderTable, SystemProviderTable } from "./provider-management-
 // ProviderManagementArea renders the complete provider registry without credential details.
 // ProviderManagementArea 渲染不含凭据详情的完整供应商注册表。
 export function ProviderManagementArea() {
+  // account changes invalidate the visible core-provider directory.
+  // account 的变化使可见核心供应商目录失效。
+  const account = React.useContext(OpenVulcanAccountContext)
   const { t } = useI18n()
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
   const [editingProvider, setEditingProvider] = React.useState<PublicAiProviderDescriptor | null>(null)
@@ -60,7 +64,7 @@ export function ProviderManagementArea() {
 
   React.useEffect(() => {
     void refresh()
-  }, [refresh])
+  }, [refresh, account?.snapshot?.connectionId, account?.snapshot?.connected])
 
   // openCreate starts a blank custom-provider editor.
   // openCreate 启动空白自定义供应商编辑器。

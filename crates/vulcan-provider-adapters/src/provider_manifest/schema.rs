@@ -173,6 +173,9 @@ pub enum ManifestCategory {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestDirectoryVisibility {
+    /// Core system provider shown only while its application account is connected.
+    /// 仅在应用账户连接期间显示的核心系统供应商。
+    CoreAccount,
     /// Shows the provider only after at least one credential exists.
     /// 仅在至少存在一个凭据后显示供应商。
     #[default]

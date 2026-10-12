@@ -102,6 +102,11 @@ pub(super) async fn send_metadata_get_with_authentication(
         request = request.header(name, value);
     }
     request = match authentication {
+        AuthenticationProjection::OpenVulcanAuth => request.header(
+            "Authorization",
+            crate::openvulcan::authorization_header(secret, url)
+                .map_err(ModelDiscoveryError::failed)?,
+        ),
         AuthenticationProjection::XApiKey => request.header("x-api-key", secret.expose_value()),
         AuthenticationProjection::BearerAuthorization
         | AuthenticationProjection::CodingDeviceBearer
@@ -137,6 +142,7 @@ pub(super) async fn send_metadata_get_with_authentication(
             request = request.header("x-goog-user-project", quota_project_id);
         }
         AuthenticationProjection::XApiKey
+        | AuthenticationProjection::OpenVulcanAuth
         | AuthenticationProjection::BearerAuthorization
         | AuthenticationProjection::CodingDeviceBearer
         | AuthenticationProjection::GoogleApiKey => {}

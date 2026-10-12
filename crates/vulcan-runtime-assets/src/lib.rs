@@ -639,6 +639,11 @@ pub const PERMISSION_REVIEW_MD: &str =
 pub const DEDICATED_PROMPT_GENERATOR_MD: &str =
     include_str!("../resources/agent-prompts/dedicated-prompt-generator.md");
 
+/// Self-contained OpenVulcan loopback result page; visible copy comes from the shared catalogs.
+/// 自包含的 OpenVulcan 环回结果页；可见文案来自共享目录。
+pub const OPENVULCAN_CALLBACK_HTML: &str =
+    include_str!("../resources/oauth/openvulcan-callback.html");
+
 #[cfg(test)]
 mod tests {
     use super::*;

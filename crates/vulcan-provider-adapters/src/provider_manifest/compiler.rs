@@ -1477,6 +1477,9 @@ fn compile_descriptor(
             super::ManifestCategory::Relay => ProviderCategory::Relay,
         },
         credential_directory_visibility: match manifest.display.credential_directory_visibility {
+            super::ManifestDirectoryVisibility::CoreAccount => {
+                CredentialDirectoryVisibility::CoreAccount
+            }
             super::ManifestDirectoryVisibility::ConfiguredOnly => {
                 CredentialDirectoryVisibility::ConfiguredOnly
             }

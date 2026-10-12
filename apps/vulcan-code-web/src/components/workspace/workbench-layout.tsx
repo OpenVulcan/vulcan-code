@@ -65,6 +65,8 @@ import { UnsupportedSessionDeleteDialog } from "@/components/project/unsupported
 import { useConversationSelectionNavigation } from "@/components/workspace/workbench-layout/use-conversation-selection-navigation";
 import { PermissionJudgeEntryContext, type PermissionJudgeEntry } from "@/components/composer/permission-judge-entry-context";
 import { useSetupGuide } from "@/components/features/onboarding/use-setup-guide";
+import { useOpenVulcanAccount } from "@/components/features/account/use-openvulcan-account";
+import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 export type { WorkbenchDeltaSignal } from "@/components/workspace/workbench-layout/types";
 import {
   WorkspaceShell,
@@ -166,6 +168,9 @@ const AssistantFloatingLayer = React.lazy(() => import("@/components/assistant/a
 const WorkbenchDialogs = React.lazy(() => import("@/components/workspace/workbench-dialogs")
   .then((module) => ({ default: module.WorkbenchDialogs })));
 const SetupGuideDialog = React.lazy(() => import("@/components/features/onboarding/setup-guide-dialog"));
+// OpenVulcanAccountDialog loads only when onboarding or account management is opened.
+// OpenVulcanAccountDialog 仅在打开引导或账户管理时加载。
+const OpenVulcanAccountDialog = React.lazy(() => import("@/components/features/account/openvulcan-account-dialog"));
 
 // MediaUploadProgressPanel loads only for an active transfer while preserving the stream-owned progress row.
 // MediaUploadProgressPanel 仅在传输进行时加载，同时保留由事件流管理的进度行。
@@ -516,7 +521,10 @@ export function WorkbenchLayout(props: {
     setActiveSettingsSubArea("permission-judge");
     handleSelectTopFeatureArea("settings");
   }, [handleSelectTopFeatureArea]);
-  const setupGuide = useSetupGuide(workbenchState.permissionJudgeBackend, props.startup.ready);
+  // account owns installation-wide onboarding before the existing optional setup guide.
+  // account 在既有可选初始化引导之前持有整个安装的账户引导。
+  const account = useOpenVulcanAccount(props.startup.ready, props.serviceInstanceEpoch);
+  const setupGuide = useSetupGuide(workbenchState.permissionJudgeBackend, props.startup.ready && account.initialized && !account.open);
   const permissionJudgeEntry = React.useMemo<PermissionJudgeEntry>(() => ({
     backend: workbenchState.permissionJudgeBackend ?? null,
     openSettings: handleOpenPermissionJudgeSettings,
@@ -1074,6 +1082,8 @@ export function WorkbenchLayout(props: {
   }, [dialogsRequested]);
 
   return (
+    <OpenVulcanAccountContext.Provider value={account}>
+    {account.open ? <React.Suspense fallback={null}><OpenVulcanAccountDialog /></React.Suspense> : null}
     <ThinkingDisplaySystemContext.Provider value={{
       mode: workbenchState.thinkingDisplayMode,
       save: handleSelectWorkbenchThinkingDisplayMode,
@@ -1355,5 +1365,6 @@ export function WorkbenchLayout(props: {
     </ComposerSettingsHostContext.Provider>
     </ToolCollapsePreferencesContext.Provider>
     </ThinkingDisplaySystemContext.Provider>
+    </OpenVulcanAccountContext.Provider>
   );
 }

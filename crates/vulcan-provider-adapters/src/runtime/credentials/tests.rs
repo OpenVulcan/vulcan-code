@@ -6,6 +6,74 @@ use super::*;
 use std::collections::BTreeSet;
 use std::sync::atomic::AtomicUsize;
 
+/// Persists a native rotation fence before failure and proves restart or deletion cannot replay it.
+/// 在失败前持久化原生轮换标记，并证明重启或删除后不能重放。
+#[tokio::test]
+async fn openvulcan_rotation_fence_survives_failure_and_new_leases() {
+    // initial is already expired, so production refresh must fail without contacting any service.
+    // initial 已过期，因此生产刷新必须失败且不访问任何服务。
+    let initial = CredentialSecretEnvelope::new(crate::CredentialSecretMaterial::OpenVulcanAuth {
+        access_token: "a".repeat(43),
+        authorization_id: uuid::Uuid::new_v4().to_string(),
+        region: crate::OpenVulcanRegion::China,
+        expires_at_unix_ms: 1,
+        rotation_pending: false,
+    })
+    .expect("native fixture");
+    // store retains the durable image across independent lease generations.
+    // store 跨独立租约代际保留持久镜像。
+    let store = Arc::new(IsolatedCredentialSecretStore {
+        delegate: Arc::new(UnavailableCredentialSecretResolver),
+        secret_reference: String::from("native-secret"),
+        secret: StdMutex::new(Some(initial)),
+    });
+    // lease uses the same production CAS fence and refresh path as a real provider request.
+    // lease 使用与实际供应商请求相同的生产 CAS 标记及刷新路径。
+    let lease = ProviderExecutionCredentialLease::new(
+        String::from("native-account"),
+        String::from("native-secret"),
+        Arc::new(OAuthAuthorizationRuntime::new(reqwest::Client::new())),
+        Arc::new(StdMutex::new(BTreeMap::new())),
+        store.clone(),
+    );
+    assert!(lease.resolve_for_request().await.is_err());
+    let fenced = store
+        .read_secret("native-secret")
+        .await
+        .expect("fence persisted");
+    assert_eq!(fenced.revision, 2);
+    assert!(matches!(
+        fenced.material,
+        crate::CredentialSecretMaterial::OpenVulcanAuth {
+            rotation_pending: true,
+            ..
+        }
+    ));
+    // restarted gets a fresh lock and runtime, proving the persistent flag owns replay prevention.
+    // restarted 获得新的锁和运行时，证明持久标记持有防重放权威。
+    let restarted = ProviderExecutionCredentialLease::new(
+        String::from("native-account"),
+        String::from("native-secret"),
+        Arc::new(OAuthAuthorizationRuntime::new(reqwest::Client::new())),
+        Arc::new(StdMutex::new(BTreeMap::new())),
+        store.clone(),
+    );
+    assert!(restarted.resolve_for_request().await.is_err());
+    assert_eq!(
+        store.read_secret("native-secret").await.unwrap().revision,
+        fenced.revision
+    );
+    store.delete_secret("native-secret").await.unwrap();
+    assert!(lease.resolve_for_request().await.is_err());
+    assert!(
+        store
+            .read_optional_secret("native-secret")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 /// Builds one valid Kimi OAuth envelope for live credential-lease tests.
 /// 为实时凭据租约测试构建一份有效 Kimi OAuth 封装。
 ///
@@ -25,7 +93,7 @@ fn test_kimi_oauth_secret(revision: u64, access_token: &str) -> CredentialSecret
     // now 为凭据不变量提供有效的签发与过期时间区间。
     let now = current_unix_millis().expect("test clock should be available");
     CredentialSecretEnvelope {
-        version: 1,
+        version: crate::CREDENTIAL_SECRET_FORMAT_VERSION,
         revision,
         material: crate::CredentialSecretMaterial::KimiCodingPlanOAuth {
             tokens: crate::OAuthTokenSet {

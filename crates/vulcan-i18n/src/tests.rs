@@ -9,7 +9,7 @@ use super::*;
 
 /// Every surface declared by `locales.json`; a new surface must be listed here to be checked.
 /// `locales.json` 声明的全部分面；新增分面必须登记在此才会被检查。
-const SURFACES: &[&Surface] = &[&BOOT, &DESKTOP, &TRAY, &WEBUI, &TUI];
+const SURFACES: &[&Surface] = &[&BOOT, &DESKTOP, &OAUTH, &TRAY, &WEBUI, &TUI];
 
 /// Placeholder names used by a message, as a sorted set.
 /// 消息使用的占位符名称，以有序集合表示。

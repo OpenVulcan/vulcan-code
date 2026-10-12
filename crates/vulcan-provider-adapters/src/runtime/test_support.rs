@@ -33,7 +33,7 @@ impl TestStaticSecretStore {
     pub(super) fn api_key() -> Self {
         Self {
             secret: CredentialSecretEnvelope {
-                version: 1,
+                version: crate::CREDENTIAL_SECRET_FORMAT_VERSION,
                 revision: 1,
                 material: crate::CredentialSecretMaterial::ApiKey {
                     value: String::from("sk-sp-manifest-activation-test"),

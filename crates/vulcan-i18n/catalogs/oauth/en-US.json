@@ -1,0 +1,17 @@
+{
+  "openvulcan.callback.accepted.title": "Browser authorization complete",
+  "openvulcan.callback.accepted.description": "Your authorization has been securely passed to Vulcan Code on this device.",
+  "openvulcan.callback.accepted.next": "The app will verify your account and save your sign-in. Check the final result in the app.",
+  "openvulcan.callback.failed.title": "Authorization could not be completed",
+  "openvulcan.callback.failed.description": "Return to Vulcan Code and start a new sign-in.",
+  "openvulcan.callback.failed.next": "Choose a sign-in option in the account window. Do not refresh this page or reuse the previous authorization link.",
+  "openvulcan.callback.rejected.title": "This authorization callback is invalid",
+  "openvulcan.callback.rejected.description": "This page could not be verified against the current sign-in request.",
+  "openvulcan.callback.rejected.next": "Continue in the authorization page you just opened. If you closed it, start a new sign-in in the app.",
+  "openvulcan.callback.nextTitle": "Return to Vulcan Code",
+  "openvulcan.callback.close": "Close this page",
+  "openvulcan.callback.closeHelp": "If your browser keeps this page open, close the tab and switch back to Vulcan Code.",
+  "openvulcan.callback.footer": "Sign-in authorized by the OpenVulcan user center",
+  "openvulcan.callback.china": "China service",
+  "openvulcan.callback.global": "International service"
+}

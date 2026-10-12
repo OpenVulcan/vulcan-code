@@ -18,6 +18,43 @@ use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
+/// Native catalog capabilities survive manifest enrichment for every declared regional account route.
+/// 每个已声明区域账户路由的原生目录能力均在 Manifest 补全后保持不变。
+#[test]
+fn openvulcan_enrichment_preserves_server_capabilities() {
+    // manifests and client use the actual compiled resource and enrichment boundary without networking.
+    // manifests 与 client 使用实际编译资源及补全边界，不产生网络访问。
+    let manifests = crate::provider_manifest::load_bundled_resolved_catalog();
+    let manifest = manifests
+        .manifest_arc("openvulcan")
+        .expect("Native manifest must exist; provider declarations may need updating.");
+    let client = HttpProviderMetadataClient::new(reqwest::Client::new());
+    // body deliberately contains capabilities absent from the conservative manifest defaults.
+    // body 刻意包含保守 Manifest 默认值中不存在的能力。
+    let body = serde_json::json!({"contract_version":crate::openvulcan::CONTRACT_VERSION,"models":[{"model_id":"synthetic-vector","display_name":"Vector","kind":"embedding","capabilities":{"max_input_tokens_per_item":128,"max_batch_size":3,"default_dimensions":4,"allowed_dimensions":[4,8],"allowed_tasks":["document"],"allowed_output_kinds":["dense"],"allowed_encodings":["float"]}}]}).to_string();
+    for entry in &manifest.descriptor.service_entries {
+        for profile in &entry.credential_profiles {
+            for route in &entry.protocol_routes {
+                // catalog and expected compare parsed server facts, never a catalog-content golden file.
+                // catalog 与 expected 比较已解析服务端事实，不使用目录内容黄金文件。
+                let mut catalog = crate::openvulcan::parse_catalog("fixture", 1, &body).unwrap();
+                let expected = catalog.models.clone();
+                client
+                    .enrich_catalog_for_protocol(
+                        Some(&manifest),
+                        &manifest.descriptor,
+                        entry,
+                        &profile.id,
+                        &route.protocol_profile_id,
+                        &mut catalog,
+                    )
+                    .unwrap();
+                assert_eq!(catalog.models, expected);
+            }
+        }
+    }
+}
+
 /// Keeps only conversation protocol routes on one entry used by manifest-free discovery tests.
 /// 仅保留无 Manifest 发现测试所用入口上的对话协议路由。
 ///

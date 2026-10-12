@@ -613,6 +613,9 @@ pub enum NativeInferenceBatchProtocolKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeInferenceProjectionKind {
+    /// Versioned OpenVulcan embedding and decision requests with Auth credentials.
+    /// 使用 Auth 凭据的版本化 OpenVulcan 向量和判定请求。
+    OpenVulcan,
     /// Plain compatible JSON without an upstream routing policy.
     /// 不携带上游路由策略的普通兼容 JSON。
     Compatible,
@@ -715,6 +718,9 @@ impl ServiceEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelDiscoveryKind {
+    /// Credential-scoped native OpenVulcan capability catalog.
+    /// 凭据作用域的 OpenVulcan 原生能力目录。
+    OpenVulcan,
     /// User-managed models without a remote catalog request.
     /// 不请求远程目录、完全由用户管理的模型。
     Manual,
@@ -752,6 +758,9 @@ pub enum ModelDiscoveryKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthenticationProjection {
+    /// Sends the region-bound credential through Authorization: Auth.
+    /// 通过 Authorization: Auth 发送绑定区域的凭据。
+    OpenVulcanAuth,
     /// Sends the resolved value through `x-api-key`.
     /// 通过 `x-api-key` 发送解析值。
     XApiKey,
@@ -780,6 +789,9 @@ pub enum AuthenticationProjection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountUsageQueryKind {
+    /// OpenVulcan base quota windows and independent expiring point balances.
+    /// OpenVulcan 基础额度窗口及独立到期积分余额。
+    OpenVulcan,
     /// Account usage is not exposed by this entry.
     /// 此入口不公开账号用量。
     #[default]
@@ -1236,11 +1248,15 @@ pub struct ProtocolModelVariant {
     pub catalog_generation: u64,
 }
 
-/// Records which basic capability fields were explicitly declared by one model directory.
-/// 记录一个模型目录明确声明了哪些基础能力字段。
+/// Records explicit capability fields and native task values observed through one model directory.
+/// 记录通过一个模型目录观测到的明确能力字段与原生任务值。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ModelCapabilityEvidence {
+    /// Exact provider task strings keyed by host semantics and frozen with this protocol variant.
+    /// 按宿主语义索引的准确供应商任务字符串，与当前协议变体共同冻结。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub embedding_task_values: BTreeMap<vulcan_ai_contract::EmbeddingTask, String>,
     /// Whether the directory explicitly declared a context limit.
     /// 目录是否明确声明了上下文上限。
     #[serde(default)]

@@ -1,7 +1,7 @@
 {
   "bootEntry": { "raw": 300000, "gzip": 90000 },
   "workbench": { "raw": 2060000, "gzip": 565000 },
-  "initialWorkbenchJavaScript": { "raw": 2400000, "gzip": 675000 },
+  "initialWorkbenchJavaScript": { "raw": 2400000, "gzip": 676000 },
   "workbenchCss": { "raw": 505000, "gzip": 74000 },
   "projectIconLucideCatalog": { "raw": 595000, "gzip": 160000 },
   "projectIconMaterialCatalog": { "raw": 930000, "gzip": 272000 },

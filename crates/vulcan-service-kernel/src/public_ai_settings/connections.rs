@@ -5,9 +5,9 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{AccountUsageAvailability, AccountUsageSnapshot};
 use vulcan_provider_adapters::{
-    CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretResolver,
-    CredentialSecretStore, MediaUnderstandingBackendSelection, PersistedAiConfiguration,
-    PublicAiRuntime, ServiceEntry, ServiceEntryKind,
+    CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretMaterial,
+    CredentialSecretSnapshot, CredentialSecretStore, MediaUnderstandingBackendSelection,
+    PersistedAiConfiguration, PublicAiRuntime, ServiceEntry, ServiceEntryKind,
 };
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -128,10 +128,10 @@ pub(crate) struct PublicAiConnectionEnabledSaveRequest {
 pub(crate) struct PublicAiConnectionRemoveRequest {
     /// Exact connection to remove.
     /// 待移除的精确连接。
-    connection_id: String,
+    pub(super) connection_id: String,
     /// Explicit replacement default for the same provider.
     /// 同一供应商的显式替代默认账号。
-    replacement_default_connection_id: Option<String>,
+    pub(super) replacement_default_connection_id: Option<String>,
 }
 
 /// Adds and synchronizes one public AI credential connection.
@@ -151,6 +151,7 @@ pub(crate) async fn service_add_public_ai_connection(
     state: SharedServiceBridgeState,
     request: PublicAiConnectionAddRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    super::openvulcan_account::reject_generic_provider_mutation(&state, &request.provider_id)?;
     validate_non_empty("providerId", request.provider_id.as_str())?;
     validate_non_empty("serviceEntryId", request.service_entry_id.as_str())?;
     validate_non_empty(
@@ -286,6 +287,44 @@ pub(super) async fn add_public_ai_connection_with_secret(
                 "Credential profile `{credential_profile_id}` is not registered for service entry `{service_entry_id}`."
             )
         })?;
+    // Core accounts are unique and bind their secure region to the signed authorization declaration.
+    // 核心账户保持唯一，并将安全区域绑定到签名授权声明。
+    if provider.credential_directory_visibility
+        == vulcan_provider_adapters::CredentialDirectoryVisibility::CoreAccount
+    {
+        if current_configuration
+            .connection_graph
+            .connections
+            .values()
+            .any(|connection| connection.provider_id == provider.id)
+        {
+            return Err(String::from("A core account is already connected."));
+        }
+        let vulcan_provider_adapters::CredentialSecretMaterial::OpenVulcanAuth {
+            region,
+            rotation_pending: false,
+            ..
+        } = &secret.material
+        else {
+            return Err(String::from(
+                "Core accounts require usable native authorization.",
+            ));
+        };
+        let expected = match region {
+            vulcan_provider_adapters::OpenVulcanRegion::China => {
+                vulcan_provider_adapters::OAuthProviderKind::OpenVulcanChina
+            }
+            vulcan_provider_adapters::OpenVulcanRegion::Global => {
+                vulcan_provider_adapters::OAuthProviderKind::OpenVulcanGlobal
+            }
+        };
+        if !matches!(&credential_profile.authorization, Some(vulcan_provider_adapters::CredentialAuthorization::RegisteredOauth { provider }) if *provider == expected)
+        {
+            return Err(String::from(
+                "Core account region does not match its authorization declaration.",
+            ));
+        }
+    }
     if management_key
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
@@ -677,6 +716,7 @@ pub(crate) async fn service_update_public_ai_connection(
     state: SharedServiceBridgeState,
     request: PublicAiConnectionUpdateRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    super::openvulcan_account::reject_generic_connection_mutation(&state, &request.connection_id)?;
     let mut request = request;
     validate_non_empty("connectionId", request.connection_id.as_str())?;
     validate_non_empty("displayName", request.display_name.as_str())?;
@@ -792,20 +832,15 @@ pub(crate) async fn service_update_public_ai_connection(
                 "Renewable account authorization must be updated through the Auth login flow.",
             ));
         }
-        let previous = CredentialSecretResolver::read_secret(
+        let replacement = super::credential_repair::replace_credential_material(
             secret_store.as_ref(),
             current.secret_reference.as_str(),
+            CredentialSecretMaterial::ApiKey {
+                value: secret.to_string(),
+            },
         )
         .await?;
-        let replacement = previous.replace_api_key(secret.to_string())?;
-        CredentialSecretStore::replace_secret(
-            secret_store.as_ref(),
-            current.secret_reference.as_str(),
-            previous.revision,
-            &replacement,
-        )
-        .await?;
-        Some((previous, replacement))
+        Some(replacement)
     } else {
         None
     };
@@ -1061,17 +1096,16 @@ pub(super) fn apply_connection_update(
 async fn rollback_replaced_secret(
     secret_store: &dyn CredentialSecretStore,
     secret_reference: &str,
-    replaced_secret: Option<&(CredentialSecretEnvelope, CredentialSecretEnvelope)>,
+    replaced_secret: Option<&(Option<CredentialSecretSnapshot>, CredentialSecretEnvelope)>,
 ) -> Result<(), String> {
     let Some((previous, replacement)) = replaced_secret else {
         return Ok(());
     };
-    let rollback = replacement.advance_with_material(previous.material.clone())?;
-    CredentialSecretStore::replace_secret(
+    super::credential_repair::rollback_credential_replacement(
         secret_store,
         secret_reference,
-        replacement.revision,
-        &rollback,
+        previous.as_ref(),
+        replacement,
     )
     .await
 }
@@ -1089,14 +1123,14 @@ enum ManagementSecretMutation {
     /// 已替换现有管理凭据。
     Replaced {
         reference: String,
-        previous: Box<CredentialSecretEnvelope>,
+        previous: Option<CredentialSecretSnapshot>,
         replacement: Box<CredentialSecretEnvelope>,
     },
     /// An existing management credential was removed.
     /// 已移除现有管理凭据。
     Removed {
         reference: String,
-        previous: Box<CredentialSecretEnvelope>,
+        previous: Option<CredentialSecretSnapshot>,
     },
 }
 
@@ -1178,29 +1212,28 @@ async fn prepare_management_secret_mutation(
         let Some(reference) = current.management_secret_reference.as_deref() else {
             return Ok(ManagementSecretMutation::Unchanged);
         };
-        let previous = CredentialSecretResolver::read_secret(secret_store, reference).await?;
+        let previous = secret_store.capture_secret(reference).await?;
         CredentialSecretStore::delete_secret(secret_store, reference).await?;
         return Ok(ManagementSecretMutation::Removed {
             reference: reference.to_string(),
-            previous: Box::new(previous),
+            previous,
         });
     }
     let Some(value) = management_key.filter(|value| !value.trim().is_empty()) else {
         return Ok(ManagementSecretMutation::Unchanged);
     };
     if let Some(reference) = current.management_secret_reference.as_deref() {
-        let previous = CredentialSecretResolver::read_secret(secret_store, reference).await?;
-        let replacement = previous.replace_api_key(value.to_string())?;
-        CredentialSecretStore::replace_secret(
+        let (previous, replacement) = super::credential_repair::replace_credential_material(
             secret_store,
             reference,
-            previous.revision,
-            &replacement,
+            CredentialSecretMaterial::ApiKey {
+                value: value.to_string(),
+            },
         )
         .await?;
         return Ok(ManagementSecretMutation::Replaced {
             reference: reference.to_string(),
-            previous: Box::new(previous),
+            previous,
             replacement: Box::new(replacement),
         });
     }
@@ -1236,12 +1269,11 @@ async fn rollback_management_secret_mutation(
             previous,
             replacement,
         } => {
-            let rollback = replacement.advance_with_material(previous.material.clone())?;
-            CredentialSecretStore::replace_secret(
+            super::credential_repair::rollback_credential_replacement(
                 secret_store,
                 reference,
-                replacement.revision,
-                &rollback,
+                previous.as_ref(),
+                replacement,
             )
             .await
         }
@@ -1249,7 +1281,12 @@ async fn rollback_management_secret_mutation(
             reference,
             previous,
         } => {
-            CredentialSecretStore::restore_secret(secret_store, reference, previous.as_ref()).await
+            super::credential_repair::restore_deleted_credential(
+                secret_store,
+                reference,
+                previous.as_ref(),
+            )
+            .await
         }
     }
 }
@@ -1301,18 +1338,26 @@ async fn delete_connection_secrets(
 async fn restore_connection_secrets(
     secret_store: &dyn CredentialSecretStore,
     primary_reference: &str,
-    primary_secret: &CredentialSecretEnvelope,
-    management_secret: Option<(&str, &CredentialSecretEnvelope)>,
+    primary_secret: &Option<CredentialSecretSnapshot>,
+    management_secret: Option<(&str, &Option<CredentialSecretSnapshot>)>,
 ) -> Result<(), String> {
     // primaryRestore returns the required credential to its exact revision and material.
     // primaryRestore 将必需凭据恢复到精确修订与材料。
-    let primary_restore =
-        CredentialSecretStore::restore_secret(secret_store, primary_reference, primary_secret)
-            .await;
+    let primary_restore = super::credential_repair::restore_deleted_credential(
+        secret_store,
+        primary_reference,
+        primary_secret.as_ref(),
+    )
+    .await;
     // managementRestore independently restores the declared secondary credential when present.
     // managementRestore 在存在时独立恢复已声明的次级凭据。
     let management_restore = if let Some((reference, secret)) = management_secret {
-        CredentialSecretStore::restore_secret(secret_store, reference, secret).await
+        super::credential_repair::restore_deleted_credential(
+            secret_store,
+            reference,
+            secret.as_ref(),
+        )
+        .await
     } else {
         Ok(())
     };
@@ -1406,6 +1451,7 @@ pub(crate) async fn service_save_public_ai_connection_enabled(
     state: SharedServiceBridgeState,
     request: PublicAiConnectionEnabledSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    super::openvulcan_account::reject_generic_connection_mutation(&state, &request.connection_id)?;
     validate_non_empty("connectionId", request.connection_id.as_str())?;
     // transaction retains writer ownership across persistence, activation, sessions, and publication.
     // transaction 在持久化、激活、会话与发布期间保持写入所有权。
@@ -1487,7 +1533,7 @@ pub(crate) async fn service_save_public_ai_connection_enabled(
 /// 返回值
 /// The published snapshot after exact reference cleanup, or a compensated failure.
 /// 精确引用清理并发布后返回快照，否则返回补偿后的失败。
-pub(crate) async fn service_remove_public_ai_connection(
+pub(super) async fn remove_public_ai_connection_inner(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: PublicAiConnectionRemoveRequest,
@@ -1506,14 +1552,12 @@ pub(crate) async fn service_remove_public_ai_connection(
         .cloned()
         .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
     let secret_store = runtime.credential_secret_store();
-    let removed_secret = CredentialSecretResolver::read_secret(
-        secret_store.as_ref(),
-        removed.secret_reference.as_str(),
-    )
-    .await?;
+    let removed_secret = secret_store
+        .capture_secret(removed.secret_reference.as_str())
+        .await?;
     let removed_management_secret =
         if let Some(reference) = removed.management_secret_reference.as_deref() {
-            Some(CredentialSecretResolver::read_secret(secret_store.as_ref(), reference).await?)
+            Some(secret_store.capture_secret(reference).await?)
         } else {
             None
         };
@@ -1523,10 +1567,10 @@ pub(crate) async fn service_remove_public_ai_connection(
         && let Err(error) =
             CredentialSecretStore::delete_secret(secret_store.as_ref(), reference).await
     {
-        let restore = CredentialSecretStore::restore_secret(
+        let restore = super::credential_repair::restore_deleted_credential(
             secret_store.as_ref(),
             removed.secret_reference.as_str(),
-            &removed_secret,
+            removed_secret.as_ref(),
         )
         .await;
         return Err(compensated_operation_error(error, restore, Ok(())));
@@ -1625,6 +1669,17 @@ pub(crate) async fn service_remove_public_ai_connection(
             ))
         }
     }
+}
+
+/// Removes a user-managed connection; core accounts must use their complete logout lifecycle.
+/// 移除用户管理的连接；核心账户必须使用完整退出生命周期。
+pub(crate) async fn service_remove_public_ai_connection(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiConnectionRemoveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    super::openvulcan_account::reject_generic_connection_mutation(&state, &request.connection_id)?;
+    remove_public_ai_connection_inner(app, state, request).await
 }
 
 /// Refreshes one connection's declared runtime metadata on demand.

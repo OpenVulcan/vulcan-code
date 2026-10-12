@@ -45,6 +45,9 @@ pub enum ProviderCategory {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialDirectoryVisibility {
+    /// Core system provider owned by the application-wide account lifecycle.
+    /// 由应用全局账户生命周期持有的核心系统供应商。
+    CoreAccount,
     /// Shows the provider only after at least one credential exists.
     /// 仅在至少存在一个凭据后显示供应商。
     #[default]

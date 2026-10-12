@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::AiOperation;
 use vulcan_provider_adapters::{
     CatalogDiscoveryState, CatalogDiscoveryStatus, ConnectionModelCatalog, CredentialConnection,
-    CredentialSecretEnvelope, CredentialSecretResolver, CredentialSecretStore, CustomProtocolRoute,
+    CredentialSecretEnvelope, CredentialSecretSnapshot, CredentialSecretStore, CustomProtocolRoute,
     CustomProviderAuthentication, CustomProviderDefinition, CustomProviderModelDiscoveryMode,
     CustomProviderProtocol, InferenceRouteBinding, InferenceRouteConfiguration,
     PersistedAiConfiguration, ProviderDescriptor, ProviderKind, ProviderRegistry, PublicAiRuntime,
@@ -1597,7 +1597,7 @@ pub(crate) async fn service_remove_public_ai_custom_provider(
 async fn delete_provider_credential_secrets(
     secret_store: &dyn CredentialSecretStore,
     connections: &[CredentialConnection],
-) -> Result<BTreeMap<String, CredentialSecretEnvelope>, String> {
+) -> Result<BTreeMap<String, Option<CredentialSecretSnapshot>>, String> {
     let mut references = BTreeSet::new();
     for connection in connections {
         references.insert(connection.secret_reference.clone());
@@ -1608,8 +1608,7 @@ async fn delete_provider_credential_secrets(
 
     let mut secrets = BTreeMap::new();
     for reference in references {
-        let secret =
-            CredentialSecretResolver::read_secret(secret_store, reference.as_str()).await?;
+        let secret = secret_store.capture_secret(reference.as_str()).await?;
         secrets.insert(reference, secret);
     }
 
@@ -1618,9 +1617,12 @@ async fn delete_provider_credential_secrets(
         if let Err(error) =
             CredentialSecretStore::delete_secret(secret_store, reference.as_str()).await
         {
-            let restore_current =
-                CredentialSecretStore::restore_secret(secret_store, reference.as_str(), &secret)
-                    .await;
+            let restore_current = super::credential_repair::restore_deleted_credential(
+                secret_store,
+                reference.as_str(),
+                secret.as_ref(),
+            )
+            .await;
             let restore_previous =
                 restore_provider_credential_secrets(secret_store, &deleted).await;
             return Err(compensated_operation_error(
@@ -1648,12 +1650,16 @@ async fn delete_provider_credential_secrets(
 /// 全部恢复后返回成功，否则汇总失败且不中断其余引用的恢复。
 async fn restore_provider_credential_secrets(
     secret_store: &dyn CredentialSecretStore,
-    secrets: &BTreeMap<String, CredentialSecretEnvelope>,
+    secrets: &BTreeMap<String, Option<CredentialSecretSnapshot>>,
 ) -> Result<(), String> {
     let mut errors = Vec::new();
     for (reference, secret) in secrets {
-        if let Err(error) =
-            CredentialSecretStore::restore_secret(secret_store, reference.as_str(), secret).await
+        if let Err(error) = super::credential_repair::restore_deleted_credential(
+            secret_store,
+            reference.as_str(),
+            secret.as_ref(),
+        )
+        .await
         {
             errors.push(format!("`{reference}`: {error}"));
         }

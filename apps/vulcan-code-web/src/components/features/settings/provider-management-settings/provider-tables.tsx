@@ -1,3 +1,4 @@
+import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 // Custom and system provider tables with the provider priority editor.
 // 自定义与系统供应商表格，以及供应商优先级编辑器。
 import * as React from "react"
@@ -225,6 +226,9 @@ export function SystemProviderTable(props: {
   variant: "system" | "functional"
 }) {
   const { t } = useI18n()
+  // account owns core-provider credential actions throughout the application.
+  // account 在整个应用内持有核心供应商凭据操作。
+  const account = React.useContext(OpenVulcanAccountContext)
   // orderedProviders applies priority first and preserves the previous promotional tie-break.
   // orderedProviders 优先应用优先级，并保留原有推广同级排序。
   const orderedProviders = React.useMemo(
@@ -337,13 +341,13 @@ export function SystemProviderTable(props: {
                         ><ListTree className="size-4" /></Button> : null}
                         <Button
                           disabled={props.busyProviderId !== null}
-                          onClick={() => props.onAddCredential(provider.id)}
+                          onClick={() => provider.credential_directory_visibility === "core_account" ? account?.setOpen(true) : props.onAddCredential(provider.id)}
                           size="sm"
                           type="button"
                           variant="outline"
                         >
                           <KeyRound className="mr-1 size-3.5" />
-                          {t("settings.providerOnboarding.addCredential")}
+                          {provider.credential_directory_visibility === "core_account" ? t("openvulcan.account.manage") : t("settings.providerOnboarding.addCredential")}
                         </Button>
                       </div>
                     </TableCell>

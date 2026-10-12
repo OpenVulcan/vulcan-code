@@ -57,6 +57,7 @@ pub(super) fn resolved_model_source_policy(
                 ));
             }
             ModelDiscoveryKind::OpenRouter
+            | ModelDiscoveryKind::OpenVulcan
             | ModelDiscoveryKind::OpenAi
             | ModelDiscoveryKind::OpenAiCodex
             | ModelDiscoveryKind::Anthropic
@@ -147,16 +148,21 @@ pub(super) fn resolve_custom_model_service_entry<'a>(
 /// `true` only for network-backed discovery kinds.
 /// 仅对网络驱动的发现类别返回 `true`。
 pub(super) const fn model_discovery_is_remote(kind: ModelDiscoveryKind) -> bool {
-    matches!(
-        kind,
-        ModelDiscoveryKind::OpenRouter
-            | ModelDiscoveryKind::OpenAi
-            | ModelDiscoveryKind::OpenAiCodex
-            | ModelDiscoveryKind::Anthropic
-            | ModelDiscoveryKind::AnthropicCompatible
-            | ModelDiscoveryKind::Gemini
-            | ModelDiscoveryKind::GoogleCodeAssist
-    )
+    // Keep this match exhaustive so each new discovery kind must declare whether it sends remote requests.
+    // 保持穷尽匹配，确保每种新增发现类型都必须明确声明是否发送远端请求。
+    match kind {
+        ModelDiscoveryKind::Manual
+        | ModelDiscoveryKind::ProviderToolsOnly
+        | ModelDiscoveryKind::ManifestStatic => false,
+        ModelDiscoveryKind::OpenVulcan
+        | ModelDiscoveryKind::OpenRouter
+        | ModelDiscoveryKind::OpenAi
+        | ModelDiscoveryKind::OpenAiCodex
+        | ModelDiscoveryKind::Anthropic
+        | ModelDiscoveryKind::AnthropicCompatible
+        | ModelDiscoveryKind::Gemini
+        | ModelDiscoveryKind::GoogleCodeAssist => true,
+    }
 }
 
 /// Builds an empty credential-scoped source catalog with one exact source marker.

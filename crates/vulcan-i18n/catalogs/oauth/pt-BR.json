@@ -1,0 +1,17 @@
+{
+  "openvulcan.callback.accepted.title": "Autorização no navegador concluída",
+  "openvulcan.callback.accepted.description": "Sua autorização foi enviada com segurança ao Vulcan Code neste dispositivo.",
+  "openvulcan.callback.accepted.next": "O aplicativo verificará sua conta e salvará o acesso. Confira o resultado final no aplicativo.",
+  "openvulcan.callback.failed.title": "Não foi possível concluir a autorização",
+  "openvulcan.callback.failed.description": "Volte ao Vulcan Code e entre novamente.",
+  "openvulcan.callback.failed.next": "Escolha uma opção de acesso na janela da conta. Não atualize esta página nem reutilize o link de autorização anterior.",
+  "openvulcan.callback.rejected.title": "Este retorno de autorização é inválido",
+  "openvulcan.callback.rejected.description": "Não foi possível validar esta página para a solicitação de acesso atual.",
+  "openvulcan.callback.rejected.next": "Continue na página de autorização que acabou de abrir. Se a fechou, entre novamente no aplicativo.",
+  "openvulcan.callback.nextTitle": "Voltar ao Vulcan Code",
+  "openvulcan.callback.close": "Fechar esta página",
+  "openvulcan.callback.closeHelp": "Se o navegador não fechar esta página, feche a aba e volte ao Vulcan Code.",
+  "openvulcan.callback.footer": "Acesso autorizado pela central de usuários OpenVulcan",
+  "openvulcan.callback.china": "Acesso à versão chinesa",
+  "openvulcan.callback.global": "Acesso internacional"
+}

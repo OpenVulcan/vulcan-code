@@ -1,3 +1,4 @@
+import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
 import { Boxes, KeyRound, ListChecks, Pencil, RefreshCw, Star, Trash2 } from "lucide-react"
@@ -76,6 +77,9 @@ import { errorMessage } from "@/lib/display-format";
 // CredentialManagementArea renders credential-only account management and runtime metadata.
 // CredentialManagementArea 渲染仅凭据账号管理与运行时元数据。
 export function CredentialManagementArea() {
+  // account ties directory refreshes to the application-wide login lifecycle.
+  // account 将目录刷新绑定到应用全局登录生命周期。
+  const account = React.useContext(OpenVulcanAccountContext)
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [busyConnectionId, setBusyConnectionId] = React.useState<string | null>(null)
@@ -118,7 +122,7 @@ export function CredentialManagementArea() {
 
   React.useEffect(() => {
     void refresh()
-  }, [refresh])
+  }, [refresh, account?.snapshot?.connectionId, account?.snapshot?.connected])
 
   // runConnectionAction serializes visual feedback for one exact connection.
   // runConnectionAction 为一个精确连接串行化视觉反馈。
@@ -228,6 +232,7 @@ export function CredentialManagementArea() {
             <Button
               disabled={busyConnectionId !== null || directoryLoading}
               onClick={() => {
+                if (activeProvider.credential_directory_visibility === "core_account") { account?.setOpen(true); return }
                 setCreatingProviderId(activeProvider.id)
                 setPickerOpen(true)
               }}
@@ -235,7 +240,7 @@ export function CredentialManagementArea() {
               type="button"
             >
               <KeyRound className="mr-1 size-4" />
-               {t("settings.providerOnboarding.addCredential")}
+               {activeProvider.credential_directory_visibility === "core_account" ? t("openvulcan.account.manage") : t("settings.providerOnboarding.addCredential")}
             </Button>
           </div>
         ) : null}
@@ -442,6 +447,10 @@ interface CredentialAccountCardProps {
 // 参数：props 提供一个凭据及受保护回调；返回账号卡片，不改变准入规则。
 function CredentialAccountCard(props: CredentialAccountCardProps) {
   const { t } = useI18n()
+  // core accounts expose sign-out through the account lifecycle instead of generic credential edits.
+  // 核心账户通过账户生命周期提供退出操作，而非通用凭据编辑。
+  const core = props.provider?.credential_directory_visibility === "core_account"
+  const account = React.useContext(OpenVulcanAccountContext)
   // usageSupported preserves the provider capability and management-key prerequisites for refreshing usage.
   // usageSupported 保留刷新用量所需的供应商能力和管理密钥前置条件。
   const usageSupported = props.credentialProfile?.account_usage_query !== "unsupported"
@@ -536,7 +545,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
 
       <CardFooter className="credential-account-footer">
         <div className="credential-account-actions">
-          <label className="credential-account-enabled">
+          {!core ? <label className="credential-account-enabled">
             <Switch
               aria-label={props.connection.enabled
                 ? t("settings.credentials.disable")
@@ -546,7 +555,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
               onCheckedChange={props.onEnabledChange}
             />
             <span>{t("settings.credentials.enable")}</span>
-          </label>
+          </label> : <Badge variant="secondary">{t("openvulcan.account.core")}</Badge>}
           {props.entry?.kind !== "provider_tools" ? (
             <Button
               disabled={props.busy || !props.connection.enabled || props.connection.pending_validation}
@@ -594,6 +603,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
                 : "size-4"}
             />
           </CredentialIconAction>
+          {core ? <Button variant="ghost" size="sm" onClick={() => account?.setOpen(true)}>{t("openvulcan.account.manage")}</Button> : <>
           <CredentialIconAction disabled={props.busy} label={t("settings.credentials.edit")} onClick={props.onEdit}>
             <Pencil aria-hidden="true" className="size-4" />
           </CredentialIconAction>
@@ -604,6 +614,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
           >
             <Trash2 className="size-4 text-destructive" />
           </CredentialIconAction>
+          </>}
         </div>
       </CardFooter>
     </Card>

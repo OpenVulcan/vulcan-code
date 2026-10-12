@@ -184,6 +184,7 @@ impl ProtocolRegistry {
         registry.register(Arc::new(crate::GoogleCodeAssistProfile))?;
         registry.register(Arc::new(crate::CohereChatProfile))?;
         registry.register(Arc::new(crate::TypeSafeSystemOneProfile))?;
+        registry.register(Arc::new(crate::OpenVulcanNativeProfile))?;
         Ok(registry)
     }
 

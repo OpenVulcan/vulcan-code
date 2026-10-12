@@ -149,6 +149,23 @@ pub(crate) fn execution_headers(
                 })?,
             );
         }
+        AuthenticationProjection::OpenVulcanAuth => {
+            // base_url uses the frozen connection, so an override cannot exfiltrate native credentials.
+            // base_url 使用冻结连接，避免覆盖地址导出原生凭据。
+            let base_url = crate::connection_endpoint::resolved_connection_protocol_base_url(
+                &route.connection,
+                &route.entry,
+                &route.protocol_route,
+            );
+            let value = crate::openvulcan::authorization_header(secret, &base_url)
+                .map_err(pre_dispatch_failure)?;
+            headers.insert(
+                reqwest::header::AUTHORIZATION,
+                HeaderValue::from_str(&value).map_err(|_| {
+                    pre_dispatch_failure("Invalid OpenVulcan authorization header.")
+                })?,
+            );
+        }
         AuthenticationProjection::BearerAuthorization
         | AuthenticationProjection::CodingDeviceBearer => {
             headers.insert(

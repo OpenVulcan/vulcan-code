@@ -90,6 +90,20 @@ impl HttpProviderMetadataClient {
             .resolved_authentication(entry.authentication, credential_profile.authentication);
         let discovery_kind = protocol_route.resolved_model_discovery(entry.model_discovery);
         let catalog = match discovery_kind {
+            ModelDiscoveryKind::OpenVulcan => {
+                let url = protocol_route.model_discovery_url(entry, "/api/v1/vulcancode/models");
+                let body = send_metadata_get_with_authentication(
+                    &self.http,
+                    entry,
+                    authentication,
+                    &url,
+                    secret,
+                    "OpenVulcan model discovery",
+                )
+                .await?;
+                crate::openvulcan::parse_catalog(&connection.id, generation, &body)
+                    .map_err(ModelDiscoveryError::invalid_response)?
+            }
             ModelDiscoveryKind::Manual => ConnectionModelCatalog {
                 connection_id: connection.id.clone(),
                 models: Vec::new(),
@@ -239,6 +253,11 @@ impl HttpProviderMetadataClient {
         let Some(manifest) = manifest else {
             return Ok(());
         };
+        // The versioned native catalog owns exact per-account capabilities; generic model-name defaults cannot widen them.
+        // 版本化原生目录持有准确的逐账户能力；通用模型名称默认值不能扩大其能力。
+        if entry.model_discovery == ModelDiscoveryKind::OpenVulcan {
+            return Ok(());
+        }
         crate::discovery::enrich_compatible_model_catalog_with_manifest(
             provider.id.as_str(),
             entry.id.as_str(),
@@ -328,6 +347,7 @@ fn build_manifest_static_catalog(
 /// 相同契约与配置必须共享签名；不同发现行为必须拆分签名。
 pub(super) fn default_discovery_path(kind: ModelDiscoveryKind) -> &'static str {
     match kind {
+        ModelDiscoveryKind::OpenVulcan => "/api/v1/vulcancode/models",
         ModelDiscoveryKind::Manual
         | ModelDiscoveryKind::ProviderToolsOnly
         | ModelDiscoveryKind::ManifestStatic => "",

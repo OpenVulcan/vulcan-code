@@ -1,0 +1,17 @@
+{
+  "openvulcan.callback.accepted.title": "Авторизация в браузере завершена",
+  "openvulcan.callback.accepted.description": "Данные авторизации безопасно переданы в Vulcan Code на этом устройстве.",
+  "openvulcan.callback.accepted.next": "Приложение проверит аккаунт и сохранит вход. Окончательный результат проверьте в приложении.",
+  "openvulcan.callback.failed.title": "Не удалось завершить авторизацию",
+  "openvulcan.callback.failed.description": "Вернитесь в Vulcan Code и войдите заново.",
+  "openvulcan.callback.failed.next": "Выберите способ входа в окне аккаунта. Не обновляйте эту страницу и не используйте старую ссылку повторно.",
+  "openvulcan.callback.rejected.title": "Недействительный ответ авторизации",
+  "openvulcan.callback.rejected.description": "Не удалось сопоставить эту страницу с текущим запросом входа.",
+  "openvulcan.callback.rejected.next": "Продолжите на только что открытой странице авторизации. Если вы её закрыли, войдите заново в приложении.",
+  "openvulcan.callback.nextTitle": "Вернуться в Vulcan Code",
+  "openvulcan.callback.close": "Закрыть эту страницу",
+  "openvulcan.callback.closeHelp": "Если браузер не закроет страницу, закройте вкладку и вернитесь в Vulcan Code.",
+  "openvulcan.callback.footer": "Вход подтверждён центром пользователей OpenVulcan",
+  "openvulcan.callback.china": "Вход в китайскую версию",
+  "openvulcan.callback.global": "Вход в международную версию"
+}

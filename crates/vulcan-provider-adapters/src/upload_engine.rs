@@ -2510,6 +2510,7 @@ fn upload_headers(
             );
         }
         crate::AuthenticationProjection::OpenAiCodexBearer
+        | crate::AuthenticationProjection::OpenVulcanAuth
         | crate::AuthenticationProjection::GoogleCodeAssistBearer
         | crate::AuthenticationProjection::GoogleGeminiBearer
         | crate::AuthenticationProjection::GoogleApiKey => {

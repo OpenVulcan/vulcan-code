@@ -8,6 +8,8 @@ export type CredentialMode = "auth" | "token";
 // OAuthProviderKind identifies one exact renewable provider flow.
 // OAuthProviderKind 标识一个精确的可续期供应商流程。
 export type OAuthProviderKind =
+  | "open_vulcan_china"
+  | "open_vulcan_global"
   | "open_ai_codex"
   | "claude_code"
   | "google_code_assist"
@@ -63,6 +65,7 @@ export interface PublicAiCredentialProfile {
   authorization?: PublicAiCredentialAuthorization;
   billing_kind: CredentialBillingKind;
   account_usage_query:
+    | "open_vulcan"
     | "unsupported"
     | "mini_max_token_plan"
     | "open_router_credits"
@@ -109,6 +112,7 @@ export type PublicAiModelDiscoveryKind =
   | "manifest_static"
   | "open_ai"
   | "open_ai_codex"
+  | "open_vulcan"
   | "anthropic"
   | "anthropic_compatible"
   | "gemini"
@@ -146,7 +150,7 @@ export type PublicAiProviderCategory = "unclassified" | "official" | "cloud_maas
 
 // PublicAiCredentialDirectoryVisibility controls zero-credential onboarding visibility.
 // PublicAiCredentialDirectoryVisibility 控制零凭据引导入口的可见性。
-export type PublicAiCredentialDirectoryVisibility = "configured_only" | "pinned_onboarding";
+export type PublicAiCredentialDirectoryVisibility = "configured_only" | "pinned_onboarding" | "core_account";
 
 // PublicAiProviderPartnershipKind identifies the disclosed commercial relationship.
 // PublicAiProviderPartnershipKind 标识已披露的商业合作关系。

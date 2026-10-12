@@ -31,6 +31,14 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_system_prompt",
     "service_reset_system_prompt",
     "service_public_ai_settings_snapshot",
+    "service_openvulcan_account",
+    "service_openvulcan_usage_page",
+    "service_claim_openvulcan_prompt",
+    "service_start_openvulcan_login",
+    "service_openvulcan_login_status",
+    "service_cancel_openvulcan_login",
+    "service_commit_openvulcan_login",
+    "service_logout_openvulcan_account",
     "service_provider_usage_dashboard",
     "service_start_public_ai_oauth",
     "service_public_ai_oauth_status",
@@ -240,6 +248,51 @@ pub(super) async fn dispatch(
         ),
         "service_public_ai_settings_snapshot" => {
             rpc_json_result(service_public_ai_settings_snapshot(state).await)
+        }
+        "service_openvulcan_usage_page" => rpc_json_result(
+            crate::public_ai_settings::openvulcan_account::usage_page(
+                state,
+                rpc_required_param(params, "cursor")?,
+            )
+            .await,
+        ),
+        "service_openvulcan_account" => rpc_json_result(
+            crate::public_ai_settings::openvulcan_account::snapshot(app, state).await,
+        ),
+        "service_claim_openvulcan_prompt" => {
+            rpc_json_result(crate::public_ai_settings::openvulcan_account::claim_prompt().await)
+        }
+        "service_start_openvulcan_login" => rpc_json_result(
+            crate::public_ai_settings::openvulcan_account::start(
+                state,
+                rpc_required_param(params, "region")?,
+            )
+            .await,
+        ),
+        "service_openvulcan_login_status" => rpc_json_result(
+            crate::public_ai_settings::openvulcan_account::status(rpc_required_param(
+                params,
+                "transactionId",
+            )?)
+            .await,
+        ),
+        "service_cancel_openvulcan_login" => rpc_json_result(
+            crate::public_ai_settings::openvulcan_account::cancel(rpc_required_param(
+                params,
+                "transactionId",
+            )?)
+            .await,
+        ),
+        "service_commit_openvulcan_login" => rpc_json_result(
+            crate::public_ai_settings::openvulcan_account::commit(
+                app,
+                state,
+                rpc_required_param(params, "transactionId")?,
+            )
+            .await,
+        ),
+        "service_logout_openvulcan_account" => {
+            rpc_json_result(crate::public_ai_settings::openvulcan_account::logout(app, state).await)
         }
         "service_provider_usage_dashboard" => {
             rpc_json_result(service_provider_usage_dashboard(state).await)

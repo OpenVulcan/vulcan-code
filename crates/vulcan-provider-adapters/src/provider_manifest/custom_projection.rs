@@ -32,6 +32,11 @@ use crate::{
 pub fn project_custom_descriptor_manifest(
     provider: &ProviderDescriptor,
 ) -> Result<ProviderManifestV1, String> {
+    if provider.credential_directory_visibility == CredentialDirectoryVisibility::CoreAccount {
+        return Err(String::from(
+            "Core accounts can only be declared by system provider manifests.",
+        ));
+    }
     let has_custom_prefix = provider.id.starts_with("custom:");
     if provider.kind != ProviderKind::Custom {
         return Err(format!(
@@ -114,6 +119,9 @@ pub fn project_custom_descriptor_manifest(
                 ProviderCategory::Relay => ManifestCategory::Relay,
             },
             credential_directory_visibility: match provider.credential_directory_visibility {
+                CredentialDirectoryVisibility::CoreAccount => {
+                    ManifestDirectoryVisibility::CoreAccount
+                }
                 CredentialDirectoryVisibility::ConfiguredOnly => {
                     ManifestDirectoryVisibility::ConfiguredOnly
                 }
@@ -310,6 +318,7 @@ fn convert_service_entry(entry: &ServiceEntry) -> ManifestServiceEntry {
                     crate::ModelDiscoveryKind::ManifestStatic => ModelSourcePolicy::ManifestOnly,
                     crate::ModelDiscoveryKind::ProviderToolsOnly => ModelSourcePolicy::ManualOnly,
                     crate::ModelDiscoveryKind::OpenRouter
+                    | crate::ModelDiscoveryKind::OpenVulcan
                     | crate::ModelDiscoveryKind::OpenAi
                     | crate::ModelDiscoveryKind::OpenAiCodex
                     | crate::ModelDiscoveryKind::Anthropic

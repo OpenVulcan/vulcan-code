@@ -2,6 +2,7 @@
 //! 公共 AI 凭据材料的进程内关系化持久层。
 
 use super::*;
+use crate::data_plane::AI_CREDENTIAL_SECRETS_TABLE;
 
 /// Stores one complete relational AI credential row without provider-domain interpretation.
 /// 保存一条完整关系化 AI 凭据记录，不在存储层解释供应商领域语义。
@@ -117,7 +118,7 @@ pub async fn load_ai_credential_secret_record(
         local_sql::query_json_async(
             &host_runtime.local,
             LogicalDatabase::AppState,
-            r#"
+            &format!(r#"
 SELECT
     secret_reference, format_version, revision, material_kind, secret_value,
     access_token, refresh_token, issued_at_unix_ms, expires_at_unix_ms, scope_text,
@@ -125,10 +126,10 @@ SELECT
     oauth_client_id, oauth_client_secret,
     project_id, quota_project_id, provider_region, resource_url, provider_device_id,
     created_at_unix_ms, updated_at_unix_ms
-FROM ai_credential_secrets
+FROM {AI_CREDENTIAL_SECRETS_TABLE}
 WHERE secret_reference = ?1
 LIMIT 1;
-"#,
+"#),
             vec![SqliteValue::Text(secret_reference.to_string())],
         ).await
         .map_err(|error| format!("Failed to query the AI credential record: {error}"))?;
@@ -216,8 +217,9 @@ pub async fn replace_ai_credential_secret_record(
     let result = local_sql::query_json_async(
         &host_runtime.local,
         LogicalDatabase::AppState,
-        r#"
-UPDATE ai_credential_secrets
+        &format!(
+            r#"
+UPDATE {AI_CREDENTIAL_SECRETS_TABLE}
 SET format_version = ?1,
     revision = ?2,
     material_kind = ?3,
@@ -244,7 +246,8 @@ SET format_version = ?1,
     updated_at_unix_ms = ?24
 WHERE secret_reference = ?25 AND revision = ?26
 RETURNING secret_reference;
-"#,
+"#
+        ),
         update_params(record, expected_revision),
     )
     .await
@@ -276,7 +279,7 @@ pub async fn delete_ai_credential_secret_record(
     local_sql::execute_batch_async(
         &host_runtime.local,
         LogicalDatabase::AppState,
-        "DELETE FROM ai_credential_secrets WHERE secret_reference = ?1;",
+        &format!("DELETE FROM {AI_CREDENTIAL_SECRETS_TABLE} WHERE secret_reference = ?1;"),
         vec![vec![SqliteValue::Text(secret_reference.to_string())]],
     )
     .await
@@ -295,8 +298,8 @@ async fn insert_ai_credential_secret_record(
         local_sql::query_json_async(
             &host_runtime.local,
             LogicalDatabase::AppState,
-            r#"
-INSERT INTO ai_credential_secrets (
+            &format!(r#"
+INSERT INTO {AI_CREDENTIAL_SECRETS_TABLE} (
     secret_reference, format_version, revision, material_kind, secret_value,
     access_token, refresh_token, issued_at_unix_ms, expires_at_unix_ms, scope_text,
     account_subject, authorization_kind, provider_username, credential_label, email, id_token, account_id,
@@ -311,7 +314,7 @@ INSERT INTO ai_credential_secrets (
     ?24, ?25, ?26
 )
 RETURNING secret_reference;
-"#,
+"#),
             insert_params(record),
         ).await
         .map_err(|error| format!("Failed to {operation} the AI credential record: {error}"))?;

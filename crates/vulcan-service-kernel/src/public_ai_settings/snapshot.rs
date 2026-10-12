@@ -761,7 +761,20 @@ pub(super) fn build_public_ai_settings_snapshot(
         usage_refresh_interval_seconds: configuration.usage_refresh_interval_seconds,
         provider_priorities: configuration.provider_priority_overrides.clone(),
         usage_cache,
-        providers: providers.providers().into_iter().cloned().collect(),
+        providers: providers
+            .providers()
+            .into_iter()
+            .filter(|provider| {
+                provider.credential_directory_visibility
+                    != vulcan_provider_adapters::CredentialDirectoryVisibility::CoreAccount
+                    || configuration
+                        .connection_graph
+                        .connections
+                        .values()
+                        .any(|connection| connection.provider_id == provider.id)
+            })
+            .cloned()
+            .collect(),
         connections: configuration
             .connection_graph
             .connections

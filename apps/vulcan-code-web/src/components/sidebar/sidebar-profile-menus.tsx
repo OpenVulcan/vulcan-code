@@ -1,5 +1,6 @@
 import React from "react";
-import { Settings } from "lucide-react";
+import { Settings, UserRound } from "lucide-react";
+import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -53,28 +54,38 @@ export function SidebarUserMenu(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
+  // account supplies the global identity and the reusable sign-in entry.
+  // account 提供全局身份及可重复进入的登录入口。
+  const account = React.useContext(OpenVulcanAccountContext);
+  // label uses the verified public name when connected, otherwise the existing local-user label.
+  // label 在已连接时使用验证过的公开名称，否则使用既有本地用户标签。
+  const label = account?.snapshot?.displayName ?? t("sidebar.user.local");
   return (
     <DropdownMenu>
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <button aria-label={t("sidebar.user.local")} className="activity-rail-button sidebar-user-button" type="button">
+            <button aria-label={label} className="activity-rail-button sidebar-user-button" type="button">
               <span aria-hidden="true" className="sidebar-user-avatar">V</span>
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="right">{t("sidebar.user.local")}</TooltipContent>
+        <TooltipContent side="right">{label}</TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="sidebar-profile-menu" side="right" sideOffset={8}>
         <DropdownMenuLabel className="sidebar-user-menu-label">
           <span aria-hidden="true" className="sidebar-user-avatar">V</span>
           <span>
-            <strong>{t("sidebar.user.local")}</strong>
+            <strong>{label}</strong>
             <small>Vulcan Code</small>
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
+          {account ? <DropdownMenuItem className="sidebar-profile-menu-item" onSelect={() => account.setOpen(true)}>
+            <UserRound size={15} />
+            <span>{account.snapshot?.connectionId ? t("openvulcan.account.manage") : t("openvulcan.account.login")}</span>
+          </DropdownMenuItem> : null}
           <DropdownMenuItem className="sidebar-profile-menu-item" onSelect={props.onOpenSettings}>
             <Settings size={15} />
             <span>{t("area.settings")}</span>

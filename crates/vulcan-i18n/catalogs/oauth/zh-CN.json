@@ -1,0 +1,17 @@
+{
+  "openvulcan.callback.accepted.title": "浏览器授权已完成",
+  "openvulcan.callback.accepted.description": "授权信息已安全交给本机的 Vulcan Code。",
+  "openvulcan.callback.accepted.next": "应用将继续验证账户并保存登录。请在应用中确认最终结果。",
+  "openvulcan.callback.failed.title": "授权未能完成",
+  "openvulcan.callback.failed.description": "请返回 Vulcan Code，重新发起登录。",
+  "openvulcan.callback.failed.next": "在账户窗口重新选择登录入口。请勿刷新此页面或重复使用旧授权链接。",
+  "openvulcan.callback.rejected.title": "此授权回调无效",
+  "openvulcan.callback.rejected.description": "此页面未能通过当前登录请求的校验。",
+  "openvulcan.callback.rejected.next": "请继续使用刚刚打开的授权页面；若已关闭，请在应用中重新登录。",
+  "openvulcan.callback.nextTitle": "返回 Vulcan Code",
+  "openvulcan.callback.close": "关闭此页面",
+  "openvulcan.callback.closeHelp": "如果浏览器未自动关闭，可以直接关闭此标签页并切回 Vulcan Code。",
+  "openvulcan.callback.footer": "登录由 OpenVulcan 用户中心授权",
+  "openvulcan.callback.china": "中文版入口",
+  "openvulcan.callback.global": "国际版入口"
+}

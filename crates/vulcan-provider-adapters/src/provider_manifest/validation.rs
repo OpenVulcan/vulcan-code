@@ -1095,15 +1095,23 @@ fn validate_service_entry(
                 "native inference binding supports only embedding_create, rerank_documents or decision_evaluate",
             ));
         }
-        // The System One projection is the only decision wire format, and it carries nothing else.
-        // System One 投影是唯一的决策 Wire 格式，且不承载其他操作。
-        if (binding.projection == crate::NativeInferenceProjectionKind::SystemOne)
-            != (binding.operation == vulcan_ai_contract::AiOperation::DecisionEvaluate)
-        {
+        // Native projections admit only their exact declared operation families.
+        // 原生投影仅准入准确声明的操作族。
+        if match binding.projection {
+            crate::NativeInferenceProjectionKind::OpenVulcan => !matches!(
+                binding.operation,
+                vulcan_ai_contract::AiOperation::EmbeddingCreate
+                    | vulcan_ai_contract::AiOperation::DecisionEvaluate
+            ),
+            crate::NativeInferenceProjectionKind::SystemOne => {
+                binding.operation != vulcan_ai_contract::AiOperation::DecisionEvaluate
+            }
+            _ => binding.operation == vulcan_ai_contract::AiOperation::DecisionEvaluate,
+        } {
             errors.push(ManifestValidationError::new(
                 "invalid_native_inference_projection",
                 format!("{binding_path}.projection"),
-                "decision_evaluate requires the system_one projection, which is valid only for decision_evaluate",
+                "native operation is incompatible with its declared projection",
             ));
         }
         if binding.model_ids.is_empty() {

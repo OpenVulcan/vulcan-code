@@ -26,6 +26,9 @@ use tokio::{
 };
 use uuid::Uuid;
 
+mod openvulcan;
+pub use openvulcan::revoke_openvulcan_authorization;
+
 const OPENAI_CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_CODEX_AUTHORIZATION_URL: &str = "https://auth.openai.com/oauth/authorize";
 const OPENAI_CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
@@ -69,6 +72,12 @@ const KIMI_DEVICE_FLOW_DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthProviderKind {
+    /// OpenVulcan China native PKCE authorization.
+    /// OpenVulcan 中国版原生 PKCE 授权。
+    OpenVulcanChina,
+    /// OpenVulcan international native PKCE authorization.
+    /// OpenVulcan 国际版原生 PKCE 授权。
+    OpenVulcanGlobal,
     /// OpenAI Codex subscription authorization.
     /// OpenAI Codex 订阅授权。
     OpenAiCodex,
@@ -139,6 +148,9 @@ pub struct OAuthClientConfiguration {
     /// Optional Google Cloud project required by the public Gemini OAuth flow.
     /// 公共 Gemini OAuth 流程所需的可选 Google Cloud 项目。
     pub project_id: Option<String>,
+    /// Optional application locale for the local authorization result page; never sent upstream.
+    /// 本地授权结果页使用的可选应用语言；绝不发送至上游。
+    pub return_page_locale: Option<String>,
 }
 
 /// Identifies the observable phase of one authorization transaction.
@@ -637,6 +649,11 @@ impl OAuthAuthorizationRuntime {
         authorization_binding: String,
         client: OAuthClientConfiguration,
     ) -> Result<OAuthAuthorizationChallenge, String> {
+        if let Some(region) = openvulcan::region_for_kind(provider_kind) {
+            return self
+                .start_openvulcan(region, authorization_binding, client.return_page_locale)
+                .await;
+        }
         if matches!(
             provider_kind,
             OAuthProviderKind::MiniMaxGlobalTokenPlan | OAuthProviderKind::MiniMaxChinaTokenPlan
@@ -1081,6 +1098,7 @@ impl OAuthAuthorizationRuntime {
         material: &CredentialSecretMaterial,
     ) -> Result<CredentialSecretMaterial, String> {
         match material {
+            CredentialSecretMaterial::OpenVulcanAuth { .. } => openvulcan::refresh(material).await,
             CredentialSecretMaterial::ApiKey { .. }
             | CredentialSecretMaterial::StaticBearer { .. }
             | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => Ok(material.clone()),
@@ -2526,9 +2544,11 @@ async fn bind_callback_listener(provider_kind: OAuthProviderKind) -> Result<TcpL
                 "MiniMax Device Flow does not use a loopback listener.",
             ));
         }
-        OAuthProviderKind::KimiCodingPlan => {
+        OAuthProviderKind::OpenVulcanChina
+        | OAuthProviderKind::OpenVulcanGlobal
+        | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(
-                "Kimi Device Flow does not use a loopback listener.",
+                "This authorization flow requires its dedicated callback runtime.",
             ));
         }
     };
@@ -2556,8 +2576,10 @@ fn callback_redirect_uri(
                 "MiniMax Device Flow does not use a callback redirect URI.",
             ))
         }
-        OAuthProviderKind::KimiCodingPlan => Err(String::from(
-            "Kimi Device Flow does not use a callback redirect URI.",
+        OAuthProviderKind::OpenVulcanChina
+        | OAuthProviderKind::OpenVulcanGlobal
+        | OAuthProviderKind::KimiCodingPlan => Err(String::from(
+            "This authorization flow requires its dedicated callback runtime.",
         )),
     }
 }
@@ -2640,9 +2662,11 @@ fn build_oauth_flow(
                 "MiniMax Device Flow must be constructed by its dedicated runtime.",
             ));
         }
-        OAuthProviderKind::KimiCodingPlan => {
+        OAuthProviderKind::OpenVulcanChina
+        | OAuthProviderKind::OpenVulcanGlobal
+        | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(
-                "Kimi Device Flow must be constructed by its dedicated runtime.",
+                "This authorization flow must be constructed by its dedicated runtime.",
             ));
         }
     };
@@ -2685,9 +2709,11 @@ fn build_oauth_flow(
                     "MiniMax Device Flow cannot use an authorization-code URL.",
                 ));
             }
-            OAuthProviderKind::KimiCodingPlan => {
+            OAuthProviderKind::OpenVulcanChina
+            | OAuthProviderKind::OpenVulcanGlobal
+            | OAuthProviderKind::KimiCodingPlan => {
                 return Err(String::from(
-                    "Kimi Device Flow cannot use an authorization-code URL.",
+                    "This authorization flow must use its dedicated authorization URL.",
                 ));
             }
         }
@@ -3025,9 +3051,11 @@ async fn exchange_authorization_code(
                 "MiniMax Device Flow cannot use callback token exchange.",
             ));
         }
-        OAuthProviderKind::KimiCodingPlan => {
+        OAuthProviderKind::OpenVulcanChina
+        | OAuthProviderKind::OpenVulcanGlobal
+        | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(
-                "Kimi Device Flow cannot use callback token exchange.",
+                "This authorization flow must use its dedicated token exchange.",
             ));
         }
     })
@@ -3808,6 +3836,7 @@ mod tests {
                 client_id: Some(String::from("desktop-client")),
                 client_secret: Some(String::from("desktop-secret")),
                 project_id: Some(String::from("cloud-project")),
+                return_page_locale: None,
             },
             String::from("http://127.0.0.1:12345/oauth/callback"),
             String::from("state"),
@@ -3826,6 +3855,7 @@ mod tests {
                 client_id: Some(String::from("desktop-client")),
                 client_secret: None,
                 project_id: None,
+                return_page_locale: None,
             },
             String::from("http://127.0.0.1:12345/oauth/callback"),
             String::from("state"),

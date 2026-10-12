@@ -3,6 +3,108 @@
 
 use super::*;
 
+/// The real settings projection reveals a core system provider only while its global account exists.
+/// 真实设置投影仅在全局账户存在时显示核心系统供应商。
+#[test]
+fn openvulcan_core_provider_follows_global_account_visibility() {
+    // runtime uses bundled declarations and cannot contact a live provider.
+    // runtime 使用内置声明，不能访问真实供应商。
+    let runtime = PublicAiRuntime::unavailable().expect("offline runtime");
+    let mut configuration = PersistedAiConfiguration::default();
+    let providers = runtime.effective_providers(&configuration).unwrap();
+    let provider = providers
+        .providers()
+        .into_iter()
+        .find(|provider| {
+            provider.credential_directory_visibility
+                == vulcan_provider_adapters::CredentialDirectoryVisibility::CoreAccount
+        })
+        .expect("core account manifest must be registered");
+    let provider_id = provider.id.clone();
+    let entry = provider
+        .service_entries
+        .iter()
+        .find(|entry| {
+            entry.credential_profiles.iter().any(|profile| {
+                matches!(
+                    profile.authorization,
+                    Some(
+                        vulcan_provider_adapters::CredentialAuthorization::RegisteredOauth {
+                            provider: vulcan_provider_adapters::OAuthProviderKind::OpenVulcanChina
+                        }
+                    )
+                )
+            })
+        })
+        .expect("China account entry");
+    let profile = entry
+        .credential_profiles
+        .iter()
+        .find(|profile| profile.credential_mode == CredentialMode::Auth)
+        .expect("renewable profile");
+    let initial = build_public_ai_settings_snapshot(&runtime, &configuration).unwrap();
+    assert!(
+        !initial
+            .providers
+            .iter()
+            .any(|provider| provider.id == provider_id)
+    );
+    let connection = CredentialConnection {
+        id: String::from("core-fixture"),
+        provider_id: provider_id.clone(),
+        service_entry_id: entry.id.clone(),
+        credential_profile_id: profile.id.clone(),
+        credential_mode: CredentialMode::Auth,
+        credential_id: String::from("fixture-credential"),
+        display_name: String::from("Fixture"),
+        secret_reference: String::from("fixture-secret"),
+        management_secret_reference: None,
+        service_origin_override: None,
+        prompt_cache_by_protocol: BTreeMap::new(),
+    };
+    configuration
+        .connection_graph
+        .add_connection(&providers, connection.clone())
+        .unwrap();
+    // Activation mirrors the real account commit before the runtime publishes a coherent catalog generation.
+    // 激活步骤模拟真实账户提交，然后运行时发布一致的目录代际。
+    runtime
+        .replace_configuration(configuration.clone())
+        .unwrap();
+    let connected = build_public_ai_settings_snapshot(&runtime, &configuration).unwrap();
+    assert!(
+        connected
+            .providers
+            .iter()
+            .any(|provider| provider.id == provider_id
+                && provider.kind == vulcan_provider_adapters::ProviderKind::System)
+    );
+    super::super::connections::remove_connection_from_configuration(
+        &mut configuration,
+        &connection.id,
+        None,
+    )
+    .unwrap();
+    // Logout publishes the cleared graph before any subsequent directory observation.
+    // 退出在后续目录观测前发布已清空的连接图。
+    runtime
+        .replace_configuration(configuration.clone())
+        .unwrap();
+    let disconnected = build_public_ai_settings_snapshot(&runtime, &configuration).unwrap();
+    assert!(
+        !disconnected
+            .providers
+            .iter()
+            .any(|provider| provider.id == provider_id)
+    );
+    assert!(
+        !disconnected
+            .connections
+            .iter()
+            .any(|item| item.id == connection.id)
+    );
+}
+
 /// Verifies the real browser snapshot retains all media fields and does not persist defaults.
 /// 验证真实浏览器快照保留全部媒体字段，且不持久化默认值。
 #[test]

@@ -26,6 +26,8 @@ use vulcan_ai_contract::{
 };
 use vulcan_llm_core::{EncodedWireRequest, SystemOneWireRequest, decode_systemone_response};
 
+mod openvulcan;
+
 /// Maximum successful native inference response size retained in memory.
 /// 原生推理成功响应允许保留在内存中的最大字节数。
 const MAXIMUM_NATIVE_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -405,7 +407,11 @@ impl<'a> NativeInferenceRoute<'a> {
         model_id: &str,
     ) -> Result<(Self, &'a str, &'a str), ProviderExecutionFailure> {
         let resolved = Self::for_operation(route, AiOperation::DecisionEvaluate, model_id)?;
-        if resolved.0.binding.projection != crate::NativeInferenceProjectionKind::SystemOne {
+        if !matches!(
+            resolved.0.binding.projection,
+            crate::NativeInferenceProjectionKind::SystemOne
+                | crate::NativeInferenceProjectionKind::OpenVulcan
+        ) {
             return Err(pre_dispatch_failure(format!(
                 "Decision action `{}` does not use the System One projection.",
                 resolved.2
@@ -725,6 +731,19 @@ impl ProviderExecutionClient {
             .map_err(pre_dispatch_failure)?;
         let (native_route, endpoint, binding_id) =
             NativeInferenceRoute::embedding(route, model.id.as_str())?;
+        if native_route.binding.projection == crate::NativeInferenceProjectionKind::OpenVulcan {
+            return self
+                .execute_openvulcan_embedding(
+                    route,
+                    model,
+                    request,
+                    usage_scope,
+                    revisions,
+                    secret,
+                    wire_request_capture,
+                )
+                .await;
+        }
         let wire_request = project_embedding_request(
             native_route,
             &route.secondary_route,
@@ -868,7 +887,16 @@ impl ProviderExecutionClient {
         )?;
         let response = self
             .send_native_json(native_route, route, endpoint, &wire_request, secret, None)
-            .await?;
+            .await
+            .map_err(|failure| {
+                if native_route.binding.projection
+                    == crate::NativeInferenceProjectionKind::OpenVulcan
+                {
+                    openvulcan::non_replayable_failure(failure)
+                } else {
+                    failure
+                }
+            })?;
         let (wire_results, wire_model, wire_usage) =
             parse_rerank_response(native_route, response.as_str())?;
         validate_response_model(native_route, model.id.as_str(), wire_model.as_deref())?;
@@ -965,13 +993,28 @@ impl ProviderExecutionClient {
         }
         let (native_route, endpoint, binding_id) =
             NativeInferenceRoute::decision(route, model.id.as_str())?;
-        let wire_request = SystemOneWireRequest {
+        let systemone_request = SystemOneWireRequest {
             model: model.id.as_str(),
             request,
         };
+        // wire_request preserves the declared decision question mapping for both reviewed protocols.
+        // wire_request 为两种已审核协议保留声明的判定问题映射。
+        let mut wire_request = serde_json::to_value(systemone_request)
+            .map_err(|_| pre_dispatch_failure("Failed to encode decision request."))?;
+        let wire_request_id = uuid::Uuid::new_v4().to_string();
+        if native_route.binding.projection == crate::NativeInferenceProjectionKind::OpenVulcan {
+            openvulcan::project_decision(&mut wire_request, request, &wire_request_id)?;
+        }
         let response = self
             .send_native_json(native_route, route, endpoint, &wire_request, secret, None)
             .await?;
+        let response = if native_route.binding.projection
+            == crate::NativeInferenceProjectionKind::OpenVulcan
+        {
+            openvulcan::decision_response(&response, &wire_request_id, &model.id)?
+        } else {
+            response
+        };
         let wire = decode_systemone_response(response.as_str())
             .map_err(|error| response_headers_protocol_failure(error.message))?;
         validate_response_model(native_route, model.id.as_str(), wire.model.as_deref())?;
@@ -1307,8 +1350,9 @@ fn project_rerank_request(
                     .then(|| routed_provider_policy(secondary_route)),
             }))
         }
-        crate::NativeInferenceProjectionKind::SystemOne => Err(pre_dispatch_failure(
-            "The System One projection carries only decision_evaluate.",
+        crate::NativeInferenceProjectionKind::SystemOne
+        | crate::NativeInferenceProjectionKind::OpenVulcan => Err(pre_dispatch_failure(
+            "This native projection does not support rerank.",
         )),
     }
 }
@@ -1348,9 +1392,10 @@ fn parse_rerank_response(
             })?;
             Ok((wire.results, wire.model, wire.usage))
         }
-        crate::NativeInferenceProjectionKind::SystemOne => Err(response_headers_protocol_failure(
-            "The System One projection carries only decision_evaluate.",
-        )),
+        crate::NativeInferenceProjectionKind::SystemOne
+        | crate::NativeInferenceProjectionKind::OpenVulcan => Err(
+            response_headers_protocol_failure("This native projection does not support rerank."),
+        ),
     }
 }
 

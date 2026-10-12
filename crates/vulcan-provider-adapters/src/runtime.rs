@@ -23,6 +23,7 @@ mod catalog_policy;
 mod catalog_sources;
 mod catalog_views;
 mod conversation_media;
+mod credential_snapshot;
 mod credentials;
 mod media;
 mod model_execution;
@@ -44,6 +45,8 @@ pub use catalog::{
     CatalogDiscoveryFailureKind, CatalogDiscoveryState, CatalogDiscoveryStatus,
     IsolatedConnectionCatalogObservation, StagedConnectionCatalogObservation,
 };
+
+pub use credential_snapshot::CredentialSecretSnapshot;
 
 pub use activation::{
     PreparedSystemManifestReplacement, ProviderCatalogActivationTransaction,
@@ -362,7 +365,7 @@ impl PublicAiRuntime {
             catalog_statuses: Arc::new(RwLock::new(BTreeMap::new())),
             usage_cache: Arc::new(RwLock::new(BTreeMap::new())),
             secondary_route_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            refresh_locks: Arc::new(StdMutex::new(BTreeMap::new())),
+            refresh_locks: shared_credential_refresh_locks(),
             secrets,
             provider_tasks: ProviderTaskRecoveryStore::default(),
             bundled_manifests,
@@ -600,6 +603,16 @@ fn build_public_ai_http_client() -> Result<reqwest::Client, String> {
         .pool_idle_timeout(Duration::from_secs(90))
         .build()
         .map_err(|error| format!("Failed to build the public AI HTTP client: {error}"))
+}
+
+/// Returns process-owned locks so runtime replacement cannot consume a single-use rotation twice.
+/// 返回进程持有的锁，避免运行时替换导致单次轮换被消费两次。
+fn shared_credential_refresh_locks() -> Arc<StdMutex<BTreeMap<String, Arc<AsyncMutex<()>>>>> {
+    // locks outlives every runtime generation and remains scoped by random durable connection IDs.
+    // locks 比每代运行时存活更久，并按随机持久连接 ID 隔离。
+    static LOCKS: std::sync::OnceLock<Arc<StdMutex<BTreeMap<String, Arc<AsyncMutex<()>>>>>> =
+        std::sync::OnceLock::new();
+    Arc::clone(LOCKS.get_or_init(|| Arc::new(StdMutex::new(BTreeMap::new()))))
 }
 
 #[cfg(test)]

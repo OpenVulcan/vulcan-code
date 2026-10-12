@@ -2034,7 +2034,7 @@ fn refresh_public_ai_catalogs_at_startup(
         .map(|connection| connection.id.clone())
         .collect::<Vec<_>>();
     async_runtime
-        .block_on(runtime.activate_staged_manifest_catalogs(configuration, &connection_ids))
+        .block_on(runtime.activate_startup_manifest_catalogs(configuration, &connection_ids))
         .map_err(|error| {
             ServiceBootstrapError::new(
                 "workspace",
@@ -2049,7 +2049,18 @@ fn refresh_public_ai_catalogs_at_startup(
             format!("Failed to read the public AI startup catalog: {error}"),
         )
     })?;
+    // Per-account failures belong in the repair UI and startup logs, not the workspace fatal state.
+    // 逐账号失败属于修复界面和启动日志，不属于工作区致命状态。
+    let failures = runtime
+        .catalog_error_snapshot()
+        .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
     for connection_id in connection_ids {
+        if let Some(error) = failures.get(&connection_id) {
+            logs.push(format!(
+                "[webui-service] public AI connection requires attention: connection={connection_id}: {error}"
+            ));
+            continue;
+        }
         logs.push(format!(
             "[webui-service] public AI catalog synchronized: connection={} models={}",
             connection_id,

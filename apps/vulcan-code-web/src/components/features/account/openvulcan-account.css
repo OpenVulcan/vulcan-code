@@ -1,0 +1,3 @@
+/* Constrain intrinsic widths inside account dialogs without adding account-only rules to startup CSS. */
+/* 约束账户弹窗内的固有宽度，不将账户专属规则加入启动样式。 */
+.openvulcan-account-columns { grid-template-columns: minmax(0, 1fr); }

@@ -354,7 +354,7 @@ impl EnginePrimitiveRegistry {
             GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
             GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
             OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
-            TYPESAFE_SYSTEMONE_PROFILE_ID,
+            OPENVULCAN_NATIVE_PROFILE_ID, TYPESAFE_SYSTEMONE_PROFILE_ID,
         };
         let mut registry = Self::default();
         for profile in [
@@ -369,6 +369,7 @@ impl EnginePrimitiveRegistry {
             OPENAI_CODEX_RESPONSES_PROFILE_ID,
             OPENAI_RESPONSES_PROFILE_ID,
             TYPESAFE_SYSTEMONE_PROFILE_ID,
+            OPENVULCAN_NATIVE_PROFILE_ID,
         ] {
             registry.protocol_profiles.insert(profile.to_string());
         }

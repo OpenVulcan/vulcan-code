@@ -483,6 +483,7 @@ pub fn parse_openai_model_catalog(
                 .as_ref()
                 .is_none_or(|modalities| compatible_supports_text(modalities));
             let capability_evidence = ModelCapabilityEvidence {
+                embedding_task_values: BTreeMap::new(),
                 context_limit_declared: model.context_window.is_some(),
                 output_limit_declared: model.max_output_tokens.is_some(),
                 input_modalities_declared: model.input_modalities.is_some(),
@@ -1317,6 +1318,7 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
 fn openrouter_capability_evidence(model: &OpenRouterModelEntry) -> ModelCapabilityEvidence {
     let architecture = model.architecture.as_ref();
     ModelCapabilityEvidence {
+        embedding_task_values: BTreeMap::new(),
         context_limit_declared: openrouter_declared_token_limit(model.context_length).is_some()
             || model.top_provider.as_ref().is_some_and(|provider| {
                 openrouter_declared_token_limit(provider.context_length).is_some()

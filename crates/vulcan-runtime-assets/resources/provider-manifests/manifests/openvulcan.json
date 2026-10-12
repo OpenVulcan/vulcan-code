@@ -1,0 +1,165 @@
+{
+  "schema_version": "vulcan.provider-manifest.v2",
+  "provider_id": "openvulcan",
+  "revision": 1,
+  "published_at": "2026-10-12T00:00:00Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [
+      "openvulcan-native.v1"
+    ],
+    "required_execution_primitives": [],
+    "required_upload_primitives": [],
+    "required_transformers": []
+  },
+  "display": {
+    "name": "OpenVulcan",
+    "category": "official",
+    "credential_directory_visibility": "core_account"
+  },
+  "services": [
+    {
+      "service_entry_id": "china",
+      "display_name": "OpenVulcan China",
+      "kind": "conversation",
+      "base_url": "https://api.openvulcan.cn",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "account",
+          "display_name": "OpenVulcan Account",
+          "credential_mode": "auth",
+          "billing_kind": "provider_managed",
+          "default_usage_scopes": [
+            "internal_background"
+          ],
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "open_vulcan_china"
+          },
+          "account_usage_query": "open_vulcan"
+        }
+      ],
+      "default_authentication": "open_vulcan_auth",
+      "request_projector": "direct",
+      "model_catalog": {
+        "source_policy": "discovery_only",
+        "discovery_kind": "open_vulcan",
+        "path": "/api/v1/vulcancode/models"
+      },
+      "native_inference_bindings": [
+        {
+          "operation": "embedding_create",
+          "binding_id": "openvulcan.embeddings.v1",
+          "endpoint_path": "/api/v1/vulcancode/embeddings",
+          "projection": "open_vulcan"
+        },
+        {
+          "operation": "decision_evaluate",
+          "binding_id": "openvulcan.decisions.v1",
+          "endpoint_path": "/api/v1/vulcancode/decisions",
+          "projection": "open_vulcan"
+        }
+      ],
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openvulcan-native.v1",
+          "endpoint_path": "/api/v1/vulcancode/embeddings",
+          "model_discovery_base_url_override": "https://auth.openvulcan.cn",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    },
+    {
+      "service_entry_id": "global",
+      "display_name": "OpenVulcan International",
+      "kind": "conversation",
+      "base_url": "https://api.openvulcan.com",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "account",
+          "display_name": "OpenVulcan Account",
+          "credential_mode": "auth",
+          "billing_kind": "provider_managed",
+          "default_usage_scopes": [
+            "internal_background"
+          ],
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "open_vulcan_global"
+          },
+          "account_usage_query": "open_vulcan"
+        }
+      ],
+      "default_authentication": "open_vulcan_auth",
+      "request_projector": "direct",
+      "model_catalog": {
+        "source_policy": "discovery_only",
+        "discovery_kind": "open_vulcan",
+        "path": "/api/v1/vulcancode/models"
+      },
+      "native_inference_bindings": [
+        {
+          "operation": "embedding_create",
+          "binding_id": "openvulcan.embeddings.v1",
+          "endpoint_path": "/api/v1/vulcancode/embeddings",
+          "projection": "open_vulcan"
+        },
+        {
+          "operation": "decision_evaluate",
+          "binding_id": "openvulcan.decisions.v1",
+          "endpoint_path": "/api/v1/vulcancode/decisions",
+          "projection": "open_vulcan"
+        }
+      ],
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openvulcan-native.v1",
+          "endpoint_path": "/api/v1/vulcancode/embeddings",
+          "model_discovery_base_url_override": "https://auth.openvulcan.com",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "discovery_evidence",
+    "unknown_model_policy": "default_binding_allowed",
+    "supported_protocols": [
+      "openvulcan-native.v1"
+    ],
+    "selected_protocol": "openvulcan-native.v1",
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [],
+    "default_response_profile_refs": [],
+    "default_operation_refs": [],
+    "capabilities": {
+      "operations": []
+    }
+  },
+  "model_rules": [],
+  "usage_profiles": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "upload_channels": [],
+  "operations": [],
+  "tool_targets": [],
+  "provenance": {
+    "status": "verified",
+    "verified_at": "2026-10-12T00:00:00Z",
+    "sources": [
+      {
+        "url": "https://auth.openvulcan.cn/api/v1/vulcancode/models",
+        "note": "Contract verified against openvulcan-web deviceauth, modelcatalog and vectorapi source. Native PKCE with rotating Auth credentials; CN and international deployments are isolated. No paid or live account request was used for verification."
+      }
+    ]
+  }
+}

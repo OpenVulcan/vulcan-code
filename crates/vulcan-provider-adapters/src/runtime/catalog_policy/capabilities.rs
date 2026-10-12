@@ -472,6 +472,7 @@ pub(super) fn manual_model_capability_evidence(
         .operations
         .contains(&AiOperation::ConversationRespond);
     crate::ModelCapabilityEvidence {
+        embedding_task_values: std::collections::BTreeMap::new(),
         context_limit_declared: capabilities.context_limit.is_some(),
         output_limit_declared: capabilities.output_limit.is_some(),
         input_modalities_declared: true,

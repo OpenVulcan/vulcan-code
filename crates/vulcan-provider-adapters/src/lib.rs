@@ -20,6 +20,7 @@ mod media_upload_deadline;
 mod native_inference;
 mod native_inference_batch;
 pub mod oauth;
+pub mod openvulcan;
 mod operation_media_source;
 pub mod provider_manifest;
 pub mod provider_manifest_fixture;

@@ -36,16 +36,17 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// 进程内序号，为每次系统统计引导提供不同的绑定后缀。
 static SYSTEM_STATISTICS_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// Schema version written by the single v1 initialization.
-/// 由唯一 v1 初始化写入的结构版本号。
-///
-/// The plan fixes v1 at `user_version = 1` and forbids compatibility branches and migration logic.
-/// The previous value was 18, reflecting eighteen accumulated additive migrations; folding those
-/// into one initialization is what makes a single version correct rather than merely convenient.
-///
-/// 方案把 v1 固定为 `user_version = 1`，并禁止兼容分支与迁移逻辑。此前的值是 18，反映十八次累积的追加式
-/// 迁移；正是把它们折入一次初始化，才使单一版本号成为正确而非仅仅便利的选择。
+/// Base application index schema version, independent of the credential table version below.
+/// 基础应用索引结构版本，独立于下方的凭据表版本。
+/// Initialization creates the declared schema without reading or migrating earlier formats.
+/// 初始化创建已声明的结构，不读取或迁移早期格式。
 pub const APP_SCHEMA_VERSION: i64 = 1;
+
+/// Versioned credential table shared by initialization and every persistence operation.
+/// 初始化与全部持久化操作共用的版本化凭据表。
+/// The suffix is the credential schema version; V0.1 never reads or migrates the old unversioned table.
+/// 后缀即凭据结构版本；V0.1 不读取或迁移旧的无版本表。
+pub const AI_CREDENTIAL_SECRETS_TABLE: &str = "ai_credential_secrets_v2";
 
 /// Long-lived host runtime handle kept by the host runtime after startup succeeds.
 /// 启动成功后由宿主运行时持有的长生命周期宿主运行时句柄。
@@ -221,13 +222,10 @@ pub async fn bootstrap_application_data_plane() -> Result<DataPlaneBootstrapRepo
         // The binding identifiers stay in the runtime metadata because plugin and VCE LanceDB paths use
         // them to address the host's own in-process databases.
         // 绑定标识符保留在运行期元数据中，因为插件与 VCE 的 LanceDB 路径用它们寻址宿主自身的进程内数据库。
-        // Single v1 initialization. The script creates every v1 object and writes
-        // `user_version = 1`; there is no migration chain, no additive ALTER, no legacy data copy
-        // and no branch that detects an older database. The version check immediately afterwards is
-        // what turns "we ran the script" into "the database is at v1".
-        // 唯一 v1 初始化。脚本创建全部 v1 对象并写入 `user_version = 1`；没有迁移链、没有追加式 ALTER、
-        // 没有旧数据拷贝，也没有检测旧数据库的分支。紧随其后的版本校验把"我们运行了脚本"变成
-        // "数据库处于 v1"。
+        // Initialize the application schema and its independently versioned credential table.
+        // 初始化应用结构及其独立版本化的凭据表。
+        // Existing credential versions are neither inspected nor copied; application indexes stay in place.
+        // 既有凭据版本既不检查也不复制；应用索引保持原位。
         {
             let connection = local
                 .connect(LogicalDatabase::AppState)
@@ -481,13 +479,14 @@ CREATE TABLE IF NOT EXISTS thread_goals (
 CREATE INDEX IF NOT EXISTS idx_thread_goals_status
 ON thread_goals(status, updated_at_ms DESC);
 
-CREATE TABLE IF NOT EXISTS ai_credential_secrets (
+CREATE TABLE IF NOT EXISTS {credential_table} (
     secret_reference TEXT PRIMARY KEY,
     format_version INTEGER NOT NULL CHECK(format_version > 0),
     revision INTEGER NOT NULL CHECK(revision > 0),
     material_kind TEXT NOT NULL CHECK(material_kind IN (
         'api_key',
         'static_bearer',
+        'openvulcan_auth',
         'open_ai_codex_oauth',
         'claude_code_oauth',
         'google_oauth',
@@ -501,7 +500,7 @@ CREATE TABLE IF NOT EXISTS ai_credential_secrets (
     expires_at_unix_ms INTEGER,
     scope_text TEXT NOT NULL DEFAULT '',
     account_subject TEXT,
-    authorization_kind TEXT CHECK(authorization_kind IN ('browser_callback')),
+    authorization_kind TEXT CHECK(authorization_kind IN ('browser_callback', 'rotation_pending')),
     provider_username TEXT,
     credential_label TEXT,
     email TEXT,
@@ -519,6 +518,19 @@ CREATE TABLE IF NOT EXISTS ai_credential_secrets (
     CHECK(
         (material_kind = 'api_key' AND secret_value IS NOT NULL AND length(trim(secret_value)) > 0)
         OR (material_kind = 'static_bearer' AND access_token IS NOT NULL AND length(trim(access_token)) > 0)
+        OR (
+            material_kind = 'openvulcan_auth'
+            AND access_token IS NOT NULL
+            AND length(trim(access_token)) > 0
+            AND refresh_token IS NULL
+            AND issued_at_unix_ms IS NULL
+            AND expires_at_unix_ms IS NOT NULL
+            AND expires_at_unix_ms > 0
+            AND provider_device_id IS NOT NULL
+            AND length(trim(provider_device_id)) > 0
+            AND provider_region IS NOT NULL
+            AND provider_region IN ('china', 'global')
+        )
         OR (
             material_kind IN (
                 'open_ai_codex_oauth',
@@ -556,6 +568,7 @@ CREATE TABLE IF NOT EXISTS ai_credential_secrets (
     ),
     CHECK(
         authorization_kind IS NULL
+        OR (material_kind = 'openvulcan_auth' AND authorization_kind = 'rotation_pending')
         OR (
             material_kind IN ('api_key', 'static_bearer')
             AND authorization_kind = 'browser_callback'
@@ -645,6 +658,7 @@ ON knowledge_import_jobs(library_id, created_at_ms DESC);
 PRAGMA user_version = {schema_version};
 "#,
         schema_version = APP_SCHEMA_VERSION,
+        credential_table = AI_CREDENTIAL_SECRETS_TABLE,
     )
 }
 
@@ -722,27 +736,42 @@ mod tests {
         }
     }
 
-    /// Verifies that the base schema stores AI credentials as relational columns without JSON documents.
-    /// 验证基础结构使用关系字段存储 AI 凭据且不保存 JSON 文档。
+    /// With no inputs, verifies relational credential columns through SQLite; returns on success.
+    /// 无需参数，通过 SQLite 验证关系化凭据字段，成功时正常返回。
     #[test]
     fn base_schema_includes_relational_ai_credential_storage() {
-        let schema = build_application_schema_script();
-
-        assert_eq!(
-            APP_SCHEMA_VERSION, 1,
-            "v1 has exactly one schema version; the migration chain is gone"
-        );
-        assert!(schema.contains("CREATE TABLE IF NOT EXISTS ai_credential_secrets"));
-        assert!(schema.contains("provider_device_id TEXT"));
-        assert!(
-            schema.contains(
-                "authorization_kind TEXT CHECK(authorization_kind IN ('browser_callback'))"
-            )
-        );
-        assert!(schema.contains("provider_username TEXT"));
-        assert!(schema.contains("credential_label TEXT"));
-        assert!(schema.contains("scope_text TEXT NOT NULL DEFAULT ''"));
-        assert!(!schema.contains("credential_json"));
+        // connection executes the real schema instead of asserting source-text fragments.
+        // connection 执行真实结构，而不是断言源码文本片段。
+        let connection = rusqlite::Connection::open_in_memory().expect("private database");
+        connection
+            .execute_batch(&build_application_schema_script())
+            .expect("initialize schema");
+        // statement inspects the actual relational columns exposed to persistence.
+        // statement 检查持久层实际可用的关系列。
+        let mut statement = connection
+            .prepare(&format!("PRAGMA table_info({AI_CREDENTIAL_SECRETS_TABLE})"))
+            .expect("credential columns");
+        // columns are matched by identity so added fields do not change assertion positions.
+        // columns 按名称定位，新增字段不会改变断言位置。
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query columns")
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()
+            .expect("collect columns");
+        for column in [
+            "material_kind",
+            "provider_device_id",
+            "authorization_kind",
+            "provider_username",
+            "credential_label",
+            "scope_text",
+        ] {
+            assert!(
+                columns.contains(column),
+                "Missing credential column {column}; verify the current persistence contract"
+            );
+        }
+        assert!(!columns.contains("credential_json"));
     }
 
     /// Verifies the single initialization creates every v1 object and writes the v1 version.
@@ -778,7 +807,7 @@ mod tests {
             .expect("collect schema");
 
         let mut expected: Vec<(String, String)> = [
-            ("table", "ai_credential_secrets"),
+            ("table", AI_CREDENTIAL_SECRETS_TABLE),
             ("table", "app_metadata"),
             ("table", "knowledge_import_jobs"),
             ("table", "knowledge_libraries"),
