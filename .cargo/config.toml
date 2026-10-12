@@ -1,9 +1,11 @@
 # Keep vendored MSVC C dependencies aligned with Rust's dynamic C runtime.
 # 让通过 MSVC 编译的内置 C 依赖统一使用 Rust 默认的动态 C 运行时。
-# Keep Cargo compiler process fan-out bounded on developer machines.
-# 限制开发机上的 Cargo 编译进程并发度。
+# Bound Cargo's compiler process fan-out, which also caps rustc's parallel codegen threads. 16 uses half
+# of a 32-thread development machine and leaves headroom for the IDE, the service and test processes.
+# 限制 Cargo 编译进程并发度（同时也是 rustc 并行代码生成线程的上限）。16 使用 32 线程开发机的一半，
+# 为 IDE、服务与测试进程保留余量。
 [build]
-jobs = 4
+jobs = 16
 
 # Keep the test harness conservative while allowing an explicit shell override.
 # 保持测试 harness 并发度适中，同时允许命令行环境变量显式覆盖。
@@ -37,3 +39,12 @@ PROTOC_INCLUDE = { value = ".cargo/protoc/include", relative = true, force = fal
 # 而不是在各 crate 的构建脚本中分别处理。
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "link-arg=/NOIMPLIB", "-C", "link-arg=/NOEXP"]
+
+# Link with the toolchain's bundled rust-lld instead of MSVC link.exe: relinking the ~500 MB debug service
+# executable after a kernel edit measured 27.7 s with link.exe and 15.3 s with rust-lld (2026-10-12).
+# Cargo accepts `linker` only under an exact target triple, not under the cfg table above.
+# 使用工具链自带的 rust-lld 代替 MSVC link.exe：修改内核后重新链接约 500 MB 的调试服务可执行文件，
+# link.exe 实测 27.7 秒，rust-lld 为 15.3 秒（2026-10-12）。Cargo 只接受精确目标三元组下的 `linker`，
+# 不接受上方的 cfg 表。
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

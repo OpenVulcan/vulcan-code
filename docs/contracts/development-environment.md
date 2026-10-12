@@ -117,7 +117,9 @@ cargo hakari verify
 
 服务内核的开发模式采用根 `Cargo.toml` 中的包级 `debug = "limited"`：保留源码位置和回溯信息，减少完整类型及局部变量调试信息。原因是 Windows 实测完整调试内核归档达到 4,247,716,754 字节，符号索引已变为 `/SYM64/`，MSVC 报无效库格式并在服务链接时产生 49 个未解析符号；这些符号实际仍存在于归档中。该设置只影响内核包，测试模式继承开发模式，发布模式及其他依赖的设置保持原定义。需要完整局部变量调试信息时，应先解决内核归档体积问题，再覆盖此设置。第三方依赖另以 `[profile.dev.package."*"] debug = "line-tables-only"` 只保留行表：回溯仍含源码位置，链接时间与 PDB 体积随之下降；工作区 crate 不受此设置影响。需要单步进入第三方源码时，临时为该依赖单独覆盖为 `debug = true`。
 
-根目录 `.cargo/config.toml` 设置 `build.jobs = 4`，限制 Cargo 编译进程并发；同时以 `RUST_TEST_THREADS = 4` 约束常规测试 harness。`.config/nextest.toml` 将 nextest 默认测试线程限制为 4。
+根目录 `.cargo/config.toml` 设置 `build.jobs = 16`，限制 Cargo 编译进程并发；该值同时是 rustc 并行代码生成线程的上限，取 32 线程开发机的一半，为 IDE、服务与测试进程保留余量。同时以 `RUST_TEST_THREADS = 4` 约束常规测试 harness。`.config/nextest.toml` 将 nextest 默认测试线程限制为 4。
+
+同一文件为 `x86_64-pc-windows-msvc` 指定 `linker = "rust-lld.exe"`（工具链自带，无需另行安装）：修改内核后重新链接约 500 MB 的调试服务可执行文件，MSVC `link.exe` 实测 27.7 秒，rust-lld 为 15.3 秒（2026-10-12）。Cargo 只接受精确目标三元组下的 `linker`，因此它不写在 `cfg(all(windows, target_env = "msvc"))` 表中。发布构建同样使用该链接器。
 
 临时调整时可以显式覆盖：
 

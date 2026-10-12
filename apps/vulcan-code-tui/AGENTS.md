@@ -49,7 +49,7 @@
 
 ## 四、验证
 
-1. 根 `.cargo/config.toml` 限制 `build.jobs = 4` 与 `RUST_TEST_THREADS = 4`，不得绕过。
+1. 根 `.cargo/config.toml` 限制 `build.jobs = 16` 与 `RUST_TEST_THREADS = 4`，不得绕过。
 2. 常规验证：`cargo clippy -p vulcan-code-tui --all-targets -- -D warnings`、
    `cargo nextest run -p vulcan-code-tui`、`cargo fmt --check`。
 3. `src/render_smoke_tests.rs` 以无头后端在宽、窄尺寸下渲染全部区域与浮层（快照另含超宽尺寸），并用 `hits.find` 驱动鼠标点击；

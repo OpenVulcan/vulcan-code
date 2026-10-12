@@ -66,7 +66,7 @@
 
 ## 四、测试与构建资源约束
 
-1. **默认并发上限。** 仓库 `.cargo/config.toml` 将 Cargo 编译并发限制为 `build.jobs = 4`，常规 Rust 测试 harness 限制为 `RUST_TEST_THREADS = 4`；不得在验证命令中无故移除或绕过这两个默认值。
+1. **默认并发上限。** 仓库 `.cargo/config.toml` 将 Cargo 编译并发限制为 `build.jobs = 16`（同时是 rustc 并行代码生成线程上限），常规 Rust 测试 harness 限制为 `RUST_TEST_THREADS = 4`；不得在验证命令中无故移除或绕过这两个默认值。
 2. **nextest 约束。** `.config/nextest.toml` 将默认 `test-threads` 限制为 4；使用 nextest 时保留该配置，若临时提高并发必须明确说明原因与资源风险。
 3. **共享资源测试必须串行。** 涉及共享 Provider Manifest、服务内核注册表、端口或其他进程级资源的测试，使用 `--test-threads=1`；nextest 使用 `cargo nextest run --test-threads=1`，避免并行测试互相争用导致假失败。
 4. **优先小范围验证。** 修改后先执行目标 crate 的 `cargo check` 或定向测试，再决定是否运行工作区级测试；工作区全量测试可能同时启动大量测试进程，不得默认无约束执行。`cargo check -p <crate>` 不检查测试目标，涉及结构体字段、公开签名或测试代码变更时必须加 `--all-targets` 或直接运行定向测试，否则测试目标可能长期无法编译而不被发现。
