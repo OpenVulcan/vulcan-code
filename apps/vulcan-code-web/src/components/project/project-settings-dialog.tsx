@@ -841,7 +841,7 @@ export function ProjectSettingsDialog(props: {
 
             {activeSection === "collaboration-grants" ? <ProjectCollaborationGrantsSection projectId={project.id} workbench={props.workbench} /> : null}
 
-            {activeSection === "permission-judge" && props.workbench.permissionJudgeState === "enabled" ? <ProjectPermissionJudgeSection projectId={project.id} /> : null}
+            {activeSection === "permission-judge" && props.workbench.permissionJudgeBackend ? <ProjectPermissionJudgeSection projectId={project.id} /> : null}
 
             {activeSection === "attachments" ? (
               <ProjectAttachmentCleanupSection

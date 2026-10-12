@@ -19,7 +19,7 @@ import {
   registerPermissionJudgeModel,
   savePermissionJudgeSettings,
 } from "@/service/permission-judge-service";
-import type { JudgeBackend, JudgeState, PermissionJudgeSettingsSnapshot } from "@/types";
+import type { PermissionJudgeSettingsSnapshot } from "@/types";
 
 // Choice is one of the three permission judge answers the guide offers.
 // Choice 是引导提供的三种权限判定答案之一。
@@ -96,15 +96,16 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
 
   const activeModel = snapshot?.models.find((model) => model.id === snapshot.activeModelId) ?? null;
   const ready = choice === "local" ? activeModel !== null : choice === "cloud" ? cloudConfigured : true;
-  // confirm saves the one explicit choice; the other saved fields stay as they are.
-  // confirm 保存这一个显式选择；其他已保存字段保持不变。
+  // confirm saves the chosen backend and keeps the other saved fields; not now writes nothing.
+  // confirm 保存所选后端并保留其他已保存字段；暂不启用不写入任何内容。
   const confirm = () => run("confirm", "setupGuide.saveFailed", async () => {
     if (!snapshot) return;
-    const state: JudgeState = choice === "off" ? "off" : "enabled";
-    const backend: JudgeBackend | null = choice === "off" ? snapshot.backend : choice;
+    if (choice === "off") {
+      props.onOpenChange(false);
+      return;
+    }
     await savePermissionJudgeSettings({
-      state,
-      backend,
+      backend: choice,
       device: snapshot.device ?? snapshot.recommendedDevice,
       cudaLibraryDirectory: snapshot.cuda.lockedDirectory,
       llmMayAllowBlocked: snapshot.llmMayAllowBlocked,

@@ -33,13 +33,17 @@ import { useDedicatedComposer } from "@/components/composer/dedicated/dedicated-
 const PERMISSION_MODE_OPTIONS = [
   { value: "read_only", icon: Hand, label: "permissionMode.readOnly", hint: "permissionMode.readOnlyHint" },
   { value: "workspace_write", icon: ShieldCheck, label: "permissionMode.workspaceWrite", hint: "permissionMode.workspaceWriteHint" },
+  { value: "auto_approve", icon: Sparkles, label: "permissionMode.autoApprove", hint: "permissionMode.autoApproveHint" },
   { value: "full_access", icon: CircleAlert, label: "permissionMode.fullAccess", hint: "permissionMode.fullAccessHint" },
 ] as const;
 
 /** Composer chip that shows and switches the permission mode of the current conversation or draft.
  * 显示并切换当前会话或草稿权限模式的输入区标签按钮。
  * `controller` owns persistence; switching to full access needs an acknowledged confirmation first.
- * `controller` 负责持久化；切换到完全权限前必须先勾选确认。 */
+ * Auto-approve needs a configured judge: until then it is greyed out and opens the judge settings.
+ * Unattended mode is offered only under auto-approve, the one mode with a reviewer.
+ * `controller` 负责持久化；切换到完全权限前必须先勾选确认。自动审批需要已配置的判定器：在此之前显示为
+ * 灰色，点击打开判定设置。无人值守只在自动审批下提供，因为只有该模式有复核器。 */
 export function ComposerPermissionModeControl(props: { controller: ComposerPermissionModeController }) {
   // A dedicated session without tools never asks for permissions, so the chip has nothing to switch.
   // 无工具的专职会话从不请求权限，因此该标签没有可切换的内容。
@@ -66,14 +70,18 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
   const current = PERMISSION_MODE_OPTIONS.find((option) => option.value === mode) ?? null;
   const CurrentIcon = current?.icon ?? ShieldCheck;
   const fullAccess = mode === "full_access";
-  // The judge entry asks for setup while unset, shows its state when enabled and is hidden when off.
-  // 判定入口在未设定时提示需要设定，启用时显示状态，关闭时隐藏。
-  const judgeLabel = judge === null ? null : judge.state === null ? "permissionMode.judgeNeedsSetup"
-    : judge.state === "enabled" ? "permissionMode.judgeEnabled" : null;
+  // Outside the workbench layout there is no judge to read, so auto-approve is not gated there.
+  // 在工作台布局之外无法读取判定器，因此不对自动审批设限。
+  const needsSetup = judge !== null && judge.backend === null;
 
-  // choose routes full access through the confirmation dialog and applies other modes directly.
-  // choose 让完全权限经过确认框，其他模式直接应用。
+  // choose opens the judge settings for an unconfigured auto-approve, routes full access through
+  // the confirmation dialog and applies other modes directly.
+  // choose 在自动审批未配置时打开判定设置，让完全权限经过确认框，其他模式直接应用。
   const choose = (next: PermissionMode) => {
+    if (next === "auto_approve" && needsSetup) {
+      judge?.openSettings();
+      return;
+    }
     if (next === mode) return;
     if (next === "full_access") {
       setAcknowledged(false);
@@ -112,12 +120,14 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
           <DropdownMenuRadioGroup value={mode ?? ""}>
             {PERMISSION_MODE_OPTIONS.map((option) => {
               const Icon = option.icon;
+              const greyed = option.value === "auto_approve" && needsSetup;
               return (
                 <DropdownMenuRadioItem
                   key={option.value}
-                  className="items-start text-xs"
+                  className={greyed ? "items-start text-xs text-muted-foreground" : "items-start text-xs"}
                   value={option.value}
                   data-permission-mode={option.value}
+                  data-needs-setup={greyed ? "" : undefined}
                   disabled={saving}
                   onSelect={() => choose(option.value)}
                 >
@@ -126,41 +136,36 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
                     <span className={option.value === "full_access" ? "text-(--vcn-content-warning)" : undefined}>{t(option.label)}</span>
-                    <span className="text-[11px] leading-snug font-normal text-muted-foreground">{t(option.hint)}</span>
+                    <span className="text-[11px] leading-snug font-normal text-muted-foreground">
+                      {t(greyed ? "permissionMode.autoApproveNeedsSetup" : option.hint)}
+                    </span>
                   </span>
                 </DropdownMenuRadioItem>
               );
             })}
           </DropdownMenuRadioGroup>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            className="items-start text-xs"
-            data-unattended-entry={unattendedOn ? "on" : "off"}
-            disabled={!unattended.available || unattended.saving}
-            onSelect={() => setEditingUnattended(true)}
-          >
-            <span className="composer-select-icon mt-0.5"><Bot size={14} /></span>
-            <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
-              <span>{t(unattendedOn ? "permissionMode.unattended.menuOn" : "permissionMode.unattended.menuOff")}</span>
-              <span className="text-[11px] leading-snug font-normal text-muted-foreground">
-                {t(unattended.available ? "permissionMode.unattended.menuHint" : "permissionMode.unattended.draftHint")}
-              </span>
-            </span>
-          </DropdownMenuItem>
-          {judge !== null && judgeLabel !== null ? (
+          {mode === "auto_approve" ? (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-xs" data-judge-state={judge.state ?? "unset"} onSelect={judge.openSettings}>
-                <span className="composer-select-icon" data-tone={judge.state === null ? "warning" : undefined}>
-                  <Sparkles size={14} />
+              <DropdownMenuItem
+                className="items-start text-xs"
+                data-unattended-entry={unattendedOn ? "on" : "off"}
+                disabled={!unattended.available || unattended.saving}
+                onSelect={() => setEditingUnattended(true)}
+              >
+                <span className="composer-select-icon mt-0.5"><Bot size={14} /></span>
+                <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
+                  <span>{t(unattendedOn ? "permissionMode.unattended.menuOn" : "permissionMode.unattended.menuOff")}</span>
+                  <span className="text-[11px] leading-snug font-normal text-muted-foreground">
+                    {t(unattended.available ? "permissionMode.unattended.menuHint" : "permissionMode.unattended.draftHint")}
+                  </span>
                 </span>
-                <span className="flex-1 text-left">{t(judgeLabel)}</span>
               </DropdownMenuItem>
             </>
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
-      <ComposerUnattendedDialog open={editingUnattended} onOpenChange={setEditingUnattended} controller={unattended} mode={mode} />
+      <ComposerUnattendedDialog open={editingUnattended} onOpenChange={setEditingUnattended} controller={unattended} />
       <AlertDialog open={confirmingFullAccess} onOpenChange={setConfirmingFullAccess}>
         <AlertDialogContent>
           <AlertDialogHeader>

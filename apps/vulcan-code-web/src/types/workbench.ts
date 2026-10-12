@@ -1,5 +1,5 @@
 import type { AnswerMode } from "@/service/answer-mode";
-import type { JudgeState } from "./permission-judge";
+import type { JudgeBackend } from "./permission-judge";
 import type {
   AgentSkillsCatalogSummary,
   ComposerAttachmentCapabilitySummary,
@@ -251,9 +251,10 @@ export interface WorkbenchSnapshot {
   // Persisted global answer mode copied into new conversations.
   // 复制到新会话的已持久化全局回答模式。
   defaultAnswerMode: AnswerMode;
-  // Saved permission judge switch; null until the user decides, absent from older test fixtures.
-  // 已保存的权限判定开关；用户决定前为 null，旧测试夹具中可缺省。
-  permissionJudgeState?: JudgeState | null;
+  // Configured permission judge backend; null until one is set up, which keeps auto-approve
+  // unavailable. Absent from older test fixtures.
+  // 已配置的权限判定后端；设置完成前为 null，此时自动审批不可用。旧测试夹具中可缺省。
+  permissionJudgeBackend?: JudgeBackend | null;
   // Composer slash commands projected by the shared service command catalog.
   // 共享服务指令目录投影出的输入区 slash 指令。
   composerSlashCommands?: ComposerSlashCommandSummary[];

@@ -516,12 +516,12 @@ export function WorkbenchLayout(props: {
     setActiveSettingsSubArea("permission-judge");
     handleSelectTopFeatureArea("settings");
   }, [handleSelectTopFeatureArea]);
-  const setupGuide = useSetupGuide(workbenchState.permissionJudgeState, props.startup.ready);
+  const setupGuide = useSetupGuide(workbenchState.permissionJudgeBackend, props.startup.ready);
   const permissionJudgeEntry = React.useMemo<PermissionJudgeEntry>(() => ({
-    state: workbenchState.permissionJudgeState ?? null,
+    backend: workbenchState.permissionJudgeBackend ?? null,
     openSettings: handleOpenPermissionJudgeSettings,
     openGuide: setupGuide.show,
-  }), [handleOpenPermissionJudgeSettings, setupGuide.show, workbenchState.permissionJudgeState]);
+  }), [handleOpenPermissionJudgeSettings, setupGuide.show, workbenchState.permissionJudgeBackend]);
   // handleOpenWorkspaceChat returns the workbench main panel to the conversation surface.
   // handleOpenWorkspaceChat 将工作台主面板切回会话界面。
   const handleOpenWorkspaceChat = React.useCallback(() => {

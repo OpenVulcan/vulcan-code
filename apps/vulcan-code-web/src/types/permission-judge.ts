@@ -2,12 +2,10 @@
 // `vulcan_service_api::permission_judge`.
 // 权限判定设置、模型登记表、worker 状态与 CUDA 执行库，镜像 `vulcan_service_api::permission_judge`。
 
-// JudgeState is off or enabled; null means not configured yet.
-// JudgeState 为关闭或启用；null 表示尚未设置。
-export type JudgeState = "off" | "enabled";
-
 // JudgeBackend names where calls are judged: the local model, or the saved cloud decision route.
-// JudgeBackend 指定判定调用的位置：本机模型，或已保存的云端判定路由。
+// A saved backend is what makes the judge configured and auto-approve available.
+// JudgeBackend 指定判定调用的位置：本机模型，或已保存的云端判定路由。已保存的后端即表示判定器已
+// 配置，自动审批也因此可用。
 export type JudgeBackend = "local" | "cloud";
 
 // JudgeDevice is the execution device of the local model.
@@ -151,7 +149,6 @@ export interface PermissionJudgeStatus {
 // PermissionJudgeSettingsSnapshot is everything the "Permission judge" settings page shows.
 // PermissionJudgeSettingsSnapshot 是“权限判定”设置页展示的全部内容。
 export interface PermissionJudgeSettingsSnapshot {
-  state: JudgeState | null;
   backend: JudgeBackend | null;
   device: JudgeDevice | null;
   recommendedDevice: JudgeDevice | null;
@@ -171,7 +168,6 @@ export interface PermissionJudgeSettingsSnapshot {
 // PermissionJudgeSettingsSaveRequest saves the system-level choices.
 // PermissionJudgeSettingsSaveRequest 保存系统级选择。
 export interface PermissionJudgeSettingsSaveRequest {
-  state: JudgeState;
   backend: JudgeBackend | null;
   device: JudgeDevice | null;
   cudaLibraryDirectory: string | null;

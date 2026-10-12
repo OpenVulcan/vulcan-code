@@ -38,7 +38,7 @@ function authority(mode: PermissionMode = "workspace_write", sessionId = "sessio
 /** Build a durable service receipt for one session.
  * 为一个会话构建可靠服务回执。 */
 function receipt(mode: PermissionMode, sessionId = "session-a"): SessionPermissionModeUpdateResponse {
-  return { session_id: sessionId, revision: 2, permission_mode: mode };
+  return { session_id: sessionId, revision: 2, permission_mode: mode, unattended: null };
 }
 
 beforeEach(() => {
@@ -90,6 +90,16 @@ it("saves the confirmed unattended policy and keeps it until the projection chan
   expect(settings.permissionMode.unattended.value).toEqual({ deny_policy: "no push" });
   await act(async () => root.render(<Harness sessionId="session-a" authority={{ ...authority(), unattended: { deny_policy: "x" } }} />));
   expect(settings.permissionMode.unattended.value).toEqual({ deny_policy: "x" });
+});
+
+it("drops unattended mode with the receipt of a mode change", async () => {
+  const owner = { ...authority("auto_approve"), unattended: { deny_policy: "no push" } };
+  save.mockResolvedValueOnce(receipt("workspace_write"));
+  await act(async () => root.render(<Harness sessionId="session-a" authority={owner} />));
+  expect(settings.permissionMode.unattended.value).toEqual({ deny_policy: "no push" });
+  await act(async () => { settings.permissionMode.select("workspace_write"); expect(await settings.permissionMode.flush()).toBe(true); });
+  expect(settings.permissionMode.mode).toBe("workspace_write");
+  expect(settings.permissionMode.unattended.value).toBeNull();
 });
 
 it("offers unattended mode only to saved sessions", async () => {

@@ -1,12 +1,12 @@
 import { createContext } from "react";
-import type { JudgeState } from "@/types/permission-judge";
+import type { JudgeBackend } from "@/types/permission-judge";
 
-/** Permission judge entry shown beside the composer permission modes.
- * 显示在输入区权限模式旁的权限判定入口。 */
+/** Permission judge the composer's auto-approve mode depends on.
+ * 输入区自动审批模式所依赖的权限判定。 */
 export interface PermissionJudgeEntry {
-  /** Saved switch: null needs setup, off hides the entry, enabled shows its state.
-   * 已保存的开关：null 需要设定，off 隐藏入口，enabled 显示其状态。 */
-  state: JudgeState | null;
+  /** Configured backend; null keeps auto-approve unavailable until the user sets one up.
+   * 已配置的后端；为 null 时自动审批不可用，直到用户完成设置。 */
+  backend: JudgeBackend | null;
   /** Opens the permission judge settings page without changing saved settings.
    * 打开权限判定设置页，不改变已保存的设置。 */
   openSettings: () => void;
@@ -15,6 +15,6 @@ export interface PermissionJudgeEntry {
   openGuide: () => void;
 }
 
-// The workbench layout owns both the saved switch and settings navigation; absent outside it.
-// 工作台布局同时持有已保存开关与设置导航；在其外部时为空。
+// The workbench layout owns both the configured backend and settings navigation; absent outside it.
+// 工作台布局同时持有已配置后端与设置导航；在其外部时为空。
 export const PermissionJudgeEntryContext = createContext<PermissionJudgeEntry | null>(null);

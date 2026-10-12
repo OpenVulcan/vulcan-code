@@ -1,5 +1,4 @@
 import React from "react";
-import { PageNotice } from "@/components/page";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -12,7 +11,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
-import type { PermissionMode } from "@/service/permission-mode";
 import type { UnattendedDefault } from "@/service/permission-mode-service";
 import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";
 
@@ -33,7 +31,6 @@ export function ComposerUnattendedDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   controller: ComposerPermissionModeController["unattended"];
-  mode: PermissionMode | null;
 }) {
   const { t } = useI18n();
   const { controller } = props;
@@ -79,8 +76,6 @@ export function ComposerUnattendedDialog(props: {
           <AlertDialogTitle>{t(enabled ? "permissionMode.unattended.editTitle" : "permissionMode.unattended.enableTitle")}</AlertDialogTitle>
           <AlertDialogDescription>{t("permissionMode.unattended.body")}</AlertDialogDescription>
         </AlertDialogHeader>
-        {props.mode === "full_access" ? <PageNotice tone="warning">{t("permissionMode.unattended.fullAccessNote")}</PageNotice> : null}
-        {props.mode === "read_only" ? <PageNotice tone="info">{t("permissionMode.unattended.readOnlyNote")}</PageNotice> : null}
         <label className="flex flex-col gap-1.5 text-sm">
           <span className="font-medium">{t("permissionMode.unattended.policyLabel")}</span>
           <Textarea

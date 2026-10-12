@@ -54,7 +54,7 @@ afterEach(async () => {
 // snapshot 构建未设定的判定；`activeModelId` 决定本机模型是否就绪。
 function snapshot(activeModelId: string | null, models = activeModelId ? [activeModelId] : []): PermissionJudgeSettingsSnapshot {
   return {
-    state: null, backend: null, device: null, recommendedDevice: "cpu",
+    backend: null, device: null, recommendedDevice: "cpu",
     devices: [{ device: "cpu", unavailableReason: null }],
     llmMayAllowBlocked: false,
     recordDecisions: false,
@@ -102,16 +102,13 @@ it("closes without saving when skipped", async () => {
   expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
 });
 
-// Not now is an explicit choice: it saves the switch off and keeps the other saved fields.
-// 暂不启用是显式选择：保存关闭状态，并保留其他已保存字段。
-it("saves the judge off for not now", async () => {
+// Not now leaves the judge unconfigured: it closes the guide and writes nothing.
+// 暂不启用让判定保持未配置：关闭引导且不写入任何内容。
+it("writes nothing for not now", async () => {
   const onOpenChange = await mount(snapshot(null));
-  service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot(null), state: "off" });
   await choose("off");
   await act(async () => buttonByKey("setupGuide.off.confirm")!.click());
-  expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    state: "off", backend: null, device: "cpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false,
-  });
+  expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
   expect(onOpenChange).toHaveBeenCalledWith(false);
 });
 
@@ -137,10 +134,10 @@ it("enables the local judge only after a registered model warms up", async () =>
   expect(service.registerPermissionJudgeModel).toHaveBeenCalledExactlyOnceWith("D:/models/model-a", "", true);
   expect(service.activatePermissionJudgeModel).toHaveBeenCalledExactlyOnceWith("model-a");
   expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
-  service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("model-a"), state: "enabled" });
+  service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("model-a"), backend: "local" });
   await act(async () => buttonByKey("setupGuide.local.confirm")!.click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    state: "enabled", backend: "local", device: "cpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false,
+    backend: "local", device: "cpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false,
   });
 });
 

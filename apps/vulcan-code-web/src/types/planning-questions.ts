@@ -119,7 +119,7 @@ export type PendingApprovalReview =
 
 // PermissionModeKey is the canonical session permission mode key.
 // PermissionModeKey 是规范的会话权限模式键。
-export type PermissionModeKey = "read_only" | "workspace_write" | "full_access";
+export type PermissionModeKey = "read_only" | "workspace_write" | "auto_approve" | "full_access";
 
 // PendingApprovalSubject describes what one gated call would affect.
 // PendingApprovalSubject 描述一次受管控调用会影响的对象。

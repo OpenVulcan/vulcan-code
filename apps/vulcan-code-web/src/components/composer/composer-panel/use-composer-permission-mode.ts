@@ -73,6 +73,12 @@ export function useComposerPermissionMode(options: PermissionModeComposerOptions
   // accepted 仅在投影仍显示被替换的模式时保留已保存回执。
   const [accepted, setAccepted] = React.useState<{ key: string; base: PermissionMode; mode: PermissionMode } | null>(null);
   const [savingOwner, setSavingOwner] = React.useState<typeof owner | null>(null);
+  // Unattended mode exists only for a saved auto-approve session; a receipt stays shown until the
+  // projection moves past the state it replaced.
+  // 无人值守模式只适用于已保存的自动审批会话；回执会一直显示，直到投影越过它所替换的状态。
+  const [acceptedUnattended, setAcceptedUnattended] = React.useState<{
+    key: string; base: string | null; value: UnattendedConfig | null;
+  } | null>(null);
   // pending synchronously deduplicates selections and allows submit to await this exact write.
   // pending 同步去重选择，并允许提交等待这次精确写入。
   const pending = React.useRef<{ owner: typeof owner; promise: Promise<boolean> } | null>(null);
@@ -94,11 +100,15 @@ export function useComposerPermissionMode(options: PermissionModeComposerOptions
     if (authority === null || current === next || pending.current?.owner === owner) return;
     const sessionId = options.sessionId;
     const base = authority.mode;
+    const unattendedBase = authority.unattended?.deny_policy ?? null;
     setSavingOwner(owner);
     const promise = setSessionPermissionMode(sessionId, next).then((response) => {
       if (!mounted.current || activeOwner.current !== owner) return false;
       if (response.session_id !== sessionId) throw new Error("Permission mode response owner changed.");
       setAccepted({ key: ownerKey, base, mode: response.permission_mode });
+      // Leaving auto-approve turns unattended mode off; show that before the projection catches up.
+      // 离开自动审批会关闭无人值守模式；在投影追上之前先显示该结果。
+      setAcceptedUnattended({ key: ownerKey, base: unattendedBase, value: response.unattended });
       return true;
     }).catch(() => {
       if (mounted.current && activeOwner.current === owner) toast.error(t("permissionMode.saveFailed"));
@@ -117,12 +127,6 @@ export function useComposerPermissionMode(options: PermissionModeComposerOptions
     return write?.owner === owner ? await write.promise : true;
   }, [owner]);
 
-  // Unattended mode exists only for a saved session; a receipt stays shown until the projection
-  // moves past the state it replaced.
-  // 无人值守模式只适用于已保存的会话；回执会一直显示，直到投影越过它所替换的状态。
-  const [acceptedUnattended, setAcceptedUnattended] = React.useState<{
-    key: string; base: string | null; value: UnattendedConfig | null;
-  } | null>(null);
   const [savingUnattended, setSavingUnattended] = React.useState<typeof owner | null>(null);
   const baseUnattended = authority?.unattended?.deny_policy ?? null;
   const unattended = authority === null ? null

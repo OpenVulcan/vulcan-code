@@ -37,7 +37,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   revision: 0,
   appVersion: "0.1.0",
   defaultAnswerMode: DEFAULT_ANSWER_MODE,
-  permissionJudgeState: null,
+  permissionJudgeBackend: null,
   modules: [
     { id: "core", label: "Core Service", status: "warning", message: "Browser preview mode" },
     { id: "luaskills", label: "LuaSkills", status: "pending", message: "Waiting for live status" },

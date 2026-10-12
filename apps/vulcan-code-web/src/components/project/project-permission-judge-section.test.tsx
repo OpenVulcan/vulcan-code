@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { TranslationKey } from "@/i18n";
-import type { JudgeState, ProjectPermissionJudgePolicySnapshot, ProjectSummary, WorkbenchSnapshot } from "@/types";
+import type { JudgeBackend, ProjectPermissionJudgePolicySnapshot, ProjectSummary, WorkbenchSnapshot } from "@/types";
 import { projectSettingsSections } from "./project-settings-utils";
 
 // The translator returns keys, so assertions name text by catalog key instead of wording.
@@ -54,18 +54,18 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-// The project navigation offers the permission strategy only while the judge is enabled.
-// 仅在判定启用时，项目导航才提供权限策略。
-it("lists the permission strategy only while the judge is enabled", () => {
+// The project navigation offers the permission strategy only while a judge is configured.
+// 仅在判定器已配置时，项目导航才提供权限策略。
+it("lists the permission strategy only while a judge is configured", () => {
   const project = { id: "project-a", pinned: false, vceEnabled: false } as ProjectSummary;
-  const has = (state: JudgeState | null) => projectSettingsSections(
+  const has = (backend: JudgeBackend | null) => projectSettingsSections(
     project,
-    { conversations: [], agentSkills: { records: [] }, permissionJudgeState: state } as unknown as WorkbenchSnapshot,
+    { conversations: [], agentSkills: { records: [] }, permissionJudgeBackend: backend } as unknown as WorkbenchSnapshot,
     (key: TranslationKey) => key,
     null,
   ).some((section) => section.id === "permission-judge");
-  expect(has("enabled")).toBe(true);
-  expect(has("off")).toBe(false);
+  expect(has("local")).toBe(true);
+  expect(has("cloud")).toBe(true);
   expect(has(null)).toBe(false);
 });
 

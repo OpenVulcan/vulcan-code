@@ -32,6 +32,7 @@ interface ToolApprovalRequestProps {
 const PERMISSION_MODE_KEYS: Record<PermissionModeKey, TranslationKey> = {
   read_only: "permissionMode.readOnly",
   workspace_write: "permissionMode.workspaceWrite",
+  auto_approve: "permissionMode.autoApprove",
   full_access: "permissionMode.fullAccess",
 };
 

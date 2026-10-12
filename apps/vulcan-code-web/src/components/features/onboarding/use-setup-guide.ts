@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { JudgeState } from "@/types";
+import type { JudgeBackend } from "@/types";
 
 // SEEN_KEY remembers, per browser, that the guide already opened once on its own.
 // SEEN_KEY 按浏览器记住引导已自动打开过一次。
@@ -27,20 +27,20 @@ function writeSeen() {
   }
 }
 
-// useSetupGuide opens the guide once while the permission judge is still unset and keeps it
-// re-enterable. `judgeState` is undefined until the service reports it, and `ready` holds the
+// useSetupGuide opens the guide once while no judge backend is configured and keeps it
+// re-enterable. `judgeBackend` is undefined until the service reports it, and `ready` holds the
 // automatic opening back while startup is still showing.
-// useSetupGuide 在权限判定仍未设定时自动打开一次引导，并保持可重新进入。`judgeState` 在服务报告前为
+// useSetupGuide 在尚未配置判定后端时自动打开一次引导，并保持可重新进入。`judgeBackend` 在服务报告前为
 // undefined，`ready` 在启动画面仍显示时阻止自动打开。
 // Returns the open state, its setter and an opener for entry points.
 // 返回打开状态、其设置函数及供入口使用的打开函数。
-export function useSetupGuide(judgeState: JudgeState | null | undefined, ready: boolean) {
+export function useSetupGuide(judgeBackend: JudgeBackend | null | undefined, ready: boolean) {
   const [open, setOpen] = React.useState(false);
   React.useEffect(() => {
-    if (!ready || judgeState !== null || readSeen()) return;
+    if (!ready || judgeBackend !== null || readSeen()) return;
     writeSeen();
     setOpen(true);
-  }, [judgeState, ready]);
+  }, [judgeBackend, ready]);
   const show = React.useCallback(() => setOpen(true), []);
   return { open, setOpen, show };
 }

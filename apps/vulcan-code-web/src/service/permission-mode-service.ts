@@ -13,6 +13,9 @@ export interface SessionPermissionModeUpdateResponse {
   /** Authoritative mode after the write.
    * 写入后的权威模式。 */
   permission_mode: PermissionMode;
+  /** Authoritative unattended mode after the write; leaving auto-approve turns it off.
+   * 写入后的权威无人值守模式；离开自动审批时会被关闭。 */
+  unattended: UnattendedConfig | null;
 }
 
 /** Save the permission mode of an existing regular session; the next tool call reads it.

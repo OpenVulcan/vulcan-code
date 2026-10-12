@@ -39,7 +39,6 @@ import {
 import type {
   JudgeBackend,
   JudgeDevice,
-  JudgeState,
   PermissionJudgeBenchmarkResult,
   PermissionJudgeSettingsSnapshot,
   PermissionJudgeStatus,
@@ -65,8 +64,9 @@ function formatOptionalBytes(value: number | null | undefined): string {
   return value == null ? "—" : formatBytes(value);
 }
 
-// Choices are the system-level judge settings besides the on/off state.
-// Choices 是开关状态之外的系统级判定设置。
+// Choices are the system-level judge settings as shown; the backend is the one on screen, which may
+// not be saved yet.
+// Choices 是界面所示的系统级判定设置；后端为界面上的选择，可能尚未保存。
 interface Choices {
   backend: JudgeBackend;
   device: JudgeDevice | null;
@@ -103,14 +103,14 @@ interface Failure {
 // RunAction 执行一个具名页面操作并报告其失败。
 type RunAction = (name: string, failureKey: TranslationKey, action: () => Promise<void>) => Promise<void>;
 
-// PermissionJudgeSettingsArea manages the permission judge. The overview reads top-down: turn the
-// judge on, choose where calls are judged and set that judge up, then the LLM review and tools.
-// Detailed work opens as sub-pages: model management, the CUDA environment and diagnostics.
-// Every choice saves at once; while the judge was never set up, choices wait until it is turned on,
-// so nothing is written before that explicit choice.
-// PermissionJudgeSettingsArea 管理权限判定。总览自上而下：开启判定、选择在哪里判定并完成该判定器的设置，
-// 然后是 LLM 复核与工具。细节操作以子页面打开：模型管理、CUDA 环境与诊断。每个选择立即保存；判定从未设置时，
-// 选择会等到开启时才一并保存，因此在该显式选择之前不写入任何内容。
+// PermissionJudgeSettingsArea manages the permission judge that auto-approve mode uses. The overview
+// reads top-down: choose where calls are judged and set that judge up, then the LLM review and
+// tools. Detailed work opens as sub-pages: model management, the CUDA environment and diagnostics.
+// Every choice saves at once, except a backend that is not set up yet: it waits until it is ready,
+// so the judge only becomes configured through an explicit, working choice.
+// PermissionJudgeSettingsArea 管理自动审批模式所用的权限判定。总览自上而下：选择在哪里判定并完成该判定器
+// 的设置，然后是 LLM 复核与工具。细节操作以子页面打开：模型管理、CUDA 环境与诊断。每个选择立即保存，只有
+// 尚未设置完成的后端会等到就绪后才保存，因此判定器只会经由明确且可用的选择成为已配置。
 // Parameters: none. Returns the settings page.
 // 参数：无。返回设置页。
 export function PermissionJudgeSettingsArea(props: { projects?: readonly ProjectSummary[] }) {
@@ -122,9 +122,8 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   // snapshot 是最近一次完整读取；status 由轮询单独刷新。
   const [snapshot, setSnapshot] = React.useState<PermissionJudgeSettingsSnapshot | null>(null);
   const [status, setStatus] = React.useState<PermissionJudgeStatus | null>(null);
-  // held keeps choices that cannot be saved yet: everything before the judge is first turned on,
-  // and a backend switch whose backend is not set up.
-  // held 保存暂时无法保存的选择：判定首次开启前的全部选择，以及尚未设置完成的后端切换。
+  // held keeps the backend choice that cannot be saved yet because that backend is not set up.
+  // held 保存因后端尚未设置完成而暂时无法保存的后端选择。
   const [held, setHeld] = React.useState<Partial<Choices>>({});
   const [view, setView] = React.useState<View>("overview");
   // busy names the running action so only one action runs at a time.
@@ -218,24 +217,26 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   const activeModel = snapshot.models.find((model) => model.id === snapshot.activeModelId) ?? null;
   const local = choices.backend === "local";
   const ready = (backend: JudgeBackend) => backend === "local" ? activeModel !== null : cloudConfigured;
-  const enabled = snapshot.state === "enabled";
+  const configured = snapshot.backend !== null;
 
-  // persist saves `change` at once in `state`, or holds it while the judge was never set up or while
-  // the enabled judge would switch to a backend that is not set up.
-  // persist 立即以 `state` 保存 `change`；判定从未设置，或已启用的判定将切换到尚未设置的后端时暂存。
-  const persist = (change: Partial<Choices>, state: JudgeState | null = snapshot.state) => {
+  // persist saves `change` at once. A backend is saved only when it is chosen explicitly (`change`
+  // names it, or `commit` confirms the held one) and is set up; otherwise it stays held and the saved
+  // backend (possibly none) is kept, so other choices never configure the judge as a side effect.
+  // persist 立即保存 `change`。后端只有在被明确选择（`change` 指定了后端，或 `commit` 确认暂存的后端）
+  // 且已设置完成时才会保存；否则保持暂存并沿用已保存的后端（可能为无），其他选择不会顺带配置判定器。
+  const persist = (change: Partial<Choices>, commit = false) => {
     const next = { ...choices, ...change };
-    if (state === snapshot.state && JSON.stringify(next) === JSON.stringify(saved)) {
-      setHeld({});
-      return;
-    }
-    if (state === null || (state === "enabled" && !ready(next.backend))) {
-      setHeld({ ...held, ...change });
+    const chosen = commit || change.backend !== undefined;
+    const backend = chosen && ready(next.backend) ? next.backend : snapshot.backend;
+    const remaining: Partial<Choices> = backend === next.backend ? {} : { backend: next.backend };
+    const request = { ...next, backend };
+    if (JSON.stringify(request) === JSON.stringify({ ...saved, backend: snapshot.backend })) {
+      setHeld(remaining);
       return;
     }
     void run("save", "settings.permissionJudge.saveFailed", async () => {
-      applySnapshot(await savePermissionJudgeSettings({ state, ...next }));
-      setHeld({});
+      applySnapshot(await savePermissionJudgeSettings(request));
+      setHeld(remaining);
       toast.success(t("settings.permissionJudge.saved"));
     });
   };
@@ -285,7 +286,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     </>);
   }
   if (view === "diagnostics") {
-    const savedCloud = enabled && snapshot.backend === "cloud";
+    const savedCloud = snapshot.backend === "cloud";
     const benchmarkReady = savedCloud || (snapshot.backend !== "cloud" && status.worker.phase === "ready");
     return subPage(t("settings.permissionJudge.diagnostics"), <>
       {snapshot.backend !== "cloud" ? <WorkerStatusSection snapshot={snapshot} status={status} t={t} /> : null}
@@ -325,11 +326,19 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
 
   // The toolbar summarizes what is saved, not held choices.
   // 工具栏概括已保存的内容，而非暂存的选择。
-  const stateLabel = enabled
-    ? `${t("settings.permissionJudge.state.enabled")} · ${t(BACKEND_KEYS[snapshot.backend ?? "local"])}`
-    : t(snapshot.state === "off" ? "settings.permissionJudge.state.off" : "settings.permissionJudge.state.unset");
-  const stateTone = enabled ? "ready" : snapshot.state === "off" ? "pending" : "warning";
-  const switching = enabled && held.backend !== undefined && held.backend !== snapshot.backend;
+  const stateLabel = snapshot.backend !== null
+    ? `${t("settings.permissionJudge.state.configured")} · ${t(BACKEND_KEYS[snapshot.backend])}`
+    : t("settings.permissionJudge.state.unset");
+  const stateTone = configured ? "ready" : "warning";
+  // pending is a backend on screen that is not the saved one: the first setup, or a switch.
+  // pending 表示界面上的后端不是已保存的后端：首次设置或切换。
+  const pending = choices.backend !== snapshot.backend;
+  const pendingBackend = t(BACKEND_KEYS[choices.backend]);
+  const pendingText = configured
+    ? formatMessage(t("settings.permissionJudge.switchBackendPending"), { backend: pendingBackend })
+    : ready(choices.backend)
+      ? formatMessage(t("settings.permissionJudge.readyToUse"), { backend: pendingBackend })
+      : t(local ? "settings.permissionJudge.needsModel" : "settings.permissionJudge.needsCloudRoute");
   const worker = status.worker;
   const phaseTone = worker.phase === "ready" ? "ready" : worker.phase === "failed" ? "error" : worker.phase === "warming" ? "warning" : "pending";
   const cudaMissing = snapshot.cuda.supported ? cudaMissingLabels(t, cudaReadiness(snapshot.cuda)) : [];
@@ -348,14 +357,6 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     {failureNotice}
 
     <PageSection layout="rows" title={t("settings.permissionJudge")} description={t("settings.permissionJudge.description")}>
-      <PageRow label={t("settings.permissionJudge.enabled")}
-        description={!enabled && !ready(choices.backend)
-          ? t(local ? "settings.permissionJudge.needsModel" : "settings.permissionJudge.needsCloudRoute")
-          : t("settings.permissionJudge.enabledHint")}>
-        <Switch aria-label={t("settings.permissionJudge.enabled")} checked={enabled}
-          disabled={busy !== null || (!enabled && !ready(choices.backend))}
-          onCheckedChange={(next) => persist({}, next ? "enabled" : "off")} />
-      </PageRow>
       <PageRow label={t("settings.permissionJudge.backend")} description={t("settings.permissionJudge.backendHint")}>
         <SegmentedControl aria-label={t("settings.permissionJudge.backend")} disabled={busy !== null} value={choices.backend}
           onValueChange={(backend) => persist({ backend: backend as JudgeBackend })}>
@@ -364,15 +365,13 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
           ))}
         </SegmentedControl>
       </PageRow>
-      {switching ? <PageNotice tone="info" data-judge-switching=""
-        actions={<Button type="button" size="sm" disabled={busy !== null || !ready(choices.backend)} onClick={() => persist({})}>
-          {formatMessage(t("settings.permissionJudge.switchBackend"), { backend: t(BACKEND_KEYS[choices.backend]) })}
+      {pending ? <PageNotice tone="info" data-judge-switching={configured ? "switch" : "setup"}
+        actions={<Button type="button" size="sm" disabled={busy !== null || !ready(choices.backend)} onClick={() => persist({}, true)}>
+          {formatMessage(t(configured ? "settings.permissionJudge.switchBackend" : "settings.permissionJudge.useBackend"),
+            { backend: pendingBackend })}
         </Button>}>
-        {formatMessage(t("settings.permissionJudge.switchBackendPending"), { backend: t(BACKEND_KEYS[choices.backend]) })}
+        {pendingText}
       </PageNotice> : null}
-      {snapshot.state === null && Object.keys(held).length > 0
-        ? <PageNotice tone="info" data-judge-held="">{t("settings.permissionJudge.heldUntilEnabled")}</PageNotice>
-        : null}
     </PageSection>
 
     {local ? <PageSection layout="rows" data-judge-local="" title={t("settings.permissionJudge.backend.local")}>
@@ -433,7 +432,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
       </PageNotice> : null}
     </PageSection> : <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />}
 
-    {enabled && snapshot.policyOptions.length > 0 ? <PageSection layout="rows" data-judge-policy-summary=""
+    {configured && snapshot.policyOptions.length > 0 ? <PageSection layout="rows" data-judge-policy-summary=""
       title={t("settings.permissionJudge.policy.title")} description={t("settings.permissionJudge.policy.description")}
       actions={open("policy", t("settings.permissionJudge.policy.manage"))}>
       {snapshot.policyOptions.map((option) => (

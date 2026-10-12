@@ -69,7 +69,7 @@ export function projectSettingsSections(
   });
   // The permission strategy exists only while the judge is enabled.
   // 权限策略仅在判定启用时存在。
-  if (workbench.permissionJudgeState === "enabled") {
+  if (workbench.permissionJudgeBackend) {
     sections.push({
       id: "permission-judge",
       icon: <ShieldQuestion size={16} />,

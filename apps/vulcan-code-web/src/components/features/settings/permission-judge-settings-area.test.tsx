@@ -72,11 +72,12 @@ function worker(phase: PermissionJudgeWorkerStatus["phase"]): PermissionJudgeWor
   };
 }
 
-// snapshot builds an enabled judge with one active model; CUDA is reported unsupported.
-// snapshot 构建已启用且有一个使用中模型的判定；CUDA 报告为不支持。
+// snapshot builds a judge configured on the local backend with one active model; CUDA is reported
+// unsupported.
+// snapshot 构建已配置为本地后端且有一个使用中模型的判定；CUDA 报告为不支持。
 function snapshot(phase: PermissionJudgeWorkerStatus["phase"]): PermissionJudgeSettingsSnapshot {
   return {
-    state: "enabled", backend: "local", device: "webgpu", recommendedDevice: "webgpu",
+    backend: "local", device: "webgpu", recommendedDevice: "webgpu",
     devices: [{ device: "webgpu", unavailableReason: null }, { device: "cpu", unavailableReason: null }],
     llmMayAllowBlocked: false,
     recordDecisions: false,
@@ -123,25 +124,40 @@ it("saves a changed choice at once with every system choice", async () => {
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), llmMayAllowBlocked: true });
   await act(async () => switchByKey("settings.permissionJudge.llmMayAllowBlocked").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false,
+    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false,
   });
 });
 
-// Before the judge is first turned on, choices wait and are saved together with the switch.
-// 判定首次开启前，选择会暂存，并随开关一起保存。
-it("holds choices until a never set up judge is turned on", async () => {
-  const unset = { ...snapshot("ready"), state: null };
+// Before a backend is chosen, other choices save without configuring the judge; the judge becomes
+// configured only through the explicit use action.
+// 选择后端之前，其他选择照常保存但不会配置判定器；判定器只经由明确的使用操作成为已配置。
+it("configures the judge only through the explicit use action", async () => {
+  const unset = { ...snapshot("ready"), backend: null };
   service.loadPermissionJudgeSettings.mockResolvedValue(unset);
   service.loadPermissionJudgeStatus.mockResolvedValue(unset.status);
   await act(async () => root.render(<PermissionJudgeSettingsArea />));
+  expect(host.querySelector('[data-judge-switching="setup"]')).not.toBeNull();
+  service.savePermissionJudgeSettings.mockResolvedValueOnce({ ...unset, llmMayAllowBlocked: true });
   await act(async () => switchByKey("settings.permissionJudge.llmMayAllowBlocked").click());
-  expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
-  expect(host.querySelector("[data-judge-held]")).not.toBeNull();
-  service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), llmMayAllowBlocked: true });
-  await act(async () => switchByKey("settings.permissionJudge.enabled").click());
-  expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false,
+  expect(service.savePermissionJudgeSettings).toHaveBeenLastCalledWith({
+    backend: null, device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false,
   });
+  service.savePermissionJudgeSettings.mockResolvedValueOnce({ ...snapshot("ready"), llmMayAllowBlocked: true });
+  await act(async () => buttonByKey("settings.permissionJudge.useBackend")!.click());
+  expect(service.savePermissionJudgeSettings).toHaveBeenLastCalledWith({
+    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false,
+  });
+  expect(host.querySelector("[data-judge-switching]")).toBeNull();
+});
+
+// Without an active model the local backend cannot be used yet, so the use action stays disabled.
+// 没有使用中模型时本地后端尚不可用，因此使用操作保持禁用。
+it("keeps the use action disabled until the backend is set up", async () => {
+  const unset = { ...snapshot("ready"), backend: null, activeModelId: null };
+  service.loadPermissionJudgeSettings.mockResolvedValue(unset);
+  service.loadPermissionJudgeStatus.mockResolvedValue(unset.status);
+  await act(async () => root.render(<PermissionJudgeSettingsArea />));
+  expect(buttonByKey("settings.permissionJudge.useBackend")?.disabled).toBe(true);
 });
 
 // An enabled judge never switches to a backend that is not set up; the switch waits for it.
@@ -260,6 +276,6 @@ it("turns the decision log on from its page", async () => {
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), recordDecisions: true });
   await act(async () => switchByKey("settings.permissionJudge.records.enabled").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: true,
+    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: true,
   });
 });
