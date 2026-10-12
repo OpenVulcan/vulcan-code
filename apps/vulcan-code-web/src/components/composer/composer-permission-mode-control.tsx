@@ -15,6 +15,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -27,6 +28,9 @@ import type { ComposerPermissionModeController } from "./composer-panel/use-comp
 import { ComposerUnattendedDialog } from "./composer-unattended-dialog";
 import { PermissionJudgeEntryContext } from "./permission-judge-entry-context";
 import { useDedicatedComposer } from "@/components/composer/dedicated/dedicated-session-controls";
+import { OPTION_KEYS, label as codeLabel } from "@/components/features/settings/permission-judge-labels";
+import { FOLLOW_DEFAULT, useProjectPermissionJudgePolicy } from "@/components/project/project-permission-judge-section";
+import type { ProjectPermissionJudgePolicySnapshot } from "@/types";
 
 // PERMISSION_MODE_OPTIONS lists the modes from most to least supervised with their icon and copy keys.
 // PERMISSION_MODE_OPTIONS 按监督程度从高到低列出各模式及其图标与文案键。
@@ -41,20 +45,74 @@ const PERMISSION_MODE_OPTIONS = [
  * 显示并切换当前会话或草稿权限模式的输入区标签按钮。
  * `controller` owns persistence; switching to full access needs an acknowledged confirmation first.
  * Auto-approve needs a configured judge: until then it is greyed out and opens the judge settings.
- * Unattended mode is offered only under auto-approve, the one mode with a reviewer.
+ * Unattended mode and the project's judge categories are offered only under auto-approve, the one
+ * mode that consults the judge and the reviewer.
  * `controller` 负责持久化；切换到完全权限前必须先勾选确认。自动审批需要已配置的判定器：在此之前显示为
- * 灰色，点击打开判定设置。无人值守只在自动审批下提供，因为只有该模式有复核器。 */
-export function ComposerPermissionModeControl(props: { controller: ComposerPermissionModeController }) {
+ * 灰色，点击打开判定设置。无人值守与项目的判定类别只在自动审批下提供，因为只有该模式会使用判定器与复核器。
+ * `projectId` is the conversation's project; without one the categories are not shown.
+ * `projectId` 是会话所属项目；没有项目时不显示类别。 */
+export function ComposerPermissionModeControl(props: { controller: ComposerPermissionModeController; projectId?: string | null }) {
   // A dedicated session without tools never asks for permissions, so the chip has nothing to switch.
   // 无工具的专职会话从不请求权限，因此该标签没有可切换的内容。
   const dedicated = useDedicatedComposer();
   if (dedicated?.toolAccess === "none") return null;
-  return <PermissionModeChip controller={props.controller} />;
+  return <PermissionModeChip controller={props.controller} projectId={props.projectId ?? null} />;
+}
+
+// quickCategories keeps the categories that are a plain allow-or-not choice, which a checkbox can
+// express; any other shape stays in the settings page.
+// quickCategories 保留可以用勾选表达的“允许或不允许”类别；其他形态只在设置页中编辑。
+function quickCategories(snapshot: ProjectPermissionJudgePolicySnapshot) {
+  return snapshot.options.filter((option) => option.modes.length === 2 && option.modes.includes("allow"));
+}
+
+/** Checkbox rows of the project's judge categories: checked means the judge may allow that kind of
+ * call. Each change saves at once; choosing the category's default follows the default again.
+ * Mounted only while the menu is open, so every opening reads the current choices.
+ * 项目判定类别的勾选行：勾选表示判定器可以放行这类调用。每次修改立即保存；选中类别默认值时恢复跟随默认。
+ * 只在菜单打开时挂载，因此每次打开都会读取当前选择。 */
+function PermissionCategoryItems(props: { projectId: string }) {
+  const { t } = useI18n();
+  const policy = useProjectPermissionJudgePolicy(props.projectId);
+  const { snapshot } = policy;
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel className="flex flex-col gap-0.5 text-xs font-normal">
+        <span className="text-foreground">{t("settings.permissionJudge.policy.title")}</span>
+        <span className="text-[11px] leading-snug text-muted-foreground">{t("permissionMode.categoriesHint")}</span>
+      </DropdownMenuLabel>
+      {policy.loadError !== null ? (
+        <DropdownMenuItem className="text-xs" disabled>{t("projectSettings.permissionJudge.loadFailed")}</DropdownMenuItem>
+      ) : snapshot === null ? (
+        <DropdownMenuItem className="text-xs" disabled>{t("ui.loading")}</DropdownMenuItem>
+      ) : quickCategories(snapshot).map((option) => {
+        const allowed = (option.chosenMode ?? option.defaultMode) === "allow";
+        const toggle = (checked: boolean) => {
+          const target = checked ? "allow" : option.modes.find((mode) => mode !== "allow")!;
+          void policy.save(option.key, target === option.defaultMode ? FOLLOW_DEFAULT : target);
+        };
+        return (
+          <DropdownMenuCheckboxItem
+            key={option.key}
+            checked={allowed}
+            className="text-xs"
+            data-judge-category={option.key}
+            disabled={policy.saving !== null}
+            onCheckedChange={(checked) => toggle(checked === true)}
+            onSelect={(event) => event.preventDefault()}
+          >
+            {codeLabel(t, OPTION_KEYS, option.key)}
+          </DropdownMenuCheckboxItem>
+        );
+      })}
+    </>
+  );
 }
 
 /** Permission-mode chip body for sessions that can call tools.
  * 可调用工具的会话所用的权限模式标签主体。 */
-function PermissionModeChip(props: { controller: ComposerPermissionModeController }) {
+function PermissionModeChip(props: { controller: ComposerPermissionModeController; projectId: string | null }) {
   const { t } = useI18n();
   const judge = React.useContext(PermissionJudgeEntryContext);
   const { mode, saving, available, select } = props.controller;
@@ -144,6 +202,9 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
               );
             })}
           </DropdownMenuRadioGroup>
+          {mode === "auto_approve" && props.projectId !== null && !needsSetup
+            ? <PermissionCategoryItems projectId={props.projectId} />
+            : null}
           {mode === "auto_approve" ? (
             <>
               <DropdownMenuSeparator />

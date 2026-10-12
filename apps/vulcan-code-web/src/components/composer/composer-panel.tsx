@@ -961,7 +961,7 @@ export function ComposerPanel(props: {
                 }
               }}
             />
-            <ComposerPermissionModeControl controller={permissionMode} />
+            <ComposerPermissionModeControl controller={permissionMode} projectId={props.projectId} />
             {planModeEnabled ? (
               <ComposerPlanModeChip
                 artifactName={props.sessionPlanMode?.artifact?.name ?? null}

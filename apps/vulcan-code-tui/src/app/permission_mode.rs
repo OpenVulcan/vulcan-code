@@ -217,10 +217,7 @@ pub fn open_unattended_prompt(
 /// Shows the policy prompt with the mode's effect and where the text came from.
 /// 显示策略输入框，附带该模式的效果与文本来源。
 fn open_prompt(app: &mut App, id: String, title: String, input: String, source: Option<String>) {
-    let mut description = vec![
-        tr!("permissionMode.unattended.body"),
-        tr!("permissionMode.unattended.policyHint"),
-    ];
+    let mut description = vec![tr!("permissionMode.unattended.body")];
     description.extend(source);
     app.overlay = Some(Overlay::Prompt(Box::new(PromptDialog::new(
         title,

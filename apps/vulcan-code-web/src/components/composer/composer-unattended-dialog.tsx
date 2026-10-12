@@ -35,6 +35,7 @@ export function ComposerUnattendedDialog(props: {
   const { t } = useI18n();
   const { controller } = props;
   const enabled = controller.value !== null;
+  const fieldId = React.useId();
   const [text, setText] = React.useState("");
   const [source, setSource] = React.useState<UnattendedDefault["source"] | null>(null);
   const [maxChars, setMaxChars] = React.useState<number | undefined>(undefined);
@@ -71,28 +72,34 @@ export function ComposerUnattendedDialog(props: {
 
   return (
     <AlertDialog open={props.open} onOpenChange={props.onOpenChange}>
-      <AlertDialogContent data-unattended-dialog="">
-        <AlertDialogHeader>
+      <AlertDialogContent size="md" data-unattended-dialog="">
+        <AlertDialogHeader className="place-items-start text-left">
           <AlertDialogTitle>{t(enabled ? "permissionMode.unattended.editTitle" : "permissionMode.unattended.enableTitle")}</AlertDialogTitle>
           <AlertDialogDescription>{t("permissionMode.unattended.body")}</AlertDialogDescription>
         </AlertDialogHeader>
-        <label className="flex flex-col gap-1.5 text-sm">
-          <span className="font-medium">{t("permissionMode.unattended.policyLabel")}</span>
+        <div className="flex flex-col gap-1.5 text-sm">
+          <div className="flex items-baseline justify-between gap-2">
+            <label className="font-medium" htmlFor={fieldId}>{t("permissionMode.unattended.policyLabel")}</label>
+            {source !== null && source !== "none" ? <span className="text-xs text-muted-foreground" data-unattended-source={source}>
+              {t(SOURCE_KEYS[source])}
+            </span> : null}
+          </div>
           <Textarea
+            id={fieldId}
             data-unattended-policy=""
-            density="large"
             maxLength={maxChars}
             placeholder={t("permissionMode.unattended.placeholder")}
+            rows={4}
             value={text}
             onChange={(event) => setText(event.target.value)}
           />
-          <span className="text-xs text-muted-foreground">{t("permissionMode.unattended.policyHint")}</span>
-          {source !== null ? <span className="text-xs text-muted-foreground" data-unattended-source={source}>{t(SOURCE_KEYS[source])}</span> : null}
-          {loadFailed ? <span className="text-xs text-(--vcn-content-warning)">{t("permissionMode.unattended.loadFailed")}</span> : null}
-          {maxChars !== undefined ? <span className="text-xs text-muted-foreground">
-            {formatMessage(t("permissionMode.unattended.counter"), { count: [...text].length, max: maxChars })}
-          </span> : null}
-        </label>
+          <div className="flex items-baseline justify-between gap-2 text-xs">
+            <span className="text-(--vcn-content-warning)">{loadFailed ? t("permissionMode.unattended.loadFailed") : null}</span>
+            {maxChars !== undefined ? <span className="text-muted-foreground tabular-nums">
+              {formatMessage(t("permissionMode.unattended.counter"), { count: [...text].length, max: maxChars })}
+            </span> : null}
+          </div>
+        </div>
         <AlertDialogFooter>
           <AlertDialogCancel>{t("permissionMode.cancel")}</AlertDialogCancel>
           {enabled ? <Button type="button" variant="outline" data-unattended-disable="" disabled={controller.saving}

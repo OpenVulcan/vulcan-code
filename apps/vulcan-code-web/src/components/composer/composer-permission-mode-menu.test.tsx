@@ -3,10 +3,19 @@ import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { expect, it, vi } from "vitest"
 import { I18nProvider } from "@/i18n"
+import { loadProjectPermissionJudgePolicy, saveProjectPermissionJudgePolicy } from "@/service/permission-judge-service"
+import type { ProjectPermissionJudgePolicySnapshot } from "@/types"
 import type { PermissionMode, UnattendedConfig } from "@/service/permission-mode"
 import type { JudgeBackend } from "@/types/permission-judge"
 import { ComposerPermissionModeControl } from "./composer-permission-mode-control"
 import { PermissionJudgeEntryContext } from "./permission-judge-entry-context"
+
+vi.mock("@/service/permission-judge-service", () => ({
+  loadProjectPermissionJudgePolicy: vi.fn(),
+  saveProjectPermissionJudgePolicy: vi.fn(),
+}))
+const loadPolicy = vi.mocked(loadProjectPermissionJudgePolicy)
+const savePolicy = vi.mocked(saveProjectPermissionJudgePolicy)
 
 // React's concurrent test environment explicitly supports act for this isolated DOM harness.
 // 为独立 DOM 测试明确启用 React 并发测试环境的 act 支持。
@@ -30,7 +39,7 @@ class MenuResizeObserver {
 // judge spy and cleanup.
 // 以给定已配置判定后端渲染标签按钮并打开菜单；返回选择监听、判定监听与清理函数。
 async function openPermissionMenu(judgeBackend: JudgeBackend | null, mode: PermissionMode = "workspace_write",
-  unattended: UnattendedConfig | null = null) {
+  unattended: UnattendedConfig | null = null, projectId: string | null = null) {
   const container = document.createElement("div")
   const root = createRoot(container)
   const select = vi.fn()
@@ -44,7 +53,7 @@ async function openPermissionMenu(judgeBackend: JudgeBackend | null, mode: Permi
       <ComposerPermissionModeControl controller={{
         mode, saving: false, available: true, select, flush: async () => true,
         unattended: { value: unattended, available: true, saving: false, apply, loadDefault },
-      }} />
+      }} projectId={projectId} />
     </PermissionJudgeEntryContext.Provider>
   </I18nProvider>))
   const trigger = container.querySelector<HTMLButtonElement>("[data-permission-mode-trigger]")!
@@ -95,6 +104,69 @@ it.each<[PermissionMode, boolean]>([
   const { cleanup } = await openPermissionMenu("local", mode)
   try {
     expect(document.querySelector("[data-unattended-entry]") !== null).toBe(offered)
+  } finally { await cleanup() }
+})
+
+// policy builds one project's categories: writes outside the project allowed by default, database
+// resets confirmed by default, with `chosen` overriding either.
+// policy 构建一个项目的类别：项目外写入默认允许，数据库重置默认需确认，`chosen` 可覆盖任一类别。
+function policy(chosen: Record<string, string> = {}): ProjectPermissionJudgePolicySnapshot {
+  return {
+    projectId: "p1",
+    options: [
+      { key: "cross_project_writes", defaultMode: "allow", modes: ["allow", "review"], chosenMode: chosen.cross_project_writes ?? null },
+      { key: "database_reset", defaultMode: "confirm", modes: ["confirm", "allow"], chosenMode: chosen.database_reset ?? null },
+    ],
+    unsupportedOptions: {},
+    issue: null,
+  }
+}
+
+// Verifies the project's categories are checkboxes under auto-approve: checked means allowed, each
+// change saves at once and the menu stays open.
+// 验证自动审批下项目类别为勾选项：勾选表示允许，每次修改立即保存且菜单保持打开。
+it("quick-sets the project's judge categories under auto-approve", async () => {
+  loadPolicy.mockReset().mockResolvedValue(policy())
+  savePolicy.mockReset().mockResolvedValueOnce(policy({ database_reset: "allow" }))
+  const { cleanup } = await openPermissionMenu("local", "auto_approve", null, "p1")
+  try {
+    expect(loadPolicy).toHaveBeenCalledExactlyOnceWith("p1")
+    const category = (key: string) => document.querySelector<HTMLElement>(`[data-judge-category="${key}"]`)!
+    expect(category("cross_project_writes").getAttribute("aria-checked")).toBe("true")
+    expect(category("database_reset").getAttribute("aria-checked")).toBe("false")
+    await act(async () => category("database_reset").click())
+    expect(savePolicy).toHaveBeenLastCalledWith("p1", { database_reset: "allow" })
+    expect(category("database_reset").getAttribute("aria-checked")).toBe("true")
+    savePolicy.mockResolvedValueOnce(policy({ database_reset: "allow", cross_project_writes: "review" }))
+    await act(async () => category("cross_project_writes").click())
+    expect(savePolicy).toHaveBeenLastCalledWith("p1", { database_reset: "allow", cross_project_writes: "review" })
+  } finally { await cleanup() }
+})
+
+// Verifies a category set back to its default follows the default again instead of pinning it.
+// 验证类别改回默认值时恢复跟随默认，而不是固定为该值。
+it("follows the default again when a category returns to it", async () => {
+  loadPolicy.mockReset().mockResolvedValue(policy({ database_reset: "allow" }))
+  savePolicy.mockReset().mockResolvedValue(policy())
+  const { cleanup } = await openPermissionMenu("local", "auto_approve", null, "p1")
+  try {
+    await act(async () => document.querySelector<HTMLElement>('[data-judge-category="database_reset"]')!.click())
+    expect(savePolicy).toHaveBeenCalledExactlyOnceWith("p1", {})
+  } finally { await cleanup() }
+})
+
+// Verifies the categories are read only under auto-approve with a project and a configured judge.
+// 验证只有在自动审批、有项目且判定器已配置时才读取类别。
+it.each<[JudgeBackend | null, PermissionMode, string | null]>([
+  ["local", "workspace_write", "p1"],
+  ["local", "auto_approve", null],
+  [null, "auto_approve", "p1"],
+])("hides the categories for judge %s, mode %s, project %s", async (backend, mode, projectId) => {
+  loadPolicy.mockReset().mockResolvedValue(policy())
+  const { cleanup } = await openPermissionMenu(backend, mode, null, projectId)
+  try {
+    expect(loadPolicy).not.toHaveBeenCalled()
+    expect(document.querySelector("[data-judge-category]")).toBeNull()
   } finally { await cleanup() }
 })
 
