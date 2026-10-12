@@ -162,7 +162,7 @@ pub(crate) async fn claim_prompt() -> Result<bool, String> {
 /// Claims root's installation marker atomically without depending on the currently selected project.
 /// 原子认领 root 的安装标记，不依赖当前选中的工程。
 fn claim_prompt_at(root: &std::path::Path) -> Result<bool, String> {
-    std::fs::create_dir_all(&root)
+    std::fs::create_dir_all(root)
         .map_err(|error| format!("Failed to create global account directory: {error}"))?;
     match std::fs::OpenOptions::new()
         .write(true)
@@ -178,37 +178,6 @@ fn claim_prompt_at(root: &std::path::Path) -> Result<bool, String> {
         Err(error) => Err(format!(
             "Failed to claim global account onboarding: {error}"
         )),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Concurrent windows get one shared first-run claim, and a reopened process observes the marker.
-    /// 并发窗口仅获得一个共享首启认领，重新打开的进程可观察到标记。
-    #[test]
-    fn openvulcan_prompt_is_atomic_and_installation_scoped() {
-        // directory is an isolated fixture; no user onboarding or account files are touched.
-        // directory 是隔离夹具；不会触碰用户引导或账户文件。
-        let directory = tempfile::tempdir().unwrap();
-        let workers = (0..8)
-            .map(|_| {
-                let root = directory.path().to_path_buf();
-                std::thread::spawn(move || claim_prompt_at(&root).unwrap())
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            workers
-                .into_iter()
-                .map(|worker| worker.join().unwrap())
-                .filter(|claimed| *claimed)
-                .count(),
-            1
-        );
-        assert!(!claim_prompt_at(directory.path()).unwrap());
-        let second = tempfile::tempdir().unwrap();
-        assert!(claim_prompt_at(second.path()).unwrap());
     }
 }
 
@@ -575,4 +544,35 @@ pub(crate) async fn logout(
     )
     .await?;
     revoke_openvulcan_authorization(&secret.material).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Concurrent windows get one shared first-run claim, and a reopened process observes the marker.
+    /// 并发窗口仅获得一个共享首启认领，重新打开的进程可观察到标记。
+    #[test]
+    fn openvulcan_prompt_is_atomic_and_installation_scoped() {
+        // directory is an isolated fixture; no user onboarding or account files are touched.
+        // directory 是隔离夹具；不会触碰用户引导或账户文件。
+        let directory = tempfile::tempdir().unwrap();
+        let workers = (0..8)
+            .map(|_| {
+                let root = directory.path().to_path_buf();
+                std::thread::spawn(move || claim_prompt_at(&root).unwrap())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .filter(|claimed| *claimed)
+                .count(),
+            1
+        );
+        assert!(!claim_prompt_at(directory.path()).unwrap());
+        let second = tempfile::tempdir().unwrap();
+        assert!(claim_prompt_at(second.path()).unwrap());
+    }
 }
