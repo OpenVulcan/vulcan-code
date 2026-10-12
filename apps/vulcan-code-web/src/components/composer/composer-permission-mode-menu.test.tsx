@@ -63,6 +63,20 @@ async function openPermissionMenu(judgeBackend: JudgeBackend | null, mode: Permi
   return { select, openJudge, apply, loadDefault, cleanup }
 }
 
+// Opens the auto-approve settings submenu from the keyboard, as a hover does with the pointer.
+// 以键盘打开自动审批设置子菜单，等同于指针悬停。
+async function openAutoSettings() {
+  const trigger = document.querySelector<HTMLElement>("[data-auto-approve-settings]")!
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })))
+  expect(document.querySelector("[data-auto-approve-settings-menu]")).not.toBeNull()
+}
+
+// menuOpen reports whether the permission menu is still mounted.
+// menuOpen 报告权限菜单是否仍然挂载。
+function menuOpen() {
+  return document.querySelector('[data-permission-mode="read_only"]') !== null
+}
+
 // Verifies an unconfigured judge greys auto-approve out and opens the judge settings instead.
 // 验证判定未配置时自动审批显示为灰色，点击改为打开判定设置。
 it("opens the judge settings from auto-approve until a judge is configured", async () => {
@@ -77,11 +91,12 @@ it("opens the judge settings from auto-approve until a judge is configured", asy
     await act(async () => auto.click())
     expect(openJudge).toHaveBeenCalledTimes(1)
     expect(select).not.toHaveBeenCalled()
+    expect(menuOpen()).toBe(false)
   } finally { await cleanup() }
 })
 
-// Verifies a configured judge makes auto-approve an ordinary choice.
-// 验证判定已配置时自动审批是普通选项。
+// Verifies a configured judge makes auto-approve an ordinary choice that keeps the menu open.
+// 验证判定已配置时自动审批是普通选项，且选择后菜单保持打开。
 it("selects auto-approve once a judge is configured", async () => {
   const { select, openJudge, cleanup } = await openPermissionMenu("local")
   try {
@@ -90,20 +105,38 @@ it("selects auto-approve once a judge is configured", async () => {
     await act(async () => auto.click())
     expect(select).toHaveBeenCalledExactlyOnceWith("auto_approve")
     expect(openJudge).not.toHaveBeenCalled()
+    expect(menuOpen()).toBe(true)
   } finally { await cleanup() }
 })
 
-// Verifies unattended mode is offered only under auto-approve, the one mode with a reviewer.
-// 验证无人值守只在自动审批下提供，因为只有该模式有复核器。
+// Verifies the supervised modes switch in place without closing the menu.
+// 验证受监督模式就地切换，不关闭菜单。
+it.each<PermissionMode>(["read_only", "workspace_write"])("keeps the menu open after choosing %s", async (mode) => {
+  const { select, cleanup } = await openPermissionMenu("local", "auto_approve")
+  try {
+    await act(async () => document.querySelector<HTMLElement>(`[data-permission-mode="${mode}"]`)!.click())
+    expect(select).toHaveBeenCalledExactlyOnceWith(mode)
+    expect(menuOpen()).toBe(true)
+  } finally { await cleanup() }
+})
+
+// Verifies the auto-approve settings, home of unattended mode, are offered only under auto-approve,
+// the one mode with a reviewer.
+// 验证自动审批设置（无人值守所在处）只在自动审批下提供，因为只有该模式有复核器。
 it.each<[PermissionMode, boolean]>([
   ["read_only", false],
   ["workspace_write", false],
   ["auto_approve", true],
   ["full_access", false],
-])("offers unattended mode under %s: %s", async (mode, offered) => {
+])("offers the auto-approve settings under %s: %s", async (mode, offered) => {
   const { cleanup } = await openPermissionMenu("local", mode)
   try {
-    expect(document.querySelector("[data-unattended-entry]") !== null).toBe(offered)
+    expect(document.querySelector("[data-auto-approve-settings]") !== null).toBe(offered)
+    if (offered) {
+      expect(document.querySelector("[data-unattended-entry]")).toBeNull()
+      await openAutoSettings()
+      expect(document.querySelector("[data-unattended-entry]")).not.toBeNull()
+    }
   } finally { await cleanup() }
 })
 
@@ -130,6 +163,8 @@ it("quick-sets the project's judge categories under auto-approve", async () => {
   savePolicy.mockReset().mockResolvedValueOnce(policy({ database_reset: "allow" }))
   const { cleanup } = await openPermissionMenu("local", "auto_approve", null, "p1")
   try {
+    expect(loadPolicy).not.toHaveBeenCalled()
+    await openAutoSettings()
     expect(loadPolicy).toHaveBeenCalledExactlyOnceWith("p1")
     const category = (key: string) => document.querySelector<HTMLElement>(`[data-judge-category="${key}"]`)!
     expect(category("cross_project_writes").getAttribute("aria-checked")).toBe("true")
@@ -150,6 +185,7 @@ it("follows the default again when a category returns to it", async () => {
   savePolicy.mockReset().mockResolvedValue(policy())
   const { cleanup } = await openPermissionMenu("local", "auto_approve", null, "p1")
   try {
+    await openAutoSettings()
     await act(async () => document.querySelector<HTMLElement>('[data-judge-category="database_reset"]')!.click())
     expect(savePolicy).toHaveBeenCalledExactlyOnceWith("p1", {})
   } finally { await cleanup() }
@@ -165,6 +201,7 @@ it.each<[JudgeBackend | null, PermissionMode, string | null]>([
   loadPolicy.mockReset().mockResolvedValue(policy())
   const { cleanup } = await openPermissionMenu(backend, mode, null, projectId)
   try {
+    if (mode === "auto_approve") await openAutoSettings()
     expect(loadPolicy).not.toHaveBeenCalled()
     expect(document.querySelector("[data-judge-category]")).toBeNull()
   } finally { await cleanup() }
@@ -178,6 +215,7 @@ it("applies supervised modes directly and gates full access behind confirmation"
     const option = (mode: PermissionMode) => document.querySelector<HTMLElement>(`[data-permission-mode="${mode}"]`)!
     await act(async () => option("full_access").click())
     expect(select).not.toHaveBeenCalled()
+    expect(menuOpen()).toBe(false)
     const confirm = document.querySelector<HTMLButtonElement>("[data-full-access-confirm]")!
     expect(confirm.disabled).toBe(true)
     await act(async () => document.querySelector<HTMLElement>("[data-full-access-acknowledge]")!.click())
@@ -192,6 +230,7 @@ it("applies supervised modes directly and gates full access behind confirmation"
 it("turns unattended mode on with the confirmed deny policy", async () => {
   const { apply, loadDefault, cleanup } = await openPermissionMenu("local", "auto_approve")
   try {
+    await openAutoSettings()
     const entry = document.querySelector<HTMLElement>("[data-unattended-entry]")!
     expect(entry.dataset.unattendedEntry).toBe("off")
     await act(async () => entry.click())
@@ -211,6 +250,7 @@ it("edits or turns off an active unattended mode", async () => {
   const { apply, cleanup } = await openPermissionMenu("local", "auto_approve", { deny_policy: "keep main" })
   try {
     expect(document.querySelector("[data-unattended-chip]")).not.toBeNull()
+    await openAutoSettings()
     await act(async () => document.querySelector<HTMLElement>('[data-unattended-entry="on"]')!.click())
     expect(document.querySelector<HTMLTextAreaElement>("[data-unattended-policy]")!.value).toBe("keep main")
     expect(document.querySelector("[data-unattended-source]")).toBeNull()

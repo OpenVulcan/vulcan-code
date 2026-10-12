@@ -1,5 +1,5 @@
 import React from "react";
-import { Bot, ChevronDown, CircleAlert, Hand, ShieldCheck, Sparkles } from "lucide-react";
+import { Bot, ChevronDown, CircleAlert, Hand, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useI18n } from "@/i18n";
 import type { PermissionMode } from "@/service/permission-mode";
 import {
@@ -22,6 +22,9 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";
@@ -45,10 +48,11 @@ const PERMISSION_MODE_OPTIONS = [
  * 显示并切换当前会话或草稿权限模式的输入区标签按钮。
  * `controller` owns persistence; switching to full access needs an acknowledged confirmation first.
  * Auto-approve needs a configured judge: until then it is greyed out and opens the judge settings.
- * Unattended mode and the project's judge categories are offered only under auto-approve, the one
- * mode that consults the judge and the reviewer.
+ * Unattended mode and the project's judge categories live in the auto-approve settings submenu,
+ * shown only under auto-approve, the one mode that consults the judge and the reviewer.
  * `controller` 负责持久化；切换到完全权限前必须先勾选确认。自动审批需要已配置的判定器：在此之前显示为
- * 灰色，点击打开判定设置。无人值守与项目的判定类别只在自动审批下提供，因为只有该模式会使用判定器与复核器。
+ * 灰色，点击打开判定设置。无人值守与项目的判定类别位于自动审批设置子菜单，只在自动审批下显示，因为只有该
+ * 模式会使用判定器与复核器。
  * `projectId` is the conversation's project; without one the categories are not shown.
  * `projectId` 是会话所属项目；没有项目时不显示类别。 */
 export function ComposerPermissionModeControl(props: { controller: ComposerPermissionModeController; projectId?: string | null }) {
@@ -68,16 +72,16 @@ function quickCategories(snapshot: ProjectPermissionJudgePolicySnapshot) {
 
 /** Checkbox rows of the project's judge categories: checked means the judge may allow that kind of
  * call. Each change saves at once; choosing the category's default follows the default again.
- * Mounted only while the menu is open, so every opening reads the current choices.
+ * Mounted only while the auto-approve settings submenu is open, so every opening reads the current
+ * choices.
  * 项目判定类别的勾选行：勾选表示判定器可以放行这类调用。每次修改立即保存；选中类别默认值时恢复跟随默认。
- * 只在菜单打开时挂载，因此每次打开都会读取当前选择。 */
+ * 只在自动审批设置子菜单打开时挂载，因此每次打开都会读取当前选择。 */
 function PermissionCategoryItems(props: { projectId: string }) {
   const { t } = useI18n();
   const policy = useProjectPermissionJudgePolicy(props.projectId);
   const { snapshot } = policy;
   return (
     <>
-      <DropdownMenuSeparator />
       <DropdownMenuLabel className="flex flex-col gap-0.5 text-xs font-normal">
         <span className="text-foreground">{t("settings.permissionJudge.policy.title")}</span>
         <span className="text-[11px] leading-snug text-muted-foreground">{t("permissionMode.categoriesHint")}</span>
@@ -132,21 +136,24 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
   // 在工作台布局之外无法读取判定器，因此不对自动审批设限。
   const needsSetup = judge !== null && judge.backend === null;
 
-  // choose opens the judge settings for an unconfigured auto-approve, routes full access through
-  // the confirmation dialog and applies other modes directly.
-  // choose 在自动审批未配置时打开判定设置，让完全权限经过确认框，其他模式直接应用。
-  const choose = (next: PermissionMode) => {
+  // choose opens the judge settings for an unconfigured auto-approve and routes full access through
+  // the confirmation dialog; both leave the menu. Other modes apply in place and keep the menu open,
+  // so the auto-approve settings appear right under the modes once the switch is confirmed.
+  // choose 在自动审批未配置时打开判定设置，并让完全权限经过确认框；二者都会离开菜单。其他模式就地应用并
+  // 保持菜单打开，切换确认后自动审批设置随即出现在模式下方。
+  const choose = (next: PermissionMode, event: Event) => {
     if (next === "auto_approve" && needsSetup) {
       judge?.openSettings();
       return;
     }
-    if (next === mode) return;
     if (next === "full_access") {
+      if (next === mode) return;
       setAcknowledged(false);
       setConfirmingFullAccess(true);
       return;
     }
-    select(next);
+    event.preventDefault();
+    if (next !== mode) select(next);
   };
 
   return (
@@ -174,26 +181,29 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" side="top" width="lg" aria-busy={saving}>
-          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t("permissionMode.menuTitle")}</DropdownMenuLabel>
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t("permissionMode.label")}</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={mode ?? ""}>
             {PERMISSION_MODE_OPTIONS.map((option) => {
               const Icon = option.icon;
               const greyed = option.value === "auto_approve" && needsSetup;
+              const warning = option.value === "full_access";
               return (
                 <DropdownMenuRadioItem
                   key={option.value}
-                  className={greyed ? "items-start text-xs text-muted-foreground" : "items-start text-xs"}
+                  className="items-start gap-2.5 py-2 text-xs"
                   value={option.value}
                   data-permission-mode={option.value}
                   data-needs-setup={greyed ? "" : undefined}
                   disabled={saving}
-                  onSelect={() => choose(option.value)}
+                  onSelect={(event) => choose(option.value, event)}
                 >
-                  <span className="composer-select-icon mt-0.5" data-tone={option.value === "full_access" ? "warning" : undefined}>
+                  <span className="composer-select-icon mt-0.5" data-tone={warning ? "warning" : undefined}>
                     <Icon size={14} />
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
-                    <span className={option.value === "full_access" ? "text-(--vcn-content-warning)" : undefined}>{t(option.label)}</span>
+                    <span className={greyed ? "text-muted-foreground" : warning ? "text-(--vcn-content-warning)" : undefined}>
+                      {t(option.label)}
+                    </span>
                     <span className="text-[11px] leading-snug font-normal text-muted-foreground">
                       {t(greyed ? "permissionMode.autoApproveNeedsSetup" : option.hint)}
                     </span>
@@ -202,26 +212,40 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
               );
             })}
           </DropdownMenuRadioGroup>
-          {mode === "auto_approve" && props.projectId !== null && !needsSetup
-            ? <PermissionCategoryItems projectId={props.projectId} />
-            : null}
           {mode === "auto_approve" ? (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="items-start text-xs"
-                data-unattended-entry={unattendedOn ? "on" : "off"}
-                disabled={!unattended.available || unattended.saving}
-                onSelect={() => setEditingUnattended(true)}
-              >
-                <span className="composer-select-icon mt-0.5"><Bot size={14} /></span>
-                <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
-                  <span>{t(unattendedOn ? "permissionMode.unattended.menuOn" : "permissionMode.unattended.menuOff")}</span>
-                  <span className="text-[11px] leading-snug font-normal text-muted-foreground">
-                    {t(unattended.available ? "permissionMode.unattended.menuHint" : "permissionMode.unattended.draftHint")}
-                  </span>
-                </span>
-              </DropdownMenuItem>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger className="gap-2.5 text-xs" data-auto-approve-settings="">
+                  <span className="composer-select-icon"><SlidersHorizontal size={14} /></span>
+                  <span className="flex-1">{t("permissionMode.autoSettings")}</span>
+                  {unattendedOn ? <span className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground">
+                    <Bot aria-hidden="true" size={12} />{t("permissionMode.unattended.chip")}
+                  </span> : null}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-72" data-auto-approve-settings-menu="">
+                  {props.projectId !== null && !needsSetup ? (
+                    <>
+                      <PermissionCategoryItems projectId={props.projectId} />
+                      <DropdownMenuSeparator />
+                    </>
+                  ) : null}
+                  <DropdownMenuItem
+                    className="items-start gap-2.5 py-2 text-xs"
+                    data-unattended-entry={unattendedOn ? "on" : "off"}
+                    disabled={!unattended.available || unattended.saving}
+                    onSelect={() => setEditingUnattended(true)}
+                  >
+                    <span className="composer-select-icon mt-0.5"><Bot size={14} /></span>
+                    <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
+                      <span>{t(unattendedOn ? "permissionMode.unattended.menuOn" : "permissionMode.unattended.menuOff")}</span>
+                      <span className="text-[11px] leading-snug font-normal text-muted-foreground">
+                        {t(unattended.available ? "permissionMode.unattended.menuHint" : "permissionMode.unattended.draftHint")}
+                      </span>
+                    </span>
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
             </>
           ) : null}
         </DropdownMenuContent>
