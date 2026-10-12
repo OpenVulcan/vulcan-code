@@ -17,7 +17,7 @@ use vulcan_permission_judge::{
     JudgePackage, JudgePolicy, cloud_policy, find_known_package, known_packages, render_call,
 };
 use vulcan_provider_config::provider_config::{
-    JudgeBackend, JudgeState, PersistedPermissionJudgeConfiguration, RegisteredJudgeModel,
+    JudgeBackend, PersistedPermissionJudgeConfiguration, RegisteredJudgeModel,
     load_project_configuration_file, save_project_configuration_file,
 };
 use vulcan_service_api::{
@@ -109,13 +109,13 @@ async fn blocking<T: Send + 'static>(
 /// Whether the saved settings run the local judge.
 /// 已保存设置是否运行本机判定器。
 pub(super) fn local_enabled(settings: &PersistedPermissionJudgeConfiguration) -> bool {
-    settings.state == Some(JudgeState::Enabled) && settings.backend == Some(JudgeBackend::Local)
+    settings.backend == Some(JudgeBackend::Local)
 }
 
 /// Whether the saved settings run the cloud judge.
 /// 已保存设置是否运行云端判定。
 fn cloud_enabled(settings: &PersistedPermissionJudgeConfiguration) -> bool {
-    settings.state == Some(JudgeState::Enabled) && settings.backend == Some(JudgeBackend::Cloud)
+    settings.backend == Some(JudgeBackend::Cloud)
 }
 
 /// Policy of the chosen backend: the cloud policy, or the local model in use; `None` when neither
@@ -305,7 +305,6 @@ async fn snapshot(
     };
     let locked = settings.cuda_library_directory.as_deref().map(Path::new);
     Ok(PermissionJudgeSettingsSnapshot {
-        state: settings.state,
         backend: settings.backend,
         device: settings.device,
         recommended_device: environment.recommended_device(locked),
@@ -416,24 +415,15 @@ pub(crate) async fn service_save_permission_judge_settings(
     request: PermissionJudgeSettingsSaveRequest,
 ) -> Result<PermissionJudgeSettingsSnapshot, String> {
     let (runtime, current) = read_state(&state)?;
-    if request.state == JudgeState::Enabled {
-        if request.backend.is_none() {
-            return Err(String::from(
-                "Choose a backend to enable the permission judge.",
-            ));
-        }
-        if request.backend == Some(JudgeBackend::Local) && current.active_model().is_none() {
-            return Err(String::from(
-                "Register and activate a local model before enabling the local judge.",
-            ));
-        }
-        if request.backend == Some(JudgeBackend::Cloud)
-            && cloud::configured_model(&state)?.is_none()
-        {
-            return Err(String::from(
-                "Choose a decision model before enabling the cloud judge.",
-            ));
-        }
+    if request.backend == Some(JudgeBackend::Local) && current.active_model().is_none() {
+        return Err(String::from(
+            "Register and activate a local model before choosing the local judge.",
+        ));
+    }
+    if request.backend == Some(JudgeBackend::Cloud) && cloud::configured_model(&state)?.is_none() {
+        return Err(String::from(
+            "Choose a decision model before choosing the cloud judge.",
+        ));
     }
     let environment = blocking(JudgeEnvironment::probe).await?;
     let cuda_library_directory = match &request.cuda_library_directory {
@@ -478,7 +468,6 @@ pub(crate) async fn service_save_permission_judge_settings(
         ));
     }
     let settings = save_settings(&state, |settings| {
-        settings.state = Some(request.state);
         settings.backend = request.backend;
         settings.device = request.device;
         settings.cuda_library_directory = cuda_library_directory;
@@ -487,10 +476,10 @@ pub(crate) async fn service_save_permission_judge_settings(
         Ok(())
     })
     .await?;
-    // The composer's permission mode selector reads the switch from the workbench.
-    // 输入区的权限模式选择器从工作台读取该开关。
+    // The composer's permission mode selector offers auto-approve only with a configured backend.
+    // 输入区的权限模式选择器只在后端已配置时提供自动审批。
     if let Ok(mut guard) = state.lock() {
-        guard.workbench.permission_judge_state = settings.state;
+        guard.workbench.permission_judge_backend = settings.backend;
         emit_workbench_event(&app, &guard.workbench);
     }
     reconcile_worker(&runtime, &settings);

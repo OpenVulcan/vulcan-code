@@ -6,8 +6,10 @@ use crate::v1::DomainError;
 use crate::v1::config::{MAX_UNATTENDED_DENY_POLICY_CHARS, PermissionMode, UnattendedConfig};
 
 impl SessionDocument {
-    /// Saves `mode` as the session permission mode; returns whether it changed.
-    /// 将 `mode` 保存为会话权限模式；返回是否发生变化。
+    /// Saves `mode` as the session permission mode; returns whether it changed. Leaving
+    /// auto-approve also turns unattended mode off, since no other mode has a reviewer.
+    /// 将 `mode` 保存为会话权限模式；返回是否发生变化。离开自动审批时一并关闭无人值守模式，因为
+    /// 其他模式没有复核器。
     /// Metadata only: an active API keeps running and the next tool call reads the new mode.
     /// 仅修改元数据：活动 API 继续运行，下一次工具调用读取新模式。
     pub fn set_permission_mode(
@@ -26,12 +28,17 @@ impl SessionDocument {
         }
         self.next_mutation_revision()?;
         self.metadata.mode.access.permission = mode;
+        if mode != PermissionMode::AutoApprove {
+            self.metadata.mode.access.unattended = None;
+        }
         self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
         Ok(true)
     }
 
     /// Turns unattended mode on with `unattended`, or off with `None`; returns whether it changed.
     /// 以 `unattended` 开启无人值守模式，或以 `None` 关闭；返回是否发生变化。
+    /// Turning it on requires auto-approve mode.
+    /// 开启需要自动审批模式。
     /// Metadata only, like the permission mode: the next tool call reads the new state.
     /// 与权限模式相同仅修改元数据：下一次工具调用读取新状态。
     pub fn set_unattended(
@@ -43,6 +50,13 @@ impl SessionDocument {
         if self.metadata.archived_at_ms.is_some() {
             return Err(DomainError::InvalidSelectionConfiguration {
                 field: "access.unattended.archived_session",
+            });
+        }
+        if unattended.is_some()
+            && self.metadata.mode.access.permission != PermissionMode::AutoApprove
+        {
+            return Err(DomainError::InvalidSelectionConfiguration {
+                field: "access.unattended.permission_mode",
             });
         }
         if unattended.as_ref().is_some_and(|config| {
@@ -131,6 +145,9 @@ mod tests {
     fn unattended_mode_saves_the_confirmed_policy() {
         let mut document = SessionDocument::new("unattended", "p", "t", 1);
         assert_eq!(document.metadata.mode.access.unattended, None);
+        document
+            .set_permission_mode(PermissionMode::AutoApprove, 1)
+            .unwrap();
         let config = UnattendedConfig {
             deny_policy: String::from("never touch production"),
         };
@@ -142,6 +159,37 @@ mod tests {
         };
         assert!(document.set_unattended(Some(oversized), 4).is_err());
         assert!(document.set_unattended(None, 5).unwrap());
+        assert_eq!(document.metadata.mode.access.unattended, None);
+    }
+
+    /// Unattended mode exists only under auto-approve: it cannot start elsewhere, and leaving
+    /// auto-approve turns it off without bringing it back on return.
+    /// 无人值守模式只存在于自动审批下：其他模式不能开启，离开自动审批即关闭，切回也不恢复。
+    #[test]
+    fn unattended_mode_follows_auto_approve() {
+        let mut document = SessionDocument::new("unattended-mode", "p", "t", 1);
+        let config = UnattendedConfig {
+            deny_policy: String::new(),
+        };
+        assert!(matches!(
+            document.set_unattended(Some(config.clone()), 2),
+            Err(DomainError::InvalidSelectionConfiguration {
+                field: "access.unattended.permission_mode"
+            })
+        ));
+        document
+            .set_permission_mode(PermissionMode::AutoApprove, 3)
+            .unwrap();
+        assert!(document.set_unattended(Some(config), 4).unwrap());
+        assert!(
+            document
+                .set_permission_mode(PermissionMode::WorkspaceWrite, 5)
+                .unwrap()
+        );
+        assert_eq!(document.metadata.mode.access.unattended, None);
+        document
+            .set_permission_mode(PermissionMode::AutoApprove, 6)
+            .unwrap();
         assert_eq!(document.metadata.mode.access.unattended, None);
     }
 

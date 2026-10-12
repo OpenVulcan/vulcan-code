@@ -3,21 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Whether the user switched the judge off or on; absence means not configured yet.
-/// 用户关闭或启用了判定器；缺省表示尚未设置。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JudgeState {
-    /// The judge layer is not used and its options stay hidden.
-    /// 不使用判定层，且其选项保持隐藏。
-    Off,
-    /// The judge layer runs with the configured backend.
-    /// 判定层使用已设置的后端运行。
-    Enabled,
-}
-
-/// Where calls are judged.
-/// 判定调用的位置。
+/// Where calls are judged. A saved backend is what makes the judge configured, and so what makes
+/// auto-approve mode available.
+/// 判定调用的位置。已保存的后端即表示判定器已配置，自动审批模式也因此可用。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JudgeBackend {

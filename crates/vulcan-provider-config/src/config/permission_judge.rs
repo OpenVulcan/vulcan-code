@@ -1,13 +1,13 @@
 //! Persisted permission-judge settings: the model is chosen per machine, the policy per project.
 //! 持久化的权限判定设置：模型按机器选择，策略按项目选择。
 //!
-//! Nothing here is written unless the user saves it; an absent block means the judge has not been
-//! configured yet, which is distinct from switched off.
-//! 只有用户保存时才写入；缺省块表示判定器尚未设置，与已关闭不同。
+//! Nothing here is written unless the user saves it; the judge is configured once a backend is
+//! saved, and auto-approve mode is available only then.
+//! 只有用户保存时才写入；保存后端后判定器即为已配置，自动审批模式也只在此时可用。
 
 use super::*;
 pub use vulcan_permission_judge::protocol::JudgeDevice;
-pub use vulcan_permission_judge::system::{JudgeBackend, JudgeState};
+pub use vulcan_permission_judge::system::JudgeBackend;
 
 /// Returns whether a persisted boolean is false so the default stays out of JSON.
 /// 判断持久化布尔值是否为 false，使默认值不写入 JSON。
@@ -55,12 +55,8 @@ pub struct RegisteredJudgeModel {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PersistedPermissionJudgeConfiguration {
-    /// Off or enabled; absent until the user decides.
-    /// 关闭或启用；用户决定前缺省。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state: Option<JudgeState>,
-    /// Backend used while enabled.
-    /// 启用时使用的后端。
+    /// Configured backend; absent until the user finishes setting one up.
+    /// 已配置的后端；用户完成设置前缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<JudgeBackend>,
     /// Device chosen by the user; absent means the recommended device at load time.
@@ -281,7 +277,6 @@ mod tests {
     #[test]
     fn settings_round_trip_with_wire_names() {
         let mut settings = PersistedPermissionJudgeConfiguration {
-            state: Some(JudgeState::Enabled),
             backend: Some(JudgeBackend::Local),
             device: Some(JudgeDevice::WebGpu),
             ..Default::default()
@@ -289,7 +284,7 @@ mod tests {
         settings.register(model("a"));
         settings.activate("a").unwrap();
         let json = serde_json::to_value(&settings).unwrap();
-        assert_eq!(json["state"], "enabled");
+        assert_eq!(json["backend"], "local");
         assert_eq!(json["device"], "webgpu");
         assert_eq!(json["activeModelId"], "a");
         let parsed: PersistedPermissionJudgeConfiguration = serde_json::from_value(json).unwrap();

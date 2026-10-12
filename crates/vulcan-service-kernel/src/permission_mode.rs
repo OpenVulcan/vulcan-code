@@ -80,8 +80,9 @@ async fn session_access_writer(
     Ok((session_id, lifecycle, handle))
 }
 
-/// Save `request` through the unique session writer and return the durable mode.
-/// 通过唯一会话写入器保存 `request`，返回可靠模式。
+/// Save `request` through the unique session writer and return the durable mode, with the
+/// unattended state that leaving auto-approve clears.
+/// 通过唯一会话写入器保存 `request`，返回可靠模式以及离开自动审批时被清除的无人值守状态。
 /// An active API keeps running; its next tool call reads the saved mode.
 /// 活动 API 继续运行；其下一次工具调用读取已保存的模式。
 pub(crate) async fn service_set_session_permission_mode(
@@ -97,19 +98,22 @@ pub(crate) async fn service_set_session_permission_mode(
             SessionFlushReason::MetadataChanged,
             |document| {
                 let changed = document.set_permission_mode(request.mode, now_ms)?;
-                let mode = document.metadata.mode.access.permission;
+                let access = &document.metadata.mode.access;
+                let value = (access.permission, access.unattended.clone());
                 Ok(if changed {
-                    SessionMutationChange::Changed(mode)
+                    SessionMutationChange::Changed(value)
                 } else {
-                    SessionMutationChange::Unchanged(mode)
+                    SessionMutationChange::Unchanged(value)
                 })
             },
         )
         .map_err(|error| format!("Failed to save permission mode: {error}"))?;
+    let (permission_mode, unattended) = receipt.value;
     Ok(SessionPermissionModeUpdateResponse {
         session_id: session_id.to_string(),
         revision: receipt.revision,
-        permission_mode: receipt.value,
+        permission_mode,
+        unattended,
     })
 }
 

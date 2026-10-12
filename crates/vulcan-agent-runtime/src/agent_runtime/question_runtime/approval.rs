@@ -207,7 +207,7 @@ mod tests {
                     String::from("shell_command"),
                     json!({"command": "rm -rf build"}),
                     ToolApprovalPrompt {
-                        mode: PermissionMode::WorkspaceWrite,
+                        mode: PermissionMode::AutoApprove,
                         subject: PermissionSubject::Command {
                             text: String::from("rm -rf build"),
                         },

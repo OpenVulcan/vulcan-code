@@ -144,10 +144,14 @@ pub enum PermissionMode {
     /// Every write needs one explicit user approval.
     /// 每次写入都需要用户明确批准一次。
     ReadOnly,
-    /// Workspace writes run directly; other effects go through the approval pipeline.
-    /// 工作区内写入直接执行；其他效果经过审批管线。
+    /// Workspace writes run directly; every other effect asks the user.
+    /// 工作区内写入直接执行；其他效果都询问用户。
     #[default]
     WorkspaceWrite,
+    /// Workspace writes run directly; other effects go through the judge model, the review LLM,
+    /// then the user. The only mode that may run unattended.
+    /// 工作区内写入直接执行；其他效果依次经过判定模型、复核 LLM 与用户。唯一可以无人值守的模式。
+    AutoApprove,
     /// No judging and no approval prompts.
     /// 不判定、不询问。
     FullAccess,
@@ -165,8 +169,9 @@ pub struct AccessConfig {
     /// Current permission mode; new sessions start from the runtime default.
     /// 当前权限模式；新会话从运行时默认值开始。
     pub permission: PermissionMode,
-    /// Unattended mode, when the user turned it on: no approval prompt is ever shown.
-    /// 用户开启时的无人值守模式：从不显示审批提示。
+    /// Unattended mode, when the user turned it on: no approval prompt is ever shown. Only set
+    /// while the permission mode is auto-approve; leaving that mode turns it off.
+    /// 用户开启时的无人值守模式：从不显示审批提示。只在自动审批模式下存在；离开该模式即关闭。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unattended: Option<UnattendedConfig>,
 }

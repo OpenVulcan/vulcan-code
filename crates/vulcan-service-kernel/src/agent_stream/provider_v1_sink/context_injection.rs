@@ -111,7 +111,10 @@ fn permission_mode_input(
             "Permission mode: read-only. Reading files and running known read-only commands proceed; file writes, state-changing commands, and extension tools that may change state are denied before they run, and the denial explains why. When a task needs a change, say what you would change so the user can switch modes."
         }
         PermissionMode::WorkspaceWrite => {
-            "Permission mode: workspace write. Edits inside the workspace and known read-only commands run directly; other actions may need the user's approval. Attempt the task normally and let the host decide each call."
+            "Permission mode: workspace write. Edits inside the workspace and known read-only commands run directly; other actions need the user's approval. Attempt the task normally and let the host decide each call."
+        }
+        PermissionMode::AutoApprove => {
+            "Permission mode: auto-approve. Edits inside the workspace and known read-only commands run directly; other actions are checked by an automatic permission judge and reviewer, and may still need the user's approval. Attempt the task normally and let the host decide each call."
         }
         PermissionMode::FullAccess => {
             "Permission mode: full access. Tool calls run without permission checks. Still avoid destructive actions the user did not ask for."

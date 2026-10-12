@@ -52,10 +52,6 @@ pub const MODE_UNAVAILABLE_DENIAL: &str = "The session permission mode could not
 /// 无人值守会话对同一调用连续拒绝时复核的次数；下一次相同调用不经复核直接拒绝，避免代理磨损复核器。
 pub const UNATTENDED_REVIEWED_REPEATS: u32 = 2;
 
-/// Model-visible explanation returned when an unattended read-only session meets a write.
-/// 无人值守只读会话遇到写入时返回给模型的说明。
-pub const UNATTENDED_READ_ONLY_DENIAL: &str = "This unattended session is read-only, and no user is available to approve this call, so it was not executed. Continue with read-only work and leave this step for the user's later instructions.";
-
 /// Guidance after an unattended denial that a stated reason could still change: the call stated
 /// none, the reviewer read it, and the reviewer may clear it. Only this text invites
 /// `declare_intent`, and only after it may that tool be called.
@@ -577,12 +573,14 @@ pub fn evaluate_rules(
             }
         }
         PermissionSubject::FileWrite { paths } => {
-            let inside = mode == PermissionMode::WorkspaceWrite
-                && workspace_root.is_some_and(|root| {
-                    paths
-                        .iter()
-                        .all(|path| path_resolves_inside_workspace(root, path).unwrap_or(false))
-                });
+            let inside = matches!(
+                mode,
+                PermissionMode::WorkspaceWrite | PermissionMode::AutoApprove
+            ) && workspace_root.is_some_and(|root| {
+                paths
+                    .iter()
+                    .all(|path| path_resolves_inside_workspace(root, path).unwrap_or(false))
+            });
             if inside {
                 RuleOutcome::Allow
             } else {
@@ -828,16 +826,18 @@ fn command_purpose(tool_id: &str, args: &Value) -> Option<String> {
 
 /// Decides whether one tool call proceeds, reading the session's live access selections.
 /// 读取会话实时授权选择，决定一次工具调用是否执行。
-/// In workspace-write mode an escalated call is first scored by the judge, which may clear it
+/// In auto-approve mode an escalated call is first scored by the judge, which may clear it
 /// unless a high-risk rule matched. The reviewing LLM then sees what the judge did not clear: it
 /// may deny, or clear calls that are neither judge-blocked nor high-risk (those only when the user
 /// allows it). Everything else goes to the user, except in unattended mode, where no user is
 /// asked and everything the reviewer did not allow is denied with guidance for the agent.
-/// Read-only escalates every write straight to the user, or denies it when unattended.
-/// 在工作区写入模式下，升级调用先由判定器评分；除非命中高风险规则，判定器可放行。复核 LLM 随后
+/// Read-only and workspace-write escalate straight to the user; only auto-approve may be
+/// unattended, so unattended access under any other mode is treated as unreadable.
+/// 在自动审批模式下，升级调用先由判定器评分；除非命中高风险规则，判定器可放行。复核 LLM 随后
 /// 查看判定器未放行的调用：它可以拒绝，也可以放行既未被判定器拦截也未命中高风险的调用（这两类
 /// 仅在用户允许时可放行）。其余全部交给用户；无人值守模式下不询问用户，复核器未放行的调用一律
-/// 拒绝并附带给代理的指引。只读模式会把所有写入直接交给用户，无人值守时直接拒绝。
+/// 拒绝并附带给代理的指引。只读与工作区修改模式直接交给用户；只有自动审批可以无人值守，其他模式
+/// 下出现无人值守视为授权不可读。
 /// `declare_intent` proceeds only right after a denial whose text invited it, under the same user
 /// request; its intent is kept for the next call, which consumes it whatever it is.
 /// `declare_intent` 只有紧接在文字邀请了它的拒绝之后、且在同一用户请求下才会执行；其意图为下一次
@@ -883,6 +883,9 @@ pub async fn admit_tool_call(
     let RuleOutcome::Escalate { high_risk } = evaluate_rules(mode, &subject, workspace_root) else {
         return ToolPermissionVerdict::Proceed;
     };
+    if access.unattended.is_some() && mode != PermissionMode::AutoApprove {
+        return ToolPermissionVerdict::Deny(String::from(MODE_UNAVAILABLE_DENIAL));
+    }
     let unattended = access.unattended.map(|config| config.deny_policy);
     let purpose = if native {
         command_purpose(&definition.descriptor.id, args)
@@ -895,9 +898,6 @@ pub async fn admit_tool_call(
         if let Some(memory) = memory {
             memory.set_invitation(session_id, None);
         }
-        if mode == PermissionMode::ReadOnly {
-            return ToolPermissionVerdict::Deny(String::from(UNATTENDED_READ_ONLY_DENIAL));
-        }
         let repeated = memory.map_or(0, |memory| {
             memory.denials(session_id, &fingerprint, texts.user_request)
         });
@@ -908,7 +908,7 @@ pub async fn admit_tool_call(
         }
     }
     let judged_at = SystemTime::now();
-    let judge = if mode == PermissionMode::WorkspaceWrite {
+    let judge = if mode == PermissionMode::AutoApprove {
         judge_layer(host, definition, texts.raw_arguments, workspace_root).await
     } else {
         JudgeRun::default()
@@ -1065,7 +1065,7 @@ async fn decide_escalated(
     }
     let explained = purpose.is_some() || intent.is_some();
     let attended = unattended.is_none();
-    let (review, review_elapsed) = if mode == PermissionMode::WorkspaceWrite {
+    let (review, review_elapsed) = if mode == PermissionMode::AutoApprove {
         let call = ReviewCall {
             workspace_root: workspace_root.map(Path::to_path_buf),
             tool_name: definition.descriptor.id.clone(),

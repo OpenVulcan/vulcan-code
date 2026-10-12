@@ -31,6 +31,9 @@ pub struct SessionPermissionModeUpdateResponse {
     /// Authoritative mode after the serialized operation.
     /// 串行操作后的权威模式。
     pub permission_mode: PermissionMode,
+    /// Authoritative unattended mode after the operation; leaving auto-approve turns it off.
+    /// 操作后的权威无人值守模式；离开自动审批时会被关闭。
+    pub unattended: Option<UnattendedConfig>,
 }
 
 /// Unattended mode update shared by WebUI and TUI.

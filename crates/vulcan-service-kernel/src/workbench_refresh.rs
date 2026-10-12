@@ -1370,7 +1370,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         ),
         output_style_catalog: output_style_catalog_summary(provider_configuration),
         default_answer_mode: crate::answer_mode::global_answer_mode(provider_configuration),
-        permission_judge_state: provider_configuration.permission_judge.state,
+        permission_judge_backend: provider_configuration.permission_judge.backend,
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: pending_prompt_process_mirrors
             .get(&workspace.selected_session)

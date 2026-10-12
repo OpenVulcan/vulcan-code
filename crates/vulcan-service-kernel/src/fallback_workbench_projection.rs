@@ -94,7 +94,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         ),
         output_style_catalog: output_style_catalog_summary(&provider_configuration),
         default_answer_mode: crate::answer_mode::global_answer_mode(&provider_configuration),
-        permission_judge_state: provider_configuration.permission_judge.state,
+        permission_judge_backend: provider_configuration.permission_judge.backend,
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: Vec::new(),
         pending_prompts_by_conversation: Vec::new(),

@@ -431,6 +431,11 @@ fn rules_follow_the_mode_table() {
         escalate
     );
     assert_eq!(evaluate_rules(WorkspaceWrite, &inside, None), escalate);
+    assert_eq!(
+        evaluate_rules(AutoApprove, &inside, Some(root)),
+        RuleOutcome::Allow
+    );
+    assert_eq!(evaluate_rules(AutoApprove, &outside, Some(root)), escalate);
     assert_eq!(evaluate_rules(ReadOnly, &inside, Some(root)), escalate);
     assert_eq!(
         evaluate_rules(ReadOnly, &read_command, Some(root)),
@@ -553,7 +558,7 @@ async fn gate_asks_the_user_for_escalated_calls_and_fails_closed() {
 }
 
 #[tokio::test]
-async fn judge_clears_only_workspace_write_calls_without_high_risk() {
+async fn judge_clears_only_auto_approve_calls_without_high_risk() {
     let workspace = tempfile::tempdir().unwrap();
     let root = workspace.path().to_path_buf();
     let shell = native(SHELL_COMMAND_TOOL_ID);
@@ -592,7 +597,7 @@ async fn judge_clears_only_workspace_write_calls_without_high_risk() {
     // An allow clears an ordinary escalated call without asking; the judge reads the raw text.
     // allow 会不经询问放行普通升级调用；判定器读取原样文本。
     let clearing = FixedHost::judging(
-        Ok(PermissionMode::WorkspaceWrite),
+        Ok(PermissionMode::AutoApprove),
         Ok(false),
         Ok(Some(JudgeLabel::Allow)),
     );
@@ -637,7 +642,7 @@ async fn judge_clears_only_workspace_write_calls_without_high_risk() {
             JudgeFinding::Unavailable(String::from("not loaded")),
         ),
     ] {
-        let host = FixedHost::judging(Ok(PermissionMode::WorkspaceWrite), Ok(true), judge);
+        let host = FixedHost::judging(Ok(PermissionMode::AutoApprove), Ok(true), judge);
         assert_eq!(
             admit(Arc::clone(&host), "cargo build").await,
             ToolPermissionVerdict::Proceed
@@ -645,19 +650,17 @@ async fn judge_clears_only_workspace_write_calls_without_high_risk() {
         assert_eq!(judge_of(&host), vec![Some(finding)]);
     }
 
-    // Read-only never consults the judge.
-    // 只读模式从不咨询判定器。
-    let read_only = FixedHost::judging(
-        Ok(PermissionMode::ReadOnly),
-        Ok(false),
-        Ok(Some(JudgeLabel::Allow)),
-    );
-    assert_eq!(
-        admit(Arc::clone(&read_only), "cargo build").await,
-        ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
-    );
-    assert!(read_only.judged.lock().unwrap().is_empty());
-    assert_eq!(judge_of(&read_only), vec![None]);
+    // Read-only and workspace-write never consult the judge.
+    // 只读与工作区修改模式从不咨询判定器。
+    for mode in [PermissionMode::ReadOnly, PermissionMode::WorkspaceWrite] {
+        let unjudged = FixedHost::judging(Ok(mode), Ok(false), Ok(Some(JudgeLabel::Allow)));
+        assert_eq!(
+            admit(Arc::clone(&unjudged), "cargo build").await,
+            ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
+        );
+        assert!(unjudged.judged.lock().unwrap().is_empty());
+        assert_eq!(judge_of(&unjudged), vec![None]);
+    }
 }
 
 #[tokio::test]
@@ -696,7 +699,7 @@ async fn reviewer_decides_within_the_judge_and_high_risk_boundary() {
     };
     let host = |judge: Option<JudgeLabel>, review| {
         FixedHost::reviewing(
-            Ok(PermissionMode::WorkspaceWrite),
+            Ok(PermissionMode::AutoApprove),
             Ok(false),
             Ok(judge),
             review,
@@ -812,19 +815,21 @@ async fn reviewer_decides_within_the_judge_and_high_risk_boundary() {
         assert_eq!(reviews, vec![Some(finding)]);
     }
 
-    // Read-only never consults the reviewer.
-    // 只读模式从不咨询复核器。
-    let read_only = FixedHost::reviewing(
-        Ok(PermissionMode::ReadOnly),
-        Ok(false),
-        Ok(None),
-        review(ReviewVerdict::Allow, true),
-    );
-    assert_eq!(
-        admit(Arc::clone(&read_only), "cargo build").await,
-        ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
-    );
-    assert!(read_only.reviewed.lock().unwrap().is_empty());
+    // Read-only and workspace-write never consult the reviewer.
+    // 只读与工作区修改模式从不咨询复核器。
+    for mode in [PermissionMode::ReadOnly, PermissionMode::WorkspaceWrite] {
+        let unreviewed = FixedHost::reviewing(
+            Ok(mode),
+            Ok(false),
+            Ok(None),
+            review(ReviewVerdict::Allow, true),
+        );
+        assert_eq!(
+            admit(Arc::clone(&unreviewed), "cargo build").await,
+            ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
+        );
+        assert!(unreviewed.reviewed.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]
@@ -866,7 +871,7 @@ async fn records_each_decision_the_judge_or_reviewer_took_part_in() {
     // A judge allow is recorded with what the judge read and the raw call text.
     // 判定器的 allow 会连同其读取内容与原样调用文本一并记录。
     let clearing = FixedHost::judging(
-        Ok(PermissionMode::WorkspaceWrite),
+        Ok(PermissionMode::AutoApprove),
         Ok(false),
         Ok(Some(JudgeLabel::Allow)),
     );
@@ -881,14 +886,14 @@ async fn records_each_decision_the_judge_or_reviewer_took_part_in() {
     // The user's answer and the reviewer's denial are recorded as the deciding layer.
     // 用户的回答与复核器的拒绝按作出决定的层记录。
     let asking = FixedHost::judging(
-        Ok(PermissionMode::WorkspaceWrite),
+        Ok(PermissionMode::AutoApprove),
         Ok(false),
         Ok(Some(JudgeLabel::Review)),
     );
     admit(Arc::clone(&asking)).await;
     assert_eq!(outcomes(&asking), vec![PermissionOutcome::UserDenied]);
     let denying = FixedHost::reviewing(
-        Ok(PermissionMode::WorkspaceWrite),
+        Ok(PermissionMode::AutoApprove),
         Ok(true),
         Ok(None),
         Ok(Some(LlmReview {
@@ -902,7 +907,7 @@ async fn records_each_decision_the_judge_or_reviewer_took_part_in() {
 
     // Without a judge or reviewer nothing is recorded.
     // 没有判定器与复核器时不记录任何内容。
-    let plain = FixedHost::new(Ok(PermissionMode::WorkspaceWrite), Ok(true));
+    let plain = FixedHost::new(Ok(PermissionMode::AutoApprove), Ok(true));
     admit(Arc::clone(&plain)).await;
     assert!(plain.records.lock().unwrap().is_empty());
 }
@@ -961,7 +966,7 @@ async fn unattended_mode_never_asks_the_user() {
         Ok(None),
         Err(String::from("offline")),
     ] {
-        let host = unattended(PermissionMode::WorkspaceWrite, review);
+        let host = unattended(PermissionMode::AutoApprove, review);
         let ToolPermissionVerdict::Deny(denial) = admit_call(
             &host,
             SHELL_COMMAND_TOOL_ID,
@@ -978,10 +983,7 @@ async fn unattended_mode_never_asks_the_user() {
         let reviewed = host.reviewed.lock().unwrap();
         assert_eq!(reviewed[0].unattended.as_deref(), Some("never push"));
     }
-    let host = unattended(
-        PermissionMode::WorkspaceWrite,
-        verdict(ReviewVerdict::AskUser),
-    );
+    let host = unattended(PermissionMode::AutoApprove, verdict(ReviewVerdict::AskUser));
     admit_call(
         &host,
         SHELL_COMMAND_TOOL_ID,
@@ -1009,10 +1011,7 @@ async fn unattended_mode_never_asks_the_user() {
 
     // A reviewer allow still runs the call.
     // 复核器放行时调用仍会执行。
-    let host = unattended(
-        PermissionMode::WorkspaceWrite,
-        verdict(ReviewVerdict::Allow),
-    );
+    let host = unattended(PermissionMode::AutoApprove, verdict(ReviewVerdict::Allow));
     assert_eq!(
         admit_call(
             &host,
@@ -1025,22 +1024,24 @@ async fn unattended_mode_never_asks_the_user() {
         ToolPermissionVerdict::Proceed
     );
 
-    // Read-only denies writes outright without asking anyone.
-    // 只读模式直接拒绝写入，不询问任何人。
-    let host = unattended(PermissionMode::ReadOnly, verdict(ReviewVerdict::Allow));
-    assert_eq!(
-        admit_call(
-            &host,
-            SHELL_COMMAND_TOOL_ID,
-            command(),
-            None,
-            workspace.path()
-        )
-        .await,
-        ToolPermissionVerdict::Deny(String::from(UNATTENDED_READ_ONLY_DENIAL))
-    );
-    assert!(host.prompts.lock().unwrap().is_empty());
-    assert!(host.reviewed.lock().unwrap().is_empty());
+    // Unattended access outside auto-approve is unreadable: denied without asking anyone.
+    // 自动审批以外的无人值守授权不可读：不询问任何人直接拒绝。
+    for mode in [PermissionMode::ReadOnly, PermissionMode::WorkspaceWrite] {
+        let host = unattended(mode, verdict(ReviewVerdict::Allow));
+        assert_eq!(
+            admit_call(
+                &host,
+                SHELL_COMMAND_TOOL_ID,
+                command(),
+                None,
+                workspace.path()
+            )
+            .await,
+            ToolPermissionVerdict::Deny(String::from(MODE_UNAVAILABLE_DENIAL))
+        );
+        assert!(host.prompts.lock().unwrap().is_empty());
+        assert!(host.reviewed.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]
@@ -1072,7 +1073,7 @@ async fn declare_intent_needs_a_denial_that_invites_it() {
     // Attended sessions and calls that were never denied give no invitation.
     // 有人值守会话与从未被拒的调用都不会给出邀请。
     let attended = FixedHost::reviewing(
-        Ok(PermissionMode::WorkspaceWrite),
+        Ok(PermissionMode::AutoApprove),
         Ok(false),
         Ok(None),
         denying(),
@@ -1091,7 +1092,7 @@ async fn declare_intent_needs_a_denial_that_invites_it() {
     // An unexplained unattended denial invites one declaration under the same user request,
     // and that intent reaches the reviewer with the next call only.
     // 未说明理由的无人值守拒绝邀请同一用户请求下的一次声明，该意图只随下一次调用交给复核器。
-    let host = unattended(PermissionMode::WorkspaceWrite, denying());
+    let host = unattended(PermissionMode::AutoApprove, denying());
     let build = |purpose: Option<&str>| match purpose {
         Some(purpose) => json!({"command": "cargo build", "purpose": purpose}),
         None => json!({"command": "cargo build"}),
@@ -1136,7 +1137,7 @@ async fn declare_intent_needs_a_denial_that_invites_it() {
 
     // A call that already stated its purpose is told to move on, not invited.
     // 已说明目的的调用会被告知改做其他事，而不会被邀请。
-    let host = unattended(PermissionMode::WorkspaceWrite, denying());
+    let host = unattended(PermissionMode::AutoApprove, denying());
     let ToolPermissionVerdict::Deny(explained) = admit_call(
         &host,
         SHELL_COMMAND_TOOL_ID,
@@ -1157,7 +1158,7 @@ async fn declare_intent_needs_a_denial_that_invites_it() {
 
     // Without a reviewer no reason can help, so nothing is invited.
     // 没有复核器时任何理由都无济于事，因此不邀请。
-    let host = unattended(PermissionMode::WorkspaceWrite, Ok(None));
+    let host = unattended(PermissionMode::AutoApprove, Ok(None));
     let ToolPermissionVerdict::Deny(unreviewed) = admit_call(
         &host,
         SHELL_COMMAND_TOOL_ID,
@@ -1177,7 +1178,7 @@ async fn declare_intent_needs_a_denial_that_invites_it() {
 async fn unattended_mode_stops_reviewing_a_call_denied_twice_in_a_row() {
     let workspace = tempfile::tempdir().unwrap();
     let host = unattended(
-        PermissionMode::WorkspaceWrite,
+        PermissionMode::AutoApprove,
         Ok(Some(LlmReview {
             verdict: ReviewVerdict::Deny,
             reason: String::from("no"),

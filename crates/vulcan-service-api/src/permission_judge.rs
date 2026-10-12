@@ -6,18 +6,15 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use vulcan_permission_judge::JudgeLabel;
 pub use vulcan_permission_judge::protocol::JudgeDevice;
-pub use vulcan_permission_judge::system::{JudgeBackend, JudgeState};
+pub use vulcan_permission_judge::system::JudgeBackend;
 
 /// Everything the "Permission judge" settings page shows.
 /// “权限判定”设置页展示的全部内容。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionJudgeSettingsSnapshot {
-    /// Off or enabled; absent until the user decides.
-    /// 关闭或启用；用户决定前缺省。
-    pub state: Option<JudgeState>,
-    /// Backend used while enabled.
-    /// 启用时使用的后端。
+    /// Configured backend; absent until one is set up, which keeps auto-approve unavailable.
+    /// 已配置的后端；设置完成前缺省，此时自动审批不可用。
     pub backend: Option<JudgeBackend>,
     /// Device chosen by the user; absent means the recommended device.
     /// 用户选择的设备；缺省表示推荐设备。
@@ -389,11 +386,10 @@ pub struct PermissionJudgeCudaInstall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PermissionJudgeSettingsSaveRequest {
-    /// Off or enabled.
-    /// 关闭或启用。
-    pub state: JudgeState,
-    /// Backend; required when enabled.
-    /// 后端；启用时必填。
+    /// Backend to configure; absent leaves the judge unconfigured. A backend is saved only once it
+    /// is ready: a local model in use, or a chosen cloud decision model.
+    /// 要配置的后端；缺省表示不配置判定器。后端只有在就绪后才能保存：本机有使用中的模型，或云端已
+    /// 选择判定模型。
     #[serde(default)]
     pub backend: Option<JudgeBackend>,
     /// Chosen device; absent follows the recommendation.

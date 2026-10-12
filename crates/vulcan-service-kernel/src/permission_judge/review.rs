@@ -20,7 +20,6 @@ use vulcan_ai_contract::{
     InferenceSchedulingClass, InferenceUsageScope, MessageRole, ParallelToolCallPolicy,
     ReasoningOutputPolicy, ResponsesExecutionRequest, StructuredOutputPolicy, ToolChoicePolicy,
 };
-use vulcan_provider_config::provider_config::JudgeState;
 use vulcan_runtime_assets::PERMISSION_REVIEW_MD;
 
 use super::services::{backend_policy, load_project_options, read_state};
@@ -183,7 +182,7 @@ async fn project_policy(state: &SharedServiceBridgeState, root: Option<&Path>) -
         None => BTreeMap::new(),
     };
     if let Ok((runtime, settings)) = read_state(state)
-        && settings.state == Some(JudgeState::Enabled)
+        && settings.backend.is_some()
         && let Ok(Some(policy)) = backend_policy(&runtime, &settings).await
         && let Ok(modes) = policy.resolve_settings(&chosen)
     {
