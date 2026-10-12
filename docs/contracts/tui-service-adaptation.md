@@ -55,10 +55,11 @@ HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响
 权威状态从会话 hydration 的 `session_config.permission_mode` 取得，只在服务回执确认后改变显示。草稿会话的
 显式选择随首次提交的 `sessionSettings.permissionMode` 一并发送，未选择时不发送值、保留会话默认。
 选择器中的无人值守入口镜像 WebUI 的 `setSessionUnattended` 与 `loadSessionUnattendedDefault`：权威状态取自
-hydration 的 `session_config.unattended`，草稿不可用；关闭时先读取分层预填值再打开文本输入框，确认后才发送，
-开启时直接编辑当前策略或关闭，显示只在服务回执确认后改变。
-选择器中的权限判定入口读取工作台的 `permissionJudgeState`：未设定时提示需要设定，启用时显示状态，
-关闭时隐藏；入口只跳转到权限判定页面，不改写判定设置。
+hydration 的 `session_config.unattended`，只在当前为自动审批时出现，草稿不可用；关闭时先读取分层预填值再打开
+文本输入框，确认后才发送，开启时直接编辑当前策略或关闭，显示只在服务回执确认后改变；切换模式的回执携带
+写入后的 `unattended`。
+选择器中的自动审批读取工作台的 `permissionJudgeBackend`：未配置时说明原因并只跳转到权限判定页面，不改写
+判定设置。
 
 | 页面 | 已适配交互 | 状态来源 |
 | --- | --- | --- |
