@@ -119,15 +119,22 @@ fn main() { println!("{}", vulcan_code_service::value()); }
     Assert-CleanupCondition (@($FreshBuild.Artifacts | Where-Object { -not $_.fresh }).Count -eq 0) 'Expected a fully fresh Cargo build.'
     Assert-CleanupCondition ((Get-ProfileSnapshot 'debug') -eq $Before) 'Fresh build removed a live unit.'
 
-    # TestBuild leaves units the tracked build never uses; the next tracked build sweeps them. Incremental
-    # caches of a crate the tracked build reused stay until it recompiles that crate.
-    # TestBuild 留下受跟踪构建不使用的单元；下一次受跟踪构建将其清理。受跟踪构建复用的 crate 的增量缓存
-    # 保留到该 crate 重新编译为止。
+    # TestBuild leaves units the tracked build never uses; they stay within the retention period and a tracked
+    # build sweeps them once they are older. Incremental caches of a crate the tracked build reused stay until
+    # it recompiles that crate.
+    # TestBuild 留下受跟踪构建不使用的单元；保留期内保留，超过后由受跟踪构建清理。受跟踪构建复用的 crate 的
+    # 增量缓存保留到该 crate 重新编译为止。
     $UnitAreas = @('deps', '.fingerprint', 'build')
     $Before = Get-ProfileSnapshot 'debug' $UnitAreas
     & cargo test --no-run -j 4 --quiet
     Assert-CleanupCondition ($LASTEXITCODE -eq 0) 'Fixture test build failed.'
-    Assert-CleanupCondition ((Get-ProfileSnapshot 'debug' $UnitAreas) -ne $Before) 'Test build added no units.'
+    $WithTests = Get-ProfileSnapshot 'debug' $UnitAreas
+    Assert-CleanupCondition ($WithTests -ne $Before) 'Test build added no units.'
+    $KeptBuild = Invoke-TrackedCargoBuild -BuildArguments $Build
+    Assert-CleanupCondition ($KeptBuild.ExitCode -eq 0 -and (Get-ProfileSnapshot 'debug' $UnitAreas) -eq $WithTests) 'Recent test-only units were swept within the retention period.'
+    # A zero retention period ages every unit out the moment a build starts; the remaining steps rely on it.
+    # 保留期为零时，每个未使用单元在构建开始时即已超期；后续步骤依赖此设置。
+    $script:UnusedUnitRetention = [TimeSpan]::Zero
     $SweptBuild = Invoke-TrackedCargoBuild -BuildArguments $Build
     Assert-CleanupCondition ($SweptBuild.ExitCode -eq 0 -and (Get-ProfileSnapshot 'debug' $UnitAreas) -eq $Before) 'Test-only units were not swept.'
     Assert-CleanupCondition (Test-Path -LiteralPath $UnhashedFile) 'Unhashed file was deleted.'
@@ -183,7 +190,7 @@ fn main() { println!("{}", vulcan_code_service::value()); }
     finally { $HeldLock.Dispose() }
     $RecoveredBuild = Invoke-TrackedCargoBuild -BuildArguments $Build
     Assert-CleanupCondition ($RecoveredBuild.ExitCode -eq 0 -and -not (Test-Path -LiteralPath $StaleUnit)) 'Stale unit survived a successful build.'
-    Write-Host 'PASS: syntax, fresh reuse, test-unit sweep, deps/fingerprint/build/incremental retirement, unhashed preservation, profile isolation, failed-build preservation, Cargo lock wait.'
+    Write-Host 'PASS: syntax, fresh reuse, test-unit retention and sweep, deps/fingerprint/build/incremental retirement, unhashed preservation, profile isolation, failed-build preservation, Cargo lock wait.'
 }
 finally {
     Pop-Location

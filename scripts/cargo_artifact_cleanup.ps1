@@ -1,5 +1,6 @@
-# Mark the compilation units of each successful make build and sweep every other unit from its Cargo profile.
-# 标记每次成功 make 构建用到的编译单元，并从其 Cargo 模式目录清除其余全部单元。
+# Mark the compilation units of each successful make build and sweep the other units of its Cargo profile
+# that have not been written for the retention period.
+# 标记每次成功 make 构建用到的编译单元，并从其 Cargo 模式目录清除超过保留期未写入的其余单元。
 
 # UnitPattern matches Cargo's 16-hex unit hash in deps files and in fingerprint and build directories.
 # UnitPattern 匹配 deps 文件及 fingerprint、build 目录名中 Cargo 的 16 位十六进制单元哈希。
@@ -10,6 +11,12 @@ $script:CargoLockNames = @('.cargo-lock', '.cargo-build-lock', '.cargo-artifact-
 # CargoLockTimeout bounds how long cleanup waits for other Cargo commands to release the profile.
 # CargoLockTimeout 限定清理等待其他 Cargo 命令释放模式目录的时长。
 $script:CargoLockTimeout = [TimeSpan]::FromMinutes(10)
+# UnusedUnitRetention keeps units this build did not use, such as cargo test, nextest and clippy units, until
+# nothing has written them for this long. Cargo leaves reused units untouched, so the age counts from the
+# unit's last compilation and a unit only other commands reuse is rebuilt at most once per period.
+# UnusedUnitRetention 让本次构建未用到的单元（如 cargo test、nextest、clippy 的单元）保留到连续这么久无写入
+# 为止。Cargo 不会改动复用的单元，因此时长从单元最近一次编译起算，只被其他命令复用的单元每个周期最多重编一次。
+$script:UnusedUnitRetention = [TimeSpan]::FromDays(1)
 
 # Return the unit hash in a deps file or unit directory name, or $null when the name carries none.
 # 返回 deps 文件或单元目录名中的单元哈希；名称不含哈希时返回 $null。
@@ -93,8 +100,22 @@ function Remove-CargoUnitPath {
     }
 }
 
-# Sweep one Cargo profile down to the units the last successful build used.
-# 将一个 Cargo 模式目录清理到最近一次成功构建用到的单元。
+# Return the latest write time of a path and, for a directory, of its direct children.
+# 返回路径及（目录时）其直接子项的最近写入时间。
+function Get-CargoUnitWriteTime {
+    param([IO.FileSystemInfo]$Entry)
+    $Latest = $Entry.LastWriteTimeUtc
+    if ($Entry -is [IO.DirectoryInfo]) {
+        foreach ($Child in $Entry.EnumerateFileSystemInfos()) {
+            if ($Child.LastWriteTimeUtc -gt $Latest) { $Latest = $Child.LastWriteTimeUtc }
+        }
+    }
+    return $Latest
+}
+
+# Sweep one Cargo profile down to the units the last successful build used and the units written within
+# the retention period.
+# 将一个 Cargo 模式目录清理到最近一次成功构建用到的单元及保留期内写入过的单元。
 # ProfileDirectory is the executable's parent; Artifacts holds every compiler-artifact, fresh ones included;
 # ProfileDirectory 是可执行文件的父目录；Artifacts 包含全部 compiler-artifact，含复用制品；
 # OutDirs holds every build-script-executed out_dir; BuildStartedUtc is when Cargo started. Returns no value.
@@ -112,14 +133,15 @@ function Invoke-CargoArtifactSweep {
         }
     }
 
-    # Live holds the hash of every unit this build used; Built and Reused hold crate names.
-    # Live 保存本次构建用到的每个单元哈希；Built 与 Reused 保存 crate 名称。
+    # Cutoff is the oldest write time an unused unit may have and still be kept.
+    # Cutoff 是未使用单元仍可保留的最早写入时间。
+    $Cutoff = $BuildStartedUtc - $script:UnusedUnitRetention
+    # Live holds the hash of every unit this build used; Reused holds the crate names of reused units.
+    # Live 保存本次构建用到的每个单元哈希；Reused 保存复用单元的 crate 名称。
     $Live = [Collections.Generic.HashSet[string]]::new()
-    $Built = [Collections.Generic.HashSet[string]]::new()
     $Reused = [Collections.Generic.HashSet[string]]::new()
     foreach ($Artifact in $Artifacts) {
         $CrateName = ([string]$Artifact.target.name).Replace('-', '_')
-        [void]$Built.Add($CrateName)
         if ($Artifact.fresh) { [void]$Reused.Add($CrateName) }
         foreach ($Filename in $Artifact.filenames) {
             $Hash = Get-CargoUnitHash ([IO.Path]::GetFileName([string]$Filename))
@@ -157,41 +179,47 @@ function Invoke-CargoArtifactSweep {
         if (-not $Removed.Contains($Area)) { $Removed[$Area] = @(0, 0L) }
         $Removed[$Area] = @(($Removed[$Area][0] + 1), ($Removed[$Area][1] + (Remove-CargoUnitPath $Path)))
     }
-    if (Test-Path -LiteralPath $DepsRoot) {
-        foreach ($Entry in [IO.Directory]::EnumerateFiles($DepsRoot)) {
-            $Hash = Get-CargoUnitHash ([IO.Path]::GetFileName($Entry))
-            if ($null -ne $Hash -and -not $Live.Contains($Hash)) { & $Account 'deps' $Entry }
-        }
-    }
-    foreach ($Area in @('.fingerprint', 'build')) {
+    # Candidates are the hashed entries of units this build did not use; LastWritten is each unit's latest
+    # write across deps, .fingerprint and build, so all entries of one unit stay or go together.
+    # Candidates 是本次构建未用到单元的带哈希条目；LastWritten 是每个单元在 deps、.fingerprint、build 中的
+    # 最近写入时间，使同一单元的全部条目一起保留或一起删除。
+    $Candidates = [Collections.Generic.List[object]]::new()
+    $LastWritten = @{}
+    $Areas = [ordered]@{ 'deps' = $false; '.fingerprint' = $true; 'build' = $true }
+    foreach ($Area in $Areas.Keys) {
         $AreaRoot = Join-Path $ProfileRoot $Area
         if (-not (Test-Path -LiteralPath $AreaRoot)) { continue }
-        foreach ($Entry in [IO.Directory]::EnumerateDirectories($AreaRoot)) {
-            $Hash = Get-CargoUnitHash ([IO.Path]::GetFileName($Entry))
-            if ($null -ne $Hash -and -not $Live.Contains($Hash)) { & $Account $Area $Entry }
+        $Entries = if ($Areas[$Area]) { [IO.DirectoryInfo]::new($AreaRoot).EnumerateDirectories() } else { [IO.DirectoryInfo]::new($AreaRoot).EnumerateFiles() }
+        foreach ($Entry in $Entries) {
+            $Hash = Get-CargoUnitHash $Entry.Name
+            if ($null -eq $Hash -or $Live.Contains($Hash)) { continue }
+            $Candidates.Add([pscustomobject]@{ Area = $Area; Hash = $Hash; Path = $Entry.FullName })
+            $Written = Get-CargoUnitWriteTime $Entry
+            if (-not $LastWritten.ContainsKey($Hash) -or $Written -gt $LastWritten[$Hash]) { $LastWritten[$Hash] = $Written }
         }
     }
-    # Rustc names incremental directories by crate with its own hash: crates this build did not use go
-    # entirely, and crates whose every unit it recompiled keep only the directories written during this
-    # build. A crate name shared by a reused unit, such as a fresh library beside a rebuilt binary, keeps all.
-    # rustc 以 crate 名加自有哈希命名增量目录：本次构建未用到的 crate 全部删除，全部单元都重新编译的 crate
-    # 只保留本次构建期间写入的目录。与复用单元同名的 crate（如重建的二进制旁未变的库）全部保留。
+    foreach ($Candidate in $Candidates) {
+        if ($LastWritten[$Candidate.Hash] -lt $Cutoff) { & $Account $Candidate.Area $Candidate.Path }
+    }
+    # Rustc names incremental directories by crate with its own hash, so they are kept by crate: a crate name
+    # shared by a reused unit, such as a fresh library beside a rebuilt binary, keeps all of its directories;
+    # any other directory goes once nothing has written it for the retention period.
+    # rustc 以 crate 名加自有哈希命名增量目录，因此按 crate 保留：与复用单元同名的 crate（如重建的二进制旁未变的
+    # 库）保留全部目录；其他目录在保留期内无写入后删除。
     $IncrementalRoot = Join-Path $ProfileRoot 'incremental'
     if (Test-Path -LiteralPath $IncrementalRoot) {
         foreach ($Entry in [IO.DirectoryInfo]::new($IncrementalRoot).EnumerateDirectories()) {
             $Separator = $Entry.Name.LastIndexOf('-')
             if ($Separator -le 0) { continue }
-            $CrateName = $Entry.Name.Substring(0, $Separator)
-            if (-not $Built.Contains($CrateName)) { & $Account 'incremental' $Entry.FullName; continue }
-            if ($Reused.Contains($CrateName)) { continue }
-            $Newest = @($Entry) + @($Entry.EnumerateFileSystemInfos()) | ForEach-Object { $_.LastWriteTimeUtc } | Measure-Object -Maximum
-            if ($Newest.Maximum -lt $BuildStartedUtc) { & $Account 'incremental' $Entry.FullName }
+            if ($Reused.Contains($Entry.Name.Substring(0, $Separator))) { continue }
+            if ((Get-CargoUnitWriteTime $Entry) -lt $Cutoff) { & $Account 'incremental' $Entry.FullName }
         }
     }
 
-    $Summary = if ($Removed.Count -eq 0) { 'nothing unused' }
+    $Summary = if ($Removed.Count -eq 0) { 'nothing removed' }
     else { ($Removed.Keys | ForEach-Object { '{0} {1} ({2:N1} GB)' -f $_, $Removed[$_][0], ($Removed[$_][1] / 1GB) }) -join ', ' }
-    Write-Host "==> Artifact cleanup ($([IO.Path]::GetFileName($ProfileRoot))): $Summary."
+    $Recent = @($LastWritten.Keys | Where-Object { $LastWritten[$_] -ge $Cutoff }).Count
+    Write-Host "==> Artifact cleanup ($([IO.Path]::GetFileName($ProfileRoot))): $Summary; kept $Recent unused units written within $($script:UnusedUnitRetention.TotalHours) h."
 }
 
 # Execute Cargo with structured output and, after success, sweep the profile down to the units it used.
