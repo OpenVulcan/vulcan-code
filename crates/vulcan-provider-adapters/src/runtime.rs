@@ -169,7 +169,7 @@ pub struct PublicAiRuntime {
     secondary_route_cache: Arc<RwLock<BTreeMap<String, SecondaryRouteCacheEntry>>>,
     /// Connection-scoped single-flight locks for renewable credential refresh.
     /// 用于可续期凭据刷新的连接作用域单飞锁。
-    refresh_locks: Arc<StdMutex<BTreeMap<String, Arc<AsyncMutex<()>>>>>,
+    refresh_locks: CredentialRefreshLocks,
     /// Host-owned secure secret resolver.
     /// 宿主所有的安全秘密解析器。
     secrets: Arc<dyn CredentialSecretStore>,
@@ -605,13 +605,16 @@ fn build_public_ai_http_client() -> Result<reqwest::Client, String> {
         .map_err(|error| format!("Failed to build the public AI HTTP client: {error}"))
 }
 
+/// Credential refresh locks keyed by durable connection ID.
+/// 按持久连接 ID 索引的凭据刷新锁。
+type CredentialRefreshLocks = Arc<StdMutex<BTreeMap<String, Arc<AsyncMutex<()>>>>>;
+
 /// Returns process-owned locks so runtime replacement cannot consume a single-use rotation twice.
 /// 返回进程持有的锁，避免运行时替换导致单次轮换被消费两次。
-fn shared_credential_refresh_locks() -> Arc<StdMutex<BTreeMap<String, Arc<AsyncMutex<()>>>>> {
+fn shared_credential_refresh_locks() -> CredentialRefreshLocks {
     // locks outlives every runtime generation and remains scoped by random durable connection IDs.
     // locks 比每代运行时存活更久，并按随机持久连接 ID 隔离。
-    static LOCKS: std::sync::OnceLock<Arc<StdMutex<BTreeMap<String, Arc<AsyncMutex<()>>>>>> =
-        std::sync::OnceLock::new();
+    static LOCKS: std::sync::OnceLock<CredentialRefreshLocks> = std::sync::OnceLock::new();
     Arc::clone(LOCKS.get_or_init(|| Arc::new(StdMutex::new(BTreeMap::new()))))
 }
 

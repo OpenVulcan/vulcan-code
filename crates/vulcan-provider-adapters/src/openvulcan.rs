@@ -124,8 +124,10 @@ pub(crate) fn parse_catalog(
         let mut embedding_task_values = BTreeMap::new();
         // capabilities never acquire conversation operations from a model-name heuristic.
         // capabilities 绝不从模型名称启发式规则获得对话操作。
-        let mut capabilities = ModelCapabilities::default();
-        capabilities.evidence_revision = format!("openvulcan.{CONTRACT_VERSION}");
+        let mut capabilities = ModelCapabilities {
+            evidence_revision: format!("openvulcan.{CONTRACT_VERSION}"),
+            ..ModelCapabilities::default()
+        };
         match descriptor.operation {
             PublicOperation::Embedding {
                 capabilities: published,

@@ -540,7 +540,7 @@ mod tests {
             let server = tokio::spawn(async move {
                 let (mut stream, _) = upstream.accept().await.unwrap();
                 let mut request = [0_u8; 8192];
-                stream.read(&mut request).await.unwrap();
+                assert!(stream.read(&mut request).await.unwrap() > 0);
                 stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
             });
             // material captures the failure before the result page is written, including early decoding errors.
@@ -566,7 +566,7 @@ mod tests {
             let writer = async {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut request = [0_u8; 8192];
-                stream.read(&mut request).await.unwrap();
+                assert!(stream.read(&mut request).await.unwrap() > 0);
                 write_exchange_result(&mut stream, &pages, &material)
                     .await
                     .unwrap();
