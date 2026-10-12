@@ -83,7 +83,7 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
       {props.modelControls}
       <Button
         aria-label={stopOnly ? props.stopAriaLabel : props.sendAriaLabel}
-        className={cn("send-button", stopOnly && "running")}
+        className={cn("send-button", stopOnly && "running", !stopOnly && !draftHasContent && !hasAttachments && "is-empty")}
         aria-busy={stopOnly && props.stopPending}
         disabled={stopOnly ? props.stopPending : props.sendBlocked}
         onClick={props.onSend}

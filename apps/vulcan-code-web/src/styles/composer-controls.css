@@ -1,25 +1,28 @@
+/* The toolbar shares the card surface: no band or divider, so text and controls read as one object. */
+/* 工具栏与卡片同一表面：不加底色带或分隔线，使文字与控件成为一个整体。 */
 .composer-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-  background: var(--vcn-surface-toolbar);
+  padding: 2px 10px 10px;
 }
 
 .composer-add-button {
-  width: 26px;
-  height: 26px;
-  flex: 0 0 26px;
-  border-radius: var(--vcn-radius-md);
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-pill);
   background: transparent;
+  color: var(--muted-foreground);
 }
 
 .composer-add-button:hover,
 .composer-add-button:focus-visible,
 .composer-add-button[data-state="open"] {
   background: var(--muted);
+  color: var(--foreground);
 }
 
 .composer-attachment-menu {
@@ -443,22 +446,25 @@
   line-height: 1.35;
 }
 
+/* Toolbar triggers are quiet pills: muted until hovered or open, so the draft text stays the focus. */
+/* 工具栏触发器是安静的胶囊：悬停或展开前保持弱化，让草稿文字始终是焦点。 */
 .composer-select-trigger {
-  height: 26px;
+  height: 30px;
   min-width: 0;
   justify-content: flex-start;
   gap: 6px;
   border-color: transparent;
-  border-radius: var(--vcn-radius-md);
+  border-radius: var(--vcn-radius-pill);
   background: transparent;
-  color: var(--foreground);
-  padding: 4px 6px;
+  color: var(--muted-foreground);
+  padding: 0 10px;
   box-shadow: none;
 }
 
 .composer-select-trigger:hover,
 .composer-select-trigger[data-state="open"] {
   background: var(--muted);
+  color: var(--foreground);
 }
 
 .composer-select-trigger.mode {

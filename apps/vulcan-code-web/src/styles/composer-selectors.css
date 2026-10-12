@@ -290,21 +290,32 @@
 }
 
 .send-button {
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
+  margin-left: 2px;
   border-radius: var(--vcn-radius-pill);
   background: var(--foreground);
   color: var(--background);
 }
 
 .send-button svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
 }
 
 .send-button:hover {
   background: color-mix(in srgb, var(--foreground) 88%, transparent);
   color: var(--background);
+}
+
+/* An empty or blocked draft shows a recessed button instead of a solid or faded black disc. */
+/* 空草稿或受阻草稿显示内凹的按钮，而不是实心或半透明的黑色圆片。 */
+.send-button.is-empty,
+.send-button.is-empty:hover,
+.send-button:disabled:not(.running) {
+  background: var(--muted);
+  color: var(--muted-foreground);
+  opacity: 1;
 }
 
 /* Merged model + reasoning trigger: the model name carries the weight, the level follows in muted ink. */

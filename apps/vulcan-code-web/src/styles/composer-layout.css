@@ -413,8 +413,8 @@ align-self: center;
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-xl);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: calc(var(--vcn-radius-xl) + 6px);
   background: var(--card);
   box-shadow: var(--vcn-shadow-hover);
   overflow: hidden;
@@ -422,11 +422,11 @@ align-self: center;
   transition: border-color var(--vcn-duration-base) var(--vcn-ease-out), box-shadow var(--vcn-duration-base) var(--vcn-ease-out);
 }
 
-/* The composer is the primary work surface: it floats above the transcript and warms to the brand colour while typing. */
-/* 输入框是主要工作表面：浮于对话记录之上，输入时边缘泛起品牌色。 */
+/* The composer is one quiet floating card; typing only deepens its edge and lift, never a coloured halo. */
+/* 输入框是一张安静的悬浮卡片；输入时只加深边缘与浮起感，不再泛出彩色光晕。 */
 .composer-panel:focus-within {
-  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
-  box-shadow: var(--vcn-shadow-hover), 0 0 0 3px color-mix(in srgb, var(--primary) 9%, transparent);
+  border-color: color-mix(in srgb, var(--foreground) 20%, var(--border));
+  box-shadow: var(--vcn-shadow-floating);
 }
 
 .composer-panel.attachment-drag-over {
