@@ -73,7 +73,9 @@ pub(super) async fn restore_deleted_credential(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai_credential_secret_store::repair_tests::CredentialRepairFixture;
+    use crate::ai_credential_secret_store::repair_tests::{
+        CredentialRepairFixture, UNSUPPORTED_FORMAT_VERSION,
+    };
     use vulcan_provider_adapters::CredentialSecretResolver;
 
     /// Exercises the actual settings update and delete services with rejected SQLite credentials.
@@ -102,7 +104,7 @@ mod tests {
         // configuration 保留两个被拒绝账号，分别用于替换和移除。
         let mut configuration = PersistedAiConfiguration::default();
         for id in ["replace-old", "delete-old"] {
-            fixture.insert(id, 1).await;
+            fixture.insert(id, UNSUPPORTED_FORMAT_VERSION).await;
             configuration.connection_graph.connections.insert(
                 id.into(),
                 CredentialConnection {
@@ -267,7 +269,9 @@ mod tests {
         let fixture = CredentialRepairFixture::new().await;
         // original provides exact evidence for compensation, including its rejected format.
         // original 提供包含被拒绝格式的精确补偿证据。
-        let mut original = fixture.insert("repair-key", 1).await;
+        let mut original = fixture
+            .insert("repair-key", UNSUPPORTED_FORMAT_VERSION)
+            .await;
         // edit retains the opaque record while storing fresh validated material.
         // edit 保留不透明记录，同时保存新验证的材料。
         let (previous, replacement) = replace_credential_material(
@@ -307,7 +311,9 @@ mod tests {
         // fixture owns an isolated schema.
         // fixture 持有隔离结构。
         let fixture = CredentialRepairFixture::new().await;
-        fixture.insert("repair-key", 1).await;
+        fixture
+            .insert("repair-key", UNSUPPORTED_FORMAT_VERSION)
+            .await;
         // first edit is the transaction whose later compensation will be stale.
         // first 是后续补偿将过期的事务编辑。
         let (previous, first) = replace_credential_material(

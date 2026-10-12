@@ -7,6 +7,11 @@ use vulcan_workspace_store::data_plane::{
     HostRuntimeMetadata, prepare_application_schema_for_test,
 };
 
+/// Storage format no current build reads, used to prove unsupported rows are rejected and repairable.
+/// 当前构建不读取的存储格式，用于证明不受支持的记录会被拒绝且可修复。
+pub(crate) const UNSUPPORTED_FORMAT_VERSION: u32 =
+    vulcan_provider_adapters::CREDENTIAL_SECRET_FORMAT_VERSION + 1;
+
 /// Owns an isolated database and store; no test resolves the user's application directory.
 /// 持有隔离数据库和仓库；测试不解析用户应用目录。
 pub(crate) struct CredentialRepairFixture {
@@ -103,10 +108,7 @@ async fn credential_repair_deletes_and_restores_unsupported_records() {
     // fixture owns an independent production-shaped database.
     // fixture 持有独立的生产形态数据库。
     let fixture = CredentialRepairFixture::new().await;
-    for version in [
-        1,
-        vulcan_provider_adapters::CREDENTIAL_SECRET_FORMAT_VERSION + 1,
-    ] {
+    for version in [UNSUPPORTED_FORMAT_VERSION, UNSUPPORTED_FORMAT_VERSION + 1] {
         // reference isolates each version's compensation history.
         // reference 隔离每个版本的补偿历史。
         let reference = format!("unsupported-{version}");

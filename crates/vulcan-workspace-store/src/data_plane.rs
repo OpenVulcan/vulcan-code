@@ -36,17 +36,15 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// 进程内序号，为每次系统统计引导提供不同的绑定后缀。
 static SYSTEM_STATISTICS_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// Base application index schema version, independent of the credential table version below.
-/// 基础应用索引结构版本，独立于下方的凭据表版本。
+/// Application schema version written by the single v1 initialization.
+/// 由唯一 v1 初始化写入的应用结构版本号。
 /// Initialization creates the declared schema without reading or migrating earlier formats.
 /// 初始化创建已声明的结构，不读取或迁移早期格式。
 pub const APP_SCHEMA_VERSION: i64 = 1;
 
-/// Versioned credential table shared by initialization and every persistence operation.
-/// 初始化与全部持久化操作共用的版本化凭据表。
-/// The suffix is the credential schema version; V0.1 never reads or migrates the old unversioned table.
-/// 后缀即凭据结构版本；V0.1 不读取或迁移旧的无版本表。
-pub const AI_CREDENTIAL_SECRETS_TABLE: &str = "ai_credential_secrets_v2";
+/// Credential table shared by initialization and every persistence operation.
+/// 初始化与全部持久化操作共用的凭据表。
+pub const AI_CREDENTIAL_SECRETS_TABLE: &str = "ai_credential_secrets";
 
 /// Long-lived host runtime handle kept by the host runtime after startup succeeds.
 /// 启动成功后由宿主运行时持有的长生命周期宿主运行时句柄。
@@ -222,10 +220,9 @@ pub async fn bootstrap_application_data_plane() -> Result<DataPlaneBootstrapRepo
         // The binding identifiers stay in the runtime metadata because plugin and VCE LanceDB paths use
         // them to address the host's own in-process databases.
         // 绑定标识符保留在运行期元数据中，因为插件与 VCE 的 LanceDB 路径用它们寻址宿主自身的进程内数据库。
-        // Initialize the application schema and its independently versioned credential table.
-        // 初始化应用结构及其独立版本化的凭据表。
-        // Existing credential versions are neither inspected nor copied; application indexes stay in place.
-        // 既有凭据版本既不检查也不复制；应用索引保持原位。
+        // Single v1 initialization: the script creates every v1 object and writes `user_version = 1`;
+        // there is no migration chain and no branch that detects an older database.
+        // 唯一 v1 初始化：脚本创建全部 v1 对象并写入 `user_version = 1`；没有迁移链，也没有检测旧数据库的分支。
         {
             let connection = local
                 .connect(LogicalDatabase::AppState)

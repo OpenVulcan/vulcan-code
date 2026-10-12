@@ -32,7 +32,10 @@ fn credential_repair_startup_isolates_old_accounts_without_rewriting_configurati
         // connection_id provides an exact stable identity for both storage and runtime assertions.
         // connection_id 为存储和运行时断言提供精确稳定身份。
         let connection_id = format!("old-account-{index}");
-        saved_records.push(async_runtime.block_on(fixture.insert(&connection_id, 1)));
+        saved_records.push(async_runtime.block_on(fixture.insert(
+            &connection_id,
+            crate::ai_credential_secret_store::repair_tests::UNSUPPORTED_FORMAT_VERSION,
+        )));
         configuration.connection_graph.connections.insert(
             connection_id.clone(),
             CredentialConnection {

@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 /// Current persisted credential-secret format version.
 /// 当前持久化凭据秘密格式版本。
-pub const CREDENTIAL_SECRET_FORMAT_VERSION: u32 = 2;
+pub const CREDENTIAL_SECRET_FORMAT_VERSION: u32 = 1;
 
 /// Identifies the isolated OpenVulcan authorization deployment.
 /// 标识相互隔离的 OpenVulcan 授权部署。
