@@ -82,14 +82,14 @@ function PermissionCategoryItems(props: { projectId: string }) {
   const { snapshot } = policy;
   return (
     <>
-      <DropdownMenuLabel className="flex flex-col gap-0.5 text-xs font-normal">
+      <DropdownMenuLabel className="flex flex-col gap-0.5">
         <span className="text-foreground">{t("settings.permissionJudge.policy.title")}</span>
-        <span className="text-[11px] leading-snug text-muted-foreground">{t("permissionMode.categoriesHint")}</span>
+        <span className="leading-snug font-normal">{t("permissionMode.categoriesHint")}</span>
       </DropdownMenuLabel>
       {policy.loadError !== null ? (
-        <DropdownMenuItem className="text-xs" disabled>{t("projectSettings.permissionJudge.loadFailed")}</DropdownMenuItem>
+        <DropdownMenuItem disabled>{t("projectSettings.permissionJudge.loadFailed")}</DropdownMenuItem>
       ) : snapshot === null ? (
-        <DropdownMenuItem className="text-xs" disabled>{t("ui.loading")}</DropdownMenuItem>
+        <DropdownMenuItem disabled>{t("ui.loading")}</DropdownMenuItem>
       ) : quickCategories(snapshot).map((option) => {
         const allowed = (option.chosenMode ?? option.defaultMode) === "allow";
         const toggle = (checked: boolean) => {
@@ -100,7 +100,6 @@ function PermissionCategoryItems(props: { projectId: string }) {
           <DropdownMenuCheckboxItem
             key={option.key}
             checked={allowed}
-            className="text-xs"
             data-judge-category={option.key}
             disabled={policy.saving !== null}
             onCheckedChange={(checked) => toggle(checked === true)}
@@ -181,7 +180,7 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" side="top" width="lg" aria-busy={saving}>
-          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t("permissionMode.label")}</DropdownMenuLabel>
+          <DropdownMenuLabel>{t("permissionMode.label")}</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={mode ?? ""}>
             {PERMISSION_MODE_OPTIONS.map((option) => {
               const Icon = option.icon;
@@ -190,7 +189,7 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
               return (
                 <DropdownMenuRadioItem
                   key={option.value}
-                  className="items-start gap-2.5 py-2 text-xs"
+                  className="items-start py-2"
                   value={option.value}
                   data-permission-mode={option.value}
                   data-needs-setup={greyed ? "" : undefined}
@@ -216,7 +215,7 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
             <>
               <DropdownMenuSeparator />
               <DropdownMenuSub>
-                <DropdownMenuSubTrigger className="gap-2.5 text-xs" data-auto-approve-settings="">
+                <DropdownMenuSubTrigger data-auto-approve-settings="">
                   <span className="composer-select-icon"><SlidersHorizontal size={14} /></span>
                   <span className="flex-1">{t("permissionMode.autoSettings")}</span>
                   {unattendedOn ? <span className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground">
@@ -231,7 +230,7 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
                     </>
                   ) : null}
                   <DropdownMenuItem
-                    className="items-start gap-2.5 py-2 text-xs"
+                    className="items-start py-2"
                     data-unattended-entry={unattendedOn ? "on" : "off"}
                     disabled={!unattended.available || unattended.saving}
                     onSelect={() => setEditingUnattended(true)}

@@ -29,10 +29,6 @@
   min-width: 160px;
 }
 
-.composer-attachment-menu svg {
-  color: var(--muted-foreground);
-}
-
 .composer-thinking-menu [data-slot="dropdown-menu-item"],
 .composer-thinking-menu [data-slot="dropdown-menu-radio-item"] {
   min-width: 172px;
