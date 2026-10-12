@@ -174,17 +174,17 @@
   align-items: center;
   justify-content: center;
   border-radius: var(--vcn-radius-md);
-  background: var(--sidebar-primary);
-  color: var(--sidebar-primary-foreground);
+  background: color-mix(in srgb, var(--sidebar-accent) 82%, var(--foreground) 12%);
+  color: var(--sidebar-accent-foreground);
   font-size: 15px;
   font-weight: 800;
   line-height: 1;
   transition: width 180ms ease, height 180ms ease, transform 180ms ease;
 }
 
-.sidebar-user-avatar {
-  background: color-mix(in srgb, var(--sidebar-accent) 82%, var(--foreground) 12%);
-  color: var(--sidebar-accent-foreground);
+.sidebar-user-avatar[data-signed-in] {
+  background: var(--sidebar-primary);
+  color: var(--sidebar-primary-foreground);
 }
 
 .sidebar-profile-label {

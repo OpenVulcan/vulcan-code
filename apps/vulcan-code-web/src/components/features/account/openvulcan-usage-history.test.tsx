@@ -5,7 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { loadOpenVulcanUsagePage, type OpenVulcanUsagePage } from "@/service/openvulcan-account-service";
 import { OpenVulcanUsageHistory } from "./openvulcan-usage-history";
 
-vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+vi.mock("@/i18n", () => ({
+  useI18n: () => ({ locale: "en-US", t: (key: string) => key }),
+  formatMessage: (template: string) => template,
+}));
 vi.mock("@/service/openvulcan-account-service", () => ({ loadOpenVulcanUsagePage: vi.fn() }));
 
 // host and root mount the actual history component with an isolated mocked host boundary.
@@ -32,20 +35,22 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-// Exact decimal strings survive rendering and the next request uses the server's cursor unchanged.
-// 准确十进制字符串在渲染中保持不变，后续请求原样使用服务端游标。
-it("preserves large usage values and paginates with the owner-bound cursor", async () => {
+// cellTexts returns the rendered table cells' own text, excluding nested failure notes.
+// cellTexts 返回表格单元格自身文本，不含嵌套的失败说明。
+function cellTexts(): string[] {
+  return Array.from(host.querySelectorAll("td"), (cell) => cell.firstChild?.textContent ?? "");
+}
+
+// Exact decimal strings are grouped without precision loss, and paging reuses the server's cursor unchanged.
+// 准确十进制字符串分组时不丢精度，翻页原样使用服务端游标。
+it("loads on mount, keeps large values exact and paginates with the owner-bound cursor", async () => {
   vi.mocked(loadOpenVulcanUsagePage).mockResolvedValueOnce(firstPage).mockResolvedValueOnce({ ...firstPage, usage: [], next_cursor: "" });
   await act(async () => root.render(<OpenVulcanUsageHistory />));
-  expect(loadOpenVulcanUsagePage).not.toHaveBeenCalled();
-  await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
-  expect(loadOpenVulcanUsagePage).toHaveBeenCalledWith("");
-  for (const exact of [firstPage.usage[0].request_count, firstPage.usage[0].input_tokens, firstPage.usage[0].charged_micro_points]) {
-    expect(Array.from(host.querySelectorAll("td"), (cell) => cell.textContent)).toContain(exact);
+  expect(loadOpenVulcanUsagePage).toHaveBeenCalledExactlyOnceWith("");
+  for (const exact of ["9,007,199,254,740,993", "18,014,398,509,481,987", "36,028,797,018.963977"]) {
+    expect(cellTexts()).toContain(exact);
   }
-  // next is located by its stable catalog key rather than translated copy or DOM position.
-  // next 按稳定目录键定位，不依赖翻译文案或 DOM 位置。
-  const next = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === "openvulcan.usage.next")!;
+  const next = host.querySelector<HTMLButtonElement>(".openvulcan-usage-next")!;
   await act(async () => next.click());
   expect(loadOpenVulcanUsagePage).toHaveBeenLastCalledWith(firstPage.next_cursor);
   expect(host.querySelectorAll("td")).toHaveLength(0);
@@ -54,14 +59,15 @@ it("preserves large usage values and paginates with the owner-bound cursor", asy
 // Replacing the mounted account prevents an old in-flight page from appearing under the new account.
 // 替换挂载账户可防止旧的在途页面出现在新账户下。
 it("discards late usage after the account connection changes", async () => {
-  // resolvePage controls only the old account's outstanding request.
-  // resolvePage 仅控制旧账户尚未完成的请求。
-  let resolvePage!: (page: OpenVulcanUsagePage) => void;
-  vi.mocked(loadOpenVulcanUsagePage).mockReturnValue(new Promise((resolve) => { resolvePage = resolve; }));
+  // resolvers control each mount's outstanding request in call order.
+  // resolvers 按调用顺序控制每次挂载尚未完成的请求。
+  const resolvers: Array<(page: OpenVulcanUsagePage) => void> = [];
+  vi.mocked(loadOpenVulcanUsagePage).mockImplementation(() => new Promise((resolve) => { resolvers.push(resolve); }));
   await act(async () => root.render(<OpenVulcanUsageHistory key="account-a" />));
-  await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
   await act(async () => root.render(<OpenVulcanUsageHistory key="account-b" />));
-  await act(async () => resolvePage(firstPage));
+  expect(resolvers).toHaveLength(2);
+  await act(async () => resolvers[0](firstPage));
   expect(host.querySelectorAll("td")).toHaveLength(0);
-  expect(loadOpenVulcanUsagePage).toHaveBeenCalledTimes(1);
+  await act(async () => resolvers[1]({ ...firstPage, next_cursor: "" }));
+  expect(host.querySelectorAll("tbody tr")).toHaveLength(1);
 });

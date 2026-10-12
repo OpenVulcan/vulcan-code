@@ -1,3 +1,342 @@
-/* Constrain intrinsic widths inside account dialogs without adding account-only rules to startup CSS. */
-/* 约束账户弹窗内的固有宽度，不将账户专属规则加入启动样式。 */
-.openvulcan-account-columns { grid-template-columns: minmax(0, 1fr); }
+/* OpenVulcan account dialog. Loaded with the lazy dialog chunk, so none of these rules enter startup CSS. */
+/* OpenVulcan 账户弹窗。随延迟加载的弹窗分块加载，这些规则都不进入启动样式。 */
+
+.openvulcan-account-header {
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+}
+
+.openvulcan-account-mark {
+  width: 40px;
+  height: 40px;
+  margin-bottom: 4px;
+}
+
+.openvulcan-account-body {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Signed-in identity row. */
+/* 已登录身份行。 */
+.openvulcan-account-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-lg);
+  background: var(--card);
+}
+
+.account-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.openvulcan-account-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--vcn-radius-pill);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 17px;
+}
+
+.openvulcan-account-avatar[data-signed-in] {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.openvulcan-account-identity {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+}
+
+.openvulcan-account-identity strong {
+  overflow: hidden;
+  font-size: var(--vcn-font-size-md);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openvulcan-account-identity span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+}
+
+.openvulcan-account-identity i {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--vcn-radius-pill);
+  background: var(--success-text);
+}
+
+.openvulcan-account-identity i[data-state="expired"] {
+  background: var(--warning-text);
+}
+
+/* Signed-out entry: one primary action, with the site choice as a quiet secondary line. */
+/* 未登录入口：一个主操作，站点选择作为低调的次要行。 */
+.openvulcan-account-login {
+  width: 100%;
+}
+
+.openvulcan-account-site {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+}
+
+.openvulcan-account-site > span {
+  margin-right: 2px;
+}
+
+.openvulcan-account-site button {
+  padding: 2px 8px;
+  border-radius: var(--vcn-radius-pill);
+  color: inherit;
+  transition: background-color var(--vcn-duration-fast) var(--vcn-ease-out), color var(--vcn-duration-fast) var(--vcn-ease-out);
+}
+
+.openvulcan-account-site button:hover:not(:disabled) {
+  color: var(--foreground);
+}
+
+.openvulcan-account-site button[aria-checked="true"] {
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.openvulcan-account-site button:disabled {
+  opacity: 0.6;
+}
+
+.openvulcan-account-pending {
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+  text-align: center;
+}
+
+/* Shared section frame for the plan and usage panels. */
+/* 套餐与用量面板共用的分区框架。 */
+.openvulcan-plan,
+.openvulcan-usage {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.openvulcan-plan-header,
+.openvulcan-usage-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.openvulcan-plan-header h3,
+.openvulcan-usage-header h3 {
+  font-size: var(--vcn-font-size-sm);
+  font-weight: 600;
+}
+
+.openvulcan-plan-header > button,
+.openvulcan-usage-header > button {
+  margin-left: auto;
+}
+
+.openvulcan-usage-header > span {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openvulcan-plan-tier {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-pill);
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 500;
+}
+
+.openvulcan-plan-tier:not([data-tier="free"]) {
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+}
+
+.openvulcan-plan-balance {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--vcn-radius-lg);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+}
+
+.openvulcan-plan-balance strong {
+  color: var(--foreground);
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.openvulcan-plan-lots {
+  display: grid;
+  gap: 10px;
+}
+
+.openvulcan-plan-lots li {
+  display: grid;
+  gap: 6px;
+}
+
+.openvulcan-plan-lot-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--vcn-font-size-sm);
+}
+
+.openvulcan-plan-lot-head span:last-child {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.openvulcan-plan-meter {
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--vcn-radius-pill);
+  background: var(--muted);
+}
+
+.openvulcan-plan-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.openvulcan-plan-lots small {
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+}
+
+/* Usage totals and the hourly table. */
+/* 用量合计与小时表。 */
+.openvulcan-usage-totals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.openvulcan-usage-totals > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-md);
+}
+
+.openvulcan-usage-totals dt,
+.openvulcan-usage-totals small {
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+}
+
+.openvulcan-usage-totals dd {
+  overflow: hidden;
+  font-size: var(--vcn-font-size-md);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.openvulcan-usage-table {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-md);
+}
+
+.openvulcan-usage-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--vcn-font-size-xs);
+}
+
+.openvulcan-usage-table th {
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  color: var(--muted-foreground);
+  font-weight: 500;
+  text-align: right;
+}
+
+.openvulcan-usage-table th,
+.openvulcan-usage-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.openvulcan-usage-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.openvulcan-usage-table td {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.openvulcan-usage-table th:nth-child(-n + 2),
+.openvulcan-usage-table td:nth-child(-n + 2) {
+  text-align: left;
+}
+
+.openvulcan-usage-table td small {
+  display: block;
+  color: var(--destructive);
+}
+
+.openvulcan-usage-model {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.openvulcan-usage-next {
+  justify-self: end;
+}
+
+@media (max-width: 520px) {
+  .openvulcan-usage-totals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,5 +1,6 @@
 import React from "react";
 import { Settings, UserRound } from "lucide-react";
+import { AccountAvatar } from "@/components/features/account/account-avatar";
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 import {
   DropdownMenu,
@@ -66,7 +67,7 @@ export function SidebarUserMenu(props: {
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
             <button aria-label={label} className="activity-rail-button sidebar-user-button" type="button">
-              <span aria-hidden="true" className="sidebar-user-avatar">V</span>
+              <AccountAvatar name={account?.snapshot?.displayName} className="sidebar-user-avatar" />
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -74,7 +75,7 @@ export function SidebarUserMenu(props: {
       </Tooltip>
       <DropdownMenuContent align="end" className="sidebar-profile-menu" side="right" sideOffset={8}>
         <DropdownMenuLabel className="sidebar-user-menu-label">
-          <span aria-hidden="true" className="sidebar-user-avatar">V</span>
+          <AccountAvatar name={account?.snapshot?.displayName} className="sidebar-user-avatar" />
           <span>
             <strong>{label}</strong>
             <small>Vulcan Code</small>

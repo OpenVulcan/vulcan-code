@@ -2,10 +2,17 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { loadOpenVulcanUsagePage } from "@/service/openvulcan-account-service";
+import { queryPublicAiConnectionUsage } from "@/service/settings-actions-service";
 import OpenVulcanAccountDialog from "./openvulcan-account-dialog";
 import { OpenVulcanAccountContext, type OpenVulcanAccountController } from "./openvulcan-account-context";
 
-vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+vi.mock("@/i18n", () => ({
+  useI18n: () => ({ locale: "en-US", t: (key: string) => key }),
+  formatMessage: (template: string) => template,
+}));
+vi.mock("@/service/settings-actions-service", () => ({ queryPublicAiConnectionUsage: vi.fn() }));
+vi.mock("@/service/openvulcan-account-service", () => ({ loadOpenVulcanUsagePage: vi.fn() }));
 
 // host and root mount the real portal and disclosure, independently of the settings page.
 // host 与 root 挂载真实门户与展开组件，独立于设置页。
@@ -87,8 +94,38 @@ it("shows pending progress and allows cancelling the waiting browser flow", asyn
   await render();
   expect(document.querySelector('[role="alert"]')).toBeNull();
   expect(document.querySelector('[role="status"]')).not.toBeNull();
-  expect(button("openvulcan.account.china").disabled).toBe(true);
-  expect(button("openvulcan.account.global").disabled).toBe(true);
+  for (const site of document.querySelectorAll<HTMLButtonElement>("[data-openvulcan-site]")) expect(site.disabled).toBe(true);
+  expect(document.querySelector<HTMLButtonElement>("[data-openvulcan-login]")!.disabled).toBe(true);
   await act(async () => button("openvulcan.account.skip").click());
   expect(account.setOpen).toHaveBeenCalledExactlyOnceWith(false);
+});
+
+// Signing in uses the chosen site, which defaults from the interface language and can be switched.
+// 登录使用所选站点；站点按界面语言默认，并可切换。
+it("signs in to the selected site", async () => {
+  account = { ...account, error: null };
+  await render();
+  expect(document.querySelector('[data-openvulcan-site="global"]')!.getAttribute("aria-checked")).toBe("true");
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-openvulcan-site="china"]')!.click());
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-openvulcan-login]")!.click());
+  expect(account.login).toHaveBeenCalledExactlyOnceWith("china");
+});
+
+// A signed-in account shows its name initial and sums its exact quota lots for the plan balance.
+// 已登录账户显示名称首字符，并精确累加额度批次作为套餐余额。
+it("shows the account initial and the exact remaining plan balance", async () => {
+  vi.mocked(loadOpenVulcanUsagePage).mockResolvedValue({ from_date: "2026-10-01", to_date: "2026-10-12", next_cursor: "", usage: [] });
+  vi.mocked(queryPublicAiConnectionUsage).mockResolvedValue({
+    credential_id: "", availability: "supported", plan_name: "plus",
+    quota_windows: ["9007199254740.000001", "0.500000"].map((remaining, index) => ({
+      id: `lot-${index}`, display_name: "member_window", bucket_name: "member_window",
+      remaining, total: "9007199254741.000000", unit: "points", unlimited: false, available: true,
+    })),
+  });
+  account = { ...account, error: null, snapshot: { connected: true, connectionId: "synthetic-connection", displayName: "lingeasy", region: "china", message: null } };
+  await render();
+  expect(queryPublicAiConnectionUsage).toHaveBeenCalledExactlyOnceWith("synthetic-connection");
+  expect(document.querySelector(".openvulcan-account-avatar")?.textContent).toBe("L");
+  expect(document.querySelector(".openvulcan-plan-tier")?.textContent).toBe("openvulcan.plan.tier.plus");
+  expect(document.querySelector(".openvulcan-plan-balance strong")?.textContent).toBe("9,007,199,254,740.500001");
 });
