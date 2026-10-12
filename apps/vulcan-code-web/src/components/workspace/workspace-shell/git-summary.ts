@@ -1,5 +1,5 @@
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
-import type { WorkspaceDiffSnapshotResponse } from "@/diff/types";
+import type { DiffReviewSelection, WorkspaceDiffSnapshotResponse } from "@/diff/types";
 
 // WorkspaceProjectGitRepositoryState stores independent Git state for one repository node.
 // WorkspaceProjectGitRepositoryState 保存单个仓库节点的独立 Git 状态。
@@ -138,3 +138,77 @@ export function workspaceDiffSnapshotHasGitRepository(
   );
 }
 
+// mergeWorkspaceDiffSnapshotIntoProjectGitState merges a panel-loaded worktree snapshot into a repository the backend
+// catalog already reported. It never creates a repository: the review panel also loads snapshots for folders without
+// Git, and inventing a node for them would show a phantom repository in the session tools.
+// mergeWorkspaceDiffSnapshotIntoProjectGitState 只把面板加载的工作树快照合并进后端目录已报告的仓库，绝不新建仓库：
+// 审核面板也会为没有 Git 的目录加载快照，为其虚构节点会在会话工具中显示不存在的仓库。
+export function mergeWorkspaceDiffSnapshotIntoProjectGitState(
+  // Current shared Git state keyed by workspace path.
+  // 按工作区路径索引的当前共享 Git 状态。
+  current: WorkspaceProjectGitStateMap,
+  // Workspace path whose panel loaded the snapshot.
+  // 加载该快照的面板所属工作区路径。
+  workspacePath: string,
+  // Optional project id used by backend Git requests.
+  // 后端 Git 请求使用的可选项目标识。
+  projectId: string | null,
+  // Review selection the snapshot answers; only unstaged and staged views update the summary.
+  // 快照对应的审核选择；只有未暂存与已暂存视图会更新摘要。
+  selection: DiffReviewSelection,
+  // Snapshot returned by the workspace diff backend.
+  // 工作区 diff 后端返回的快照。
+  response: WorkspaceDiffSnapshotResponse,
+): WorkspaceProjectGitStateMap {
+  if (selection.mode !== "unstaged" && selection.mode !== "staged") {
+    return current;
+  }
+  const previous = current[workspacePath];
+  if (previous?.loading) {
+    return current;
+  }
+  const repositoryKey = selection.repositoryKey ?? previous?.primaryRepositoryKey ?? null;
+  const previousRepository = previous?.repositories.find((repository) => repository.repositoryKey === repositoryKey);
+  if (!previous || !previousRepository) {
+    return current;
+  }
+  const nextUnstagedSnapshot = selection.mode === "unstaged"
+    ? response
+    : previousRepository.unstagedSnapshot;
+  const nextStagedSnapshot = selection.mode === "staged"
+    ? response
+    : previousRepository.stagedSnapshot;
+  const nextRepository: WorkspaceProjectGitRepositoryState = {
+    ...previousRepository,
+    error: null,
+    loading: false,
+    projectId,
+    revision: previousRepository.revision + 1,
+    stagedSnapshot: nextStagedSnapshot,
+    summary: buildWorkspaceProjectGitSummary(nextUnstagedSnapshot, nextStagedSnapshot),
+    unstagedSnapshot: nextUnstagedSnapshot,
+    workspacePath,
+  };
+  const repositories = previous.repositories.map((repository) => (
+    repository.repositoryKey === previousRepository.repositoryKey ? nextRepository : repository
+  ));
+  const primaryRepository = repositories.find((repository) => repository.repositoryKey === previous.primaryRepositoryKey)
+    ?? repositories[0]
+    ?? null;
+  return {
+    ...current,
+    [workspacePath]: {
+      error: null,
+      loading: false,
+      projectId,
+      revision: previous.revision + 1,
+      refreshRequestId: previous.refreshRequestId,
+      stagedSnapshot: primaryRepository?.stagedSnapshot ?? null,
+      summary: primaryRepository?.summary ?? null,
+      unstagedSnapshot: primaryRepository?.unstagedSnapshot ?? null,
+      workspacePath,
+      repositories,
+      primaryRepositoryKey: primaryRepository?.repositoryKey ?? null,
+    },
+  };
+}

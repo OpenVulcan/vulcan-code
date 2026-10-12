@@ -5,6 +5,7 @@ import type { ConversationSessionGitBranchActions } from "@/components/conversat
 import { createWorkspaceGitRefreshOwnership } from "@/components/workspace/workspace-shell/git-refresh-ownership";
 import {
   buildWorkspaceProjectGitSummary,
+  mergeWorkspaceDiffSnapshotIntoProjectGitState,
   type WorkspaceProjectGitRepositoryState,
   type WorkspaceProjectGitStateMap,
 } from "@/components/workspace/workspace-shell/git-summary";
@@ -691,60 +692,13 @@ export function useWorkspaceGitState(options: WorkspaceGitStateOptions): Workspa
     selection: DiffReviewSelection,
     response: WorkspaceDiffSnapshotResponse,
   ) => {
-    if (selection.mode !== "unstaged" && selection.mode !== "staged") {
-      return;
-    }
-    setWorkspaceGitStateByProject((current) => {
-      const previous = current[workspacePath];
-      if (previous?.loading) {
-        return current;
-      }
-      const repositoryKey = selection.repositoryKey ?? previous?.primaryRepositoryKey ?? ".";
-      const previousRepository = previous?.repositories.find((repository) => repository.repositoryKey === repositoryKey);
-      const nextUnstagedSnapshot = selection.mode === "unstaged"
-        ? response
-        : previousRepository?.unstagedSnapshot ?? null;
-      const nextStagedSnapshot = selection.mode === "staged"
-        ? response
-        : previousRepository?.stagedSnapshot ?? null;
-      const nextRepository: WorkspaceProjectGitRepositoryState = {
-        error: null,
-        isPrimary: previousRepository?.isPrimary ?? repositoryKey === (previous?.primaryRepositoryKey ?? "."),
-        loading: false,
-        monitoringEnabled: previousRepository?.monitoringEnabled ?? true,
-        projectId,
-        relativePath: previousRepository?.relativePath ?? repositoryKey,
-        repositoryKey,
-        repositoryName: previousRepository?.repositoryName ?? repositoryKey,
-        revision: (previousRepository?.revision ?? 0) + 1,
-        stagedSnapshot: nextStagedSnapshot,
-        summary: buildWorkspaceProjectGitSummary(nextUnstagedSnapshot, nextStagedSnapshot),
-        unstagedSnapshot: nextUnstagedSnapshot,
-        workspacePath,
-      };
-      const repositories = previous?.repositories.filter((repository) => repository.repositoryKey !== repositoryKey) ?? [];
-      repositories.push(nextRepository);
-      repositories.sort((left, right) => left.repositoryKey.localeCompare(right.repositoryKey));
-      const primaryRepository = repositories.find((repository) => repository.repositoryKey === (previous?.primaryRepositoryKey ?? "."))
-        ?? repositories[0]
-        ?? null;
-      return {
-        ...current,
-        [workspacePath]: {
-          error: null,
-          loading: false,
-          projectId,
-          revision: (previous?.revision ?? 0) + 1,
-          refreshRequestId: previous?.refreshRequestId ?? 0,
-          stagedSnapshot: primaryRepository?.stagedSnapshot ?? null,
-          summary: primaryRepository?.summary ?? null,
-          unstagedSnapshot: primaryRepository?.unstagedSnapshot ?? null,
-          workspacePath,
-          repositories,
-          primaryRepositoryKey: primaryRepository?.repositoryKey ?? null,
-        },
-      };
-    });
+    setWorkspaceGitStateByProject((current) => mergeWorkspaceDiffSnapshotIntoProjectGitState(
+      current,
+      workspacePath,
+      projectId,
+      selection,
+      response,
+    ));
   }, []);
 
   React.useEffect(() => {
