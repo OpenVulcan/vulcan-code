@@ -65,15 +65,16 @@ describe("project editor operation lifetimes", () => {
     const browse = vi.fn(async () => ({ path: "D:/synthetic", canSelect: true, entries: [], roots: [] }))
     const confirm = vi.fn(async () => undefined)
     await withEditor(<ProjectFolderPickerDialog open onBrowse={browse} onConfirm={confirm} onOpenChange={vi.fn()} />, async container => {
+      await act(async () => container.querySelector<HTMLButtonElement>("[data-folder-picker-edit]")!.click())
       // input changes bypass the React tracker just as native editing does.
       // input 变化像原生编辑一样绕过 React 值追踪器。
-      const input = container.querySelector("input")!
+      const input = container.querySelector<HTMLInputElement>("form input")!
       await act(async () => {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "D:/unbrowsed")
         input.dispatchEvent(new Event("input", { bubbles: true }))
       })
-      expect(container.querySelector<HTMLButtonElement>("footer button:last-child")?.disabled).toBe(true)
-      expect(container.textContent).toContain("请先打开输入的路径")
+      expect(container.querySelector<HTMLButtonElement>("[data-folder-picker-confirm]")?.disabled).toBe(true)
+      expect(container.querySelector("[data-folder-picker-unbrowsed]")).not.toBeNull()
       expect(confirm).not.toHaveBeenCalled()
     })
   })

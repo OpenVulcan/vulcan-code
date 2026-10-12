@@ -95,7 +95,6 @@
   "apps/vulcan-code-web/src/components/features/skills/lua-skill-update-progress-dialog.test.tsx": 13,
   "apps/vulcan-code-web/src/components/media/generated-media-player.test.tsx": 10,
   "apps/vulcan-code-web/src/components/project/project-agent-settings-loading.test.tsx": 1,
-  "apps/vulcan-code-web/src/components/project/project-editing-lifecycle.test.tsx": 1,
   "apps/vulcan-code-web/src/components/project/project-overview-section.test.tsx": 16,
   "apps/vulcan-code-web/src/components/project/project-settings-vce.test.tsx": 7,
   "apps/vulcan-code-web/src/components/project/project-sidebar.test.tsx": 3,

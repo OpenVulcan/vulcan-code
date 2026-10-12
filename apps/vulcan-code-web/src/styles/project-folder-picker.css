@@ -1,8 +1,8 @@
 .project-folder-picker-dialog {
   display: flex;
   flex-direction: column;
-  height: min(600px, calc(100vh - 64px));
-  max-width: min(860px, calc(100vw - 32px));
+  height: min(620px, calc(100vh - 64px));
+  max-width: min(880px, calc(100vw - 32px));
   overflow: hidden;
 }
 
@@ -11,108 +11,284 @@
   flex: 0 0 auto;
 }
 
-.project-folder-picker-path-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-}
-
-.project-folder-picker-toolbar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.project-folder-picker-current {
+/* One navigation bar: back and up on the left, the path in the middle, refresh on the right. */
+/* 单一导航栏：左侧后退与上级，中间为路径，右侧刷新。 */
+.project-folder-picker-nav {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   min-width: 0;
+}
+
+.project-folder-picker-crumbs,
+.project-folder-picker-path-form {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  margin: 0 4px;
   border: 1px solid var(--border);
   border-radius: var(--vcn-radius-md);
-  background: var(--muted);
-  padding: 8px 10px;
+  background: var(--vcn-fill-subtle);
+}
+
+.project-folder-picker-crumbs {
+  padding: 0 2px 0 4px;
+  cursor: text;
+}
+
+.project-folder-picker-path-form {
+  padding: 0 2px 0 0;
+  background: var(--background);
+}
+
+.project-folder-picker-path-input {
+  height: 32px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.project-folder-picker-crumb-track {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+
+.project-folder-picker-crumb-track::-webkit-scrollbar {
+  display: none;
+}
+
+.project-folder-picker-crumb {
+  flex: 0 0 auto;
+  height: 26px;
+  border: 0;
+  border-radius: var(--vcn-radius-sm);
+  background: transparent;
+  padding: 0 6px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-md);
+  cursor: pointer;
+  transition: background-color var(--vcn-duration-instant) var(--vcn-ease-out);
+}
+
+.project-folder-picker-crumb:hover:not(:disabled) {
+  background: var(--vcn-fill-hover);
+  color: var(--foreground);
+}
+
+.project-folder-picker-crumb[aria-current] {
+  color: var(--foreground);
+  font-weight: 600;
+  cursor: default;
+}
+
+.project-folder-picker-crumb:disabled {
+  opacity: 1;
+}
+
+.project-folder-picker-crumb-sep {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  opacity: 0.6;
+}
+
+/* The empty part of the path bar switches to typing, like a file manager's address bar. */
+/* 路径栏的空白部分可切换为输入，与文件管理器地址栏一致。 */
+.project-folder-picker-crumb-fill {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 16px;
+  border: 0;
+  background: transparent;
+  cursor: text;
+}
+
+.project-folder-picker-browser {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  flex: 1 1 auto;
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.project-folder-picker-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0;
+}
+
+.project-folder-picker-group {
+  display: grid;
+  gap: 1px;
+}
+
+.project-folder-picker-group h3 {
+  margin: 0;
+  padding: 0 8px 4px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 560;
+}
+
+.project-folder-picker-place {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  border: 0;
+  border-radius: var(--vcn-radius-md);
+  background: transparent;
+  padding: 0 8px;
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--vcn-duration-instant) var(--vcn-ease-out);
+}
+
+.project-folder-picker-place svg {
   color: var(--muted-foreground);
 }
 
-.project-folder-picker-current span {
+.project-folder-picker-place span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.project-folder-picker-browser {
-  display: grid;
-  grid-template-columns: 132px minmax(0, 1fr);
-  flex: 1 1 auto;
-  gap: 10px;
-  min-height: 0;
-  overflow: hidden;
+.project-folder-picker-place:hover:not(:disabled) {
+  background: var(--vcn-fill-hover);
 }
 
-.project-folder-picker-roots,
-.project-folder-picker-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  padding: 6px;
-}
-
-.project-folder-picker-roots {
-  min-height: 0;
-  max-height: none;
+.project-folder-picker-place[data-active] {
+  background: var(--vcn-fill-active);
+  font-weight: 600;
 }
 
 .project-folder-picker-directory {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   min-height: 0;
   min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-lg);
+  overflow: hidden;
+}
+
+.project-folder-picker-filter {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  border-bottom: 1px solid var(--vcn-border-subtle);
+  padding: 0 8px 0 12px;
+  color: var(--muted-foreground);
+}
+
+.project-folder-picker-filter input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-md);
+  outline: none;
+}
+
+.project-folder-picker-filter input::placeholder {
+  color: var(--muted-foreground);
+}
+
+.project-folder-picker-toggle {
+  flex: 0 0 auto;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: var(--vcn-radius-pill);
+  background: transparent;
+  padding: 0 8px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  cursor: pointer;
+}
+
+.project-folder-picker-toggle:hover,
+.project-folder-picker-toggle[aria-pressed="true"] {
+  background: var(--vcn-fill-hover);
+  color: var(--foreground);
 }
 
 .project-folder-picker-list {
   flex: 1 1 auto;
   min-height: 0;
-  max-height: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: auto;
+  padding: 6px;
+  outline: none;
+  transition: opacity var(--vcn-duration-fast) var(--vcn-ease-out);
 }
 
-.project-folder-picker-root,
+.project-folder-picker-list[aria-busy="true"] {
+  opacity: 0.6;
+}
+
+.project-folder-picker-list:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 40%, transparent);
+  outline-offset: -2px;
+}
+
 .project-folder-picker-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 8px;
-  width: 100%;
   min-height: 34px;
-  border: 0;
-  border-radius: var(--vcn-radius-sm);
-  background: transparent;
-  padding: 7px 8px;
+  border-radius: var(--vcn-radius-md);
+  padding: 0 4px 0 10px;
   color: var(--foreground);
-  text-align: left;
+  font-size: var(--vcn-font-size-md);
+  cursor: default;
+  user-select: none;
+  transition: background-color var(--vcn-duration-instant) var(--vcn-ease-out);
 }
 
-.project-folder-picker-root {
-  grid-template-columns: auto minmax(0, 1fr);
+.project-folder-picker-row > svg {
+  color: var(--muted-foreground);
 }
 
-.project-folder-picker-root.active {
-  background: var(--accent);
-  color: var(--accent-foreground);
+.project-folder-picker-row:hover {
+  background: var(--vcn-fill-hover);
 }
 
-.project-folder-picker-root:hover:not(:disabled),
-.project-folder-picker-row:hover:not(:disabled) {
-  background: var(--accent);
+.project-folder-picker-row[aria-selected="true"] {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
-.project-folder-picker-root span,
-.project-folder-picker-row span {
+.project-folder-picker-row[aria-selected="true"] > svg {
+  color: var(--primary);
+}
+
+.project-folder-picker-row-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -122,6 +298,68 @@
 .project-folder-picker-row small {
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-xs);
+}
+
+.project-folder-picker-row small.project-folder-picker-badge {
+  border-radius: var(--vcn-radius-pill);
+  background: var(--vcn-fill-active);
+  padding: 1px 7px;
+}
+
+/* The open arrow stays faint until the row is hovered or selected, so the list reads calmly. */
+/* 进入箭头在行悬停或选中前保持淡化，使列表观感平静。 */
+.project-folder-picker-enter {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--vcn-radius-sm);
+  background: transparent;
+  color: var(--muted-foreground);
+  opacity: 0.35;
+  cursor: pointer;
+  transition: opacity var(--vcn-duration-instant) var(--vcn-ease-out), background-color var(--vcn-duration-instant) var(--vcn-ease-out);
+}
+
+.project-folder-picker-row:hover .project-folder-picker-enter,
+.project-folder-picker-row[aria-selected="true"] .project-folder-picker-enter {
+  opacity: 1;
+}
+
+.project-folder-picker-enter:hover:not(:disabled) {
+  background: var(--vcn-fill-active);
+  color: var(--foreground);
+}
+
+.project-folder-picker-footer {
+  align-items: center;
+}
+
+/* The footer names the exact folder the confirm button will use. */
+/* 底栏写明确认按钮将使用的确切目录。 */
+.project-folder-picker-selection {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-right: auto;
+  font-size: var(--vcn-font-size-sm);
+}
+
+.project-folder-picker-selection span {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
+.project-folder-picker-selection strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-folder-picker-empty,
@@ -144,16 +382,37 @@
 
 @media (max-width: 720px) {
   .project-folder-picker-dialog {
-    height: min(580px, calc(100vh - 32px));
+    height: min(600px, calc(100vh - 32px));
   }
 
   .project-folder-picker-browser {
-    grid-template-rows: 120px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .project-folder-picker-roots {
-    min-height: 0;
-    max-height: none;
+  .project-folder-picker-sidebar {
+    flex-direction: row;
+    gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0;
+  }
+
+  .project-folder-picker-group {
+    display: flex;
+    gap: 2px;
+  }
+
+  .project-folder-picker-group h3 {
+    display: none;
+  }
+
+  .project-folder-picker-place {
+    width: auto;
+    flex: 0 0 auto;
+  }
+
+  .project-folder-picker-selection {
+    display: none;
   }
 }

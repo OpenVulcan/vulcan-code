@@ -191,10 +191,14 @@ export interface WorkbenchDialogsProps {
 // WorkbenchDialogs renders the globally mounted modal layer for the workbench.
 // WorkbenchDialogs 渲染工作台全局挂载的模态层。
 export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
+  // projectPaths lets the folder picker offer the folders that already hold projects.
+  // projectPaths 让目录选择器提供已有项目所在的目录。
+  const projectPaths = React.useMemo(() => props.workbench.projects.map((project) => project.path), [props.workbench.projects]);
   return (
     <>
       {props.projectFolderPickerOpen ? <DeferredProjectFolderPicker
         open={props.projectFolderPickerOpen}
+        projectPaths={projectPaths}
         onBrowse={props.onBrowseProjectDirectories}
         onConfirm={props.onConfirmProjectFolder}
         onOpenChange={props.onProjectFolderPickerOpenChange}
