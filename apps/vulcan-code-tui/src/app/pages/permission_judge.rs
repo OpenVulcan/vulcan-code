@@ -16,6 +16,16 @@ const REVIEW_PURPOSE: &str = "tool_call_review";
 // 不保存显式思考档位的选择值。
 const MODEL_DEFAULT_EFFORT: &str = "model-default";
 
+/// Labels a judge backend code; unknown codes render as themselves.
+/// 为判定后端代码生成标签；未知代码按原样显示。
+pub(super) fn backend_label(code: &str) -> String {
+    match code {
+        "local" => tr!("settings.permissionJudge.backend.local"),
+        "cloud" => tr!("settings.permissionJudge.backend.cloud"),
+        other => other.to_string(),
+    }
+}
+
 /// Labels a device code; unknown codes render as themselves.
 /// 为设备代码生成标签；未知代码按原样显示。
 pub(super) fn device_label(code: &str) -> String {
@@ -173,21 +183,12 @@ fn save_request(snapshot: &Value) -> Value {
         device => device.clone(),
     };
     json!({
-        "state": if s(snapshot, "/state") == "enabled" { "enabled" } else { "off" },
-        "backend": if s(snapshot, "/backend") == "cloud" { "cloud" } else { "local" },
+        "backend": v(snapshot, "/backend"),
         "device": device,
         "cudaLibraryDirectory": v(snapshot, "/cuda/lockedDirectory"),
         "llmMayAllowBlocked": b(snapshot, "/llmMayAllowBlocked"),
         "recordDecisions": b(snapshot, "/recordDecisions"),
     })
-}
-
-/// Turns the judge on or off.
-/// 开启或关闭权限判定。
-fn set_state(base: &Value, value: &SettingValue) -> Option<ServiceCall> {
-    let mut request = base.clone();
-    request["state"] = json!(if value.as_bool() { "enabled" } else { "off" });
-    Some(judge::save_permission_judge_settings(request))
 }
 
 /// Locks a CUDA library folder; an empty entry uses the one found.
@@ -311,69 +312,76 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     };
     let ai = app.slots.value(Slot::PublicAiSettings);
     let base = save_request(snapshot);
-    let local = s(&base, "/backend") == "local";
-    let enabled = s(snapshot, "/state") == "enabled";
+    // The saved backend is what makes the judge configured; until then both setups are shown.
+    // 已保存的后端决定判定器是否已配置；在此之前同时显示两种设置。
+    let saved = v(snapshot, "/backend").as_str();
+    let configured = saved.is_some();
+    let local = saved != Some("cloud");
+    let cloud = saved != Some("local");
     let active_model = a(snapshot, "/models")
         .iter()
         .find(|model| v(model, "/id") == v(snapshot, "/activeModelId"));
     let cloud_route = v(ai, &format!("/inferenceProfiles/{JUDGE_PROFILE}/decision"));
-    let ready = if local {
-        active_model.is_some()
-    } else {
-        !cloud_route.is_null()
-    };
 
     let mut rows = vec![button(
         tr!("setupGuide.open"),
         UiAction::GoPage(PageId::SetupGuide),
         Tone::Normal,
     )];
-    if enabled || ready {
-        rows.push(toggle(
-            tr!("settings.permissionJudge.enabled"),
-            enabled,
-            Edit::Call(Setter::Build {
-                ctx: base.clone(),
-                build: set_state,
-            }),
-        ));
-    } else {
-        rows.push(info(
-            tr!("settings.permissionJudge.enabled"),
-            if local {
-                tr!("settings.permissionJudge.needsModel")
-            } else {
-                tr!("settings.permissionJudge.needsCloudRoute")
-            },
-            Tone::Warn,
-        ));
-    }
+    rows.push(info(
+        tr!("settings.permissionJudge.backend"),
+        match saved {
+            Some(backend) => format!(
+                "{} · {}",
+                tr!("settings.permissionJudge.state.configured"),
+                backend_label(backend)
+            ),
+            None => tr!("settings.permissionJudge.state.unset"),
+        },
+        if configured { Tone::Good } else { Tone::Warn },
+    ));
     rows.push(note(
-        tr!("settings.permissionJudge.enabledHint"),
+        tr!("settings.permissionJudge.backendHint"),
         Tone::Muted,
     ));
-    rows.push(
-        choice(
-            tr!("settings.permissionJudge.backend"),
-            vec![
-                (
-                    "local".into(),
-                    tr!("settings.permissionJudge.backend.local"),
-                ),
-                (
-                    "cloud".into(),
-                    tr!("settings.permissionJudge.backend.cloud"),
-                ),
-            ],
-            s(&base, "/backend"),
-            dto(
-                base.clone(),
-                "/backend",
-                judge::save_permission_judge_settings,
-            ),
-        )
-        .detail(tr!("settings.permissionJudge.backendHint")),
-    );
+    // Each other backend is offered only once it is set up, so the judge never points at one
+    // that cannot run.
+    // 其他后端只有在设置完成后才提供，因此判定器不会指向无法运行的后端。
+    for (backend, ready, missing) in [
+        (
+            "local",
+            active_model.is_some(),
+            tr!("settings.permissionJudge.needsModel"),
+        ),
+        (
+            "cloud",
+            !cloud_route.is_null(),
+            tr!("settings.permissionJudge.needsCloudRoute"),
+        ),
+    ] {
+        if saved == Some(backend) {
+            continue;
+        }
+        if ready {
+            let mut request = base.clone();
+            request["backend"] = json!(backend);
+            let name = backend_label(backend);
+            rows.push(button(
+                if configured {
+                    tr!("settings.permissionJudge.switchBackend", backend = name)
+                } else {
+                    tr!("settings.permissionJudge.useBackend", backend = name)
+                },
+                call(judge::save_permission_judge_settings(request)),
+                Tone::Normal,
+            ));
+        } else if !configured {
+            rows.push(note(
+                format!("{} · {missing}", backend_label(backend)),
+                Tone::Muted,
+            ));
+        }
+    }
     if local {
         device_rows(&mut rows, snapshot, &base);
     }
@@ -392,11 +400,12 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
 
     if local {
         status_rows(&mut rows, snapshot, status);
-    } else {
+    }
+    if cloud {
         cloud_rows(&mut rows, ai, cloud_route);
     }
     review_rows(&mut rows, ai);
-    benchmark_rows(&mut rows, app, snapshot, status, enabled);
+    benchmark_rows(&mut rows, app, snapshot, status, configured);
     if local {
         model_rows(&mut rows, app, snapshot);
         cuda_rows(&mut rows, snapshot, status, &base);
@@ -676,10 +685,16 @@ fn review_rows(rows: &mut Vec<Row>, ai: &Value) {
 
 /// Speed tests of one call or ten at once, and the latest result.
 /// 一条或同时十条的速度测试，以及最近一次结果。
-fn benchmark_rows(rows: &mut Vec<Row>, app: &App, snapshot: &Value, status: &Value, enabled: bool) {
+fn benchmark_rows(
+    rows: &mut Vec<Row>,
+    app: &App,
+    snapshot: &Value,
+    status: &Value,
+    configured: bool,
+) {
     // The saved backend decides what the test runs on, as in the WebUI.
     // 与 WebUI 一致，由已保存的后端决定测试对象。
-    let saved_cloud = enabled && s(snapshot, "/backend") == "cloud";
+    let saved_cloud = configured && s(snapshot, "/backend") == "cloud";
     let ready = saved_cloud
         || (s(snapshot, "/backend") != "cloud" && s(status, "/worker/phase") == "ready");
     rows.push(section(tr!("settings.permissionJudge.benchmark")));
@@ -1567,18 +1582,19 @@ mod tests {
     #[test]
     fn edits_send_the_complete_save_request() {
         let snapshot = json!({
-            "state": null, "backend": null, "device": null, "recommendedDevice": "webgpu",
+            "backend": null, "device": null, "recommendedDevice": "webgpu",
             "llmMayAllowBlocked": true, "recordDecisions": true, "cuda": {"lockedDirectory": "D:/cuda"},
         });
         let base = save_request(&snapshot);
-        let on = set_state(&base, &SettingValue::Bool(true)).unwrap();
         assert_eq!(
-            on.params,
-            json!({"request": {"state": "enabled", "backend": "local", "device": "webgpu",
-                "cudaLibraryDirectory": "D:/cuda", "llmMayAllowBlocked": true, "recordDecisions": true}})
+            base,
+            json!({"backend": null, "device": "webgpu", "cudaLibraryDirectory": "D:/cuda",
+                "llmMayAllowBlocked": true, "recordDecisions": true})
         );
+        // Other edits never configure the judge as a side effect.
+        // 其他编辑不会顺带配置判定器。
         let cleared = set_cuda_directory(&base, &SettingValue::Text("  ".into())).unwrap();
         assert!(cleared.param("/request/cudaLibraryDirectory").is_null());
-        assert_eq!(cleared.param("/request/state"), "off");
+        assert!(cleared.param("/request/backend").is_null());
     }
 }

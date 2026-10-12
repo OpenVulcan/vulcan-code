@@ -14,9 +14,10 @@ use vulcan_service_api::{SessionUnattendedUpdateRequest, UnattendedDefaultRespon
 
 /// Modes in the same order as the WebUI conversation settings menu.
 /// 与 WebUI 会话设置菜单相同顺序的模式。
-const MODES: [PermissionMode; 3] = [
+const MODES: [PermissionMode; 4] = [
     PermissionMode::ReadOnly,
     PermissionMode::WorkspaceWrite,
+    PermissionMode::AutoApprove,
     PermissionMode::FullAccess,
 ];
 
@@ -26,6 +27,7 @@ pub fn label(mode: PermissionMode) -> String {
     match mode {
         PermissionMode::ReadOnly => tr!("permissionMode.readOnly"),
         PermissionMode::WorkspaceWrite => tr!("permissionMode.workspaceWrite"),
+        PermissionMode::AutoApprove => tr!("permissionMode.autoApprove"),
         PermissionMode::FullAccess => tr!("permissionMode.fullAccess"),
     }
 }
@@ -36,16 +38,18 @@ fn hint(mode: PermissionMode) -> String {
     match mode {
         PermissionMode::ReadOnly => tr!("permissionMode.readOnlyHint"),
         PermissionMode::WorkspaceWrite => tr!("permissionMode.workspaceWriteHint"),
+        PermissionMode::AutoApprove => tr!("permissionMode.autoApproveHint"),
         PermissionMode::FullAccess => tr!("permissionMode.fullAccessHint"),
     }
 }
 
 /// Open the picker for the selected session or draft; nothing opens before its mode loads.
 /// 为选中会话或草稿打开选择器；模式加载前不打开。
-/// The unattended entry follows the modes; a draft shows why it is not available yet.
-/// 无人值守入口位于模式之后；草稿会说明为何尚不可用。
-/// The judge entry asks for setup while unset, shows its state when enabled and hides when off.
-/// 判定入口在未设定时提示需要设定，启用时显示其状态，关闭时隐藏。
+/// Auto-approve needs a configured judge: until then it explains why and opens the judge page.
+/// 自动审批需要已配置的判定器：在此之前说明原因并打开判定页。
+/// The unattended entry follows the modes only under auto-approve, the one mode with a reviewer;
+/// a draft shows why it is not available yet.
+/// 无人值守入口只在自动审批下位于模式之后，因为只有该模式有复核器；草稿会说明为何尚不可用。
 pub fn open(app: &mut App) {
     let Some(session) = app.session() else {
         return;
@@ -54,16 +58,32 @@ pub fn open(app: &mut App) {
         return;
     };
     let unattended = session.unattended.clone();
+    let needs_setup = app.permission_judge_backend.is_none();
     let mut items: Vec<PickerItem> = MODES
         .into_iter()
-        .map(|mode| PickerItem {
-            label: label(mode),
-            detail: hint(mode),
-            hint: String::new(),
-            current: mode == current,
-            action: PickerAction::PermissionMode(mode),
+        .map(|mode| {
+            let greyed = mode == PermissionMode::AutoApprove && needs_setup;
+            PickerItem {
+                label: label(mode),
+                detail: if greyed {
+                    tr!("permissionMode.autoApproveNeedsSetup")
+                } else {
+                    hint(mode)
+                },
+                hint: String::new(),
+                current: mode == current,
+                action: if greyed {
+                    PickerAction::Page(PageId::PermissionJudge)
+                } else {
+                    PickerAction::PermissionMode(mode)
+                },
+            }
         })
         .collect();
+    if current != PermissionMode::AutoApprove {
+        app.overlay = Some(picker(items));
+        return;
+    }
     let on = matches!(unattended, Unattended::On(_));
     items.push(PickerItem {
         label: if on {
@@ -89,31 +109,31 @@ pub fn open(app: &mut App) {
             action: PickerAction::UnattendedOff,
         });
     }
-    let judge = match app.permission_judge_state {
-        None => Some(tr!("permissionMode.judgeNeedsSetup")),
-        Some(JudgeState::Enabled) => Some(tr!("permissionMode.judgeEnabled")),
-        Some(JudgeState::Off) => None,
-    };
-    if let Some(judge) = judge {
-        items.push(PickerItem {
-            label: judge,
-            detail: String::new(),
-            hint: String::new(),
-            current: false,
-            action: PickerAction::Page(PageId::PermissionJudge),
-        });
-    }
-    app.overlay = Some(Overlay::Picker(Picker::new(
+    app.overlay = Some(picker(items));
+}
+
+/// Wraps the mode items in the choice picker overlay.
+/// 将模式条目包装为选择器浮层。
+fn picker(items: Vec<PickerItem>) -> Overlay {
+    Overlay::Picker(Picker::new(
         PickerKind::Choice,
         tr!("permissionMode.label"),
         tr!("knowledge.search"),
         items,
-    )));
+    ))
 }
 
-/// Request one mode; the displayed mode changes only when the backend confirms it.
-/// 请求一个模式；只有后端确认后显示的模式才会改变。
+/// Request one mode; the displayed mode changes only when the backend confirms it. Auto-approve
+/// without a configured judge opens the judge page instead.
+/// 请求一个模式；只有后端确认后显示的模式才会改变。判定器未配置时，自动审批改为打开判定页。
 pub fn select(app: &mut App, mode: PermissionMode) {
+    if mode == PermissionMode::AutoApprove && app.permission_judge_backend.is_none() {
+        super::action::perform(
+            app,
+            super::action::UiAction::GoPage(PageId::PermissionJudge),
+        );
+        return;
+    }
     let Some(id) = app.selected.clone() else {
         return;
     };
@@ -194,20 +214,13 @@ pub fn open_unattended_prompt(
     );
 }
 
-/// Shows the policy prompt with the mode's effect, its access note and where the text came from.
-/// 显示策略输入框，附带该模式的效果、权限说明与文本来源。
+/// Shows the policy prompt with the mode's effect and where the text came from.
+/// 显示策略输入框，附带该模式的效果与文本来源。
 fn open_prompt(app: &mut App, id: String, title: String, input: String, source: Option<String>) {
-    let mut description = vec![tr!("permissionMode.unattended.body")];
-    match app.session().and_then(|session| session.permission_mode) {
-        Some(PermissionMode::FullAccess) => {
-            description.push(tr!("permissionMode.unattended.fullAccessNote"))
-        }
-        Some(PermissionMode::ReadOnly) => {
-            description.push(tr!("permissionMode.unattended.readOnlyNote"))
-        }
-        _ => {}
-    }
-    description.push(tr!("permissionMode.unattended.policyHint"));
+    let mut description = vec![
+        tr!("permissionMode.unattended.body"),
+        tr!("permissionMode.unattended.policyHint"),
+    ];
     description.extend(source);
     app.overlay = Some(Overlay::Prompt(Box::new(PromptDialog::new(
         title,
@@ -245,7 +258,7 @@ mod tests {
 
     /// Creates an isolated app with one loaded session and returns its command observer.
     /// 创建带一个已加载会话的隔离应用，并返回命令观察端。
-    fn loaded_app(judge: Option<JudgeState>) -> (App, Receiver<Command>) {
+    fn loaded_app(judge: Option<JudgeBackend>) -> (App, Receiver<Command>) {
         let (commands, receiver) = mpsc::channel();
         let (_, events) = mpsc::channel();
         let mut app = App::new(
@@ -260,10 +273,10 @@ mod tests {
         );
         app.connection = ConnectionState::Connected;
         app.selected = Some("session-a".into());
-        app.permission_judge_state = judge;
+        app.permission_judge_backend = judge;
         app.apply(BackendEvent::PermissionMode {
             conversation_id: "session-a".into(),
-            mode: PermissionMode::WorkspaceWrite,
+            mode: PermissionMode::AutoApprove,
             unattended: Unattended::Off,
         });
         (app, receiver)
@@ -280,32 +293,57 @@ mod tests {
         }
     }
 
-    /// The judge entry follows the saved switch, and only the three modes stay when it is off.
-    /// 判定入口跟随已保存的开关；关闭时只保留三个模式。
+    /// Auto-approve opens the judge page until a judge is configured, then becomes a mode choice.
+    /// 判定器配置前自动审批打开判定页，配置后成为普通模式选项。
     #[test]
-    fn judge_entry_follows_the_saved_switch() {
-        for (judge, has_entry) in [
-            (None, true),
-            (Some(JudgeState::Enabled), true),
-            (Some(JudgeState::Off), false),
-        ] {
+    fn auto_approve_follows_the_configured_judge() {
+        for (judge, choosable) in [(None, false), (Some(JudgeBackend::Local), true)] {
             let (mut app, _) = loaded_app(judge);
             open(&mut app);
             let actions = actions(&app);
             assert_eq!(
-                actions
-                    .iter()
-                    .filter(|a| matches!(a, PickerAction::PermissionMode(_)))
-                    .count(),
-                3
+                actions.iter().any(|a| matches!(
+                    a,
+                    PickerAction::PermissionMode(PermissionMode::AutoApprove)
+                )),
+                choosable,
+                "judge backend {judge:?}"
             );
             assert_eq!(
                 actions
                     .iter()
                     .any(|a| matches!(a, PickerAction::Page(PageId::PermissionJudge))),
-                has_entry,
-                "judge state {judge:?}"
+                !choosable,
+                "judge backend {judge:?}"
             );
+        }
+    }
+
+    /// Unattended mode is offered only under auto-approve.
+    /// 无人值守只在自动审批下提供。
+    #[test]
+    fn unattended_entry_is_offered_only_under_auto_approve() {
+        let (mut app, _) = loaded_app(Some(JudgeBackend::Local));
+        for mode in [
+            PermissionMode::ReadOnly,
+            PermissionMode::WorkspaceWrite,
+            PermissionMode::AutoApprove,
+            PermissionMode::FullAccess,
+        ] {
+            app.apply(BackendEvent::PermissionMode {
+                conversation_id: "session-a".into(),
+                mode,
+                unattended: Unattended::Off,
+            });
+            open(&mut app);
+            assert_eq!(
+                actions(&app)
+                    .iter()
+                    .any(|a| matches!(a, PickerAction::Unattended)),
+                mode == PermissionMode::AutoApprove,
+                "mode {mode:?}"
+            );
+            app.overlay = None;
         }
     }
 
@@ -313,8 +351,8 @@ mod tests {
     /// 选择只发送一次请求，后端确认前不改变显示的模式。
     #[test]
     fn selecting_requests_without_optimistic_change() {
-        let (mut app, commands) = loaded_app(None);
-        select(&mut app, PermissionMode::WorkspaceWrite);
+        let (mut app, commands) = loaded_app(Some(JudgeBackend::Local));
+        select(&mut app, PermissionMode::AutoApprove);
         assert!(commands.try_recv().is_err());
         select(&mut app, PermissionMode::ReadOnly);
         assert!(matches!(
@@ -324,7 +362,7 @@ mod tests {
         ));
         assert_eq!(
             app.session().and_then(|s| s.permission_mode),
-            Some(PermissionMode::WorkspaceWrite)
+            Some(PermissionMode::AutoApprove)
         );
     }
 
@@ -332,7 +370,7 @@ mod tests {
     /// 开启无人值守模式先读取默认值，且只保存确认的文本。
     #[test]
     fn unattended_mode_saves_only_the_confirmed_policy() {
-        let (mut app, commands) = loaded_app(None);
+        let (mut app, commands) = loaded_app(Some(JudgeBackend::Local));
         open(&mut app);
         assert!(
             actions(&app)
@@ -381,10 +419,10 @@ mod tests {
     /// 无人值守会话提供关闭入口；草稿只说明为何不可用。
     #[test]
     fn unattended_entries_follow_the_session_state() {
-        let (mut app, commands) = loaded_app(None);
+        let (mut app, commands) = loaded_app(Some(JudgeBackend::Local));
         app.apply(BackendEvent::PermissionMode {
             conversation_id: "session-a".into(),
-            mode: PermissionMode::WorkspaceWrite,
+            mode: PermissionMode::AutoApprove,
             unattended: Unattended::On("keep main".into()),
         });
         open(&mut app);
@@ -401,7 +439,7 @@ mod tests {
         ));
         app.apply(BackendEvent::PermissionMode {
             conversation_id: "session-a".into(),
-            mode: PermissionMode::WorkspaceWrite,
+            mode: PermissionMode::AutoApprove,
             unattended: Unattended::Unavailable,
         });
         edit_unattended(&mut app);

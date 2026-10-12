@@ -1238,7 +1238,6 @@
       "flow": null
     },
     "service_permission_judge_settings": {
-      "state": "enabled",
       "backend": "local",
       "device": "webgpu",
       "recommendedDevice": "webgpu",

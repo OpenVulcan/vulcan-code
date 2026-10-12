@@ -819,7 +819,7 @@ impl Worker {
             models,
             selected_model_id,
             ui_locale: wb.ui_locale.clone(),
-            permission_judge_state: wb.permission_judge_state,
+            permission_judge_backend: wb.permission_judge_backend,
             base_url: self
                 .client
                 .as_ref()

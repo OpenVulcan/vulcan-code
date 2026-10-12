@@ -541,9 +541,9 @@ pub struct App {
     pub conversations: Vec<ConversationSummary>,
     pub models: Vec<ModelInfo>,
     pub model_id: String,
-    /// Saved permission judge switch from the workbench; `None` needs setup.
-    /// 来自工作台的已保存权限判定开关；`None` 表示需要设定。
-    pub permission_judge_state: Option<JudgeState>,
+    /// Saved permission judge backend from the workbench; `None` greys out auto-approve.
+    /// 来自工作台的已保存权限判定后端；`None` 时自动审批显示为灰色。
+    pub permission_judge_backend: Option<JudgeBackend>,
     pub effort: ReasoningEffort,
     /// Efforts the current model accepts; `CycleReasoning` stays within them.
     /// 当前模型接受的推理强度；`CycleReasoning` 只在其中循环。
@@ -728,7 +728,7 @@ impl App {
             conversations: Vec::new(),
             models: Vec::new(),
             model_id: String::new(),
-            permission_judge_state: None,
+            permission_judge_backend: None,
             effort: ReasoningEffort::High,
             efforts: ReasoningEffort::ALL.to_vec(),
             base_url: String::new(),
@@ -1197,7 +1197,7 @@ impl App {
                 self.conversations = snapshot.conversations;
                 self.models = snapshot.models;
                 self.model_id = snapshot.selected_model_id;
-                self.permission_judge_state = snapshot.permission_judge_state;
+                self.permission_judge_backend = snapshot.permission_judge_backend;
                 self.base_url = snapshot.base_url;
                 if !self.backend.is_mock && !self.base_url.is_empty() {
                     self.backend.label = self.base_url.clone();

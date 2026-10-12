@@ -932,7 +932,7 @@ impl World {
                     models: fixtures::models(),
                     selected_model_id: "claude-opus-5-5".into(),
                     ui_locale: None,
-                    permission_judge_state: None,
+                    permission_judge_backend: None,
                     base_url: fixtures::BASE_URL.into(),
                 }));
                 self.emit(BackendEvent::Connection(ConnectionState::Connected));
@@ -1019,6 +1019,11 @@ impl World {
                     return;
                 };
                 log.permission_mode = request.mode;
+                // Unattended mode exists only under auto-approve, as in the service.
+                // 与服务一致，无人值守只存在于自动审批下。
+                if request.mode != PermissionMode::AutoApprove {
+                    log.unattended = None;
+                }
                 let unattended = unattended_state(&log.unattended);
                 self.emit(BackendEvent::PermissionMode {
                     conversation_id: request.session_id,
@@ -1030,6 +1035,11 @@ impl World {
                 let Some(log) = self.logs.get_mut(&request.session_id) else {
                     return;
                 };
+                if request.unattended.is_some()
+                    && log.permission_mode != PermissionMode::AutoApprove
+                {
+                    return;
+                }
                 log.unattended = request.unattended;
                 let (mode, unattended) = (log.permission_mode, unattended_state(&log.unattended));
                 self.emit(BackendEvent::PermissionMode {

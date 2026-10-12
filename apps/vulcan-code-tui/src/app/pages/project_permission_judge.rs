@@ -188,10 +188,10 @@ mod tests {
         app.set_area(Area::Settings);
         for (judge, listed) in [
             (None, false),
-            (Some(JudgeState::Off), false),
-            (Some(JudgeState::Enabled), true),
+            (Some(JudgeBackend::Local), true),
+            (Some(JudgeBackend::Cloud), true),
         ] {
-            app.permission_judge_state = judge;
+            app.permission_judge_backend = judge;
             let found = navigation(&app)
                 .into_iter()
                 .flat_map(|(_, entries)| entries)

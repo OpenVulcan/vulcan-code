@@ -1,8 +1,8 @@
 // Setup guide page: its first step is the permission judge, answered by a local model, a cloud
-// judge or not now, mirroring the WebUI setup guide dialog. Only a confirm button saves the system
-// settings; leaving the page writes nothing, so an unset judge stays unset.
+// judge or not now, mirroring the WebUI setup guide dialog. Only a backend's confirm button saves
+// the system settings; not now and leaving the page write nothing, so an unset judge stays unset.
 // 初始化引导页：第一步是权限判定，可选本机模型、云端判定或暂不启用，镜像 WebUI 初始化引导对话框。
-// 只有确认按钮会保存系统设置；离开页面不写入任何内容，未设定的判定保持未设定。
+// 只有后端的确认按钮会保存系统设置；暂不启用与离开页面不写入任何内容，未设定的判定保持未设定。
 
 use super::permission_judge::{
     JUDGE_PROFILE, cloud_rows, device_label, phase_label, reason_label, register_rows,
@@ -10,11 +10,9 @@ use super::permission_judge::{
 use super::*;
 use crate::service_api::permission_judge as judge;
 
-/// The save request for one explicit choice: `Some(backend)` enables that backend, `None` turns
-/// the judge off and keeps the saved backend; the other saved fields stay as they are.
-/// 单个显式选择对应的保存请求：`Some(backend)` 启用该后端，`None` 关闭判定并保留已保存后端；其他已保存
-/// 字段保持不变。
-fn choice_request(snapshot: &Value, backend: Option<&str>) -> Value {
+/// The save request that configures the judge on `backend`; the other saved fields stay as they are.
+/// 将判定器配置为 `backend` 的保存请求；其他已保存字段保持不变。
+fn choice_request(snapshot: &Value, backend: &str) -> Value {
     // Saved device, else the recommendation.
     // 已保存设备，否则为推荐设备。
     let device = match v(snapshot, "/device") {
@@ -22,8 +20,7 @@ fn choice_request(snapshot: &Value, backend: Option<&str>) -> Value {
         device => device.clone(),
     };
     json!({
-        "state": if backend.is_some() { "enabled" } else { "off" },
-        "backend": backend.map_or_else(|| v(snapshot, "/backend").clone(), |backend| json!(backend)),
+        "backend": backend,
         "device": device,
         "cudaLibraryDirectory": v(snapshot, "/cuda/lockedDirectory"),
         "llmMayAllowBlocked": b(snapshot, "/llmMayAllowBlocked"),
@@ -73,16 +70,16 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     ));
     rows.push(confirm_row(
         tr!("setupGuide.cloud.confirm"),
-        (!cloud_route.is_null()).then(|| choice_request(snapshot, Some("cloud"))),
+        (!cloud_route.is_null()).then(|| choice_request(snapshot, "cloud")),
         tr!("settings.permissionJudge.needsCloudRoute"),
     ));
 
     rows.push(section(tr!("setupGuide.off.title")));
     rows.push(note(tr!("setupGuide.off.description"), Tone::Muted));
-    rows.push(confirm_row(
+    rows.push(button(
         tr!("setupGuide.off.confirm"),
-        Some(choice_request(snapshot, None)),
-        String::new(),
+        UiAction::Area(Area::Chat),
+        Tone::Normal,
     ));
     rows
 }
@@ -153,7 +150,7 @@ fn local_rows(rows: &mut Vec<Row>, app: &App, snapshot: &Value, status: &Value) 
     let in_use = models.iter().any(|model| v(model, "/id") == active);
     rows.push(confirm_row(
         tr!("setupGuide.local.confirm"),
-        in_use.then(|| choice_request(snapshot, Some("local"))),
+        in_use.then(|| choice_request(snapshot, "local")),
         tr!("settings.permissionJudge.needsModel"),
     ));
 }
@@ -166,34 +163,22 @@ mod tests {
     /// 未设定的判定，带推荐设备与已保存的 CUDA 文件夹。
     fn unset() -> Value {
         json!({
-            "state": null, "backend": null, "device": null, "recommendedDevice": "cpu",
+            "backend": null, "device": null, "recommendedDevice": "cpu",
             "llmMayAllowBlocked": true, "recordDecisions": true, "cuda": { "lockedDirectory": "D:/cuda" },
         })
     }
 
-    // Enabling a backend saves it with the recommended device and keeps the other saved fields.
-    // 启用后端时以推荐设备保存，并保留其他已保存字段。
+    // Choosing a backend saves it with the recommended device and keeps the other saved fields.
+    // 选择后端时以推荐设备保存，并保留其他已保存字段。
     #[test]
-    fn enabling_a_backend_saves_the_recommended_device() {
+    fn choosing_a_backend_saves_the_recommended_device() {
         assert_eq!(
-            choice_request(&unset(), Some("local")),
+            choice_request(&unset(), "local"),
             json!({
-                "state": "enabled", "backend": "local", "device": "cpu",
+                "backend": "local", "device": "cpu",
                 "cudaLibraryDirectory": "D:/cuda", "llmMayAllowBlocked": true,
                 "recordDecisions": true,
             })
         );
-    }
-
-    // Not now saves the switch off and keeps the saved backend, even when none is saved.
-    // 暂不启用保存关闭状态并保留已保存后端，即使尚未保存后端。
-    #[test]
-    fn not_now_turns_the_judge_off_and_keeps_the_backend() {
-        let request = choice_request(&unset(), None);
-        assert_eq!(request["state"], json!("off"));
-        assert_eq!(request["backend"], Value::Null);
-        let mut saved = unset();
-        saved["backend"] = json!("cloud");
-        assert_eq!(choice_request(&saved, None)["backend"], json!("cloud"));
     }
 }

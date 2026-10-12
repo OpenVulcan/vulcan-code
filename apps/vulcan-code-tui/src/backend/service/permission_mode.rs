@@ -68,6 +68,7 @@ impl Worker {
             return;
         }
         window.permission_mode = response.permission_mode;
+        window.unattended = response.unattended;
         self.emit_permission_mode(&request.session_id);
     }
 
