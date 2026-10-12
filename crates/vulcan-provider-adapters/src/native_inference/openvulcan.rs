@@ -2,7 +2,7 @@
 //! 准确的 OpenVulcan 推理投影，包含响应身份及向量校验。
 
 use super::*;
-use crate::openvulcan::CONTRACT_VERSION;
+use crate::openvulcan::{CONTRACT_VERSION, DECISION_CONTRACT_VERSION};
 use serde_json::{Value, json};
 
 /// Prevents automatic replay of a separately billable native dispatch, preserving its outcome evidence.
@@ -117,7 +117,10 @@ pub(super) fn project_decision(
         .remove("model")
         .ok_or_else(|| pre_dispatch_failure("Decision serializer omitted its model."))?;
     object.insert(String::from("model_id"), model);
-    object.insert(String::from("contract_version"), json!(CONTRACT_VERSION));
+    object.insert(
+        String::from("contract_version"),
+        json!(DECISION_CONTRACT_VERSION),
+    );
     object.insert(String::from("request_id"), json!(request_id));
     object.insert(
         String::from("consumer_profile_id"),
@@ -139,7 +142,7 @@ pub(super) fn decision_response(
     // response 带准确原生身份字段；缺失身份始终是协议错误。
     let mut response: Value = serde_json::from_str(body)
         .map_err(|_| response_headers_protocol_failure("Invalid OpenVulcan decision response."))?;
-    if response.get("contract_version").and_then(Value::as_str) != Some(CONTRACT_VERSION)
+    if response.get("contract_version").and_then(Value::as_str) != Some(DECISION_CONTRACT_VERSION)
         || response.get("request_id").and_then(Value::as_str) != Some(request_id)
         || response.get("model_id").and_then(Value::as_str) != Some(model_id)
         || response
@@ -516,12 +519,72 @@ mod tests {
     /// 判定归一化保留报告置信度及用量，并拒绝跨请求答案。
     #[test]
     fn openvulcan_decision_keeps_reported_evidence() {
-        let body = json!({"contract_version":CONTRACT_VERSION,"request_id":"dispatch","model_id":"decision","answers":{"q":{"type":"choice","choice":"review","confidence":0.8,"probabilities":{"allow":0.1,"review":0.9}}},"usage":{"input_tokens":7}});
+        let body = json!({"contract_version":DECISION_CONTRACT_VERSION,"request_id":"dispatch","model_id":"decision","answers":{"q":{"type":"choice","choice":"review","confidence":0.8,"probabilities":{"allow":0.1,"review":0.9}}},"usage":{"input_tokens":7}});
         let normalized = decision_response(&body.to_string(), "dispatch", "decision").unwrap();
         let decoded = decode_systemone_response(&normalized).unwrap();
         assert_eq!(decoded.usage.input_tokens, Some(7));
         assert!(decoded.usage.output_tokens.is_none());
         assert!(decision_response(&body.to_string(), "foreign", "decision").is_err());
+    }
+
+    /// The decision envelope carries exactly the server's decision fields under the decision contract,
+    /// and a response under the embedding contract is rejected.
+    /// 判定封装在判定契约下恰好携带服务端的判定字段，向量契约下的响应被拒绝。
+    #[test]
+    fn openvulcan_decision_uses_its_own_contract_version() {
+        let request = DecisionRequest {
+            contract_version: vulcan_ai_contract::INFERENCE_CONTRACT_VERSION,
+            request_id: String::from("host-request"),
+            idempotency_key: None,
+            consumer_profile_id: String::from("permission_judge"),
+            state: json!({"call": {"tool": "shell_command"}}),
+            questions: vec![vulcan_ai_contract::DecisionQuestion {
+                id: String::from("decision"),
+                kind: vulcan_ai_contract::DecisionQuestionKind::Choice {
+                    instructions: String::from("Judge."),
+                    criteria: ["allow", "review"]
+                        .map(|option| vulcan_ai_contract::DecisionCriterion {
+                            option: option.to_string(),
+                            criterion: format!("{option}."),
+                        })
+                        .to_vec(),
+                },
+            }],
+        };
+        let mut body = serde_json::to_value(vulcan_llm_core::SystemOneWireRequest {
+            model: "decision",
+            request: &request,
+        })
+        .unwrap();
+        project_decision(&mut body, &request, "dispatch").unwrap();
+        let mut keys = body
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "consumer_profile_id",
+                "contract_version",
+                "model_id",
+                "questions",
+                "request_id",
+                "state"
+            ]
+        );
+        assert_eq!(body["contract_version"], DECISION_CONTRACT_VERSION);
+        assert_eq!(body["questions"]["decision"]["type"], "choice");
+        assert_eq!(
+            body["questions"]["decision"]["criteria"]["review"],
+            "review."
+        );
+        let embedding_versioned = json!({"contract_version":CONTRACT_VERSION,"request_id":"dispatch","model_id":"decision","answers":{},"usage":{"input_tokens":1}});
+        assert!(
+            decision_response(&embedding_versioned.to_string(), "dispatch", "decision").is_err()
+        );
     }
 
     /// Lost responses preserve their uncertain dispatch outcome and disable billable automatic retries.

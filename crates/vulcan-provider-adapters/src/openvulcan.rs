@@ -274,9 +274,14 @@ pub(crate) fn authorization_header(
 /// Refresh one day before the server-owned expiry to survive ordinary idle intervals.
 /// 在服务端持有的到期时间前一天刷新，以覆盖普通空闲间隔。
 pub(crate) const REFRESH_AHEAD_MS: u64 = 24 * 60 * 60 * 1_000;
-/// Version of the user-center inference request contract.
-/// 用户中心推理请求契约版本。
+/// Version of the user-center model catalog and embedding request contract.
+/// 用户中心模型目录与向量请求契约版本。
 pub(crate) const CONTRACT_VERSION: &str = "2026-08-30";
+/// Version of the user-center decision request and response contract, versioned apart from embeddings
+/// (`DecisionContractVersion` in openvulcan-web `vectorapi/decisions.go`).
+/// 用户中心判定请求与响应契约版本，与向量契约分别版本化（openvulcan-web `vectorapi/decisions.go` 的
+/// `DecisionContractVersion`）。
+pub(crate) const DECISION_CONTRACT_VERSION: &str = "2026-10-11";
 
 impl OpenVulcanRegion {
     /// Returns the reviewed authorization origin for this fixed region without discovery.
