@@ -19,6 +19,7 @@ import { createClientOwnedActionId } from "@/notifications/client-identity";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 import {
   fetchModelAttachmentCapabilities,
+  reconcileComposerAttachmentDraftLease,
   stageComposerAttachmentBytes,
   stopConversationRun,
   submitConversationPrompt,
@@ -157,6 +158,50 @@ function useAssistantAttachmentCapabilities(
   );
 }
 
+/** Keeps the session's composer-draft lease equal to the staged attachments, as the main composer does;
+ * submission rejects staged media whose draft slot holds no lease.
+ * 使会话的输入区草稿租约与已暂存附件保持一致（与主输入框相同）；提交会拒绝草稿槽未持有租约的暂存素材。
+ *
+ * @param assistant the session that owns the `conversation:` draft slot.
+ *                  持有 `conversation:` 草稿槽的会话。
+ * @param attachments the canonical staged set; an empty set needs no lease.
+ *                    规范已暂存集合；空集合无需租约。
+ * @returns `ready` once this exact set is leased, and `release`, which leases the set without one attachment. */
+function useAssistantDraftLease(assistant: AssistantEntry, attachments: ComposerAttachmentSummary[]) {
+  const { id, projectId } = assistant;
+  // queueRef orders replacements so an older request cannot re-lease a removed attachment.
+  // queueRef 串行化替换，避免较早请求重新租用已移除的附件。
+  const queueRef = React.useRef<Promise<unknown>>(Promise.resolve());
+  const [leased, setLeased] = React.useState<ComposerAttachmentSummary[] | null>(null);
+  const reconcile = React.useCallback((next: ComposerAttachmentSummary[]) => {
+    const request = () => reconcileComposerAttachmentDraftLease(projectId, id, `conversation:${id}`, next);
+    const result = queueRef.current.then(request, request);
+    queueRef.current = result.catch(() => undefined);
+    return result;
+  }, [id, projectId]);
+  React.useEffect(() => {
+    if (!attachments.length) return;
+    let current = true;
+    reconcile(attachments).then(
+      () => { if (current) setLeased(attachments); },
+      (reason: unknown) => { if (current) reportLeaseError(reason); },
+    );
+    return () => { current = false; };
+  }, [attachments, reconcile]);
+  const release = React.useCallback(
+    (attachment: ComposerAttachmentSummary, from: ComposerAttachmentSummary[]) =>
+      reconcile(from.filter((candidate) => candidate !== attachment)),
+    [reconcile],
+  );
+  return { ready: attachments.length === 0 || leased === attachments, release };
+}
+
+/** Shows a failed draft-lease update; the input stays blocked until a later change succeeds.
+ * 显示草稿租约更新失败；输入保持阻止直到后续变更成功。 */
+function reportLeaseError(reason: unknown) {
+  toast.error(reason instanceof Error ? reason.message : String(reason));
+}
+
 /** One provider request: thinking shown inline while it streams and folded afterwards, then the answer.
  * 一次供应商请求：思考在流式输出时内联展开、结束后收起，随后是回答。 */
 function AssistantStep(props: { step: AssistantReplyStep }) {
@@ -263,6 +308,7 @@ function AssistantComposer(props: {
     projectId: assistant.projectId,
   });
   const { attachments } = staging;
+  const lease = useAssistantDraftLease(assistant, attachments);
   React.useEffect(() => {
     if (text) assistantDrafts.set(assistant.id, text);
     else assistantDrafts.delete(assistant.id);
@@ -287,7 +333,7 @@ function AssistantComposer(props: {
         : t("composer.attachment.unsupported"));
     }
   };
-  const blocked = props.running || pending || staging.pendingAttachmentCount > 0;
+  const blocked = props.running || pending || staging.pendingAttachmentCount > 0 || !lease.ready;
   const send = async () => {
     const prompt = text.trim();
     if ((!prompt && attachments.length === 0) || blocked || staging.hasPendingAttachmentStaging()) return;
@@ -332,7 +378,7 @@ function AssistantComposer(props: {
         onOpenMedia={props.onOpenMedia}
         onRemove={(index) => {
           const attachment = attachments[index];
-          if (attachment) staging.removeComposerAttachment(attachment);
+          if (attachment) void lease.release(attachment, attachments).then(() => staging.removeComposerAttachment(attachment), reportLeaseError);
         }}
       />
       <div className="assistant-composer-row">
