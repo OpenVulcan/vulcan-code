@@ -31,7 +31,7 @@ export function DedicatedDraftStrip(props: {
   return (
     <div className="dedicated-composer-tab">
       <Select disabled={props.disabled} onValueChange={props.draft.onChangeProject} value={props.draft.projectId}>
-        <SelectTrigger aria-label={t("composer.draft.project")} className="h-6 max-w-64 border-0 bg-transparent px-2 shadow-none" size="sm">
+        <SelectTrigger aria-label={t("composer.draft.project")} className="max-w-64 shadow-none" size="sm">
           <Folder size={14} aria-hidden="true" />
           <SelectValue />
         </SelectTrigger>

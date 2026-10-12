@@ -10,6 +10,13 @@
   justify-content: center;
 }
 
+/* The centred wizard occupies the empty-state heading's place, so the heading leaves as it does on submit. */
+/* 居中的向导占据空状态标题的位置，因此标题与提交时一样淡出离场。 */
+.empty-conversation-grid:has(> .composer-dock.dedicated-wizard-mode) > .empty-conversation-prompt {
+  opacity: 0;
+  transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))) translateY(-16px);
+}
+
 .dedicated-wizard {
   width: 100%;
   min-height: 0;
@@ -19,9 +26,9 @@
   gap: 12px;
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
+  border-radius: calc(var(--vcn-radius-xl) + 6px);
   background: var(--card);
-  box-shadow: var(--vcn-shadow-raised);
+  box-shadow: var(--vcn-shadow-hover);
 }
 
 .dedicated-wizard-body {
@@ -50,25 +57,62 @@
   font-size: var(--vcn-font-size-sm);
 }
 
+/* One labelled group of the merged settings step. */
+/* 合并后基础设置步骤中的一个带标题分组。 */
+.dedicated-wizard-section {
+  display: grid;
+  gap: 8px;
+  container-type: inline-size;
+}
+
+.dedicated-wizard-section + .dedicated-wizard-section {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.dedicated-wizard-section h3 {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+  font-weight: 600;
+}
+
 .dedicated-wizard-options {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: 8px;
+}
+
+/* A small known set keeps all cards on one row; a narrow wizard halves the row, a very narrow one stacks. */
+/* 已知的少量选项保持同一行；向导较窄时每行减半，极窄时纵向堆叠。 */
+.dedicated-wizard-options[data-columns="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dedicated-wizard-options[data-columns="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dedicated-wizard-options[data-columns="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+@container (max-width: 560px) {
+  .dedicated-wizard-options[data-columns="3"],
+  .dedicated-wizard-options[data-columns="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container (max-width: 340px) {
+  .dedicated-wizard-options[data-columns] { grid-template-columns: minmax(0, 1fr); }
 }
 
 .dedicated-wizard-option {
   display: grid;
   align-content: start;
-  gap: 2px;
+  gap: 3px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
+  border-radius: var(--vcn-radius-lg);
   background: var(--background);
   color: var(--foreground);
   font-size: var(--vcn-font-size-sm);
+  font-weight: 500;
   text-align: left;
   cursor: pointer;
+  transition: border-color var(--vcn-duration-fast) var(--vcn-ease-out), background-color var(--vcn-duration-fast) var(--vcn-ease-out);
 }
 
 .dedicated-wizard-option:hover {
@@ -76,12 +120,208 @@
 }
 
 .dedicated-wizard-option[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
   background: var(--vcn-fill-selected);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
 .dedicated-wizard-option small {
   color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.dedicated-wizard-option-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Choice mark closing the title row: a round radio for single choice, a square box for multi-select groups. */
+/* 标题行末端的选择标记：单选为圆形，多选组为方形。 */
+.dedicated-wizard-option-mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  border: 1.5px solid color-mix(in srgb, var(--muted-foreground) 55%, transparent);
+  border-radius: 50%;
+  background: var(--card);
+  transition: border-color var(--vcn-duration-fast) var(--vcn-ease-out), box-shadow var(--vcn-duration-fast) var(--vcn-ease-out);
+}
+
+.dedicated-wizard-option[aria-pressed="true"] .dedicated-wizard-option-mark {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 2.5px var(--card), inset 0 0 0 7px var(--primary);
+}
+
+.dedicated-wizard-options[data-multiple] .dedicated-wizard-option-mark {
+  border-radius: 4px;
+}
+
+.dedicated-wizard-option-badge {
+  padding: 0 6px;
+  border-radius: var(--vcn-radius-pill);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--primary);
+  font-size: var(--vcn-font-size-xs);
+  font-style: normal;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+/* Prompt-size bar of an output style; an empty track means the style adds nothing to the prompt. */
+/* 输出风格的提示词长度横条；空轨道表示该风格不向提示词追加任何内容。 */
+.dedicated-wizard-option-meter {
+  display: block;
+  height: 4px;
+  margin-top: 4px;
+  overflow: hidden;
+  border-radius: var(--vcn-radius-pill);
+  background: color-mix(in srgb, var(--muted-foreground) 16%, transparent);
+}
+
+.dedicated-wizard-option-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
+}
+
+.dedicated-wizard-option[aria-pressed="true"] .dedicated-wizard-option-meter > span {
+  background: var(--primary);
+}
+
+/* Answer-mode sketch: grey Markdown lines, or a heading over a mini chart and card for interactive answers. */
+/* 回答模式示意：灰色 Markdown 文本行，交互模式为标题下方的迷你图表与卡片。 */
+.dedicated-answer-preview {
+  height: 62px;
+  display: grid;
+  grid-template-rows: auto;
+  align-content: start;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 10px 12px;
+  border-radius: var(--vcn-radius-md);
+  background: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.dedicated-answer-preview[data-mode="interactive"] {
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+}
+
+.dedicated-answer-preview-line {
+  display: block;
+  width: 100%;
+  height: 5px;
+  border-radius: var(--vcn-radius-pill);
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.dedicated-answer-preview-line[data-variant="heading"] {
+  width: 38%;
+  background: color-mix(in srgb, var(--foreground) 32%, transparent);
+}
+
+.dedicated-answer-preview-line[data-variant="short"] {
+  width: 62%;
+}
+
+.dedicated-answer-preview-widgets {
+  min-height: 0;
+  display: flex;
+  gap: 8px;
+}
+
+.dedicated-answer-preview-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 0 2px;
+}
+
+.dedicated-answer-preview-chart > i {
+  width: 7px;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
+.dedicated-answer-preview-chart > i:nth-child(1) { height: 45%; }
+.dedicated-answer-preview-chart > i:nth-child(2) { height: 80%; }
+.dedicated-answer-preview-chart > i:nth-child(3) { height: 60%; }
+.dedicated-answer-preview-chart > i:nth-child(4) { height: 100%; }
+
+.dedicated-answer-preview-card {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--primary) 32%, transparent);
+  border-radius: var(--vcn-radius-sm);
+  background: var(--card);
+}
+
+.dedicated-answer-preview-card > i {
+  display: block;
+  height: 4px;
+  border-radius: var(--vcn-radius-pill);
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.dedicated-answer-preview-card > i:last-child {
+  width: 60%;
+}
+
+/* Session-model row of the prompt step; the generator dialog shows the same model read-only. */
+/* 提示词步骤的会话模型行；生成弹窗以只读方式显示同一模型。 */
+.dedicated-wizard-model {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dedicated-generator-model {
+  max-width: 16rem;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dedicated-wizard-prompt {
+  min-height: 180px;
+}
+
+/* Prompt generator dialog: labelled fields stacked over the streamed thinking and the reviewable draft. */
+/* 提示词生成弹窗：带标题的字段纵向排列，下方是流式思考与可审阅的草稿。 */
+.dedicated-generator {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.dedicated-generator-field {
+  display: grid;
+  gap: 6px;
+}
+
+.dedicated-generator-field > span {
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+  font-weight: 600;
+}
+
+.dedicated-generator-revision {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
 }
 
 .dedicated-wizard-actions {

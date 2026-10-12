@@ -48,8 +48,8 @@ export function DedicatedMemoryLockBar(props: { memory: DedicatedMemorySelection
   const dock = useAssistantDock();
   const [convertOpen, setConvertOpen] = React.useState(false);
   return (
-    <div className="dedicated-composer-tab">
-      <span className={locked ? "inline-flex min-w-0 items-center gap-1.5 text-primary" : "inline-flex min-w-0 items-center gap-1.5"} role="status">
+    <div className="dedicated-memory-bar" data-locked={locked}>
+      <span className="dedicated-memory-bar-status" role="status">
         <Icon size={14} aria-hidden="true" />
         {locked ? t("composer.dedicated.lockedStatus") : t("composer.dedicated.unlockedStatus")}
       </span>

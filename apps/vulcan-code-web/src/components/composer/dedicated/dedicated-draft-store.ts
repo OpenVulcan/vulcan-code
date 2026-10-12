@@ -6,16 +6,19 @@ import type { DedicatedToolAccess } from "@/service/conversation-event-window-cl
  * 单个草稿选择的会话种类；只有草稿可以切换。 */
 export type DraftSessionKind = "work" | "dedicated";
 
-/** Ordered steps of the dedicated creation wizard.
- * 专职创建向导的有序步骤。 */
-export const DEDICATED_WIZARD_STEPS = [
-  "knowledge",
-  "answerMode",
-  "outputStyle",
-  "requirement",
-  "prompt",
-  "memory",
-] as const;
+/** Ordered steps of the dedicated creation wizard: basic settings, the base prompt, then memory.
+ * 专职创建向导的有序步骤：基础设置、基础提示词、记忆。 */
+export const DEDICATED_WIZARD_STEPS = ["settings", "prompt", "memory"] as const;
+
+/** Recommended answer mode of a new assistant: it answers by its own prompt, so interactive components rarely fit.
+ * 新助手的推荐回答模式：助手按自身提示词作答，交互式组件通常并不适合。 */
+export const DEDICATED_RECOMMENDED_ANSWER_MODE: AnswerMode = "standard";
+
+/** Recommended output style of a new assistant, so only its own prompt shapes the answer; the wire id is the
+ * service's `OUTPUT_STYLE_UNRESTRICTED_ID` (`vulcan-prompt-composer::output_style`).
+ * 新助手的推荐输出风格，使回答只由其自身提示词塑造；线上标识即服务端
+ * `OUTPUT_STYLE_UNRESTRICTED_ID`（`vulcan-prompt-composer::output_style`）。 */
+export const DEDICATED_RECOMMENDED_OUTPUT_STYLE_ID = "unrestricted";
 
 /** One dedicated creation wizard step.
  * 单个专职创建向导步骤。 */
@@ -30,15 +33,18 @@ export interface DedicatedDraftState {
   /** Explicit knowledge libraries enabled at creation; empty disables the knowledge base.
    * 创建时启用的显式知识库；为空表示不使用知识库。 */
   knowledgeLibraryIds: string[];
-  /** Explicit answer mode; null copies the global default.
-   * 显式回答模式；null 表示复制全局默认值。 */
+  /** Answer mode picked in the wizard; null shows and submits the recommended mode.
+   * 向导中选择的回答模式；null 表示显示并提交推荐模式。 */
   answerMode: AnswerMode | null;
-  /** Explicit output style; null follows the global selection.
-   * 显式输出风格；null 表示跟随全局选择。 */
+  /** Output style picked in the wizard; null shows and submits the recommended style.
+   * 向导中选择的输出风格；null 表示显示并提交推荐风格。 */
   outputStyleId: string | null;
+  /** Description the prompt generator drafts from; kept so the dialog reopens with it.
+   * 提示词生成器据以起草的描述；保留以便弹窗重新打开时沿用。 */
   requirement: string;
+  /** Base prompt typed by the user or written back from the generator.
+   * 用户撰写或由生成器写回的基础提示词。 */
   prompt: string;
-  revisionRequest: string;
 }
 
 /** Initial state of a draft that has not been touched.
@@ -46,13 +52,12 @@ export interface DedicatedDraftState {
 export const INITIAL_DEDICATED_DRAFT: DedicatedDraftState = {
   kind: "work",
   toolAccess: "none",
-  step: "knowledge",
+  step: "settings",
   knowledgeLibraryIds: [],
   answerMode: null,
   outputStyleId: null,
   requirement: "",
   prompt: "",
-  revisionRequest: "",
 };
 
 // drafts stores per-draft choices so switching conversations does not lose wizard progress.

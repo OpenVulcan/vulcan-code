@@ -4,12 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
-import { ModelPickerControl, type ModelPickerChoice } from "@/components/composer/model-picker-control";
 import { reasoningLevelLabel } from "@/components/composer/model-reasoning-picker-control";
 import { formatMessage, pickBilingualText, useI18n } from "@/i18n";
+import type { AnswerMode } from "@/service/answer-mode";
 import { listKnowledgeLibraries } from "@/service/knowledge-base-service";
-import type { KnowledgeLibrarySummary, OutputStyleCatalogSummary, ProviderSummary } from "@/types";
-import type { DedicatedDraftState } from "./dedicated-draft-store";
+import type { KnowledgeLibrarySummary, OutputStyleCatalogSummary } from "@/types";
+import { DEDICATED_RECOMMENDED_ANSWER_MODE, DEDICATED_RECOMMENDED_OUTPUT_STYLE_ID } from "./dedicated-draft-store";
 
 /** One selectable wizard answer.
  * 单个可选向导答案。 */
@@ -17,18 +17,33 @@ export interface DedicatedWizardOption<T> {
   value: T;
   label: string;
   hint?: string;
+  /** Short marker shown beside the label, such as the recommended choice.
+   * 显示在标签旁的简短标记，例如推荐选项。 */
+  badge?: string;
+  /** Decorative sketch above the label that shows what the choice looks like.
+   * 标签上方的装饰性示意图，直观展示该选项的效果。 */
+  preview?: React.ReactNode;
+  /** Relative size in [0, 1] drawn as a bar below the hint, so options compare at a glance.
+   * 以提示下方横条绘制的 [0, 1] 相对大小，便于一眼比较各选项。 */
+  meter?: number;
 }
 
-/** Renders mutually exclusive or multi-select answers as a grid of pressable cards.
- * 将互斥或多选答案渲染为可按压卡片矩阵。 */
+/** Renders mutually exclusive or multi-select answers as a grid of pressable cards with a choice mark.
+ * 将互斥或多选答案渲染为带选择标记的可按压卡片矩阵。
+ *
+ * @param props.columns fixed column count for a small known set; narrow wizards halve it. Omitted, cards auto-fill.
+ *                      已知少量选项的固定列数，较窄时减半；省略时卡片自动填充。
+ * @param props.multiple marks the cards as checkboxes instead of radio choices. */
 export function DedicatedWizardOptions<T>(props: {
   options: DedicatedWizardOption<T>[];
   isSelected: (value: T) => boolean;
   onSelect: (value: T) => void;
   disabled?: boolean;
+  columns?: 2 | 3 | 4;
+  multiple?: boolean;
 }) {
   return (
-    <div className="dedicated-wizard-options">
+    <div className="dedicated-wizard-options" data-columns={props.columns} data-multiple={props.multiple || undefined}>
       {props.options.map((option) => (
         <button
           aria-pressed={props.isSelected(option.value)}
@@ -38,11 +53,43 @@ export function DedicatedWizardOptions<T>(props: {
           onClick={() => props.onSelect(option.value)}
           type="button"
         >
-          <span>{option.label}</span>
+          {option.preview}
+          <span className="dedicated-wizard-option-title">
+            {option.label}
+            {option.badge ? <em className="dedicated-wizard-option-badge">{option.badge}</em> : null}
+            <span aria-hidden="true" className="dedicated-wizard-option-mark" />
+          </span>
           {option.hint ? <small>{option.hint}</small> : null}
+          {option.meter === undefined ? null : (
+            <span aria-hidden="true" className="dedicated-wizard-option-meter">
+              <span style={{ inlineSize: `${Math.round(Math.min(Math.max(option.meter, 0), 1) * 100)}%` }} />
+            </span>
+          )}
         </button>
       ))}
     </div>
+  );
+}
+
+/** Miniature answer sketch: plain Markdown lines, or a heading over a chart and a card for interactive answers.
+ * 回答缩略示意：标准回答为纯 Markdown 文本行，交互回答在标题下方显示图表与卡片。 */
+function AnswerModePreview(props: { mode: AnswerMode }) {
+  return (
+    <span aria-hidden="true" className="dedicated-answer-preview" data-mode={props.mode}>
+      <span className="dedicated-answer-preview-line" data-variant="heading" />
+      {props.mode === "standard" ? (
+        <>
+          <span className="dedicated-answer-preview-line" />
+          <span className="dedicated-answer-preview-line" />
+          <span className="dedicated-answer-preview-line" data-variant="short" />
+        </>
+      ) : (
+        <span className="dedicated-answer-preview-widgets">
+          <span className="dedicated-answer-preview-chart"><i /><i /><i /><i /></span>
+          <span className="dedicated-answer-preview-card"><i /><i /></span>
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -105,6 +152,7 @@ export function DedicatedKnowledgeStep(props: {
   return (
     <DedicatedWizardOptions
       isSelected={(value) => value === null ? props.libraryIds.length === 0 : props.libraryIds.includes(value)}
+      multiple
       onSelect={(value) => {
         if (value === null) props.onChange([]);
         else if (props.libraryIds.includes(value)) props.onChange(props.libraryIds.filter((id) => id !== value));
@@ -115,115 +163,118 @@ export function DedicatedKnowledgeStep(props: {
   );
 }
 
-/** Output-style step: follow the global selection or pick one catalog entry.
- * 输出风格步骤：跟随全局选择或选择一个目录项。 */
-export function DedicatedOutputStyleStep(props: {
+/** Basic-settings step: knowledge, answer mode and output style on one page; the recommended choices carry a badge.
+ * 基础设置步骤：知识库、回答模式与输出风格同页设置；推荐选项带有标记。
+ *
+ * @param props.answerMode the effective answer mode (the wizard's pick, else the recommended mode).
+ *                         生效的回答模式（向导选择，否则为推荐模式）。
+ * @param props.styleId the effective output style (the wizard's pick, else the recommended style). */
+export function DedicatedSettingsStep(props: {
+  knowledge: ProjectKnowledgeLibraries;
+  libraryIds: string[];
+  onKnowledgeChange: (libraryIds: string[]) => void;
+  answerMode: AnswerMode;
+  onAnswerModeChange: (answerMode: AnswerMode) => void;
   catalog: OutputStyleCatalogSummary;
-  styleId: string | null;
-  onChange: (styleId: string | null) => void;
+  styleId: string;
+  onStyleChange: (styleId: string) => void;
 }) {
   const { locale, t } = useI18n();
-  const globalEntry = props.catalog.entries.find((entry) => entry.id === props.catalog.selectedId);
-  const globalLabel = globalEntry ? pickBilingualText(locale, globalEntry.labelZh, globalEntry.labelEn) : props.catalog.selectedId;
-  const options: DedicatedWizardOption<string | null>[] = [
-    {
-      value: null,
-      label: t("composer.outputStyle.inheritGlobal"),
-      hint: formatMessage(t("composer.outputStyle.useSystemSetting"), { label: globalLabel }),
-    },
-    ...props.catalog.entries.map((entry) => ({
-      value: entry.id,
-      label: pickBilingualText(locale, entry.labelZh, entry.labelEn),
-      hint: formatMessage(t("composer.outputStyle.promptCharacters"), { count: entry.promptCharCount.toLocaleString(locale) }),
-    })),
-  ];
-  return <DedicatedWizardOptions isSelected={(value) => value === props.styleId} onSelect={props.onChange} options={options} />;
-}
-
-/** Requirement step: describe the job and choose the model that drafts the prompt.
- * 需求步骤：描述职责并选择起草提示词的模型。 */
-export function DedicatedRequirementStep(props: {
-  state: DedicatedDraftState;
-  providers: ProviderSummary[];
-  busy: boolean;
-  onRequirementChange: (requirement: string) => void;
-  onSelectModel: (choice: ModelPickerChoice) => void;
-  thinkingLevel: React.ReactNode;
-}) {
-  const { t } = useI18n();
+  const recommended = t("composer.dedicated.recommended");
+  const badge = (isRecommended: boolean) => (isRecommended ? recommended : undefined);
+  const answerModeOptions: DedicatedWizardOption<AnswerMode>[] = (["standard", "interactive"] as const).map((value) => ({
+    value,
+    label: t(value === "standard" ? "answerMode.standard" : "answerMode.interactive"),
+    hint: t(value === "standard" ? "answerMode.standardHint" : "answerMode.interactiveHint"),
+    badge: badge(value === DEDICATED_RECOMMENDED_ANSWER_MODE),
+    preview: <AnswerModePreview mode={value} />,
+  }));
+  // Each style's bar is its prompt size against the largest one, showing how much a style adds to the assistant prompt.
+  // 每个风格的横条为其提示词长度相对最长者的比例，表示该风格会给助手提示词增加多少内容。
+  const largestStyle = Math.max(1, ...props.catalog.entries.map((entry) => entry.promptCharCount));
+  const styleCount = props.catalog.entries.length;
+  const styleColumns = styleCount >= 2 && styleCount <= 4 ? styleCount as 2 | 3 | 4 : undefined;
+  const styleOptions: DedicatedWizardOption<string>[] = props.catalog.entries.map((entry) => ({
+    value: entry.id,
+    label: pickBilingualText(locale, entry.labelZh, entry.labelEn),
+    hint: formatMessage(t("composer.outputStyle.promptCharacters"), { count: entry.promptCharCount.toLocaleString(locale) }),
+    badge: badge(entry.id === DEDICATED_RECOMMENDED_OUTPUT_STYLE_ID),
+    meter: entry.promptCharCount / largestStyle,
+  }));
   return (
     <>
-      <Textarea
-        aria-label={t("composer.dedicated.requirement")}
-        density="large"
-        disabled={props.busy}
-        onChange={(event) => props.onRequirementChange(event.target.value)}
-        placeholder={t("composer.dedicated.requirementPlaceholder")}
-        value={props.state.requirement}
-      />
-      <div className="dedicated-wizard-actions">
-        <span className="dedicated-wizard-hint">{t("composer.dedicated.generatorModel")}</span>
-        <ModelPickerControl
-          ariaLabel={t("composer.aria.modelReasoning")}
-          disabled={props.busy}
-          fallbackLabel={t("composer.modelPicker.placeholder")}
-          filterPlaceholder={t("composer.modelPicker.filter")}
-          noMatchesLabel={t("composer.modelPicker.noMatches")}
-          onValueChange={props.onSelectModel}
-          providers={props.providers}
-          value=""
+      {/* The section appears once libraries exist (or loading failed), so an empty project never flashes it. */}
+      {/* 分区在确认存在知识库（或加载失败）后才出现，没有知识库的项目不会闪现该分区。 */}
+      {!props.knowledge.libraries?.length && !props.knowledge.error ? null : (
+        <section className="dedicated-wizard-section">
+          <h3>{t("composer.dedicated.step.knowledge")}</h3>
+          <DedicatedKnowledgeStep knowledge={props.knowledge} libraryIds={props.libraryIds} onChange={props.onKnowledgeChange} />
+        </section>
+      )}
+      <section className="dedicated-wizard-section">
+        <h3>{t("composer.dedicated.step.answerMode")}</h3>
+        <DedicatedWizardOptions
+          columns={2}
+          isSelected={(value) => value === props.answerMode}
+          onSelect={props.onAnswerModeChange}
+          options={answerModeOptions}
         />
-        {props.thinkingLevel}
-      </div>
+      </section>
+      <section className="dedicated-wizard-section">
+        <h3>{t("composer.dedicated.step.outputStyle")}</h3>
+        <DedicatedWizardOptions
+          columns={styleColumns}
+          isSelected={(value) => value === props.styleId}
+          onSelect={props.onStyleChange}
+          options={styleOptions}
+        />
+      </section>
     </>
   );
 }
 
-/** Prompt step: edit the drafted prompt directly or revise it with supplementary instructions.
- * 提示词步骤：直接编辑起草的提示词，或以补充说明进行修订。 */
+/** Prompt step: picks the session model with its thinking level and takes the base prompt typed here; generation
+ * happens in a separate dialog.
+ * 提示词步骤：选择会话模型及其思考档位，并以此处填写的内容作为基础提示词；生成在独立弹窗中进行。
+ *
+ * @param props.modelControl the session model, account and thinking-level control owned by the wizard.
+ *                           由向导持有的会话模型、账号与思考档位控件。 */
 export function DedicatedPromptStep(props: {
-  state: DedicatedDraftState;
-  busy: boolean;
+  prompt: string;
+  disabled: boolean;
   canGenerate: boolean;
+  modelControl: React.ReactNode;
   onPromptChange: (prompt: string) => void;
-  onRevisionChange: (revisionRequest: string) => void;
-  onRevise: () => void;
-  thinkingLevel: React.ReactNode;
+  onOpenGenerator: () => void;
 }) {
   const { t } = useI18n();
   return (
     <>
+      <div className="dedicated-wizard-model">
+        <span className="dedicated-wizard-hint">{t("composer.dedicated.sessionModel")}</span>
+        {props.modelControl}
+      </div>
       <Textarea
         aria-label={t("composer.dedicated.prompt")}
+        className="dedicated-wizard-prompt"
         density="large"
-        disabled={props.busy}
+        disabled={props.disabled}
         onChange={(event) => props.onPromptChange(event.target.value)}
         placeholder={t("composer.dedicated.promptPlaceholder")}
-        value={props.state.prompt}
-      />
-      <p className="dedicated-wizard-hint">{t("composer.dedicated.promptImmutableHint")}</p>
-      <Textarea
-        aria-label={t("composer.dedicated.revision")}
-        density="compact"
-        disabled={props.busy}
-        onChange={(event) => props.onRevisionChange(event.target.value)}
-        placeholder={t("composer.dedicated.revisionPlaceholder")}
-        value={props.state.revisionRequest}
+        value={props.prompt}
       />
       <div className="dedicated-wizard-actions">
-        {props.thinkingLevel}
-        <span className="dedicated-wizard-actions-end">
-          <Button
-            disabled={props.busy || !props.canGenerate || props.state.prompt.trim().length === 0 || props.state.revisionRequest.trim().length === 0}
-            onClick={props.onRevise}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
-            {props.busy ? <RefreshCw className="animate-spin" size={14} /> : <Sparkles size={14} />}
-            {t("composer.dedicated.revise")}
-          </Button>
-        </span>
+        <span className="dedicated-wizard-hint">{t("composer.dedicated.promptImmutableHint")}</span>
+        <Button
+          disabled={props.disabled || !props.canGenerate}
+          onClick={props.onOpenGenerator}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <Sparkles size={14} />
+          {t("composer.dedicated.generate")}
+        </Button>
       </div>
     </>
   );
