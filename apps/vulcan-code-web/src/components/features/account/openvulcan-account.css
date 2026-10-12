@@ -81,11 +81,11 @@
   width: 7px;
   height: 7px;
   border-radius: var(--vcn-radius-pill);
-  background: var(--success-text);
+  background: var(--vcn-content-success);
 }
 
 .openvulcan-account-identity i[data-state="expired"] {
-  background: var(--warning-text);
+  background: var(--vcn-content-warning);
 }
 
 /* Signed-out entry: one primary action, with the site choice as a quiet secondary line. */
