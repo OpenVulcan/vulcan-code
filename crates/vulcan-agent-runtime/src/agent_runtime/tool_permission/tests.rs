@@ -432,6 +432,25 @@ fn builtin_luaskills_entries_are_classified_exactly() {
         classify_tool_call(&skill("vulcan-codekit-patch"), &json!({})),
         PermissionSubject::Opaque
     );
+    // An explicit PWD replaces the injected workspace root as the base of relative targets.
+    // 显式 PWD 取代注入的工作区根目录，成为相对目标的基准。
+    let explicit_pwd = std::env::temp_dir();
+    assert_eq!(
+        classify_tool_call(
+            &skill("vulcan-codekit-patch"),
+            &json!({"file": "x.rs", "PWD": explicit_pwd.to_str().unwrap()})
+        ),
+        PermissionSubject::FileWrite {
+            paths: vec![explicit_pwd.join("x.rs").to_str().unwrap().to_string()]
+        }
+    );
+    assert_eq!(
+        classify_tool_call(
+            &skill("vulcan-codekit-patch"),
+            &json!({"file": "x.rs", "PWD": "relative/base"})
+        ),
+        PermissionSubject::Opaque
+    );
     let get = skill("vulcan-curl-get");
     assert_eq!(
         classify_tool_call(&get, &json!({"url": "https://example.invalid"})),

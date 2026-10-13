@@ -45,7 +45,8 @@
   列表、属性动作不经闸门。
 - 默认安装的 LuaSkills 入口按完整规范名称精确分类（`tool_permission/builtin_luaskills.rs`，同一清单也决定
   计划模式可见性）：`vulcan-codekit` 的 `repo-map`、`ast-detail`、`ast-tree`、`rg`、`markdown-menu`、
-  `node-source` 为只读；`vulcan-codekit-patch` 按 `file` 与 `patches[].file` 视为文件写入；`vulcan-curl-get`
+  `node-source` 为只读；`vulcan-codekit-patch` 按 `file` 与 `patches[].file` 视为文件写入，相对路径以 `PWD` 为基准
+  （省略时宿主注入工作区根目录；显式绝对 `PWD` 拼接后判断，显式非绝对 `PWD` 交给后续层）；`vulcan-curl-get`
   无 `download_to` 时为网络读取，绝对 `download_to` 视为文件写入，相对路径（按服务进程目录解析）交给后续层；
   `vulcan-curl-post`、`vulcan-curl-request` 与其他未列出入口沿用名称只读启发式。`call_luaskill` 按其目标入口
   分类，规则与直接调用相同，参数无法解析时不放行。

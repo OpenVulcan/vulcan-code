@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 
 use super::PermissionSubject;
+use crate::luaskills_runtime::PWD_PARAMETER_NAME;
 
 /// Built-in entries that only read the workspace; they run without approval in every mode.
 /// 仅读取工作区的内置入口；在任何模式下都无需审批即可运行。
@@ -109,6 +110,11 @@ fn dispatch_arguments(args: &Value) -> Option<Value> {
 /// 从单项模式的 `file` 与批量模式的 `patches[].file` 收集 CodeKit 补丁目标。
 /// Returns `None` when any listed target is not a string.
 /// 任一目标不是字符串时返回 `None`。
+/// CodeKit resolves relative targets against `PWD`. The host injects the workspace root only
+/// when the call omits `PWD`, so relative targets stay workspace-relative in that case; an
+/// explicit absolute `PWD` is joined here, and any other explicit `PWD` returns `None`.
+/// CodeKit 相对 `PWD` 解析相对目标。宿主仅在调用省略 `PWD` 时注入工作区根目录，此时相对目标保持
+/// 相对工作区；显式的绝对 `PWD` 在此拼接，其他显式 `PWD` 返回 `None`。
 fn codekit_patch_paths(args: &Value) -> Option<Vec<String>> {
     let mut paths = Vec::new();
     if let Some(file) = args.get("file") {
@@ -119,7 +125,23 @@ fn codekit_patch_paths(args: &Value) -> Option<Vec<String>> {
             paths.push(patch.get("file")?.as_str()?.to_string());
         }
     }
-    Some(paths)
+    let Some(pwd) = args.get(PWD_PARAMETER_NAME) else {
+        return Some(paths);
+    };
+    let pwd = std::path::Path::new(pwd.as_str()?);
+    if !pwd.is_absolute() {
+        return None;
+    }
+    paths
+        .into_iter()
+        .map(|path| {
+            if std::path::Path::new(&path).is_absolute() {
+                Some(path)
+            } else {
+                pwd.join(&path).to_str().map(str::to_string)
+            }
+        })
+        .collect()
 }
 
 /// Builds a file-write subject, or `Opaque` when the targets are unknown or empty.
