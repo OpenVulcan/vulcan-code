@@ -349,7 +349,15 @@ pub fn build_vulcan_tools_manager(
             descriptor,
             parameters_schema,
             ai_visible: true,
-            plan_policy: VulcanPlanToolPolicy::HeuristicText(canonical_name.clone()),
+            // Built-in read-only entries are known exactly; others fall back to the name heuristic.
+            // 内置只读入口已精确已知；其余入口回退到名称启发式。
+            plan_policy: if crate::agent_runtime::tool_permission::builtin_luaskills::is_read_only_entry(
+                &canonical_name,
+            ) {
+                VulcanPlanToolPolicy::Visible
+            } else {
+                VulcanPlanToolPolicy::HeuristicText(canonical_name.clone())
+            },
             request_streaming: None,
             invoke: std::sync::Arc::new(move |args, context| {
                 let runtime = runtime.clone();

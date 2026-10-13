@@ -8,6 +8,7 @@
 //! 各层依次运行：模式闸门、确定性规则，然后（配置时）判定模型、复核 LLM，最后是用户。
 //! 每层要么作出决定，要么交给下一层；错误绝不放行。
 
+pub(crate) mod builtin_luaskills;
 pub mod command_rules;
 #[cfg(test)]
 mod tests;
@@ -23,7 +24,7 @@ pub use vulcan_permission_judge::JudgeLabel;
 use vulcan_session_core::v1::config::{AccessConfig, PermissionMode};
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolInvocationContext, VulcanToolSourceKind,
-    tool_is_allowed_in_plan_with_args,
+    text_looks_read_only, tool_is_allowed_in_plan_with_args,
 };
 
 use crate::agent_runtime::question_runtime::ToolApprovalPrompt;
@@ -451,10 +452,33 @@ pub enum ToolPermissionVerdict {
 /// 写入类工具的参数格式错误时归为 `Opaque`，绝不归为 `Ungoverned`。
 pub fn classify_tool_call(definition: &ResolvedToolDefinition, args: &Value) -> PermissionSubject {
     match definition.descriptor.source {
+        VulcanToolSourceKind::Native
+            if builtin_luaskills::is_dispatcher(&definition.descriptor.id) =>
+        {
+            // The dispatcher runs another LuaSkills entry, so it is classified as that entry.
+            // 调度器运行另一个 LuaSkills 入口，因此按该入口分类。
+            builtin_luaskills::classify_dispatch(args, |name| {
+                if text_looks_read_only(name) {
+                    PermissionSubject::Ungoverned
+                } else {
+                    PermissionSubject::Opaque
+                }
+            })
+        }
         VulcanToolSourceKind::Native => classify_native(&definition.descriptor.id, args),
         VulcanToolSourceKind::Mcp
         | VulcanToolSourceKind::LuaSkills
         | VulcanToolSourceKind::VulcanPlugin => {
+            // Built-in LuaSkills entries are known exactly and override the name heuristic.
+            // 内置 LuaSkills 入口已精确已知，优先于名称启发式。
+            if definition.descriptor.source == VulcanToolSourceKind::LuaSkills
+                && let Some(subject) = builtin_luaskills::classify_entry(
+                    definition.descriptor.origin().original_name(),
+                    args,
+                )
+            {
+                return subject;
+            }
             // Extension tools reuse the Plan-mode read-only classification.
             // 扩展工具复用计划模式的只读分类。
             if tool_is_allowed_in_plan_with_args(definition, args) {

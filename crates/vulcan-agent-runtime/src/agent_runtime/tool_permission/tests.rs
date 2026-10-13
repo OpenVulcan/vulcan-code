@@ -400,6 +400,89 @@ fn extension_tools_reuse_the_plan_read_only_classification() {
     );
 }
 
+/// Built-in LuaSkills entries are classified exactly, directly and through the dispatcher.
+/// 内置 LuaSkills 入口被精确分类，直接调用与经调度器调用一致。
+#[test]
+fn builtin_luaskills_entries_are_classified_exactly() {
+    let skill = |name: &str| {
+        definition(
+            VulcanToolSourceKind::LuaSkills,
+            name,
+            VulcanPlanToolPolicy::HeuristicText(name.to_string()),
+        )
+    };
+    // The name heuristic would not clear these, but they only read.
+    // 名称启发式不会放行它们，但它们只读取。
+    for name in ["vulcan-codekit-repo-map", "vulcan-codekit-node-source"] {
+        assert_eq!(
+            classify_tool_call(&skill(name), &json!({})),
+            PermissionSubject::Ungoverned
+        );
+    }
+    assert_eq!(
+        classify_tool_call(
+            &skill("vulcan-codekit-patch"),
+            &json!({"patches": [{"file": "src/a.rs"}, {"file": "src/b.rs"}]})
+        ),
+        PermissionSubject::FileWrite {
+            paths: vec![String::from("src/a.rs"), String::from("src/b.rs")]
+        }
+    );
+    assert_eq!(
+        classify_tool_call(&skill("vulcan-codekit-patch"), &json!({})),
+        PermissionSubject::Opaque
+    );
+    let get = skill("vulcan-curl-get");
+    assert_eq!(
+        classify_tool_call(&get, &json!({"url": "https://example.invalid"})),
+        PermissionSubject::Ungoverned
+    );
+    assert_eq!(
+        classify_tool_call(&get, &json!({"download_to": "out.bin"})),
+        PermissionSubject::Opaque
+    );
+    assert_eq!(
+        classify_tool_call(&skill("vulcan-curl-post"), &json!({})),
+        PermissionSubject::Opaque
+    );
+
+    let dispatcher = definition(
+        VulcanToolSourceKind::Native,
+        vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME,
+        VulcanPlanToolPolicy::Hidden,
+    );
+    let dispatch = |name: &str, args: serde_json::Value| {
+        classify_tool_call(&dispatcher, &json!({"name": name, "args": args}))
+    };
+    assert_eq!(
+        dispatch("vulcan-codekit-repo-map", json!([])),
+        PermissionSubject::Ungoverned
+    );
+    assert_eq!(
+        dispatch(
+            "vulcan-codekit-patch",
+            json!([{"name": "patches", "value": "[{\"file\":\"src/a.rs\"}]"}])
+        ),
+        PermissionSubject::FileWrite {
+            paths: vec![String::from("src/a.rs")]
+        }
+    );
+    // Unknown entries reuse the name heuristic instead of bypassing the gate.
+    // 未知入口复用名称启发式，而不是绕过闸门。
+    assert_eq!(
+        dispatch("other-skill-list", json!([])),
+        PermissionSubject::Ungoverned
+    );
+    assert_eq!(
+        dispatch("other-skill-deploy", json!([])),
+        PermissionSubject::Opaque
+    );
+    assert_eq!(
+        classify_tool_call(&dispatcher, &json!({})),
+        PermissionSubject::Opaque
+    );
+}
+
 #[test]
 fn rules_follow_the_mode_table() {
     let workspace = tempfile::tempdir().unwrap();

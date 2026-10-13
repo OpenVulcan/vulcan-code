@@ -109,12 +109,7 @@ pub fn tool_is_allowed_in_plan_with_args(tool: &ResolvedToolDefinition, args: &V
     match &tool.plan_policy {
         VulcanPlanToolPolicy::Hidden => false,
         VulcanPlanToolPolicy::Visible => true,
-        VulcanPlanToolPolicy::HeuristicText(text) => {
-            let text = text.to_ascii_lowercase();
-            DEFAULT_PLAN_READ_ONLY_KEYWORDS
-                .iter()
-                .any(|keyword| text.contains(keyword))
-        }
+        VulcanPlanToolPolicy::HeuristicText(text) => text_looks_read_only(text),
         VulcanPlanToolPolicy::StringArgumentAllowlist {
             field,
             allowed_values,
@@ -123,6 +118,17 @@ pub fn tool_is_allowed_in_plan_with_args(tool: &ResolvedToolDefinition, args: &V
             .and_then(Value::as_str)
             .is_some_and(|value| allowed_values.iter().any(|allowed| allowed == value)),
     }
+}
+
+/// Returns whether a tool name or description `text` contains a read-only heuristic keyword.
+/// 返回工具名称或描述 `text` 是否包含只读启发式关键字。
+/// The permission gate applies the same heuristic to implicit LuaSkills entries named in a dispatch.
+/// 权限闸门对调度中指定的隐式 LuaSkills 入口应用同一启发式。
+pub fn text_looks_read_only(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    DEFAULT_PLAN_READ_ONLY_KEYWORDS
+        .iter()
+        .any(|keyword| text.contains(keyword))
 }
 
 /// Shared read-only heuristic keywords used by the Plan-mode execution guard.

@@ -43,6 +43,12 @@
 
 - 文件写入工具指 `file_write`、`file_edit`、`apply_patch` 与 `file` 的移动、删除动作；`file_read` 与 `file` 的
   列表、属性动作不经闸门。
+- 默认安装的 LuaSkills 入口按完整规范名称精确分类（`tool_permission/builtin_luaskills.rs`，同一清单也决定
+  计划模式可见性）：`vulcan-codekit` 的 `repo-map`、`ast-detail`、`ast-tree`、`rg`、`markdown-menu`、
+  `node-source` 为只读；`vulcan-codekit-patch` 按 `file` 与 `patches[].file` 视为文件写入；`vulcan-curl-get`
+  无 `download_to` 时为网络读取，绝对 `download_to` 视为文件写入，相对路径（按服务进程目录解析）交给后续层；
+  `vulcan-curl-post`、`vulcan-curl-request` 与其他未列出入口沿用名称只读启发式。`call_luaskill` 按其目标入口
+  分类，规则与直接调用相同，参数无法解析时不放行。
 - 模式保存在会话配置（`PermissionMode`，会话元数据模式版本见
   [`session-metadata-migrations.md`](session-metadata-migrations.md)）；新会话默认值只存在于运行时内存。
 - 子代理会话使用其根会话的模式；读不到模式时拒绝调用。
@@ -159,6 +165,7 @@
 | --- | --- |
 | 权限闸门与管线顺序 | `crates/vulcan-agent-runtime/src/agent_runtime/tool_permission.rs` 中的 `admit_tool_call` |
 | 已知只读与高风险命令规则 | `crates/vulcan-agent-runtime/src/agent_runtime/tool_permission/command_rules.rs` |
+| 内置 LuaSkills 入口与 `call_luaskill` 分类 | `crates/vulcan-agent-runtime/src/agent_runtime/tool_permission/builtin_luaskills.rs` |
 | 模式读取、判定与复核宿主 | `crates/vulcan-service-kernel/src/tool_permission_host.rs` |
 | 会话模式修改与草稿首次提交 | `crates/vulcan-service-kernel/src/permission_mode.rs`、`conversation_submission.rs` |
 | 无人值守、连续拒绝记忆与代理理由 | `tool_permission.rs` 中的 `PermissionMemory`、`UNATTENDED_REVIEWED_REPEATS`；`tooling/native/declare_intent.rs` |
