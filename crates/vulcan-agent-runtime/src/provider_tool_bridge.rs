@@ -46,6 +46,9 @@ const PROVIDER_TOOL_VIDEO_OUTPUT_BYTE_LIMIT: usize = 512 * 1024 * 1024;
 /// Maximum wall-clock time allowed for one provider resource download.
 /// 单个供应商资源下载允许的最大墙钟时间。
 const PROVIDER_TOOL_RESOURCE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// Most redirects one provider resource download follows.
+/// 单个供应商资源下载最多跟随的重定向次数。
+const PROVIDER_TOOL_RESOURCE_REDIRECT_LIMIT: usize = 10;
 /// Stable host-result kind carrying exact managed generated attachments.
 /// 携带精确托管生成附件的稳定宿主结果类型。
 pub(crate) const GENERATED_ATTACHMENTS_HOST_RESULT_KIND: &str = "generated_attachments";
@@ -1516,6 +1519,33 @@ fn rollback_staged_provider_resources(
     }
 }
 
+/// Checks one redirect hop of a provider resource download against the declared policy.
+/// 按声明的策略检查供应商资源下载的一跳重定向。
+///
+/// # Parameters
+/// 参数
+/// `target` is the URL the hop leads to and `followed` counts the redirects already followed.
+/// `target` 是该跳指向的 URL，`followed` 是已经跟随的重定向次数。
+///
+/// # Returns
+/// 返回值
+/// `Ok` when the hop may be followed, otherwise the reason the download stops.
+/// 该跳可跟随时返回 `Ok`，否则返回下载终止的原因。
+fn provider_resource_redirect_allowed(
+    policy: &ProviderToolResourceDownloadPolicy,
+    target: &str,
+    followed: usize,
+) -> Result<(), String> {
+    if followed >= PROVIDER_TOOL_RESOURCE_REDIRECT_LIMIT {
+        return Err(format!(
+            "Provider resource download exceeded {PROVIDER_TOOL_RESOURCE_REDIRECT_LIMIT} redirects."
+        ));
+    }
+    policy
+        .validate_url(target, "Provider resource redirect")
+        .map(|_| ())
+}
+
 /// Downloads one bounded HTTPS provider resource into an automatically cleaned temporary file.
 /// 将一个有界 HTTPS 供应商资源下载到会自动清理的临时文件。
 ///
@@ -1543,10 +1573,22 @@ async fn download_provider_resource_to_temp(
         "video" => PROVIDER_TOOL_VIDEO_OUTPUT_BYTE_LIMIT,
         _ => PROVIDER_TOOL_DEFAULT_OUTPUT_BYTE_LIMIT,
     };
-    // Redirects follow the client default because providers commonly hand out CDN or signed links
-    // that redirect, and no host allowlist exists for a redirect to bypass.
-    // 重定向沿用客户端默认策略：供应商常返回会重定向的 CDN 或签名链接，且没有可被绕过的宿主白名单。
+    // Redirects are followed because providers commonly hand out CDN or signed links that redirect,
+    // but every hop must still satisfy the declared scheme, so HTTPS never downgrades to HTTP.
+    // 跟随重定向，因为供应商常返回会重定向的 CDN 或签名链接；但每一跳仍须满足声明的 Scheme，
+    // 因此 HTTPS 绝不会降级为 HTTP。
+    let redirect_policy = download_policy.clone();
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            match provider_resource_redirect_allowed(
+                &redirect_policy,
+                attempt.url().as_str(),
+                attempt.previous().len(),
+            ) {
+                Ok(()) => attempt.follow(),
+                Err(error) => attempt.error(error),
+            }
+        }))
         .timeout(PROVIDER_TOOL_RESOURCE_DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|error| {
@@ -1615,8 +1657,8 @@ mod tests {
         apply_session_provider_tool_selections, build_selected_model_extension_catalog,
         download_provider_resource_to_temp, model_extension_executor_schema,
         model_extension_parameters_schema, model_extension_tool_id,
-        render_model_extension_parameters, render_provider_resource_result,
-        render_provider_tool_result, stage_provider_resources,
+        provider_resource_redirect_allowed, render_model_extension_parameters,
+        render_provider_resource_result, render_provider_tool_result, stage_provider_resources,
         validate_enabled_media_understanding_backends,
     };
     use serde_json::json;
@@ -2071,6 +2113,36 @@ mod tests {
                 .await
                 .expect_err("insecure URL must be rejected");
         assert_eq!(error, "Provider resource URL must use the declared scheme.");
+    }
+
+    /// Verifies every redirect hop keeps the declared scheme and the hop count stays bounded.
+    /// 验证每一跳重定向都保持声明的 Scheme，且跳数有界。
+    #[test]
+    fn provider_resource_redirects_keep_the_declared_scheme() {
+        let https = ProviderToolResourceDownloadPolicy {
+            encoding: ProviderToolResourceEncoding::HttpsUrl,
+        };
+        assert!(
+            provider_resource_redirect_allowed(&https, "https://cdn.example.com/a.png", 0).is_ok()
+        );
+        assert!(
+            provider_resource_redirect_allowed(&https, "http://cdn.example.com/a.png", 0).is_err()
+        );
+        assert!(
+            provider_resource_redirect_allowed(&https, "https://user@cdn.example.com/a.png", 0)
+                .is_err()
+        );
+        assert!(
+            provider_resource_redirect_allowed(&https, "https://cdn.example.com/a.png", 10)
+                .is_err()
+        );
+        let public_http = ProviderToolResourceDownloadPolicy {
+            encoding: ProviderToolResourceEncoding::PublicHttpUrl,
+        };
+        assert!(
+            provider_resource_redirect_allowed(&public_http, "http://cdn.example.com/a.png", 0)
+                .is_ok()
+        );
     }
 
     /// Verifies embedding output retains exact data once without an unused host clone.

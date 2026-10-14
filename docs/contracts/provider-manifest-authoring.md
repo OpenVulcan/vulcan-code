@@ -844,7 +844,8 @@ query/fragment 的 HTTPS URL，endpoint path 必须保持同源；输入 JSON Sc
 供应商返回 URL 型资源时，清单不声明下载宿主白名单：已配置的供应商返回的任何宿主与端口都直接使用，
 CDN 或存储桶变更不需要软件更新。`https_url` 只接受 HTTPS，`public_http_url` 仅在清单显式声明时
 接受 HTTP/HTTPS。URL 在响应解码、异步跟随请求和 Agent 宿主实际下载前分别重新校验 Scheme、
-绝对宿主与不含凭据；实际下载跟随重定向。这些请求不附带供应商凭据，因此放开宿主不会泄露密钥。
+绝对宿主与不含凭据；实际下载跟随有限次重定向（`PROVIDER_TOOL_RESOURCE_REDIRECT_LIMIT`），每一跳都按同一规则重新校验，因此 `https_url`
+不会经重定向降级为 HTTP。这些请求不附带供应商凭据，因此放开宿主不会泄露密钥。
 签名上传返回的临时 OSS 目标与上传响应 URL 同样只校验 HTTPS 与不含凭据。
 
 如果新模型只是复用上述原语和既有 Wire 契约，可仅更新 JSON。若它需要新的认证、签名、流式
