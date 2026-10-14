@@ -242,11 +242,16 @@ impl ScopedCredentialStore {
             .map_err(RmcpAuthError::InternalError)
     }
 
-    /// Lets saves of the manager operation starting now succeed until the next sign-out.
-    /// 允许此刻开始的管理器操作进行保存，直到下一次退出登录。
-    fn begin_operation(&self) {
-        let current = *self.epoch.lock().unwrap_or_else(PoisonError::into_inner);
-        self.save_epoch.store(current, Ordering::Release);
+    /// Returns the current sign-out epoch.
+    /// 返回当前的退出登录代次。
+    fn current_epoch(&self) -> u64 {
+        *self.epoch.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Lets saves of the manager operation requested under `started` succeed until the next sign-out.
+    /// 允许在 `started` 代次下请求的管理器操作进行保存，直到下一次退出登录。
+    fn begin_operation(&self, started: u64) {
+        self.save_epoch.store(started, Ordering::Release);
     }
 
     /// Returns whether a stored record belongs to the currently configured server and client.
@@ -379,9 +384,15 @@ impl McpOAuthSession {
 
     /// Locks the manager for one operation whose saves count only until the next sign-out.
     /// 为一次操作锁定管理器，该操作的保存只在下一次退出登录之前有效。
+    ///
+    /// The epoch is read before waiting for the lock, so an operation requested before a sign-out,
+    /// such as a code exchange of a flow the sign-out discarded, cannot save after it.
+    /// 代次在等待锁之前读取，因此退出登录之前请求的操作（例如被退出登录丢弃的流程的授权码交换）
+    /// 之后无法保存。
     async fn lock_manager(&self) -> tokio::sync::MutexGuard<'_, AuthorizationManager> {
+        let started = self.credential_store.current_epoch();
         let manager = self.manager.lock().await;
-        self.credential_store.begin_operation();
+        self.credential_store.begin_operation(started);
         manager
     }
 

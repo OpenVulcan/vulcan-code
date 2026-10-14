@@ -201,6 +201,43 @@ async fn sign_out_in_one_generation_rejects_a_refresh_started_in_another() {
     assert!(backend.load(SERVER_ID).unwrap().is_some());
 }
 
+/// An operation still waiting for its manager lock when the user signs out keeps the epoch it was
+/// requested under, so it cannot save once the lock frees up.
+/// 用户退出登录时仍在等待管理器锁的操作保留其请求时的代次，因此锁释放后也无法保存。
+#[tokio::test]
+async fn an_operation_queued_before_sign_out_cannot_save_after_it() {
+    let backend: Arc<dyn McpOAuthCredentialBackend> =
+        Arc::new(McpOAuthMemoryCredentialBackend::default());
+    let older = Arc::new(session(backend.clone(), McpTransportOAuthSpec::default()).await);
+    let current = session(backend.clone(), McpTransportOAuthSpec::default()).await;
+    backend
+        .save(SERVER_ID, &record(SERVER_URL, "client"))
+        .unwrap();
+
+    // Another operation holds the older generation's lock, so a code exchange queues behind it.
+    // 另一操作持有旧代次的锁，因此授权码交换在其后排队。
+    let busy = older.manager.lock().await;
+    let queued = tokio::spawn({
+        let older = older.clone();
+        async move {
+            let _manager = older.lock_manager().await;
+            older
+                .credential_store
+                .save(record(SERVER_URL, "client").credentials)
+                .await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    current.remove_authorization().await.unwrap();
+    drop(busy);
+
+    assert!(matches!(
+        queued.await.unwrap(),
+        Err(RmcpAuthError::AuthorizationRequired)
+    ));
+    assert!(backend.load(SERVER_ID).unwrap().is_none());
+}
+
 #[tokio::test]
 async fn denied_callback_fails_without_contacting_the_server() {
     let backend = Arc::new(McpOAuthMemoryCredentialBackend::default());
