@@ -36,11 +36,11 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// 进程内序号，为每次系统统计引导提供不同的绑定后缀。
 static SYSTEM_STATISTICS_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// Current application schema, including atomic OpenDesign credential pairs.
-/// 当前应用结构，包含原子 OpenDesign 凭据对。
-/// Initialization creates the declared schema without reading or migrating earlier formats.
-/// 初始化创建已声明的结构，不读取或迁移早期格式。
-pub const APP_SCHEMA_VERSION: i64 = 2;
+/// Pre-release application schema version, including atomic OpenDesign credential pairs.
+/// 预发布应用结构版本，包含原子 OpenDesign 凭据对。
+/// Local Debug structure changes use the standalone maintenance tool while this version stays at v1.
+/// 此版本保持 v1，本地 Debug 结构变化通过独立维护工具同步。
+pub const APP_SCHEMA_VERSION: i64 = 1;
 
 /// Credential table shared by initialization and every persistence operation.
 /// 初始化与全部持久化操作共用的凭据表。
@@ -191,7 +191,9 @@ impl DataPlaneBootstrapReport {
 /// 引导进程内应用数据平面以及主 SQLite 结构。
 pub async fn bootstrap_application_data_plane() -> Result<DataPlaneBootstrapReport, String> {
     let data_root = application_data_root();
-    let sqlite_path = data_root.join("sqlite").join("app-workspace.sqlite3");
+    // sqlite_path shares the authoritative derivation with the independent Debug maintenance command.
+    // sqlite_path 与独立 Debug 维护命令共用权威派生入口。
+    let sqlite_path = application_sqlite_path();
     let system_statistics_root = data_root.join("statistics");
     let system_statistics_sqlite_path = system_statistics_root.join("provider-usage.sqlite3");
 
@@ -220,8 +222,8 @@ pub async fn bootstrap_application_data_plane() -> Result<DataPlaneBootstrapRepo
         // The binding identifiers stay in the runtime metadata because plugin and VCE LanceDB paths use
         // them to address the host's own in-process databases.
         // 绑定标识符保留在运行期元数据中，因为插件与 VCE 的 LanceDB 路径用它们寻址宿主自身的进程内数据库。
-        // Initialization accepts only empty databases or the exact current schema; pre-release formats are not migrated.
-        // 初始化仅接受空数据库或精确的当前结构；不迁移预发布格式。
+        // Initialization checks the declared version; existing Debug structures are synchronized separately.
+        // 初始化检查声明版本；已有 Debug 结构由独立入口同步。
         {
             let connection = local
                 .connect(LogicalDatabase::AppState)
@@ -286,11 +288,11 @@ pub async fn prepare_application_schema_for_test(
     Ok(())
 }
 
-/// Checks the existing schema before any initialization can overwrite its version marker.
-/// 在任何初始化覆盖版本标记之前检查既有结构。
+/// Checks the existing schema version before initialization can overwrite its version marker.
+/// 在初始化覆盖版本标记之前检查既有结构版本。
 ///
-/// `connection` is the exact application database. Returns success only for a new or current database.
-/// `connection` 是精确的应用数据库。仅新数据库或当前数据库返回成功。
+/// `connection` is the application database; accepts new or current-version databases without migrating DDL.
+/// `connection` 为应用数据库；接受新库或当前版本数据库，不迁移 DDL。
 fn validate_application_schema_for_initialization(
     connection: &rusqlite::Connection,
 ) -> Result<(), String> {
@@ -369,6 +371,16 @@ pub fn application_data_root() -> PathBuf {
     }
 }
 
+/// Derive the application SQLite path shared by bootstrap and explicit maintenance.
+/// 派生引导与显式维护共用的应用 SQLite 路径。
+/// No arguments; returns the path under the build-profile-specific application data root.
+/// 无参数；返回当前构建配置对应的应用数据目录内路径。
+pub fn application_sqlite_path() -> PathBuf {
+    application_data_root()
+        .join("sqlite")
+        .join("app-workspace.sqlite3")
+}
+
 /// Resolves the fixed absolute host-owned root used by LuaSkills package configuration stores.
 /// 解析 LuaSkills 技能包配置存储使用的固定绝对宿主持有根目录。
 ///
@@ -414,7 +426,9 @@ fn ensure_parent_directory(path: &Path) -> Result<(), String> {
 
 /// Builds the initial SQLite schema used by the Vulcan application data plane.
 /// 构建 Vulcan 应用数据平面使用的初始 SQLite 结构。
-pub(crate) fn build_application_schema_script() -> String {
+/// No parameters; returns the authoritative DDL shared with the standalone Debug maintenance command.
+/// 无参数；返回与独立 Debug 维护命令共用的权威 DDL。
+pub fn build_application_schema_script() -> String {
     format!(
         r#"
 PRAGMA foreign_keys = ON;
@@ -693,20 +707,23 @@ PRAGMA user_version = {schema_version};
 mod tests {
     use super::*;
 
-    /// Verifies initialization refuses an old schema before modifying its version or stored data.
-    /// 验证初始化在修改版本或已存数据之前拒绝旧结构。
+    /// Verifies initialization refuses unknown versions before modifying the version or stored data.
+    /// 验证初始化在修改版本或已存数据之前拒绝未知版本。
     #[test]
-    fn open_design_schema_rejects_previous_version_without_mutation() {
+    fn initialization_rejects_unknown_version_without_mutation() {
         // connection models a pre-existing database independently of the production data directory.
         // connection 模拟既有数据库，与生产数据目录隔离。
         let connection = rusqlite::Connection::open_in_memory().unwrap();
-        connection.execute_batch("PRAGMA user_version = 1; CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES ('retained');").unwrap();
+        // unsupported_version deliberately differs from the version declared by the application.
+        // unsupported_version 刻意使用与应用声明不同的版本。
+        let unsupported_version = APP_SCHEMA_VERSION + 1;
+        connection.execute_batch(&format!("PRAGMA user_version = {unsupported_version}; CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES ('retained');")).unwrap();
         assert!(validate_application_schema_for_initialization(&connection).is_err());
         assert_eq!(
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            1
+            unsupported_version
         );
         assert_eq!(
             connection

@@ -31,10 +31,13 @@
 10. **按需文档是条件性强制要求。** 任务命中下列领域时，必须先阅读对应链接，再开始修改。
 11. **同一边界值只允许一处定义。** 同一语义的上限、超时、容量等边界值必须有唯一来源，其余位置
     一律派生或引用；发现同一概念存在多个独立字面量时按缺陷处理，无论当前取值是否巧合一致。
-12. **正式发布前不做兼容。** 正式发布版本从 V0.2 起算；当前版本以根 `Cargo.toml`
-    `[workspace.package].version` 为准。V0.1.x 期间一律不保留旧数据、旧格式或旧协议的兼容、迁移、
-    降级或“需重装”分支：持久格式变化时直接改为新形状并递增对应版本号，旧数据明确拒绝或不再识别，
-    不猜测、不补默认值。V0.2 及以后，持久格式变化才需要逐版本迁移与原字节备份。
+12. **正式发布前直接同步开发数据库。** 正式发布版本从 V0.2 起算；当前版本以根 `Cargo.toml`
+    `[workspace.package].version` 为准。V0.1.x 期间应用 SQLite 数据库保持 v1，结构以当前源码为准。
+    结构有调整时，必须通过独立、显式的维护入口将本地已存在的 Debug 数据库同步到最新结构，
+    先备份，事务执行，验证保留数据与完整性；不得删除数据库重建，不得猜测字段映射或补默认值。
+    应用启动流程不承担历史结构兼容、迁移或降级，维护工具不进入 Release 启动及发布流程。
+    其他持久格式仍按各自契约递增版本并明确拒绝旧格式。V0.2 及以后，持久格式变化需要逐版本迁移
+    与原字节备份。
 
 ## 二、按需文档入口
 
@@ -44,6 +47,7 @@
 | --- | --- | --- |
 | 修改宿主消息固定指引或锁定基线校验 | 指引版本目录只能追加；已锁定正文不得重写，新版说明通过持久动态上下文追加 | [`host-message-guidance-versions.md`](docs/contracts/host-message-guidance-versions.md) |
 | 修改会话元数据持久字段、模式版本或读取入口 | 递增 `METADATA_SCHEMA_VERSION`；V0.1.x 不新增迁移，旧版本明确拒绝（见第一节第 12 条），V0.2 起才提供逐版本迁移并在升级前保留原字节备份；未知版本不得降级，用户观察权限不得猜测 | [`session-metadata-migrations.md`](docs/contracts/session-metadata-migrations.md) |
+| 修改预发布应用 SQLite 数据库结构 | 应用数据库保持 v1；通过独立工具显式同步本地既有 Debug 库，先备份并验证数据，应用启动不自动迁移；未知字段映射必须停止 | [`debug-database-maintenance.md`](docs/contracts/debug-database-maintenance.md) |
 | 修改 `shell_command`、`terminal_session` 或命令会话状态 | `timeout_ms` 省略表示无限等待；`shell_command` 合并输出超过 8 MiB 硬上限时终止进程树并丢弃全部输出，不返回给模型；内联输出超过 `200000` 字节转到 `.vulcan/temp/` 分页文件；`terminal_session.read` 是轮询不是事件推送；`cwd` 只在 `start` 生效 | [`tooling-and-terminal-runtime.md`](docs/contracts/tooling-and-terminal-runtime.md) |
 | 修改权限模式、工具权限闸门、判定模型、复核 LLM、用户审批或其设置界面 | 管线固定为模式闸门 → 确定性规则 → 判定模型 → 复核 LLM → 用户，任何错误都不放行，放行只对本次调用有效；判定与复核只用于自动审批模式，无人值守只属于自动审批且切换模式即关闭；无人值守会话永不询问用户，复核未放行即拒绝；高风险或判定拦截项不能由单层放行；模型与后端是系统级，项目配置只保存类别档位；只有显式选择写入判定设置 | [`permission-modes-and-judge.md`](docs/contracts/permission-modes-and-judge.md) |
 | 修改 `ask`、提问状态机、Ask WebUI 或 Markdown 预览/渲染 | 模型可见提问工具只有 `ask`，不保留 `question` 别名；必须复用共享 `QuestionRuntime`，刷新或流式启动不得丢弃等待中的问题；Ask 是会话内非模态面板，不得劫持其他窗口键盘；会话 Markdown 复用当前 `conversation-markdown` 链路，不建立第二套解析器 | [`ask-and-markdown-interaction.md`](docs/contracts/ask-and-markdown-interaction.md) |

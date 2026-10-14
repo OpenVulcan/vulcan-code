@@ -14,6 +14,14 @@ workspace = true
 # Exposes exact fixture constructors for downstream crate tests only.
 # 仅向下游 crate 测试暴露精确夹具构造函数。
 test-support = []
+# Enables the explicitly invoked local Debug database maintenance binary.
+# 启用需要显式调用的本地 Debug 数据库维护程序。
+debug-db-maintenance = []
+
+[[bin]]
+name = "vulcan-debug-db"
+path = "src/bin/vulcan-debug-db.rs"
+required-features = ["debug-db-maintenance"]
 
 [dependencies]
 futures-util.workspace = true

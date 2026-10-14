@@ -18,6 +18,11 @@ Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。
 
 ## Windows Debug 下只更新 Core
 
+应用 SQLite 结构变动后，在启动新 Core 前独立执行 Debug 数据库检查与同步，应用数据库版本保持 v1。
+维护命令直接复用生产 DDL，先备份、事务更新，再校验保留值及完整性；不会随 `make build`、
+`make run`、`make core-restart` 或 Release 启动隐式执行。具体入口和可处理的结构差异见
+[本地 Debug 数据库维护](debug-database-maintenance.md)。
+
 ### 内置浏览器依赖
 
 “Vulcan 浏览器”保留插件设置入口，作为随包交付的内置组件。官方 MCP 固定为 `0.0.82`，其 Playwright 与 playwright-core 固定为 `1.64.0-alpha-1789764292000`；版本组合在 `scripts/browser-runtime.mjs` 中校验，不使用 `latest`。升级必须同时更新锁文件并重新验证 MCP 导航、快照、点击、截图及授权撤销。
