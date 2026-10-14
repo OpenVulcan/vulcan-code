@@ -36,8 +36,10 @@ import {
   savePublicAiInferenceRoute,
   testPublicAiInferenceRoute,
 } from "@/service/settings-actions-service"
+import { renderServiceErrorMessage } from "@/service/browserTransport"
 import type {
   PublicAiInferenceRoute,
+  PublicAiInferenceRouteDiagnostic,
   PublicAiInternalInferenceCandidate,
   PublicAiOperation,
   PublicAiSettingsSnapshot,
@@ -348,10 +350,10 @@ export function VmmInferenceSettings({
                   route,
                 )}
                 route={profile?.llm_routes?.[purpose.id]}
-                unavailableReason={diagnostics.find((diagnostic) => (
+                unavailableReason={diagnosticReason(diagnostics.find((diagnostic) => (
                   diagnostic.operation === "conversation_respond"
                   && diagnostic.purposeId === purpose.id
-                ))?.reason}
+                )))}
               />
             ))}
             <InferenceRouteField
@@ -366,10 +368,10 @@ export function VmmInferenceSettings({
               route={profile?.embedding}
               testPending={testingOperation === "embedding_create"}
               testSummary={testSummaries.embedding_create}
-              unavailableReason={diagnostics.find((diagnostic) => (
+              unavailableReason={diagnosticReason(diagnostics.find((diagnostic) => (
                 diagnostic.operation === "embedding_create"
                 && diagnostic.purposeId === undefined
-              ))?.reason}
+              )))}
             />
             <InferenceRouteField
               candidates={candidates.filter((candidate) => (
@@ -384,10 +386,10 @@ export function VmmInferenceSettings({
               showEnableToggle
               testPending={testingOperation === "rerank_documents"}
               testSummary={testSummaries.rerank_documents}
-              unavailableReason={diagnostics.find((diagnostic) => (
+              unavailableReason={diagnosticReason(diagnostics.find((diagnostic) => (
                 diagnostic.operation === "rerank_documents"
                 && diagnostic.purposeId === undefined
-              ))?.reason}
+              )))}
             />
           </div>
           <PublicAiInternalOverridesDialog
@@ -1016,4 +1018,11 @@ function candidateSupportsVmmStructuredOutput(
 ): boolean {
   return candidate.capabilities.structured_output === "json_object"
     || candidate.capabilities.structured_output === "json_schema"
+}
+
+// diagnosticReason renders a route failure in the active language when the service sent a catalog cause.
+// diagnosticReason 在服务给出目录原因时以当前语言渲染路由失败原因。
+function diagnosticReason(diagnostic: PublicAiInferenceRouteDiagnostic | undefined): string | undefined {
+  if (!diagnostic) return undefined
+  return renderServiceErrorMessage(diagnostic.reason, diagnostic.reasonMessage ?? undefined)
 }

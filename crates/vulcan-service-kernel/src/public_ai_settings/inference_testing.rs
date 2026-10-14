@@ -16,6 +16,7 @@ use vulcan_ai_contract::{
     RerankRequest, RerankScoreSemantics, RerankText, RerankTruncation,
 };
 use vulcan_provider_adapters::{InferenceRouteConfiguration, PersistedAiConfiguration};
+use vulcan_service_api::WebuiServiceRpcError;
 
 use super::{public_ai_runtime_and_configuration, validate_non_empty};
 use crate::SharedServiceBridgeState;
@@ -80,7 +81,7 @@ pub(crate) struct PublicAiInferenceTestResult {
 pub(crate) async fn service_test_public_ai_inference_route(
     state: SharedServiceBridgeState,
     request: PublicAiInferenceTestRequest,
-) -> Result<PublicAiInferenceTestResult, String> {
+) -> Result<PublicAiInferenceTestResult, WebuiServiceRpcError> {
     validate_non_empty("consumerProfileId", request.consumer_profile_id.as_str())?;
     let permission = match request.operation {
         AiOperation::EmbeddingCreate => InferencePermission::Embedding,
@@ -90,7 +91,8 @@ pub(crate) async fn service_test_public_ai_inference_route(
             return Err(format!(
                 "Operation `{}` does not have a settings connection test.",
                 request.operation.as_str()
-            ));
+            )
+            .into());
         }
     };
     let (_, configuration) = public_ai_runtime_and_configuration(&state)?;
@@ -122,13 +124,17 @@ pub(crate) async fn service_test_public_ai_inference_route(
             )
         })?;
     if !operation.available {
-        return Err(operation.unavailable_reason.clone().unwrap_or_else(|| {
-            format!(
-                "Consumer profile `{}` operation `{}` is unavailable.",
-                request.consumer_profile_id,
-                request.operation.as_str()
-            )
-        }));
+        return Err(operation
+            .unavailable_reason
+            .clone()
+            .unwrap_or_else(|| {
+                format!(
+                    "Consumer profile `{}` operation `{}` is unavailable.",
+                    request.consumer_profile_id,
+                    request.operation.as_str()
+                )
+            })
+            .into());
     }
     match request.operation {
         AiOperation::EmbeddingCreate => {
@@ -142,6 +148,7 @@ pub(crate) async fn service_test_public_ai_inference_route(
                 &request.consumer_profile_id,
                 embedding,
             )?;
+            let task = settings_embedding_task(&request.consumer_profile_id, embedding)?;
             let request_id = format!("settings_embedding_test_{}", uuid::Uuid::new_v4().simple());
             let response = service
                 .create_embeddings(
@@ -159,7 +166,7 @@ pub(crate) async fn service_test_public_ai_inference_route(
                                 ),
                             },
                         }],
-                        task: preferred_embedding_task(embedding)?,
+                        task,
                         dimensions,
                         output_kind: preferred_embedding_output_kind(embedding)?,
                         encoding: preferred_embedding_encoding(embedding)?,
@@ -204,7 +211,8 @@ pub(crate) async fn service_test_public_ai_inference_route(
                 return Err(format!(
                     "Configured rerank test requires {candidate_count} candidates but the model maximum is {}.",
                     rerank.maximum_candidates.unwrap_or_default()
-                ));
+                )
+                .into());
             }
             let candidates = fixed_rerank_test_candidates(candidate_count);
             let request_id = format!("settings_rerank_test_{}", uuid::Uuid::new_v4().simple());
@@ -295,7 +303,8 @@ pub(crate) async fn service_test_public_ai_inference_route(
         _ => Err(format!(
             "Operation `{}` does not have a settings connection test.",
             request.operation.as_str()
-        )),
+        )
+        .into()),
     }
 }
 
@@ -446,6 +455,31 @@ fn configured_settings_inference_test_route(
         ));
     }
     Ok(route.clone())
+}
+
+/// Selects the embedding task the tested consumer itself sends, so a passing test means the
+/// consumer can use the route.
+/// 选择被测消费者自身会发送的向量任务，使测试通过即代表该消费者可以使用此路由。
+///
+/// # Parameters
+/// 参数
+/// `consumer_profile_id` names the consumer and `capabilities` is its route contract.
+/// `consumer_profile_id` 指明消费者，`capabilities` 是其路由契约。
+///
+/// # Returns
+/// 返回值
+/// Native VMM's stored-text task after its model-level route check, otherwise the generic test task.
+/// 原生 VMM 经模型层路由校验后的存储文本任务；其他消费者返回通用测试任务。
+fn settings_embedding_task(
+    consumer_profile_id: &str,
+    capabilities: &vulcan_ai_contract::EmbeddingCapabilities,
+) -> Result<EmbeddingTask, WebuiServiceRpcError> {
+    if consumer_profile_id == crate::configured_inference::VMM_CONSUMER_PROFILE_ID {
+        return crate::native_vmm::native_vmm_embedding_shape(capabilities)
+            .map(|tasks| tasks.document)
+            .map_err(|issue| issue.localized().into());
+    }
+    Ok(preferred_embedding_task(capabilities)?)
 }
 
 /// Selects a deterministic declared embedding task for the fixed test request.

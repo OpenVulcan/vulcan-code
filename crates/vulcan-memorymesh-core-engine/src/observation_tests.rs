@@ -315,6 +315,7 @@ fn search_batch_checkpoint_revalidates_query_plan() -> Result<(), Box<dyn std::e
     }
     request.effect = HostEffect::Embedding(EmbeddingEffect {
         allow_partial_invalid_inputs: false,
+        purpose: EmbeddingPurpose::Query,
         vector_space_id: pipeline.work.vector_space_id.clone(),
         expected_dimension: 2,
         inputs: vec!["second".to_owned()],

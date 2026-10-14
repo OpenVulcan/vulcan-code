@@ -1,3 +1,4 @@
+import type { BrowserServiceLocalizedMessage } from "@/service/browserTransport";
 import type { ContextInjectionCardSummary, VmmStaticProfileSummary } from "./runtime-context";
 
 export interface MemorySummary {
@@ -1274,6 +1275,9 @@ export interface VmmNativeVectorStatusSummary {
   legacyVectorSpaceCount: number;
   pendingAnalysisJobCount: number;
   error?: string | null;
+  // errorMessage is the catalog form of the failure cause; `error` stays the English diagnostic.
+  // errorMessage 是失败原因的目录形式；`error` 保留英文诊断。
+  errorMessage?: BrowserServiceLocalizedMessage | null;
 }
 
 // VmmNativeVectorRebuildPreview binds a high-impact rebuild to one exact displayed target set.
@@ -1290,6 +1294,21 @@ export interface VmmNativeVectorRebuildPreview {
   affectedProjectCount: number;
   batchCount: number;
   previewFingerprint: string;
+  // adoptableMemoryCount counts targets whose stored vector already has the current dimension.
+  // adoptableMemoryCount 统计已存向量维度与当前一致的目标。
+  adoptableMemoryCount: number;
+}
+
+// VmmNativeVectorAdoptionResult reports whether existing vectors were kept under the current generation.
+// VmmNativeVectorAdoptionResult 报告现有向量是否已在当前代次下沿用。
+export interface VmmNativeVectorAdoptionResult {
+  storageVersion: number;
+  targetVectorSpaceId: string;
+  adopted: boolean;
+  adoptedMemoryCount: number;
+  remainingRebuildMemoryCount: number;
+  sampleSimilarity: number;
+  requiredSimilarity: number;
 }
 
 // VmmNativeVectorRebuildResult summarizes one completed native vector-generation rebuild.
@@ -1655,6 +1674,7 @@ export type VmmMemoryActionResponse =
   | { kind: "native_vector_status"; value: VmmNativeVectorStatusSummary }
   | { kind: "native_vector_rebuild_preview"; value: VmmNativeVectorRebuildPreview }
   | { kind: "native_vector_rebuild"; value: VmmNativeVectorRebuildResult }
+  | { kind: "native_vector_adoption"; value: VmmNativeVectorAdoptionResult }
   | { kind: "native_recycle_bin"; value: VmmNativeRecycleBinSummary }
   | { kind: "native_recycle_records"; value: VmmNativeRecycleRecordPage }
   | { kind: "native_removal_impact"; value: VmmNativeRemovalImpact }

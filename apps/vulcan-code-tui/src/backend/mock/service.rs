@@ -1985,7 +1985,8 @@ impl FakeService {
                     json!({"storageVersion":self.version,"targetVectorSpaceId":"demo-vector",
                     "embeddingDimension":384,"activeMemoryCount":active,"recycleBinMemoryCount":recycled,
                     "rebuildMemoryCount":0,"activeRebuildMemoryCount":0,"recycleBinRebuildMemoryCount":0,
-                    "affectedProjectCount":0,"batchCount":0,"previewFingerprint":"demo-vector-fingerprint"})
+                    "affectedProjectCount":0,"batchCount":0,"previewFingerprint":"demo-vector-fingerprint",
+                    "adoptableMemoryCount":0})
                 }
                 _ => return Err("Unknown VMM preview".into()),
             };
@@ -2344,6 +2345,17 @@ impl FakeService {
             "native_vector_rebuild" => {
                 if required(payload, "/confirmed")? != &json!(true) {
                     return Err("Vector rebuild needs consent".into());
+                }
+                if required(payload, "/expectedStorageVersion")?.as_i64() != Some(self.version)
+                    || string(payload, "/expectedPreviewFingerprint")? != "demo-vector-fingerprint"
+                {
+                    return Err("Vector preview is stale".into());
+                }
+                self.memory["native_vector_status"]["rebuildRequiredMemoryCount"] = json!(0);
+            }
+            "native_vector_adoption" => {
+                if required(payload, "/confirmed")? != &json!(true) {
+                    return Err("Vector adoption needs consent".into());
                 }
                 if required(payload, "/expectedStorageVersion")?.as_i64() != Some(self.version)
                     || string(payload, "/expectedPreviewFingerprint")? != "demo-vector-fingerprint"

@@ -32,9 +32,9 @@ use vulcan_memorymesh_core_contracts::{
     CommandDiagnostics, CommandHandle, CommandId, CommandResult, CommandStatus, CommandStep,
     CommitReceipt, ContextEvidenceCandidate, ContextEvidenceGroup, ContextEvidenceRelation,
     CoreCommand, CoreError, DirectWriteDedupeLookup, DroppedCandidate, EffectDeadlineClass,
-    EffectFailureKind, EffectId, EffectRequest, EffectResult, EmbeddingEffect, EntityKind,
-    EntityRef, EntitySlotId, ErrorCode, ErrorStage, EvidenceRef, FailureClass, HostEffect,
-    HostEffectResult, IdempotencyKey, LlmEffect, LlmInput, LlmOutput, LlmPurpose,
+    EffectFailureKind, EffectId, EffectRequest, EffectResult, EmbeddingEffect, EmbeddingPurpose,
+    EntityKind, EntityRef, EntitySlotId, ErrorCode, ErrorStage, EvidenceRef, FailureClass,
+    HostEffect, HostEffectResult, IdempotencyKey, LlmEffect, LlmInput, LlmOutput, LlmPurpose,
     MAX_DOMAIN_COLLECTION_ITEMS, MAX_DOMAIN_TEXT_BYTES, MAX_MEMORY_TAG_BYTES, MAX_MEMORY_TAGS,
     MaintenanceAction, MaintenanceCommand, MaintenanceResult, MemoryAccessClass,
     MemoryAccessIdentity, MemoryCandidate, MemoryContextEvidence, MemoryDeleteBatchCommand,
@@ -2783,6 +2783,7 @@ fn initialize_precheck(
             emit_effect(
                 record,
                 HostEffect::Embedding(EmbeddingEffect {
+                    purpose: EmbeddingPurpose::Query,
                     allow_partial_invalid_inputs: false,
                     vector_space_id: command.vector_space_id,
                     expected_dimension: record.snapshot.embedding_dimension,
@@ -2862,6 +2863,7 @@ fn advance_precheck_intent(
             emit_effect(
                 record,
                 HostEffect::Embedding(EmbeddingEffect {
+                    purpose: EmbeddingPurpose::Query,
                     allow_partial_invalid_inputs: false,
                     vector_space_id: command.vector_space_id,
                     expected_dimension: record.snapshot.embedding_dimension,
@@ -3539,6 +3541,7 @@ fn emit_embedding_for_pipeline(
     emit_effect(
         record,
         HostEffect::Embedding(EmbeddingEffect {
+            purpose: EmbeddingPurpose::Query,
             vector_space_id,
             allow_partial_invalid_inputs: false,
             expected_dimension: record.snapshot.embedding_dimension,
@@ -3586,6 +3589,7 @@ fn pipeline_effect(
             candidate_observation_query(work, snapshot)?,
         )),
         PipelineStage::Embedding => HostEffect::Embedding(EmbeddingEffect {
+            purpose: EmbeddingPurpose::Query,
             allow_partial_invalid_inputs: false,
             vector_space_id: work.vector_space_id.clone(),
             expected_dimension: snapshot.embedding_dimension,
@@ -4731,6 +4735,7 @@ fn begin_intake_noise_embedding(
         return emit_effect(
             record,
             HostEffect::Embedding(EmbeddingEffect {
+                purpose: EmbeddingPurpose::Document,
                 vector_space_id,
                 allow_partial_invalid_inputs: false,
                 expected_dimension: record.snapshot.embedding_dimension,
@@ -4938,6 +4943,7 @@ fn advance_intake_semantic(
     emit_effect(
         record,
         HostEffect::Embedding(EmbeddingEffect {
+            purpose: EmbeddingPurpose::Document,
             vector_space_id,
             allow_partial_invalid_inputs: false,
             expected_dimension: record.snapshot.embedding_dimension,
@@ -5414,6 +5420,7 @@ fn begin_analyze_candidate_queries(
         return finish_analyze_preparation(record, pending);
     }
     let effect = EmbeddingEffect {
+        purpose: EmbeddingPurpose::Query,
         allow_partial_invalid_inputs: false,
         vector_space_id: pending.command.vector_space_id.clone(),
         expected_dimension: record.snapshot.embedding_dimension,
@@ -5818,6 +5825,7 @@ fn begin_analyze_persistence_embedding(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let effect = EmbeddingEffect {
+        purpose: EmbeddingPurpose::Document,
         vector_space_id: pending.command.vector_space_id.clone(),
         expected_dimension: record.snapshot.embedding_dimension,
         inputs,
@@ -6600,6 +6608,7 @@ fn advance_memory_write_dedupe(
         );
     }
     let effect = HostEffect::Embedding(EmbeddingEffect {
+        purpose: EmbeddingPurpose::Query,
         allow_partial_invalid_inputs: false,
         vector_space_id: pending.command.vector_space_id.clone(),
         expected_dimension: record.snapshot.embedding_dimension,
@@ -6667,6 +6676,7 @@ fn advance_memory_write_batch_dedupe(
         pending.command.occurred_at_ns,
     )?;
     let effect = HostEffect::Embedding(EmbeddingEffect {
+        purpose: EmbeddingPurpose::Query,
         allow_partial_invalid_inputs: false,
         vector_space_id: pending.command.vector_space_id.clone(),
         expected_dimension: record.snapshot.embedding_dimension,
@@ -7330,6 +7340,7 @@ fn begin_direct_persistence_embedding(
         return finish_direct_write(record, pending, &supersede_by_item);
     }
     let effect = EmbeddingEffect {
+        purpose: EmbeddingPurpose::Document,
         vector_space_id: pending
             .proposed
             .first()
@@ -8698,6 +8709,7 @@ fn advance_maintenance_rebuild_query(
     emit_effect(
         record,
         HostEffect::Embedding(EmbeddingEffect {
+            purpose: EmbeddingPurpose::Document,
             allow_partial_invalid_inputs: false,
             vector_space_id: vector_space_id.clone(),
             expected_dimension: record.snapshot.embedding_dimension,

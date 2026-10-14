@@ -12,7 +12,7 @@ use vulcan_provider_adapters::{
     InternalModelOverrides, PersistedAiConfiguration, PublicAiRuntime,
     registered_native_action_binding_id,
 };
-use vulcan_service_api::ServiceEventEmitter;
+use vulcan_service_api::{ServiceEventEmitter, WebuiLocalizedMessage};
 
 use super::{
     PublicAiSettingsSnapshot, build_public_ai_settings_snapshot,
@@ -54,6 +54,10 @@ pub(crate) struct PublicAiInferenceRouteDiagnostic {
     /// Exact backend failure produced by strict route validation.
     /// 严格路由校验产生的精确后端失败原因。
     reason: String,
+    /// Catalog cause shown in the active language when the failure has one; `reason` stays the diagnostic.
+    /// 失败具有目录原因时以当前语言显示；`reason` 仍作为诊断。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason_message: Option<WebuiLocalizedMessage>,
 }
 
 /// Browser-facing exact route candidate for one internal inference operation.
@@ -812,6 +816,7 @@ fn push_internal_inference_route_diagnostic(
     expected_operation: AiOperation,
     route: &InferenceRouteConfiguration,
 ) {
+    let mut localized_reason = None;
     let resolution = if route.operation != expected_operation {
         Err(format!(
             "Persisted inference route operation `{}` does not match profile slot operation `{}`.",
@@ -822,6 +827,24 @@ fn push_internal_inference_route_diagnostic(
         runtime
             .resolve_internal_inference_selection(configuration, route)
             .and_then(|selection| {
+                // Memory vectors need a task pairing the generic route catalog cannot judge.
+                // 记忆向量需要通用路由目录无法判断的任务配对。
+                if consumer_profile_id == VMM_CONSUMER_PROFILE_ID
+                    && expected_operation == AiOperation::EmbeddingCreate
+                {
+                    let issue = match selection.model.capabilities.embedding.as_ref() {
+                        Some(embedding) => {
+                            crate::native_vmm::native_vmm_embedding_shape(embedding).err()
+                        }
+                        None => {
+                            Some(crate::native_vmm::NativeVmmEmbeddingRouteIssue::MissingLimits)
+                        }
+                    };
+                    if let Some(issue) = issue {
+                        localized_reason = Some(issue.localized());
+                        return Err(issue.diagnostic().to_owned());
+                    }
+                }
                 validate_vmm_llm_reasoning_policy(
                     consumer_profile_id,
                     purpose_id,
@@ -850,6 +873,7 @@ fn push_internal_inference_route_diagnostic(
             operation: expected_operation,
             route: route.clone(),
             reason,
+            reason_message: localized_reason,
         });
     }
 }

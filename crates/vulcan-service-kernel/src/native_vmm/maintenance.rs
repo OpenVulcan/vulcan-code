@@ -647,6 +647,9 @@ pub(crate) struct NativeVmmVectorStatus {
     /// Exact configuration failure when no current generation can be resolved.
     /// 无法解析当前代次时的准确配置失败。
     pub error: Option<String>,
+    /// Catalog form of the failure cause for the memory pages.
+    /// 供记忆页面使用的失败原因目录形式。
+    pub error_message: Option<vulcan_service_api::WebuiLocalizedMessage>,
 }
 
 /// Carries the exact side-effect-free preview required before rebuilding native vectors.
@@ -686,6 +689,50 @@ pub(crate) struct NativeVmmVectorRebuildPreview {
     /// SHA-256 confirmation identity of the exact displayed target set.
     /// 所显示准确目标集合的 SHA-256 确认身份。
     pub preview_fingerprint: String,
+    /// Targets whose stored vector already has the current dimension and may be kept instead.
+    /// 已存向量维度与当前一致、可改为沿用的目标数量。
+    pub adoptable_memory_count: u64,
+}
+
+/// Lowest cosine similarity between a stored vector and its fresh re-embedding that still proves
+/// the current route runs the model that produced the stored vectors.
+/// 已存向量与其重新嵌入结果之间的最低余弦相似度，达到即证明当前路由运行的是产生已存向量的模型。
+const NATIVE_VMM_VECTOR_ADOPTION_MIN_SIMILARITY: f64 = 0.95;
+
+/// Summarizes one attempt to keep existing vectors under the current vector generation.
+/// 汇总一次在当前向量代次下沿用现有向量的尝试。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct NativeVmmVectorAdoptionResult {
+    /// Core storage version after the attempt.
+    /// 本次尝试之后的 Core 存储版本。
+    pub storage_version: u64,
+    /// Target route-derived logical vector-space identity.
+    /// 目标路由派生的逻辑向量空间标识。
+    pub target_vector_space_id: String,
+    /// False when the sample check showed the current route runs a different model.
+    /// 抽样校验表明当前路由运行的是另一个模型时为假。
+    pub adopted: bool,
+    /// Memories moved into the current generation without calling the provider for each.
+    /// 未逐条调用供应商即转入当前代次的记忆数量。
+    pub adopted_memory_count: u64,
+    /// Memories that still need a rebuild, such as those stored with another dimension.
+    /// 仍需重建的记忆数量，例如以其他维度保存的记忆。
+    pub remaining_rebuild_memory_count: u64,
+    /// Cosine similarity between one stored vector and its fresh re-embedding.
+    /// 一条已存向量与其重新嵌入结果之间的余弦相似度。
+    pub sample_similarity: f64,
+    /// Similarity the sample had to reach for the vectors to be kept.
+    /// 抽样必须达到才可沿用向量的相似度。
+    pub required_similarity: f64,
+}
+
+/// Carries one journal-replayable vector adoption outcome.
+/// 携带一次可由账本重放的向量沿用结果。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct NativeVmmVectorAdoptionBatch {
+    /// Exact memories moved into the current generation, in stable order.
+    /// 按稳定顺序列出的已转入当前代次的准确记忆。
+    adopted_memory_ids: Vec<String>,
 }
 
 /// Summarizes one completed or resumed native vector-generation rebuild.
@@ -1499,13 +1546,17 @@ impl NativeVmmMaintenance {
                 pending_analysis_job_count,
                 None,
             )),
-            Err(error) => Ok(vector_status_from_snapshot(
-                &snapshot,
-                None,
-                None,
-                pending_analysis_job_count,
-                Some(error),
-            )),
+            Err(error) => {
+                let mut status = vector_status_from_snapshot(
+                    &snapshot,
+                    None,
+                    None,
+                    pending_analysis_job_count,
+                    Some(error),
+                );
+                status.error_message = Some(self.runtime.vector_route_failure_message());
+                Ok(status)
+            }
         }
     }
 
@@ -1739,6 +1790,130 @@ impl NativeVmmMaintenance {
             target_vector_space_id: descriptor.vector_space_id.into_string(),
             rebuilt_memory_count,
             batch_count,
+        })
+    }
+
+    /// Keeps existing same-dimension vectors under the current generation when the route still runs
+    /// the model that produced them, for example after moving the same model to a relay provider.
+    /// 当前路由仍运行产生现有向量的模型时（例如同一模型改走中转供应商），在当前代次下沿用同维度的现有向量。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_id`, the expected version and the preview fingerprint bind execution to the exact
+    /// rebuild precheck shown to the user; `confirmed` must be true.
+    /// `operation_id`、预期版本与预检指纹把执行绑定到用户看到的准确重建预检；`confirmed` 必须为真。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The outcome, including a refusal when one re-embedded sample differs from its stored vector.
+    /// 返回执行结果；某条重新嵌入的抽样与已存向量不一致时，结果为拒绝沿用。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns on stale confirmation, route drift, provider failure, or any journaled persistence error.
+    /// 预检过期、路由漂移、供应商失败或任何账本化持久化错误时返回错误。
+    pub(crate) async fn execute_vector_adoption(
+        &self,
+        operation_id: &str,
+        expected_storage_version: u64,
+        expected_preview_fingerprint: &str,
+        confirmed: bool,
+    ) -> Result<NativeVmmVectorAdoptionResult, String> {
+        if !confirmed {
+            return Err(String::from(
+                "Keeping existing vectors changes every incompatible memory and must be explicitly confirmed.",
+            ));
+        }
+        let _project_guard = self.project_mutation_gate.lock().await;
+        let _operation_guard = self.operation_gate.write().await;
+        self.runtime.recover_storage_mutations().await?;
+        let descriptor = self.runtime.current_vector_space_descriptor().await?;
+        let snapshot = self.runtime.storage_snapshot()?;
+        if snapshot.storage_version != expected_storage_version {
+            return Err(format!(
+                "The native VMM vector precheck is stale: expected storage version {expected_storage_version}, current version {}; precheck again.",
+                snapshot.storage_version
+            ));
+        }
+        let preview = vector_rebuild_preview(&snapshot, &descriptor)?;
+        if preview.preview_fingerprint != expected_preview_fingerprint {
+            return Err(String::from(
+                "The native VMM vector rebuild targets changed; precheck again and confirm.",
+            ));
+        }
+        let targets = vector_adoption_targets(&snapshot, &descriptor);
+        // One stored memory is re-embedded so the current route proves it runs the same model.
+        // 重新嵌入一条已存记忆，让当前路由证明其运行的是同一模型。
+        let Some((sample_summary, sample_vector)) = targets.iter().find_map(|memory| {
+            let summary = memory.summary.trim();
+            (!summary.is_empty())
+                .then(|| {
+                    memory
+                        .embedding
+                        .as_ref()
+                        .map(|vector| (summary.to_owned(), vector.clone()))
+                })
+                .flatten()
+        }) else {
+            return Err(String::from(
+                "No memory keeps a vector of the current dimension with a summary to sample; run the vector rebuild instead.",
+            ));
+        };
+        let expected_ids = targets
+            .iter()
+            .map(|memory| memory.id.to_string())
+            .collect::<Vec<_>>();
+        let fresh = self
+            .runtime
+            .embed_maintenance_summaries(
+                &format!("{operation_id}:adoption-sample"),
+                &descriptor,
+                vec![sample_summary],
+            )
+            .await?;
+        let [fresh] = fresh.as_slice() else {
+            return Err(String::from(
+                "The adoption sample embedding returned an unexpected number of vectors.",
+            ));
+        };
+        let sample_similarity = cosine_similarity(&sample_vector, fresh);
+        if sample_similarity < NATIVE_VMM_VECTOR_ADOPTION_MIN_SIMILARITY {
+            return Ok(NativeVmmVectorAdoptionResult {
+                storage_version: snapshot.storage_version,
+                target_vector_space_id: descriptor.vector_space_id.into_string(),
+                adopted: false,
+                adopted_memory_count: 0,
+                remaining_rebuild_memory_count: preview.rebuild_memory_count,
+                sample_similarity,
+                required_similarity: NATIVE_VMM_VECTOR_ADOPTION_MIN_SIMILARITY,
+            });
+        }
+        if self.runtime.current_vector_space_descriptor().await? != descriptor {
+            return Err(String::from(
+                "The embedding route changed while keeping existing vectors; precheck again.",
+            ));
+        }
+        let mutation_kind = format!("vector_adoption:{}", descriptor.vector_space_id.as_str());
+        let staged_descriptor = descriptor.clone();
+        let batch = self
+            .runtime
+            .transform_storage_snapshot(
+                operation_id,
+                &mutation_kind,
+                expected_storage_version,
+                move |snapshot| apply_vector_adoption(snapshot, &staged_descriptor, &expected_ids),
+            )
+            .await?;
+        let final_snapshot = self.runtime.storage_snapshot()?;
+        let remaining = vector_rebuild_preview(&final_snapshot, &descriptor)?;
+        Ok(NativeVmmVectorAdoptionResult {
+            storage_version: final_snapshot.storage_version,
+            target_vector_space_id: descriptor.vector_space_id.into_string(),
+            adopted: true,
+            adopted_memory_count: usize_to_u64(batch.adopted_memory_ids.len()),
+            remaining_rebuild_memory_count: remaining.rebuild_memory_count,
+            sample_similarity,
+            required_similarity: NATIVE_VMM_VECTOR_ADOPTION_MIN_SIMILARITY,
         })
     }
 
@@ -4070,6 +4245,7 @@ fn vector_status_from_snapshot(
         legacy_vector_space_count: usize_to_u64(legacy_vector_spaces.len()),
         pending_analysis_job_count,
         error,
+        error_message: None,
     }
 }
 
@@ -4375,7 +4551,123 @@ fn vector_rebuild_preview(
         affected_project_count: usize_to_u64(affected_projects.len()),
         batch_count: usize_to_u64(batch_count),
         preview_fingerprint: format!("sha256:{}", hex::encode(hasher.finalize())),
+        adoptable_memory_count: usize_to_u64(vector_adoption_targets(snapshot, descriptor).len()),
     })
+}
+
+/// Lists rebuild targets whose stored vector already has the current dimension.
+/// 列出已存向量维度与当前一致的重建目标。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the authoritative before-image and `descriptor` is the current exact target route.
+/// `snapshot` 是权威前镜像，`descriptor` 是当前准确目标路由。
+///
+/// # Returns
+/// 返回值
+/// Active memories first, then recycle-bin memories, each in stored order.
+/// 先列活动记忆，再列回收站记忆，各自保持存储顺序。
+fn vector_adoption_targets<'a>(
+    snapshot: &'a StorageSnapshot,
+    descriptor: &NativeVmmVectorSpaceDescriptor,
+) -> Vec<&'a vulcan_memorymesh_core::MemoryRecord> {
+    let dimension = usize::try_from(descriptor.embedding_dimension).ok();
+    let adoptable = |memory: &&vulcan_memorymesh_core::MemoryRecord| {
+        memory
+            .vector_space_id
+            .as_ref()
+            .is_some_and(|space_id| *space_id != descriptor.vector_space_id)
+            && memory
+                .embedding
+                .as_ref()
+                .is_some_and(|vector| Some(vector.len()) == dimension)
+    };
+    snapshot
+        .dataset
+        .memories
+        .iter()
+        .filter(|memory| memory.state == MemoryState::Active)
+        .chain(
+            snapshot
+                .retention_trash_batches
+                .iter()
+                .flat_map(|batch| batch.dataset.memories.iter()),
+        )
+        .filter(adoptable)
+        .collect()
+}
+
+/// Moves the confirmed same-dimension memories into the current vector generation.
+/// 将已确认的同维度记忆转入当前向量代次。
+///
+/// # Parameters
+/// 参数
+/// `expected` is the exact target set confirmed before the sample check.
+/// `expected` 是抽样校验前确认的准确目标集合。
+///
+/// # Returns
+/// 返回值
+/// The adopted identities in stable order for durable idempotent replay.
+/// 返回按稳定顺序排列的已沿用身份，用于耐久幂等重放。
+///
+/// # Errors
+/// 错误
+/// Returns before mutation when the staged targets differ from the confirmed set.
+/// 暂存目标与已确认集合不一致时，在变更前返回错误。
+fn apply_vector_adoption(
+    snapshot: &mut StorageSnapshot,
+    descriptor: &NativeVmmVectorSpaceDescriptor,
+    expected: &[String],
+) -> Result<NativeVmmVectorAdoptionBatch, String> {
+    let staged = vector_adoption_targets(snapshot, descriptor)
+        .into_iter()
+        .map(|memory| memory.id.to_string())
+        .collect::<Vec<_>>();
+    if staged != expected {
+        return Err(String::from(
+            "The memories that can keep their vectors changed; precheck again and confirm.",
+        ));
+    }
+    let targets = expected.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    for memory in snapshot
+        .dataset
+        .memories
+        .iter_mut()
+        .filter(|memory| memory.state == MemoryState::Active)
+        .chain(
+            snapshot
+                .retention_trash_batches
+                .iter_mut()
+                .flat_map(|batch| batch.dataset.memories.iter_mut()),
+        )
+        .filter(|memory| targets.contains(memory.id.as_str()))
+    {
+        memory.vector_space_id = Some(descriptor.vector_space_id.clone());
+    }
+    Ok(NativeVmmVectorAdoptionBatch {
+        adopted_memory_ids: staged,
+    })
+}
+
+/// Measures the cosine similarity of two equally sized vectors.
+/// 计算两个等长向量的余弦相似度。
+///
+/// # Returns
+/// 返回值
+/// The similarity in `[-1, 1]`, or zero when either vector has no magnitude.
+/// 返回 `[-1, 1]` 区间的相似度；任一向量模长为零时返回零。
+fn cosine_similarity(left: &[f32], right: &[f32]) -> f64 {
+    let (mut dot, mut left_norm, mut right_norm) = (0.0_f64, 0.0_f64, 0.0_f64);
+    for (left, right) in left.iter().zip(right) {
+        let (left, right) = (f64::from(*left), f64::from(*right));
+        dot += left * right;
+        left_norm += left * left;
+        right_norm += right * right;
+    }
+    if left_norm == 0.0 || right_norm == 0.0 {
+        return 0.0;
+    }
+    dot / (left_norm.sqrt() * right_norm.sqrt())
 }
 
 /// Derives a stable per-batch operation identity from the user command and exact target set.

@@ -235,6 +235,11 @@ pub fn open(app: &mut App, call: ServiceCall, result: Value) {
             tr!("tui.preview.vectorImpact"),
             tr!("tui.field.confirm"),
         ),
+        Preview::VmmVectorAdoption => (
+            tr!("memory.maintenance.keepVectorsTitle"),
+            tr!("tui.preview.vectorImpact"),
+            tr!("memory.maintenance.keepVectors"),
+        ),
     };
     // Show the initial target set; subsequent input may only narrow or explicitly decide it.
     // 展示初始目标集；后续输入仅可缩减目标或明确选择决定。

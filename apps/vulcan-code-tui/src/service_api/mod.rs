@@ -278,6 +278,9 @@ pub enum Preview {
     /// `native_vector_rebuild_preview` → `native_vector_rebuild`.
     /// 向量重建预检转为确认执行。
     VmmVector,
+    /// `native_vector_rebuild_preview` → `native_vector_adoption`.
+    /// 向量重建预检转为确认沿用现有向量。
+    VmmVectorAdoption,
 }
 
 /// One request to the Vulcan Code service, exactly as the WebUI sends it.
@@ -623,6 +626,7 @@ pub fn confirm_preview(
         Preview::VmmRemoval => memory_actions::native_removal_recycle(result),
         Preview::VmmRetention => memory_actions::native_retention_run(result),
         Preview::VmmVector => memory_actions::native_vector_rebuild(result),
+        Preview::VmmVectorAdoption => memory_actions::native_vector_adoption(result),
     }
 }
 

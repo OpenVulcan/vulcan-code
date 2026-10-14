@@ -3,7 +3,9 @@ import { AlertTriangle, RefreshCw } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { InlineDisclosure } from "@/components/ui/disclosure"
 import { useI18n } from "@/i18n"
+import { nativeVectorRouteCause } from "./vmm-native-vector-status"
 import type { VmmMemoryActionRequest, VmmMemoryActionResult, VmmNativeVectorStatusSummary } from "@/types"
 
 // VmmNativeVectorHealthAlertProps supplies the read-only status endpoint and exact repair destinations.
@@ -95,10 +97,14 @@ export function VmmNativeVectorHealthAlert({
       : activeBlocked
         ? t("memory.vectorHealth.activeBlocked")
         : t("memory.vectorHealth.recycledBlocked")
+  // The catalog cause is shown in the active language; the English diagnostic moves to details.
+  // 目录原因以当前语言显示；英文诊断移入技术细节。
+  const routeCause = status ? nativeVectorRouteCause(status) : null
+  const routeDetail = status?.errorMessage && status.error ? status.error : null
   const description = error
     ? error
     : routeUnavailable
-      ? status?.error || t("memory.vectorHealth.routeHelp")
+      ? routeCause || t("memory.vectorHealth.routeHelp")
       : activeBlocked
         ? t("memory.vectorHealth.activeHelp").replace("{count}", String(status?.activeRebuildRequiredMemoryCount))
         : t("memory.vectorHealth.recycledHelp").replace("{count}", String(status?.recycleBinRebuildRequiredMemoryCount))
@@ -108,7 +114,14 @@ export function VmmNativeVectorHealthAlert({
       <AlertTriangle aria-hidden="true" />
       <AlertTitle>{title}</AlertTitle>
       <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
-        <span>{description}</span>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span>{description}</span>
+          {routeUnavailable && routeDetail ? (
+            <InlineDisclosure label={t("memory.vectorHealth.technicalDetails")}>
+              <span className="break-all font-mono text-xs">{routeDetail}</span>
+            </InlineDisclosure>
+          ) : null}
+        </div>
         {error ? (
           <Button disabled={loading} onClick={() => void loadStatus()} size="sm" type="button" variant="outline">
             <RefreshCw aria-hidden="true" className="size-4" />{t("memory.vectorHealth.retry")}

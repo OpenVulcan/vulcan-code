@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 /// Identifies one stable checkpoint format release.
 /// 标识一个稳定的检查点格式版本。
-pub const CHECKPOINT_FORMAT_VERSION: u32 = 35;
+pub const CHECKPOINT_FORMAT_VERSION: u32 = 36;
 
 /// Names the checkpoint magic prefix.
 /// 命名检查点魔数前缀。

@@ -3,13 +3,13 @@
 
 use super::{
     Admission, CoreCommand, CoreError, DirectRecordSource, DirectWriteResultMode, EffectRequest,
-    EmbeddingEffect, FlowState, HostEffect, LlmOutput, LlmPurpose, MAX_DOMAIN_COLLECTION_ITEMS,
-    MemoryWriteBatchCommand, PendingAnalyze, PendingBatchMemory, PendingDirectWriteReview,
-    PipelineFollowUp, ReviewQueryFacts, SearchWork, StorageQuery, TurnStatus, analyze_query_plan,
-    analyze_query_work, build_direct_memory_record, direct_query_representative, direct_query_work,
-    direct_write_dedupe_hash, effect_type_error, pipeline_effect, plan_direct_queries,
-    retrieval_kernel, validate_and_filter_profile_nodes, validate_candidate_memory_record,
-    validate_host_turn, validate_recent_direct_write_hit,
+    EmbeddingEffect, EmbeddingPurpose, FlowState, HostEffect, LlmOutput, LlmPurpose,
+    MAX_DOMAIN_COLLECTION_ITEMS, MemoryWriteBatchCommand, PendingAnalyze, PendingBatchMemory,
+    PendingDirectWriteReview, PipelineFollowUp, ReviewQueryFacts, SearchWork, StorageQuery,
+    TurnStatus, analyze_query_plan, analyze_query_work, build_direct_memory_record,
+    direct_query_representative, direct_query_work, direct_write_dedupe_hash, effect_type_error,
+    pipeline_effect, plan_direct_queries, retrieval_kernel, validate_and_filter_profile_nodes,
+    validate_candidate_memory_record, validate_host_turn, validate_recent_direct_write_hit,
 };
 use vulcan_memorymesh_core_config::ConfigSnapshot;
 
@@ -45,6 +45,7 @@ pub(super) fn validate(
                 }
                 validate_profiles(pending)?;
                 HostEffect::Embedding(EmbeddingEffect {
+                    purpose: EmbeddingPurpose::Query,
                     allow_partial_invalid_inputs: false,
                     vector_space_id: pending.command.vector_space_id.clone(),
                     expected_dimension: snapshot.embedding_dimension,
@@ -76,6 +77,7 @@ pub(super) fn validate(
                 return Err(invalid());
             }
             HostEffect::Embedding(EmbeddingEffect {
+                purpose: EmbeddingPurpose::Query,
                 allow_partial_invalid_inputs: false,
                 vector_space_id: normalized.vector_space_id,
                 expected_dimension: snapshot.embedding_dimension,
@@ -120,6 +122,7 @@ pub(super) fn validate(
                 }
             }
             HostEffect::Embedding(EmbeddingEffect {
+                purpose: EmbeddingPurpose::Query,
                 allow_partial_invalid_inputs: false,
                 vector_space_id: normalized.vector_space_id,
                 expected_dimension: snapshot.embedding_dimension,

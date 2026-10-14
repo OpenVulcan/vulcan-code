@@ -16,7 +16,10 @@ mod retrieval_origin;
 mod turn_details;
 
 pub(crate) use client::NativeVmmClient;
-pub(crate) use driver::{NativeVmmCoreRuntime, NativeVmmHostAiStatus};
+pub(crate) use driver::{
+    NativeVmmCoreRuntime, NativeVmmEmbeddingRouteIssue, NativeVmmHostAiStatus,
+    native_vmm_embedding_shape,
+};
 pub(crate) use maintenance::{
     NativeVmmClearPreview, NativeVmmClearResult, NativeVmmMaintenance, NativeVmmMemoryLevelCounts,
     NativeVmmMemoryRecords, NativeVmmMemorySessionSummary, NativeVmmMigrationPreview,
@@ -25,5 +28,6 @@ pub(crate) use maintenance::{
     NativeVmmProjectContentCounts, NativeVmmProjectDeletePreview, NativeVmmRecallPublication,
     NativeVmmRecycleBatchSummary, NativeVmmRecycleBin, NativeVmmRetentionApplyResult,
     NativeVmmRetentionStatus, NativeVmmSessionRename, NativeVmmTurnStatusCounts,
-    NativeVmmVectorRebuildPreview, NativeVmmVectorRebuildResult, NativeVmmVectorStatus,
+    NativeVmmVectorAdoptionResult, NativeVmmVectorRebuildPreview, NativeVmmVectorRebuildResult,
+    NativeVmmVectorStatus,
 };

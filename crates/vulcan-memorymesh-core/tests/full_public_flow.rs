@@ -5941,6 +5941,7 @@ fn analysis_persistence_embedding_partitions_survive_checkpoint_restore() {
         );
         for memory in &host.storage.dataset().memories {
             let expected = DeterministicHost::execute_embedding(&EmbeddingEffect {
+                purpose: vulcan_memorymesh_core::EmbeddingPurpose::Document,
                 inputs: vec![memory.summary.clone()],
                 vector_space_id: vector_space_id.clone(),
                 expected_dimension: 32,

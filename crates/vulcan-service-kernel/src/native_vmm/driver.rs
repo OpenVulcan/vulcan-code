@@ -9,6 +9,7 @@
 )]
 
 use super::{lexical, llm_contract, prompt, resources::NativeVmmResourceStore};
+use crate::configured_inference::VMM_CONSUMER_PROFILE_ID;
 use vulcan_service_api::{VmmNativeRetentionSettingsSummary, VmmNativeRetrievalPolicySummary};
 
 #[cfg(test)]
@@ -22,20 +23,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
-    AiMessage, AiOperation, ContentItem, EmbeddingEncoding, EmbeddingInput, EmbeddingInputContent,
-    EmbeddingInvalidInputPolicy, EmbeddingOutputKind, EmbeddingPayload, EmbeddingRequest,
-    EmbeddingSpaceFingerprint, EmbeddingTask, HostAiCallContext, HostAiCancellation,
-    HostAiCapabilityHandle, HostAiCapabilityRegistration, HostAiCapabilityRequirement,
-    HostAiEmbeddingRequest, HostAiError, HostAiErrorCode, HostAiPort, INFERENCE_CONTRACT_VERSION,
-    InferenceCallerBudget, InferenceCallerContext, InferencePermission, InferenceUsageScope,
-    MessageRole, ReasoningEffort, ReasoningOutputPolicy, RerankRequest, RerankText,
-    RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy,
+    AiMessage, AiOperation, ContentItem, EmbeddingCapabilities, EmbeddingEncoding, EmbeddingInput,
+    EmbeddingInputContent, EmbeddingInvalidInputPolicy, EmbeddingOutputKind, EmbeddingPayload,
+    EmbeddingRequest, EmbeddingSpaceFingerprint, EmbeddingTask, HostAiCallContext,
+    HostAiCancellation, HostAiCapabilityHandle, HostAiCapabilityRegistration,
+    HostAiCapabilityRequirement, HostAiEmbeddingRequest, HostAiError, HostAiErrorCode, HostAiPort,
+    INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext,
+    InferenceOperationCapability, InferencePermission, InferenceUsageScope, MessageRole,
+    ReasoningEffort, ReasoningOutputPolicy, RerankRequest, RerankText, RerankTruncation,
+    ResponsesExecutionRequest, StructuredOutputPolicy,
 };
 use vulcan_memorymesh_core::{
     AsyncHostDriver, CandidateChannelResult, CandidateObservation, CommandResult, CoreCommand,
     CoreError, EffectDeadlineClass, EffectFailure, EffectFailureKind, EffectRequest, EffectResult,
-    EmbeddingBatchResult, EmbeddingDropReason, EmbeddingDroppedInput, ErrorCode, ErrorStage,
-    FailureClass, HostEffect, HostEffectResult, InMemoryStorage, LlmEffect, LlmPurpose,
+    EmbeddingBatchResult, EmbeddingDropReason, EmbeddingDroppedInput, EmbeddingPurpose, ErrorCode,
+    ErrorStage, FailureClass, HostEffect, HostEffectResult, InMemoryStorage, LlmEffect, LlmPurpose,
     MemoryAccessClass, MemoryMeshCore, MemoryPolicy, MemoryState, MutationBatch, MutationOutcome,
     PhysicalCandidate, PhysicalCandidateChannel, PhysicalCandidateScore, RawScoreKind,
     RerankEffect, RerankEntry, ScoreDirection, StoragePort, StorageQuery, StorageQueryResult,
@@ -45,7 +47,7 @@ use vulcan_service_api::{
     VmmNativeNoiseTestResult, VmmNativePiiFormulaMatchSummary, VmmNativePiiFormulaTestResult,
     VmmNativePiiRedactionSummary, VmmNativePiiTestResult, VmmNativeRecallPolicySummary,
     VmmNativeResourceCatalogSummary, VmmNativeResourceFileContent,
-    VmmNativeResourceSettingsSummary, VmmNativeRuntimePolicySummary,
+    VmmNativeResourceSettingsSummary, VmmNativeRuntimePolicySummary, WebuiLocalizedMessage,
 };
 use vulcan_workspace_store::vmm_data_plane::{
     NativeVmmCoreMutation, VMM_CORE_MUTATION_COMMITTED, VMM_CORE_MUTATION_COMPLETED,
@@ -59,12 +61,6 @@ const NATIVE_VMM_REGISTRATION_ID: &str = "vmm-native:runtime";
 /// Stable owner identity for native VMM AI usage and diagnostics.
 /// 原生 VMM AI 用量与诊断使用的稳定所有者标识。
 const NATIVE_VMM_OWNER_ID: &str = "vmm-native";
-/// Configured inference profile selected for all native VMM AI roles.
-/// 全部原生 VMM AI 角色选择的已配置推理 Profile。
-const NATIVE_VMM_CONSUMER_PROFILE_ID: &str = "vmm";
-/// Native VMM uses one symmetric provider-default embedding space for both stored memories and queries.
-/// 原生 VMM 对已存记忆与查询统一使用同一个供应商默认对称向量空间。
-const NATIVE_VMM_EMBEDDING_TASK: EmbeddingTask = EmbeddingTask::ProviderDefault;
 /// Maximum LLM output budget accepted from one Core effect.
 /// 单个 Core Effect 接受的最大 LLM 输出预算。
 const NATIVE_VMM_LLM_OUTPUT_TOKENS: u64 = 8_192;
@@ -633,6 +629,28 @@ impl NativeVmmCoreRuntime {
             .map_err(|error| error.to_string())
     }
 
+    /// Names why the memory configuration cannot activate, in a form the memory pages translate.
+    /// 以记忆页面可翻译的形式说明记忆配置无法激活的原因。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The embedding route issue when the route itself is unusable, a missing-route message when a
+    /// required inference or embedding route is unavailable, or a generic activation message.
+    /// 路由本身不可用时返回向量路由原因；必需推理或向量路由不可用时返回缺少路由消息；否则返回通用
+    /// 激活失败消息。
+    pub(super) fn vector_route_failure_message(&self) -> WebuiLocalizedMessage {
+        match self.host.capability() {
+            Ok(handle) => native_vmm_embedding_route(&handle)
+                .map_or_else(NativeVmmEmbeddingRouteIssue::localized, |_| {
+                    WebuiLocalizedMessage::new("memory.vectorHealth.reason.activationFailed")
+                }),
+            Err(error) if error.code == HostAiErrorCode::CapabilityUnavailable => {
+                WebuiLocalizedMessage::new("memory.vectorHealth.reason.requiredRouteUnavailable")
+            }
+            Err(_) => WebuiLocalizedMessage::new("memory.vectorHealth.reason.activationFailed"),
+        }
+    }
+
     /// Embeds one bounded maintenance batch through the same registered Host AI capability as Core.
     /// 通过与 Core 相同的已注册宿主 AI 能力嵌入一个有界维护批次。
     ///
@@ -673,6 +691,7 @@ impl NativeVmmCoreRuntime {
         }
         let effect = vulcan_memorymesh_core::EmbeddingEffect {
             inputs,
+            purpose: EmbeddingPurpose::Document,
             vector_space_id: descriptor.vector_space_id.clone(),
             expected_dimension: descriptor.embedding_dimension,
             allow_partial_invalid_inputs: false,
@@ -1700,7 +1719,7 @@ impl NativeVmmHostDriver {
             contract_version: INFERENCE_CONTRACT_VERSION,
             request_id: request_id.clone(),
             idempotency_key: None,
-            consumer_profile_id: String::from(NATIVE_VMM_CONSUMER_PROFILE_ID),
+            consumer_profile_id: String::from(VMM_CONSUMER_PROFILE_ID),
             purpose_id: purpose_id.to_owned(),
             messages: vec![
                 AiMessage {
@@ -1791,6 +1810,18 @@ impl NativeVmmHostDriver {
             Ok(value) => value,
             Err(error) => return Ok(ai_failure(EffectFailureKind::Embedding, error)),
         };
+        // task follows the same route check that froze this vector space at activation.
+        // task 遵循激活时冻结本向量空间的同一路由校验。
+        let tasks = match native_vmm_embedding_route(&capability) {
+            Ok((_, tasks, _)) => tasks,
+            Err(issue) => {
+                return Ok(ai_failure(
+                    EffectFailureKind::Embedding,
+                    HostAiError::new(HostAiErrorCode::CapabilityUnavailable, issue.diagnostic()),
+                ));
+            }
+        };
+        let task = tasks.for_purpose(effect.purpose);
         let inputs = effect
             .inputs
             .iter()
@@ -1804,9 +1835,9 @@ impl NativeVmmHostDriver {
             contract_version: INFERENCE_CONTRACT_VERSION,
             request_id,
             idempotency_key: None,
-            consumer_profile_id: String::from(NATIVE_VMM_CONSUMER_PROFILE_ID),
+            consumer_profile_id: String::from(VMM_CONSUMER_PROFILE_ID),
             inputs,
-            task: NATIVE_VMM_EMBEDDING_TASK,
+            task,
             dimensions: Some(effect.expected_dimension),
             output_kind: EmbeddingOutputKind::Dense,
             encoding: EmbeddingEncoding::Float,
@@ -1832,10 +1863,9 @@ impl NativeVmmHostDriver {
             .response
             .validate_for_request(&embedding_request)
             .map_err(core_effect_error)?;
-        self.remember_embedding_fingerprint(
-            effect.vector_space_id.as_str(),
-            &response.response.fingerprint,
-        )?;
+        let space_fingerprint =
+            native_vmm_space_fingerprint(tasks, task, response.response.fingerprint.clone())?;
+        self.remember_embedding_fingerprint(effect.vector_space_id.as_str(), &space_fingerprint)?;
         let expected_dimension = usize::try_from(effect.expected_dimension)
             .map_err(|error| core_effect_error(format!("embedding dimension overflow: {error}")))?;
         let mut vectors = Vec::with_capacity(response.response.results.len());
@@ -1898,7 +1928,7 @@ impl NativeVmmHostDriver {
             contract_version: INFERENCE_CONTRACT_VERSION,
             request_id: format!("vmm-rerank-{}", request.effect_id.as_str()),
             idempotency_key: None,
-            consumer_profile_id: String::from(NATIVE_VMM_CONSUMER_PROFILE_ID),
+            consumer_profile_id: String::from(VMM_CONSUMER_PROFILE_ID),
             query: RerankText {
                 id: String::from("query"),
                 text: effect.query.clone(),
@@ -2869,12 +2899,10 @@ fn native_vmm_capability_registration() -> HostAiCapabilityRegistration {
     HostAiCapabilityRegistration {
         registration_id: String::from(NATIVE_VMM_REGISTRATION_ID),
         owner_id: String::from(NATIVE_VMM_OWNER_ID),
-        consumer_profile_id: String::from(NATIVE_VMM_CONSUMER_PROFILE_ID),
+        consumer_profile_id: String::from(VMM_CONSUMER_PROFILE_ID),
         caller: InferenceCallerContext {
             caller_id: String::from("vulcan-code-native-vmm"),
-            allowed_consumer_profile_ids: BTreeSet::from([String::from(
-                NATIVE_VMM_CONSUMER_PROFILE_ID,
-            )]),
+            allowed_consumer_profile_ids: BTreeSet::from([String::from(VMM_CONSUMER_PROFILE_ID)]),
             permissions: BTreeSet::from([
                 InferencePermission::Status,
                 InferencePermission::Llm,
@@ -3083,12 +3111,118 @@ fn command_mutation_identity(
     }
 }
 
-/// Selects one deterministic supported embedding dimension and opaque Core fingerprint.
-/// 选择一个确定且受支持的向量维度及不透明 Core 指纹。
-fn embedding_config_from_capability(
+/// Embedding tasks native VMM sends for stored text and for retrieval text.
+/// 原生 VMM 为存储文本与检索文本发送的向量任务。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativeVmmEmbeddingTasks {
+    /// Task for memory summaries, rebuilds and noise prototypes.
+    /// 记忆摘要、重建与噪声原型使用的任务。
+    pub(crate) document: EmbeddingTask,
+    /// Task for recall, search and review queries.
+    /// 召回、搜索与审核查询使用的任务。
+    pub(crate) query: EmbeddingTask,
+}
+
+impl NativeVmmEmbeddingTasks {
+    /// Returns the exact task for one Core comparison side.
+    /// 返回一个 Core 比较侧的准确任务。
+    fn for_purpose(self, purpose: EmbeddingPurpose) -> EmbeddingTask {
+        match purpose {
+            EmbeddingPurpose::Document => self.document,
+            EmbeddingPurpose::Query => self.query,
+        }
+    }
+
+    /// Reports whether stored and retrieval text use separately trained encodings.
+    /// 报告存储文本与检索文本是否使用分别训练的编码。
+    fn is_asymmetric(self) -> bool {
+        self.document != self.query
+    }
+}
+
+/// Why one configured embedding route cannot hold native VMM vectors.
+/// 一条已配置向量路由无法承载原生 VMM 向量的原因。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeVmmEmbeddingRouteIssue {
+    /// No available embedding route is configured for memory.
+    /// 记忆没有配置可用的向量路由。
+    Unavailable,
+    /// The route omits its typed embedding limits.
+    /// 路由缺少强类型向量限制。
+    MissingLimits,
+    /// The route declares neither a shared task nor both document and query tasks.
+    /// 路由既未声明共用任务，也未同时声明文档与查询任务。
+    UnsupportedTasks,
+    /// The route cannot return dense vectors.
+    /// 路由无法返回稠密向量。
+    UnsupportedOutput,
+    /// The route cannot return float vectors.
+    /// 路由无法返回浮点向量。
+    UnsupportedEncoding,
+    /// The route declares no single default dimension.
+    /// 路由没有声明唯一默认维度。
+    UndeterminedDimension,
+    /// The declared default dimension contradicts the route's own limits.
+    /// 声明的默认维度与路由自身限制矛盾。
+    InvalidDimension,
+}
+
+impl NativeVmmEmbeddingRouteIssue {
+    /// Returns the English diagnostic kept for logs and Core errors.
+    /// 返回用于日志与 Core 错误的英文诊断。
+    pub(crate) fn diagnostic(self) -> &'static str {
+        match self {
+            Self::Unavailable => "native VMM embedding capability is unavailable",
+            Self::MissingLimits => "native VMM embedding capability omitted its typed limits",
+            Self::UnsupportedTasks => {
+                "native VMM embedding route declares neither the provider-default task nor both document and query tasks"
+            }
+            Self::UnsupportedOutput => "native VMM embedding route does not support dense output",
+            Self::UnsupportedEncoding => {
+                "native VMM embedding route does not support float encoding"
+            }
+            Self::UndeterminedDimension => {
+                "native VMM embedding route does not declare a deterministic default dimension"
+            }
+            Self::InvalidDimension => {
+                "native VMM embedding default dimension violates the registered capability"
+            }
+        }
+    }
+
+    /// Returns the catalog message the memory pages show for this issue.
+    /// 返回记忆页面为该原因显示的目录消息。
+    pub(crate) fn localized(self) -> WebuiLocalizedMessage {
+        WebuiLocalizedMessage::new(match self {
+            Self::Unavailable => "memory.vectorHealth.reason.embeddingUnavailable",
+            Self::MissingLimits => "memory.vectorHealth.reason.embeddingMissingLimits",
+            Self::UnsupportedTasks => "memory.vectorHealth.reason.embeddingUnsupportedTasks",
+            Self::UnsupportedOutput => "memory.vectorHealth.reason.embeddingUnsupportedOutput",
+            Self::UnsupportedEncoding => "memory.vectorHealth.reason.embeddingUnsupportedEncoding",
+            Self::UndeterminedDimension => {
+                "memory.vectorHealth.reason.embeddingUndeterminedDimension"
+            }
+            Self::InvalidDimension => "memory.vectorHealth.reason.embeddingInvalidDimension",
+        })
+    }
+
+    /// Converts the issue into the Core configuration boundary.
+    /// 将该原因转换到 Core 配置边界。
+    fn core_error(self) -> CoreError {
+        let code = match self {
+            Self::Unavailable => ErrorCode::MissingResource,
+            _ => ErrorCode::InvalidConfiguration,
+        };
+        CoreError::new(code, ErrorStage::Configuration, self.diagnostic())
+    }
+}
+
+/// Finds the purpose-free embedding operation of one capability handle.
+/// 查找一份能力句柄中不带用途的向量操作。
+fn native_vmm_embedding_operation(
     handle: &HostAiCapabilityHandle,
-) -> Result<(u32, String), CoreError> {
-    let operation = handle
+) -> Result<&InferenceOperationCapability, NativeVmmEmbeddingRouteIssue> {
+    handle
         .snapshot
         .operations
         .iter()
@@ -3097,44 +3231,103 @@ fn embedding_config_from_capability(
                 && operation.purpose_id.is_none()
                 && operation.available
         })
-        .ok_or_else(|| {
-            CoreError::new(
-                ErrorCode::MissingResource,
-                ErrorStage::Configuration,
-                "native VMM embedding capability is unavailable",
-            )
-        })?;
-    let capabilities = operation.embedding.as_ref().ok_or_else(|| {
-        CoreError::new(
-            ErrorCode::InvalidConfiguration,
-            ErrorStage::Configuration,
-            "native VMM embedding capability omitted its typed limits",
-        )
-    })?;
-    if !capabilities.tasks.contains(&NATIVE_VMM_EMBEDDING_TASK) {
-        return Err(CoreError::new(
-            ErrorCode::InvalidConfiguration,
-            ErrorStage::Configuration,
-            "native VMM embedding route does not support the required provider-default task",
-        ));
+        .ok_or(NativeVmmEmbeddingRouteIssue::Unavailable)
+}
+
+/// Selects the tasks native VMM sends through one embedding route.
+/// 选择原生 VMM 通过一条向量路由发送的任务。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the route's declared embedding contract.
+/// `capabilities` 是路由声明的向量契约。
+///
+/// # Returns
+/// 返回值
+/// Document and query tasks when both are declared, so asymmetric models keep their separate
+/// encodings; otherwise the provider-default task for both sides.
+/// 同时声明文档与查询任务时返回两者，使非对称模型保留各自编码；否则两侧都使用供应商默认任务。
+///
+/// # Errors
+/// 错误
+/// Returns `UnsupportedTasks` when neither pairing is declared; a lone document or query task is
+/// never paired with another task, because the two sides would then live in different spaces.
+/// 两种组合都未声明时返回 `UnsupportedTasks`；单独的文档或查询任务不会与其他任务混配，否则两侧
+/// 会落在不同向量空间。
+pub(crate) fn native_vmm_embedding_tasks(
+    capabilities: &EmbeddingCapabilities,
+) -> Result<NativeVmmEmbeddingTasks, NativeVmmEmbeddingRouteIssue> {
+    if capabilities.tasks.contains(&EmbeddingTask::Document)
+        && capabilities.tasks.contains(&EmbeddingTask::Query)
+    {
+        return Ok(NativeVmmEmbeddingTasks {
+            document: EmbeddingTask::Document,
+            query: EmbeddingTask::Query,
+        });
     }
+    if capabilities.tasks.contains(&EmbeddingTask::ProviderDefault) {
+        return Ok(NativeVmmEmbeddingTasks {
+            document: EmbeddingTask::ProviderDefault,
+            query: EmbeddingTask::ProviderDefault,
+        });
+    }
+    Err(NativeVmmEmbeddingRouteIssue::UnsupportedTasks)
+}
+
+/// Checks the model-level native VMM request shape: tasks, dense output and float encoding.
+/// 校验模型层面的原生 VMM 请求形态：任务、稠密输出与浮点编码。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the model's declared embedding contract; dimension overrides do not affect it.
+/// `capabilities` 是模型声明的向量契约，维度覆盖不影响该校验。
+///
+/// # Returns
+/// 返回值
+/// The tasks to send.
+/// 返回要发送的任务。
+///
+/// # Errors
+/// 错误
+/// Returns the first unmet requirement in task, output and encoding order.
+/// 按任务、输出、编码的顺序返回第一项未满足的要求。
+pub(crate) fn native_vmm_embedding_shape(
+    capabilities: &EmbeddingCapabilities,
+) -> Result<NativeVmmEmbeddingTasks, NativeVmmEmbeddingRouteIssue> {
+    let tasks = native_vmm_embedding_tasks(capabilities)?;
     if !capabilities
         .output_kinds
         .contains(&EmbeddingOutputKind::Dense)
     {
-        return Err(CoreError::new(
-            ErrorCode::InvalidConfiguration,
-            ErrorStage::Configuration,
-            "native VMM embedding route does not support dense output",
-        ));
+        return Err(NativeVmmEmbeddingRouteIssue::UnsupportedOutput);
     }
     if !capabilities.encodings.contains(&EmbeddingEncoding::Float) {
-        return Err(CoreError::new(
-            ErrorCode::InvalidConfiguration,
-            ErrorStage::Configuration,
-            "native VMM embedding route does not support float encoding",
-        ));
+        return Err(NativeVmmEmbeddingRouteIssue::UnsupportedEncoding);
     }
+    Ok(tasks)
+}
+
+/// Checks the whole native VMM request shape against one resolved embedding contract.
+/// 依据一份已解析向量契约校验完整的原生 VMM 请求形态。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the route's resolved embedding contract, including dimension overrides.
+/// `capabilities` 是路由解析后的向量契约，包含维度覆盖。
+///
+/// # Returns
+/// 返回值
+/// The tasks to send and the one deterministic dense-vector dimension.
+/// 返回要发送的任务及唯一确定的稠密向量维度。
+///
+/// # Errors
+/// 错误
+/// Returns the first unmet requirement in task, output, encoding and dimension order.
+/// 按任务、输出、编码、维度的顺序返回第一项未满足的要求。
+fn native_vmm_embedding_contract(
+    capabilities: &EmbeddingCapabilities,
+) -> Result<(NativeVmmEmbeddingTasks, u32), NativeVmmEmbeddingRouteIssue> {
+    let tasks = native_vmm_embedding_shape(capabilities)?;
     let dimension = capabilities
         .default_dimensions
         .or_else(|| {
@@ -3142,13 +3335,7 @@ fn embedding_config_from_capability(
                 .then(|| capabilities.dimensions.iter().next().copied())
                 .flatten()
         })
-        .ok_or_else(|| {
-            CoreError::new(
-                ErrorCode::InvalidConfiguration,
-                ErrorStage::Configuration,
-                "native VMM embedding route does not declare a deterministic default dimension",
-            )
-        })?;
+        .ok_or(NativeVmmEmbeddingRouteIssue::UndeterminedDimension)?;
     if dimension == 0
         || (!capabilities.dimensions.is_empty() && !capabilities.dimensions.contains(&dimension))
         || capabilities
@@ -3158,19 +3345,74 @@ fn embedding_config_from_capability(
             .maximum_dimensions
             .is_some_and(|maximum| dimension > maximum)
     {
-        return Err(CoreError::new(
-            ErrorCode::InvalidConfiguration,
-            ErrorStage::Configuration,
-            "native VMM embedding default dimension violates the registered capability",
+        return Err(NativeVmmEmbeddingRouteIssue::InvalidDimension);
+    }
+    Ok((tasks, dimension))
+}
+
+/// Checks one capability handle's embedding route and returns its tasks and dimension.
+/// 校验一份能力句柄的向量路由，并返回其任务与维度。
+fn native_vmm_embedding_route(
+    handle: &HostAiCapabilityHandle,
+) -> Result<
+    (&InferenceOperationCapability, NativeVmmEmbeddingTasks, u32),
+    NativeVmmEmbeddingRouteIssue,
+> {
+    let operation = native_vmm_embedding_operation(handle)?;
+    let capabilities = operation
+        .embedding
+        .as_ref()
+        .ok_or(NativeVmmEmbeddingRouteIssue::MissingLimits)?;
+    let (tasks, dimension) = native_vmm_embedding_contract(capabilities)?;
+    Ok((operation, tasks, dimension))
+}
+
+/// Projects one observed physical fingerprint onto the vector space it writes or searches.
+/// 将一次观测到的物理指纹投影到其写入或检索的向量空间。
+///
+/// Query and document calls of one asymmetric route share a space, so the space lock records the
+/// storage-side task; every other physical field must still match exactly.
+/// 同一非对称路由的查询与文档调用共享向量空间，因此空间锁记录存储侧任务；其余物理字段仍须完全一致。
+///
+/// # Errors
+/// 错误
+/// Returns when the response fingerprint does not echo the task that was requested.
+/// 响应指纹未回显所请求任务时返回错误。
+fn native_vmm_space_fingerprint(
+    tasks: NativeVmmEmbeddingTasks,
+    requested: EmbeddingTask,
+    mut fingerprint: EmbeddingSpaceFingerprint,
+) -> Result<EmbeddingSpaceFingerprint, CoreError> {
+    if fingerprint.task != requested {
+        return Err(core_effect_error(
+            "native VMM embedding response fingerprint does not echo the requested task",
         ));
     }
-    let material = serde_json::to_vec(operation).map_err(|error| {
+    fingerprint.task = tasks.document;
+    Ok(fingerprint)
+}
+
+/// Selects one deterministic supported embedding dimension and opaque Core fingerprint.
+/// 选择一个确定且受支持的向量维度及不透明 Core 指纹。
+///
+/// The fingerprint covers the declared capability and, for asymmetric routes, the task pairing, so
+/// vectors encoded under a different pairing are never treated as compatible.
+/// 指纹覆盖声明的能力，非对称路由还覆盖任务组合，因此以不同组合编码的向量永不视为兼容。
+fn embedding_config_from_capability(
+    handle: &HostAiCapabilityHandle,
+) -> Result<(u32, String), CoreError> {
+    let (operation, tasks, dimension) =
+        native_vmm_embedding_route(handle).map_err(NativeVmmEmbeddingRouteIssue::core_error)?;
+    let mut material = serde_json::to_vec(operation).map_err(|error| {
         CoreError::new(
             ErrorCode::InvalidConfiguration,
             ErrorStage::Configuration,
             format!("failed to encode native VMM embedding capability: {error}"),
         )
     })?;
+    if tasks.is_asymmetric() {
+        material.extend_from_slice(b"\nnative-vmm-embedding-tasks:document,query");
+    }
     Ok((
         dimension,
         format!(
@@ -3556,11 +3798,116 @@ mod tests {
         InferenceOperationCapability,
     };
 
-    /// Verifies the native Core never requests an unsupported inferred embedding role.
-    /// 验证原生 Core 不会请求未经能力契约支持的推断型向量角色。
+    /// Verifies stored and retrieval text keep separate tasks only when both are declared.
+    /// 验证仅在两者均已声明时，存储文本与检索文本才使用各自任务。
     #[test]
-    fn native_vmm_embedding_task_is_provider_default() {
-        assert_eq!(NATIVE_VMM_EMBEDDING_TASK, EmbeddingTask::ProviderDefault);
+    fn native_vmm_embedding_tasks_pair_document_with_query_or_share_the_default() {
+        let tasks = |declared: &[EmbeddingTask]| {
+            let mut capabilities = embedding_capabilities(BTreeSet::new());
+            capabilities.tasks = declared.iter().copied().collect();
+            native_vmm_embedding_tasks(&capabilities)
+        };
+        let asymmetric = tasks(&[EmbeddingTask::Query, EmbeddingTask::Document])
+            .expect("document and query tasks should pair");
+        assert_eq!(
+            asymmetric.for_purpose(EmbeddingPurpose::Document),
+            EmbeddingTask::Document
+        );
+        assert_eq!(
+            asymmetric.for_purpose(EmbeddingPurpose::Query),
+            EmbeddingTask::Query
+        );
+        let all = tasks(&[
+            EmbeddingTask::ProviderDefault,
+            EmbeddingTask::Query,
+            EmbeddingTask::Document,
+        ])
+        .expect("declared pair should win over the shared task");
+        assert_eq!(all, asymmetric);
+        let shared = tasks(&[EmbeddingTask::ProviderDefault, EmbeddingTask::Document])
+            .expect("a lone document task falls back to the shared task");
+        assert_eq!(
+            shared.for_purpose(EmbeddingPurpose::Document),
+            EmbeddingTask::ProviderDefault
+        );
+        assert_eq!(
+            shared.for_purpose(EmbeddingPurpose::Query),
+            EmbeddingTask::ProviderDefault
+        );
+        for declared in [
+            &[EmbeddingTask::Query][..],
+            &[EmbeddingTask::Document],
+            &[EmbeddingTask::SemanticSimilarity],
+        ] {
+            assert_eq!(
+                tasks(declared),
+                Err(NativeVmmEmbeddingRouteIssue::UnsupportedTasks),
+                "{declared:?}"
+            );
+        }
+    }
+
+    /// Verifies the task pairing is part of the vector generation, so a pairing change forces a rebuild.
+    /// 验证任务组合属于向量代次的一部分，组合变化时必须重建。
+    #[test]
+    fn native_vmm_vector_generation_tracks_the_task_pairing() {
+        let shared = embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault]));
+        let paired = embedding_capability_handle(BTreeSet::from([
+            EmbeddingTask::Query,
+            EmbeddingTask::Document,
+        ]));
+        let (_, shared_fingerprint) =
+            embedding_config_from_capability(&shared).expect("shared route should activate");
+        let (_, paired_fingerprint) =
+            embedding_config_from_capability(&paired).expect("paired route should activate");
+        assert_ne!(shared_fingerprint, paired_fingerprint);
+    }
+
+    /// Verifies query and document calls of one paired route lock the same space fingerprint.
+    /// 验证同一配对路由的查询与文档调用锁定相同的空间指纹。
+    #[test]
+    fn native_vmm_space_fingerprint_is_shared_by_query_and_document_calls() {
+        let tasks = NativeVmmEmbeddingTasks {
+            document: EmbeddingTask::Document,
+            query: EmbeddingTask::Query,
+        };
+        let observed = |task| EmbeddingSpaceFingerprint {
+            provider_id: "fixture".to_owned(),
+            service_entry_id: "fixture".to_owned(),
+            deployment_id: None,
+            secondary_route_id: None,
+            model_id: "fixture".to_owned(),
+            binding_id: "fixture-embedding".to_owned(),
+            capability_revision: "fixture-v1".to_owned(),
+            task,
+            dimensions: 1_536,
+            output_kind: EmbeddingOutputKind::Dense,
+            encoding: EmbeddingEncoding::Float,
+            normalization: EmbeddingNormalization::Unknown,
+            distance_metric: DistanceMetric::Unknown,
+        };
+        let document = native_vmm_space_fingerprint(
+            tasks,
+            EmbeddingTask::Document,
+            observed(EmbeddingTask::Document),
+        )
+        .expect("document call should project");
+        let query = native_vmm_space_fingerprint(
+            tasks,
+            EmbeddingTask::Query,
+            observed(EmbeddingTask::Query),
+        )
+        .expect("query call should project");
+        assert_eq!(document, query);
+        assert!(
+            native_vmm_space_fingerprint(
+                tasks,
+                EmbeddingTask::Query,
+                observed(EmbeddingTask::Document)
+            )
+            .is_err(),
+            "a response that does not echo the requested task must be rejected"
+        );
     }
 
     /// Verifies vector generations are stable for one route and change for either capability or dimension drift.
@@ -3673,9 +4020,13 @@ mod tests {
         // incompatibleHandle 证明任务语义在激活阶段校验，而不是等到首次使用。
         let incompatible_handle =
             embedding_capability_handle(BTreeSet::from([EmbeddingTask::SemanticSimilarity]));
+        assert_eq!(
+            native_vmm_embedding_route(&incompatible_handle).err(),
+            Some(NativeVmmEmbeddingRouteIssue::UnsupportedTasks)
+        );
         let error = embedding_config_from_capability(&incompatible_handle)
             .expect_err("semantic-similarity-only route must not activate native VMM");
-        assert!(error.diagnostic.contains("provider-default task"));
+        assert_eq!(error.code, ErrorCode::InvalidConfiguration);
     }
 
     /// Builds one fully available native VMM capability handle for status contract tests.
@@ -3748,7 +4099,14 @@ mod tests {
             .iter_mut()
             .find(|operation| operation.operation == AiOperation::EmbeddingCreate)
             .expect("embedding capability should exist");
-        embedding_operation.embedding = Some(EmbeddingCapabilities {
+        embedding_operation.embedding = Some(embedding_capabilities(tasks));
+        handle
+    }
+
+    /// Builds one deterministic dense-float embedding contract declaring `tasks`.
+    /// 构造一份声明 `tasks` 的确定性稠密浮点向量契约。
+    fn embedding_capabilities(tasks: BTreeSet<EmbeddingTask>) -> EmbeddingCapabilities {
+        EmbeddingCapabilities {
             tasks,
             input_resources: BTreeSet::new(),
             output_kinds: BTreeSet::from([EmbeddingOutputKind::Dense]),
@@ -3761,8 +4119,7 @@ mod tests {
             maximum_tokens_per_input: Some(8_192),
             normalization: EmbeddingNormalization::Unknown,
             distance_metric: DistanceMetric::Unknown,
-        });
-        handle
+        }
     }
 
     /// Verifies optional capability loss degrades only its own readiness flag.

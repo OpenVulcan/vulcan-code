@@ -43,8 +43,10 @@ export function maintenanceReply(action: string, payload?: Record<string, unknow
     case "native_recycle_purge": data = { kind: "native_recycle_batch", value: maintenanceBatch }; break
     case "native_vector_rebuild_preview": data = { kind: action, value: { storageVersion: 19, targetVectorSpaceId: "audit-vector",
       embeddingDimension: 1024, activeMemoryCount: 1, recycleBinMemoryCount: 1, rebuildMemoryCount: 2,
-      activeRebuildMemoryCount: 1, recycleBinRebuildMemoryCount: 1, affectedProjectCount: 1, batchCount: 1, previewFingerprint: "audit-fingerprint" } }; break
+      activeRebuildMemoryCount: 1, recycleBinRebuildMemoryCount: 1, affectedProjectCount: 1, batchCount: 1, previewFingerprint: "audit-fingerprint", adoptableMemoryCount: 1 } }; break
     case "native_vector_rebuild": data = { kind: action, value: { storageVersion: 20, targetVectorSpaceId: "audit-vector", rebuiltMemoryCount: 2, batchCount: 1 } }; break
+    case "native_vector_adoption": data = { kind: action, value: { storageVersion: 20, targetVectorSpaceId: "audit-vector", adopted: payload?.expectedPreviewFingerprint === "audit-fingerprint",
+      adoptedMemoryCount: 1, remainingRebuildMemoryCount: 1, sampleSimilarity: 0.9999, requiredSimilarity: 0.95 } }; break
     case "native_lexical_rebuild": data = { kind: action, value: { storageVersion: 19, reindexedMemoryCount: 1 } }; break
     case "native_retention_preview": data = { kind: action, value: { previewId: "audit-cleanup", storageVersion: 19,
       evaluatedAtUnixMs: 1789200000000, expiresAtUnixMs: 1789200300000, projects: [] } }; break

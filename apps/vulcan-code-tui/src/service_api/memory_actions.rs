@@ -675,6 +675,48 @@ pub fn native_vector_rebuild(result: &Value) -> Option<ServiceCall> {
     ))
 }
 
+/// Obtains the same rebuild precheck, confirmed as keeping existing same-dimension vectors.
+/// 获取同一重建预检，并以沿用同维度现有向量的方式确认。
+/// Builds the request for `native_vector_rebuild_preview`.
+/// 构建 `native_vector_rebuild_preview` 的请求。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn native_vector_adoption_preview() -> ServiceCall {
+    preview(
+        "native_vector_rebuild_preview",
+        json!({}),
+        Preview::VmmVectorAdoption,
+    )
+}
+
+/// Keeps existing vectors only for the storage version and target set authorized in the precheck.
+/// 仅对预检中已授权的存储版本与目标集合沿用现有向量。
+/// Builds the request for `native_vector_adoption`.
+/// 构建 `native_vector_adoption` 的请求。
+/// `result` is the exact service response for the preceding preview.
+/// `result` 为前序预检的准确服务响应。
+/// Returns an unexecuted call; None rejects incomplete evidence or a precheck with nothing to keep.
+/// 返回尚未执行的调用；None 拒绝缺失证据或没有可沿用目标的预检。
+pub fn native_vector_adoption(result: &Value) -> Option<ServiceCall> {
+    // Plan.
+    // 已审查操作计划。
+    let plan = value_of(result);
+    // Fingerprint.
+    // 服务签发的内容或预检指纹。
+    let fingerprint = plan.get("previewFingerprint")?.as_str()?;
+    if fingerprint.is_empty() || plan.get("adoptableMemoryCount")?.as_u64()? == 0 {
+        return None;
+    }
+    Some(mutate(
+        "native_vector_adoption",
+        json!({
+        "expectedStorageVersion":plan.get("storageVersion")?.as_i64()?,
+        "expectedPreviewFingerprint":fingerprint,
+        "confirmed":true}),
+        MAINTENANCE,
+    ))
+}
+
 // ---- Maintenance ----
 
 /// Builds the request for `native_lexical_rebuild`.

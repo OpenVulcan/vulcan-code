@@ -111,6 +111,34 @@ it.each(["恢复", "永久清除"])("locks %s during submission and keeps the or
   } finally { await view.dispose() }
 })
 
+it("keeps same-dimension vectors through the exact rebuild precheck and closes the confirmation", async () => {
+  const run = vi.fn(async (action: string, payload?: Record<string, unknown>) => maintenanceReply(action, payload))
+  const view = await mount(run)
+  try {
+    await act(async () => button("向量与检索索引").click())
+    await act(async () => button("预检向量重建", view.container).click())
+    const dialog = document.querySelector('[role="alertdialog"]')!
+    await act(async () => button("沿用现有向量", dialog).click())
+    expect(run).toHaveBeenCalledWith("native_vector_adoption", { expectedStorageVersion: 19, expectedPreviewFingerprint: "audit-fingerprint", confirmed: true })
+    await vi.waitFor(() => expect(document.querySelector('[role="alertdialog"]')).toBeNull())
+    expect(view.container.querySelector('[role="status"]')).not.toBeNull()
+  } finally { await view.dispose() }
+})
+
+it("keeps the rebuild confirmation open when the sample shows a different model", async () => {
+  const run = vi.fn(async (action: string, payload?: Record<string, unknown>) => maintenanceReply(action, action === "native_vector_adoption" ? { ...payload, expectedPreviewFingerprint: "different-model" } : payload))
+  const view = await mount(run)
+  try {
+    await act(async () => button("向量与检索索引").click())
+    await act(async () => button("预检向量重建", view.container).click())
+    const dialog = document.querySelector('[role="alertdialog"]')!
+    await act(async () => button("沿用现有向量", dialog).click())
+    expect(document.querySelector('[role="alertdialog"]')).toBe(dialog)
+    expect(dialog.querySelector('[role="alert"]')).not.toBeNull()
+    expect(run).not.toHaveBeenCalledWith("native_vector_rebuild", expect.anything())
+  } finally { await view.dispose() }
+})
+
 it("keeps a vector rejection inside its confirmation and restores the exact trigger", async () => {
   const run = vi.fn(async (action: string, payload?: Record<string, unknown>) => action === "native_vector_rebuild" ? null : maintenanceReply(action, payload))
   const view = await mount(run)

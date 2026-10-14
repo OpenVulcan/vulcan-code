@@ -2466,6 +2466,10 @@ pub struct VmmNativeVectorStatusSummary {
     /// 配置不可用时的准确路由解析失败。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Catalog form of the failure cause, shown in the client's language beside `error`.
+    /// 失败原因的目录形式，以客户端语言与 `error` 一同显示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<WebuiLocalizedMessage>,
 }
 
 /// Side-effect-free confirmation payload for one native vector-generation rebuild.
@@ -2506,6 +2510,37 @@ pub struct VmmNativeVectorRebuildPreview {
     /// SHA-256 identity of the exact displayed target set.
     /// 所显示准确目标集合的 SHA-256 身份。
     pub preview_fingerprint: String,
+    /// Targets whose stored vector already has the current dimension and may be kept instead.
+    /// 已存向量维度与当前一致、可改为沿用的目标数量。
+    pub adoptable_memory_count: u64,
+}
+
+/// Result of one confirmed attempt to keep existing vectors under the current generation.
+/// 一次已确认的、在当前代次下沿用现有向量的尝试结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeVectorAdoptionResult {
+    /// Core storage version after the attempt.
+    /// 本次尝试之后的 Core 存储版本。
+    pub storage_version: u64,
+    /// Exact target logical vector generation.
+    /// 准确目标逻辑向量代次。
+    pub target_vector_space_id: String,
+    /// False when the sample check showed the current route runs a different model.
+    /// 抽样校验表明当前路由运行的是另一个模型时为假。
+    pub adopted: bool,
+    /// Memories moved into the current generation.
+    /// 转入当前代次的记忆数量。
+    pub adopted_memory_count: u64,
+    /// Memories that still need a rebuild.
+    /// 仍需重建的记忆数量。
+    pub remaining_rebuild_memory_count: u64,
+    /// Cosine similarity between one stored vector and its fresh re-embedding.
+    /// 一条已存向量与其重新嵌入结果之间的余弦相似度。
+    pub sample_similarity: f64,
+    /// Similarity the sample had to reach for the vectors to be kept.
+    /// 抽样必须达到才可沿用向量的相似度。
+    pub required_similarity: f64,
 }
 
 /// Result of one confirmed native vector-generation rebuild.
@@ -2747,6 +2782,9 @@ pub enum VmmMemoryActionResponse {
     /// Completed native vector-generation rebuild.
     /// 已完成的原生向量代次重建。
     NativeVectorRebuild(VmmNativeVectorRebuildResult),
+    /// Confirmed attempt to keep existing vectors under the current generation.
+    /// 已确认的、在当前代次下沿用现有向量的尝试。
+    NativeVectorAdoption(VmmNativeVectorAdoptionResult),
     /// Current native recycle-bin batches.
     /// 当前原生回收站批次。
     NativeRecycleBin(VmmNativeRecycleBinSummary),

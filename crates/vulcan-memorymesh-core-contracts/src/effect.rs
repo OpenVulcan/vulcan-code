@@ -517,6 +517,23 @@ pub enum LlmOutput {
     },
 }
 
+/// Names which side of a vector comparison one embedding batch encodes.
+/// 指明一个嵌入批次编码的是向量比较的哪一侧。
+///
+/// Asymmetric models encode stored text and retrieval text differently; the Host maps each side to
+/// the model's declared task and uses one shared task for both sides when the model declares only that.
+/// 非对称模型对存储文本与检索文本采用不同编码；Host 将每一侧映射到模型声明的任务，模型只声明
+/// 共用任务时两侧使用同一任务。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EmbeddingPurpose {
+    /// Text whose vector is stored or compared symmetrically, such as memory summaries and noise prototypes.
+    /// 向量会被存储或对称比较的文本，例如记忆摘要与噪声原型。
+    Document,
+    /// Text whose vector searches stored vectors, such as recall and review queries.
+    /// 向量用于检索已存储向量的文本，例如召回与审核查询。
+    Query,
+}
+
 /// Carries one batch embedding request.
 /// 携带一次批量嵌入请求。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -524,6 +541,9 @@ pub struct EmbeddingEffect {
     /// Identifies the vector space.
     /// 标识向量空间。
     pub vector_space_id: VectorSpaceId,
+    /// Names the comparison side every input of this batch encodes.
+    /// 指明本批次全部输入编码的比较侧。
+    pub purpose: EmbeddingPurpose,
     /// Carries the exact vector dimension the Host must return for every input.
     /// 携带 Host 必须为每个输入返回的精确向量维度。
     pub expected_dimension: u32,

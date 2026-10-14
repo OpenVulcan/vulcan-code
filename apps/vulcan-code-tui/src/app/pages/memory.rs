@@ -295,6 +295,11 @@ pub(super) fn maintenance(app: &App) -> Vec<Row> {
         call(memory::native_vector_rebuild_preview()),
         Tone::Warn,
     ));
+    rows.push(button(
+        tr!("memory.maintenance.keepVectors"),
+        call(memory::native_vector_adoption_preview()),
+        Tone::Warn,
+    ));
     if let Some(version) = v(value(app, Slot::VmmLexical), "/storageVersion").as_i64() {
         rows.push(button(
             tr!("tui.field.lexicalRebuild"),

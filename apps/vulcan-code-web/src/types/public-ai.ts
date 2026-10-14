@@ -1,3 +1,4 @@
+import type { BrowserServiceLocalizedMessage } from "@/service/browserTransport";
 import type { PublicAiMediaDeliverySettingsSnapshot } from "./media-delivery";
 export type * from "./media-delivery";
 
@@ -1388,6 +1389,9 @@ export interface PublicAiInferenceRouteDiagnostic {
   operation: PublicAiOperation;
   route: PublicAiInferenceRoute;
   reason: string;
+  // reasonMessage is the catalog form of reason, rendered in the active language when present.
+  // reasonMessage 是 reason 的目录形式，存在时按当前语言渲染。
+  reasonMessage?: BrowserServiceLocalizedMessage | null;
 }
 
 // PublicAiInferenceTestResult carries compact validated facts from a real provider test.

@@ -181,6 +181,8 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `memory_actions::native_profile_policy_update` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_profile_policy_update` |
 | `memory_actions::native_vector_rebuild_preview` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_vector_rebuild_preview` |
 | `memory_actions::native_vector_rebuild` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_vector_rebuild` |
+| `memory_actions::native_vector_adoption_preview` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_vector_rebuild_preview` |
+| `memory_actions::native_vector_adoption` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_vector_adoption` |
 | `memory_actions::native_lexical_rebuild` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_lexical_rebuild` |
 | `memory_actions::native_retention_preview` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_retention_preview` |
 | `memory_actions::native_retention_run` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_retention_run` |

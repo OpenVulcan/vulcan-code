@@ -22,7 +22,9 @@ import { useI18n } from "@/i18n"
 import { VmmNativeCleanupPreview } from "./vmm-native-cleanup-preview"
 import { VmmNativeLexicalIndex } from "./vmm-native-lexical-index"
 import { VmmNativeRecycleRecords } from "./vmm-native-recycle-records"
+import { formatSkillText } from "@/components/features/featureText"
 import { formatNativeDuration } from "./native-duration-display"
+import { nativeVectorRouteCause } from "./vmm-native-vector-status"
 import type {
   VmmMemoryActionResult,
   VmmNativeProjectCatalogSummary,
@@ -31,6 +33,7 @@ import type {
   VmmNativeRetentionStatusSummary,
   VmmNativeRetentionPreview,
   VmmNativeLexicalIndexStatus,
+  VmmNativeVectorAdoptionResult,
   VmmNativeVectorRebuildPreview,
   VmmNativeVectorStatusSummary,
 } from "@/types"
@@ -72,6 +75,9 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
   const [lexicalStatus, setLexicalStatus] = React.useState<VmmNativeLexicalIndexStatus | null>(null)
   const [vectorStatus, setVectorStatus] = React.useState<VmmNativeVectorStatusSummary | null>(null)
   const [vectorPreview, setVectorPreview] = React.useState<VmmNativeVectorRebuildPreview | null>(null)
+  // The latest keep-vectors outcome is shown in the dialog when refused and on the index tab when done.
+  // 最近一次沿用向量的结果：被拒绝时显示在弹窗内，完成时显示在索引页。
+  const [vectorAdoption, setVectorAdoption] = React.useState<VmmNativeVectorAdoptionResult | null>(null)
   const [catalog, setCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
   const [recycleBin, setRecycleBin] = React.useState<VmmNativeRecycleBinSummary | null>(null)
   const [projectFilter, setProjectFilter] = React.useState("all")
@@ -273,6 +279,7 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
         return
       }
       setVectorPreview(result.data.value)
+      setVectorAdoption(null)
       setError(null)
     } finally { actionLock.current = false; if (mounted.current) setActionPending(false) }
   }, [onRunAction, t])
@@ -294,6 +301,33 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
         setError(t("memory.maintenance.invalidResponse"))
         return
       }
+      setVectorPreview(null)
+      setVectorAdoption(null)
+      await loadPage()
+    } finally { actionLock.current = false; if (mounted.current) setActionPending(false) }
+  }, [loadPage, onRunAction, t, vectorPreview])
+
+  // applyVectorAdoption keeps same-dimension vectors after the service re-embeds one sample to prove
+  // the current route runs the same model; a refused sample leaves the rebuild dialog open.
+  // applyVectorAdoption 在服务重新嵌入一条抽样、证明当前路由运行同一模型后沿用同维度向量；
+  // 抽样未通过时保留重建弹窗。
+  const applyVectorAdoption = React.useCallback(async () => {
+    if (!vectorPreview || actionLock.current) return
+    actionLock.current = true
+    setActionPending(true)
+    try {
+      const result = await onRunAction("native_vector_adoption", {
+        expectedStorageVersion: vectorPreview.storageVersion,
+        expectedPreviewFingerprint: vectorPreview.previewFingerprint,
+        confirmed: true,
+      })
+      if (!mounted.current) return
+      if (result?.data.kind !== "native_vector_adoption") {
+        setError(t("memory.maintenance.invalidResponse"))
+        return
+      }
+      setVectorAdoption(result.data.value)
+      if (!result.data.value.adopted) return
       setVectorPreview(null)
       await loadPage()
     } finally { actionLock.current = false; if (mounted.current) setActionPending(false) }
@@ -347,7 +381,7 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
               <p className="text-sm font-medium">{t(vectorStatus.configured ? "memory.maintenance.vectorRebuildRequired" : "memory.maintenance.vectorRouteUnavailable")}</p>
               {vectorStatus.configured
                 ? <p className="mt-1 text-xs text-muted-foreground">{t("memory.maintenance.vectorRebuildCounts").replace("{memories}", String(vectorStatus.rebuildRequiredMemoryCount)).replace("{active}", String(vectorStatus.activeRebuildRequiredMemoryCount)).replace("{recycled}", String(vectorStatus.recycleBinRebuildRequiredMemoryCount)).replace("{spaces}", String(vectorStatus.legacyVectorSpaceCount))}</p>
-                : vectorStatus.error ? <p className="mt-1 text-xs text-destructive">{vectorStatus.error}</p> : null}
+                : nativeVectorRouteCause(vectorStatus) ? <p className="mt-1 text-xs text-destructive">{nativeVectorRouteCause(vectorStatus)}</p> : null}
             </div>
           </div>
           <Button onClick={() => setMaintenanceView("index")} size="sm" type="button" variant="outline">{t(vectorStatus.configured ? "memory.vectorHealth.openRepair" : "memory.maintenance.vectorTitle")}</Button>
@@ -383,13 +417,19 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
                 <div>
                   <p className="text-sm font-medium">{!vectorStatus.configured ? t("memory.maintenance.vectorRouteUnavailable") : vectorStatus.rebuildRequiredMemoryCount > 0 ? t("memory.maintenance.vectorRebuildRequired") : t("memory.maintenance.vectorCompatible")}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{t("memory.maintenance.vectorRebuildCounts").replace("{memories}", String(vectorStatus.rebuildRequiredMemoryCount)).replace("{active}", String(vectorStatus.activeRebuildRequiredMemoryCount)).replace("{recycled}", String(vectorStatus.recycleBinRebuildRequiredMemoryCount)).replace("{spaces}", String(vectorStatus.legacyVectorSpaceCount))}</p>
-                  {vectorStatus.error ? <p className="mt-1 text-xs text-destructive">{vectorStatus.error}</p> : null}
+                  {nativeVectorRouteCause(vectorStatus) ? <p className="mt-1 text-xs text-destructive">{nativeVectorRouteCause(vectorStatus)}</p> : null}
                 </div>
                 <Button ref={vectorTrigger} disabled={controlsBusy || !vectorStatus.configured || vectorStatus.rebuildRequiredMemoryCount === 0} onClick={() => void previewVectorRebuild()} type="button" variant="outline">
                   <DatabaseZap className="size-4" aria-hidden="true" />{t("memory.maintenance.previewVectorRebuild")}
                 </Button>
               </div>
             </div>
+            {vectorAdoption?.adopted ? (
+              <p className="text-sm text-muted-foreground" role="status">{formatSkillText(t("memory.maintenance.keepVectorsDone"), {
+                count: vectorAdoption.adoptedMemoryCount,
+                remaining: vectorAdoption.remainingRebuildMemoryCount,
+              })}</p>
+            ) : null}
           </> : pagePending ? <StreamPlaceholder label={t("memory.resources.loading")} shape="fields" count={3} /> : <p className="text-sm text-muted-foreground">{t("memory.maintenance.invalidResponse")}</p>}
         </CardContent>
       </Card>
@@ -421,9 +461,24 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
                 .replace("{dimension}", String(vectorPreview.embeddingDimension)) : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {vectorPreview && vectorPreview.adoptableMemoryCount > 0 ? (
+            <div className="space-y-1 rounded-lg border bg-muted/20 p-3 text-sm">
+              <p className="font-medium">{t("memory.maintenance.keepVectorsTitle")}</p>
+              <p className="text-xs text-muted-foreground">{formatSkillText(t("memory.maintenance.keepVectorsDescription"), { count: vectorPreview.adoptableMemoryCount })}</p>
+              {vectorAdoption && !vectorAdoption.adopted ? (
+                <p role="alert" className="text-xs text-destructive">{formatSkillText(t("memory.maintenance.keepVectorsRejected"), {
+                  similarity: vectorAdoption.sampleSimilarity.toFixed(4),
+                  required: vectorAdoption.requiredSimilarity.toFixed(4),
+                })}</p>
+              ) : null}
+            </div>
+          ) : null}
           {error ? <p role="alert" className="break-all text-sm text-destructive">{error}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy || actionPending}>{t("memory.common.cancel")}</AlertDialogCancel>
+            {vectorPreview && vectorPreview.adoptableMemoryCount > 0 && !(vectorAdoption && !vectorAdoption.adopted) ? (
+              <Button disabled={busy || actionPending} onClick={() => void applyVectorAdoption()} type="button" variant="outline">{t("memory.maintenance.keepVectors")}</Button>
+            ) : null}
             <AlertDialogAction disabled={busy || actionPending} onClick={(event) => { event.preventDefault(); void applyVectorRebuild() }}>{t("memory.maintenance.rebuildVectors")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

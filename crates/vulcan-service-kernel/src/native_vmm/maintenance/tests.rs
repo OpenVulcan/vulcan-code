@@ -352,6 +352,98 @@ fn vector_rebuild_preview_is_deterministic_and_bounded() {
     assert!(first.preview_fingerprint.starts_with("sha256:"));
 }
 
+/// Verifies keeping vectors moves only old-generation memories whose vector has the current dimension.
+/// 验证沿用向量只转移向量维度与当前一致的旧代次记忆。
+#[test]
+fn vector_adoption_keeps_same_dimension_vectors_and_leaves_the_rest_for_rebuild() {
+    let current = VectorSpaceId::new("current-space").expect("current vector space");
+    let old = VectorSpaceId::new("old-space").expect("old vector space");
+    let descriptor = NativeVmmVectorSpaceDescriptor {
+        vector_space_id: current.clone(),
+        embedding_dimension: 2,
+        capability_fingerprint: String::from("capability-fingerprint"),
+    };
+    let stored = |id: &str, space: &VectorSpaceId, vector: Vec<f32>| {
+        let mut record = memory(
+            id,
+            1,
+            "session-a",
+            None,
+            MemorySourceKind::Direct,
+            MemoryLevel::Stable,
+        );
+        record.vector_space_id = Some(space.clone());
+        record.embedding = Some(vector);
+        record
+    };
+    let mut snapshot = empty_snapshot(30);
+    snapshot.dataset.memories = vec![
+        stored("same-dimension", &old, vec![0.6, 0.8]),
+        stored("other-dimension", &old, vec![1.0, 0.0, 0.0]),
+        stored("already-current", &current, vec![1.0, 0.0]),
+        memory(
+            "without-vector",
+            1,
+            "session-a",
+            None,
+            MemorySourceKind::Direct,
+            MemoryLevel::Stable,
+        ),
+    ];
+    let mut batch = retention_trash_batch(
+        String::from("vector-adoption-trash"),
+        native_vmm_subject_id().expect("subject"),
+        project_scope(1).expect("scope"),
+        1,
+        100,
+        RetentionReasonCode::TerminalMemoryRecycle,
+    );
+    batch
+        .dataset
+        .memories
+        .push(stored("recycled-same-dimension", &old, vec![0.0, 1.0]));
+    snapshot.retention_trash_batches.push(batch);
+
+    let preview = vector_rebuild_preview(&snapshot, &descriptor).expect("preview");
+    assert_eq!(preview.rebuild_memory_count, 4);
+    assert_eq!(preview.adoptable_memory_count, 2);
+
+    let expected = vec![
+        String::from("same-dimension"),
+        String::from("recycled-same-dimension"),
+    ];
+    let mut stale = snapshot.clone();
+    assert!(
+        apply_vector_adoption(&mut stale, &descriptor, &expected[..1]).is_err(),
+        "a target set that differs from the confirmed one must be rejected"
+    );
+    let batch = apply_vector_adoption(&mut snapshot, &descriptor, &expected).expect("adoption");
+    assert_eq!(batch.adopted_memory_ids, expected);
+    let remaining = vector_rebuild_preview(&snapshot, &descriptor).expect("remaining preview");
+    assert_eq!(remaining.rebuild_memory_count, 2);
+    assert_eq!(remaining.adoptable_memory_count, 0);
+    let kept = snapshot
+        .dataset
+        .memories
+        .iter()
+        .find(|memory| memory.id.as_str() == "same-dimension")
+        .expect("kept memory");
+    assert_eq!(kept.vector_space_id.as_ref(), Some(&current));
+    assert_eq!(kept.embedding.as_deref(), Some(&[0.6_f32, 0.8][..]));
+}
+
+/// Verifies the sample comparison separates a matching vector from an unrelated one.
+/// 验证抽样比较能区分一致向量与无关向量。
+#[test]
+fn vector_adoption_similarity_separates_same_and_unrelated_vectors() {
+    let stored = [0.6_f32, 0.8, 0.0];
+    assert!(cosine_similarity(&stored, &[0.6, 0.8, 0.0]) > 0.999_999);
+    assert!(
+        cosine_similarity(&stored, &[0.0, 0.0, 1.0]) < NATIVE_VMM_VECTOR_ADOPTION_MIN_SIMILARITY
+    );
+    assert!(cosine_similarity(&stored, &[0.0, 0.0, 0.0]).abs() < f64::EPSILON);
+}
+
 /// Verifies recycle-bin vector migration changes only the retained vector generation.
 /// 验证回收站向量迁移只修改所保留的向量代次。
 #[test]

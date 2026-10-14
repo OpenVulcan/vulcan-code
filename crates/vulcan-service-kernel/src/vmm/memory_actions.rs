@@ -22,8 +22,8 @@ use vulcan_service_api::{
     VmmNativeResourceSettingsSummary, VmmNativeRetentionApplyResult,
     VmmNativeRetentionPolicySummary, VmmNativeRetentionStatusSummary, VmmNativeSessionRename,
     VmmNativeTimelineItemSummary, VmmNativeTurnRecordSummary, VmmNativeTurnStatusCounts,
-    VmmNativeVectorRebuildPreview, VmmNativeVectorRebuildResult, VmmNativeVectorStatusSummary,
-    VmmProjectDisplaySummary, VmmUserDisplaySummary,
+    VmmNativeVectorAdoptionResult, VmmNativeVectorRebuildPreview, VmmNativeVectorRebuildResult,
+    VmmNativeVectorStatusSummary, VmmProjectDisplaySummary, VmmUserDisplaySummary,
 };
 
 /// Runs one VMM memory management action and returns its structured result.
@@ -110,6 +110,7 @@ pub(crate) async fn service_run_vmm_memory_action(
             | "native_vector_status"
             | "native_vector_rebuild_preview"
             | "native_vector_rebuild"
+            | "native_vector_adoption"
             | "native_recycle_bin"
             | "native_recycle_records"
             | "native_recycle_restore"
@@ -949,6 +950,39 @@ async fn service_run_native_vmm_maintenance_action(
                 VmmMemoryActionResponse::NativeVectorRebuild(result.clone()),
             )
         }
+        "native_vector_adoption" => {
+            let result = native_vector_adoption_result(
+                maintenance
+                    .execute_vector_adoption(
+                        &request.command_id,
+                        required_native_storage_version(
+                            &request.payload,
+                            "expectedStorageVersion",
+                        )?,
+                        &required_native_text(&request.payload, "expectedPreviewFingerprint")?,
+                        required_native_bool(&request.payload, "confirmed")?,
+                    )
+                    .await?,
+            );
+            native_action_result(
+                action,
+                if result.adopted {
+                    format!(
+                        "Kept existing vectors for {} memories; {} still need a rebuild.",
+                        result.adopted_memory_count, result.remaining_rebuild_memory_count
+                    )
+                } else {
+                    format!(
+                        "Kept no vectors: the sample similarity {:.4} is below the required {:.4}, so the current route runs a different model.",
+                        result.sample_similarity, result.required_similarity
+                    )
+                },
+                "native_vector_adoption",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativeVectorAdoption(result.clone()),
+            )
+        }
         "native_recycle_bin" => {
             let project_id = vmm_payload_u64(&request.payload, "vmmProjectId")
                 .filter(|project_id| *project_id > 0);
@@ -1731,6 +1765,7 @@ fn native_vector_status(
         legacy_vector_space_count: status.legacy_vector_space_count,
         pending_analysis_job_count: status.pending_analysis_job_count,
         error: status.error,
+        error_message: status.error_message,
     }
 }
 
@@ -1751,6 +1786,23 @@ fn native_vector_rebuild_preview(
         affected_project_count: preview.affected_project_count,
         batch_count: preview.batch_count,
         preview_fingerprint: preview.preview_fingerprint,
+        adoptable_memory_count: preview.adoptable_memory_count,
+    }
+}
+
+/// Maps one internal vector adoption outcome into the stable browser-facing contract.
+/// 将一次内部向量沿用结果映射为稳定的浏览器契约。
+fn native_vector_adoption_result(
+    result: crate::native_vmm::NativeVmmVectorAdoptionResult,
+) -> VmmNativeVectorAdoptionResult {
+    VmmNativeVectorAdoptionResult {
+        storage_version: result.storage_version,
+        target_vector_space_id: result.target_vector_space_id,
+        adopted: result.adopted,
+        adopted_memory_count: result.adopted_memory_count,
+        remaining_rebuild_memory_count: result.remaining_rebuild_memory_count,
+        sample_similarity: result.sample_similarity,
+        required_similarity: result.required_similarity,
     }
 }
 
