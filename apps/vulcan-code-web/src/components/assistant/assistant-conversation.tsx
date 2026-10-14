@@ -289,7 +289,7 @@ function AssistantUsageLine(props: {
 
 /** One-line input that grows with its text; Enter sends, Shift+Enter breaks the line.
  * 随内容增高的单行输入；Enter 发送，Shift+Enter 换行。 */
-function AssistantComposer(props: {
+export function AssistantComposer(props: {
   assistant: AssistantEntry;
   running: boolean;
   sessionConfig: ConversationSessionConfigV1 | null;
@@ -335,7 +335,8 @@ function AssistantComposer(props: {
   };
   const blocked = props.running || pending || staging.pendingAttachmentCount > 0 || !lease.ready;
   const send = async () => {
-    const prompt = text.trim();
+    const sentText = text;
+    const prompt = sentText.trim();
     if ((!prompt && attachments.length === 0) || blocked || staging.hasPendingAttachmentStaging()) return;
     setPending(true);
     try {
@@ -356,8 +357,10 @@ function AssistantComposer(props: {
         toast.info(t("conversationActions.previewCannotSend"));
         return;
       }
-      setText("");
-      staging.setAttachments([]);
+      // The input stays editable while the receipt is pending, so only what was sent is cleared.
+      // 等待回执期间输入框仍可编辑，因此只清除已发送的内容。
+      setText((current) => (current === sentText ? "" : current));
+      staging.setAttachments((current) => current.filter((attachment) => !attachments.includes(attachment)));
     } catch (reason) {
       toast.error(reason instanceof Error ? reason.message : String(reason));
     } finally {
