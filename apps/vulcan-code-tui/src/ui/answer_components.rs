@@ -15,13 +15,32 @@ use std::collections::HashMap;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use vulcan_session_core::v1::answer_components::{
-    ANSWER_CHART_MAX_SERIES, ANSWER_COMPONENT_MAX_ROWS,
+    ANSWER_CHART_MAX_SERIES, ANSWER_CODE_MAX_EXCERPTS, ANSWER_COMPONENT_MAX_ROWS,
+    AnswerCodeLocation, AnswerCodeSnapshot, AnswerCodeSnapshotResult, AnswerCodeUnavailableReason,
+    parse_answer_code_location,
 };
 
 use super::markdown;
 use super::mermaid;
-use super::theme::Theme;
+use super::text::{wrap, wrap_verbatim};
+use super::theme::{Theme, mix};
 use crate::tr;
+
+/// Capture state of the reply being rendered, read by its `ui-code` excerpts.
+/// 正在渲染的回答的抓取状态，供其 `ui-code` 摘录读取。
+#[derive(Debug, Clone, Copy, Default)]
+pub enum CodeSnapshots<'a> {
+    /// The Markdown is not a reply, so nothing was captured.
+    /// 该 Markdown 不是回答，因此没有抓取。
+    #[default]
+    None,
+    /// The reply still streams; its lines are captured when it is sealed.
+    /// 回答仍在流式输出；其代码行在封口时抓取。
+    Pending,
+    /// The captures stored when the reply was sealed.
+    /// 回答封口时存储的抓取结果。
+    Sealed(&'a [AnswerCodeSnapshot]),
+}
 
 /// Render one closed `ui-*` fence whose info string is `info` (without the backticks).
 /// 渲染一个信息串为 `info`（不含反引号）的已闭合 `ui-*` 围栏。
@@ -32,6 +51,7 @@ pub fn render(
     body: &[&str],
     width: usize,
     theme: &Theme,
+    code: CodeSnapshots<'_>,
 ) -> Option<Vec<Line<'static>>> {
     let component = info.strip_prefix("ui-")?;
     let (name, args) = component
@@ -51,10 +71,11 @@ pub fn render(
                 _ => return None,
             };
             let header = format!("{symbol} {}", title.trim());
-            Some(framed(header.trim_end(), color, body, width, theme))
+            Some(framed(header.trim_end(), color, body, width, theme, code))
         }
         "details" => (!args.is_empty())
-            .then(|| framed(&format!("▾ {args}"), theme.border, body, width, theme)),
+            .then(|| framed(&format!("▾ {args}"), theme.border, body, width, theme, code)),
+        "code" if args.is_empty() => code_excerpts(body, width, theme, code),
         "tabs" | "columns" => {
             let sections = body.iter().filter(|line| line.starts_with("### ")).count();
             let first = body.iter().find(|line| !line.trim().is_empty())?;
@@ -68,7 +89,7 @@ pub fn render(
                 && first.starts_with("### ")
                 && filled
                 && (2..=ANSWER_COMPONENT_MAX_ROWS).contains(&sections))
-            .then(|| markdown::render(&body.join("\n"), width, theme))
+            .then(|| markdown::render_with_code(&body.join("\n"), width, theme, code))
         }
         _ => {
             let source = component_markdown(name, args, body, width, theme)?;
@@ -85,6 +106,7 @@ fn framed(
     body: &[&str],
     width: usize,
     theme: &Theme,
+    code: CodeSnapshots<'_>,
 ) -> Vec<Line<'static>> {
     let bar = Span::styled("┃ ".to_owned(), Style::new().fg(color));
     let mut lines = vec![Line::from(vec![
@@ -94,11 +116,202 @@ fn framed(
             Style::new().fg(color).add_modifier(Modifier::BOLD),
         ),
     ])];
-    for line in markdown::render(&body.join("\n"), width.saturating_sub(2), theme) {
+    for line in markdown::render_with_code(&body.join("\n"), width.saturating_sub(2), theme, code) {
         let mut spans = vec![bar.clone()];
         spans.extend(line.spans);
         lines.push(Line::from(spans));
     }
+    lines
+}
+
+/// `ui-code` excerpts: each quoted range in a code frame, numbered from its start line, with the
+/// captured lines of the reply or the reason they are missing; `None` when a row is malformed.
+/// `ui-code` 摘录：每个引用范围置于代码框中，自首行编号，显示回答抓取的行或缺失原因；行格式不符时为 `None`。
+fn code_excerpts(
+    body: &[&str],
+    width: usize,
+    theme: &Theme,
+    code: CodeSnapshots<'_>,
+) -> Option<Vec<Line<'static>>> {
+    let rows = data_rows(body);
+    if rows.is_empty() || rows.len() > ANSWER_CODE_MAX_EXCERPTS {
+        return None;
+    }
+    let mut excerpts = Vec::new();
+    for row in rows {
+        let cells = row_cells(row, 1, 3)?;
+        let location = parse_answer_code_location(cells[0])?;
+        let highlighted = match cells.get(1) {
+            None | Some(&"-") => Vec::new(),
+            Some(text) => line_set(text, location.start_line, location.end_line)?,
+        };
+        excerpts.push((location, highlighted, cells.get(2).copied()));
+    }
+    let mut lines = Vec::new();
+    for (location, highlighted, note) in excerpts {
+        lines.extend(code_excerpt(
+            &location,
+            &highlighted,
+            note,
+            width,
+            theme,
+            code,
+        ));
+    }
+    Some(lines)
+}
+
+/// Sorted distinct line numbers of `42,47-49`, all within `first..=last`; `None` when malformed.
+/// `42,47-49` 中排序去重的行号，全部位于 `first..=last` 之内；格式错误时为 `None`。
+fn line_set(text: &str, first: u32, last: u32) -> Option<Vec<u32>> {
+    let mut lines = Vec::new();
+    for part in text.split(',') {
+        let part = part.trim();
+        let (from, to) = part.split_once('-').unwrap_or((part, part));
+        let digits = |value: &str| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit());
+        if !digits(from) || !digits(to) {
+            return None;
+        }
+        let (from, to): (u32, u32) = (from.parse().ok()?, to.parse().ok()?);
+        if from < first || to > last || to < from {
+            return None;
+        }
+        lines.extend(from..=to);
+    }
+    lines.sort_unstable();
+    lines.dedup();
+    Some(lines)
+}
+
+/// One excerpt frame: a header naming the file and range, then numbered lines or a message.
+/// 单个摘录框：标题注明文件与范围，随后是带行号的代码行或说明。
+fn code_excerpt(
+    location: &AnswerCodeLocation,
+    highlighted: &[u32],
+    note: Option<&str>,
+    width: usize,
+    theme: &Theme,
+    code: CodeSnapshots<'_>,
+) -> Vec<Line<'static>> {
+    let snapshot = match code {
+        CodeSnapshots::Sealed(snapshots) => snapshots
+            .iter()
+            .find(|snapshot| snapshot.location == location.location),
+        _ => None,
+    };
+    let captured = match snapshot.map(|snapshot| &snapshot.result) {
+        Some(AnswerCodeSnapshotResult::Captured { text }) => Some(text.as_str()),
+        _ => None,
+    };
+    let last = captured.map_or(location.end_line, |text| {
+        location.start_line + text.split('\n').count() as u32 - 1
+    });
+    let range = if last == location.start_line {
+        location.start_line.to_string()
+    } else {
+        format!("{}–{last}", location.start_line)
+    };
+    let border = Style::new().fg(theme.border);
+    let mut header = vec![
+        Span::styled("╭─ ".to_owned(), border),
+        Span::styled(location.path.clone(), theme.strong()),
+        Span::styled(format!(" {range}"), theme.muted_text()),
+    ];
+    if let Some(note) = note {
+        header.push(Span::styled(format!(" · {note}"), theme.muted_text()));
+    }
+    let mut lines = wrap(
+        &header,
+        width,
+        &[],
+        &[Span::styled("│ ".to_owned(), border)],
+    );
+    let bar = Span::styled("│ ".to_owned(), border);
+    match captured {
+        Some(text) => {
+            let digits = last.to_string().len();
+            let code_bg = mix(theme.muted, theme.bg, 0.7);
+            let marked_bg = mix(theme.info, theme.bg, 0.75);
+            for (index, source) in text.split('\n').enumerate() {
+                let number = location.start_line + index as u32;
+                let marked = highlighted.contains(&number);
+                let number_style = if marked {
+                    Style::new().fg(theme.info).add_modifier(Modifier::BOLD)
+                } else {
+                    theme.muted_text()
+                };
+                let gutter = vec![
+                    bar.clone(),
+                    Span::styled(format!("{number:>digits$} "), number_style),
+                ];
+                let continuation = vec![bar.clone(), Span::raw(" ".repeat(digits + 1))];
+                let style =
+                    Style::new()
+                        .fg(theme.teal)
+                        .bg(if marked { marked_bg } else { code_bg });
+                // Code keeps its indentation, so it wraps verbatim beside the number gutter.
+                // 代码保留缩进，因此在行号栏旁逐字换行。
+                let body_width = width.saturating_sub(digits + 3).max(1);
+                let mut rows = wrap_verbatim(source, body_width, style);
+                // A blank source line still takes its numbered row.
+                // 空白来源行仍占据其编号行。
+                if rows.is_empty() {
+                    rows.push(Line::default());
+                }
+                for (row, body) in rows.into_iter().enumerate() {
+                    let mut spans = if row == 0 {
+                        gutter.clone()
+                    } else {
+                        continuation.clone()
+                    };
+                    spans.extend(body.spans);
+                    lines.push(Line::from(spans));
+                }
+            }
+        }
+        None => {
+            let message = match (code, snapshot.map(|snapshot| &snapshot.result)) {
+                (CodeSnapshots::Pending, _) => tr!("answerComponents.code.pending"),
+                (_, Some(AnswerCodeSnapshotResult::Unavailable { reason })) => match reason {
+                    AnswerCodeUnavailableReason::NotFound => {
+                        tr!("answerComponents.code.reason.not_found")
+                    }
+                    AnswerCodeUnavailableReason::NoWorkspace => {
+                        tr!("answerComponents.code.reason.no_workspace")
+                    }
+                    AnswerCodeUnavailableReason::BeyondEnd => {
+                        tr!("answerComponents.code.reason.beyond_end")
+                    }
+                    AnswerCodeUnavailableReason::NotText => {
+                        tr!("answerComponents.code.reason.not_text")
+                    }
+                    AnswerCodeUnavailableReason::TooLarge => {
+                        tr!("answerComponents.code.reason.too_large")
+                    }
+                    AnswerCodeUnavailableReason::ReadFailed => {
+                        tr!("answerComponents.code.reason.read_failed")
+                    }
+                },
+                (CodeSnapshots::Sealed(snapshots), _)
+                    if snapshots.len() >= ANSWER_CODE_MAX_EXCERPTS =>
+                {
+                    tr!(
+                        "answerComponents.code.limit",
+                        count = ANSWER_CODE_MAX_EXCERPTS
+                    )
+                }
+                _ => tr!("answerComponents.code.notCaptured"),
+            };
+            let span = Span::styled(message, theme.muted_text());
+            lines.extend(wrap(
+                &[span],
+                width,
+                std::slice::from_ref(&bar),
+                std::slice::from_ref(&bar),
+            ));
+        }
+    }
+    lines.push(Line::from(Span::styled("╰─".to_owned(), border)));
     lines
 }
 

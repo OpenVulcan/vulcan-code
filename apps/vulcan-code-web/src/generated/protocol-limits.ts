@@ -25,6 +25,14 @@ export const ANSWER_COMPONENT_MAX_ROWS = 128;
  * 单个 ui-chart 承载的最多数值系列数，等于图表配色数量。 */
 export const ANSWER_CHART_MAX_SERIES = 8;
 
+/** Most lines one ui-code excerpt quotes; a longer range keeps the fence as code.
+ * 单个 ui-code 摘录引用的最多行数；更长的范围使围栏保持为代码。 */
+export const ANSWER_CODE_MAX_LINES = 200;
+
+/** Most distinct ui-code excerpts one reply captures, also the row limit of one fence.
+ * 单条回答抓取的最多不同 ui-code 摘录数，也是单个围栏的行数上限。 */
+export const ANSWER_CODE_MAX_EXCERPTS = 16;
+
 /** System default answer mode for users who never chose one.
  * 从未选择回答模式的用户所用的系统默认回答模式。 */
 export const DEFAULT_ANSWER_MODE = "interactive";

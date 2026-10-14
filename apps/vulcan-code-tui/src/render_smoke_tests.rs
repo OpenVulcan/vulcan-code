@@ -960,6 +960,7 @@ fn push_reply(h: &mut Harness, text: String) {
         body: EventBody::AssistantText {
             text,
             status: AssistantSemanticStatus::Completed,
+            code_snapshots: None,
         },
     });
     h.frame();

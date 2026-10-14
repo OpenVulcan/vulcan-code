@@ -832,6 +832,87 @@ fn provider_semantic_snapshots_are_monotonic_and_idempotent() -> Result<(), Doma
     Ok(())
 }
 
+/// `ui-code` snapshots attach only with the sealing revision and stay immutable afterwards.
+/// `ui-code` 快照只随封口修订附着，之后保持不可变。
+#[test]
+fn answer_code_snapshots_attach_once_when_text_is_sealed() -> Result<(), DomainError> {
+    use crate::v1::answer_components::{AnswerCodeSnapshot, AnswerCodeSnapshotResult};
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("root", Vec::new(), T0)?;
+    let api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 1,
+    )?;
+    let body = "```ui-code\nsrc/a.rs:1-2\n```";
+    let snapshot = |text: &str| AnswerCodeSnapshot {
+        location: "src/a.rs:1-2".into(),
+        result: AnswerCodeSnapshotResult::Captured { text: text.into() },
+    };
+    doc.append_assistant_text(api, body, AssistantSemanticStatus::Streaming, T0 + 2)?;
+
+    // Streaming text cannot carry snapshots.
+    // 流式正文不能携带快照。
+    assert!(matches!(
+        doc.append_assistant_text_with_code_snapshots(
+            api,
+            body,
+            AssistantSemanticStatus::Streaming,
+            vec![snapshot("a\nb")],
+            T0 + 3,
+        ),
+        Err(DomainError::InvalidAnswerCodeSnapshots { field: "status" })
+    ));
+
+    // The sealing revision attaches them; an exact replay is idempotent.
+    // 封口修订附着快照；完全相同的重放保持幂等。
+    let sealed = doc.append_assistant_text_with_code_snapshots(
+        api,
+        body,
+        AssistantSemanticStatus::Completed,
+        vec![snapshot("a\nb")],
+        T0 + 4,
+    )?;
+    assert!(sealed.changed());
+    let seq = sealed.into_value();
+    let replay = doc.append_assistant_text_with_code_snapshots(
+        api,
+        body,
+        AssistantSemanticStatus::Completed,
+        vec![snapshot("a\nb")],
+        T0 + 5,
+    )?;
+    assert!(!replay.changed());
+    let stored = doc
+        .events()
+        .iter()
+        .find(|event| event.seq() == seq)
+        .expect("assistant text event");
+    let EventBody::AssistantText(text) = &stored.event else {
+        panic!("expected assistant text");
+    };
+    assert_eq!(text.code_snapshots, vec![snapshot("a\nb")]);
+
+    // A sealed reply never recaptures.
+    // 已封口的回答绝不重新抓取。
+    let before_rewrite = doc.clone();
+    assert!(matches!(
+        doc.append_assistant_text_with_code_snapshots(
+            api,
+            body,
+            AssistantSemanticStatus::Completed,
+            vec![snapshot("changed")],
+            T0 + 6,
+        ),
+        Err(DomainError::ImmutableFieldMutation {
+            entity: "assistant_semantic",
+            field: "code_snapshots",
+        })
+    ));
+    assert_eq!(doc, before_rewrite);
+    Ok(())
+}
+
 /// A live process exit records its exact runtime timestamp and remains idempotent.
 /// 实时进程退出记录精确的运行时边界时间戳，并保持幂等。
 #[test]

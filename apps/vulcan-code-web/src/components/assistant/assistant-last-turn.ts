@@ -1,4 +1,5 @@
 import type {
+  AnswerCodeSnapshot,
   ConversationEventBody,
   ConversationEventSummary,
   UsageSnapshot,
@@ -28,6 +29,9 @@ export interface AssistantReplyStep {
   apiCallId: number;
   reasoning: AssistantStreamText | null;
   answer: AssistantStreamText | null;
+  /** Answer-time `ui-code` captures, present once the answer is sealed.
+   * 回答当时的 `ui-code` 抓取结果，回答封口后才存在。 */
+  answerCodeSnapshots?: readonly AnswerCodeSnapshot[];
   tools: { id: number; name: string; status: Extract<ConversationEventBody, { kind: "tool_call" }>["status"] }[];
   usage: AssistantUsage | null;
   durationMs: number | null;
@@ -85,6 +89,7 @@ export function projectAssistantLastTurn(events: readonly ConversationEventSumma
         break;
       case "assistant_text":
         step(event.api_call_id).answer = streamText(step(event.api_call_id).answer, event.text, event.status);
+        if (event.status !== "streaming") step(event.api_call_id).answerCodeSnapshots = event.code_snapshots ?? [];
         break;
       case "tool_call":
         step(event.api_call_id).tools.push({ id: event.tool_call_id, name: event.tool_name, status: event.status });

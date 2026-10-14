@@ -95,6 +95,18 @@ fn web_module() -> String {
                 "Most value series one ui-chart carries, equal to the chart palette size.",
                 "单个 ui-chart 承载的最多数值系列数，等于图表配色数量。",
             ),
+            Constant::Number(
+                "ANSWER_CODE_MAX_LINES",
+                vulcan_session_core::v1::answer_components::ANSWER_CODE_MAX_LINES as u64,
+                "Most lines one ui-code excerpt quotes; a longer range keeps the fence as code.",
+                "单个 ui-code 摘录引用的最多行数；更长的范围使围栏保持为代码。",
+            ),
+            Constant::Number(
+                "ANSWER_CODE_MAX_EXCERPTS",
+                vulcan_session_core::v1::answer_components::ANSWER_CODE_MAX_EXCERPTS as u64,
+                "Most distinct ui-code excerpts one reply captures, also the row limit of one fence.",
+                "单条回答抓取的最多不同 ui-code 摘录数，也是单个围栏的行数上限。",
+            ),
             Constant::Text(
                 "DEFAULT_ANSWER_MODE",
                 vulcan_session_core::v1::config::AnswerMode::default().wire_name(),

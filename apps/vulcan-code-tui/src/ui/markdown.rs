@@ -11,7 +11,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::answer_components;
+use super::answer_components::{self, CodeSnapshots};
 use super::mermaid;
 use super::text::{width_of, wrap};
 use super::theme::{Theme, mix};
@@ -19,6 +19,17 @@ use super::theme::{Theme, mix};
 /// Renders `source` into lines at most `width` columns wide.
 /// 将 `source` 渲染为不超过 `width` 列的行。
 pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    render_with_code(source, width, theme, CodeSnapshots::None)
+}
+
+/// Renders a reply whose `ui-code` excerpts read the captures in `code`.
+/// 渲染一条回答，其 `ui-code` 摘录读取 `code` 中的抓取结果。
+pub fn render_with_code(
+    source: &str,
+    width: usize,
+    theme: &Theme,
+    code: CodeSnapshots<'_>,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut in_code = false;
     // Unified diffs color their added and removed rows.
@@ -55,6 +66,7 @@ pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
                                 &source[index..index + close],
                                 width,
                                 theme,
+                                code,
                             )?,
                         ))
                     }) {
@@ -623,6 +635,67 @@ graph TD
 A[Plan] --> B[Build]";
         let texts: Vec<String> = render(open, 60, &theme).iter().map(text_of).collect();
         assert!(texts.iter().any(|t| t.contains("A[Plan] --> B[Build]")));
+    }
+
+    /// `ui-code` shows the reply's captured lines numbered from the start line, explains missing
+    /// captures, and stays code when a range is malformed.
+    /// `ui-code` 显示回答抓取的行并自首行编号，说明缺失的抓取，范围格式不符时保持为代码。
+    #[test]
+    fn code_excerpts_show_captured_lines_or_why_they_are_missing() {
+        use vulcan_session_core::v1::answer_components::{
+            AnswerCodeSnapshot, AnswerCodeSnapshotResult, AnswerCodeUnavailableReason,
+        };
+        let theme = Theme::dark();
+        let joined = |source: &str, code: CodeSnapshots<'_>| {
+            render_with_code(source, 60, &theme, code)
+                .iter()
+                .map(text_of)
+                .collect::<Vec<_>>()
+        };
+        let fence = "```ui-code\nsrc/a.rs:10-13 | 11 | Entry\nsrc/b.rs:3\n```";
+        let snapshots = [
+            AnswerCodeSnapshot {
+                location: "src/a.rs:10-13".into(),
+                result: AnswerCodeSnapshotResult::Captured {
+                    text: "fn a() {\n    lock();\n\n}".into(),
+                },
+            },
+            AnswerCodeSnapshot {
+                location: "src/b.rs:3".into(),
+                result: AnswerCodeSnapshotResult::Unavailable {
+                    reason: AnswerCodeUnavailableReason::NotFound,
+                },
+            },
+        ];
+        let sealed = joined(fence, CodeSnapshots::Sealed(&snapshots));
+        assert!(
+            sealed
+                .iter()
+                .any(|line| line.starts_with("╭─ src/a.rs 10–13"))
+        );
+        assert!(sealed.iter().any(|line| line.contains("11     lock();")));
+        assert!(sealed.iter().any(|line| line.trim_end() == "│ 12"));
+        assert!(sealed.iter().any(|line| line.contains("13 }")));
+        assert!(!sealed.iter().any(|line| line.contains("ui-code")));
+        assert!(
+            sealed
+                .iter()
+                .any(|line| line.contains(&crate::tr!("answerComponents.code.reason.not_found")))
+        );
+
+        let pending = joined(fence, CodeSnapshots::Pending);
+        let message = crate::tr!("answerComponents.code.pending");
+        assert_eq!(
+            pending
+                .iter()
+                .filter(|line| line.contains(&message))
+                .count(),
+            2
+        );
+
+        let invalid = joined("```ui-code\nsrc/a.rs\n```", CodeSnapshots::None);
+        assert!(invalid.iter().any(|line| line.contains("src/a.rs")));
+        assert!(invalid.iter().any(|line| line.contains("ui-code")));
     }
 
     /// Closed components render natively, nested fences stay inside their container, and an

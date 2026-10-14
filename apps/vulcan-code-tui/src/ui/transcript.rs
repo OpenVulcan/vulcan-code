@@ -14,6 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use serde_json::Value;
 
+use super::answer_components::CodeSnapshots;
 use super::brand;
 use super::markdown;
 use super::text::{compact_count, compact_duration, shimmer, spinner, truncate, width_of, wrap};
@@ -414,10 +415,20 @@ fn reasoning(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
 /// Render assistant Markdown, including closed answer components, with its streaming state.
 /// 渲染助手 Markdown（含已闭合的回答组件）及其流式状态。
 fn text(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
-    let EventBody::AssistantText { text, status } = &event.body else {
+    let EventBody::AssistantText {
+        text,
+        status,
+        code_snapshots,
+    } = &event.body
+    else {
         return Vec::new();
     };
-    let mut lines = markdown::render(text, ctx.width, ctx.theme);
+    let code = match (status, code_snapshots) {
+        (_, Some(snapshots)) => CodeSnapshots::Sealed(snapshots),
+        (AssistantSemanticStatus::Streaming, None) => CodeSnapshots::Pending,
+        _ => CodeSnapshots::None,
+    };
+    let mut lines = markdown::render_with_code(text, ctx.width, ctx.theme, code);
     match status {
         AssistantSemanticStatus::Streaming => {
             let caret = Span::styled(

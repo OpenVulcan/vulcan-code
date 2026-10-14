@@ -15,7 +15,7 @@ import { GoalStatusNotice } from "./conversation-goal-notice";
 import { DedicatedMemoryNotice, isDedicatedMemoryNoticeKind } from "@/components/conversation/conversation-dedicated-notice";
 import { metadataString } from "./conversation-metadata";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
-import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { AnswerCodeSnapshotsProvider, MarkdownMessage, type AnswerCodeSnapshotState } from "@/components/conversation/conversation-markdown";
 import { StreamingMarkdownDocument } from "@/components/conversation/streaming-markdown-document";
 import {
   type ConversationDetail,
@@ -196,24 +196,33 @@ export function ConversationBlocksView(props: {
     return <ConversationAgentInteractionView interaction={block.agentInteraction} />;
   }
   if (block.kind === "markdown") {
+    // A streaming reply has not captured its `ui-code` lines yet; a sealed one carries them on the block.
+    // 流式回答尚未抓取其 `ui-code` 行；已封口回答在块上携带抓取结果。
+    const codeSnapshots: AnswerCodeSnapshotState | null = block.answerCodeSnapshots
+      ? { pending: false, snapshots: block.answerCodeSnapshots }
+      : props.itemStreaming ? { pending: true } : null;
     if (props.itemStreaming && props.conversationId && block.sourceMessageId) {
       return (
-        <StreamingMarkdownDocument
-          conversationId={props.conversationId}
-          fallbackContent={block.body}
-          fallbackStreaming
-          messageId={block.sourceMessageId}
-          onOpenMedia={props.onOpenMedia}
-        />
+        <AnswerCodeSnapshotsProvider value={codeSnapshots}>
+          <StreamingMarkdownDocument
+            conversationId={props.conversationId}
+            fallbackContent={block.body}
+            fallbackStreaming
+            messageId={block.sourceMessageId}
+            onOpenMedia={props.onOpenMedia}
+          />
+        </AnswerCodeSnapshotsProvider>
       );
     }
     return (
-      <MarkdownMessage
-        content={block.body}
-        eager={props.forceEagerMarkdown}
-        streaming={props.itemStreaming}
-        onOpenMedia={props.onOpenMedia}
-      />
+      <AnswerCodeSnapshotsProvider value={codeSnapshots}>
+        <MarkdownMessage
+          content={block.body}
+          eager={props.forceEagerMarkdown}
+          streaming={props.itemStreaming}
+          onOpenMedia={props.onOpenMedia}
+        />
+      </AnswerCodeSnapshotsProvider>
     );
   }
   return renderSpecialBlock(block);

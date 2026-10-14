@@ -4,7 +4,9 @@ import type { GeneratedMediaAttachment } from "@/components/media/generated-medi
 import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
 import { formatMessage, useI18n } from "@/i18n";
 import "@/styles/answer-components.css";
+import type { AnswerCodeSnapshotState } from "@/components/conversation/conversation-markdown";
 import { AnswerChartView, formatChartNumber } from "./answer-chart";
+import { AnswerCodeView } from "./answer-code";
 import { parseAnswerComponent, type AnswerComponent, type AnswerSeverity, type AnswerTonedText, type AnswerTreeNode } from "./answer-component-model";
 import { AnswerFrame, AnswerFrameActionContext, CopyAction, type AnswerCopyHost } from "./answer-frame";
 import { AnswerSequenceView } from "./answer-graphs";
@@ -31,9 +33,30 @@ export interface AnswerComponentHost extends AnswerCopyHost {
   /** Link target for a workspace file reference such as `src/a.rs:42`, or null.
    * 工作区文件引用（如 `src/a.rs:42`）的链接目标；否则为 null。 */
   fileHref: (location: string) => string | null;
+  /** Answer-time `ui-code` captures of the enclosing reply, or null outside a reply.
+   * 所在回答的回答当时 `ui-code` 抓取结果；回答之外为 null。 */
+  codeSnapshots: AnswerCodeSnapshotState | null;
+  /** Render captured lines with the reply's code block chrome, highlighting and a line-number gutter.
+   * 以回答代码块的外框、高亮与行号栏渲染已抓取的行。 */
+  renderCode: (excerpt: AnswerCodeFigure) => React.ReactNode;
   /** Optional media viewer for gallery items.
    * 图库条目可选的媒体查看器。 */
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
+}
+
+/** Captured `ui-code` lines handed to the host's code block.
+ * 交给宿主代码块的已抓取 `ui-code` 行。 */
+export interface AnswerCodeFigure {
+  /** Lines joined by `\n`. 以 `\n` 连接的各行。 */
+  code: string;
+  /** File path; selects the syntax highlighting. 文件路径；决定语法高亮。 */
+  path: string;
+  /** Left side of the code block header. 代码块标题左侧内容。 */
+  header: React.ReactNode;
+  /** Number of the first line. 首行行号。 */
+  firstLine: number;
+  /** Line numbers to highlight. 需高亮的行号。 */
+  highlighted: ReadonlySet<number>;
 }
 
 /** Parse a closed `ui-*` fence and render it; unknown names and invalid syntax keep `fallback`, the code block.
@@ -213,6 +236,8 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
           </ul>
         </section>
       );
+    case "code":
+      return <AnswerCodeView excerpts={component.excerpts} host={host} />;
     case "gallery":
       return (
         <div className="answer-gallery">

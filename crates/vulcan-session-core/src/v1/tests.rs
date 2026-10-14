@@ -192,6 +192,7 @@ fn golden_assistant_text_with_provider_source() {
                 covered_until_seq: Seq::try_new(4).unwrap(),
                 fingerprint_sha256: "abc123".to_string(),
             }),
+            code_snapshots: Vec::new(),
         }),
     );
     assert_golden(
@@ -496,6 +497,7 @@ fn all_kinds_round_trip() {
                 text: String::new(),
                 status: AssistantSemanticStatus::Interrupted,
                 provider_source: None,
+                code_snapshots: Vec::new(),
             }),
         ),
         envelope(

@@ -1,4 +1,9 @@
-import { ANSWER_CHART_MAX_SERIES, ANSWER_COMPONENT_MAX_ROWS } from "@/generated/protocol-limits";
+import {
+  ANSWER_CHART_MAX_SERIES,
+  ANSWER_CODE_MAX_EXCERPTS,
+  ANSWER_CODE_MAX_LINES,
+  ANSWER_COMPONENT_MAX_ROWS,
+} from "@/generated/protocol-limits";
 
 // Parsed `ui-*` answer component fences. Parsing is pure and total: any fence that does not match
 // its documented syntax returns null so the caller keeps showing it as ordinary code. The syntax
@@ -106,6 +111,18 @@ export interface AnswerFile {
   note?: string;
 }
 
+// One `ui-code` excerpt: a quoted file range, the lines to highlight inside it and an optional note.
+// `location` is the exact cell, the key of the answer-time capture.
+// 单个 `ui-code` 摘录：引用的文件范围、其中需高亮的行与可选说明。`location` 是精确单元格，即回答当时抓取结果的键。
+export interface AnswerCodeExcerpt {
+  location: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  highlighted: number[];
+  note?: string;
+}
+
 // Chart layouts accepted after `ui-chart`.
 // `ui-chart` 之后接受的图表布局。
 export type AnswerChartKind = "bar" | "hbar" | "stack" | "line" | "area" | "pie" | "donut";
@@ -167,6 +184,7 @@ export type AnswerComponent =
   | { kind: "timeline"; rows: { time: string; title: string; text?: string }[] }
   | { kind: "cards"; cards: { title: string; text: string; tag?: AnswerTonedText }[] }
   | { kind: "files"; files: AnswerFile[]; added: number; removed: number }
+  | { kind: "code"; excerpts: AnswerCodeExcerpt[] }
   | { kind: "gallery"; items: { path: string; caption?: string }[] }
   | { kind: "tree"; nodes: AnswerTreeNode[] }
   | { kind: "chart"; chart: AnswerChart }
@@ -224,6 +242,8 @@ export function parseAnswerComponent(language: string, meta: string, body: strin
         (cards) => ({ kind: "cards", cards })));
     case "ui-files":
       return noArgs(args, () => files(body));
+    case "ui-code":
+      return noArgs(args, () => code(body));
     case "ui-gallery":
       return noArgs(args, () => mapRows(body, 1, 2, ([path, caption]) => ({ path, caption }), (items) => ({ kind: "gallery", items })));
     case "ui-tree":
@@ -362,6 +382,61 @@ function files(body: string): AnswerComponent | null {
     removed += file.removed;
     return file;
   }, (rows) => ({ kind: "files", files: rows, added, removed }));
+}
+
+// `path:start-end | highlights | note` rows; at most ANSWER_CODE_MAX_EXCERPTS, each range at most
+// ANSWER_CODE_MAX_LINES lines. Highlights are comma-separated lines or ranges inside the excerpt, or `-`.
+// `路径:起-迄 | 高亮 | 说明` 行；至多 ANSWER_CODE_MAX_EXCERPTS 行，每个范围至多 ANSWER_CODE_MAX_LINES 行。
+// 高亮为摘录内以逗号分隔的行号或范围，或 `-`。
+function code(body: string): AnswerComponent | null {
+  const lines = dataLines(body);
+  if (lines.length === 0 || lines.length > ANSWER_CODE_MAX_EXCERPTS) return null;
+  const excerpts: AnswerCodeExcerpt[] = [];
+  for (const line of lines) {
+    const cells = rowCells(line, 1, 3);
+    const location = cells === null ? null : answerCodeLocation(cells[0]);
+    if (cells === null || location === null) return null;
+    const highlighted = cells[1] === undefined || cells[1] === "-" ? [] : lineSet(cells[1], location.startLine, location.endLine);
+    if (highlighted === null) return null;
+    excerpts.push({ ...location, highlighted, note: cells[2] });
+  }
+  return { kind: "code", excerpts };
+}
+
+/**
+ * Parse `path:start-end` or `path:line`, splitting at the last colon so drive letters stay in the path.
+ * Mirrors `parse_answer_code_location` in vulcan-session-core, which decides what the host captures.
+ * 解析 `path:start-end` 或 `path:line`，在最后一个冒号处拆分，使盘符留在路径中。
+ * 与 vulcan-session-core 的 `parse_answer_code_location` 一致，后者决定宿主抓取的内容。
+ */
+export function answerCodeLocation(cell: string): Omit<AnswerCodeExcerpt, "highlighted" | "note"> | null {
+  const location = cell.trim();
+  const split = location.lastIndexOf(":");
+  if (split < 0) return null;
+  const path = location.slice(0, split);
+  const match = /^(\d+)(?:-(\d+))?$/u.exec(location.slice(split + 1));
+  if (!match || !path || path.trim() !== path) return null;
+  const startLine = Number(match[1]);
+  const endLine = Number(match[2] ?? match[1]);
+  // Line numbers are unsigned 32-bit on the host.
+  // 宿主端行号为无符号 32 位整数。
+  if (startLine < 1 || endLine < startLine || endLine > 0xffff_ffff || endLine - startLine + 1 > ANSWER_CODE_MAX_LINES) return null;
+  return { location, path, startLine, endLine };
+}
+
+// Sorted distinct line numbers of `42,47-49`, all within `first..=last`; null when malformed.
+// `42,47-49` 中排序去重的行号，全部位于 `first..=last` 之内；格式错误时为 null。
+function lineSet(text: string, first: number, last: number): number[] | null {
+  const lines = new Set<number>();
+  for (const part of text.split(",")) {
+    const match = /^(\d+)(?:-(\d+))?$/u.exec(part.trim());
+    if (!match) return null;
+    const from = Number(match[1]);
+    const to = Number(match[2] ?? match[1]);
+    if (from < first || to > last || to < from) return null;
+    for (let line = from; line <= to; line += 1) lines.add(line);
+  }
+  return [...lines].sort((a, b) => a - b);
 }
 
 // Split a leading plan marker (`+ `, `- `, `~ `) from a line; a leading `\` keeps the text literal.

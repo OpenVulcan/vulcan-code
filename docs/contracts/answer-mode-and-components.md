@@ -33,7 +33,9 @@
 请求准备通过动态上下文键 `dynamic.html_answers`（沿用已持久化的键值）注入：互动模式注入
 `answer-mode-interactive.md`；切回标准模式时，仅当该键曾经存在才注入 `answer-mode-standard.md`
 停止说明。从未开启互动模式的会话不发送任何额外说明。重复同步幂等。互动提示词中的
-`{{max_rows}}` 与 `{{max_series}}` 由 `ANSWER_COMPONENT_MAX_ROWS`、`ANSWER_CHART_MAX_SERIES` 派生。
+`{{max_rows}}`、`{{max_series}}`、`{{code_max_lines}}` 与 `{{code_max_excerpts}}` 分别由
+`ANSWER_COMPONENT_MAX_ROWS`、`ANSWER_CHART_MAX_SERIES`、`ANSWER_CODE_MAX_LINES`、
+`ANSWER_CODE_MAX_EXCERPTS` 派生。
 
 ## 组件渲染
 
@@ -42,8 +44,8 @@
 
 - 只渲染已闭合的围栏；结束围栏的反引号数不少于开始围栏，容器内嵌组件需用更长的外层围栏。
   流式中尚未闭合或语法无效的围栏一律保持代码显示，不猜测修复。
-- 渲染只基于回复原文，不经服务端投影，不执行任何脚本；需要真实交互时由模型写出独立 HTML 文件并以
-  链接交给内置浏览器打开。
+- 渲染只基于回复原文，不经服务端投影，不执行任何脚本；唯一例外是 `ui-code` 的回答当时快照（见下文）。
+  需要真实交互时由模型写出独立 HTML 文件并以链接交给内置浏览器打开。
 - WebUI 由 `apps/vulcan-code-web/src/components/conversation/answer-components/` 原生绘制：
   `answer-component-model.ts` 是纯解析器（与 TUI 解析规则一致），`conversation-markdown.tsx` 的
   `MarkdownPreBlock` 依据 AST 源码位置确认围栏已闭合后，才把原始围栏交给延迟加载的 `AnswerFenceView` 解析
@@ -78,3 +80,24 @@
   `AnswerReplyContext` 的界面（助手面板、详情弹窗等）中决策只读显示、组件不提供批注。框架型组件
   （findings、compare、chart、files）的批注按钮并入自身操作组（`AnswerFrameActionContext`），其他组件显示在悬停角落。
   TUI 只读显示问题与选项（建议项带星标），读者在自己的消息中作答。
+
+## 代码摘录与回答当时快照
+
+`ui-code` 每行引用一段真实文件行：`path:start-end | 高亮行 | 说明`（`path:42` 为单行）。模型不在行中写代码；
+宿主抓取文件内容，因此回答始终显示其写作当时的代码，而不是文件的当前内容。
+
+- **抓取时机。** 唯一一次抓取发生在 Provider V1 sink 封口 assistant 正文时
+  （`provider_v1_sink/answer_code.rs`，在阻塞线程读取文件），结果与“流式 → 终态”状态变化在同一次事件修订中
+  写入 `AssistantTextEvent.code_snapshots`。会话核心只在离开流式状态的那次修订接受快照，流式正文携带快照、
+  已封口后替换快照都会被拒绝；加载时同样校验边界。快照仅用于展示，不进入 Provider 请求投影。
+- **位置解析与边界。** 位置扫描与解析的唯一实现是 `answer_components::{answer_code_locations,
+  parse_answer_code_location}`：只认已闭合的 `ui-code` 围栏（`ui-*` 容器内计入，其他代码块内不计入），以最后一个
+  冒号分隔范围，按位置原文去重。`ANSWER_CODE_MAX_LINES` 限制单段行数（超出则围栏无效），
+  `ANSWER_CODE_MAX_EXCERPTS` 同时限制单条回答抓取的不同摘录数与单个围栏的行数，`ANSWER_CODE_MAX_BYTES`
+  限制单段字节数。相对路径以会话工作区（`workspace_path_for_session`）解析，绝对路径直接读取。
+- **结果。** 每个快照以位置原文为键，结果为 `captured`（自首行起、以 `\n` 连接的各行，文件提前结束时较短）或
+  `unavailable` 及稳定原因（`not_found`、`no_workspace`、`beyond_end`、`not_text`、`too_large`、`read_failed`），
+  原因由客户端经目录本地化。没有工作区根的 sink（如子代理执行）对相对路径记录 `no_workspace`。
+- **展示。** WebUI 把已封口事件的快照放入展示消息，经 `AnswerCodeSnapshotsContext` 交给 `MarkdownPreBlock`
+  与组件宿主；流式中显示“抓取中”，已封口但缺少某位置时说明未抓取（超过摘录上限时说明上限）。
+  高亮沿用代码块的 Shiki 管线，语言按文件扩展名推断。TUI 以带行号的代码框显示同一快照，高亮行加标记。

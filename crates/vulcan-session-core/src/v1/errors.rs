@@ -167,6 +167,13 @@ pub enum DomainError {
         /// 非法统计或回流字段。
         field: &'static str,
     },
+    /// Answer code snapshots exceed their bounds or attach outside the terminal seal.
+    /// 回答代码快照超出边界，或在终态封口之外附着。
+    InvalidAnswerCodeSnapshots {
+        /// Invalid snapshot field or cross-field invariant.
+        /// 非法快照字段或跨字段不变量。
+        field: &'static str,
+    },
     /// A subagent return was built from child state that is not fully durable.
     /// 子代理回流基于尚未完全持久化的子会话状态构建。
     SubagentSourceNotDurable {
@@ -719,6 +726,9 @@ impl fmt::Display for DomainError {
             }
             Self::InvalidStatistics { field } => {
                 write!(formatter, "invalid persisted statistic field {field}")
+            }
+            Self::InvalidAnswerCodeSnapshots { field } => {
+                write!(formatter, "invalid answer code snapshot field {field}")
             }
             Self::SubagentSourceNotDurable {
                 memory_revision,

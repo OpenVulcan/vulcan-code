@@ -191,6 +191,7 @@ mod tests {
                 EventBody::AssistantText {
                     text: "done".into(),
                     status: AssistantSemanticStatus::Completed,
+                    code_snapshots: None,
                 },
             ),
         ];

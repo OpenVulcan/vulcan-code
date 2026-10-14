@@ -80,6 +80,7 @@ use crate::session_runtime_registry_v1::{
 };
 use crate::state::SharedServiceBridgeState;
 
+mod answer_code;
 mod compaction_source;
 mod remote_checkpoint;
 pub(crate) use remote_checkpoint::{
@@ -486,20 +487,26 @@ pub(crate) fn provider_v1_stream_sink_for_session(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Result<Option<ProviderV1StreamSink>, String> {
-    let (registry, project_resource_catalog_registry) = {
+    let (registry, project_resource_catalog_registry, answer_code_root) = {
         let guard = state.lock().map_err(|_| {
             String::from("Service state lock poisoned while acquiring the V1 session.")
         })?;
         (
             guard.session_runtime_registry.clone(),
             Arc::clone(&guard.project_resource_catalog_registry),
+            guard.workspace_snapshot.as_ref().map(|workspace| {
+                PathBuf::from(crate::workspace_path_for_session(workspace, session_id))
+            }),
         )
     };
     match registry.get(session_id) {
-        Ok(handle) => Ok(Some(ProviderV1StreamSink::new(
-            handle,
-            project_resource_catalog_registry,
-        ))),
+        Ok(handle) => {
+            let sink = ProviderV1StreamSink::new(handle, project_resource_catalog_registry);
+            Ok(Some(match answer_code_root {
+                Some(root) => sink.with_answer_code_root(root),
+                None => sink,
+            }))
+        }
         Err(SessionRuntimeError::SessionNotRegistered(_)) => Ok(None),
         Err(error) => Err(error.to_string()),
     }
@@ -538,6 +545,9 @@ pub(crate) struct ProviderV1StreamSink {
     /// Exact locked baseline used by the last completed physical API.
     /// 最后一次已完成物理 API 使用的精确锁定基线。
     completed_locked_baseline: Option<LockedBaselineProjection>,
+    /// Workspace that resolves relative `ui-code` paths, absent when the session has none.
+    /// 解析相对 `ui-code` 路径的工作区；会话没有工作区时不存在。
+    answer_code_root: Option<PathBuf>,
 }
 
 /// Exact persisted assistant semantic emitted by one completed physical API.
@@ -1756,7 +1766,15 @@ impl ProviderV1StreamSink {
             completed_assistant_text: None,
             completed_remote_compaction: None,
             completed_locked_baseline: None,
+            answer_code_root: None,
         }
+    }
+
+    /// Resolves relative `ui-code` paths of this stream's replies against `root`.
+    /// 以 `root` 解析当前流回答中的相对 `ui-code` 路径。
+    pub(crate) fn with_answer_code_root(mut self, root: PathBuf) -> Self {
+        self.answer_code_root = Some(root);
+        self
     }
 
     /// Transfers all durable V1 terminal facts to the finished-stream owner exactly once.
@@ -2260,7 +2278,23 @@ impl ProviderV1StreamSink {
             }
             (_, None) => None,
         };
-        self.seal_semantics_for_terminal(terminal.status, terminal.completed_at_ms)?;
+        // Quoted file lines are captured once, as the reply stands when it is sealed.
+        // 引用的文件行只抓取一次，即回答封口时的状态。
+        let code_snapshots = match self.active.as_ref() {
+            Some(active) if active.assistant_text_seq.is_some() => {
+                answer_code::capture_answer_code_snapshots(
+                    self.answer_code_root.clone(),
+                    &active.assistant_text,
+                )
+                .await
+            }
+            _ => Vec::new(),
+        };
+        self.seal_semantics_for_terminal(
+            terminal.status,
+            terminal.completed_at_ms,
+            code_snapshots,
+        )?;
         if terminal.tool_call_count > 0 {
             self.active
                 .as_mut()
@@ -2687,8 +2721,10 @@ impl ProviderV1StreamSink {
     ///
     /// # Parameters
     /// 参数
-    /// `status` selects Completed or Interrupted and `now_ms` is the terminal observation time.
-    /// `status` 选择 Completed 或 Interrupted，`now_ms` 是终态观测时间。
+    /// `status` selects Completed or Interrupted and `now_ms` is the terminal observation time;
+    /// `code_snapshots` are the `ui-code` captures attached by the sealing revision.
+    /// `status` 选择 Completed 或 Interrupted，`now_ms` 是终态观测时间；
+    /// `code_snapshots` 是随封口修订附着的 `ui-code` 抓取结果。
     ///
     /// # Returns
     /// 返回值
@@ -2698,6 +2734,7 @@ impl ProviderV1StreamSink {
         &mut self,
         status: ApiCallStatus,
         now_ms: i64,
+        code_snapshots: Vec<vulcan_session_core::v1::answer_components::AnswerCodeSnapshot>,
     ) -> Result<(), ProviderV1SinkError> {
         let semantic_status = if status == ApiCallStatus::Completed {
             AssistantSemanticStatus::Completed
@@ -2721,10 +2758,11 @@ impl ProviderV1StreamSink {
         // Seal every allocated semantic event, including an exact empty physical response.
         // 封口每个已分配语义事件，包括真实的空物理回复。
         if active.assistant_text_seq.is_some() {
-            let receipt = self.handle.update_assistant_text(
+            let receipt = self.handle.seal_assistant_text(
                 active.api_call_id,
                 active.assistant_text.clone(),
                 semantic_status,
+                code_snapshots,
                 now_ms,
             )?;
             active.assistant_text_seq = Some(receipt.value);

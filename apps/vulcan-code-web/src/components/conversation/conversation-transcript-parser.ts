@@ -50,6 +50,21 @@ export function parseConversationBlocks(
   // 用于本地化元数据摘要的可选翻译函数。
   t?: (key: TranslationKey) => string,
 ): ConversationBlock[] {
+  const blocks = parseMessageBlocks(message, t);
+  // Every Markdown block of a sealed reply resolves its `ui-code` fences against the same captures.
+  // 已封口回答的每个 Markdown 块都以同一组抓取结果解析其 `ui-code` 围栏。
+  const snapshots = message.answerCodeSnapshots;
+  return snapshots
+    ? blocks.map((block) => block.kind === "markdown" ? { ...block, answerCodeSnapshots: snapshots } : block)
+    : blocks;
+}
+
+// parseMessageBlocks splits one message into blocks before reply-level facts are attached.
+// parseMessageBlocks 在附着回答级事实之前把一条消息拆分为块。
+function parseMessageBlocks(
+  message: ConversationMessage,
+  t?: (key: TranslationKey) => string,
+): ConversationBlock[] {
   if (message.agentInteraction) {
     return [{
       id: `${message.id}:agent-interaction`,

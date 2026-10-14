@@ -25,12 +25,18 @@ pub(super) const PERMISSION_MODE_CONTEXT_KEY: &str = "dynamic.permission_mode";
 /// 无输入；返回已去除首尾空白且没有独立限额定义的一份生产者正文。
 pub(super) fn answer_mode_interactive_prompt() -> String {
     use vulcan_session_core::v1::answer_components::{
-        ANSWER_CHART_MAX_SERIES, ANSWER_COMPONENT_MAX_ROWS,
+        ANSWER_CHART_MAX_SERIES, ANSWER_CODE_MAX_EXCERPTS, ANSWER_CODE_MAX_LINES,
+        ANSWER_COMPONENT_MAX_ROWS,
     };
     vulcan_runtime_assets::ANSWER_MODE_INTERACTIVE_MD
         .trim()
         .replace("{{max_rows}}", &ANSWER_COMPONENT_MAX_ROWS.to_string())
         .replace("{{max_series}}", &ANSWER_CHART_MAX_SERIES.to_string())
+        .replace("{{code_max_lines}}", &ANSWER_CODE_MAX_LINES.to_string())
+        .replace(
+            "{{code_max_excerpts}}",
+            &ANSWER_CODE_MAX_EXCERPTS.to_string(),
+        )
 }
 
 /// Builds an append-only identity notice from `document` history and the frozen `request`.

@@ -398,6 +398,9 @@ function conversationMessagesForV1Event(
         ...base,
         role: "assistant",
         body: summary.event.text,
+        // Captures attach with the sealing revision, so only a streaming text lacks them.
+        // 抓取结果随封口修订附着，因此只有流式正文缺少它们。
+        ...(summary.event.status === "streaming" ? {} : { answerCodeSnapshots: summary.event.code_snapshots ?? [] }),
         metadata: {
           ...presentationMetadata(summary, rootInput),
           api_call_id: summary.event.api_call_id,

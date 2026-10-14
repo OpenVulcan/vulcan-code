@@ -19,6 +19,7 @@ use super::{
     ActiveApiEventKind, ActiveApiState, IdempotentMutation, SessionDocument,
     ensure_api_event_owner, ensure_api_request_field, validate_timestamp,
 };
+use crate::v1::answer_components::{AnswerCodeSnapshot, validate_answer_code_snapshots};
 use crate::v1::budget::ProviderRequestBudgetEvidence;
 use crate::v1::config::ActiveRequestConfig;
 use crate::v1::context::{LockedBaselineProjection, RuntimeInitializationState};
@@ -1419,6 +1420,34 @@ impl SessionDocument {
         status: AssistantSemanticStatus,
         now_ms: i64,
     ) -> Result<IdempotentMutation<Seq>, DomainError> {
+        self.append_assistant_text_with_code_snapshots(
+            api_call_id,
+            text,
+            status,
+            Vec::new(),
+            now_ms,
+        )
+    }
+
+    /// Appends or updates the assistant text semantic of one API together with its `ui-code`
+    /// snapshots.
+    /// 追加或更新一次 API 的 assistant 正文语义及其 `ui-code` 快照。
+    ///
+    /// `code_snapshots` may only be non-empty with a terminal `status`; they are attached by the
+    /// same revision that seals the streaming text and are immutable afterwards.
+    /// `code_snapshots` 只能随终态 `status` 非空；它们由封口流式正文的同一修订附着，之后不可变。
+    pub fn append_assistant_text_with_code_snapshots(
+        &mut self,
+        api_call_id: ApiCallId,
+        text: impl Into<String>,
+        status: AssistantSemanticStatus,
+        code_snapshots: Vec<AnswerCodeSnapshot>,
+        now_ms: i64,
+    ) -> Result<IdempotentMutation<Seq>, DomainError> {
+        if !code_snapshots.is_empty() && status == AssistantSemanticStatus::Streaming {
+            return Err(DomainError::InvalidAnswerCodeSnapshots { field: "status" });
+        }
+        validate_answer_code_snapshots(&code_snapshots)?;
         let mut api = self.require_active_api(api_call_id)?;
         if !api.tool_seqs.is_empty() || api.stats_seq.is_some() {
             return Err(DomainError::SequenceViolation {
@@ -1436,6 +1465,7 @@ impl SessionDocument {
                     text,
                     status,
                     provider_source: None,
+                    code_snapshots,
                 }),
             )?,
             None => {
@@ -1447,6 +1477,7 @@ impl SessionDocument {
                         text,
                         status,
                         provider_source: None,
+                        code_snapshots,
                     }),
                     now_ms,
                 )?;
@@ -2209,6 +2240,17 @@ impl SessionDocument {
             }
             (EventBody::AssistantText(current), EventBody::AssistantText(next)) => {
                 ensure_api_event_owner(seq, next.api_call_id, current.api_call_id)?;
+                // Snapshots attach exactly once, in the revision that leaves the streaming state.
+                // 快照只附着一次，即离开流式状态的那次修订。
+                let attaches_snapshots = current.status == AssistantSemanticStatus::Streaming
+                    && current.code_snapshots.is_empty()
+                    && next.status != AssistantSemanticStatus::Streaming;
+                if current.code_snapshots != next.code_snapshots && !attaches_snapshots {
+                    return Err(DomainError::ImmutableFieldMutation {
+                        entity: "assistant_semantic",
+                        field: "code_snapshots",
+                    });
+                }
                 validate_provider_semantic_snapshot_transition(
                     &current.text,
                     current.status,

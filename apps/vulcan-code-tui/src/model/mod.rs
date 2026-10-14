@@ -224,6 +224,9 @@ pub enum EventBody {
     AssistantText {
         text: String,
         status: AssistantSemanticStatus,
+        /// Answer-time `ui-code` captures; `None` while the text streams.
+        /// 回答当时的 `ui-code` 抓取结果；正文流式输出期间为 `None`。
+        code_snapshots: Option<Vec<vulcan_session_core::v1::answer_components::AnswerCodeSnapshot>>,
     },
     ToolCall {
         tool_name: String,

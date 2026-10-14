@@ -225,24 +225,28 @@ export function diffLanguageForFile(file: DiffFile): string | null {
   if (cached !== undefined) {
     return cached;
   }
-  const path = displayPath(file).replace(/\\/g, "/").toLowerCase();
+  const language = shikiLanguageForPath(displayPath(file));
+  diffFileLanguageCache.set(file, language);
+  return language;
+}
+
+// shikiLanguageForPath infers a Shiki language id from a file path's name or extension.
+// shikiLanguageForPath 从文件路径的文件名或扩展名推断 Shiki 语言标识。
+export function shikiLanguageForPath(filePath: string): string | null {
+  const path = filePath.replace(/\\/g, "/").toLowerCase();
   const slashIndex = path.lastIndexOf("/");
   const fileName = slashIndex >= 0 ? path.slice(slashIndex + 1) : path;
   const dotIndex = fileName.lastIndexOf(".");
   const extension = dotIndex >= 0 ? fileName.slice(dotIndex + 1) : "";
   const specialName = DIFF_HIGHLIGHT_FILE_NAME_MAP[fileName];
   if (specialName && shikiLanguageExists(specialName)) {
-    diffFileLanguageCache.set(file, specialName);
     return specialName;
   }
   const mappedExtension = DIFF_HIGHLIGHT_EXTENSION_MAP[extension];
   if (mappedExtension && shikiLanguageExists(mappedExtension)) {
-    diffFileLanguageCache.set(file, mappedExtension);
     return mappedExtension;
   }
-  const language = shikiLanguageExists(extension) ? extension : null;
-  diffFileLanguageCache.set(file, language);
-  return language;
+  return shikiLanguageExists(extension) ? extension : null;
 }
 
 // normalizeShikiLanguage resolves aliases to canonical allowlisted Shiki language ids.

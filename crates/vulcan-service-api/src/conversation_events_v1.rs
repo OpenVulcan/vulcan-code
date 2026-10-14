@@ -1776,6 +1776,7 @@ mod tests {
                 text: text.to_string(),
                 status,
                 provider_source: None,
+                code_snapshots: Vec::new(),
             })
         };
         ConversationEventSummary {

@@ -545,6 +545,11 @@ pub struct AssistantTextEvent {
     /// 事件上(见顺序规则)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_source: Option<ProviderSource>,
+    /// File lines quoted by the body's `ui-code` fences, captured once when the body is sealed;
+    /// display-only and never sent to a Provider.
+    /// 正文 `ui-code` 围栏引用的文件行，在正文封口时抓取一次；仅用于展示，绝不发送给 Provider。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_snapshots: Vec<crate::v1::answer_components::AnswerCodeSnapshot>,
 }
 
 /// Lifecycle status of one tool invocation.

@@ -142,6 +142,14 @@ impl SessionDocument {
             if let EventBody::TurnStats(stats) = &event.event {
                 validate_turn_stat_buckets(&stats.buckets)?;
             }
+            if let EventBody::AssistantText(text) = &event.event
+                && !text.code_snapshots.is_empty()
+            {
+                if text.status == crate::v1::event::AssistantSemanticStatus::Streaming {
+                    return Err(DomainError::InvalidAnswerCodeSnapshots { field: "status" });
+                }
+                crate::v1::answer_components::validate_answer_code_snapshots(&text.code_snapshots)?;
+            }
             if let Some(turn_id) = event.turn_id
                 && let EventBody::TurnBoundary(_) = &event.event
             {

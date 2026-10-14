@@ -1,6 +1,7 @@
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import type { ConversationMessage } from "@/types";
 import type { ConversationAgentInteraction } from "@/types/conversation";
+import type { AnswerCodeSnapshot } from "@/service/conversation-event-window-store";
 
 // ConversationBlockKind describes one WebUI-renderable conversation block family.
 // ConversationBlockKind 描述 WebUI 可渲染的单个会话块族。
@@ -78,6 +79,9 @@ export interface ConversationBlock {
   // Generated media outputs resolved from host tool metadata.
   // 从宿主工具元数据解析出的生成媒体输出。
   mediaAttachments?: GeneratedMediaAttachment[];
+  // Answer-time `ui-code` captures of the sealed assistant text this Markdown block came from.
+  // 当前 Markdown 块所属已封口 assistant 正文的回答当时 `ui-code` 抓取结果。
+  answerCodeSnapshots?: readonly AnswerCodeSnapshot[];
   // Optional context-compaction section id used to merge status rows.
   // 用于合并状态行的可选上下文压缩分段标识。
   compactionSectionId?: string;

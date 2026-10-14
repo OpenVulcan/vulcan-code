@@ -1197,3 +1197,91 @@
 .answer-reply-tray .answer-reply-tray-discard {
   color: var(--muted-foreground);
 }
+
+/* `ui-code` excerpts reuse the code block chrome and add a sticky line-number gutter with highlighted lines. */
+/* `ui-code` 摘录沿用代码块外框，并增加固定行号栏与高亮行。 */
+.answer-code {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 11px;
+}
+
+.markdown-message .answer-code .markdown-code-block {
+  margin: 0;
+}
+
+.answer-code-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.answer-code-title a {
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.answer-code-title a:hover {
+  text-decoration: underline;
+}
+
+.answer-code-range {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.answer-code-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+}
+
+.answer-code .markdown-code-pre[data-numbered="true"] {
+  padding: 0 14px 0 0;
+}
+
+.answer-code .markdown-code-pre[data-numbered="true"] .markdown-code-line {
+  display: flex;
+}
+
+.answer-code .markdown-code-number {
+  position: sticky;
+  left: 0;
+  flex: 0 0 auto;
+  min-width: 3.2em;
+  margin-right: 12px;
+  padding: 0 8px 0 10px;
+  background: color-mix(in srgb, var(--card) 94%, var(--muted));
+  color: var(--muted-foreground);
+  text-align: right;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.answer-code .markdown-code-line > span:last-child {
+  min-width: 0;
+}
+
+.answer-code .markdown-code-line[data-highlighted="true"] {
+  background: var(--answer-tint-info);
+}
+
+/* The sticky gutter stays opaque so scrolled code never shows through it. */
+/* 固定行号栏保持不透明，滚动的代码不会透出。 */
+.answer-code .markdown-code-line[data-highlighted="true"] .markdown-code-number {
+  background: color-mix(in srgb, var(--answer-info) 14%, color-mix(in srgb, var(--card) 94%, var(--muted)));
+  box-shadow: inset 2px 0 0 var(--answer-info);
+  color: var(--foreground);
+}
+
+.answer-code-missing p {
+  margin: 0;
+  padding: 4px 14px 12px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+}

@@ -2,7 +2,12 @@
 import React from "react";
 import { prerender } from "react-dom/static";
 import { describe, expect, it, vi } from "vitest";
-import { MarkdownImageWorkspacePathProvider, MarkdownMessage } from "../conversation-markdown";
+import {
+  AnswerCodeSnapshotsProvider,
+  MarkdownImageWorkspacePathProvider,
+  MarkdownMessage,
+  type AnswerCodeSnapshotState,
+} from "../conversation-markdown";
 
 // Only the text catalog is synthetic; keys stand in for localized labels.
 // 仅文案目录为合成边界；以键代替本地化标签。
@@ -94,5 +99,53 @@ describe("answer components in conversation Markdown", () => {
     const host = await render("```ui-math\n\\frac{1}{\n```");
     expect(host.querySelector(".answer-math .katex")).toBeNull();
     expect(host.querySelector("code.answer-math-source")?.textContent).toBe("\\frac{1}{");
+  });
+});
+
+describe("ui-code excerpts", () => {
+  // renderCode prerenders a reply whose `ui-code` fences resolve against `state`.
+  // renderCode 预渲染一条回答，其 `ui-code` 围栏按 `state` 解析。
+  async function renderCode(content: string, state: AnswerCodeSnapshotState | null): Promise<HTMLElement> {
+    const host = document.createElement("div");
+    const { prelude } = await prerender(
+      <AnswerCodeSnapshotsProvider value={state}>
+        <MarkdownMessage content={content} eager />
+      </AnswerCodeSnapshotsProvider>,
+    );
+    host.innerHTML = await new Response(prelude).text();
+    return host;
+  }
+
+  const fence = "```ui-code\nsrc/a.rs:10-12 | 11 | Entry\nsrc/b.rs:3\n```";
+
+  it("shows the captured lines numbered from the start line, never the fence text", async () => {
+    const host = await renderCode(fence, {
+      pending: false,
+      snapshots: [
+        { location: "src/a.rs:10-12", result: { status: "captured", text: "fn a() {\n    lock();\n}" } },
+        { location: "src/b.rs:3", result: { status: "unavailable", reason: "not_found" } },
+      ],
+    });
+    const [captured, missing] = Array.from(host.querySelectorAll(".answer-code > figure"));
+    expect(Array.from(captured.querySelectorAll(".markdown-code-number"), (cell) => cell.textContent)).toEqual(["10", "11", "12"]);
+    expect(captured.querySelector(".markdown-code-line[data-highlighted='true'] .markdown-code-number")?.textContent).toBe("11");
+    expect(captured.textContent).toContain("lock();");
+    expect(missing.querySelector("p")?.textContent).toBe("answerComponents.code.reason.not_found");
+  });
+
+  it("shows the range the file actually had when it ended early", async () => {
+    const host = await renderCode(fence, {
+      pending: false,
+      snapshots: [{ location: "src/a.rs:10-12", result: { status: "captured", text: "only" } }],
+    });
+    expect(host.querySelector(".answer-code-range")?.textContent).toBe("10");
+  });
+
+  it("explains streaming, uncaptured and context-free excerpts", async () => {
+    const message = async (state: AnswerCodeSnapshotState | null) =>
+      (await renderCode(fence, state)).querySelector(".answer-code-missing p")?.textContent;
+    expect(await message({ pending: true })).toBe("answerComponents.code.pending");
+    expect(await message({ pending: false, snapshots: [] })).toBe("answerComponents.code.notCaptured");
+    expect(await message(null)).toBe("answerComponents.code.notCaptured");
   });
 });

@@ -12,6 +12,7 @@ import { AnswerFrame } from "@/components/conversation/answer-components/answer-
 import { markdownTable, numericCells } from "@/components/conversation/answer-components/answer-markdown-table";
 import { splitStreamingMarkdownBlocks, STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS } from "@/components/conversation/streaming-markdown-blocks";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
+import type { AnswerCodeSnapshot } from "@/service/conversation-event-window-store";
 import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
 import {
   highlightedDiffLineSpansForLanguage,
@@ -21,6 +22,7 @@ import {
 import {
   escapeHtml,
   normalizeShikiLanguage,
+  shikiLanguageForPath,
   tokenSpansToHtml,
 } from "@/diff/diff-shiki-shared";
 import { useI18n } from "@/i18n";
@@ -129,6 +131,29 @@ export function MarkdownImageWorkspacePathProvider(props: {
       {props.children}
     </MarkdownImageWorkspacePathContext.Provider>
   );
+}
+
+// AnswerCodeSnapshotState tells `ui-code` excerpts whether their reply still streams or which captures it sealed.
+// AnswerCodeSnapshotState 告知 `ui-code` 摘录其回答是否仍在流式输出，或已封口的抓取结果。
+export type AnswerCodeSnapshotState =
+  | { pending: true }
+  | { pending: false; snapshots: readonly AnswerCodeSnapshot[] };
+
+// AnswerCodeSnapshotsContext carries the reply's captures to nested `ui-code` fences; null outside replies.
+// AnswerCodeSnapshotsContext 把回答的抓取结果传给嵌套 `ui-code` 围栏；回答之外为 null。
+const AnswerCodeSnapshotsContext = React.createContext<AnswerCodeSnapshotState | null>(null);
+
+// AnswerCodeSnapshotsProvider scopes one reply's `ui-code` captures to the Markdown rendered inside it.
+// AnswerCodeSnapshotsProvider 将单条回答的 `ui-code` 抓取结果限定到其内部渲染的 Markdown。
+export function AnswerCodeSnapshotsProvider(props: {
+  // Markdown of the reply.
+  // 回答的 Markdown。
+  children: React.ReactNode;
+  // Capture state of the reply, or null when it has none.
+  // 回答的抓取状态；没有时为 null。
+  value: AnswerCodeSnapshotState | null;
+}) {
+  return <AnswerCodeSnapshotsContext.Provider value={props.value}>{props.children}</AnswerCodeSnapshotsContext.Provider>;
 }
 
 // MarkdownMessage renders assistant Markdown with Vulcan-specific component styling.
@@ -504,8 +529,11 @@ function MarkdownPreBlock(props: {
     const body = markdownCodeText(codeElement?.props.children ?? props.children).replace(/\n$/u, "");
     return { language, meta: typeof meta === "string" ? meta : "", body };
   }, [codeElement, language, props.children, props.node, source]);
-  // host lends nested Markdown, media, file links and the clipboard to the component.
-  // host 为组件提供嵌套 Markdown、媒体、文件链接与剪贴板。
+  // codeSnapshots are the reply's `ui-code` captures, read by excerpts at any nesting depth.
+  // codeSnapshots 是回答的 `ui-code` 抓取结果，任意嵌套深度的摘录都会读取。
+  const codeSnapshots = React.useContext(AnswerCodeSnapshotsContext);
+  // host lends nested Markdown, media, file links, captured code and the clipboard to the component.
+  // host 为组件提供嵌套 Markdown、媒体、文件链接、抓取的代码与剪贴板。
   const host = React.useMemo<AnswerComponentHost>(() => ({
     renderMarkdown: (body) => (
       <MarkdownContentRenderer
@@ -518,9 +546,20 @@ function MarkdownPreBlock(props: {
     ),
     mediaSource: (path) => answerMediaSource(path, props.workspacePath),
     fileHref: (location) => answerFileHref(location, props.workspacePath),
+    codeSnapshots,
+    renderCode: (excerpt) => (
+      <CodeBlockFigure
+        code={excerpt.code}
+        defaultCodeWrap={props.defaultCodeWrap}
+        firstLineNumber={excerpt.firstLine}
+        header={excerpt.header}
+        highlightLanguage={normalizeShikiLanguage(shikiLanguageForPath(excerpt.path))}
+        highlightedLines={excerpt.highlighted}
+      />
+    ),
     copy: copyMarkdownCode,
     onOpenMedia: props.onOpenMedia,
-  }), [props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
+  }), [codeSnapshots, props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
   if (fence) {
     // The fence keeps its code presentation until the deferred renderer arrives, and for good when it is invalid.
     // 延迟渲染器到达前围栏保持代码展示；语法无效时始终如此。
@@ -565,27 +604,69 @@ function MarkdownCodeBlock(props: {
   // 该代码块的换行控制是否默认启用。
   defaultCodeWrap?: boolean;
 }) {
-  // t resolves stable WebUI copy keys for the active language.
-  // t 根据当前语言解析稳定的 WebUI 文案键。
-  const { t } = useI18n();
   const codeElement = markdownCodeElement(props.children);
   const className = codeElement?.props.className;
   const rawCode = markdownCodeText(codeElement?.props.children ?? props.children);
   const code = rawCode.replace(/\n$/u, "");
   const language = markdownCodeLanguage(className);
   const displayLanguage = markdownCodeDisplayLanguage(language);
-  const normalizedLanguage = normalizeShikiLanguage(markdownCodeHighlightLanguage(language));
+  const icon = React.useMemo(
+    () => resolveFileTypeIcon(markdownCodeIconHint(displayLanguage)),
+    [displayLanguage],
+  );
+  return (
+    <CodeBlockFigure
+      code={code}
+      defaultCodeWrap={props.defaultCodeWrap}
+      header={(
+        <span className="markdown-code-language">
+          <FileTypeIcon icon={icon} />
+          <span>{displayLanguage}</span>
+        </span>
+      )}
+      highlightLanguage={normalizeShikiLanguage(markdownCodeHighlightLanguage(language))}
+    />
+  );
+}
+
+// CodeBlockFigure renders code lines under a header with copy and wrap actions, syntax highlighting and an
+// optional line-number gutter whose highlighted lines are marked.
+// CodeBlockFigure 在带复制与折行操作的标题下渲染代码行，提供语法高亮与可选行号栏，并标记高亮行。
+function CodeBlockFigure(props: {
+  // Source text without a trailing newline.
+  // 不含尾随换行的源码文本。
+  code: string;
+  // Left side of the header: the language label or a file location.
+  // 标题左侧内容：语言标签或文件位置。
+  header: React.ReactNode;
+  // Canonical Shiki language, or null for plain text.
+  // 规范 Shiki 语言；纯文本时为 null。
+  highlightLanguage: string | null;
+  // Whether the wrap control starts enabled for this code block.
+  // 该代码块的换行控制是否默认启用。
+  defaultCodeWrap?: boolean;
+  // Number of the first line; a gutter is shown only when present.
+  // 首行行号；仅在提供时显示行号栏。
+  firstLineNumber?: number;
+  // Line numbers drawn with the highlight background.
+  // 以高亮背景绘制的行号。
+  highlightedLines?: ReadonlySet<number>;
+}) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
+  const { code, firstLineNumber, highlightLanguage, highlightedLines } = props;
   const lines = React.useMemo(() => code.split(/\r\n|\r|\n/u), [code]);
   const highlightEnabled = Boolean(
-    normalizedLanguage
+    highlightLanguage
     && lines.length <= MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT
     && code.length <= MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT,
   );
   const shikiTheme = useDiffShikiTheme();
-  const highlightRevision = useHighlightedCodeBlockRevision(lines, normalizedLanguage, highlightEnabled);
+  const highlightRevision = useHighlightedCodeBlockRevision(lines, highlightLanguage, highlightEnabled);
   const renderedLines = React.useMemo(
-    () => markdownCodeRenderedLines(lines, normalizedLanguage, highlightRevision, highlightEnabled),
-    [highlightEnabled, highlightRevision, lines, normalizedLanguage, shikiTheme],
+    () => markdownCodeRenderedLines(lines, highlightLanguage, highlightRevision, highlightEnabled),
+    [highlightEnabled, highlightRevision, lines, highlightLanguage, shikiTheme],
   );
   const [copied, setCopied] = React.useState(false);
   const [wrapped, setWrapped] = React.useState(props.defaultCodeWrap ?? false);
@@ -598,17 +679,10 @@ function MarkdownCodeBlock(props: {
     return () => window.clearTimeout(timer);
   }, [copied]);
 
-  const icon = React.useMemo(
-    () => resolveFileTypeIcon(markdownCodeIconHint(displayLanguage)),
-    [displayLanguage],
-  );
   return (
     <figure className="markdown-code-block">
       <figcaption className="markdown-code-header">
-        <span className="markdown-code-language">
-          <FileTypeIcon icon={icon} />
-          <span>{displayLanguage}</span>
-        </span>
+        {props.header}
         <span className="markdown-code-actions">
           <button
             aria-label={wrapped ? t("markdown.wrap.disable") : t("markdown.wrap.enable")}
@@ -636,15 +710,25 @@ function MarkdownCodeBlock(props: {
         </span>
       </figcaption>
       <div className="markdown-code-scroll" data-wrap={wrapped ? "true" : "false"}>
-        <pre className="markdown-code-pre">
+        <pre className="markdown-code-pre" data-numbered={firstLineNumber === undefined ? undefined : "true"}>
           <code>
-            {renderedLines.map((line, index) => (
-              <span
-                className="markdown-code-line"
-                dangerouslySetInnerHTML={{ __html: line || "&#8203;" }}
-                key={`${index}:${line.length}`}
-              />
-            ))}
+            {renderedLines.map((line, index) => {
+              const html = { __html: line || "&#8203;" };
+              if (firstLineNumber === undefined) {
+                return <span className="markdown-code-line" dangerouslySetInnerHTML={html} key={`${index}:${line.length}`} />;
+              }
+              const number = firstLineNumber + index;
+              return (
+                <span
+                  className="markdown-code-line"
+                  data-highlighted={highlightedLines?.has(number) || undefined}
+                  key={`${index}:${line.length}`}
+                >
+                  <span aria-hidden="true" className="markdown-code-number">{number}</span>
+                  <span dangerouslySetInnerHTML={html} />
+                </span>
+              );
+            })}
           </code>
         </pre>
       </div>

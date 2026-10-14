@@ -577,6 +577,10 @@ pub fn event(summary: &ConversationEventSummary) -> Option<ConversationEvent> {
         CoreEvent::AssistantText(text) => EventBody::AssistantText {
             text: text.text.clone(),
             status: text.status,
+            // Captures attach with the sealing revision, so only a streaming text lacks them.
+            // 抓取结果随封口修订附着，因此只有流式正文缺少它们。
+            code_snapshots: (text.status != AssistantSemanticStatus::Streaming)
+                .then(|| text.code_snapshots.clone()),
         },
         CoreEvent::ToolCall(call) => EventBody::ToolCall {
             tool_name: call.tool_name.clone(),

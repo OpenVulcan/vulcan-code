@@ -28,6 +28,13 @@ describe("conversation transcript parser source identity", () => {
     expect(block?.sourceMessageId).toBe("message-42");
   });
 
+  it("carries a sealed reply's ui-code captures onto its Markdown blocks only when present", () => {
+    const snapshots = [{ location: "a.rs:1", result: { status: "captured", text: "fn a() {}" } }] as const;
+    const sealed = parseConversationBlocks({ ...transcriptMessage("m", "```ui-code\na.rs:1\n```"), answerCodeSnapshots: snapshots });
+    expect(sealed.map((block) => block.answerCodeSnapshots)).toEqual([snapshots]);
+    expect(parseConversationBlocks(transcriptMessage("s", "body"))[0]?.answerCodeSnapshots).toBeUndefined();
+  });
+
   // Verifies backend-owned Provider retry metadata selects the retained notice-card path.
   // 验证后端持有的 Provider 重试元数据会选择可保留的提示卡路径。
   it("projects Provider retry display notes as structured notices", () => {

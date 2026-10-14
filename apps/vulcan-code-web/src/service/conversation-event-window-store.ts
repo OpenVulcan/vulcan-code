@@ -112,6 +112,29 @@ export interface ProviderSource {
   fingerprint_sha256: string;
 }
 
+/** Stable reason one `ui-code` excerpt could not be captured when its reply was sealed.
+ * 单个 `ui-code` 摘录在回答封口时无法抓取的稳定原因。 */
+export type AnswerCodeUnavailableReason =
+  | "not_found"
+  | "no_workspace"
+  | "beyond_end"
+  | "not_text"
+  | "too_large"
+  | "read_failed";
+
+/** File lines one `ui-code` location quoted, captured once when its reply was sealed.
+ * 单个 `ui-code` 位置引用的文件行，在其回答封口时抓取一次。 */
+export interface AnswerCodeSnapshot {
+  /** Exact trimmed location cell such as `src/a.rs:40-58`.
+   * 精确的去空白位置单元格，例如 `src/a.rs:40-58`。 */
+  location: string;
+  /** Lines joined by `\n` from the start line, or why they are unavailable.
+   * 自首行起以 `\n` 连接的各行，或无法提供的原因。 */
+  result:
+    | { status: "captured"; text: string }
+    | { status: "unavailable"; reason: AnswerCodeUnavailableReason };
+}
+
 /** Official token usage reported by one physical API request.
  * 一次物理 API 请求上报的官方 token 用量。 */
 export interface UsageSnapshot {
@@ -957,6 +980,7 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
       text: string;
       status: "streaming" | "completed" | "interrupted";
       provider_source?: ProviderSource;
+      code_snapshots?: AnswerCodeSnapshot[];
     }
   | {
       kind: "tool_call";

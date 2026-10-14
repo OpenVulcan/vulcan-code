@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ANSWER_CHART_MAX_SERIES, ANSWER_COMPONENT_MAX_ROWS } from "@/generated/protocol-limits";
+import { ANSWER_CHART_MAX_SERIES, ANSWER_CODE_MAX_EXCERPTS, ANSWER_CODE_MAX_LINES, ANSWER_COMPONENT_MAX_ROWS } from "@/generated/protocol-limits";
 import { parseAnswerComponent, type AnswerComponent } from "./answer-component-model";
 
 // parse wraps the parser for fences written as `language meta`.
@@ -175,5 +175,28 @@ describe("parseAnswerComponent", () => {
     expect(parse("ui-decision", "Q?\n* A\n* B")).toBeNull();
     expect(parse("ui-decision", "- Q?\n- A\n- B")).toBeNull();
     expect(parse("ui-decision single", "Q?\n- A\n- B")).toBeNull();
+  });
+
+  it("parses code excerpts with ranges, single lines, drive letters, highlights and notes", () => {
+    expect(parse("ui-code", "src/a.rs:40-45 | 42, 44-45 | Lock first\nC:\\repo\\b.ts:7\nsrc/c.rs:1-3 | - | Entry")).toEqual({
+      kind: "code",
+      excerpts: [
+        { location: "src/a.rs:40-45", path: "src/a.rs", startLine: 40, endLine: 45, highlighted: [42, 44, 45], note: "Lock first" },
+        { location: "C:\\repo\\b.ts:7", path: "C:\\repo\\b.ts", startLine: 7, endLine: 7, highlighted: [], note: undefined },
+        { location: "src/c.rs:1-3", path: "src/c.rs", startLine: 1, endLine: 3, highlighted: [], note: "Entry" },
+      ],
+    });
+  });
+
+  it("rejects code excerpts without a valid range or with highlights outside it", () => {
+    for (const row of ["src/a.rs", "src/a.rs:0-2", "src/a.rs:5-3", "src/a.rs:1-", "src/a.rs:1-3 | 4", "src/a.rs:1-3 | x"]) {
+      expect(parse("ui-code", row), row).toBeNull();
+    }
+    expect(parse("ui-code", `a.rs:1-${ANSWER_CODE_MAX_LINES}`)).not.toBeNull();
+    expect(parse("ui-code", `a.rs:1-${ANSWER_CODE_MAX_LINES + 1}`)).toBeNull();
+    const rows = (count: number) => Array.from({ length: count }, (_, index) => `a.rs:${index + 1}`).join("\n");
+    expect(parse("ui-code", rows(ANSWER_CODE_MAX_EXCERPTS))).not.toBeNull();
+    expect(parse("ui-code", rows(ANSWER_CODE_MAX_EXCERPTS + 1))).toBeNull();
+    expect(parse("ui-code extra", "a.rs:1")).toBeNull();
   });
 });

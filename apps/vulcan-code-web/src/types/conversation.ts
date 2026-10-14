@@ -18,7 +18,7 @@ import type {
 import type { CommandSessionSummary, ContextInjectionSnapshot, ContextUsageSnapshot } from "./runtime-context";
 import type { ProjectSummary } from "./projects-files";
 import type { ContextCompactionWindowNodeId } from "./public-ai";
-import type { ConversationEventBody, ConversationEventSummary } from "@/service/conversation-event-window-store";
+import type { AnswerCodeSnapshot, ConversationEventBody, ConversationEventSummary } from "@/service/conversation-event-window-store";
 
 // ConversationAgentInteraction retains exact collaboration, authenticated question input or child-result facts for display only.
 // ConversationAgentInteraction 仅为展示保留精确协作、已验证问题输入或子任务结果事实。
@@ -126,6 +126,9 @@ export interface ConversationMessage {
   // Typed projection metadata used only by presentation components.
   // 仅供展示组件使用的强类型投影元数据。
   metadata?: unknown;
+  // Answer-time `ui-code` captures of a sealed assistant text; absent while it streams.
+  // 已封口 assistant 正文的回答当时 `ui-code` 抓取结果；流式期间不存在。
+  answerCodeSnapshots?: readonly AnswerCodeSnapshot[];
   // Optional composer-compatible previews for process-local optimistic content.
   // 进程内乐观内容使用的可选输入区兼容预览。
   attachments?: ComposerAttachmentSummary[];

@@ -7,7 +7,7 @@ import { useComposerAttachments } from "@/components/composer/composer-attachmen
 import { ComposerTextContextMenu } from "@/components/composer/composer-text-context-menu";
 import { composerAttachmentForResource } from "@/components/conversation/conversation-branch-presentation-v1";
 import { runConversationControlAction } from "@/components/conversation/conversation-control-feedback";
-import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { AnswerCodeSnapshotsProvider, MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { Button } from "@/components/ui/button";
 import { InlineDisclosure } from "@/components/ui/disclosure";
@@ -270,7 +270,13 @@ export function AssistantStep(props: { step: AssistantReplyStep }) {
           {step.tools.map((tool) => <span key={tool.id} className="assistant-tool-chip">{tool.name}</span>)}
         </div>
       ) : null}
-      {step.answer ? <MarkdownMessage content={step.answer.text} eager streaming={step.answer.streaming} /> : null}
+      {step.answer ? (
+        <AnswerCodeSnapshotsProvider
+          value={step.answerCodeSnapshots ? { pending: false, snapshots: step.answerCodeSnapshots } : step.answer.streaming ? { pending: true } : null}
+        >
+          <MarkdownMessage content={step.answer.text} eager streaming={step.answer.streaming} />
+        </AnswerCodeSnapshotsProvider>
+      ) : null}
       {step.usage || (step.answer && !step.answer.streaming) ? (
         <div className="assistant-step-footer">
           {step.usage ? <AssistantUsageLine durationMs={step.durationMs} usage={step.usage} /> : null}

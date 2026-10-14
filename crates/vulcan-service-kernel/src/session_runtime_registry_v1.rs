@@ -2695,6 +2695,34 @@ impl SessionHandle {
         )
     }
 
+    /// Seals assistant text in memory together with its answer-time `ui-code` snapshots.
+    /// 在内存中封口 assistant 正文，并附着其回答当时的 `ui-code` 快照。
+    pub(crate) fn seal_assistant_text(
+        &self,
+        api_call_id: ApiCallId,
+        text: impl Into<String>,
+        status: AssistantSemanticStatus,
+        code_snapshots: Vec<vulcan_session_core::v1::answer_components::AnswerCodeSnapshot>,
+        now_ms: i64,
+    ) -> Result<SessionConditionalMutationReceipt<Seq>, SessionRuntimeError> {
+        let text = text.into();
+        self.mutate_in_memory_if_changed(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::ApiCompleted,
+            move |document| {
+                document
+                    .append_assistant_text_with_code_snapshots(
+                        api_call_id,
+                        text,
+                        status,
+                        code_snapshots,
+                        now_ms,
+                    )
+                    .map(session_change_from_idempotent)
+            },
+        )
+    }
+
     /// Publishes the durable Ask waiting checkpoint of one tool.
     /// 发布一个工具的可靠 Ask 等待检查点。
     pub(crate) fn mark_tool_waiting_user(

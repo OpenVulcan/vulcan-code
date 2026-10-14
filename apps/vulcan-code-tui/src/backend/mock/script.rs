@@ -137,6 +137,7 @@ impl Script {
                 body: EventBody::AssistantText {
                     text: String::new(),
                     status: AssistantSemanticStatus::Streaming,
+                    code_snapshots: None,
                 },
             },
         );
