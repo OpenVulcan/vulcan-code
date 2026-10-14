@@ -188,6 +188,9 @@ fn known_read_only_commands_are_recognised() {
         "git -C sub log --oneline -5",
         "git diff HEAD~1 -- src",
         "git branch -a",
+        "git --no-pager log -1",
+        "git grep -n needle",
+        "git ls-remote origin",
         "rg -n \"fn main\" src",
         "ls -la | head -20",
         "Get-ChildItem -Recurse src | Select-String foo",
@@ -209,6 +212,16 @@ fn writes_and_unknown_commands_are_not_read_only() {
         "git branch feature",
         "git branch -D old",
         "git diff --output=patch.diff",
+        "git -c core.fsmonitor=./hook status",
+        "git --config-env=core.pager=PAGER log",
+        "git --git-dir=other status",
+        "git --work-tree=other status",
+        "git --bare log",
+        "git --exec-path=bin status",
+        "git grep -Ohook needle",
+        "git grep --open-files-in-pager=hook needle",
+        "git ls-remote --upload-pack=hook .",
+        "git ls-remote -u hook .",
         "echo hi > out.txt",
         "ls >> out.txt",
         "find . -delete",
@@ -558,6 +571,43 @@ fn rules_follow_the_mode_table() {
         assert_eq!(
             evaluate_rules(FullAccess, subject, Some(root)),
             RuleOutcome::Allow
+        );
+    }
+}
+
+/// Git metadata names commands Git runs, so writing it is never a plain workspace edit, however
+/// the path spells the `.git` component.
+/// Git 元数据指定 Git 会运行的命令，因此无论路径如何拼写 `.git` 组件，写入它都不是普通工作区编辑。
+#[test]
+fn writes_into_git_metadata_escalate_inside_the_workspace() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+    std::fs::create_dir_all(root.join("vendor/lib")).unwrap();
+    let write = |path: &str| PermissionSubject::FileWrite {
+        paths: vec![String::from(path)],
+    };
+    for path in [
+        ".git/config",
+        ".GIT/hooks/pre-commit",
+        "src/../.git/config",
+        "vendor/lib/.git/config",
+        "vendor/.git",
+        ".git./config",
+    ] {
+        for mode in [PermissionMode::WorkspaceWrite, PermissionMode::AutoApprove] {
+            assert_eq!(
+                evaluate_rules(mode, &write(path), Some(root)),
+                RuleOutcome::Escalate { high_risk: None },
+                "{path}"
+            );
+        }
+    }
+    for path in [".gitignore", ".github/workflows/ci.yml", "src/git/config"] {
+        assert_eq!(
+            evaluate_rules(PermissionMode::WorkspaceWrite, &write(path), Some(root)),
+            RuleOutcome::Allow,
+            "{path}"
         );
     }
 }

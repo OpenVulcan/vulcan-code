@@ -43,6 +43,13 @@
 
 - 文件写入工具指 `file_write`、`file_edit`、`apply_patch` 与 `file` 的移动、删除动作；`file_read` 与 `file` 的
   列表、属性动作不经闸门。
+- “工作区内”不含 Git 元数据：路径在工作区根目录之下任意深度含 `.git` 组件（规范化已存在部分后比较，忽略
+  大小写与结尾的点或空格）时按工作区外处理，因为 Git 会运行其中配置的命令（`core.fsmonitor`、钩子、差异
+  驱动），写入后再执行“只读”的 `git status` 即可运行任意程序。
+- 已知只读的 `git` 只接受不改变配置与所运行程序的全局选项（`-C`、`--no-pager`、`-P`、`--no-optional-locks`、
+  各类 pathspec 选项、`--no-replace-objects`）；带 `-c`、`--config-env`、`--git-dir`、`--work-tree`、`--bare`、
+  `--exec-path` 或其他全局选项的调用不是只读。`git grep -O`/`--open-files-in-pager` 与
+  `git ls-remote --upload-pack`/`-u` 会运行指定程序，同样不是只读。
 - 默认安装的 LuaSkills 入口按完整规范名称精确分类（`tool_permission/builtin_luaskills.rs`，同一清单也决定
   计划模式可见性）：`vulcan-codekit` 的 `repo-map`、`ast-detail`、`ast-tree`、`rg`、`markdown-menu`、
   `node-source` 为只读；`vulcan-codekit-patch` 按 `file` 与 `patches[].file` 视为文件写入，相对路径以 `PWD` 为基准

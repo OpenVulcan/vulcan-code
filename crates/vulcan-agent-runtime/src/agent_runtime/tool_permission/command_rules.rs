@@ -107,6 +107,20 @@ const GIT_READ_ONLY_SUBCOMMANDS: &[&str] = &[
     "whatchanged",
 ];
 
+/// Git global options that change neither configuration nor the programs Git runs; `-C <dir>`
+/// is handled separately because it takes a value.
+/// 既不改变配置也不改变 Git 所运行程序的 Git 全局选项；`-C <dir>` 带有取值，因此单独处理。
+const GIT_READ_ONLY_GLOBAL_OPTIONS: &[&str] = &[
+    "--no-pager",
+    "-P",
+    "--no-optional-locks",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-replace-objects",
+];
+
 /// `git branch` flags that modify branches; any of them makes the call a write.
 /// 会修改分支的 `git branch` 参数；出现任意一个即为写入。
 const GIT_BRANCH_WRITE_FLAGS: &[&str] = &[
@@ -468,14 +482,39 @@ fn segment_is_read_only(words: &[String]) -> bool {
 
 /// Returns whether one `git` invocation only reads repository state.
 /// 返回一次 `git` 调用是否只读取仓库状态。
+///
+/// Configuration can make any subcommand run a program (`-c core.fsmonitor=…`), and `--git-dir`,
+/// `--work-tree`, `--bare` and `--exec-path` choose which configuration or programs apply, so only
+/// global options that change neither keep the call read-only.
+/// 配置可使任意子命令运行程序（`-c core.fsmonitor=…`），`--git-dir`、`--work-tree`、`--bare` 与
+/// `--exec-path` 决定适用哪份配置或程序，因此只有两者都不改变的全局选项才保持只读。
 fn git_is_read_only(args: &[String]) -> bool {
     let Some((subcommand, rest)) = git_subcommand(args) else {
         return false;
     };
+    let global = &args[..args.len() - rest.len() - 1];
+    let mut options = global.iter();
+    while let Some(option) = options.next() {
+        if option == "-C" {
+            options.next();
+        } else if !GIT_READ_ONLY_GLOBAL_OPTIONS.contains(&option.as_str()) {
+            return false;
+        }
+    }
     if rest.iter().any(|arg| arg.starts_with("--output")) {
         return false;
     }
     match subcommand.as_str() {
+        // `-O`/`--open-files-in-pager` runs the named program on the matches.
+        // `-O`/`--open-files-in-pager` 会对匹配结果运行指定程序。
+        "grep" => !rest
+            .iter()
+            .any(|arg| arg.starts_with("-O") || arg.starts_with("--open-files-in-pager")),
+        // `--upload-pack`/`-u` names the program run for a local or SSH remote.
+        // `--upload-pack`/`-u` 指定本地或 SSH 远端所运行的程序。
+        "ls-remote" => !rest
+            .iter()
+            .any(|arg| arg.starts_with("--upload-pack") || arg.starts_with("-u")),
         "branch" => rest
             .iter()
             .all(|arg| arg.starts_with('-') && !GIT_BRANCH_WRITE_FLAGS.contains(&arg.as_str())),

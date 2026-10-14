@@ -19,7 +19,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
-use vulcan_host_tools::file_runtime::{apply_patch_write_paths, path_resolves_inside_workspace};
+use vulcan_host_tools::file_runtime::{
+    apply_patch_write_paths, path_resolves_inside_workspace, path_targets_git_metadata,
+};
 pub use vulcan_permission_judge::JudgeLabel;
 use vulcan_session_core::v1::config::{AccessConfig, PermissionMode};
 use vulcan_tools_manager::{
@@ -601,9 +603,12 @@ pub fn evaluate_rules(
                 mode,
                 PermissionMode::WorkspaceWrite | PermissionMode::AutoApprove
             ) && workspace_root.is_some_and(|root| {
-                paths
-                    .iter()
-                    .all(|path| path_resolves_inside_workspace(root, path).unwrap_or(false))
+                // Git metadata names commands Git runs, so writing it is not a workspace edit.
+                // Git 元数据指定 Git 会运行的命令，因此写入它不属于工作区编辑。
+                paths.iter().all(|path| {
+                    path_resolves_inside_workspace(root, path).unwrap_or(false)
+                        && !path_targets_git_metadata(root, path).unwrap_or(true)
+                })
             });
             if inside {
                 RuleOutcome::Allow

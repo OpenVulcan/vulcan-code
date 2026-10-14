@@ -4549,6 +4549,44 @@ pub fn path_resolves_inside_workspace(
     Ok(canonical_ancestor.starts_with(&canonical_workspace))
 }
 
+/// Reports whether one raw tool path addresses Git metadata: a `.git` component below the
+/// workspace root, at any depth. Git runs commands named in that metadata (`core.fsmonitor`,
+/// hooks, diff drivers), so a write there is never a plain workspace edit.
+/// 报告一个原始工具路径是否指向 Git 元数据：工作区根目录之下任意深度的 `.git` 组件。Git 会运行
+/// 这些元数据中指定的命令（`core.fsmonitor`、钩子、差异驱动），因此写入那里绝不是普通的工作区编辑。
+/// The existing part is canonicalized, so case, Windows short names and trailing dots or spaces
+/// cannot hide the component. Errors mean the path cannot be resolved; callers must treat them as
+/// metadata.
+/// 已存在部分会被规范化，因此大小写、Windows 短文件名与结尾的点或空格无法隐藏该组件。错误表示路径
+/// 无法解析，调用方必须按元数据处理。
+pub fn path_targets_git_metadata(
+    workspace_root: &Path,
+    raw_path: &str,
+) -> Result<bool, FileToolError> {
+    let (workspace_path, path) = resolve_lexical_path(workspace_root, raw_path)?;
+    let canonical_workspace = fs::canonicalize(&workspace_path)
+        .map_err(|error| io_error("path_not_found", &workspace_path, error))?;
+    let Some(existing_ancestor) = nearest_existing_ancestor(&path)? else {
+        return Ok(false);
+    };
+    let canonical_ancestor = fs::canonicalize(&existing_ancestor)
+        .map_err(|error| io_error("path_not_found", &existing_ancestor, error))?;
+    let existing = canonical_ancestor
+        .strip_prefix(&canonical_workspace)
+        .unwrap_or(&canonical_ancestor);
+    let missing = path.strip_prefix(&existing_ancestor).unwrap_or(&path);
+    Ok(existing
+        .components()
+        .chain(missing.components())
+        .any(|component| match component {
+            Component::Normal(name) => name
+                .to_string_lossy()
+                .trim_end_matches(['.', ' '])
+                .eq_ignore_ascii_case(".git"),
+            _ => false,
+        }))
+}
+
 /// Lists every path an `apply_patch` body would write, including move destinations.
 /// 列出 `apply_patch` 正文将写入的全部路径，包括移动目标。
 /// Paths are returned raw, as written in the patch; syntax errors are returned unchanged.
