@@ -5,8 +5,7 @@ use vulcan_service_api::{
     ComposerAttachmentSummary, SESSION_RESOURCE_LIST_V1_MAX_ITEMS, ServiceMediaResponse,
     SessionResourceContentV1Request, SessionResourceListV1Request, SessionResourceListV1Response,
     SessionResourcePathV1Request, SessionResourceSummaryV1,
-    build_service_project_resource_response,
-    service_media_error_response,
+    build_service_project_resource_response, service_media_error_response,
 };
 use vulcan_session_core::v1::ids::ResourceId;
 use vulcan_workbench_model::SessionId;
