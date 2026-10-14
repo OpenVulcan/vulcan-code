@@ -5,10 +5,19 @@ import { MediaPathContextMenu } from "@/components/media/media-path-context-menu
 import { formatMessage, useI18n } from "@/i18n";
 import "@/styles/answer-components.css";
 import { AnswerChartView, formatChartNumber } from "./answer-chart";
-import type { AnswerComponent, AnswerSeverity, AnswerTonedText, AnswerTreeNode } from "./answer-component-model";
-import { AnswerFrame, CopyAction, type AnswerCopyHost } from "./answer-frame";
-import { AnswerFlowView, AnswerSequenceView } from "./answer-graphs";
+import { parseAnswerComponent, type AnswerComponent, type AnswerSeverity, type AnswerTonedText, type AnswerTreeNode } from "./answer-component-model";
+import { AnswerFrame, AnswerFrameActionContext, CopyAction, type AnswerCopyHost } from "./answer-frame";
+import { AnswerSequenceView } from "./answer-graphs";
 import { markdownTable } from "./answer-markdown-table";
+import { AnswerReplyContext } from "./answer-reply";
+import { AnswerDecisionView, CommentableFence } from "./answer-reply-views";
+
+// Layered diagrams carry the graph layout engine; formulas carry KaTeX. Both load only when a reply uses them,
+// and the fence keeps its code presentation until they arrive.
+// 分层图携带图布局引擎，公式携带 KaTeX。两者仅在回答用到时加载，到达前围栏保持代码展示。
+const LazyFlowDiagram = React.lazy(async () => ({ default: (await import("./answer-diagrams")).AnswerFlowDiagram }));
+const LazyErDiagram = React.lazy(async () => ({ default: (await import("./answer-diagrams")).AnswerErDiagram }));
+const LazyMathView = React.lazy(async () => ({ default: (await import("./answer-math")).AnswerMathView }));
 
 /** Services the conversation Markdown surface lends to answer components.
  * 会话 Markdown 区域提供给回答组件的服务。 */
@@ -27,10 +36,45 @@ export interface AnswerComponentHost extends AnswerCopyHost {
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }
 
+/** Parse a closed `ui-*` fence and render it; unknown names and invalid syntax keep `fallback`, the code block.
+ * The parser lives in this deferred chunk so it never weighs on the workbench startup bundle.
+ * 解析已闭合的 `ui-*` 围栏并渲染；未知名称或语法无效时保留 `fallback` 代码块。
+ * 解析器位于此延迟分块，不计入工作台启动包。 */
+export function AnswerFenceView({ language, meta, body, host, fallback }: {
+  language: string;
+  meta: string;
+  body: string;
+  host: AnswerComponentHost;
+  fallback: React.ReactNode;
+}) {
+  const component = React.useMemo(() => parseAnswerComponent(language, meta, body), [body, language, meta]);
+  const store = React.useContext(AnswerReplyContext);
+  if (!component) return <>{fallback}</>;
+  // replyKey identifies the fence in the conversation's reply store; the same fence shares one reply.
+  // replyKey 在会话回复存储中标识该围栏；相同围栏共用一条回复。
+  const replyKey = `${language} ${meta}\n${body}`;
+  const view = <AnswerComponentView component={component} host={host} replyKey={replyKey} />;
+  if (!store || component.kind === "decision") return view;
+  // subject names the component in the reply by its fence name and first line.
+  // subject 在回复中以围栏名称与首行指明该组件。
+  const first = body.split(/\r?\n/u).map((line) => line.trim()).find(Boolean) ?? "";
+  const subject = `${[language, meta.trim()].filter(Boolean).join(" ")}: ${first.length > 60 ? `${first.slice(0, 60)}…` : first}`;
+  return (
+    <CommentableFence framed={FRAME_ACTION_KINDS.has(component.kind)} replyKey={replyKey} store={store} subject={subject}>
+      {view}
+    </CommentableFence>
+  );
+}
+
+// Components whose own action group takes the comment button; others show it in a hover corner.
+// 由自身操作组承载批注按钮的组件；其他组件在悬停角落显示该按钮。
+const FRAME_ACTION_KINDS = new Set<AnswerComponent["kind"]>(["findings", "compare", "chart", "files"]);
+
 /** Render one parsed `ui-*` component: framed blocks carry reusable data, embedded blocks read as prose.
  * 渲染一个已解析的 `ui-*` 组件：框架型区块承载可复用数据，融入型区块随正文阅读。 */
-export function AnswerComponentView({ component, host }: { component: AnswerComponent; host: AnswerComponentHost }) {
+export function AnswerComponentView({ component, host, replyKey }: { component: AnswerComponent; host: AnswerComponentHost; replyKey?: string }) {
   const { t } = useI18n();
+  const frameAction = React.useContext(AnswerFrameActionContext);
   switch (component.kind) {
     case "kv":
       return (
@@ -44,12 +88,14 @@ export function AnswerComponentView({ component, host }: { component: AnswerComp
       return (
         <div className="answer-metrics">
           {component.rows.map((metric, index) => (
-            <div className="answer-metric" data-tone={metric.tone} key={index}>
-              <b>{metric.value}{metric.unit ? <small>{metric.unit}</small> : null}</b>
+            <div className="answer-metric" data-over={metric.over || undefined} data-tone={metric.tone} key={index}>
+              <b>
+                {metric.value}
+                {metric.maximum !== undefined ? <small>/ {formatChartNumber(metric.maximum)}</small> : null}
+                {metric.unit ? <small>{metric.unit}</small> : null}
+              </b>
               <span>{metric.label}</span>
-              {metric.maximum !== undefined ? (
-                <div aria-hidden="true" className="answer-meter"><i style={{ width: `${(metric.numeric! / metric.maximum) * 100}%` }} /></div>
-              ) : null}
+              {metric.maximum !== undefined ? <MetricMeter maximum={metric.maximum} value={metric.numeric!} /> : null}
             </div>
           ))}
         </div>
@@ -155,6 +201,7 @@ export function AnswerComponentView({ component, host }: { component: AnswerComp
               <strong>{formatMessage(t("answerComponents.fileCount"), { count: component.files.length })}</strong>
               <LineDelta added={component.added} removed={component.removed} />
             </span>
+            {frameAction ? <span className="answer-frame-actions">{frameAction}</span> : null}
           </header>
           <ul>
             {component.files.map((file, index) => (
@@ -177,7 +224,13 @@ export function AnswerComponentView({ component, host }: { component: AnswerComp
     case "chart":
       return <ChartFrame chart={component.chart} host={host} />;
     case "flow":
-      return <AnswerFlowView flow={component} />;
+      return <LazyFlowDiagram flow={component} />;
+    case "er":
+      return <LazyErDiagram er={component} />;
+    case "math":
+      return <LazyMathView math={component} />;
+    case "decision":
+      return <AnswerDecisionView decision={component} replyKey={replyKey} />;
     case "sequence":
       return <AnswerSequenceView sequence={component} />;
     case "callout": {
@@ -210,6 +263,19 @@ export function AnswerComponentView({ component, host }: { component: AnswerComp
         </div>
       );
   }
+}
+
+// Meter of a value against its maximum; an overrun fills the bar and shows how far past the maximum it went.
+// 数值相对最大值的进度条；超限时填满并显示超出幅度。
+function MetricMeter({ maximum, value }: { maximum: number; value: number }) {
+  const { t } = useI18n();
+  const over = value > maximum;
+  return (
+    <div className="answer-meter-row">
+      <div aria-hidden="true" className="answer-meter"><i style={{ width: `${Math.min(value / maximum, 1) * 100}%` }} /></div>
+      {over ? <small className="answer-meter-over">{formatMessage(t("answerComponents.overBy"), { percent: Math.round((value / maximum - 1) * 100) })}</small> : null}
+    </div>
+  );
 }
 
 // Catalog keys of finding severities.
@@ -331,6 +397,7 @@ function AnswerTabs({ host, sections }: { host: AnswerComponentHost; sections: {
 function ChartFrame({ chart, host }: { chart: Extract<AnswerComponent, { kind: "chart" }>["chart"]; host: AnswerComponentHost }) {
   const { t } = useI18n();
   const [data, setData] = React.useState(false);
+  const frameAction = React.useContext(AnswerFrameActionContext);
   const header = [chart.categoryLabel, ...chart.series];
   const rows = chart.rows.map((row) => [row.category, ...row.values.map(formatChartNumber)]);
   return (
@@ -342,6 +409,7 @@ function ChartFrame({ chart, host }: { chart: Extract<AnswerComponent, { kind: "
             <button aria-pressed={!data} onClick={() => setData(false)} type="button">{t("answerComponents.chartView")}</button>
             <button aria-pressed={data} onClick={() => setData(true)} type="button">{t("answerComponents.dataView")}</button>
           </span>
+          {frameAction}
           <CopyAction host={host} label={t("answerComponents.copyData")} text={markdownTable(header, rows)} />
         </span>
       </header>

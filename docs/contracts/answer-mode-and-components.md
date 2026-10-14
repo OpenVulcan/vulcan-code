@@ -46,7 +46,8 @@
   链接交给内置浏览器打开。
 - WebUI 由 `apps/vulcan-code-web/src/components/conversation/answer-components/` 原生绘制：
   `answer-component-model.ts` 是纯解析器（与 TUI 解析规则一致），`conversation-markdown.tsx` 的
-  `MarkdownPreBlock` 依据 AST 源码位置确认围栏已闭合后才交给组件。流式回复中已闭合的组件即时渲染；
+  `MarkdownPreBlock` 依据 AST 源码位置确认围栏已闭合后，才把原始围栏交给延迟加载的 `AnswerFenceView` 解析
+  并渲染（解析器不进入工作台启动包，语法无效时保留代码块）。流式回复中已闭合的组件即时渲染；
   Mermaid 仍只在回复完成后绘制。TUI 由 `apps/vulcan-code-tui/src/ui/answer_components.rs` 改写为
   终端可读的 Markdown（状态词转符号、图形组件转 Mermaid、树形带引导线、容器正文置于着色竖线之后）。
 - 组件渲染器 `answer-component-view.tsx` 及其样式 `src/styles/answer-components.css` 延迟加载，首次遇到已闭合
@@ -58,6 +59,22 @@
   表格同样使用框架型外框，纯数字列靠右；Mermaid 使用 `base` 主题并从工作台色票取色。
 - 文件位置（`ui-findings` 位置、`ui-files` 路径）仅在呈路径形态（无空白与全角标点，含分隔符或扩展名）
   且可由项目根解析时成为 `file:` 链接，行号后缀只用于显示；图库路径按 Markdown 图片的同一规则解析为本地媒体地址。
-- 大图仍使用可缩放的 Mermaid；`ui-flow` 与 `ui-sequence` 是嵌入正文的扁平图：`ui-flow` 每行源码
-  平铺为一条链（同名即同一节点，只出现在新增或删除行上的节点带对应标记），`ui-sequence` 以参与者列与
-  生命线排布消息、注释与阶段。
+- 大图仍使用可缩放的 Mermaid。`ui-flow` 与 `ui-er` 是分层图：`answer-graph-layout.ts` 以 dagre
+  （`dagre-d3-es`，与 Mermaid 同源）分层排序，`answer-diagrams.tsx` 绘制为外框内的 SVG（同名即同一节点，
+  每一跳一条连线；只出现在新增或删除行上的节点带对应标记，含标记时外框显示图例）。图形按自然尺寸绘制，
+  随回答宽度缩小至下限后横向滚动；布局引擎与图形模块单独延迟加载，到达前围栏保持代码显示。`ui-er` 的
+  引用从字段行连到被引用表，未声明的目标表使整个组件无效。`ui-sequence` 以参与者列与生命线排布消息、
+  注释与阶段，单参与者注释是生命线上的紧凑方框。
+- `ui-metrics` 的数值可超过最大值，此时为超限：进度条以危险色填满并标出超出百分比，未写色调时默认 `no`。
+- 公式由 KaTeX 排版（`answer-math.tsx`，`trust: false`，只输出静态标记），模块、样式与字体仅在回答含公式时
+  加载。`ui-math` 每行一个独立公式（使用 `\begin` 环境时整体为一个），空行后为 `符号 | 含义` 图例；行内公式
+  写作 `` $`…`$ ``，由 `conversation-markdown` 在清理之后的 rehype 步骤识别，普通 `$…$` 保持文字，金额不会
+  误判。KaTeX 无法解析的公式保持为代码显示。TUI 以 TeX 代码块与图例列表显示 `ui-math`，行内公式以斜体显示
+  TeX 源码；`ui-er` 以树形引导线显示各表与字段。
+- `ui-decision` 与组件批注是**读者回复**，不是 `ask` 工具：不阻塞回合，也不经服务端。读者的选择与批注保存在
+  `ChatArea` 持有的 `AnswerReplyStore`（`answer-reply.ts`，按会话界面新建，转录行卸载后仍保留），以围栏原文为键。
+  有条目时输入区上方出现延迟加载的回复条（`answer-reply-tray.tsx`），点击后把 `formatAnswerReply` 汇总的 Markdown
+  （决策列表在前、批注列表在后，说明以 `>` 引用，标题走目录）**追加到草稿**并清空存储；从不自动发送。没有
+  `AnswerReplyContext` 的界面（助手面板、详情弹窗等）中决策只读显示、组件不提供批注。框架型组件
+  （findings、compare、chart、files）的批注按钮并入自身操作组（`AnswerFrameActionContext`），其他组件显示在悬停角落。
+  TUI 只读显示问题与选项（建议项带星标），读者在自己的消息中作答。

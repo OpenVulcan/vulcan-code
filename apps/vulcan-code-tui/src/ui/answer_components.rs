@@ -184,7 +184,11 @@ fn component_markdown(
     width: usize,
     theme: &Theme,
 ) -> Option<String> {
-    if !matches!(name, "chart" | "flow" | "sequence") && !args.is_empty() {
+    if !matches!(
+        name,
+        "chart" | "flow" | "sequence" | "er" | "math" | "decision"
+    ) && !args.is_empty()
+    {
         return None;
     }
     match name {
@@ -261,6 +265,9 @@ fn component_markdown(
                 .collect();
             (rows.len() <= ANSWER_COMPONENT_MAX_ROWS).then(|| tree(&rows))
         }
+        "er" => entities(args, lines),
+        "math" => math(args, lines),
+        "decision" => decision(args, lines),
         _ => None,
     }
 }
@@ -281,18 +288,32 @@ fn metric(cell: &[&str]) -> Option<String> {
         return Some(format!("- {prefix}**{}**: {}\n", cell[0], cell[1]));
     };
     let value: f64 = cell[1].parse().ok()?;
-    let maximum: f64 = maximum.parse().ok()?;
-    if !value.is_finite()
-        || !maximum.is_finite()
-        || maximum <= 0.0
-        || value < 0.0
-        || value > maximum
-    {
+    let limit: f64 = maximum.parse().ok()?;
+    if !value.is_finite() || !limit.is_finite() || limit <= 0.0 || value < 0.0 {
         return None;
     }
-    let filled = (value / maximum * 10.0).round() as usize;
+    // A value above the maximum is an overrun: a full bar, the overshoot and a `no` tone by default.
+    // 超出最大值即为超限：进度条填满、标出超出幅度，色调默认为 `no`。
+    let over = value > limit;
+    let prefix = if over && tone.is_none() {
+        "✗ ".to_owned()
+    } else {
+        prefix
+    };
+    let filled = (value.min(limit) / limit * 10.0).round() as usize;
+    let overshoot = if over {
+        format!(
+            " {}",
+            tr!(
+                "answerComponents.overBy",
+                percent = ((value / limit - 1.0) * 100.0).round()
+            )
+        )
+    } else {
+        String::new()
+    };
     Some(format!(
-        "- {prefix}**{}**: {}{} `{}{}`\n",
+        "- {prefix}**{}**: {} / {maximum}{} `{}{}`{overshoot}\n",
         cell[0],
         cell[1],
         cell.get(3).map_or(String::new(), |unit| format!(" {unit}")),
@@ -670,6 +691,175 @@ fn sequence_mermaid(rows: &[&str], args: &str) -> Option<String> {
         }
     }
     Some(source)
+}
+
+/// `ui-er [LR|TB]` as tree-drawn tables: unindented lines are tables, indented lines are
+/// `name [type] [PK|FK|UK] [-> Table]` fields, and every reference must name a table of the same diagram.
+/// `ui-er [LR|TB]` 以树形绘制各表：无缩进行为表，缩进行为 `名称 [类型] [PK|FK|UK] [-> 表]` 字段，
+/// 每个引用都必须指向同图中的表。
+fn entities(args: &str, lines: &[&str]) -> Option<String> {
+    if !matches!(args, "" | "LR" | "TB") {
+        return None;
+    }
+    let rows: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if rows.is_empty() || rows.len() > ANSWER_COMPONENT_MAX_ROWS {
+        return None;
+    }
+    let mut tables: Vec<String> = Vec::new();
+    let mut targets: Vec<String> = Vec::new();
+    let mut drawn: Vec<String> = Vec::new();
+    for row in rows {
+        let (marker, text) = change(row.trim());
+        let (head, note) = match text.split_once('|') {
+            Some((head, note)) => (
+                head.trim(),
+                Some(note.trim()).filter(|note| !note.is_empty()),
+            ),
+            None => (text.trim(), None),
+        };
+        if head.is_empty() {
+            return None;
+        }
+        let marker = marker.map_or(String::new(), |marker| format!("{marker} "));
+        let note = note.map_or(String::new(), |note| format!(" | {note}"));
+        if !row.starts_with(char::is_whitespace) {
+            if tables.iter().any(|table| table == head) {
+                return None;
+            }
+            tables.push(head.to_owned());
+            drawn.push(format!("{marker}{head}{note}"));
+            continue;
+        }
+        if tables.is_empty() {
+            return None;
+        }
+        let (spec, target) = match head.split_once("->") {
+            Some((spec, target)) => (spec, Some(target.trim())),
+            None => (head, None),
+        };
+        if target == Some("") {
+            return None;
+        }
+        let mut tokens = spec.split_whitespace();
+        let name = tokens.next()?;
+        let (mut keys, kinds): (Vec<&str>, Vec<&str>) =
+            tokens.partition(|token| matches!(*token, "PK" | "FK" | "UK"));
+        if let Some(target) = target {
+            targets.push(target.to_owned());
+            if !keys.contains(&"FK") {
+                keys.push("FK");
+            }
+        }
+        let mut field = format!("{marker}{name}");
+        for part in [kinds.join(" "), keys.join(" ")] {
+            if !part.is_empty() {
+                field.push(' ');
+                field.push_str(&part);
+            }
+        }
+        if let Some(target) = target {
+            field.push_str(&format!(" → {target}"));
+        }
+        drawn.push(format!("  {field}{note}"));
+    }
+    if targets.iter().any(|target| !tables.contains(target)) {
+        return None;
+    }
+    let drawn: Vec<&str> = drawn.iter().map(String::as_str).collect();
+    Some(tree(&drawn))
+}
+
+/// `ui-math [title]`: formula lines as a TeX code block, then after the first blank line an optional
+/// `symbol | meaning` legend.
+/// `ui-math [标题]`：公式行以 TeX 代码块显示，第一个空行之后为可选的 `符号 | 含义` 图例。
+fn math(args: &str, lines: &[&str]) -> Option<String> {
+    let start = lines.iter().position(|line| !line.trim().is_empty())?;
+    let lines = &lines[start..];
+    let blank = lines
+        .iter()
+        .position(|line| line.trim().is_empty())
+        .unwrap_or(lines.len());
+    let legend = data_rows(&lines[blank..]);
+    if blank + legend.len() > ANSWER_COMPONENT_MAX_ROWS {
+        return None;
+    }
+    let mut output = String::new();
+    if !args.is_empty() {
+        output.push_str(&format!("**{args}**\n\n"));
+    }
+    output.push_str("```tex\n");
+    for line in &lines[..blank] {
+        output.push_str(line.trim());
+        output.push('\n');
+    }
+    output.push_str("```\n");
+    for row in legend {
+        let cell = row_cells(row, 2, 2)?;
+        output.push_str(&format!("- $`{}`$ — {}\n", cell[0], cell[1]));
+    }
+    Some(output)
+}
+
+/// `ui-decision [multi]`: the question in bold, then one bullet per option with the recommended option starred.
+/// The terminal shows the choice read-only; the reader answers in their own message.
+/// `ui-decision [multi]`：问题加粗，随后每个选项一条，建议选项带星标。终端以只读方式显示，读者在自己的消息中作答。
+fn decision(args: &str, lines: &[&str]) -> Option<String> {
+    let multiple = match args {
+        "" => false,
+        "multi" => true,
+        _ => return None,
+    };
+    let mut rows = lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty());
+    let question = rows.next()?;
+    let options: Vec<&str> = rows.collect();
+    if question.starts_with("* ")
+        || question.starts_with("- ")
+        || options.len() < 2
+        || options.len() > ANSWER_COMPONENT_MAX_ROWS
+    {
+        return None;
+    }
+    let mut output = format!("**{question}**");
+    if multiple {
+        output.push_str(&format!(
+            " _({})_",
+            tr!("answerComponents.decision.multiple")
+        ));
+    }
+    output.push_str("\n\n");
+    let mut labels = Vec::new();
+    let mut recommended = 0;
+    for option in options {
+        let starred = match option.get(..2)? {
+            "* " => true,
+            "- " => false,
+            _ => return None,
+        };
+        let cell = row_cells(option.get(2..)?, 1, 2)?;
+        if labels.contains(&cell[0]) {
+            return None;
+        }
+        labels.push(cell[0]);
+        recommended += usize::from(starred);
+        let symbol = if multiple { "☐" } else { "○" };
+        let note = cell
+            .get(1)
+            .map_or(String::new(), |note| format!(" — {note}"));
+        let badge = if starred {
+            format!(" ★ {}", tr!("answerComponents.decision.recommended"))
+        } else {
+            String::new()
+        };
+        output.push_str(&format!("- {symbol} **{}**{note}{badge}\n", cell[0]));
+    }
+    (multiple || recommended <= 1).then_some(output)
 }
 
 /// Draw `ui-tree` rows with `├─`/`└─` guides inside a code frame; nesting follows indentation.

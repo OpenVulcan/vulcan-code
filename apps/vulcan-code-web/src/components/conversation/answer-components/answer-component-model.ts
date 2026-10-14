@@ -37,15 +37,55 @@ export interface AnswerTonedText {
   text: string;
 }
 
-// One metric; `maximum` enables a meter.
-// 单个指标；提供 `maximum` 时显示进度条。
+// One metric; `maximum` enables a meter, and `over` marks a value above it.
+// 单个指标；提供 `maximum` 时显示进度条，`over` 表示数值超出最大值。
 export interface AnswerMetric {
   label: string;
   value: string;
   numeric?: number;
   maximum?: number;
+  over?: boolean;
   unit?: string;
   tone?: AnswerTone;
+}
+
+// Key flags of an entity field.
+// 实体字段的键标记。
+export type AnswerErKey = "PK" | "FK" | "UK";
+
+// One entity field; `target` indexes the referenced table.
+// 单个实体字段；`target` 为被引用表的下标。
+export interface AnswerErField {
+  name: string;
+  type?: string;
+  keys: AnswerErKey[];
+  target?: number;
+  note?: string;
+  mark?: AnswerMark;
+}
+
+// One entity (table) with its fields.
+// 单个实体（表）及其字段。
+export interface AnswerErTable {
+  name: string;
+  note?: string;
+  mark?: AnswerMark;
+  fields: AnswerErField[];
+}
+
+// One symbol of a formula legend.
+// 公式图例中的单个符号。
+export interface AnswerMathSymbol {
+  symbol: string;
+  meaning: string;
+}
+
+// One option of a decision; `recommended` marks the option the answer would pick.
+// 决策的单个选项；`recommended` 标记回答建议的选项。
+export interface AnswerDecisionOption {
+  label: string;
+  note?: string;
+  recommended: boolean;
 }
 
 // One tree node with its nested children.
@@ -132,6 +172,9 @@ export type AnswerComponent =
   | { kind: "chart"; chart: AnswerChart }
   | { kind: "flow"; horizontal: boolean; nodes: AnswerFlowNode[]; chains: AnswerFlowChain[] }
   | { kind: "sequence"; numbered: boolean; actors: string[]; steps: AnswerSequenceStep[] }
+  | { kind: "er"; horizontal: boolean; tables: AnswerErTable[] }
+  | { kind: "math"; title?: string; equations: string[]; symbols: AnswerMathSymbol[] }
+  | { kind: "decision"; multiple: boolean; question: string; options: AnswerDecisionOption[] }
   | { kind: "callout"; tone: AnswerCalloutTone; title?: string; body: string }
   | { kind: "details"; title: string; body: string }
   | { kind: "tabs" | "columns"; sections: AnswerSection[] };
@@ -146,12 +189,6 @@ const CHART_KINDS = new Set<string>(["bar", "hbar", "stack", "line", "area", "pi
 // Finite decimal number syntax shared by metrics and charts.
 // 指标与图表共用的有限十进制数语法。
 const NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
-
-// Whether a fence language names an answer component.
-// 围栏语言是否命名回答组件。
-export function isAnswerComponentLanguage(language: string | null | undefined): boolean {
-  return Boolean(language?.startsWith("ui-"));
-}
 
 /**
  * Parse one fence; `language` is `ui-<name>`, `meta` the rest of the info string, `body` the text.
@@ -197,6 +234,12 @@ export function parseAnswerComponent(language: string, meta: string, body: strin
       return args === "" || args === "LR" ? flow(args === "LR", body) : null;
     case "ui-sequence":
       return args === "" || args === "num" ? sequence(args === "num", body) : null;
+    case "ui-er":
+      return args === "" || args === "LR" || args === "TB" ? er(args !== "TB", body) : null;
+    case "ui-math":
+      return math(args, body);
+    case "ui-decision":
+      return args === "" || args === "multi" ? decision(args === "multi", body) : null;
     case "ui-callout": {
       const [tone = "", ...title] = args.split(/\s+/u).filter(Boolean);
       if (!CALLOUT_TONES.has(tone)) return null;
@@ -274,8 +317,9 @@ function number(text: string): number | null {
   return NUMBER.test(text) ? Number(text) : null;
 }
 
-// `label | value [| maximum [| unit]] [| tone]`; a maximum requires a numeric value within range.
-// `标签 | 数值 [| 最大值 [| 单位]] [| 色调]`；提供最大值时数值必须为范围内的数字。
+// `label | value [| maximum [| unit]] [| tone]`; a maximum requires a nonnegative numeric value, and a value
+// above it is an overrun whose tone defaults to `no`.
+// `标签 | 数值 [| 最大值 [| 单位]] [| 色调]`；提供最大值时数值必须为非负数字，超出最大值即为超限，色调默认 `no`。
 function metric(input: string[]): AnswerMetric | null {
   const cells = [...input];
   const tone = cells.length > 2 && TONES.has(cells[cells.length - 1]) ? cells.pop() as AnswerTone : undefined;
@@ -283,8 +327,9 @@ function metric(input: string[]): AnswerMetric | null {
   if (maximum === undefined) return { label, value, tone };
   const numeric = number(value);
   const max = number(maximum);
-  if (numeric === null || max === null || max <= 0 || numeric < 0 || numeric > max) return null;
-  return { label, value, numeric, maximum: max, unit, tone };
+  if (numeric === null || max === null || max <= 0 || numeric < 0) return null;
+  const over = numeric > max;
+  return { label, value, numeric, maximum: max, over, unit, tone: tone ?? (over ? "no" : undefined) };
 }
 
 // Decision matrix: a header of criterion and at least two options, then one row per criterion.
@@ -516,4 +561,90 @@ function sequence(numbered: boolean, body: string): AnswerComponent | null {
     steps.push({ kind: "message", from, to, dashed, text: tail ?? "", mark });
   }
   return actors.length > 0 ? { kind: "sequence", numbered, actors, steps } : null;
+}
+
+const ER_KEYS = new Set<string>(["PK", "FK", "UK"]);
+
+// Split a trailing `| note` from a line into a trimmed head and an optional nonempty note.
+// 从一行拆出末尾的 `| 说明`，得到去空白的前段与可选的非空说明。
+function noted(text: string): { head: string; note?: string } {
+  const split = text.indexOf("|");
+  if (split < 0) return { head: text.trim() };
+  return { head: text.slice(0, split).trim(), note: text.slice(split + 1).trim() || undefined };
+}
+
+// `ui-er [LR|TB]`: unindented lines name tables, indented lines are `name [type] [PK|FK|UK] [-> Table]`
+// fields; every reference must name a table of the same diagram.
+// `ui-er [LR|TB]`：无缩进行为表名，缩进行为 `名称 [类型] [PK|FK|UK] [-> 表]` 字段；每个引用都必须指向同图中的表。
+function er(horizontal: boolean, body: string): AnswerComponent | null {
+  const lines = body.split(/\r?\n/u).filter((line) => line.trim());
+  if (lines.length === 0 || lines.length > ANSWER_COMPONENT_MAX_ROWS) return null;
+  const tables: AnswerErTable[] = [];
+  const references: { field: AnswerErField; target: string }[] = [];
+  for (const line of lines) {
+    const { mark, text } = change(line.trim());
+    const { head, note } = noted(text);
+    if (!head) return null;
+    if (!/^\s/u.test(line)) {
+      tables.push({ name: head, note, mark, fields: [] });
+      continue;
+    }
+    if (tables.length === 0) return null;
+    const arrow = head.indexOf("->");
+    const target = arrow < 0 ? undefined : head.slice(arrow + 2).trim();
+    if (target === "") return null;
+    const [name, ...rest] = (arrow < 0 ? head : head.slice(0, arrow)).trim().split(/\s+/u).filter(Boolean);
+    if (!name) return null;
+    const keys = rest.filter((token) => ER_KEYS.has(token)) as AnswerErKey[];
+    if (target !== undefined && !keys.includes("FK")) keys.push("FK");
+    const type = rest.filter((token) => !ER_KEYS.has(token)).join(" ") || undefined;
+    const field: AnswerErField = { name, type, keys, note, mark };
+    tables[tables.length - 1].fields.push(field);
+    if (target !== undefined) references.push({ field, target });
+  }
+  const names = tables.map((table) => table.name);
+  if (new Set(names).size !== names.length) return null;
+  for (const reference of references) {
+    const index = names.indexOf(reference.target);
+    if (index < 0) return null;
+    reference.field.target = index;
+  }
+  return { kind: "er", horizontal, tables };
+}
+
+// `ui-math [title]`: formula lines, then after a blank line optional `symbol | meaning` legend rows. Each
+// formula line is one displayed equation unless the formula uses a `\begin` environment.
+// `ui-math [标题]`：公式行，空行之后为可选的 `符号 | 含义` 图例行。除非公式使用 `\begin` 环境，每行公式各自独立显示。
+function math(args: string, body: string): AnswerComponent | null {
+  const lines = body.split(/\r?\n/u);
+  while (lines.length > 0 && !lines[0].trim()) lines.shift();
+  const blank = lines.findIndex((line) => !line.trim());
+  const formula = (blank < 0 ? lines : lines.slice(0, blank)).map((line) => line.trim());
+  const legend = blank < 0 ? [] : dataLines(lines.slice(blank + 1).join("\n"));
+  if (formula.length === 0 || formula.length + legend.length > ANSWER_COMPONENT_MAX_ROWS) return null;
+  const symbols: AnswerMathSymbol[] = [];
+  for (const line of legend) {
+    const cells = rowCells(line, 2, 2);
+    if (cells === null) return null;
+    symbols.push({ symbol: cells[0], meaning: cells[1] });
+  }
+  const equations = formula.some((line) => line.includes("\\begin")) ? [formula.join("\n")] : formula;
+  return { kind: "math", title: args || undefined, equations, symbols };
+}
+
+// `ui-decision [multi]`: the question line, then option lines `* label | note` (the recommended option) or
+// `- label | note`. Labels are unique; a single choice recommends at most one option.
+// `ui-decision [multi]`：问题行，然后是选项行 `* 标签 | 说明`（建议选项）或 `- 标签 | 说明`。标签不可重复；单选最多建议一个选项。
+function decision(multiple: boolean, body: string): AnswerComponent | null {
+  const [question = "", ...lines] = body.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  if (/^[*-] /u.test(question) || lines.length < 2 || lines.length > ANSWER_COMPONENT_MAX_ROWS) return null;
+  const options: AnswerDecisionOption[] = [];
+  for (const line of lines) {
+    const marker = line.slice(0, 2);
+    const cells = marker === "* " || marker === "- " ? rowCells(line.slice(2), 1, 2) : null;
+    if (cells === null || options.some((option) => option.label === cells[0])) return null;
+    options.push({ label: cells[0], note: cells[1], recommended: marker === "* " });
+  }
+  if (!multiple && options.filter((option) => option.recommended).length > 1) return null;
+  return { kind: "decision", multiple, question, options };
 }

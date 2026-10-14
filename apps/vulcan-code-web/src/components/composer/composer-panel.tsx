@@ -55,6 +55,8 @@ import type { ComposerTraceCallback } from "@/components/composer/composer-contr
 import { composerShortcutHint } from "@/components/composer/composer-panel/helpers";
 import { ModelSecondaryRouteControl } from "@/components/composer/composer-panel/model-secondary-route-control";
 import { ComposerGoalStrip, ComposerPlanModeChip } from "@/components/composer/composer-panel/goal-strip";
+import { ComposerAnswerReplySlot } from "@/components/composer/composer-panel/answer-reply-slot";
+import { usePendingPromptQueueGuards } from "@/components/composer/composer-panel/use-pending-prompt-queue-guards";
 import { ComposerPanelAttachmentPreviewStrip } from "@/components/composer/composer-panel/attachment-preview-strip";
 import { ComposerGoalDialog } from "@/components/composer/composer-panel/goal-dialog";
 import { ComposerPanelToolbarRight } from "@/components/composer/composer-panel/toolbar-right";
@@ -712,31 +714,9 @@ export function ComposerPanel(props: {
     releasePendingPromptEditGate,
     t,
   ]);
-  // handlePendingPromptInsert excludes insertion while an exact queue edit owns the queue.
-  // handlePendingPromptInsert 在精确队列编辑持有队列期间排除插入操作。
-  const handlePendingPromptInsert = React.useCallback((entryId: string) => {
-    if (!pendingPromptEditRef.current) {
-      void props.onInsertPendingPrompt(entryId);
-    }
-  }, [props.onInsertPendingPrompt]);
-  // handlePendingPromptRemove excludes removal while an exact queue edit owns the queue.
-  // handlePendingPromptRemove 在精确队列编辑持有队列期间排除移除操作。
-  const handlePendingPromptRemove = React.useCallback((entryId: string) => {
-    if (!pendingPromptEditRef.current) {
-      void props.onRemovePendingPrompt(entryId);
-    }
-  }, [props.onRemovePendingPrompt]);
-  // handlePendingPromptReorder excludes reordering while an exact queue edit owns the queue.
-  // handlePendingPromptReorder 在精确队列编辑持有队列期间排除重排操作。
-  const handlePendingPromptReorder = React.useCallback((
-    entryIds: string[],
-    draggedEntryId: string,
-    targetEntryId: string | null,
-  ) => {
-    if (!pendingPromptEditRef.current) {
-      void props.onReorderPendingPrompts(entryIds, draggedEntryId, targetEntryId);
-    }
-  }, [props.onReorderPendingPrompts]);
+  // pendingPromptQueueGuards exclude queue insertion, removal and reordering while an exact queue edit owns the queue.
+  // pendingPromptQueueGuards 在精确队列编辑持有队列期间排除插入、移除与重排操作。
+  const pendingPromptQueueGuards = usePendingPromptQueueGuards(pendingPromptEditRef, props);
 
   // Goal controller state and actions isolate goal lifecycle orchestration from the composer input flow.
   // 目标控制器状态与操作将目标生命周期编排从输入区输入流程中隔离出来。
@@ -848,9 +828,7 @@ export function ComposerPanel(props: {
           entries={props.pendingPrompts}
           onTrace={props.onTrace}
           onEdit={(entryId) => void handlePendingPromptEdit(entryId)}
-          onInsert={handlePendingPromptInsert}
-          onRemove={handlePendingPromptRemove}
-          onReorder={handlePendingPromptReorder}
+          {...pendingPromptQueueGuards}
         />
       ) : null}
       {visibleSessionGoal ? (
@@ -863,6 +841,7 @@ export function ComposerPanel(props: {
           onToggleStatus={() => void handleGoalStatusToggle()}
         />
       ) : null}
+      <ComposerAnswerReplySlot disabled={isPendingPromptEditing} setDraftInput={setDraftInput} textareaRef={composerTextareaRef} />
       <section
         className={cn("composer-panel", isAttachmentDragOver && "attachment-drag-over")}
         data-workspace-input-owner="composer"

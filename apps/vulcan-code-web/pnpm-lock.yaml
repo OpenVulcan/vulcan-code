@@ -56,6 +56,12 @@ importers:
       cmdk:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.3(patch_hash=5e1541cb084f83451f8c244c06fd79799e6f7b9126ef03aace106b3e06e4ee20)(react@19.2.3))(react@19.2.3)
+      dagre-d3-es:
+        specifier: 7.0.14
+        version: 7.0.14
+      katex:
+        specifier: 0.16.47
+        version: 0.16.47
       lucide-react:
         specifier: 0.577.0
         version: 0.577.0(react@19.2.3)

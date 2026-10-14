@@ -9,15 +9,23 @@ export interface AnswerCopyHost {
   copy: (text: string) => Promise<void>;
 }
 
+/** Extra action a framed answer component shows beside its own actions, such as the reader's comment button.
+ * 框架型回答组件在自身操作旁显示的额外操作，例如读者的批注按钮。 */
+export const AnswerFrameActionContext = React.createContext<React.ReactNode>(null);
+
 /** Framed tabular block whose copy-as-Markdown action appears on hover. Plain Markdown tables use it
  * at startup, so it stays outside the deferred component chunk.
  * 框架型表格区块，悬停时显示「复制为 Markdown」操作。普通 Markdown 表格在启动时即使用它，
  * 因此不放入延迟加载的组件分块。 */
 export function AnswerFrame({ children, copy, host }: { children: React.ReactNode; copy: string; host: AnswerCopyHost }) {
   const { t } = useI18n();
+  const extraAction = React.useContext(AnswerFrameActionContext);
   return (
     <section className="answer-frame" data-hover-actions="true">
-      <span className="answer-hover-actions"><CopyAction host={host} label={t("answerComponents.copyMarkdown")} text={copy} /></span>
+      <span className="answer-hover-actions">
+        {extraAction}
+        <CopyAction host={host} label={t("answerComponents.copyMarkdown")} text={copy} />
+      </span>
       {children}
     </section>
   );

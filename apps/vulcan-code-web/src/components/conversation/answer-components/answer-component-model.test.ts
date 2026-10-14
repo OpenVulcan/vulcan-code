@@ -39,9 +39,41 @@ describe("parseAnswerComponent", () => {
   it("validates metric meters and splits a trailing tone word", () => {
     const metrics = parse("ui-metrics", "Coverage | 80 | 100 | % | ok\nOpen | 3 | warn");
     expect(metrics).toMatchObject({ kind: "metrics", rows: [{ numeric: 80, maximum: 100, unit: "%", tone: "ok" }, { value: "3", tone: "warn" }] });
-    expect(parse("ui-metrics", "Coverage | 120 | 100")).toBeNull();
     expect(parse("ui-metrics", "Coverage | high | 100")).toBeNull();
     expect(parse("ui-metrics", "Coverage | 1 | 0")).toBeNull();
+    expect(parse("ui-metrics", "Coverage | -1 | 100")).toBeNull();
+  });
+
+  it("marks a value above its maximum as an overrun whose tone defaults to no", () => {
+    expect(parse("ui-metrics", "Images | 620 | 500 | KB\nScripts | 200 | 170 | KB | warn\nFonts | 40 | 50")).toMatchObject({
+      kind: "metrics", rows: [{ over: true, tone: "no" }, { over: true, tone: "warn" }, { over: false }],
+    });
+    expect(parse("ui-metrics", "Fonts | 40 | 50")).toHaveProperty("rows.0.tone", undefined);
+  });
+
+  it("reads entity tables, field keys and references, and rejects unknown targets", () => {
+    const er = parse("ui-er", "User | accounts\n  id PK\n  email string UK\n+ Order\n  user_id -> User\n  ~ total decimal(10, 2) | gross");
+    expect(er).toMatchObject({
+      kind: "er", horizontal: true, tables: [
+        { name: "User", note: "accounts", fields: [{ name: "id", keys: ["PK"] }, { name: "email", type: "string", keys: ["UK"] }] },
+        { name: "Order", mark: "add", fields: [{ name: "user_id", keys: ["FK"], target: 0 }, { name: "total", type: "decimal(10, 2)", note: "gross", mark: "chg" }] },
+      ],
+    });
+    expect(parse("ui-er TB", "A\n  id PK")).toMatchObject({ horizontal: false });
+    expect(parse("ui-er", "A\n  b_id -> B")).toBeNull();
+    expect(parse("ui-er", "  id PK\nA")).toBeNull();
+    expect(parse("ui-er", "A\nA")).toBeNull();
+    expect(parse("ui-er RL", "A")).toBeNull();
+  });
+
+  it("splits formula lines from a legend after the first blank line", () => {
+    expect(parse("ui-math Little's law", "L = \\lambda W\n\\rho = \\lambda / \\mu\n\nL | Requests in system\n\\lambda | Arrival rate")).toEqual({
+      kind: "math", title: "Little's law", equations: ["L = \\lambda W", "\\rho = \\lambda / \\mu"],
+      symbols: [{ symbol: "L", meaning: "Requests in system" }, { symbol: "\\lambda", meaning: "Arrival rate" }],
+    });
+    expect(parse("ui-math", "\\begin{aligned}\na &= b \\\\\n&= c\n\\end{aligned}")).toMatchObject({ equations: ["\\begin{aligned}\na &= b \\\\\n&= c\n\\end{aligned}"] });
+    expect(parse("ui-math", "|x| = 1")).toMatchObject({ equations: ["|x| = 1"], symbols: [] });
+    expect(parse("ui-math", "x = 1\n\nx")).toBeNull();
   });
 
   it("sums file deltas and rejects a third cell without a delta", () => {
@@ -124,5 +156,24 @@ describe("parseAnswerComponent", () => {
       ],
     });
     expect(parse("ui-flow", "Build -> Test | on push")).toMatchObject({ chains: [{ groups: [[0], [1]], label: "on push" }] });
+  });
+
+  it("reads a decision question, its options and the recommendation", () => {
+    expect(parse("ui-decision", "Cache lifetime?\n* 10 minutes | Matches deploys\n- 1 hour")).toEqual({
+      kind: "decision", multiple: false, question: "Cache lifetime?", options: [
+        { label: "10 minutes", note: "Matches deploys", recommended: true },
+        { label: "1 hour", note: undefined, recommended: false },
+      ],
+    });
+    expect(parse("ui-decision multi", "Also?\n* A\n* B")).toMatchObject({ multiple: true });
+  });
+
+  it("rejects decisions without two marked options, with repeated labels or with two recommendations", () => {
+    expect(parse("ui-decision", "Q?\n* Only one")).toBeNull();
+    expect(parse("ui-decision", "Q?\nA\n- B")).toBeNull();
+    expect(parse("ui-decision", "Q?\n- A\n- A")).toBeNull();
+    expect(parse("ui-decision", "Q?\n* A\n* B")).toBeNull();
+    expect(parse("ui-decision", "- Q?\n- A\n- B")).toBeNull();
+    expect(parse("ui-decision single", "Q?\n- A\n- B")).toBeNull();
   });
 });

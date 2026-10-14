@@ -141,6 +141,27 @@
   background: var(--primary);
 }
 
+/* An overrun fills the meter in the danger tone and states how far past the maximum it went. */
+/* 超限时进度条以危险色填满，并标出超出幅度。 */
+.markdown-message .answer-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.markdown-message .answer-meter-row .answer-meter { flex: 1; margin-top: 0; }
+.markdown-message .answer-metric[data-tone="ok"] .answer-meter i { background: var(--answer-ok); }
+.markdown-message .answer-metric[data-tone="warn"] .answer-meter i { background: var(--answer-warn); }
+.markdown-message .answer-metric[data-tone="no"] .answer-meter i { background: var(--answer-err); }
+
+.markdown-message .answer-meter-over {
+  color: var(--answer-err);
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 /* Callout. */
 /* 提示框。 */
 .markdown-message .answer-callout {
@@ -693,126 +714,159 @@
   font-size: var(--vcn-font-size-sm);
 }
 
-/* Flow: chains laid out flat; vertical flows stack each chain and place chains side by side. */
-/* 流程：链平铺排列；纵向流程将每条链竖排，链与链并排。 */
-.markdown-message .answer-flow {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+/* Layered diagrams (flow and entity): an SVG drawn at its natural size, shrinking to the reply width down
+   to a floor and scrolling beyond it. */
+/* 分层图（流程与实体）：按自然尺寸绘制的 SVG，随回答宽度缩小至下限，超出后横向滚动。 */
+.markdown-message .answer-diagram {
+  --answer-diagram-surface: color-mix(in srgb, var(--card) 94%, var(--muted));
+  --answer-diagram-stroke: color-mix(in srgb, var(--foreground) 52%, var(--border));
+  --answer-edge: color-mix(in srgb, var(--muted-foreground) 85%, transparent);
   margin: 0 0 13px;
 }
 
-.markdown-message .answer-flow[data-direction="vertical"] {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 12px 28px;
+.markdown-message .answer-diagram-scroll {
+  overflow-x: auto;
+  padding: 14px 12px;
 }
 
-.markdown-message .answer-flow-chain {
+.markdown-message .answer-diagram svg {
+  display: block;
+  width: var(--answer-diagram-width);
+  min-width: min(var(--answer-diagram-width), 520px);
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  overflow: visible;
+  font-family: inherit;
+}
+
+.markdown-message .answer-diagram-legend {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 0;
+  gap: 4px 14px;
+  padding: 7px 12px 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
 }
 
-.markdown-message .answer-flow[data-direction="vertical"] .answer-flow-chain {
-  flex-direction: column;
-  flex-wrap: nowrap;
-}
-
-.markdown-message .answer-flow-group {
+.markdown-message .answer-diagram-legend span {
   display: inline-flex;
-  flex-direction: column;
   align-items: center;
   gap: 6px;
 }
 
-.markdown-message .answer-flow[data-direction="vertical"] .answer-flow-group {
-  flex-direction: row;
+.markdown-message .answer-diagram-legend i {
+  width: 14px;
+  height: 9px;
+  border: 1.5px solid var(--answer-mark);
+  border-radius: 3px;
+  background: var(--answer-mark-tint);
 }
 
-.markdown-message .answer-flow-node {
-  padding: 6px 12px;
-  border: 1.5px solid color-mix(in srgb, var(--foreground) 55%, var(--border));
-  border-radius: var(--vcn-radius-sm);
-  background: var(--card);
-  font-size: var(--vcn-font-size-md);
-  line-height: 1.4;
-  text-align: center;
+.markdown-message .answer-diagram-legend [data-mark="del"] i { border-style: dashed; }
+
+.markdown-message .answer-diagram [data-mark="add"] { --answer-mark: var(--answer-ok); --answer-mark-tint: var(--answer-tint-ok); }
+.markdown-message .answer-diagram [data-mark="chg"] { --answer-mark: var(--answer-warn); --answer-mark-tint: var(--answer-tint-warn); }
+.markdown-message .answer-diagram [data-mark="del"] { --answer-mark: var(--answer-err); --answer-mark-tint: var(--answer-tint-err); }
+
+.markdown-message .answer-graph-edge {
+  fill: none;
+  stroke: var(--answer-edge);
+  stroke-width: 1.4;
 }
 
-.markdown-message .answer-flow-node[data-shape="terminal"] { border-radius: var(--vcn-radius-pill); }
-.markdown-message .answer-flow-node[data-shape="decision"] { border-style: double; border-width: 3px; background: var(--answer-tint-warn); }
-.markdown-message .answer-flow-node[data-shape="store"] { border-radius: var(--vcn-radius-md) / var(--vcn-radius-lg); border-top-width: 3px; }
-.markdown-message .answer-flow-node[data-mark="add"] { border-color: var(--answer-ok); background: var(--answer-tint-ok); }
-.markdown-message .answer-flow-node[data-mark="del"] { border-color: var(--answer-err); opacity: 0.75; text-decoration: line-through; }
-.markdown-message .answer-flow-node[data-mark="chg"] { outline: 2px dashed var(--answer-warn); outline-offset: 2px; }
+.markdown-message .answer-graph-edge[data-dashed] { stroke-dasharray: 5 4; }
+.markdown-message .answer-graph-edge[data-mark] { stroke: var(--answer-mark); stroke-width: 1.8; }
+.markdown-message .answer-graph-edge[data-mark="del"] { stroke-dasharray: 5 4; }
 
-.markdown-message .answer-flow-arrow {
-  --answer-arrow: var(--muted-foreground);
-  position: relative;
-  flex: none;
-  width: 46px;
-  height: 2px;
-  margin: 0 4px;
-  display: inline-flex;
-  justify-content: center;
-  background: var(--answer-arrow);
+.markdown-message .answer-graph-arrow { fill: var(--answer-edge); }
+.markdown-message .answer-graph marker[data-mark="add"] .answer-graph-arrow { fill: var(--answer-ok); }
+.markdown-message .answer-graph marker[data-mark="chg"] .answer-graph-arrow { fill: var(--answer-warn); }
+.markdown-message .answer-graph marker[data-mark="del"] .answer-graph-arrow { fill: var(--answer-err); }
+
+.markdown-message .answer-graph-label rect { fill: var(--answer-diagram-surface); }
+
+.markdown-message .answer-graph-label text {
+  fill: var(--muted-foreground);
+  font-size: 11.5px;
 }
 
-.markdown-message .answer-flow-chain[data-mark="add"] .answer-flow-arrow { --answer-arrow: var(--answer-ok); }
-.markdown-message .answer-flow-chain[data-mark="del"] .answer-flow-arrow { --answer-arrow: var(--answer-err); }
-.markdown-message .answer-flow-chain[data-mark="chg"] .answer-flow-arrow { --answer-arrow: var(--answer-warn); }
+.markdown-message .answer-graph-label[data-mark] text { fill: var(--answer-mark); }
 
-.markdown-message .answer-flow-arrow::after {
-  content: "";
-  position: absolute;
-  top: -4px;
-  right: -1px;
-  border: 5px solid transparent;
-  border-right: 0;
-  border-left: 7px solid var(--answer-arrow);
+.markdown-message .answer-graph-node :is(rect, polygon, path, ellipse) {
+  fill: var(--card);
+  stroke: var(--answer-diagram-stroke);
+  stroke-width: 1.3;
 }
 
-.markdown-message .answer-flow-arrow[data-dashed] {
-  background: repeating-linear-gradient(90deg, var(--answer-arrow) 0 5px, transparent 5px 9px);
+.markdown-message .answer-graph-node text {
+  fill: var(--foreground);
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.markdown-message .answer-flow-arrow em {
-  position: absolute;
-  bottom: 4px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-  font-style: normal;
-  white-space: nowrap;
+.markdown-message .answer-graph-node[data-shape="terminal"] rect { fill: var(--muted); }
+.markdown-message .answer-graph-node[data-shape="decision"] polygon { fill: color-mix(in srgb, var(--answer-warn) 9%, var(--card)); }
+.markdown-message .answer-graph-node[data-shape="store"] :is(path, ellipse) { fill: color-mix(in srgb, var(--answer-info) 9%, var(--card)); }
+
+.markdown-message .answer-graph-node[data-mark] :is(rect, polygon, path, ellipse) {
+  fill: var(--answer-mark-tint);
+  stroke: var(--answer-mark);
+  stroke-width: 1.8;
 }
 
-.markdown-message .answer-flow[data-direction="vertical"] .answer-flow-arrow {
-  width: 2px;
-  height: 26px;
-  margin: 2px 0;
+.markdown-message .answer-graph-node[data-mark="del"] :is(rect, polygon, path, ellipse) { stroke-dasharray: 5 3; }
+.markdown-message .answer-graph-node[data-mark="del"] text { opacity: 0.7; text-decoration: line-through; }
+
+/* Entity cards: a tinted header, one row per field, key badges and right-aligned types. */
+/* 实体卡片：着色标题、每字段一行、键徽标与右对齐的类型。 */
+.markdown-message .answer-er-card {
+  fill: var(--card);
+  stroke: var(--answer-diagram-stroke);
+  stroke-width: 1.2;
 }
 
-.markdown-message .answer-flow[data-direction="vertical"] .answer-flow-arrow::after {
-  top: auto;
-  right: -4px;
-  bottom: -1px;
-  border: 5px solid transparent;
-  border-bottom: 0;
-  border-top: 7px solid var(--answer-arrow);
+.markdown-message .answer-er-head { fill: color-mix(in srgb, var(--foreground) 7%, var(--card)); }
+.markdown-message .answer-er-table[data-mark] .answer-er-card { fill: var(--answer-mark-tint); stroke: var(--answer-mark); stroke-width: 1.8; }
+.markdown-message .answer-er-table[data-mark="del"] .answer-er-card { stroke-dasharray: 5 3; }
+.markdown-message .answer-er-table[data-mark] .answer-er-head { fill: color-mix(in srgb, var(--answer-mark) 16%, var(--card)); }
+.markdown-message .answer-er-rule { stroke: var(--answer-hairline); stroke-width: 1; }
+.markdown-message .answer-er-foot { fill: none; stroke: var(--answer-edge); stroke-width: 1.4; }
+
+.markdown-message .answer-er-title {
+  fill: var(--foreground);
+  font-size: 13px;
+  font-weight: 650;
 }
 
-.markdown-message .answer-flow[data-direction="vertical"] .answer-flow-arrow[data-dashed] {
-  background: repeating-linear-gradient(180deg, var(--answer-arrow) 0 5px, transparent 5px 9px);
+.markdown-message .answer-er-field {
+  fill: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
 }
 
-.markdown-message .answer-flow[data-direction="vertical"] .answer-flow-arrow em {
-  bottom: auto;
-  top: 50%;
-  left: 8px;
-  transform: translateY(-50%);
+.markdown-message .answer-er-type,
+.markdown-message .answer-er-note {
+  fill: var(--muted-foreground);
+  font-size: 11.5px;
 }
+
+.markdown-message .answer-er-row[data-mark] .answer-er-field { fill: var(--answer-mark); font-weight: 600; }
+.markdown-message .answer-er-row[data-mark="del"] text { text-decoration: line-through; }
+
+.markdown-message .answer-er-key rect { fill: var(--muted); }
+
+.markdown-message .answer-er-key text {
+  fill: var(--muted-foreground);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.markdown-message .answer-er-key[data-key="PK"] rect { fill: color-mix(in srgb, var(--answer-warn) 20%, var(--card)); }
+.markdown-message .answer-er-key[data-key="PK"] text { fill: var(--answer-warn); }
+.markdown-message .answer-er-key[data-key="FK"] rect { fill: color-mix(in srgb, var(--answer-info) 18%, var(--card)); }
+.markdown-message .answer-er-key[data-key="FK"] text { fill: var(--answer-info); }
 
 /* Sequence: one column per actor with a lifeline down its center. */
 /* 时序：每个参与者一列，生命线沿列中心向下。 */
@@ -891,15 +945,24 @@
 .markdown-message .answer-sequence-message[data-mark="del"] { --answer-arrow: var(--answer-err); text-decoration: line-through; }
 .markdown-message .answer-sequence-message[data-mark="chg"] { --answer-arrow: var(--answer-warn); }
 
+/* A note spans just past the lifelines it covers; a single-actor note is a compact box on its lifeline. */
+/* 注释覆盖其所跨生命线并略微外延；单参与者注释是生命线上的紧凑方框。 */
 .markdown-message .answer-sequence-note {
+  position: relative;
   justify-self: stretch;
-  margin: 0 8px;
-  padding: 3px 8px;
+  margin: 0 max(4px, calc(50% / var(--answer-span) - 28px));
+  padding: 3px 10px;
   border: 1px solid color-mix(in srgb, var(--chart-4) 55%, var(--border));
   border-radius: var(--vcn-radius-sm);
   background: color-mix(in srgb, var(--chart-4) 14%, var(--card));
   font-size: var(--vcn-font-size-sm);
   text-align: center;
+}
+
+.markdown-message .answer-sequence-note[data-single] {
+  justify-self: center;
+  max-width: calc(100% - 8px);
+  margin: 0 4px;
 }
 
 .markdown-message .answer-sequence-phase {
@@ -923,4 +986,214 @@
 .markdown-message .answer-sequence-phase span {
   padding: 0 4px;
   background: var(--background);
+}
+
+/* Decisions: each option is a full-width row; a pick fills its mark, the recommended option carries a badge. */
+/* 决策：每个选项是一整行；选中时标记填满，建议选项带徽标。 */
+.markdown-message .answer-decision-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 8px 7px 12px;
+}
+
+.markdown-message .answer-decision-head strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.markdown-message .answer-decision-head small {
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+  white-space: nowrap;
+}
+
+.markdown-message .answer-decision-options {
+  display: grid;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+
+.markdown-message .answer-decision-option {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--answer-frame-border);
+  border-radius: var(--vcn-radius-sm);
+  background: var(--card);
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--vcn-duration-fast) ease, background var(--vcn-duration-fast) ease;
+}
+
+.markdown-message .answer-decision-option:disabled {
+  cursor: default;
+}
+
+.markdown-message .answer-decision-option:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.markdown-message .answer-decision-option:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.markdown-message .answer-decision-option[aria-checked="true"] {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 7%, var(--card));
+}
+
+.markdown-message .answer-decision-mark {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid color-mix(in srgb, var(--muted-foreground) 70%, transparent);
+  border-radius: 50%;
+  color: var(--primary-foreground);
+}
+
+.markdown-message .answer-decision-option[data-multiple] .answer-decision-mark {
+  border-radius: var(--vcn-radius-xs);
+}
+
+.markdown-message .answer-decision-option[aria-checked="true"] .answer-decision-mark {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.markdown-message .answer-decision-text {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.markdown-message .answer-decision-text > span {
+  font-weight: 500;
+}
+
+.markdown-message .answer-decision-text small {
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+}
+
+.markdown-message .answer-decision-badge {
+  padding: 1px 8px;
+  border-radius: var(--vcn-radius-pill);
+  background: var(--answer-tint-ok);
+  color: var(--answer-ok);
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Reader comments: the button joins a frame's actions or shows in a hover corner; the note sits under the block. */
+/* 读者批注：按钮并入外框操作或显示在悬停角落；说明框位于区块下方。 */
+.markdown-message .answer-fence {
+  position: relative;
+}
+
+.markdown-message .answer-fence:hover > .answer-hover-actions {
+  opacity: 1;
+}
+
+.markdown-message .markdown-code-action[data-active] {
+  color: var(--primary);
+}
+
+.markdown-message .answer-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 11px;
+  padding: 6px 6px 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, var(--border));
+  border-left-width: 3px;
+  border-radius: var(--vcn-radius-sm);
+  background: color-mix(in srgb, var(--primary) 4%, var(--card));
+}
+
+.markdown-message .answer-fence > .answer-frame + .answer-note {
+  margin-top: -4px;
+}
+
+.markdown-message .answer-decision > .answer-note {
+  margin: 0 10px 10px;
+}
+
+.markdown-message .answer-note textarea {
+  flex: 1 1 auto;
+  min-height: 2.6em;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--vcn-font-size-md);
+  line-height: 1.45;
+  resize: vertical;
+  outline: none;
+}
+
+/* Reply tray: a tab on top of the composer, like the goal strip. */
+/* 回复条：位于输入区上方的标签条，与目标条一致。 */
+.answer-reply-tray {
+  width: 90%;
+  min-height: 34px;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: -10px;
+  padding: 2px 8px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-bottom: 0;
+  border-radius: var(--vcn-radius-xl) var(--vcn-radius-xl) 0 0;
+  background: color-mix(in srgb, var(--primary) 6%, var(--card));
+  color: var(--primary);
+  pointer-events: auto;
+}
+
+.composer-goal-strip:has(+ .answer-reply-tray) {
+  margin-bottom: 0;
+}
+
+.composer-goal-strip + .answer-reply-tray {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.answer-reply-tray-counts {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  gap: 12px;
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-md);
+  white-space: nowrap;
+}
+
+.answer-reply-tray-counts b {
+  margin-left: 2px;
+  color: var(--primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.answer-reply-tray .answer-reply-tray-insert {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.answer-reply-tray .answer-reply-tray-discard {
+  color: var(--muted-foreground);
 }

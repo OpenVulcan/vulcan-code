@@ -7,7 +7,6 @@ import { Check, Copy, Globe, Text, TextWrap } from "lucide-react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { MermaidDiagram } from "@/components/conversation/conversation-mermaid";
 import { SvgPreview } from "@/components/conversation/conversation-svg-preview";
-import { isAnswerComponentLanguage, parseAnswerComponent } from "@/components/conversation/answer-components/answer-component-model";
 import type { AnswerComponentHost } from "@/components/conversation/answer-components/answer-component-view";
 import { AnswerFrame } from "@/components/conversation/answer-components/answer-frame";
 import { markdownTable, numericCells } from "@/components/conversation/answer-components/answer-markdown-table";
@@ -35,23 +34,66 @@ const MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT = 800;
 // MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT 在 Worker 高亮前限制超大代码块体积。
 const MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT = 240_000;
 
-// LazyAnswerComponentView loads the component renderer and its stylesheet only when a reply contains a closed `ui-*` fence.
-// LazyAnswerComponentView 仅在回答含已闭合 `ui-*` 围栏时加载组件渲染器及其样式表。
-const LazyAnswerComponentView = React.lazy(async () => {
+// LazyAnswerFenceView loads the component parser, renderer and stylesheet only when a reply contains a closed `ui-*` fence.
+// LazyAnswerFenceView 仅在回答含已闭合 `ui-*` 围栏时加载组件解析器、渲染器及其样式表。
+const LazyAnswerFenceView = React.lazy(async () => {
   const module = await import("@/components/conversation/answer-components/answer-component-view");
-  return { default: module.AnswerComponentView };
+  return { default: module.AnswerFenceView };
 });
 
 // markdownPlugins stores the Markdown extension set shared by inline and modal renderers.
 // markdownPlugins 保存内联与弹窗渲染器共享的 Markdown 扩展集合。
 const markdownPlugins = [remarkGfm];
 
+// LazyInlineMath typesets inline `` $`…`$ `` math with KaTeX, which loads only when a reply contains math.
+// LazyInlineMath 以 KaTeX 排版行内 `` $`…`$ `` 公式；KaTeX 仅在回答含公式时加载。
+const LazyInlineMath = React.lazy(async () => {
+  const module = await import("@/components/conversation/answer-components/answer-math");
+  return { default: module.MathFormula };
+});
+
+// MarkdownHastNode is the part of a HAST node the inline math pass reads and edits.
+// MarkdownHastNode 是行内公式处理读取和修改的 HAST 节点部分。
+interface MarkdownHastNode {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: MarkdownHastNode[];
+}
+
+// rehypeInlineMath marks inline code written as `` $`…`$ `` (the GitHub inline math form) as math and drops the
+// dollar signs around it. The code span keeps `_` and `*` away from emphasis parsing, and amounts such as
+// `$5 and $10` never match. It runs after sanitization, so its marker attribute survives.
+// rehypeInlineMath 将写作 `` $`…`$ ``（GitHub 行内公式写法）的行内代码标记为公式并去掉两侧美元符号。
+// 代码段使 `_` 与 `*` 不进入强调解析，`$5 and $10` 之类金额也不会匹配。它在清理之后运行，标记属性得以保留。
+function rehypeInlineMath() {
+  const visit = (node: MarkdownHastNode) => {
+    const children = node.children ?? [];
+    children.forEach((child, index) => {
+      const before = children[index - 1];
+      const after = children[index + 1];
+      if (
+        node.tagName !== "pre" && child.type === "element" && child.tagName === "code"
+        && before?.type === "text" && before.value?.endsWith("$") && !before.value.endsWith("$$")
+        && after?.type === "text" && after.value?.startsWith("$") && !after.value.startsWith("$$")
+      ) {
+        before.value = before.value.slice(0, -1);
+        after.value = after.value.slice(1);
+        child.properties = { ...child.properties, dataMath: "inline" };
+      }
+      visit(child);
+    });
+  };
+  return (tree: MarkdownHastNode) => visit(tree);
+}
+
 // markdownSanitizers stores the HTML sanitization pipeline for untrusted transcript content.
 // markdownSanitizers 保存用于不可信转录内容的 HTML 清理管线。
 const markdownSanitizers: NonNullable<React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]> = [[rehypeSanitize, {
   ...defaultSchema,
   protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "file"] },
-}]];
+}], rehypeInlineMath];
 
 // markdownUrlTransform preserves explicit file hyperlinks while retaining the default policy for all other URLs.
 // markdownUrlTransform 保留明确的文件超链接，其余 URL 继续使用默认安全策略。
@@ -237,7 +279,16 @@ function MarkdownContentRenderer(props: {
         {href ? <Globe aria-hidden="true" className="markdown-link-icon" /> : null}{children}
       </a>
     ),
-    code: ({ children, className }: { children?: React.ReactNode; className?: string }) => {
+    code: ({ children, className, node }: { children?: React.ReactNode; className?: string } & ExtraProps) => {
+      if (node?.properties?.dataMath === "inline" && typeof children === "string") {
+        // The source stays visible as code until KaTeX arrives.
+        // KaTeX 到达前源码保持为代码显示。
+        return (
+          <React.Suspense fallback={<code className="inline-code">{children}</code>}>
+            <LazyInlineMath tex={children} />
+          </React.Suspense>
+        );
+      }
       const inline = !className;
       return inline ? <code className="inline-code">{children}</code> : <code className={className}>{children}</code>;
     },
@@ -444,14 +495,14 @@ function MarkdownPreBlock(props: {
   // language is the normalized information string attached to the fenced block.
   // language 是围栏代码块携带的规范化信息字符串。
   const language = markdownCodeLanguage(codeElement?.props.className)?.toLowerCase();
-  // component is the parsed answer component of a closed `ui-*` fence; streaming or invalid fences stay code.
-  // component 是已闭合 `ui-*` 围栏解析出的回答组件；流式或无效围栏保持为代码。
-  const component = React.useMemo(() => {
-    if (!isAnswerComponentLanguage(language) || !closedFence(source, props.node)) return null;
+  // fence is the raw `ui-*` fence once closed; streaming fences stay code, and the deferred renderer parses it.
+  // fence 是已闭合的原始 `ui-*` 围栏；流式围栏保持为代码，由延迟渲染器解析。
+  const fence = React.useMemo(() => {
+    if (!language?.startsWith("ui-") || !closedFence(source, props.node)) return null;
     const code = hastElements(props.node, ["code"])[0];
     const meta = (code?.data as { meta?: unknown } | undefined)?.meta;
     const body = markdownCodeText(codeElement?.props.children ?? props.children).replace(/\n$/u, "");
-    return parseAnswerComponent(language!, typeof meta === "string" ? meta : "", body);
+    return { language, meta: typeof meta === "string" ? meta : "", body };
   }, [codeElement, language, props.children, props.node, source]);
   // host lends nested Markdown, media, file links and the clipboard to the component.
   // host 为组件提供嵌套 Markdown、媒体、文件链接与剪贴板。
@@ -470,12 +521,13 @@ function MarkdownPreBlock(props: {
     copy: copyMarkdownCode,
     onOpenMedia: props.onOpenMedia,
   }), [props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
-  if (component) {
-    // The fence keeps its code presentation until the deferred renderer arrives.
-    // 延迟渲染器到达前，围栏保持代码展示。
+  if (fence) {
+    // The fence keeps its code presentation until the deferred renderer arrives, and for good when it is invalid.
+    // 延迟渲染器到达前围栏保持代码展示；语法无效时始终如此。
+    const codeBlock = <MarkdownCodeBlock defaultCodeWrap={props.defaultCodeWrap}>{props.children}</MarkdownCodeBlock>;
     return (
-      <React.Suspense fallback={<MarkdownCodeBlock defaultCodeWrap={props.defaultCodeWrap}>{props.children}</MarkdownCodeBlock>}>
-        <LazyAnswerComponentView component={component} host={host} />
+      <React.Suspense fallback={codeBlock}>
+        <LazyAnswerFenceView {...fence} fallback={codeBlock} host={host} />
       </React.Suspense>
     );
   }

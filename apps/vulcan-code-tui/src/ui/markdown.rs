@@ -443,6 +443,25 @@ pub fn inline(text: &str, base: Style, theme: &Theme) -> Vec<Span<'static>> {
     let mut i = 0;
     while i < chars.len() {
         let ch = chars[i];
+        // Inline math written as $`…`$ shows its TeX source in italics without the delimiters.
+        // 写作 $`…`$ 的行内公式以斜体显示其 TeX 源码，不显示定界符。
+        if ch == '$'
+            && chars.get(i + 1) == Some(&'`')
+            && i.checked_sub(1).and_then(|before| chars.get(before)) != Some(&'$')
+            && let Some(end) = chars[i + 2..]
+                .windows(2)
+                .position(|pair| pair == ['`', '$'])
+            && chars.get(i + end + 4) != Some(&'$')
+        {
+            flush(&mut spans, &mut buffer, style_of(bold, italic));
+            let tex: String = chars[i + 2..i + 2 + end].iter().collect();
+            spans.push(Span::styled(
+                tex,
+                Style::new().fg(theme.teal).add_modifier(Modifier::ITALIC),
+            ));
+            i += end + 4;
+            continue;
+        }
         if ch == '`'
             && let Some(end) = chars[i + 1..].iter().position(|c| *c == '`')
         {
@@ -646,5 +665,46 @@ A[Plan] --> B[Build]";
         let piped = joined("```ui-sequence\nA -> B | msg-marker\nnote A, B | note-marker\n```");
         assert!(!piped.contains("ui-sequence"));
         assert!(piped.contains("msg-marker") && piped.contains("note-marker"));
+    }
+
+    #[test]
+    fn entity_math_and_overrun_components_follow_the_shared_syntax() {
+        let theme = Theme::dark();
+        let joined = |source: &str| {
+            render(source, 60, &theme)
+                .iter()
+                .map(text_of)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let er = joined("```ui-er\nUser\n  id PK\nOrder\n  user_id -> User\n```");
+        assert!(!er.contains("ui-er") && er.contains("user_id FK → User"));
+        assert!(joined("```ui-er\nOrder\n  user_id -> Missing\n```").contains("ui-er"));
+        assert!(joined("```ui-er\n  id PK\nUser\n```").contains("ui-er"));
+
+        let math = joined("```ui-math Law\nL = \\lambda W\n\nL | requests-marker\n```");
+        assert!(!math.contains("ui-math"));
+        assert!(math.contains("L = \\lambda W") && math.contains("requests-marker"));
+        assert!(joined("```ui-math\nx = 1\n\nx\n```").contains("ui-math"));
+
+        let over = joined("```ui-metrics\nImages | 620 | 500 | KB\n```");
+        assert!(!over.contains("ui-metrics") && over.contains("✗") && over.contains("██████████"));
+
+        let decision = joined("```ui-decision\nLifetime?\n* Ten | deploys\n- Hour\n```");
+        assert!(!decision.contains("ui-decision") && decision.contains("Lifetime?"));
+        assert!(decision.contains("○ Ten — deploys ★") && decision.contains("○ Hour"));
+        assert!(joined("```ui-decision multi\nAlso?\n* A\n* B\n```").contains("☐ B ★"));
+        assert!(joined("```ui-decision\nQ?\n* A\n* B\n```").contains("ui-decision"));
+        assert!(joined("```ui-decision\nQ?\n- A\n- A\n```").contains("ui-decision"));
+    }
+
+    #[test]
+    fn inline_math_drops_its_delimiters_and_leaves_amounts_alone() {
+        let theme = Theme::dark();
+        let text: String = inline("rate $`\\lambda`$ and $5 or $10", Style::new(), &theme)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(text, "rate \\lambda and $5 or $10");
     }
 }

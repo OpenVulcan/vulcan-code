@@ -1,5 +1,6 @@
 import React from "react";
 import { createClientOwnedActionId } from "@/notifications/client-identity";
+import { AnswerReplyContext, AnswerReplyStore } from "@/components/conversation/answer-components/answer-reply";
 import { ChatAreaComposerDockLayer } from "@/components/conversation/chat-area/composer-dock-layer";
 import {
   ConversationLoadingCenter,
@@ -365,6 +366,10 @@ export function ChatArea(props: ChatAreaProps) {
   // visualSurfaceKey 区分已持久化会话与项目范围的新建会话界面。
   const visualSurfaceKey = activeSurfaceConversationId
     ?? `draft:${props.selectedDraftConversation?.projectId ?? "workspace"}`;
+  // answerReplyStore keeps the reader's decisions and comments on answer components until the composer takes them;
+  // each conversation surface starts with an empty store.
+  // answerReplyStore 保存读者在回答组件上的决策与批注，直到输入区取走；每个会话界面都从空存储开始。
+  const answerReplyStore = React.useMemo(() => new AnswerReplyStore(), [visualSurfaceKey]);
   // transientReasoningStatus is request-local and never enters the stable Workbench snapshot.
   // transientReasoningStatus 仅属于当前请求，绝不进入稳定 Workbench 快照。
   const transientReasoningStatus = useConversationTransientReasoningStatus(
@@ -680,20 +685,22 @@ export function ChatArea(props: ChatAreaProps) {
     </>
   );
   return (
-    <div
-      className={cn(
-        "area-grid chat-grid",
-        isEmptyConversation && "empty-conversation-grid",
-        showConversationLoadingOnly && "loading-conversation-grid",
-      )}
-      style={{ "--composer-dock-height": `${composerDockHeight}px` } as React.CSSProperties}
-    >
-      {showConversationLoadingOnly ? (
-        <ConversationLoadingCenter />
-      ) : (
-        conversationSurfaceContent
-      )}
-    </div>
+    <AnswerReplyContext.Provider value={answerReplyStore}>
+      <div
+        className={cn(
+          "area-grid chat-grid",
+          isEmptyConversation && "empty-conversation-grid",
+          showConversationLoadingOnly && "loading-conversation-grid",
+        )}
+        style={{ "--composer-dock-height": `${composerDockHeight}px` } as React.CSSProperties}
+      >
+        {showConversationLoadingOnly ? (
+          <ConversationLoadingCenter />
+        ) : (
+          conversationSurfaceContent
+        )}
+      </div>
+    </AnswerReplyContext.Provider>
   );
 }
 

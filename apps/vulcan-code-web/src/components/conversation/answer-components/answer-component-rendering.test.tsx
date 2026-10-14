@@ -68,4 +68,31 @@ describe("answer components in conversation Markdown", () => {
     const numeric = Array.from(host.querySelectorAll("tbody tr:first-child td"), (cell) => cell.hasAttribute("data-numeric"));
     expect(numeric).toEqual([false, true, false]);
   });
+
+  it("draws a flow as one graph: a repeated label is one node and every hop is one edge", async () => {
+    const host = await render("```ui-flow\n(Start) -> {Valid?}\n{Valid?} -> Render: yes\n{Valid?} --> Code: no\n```");
+    expect(host.querySelectorAll(".answer-graph-node")).toHaveLength(4);
+    expect(host.querySelectorAll(".answer-graph-edge")).toHaveLength(3);
+    expect(host.querySelectorAll(".answer-graph-edge[data-dashed]")).toHaveLength(1);
+    expect(host.querySelector(".answer-graph-node[data-shape='decision'] polygon")).not.toBeNull();
+  });
+
+  it("draws entity tables with one link per reference", async () => {
+    const host = await render("```ui-er\nUser\n  id PK\nOrder\n  id PK\n  user_id -> User\n```");
+    expect(host.querySelectorAll(".answer-er-table")).toHaveLength(2);
+    expect(host.querySelectorAll(".answer-er .answer-graph-edge")).toHaveLength(1);
+  });
+
+  it("typesets inline $`…`$ math and leaves dollar amounts as text", async () => {
+    const host = await render("Rate $`\\lambda < \\mu`$ holds; costs $5 and $10, and `$HOME` stays code.");
+    expect(host.querySelectorAll(".answer-math-inline .katex")).toHaveLength(1);
+    expect(host.textContent).toContain("costs $5 and $10");
+    expect(host.querySelector("code.inline-code")?.textContent).toBe("$HOME");
+  });
+
+  it("keeps a formula KaTeX cannot parse visible as source", async () => {
+    const host = await render("```ui-math\n\\frac{1}{\n```");
+    expect(host.querySelector(".answer-math .katex")).toBeNull();
+    expect(host.querySelector("code.answer-math-source")?.textContent).toBe("\\frac{1}{");
+  });
 });
