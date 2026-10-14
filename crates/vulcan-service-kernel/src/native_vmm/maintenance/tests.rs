@@ -412,12 +412,14 @@ fn vector_adoption_keeps_same_dimension_vectors_and_leaves_the_rest_for_rebuild(
         String::from("same-dimension"),
         String::from("recycled-same-dimension"),
     ];
+    let adopted_spaces = BTreeSet::from([old.clone()]);
     let mut stale = snapshot.clone();
     assert!(
-        apply_vector_adoption(&mut stale, &descriptor, &expected[..1]).is_err(),
+        apply_vector_adoption(&mut stale, &descriptor, &expected[..1], &adopted_spaces).is_err(),
         "a target set that differs from the confirmed one must be rejected"
     );
-    let batch = apply_vector_adoption(&mut snapshot, &descriptor, &expected).expect("adoption");
+    let batch = apply_vector_adoption(&mut snapshot, &descriptor, &expected, &adopted_spaces)
+        .expect("adoption");
     assert_eq!(batch.adopted_memory_ids, expected);
     let remaining = vector_rebuild_preview(&snapshot, &descriptor).expect("remaining preview");
     assert_eq!(remaining.rebuild_memory_count, 2);
@@ -430,6 +432,85 @@ fn vector_adoption_keeps_same_dimension_vectors_and_leaves_the_rest_for_rebuild(
         .expect("kept memory");
     assert_eq!(kept.vector_space_id.as_ref(), Some(&current));
     assert_eq!(kept.embedding.as_deref(), Some(&[0.6_f32, 0.8][..]));
+}
+
+/// Verifies each older generation is sampled on its own and only the proven ones are kept.
+/// 验证每个旧代次各自抽样，只沿用已证明的代次。
+#[test]
+fn vector_adoption_keeps_only_the_older_generations_whose_sample_passed() {
+    let current = VectorSpaceId::new("current-space").expect("current vector space");
+    let proven = VectorSpaceId::new("proven-space").expect("proven vector space");
+    let unproven = VectorSpaceId::new("unproven-space").expect("unproven vector space");
+    let descriptor = NativeVmmVectorSpaceDescriptor {
+        vector_space_id: current.clone(),
+        embedding_dimension: 2,
+        capability_fingerprint: String::from("capability-fingerprint"),
+    };
+    let stored = |id: &str, space: &VectorSpaceId| {
+        let mut record = memory(
+            id,
+            1,
+            "session-a",
+            None,
+            MemorySourceKind::Direct,
+            MemoryLevel::Stable,
+        );
+        record.vector_space_id = Some(space.clone());
+        record.embedding = Some(vec![0.6, 0.8]);
+        record
+    };
+    let mut snapshot = empty_snapshot(30);
+    snapshot.dataset.memories = vec![
+        stored("unproven-a", &unproven),
+        stored("proven-a", &proven),
+        stored("proven-b", &proven),
+        stored("unproven-b", &unproven),
+    ];
+    snapshot.dataset.memories[1].summary = String::from("  ");
+
+    let targets = vector_adoption_targets(&snapshot, &descriptor);
+    let samples = vector_adoption_samples(&targets);
+    let sampled = samples
+        .iter()
+        .map(|sample| (sample.vector_space_id.as_str(), sample.summary.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sampled,
+        [
+            ("proven-space", "summary-proven-b"),
+            ("unproven-space", "summary-unproven-a"),
+        ],
+        "one sample per older generation, skipping blank summaries"
+    );
+    let expected = targets
+        .iter()
+        .map(|memory| memory.id.to_string())
+        .collect::<Vec<_>>();
+
+    let batch = apply_vector_adoption(
+        &mut snapshot,
+        &descriptor,
+        &expected,
+        &BTreeSet::from([proven.clone()]),
+    )
+    .expect("adoption");
+
+    assert_eq!(batch.adopted_memory_ids, ["proven-a", "proven-b"]);
+    for memory in &snapshot.dataset.memories {
+        let space = if memory.id.as_str().starts_with("proven") {
+            &current
+        } else {
+            &unproven
+        };
+        assert_eq!(
+            memory.vector_space_id.as_ref(),
+            Some(space),
+            "{}",
+            memory.id
+        );
+    }
+    let remaining = vector_rebuild_preview(&snapshot, &descriptor).expect("remaining preview");
+    assert_eq!(remaining.adoptable_memory_count, 2);
 }
 
 /// Verifies the sample comparison separates a matching vector from an unrelated one.

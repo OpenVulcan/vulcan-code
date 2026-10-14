@@ -709,8 +709,8 @@ pub(crate) struct NativeVmmVectorAdoptionResult {
     /// Target route-derived logical vector-space identity.
     /// 目标路由派生的逻辑向量空间标识。
     pub target_vector_space_id: String,
-    /// False when the sample check showed the current route runs a different model.
-    /// 抽样校验表明当前路由运行的是另一个模型时为假。
+    /// False when no older generation's sample showed the current route runs its model.
+    /// 没有任何旧代次的抽样表明当前路由运行其模型时为假。
     pub adopted: bool,
     /// Memories moved into the current generation without calling the provider for each.
     /// 未逐条调用供应商即转入当前代次的记忆数量。
@@ -718,8 +718,10 @@ pub(crate) struct NativeVmmVectorAdoptionResult {
     /// Memories that still need a rebuild, such as those stored with another dimension.
     /// 仍需重建的记忆数量，例如以其他维度保存的记忆。
     pub remaining_rebuild_memory_count: u64,
-    /// Cosine similarity between one stored vector and its fresh re-embedding.
-    /// 一条已存向量与其重新嵌入结果之间的余弦相似度。
+    /// Cosine similarity between a stored vector and its fresh re-embedding, one sample per older
+    /// generation: the lowest among the kept generations, or the highest when none was kept.
+    /// 已存向量与其重新嵌入结果之间的余弦相似度，每个旧代次一个抽样：有代次被沿用时取其中最低值，
+    /// 全部未沿用时取最高值。
     pub sample_similarity: f64,
     /// Similarity the sample had to reach for the vectors to be kept.
     /// 抽样必须达到才可沿用向量的相似度。
@@ -1842,42 +1844,49 @@ impl NativeVmmMaintenance {
             ));
         }
         let targets = vector_adoption_targets(&snapshot, &descriptor);
-        // One stored memory is re-embedded so the current route proves it runs the same model.
-        // 重新嵌入一条已存记忆，让当前路由证明其运行的是同一模型。
-        let Some((sample_summary, sample_vector)) = targets.iter().find_map(|memory| {
-            let summary = memory.summary.trim();
-            (!summary.is_empty())
-                .then(|| {
-                    memory
-                        .embedding
-                        .as_ref()
-                        .map(|vector| (summary.to_owned(), vector.clone()))
-                })
-                .flatten()
-        }) else {
+        let samples = vector_adoption_samples(&targets);
+        if samples.is_empty() {
             return Err(String::from(
                 "No memory keeps a vector of the current dimension with a summary to sample; run the vector rebuild instead.",
             ));
-        };
+        }
         let expected_ids = targets
             .iter()
             .map(|memory| memory.id.to_string())
             .collect::<Vec<_>>();
-        let fresh = self
-            .runtime
-            .embed_maintenance_summaries(
-                &format!("{operation_id}:adoption-sample"),
-                &descriptor,
-                vec![sample_summary],
-            )
-            .await?;
-        let [fresh] = fresh.as_slice() else {
-            return Err(String::from(
-                "The adoption sample embedding returned an unexpected number of vectors.",
+        // Each older generation may come from a different model, so every one proves itself with its
+        // own re-embedded sample and only the generations that pass are kept.
+        // 每个旧代次可能来自不同模型，因此各自以重新嵌入的抽样证明自身，只沿用通过的代次。
+        let mut similarities = Vec::with_capacity(samples.len());
+        for (index, sample) in samples.iter().enumerate() {
+            let fresh = self
+                .runtime
+                .embed_maintenance_summaries(
+                    &format!("{operation_id}:adoption-sample:{index}"),
+                    &descriptor,
+                    vec![sample.summary.clone()],
+                )
+                .await?;
+            let [fresh] = fresh.as_slice() else {
+                return Err(String::from(
+                    "The adoption sample embedding returned an unexpected number of vectors.",
+                ));
+            };
+            similarities.push((
+                sample.vector_space_id.clone(),
+                cosine_similarity(&sample.vector, fresh),
             ));
-        };
-        let sample_similarity = cosine_similarity(&sample_vector, fresh);
-        if sample_similarity < NATIVE_VMM_VECTOR_ADOPTION_MIN_SIMILARITY {
+        }
+        let adopted_spaces = similarities
+            .iter()
+            .filter(|(_, similarity)| *similarity >= NATIVE_VMM_VECTOR_ADOPTION_MIN_SIMILARITY)
+            .map(|(space, _)| space.clone())
+            .collect::<BTreeSet<_>>();
+        if adopted_spaces.is_empty() {
+            let sample_similarity = similarities
+                .iter()
+                .map(|(_, similarity)| *similarity)
+                .fold(f64::NEG_INFINITY, f64::max);
             return Ok(NativeVmmVectorAdoptionResult {
                 storage_version: snapshot.storage_version,
                 target_vector_space_id: descriptor.vector_space_id.into_string(),
@@ -1893,6 +1902,11 @@ impl NativeVmmMaintenance {
                 "The embedding route changed while keeping existing vectors; precheck again.",
             ));
         }
+        let sample_similarity = similarities
+            .iter()
+            .filter(|(space, _)| adopted_spaces.contains(space))
+            .map(|(_, similarity)| *similarity)
+            .fold(f64::INFINITY, f64::min);
         let mutation_kind = format!("vector_adoption:{}", descriptor.vector_space_id.as_str());
         let staged_descriptor = descriptor.clone();
         let batch = self
@@ -1901,7 +1915,14 @@ impl NativeVmmMaintenance {
                 operation_id,
                 &mutation_kind,
                 expected_storage_version,
-                move |snapshot| apply_vector_adoption(snapshot, &staged_descriptor, &expected_ids),
+                move |snapshot| {
+                    apply_vector_adoption(
+                        snapshot,
+                        &staged_descriptor,
+                        &expected_ids,
+                        &adopted_spaces,
+                    )
+                },
             )
             .await?;
         let final_snapshot = self.runtime.storage_snapshot()?;
@@ -4597,13 +4618,61 @@ fn vector_adoption_targets<'a>(
         .collect()
 }
 
-/// Moves the confirmed same-dimension memories into the current vector generation.
-/// 将已确认的同维度记忆转入当前向量代次。
+/// One older vector generation's re-embedding sample.
+/// 一个旧向量代次的重新嵌入抽样。
+#[derive(Debug, Clone, PartialEq)]
+struct NativeVmmVectorAdoptionSample {
+    /// Older generation the sample stands for.
+    /// 抽样所代表的旧代次。
+    vector_space_id: VectorSpaceId,
+    /// Summary to re-embed with the current route.
+    /// 以当前路由重新嵌入的摘要。
+    summary: String,
+    /// Vector stored for the summary under the older generation.
+    /// 旧代次下为该摘要保存的向量。
+    vector: Vec<f32>,
+}
+
+/// Picks one sample per older generation among the adoption targets.
+/// 在沿用目标中为每个旧代次选取一个抽样。
+///
+/// # Returns
+/// 返回值
+/// The first target with a summary of each generation, ordered by generation; a generation without
+/// one has no sample and is never kept.
+/// 每个代次中首个带摘要的目标，按代次排序；没有此类目标的代次没有抽样，永远不会被沿用。
+fn vector_adoption_samples(
+    targets: &[&vulcan_memorymesh_core::MemoryRecord],
+) -> Vec<NativeVmmVectorAdoptionSample> {
+    let mut samples = BTreeMap::new();
+    for memory in targets {
+        let (Some(space), Some(vector)) = (&memory.vector_space_id, &memory.embedding) else {
+            continue;
+        };
+        let summary = memory.summary.trim();
+        if summary.is_empty() || samples.contains_key(space) {
+            continue;
+        }
+        samples.insert(
+            space.clone(),
+            NativeVmmVectorAdoptionSample {
+                vector_space_id: space.clone(),
+                summary: summary.to_owned(),
+                vector: vector.clone(),
+            },
+        );
+    }
+    samples.into_values().collect()
+}
+
+/// Moves the confirmed same-dimension memories of the proven generations into the current one.
+/// 将已证明代次中已确认的同维度记忆转入当前向量代次。
 ///
 /// # Parameters
 /// 参数
-/// `expected` is the exact target set confirmed before the sample check.
-/// `expected` 是抽样校验前确认的准确目标集合。
+/// `expected` is the exact target set confirmed before the sample check and `adopted_spaces` are
+/// the older generations whose sample passed.
+/// `expected` 是抽样校验前确认的准确目标集合，`adopted_spaces` 是抽样通过的旧代次。
 ///
 /// # Returns
 /// 返回值
@@ -4618,9 +4687,11 @@ fn apply_vector_adoption(
     snapshot: &mut StorageSnapshot,
     descriptor: &NativeVmmVectorSpaceDescriptor,
     expected: &[String],
+    adopted_spaces: &BTreeSet<VectorSpaceId>,
 ) -> Result<NativeVmmVectorAdoptionBatch, String> {
-    let staged = vector_adoption_targets(snapshot, descriptor)
-        .into_iter()
+    let staged_targets = vector_adoption_targets(snapshot, descriptor);
+    let staged = staged_targets
+        .iter()
         .map(|memory| memory.id.to_string())
         .collect::<Vec<_>>();
     if staged != expected {
@@ -4628,7 +4699,17 @@ fn apply_vector_adoption(
             "The memories that can keep their vectors changed; precheck again and confirm.",
         ));
     }
-    let targets = expected.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let adopted = staged_targets
+        .iter()
+        .filter(|memory| {
+            memory
+                .vector_space_id
+                .as_ref()
+                .is_some_and(|space| adopted_spaces.contains(space))
+        })
+        .map(|memory| memory.id.to_string())
+        .collect::<Vec<_>>();
+    let targets = adopted.iter().map(String::as_str).collect::<BTreeSet<_>>();
     for memory in snapshot
         .dataset
         .memories
@@ -4645,7 +4726,7 @@ fn apply_vector_adoption(
         memory.vector_space_id = Some(descriptor.vector_space_id.clone());
     }
     Ok(NativeVmmVectorAdoptionBatch {
-        adopted_memory_ids: staged,
+        adopted_memory_ids: adopted,
     })
 }
 
