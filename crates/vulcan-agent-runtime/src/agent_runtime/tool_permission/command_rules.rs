@@ -509,12 +509,12 @@ fn git_is_read_only(args: &[String]) -> bool {
         // `-O`/`--open-files-in-pager` 会对匹配结果运行指定程序。
         "grep" => !rest
             .iter()
-            .any(|arg| arg.starts_with("-O") || arg.starts_with("--open-files-in-pager")),
+            .any(|arg| git_option_given(arg, 'O', "--open-files-in-pager")),
         // `--upload-pack`/`-u` names the program run for a local or SSH remote.
         // `--upload-pack`/`-u` 指定本地或 SSH 远端所运行的程序。
         "ls-remote" => !rest
             .iter()
-            .any(|arg| arg.starts_with("--upload-pack") || arg.starts_with("-u")),
+            .any(|arg| git_option_given(arg, 'u', "--upload-pack")),
         "branch" => rest
             .iter()
             .all(|arg| arg.starts_with('-') && !GIT_BRANCH_WRITE_FLAGS.contains(&arg.as_str())),
@@ -528,6 +528,24 @@ fn git_is_read_only(args: &[String]) -> bool {
         }),
         subcommand => GIT_READ_ONLY_SUBCOMMANDS.contains(&subcommand),
     }
+}
+
+/// Returns whether `arg` may pass the option `short` or `long` to a git command parsed by git's
+/// option parser, which accepts short options bundled in one word (`-nO<program>`) and any
+/// abbreviation of a long option (`--open=<program>`).
+/// 返回 `arg` 是否可能向由 git 选项解析器解析的命令传入选项 `short` 或 `long`；该解析器接受合并在
+/// 一个词中的短选项（`-nO<程序>`）以及长选项的任意缩写（`--open=<程序>`）。
+///
+/// A bundle counts whenever it contains `short`, even where the letter would be another option's
+/// value, so the check can only err toward asking.
+/// 只要合并词中含有 `short` 就计入，即使该字母实为其他选项的值，因此判断只会偏向询问。
+fn git_option_given(arg: &str, short: char, long: &str) -> bool {
+    if let Some(name) = arg.strip_prefix("--") {
+        let name = name.split('=').next().unwrap_or(name);
+        return !name.is_empty() && long[2..].starts_with(name);
+    }
+    arg.strip_prefix('-')
+        .is_some_and(|bundle| bundle.contains(short))
 }
 
 /// Skips git's global options and returns the subcommand plus its arguments.

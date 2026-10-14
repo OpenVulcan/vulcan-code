@@ -49,7 +49,9 @@
 - 已知只读的 `git` 只接受不改变配置与所运行程序的全局选项（`-C`、`--no-pager`、`-P`、`--no-optional-locks`、
   各类 pathspec 选项、`--no-replace-objects`）；带 `-c`、`--config-env`、`--git-dir`、`--work-tree`、`--bare`、
   `--exec-path` 或其他全局选项的调用不是只读。`git grep -O`/`--open-files-in-pager` 与
-  `git ls-remote --upload-pack`/`-u` 会运行指定程序，同样不是只读。
+  `git ls-remote --upload-pack`/`-u` 会运行指定程序，同样不是只读。git 选项解析器接受合并短选项
+  （`-nO<程序>`）与长选项缩写（`--open=<程序>`、`--upl=<程序>`），因此含该字母的任一短选项组合、该长选项的
+  任一前缀都按指定程序处理。
 - 默认安装的 LuaSkills 入口按完整规范名称精确分类（`tool_permission/builtin_luaskills.rs`，同一清单也决定
   计划模式可见性）：`vulcan-codekit` 的 `repo-map`、`ast-detail`、`ast-tree`、`rg`、`markdown-menu`、
   `node-source` 为只读；`vulcan-codekit-patch` 按 `file` 与 `patches[].file` 视为文件写入，相对路径以 `PWD` 为基准
