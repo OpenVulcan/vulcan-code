@@ -100,9 +100,7 @@ export function McpOAuthPanel(props: {
       </>}
       <div className="mcp-filter-row">
         {phase === "awaiting_callback" && flow.callbackMode === "manual" && <Button size="sm" disabled={busy || !callbackUrl.trim()} onClick={() => void run(() => finishMcpOAuth({ serverId: props.serverId, flowId: flow.flowId, callbackUrl }))}>{t("settings.mcp.oauth.finish")}</Button>}
-        {/* The click is the explicit confirmation for this exact authorization URL. */}
-        {/* 该点击即为对此精确授权 URL 的显式确认。 */}
-        <Button size="sm" variant="outline" disabled={busy || phase !== "awaiting_callback"} onClick={() => void openExternalUrl(flow.authorizationUrl, true).catch(failure => setError(String(failure)))}>{t("settings.mcp.oauth.openPage")}</Button>
+        <Button size="sm" variant="outline" disabled={busy || phase !== "awaiting_callback"} onClick={() => void openExternalUrl(flow.authorizationUrl).catch(failure => setError(String(failure)))}>{t("settings.mcp.oauth.openPage")}</Button>
         <Button size="sm" variant="ghost" disabled={busy || phase !== "awaiting_callback"} onClick={() => void run(() => cancelMcpOAuth({ serverId: props.serverId, flowId: flow.flowId }))}>{t("settings.mcp.oauth.cancel")}</Button>
       </div>
     </>}

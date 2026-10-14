@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 20,
-  "published_at": "2026-09-13T00:00:00Z",
+  "revision": 21,
+  "published_at": "2026-10-14T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -4438,7 +4438,6 @@
       "signing_primitive": "temporary_oss_policy",
       "endpoint_host": "dashscope.aliyuncs.com",
       "endpoint_path": "/api/v1/uploads",
-      "response_host_suffixes": [".aliyuncs.com"],
       "method": "GET",
       "accepted_mime_types": [
         "image/jpeg",
@@ -4886,7 +4885,6 @@
             "item_success_statuses": ["SUCCEEDED"],
             "item_url_pointer": "/transcription_url",
             "url_encoding": "https_url",
-            "url_host_suffixes": [".aliyuncs.com"],
             "response_items_pointer": "/transcripts",
             "response_text_pointer": "/text",
             "response_item_separator": "\n",
@@ -5379,7 +5377,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -5484,7 +5481,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -5595,7 +5591,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -5706,7 +5701,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -5817,7 +5811,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -5928,7 +5921,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -6009,7 +6001,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type": "audio/wav",
             "optional": false,
@@ -6089,7 +6080,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type": "audio/wav",
             "optional": false,
@@ -6649,7 +6639,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -6738,7 +6727,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -6815,7 +6803,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -6907,7 +6894,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -7001,7 +6987,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -7130,7 +7115,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -7240,7 +7224,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -7390,7 +7373,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -7477,7 +7459,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -7582,7 +7563,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -7693,7 +7673,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -7774,7 +7753,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type": "audio/wav",
             "optional": false,
@@ -7854,7 +7832,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type": "audio/wav",
             "optional": false,
@@ -8297,7 +8274,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -8397,7 +8373,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -8497,7 +8472,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -8597,7 +8571,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -8697,7 +8670,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -8797,7 +8769,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -8889,7 +8860,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -8982,7 +8952,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -9074,7 +9043,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -9167,7 +9135,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -9259,7 +9226,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -9352,7 +9318,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -9444,7 +9409,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -9537,7 +9501,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -9625,7 +9588,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -9719,7 +9681,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -9807,7 +9768,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -9901,7 +9861,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -9989,7 +9948,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -10083,7 +10041,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -10212,7 +10169,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -10341,7 +10297,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -10417,9 +10372,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [
-              "dashscope-result-bj.oss-cn-beijing.aliyuncs.com"
-            ],
             "mime_type_request_path": "/format",
             "mime_types_by_request_value": {
               "mp3": "audio/mpeg",
@@ -10582,9 +10534,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [
-              ".aliyuncs.com"
-            ],
             "mime_type_request_path": "/format",
             "mime_types_by_request_value": {
               "mp3": "audio/mpeg",
@@ -10747,9 +10696,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [
-              "dashscope-result-bj.oss-cn-beijing.aliyuncs.com"
-            ],
             "mime_type_request_path": "/format",
             "mime_types_by_request_value": {
               "mp3": "audio/mpeg",
@@ -10912,9 +10858,6 @@
           {
             "source_path": "/audio_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [
-              ".aliyuncs.com"
-            ],
             "mime_type_request_path": "/format",
             "mime_types_by_request_value": {
               "mp3": "audio/mpeg",
@@ -11105,7 +11048,6 @@
           {
             "source_path": "/images",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "optional": false,
@@ -11206,7 +11148,6 @@
           {
             "source_path": "/output/video_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": [".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,

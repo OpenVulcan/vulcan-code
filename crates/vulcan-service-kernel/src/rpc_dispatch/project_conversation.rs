@@ -192,7 +192,6 @@ pub(super) async fn dispatch(
         "service_open_external_url" => rpc_json_result(service_open_external_url(
             state,
             rpc_required_param(params, "url")?,
-            rpc_optional_param(params, "userConfirmed")?.unwrap_or(false),
         )),
         _ => return Ok(ServiceRpcDispatch::Unknown),
     };

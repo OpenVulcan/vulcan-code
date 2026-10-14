@@ -38,7 +38,6 @@
         {
           "source_path": "/data/images",
           "encoding": "https_url",
-          "download_host_suffixes": ["example.com"],
           "resource_kind": "image",
           "mime_type": "image/png",
           "output_id_prefix": "image"

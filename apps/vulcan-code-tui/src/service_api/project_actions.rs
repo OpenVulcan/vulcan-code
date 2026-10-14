@@ -44,15 +44,13 @@ pub fn delete_archived_conversations(conversation_ids: &[String]) -> ServiceCall
 /// 构建 `service_open_external_url` 的请求；由服务在其宿主上打开该 URL。
 /// `url` is the exact external URL the user chose to open.
 /// `url` 为用户选择打开的准确外部 URL。
-/// `user_confirmed` is true when this call is the user's explicit confirmation for the URL.
-/// 当本调用即为用户对该 URL 的显式确认时，`user_confirmed` 为 true。
 /// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
 /// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
-pub fn open_external_url(url: &str, user_confirmed: bool) -> ServiceCall {
+pub fn open_external_url(url: &str) -> ServiceCall {
     ServiceCall::mutate(
         "open_external_url",
         "service_open_external_url",
-        json!({ "url": url, "userConfirmed": user_confirmed }),
+        json!({ "url": url }),
         &[],
     )
 }

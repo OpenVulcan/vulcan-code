@@ -3129,41 +3129,6 @@ fn validate_upload_channel(
             ),
         ));
     }
-    let uses_returned_signed_host = primitive == super::UploadPrimitiveKind::SignedObjectUpload
-        && declaration.signing_primitive
-            == Some(super::UploadSigningPrimitiveKind::TemporaryOssPolicy);
-    if declaration.response_host_suffixes.len() > 16 {
-        errors.push(ManifestValidationError::new(
-            "too_many_upload_response_host_suffixes",
-            &path,
-            "upload channels may declare at most 16 response host suffixes",
-        ));
-    }
-    if uses_returned_signed_host && declaration.response_host_suffixes.is_empty() {
-        errors.push(ManifestValidationError::new(
-            "signed_upload_requires_response_host_suffix",
-            &path,
-            "temporary signed uploads require at least one allowed response host suffix",
-        ));
-    }
-    if !uses_returned_signed_host && !declaration.response_host_suffixes.is_empty() {
-        errors.push(ManifestValidationError::new(
-            "upload_response_host_suffix_requires_signed_policy",
-            &path,
-            "response host suffixes are valid only for temporary signed upload policies",
-        ));
-    }
-    for suffix in &declaration.response_host_suffixes {
-        if !crate::provider_resource_host_suffix_is_safe(suffix) {
-            errors.push(ManifestValidationError::new(
-                "invalid_upload_response_host_suffix",
-                &path,
-                format!(
-                    "upload response host suffix `{suffix}` is not a safe lowercase DNS suffix"
-                ),
-            ));
-        }
-    }
 
     let network_bound = matches!(
         primitive,
@@ -3276,33 +3241,6 @@ fn validate_upload_channel(
             ),
         )),
         (None, None) => {}
-    }
-
-    if primitive == super::UploadPrimitiveKind::RemoteUrlPassthrough {
-        if declaration.remote_url_host_suffixes.is_empty()
-            || declaration.remote_url_host_suffixes.len() > 16
-        {
-            errors.push(ManifestValidationError::new(
-                "remote_url_upload_requires_host_allowlist",
-                format!("{path}.remote_url_host_suffixes"),
-                "remote URL passthrough requires 1..=16 exact or dot-prefixed HTTPS host suffixes",
-            ));
-        }
-        for (index, suffix) in declaration.remote_url_host_suffixes.iter().enumerate() {
-            if !crate::provider_resource_host_suffix_is_safe(suffix) {
-                errors.push(ManifestValidationError::new(
-                    "invalid_remote_url_upload_host_suffix",
-                    format!("{path}.remote_url_host_suffixes[{index}]"),
-                    format!("remote URL host suffix `{suffix}` is not a safe DNS matcher"),
-                ));
-            }
-        }
-    } else if !declaration.remote_url_host_suffixes.is_empty() {
-        errors.push(ManifestValidationError::new(
-            "remote_url_host_allowlist_requires_passthrough",
-            format!("{path}.remote_url_host_suffixes"),
-            "remote URL host suffixes are valid only for remote_url_passthrough",
-        ));
     }
 
     match primitive {
@@ -6288,43 +6226,6 @@ fn validate_provider_tool_output_contract(
                 | crate::ProviderToolResourceEncoding::Hex
                 | crate::ProviderToolResourceEncoding::BinaryBody
         );
-        let url_carrier = matches!(
-            decoder.encoding,
-            crate::ProviderToolResourceEncoding::HttpsUrl
-                | crate::ProviderToolResourceEncoding::PublicHttpUrl
-        );
-        if decoder.download_host_suffixes.len() > 16 {
-            errors.push(ManifestValidationError::new(
-                "too_many_resource_decoder_download_host_suffixes",
-                format!("{decoder_path}.download_host_suffixes"),
-                "resource decoders may declare at most 16 download host suffixes",
-            ));
-        }
-        if url_carrier && decoder.download_host_suffixes.is_empty() {
-            errors.push(ManifestValidationError::new(
-                "url_resource_decoder_requires_download_host_suffix",
-                format!("{decoder_path}.download_host_suffixes"),
-                "URL resource decoders require at least one reviewed download host suffix",
-            ));
-        }
-        if !url_carrier && !decoder.download_host_suffixes.is_empty() {
-            errors.push(ManifestValidationError::new(
-                "inline_resource_decoder_has_download_host_suffix",
-                format!("{decoder_path}.download_host_suffixes"),
-                "inline resource decoders must not declare download host suffixes",
-            ));
-        }
-        for suffix in &decoder.download_host_suffixes {
-            if !crate::provider_resource_host_suffix_is_safe(suffix) {
-                errors.push(ManifestValidationError::new(
-                    "invalid_resource_decoder_download_host_suffix",
-                    format!("{decoder_path}.download_host_suffixes"),
-                    format!(
-                        "resource decoder download host suffix `{suffix}` is not a safe lowercase host matcher"
-                    ),
-                ));
-            }
-        }
         if inline_carrier {
             if !decoder
                 .max_bytes
@@ -6700,24 +6601,6 @@ fn validate_generic_json_async_lifecycle(
                 format!("{follow_up_path}.url_encoding"),
                 "batch follow-up URLs must use https_url or public_http_url encoding",
             ));
-        }
-        if follow_up.url_host_suffixes.is_empty() || follow_up.url_host_suffixes.len() > 16 {
-            errors.push(ManifestValidationError::new(
-                "invalid_generic_async_batch_follow_up_host_suffix_count",
-                format!("{follow_up_path}.url_host_suffixes"),
-                "batch follow-up URLs require one through 16 reviewed host suffixes",
-            ));
-        }
-        for suffix in &follow_up.url_host_suffixes {
-            if !crate::provider_resource_host_suffix_is_safe(suffix) {
-                errors.push(ManifestValidationError::new(
-                    "invalid_generic_async_batch_follow_up_host_suffix",
-                    format!("{follow_up_path}.url_host_suffixes"),
-                    format!(
-                        "batch follow-up host suffix `{suffix}` is not a safe lowercase host matcher"
-                    ),
-                ));
-            }
         }
         if !(1..=256).contains(&follow_up.max_items) {
             errors.push(ManifestValidationError::new(

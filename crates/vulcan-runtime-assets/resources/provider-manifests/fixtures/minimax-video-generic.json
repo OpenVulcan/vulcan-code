@@ -43,7 +43,6 @@
         {
           "source_path": "/file/download_url",
           "encoding": "public_http_url",
-          "download_host_suffixes": [".aliyuncs.com"],
           "resource_kind": "video",
           "mime_type": "video/mp4",
           "optional": false,

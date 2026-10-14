@@ -38,7 +38,6 @@
         {
           "source_path": "/audio_url",
           "encoding": "public_http_url",
-          "download_host_suffixes": ["example.com"],
           "resource_kind": "audio",
           "mime_type_request_path": "/output_format",
           "mime_types_by_request_value": {"mp3": "audio/mpeg", "wav": "audio/wav"},

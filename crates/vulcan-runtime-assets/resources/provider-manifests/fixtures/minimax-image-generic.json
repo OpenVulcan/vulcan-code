@@ -54,7 +54,6 @@
         {
           "source_path": "/data/image_urls",
           "encoding": "https_url",
-          "download_host_suffixes": [".aliyuncs.com"],
           "resource_kind": "image",
           "mime_type": "image/jpeg",
           "optional": true,

@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 31,
-  "published_at": "2026-10-10T05:13:10Z",
+  "revision": 32,
+  "published_at": "2026-10-14T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -1695,7 +1695,6 @@
           {
             "source_path": "/data/image_urls",
             "encoding": "https_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/jpeg",
             "optional": true,
@@ -1936,7 +1935,6 @@
           {
             "source_path": "/data/audio",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -1954,7 +1952,6 @@
           {
             "source_path": "/data/subtitle_file",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
             "resource_kind": "file",
             "mime_type": "application/json",
             "optional": true,
@@ -2150,7 +2147,6 @@
           {
             "source_path": "/data/audio",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -2168,7 +2164,6 @@
           {
             "source_path": "/data/subtitle_file",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
             "resource_kind": "file",
             "mime_type": "application/json",
             "optional": true,
@@ -2364,7 +2359,6 @@
           {
             "source_path": "/data/audio",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -2382,7 +2376,6 @@
           {
             "source_path": "/data/subtitle_file",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
             "resource_kind": "file",
             "mime_type": "application/json",
             "optional": true,
@@ -2578,7 +2571,6 @@
           {
             "source_path": "/data/audio",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -2596,7 +2588,6 @@
           {
             "source_path": "/data/subtitle_file",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
             "resource_kind": "file",
             "mime_type": "application/json",
             "optional": true,
@@ -2676,7 +2667,6 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -2766,7 +2756,6 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -2847,7 +2836,6 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -3078,7 +3066,6 @@
           {
             "source_path": "/data/image_urls",
             "encoding": "https_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/jpeg",
             "optional": true,
@@ -3217,7 +3204,6 @@
           {
             "source_path": "/data/image_urls",
             "encoding": "https_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/jpeg",
             "optional": true,
@@ -3458,7 +3444,6 @@
           {
             "source_path": "/data/audio",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -3476,7 +3461,6 @@
           {
             "source_path": "/data/subtitle_file",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
             "resource_kind": "file",
             "mime_type": "application/json",
             "optional": true,
@@ -3672,7 +3656,6 @@
           {
             "source_path": "/data/audio",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -3690,7 +3673,6 @@
           {
             "source_path": "/data/subtitle_file",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
             "resource_kind": "file",
             "mime_type": "application/json",
             "optional": true,
@@ -3886,7 +3868,6 @@
           {
             "source_path": "/data/audio",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -3904,7 +3885,6 @@
           {
             "source_path": "/data/subtitle_file",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
             "resource_kind": "file",
             "mime_type": "application/json",
             "optional": true,
@@ -4100,7 +4080,6 @@
           {
             "source_path": "/data/audio",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -4118,7 +4097,6 @@
           {
             "source_path": "/data/subtitle_file",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
             "resource_kind": "file",
             "mime_type": "application/json",
             "optional": true,
@@ -4197,7 +4175,6 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -4277,7 +4254,6 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -4367,7 +4343,6 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -4448,7 +4423,6 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -4635,7 +4609,6 @@
           {
             "source_path": "/data/image_urls",
             "encoding": "https_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/jpeg",
             "optional": true,
@@ -4713,7 +4686,6 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,

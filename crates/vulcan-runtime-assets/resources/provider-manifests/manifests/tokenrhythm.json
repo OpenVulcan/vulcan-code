@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "tokenrhythm",
-  "revision": 4,
-  "published_at": "2026-09-24T00:00:00Z",
+  "revision": 5,
+  "published_at": "2026-10-14T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -782,7 +782,6 @@
           {
             "source_path": "/data/0/url",
             "encoding": "https_url",
-            "download_host_suffixes": ["tokenrhythm-prod-backup-oss.oss-cn-beijing.aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "output_id_prefix": "image"
@@ -832,7 +831,6 @@
           {
             "source_path": "/data/0/url",
             "encoding": "https_url",
-            "download_host_suffixes": ["tokenrhythm-prod-backup-oss.oss-cn-beijing.aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/png",
             "output_id_prefix": "image"

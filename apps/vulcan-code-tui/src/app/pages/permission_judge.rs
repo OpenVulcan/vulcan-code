@@ -1165,14 +1165,11 @@ fn cuda_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value, base: &Value
                 links
                     .iter()
                     .map(|link| {
-                        // Choosing the link is the explicit confirmation for this exact URL.
-                        // 选择该链接即为对此精确 URL 的显式确认。
                         action(
                             link_label(&s(link, "/id")),
-                            call(crate::service_api::project_actions::open_external_url(
-                                &s(link, "/url"),
-                                true,
-                            )),
+                            call(crate::service_api::project_actions::open_external_url(&s(
+                                link, "/url",
+                            ))),
                             Tone::Normal,
                         )
                     })

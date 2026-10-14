@@ -30,7 +30,6 @@
         {
           "source_path": "/output/video_url",
           "encoding": "public_http_url",
-          "download_host_suffixes": ["example.com"],
           "resource_kind": "video",
           "mime_type": "video/mp4",
           "optional": false,
@@ -108,7 +107,6 @@
       "upload_channel_id": "fixture.remote-audio",
       "description": "Fixture-only reviewed remote audio passthrough.",
       "primitive": "remote_url_passthrough",
-      "remote_url_host_suffixes": ["example.com"],
       "accepted_mime_types": ["audio/mpeg"],
       "max_bytes": 1024,
       "max_count": 1,

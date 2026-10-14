@@ -42,7 +42,6 @@
         {
           "source_path": "/output/video_url",
           "encoding": "public_http_url",
-          "download_host_suffixes": ["example.com"],
           "resource_kind": "video",
           "mime_type": "video/mp4",
           "optional": false,

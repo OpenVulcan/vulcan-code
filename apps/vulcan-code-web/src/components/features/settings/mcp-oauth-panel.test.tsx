@@ -107,7 +107,7 @@ describe("McpOAuthPanel", () => {
 
     expect(container.querySelector("input")).toBeNull()
     await click("Open authorization page")
-    expect(external.openExternalUrl).toHaveBeenCalledWith("https://auth.example.test/authorize", true)
+    expect(external.openExternalUrl).toHaveBeenCalledWith("https://auth.example.test/authorize")
     await click("Cancel sign-in")
     expect(service.cancelMcpOAuth).toHaveBeenCalledWith({ serverId: "remote", flowId: "flow-1" })
     expect(button("Sign in")).toBeDefined()

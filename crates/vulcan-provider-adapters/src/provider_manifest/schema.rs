@@ -1719,14 +1719,6 @@ pub struct UploadChannelDeclaration {
     /// 宿主下的绝对端点路径。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_path: Option<String>,
-    /// Allowed HTTPS host suffixes for provider-returned signed upload destinations.
-    /// 供应商返回的签名上传目标允许使用的 HTTPS 宿主后缀。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub response_host_suffixes: Vec<String>,
-    /// Allowed exact or dot-prefixed DNS suffixes for HTTPS source URL passthrough.
-    /// HTTPS 来源 URL 直通允许使用的精确 DNS 宿主或点前缀后缀。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub remote_url_host_suffixes: Vec<String>,
     /// HTTP method used by this channel.
     /// 此通道使用的 HTTP 方法。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2176,9 +2168,6 @@ pub struct GenericJsonAsyncBatchFollowUpDeclaration {
     /// Closed URL encoding accepted for each follow-up locator.
     /// 每个后续定位符接受的封闭 URL 编码。
     pub url_encoding: ProviderToolResourceEncoding,
-    /// Exact hosts or dot-prefixed DNS suffixes authorized for every follow-up URL.
-    /// 每个后续 URL 获准使用的精确宿主或点前缀 DNS 后缀。
-    pub url_host_suffixes: Vec<String>,
     /// JSON Pointer selecting the fetched response item array.
     /// 选择拉取响应项目数组的 JSON Pointer。
     pub response_items_pointer: String,

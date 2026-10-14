@@ -1013,14 +1013,6 @@ fn validate_upload_channel_trust_ceiling(
         || candidate.response_url_pointer != bundled.response_url_pointer
         || candidate.reference_template != bundled.reference_template
         || candidate.reference_encoding != bundled.reference_encoding
-        || !host_allowlist_scope_is_subset(
-            &candidate.response_host_suffixes,
-            &bundled.response_host_suffixes,
-        )
-        || !host_allowlist_scope_is_subset(
-            &candidate.remote_url_host_suffixes,
-            &bundled.remote_url_host_suffixes,
-        )
         || !wildcard_empty_sequence_is_subset(
             &candidate.accepted_mime_types,
             &bundled.accepted_mime_types,
@@ -1100,31 +1092,6 @@ fn validate_operation_trust_ceiling(
 /// 报告候选序列的每个值是否都存在于随包序列。
 fn sequence_is_subset<T: PartialEq>(candidate: &[T], bundled: &[T]) -> bool {
     candidate.iter().all(|value| bundled.contains(value))
-}
-
-/// Reports whether every candidate exact-host or DNS-suffix matcher narrows bundled authority.
-/// 报告每个候选精确宿主或 DNS 后缀匹配项是否收紧随包权限。
-///
-/// # Parameters
-/// 参数
-/// `candidate` and `bundled` contain validated exact hosts or dot-prefixed strict-subdomain
-/// suffixes. An empty list authorizes no host.
-/// `candidate` 与 `bundled` 包含已校验的精确宿主或点前缀严格子域后缀；空列表不授权任何宿主。
-///
-/// # Returns
-/// 返回值
-/// `true` only when every host admitted by a candidate matcher was already admitted by one
-/// bundled matcher.
-/// 仅当每个候选匹配项允许的全部宿主都已被某个随包匹配项允许时返回 `true`。
-fn host_allowlist_scope_is_subset(candidate: &[String], bundled: &[String]) -> bool {
-    candidate.iter().all(|candidate_matcher| {
-        bundled.iter().any(|bundled_matcher| {
-            candidate_matcher == bundled_matcher
-                || (bundled_matcher.starts_with('.')
-                    && candidate_matcher.len() > bundled_matcher.len()
-                    && candidate_matcher.ends_with(bundled_matcher))
-        })
-    })
 }
 
 /// Reports whether a sequence with empty-as-wildcard semantics preserves or narrows authority.
@@ -2339,18 +2306,6 @@ mod tests {
         let alibaba: vulcan_provider_adapters::ProviderManifestV1 =
             serde_json::from_str(&alibaba_text).expect("bundled alibaba manifest must parse");
 
-        // changed_upload_response_host expands the dynamic destination returned by the OSS signer.
-        // changed_upload_response_host 扩大 OSS 签名端返回的动态目标范围。
-        let mut changed_upload_response_host = alibaba.clone();
-        changed_upload_response_host.upload_channels[0]
-            .response_host_suffixes
-            .push(String::from(".unreviewed.example"));
-        // error proves a signed data update cannot create new network authority indirectly.
-        // error 证明签名数据更新不能间接创建新的网络权限。
-        let error = validate_bundled_trust_ceiling(&alibaba, &changed_upload_response_host)
-            .expect_err("a dynamic upload host suffix must remain inside the bundled allowlist");
-        assert!(error.contains("Upload channel"), "{error}");
-
         // changed_template simulates a signed candidate redirecting immutable execution authority.
         // changed_template 模拟签名候选重定向不可变执行权限。
         let mut changed_template = alibaba.clone();
@@ -2590,44 +2545,6 @@ mod tests {
             .clear();
         validate_bundled_trust_ceiling(&baseline, &narrowed_diagnostics)
             .expect("removing diagnostic extraction authority must remain allowed");
-    }
-
-    /// Verifies remote URL upload hosts remain inside the reviewed semantic host scope.
-    /// 验证远程 URL 上传宿主始终位于已审核的语义宿主范围内。
-    #[test]
-    fn upload_channel_trust_ceiling_freezes_remote_url_hosts() {
-        // baseline authorizes only strict subdomains of example.com.
-        // baseline 仅授权 example.com 的严格子域。
-        let baseline: vulcan_provider_adapters::UploadChannelDeclaration =
-            serde_json::from_value(serde_json::json!({
-                "upload_channel_id": "remote-url",
-                "primitive": "remote_url_passthrough",
-                "remote_url_host_suffixes": [".example.com"]
-            }))
-            .expect("the synthetic remote URL channel must parse");
-
-        // expanded adds a wholly unrelated host outside the reviewed allowlist.
-        // expanded 增加完全不属于审核允许列表的宿主。
-        let mut expanded = baseline.clone();
-        expanded
-            .remote_url_host_suffixes
-            .push(String::from("unreviewed.example"));
-        validate_upload_channel_trust_ceiling(&baseline, &expanded)
-            .expect_err("an unrelated remote URL host must exceed the trust ceiling");
-
-        // narrowed admits only a deeper strict-subdomain suffix.
-        // narrowed 仅允许更深层的严格子域后缀。
-        let mut narrowed = baseline.clone();
-        narrowed.remote_url_host_suffixes = vec![String::from(".media.example.com")];
-        validate_upload_channel_trust_ceiling(&baseline, &narrowed)
-            .expect("a deeper host suffix must be accepted as authority narrowing");
-
-        // root_host proves a suffix grant never implicitly authorizes its DNS root.
-        // root_host 证明后缀授权绝不会隐式授权其 DNS 根域。
-        let mut root_host = baseline.clone();
-        root_host.remote_url_host_suffixes = vec![String::from("example.com")];
-        validate_upload_channel_trust_ceiling(&baseline, &root_host)
-            .expect_err("a strict-subdomain grant must not authorize the root host");
     }
 
     /// Verifies signed updates cannot change the reviewed upload response identifier scalar type.

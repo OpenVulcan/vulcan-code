@@ -184,7 +184,7 @@ Action 完成后宿主只重读凭据校验状态，不重置配置草稿；状�
 | `context` | `conversationId`（当前会话，可能为空）、`clientHost`（实际宿主壳）。 |
 | `invoke(actionId, args, { refresh?, signal? })` | 调用本插件声明的 Action；相同读取由宿主合并，`signal` 只取消本视图的结果投递。 |
 | `readTextAsset(path)` | 读取清单声明的 UTF-8 文本资源，例如许可证。 |
-| `openExternalUrl(url)` | 经宿主授权打开外部地址。 |
+| `openExternalUrl(url)` | 经宿主在系统浏览器中打开外部地址；只接受不含凭据的 `https://` 地址，不设域名白名单。 |
 | `locale`、`t(key, fallback)`、`formatNumber(value)` | 当前语言、插件文案与数值格式化；语言变化时宿主重建组件。 |
 | `events.subscribe(topic, listener)`、`events.latestRevision(topic)` | 仅含修订号的失效通知，用于重新读取。 |
 | `notifications.success/error(message)` | 用户发起操作的结果提示。 |

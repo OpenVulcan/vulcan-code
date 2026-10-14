@@ -1543,10 +1543,10 @@ async fn download_provider_resource_to_temp(
         "video" => PROVIDER_TOOL_VIDEO_OUTPUT_BYTE_LIMIT,
         _ => PROVIDER_TOOL_DEFAULT_OUTPUT_BYTE_LIMIT,
     };
-    // Redirects are disabled because the provider URL was validated before this request and a redirect could otherwise bypass that boundary.
-    // 禁止重定向，因为供应商 URL 已在请求前校验；否则重定向可能绕过该边界。
+    // Redirects follow the client default because providers commonly hand out CDN or signed links
+    // that redirect, and no host allowlist exists for a redirect to bypass.
+    // 重定向沿用客户端默认策略：供应商常返回会重定向的 CDN 或签名链接，且没有可被绕过的宿主白名单。
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
         .timeout(PROVIDER_TOOL_RESOURCE_DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|error| {
@@ -2065,39 +2065,12 @@ mod tests {
         // 仅 HTTPS 策略是本测试使用的精确权限。
         let policy = ProviderToolResourceDownloadPolicy {
             encoding: ProviderToolResourceEncoding::HttpsUrl,
-            host_suffixes: vec![String::from("example.com")],
         };
         let error =
             download_provider_resource_to_temp("http://example.com/output.png", "image", &policy)
                 .await
                 .expect_err("insecure URL must be rejected");
-        assert_eq!(
-            error,
-            "Provider resource URL host `example.com` is outside the declared scheme, default port or exact operation origin, and host suffixes."
-        );
-    }
-
-    /// Verifies a syntactically valid HTTPS URL cannot escape its manifest-owned host authority.
-    /// 验证语法有效的 HTTPS URL 无法逃逸 Manifest 持有的宿主权限。
-    #[tokio::test]
-    async fn provider_resource_download_rejects_undeclared_host() {
-        // The exact host matcher intentionally excludes every subdomain and alternate domain.
-        // 精确宿主匹配项刻意排除全部子域与其他域名。
-        let policy = ProviderToolResourceDownloadPolicy {
-            encoding: ProviderToolResourceEncoding::HttpsUrl,
-            host_suffixes: vec![String::from("example.com")],
-        };
-        let error = download_provider_resource_to_temp(
-            "https://assets.example.org/output.png",
-            "image",
-            &policy,
-        )
-        .await
-        .expect_err("undeclared host must be rejected before networking");
-        assert_eq!(
-            error,
-            "Provider resource URL host `assets.example.org` is outside the declared scheme, default port or exact operation origin, and host suffixes."
-        );
+        assert_eq!(error, "Provider resource URL must use the declared scheme.");
     }
 
     /// Verifies embedding output retains exact data once without an unused host clone.

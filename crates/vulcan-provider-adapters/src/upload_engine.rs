@@ -1295,15 +1295,14 @@ async fn materialize_upload_inner(
 ///
 /// # Parameters
 /// 参数
-/// `channel` owns the exact host allowlist and `candidate` is the unmodified source URL.
-/// `channel` 持有精确宿主允许列表，`candidate` 是未经修改的来源 URL。
+/// `channel` names the upload channel and `candidate` is the unmodified source URL.
+/// `channel` 指明上传通道，`candidate` 是未经修改的来源 URL。
 ///
 /// # Returns
 /// 返回值
-/// `Ok` only for credential-free HTTPS URLs on an explicitly authorized host without a port or
-/// fragment; otherwise a controlled pre-dispatch error.
-/// 仅对位于显式授权宿主、不含凭据、端口或片段的 HTTPS URL 返回 `Ok`；否则返回受控的
-/// 分派前错误。
+/// `Ok` for any credential-free HTTPS URL with a host and no fragment; otherwise a controlled
+/// pre-dispatch error.
+/// 对任何带宿主、不含凭据与片段的 HTTPS URL 返回 `Ok`；否则返回受控的分派前错误。
 fn validate_remote_url_passthrough(
     channel: &crate::UploadChannelDeclaration,
     candidate: &str,
@@ -1314,21 +1313,19 @@ fn validate_remote_url_passthrough(
             channel.upload_channel_id
         )
     })?;
-    let host = parsed.host_str().ok_or_else(|| {
-        format!(
+    if parsed.host_str().is_none() {
+        return Err(format!(
             "Upload channel `{}` remote URL has no host.",
             channel.upload_channel_id
-        )
-    })?;
+        ));
+    }
     if parsed.scheme() != "https"
         || !parsed.username().is_empty()
         || parsed.password().is_some()
-        || parsed.port().is_some()
         || parsed.fragment().is_some()
-        || !crate::provider_resource_host_matches_suffixes(host, &channel.remote_url_host_suffixes)
     {
         return Err(format!(
-            "Upload channel `{}` remote URL is outside its credential-free HTTPS host policy.",
+            "Upload channel `{}` remote URL must be a credential-free HTTPS URL.",
             channel.upload_channel_id
         ));
     }
@@ -1431,7 +1428,7 @@ async fn upload_temporary_oss_object(
     .map_err(|_| MediaUploadFailure::InvalidResponse {
         stage: MediaUploadStage::Signing,
     })?;
-    let upload_url = validate_temporary_oss_policy(channel, &policy.data).map_err(|_| {
+    let upload_url = validate_temporary_oss_policy(&policy.data).map_err(|_| {
         MediaUploadFailure::InvalidResponse {
             stage: MediaUploadStage::Signing,
         }
@@ -1598,17 +1595,14 @@ async fn validate_signed_upload_source(
 ///
 /// # Parameters
 /// 参数
-/// `channel` owns the reviewed host suffix allowlist and `policy` is the decoded provider response.
-/// `channel` 持有已审核宿主后缀允许列表，`policy` 是解码后的供应商响应。
+/// `policy` is the decoded provider response.
+/// `policy` 是解码后的供应商响应。
 ///
 /// # Returns
 /// 返回值
 /// The parsed credential-free HTTPS upload URL when every field and authority check succeeds.
 /// 当全部字段与权威检查成功时返回解析后的无凭据 HTTPS 上传 URL。
-fn validate_temporary_oss_policy(
-    channel: &crate::UploadChannelDeclaration,
-    policy: &TemporaryOssPolicy,
-) -> Result<reqwest::Url, String> {
+fn validate_temporary_oss_policy(policy: &TemporaryOssPolicy) -> Result<reqwest::Url, String> {
     if [
         policy.upload_dir.as_str(),
         policy.oss_access_key_id.as_str(),
@@ -1624,45 +1618,22 @@ fn validate_temporary_oss_policy(
     }
     let upload_url = reqwest::Url::parse(policy.upload_host.as_str())
         .map_err(|error| format!("Temporary OSS upload URL is invalid: {error}"))?;
-    let host = upload_url
-        .host_str()
-        .ok_or_else(|| String::from("Temporary OSS upload URL must declare a host."))?;
+    if upload_url.host_str().is_none() {
+        return Err(String::from(
+            "Temporary OSS upload URL must declare a host.",
+        ));
+    }
     if upload_url.scheme() != "https"
         || !upload_url.username().is_empty()
         || upload_url.password().is_some()
-        || upload_url.port().is_some()
         || upload_url.query().is_some()
         || upload_url.fragment().is_some()
-        || !response_host_matches_suffixes(host, &channel.response_host_suffixes)
     {
         return Err(String::from(
-            "Temporary OSS upload URL is outside the declared HTTPS host suffixes.",
+            "Temporary OSS upload URL must be a credential-free HTTPS URL without query or fragment.",
         ));
     }
     Ok(upload_url)
-}
-
-/// Reports whether one DNS host belongs to an exact manifest-owned suffix allowlist.
-/// 报告一个 DNS 宿主是否属于精确 Manifest 持有的后缀允许列表。
-///
-/// # Parameters
-/// 参数
-/// `host` is the parsed URL host and `suffixes` contains exact hosts or dot-prefixed subdomains.
-/// `host` 是解析后的 URL 宿主，`suffixes` 包含精确宿主或点前缀子域。
-///
-/// # Returns
-/// 返回值
-/// True only for a case-insensitive exact match or a non-root dot-suffix match.
-/// 仅在大小写不敏感精确匹配或非根点后缀匹配时返回真。
-fn response_host_matches_suffixes(host: &str, suffixes: &[String]) -> bool {
-    let host = host.to_ascii_lowercase();
-    suffixes.iter().any(|suffix| {
-        if suffix.starts_with('.') {
-            host.len() > suffix.len() && host.ends_with(suffix)
-        } else {
-            host == *suffix
-        }
-    })
 }
 
 /// Hashes one revalidated local upload source without buffering it in memory.
@@ -2071,8 +2042,8 @@ pub(crate) fn validate_prepared_reference(
     }
 }
 
-/// Validates a response URL against the upload channel's closed HTTPS host policy.
-/// 按上传通道的封闭 HTTPS 宿主策略校验响应 URL。
+/// Validates a response URL as a credential-free HTTPS URL; any provider host is accepted.
+/// 将响应 URL 校验为不含凭据的 HTTPS URL；接受供应商返回的任何宿主。
 fn validate_provider_response_url(
     channel: &crate::UploadChannelDeclaration,
     candidate: &str,
@@ -2083,22 +2054,19 @@ fn validate_provider_response_url(
             channel.upload_channel_id
         )
     })?;
-    let host = parsed.host_str().ok_or_else(|| {
-        format!(
+    if parsed.host_str().is_none() {
+        return Err(format!(
             "Upload channel `{}` provider reference URL has no host.",
             channel.upload_channel_id
-        )
-    })?;
+        ));
+    }
     if parsed.scheme() != "https"
         || !parsed.username().is_empty()
         || parsed.password().is_some()
-        || parsed.port().is_some()
         || parsed.fragment().is_some()
-        || (!channel.response_host_suffixes.is_empty()
-            && !response_host_matches_suffixes(host, &channel.response_host_suffixes))
     {
         return Err(format!(
-            "Upload channel `{}` provider reference URL is outside its declared HTTPS host policy.",
+            "Upload channel `{}` provider reference URL must be a credential-free HTTPS URL.",
             channel.upload_channel_id
         ));
     }
@@ -2671,8 +2639,6 @@ mod tests {
             signing_primitive: None,
             endpoint_host: Some(String::from("upload.example.invalid")),
             endpoint_path: Some(String::from("/v1/files")),
-            response_host_suffixes: Vec::new(),
-            remote_url_host_suffixes: Vec::new(),
             method: Some(String::from("POST")),
             credential_role: None,
             file_field: Some(String::from("file")),
@@ -3105,12 +3071,11 @@ mod tests {
 
         let mut url_channel = channel;
         url_channel.reference_encoding = Some(UploadReferenceEncoding::ResponseUrl);
-        url_channel.response_host_suffixes = vec![String::from(".example.invalid")];
         assert!(
             validate_prepared_reference(&url_channel, "https://cdn.example.invalid/file").is_ok()
         );
         assert!(
-            validate_prepared_reference(&url_channel, "https://cdn.other.invalid/file").is_err()
+            validate_prepared_reference(&url_channel, "http://cdn.example.invalid/file").is_err()
         );
 
         let mut template_url_channel = url_channel;
@@ -3126,7 +3091,7 @@ mod tests {
         assert!(
             validate_prepared_reference(
                 &template_url_channel,
-                "provider://https://cdn.other.invalid/file"
+                "provider://http://cdn.example.invalid/file"
             )
             .is_err()
         );
@@ -3243,45 +3208,29 @@ mod tests {
         );
     }
 
-    /// Verifies dynamic signed-upload destinations stay on reviewed HTTPS hosts and ports.
-    /// 验证动态签名上传目标始终位于已审核的 HTTPS 宿主与端口。
+    /// Verifies dynamic signed-upload destinations accept any HTTPS host but keep the URL shape.
+    /// 验证动态签名上传目标接受任何 HTTPS 宿主，但保持 URL 形状约束。
     #[test]
-    fn temporary_oss_policy_rejects_expanded_network_authority() {
-        // signed_channel declares the only DNS suffix the provider policy may select.
-        // signed_channel 声明供应商策略可以选择的唯一 DNS 后缀。
-        let mut signed_channel = channel(
-            UploadPrimitiveKind::SignedObjectUpload,
-            vec![String::from("image/png")],
-            Some(1024),
-            Some(1),
-        );
-        signed_channel.signing_primitive =
-            Some(crate::UploadSigningPrimitiveKind::TemporaryOssPolicy);
-        signed_channel.response_host_suffixes = vec![String::from(".aliyuncs.com")];
-
-        // accepted is a credential-free default-port HTTPS child of the reviewed suffix.
-        // accepted 是已审核后缀下不含凭据且使用默认端口的 HTTPS 子域。
-        let accepted = validate_temporary_oss_policy(
-            &signed_channel,
-            &temporary_policy("https://bucket.aliyuncs.com"),
-        )
-        .expect("a reviewed OSS child host should be accepted");
-        assert_eq!(accepted.host_str(), Some("bucket.aliyuncs.com"));
-
-        // unsafe_hosts cover explicit non-default ports and suffix-confusion authorities.
-        // unsafe_hosts 覆盖显式非默认端口与后缀混淆 authority。
-        let unsafe_hosts = [
-            "https://bucket.aliyuncs.com:8443",
-            "https://bucket.aliyuncs.com.evil.example",
-            "https://aliyuncs.com",
-        ];
-        for unsafe_host in unsafe_hosts {
-            // error proves every dynamic authority remains inside the exact reviewed boundary.
-            // error 证明每个动态 authority 都保持在精确审核边界内。
-            let error =
-                validate_temporary_oss_policy(&signed_channel, &temporary_policy(unsafe_host))
-                    .expect_err("expanded temporary OSS authority must be rejected");
-            assert!(error.contains("outside"), "unexpected error: {error}");
+    fn temporary_oss_policy_accepts_any_https_host() {
+        for host in [
+            "https://bucket.aliyuncs.com",
+            "https://bucket.oss.example.com:8443",
+        ] {
+            // accepted proves the provider-selected host is used as returned.
+            // accepted 证明供应商选择的宿主按原样使用。
+            let accepted = validate_temporary_oss_policy(&temporary_policy(host))
+                .expect("a credential-free HTTPS destination should be accepted");
+            assert_eq!(accepted.as_str().trim_end_matches('/'), host);
+        }
+        for rejected in [
+            "http://bucket.aliyuncs.com",
+            "https://user@bucket.aliyuncs.com",
+            "https://bucket.aliyuncs.com/?x=1",
+        ] {
+            assert!(
+                validate_temporary_oss_policy(&temporary_policy(rejected)).is_err(),
+                "temporary OSS destination `{rejected}` must be rejected"
+            );
         }
     }
 
@@ -3456,37 +3405,33 @@ mod tests {
         assert_eq!(selected.upload_channel_id, "open.channel");
     }
 
-    /// Verifies remote URL passthrough enforces HTTPS and exact DNS suffix boundaries.
-    /// 验证远端 URL 直通强制 HTTPS 与精确 DNS 后缀边界。
+    /// Verifies remote URL passthrough accepts any HTTPS host and rejects unsafe URL forms.
+    /// 验证远端 URL 直通接受任何 HTTPS 宿主并拒绝不安全的 URL 形式。
     #[test]
-    fn remote_url_passthrough_enforces_closed_host_policy() {
-        // channel authorizes only strict subdomains of example.com.
-        // channel 仅授权 example.com 的严格子域。
+    fn remote_url_passthrough_accepts_any_https_host() {
         let mut channel = channel(
             UploadPrimitiveKind::RemoteUrlPassthrough,
             vec![String::from("image/png")],
             None,
             Some(1),
         );
-        channel.remote_url_host_suffixes = vec![String::from(".example.com")];
         channel.endpoint_host = None;
         channel.endpoint_path = None;
         channel.method = None;
         channel.file_field = None;
         channel.response_id_pointer = None;
         channel.response_url_pointer = None;
-        assert!(
-            validate_remote_url_passthrough(
-                &channel,
-                "https://cdn.example.com/media.png?signature=fixture"
-            )
-            .is_ok()
-        );
+        for accepted in [
+            "https://cdn.example.com/media.png?signature=fixture",
+            "https://media.other.test:8443/media.png",
+        ] {
+            assert!(
+                validate_remote_url_passthrough(&channel, accepted).is_ok(),
+                "remote URL `{accepted}` must be accepted"
+            );
+        }
         for rejected in [
             "http://cdn.example.com/media.png",
-            "https://example.com/media.png",
-            "https://cdn.example.com.evil.test/media.png",
-            "https://cdn.example.com:8443/media.png",
             "https://user@cdn.example.com/media.png",
             "https://cdn.example.com/media.png#fragment",
         ] {

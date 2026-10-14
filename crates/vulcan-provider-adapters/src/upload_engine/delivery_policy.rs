@@ -163,8 +163,8 @@ pub(super) fn resolve_operation_delivery_channel<'a>(
     // An already remote source has no verified raw byte length and cannot be treated as zero-byte inline data.
     // 已远程化来源没有已验证原始字节长度，不能当作零字节内联数据。
     if let Some(url) = resource.remote_url.as_deref() {
-        // Explicit passthrough retains its closed host allowlist without downloading or reuploading.
-        // 显式直通保留封闭宿主允许列表，不下载也不重新上传。
+        // Explicit passthrough forwards the HTTPS URL without downloading or reuploading.
+        // 显式直通直接转发 HTTPS URL，不下载也不重新上传。
         let remote = resolve_channel_of_kind(
             channels,
             references,

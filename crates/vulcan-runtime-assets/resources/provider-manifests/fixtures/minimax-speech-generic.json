@@ -56,7 +56,6 @@
         {
           "source_path": "/data/audio",
           "encoding": "public_http_url",
-          "download_host_suffixes": ["example.com"],
           "resource_kind": "audio",
           "mime_type_request_path": "/output_format",
           "mime_types_by_request_value": {
@@ -74,7 +73,6 @@
         {
           "source_path": "/data/subtitle_file",
           "encoding": "public_http_url",
-          "download_host_suffixes": ["example.com"],
           "resource_kind": "file",
           "mime_type": "application/json",
           "optional": true,

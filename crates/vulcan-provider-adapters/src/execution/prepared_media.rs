@@ -677,8 +677,6 @@ fn upload_channel_contract_fingerprint(
         channel.signing_primitive,
         channel.endpoint_host.as_deref(),
         channel.endpoint_path.as_deref(),
-        channel.response_host_suffixes.as_slice(),
-        channel.remote_url_host_suffixes.as_slice(),
         channel.method.as_deref(),
         channel.credential_role.as_deref(),
         channel.file_field.as_deref(),

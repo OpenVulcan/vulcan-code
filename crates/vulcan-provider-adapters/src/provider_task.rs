@@ -1872,7 +1872,6 @@ mod tests {
                 )),
                 download_policy: Some(crate::ProviderToolResourceDownloadPolicy {
                     encoding: crate::ProviderToolResourceEncoding::HttpsUrl,
-                    host_suffixes: vec![String::from("example.com")],
                 }),
             }]),
         });

@@ -948,14 +948,12 @@ fn mcp_oauth(status: &Value) -> Row {
                     Tone::Accent,
                 ));
             }
-            // Choosing the action is the explicit confirmation for this exact authorization URL.
-            // 选择该操作即为对此精确授权 URL 的显式确认。
             actions.push(action(
                 tr!("settings.mcp.oauth.openPage"),
-                call(api::project_actions::open_external_url(
-                    &s(flow, "/authorizationUrl"),
-                    true,
-                )),
+                call(api::project_actions::open_external_url(&s(
+                    flow,
+                    "/authorizationUrl",
+                ))),
                 Tone::Normal,
             ));
             actions.push(action(

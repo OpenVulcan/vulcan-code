@@ -33,7 +33,6 @@
         {
           "source_path": "/data/0/url",
           "encoding": "https_url",
-          "download_host_suffixes": ["tokenrhythm-prod-backup-oss.oss-cn-beijing.aliyuncs.com"],
           "resource_kind": "image",
           "mime_type": "image/png",
           "output_id_prefix": "image"

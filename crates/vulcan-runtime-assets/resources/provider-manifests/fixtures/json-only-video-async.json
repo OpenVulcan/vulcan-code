@@ -32,7 +32,6 @@
         {
           "source_path": "/result/videos",
           "encoding": "https_url",
-          "download_host_suffixes": ["example.com"],
           "resource_kind": "video",
           "mime_type": "video/mp4",
           "output_id_prefix": "video"

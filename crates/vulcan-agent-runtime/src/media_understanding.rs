@@ -1311,8 +1311,8 @@ pub(crate) async fn resolve_media_understanding_resource_arguments(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("Media-understanding argument `{path_argument}` is required."))?;
     // A declared HTTPS source remains in operation arguments so the frozen manifest upload binding
-    // can validate its passthrough primitive and host allowlist before provider dispatch.
-    // 已声明的 HTTPS 来源保留在操作参数中，使冻结 Manifest 上传绑定能在供应商分派前校验直通原语与宿主白名单。
+    // can validate its passthrough primitive and HTTPS form before provider dispatch.
+    // 已声明的 HTTPS 来源保留在操作参数中，使冻结 Manifest 上传绑定能在供应商分派前校验直通原语与 HTTPS 形式。
     if media_understanding_reference_is_remote_url(reference)? {
         return Ok((arguments, Vec::new()));
     }

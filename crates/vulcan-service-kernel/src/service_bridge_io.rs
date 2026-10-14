@@ -13,10 +13,6 @@ use vulcan_service_api::{WebuiServiceDiscoverySnapshot, WebuiServiceRpcError};
 /// 外部链接成功打开后返回的稳定服务结果。
 const EXTERNAL_URL_OPENED: &str = "opened";
 
-/// Stable service result requesting an explicit trusted-UI user confirmation.
-/// 请求可信界面进行明确用户确认时返回的稳定服务结果。
-const EXTERNAL_URL_CONFIRMATION_REQUIRED: &str = "confirmation_required";
-
 /// Explicit worker-stack capacity reserved for deeply nested agent stream polling on the WebUI bridge runtime.
 /// 为 WebUI 桥接运行时中的深层智能体流轮询显式预留的工作线程栈容量。
 const WEBUI_SERVICE_WORKER_STACK_BYTES: usize =
@@ -49,20 +45,16 @@ pub(crate) fn webui_service_runtime_builder() -> tokio::runtime::Builder {
     builder
 }
 
-/// Opens a trusted external URL with the system default browser.
-/// 使用系统默认浏览器打开可信外部链接。
+/// Opens a safe external URL with the system default browser; any HTTPS domain is accepted.
+/// 使用系统默认浏览器打开安全的外部链接；任何 HTTPS 域名均可打开。
 pub(crate) fn service_open_external_url(
     state: SharedServiceBridgeState,
     url: String,
-    user_confirmed: bool,
 ) -> Result<String, String> {
     if !external_url_is_safe(&url) {
         return Err(String::from(
             "Opening unsafe external links is not allowed.",
         ));
-    }
-    if !external_url_is_allowed(&url) && !user_confirmed {
-        return Ok(String::from(EXTERNAL_URL_CONFIRMATION_REQUIRED));
     }
     shell_host_from_state(&state)?.open_url(&url)?;
     Ok(String::from(EXTERNAL_URL_OPENED))
@@ -85,29 +77,6 @@ pub(crate) fn external_url_is_safe(url: &str) -> bool {
         && parsed.host_str().is_some()
         && parsed.username().is_empty()
         && parsed.password().is_none()
-}
-
-/// Returns whether one external URL may be opened by the host shell.
-/// 返回一个外部链接是否允许由宿主 shell 打开。
-fn external_url_is_allowed(url: &str) -> bool {
-    let Ok(parsed) = Url::parse(url) else {
-        return false;
-    };
-    // allowed_host limits shell navigation to exact source-defined HTTPS domains.
-    // allowed_host 将 Shell 导航限制为源码明确声明的精确 HTTPS 域名。
-    let allowed_host = matches!(
-        parsed.host_str(),
-        Some(
-            "github.com"
-                | "context7.com"
-                | "apikey.fan"
-                | "console.apito.ai"
-                | "s.qiniu.com"
-                | "api.fenno.ai"
-                | "console.code0.ai"
-        )
-    );
-    external_url_is_safe(url) && allowed_host
 }
 
 /// Returns the host shell adapter from shared service state.
@@ -1131,71 +1100,26 @@ fn service_lifecycle_from_startup_phase(phase: &str) -> ServiceLifecycle {
 mod tests {
     use super::*;
 
-    /// Verifies GitHub HTTPS URLs are allowed for provenance links.
-    /// 验证 GitHub HTTPS 链接允许作为来源链接打开。
+    /// Verifies any HTTPS domain may be opened while transport and credential rules stay enforced.
+    /// 验证任何 HTTPS 域名均可打开，同时传输与凭据规则仍然生效。
     #[test]
-    fn external_url_allowlist_accepts_github_https_urls() {
-        assert!(external_url_is_allowed(
-            "https://github.com/OpenVulcan/vulcan-code"
-        ));
-        assert!(external_url_is_allowed(
-            "https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-code-reviewer.md"
-        ));
-        assert!(external_url_is_allowed(
-            "https://github.com/jnMetaCode/agency-agents-zh/blob/main/academic/academic-study-planner.md"
-        ));
-    }
-
-    /// Verifies every HTTPS path on the exact Context7 domain is allowed.
-    /// 验证精确 Context7 域名下的全部 HTTPS 路径均被允许。
-    #[test]
-    fn external_url_allowlist_accepts_context7_https_urls() {
-        assert!(external_url_is_allowed("https://context7.com"));
-        assert!(external_url_is_allowed("https://context7.com/dashboard"));
-        assert!(external_url_is_allowed(
-            "https://context7.com/docs/howto/api-keys?source=vulcan#setup"
-        ));
-    }
-
-    /// Verifies disclosed provider referral URLs use the exact HTTPS domain allowlist.
-    /// 验证已披露的供应商邀请链接使用精确 HTTPS 域名白名单。
-    #[test]
-    fn external_url_allowlist_accepts_provider_referral_https_urls() {
+    fn external_url_safety_accepts_any_https_domain_and_rejects_unsafe_urls() {
         for url in [
-            "https://apikey.fan/register?aff=LY4DT3DCTM9N",
-            "https://console.apito.ai/register?aff=8jvf",
-            "https://s.qiniu.com/reuYBn",
-            "https://api.fenno.ai/s/v59N",
-            "https://console.code0.ai/register?aff=il6p",
+            "https://github.com/OpenVulcan/vulcan-code",
+            "https://developer.nvidia.com/cuda-downloads",
+            "https://docs.context7.com/docs?source=vulcan#setup",
         ] {
-            assert!(external_url_is_allowed(url), "{url}");
+            assert!(external_url_is_safe(url), "{url}");
         }
-    }
-
-    /// Verifies non-allowlisted or unsafe URLs remain blocked.
-    /// 验证非白名单或不安全链接仍会被阻止。
-    #[test]
-    fn external_url_allowlist_rejects_unsafe_urls() {
-        assert!(!external_url_is_allowed(
-            "http://github.com/OpenVulcan/vulcan-code"
-        ));
-        assert!(!external_url_is_allowed(
-            "https://example.com/msitarzewski/agency-agents"
-        ));
-        assert!(!external_url_is_allowed(
-            "https://user:token@github.com/msitarzewski/agency-agents"
-        ));
-        assert!(!external_url_is_allowed("http://context7.com/dashboard"));
-        assert!(!external_url_is_allowed("https://docs.context7.com"));
-        assert!(!external_url_is_allowed(
-            "https://user:token@context7.com/dashboard"
-        ));
-        assert!(!external_url_is_allowed("http://s.qiniu.com/reuYBn"));
-        assert!(!external_url_is_allowed("https://evil.s.qiniu.com/reuYBn"));
-        assert!(!external_url_is_allowed(
-            "https://user:token@s.qiniu.com/reuYBn"
-        ));
-        assert!(!external_url_is_allowed("not a url"));
+        for url in [
+            "http://github.com/OpenVulcan/vulcan-code",
+            "https://user:token@github.com/OpenVulcan/vulcan-code",
+            "https://user@example.com/",
+            "file:///etc/passwd",
+            "not a url",
+        ] {
+            assert!(!external_url_is_safe(url), "{url}");
+        }
     }
 
     /// Verifies explicit confirmation may bypass only the domain allowlist, not URL safety rules.

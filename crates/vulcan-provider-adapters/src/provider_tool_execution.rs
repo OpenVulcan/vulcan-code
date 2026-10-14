@@ -1599,8 +1599,6 @@ async fn poll_generic_json_async_task(
         if let Some(follow_up) = lifecycle.success_batch_follow_up.as_ref() {
             let output = match execute_generic_json_async_batch_follow_up(
                 context.http,
-                context.entry,
-                context.target,
                 &response,
                 recovery,
                 follow_up,
@@ -1819,10 +1817,9 @@ fn append_bounded_provider_result(
 ///
 /// # Parameters
 /// 参数
-/// `http` owns transport policy; `entry` and `target` freeze the initiating origin; `terminal` is
-/// the successful poll payload; `recovery` contains ordered identity fingerprints; `follow_up`
-/// declares all item and text pointers.
-/// `http` 持有传输策略；`entry` 与 `target` 冻结启动 Origin；`terminal` 是成功轮询载荷；
+/// `http` owns transport policy; `terminal` is the successful poll payload; `recovery` contains
+/// ordered identity fingerprints; `follow_up` declares all item and text pointers.
+/// `http` 持有传输策略；`terminal` 是成功轮询载荷；
 /// `recovery` 包含有序身份指纹；`follow_up` 声明全部项目与文本 Pointer。
 ///
 /// # Returns
@@ -1831,16 +1828,10 @@ fn append_bounded_provider_result(
 /// 返回不超过共享 8 MiB 元数据上限的拼接文本。
 async fn execute_generic_json_async_batch_follow_up(
     http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
     terminal: &Value,
     recovery: &ProviderAsyncTaskRecoveryContext,
     follow_up: &crate::provider_manifest::GenericJsonAsyncBatchFollowUpDeclaration,
 ) -> Result<String, String> {
-    // exactOrigin is derived from the already-validated frozen target, never from response data.
-    // exactOrigin 从已验证冻结目标派生，绝不来自响应数据。
-    let exact_origin = reqwest::Url::parse(provider_tool_url(entry, target).as_str())
-        .map_err(|_| String::from("Provider task batch follow-up origin is invalid."))?;
     let fingerprints = match recovery {
         ProviderAsyncTaskRecoveryContext::OrderedSha256 { fingerprints } => fingerprints,
         ProviderAsyncTaskRecoveryContext::None => {
@@ -1918,17 +1909,12 @@ async fn execute_generic_json_async_batch_follow_up(
                     follow_up.item_url_pointer
                 )
             })?;
-        // The frozen follow-up policy prevents provider response data from selecting a new origin.
-        // 冻结的后续请求策略阻止供应商响应数据选择新的 Origin。
+        // The follow-up policy enforces only the declared scheme; the provider chooses the host.
+        // 后续请求策略只强制声明的 Scheme；宿主由供应商决定。
         let download_policy = ProviderToolResourceDownloadPolicy {
             encoding: follow_up.url_encoding,
-            host_suffixes: follow_up.url_host_suffixes.clone(),
         };
-        let url = download_policy.validate_url_with_exact_origin(
-            url_value,
-            "Provider task batch follow-up URL",
-            &exact_origin,
-        )?;
+        let url = download_policy.validate_url(url_value, "Provider task batch follow-up URL")?;
         urls.push(url);
     }
     if !items_by_fingerprint.is_empty() {
@@ -2231,7 +2217,6 @@ async fn execute_generic_json_async_binary_follow_up(
     };
     if target.contract.output.kind != ProviderToolOutputKind::Resources
         || decoder.encoding != crate::ProviderToolResourceEncoding::BinaryBody
-        || !decoder.download_host_suffixes.is_empty()
         || decoder.mime_type_request_path.is_some()
         || !decoder.mime_types_by_request_value.is_empty()
         || decoder.optional
@@ -3306,7 +3291,6 @@ fn decode_declared_generic_resource(
         | crate::ProviderToolResourceEncoding::PublicHttpUrl => {
             let policy = ProviderToolResourceDownloadPolicy {
                 encoding: decoder.encoding,
-                host_suffixes: decoder.download_host_suffixes.clone(),
             };
             policy.validate_url(
                 carrier,
@@ -4307,17 +4291,17 @@ mod tests {
     /// 验证供应商已确认成功后，MiniMax 确定性结果拒绝不能继续轮询。
     #[test]
     fn minimax_completed_result_contract_failure_is_terminal() {
-        // target retains the production MiniMax video output contract and its frozen URL authority.
-        // target 保留生产 MiniMax 视频输出契约及其冻结 URL 权限。
+        // target retains the production MiniMax video output contract and its URL scheme policy.
+        // target 保留生产 MiniMax 视频输出契约及其 URL Scheme 策略。
         let target = bundled_manifest_tool_targets("minimax")
             .into_iter()
             .find(|target| target.target_id == "cn.MiniMax-Hailuo-2.3")
             .expect("bundled MiniMax Hailuo 2.3 target");
-        // response represents a successful file-retrieve document with an unauthorized resource host.
-        // response 表示包含未授权资源主机的成功文件查询文档。
+        // response represents a successful file-retrieve document with an undeclared URL scheme.
+        // response 表示包含未声明 URL Scheme 的成功文件查询文档。
         let response = serde_json::json!({
             "file": {
-                "download_url": "https://untrusted.invalid/generated.mp4"
+                "download_url": "ftp://files.example.invalid/generated.mp4"
             }
         });
 
@@ -4332,7 +4316,7 @@ mod tests {
                         "Provider task completed, but its result could not be accepted:"
                     )
                 );
-                assert!(error.contains("outside the declared scheme"));
+                assert!(error.contains("must use the declared scheme"));
             }
             other => panic!("completed invalid result must be terminal, got {other:?}"),
         }
@@ -4600,7 +4584,6 @@ mod tests {
                 crate::ProviderToolResourceDecoder {
                     source_path: String::from("/inline"),
                     encoding: crate::ProviderToolResourceEncoding::DataUrl,
-                    download_host_suffixes: Vec::new(),
                     resource_kind: String::from("image"),
                     mime_type: None,
                     mime_type_request_path: None,
@@ -4612,7 +4595,6 @@ mod tests {
                 crate::ProviderToolResourceDecoder {
                     source_path: String::from("/url"),
                     encoding: crate::ProviderToolResourceEncoding::HttpsUrl,
-                    download_host_suffixes: vec![String::from("example.com")],
                     resource_kind: String::from("image"),
                     mime_type: Some(String::from("image/png")),
                     mime_type_request_path: None,
@@ -4664,7 +4646,6 @@ mod tests {
                 crate::ProviderToolResourceDecoder {
                     source_path: String::from("/data/audio"),
                     encoding: crate::ProviderToolResourceEncoding::Hex,
-                    download_host_suffixes: Vec::new(),
                     resource_kind: String::from("audio"),
                     mime_type: None,
                     mime_type_request_path: Some(String::from("/output_format")),
@@ -4676,7 +4657,6 @@ mod tests {
                 crate::ProviderToolResourceDecoder {
                     source_path: String::from("/data/subtitle_file"),
                     encoding: crate::ProviderToolResourceEncoding::PublicHttpUrl,
-                    download_host_suffixes: vec![String::from("example.com")],
                     resource_kind: String::from("file"),
                     mime_type: Some(String::from("application/json")),
                     mime_type_request_path: None,
@@ -4719,48 +4699,28 @@ mod tests {
             download_policy.encoding,
             crate::ProviderToolResourceEncoding::PublicHttpUrl
         );
-        assert_eq!(download_policy.host_suffixes, [String::from("example.com")]);
-        // An alternate valid HTTPS origin proves host authority is enforced independently of syntax.
-        // 另一个有效 HTTPS Origin 证明宿主权限独立于语法得到执行。
-        let error = download_policy
-            .validate_url(
-                "https://assets.example.org/subtitle.json",
-                "Provider tool test resource",
-            )
-            .expect_err("undeclared host must remain outside the frozen authority");
-        assert!(error.contains("declared scheme"));
-        assert!(error.contains("host suffixes"));
-        assert!(error.contains("assets.example.org"));
-
-        // A non-default port is a distinct network authority that the host-only policy cannot grant.
-        // 非默认端口属于宿主专用策略无法授权的另一项网络权限。
-        let error = download_policy
-            .validate_url(
-                "https://example.com:8443/subtitle.json?signature=temporary",
-                "Provider tool test resource",
-            )
-            .expect_err("undeclared port must remain outside the frozen authority");
-        assert!(error.contains("default port"));
-
-        // exactOrigin is a host-owned exception for a task initiated on one declared non-default port.
-        // exactOrigin 是对一个已声明非默认端口启动任务的宿主持有例外。
-        let exact_origin = reqwest::Url::parse("https://example.com:8443/v1/tasks/1")
-            .expect("exact operation origin should parse");
+        // Any host and port is accepted, while the declared scheme and credential rules still apply.
+        // 接受任何宿主与端口，同时声明的 Scheme 与凭据规则仍然生效。
+        for accepted in [
+            "https://assets.example.org/subtitle.json",
+            "https://example.com:8443/subtitle.json?signature=temporary",
+        ] {
+            download_policy
+                .validate_url(accepted, "Provider tool test resource")
+                .expect("any credential-free HTTP(S) host should be accepted");
+        }
         download_policy
-            .validate_url_with_exact_origin(
-                "https://example.com:8443/subtitle.json?signature=temporary",
+            .validate_url(
+                "ftp://example.com/subtitle.json",
                 "Provider tool test resource",
-                &exact_origin,
             )
-            .expect("the exact frozen operation origin should retain its port");
-        let wrong_port = download_policy
-            .validate_url_with_exact_origin(
-                "https://example.com:9443/subtitle.json?signature=temporary",
+            .expect_err("an undeclared scheme must be rejected");
+        download_policy
+            .validate_url(
+                "https://user:secret@example.com/subtitle.json",
                 "Provider tool test resource",
-                &exact_origin,
             )
-            .expect_err("a different non-default port must remain outside the frozen authority");
-        assert!(wrong_port.contains("exact operation origin"));
+            .expect_err("embedded credentials must be rejected");
     }
 
     /// Verifies declarative resource byte limits and MIME mappings fail closed.
@@ -4778,7 +4738,6 @@ mod tests {
             resource_decoders: vec![crate::ProviderToolResourceDecoder {
                 source_path: String::from("/audio"),
                 encoding: crate::ProviderToolResourceEncoding::Base64,
-                download_host_suffixes: Vec::new(),
                 resource_kind: String::from("audio"),
                 mime_type: None,
                 mime_type_request_path: Some(String::from("/format")),

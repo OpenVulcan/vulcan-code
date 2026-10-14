@@ -1030,7 +1030,6 @@ fn upload_channels_require_safe_host_and_bounded_size() {
         "signing_primitive": "temporary_oss_policy",
         "endpoint_host": "dashscope.aliyuncs.com",
         "endpoint_path": "/api/v1/uploads",
-        "response_host_suffixes": [".aliyuncs.com"],
         "method": "GET",
         "accepted_mime_types": ["image/png"],
         "max_bytes": 10485760,
@@ -1162,29 +1161,6 @@ fn unregistered_upload_primitive_fails_closed() {
     );
 }
 
-/// Verifies remote URL passthrough requires an explicit bounded host allowlist.
-/// 验证远端 URL 直通要求显式且有界的宿主允许列表。
-#[test]
-fn remote_url_passthrough_requires_host_allowlist() {
-    let declaration: super::super::UploadChannelDeclaration =
-        serde_json::from_value(serde_json::json!({
-            "upload_channel_id": "remote-source",
-            "description": "Remote source passthrough",
-            "primitive": "remote_url_passthrough",
-            "accepted_mime_types": ["image/png"],
-            "max_count": 1,
-            "reference_encoding": "response_url"
-        }))
-        .expect("remote channel should parse");
-    let errors = validate_upload_channel_errors(&declaration);
-    assert!(
-        errors
-            .iter()
-            .any(|code| code == "remote_url_upload_requires_host_allowlist"),
-        "a remote passthrough without host authority must fail: {errors:?}"
-    );
-}
-
 /// Verifies upload reference templates close every placeholder against response pointers.
 /// 验证上传引用模板的每个占位符都与响应指针闭合。
 #[test]
@@ -1266,7 +1242,6 @@ fn non_network_upload_primitives_need_no_endpoint() {
                 "upload_channel_id": "remote-url",
                 "description": "Remote URL materialization",
                 "primitive": "remote_url_passthrough",
-                "remote_url_host_suffixes": ["example.com"],
                 "accepted_mime_types": ["image/png"],
                 "max_count": 1
             }),
@@ -2189,8 +2164,6 @@ fn closed_operation_tool_target_manifest_validates() {
         signing_primitive: None,
         endpoint_host: None,
         endpoint_path: None,
-        response_host_suffixes: Vec::new(),
-        remote_url_host_suffixes: Vec::new(),
         method: None,
         credential_role: None,
         file_field: None,
@@ -2313,53 +2286,6 @@ fn tool_target_template_binding_rejects_unauthorized_service_entry() {
             .iter()
             .any(|error| error.code == "tool_target_template_service_not_authorized"),
         "unauthorized template service must be classified exactly: {errors:?}"
-    );
-}
-
-/// Verifies resource URLs cannot compile without an explicit reviewed host authority.
-/// 验证资源 URL 在没有显式已审核宿主权限时无法编译。
-#[test]
-fn resource_url_decoder_requires_reviewed_host_suffix() {
-    // The minimal manifest supplies the exact service and credential identities for the target.
-    // 最小清单为目标提供精确服务与凭据身份。
-    let mut manifest = minimal_manifest();
-    // The target models one syntactically complete URL resource contract with no host authority.
-    // 该目标模拟一个语法完整但没有宿主权限的 URL 资源契约。
-    let mut target = tool_target_declaration(
-        "public-api",
-        crate::ProviderToolCapabilityKind::ImageGenerate,
-        crate::ProviderToolExecutionKind::HttpJsonSync,
-    );
-    target.output = crate::ProviderToolOutputContract {
-        kind: crate::ProviderToolOutputKind::Resources,
-        source_path: String::from("/assets"),
-        normalized_result_path: String::from("resources"),
-        resource_kind: Some(String::from("image")),
-        mime_types: vec![String::from("image/png")],
-        resource_decoders: vec![crate::ProviderToolResourceDecoder {
-            source_path: String::from("/assets"),
-            encoding: crate::ProviderToolResourceEncoding::HttpsUrl,
-            download_host_suffixes: Vec::new(),
-            resource_kind: String::from("image"),
-            mime_type: Some(String::from("image/png")),
-            mime_type_request_path: None,
-            mime_types_by_request_value: BTreeMap::new(),
-            optional: false,
-            max_bytes: None,
-            output_id_prefix: Some(String::from("image")),
-        }],
-    };
-    manifest.tool_targets = vec![target];
-
-    // The exact diagnostic proves schema shape cannot substitute for network authority.
-    // 精确诊断证明 Schema 形状不能替代网络权限。
-    let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
-        .expect_err("URL decoder without host authority must fail closed");
-    assert!(
-        errors
-            .iter()
-            .any(|error| { error.code == "url_resource_decoder_requires_download_host_suffix" }),
-        "missing resource host authority must be classified exactly: {errors:?}"
     );
 }
 

@@ -584,8 +584,8 @@ signed_object_upload
 Upload 在任何网络副作用之前完成全部资源预检。网络通道必须使用允许的 HTTPS 宿主和绝对安全
 路径；每个通道必须声明精确 MIME 允许列表及有界数量，本地字节通道还必须声明有界字节数，
 网络通道必须声明 `timeout_ms`，其截止时间覆盖签名握手、文件传输与响应解码的完整生命周期。
-`remote_url_passthrough` 固定只允许不含凭据、端口和 fragment 的 HTTPS URL，并必须通过
-`remote_url_host_suffixes` 声明精确宿主或点前缀子域后缀。资源上限不能由远端更新放宽。签名上传
+`remote_url_passthrough` 固定只允许不含凭据和 fragment 的 HTTPS URL，不限制宿主或端口：供应商
+既已配置，就不再要求清单另列宿主白名单。资源上限不能由远端更新放宽。签名上传
 没有已注册签名原语时必须失败，不能猜签名算法。Multipart/File Create 的 method、file field、
 响应 JSON Pointer、引用模板、固定字段冲突和缓存时长均在激活前闭合验证，不留到请求期猜测。
 `response_id_pointer` 默认只接受非空 JSON 字符串；当上游真实返回非负整数 ID 时，通道必须显式声明
@@ -665,8 +665,8 @@ V1新增的原投递来源属于 `UserInputEvent.parameters`，与上述旧附�
 
 模型代替理解和供应商专用操作的媒体准备已接入独立的 `MediaDeliveryPolicy`。不要从工具名称、
 AI 参数或 `upload_channels` 数组非空推断用途或真实上传能力：`inline_data_url`、`inline_base64`
-属于内联；仅已注册且签名契约闭合的网络原语属于真实上传；已有远程 URL 只走显式 URL 直通及其
-宿主允许列表，不会下载成 Base64。
+属于内联；仅已注册且签名契约闭合的网络原语属于真实上传；已有远程 URL 只走显式 URL 直通，
+不会下载成 Base64。
 
 独立扩展按图片、音频、视频、文件分别设置有上传和无上传的原始字节阈值。无上传默认 10 MiB，
 有上传时的内联偏好默认零，累计 Base64 编码预算默认 16 MiB；与主会话的配置独立。真实上传接口
@@ -841,13 +841,11 @@ query/fragment 的 HTTPS URL，endpoint path 必须保持同源；输入 JSON Sc
 固定/条件请求头、MCP 契约、凭据档和已注册执行原语均在模板展开前校验，模板不能成为绕过普通
 目标安全边界的第二入口。
 
-供应商返回 URL 型资源时，响应 decoder 必须声明 `download_host_suffixes`；异步 batch follow-up
-必须独立声明 `url_host_suffixes`。`https_url` 只接受 HTTPS，`public_http_url` 仅在清单显式声明时
-接受 HTTP/HTTPS。URL 在响应解码、异步跟随请求和 Agent 宿主实际下载前分别重新校验：禁止凭据、
-片段、未授权 Host 和不安全后缀。通用 URL 资源只允许 Scheme 默认端口；异步 batch follow-up
-还可使用与已验证、冻结启动端点的 Scheme、Host 和有效端口全部精确一致的 Origin。该例外来自请求目标，
-绝不从响应 URL 学习端口；任何其他非默认端口仍失败关闭。远端签名更新不能扩大这些 Host 集合；新增下载域名仍需软件更新
-和安全审核。
+供应商返回 URL 型资源时，清单不声明下载宿主白名单：已配置的供应商返回的任何宿主与端口都直接使用，
+CDN 或存储桶变更不需要软件更新。`https_url` 只接受 HTTPS，`public_http_url` 仅在清单显式声明时
+接受 HTTP/HTTPS。URL 在响应解码、异步跟随请求和 Agent 宿主实际下载前分别重新校验 Scheme、
+绝对宿主与不含凭据；实际下载跟随重定向。这些请求不附带供应商凭据，因此放开宿主不会泄露密钥。
+签名上传返回的临时 OSS 目标与上传响应 URL 同样只校验 HTTPS 与不含凭据。
 
 如果新模型只是复用上述原语和既有 Wire 契约，可仅更新 JSON。若它需要新的认证、签名、流式
 解码、本地媒体转换或供应商特有二进制协议，则必须先实现并审核宿主原语，再允许 Manifest 引用。

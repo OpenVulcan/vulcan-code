@@ -1521,10 +1521,6 @@ pub struct ProviderToolResourceDecoder {
     /// Closed carrier encoding used to decode every selected value.
     /// 用于解码每个选中值的封闭载体编码。
     pub encoding: ProviderToolResourceEncoding,
-    /// Exact hosts or dot-prefixed DNS suffixes authorized for URL download carriers.
-    /// URL 下载载体获准使用的精确宿主或点前缀 DNS 后缀。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub download_host_suffixes: Vec<String>,
     /// Exact normalized resource kind, such as image, audio, video, or file.
     /// 精确的归一化资源类别，例如 image、audio、video 或 file。
     pub resource_kind: String,

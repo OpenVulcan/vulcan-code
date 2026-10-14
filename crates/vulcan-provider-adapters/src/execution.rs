@@ -45,10 +45,7 @@ pub(crate) use projection_profiles::{
     project_response_record_text,
 };
 pub(crate) use request_headers::{execution_headers, insert_coding_device_identity_headers};
-pub use resource_download::{
-    ProviderToolResourceDownloadPolicy, provider_resource_host_matches_suffixes,
-    provider_resource_host_suffix_is_safe,
-};
+pub use resource_download::ProviderToolResourceDownloadPolicy;
 pub(crate) use response_body::read_bounded_response_text;
 pub(crate) use response_metadata::parse_retry_after_headers;
 pub use responses_compact::{
