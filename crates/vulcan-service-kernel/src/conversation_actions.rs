@@ -34,26 +34,30 @@ pub(crate) fn service_reply_pending_question(
             String::from("service is still starting; question runtime is not ready")
         })?
     };
-    let request = pending_question_request(&agent_runtime, &request_id)?;
+    // The hook observes only a committed answer, after the pending lock is released and before
+    // the tool resumes, so the asking turn cannot end first.
+    // hook 只观察已提交的回答，在 pending 锁释放后、工具恢复前运行，因此提问所在回合不会先结束。
     let answered = agent_runtime
         .question_runtime
-        .reply(&request_id, answers.clone())
+        .reply_then(&request_id, answers, |request, answers| {
+            if request.approval.is_some() {
+                return;
+            }
+            record_question_lifecycle_hook(&agent_runtime.conversation_hook_runtime, |hooks| {
+                hooks.record_question_answered(
+                    request.session_id,
+                    &request.id,
+                    &request.questions,
+                    answers,
+                )
+            });
+        })
         .map_err(|error| format!("failed to submit ask answers: {error}"))?;
     if !answered {
         return Err(format!(
             "pending ask request `{request_id}` is no longer active"
         ));
     }
-    // The hook observes only a committed answer and runs after the pending lock is released.
-    // hook 只观察已提交的回答，并在 pending 锁释放后运行。
-    record_question_lifecycle_hook(&agent_runtime.conversation_hook_runtime, |hooks| {
-        hooks.record_question_answered(
-            request.session_id,
-            &request_id,
-            &request.questions,
-            &answers,
-        )
-    });
     Ok(true)
 }
 
@@ -83,46 +87,28 @@ pub(crate) fn service_reject_pending_question(
             String::from("service is still starting; question runtime is not ready")
         })?
     };
-    let request = pending_question_request(&agent_runtime, &request_id)?;
+    // The hook observes only a committed rejection, after the pending lock is released and
+    // before the tool resumes; a rejection ends the run, so recording afterwards could land after
+    // the asking turn closed.
+    // hook 只观察已提交的拒绝，在 pending 锁释放后、工具恢复前运行；拒绝会结束本次运行，
+    // 之后再记录可能落在提问回合关闭之后。
     let rejected = agent_runtime
         .question_runtime
-        .reject(&request_id)
+        .reject_then(&request_id, |request| {
+            if request.approval.is_some() {
+                return;
+            }
+            record_question_lifecycle_hook(&agent_runtime.conversation_hook_runtime, |hooks| {
+                hooks.record_question_rejected(request.session_id, &request.id)
+            });
+        })
         .map_err(|error| format!("failed to reject ask request: {error}"))?;
     if !rejected {
         return Err(format!(
             "pending ask request `{request_id}` is no longer active"
         ));
     }
-    // The hook observes only a committed rejection and runs after the pending lock is released.
-    // hook 只观察已提交的拒绝，并在 pending 锁释放后运行。
-    record_question_lifecycle_hook(&agent_runtime.conversation_hook_runtime, |hooks| {
-        hooks.record_question_rejected(request.session_id, &request_id)
-    });
     Ok(true)
-}
-
-/// Returns the exact pending Ask request so its lifecycle hook can name the owning session and prompts.
-/// 返回精确的待回答 Ask 请求，使其生命周期 hook 能给出所属会话与问题。
-///
-/// # Parameters
-/// 参数
-/// `agent_runtime` owns the question runtime and `request_id` selects the pending request.
-/// `agent_runtime` 持有问题运行时，`request_id` 选择待回答请求。
-///
-/// # Returns
-/// 返回值
-/// The pending request, or the same inactive-request error the commit would report.
-/// 返回待回答请求；不存在时返回与提交相同的失效请求错误。
-fn pending_question_request(
-    agent_runtime: &AgentRuntimeBridge,
-    request_id: &str,
-) -> Result<vulcan_agent_runtime::agent_runtime::question_runtime::QuestionRequest, String> {
-    agent_runtime
-        .question_runtime
-        .list_pending()?
-        .into_iter()
-        .find(|request| request.id == request_id)
-        .ok_or_else(|| format!("pending ask request `{request_id}` is no longer active"))
 }
 
 /// Reports one committed Ask lifecycle change to conversation hooks without failing the commit.

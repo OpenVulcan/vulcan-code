@@ -505,6 +505,23 @@ impl QuestionRuntime {
     /// Returns `Ok(true)` after delivery, `Ok(false)` when absent, or a lock or channel error.
     /// 投递成功后返回 `Ok(true)`，请求不存在时返回 `Ok(false)`，失败时返回锁或通道错误。
     pub fn reply(&self, request_id: &str, answers: Vec<Vec<String>>) -> Result<bool, String> {
+        self.reply_then(request_id, answers, |_, _| {})
+    }
+
+    /// Submits answers like [`Self::reply`], running `before_resume` once the reply is committed
+    /// and before the blocked tool resumes, so observers record it inside the asking turn.
+    /// 与 [`Self::reply`] 相同地提交答案，并在回答提交后、被阻塞的工具恢复前运行 `before_resume`，
+    /// 使观察者在提问所在回合内记录它。
+    ///
+    /// `before_resume` receives the committed request and answers; it runs outside the pending
+    /// lock and only when this call commits.
+    /// `before_resume` 接收已提交的请求与答案；它在 pending 锁之外运行，且仅在本次调用提交时运行。
+    pub fn reply_then(
+        &self,
+        request_id: &str,
+        answers: Vec<Vec<String>>,
+        before_resume: impl FnOnce(&QuestionRequest, &[Vec<String>]),
+    ) -> Result<bool, String> {
         // changeCallback must be readable before the pending request is consumed.
         // changeCallback 必须在消费 pending 请求前可读。
         let change_callback = self.change_callback_snapshot()?;
@@ -535,6 +552,7 @@ impl QuestionRuntime {
                 )
             })?
         };
+        before_resume(&entry.request, &reply.answers);
         // deliveryResult distinguishes a real tool resumption from a vanished receiver.
         // deliveryResult 区分真实工具恢复与接收方已经消失。
         let delivery_result = entry.sender.send(PendingQuestionCompletion::Reply(reply));
@@ -569,6 +587,22 @@ impl QuestionRuntime {
     /// Returns `Ok(true)` after delivery, `Ok(false)` when absent, or a lock or channel error.
     /// 投递成功后返回 `Ok(true)`，请求不存在时返回 `Ok(false)`，失败时返回锁或通道错误。
     pub fn reject(&self, request_id: &str) -> Result<bool, String> {
+        self.reject_then(request_id, |_| {})
+    }
+
+    /// Rejects like [`Self::reject`], running `before_resume` once the rejection is committed and
+    /// before the blocked tool resumes, so observers record it inside the asking turn.
+    /// 与 [`Self::reject`] 相同地拒绝，并在拒绝提交后、被阻塞的工具恢复前运行 `before_resume`，
+    /// 使观察者在提问所在回合内记录它。
+    ///
+    /// `before_resume` receives the committed request; it runs outside the pending lock and only
+    /// when this call commits.
+    /// `before_resume` 接收已提交的请求；它在 pending 锁之外运行，且仅在本次调用提交时运行。
+    pub fn reject_then(
+        &self,
+        request_id: &str,
+        before_resume: impl FnOnce(&QuestionRequest),
+    ) -> Result<bool, String> {
         // changeCallback must be readable before the pending request is consumed.
         // changeCallback 必须在消费 pending 请求前可读。
         let change_callback = self.change_callback_snapshot()?;
@@ -597,6 +631,7 @@ impl QuestionRuntime {
                 )
             })?
         };
+        before_resume(&entry.request);
         // deliveryResult distinguishes a real cancellation from a vanished receiver.
         // deliveryResult 区分真实取消投递与接收方已经消失。
         let delivery_result = entry.sender.send(PendingQuestionCompletion::Reject);
@@ -1231,6 +1266,80 @@ mod tests {
             .expect("ask task should join")
             .expect("reply should resolve");
         assert_eq!(reply.answers, vec![vec![String::from("A")]]);
+    }
+
+    /// Verifies the committed-reply and committed-rejection observers run before the asking tool
+    /// resumes, so a rejection that ends the run cannot close the turn before they record it.
+    /// 验证已提交回答与已提交拒绝的观察者在提问工具恢复前运行，使结束本次运行的拒绝无法在其记录前
+    /// 关闭回合。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn commit_observers_run_before_the_asking_tool_resumes() {
+        for reject in [false, true] {
+            let runtime = Arc::new(QuestionRuntime::new());
+            install_test_durability_callback(&runtime);
+            let ask_runtime = Arc::clone(&runtime);
+            let ask_task = tokio::spawn(async move {
+                ask_runtime
+                    .ask(
+                        Uuid::nil(),
+                        test_request_stream_id(),
+                        ApiCallId::try_new(1).expect("test API id"),
+                        ToolCallId::try_new(2).expect("test tool id"),
+                        test_controller_tool_call_id(),
+                        None,
+                        String::from("ask"),
+                        test_tool_arguments(),
+                        vec![test_question_prompt()],
+                    )
+                    .await
+            });
+            let request_id = loop {
+                if let Some(request) = runtime.list_pending().expect("pending list").pop() {
+                    break request.id;
+                }
+                tokio::task::yield_now().await;
+            };
+            // A tool resumed before the observer would finish on the other worker meanwhile.
+            // 若工具先于观察者恢复，它会在此期间于另一工作线程上完成。
+            let observed = |request: &QuestionRequest| {
+                assert_eq!(request.id, request_id);
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                assert!(
+                    !ask_task.is_finished(),
+                    "the tool resumed before the observer ran"
+                );
+            };
+            let mut calls = 0;
+            let committed = if reject {
+                runtime.reject_then(&request_id, |request| {
+                    calls += 1;
+                    observed(request);
+                })
+            } else {
+                runtime.reply_then(
+                    &request_id,
+                    vec![vec![String::from("A")]],
+                    |request, answers| {
+                        calls += 1;
+                        assert_eq!(answers, [vec![String::from("A")]]);
+                        observed(request);
+                    },
+                )
+            };
+            assert!(committed.expect("commit should succeed"));
+            assert_eq!(calls, 1);
+            assert_eq!(
+                ask_task.await.expect("ask task should join").is_err(),
+                reject
+            );
+            assert!(
+                !runtime
+                    .reject_then(&request_id, |_| panic!(
+                        "an absent request is never observed"
+                    ))
+                    .expect("absent rejection")
+            );
+        }
     }
 
     /// Verifies Ask refuses a process-only registration when no V1 durability bridge is installed.

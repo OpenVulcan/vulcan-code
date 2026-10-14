@@ -22,6 +22,9 @@
 - 运行时必须复用共享 `QuestionRuntime`；刷新 Runtime Foundation 或启动流式请求时不能重建并丢失
   等待中的问题。
 - 关闭或放弃 Ask 必须先进入明确的拒绝确认，再中断工具调用和后续对话执行。
+- 回答与拒绝的会话 hook（`record_question_answered`/`record_question_rejected`）通过
+  `QuestionRuntime::reply_then`/`reject_then` 在可靠提交之后、被阻塞的工具恢复之前记录，且在 pending 锁之外
+  运行；拒绝会结束本次运行，事后记录可能落在提问回合关闭之后而新建空回合。权限审批请求不进入提问 hook。
 
 ## 二、当前键盘状态机
 
@@ -72,6 +75,7 @@
   Markdown 渲染，开启时高亮。选择按客户端保存在 `localStorage`，跨会话和重启保留；
   未保存时使用默认关闭状态，不自动回写。仅开启后挂载既有 Markdown 渲染器，不影响左侧按钮的手动思考预览。
 - 回答组件是信息串为 `ui-<name>` 的已闭合围栏，由同一 `conversation-markdown` 链路原生渲染，不执行脚本、不建立第二套解析器；语法与模式语义见 [回答模式与回答组件](answer-mode-and-components.md)。
+- 行内公式写作 `` $`…`$ ``（GitHub 写法），在任何回答模式下都由同一链路清理之后的 rehype 步骤识别并以延迟加载的 KaTeX 排版；普通 `$…$` 不识别为公式。
 - 需要“可选择、可复制、只读”的预览时，使用可选择文本或只读编辑区，不退回不可复制的普通展示。
 - 仅显示 Markdown 外观但用户实际需要复制内容时，也必须保留文本选择能力。
 - Markdown 样式修改应作用于精确范围，不能污染代码块、工具卡片或其他非会话区域。
