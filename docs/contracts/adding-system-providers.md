@@ -206,7 +206,7 @@ Responses:   /responses
 封闭授权入口：
 
 - `registered_oauth`：选择一个宿主已审核的 OAuth 或 Device Flow 原语。OpenAI、Claude、Google、
-  Kimi、MiniMax 使用这一类；Manifest 统一声明入口，但网络交换、刷新、设备身份和区域信任边界仍由
+  Kimi、MiniMax、OpenDesign 使用这一类；Manifest 统一声明入口，但网络交换、刷新、设备身份和区域信任边界仍由
   各自已注册原语负责。
 - `browser_callback`：系统 Manifest 声明 HTTPS 授权页、有界回环端口、精确路径、超时、正文上限、
   JSON Pointer 与秘密投影。适用于 CommandCode 这种浏览器直接向本地回调交付凭据的流程。
@@ -227,6 +227,10 @@ Provider 请求前重读同一秘密引用的最新修订版。另一个请求�
 和 `Access-Control-Allow-Headers: Content-Type`，随后继续监听同一事务；预检本身不能被当成凭据请求，
 也不能让监听器退出。真正的凭据仍只接受精确路径上的有界 `application/json` `POST`，并继续执行
 State、字段映射和秘密前缀校验。
+
+OpenDesign 使用原生设备授权原语，成对保存模型调用的 `runtimeKey` 与钱包查询的 `controlKey`；
+没有已验证的刷新令牌协议，失效后重新授权。协议证据见
+[OpenDesign 接入记录](providers/open-design-verified-facts.md)。
 
 新增授权能力时先判断现有两类是否精确覆盖。若需要新的网络交换、签名、刷新或浏览器信任边界，先
 实现并审核新的宿主原语，再允许 Manifest 引用；禁止为单个供应商增加散落的前端登录分支。

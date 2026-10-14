@@ -6,8 +6,8 @@ export type * from "./media-delivery";
 // CredentialMode 标识一种受支持的凭据生命周期。
 export type CredentialMode = "auth" | "token";
 
-// OAuthProviderKind identifies one exact renewable provider flow.
-// OAuthProviderKind 标识一个精确的可续期供应商流程。
+// OAuthProviderKind identifies one registered account authorization protocol.
+// OAuthProviderKind 标识一个已注册账户授权协议。
 export type OAuthProviderKind =
   | "open_vulcan_china"
   | "open_vulcan_global"
@@ -17,7 +17,8 @@ export type OAuthProviderKind =
   | "google_gemini"
   | "mini_max_global_token_plan"
   | "mini_max_china_token_plan"
-  | "kimi_coding_plan";
+  | "kimi_coding_plan"
+  | "open_design";
 
 // PublicAiCredentialAuthorization declares a registered OAuth primitive or a Manifest browser callback.
 // PublicAiCredentialAuthorization 声明已注册 OAuth 原语或 Manifest 浏览器回调。
@@ -73,7 +74,8 @@ export interface PublicAiCredentialProfile {
     | "tavily_credits"
     | "deep_seek_balance"
     | "kimi_coding_plan"
-    | "command_code_usage";
+    | "command_code_usage"
+    | "open_design_wallet";
   authentication?: string;
   key_prefix?: string;
 }
@@ -529,7 +531,8 @@ export interface PublicAiConnection {
     | "tavily_credits"
     | "deep_seek_balance"
     | "kimi_coding_plan"
-    | "command_code_usage";
+    | "command_code_usage"
+    | "open_design_wallet";
   // Whether usage refresh needs a separate provider-management credential.
   // 用量刷新是否需要独立的供应商管理凭据。
   usage_requires_management_key: boolean;

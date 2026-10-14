@@ -26,6 +26,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
+mod open_design;
 mod openvulcan;
 pub use openvulcan::revoke_openvulcan_authorization;
 
@@ -67,8 +68,8 @@ const KIMI_TOKEN_URL: &str = "https://auth.kimi.com/api/oauth/token";
 const KIMI_DEVICE_FLOW_MAX_LIFETIME: Duration = Duration::from_secs(15 * 60);
 const KIMI_DEVICE_FLOW_DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Identifies one exact renewable provider authorization flow.
-/// 标识一个精确的可续期供应商授权流程。
+/// Identifies one exact registered provider authorization flow.
+/// 标识一个精确的已注册供应商授权流程。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthProviderKind {
@@ -99,6 +100,9 @@ pub enum OAuthProviderKind {
     /// Kimi Coding Plan Device Authorization Grant.
     /// Kimi Coding Plan 设备授权流程。
     KimiCodingPlan,
+    /// OpenDesign native device authorization issuing runtime and control credentials.
+    /// 签发运行与控制凭据的 OpenDesign 原生设备授权。
+    OpenDesign,
 }
 
 /// Derives one opaque transaction binding from an exact provider authorization scope.
@@ -665,6 +669,9 @@ impl OAuthAuthorizationRuntime {
         if provider_kind == OAuthProviderKind::KimiCodingPlan {
             return self.start_kimi_device_flow(authorization_binding).await;
         }
+        if provider_kind == OAuthProviderKind::OpenDesign {
+            return self.start_open_design(authorization_binding).await;
+        }
         let transaction_id = format!("oauth_{}", Uuid::new_v4().simple());
         let state = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let verifier = build_pkce_verifier();
@@ -1099,7 +1106,8 @@ impl OAuthAuthorizationRuntime {
     ) -> Result<CredentialSecretMaterial, String> {
         match material {
             CredentialSecretMaterial::OpenVulcanAuth { .. } => openvulcan::refresh(material).await,
-            CredentialSecretMaterial::ApiKey { .. }
+            CredentialSecretMaterial::OpenDesignAuth { .. }
+            | CredentialSecretMaterial::ApiKey { .. }
             | CredentialSecretMaterial::StaticBearer { .. }
             | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => Ok(material.clone()),
             CredentialSecretMaterial::OpenAiCodexOAuth {
@@ -2546,6 +2554,7 @@ async fn bind_callback_listener(provider_kind: OAuthProviderKind) -> Result<TcpL
         }
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
+        | OAuthProviderKind::OpenDesign
         | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(
                 "This authorization flow requires its dedicated callback runtime.",
@@ -2578,6 +2587,7 @@ fn callback_redirect_uri(
         }
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
+        | OAuthProviderKind::OpenDesign
         | OAuthProviderKind::KimiCodingPlan => Err(String::from(
             "This authorization flow requires its dedicated callback runtime.",
         )),
@@ -2664,6 +2674,7 @@ fn build_oauth_flow(
         }
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
+        | OAuthProviderKind::OpenDesign
         | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(
                 "This authorization flow must be constructed by its dedicated runtime.",
@@ -2711,6 +2722,7 @@ fn build_oauth_flow(
             }
             OAuthProviderKind::OpenVulcanChina
             | OAuthProviderKind::OpenVulcanGlobal
+            | OAuthProviderKind::OpenDesign
             | OAuthProviderKind::KimiCodingPlan => {
                 return Err(String::from(
                     "This authorization flow must use its dedicated authorization URL.",
@@ -3053,6 +3065,7 @@ async fn exchange_authorization_code(
         }
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
+        | OAuthProviderKind::OpenDesign
         | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(
                 "This authorization flow must use its dedicated token exchange.",

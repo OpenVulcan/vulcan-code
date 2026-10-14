@@ -212,6 +212,20 @@ fn credential_record_from_envelope(
         updated_at_unix_ms: timestamp,
     };
     match &secret.material {
+        CredentialSecretMaterial::OpenDesignAuth {
+            runtime_key,
+            control_key,
+            user_id,
+            email,
+        } => {
+            record.material_kind = String::from("open_design_auth");
+            // Separate typed columns preserve both roles without inventing OAuth refresh semantics.
+            // 独立类型化列保留两种角色，不虚构 OAuth 刷新语义。
+            record.access_token = Some(runtime_key.clone());
+            record.secret_value = Some(control_key.clone());
+            record.account_subject = Some(user_id.clone());
+            record.email = Some(email.clone());
+        }
         CredentialSecretMaterial::OpenVulcanAuth {
             access_token,
             authorization_id,
@@ -390,6 +404,12 @@ fn credential_envelope_from_record(
                 )?,
             }
         }
+        ("open_design_auth", None) => CredentialSecretMaterial::OpenDesignAuth {
+            runtime_key: required_record_text(&record.access_token, "OpenDesign runtime key")?,
+            control_key: required_record_text(&record.secret_value, "OpenDesign control key")?,
+            user_id: required_record_text(&record.account_subject, "OpenDesign user id")?,
+            email: required_record_text(&record.email, "OpenDesign email")?,
+        },
         ("api_key", None) => CredentialSecretMaterial::ApiKey {
             value: required_record_text(&record.secret_value, "API key")?,
         },
@@ -765,6 +785,13 @@ mod tests {
         // secrets cover static, renewable and browser callback material projections.
         // secrets 覆盖静态、可续期及浏览器回调材料投影。
         let secrets = vec![
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::OpenDesignAuth {
+                runtime_key: String::from("runtime-only"),
+                control_key: String::from("control-only"),
+                user_id: String::from("open-design-user"),
+                email: String::from("test@example.invalid"),
+            })
+            .expect("OpenDesign fixture should be valid"),
             CredentialSecretEnvelope::new_api_key(String::from("api-key"))
                 .expect("API key fixture should be valid"),
             CredentialSecretEnvelope::new(CredentialSecretMaterial::StaticBearer {

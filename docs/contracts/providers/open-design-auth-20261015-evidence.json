@@ -1,0 +1,105 @@
+{
+  "verified_at": "2026-10-14T17:16:17.994Z",
+  "upstream_source": {
+    "repository": "https://github.com/nexu-io/open-design",
+    "commit": "7da9a8aaa2d406bf3aa0a1cb9d4e8e1cd24c9095",
+    "paths": [
+      "apps/daemon/src/integrations/vela.ts",
+      "apps/daemon/src/integrations/vela-wallet.ts"
+    ]
+  },
+  "official_cli": {
+    "package": "@powerformer/vela-cli-win32-x64",
+    "version": "0.1.4",
+    "tarball": "https://registry.npmjs.org/@powerformer/vela-cli-win32-x64/-/vela-cli-win32-x64-0.1.4.tgz",
+    "integrity": "sha512-t/9JzqdKS6AWWjdT78U7ND1LcgBZg5zbuA4hpbf0ccGbeICZ0NPIkTgSvRk/pZgQ+0ZDn05vEO4/WgQgZHy3IA==",
+    "integrity_verified": true
+  },
+  "device_authorization": {
+    "create": {
+      "method": "POST",
+      "url": "https://amr-api.open-design.ai/api/v1/cli/device-authorizations",
+      "body": {
+        "cliVersion": "0.1.0",
+        "host": "Vulcan Code",
+        "profile": "prod"
+      },
+      "live_http_status": 201,
+      "response_fields": [
+        "deviceId",
+        "deviceSecret",
+        "userCode",
+        "activationUrl",
+        "expiresAt",
+        "pollIntervalSeconds",
+        "status",
+        "cliVersion",
+        "host",
+        "profile"
+      ]
+    },
+    "poll": {
+      "method": "POST",
+      "path": "/api/v1/cli/device-authorizations/{deviceId}/token",
+      "body": {
+        "deviceSecret": "<private-device-proof>"
+      },
+      "live_http_status": 200,
+      "live_state": "pending",
+      "live_final_state": "expired"
+    },
+    "activation": {
+      "origin": "https://open-design.ai",
+      "path": "/cloud/cli/activate",
+      "query": [
+        "deviceId",
+        "userCode"
+      ]
+    },
+    "approved_response": {
+      "evidence": "Synthetic response accepted and persisted by the official Vela CLI 0.1.4; real device challenge expired without account approval.",
+      "required_fields": [
+        "status",
+        "controlKey",
+        "runtimeKey",
+        "apiUrl",
+        "linkUrl",
+        "user.id",
+        "user.email"
+      ],
+      "runtime_origin": "https://amr-link.open-design.ai",
+      "control_origin": "https://amr-api.open-design.ai"
+    },
+    "lifecycle": {
+      "observed_cli_states": [
+        "pending",
+        "approved",
+        "expired"
+      ],
+      "unknown_state": "rejected",
+      "refresh": "No refresh token or renewal flow is present in the inspected upstream login integration."
+    }
+  },
+  "wallet": {
+    "source": "apps/daemon/src/integrations/vela-wallet.ts",
+    "method": "GET",
+    "url": "https://amr-api.open-design.ai/api/v1/wallet/balance",
+    "authorization": "Bearer <controlKey>",
+    "response_amount": "balanceUsd",
+    "amount_type": "non-negative decimal string",
+    "currency": "USD",
+    "unauthorized_statuses": [
+      401,
+      403
+    ],
+    "live_account_verified": false,
+    "api_key_http_status": 401
+  },
+  "secrets_included": false,
+  "runtime_discovery": {
+    "evidence": "Captured from official Vela CLI with isolated synthetic credentials and loopback server.",
+    "method": "GET",
+    "path": "/v1/models?all=true",
+    "authorization": "Bearer <runtimeKey>"
+  }
+}

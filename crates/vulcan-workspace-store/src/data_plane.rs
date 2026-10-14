@@ -36,11 +36,11 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// 进程内序号，为每次系统统计引导提供不同的绑定后缀。
 static SYSTEM_STATISTICS_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// Application schema version written by the single v1 initialization.
-/// 由唯一 v1 初始化写入的应用结构版本号。
+/// Current application schema, including atomic OpenDesign credential pairs.
+/// 当前应用结构，包含原子 OpenDesign 凭据对。
 /// Initialization creates the declared schema without reading or migrating earlier formats.
 /// 初始化创建已声明的结构，不读取或迁移早期格式。
-pub const APP_SCHEMA_VERSION: i64 = 1;
+pub const APP_SCHEMA_VERSION: i64 = 2;
 
 /// Credential table shared by initialization and every persistence operation.
 /// 初始化与全部持久化操作共用的凭据表。
@@ -220,13 +220,13 @@ pub async fn bootstrap_application_data_plane() -> Result<DataPlaneBootstrapRepo
         // The binding identifiers stay in the runtime metadata because plugin and VCE LanceDB paths use
         // them to address the host's own in-process databases.
         // 绑定标识符保留在运行期元数据中，因为插件与 VCE 的 LanceDB 路径用它们寻址宿主自身的进程内数据库。
-        // Single v1 initialization: the script creates every v1 object and writes `user_version = 1`;
-        // there is no migration chain and no branch that detects an older database.
-        // 唯一 v1 初始化：脚本创建全部 v1 对象并写入 `user_version = 1`；没有迁移链，也没有检测旧数据库的分支。
+        // Initialization accepts only empty databases or the exact current schema; pre-release formats are not migrated.
+        // 初始化仅接受空数据库或精确的当前结构；不迁移预发布格式。
         {
             let connection = local
                 .connect(LogicalDatabase::AppState)
                 .map_err(|error| format!("Failed to open the application database: {error}"))?;
+            validate_application_schema_for_initialization(&connection)?;
             connection
                 .execute_batch(&build_application_schema_script())
                 .map_err(|error| {
@@ -283,6 +283,27 @@ pub async fn prepare_application_schema_for_test(
     )
     .await
     .map_err(|error| format!("Initialize private application schema: {error}"))?;
+    Ok(())
+}
+
+/// Checks the existing schema before any initialization can overwrite its version marker.
+/// 在任何初始化覆盖版本标记之前检查既有结构。
+///
+/// `connection` is the exact application database. Returns success only for a new or current database.
+/// `connection` 是精确的应用数据库。仅新数据库或当前数据库返回成功。
+fn validate_application_schema_for_initialization(
+    connection: &rusqlite::Connection,
+) -> Result<(), String> {
+    // observed is read before CREATE IF NOT EXISTS, which cannot update old CHECK constraints.
+    // observed 在 CREATE IF NOT EXISTS 之前读取；后者无法更新旧 CHECK 约束。
+    let observed: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|_| String::from("Failed to inspect the application schema version."))?;
+    if observed != 0 && observed != APP_SCHEMA_VERSION {
+        return Err(format!(
+            "Unsupported application schema version {observed}; expected {APP_SCHEMA_VERSION}."
+        ));
+    }
     Ok(())
 }
 
@@ -483,6 +504,7 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
     material_kind TEXT NOT NULL CHECK(material_kind IN (
         'api_key',
         'static_bearer',
+        'open_design_auth',
         'openvulcan_auth',
         'open_ai_codex_oauth',
         'claude_code_oauth',
@@ -515,6 +537,14 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
     CHECK(
         (material_kind = 'api_key' AND secret_value IS NOT NULL AND length(trim(secret_value)) > 0)
         OR (material_kind = 'static_bearer' AND access_token IS NOT NULL AND length(trim(access_token)) > 0)
+        OR (
+            material_kind = 'open_design_auth'
+            AND access_token IS NOT NULL AND length(trim(access_token)) > 0
+            AND secret_value IS NOT NULL AND length(trim(secret_value)) > 0
+            AND account_subject IS NOT NULL AND length(trim(account_subject)) > 0
+            AND email IS NOT NULL AND length(trim(email)) > 0
+            AND refresh_token IS NULL AND expires_at_unix_ms IS NULL
+        )
         OR (
             material_kind = 'openvulcan_auth'
             AND access_token IS NOT NULL
@@ -663,6 +693,30 @@ PRAGMA user_version = {schema_version};
 mod tests {
     use super::*;
 
+    /// Verifies initialization refuses an old schema before modifying its version or stored data.
+    /// 验证初始化在修改版本或已存数据之前拒绝旧结构。
+    #[test]
+    fn open_design_schema_rejects_previous_version_without_mutation() {
+        // connection models a pre-existing database independently of the production data directory.
+        // connection 模拟既有数据库，与生产数据目录隔离。
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.execute_batch("PRAGMA user_version = 1; CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES ('retained');").unwrap();
+        assert!(validate_application_schema_for_initialization(&connection).is_err());
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT value FROM sentinel", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "retained"
+        );
+    }
+
     /// Verifies that the base schema no longer creates legacy SQLite transcript tables.
     /// 验证基础结构不再创建旧版 SQLite 转录表。
     #[test]
@@ -771,8 +825,8 @@ mod tests {
         assert!(!columns.contains("credential_json"));
     }
 
-    /// Verifies the single initialization creates every v1 object and writes the v1 version.
-    /// 验证唯一初始化创建全部 v1 对象并写入 v1 版本号。
+    /// Verifies initialization creates every current object and writes the current schema version.
+    /// 验证初始化创建全部当前对象并写入当前结构版本号。
     ///
     /// This is the test that makes "one initialization replaces the migration chain" a verified
     /// claim rather than an assertion: the object set below is the union of what the previous base
@@ -781,7 +835,7 @@ mod tests {
     /// 本测试使"一次初始化取代迁移链"成为被验证的结论而非断言：下方对象集是此前基础脚本与被删除的追加式
     /// 迁移共同产出的并集，因此任何缺失的表或索引都会在此失败。
     #[test]
-    fn v1_initialization_creates_every_object_and_writes_version_one() {
+    fn initialization_creates_every_object_and_writes_current_version() {
         let connection = rusqlite::Connection::open_in_memory().expect("in-memory database");
         connection
             .execute_batch(&build_application_schema_script())
@@ -848,8 +902,8 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
         assert_eq!(
-            user_version, 1,
-            "v1 initialization must write user_version = 1"
+            user_version, APP_SCHEMA_VERSION,
+            "initialization must write the current schema version"
         );
 
         let recorded_version: String = connection
@@ -859,7 +913,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("read recorded schema version");
-        assert_eq!(recorded_version, "1");
+        assert_eq!(recorded_version, APP_SCHEMA_VERSION.to_string());
 
         // Applying the initialization twice must be a no-op, because the script is the only entry
         // point and a host may re-run it against an existing database.

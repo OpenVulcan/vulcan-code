@@ -56,6 +56,22 @@ pub struct CredentialSecretEnvelope {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CredentialSecretMaterial {
+    /// OpenDesign's approved non-renewable credential pair, stored and replaced atomically.
+    /// OpenDesign 获批且不可续期的凭据对，原子存储及替换。
+    OpenDesignAuth {
+        /// Runtime key used exclusively for model discovery and inference.
+        /// 仅用于模型发现与推理的运行密钥。
+        runtime_key: String,
+        /// Control key used exclusively for account metadata.
+        /// 仅用于账户元数据的控制密钥。
+        control_key: String,
+        /// Stable user identifier issued alongside both keys.
+        /// 与两把密钥同时签发的稳定用户标识。
+        user_id: String,
+        /// Account email returned by the authorization service.
+        /// 授权服务返回的账户邮箱。
+        email: String,
+    },
     /// Rotating OpenVulcan device authorization without a separate refresh token.
     /// 没有独立刷新令牌的 OpenVulcan 轮换设备授权。
     OpenVulcanAuth {
@@ -227,6 +243,9 @@ pub enum CredentialExecutionSecretKind {
 /// 承载一个已验证的执行秘密，且不实现调试序列化。
 #[derive(Clone, PartialEq, Eq)]
 pub struct CredentialExecutionSecret {
+    /// Private OpenDesign control credential; never returned by the inference value accessor.
+    /// 私有 OpenDesign 控制凭据；绝不由推理值访问器返回。
+    open_design_control_key: Option<String>,
     /// Secret-store revision frozen for this execution.
     /// 为本次执行冻结的秘密存储修订号。
     revision: u64,
@@ -390,6 +409,7 @@ impl CredentialSecretEnvelope {
             | CredentialSecretMaterial::MiniMaxOAuth { .. }
             | CredentialSecretMaterial::KimiCodingPlanOAuth { .. }
             | CredentialSecretMaterial::OpenVulcanAuth { .. }
+            | CredentialSecretMaterial::OpenDesignAuth { .. }
             | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => CredentialMode::Auth,
         }
     }
@@ -436,6 +456,14 @@ impl CredentialSecretEnvelope {
         }
         let (kind, value, account_id, quota_project_id, project_id, provider_device_id) =
             match &self.material {
+                CredentialSecretMaterial::OpenDesignAuth { runtime_key, .. } => (
+                    CredentialExecutionSecretKind::Bearer,
+                    runtime_key.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
                 CredentialSecretMaterial::OpenVulcanAuth {
                     access_token,
                     authorization_id,
@@ -532,6 +560,12 @@ impl CredentialSecretEnvelope {
                 ),
             };
         Ok(CredentialExecutionSecret {
+            open_design_control_key: match &self.material {
+                CredentialSecretMaterial::OpenDesignAuth { control_key, .. } => {
+                    Some(control_key.clone())
+                }
+                _ => None,
+            },
             openvulcan_region: match &self.material {
                 CredentialSecretMaterial::OpenVulcanAuth { region, .. } => Some(*region),
                 _ => None,
@@ -583,6 +617,7 @@ impl CredentialSecretEnvelope {
                 tokens.expires_at_unix_ms
             }
             CredentialSecretMaterial::ApiKey { .. }
+            | CredentialSecretMaterial::OpenDesignAuth { .. }
             | CredentialSecretMaterial::StaticBearer { .. }
             | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => return false,
         };
@@ -609,6 +644,17 @@ impl CredentialSecretEnvelope {
             ));
         }
         match &self.material {
+            CredentialSecretMaterial::OpenDesignAuth {
+                runtime_key,
+                control_key,
+                user_id,
+                email,
+            } => {
+                validate_non_empty_secret("OpenDesign runtime key", runtime_key)?;
+                validate_non_empty_secret("OpenDesign control key", control_key)?;
+                validate_bounded_identity("OpenDesign user id", user_id)?;
+                validate_bounded_identity("OpenDesign email", email)
+            }
             CredentialSecretMaterial::OpenVulcanAuth {
                 access_token,
                 authorization_id,
@@ -755,6 +801,16 @@ impl OAuthTokenSet {
 }
 
 impl CredentialExecutionSecret {
+    /// Resolves the dedicated control key for the registered OpenDesign wallet primitive.
+    /// 为已注册的 OpenDesign 钱包原语解析专用控制密钥。
+    ///
+    /// Returns the exact control key, or an explicit error for API keys and other credentials.
+    /// 返回精确控制密钥，或针对 API Key 及其他凭据的明确错误。
+    pub(crate) fn open_design_control_key(&self) -> Result<&str, String> {
+        self.open_design_control_key.as_deref().ok_or_else(|| {
+            String::from("OpenDesign wallet balance requires account authorization.")
+        })
+    }
     /// Returns the fixed OpenVulcan deployment when this is a native Auth credential.
     /// 当本凭据为原生 Auth 时返回固定的 OpenVulcan 部署。
     pub fn openvulcan_region(&self) -> Option<OpenVulcanRegion> {

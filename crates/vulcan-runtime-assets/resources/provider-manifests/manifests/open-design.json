@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "open-design",
-  "revision": 1,
-  "published_at": "2026-10-14T00:00:00Z",
+  "revision": 2,
+  "published_at": "2026-10-14T17:22:34.274Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -27,6 +27,22 @@
       "kind": "conversation",
       "base_url": "https://amr-link.open-design.ai/v1",
       "credential_profiles": [
+        {
+          "credential_profile_id": "account-auth",
+          "display_name": "OpenDesign Account",
+          "credential_mode": "auth",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "open_design"
+          },
+          "billing_kind": "token_plan",
+          "account_usage_query": "open_design_wallet",
+          "default_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        },
         {
           "credential_profile_id": "api-key",
           "display_name": "API Key",

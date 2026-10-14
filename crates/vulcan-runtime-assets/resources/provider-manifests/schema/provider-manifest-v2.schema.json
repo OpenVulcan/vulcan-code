@@ -245,6 +245,7 @@
                             "mini_max_global_token_plan",
                             "mini_max_china_token_plan",
                             "kimi_coding_plan",
+                            "open_design",
                             "open_vulcan_china",
                             "open_vulcan_global"
                           ]

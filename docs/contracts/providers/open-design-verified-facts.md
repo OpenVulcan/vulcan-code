@@ -1,6 +1,6 @@
 # OpenDesign 套餐与供应商接入证据
 
-本记录对应 2026-10-14 的官方页面、指定客户端源码和测试凭据实测。清单字段以
+本记录对应 2026-10-14 的模型实测与 2026-10-15 的授权、余额协议验证。清单字段以
 `provider-manifest-v2.schema.json` 与 Rust 编译器为准；模型身份与执行能力由
 `open-design.json` 持有。本文件记录证据及限制，不另建运行时目录。
 
@@ -42,15 +42,15 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
 
 ## 目录与路由
 
-- 供应商 ID：`open-design`；服务入口：`design-plan`；凭据档：`api-key`。
+- 供应商 ID：`open-design`；服务入口：`design-plan`；凭据档：`api-key` 与 `account-auth`。
 - 基地址：`https://amr-link.open-design.ai/v1`；唯一已选协议：OpenAI Chat Completions。
-- 鉴权：`Authorization: Bearer <credential>`；凭据格式前缀：`sk-amr-`。
+- 鉴权：`Authorization: Bearer <credential>`；API Key 前缀为 `sk-amr-`，账号授权使用返回的 `runtimeKey`。
 - 目录采用 `discovery_only` 与精确规则交集。没有规则的远端模型不会被猜测启用；
   Key 不再返回的模型不会由本地清单补回。
 - 官方营销目录列出 12 个模型，测试 Key 实际只返回 11 个。
   **Hunyuan H4 Preview 未返回，未取得精确 ID、容量及可执行协议证据，因此不创建可用规则。**
-- 原生账单经登录后的 Vela CLI 读取，当前 API Key 接入未取得对应查询协议；
-  `account_usage_query` 明确为 `unsupported`，不复用其他供应商的余额接口。
+- API Key 凭据档的 `account_usage_query` 为 `unsupported`；账号授权凭据档使用
+  `open_design_wallet`，以独立 `controlKey` 查询美元钱包余额，不把套餐窗口等同于钱包余额。
 - `metadata.context_limit` 是本次声明的容量来源；`context_budget` 是上游客户端预算，
   不将它误当模型硬上限。输出使用该网关明确发布的 `output_budget = 32000`。
 
@@ -102,6 +102,40 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
 不自动切换协议、不拆帧冒充原生视频支持，也不据目录形状开放不可用线路。
 恢复视频能力前必须补齐精确载荷、生产 `encode_request` 和真实网关验收。
 
+## 设备授权与余额（2026-10-15）
+
+协议归属是 OpenDesign 的 Vela 设备授权服务；上游 CLI 或上述 daemon 集成升级时重新核验。
+本接入复用宿主的已注册授权事务、设备码界面、取消、重新授权与安全凭据存储，
+不依赖用户安装 Vela，也不读取或改写 `~/.amr/config.json`。
+
+- 官方包 `@powerformer/vela-cli-win32-x64@0.1.4` 的 tarball 已核对 npm 发布的 SHA-512。
+  以隔离临时配置和本地模拟服务运行该二进制，捕获其请求并验证获批响应被接受和保存。
+- 创建：`POST https://amr-api.open-design.ai/api/v1/cli/device-authorizations`，
+  JSON 为 `cliVersion`、`host`、`profile`；宿主如实使用自身版本、`Vulcan Code` 和 `prod`。
+- 创建返回 `deviceId`、`deviceSecret`、`userCode`、`activationUrl`、`expiresAt`、
+  `pollIntervalSeconds`、`status`。激活页面固定为 `https://open-design.ai/cloud/cli/activate`，
+  URL 内的设备身份与确认码必须和响应一致。设备秘密只留在内存任务中。
+- 轮询：`POST /api/v1/cli/device-authorizations/{deviceId}/token`，JSON 为 `deviceSecret`。
+  `pending` 按服务端间隔继续；`expired` 终止；`approved` 必须包含两把密钥、账户身份和
+  精确的生产 `apiUrl`、`linkUrl`。未知状态、错误响应和重定向都直接失败。
+- 官方 CLI 的本地捕获显示模型目录请求为 `GET /v1/models?all=true`，使用 `Bearer runtimeKey`。
+  `runtimeKey` 只通过推理值访问器投影到模型发现和推理；钱包专用访问器选择 `controlKey`。
+  两者没有已验证的刷新协议，不制造 Refresh Token 或过期时间。失效后重新授权。
+- 钱包：`GET https://amr-api.open-design.ai/api/v1/wallet/balance`，
+  `Authorization: Bearer <controlKey>`。金额来自字符串 `balanceUsd`，固定币种 USD；
+  保留所有十进制位，拒绝数字类型、负数、指数及非法小数。`updatedAt` 是上游更新时间，
+  宿主快照的 `observed_at` 使用实际查询时间。没有证据的用量与套餐窗口保持空。
+- 已提供的测试 API Key 访问正式钱包接口返回 401，因此保留 API Key 档的余额不支持声明。
+  Auth 钱包查询的 401/403 明确要求重新登录；其他错误保留为暂时不可用，不回显可能包含凭据的上游正文。
+- 成对凭据使用 `open_design_auth` 类型并由既有事务原子保存；运行密钥、控制密钥、
+  用户 ID、邮箱分别写入已有类型化列。SQLite 新增该类型的完整性约束，应用结构版本为 2。
+  遵循仓库 V0.1 规则：初始化前拒绝旧版本，不迁移、不覆盖旧数据库的版本号或内容。
+
+[脱敏授权证据](open-design-auth-20261015-evidence.json) 区分正式服务响应、官方 CLI 的模拟
+协议验证和本地回归。正式服务已验证创建 201、等待轮询 200 与到期状态 `expired`；
+本次设备挑战未获账户批准，真实登录完成及余额值仍未验收。仓库不保存设备秘密、实际密钥、
+账户身份或实际余额。
+
 ## Logo
 
 Logo 原样取自指定仓库 `apps/web/public/logo.svg`，复制为前端
@@ -129,3 +163,17 @@ Logo 原样取自指定仓库 `apps/web/public/logo.svg`，复制为前端
 
 这不等同于 1M 上下文压力测试、真实额度耗尽测试、其他套餐账号验收或桌面应用重启后的界面验收。
 资源通过 `make.ps1 sync` 同步；在线发布的签名与远端分发仍属于独立发布流程。
+
+
+### 2026-10-15 授权与余额接入验证
+
+- OpenDesign 定向测试通过，覆盖生产模型投影、设备创建和轮询、取消后迟到响应、到期、
+  不可信目标、秘密不回显、控制凭据选择及十进制金额格式。
+- 实际 SQLite 凭据测试通过，涵盖 OpenDesign 双密钥往返读写；数据库结构测试通过，
+  拒绝旧版本时保留既有版本号和记录。
+- `vulcan-provider-adapters`、`vulcan-service-kernel`、`vulcan-workspace-store` 的
+  `cargo check --all-targets` 通过；清单符合性与随包加载 23 项测试通过。
+- 前端 TypeScript、变更文件 ESLint、余额展示 12 项既有测试通过；
+  后端中文字符串及文案断言检查通过。
+- 源清单、索引及 Schema 已通过 `make.ps1 sync` 同步，产物与权威资源字节一致。
+- 发布门禁通过：22 份供应商清单、42 个执行夹具，以及临时签名、验签和摘要校验。
