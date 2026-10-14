@@ -96,6 +96,20 @@ pub fn answer_code_locations(text: &str) -> Vec<AnswerCodeLocation> {
     let lines: Vec<&str> = text.lines().collect();
     let mut seen = BTreeSet::new();
     let mut found = Vec::new();
+    collect_answer_code_locations(&lines, &mut seen, &mut found);
+    found
+}
+
+/// Scans `lines` fence by fence: a `ui-code` body yields locations, another `ui-*` body is scanned
+/// again because containers hold Markdown, and any other block is skipped as source text. Every
+/// fence is consumed through its own closing line, so a closing fence never opens another block.
+/// 逐个围栏扫描 `lines`：`ui-code` 正文产出位置，其他 `ui-*` 正文因容器承载 Markdown 而再次扫描，
+/// 其余代码块作为源码文本跳过。每个围栏都消费到其自身的结束行，因此结束围栏不会开启新的代码块。
+fn collect_answer_code_locations(
+    lines: &[&str],
+    seen: &mut BTreeSet<String>,
+    found: &mut Vec<AnswerCodeLocation>,
+) {
     let mut index = 0;
     while index < lines.len() {
         let line = lines[index].trim_start();
@@ -105,19 +119,19 @@ pub fn answer_code_locations(text: &str) -> Vec<AnswerCodeLocation> {
             continue;
         }
         let info = line[ticks..].trim();
-        if info.starts_with("ui-") && info != ANSWER_CODE_FENCE {
-            continue;
-        }
         let close = lines[index..].iter().position(|candidate| {
             let candidate = candidate.trim();
             let closing = candidate.bytes().take_while(|byte| *byte == b'`').count();
             closing >= ticks && closing == candidate.len()
         });
+        // An unclosed fence runs to the end of the reply, so nothing after it is a component.
+        // 未闭合的围栏延续到回答末尾，因此其后不再有组件。
         let Some(close) = close else {
-            break;
+            return;
         };
+        let body = &lines[index..index + close];
         if info == ANSWER_CODE_FENCE {
-            for row in &lines[index..index + close] {
+            for row in body {
                 let first = row.trim().trim_start_matches('|').split('|').next();
                 let Some(location) = first.and_then(parse_answer_code_location) else {
                     continue;
@@ -127,10 +141,11 @@ pub fn answer_code_locations(text: &str) -> Vec<AnswerCodeLocation> {
                     found.push(location);
                 }
             }
+        } else if info.starts_with("ui-") {
+            collect_answer_code_locations(body, seen, found);
         }
         index += close + 1;
     }
-    found
 }
 
 /// One `ui-code` location and what the host read there when the reply was sealed.
@@ -292,6 +307,37 @@ src/unclosed.rs:1-2
             .map(|location| location.location)
             .collect();
         assert_eq!(locations, ["src/a.rs:1-3", "src/b.rs:4", "src/c.rs:5-6"]);
+    }
+
+    /// The closing fence of an earlier component or container never opens a block that would hide
+    /// later excerpts.
+    /// 先前组件或容器的结束围栏绝不会开启一个隐藏后续摘录的代码块。
+    #[test]
+    fn closing_fences_of_other_components_do_not_hide_later_excerpts() {
+        let text = "\
+```ui-kv
+Owner | core
+```
+
+```ui-code
+src/a.rs:1
+```
+
+````ui-callout warning
+```ui-metrics
+Tests | 412
+```
+````
+
+```ui-code
+src/b.rs:2
+```
+";
+        let locations: Vec<String> = answer_code_locations(text)
+            .into_iter()
+            .map(|location| location.location)
+            .collect();
+        assert_eq!(locations, ["src/a.rs:1", "src/b.rs:2"]);
     }
 
     #[test]
