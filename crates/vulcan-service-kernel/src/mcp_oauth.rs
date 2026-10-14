@@ -28,7 +28,9 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use tokio::task::AbortHandle;
 use tokio::time::Instant;
-use vulcan_agent_runtime::mcp::{McpAuthStatus, McpOAuthSession, mcp_oauth_credential_backend};
+use vulcan_agent_runtime::mcp::{
+    McpAuthStatus, McpOAuthSession, clear_mcp_oauth_credentials, mcp_oauth_credential_backend,
+};
 
 /// Lifetime of one sign-in flow, for both loopback and pasted completion.
 /// 单个登录流程的有效期，同时适用于回环与粘贴完成方式。
@@ -554,12 +556,13 @@ fn discard_flow(server_id: &str) {
     }
 }
 
-/// Clears stored credentials for one server straight from the process backend.
-/// 直接从进程后端清除某服务器的已存储凭据。
+/// Clears stored credentials for one server straight from the process backend, invalidating saves
+/// that sessions of older runtime generations started before.
+/// 直接从进程后端清除某服务器的已存储凭据，并使旧运行时代次会话之前开始的保存失效。
 async fn clear_stored_credentials(server_id: &str) -> Result<(), String> {
     let backend = mcp_oauth_credential_backend();
     let server_id = server_id.to_string();
-    tokio::task::spawn_blocking(move || backend.clear(&server_id))
+    tokio::task::spawn_blocking(move || clear_mcp_oauth_credentials(&backend, &server_id))
         .await
         .map_err(|error| error.to_string())?
 }

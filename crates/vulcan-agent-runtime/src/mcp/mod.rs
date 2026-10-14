@@ -38,4 +38,5 @@ pub use runtime::{
 pub use vulcan_mcp_runtime::{
     McpAuthChallenge, McpAuthStatus, McpOAuthCredentialBackend, McpOAuthCredentialRecord,
     McpOAuthMemoryCredentialBackend, McpOAuthSession, McpOAuthStoredCredentials, McpRuntimeError,
+    clear_mcp_oauth_credentials,
 };

@@ -170,6 +170,37 @@ async fn sign_out_waits_for_an_in_flight_refresh_and_clears_its_tokens() {
     assert!(backend.load(SERVER_ID).unwrap().is_none());
 }
 
+/// A refresh in an older runtime generation holds only its own manager lock, so the sign-out epoch
+/// keeps its late save from restoring credentials the current generation removed.
+/// 旧运行时代次中的刷新只持有自己的管理器锁，因此由退出登录代次阻止其迟到的保存还原当前代次已移除的凭据。
+#[tokio::test]
+async fn sign_out_in_one_generation_rejects_a_refresh_started_in_another() {
+    let backend: Arc<dyn McpOAuthCredentialBackend> =
+        Arc::new(McpOAuthMemoryCredentialBackend::default());
+    let older = session(backend.clone(), McpTransportOAuthSpec::default()).await;
+    let current = session(backend.clone(), McpTransportOAuthSpec::default()).await;
+    backend
+        .save(SERVER_ID, &record(SERVER_URL, "client"))
+        .unwrap();
+    let credentials = || record(SERVER_URL, "client").credentials;
+
+    // The older generation's refresh starts, then the user signs out in the current one.
+    // 旧代次的刷新开始后，用户在当前代次退出登录。
+    let refreshing = older.lock_manager().await;
+    current.remove_authorization().await.unwrap();
+    let late = older.credential_store.save(credentials()).await;
+    drop(refreshing);
+
+    assert!(matches!(late, Err(RmcpAuthError::AuthorizationRequired)));
+    assert!(backend.load(SERVER_ID).unwrap().is_none());
+
+    // An operation that starts after the sign-out saves normally.
+    // 退出登录之后开始的操作可正常保存。
+    drop(older.lock_manager().await);
+    older.credential_store.save(credentials()).await.unwrap();
+    assert!(backend.load(SERVER_ID).unwrap().is_some());
+}
+
 #[tokio::test]
 async fn denied_callback_fails_without_contacting_the_server() {
     let backend = Arc::new(McpOAuthMemoryCredentialBackend::default());

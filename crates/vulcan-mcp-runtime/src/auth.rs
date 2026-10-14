@@ -9,9 +9,9 @@ use rmcp::transport::auth::{
     OAuthClientConfig, StoredCredentials,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, PoisonError};
 use tokio::sync::{Mutex, watch};
 
 /// Stable host-owned OAuth configuration attached to one remote MCP transport.
@@ -158,6 +158,51 @@ impl McpOAuthMemoryCredentialBackend {
     }
 }
 
+/// Sign-out epoch of one server in one backend, shared by every runtime generation in the process.
+/// 某后端中某服务器的退出登录代次，由进程内所有运行时代次共享。
+///
+/// Each runtime generation owns its own session and manager lock, so a refresh in an older
+/// generation is not ordered against a sign-out in the current one. Clearing bumps the epoch and
+/// saving requires the epoch its operation started under, both while holding this lock, so a save
+/// that began before a sign-out can never restore the removed credentials.
+/// 每个运行时代次拥有自己的会话与管理器锁，因此旧代次中的刷新与当前代次中的退出登录之间没有先后
+/// 约束。清除会递增代次，保存要求其操作开始时的代次，二者都在持有此锁时进行，因此退出登录前开始的
+/// 保存绝不会还原已移除的凭据。
+type CredentialEpoch = Arc<std::sync::Mutex<u64>>;
+
+/// Sign-out epochs keyed by backend instance and server identifier.
+/// 按后端实例与服务器标识索引的退出登录代次。
+static CREDENTIAL_EPOCHS: LazyLock<std::sync::Mutex<HashMap<(usize, String), CredentialEpoch>>> =
+    LazyLock::new(Default::default);
+
+/// Returns the sign-out epoch shared by every session of `server_id` over `backend`.
+/// 返回 `backend` 上 `server_id` 的所有会话共享的退出登录代次。
+fn credential_epoch(
+    backend: &Arc<dyn McpOAuthCredentialBackend>,
+    server_id: &str,
+) -> CredentialEpoch {
+    let instance = Arc::as_ptr(backend).cast::<()>() as usize;
+    CREDENTIAL_EPOCHS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry((instance, server_id.to_owned()))
+        .or_default()
+        .clone()
+}
+
+/// Clears the stored credentials of `server_id` and invalidates every save that started before,
+/// in any runtime generation.
+/// 清除 `server_id` 的已存储凭据，并使之前在任意运行时代次中开始的保存全部失效。
+pub fn clear_mcp_oauth_credentials(
+    backend: &Arc<dyn McpOAuthCredentialBackend>,
+    server_id: &str,
+) -> Result<(), String> {
+    let epoch = credential_epoch(backend, server_id);
+    let mut current = epoch.lock().unwrap_or_else(PoisonError::into_inner);
+    *current += 1;
+    backend.clear(server_id)
+}
+
 /// rmcp credential store that scopes one shared backend to a single server URL and client.
 /// 将共享后端限定到单个服务器 URL 与客户端的 rmcp 凭据存储。
 #[derive(Clone)]
@@ -174,6 +219,12 @@ struct ScopedCredentialStore {
     /// Pre-registered client identifier that stored records must match, when configured.
     /// 已配置时，已存储记录必须匹配的预注册客户端标识。
     expected_client_id: Option<String>,
+    /// Sign-out epoch shared with the other generations' sessions of this server.
+    /// 与该服务器其他代次会话共享的退出登录代次。
+    epoch: CredentialEpoch,
+    /// Epoch the current manager operation started under; a save is accepted only while it holds.
+    /// 当前管理器操作开始时的代次；仅当其仍有效时才接受保存。
+    save_epoch: Arc<AtomicU64>,
 }
 
 impl ScopedCredentialStore {
@@ -189,6 +240,13 @@ impl ScopedCredentialStore {
             .await
             .map_err(|error| RmcpAuthError::InternalError(error.to_string()))?
             .map_err(RmcpAuthError::InternalError)
+    }
+
+    /// Lets saves of the manager operation starting now succeed until the next sign-out.
+    /// 允许此刻开始的管理器操作进行保存，直到下一次退出登录。
+    fn begin_operation(&self) {
+        let current = *self.epoch.lock().unwrap_or_else(PoisonError::into_inner);
+        self.save_epoch.store(current, Ordering::Release);
     }
 
     /// Returns whether a stored record belongs to the currently configured server and client.
@@ -218,13 +276,33 @@ impl CredentialStore for ScopedCredentialStore {
             server_url: self.server_url.clone(),
             credentials,
         };
-        self.run(move |backend, server_id| backend.save(server_id, &record))
-            .await
+        let epoch = self.epoch.clone();
+        let started = self.save_epoch.load(Ordering::Acquire);
+        let saved = self
+            .run(move |backend, server_id| {
+                let current = epoch.lock().unwrap_or_else(PoisonError::into_inner);
+                if *current != started {
+                    return Ok(false);
+                }
+                backend.save(server_id, &record).map(|()| true)
+            })
+            .await?;
+        // A sign-out since the operation began wins; the caller must authorize again.
+        // 操作开始后发生的退出登录优先；调用方必须重新授权。
+        if saved {
+            Ok(())
+        } else {
+            Err(RmcpAuthError::AuthorizationRequired)
+        }
     }
 
     async fn clear(&self) -> Result<(), RmcpAuthError> {
-        self.run(|backend, server_id| backend.clear(server_id))
+        let backend = self.backend.clone();
+        let server_id = self.server_id.clone();
+        tokio::task::spawn_blocking(move || clear_mcp_oauth_credentials(&backend, &server_id))
             .await
+            .map_err(|error| RmcpAuthError::InternalError(error.to_string()))?
+            .map_err(RmcpAuthError::InternalError)
     }
 }
 
@@ -275,11 +353,14 @@ impl McpOAuthSession {
         backend: Arc<dyn McpOAuthCredentialBackend>,
     ) -> Result<Self, McpRuntimeError> {
         let server_url = base_url.into();
+        let server_id = server_id.into();
         let credential_store = ScopedCredentialStore {
+            epoch: credential_epoch(&backend, &server_id),
             backend,
-            server_id: server_id.into(),
+            server_id,
             server_url: server_url.clone(),
             expected_client_id: spec.client_id.clone(),
+            save_epoch: Arc::new(AtomicU64::new(0)),
         };
         let mut manager = AuthorizationManager::new(server_url.as_str())
             .await
@@ -296,6 +377,14 @@ impl McpOAuthSession {
         })
     }
 
+    /// Locks the manager for one operation whose saves count only until the next sign-out.
+    /// 为一次操作锁定管理器，该操作的保存只在下一次退出登录之前有效。
+    async fn lock_manager(&self) -> tokio::sync::MutexGuard<'_, AuthorizationManager> {
+        let manager = self.manager.lock().await;
+        self.credential_store.begin_operation();
+        manager
+    }
+
     /// Restores stored tokens into the manager, rediscovering metadata only when tokens exist.
     /// 将已存储令牌还原到管理器，仅在存在令牌时重新发现元数据。
     ///
@@ -305,7 +394,7 @@ impl McpOAuthSession {
         if self.restored.load(Ordering::Acquire) {
             return Ok(());
         }
-        let mut manager = self.manager.lock().await;
+        let mut manager = self.lock_manager().await;
         if self.restored.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -361,7 +450,7 @@ impl McpOAuthSession {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let mut manager = self.manager.lock().await;
+        let mut manager = self.lock_manager().await;
         let metadata_resolution = manager
             .resolve_metadata()
             .await
@@ -401,8 +490,7 @@ impl McpOAuthSession {
         let callback = AuthorizationCallback::from_redirect_url(callback_url).map_err(|error| {
             McpRuntimeError::invalid_argument(format!("mcp.oauth.callback: {error}"))
         })?;
-        self.manager
-            .lock()
+        self.lock_manager()
             .await
             .exchange_code_for_token_with_issuer(
                 &callback.code,
@@ -421,10 +509,9 @@ impl McpOAuthSession {
     /// Clears every stored credential for this server and wakes connections waiting on authorization.
     /// 清除此服务器的全部已存储凭据，并唤醒等待授权的连接。
     pub async fn remove_authorization(&self) -> Result<(), McpRuntimeError> {
-        // A refresh holds the manager lock from loading tokens until saving new ones; clearing
-        // under the same lock keeps an in-flight refresh from restoring tokens after sign-out.
-        // 刷新从读取令牌到保存新令牌全程持有管理器锁；在同一把锁下清除，
-        // 可防止进行中的刷新在退出登录后写回令牌。
+        // Clearing advances the sign-out epoch, so a refresh in flight in this or any other
+        // runtime generation cannot save its tokens afterwards.
+        // 清除会推进退出登录代次，因此本代次或任何其他运行时代次中进行中的刷新之后都无法保存其令牌。
         let manager = self.manager.lock().await;
         self.credential_store
             .clear()
@@ -471,7 +558,7 @@ impl McpOAuthSession {
     /// 解析一个访问令牌；用户必须（重新）授权时返回 `None`。
     pub async fn access_token(&self) -> Result<Option<String>, McpRuntimeError> {
         self.ensure_restored().await?;
-        let manager = self.manager.lock().await;
+        let manager = self.lock_manager().await;
         match manager.get_access_token().await {
             Ok(token) => Ok(Some(token)),
             Err(RmcpAuthError::AuthorizationRequired) => Ok(None),

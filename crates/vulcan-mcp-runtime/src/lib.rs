@@ -32,6 +32,7 @@ pub mod transport;
 pub use auth::{
     McpAuthChallenge, McpAuthStatus, McpOAuthCredentialBackend, McpOAuthCredentialRecord,
     McpOAuthMemoryCredentialBackend, McpOAuthSession, McpTransportOAuthSpec,
+    clear_mcp_oauth_credentials,
 };
 // Stored credential payload carried inside each persisted OAuth record.
 // 每条持久化 OAuth 记录中携带的已存储凭据载荷。
