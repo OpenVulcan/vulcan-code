@@ -1,0 +1,1506 @@
+{
+  "evidence_id": "open-design.gateway.2026-10-14",
+  "verified_on": "2026-10-14",
+  "source_repository_commit": "7da9a8aaa2d406bf3aa0a1cb9d4e8e1cd24c9095",
+  "base_url": "https://amr-link.open-design.ai/v1",
+  "scope": "One supplied test credential; public synthetic inputs; no quota exhaustion or full-context stress test.",
+  "sources": [
+    "https://open-design.ai/zh/pricing/",
+    "https://open-design.ai/zh/model-credits/",
+    "https://amr-link.open-design.ai/v1/models"
+  ],
+  "catalog": {
+    "authenticated_status": 200,
+    "unauthenticated_status": 401,
+    "models": [
+      {
+        "id": "claude-haiku-5.5",
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "file"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "low",
+          "capability": "standard",
+          "context_limit": 1000000,
+          "context_budget": 132000,
+          "output_budget": 32000
+        },
+        "default": false,
+        "enabled": true
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "medium",
+          "capability": "standard",
+          "context_limit": 1048000,
+          "context_budget": 232000,
+          "output_budget": 32000
+        },
+        "default": false,
+        "enabled": true
+      },
+      {
+        "id": "deepseek-v4-flash-vision-exp",
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "medium",
+          "capability": "standard",
+          "context_limit": 1048000,
+          "context_budget": 232000,
+          "output_budget": 32000
+        },
+        "default": false,
+        "enabled": true
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "high",
+          "capability": "advanced",
+          "context_limit": 1048000,
+          "context_budget": 232000,
+          "output_budget": 32000
+        },
+        "default": false,
+        "enabled": true
+      },
+      {
+        "id": "deepseek-v4.1-flash",
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "low",
+          "capability": "advanced",
+          "context_limit": 1048000,
+          "context_budget": 232000,
+          "output_budget": 32000
+        },
+        "default": true,
+        "enabled": true
+      },
+      {
+        "id": "glm-5.3-flash",
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "video"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "low",
+          "capability": "advanced",
+          "context_limit": 1048000,
+          "context_budget": 232000,
+          "output_budget": 32000
+        },
+        "default": false,
+        "enabled": true
+      },
+      {
+        "id": "glm-5.3-flashx",
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "file",
+            "video"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "medium",
+          "capability": "advanced",
+          "context_limit": 1000000,
+          "context_budget": 232000,
+          "output_budget": 32000
+        },
+        "default": false,
+        "enabled": true
+      },
+      {
+        "id": "gpt-6-luna",
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "file"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "low",
+          "capability": "standard",
+          "context_limit": 1050000,
+          "context_budget": 304000,
+          "output_budget": 32000
+        },
+        "default": false,
+        "enabled": true
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "medium",
+          "capability": "advanced",
+          "context_limit": 262000,
+          "context_budget": 262000,
+          "output_budget": 32000
+        },
+        "default": false,
+        "enabled": true
+      },
+      {
+        "id": "mimo-v2.6-flash",
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "low",
+          "capability": "standard",
+          "context_limit": 1048000,
+          "context_budget": 232000,
+          "output_budget": 32000
+        },
+        "default": false,
+        "enabled": true
+      },
+      {
+        "id": "mimo-v2.6-pro",
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "metadata": {
+          "cost": "medium",
+          "capability": "advanced",
+          "context_limit": 1048000,
+          "context_budget": 232000,
+          "output_budget": 32000
+        },
+        "default": false,
+        "enabled": true
+      }
+    ],
+    "missing_requested_names": [
+      "Hunyuan H4 Preview"
+    ]
+  },
+  "reasoning": {
+    "declared_efforts": {
+      "claude-haiku-5.5": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "deepseek-v4-flash": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "ultra",
+        "max"
+      ],
+      "deepseek-v4-flash-vision-exp": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "ultra",
+        "max"
+      ],
+      "deepseek-v4-pro": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "ultra",
+        "max"
+      ],
+      "deepseek-v4.1-flash": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "ultra",
+        "max"
+      ],
+      "glm-5.3-flash": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "glm-5.3-flashx": [
+        "low",
+        "high",
+        "max"
+      ],
+      "gpt-6-luna": [
+        "adaptive"
+      ],
+      "kimi-k2.7-code": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "mimo-v2.6-flash": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "mimo-v2.6-pro": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "probes": [
+      {
+        "model": "deepseek-v4.1-flash",
+        "endpoint": "/chat/completions",
+        "status": 400,
+        "requested_effort": "__invalid__",
+        "reasoning_types": []
+      },
+      {
+        "model": "claude-haiku-5.5",
+        "endpoint": "/chat/completions",
+        "status": 400,
+        "requested_effort": "__invalid__",
+        "reasoning_types": []
+      },
+      {
+        "model": "gpt-6-luna",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "__invalid__",
+        "reasoning_types": [
+          "reasoning.encrypted"
+        ],
+        "reasoning_tokens": 9
+      },
+      {
+        "model": "glm-5.3-flashx",
+        "endpoint": "/chat/completions",
+        "status": 400,
+        "requested_effort": "__invalid__",
+        "reasoning_types": []
+      },
+      {
+        "model": "deepseek-v4-pro",
+        "endpoint": "/chat/completions",
+        "status": 400,
+        "requested_effort": "__invalid__",
+        "reasoning_types": []
+      },
+      {
+        "model": "deepseek-v4-flash",
+        "endpoint": "/chat/completions",
+        "status": 400,
+        "requested_effort": "__invalid__",
+        "reasoning_types": []
+      },
+      {
+        "model": "glm-5.3-flash",
+        "endpoint": "/chat/completions",
+        "status": 400,
+        "requested_effort": "__invalid__",
+        "reasoning_types": []
+      },
+      {
+        "model": "kimi-k2.7-code",
+        "endpoint": "/chat/completions",
+        "status": 400,
+        "requested_effort": "__invalid__",
+        "reasoning_types": []
+      },
+      {
+        "model": "deepseek-v4-flash-vision-exp",
+        "endpoint": "/chat/completions",
+        "status": 400,
+        "requested_effort": "__invalid__",
+        "reasoning_types": []
+      },
+      {
+        "model": "mimo-v2.6-flash",
+        "endpoint": "/chat/completions",
+        "status": 400,
+        "requested_effort": "__invalid__",
+        "reasoning_types": []
+      },
+      {
+        "model": "mimo-v2.6-pro",
+        "endpoint": "/chat/completions",
+        "status": 400,
+        "requested_effort": "__invalid__",
+        "reasoning_types": []
+      },
+      {
+        "model": "mimo-v2.6-pro",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "none",
+        "reasoning_types": []
+      },
+      {
+        "model": "mimo-v2.6-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "none",
+        "reasoning_types": []
+      },
+      {
+        "model": "gpt-6-luna",
+        "endpoint": "/responses",
+        "status": 200,
+        "requested_effort": "__invalid__",
+        "reported_effort": "medium",
+        "reasoning_types": []
+      },
+      {
+        "model": "gpt-6-luna",
+        "endpoint": "/responses",
+        "status": 200,
+        "requested_effort": "none",
+        "reported_effort": "medium",
+        "reasoning_types": []
+      },
+      {
+        "model": "mimo-v2.6-pro",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "high",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 11
+      },
+      {
+        "model": "gpt-6-luna",
+        "endpoint": "/responses",
+        "status": 200,
+        "requested_effort": "high",
+        "reported_effort": "medium",
+        "reasoning_types": []
+      },
+      {
+        "model": "mimo-v2.6-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "high",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 106
+      },
+      {
+        "model": "deepseek-v4-flash-vision-exp",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "none",
+        "reasoning_types": []
+      },
+      {
+        "model": "deepseek-v4.1-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "none",
+        "reasoning_types": []
+      },
+      {
+        "model": "deepseek-v4-pro",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "none",
+        "reasoning_types": []
+      },
+      {
+        "model": "deepseek-v4-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "none",
+        "reasoning_types": []
+      },
+      {
+        "model": "glm-5.3-flashx",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "low",
+        "reasoning_types": []
+      },
+      {
+        "model": "glm-5.3-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "none",
+        "reasoning_types": []
+      },
+      {
+        "model": "claude-haiku-5.5",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "none",
+        "reasoning_types": []
+      },
+      {
+        "model": "kimi-k2.7-code",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "none",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 36
+      },
+      {
+        "model": "deepseek-v4.1-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "high",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 10
+      },
+      {
+        "model": "claude-haiku-5.5",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "high",
+        "reasoning_types": []
+      },
+      {
+        "model": "kimi-k2.7-code",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "high",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 26
+      },
+      {
+        "model": "glm-5.3-flashx",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "max",
+        "reasoning_types": []
+      },
+      {
+        "model": "gpt-6-luna",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "none",
+        "reasoning_types": [
+          "reasoning.encrypted"
+        ],
+        "reasoning_tokens": 10
+      },
+      {
+        "model": "gpt-6-luna",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "high",
+        "reasoning_types": []
+      },
+      {
+        "model": "mimo-v2.6-pro",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "medium",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 11
+      },
+      {
+        "model": "mimo-v2.6-pro",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "xhigh",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 11
+      },
+      {
+        "model": "mimo-v2.6-pro",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "minimal",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 11
+      },
+      {
+        "model": "mimo-v2.6-pro",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "max",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 11
+      },
+      {
+        "model": "mimo-v2.6-pro",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "low",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 11
+      },
+      {
+        "model": "mimo-v2.6-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "minimal",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 11
+      },
+      {
+        "model": "mimo-v2.6-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "max",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 12
+      },
+      {
+        "model": "mimo-v2.6-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "xhigh",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 11
+      },
+      {
+        "model": "mimo-v2.6-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "low",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 11
+      },
+      {
+        "model": "mimo-v2.6-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "medium",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 158
+      },
+      {
+        "model": "deepseek-v4.1-flash",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "high",
+        "reasoning_types": [
+          "reasoning.text"
+        ]
+      },
+      {
+        "model": "kimi-k2.7-code",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "high",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 33
+      },
+      {
+        "model": "mimo-v2.6-pro",
+        "endpoint": "/chat/completions",
+        "status": 200,
+        "requested_effort": "high",
+        "reasoning_types": [
+          "reasoning.text"
+        ],
+        "reasoning_tokens": 8
+      }
+    ],
+    "findings": [
+      "Claude, DeepSeek, GLM and Kimi invalid-value errors enumerated accepted gateway effort labels; this does not prove identical upstream semantics.",
+      "Both MiMo models accepted each declared effort, rejected an invalid value, omitted reasoning for none, and returned reasoning.text for enabled efforts.",
+      "Kimi none still returned reasoning.text and nonzero reasoning tokens; none is excluded.",
+      "GLM-5.3 Flash image input with none still returned reasoning.summary and nonzero reasoning tokens; none is excluded.",
+      "GPT-6 Luna accepted an invalid Chat effort; Responses reported medium for invalid, none and high. Use provider_adaptive and remove reasoning_effort."
+    ]
+  },
+  "media": [
+    {
+      "kind": "image",
+      "model": "deepseek-v4.1-flash",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "Red"
+      ],
+      "reasoning_types": [],
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "image",
+      "model": "gpt-6-luna",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "Red"
+      ],
+      "reasoning_types": [
+        "reasoning.encrypted"
+      ],
+      "reasoning_tokens": 13,
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "image",
+      "model": "deepseek-v4-flash-vision-exp",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "Red"
+      ],
+      "reasoning_types": [],
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "image",
+      "model": "claude-haiku-5.5",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "Red"
+      ],
+      "reasoning_types": [],
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "image",
+      "model": "glm-5.3-flashx",
+      "status": 200,
+      "requested_effort": "low",
+      "content": [
+        "Red"
+      ],
+      "reasoning_types": [
+        "reasoning.text"
+      ],
+      "reasoning_tokens": 2,
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "image",
+      "model": "kimi-k2.7-code",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "Red"
+      ],
+      "reasoning_types": [
+        "reasoning.text"
+      ],
+      "reasoning_tokens": 26,
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "image",
+      "model": "mimo-v2.6-flash",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "Red."
+      ],
+      "reasoning_types": [],
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "image",
+      "model": "glm-5.3-flash",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "Red"
+      ],
+      "reasoning_types": [
+        "reasoning.summary"
+      ],
+      "reasoning_tokens": 3,
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "image",
+      "model": "mimo-v2.6-pro",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "Red"
+      ],
+      "reasoning_types": [],
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "video",
+      "model": "glm-5.3-flashx",
+      "status": 400,
+      "requested_effort": "low",
+      "reasoning_types": [],
+      "outcome": "not_enabled"
+    },
+    {
+      "kind": "video",
+      "model": "mimo-v2.6-pro",
+      "status": 400,
+      "requested_effort": "none",
+      "reasoning_types": [],
+      "outcome": "not_enabled"
+    },
+    {
+      "kind": "file",
+      "model": "claude-haiku-5.5",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "VULCAN-OD-42"
+      ],
+      "reasoning_types": [],
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "video",
+      "model": "mimo-v2.6-flash",
+      "status": 400,
+      "requested_effort": "none",
+      "reasoning_types": [],
+      "outcome": "not_enabled"
+    },
+    {
+      "kind": "file",
+      "model": "glm-5.3-flashx",
+      "status": 200,
+      "requested_effort": "low",
+      "content": [
+        "VULCAN-OD-42"
+      ],
+      "reasoning_types": [],
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "video",
+      "model": "glm-5.3-flash",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "I can't see any video in our conversation — no video was attached or shared. Could you share the video you'd like me to analyze? Once I can view it, I'll tell you the dominant color in one word."
+      ],
+      "reasoning_types": [
+        "reasoning.summary"
+      ],
+      "reasoning_tokens": 28,
+      "outcome": "not_enabled"
+    },
+    {
+      "kind": "file",
+      "model": "gpt-6-luna",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "VULCAN-OD-42"
+      ],
+      "reasoning_types": [
+        "reasoning.encrypted"
+      ],
+      "reasoning_tokens": 18,
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "audio",
+      "model": "mimo-v2.6-pro",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "Speech."
+      ],
+      "reasoning_types": [],
+      "outcome": "inconclusive_silence_probe"
+    },
+    {
+      "kind": "audio",
+      "model": "mimo-v2.6-flash",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "Silence"
+      ],
+      "reasoning_types": [],
+      "outcome": "inconclusive_silence_probe"
+    },
+    {
+      "kind": "audio_speech",
+      "model": "mimo-v2.6-flash",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "42"
+      ],
+      "reasoning_types": [],
+      "outcome": "verified_synthetic_input"
+    },
+    {
+      "kind": "audio_speech",
+      "model": "mimo-v2.6-pro",
+      "status": 200,
+      "requested_effort": "none",
+      "content": [
+        "42"
+      ],
+      "reasoning_types": [],
+      "outcome": "verified_synthetic_input"
+    }
+  ],
+  "media_inputs": {
+    "image": "128 x 128 red PNG; asked for dominant color.",
+    "file": "One-page PDF containing marker VULCAN-OD-42.",
+    "video": "Two-second red MP4, encoded as video_url.url with a data URL.",
+    "audio": "Initial silence WAV was inconclusive for MiMo Pro; replaced with spoken WAV: The secret number is forty two.",
+    "audio_speech": "Both MiMo models returned 42 from the spoken WAV."
+  },
+  "streams": [
+    {
+      "model": "deepseek-v4.1-flash",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_tokens": 256,
+        "reasoning_effort": "high",
+        "functions": []
+      },
+      "event_count": 15,
+      "tool_call_delta_count": 0,
+      "usage": [
+        {
+          "prompt_tokens": 34,
+          "completion_tokens": 14,
+          "total_tokens": 48,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 12
+          }
+        }
+      ]
+    },
+    {
+      "model": "gpt-6-luna",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_tokens": 256,
+        "functions": []
+      },
+      "event_count": 9,
+      "tool_call_delta_count": 0,
+      "usage": [
+        {
+          "prompt_tokens": 10,
+          "completion_tokens": 5,
+          "total_tokens": 15,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {}
+        }
+      ]
+    },
+    {
+      "model": "mimo-v2.6-pro",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_tokens": 256,
+        "reasoning_effort": "high",
+        "functions": []
+      },
+      "event_count": 4,
+      "tool_call_delta_count": 0,
+      "usage": [
+        {
+          "prompt_tokens": 11,
+          "completion_tokens": 15,
+          "total_tokens": 26,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 11
+          }
+        }
+      ]
+    },
+    {
+      "model": "deepseek-v4-pro",
+      "status": 400,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "reasoning_effort": "high",
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 0,
+      "tool_call_delta_count": 0,
+      "usage": []
+    },
+    {
+      "model": "deepseek-v4-flash",
+      "status": 400,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "reasoning_effort": "high",
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 0,
+      "tool_call_delta_count": 0,
+      "usage": []
+    },
+    {
+      "model": "deepseek-v4-flash-vision-exp",
+      "status": 400,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "reasoning_effort": "high",
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 0,
+      "tool_call_delta_count": 0,
+      "usage": []
+    },
+    {
+      "model": "deepseek-v4.1-flash",
+      "status": 400,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "reasoning_effort": "high",
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 0,
+      "tool_call_delta_count": 0,
+      "usage": []
+    },
+    {
+      "model": "glm-5.3-flash",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "reasoning_effort": "high",
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 13,
+      "tool_call_delta_count": 8,
+      "usage": [
+        {
+          "prompt_tokens": 165,
+          "completion_tokens": 11,
+          "total_tokens": 176,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {}
+        }
+      ]
+    },
+    {
+      "model": "claude-haiku-5.5",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "reasoning_effort": "high",
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 6,
+      "tool_call_delta_count": 4,
+      "usage": [
+        {
+          "prompt_tokens": 502,
+          "completion_tokens": 38,
+          "total_tokens": 540
+        }
+      ]
+    },
+    {
+      "model": "kimi-k2.7-code",
+      "status": 400,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "reasoning_effort": "high",
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 0,
+      "tool_call_delta_count": 0,
+      "usage": []
+    },
+    {
+      "model": "mimo-v2.6-flash",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "reasoning_effort": "high",
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 9,
+      "tool_call_delta_count": 6,
+      "usage": [
+        {
+          "prompt_tokens": 96,
+          "completion_tokens": 32,
+          "total_tokens": 128,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 13,
+            "image_tokens": 0
+          }
+        }
+      ]
+    },
+    {
+      "model": "gpt-6-luna",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 11,
+      "tool_call_delta_count": 6,
+      "usage": [
+        {
+          "prompt_tokens": 48,
+          "completion_tokens": 18,
+          "total_tokens": 66,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {}
+        }
+      ]
+    },
+    {
+      "model": "mimo-v2.6-pro",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "reasoning_effort": "high",
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 10,
+      "tool_call_delta_count": 6,
+      "usage": [
+        {
+          "prompt_tokens": 96,
+          "completion_tokens": 33,
+          "total_tokens": 129,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 14
+          }
+        }
+      ]
+    },
+    {
+      "model": "glm-5.3-flashx",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 256,
+        "reasoning_effort": "low",
+        "tool_choice": "required",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 2,
+      "tool_call_delta_count": 1,
+      "usage": [
+        {
+          "prompt_tokens": 165,
+          "completion_tokens": 12,
+          "total_tokens": 177,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {}
+        }
+      ]
+    },
+    {
+      "model": "deepseek-v4-flash-vision-exp",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 512,
+        "reasoning_effort": "high",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 26,
+      "tool_call_delta_count": 10,
+      "usage": [
+        {
+          "prompt_tokens": 298,
+          "completion_tokens": 52,
+          "total_tokens": 350,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 14
+          }
+        }
+      ]
+    },
+    {
+      "model": "deepseek-v4-flash",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 512,
+        "reasoning_effort": "high",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 28,
+      "tool_call_delta_count": 10,
+      "usage": [
+        {
+          "prompt_tokens": 298,
+          "completion_tokens": 54,
+          "total_tokens": 352,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 16
+          }
+        }
+      ]
+    },
+    {
+      "model": "deepseek-v4.1-flash",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 512,
+        "reasoning_effort": "high",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 27,
+      "tool_call_delta_count": 10,
+      "usage": [
+        {
+          "prompt_tokens": 298,
+          "completion_tokens": 53,
+          "total_tokens": 351,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 15
+          }
+        }
+      ]
+    },
+    {
+      "model": "kimi-k2.7-code",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 512,
+        "reasoning_effort": "high",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 5,
+      "tool_call_delta_count": 2,
+      "usage": [
+        {
+          "prompt_tokens": 61,
+          "completion_tokens": 29,
+          "total_tokens": 90,
+          "prompt_tokens_details": {
+            "text_tokens": 61,
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 16,
+            "reasoning_tokens": 13
+          }
+        }
+      ]
+    },
+    {
+      "model": "deepseek-v4-pro",
+      "status": 200,
+      "request": {
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "max_completion_tokens": 512,
+        "reasoning_effort": "high",
+        "functions": [
+          "report_result"
+        ]
+      },
+      "event_count": 24,
+      "tool_call_delta_count": 10,
+      "usage": [
+        {
+          "prompt_tokens": 361,
+          "completion_tokens": 56,
+          "total_tokens": 417,
+          "prompt_tokens_details": {
+            "cached_read_tokens": 256,
+            "cached_tokens": 256
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 12
+          }
+        }
+      ]
+    }
+  ],
+  "tool_continuations": [
+    {
+      "model": "deepseek-v4.1-flash",
+      "status": 200,
+      "answer": "Result reported: **OK**"
+    },
+    {
+      "model": "kimi-k2.7-code",
+      "status": 200,
+      "answer": "Called `report_result` with value `OK`. The function returned `{\"value\":\"OK\"}`."
+    },
+    {
+      "model": "mimo-v2.6-pro",
+      "status": 200,
+      "answer": "Done — the result \"OK\" has been reported successfully."
+    }
+  ],
+  "limitations": [
+    "Video was not consumed by GLM-5.3 Flash; GLM-5.3 Flash-X and both MiMo models returned HTTP 400. No native video capability is enabled on the tested Chat route.",
+    "Thinking-enabled DeepSeek and Kimi rejected tool_choice required; default tool choice worked. The client does not rewrite forced tool choice.",
+    "File input is limited to locally supplied application/pdf; remote file references were not verified.",
+    "Only Chat Completions is enabled. Responses was used solely to investigate GPT reasoning behavior; other protocols are not certified.",
+    "No API-key account usage endpoint was established; Vela billing summary uses the logged-in application account."
+  ]
+}

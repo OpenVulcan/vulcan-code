@@ -19,6 +19,7 @@ import miniMaxIcon from "@/assets/provider-icons/provider-minimax.svg"
 import openAICompatibilityDarkIcon from "@/assets/provider-icons/provider-openai-compat-dark.svg"
 import openAICompatibilityLightIcon from "@/assets/provider-icons/provider-openai-compat-light.svg"
 import openCodeGoIcon from "@/assets/provider-icons/provider-opencode-go.svg"
+import openDesignIcon from "@/assets/provider-icons/provider-open-design.svg"
 import openRouterIcon from "@/assets/provider-icons/provider-openrouter.svg"
 import qiniuIcon from "@/assets/provider-icons/provider-qiniu.svg"
 import qwenIcon from "@/assets/provider-icons/provider-qwen.svg"
@@ -49,6 +50,7 @@ export type ProviderIconKey =
   | "kimi"
   | "minimax"
   | "opencode-go"
+  | "open-design"
   | "openrouter"
   | "qwen"
   | "qiniu"
@@ -106,6 +108,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
   },
   minimax: { light: miniMaxIcon },
   "opencode-go": { light: openCodeGoIcon, monochrome: true, transparent: true },
+  "open-design": { light: openDesignIcon, monochrome: true, transparent: true },
   openrouter: { light: openRouterIcon, transparent: true },
   qwen: { light: qwenIcon },
   qiniu: { light: qiniuIcon, transparent: true },
@@ -134,6 +137,7 @@ const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   minimax: "minimax",
   openai: "compatibility",
   "opencode-go": "opencode-go",
+  "open-design": "open-design",
   openrouter: "openrouter",
   qwen: "qwen",
   qiniu: "qiniu",

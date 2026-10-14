@@ -82,9 +82,9 @@ pub(crate) fn bundled_manifest_route(
     route
 }
 
-/// Builds one minimal provider-neutral conversation request.
-/// 构建一个最小供应商无关对话请求。
-pub(super) fn minimal_request() -> AiExecutionRequest {
+/// Returns a minimal provider-neutral conversation request for encoder and selection tests; takes no parameters.
+/// 返回编码器和选择链测试共用的最小供应商无关对话请求；无参数。
+pub(crate) fn minimal_request() -> AiExecutionRequest {
     AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
         model_id: String::from("openai/gpt-4.1"),

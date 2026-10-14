@@ -103,6 +103,21 @@
                                              ]
                    },
                    {
+                       "key":  "claude-haiku-5.5",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "file",
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "claude-opus-4-5-20251101",
                        "aliases":  [
 
@@ -212,10 +227,23 @@
                        "key":  "deepseek/deepseek-v4.1-flash",
                        "aliases":  [
                                        "deepseek/deepseek-v4.1-flash-20260910",
-                                       "deepseek: deepseek v4.1 flash",
-                                       "deepseek-v4.1-flash"
+                                       "deepseek: deepseek v4.1 flash"
                                    ],
                        "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "deepseek-v4.1-flash",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1048000,
                        "input_modalities":  [
                                                 "image",
                                                 "text"
@@ -796,6 +824,21 @@
                                        "openai: gpt-6 astra"
                                    ],
                        "context_window":  272000,
+                       "input_modalities":  [
+                                                "file",
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "gpt-6-luna",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1050000,
                        "input_modalities":  [
                                                 "file",
                                                 "image",

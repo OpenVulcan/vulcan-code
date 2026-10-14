@@ -1,0 +1,518 @@
+{
+  "schema_version": "vulcan.provider-manifest.v2",
+  "provider_id": "open-design",
+  "revision": 1,
+  "published_at": "2026-10-14T00:00:00Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [
+      "openai-chat-completions.v1"
+    ],
+    "required_execution_primitives": [],
+    "required_upload_primitives": [],
+    "required_transformers": [
+      "copy_request_field",
+      "delete_json_pointer"
+    ]
+  },
+  "display": {
+    "name": "OpenDesign",
+    "category": "relay",
+    "credential_directory_visibility": "pinned_onboarding"
+  },
+  "services": [
+    {
+      "service_entry_id": "design-plan",
+      "display_name": "OpenDesign Design Plan API",
+      "kind": "conversation",
+      "base_url": "https://amr-link.open-design.ai/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "account_usage_query": "unsupported",
+          "key_prefix": "sk-amr-",
+          "default_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "discovery_only",
+        "discovery_kind": "open_ai"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "usage_profile_refs": [],
+          "request_profile_refs": [
+            "open-design.explicit-reasoning.v1"
+          ],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "declared_only",
+    "unknown_model_policy": "declared_rule_required",
+    "supported_protocols": [
+      "openai-chat-completions.v1"
+    ],
+    "selected_protocol": "openai-chat-completions.v1",
+    "capabilities": {
+      "operations": [
+        "conversation_respond"
+      ],
+      "output_resources": [],
+      "provider_native_tools": [],
+      "evidence_revision": "open-design.gateway.2026-10-14"
+    },
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [
+      "open-design.explicit-reasoning.v1"
+    ],
+    "default_response_profile_refs": [],
+    "default_operation_refs": []
+  },
+  "model_rules": [
+    {
+      "rule_id": "claude-haiku-5.5",
+      "matcher": {
+        "kind": "exact",
+        "value": "claude-haiku-5.5"
+      },
+      "display_name": "Claude Haiku 5.5",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image",
+          "file"
+        ],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1000000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "input_resource_constraints": [
+        {
+          "resource_kind": "file",
+          "accepted_mime_types": [
+            "application/pdf"
+          ],
+          "reference_policy": "local_only"
+        }
+      ],
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    },
+    {
+      "rule_id": "deepseek-v4-flash",
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek-v4-flash"
+      },
+      "display_name": "DeepSeek V4 Flash",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "ultra",
+          "max"
+        ],
+        "context_limit": 1048000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    },
+    {
+      "rule_id": "deepseek-v4-flash-vision-exp",
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek-v4-flash-vision-exp"
+      },
+      "display_name": "DeepSeek V4 Flash Vision Exp",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image"
+        ],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "ultra",
+          "max"
+        ],
+        "context_limit": 1048000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    },
+    {
+      "rule_id": "deepseek-v4-pro",
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek-v4-pro"
+      },
+      "display_name": "DeepSeek V4 Pro",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "ultra",
+          "max"
+        ],
+        "context_limit": 1048000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    },
+    {
+      "rule_id": "deepseek-v4.1-flash",
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek-v4.1-flash"
+      },
+      "display_name": "DeepSeek V4.1 Flash",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image"
+        ],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "ultra",
+          "max"
+        ],
+        "context_limit": 1048000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    },
+    {
+      "rule_id": "glm-5.3-flash",
+      "matcher": {
+        "kind": "exact",
+        "value": "glm-5.3-flash"
+      },
+      "display_name": "GLM-5.3 Flash",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image"
+        ],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1048000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    },
+    {
+      "rule_id": "glm-5.3-flashx",
+      "matcher": {
+        "kind": "exact",
+        "value": "glm-5.3-flashx"
+      },
+      "display_name": "GLM-5.3 Flash-X",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image",
+          "file"
+        ],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "context_limit": 1000000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "input_resource_constraints": [
+        {
+          "resource_kind": "file",
+          "accepted_mime_types": [
+            "application/pdf"
+          ],
+          "reference_policy": "local_only"
+        }
+      ],
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    },
+    {
+      "rule_id": "gpt-6-luna",
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6-luna"
+      },
+      "display_name": "GPT-6 Luna",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image",
+          "file"
+        ],
+        "reasoning": "native",
+        "reasoning_control": "provider_adaptive",
+        "reasoning_efforts": [
+          "adaptive"
+        ],
+        "context_limit": 1050000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "input_resource_constraints": [
+        {
+          "resource_kind": "file",
+          "accepted_mime_types": [
+            "application/pdf"
+          ],
+          "reference_policy": "local_only"
+        }
+      ],
+      "request_profile_refs": [
+        "open-design.provider-reasoning.v1"
+      ],
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    },
+    {
+      "rule_id": "kimi-k2.7-code",
+      "matcher": {
+        "kind": "exact",
+        "value": "kimi-k2.7-code"
+      },
+      "display_name": "Kimi K2.7 Code",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image"
+        ],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "context_limit": 262000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    },
+    {
+      "rule_id": "mimo-v2.6-flash",
+      "matcher": {
+        "kind": "exact",
+        "value": "mimo-v2.6-flash"
+      },
+      "display_name": "MiMo V2.6 Flash",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image",
+          "audio"
+        ],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1048000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    },
+    {
+      "rule_id": "mimo-v2.6-pro",
+      "matcher": {
+        "kind": "exact",
+        "value": "mimo-v2.6-pro"
+      },
+      "display_name": "MiMo V2.6 Pro",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image",
+          "audio"
+        ],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1048000,
+        "output_limit": 32000,
+        "evidence_revision": "open-design.gateway.2026-10-14"
+      },
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+    }
+  ],
+  "usage_profiles": [],
+  "request_profiles": [
+    {
+      "profile_id": "open-design.explicit-reasoning.v1",
+      "description": "Preserve the exact user-selected gateway effort, including explicit none, after protocol conversion.",
+      "payload": {
+        "profile_id": "open-design.explicit-reasoning.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "copy_request_field",
+            "path": "/reasoning_effort",
+            "field": "reasoning_effort"
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "open-design.provider-reasoning.v1",
+      "description": "Leave GPT-6 Luna reasoning to the gateway because fixed effort selection is not honored.",
+      "payload": {
+        "profile_id": "open-design.provider-reasoning.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "delete_json_pointer",
+            "path": "/reasoning_effort"
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [],
+  "upload_channels": [],
+  "operations": [],
+  "tool_targets": [],
+  "provenance": {
+    "status": "verified",
+    "sources": [
+      {
+        "url": "https://amr-link.open-design.ai/v1/models",
+        "note": "Credential-scoped catalog, exact model IDs, input modalities, context_limit and output_budget verified on 2026-10-14. Video claims are excluded from executable capabilities after unsuccessful Chat media probes."
+      },
+      {
+        "url": "https://open-design.ai/zh/model-credits/",
+        "note": "Design Plan shared quota, subscription windows and API usage policy."
+      },
+      {
+        "url": "builtin:open-design.gateway.2026-10-14",
+        "note": "Sanitized live protocol, reasoning, media and source evidence; unavailable Hunyuan model and ineffective reasoning controls are explicit."
+      }
+    ],
+    "verified_at": "2026-10-14T00:00:00Z"
+  }
+}
