@@ -36,10 +36,12 @@ export function McpOAuthPanel(props: {
   // status 与 error 属于所选服务器，切换时重置。
   const [status, setStatus] = React.useState<McpOAuthStatus | null>(null)
   const [error, setError] = React.useState("")
-  // busyServer names the server whose operation is in flight, so another selection stays usable.
-  // busyServer 记录操作进行中的服务器，使切换到的其他服务器仍可操作。
-  const [busyServer, setBusyServer] = React.useState<string | null>(null)
-  const busy = busyServer === props.serverId
+  // busyServers names every server with an operation in flight, so starting one on another server
+  // never re-enables this one while its own request is still pending.
+  // busyServers 记录所有操作进行中的服务器，因此在其他服务器上开始操作不会让本服务器在其请求仍未完成时
+  // 重新可用。
+  const [busyServers, setBusyServers] = React.useState<ReadonlySet<string>>(() => new Set())
+  const busy = busyServers.has(props.serverId)
   const [callbackUrl, setCallbackUrl] = React.useState("")
   // serverRef discards responses that arrive after the selection moved to another server.
   // serverRef 丢弃选择切换到其他服务器后才到达的响应。
@@ -68,10 +70,16 @@ export function McpOAuthPanel(props: {
   const run = async (operation: () => Promise<McpOAuthStatus>) => {
     if (busy) return
     const serverId = props.serverId
-    setBusyServer(serverId); setError("")
+    setBusyServers(current => new Set(current).add(serverId)); setError("")
     try { accept(serverId, await operation()) }
     catch (failure) { if (serverRef.current === serverId) setError(String(failure)) }
-    finally { setBusyServer(current => current === serverId ? null : current) }
+    finally {
+      setBusyServers(current => {
+        const next = new Set(current)
+        next.delete(serverId)
+        return next
+      })
+    }
   }
   const flow = status?.flow ?? null
   const signedIn = status?.authStatus === "authenticated" || status?.authStatus === "expired"

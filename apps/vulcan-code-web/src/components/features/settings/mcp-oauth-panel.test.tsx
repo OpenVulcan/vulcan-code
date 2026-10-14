@@ -134,6 +134,12 @@ describe("McpOAuthPanel", () => {
     await render("other")
 
     expect(button("Sign in")?.disabled).toBe(false)
+    // Starting the other server's sign-in must not re-enable the first, whose start is still pending.
+    // 开始另一服务器的登录不得让仍在等待开始结果的第一个服务器重新可用。
+    await click("Sign in")
+    await render("remote")
+    expect(button("Sign in")?.disabled).toBe(true)
+    expect(service.startMcpOAuth).toHaveBeenCalledTimes(2)
   })
 
   it("shows no sign-in controls for a server without OAuth", async () => {
