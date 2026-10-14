@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { ComposerAttachmentStrip } from "@/components/composer/composer-attachment-controls";
 import { composerAttachmentMedia, inferComposerAttachmentKindFromFile } from "@/components/composer/composer-attachment-media";
 import { useComposerAttachments } from "@/components/composer/composer-attachments";
+import { ComposerTextContextMenu } from "@/components/composer/composer-text-context-menu";
 import { composerAttachmentForResource } from "@/components/conversation/conversation-branch-presentation-v1";
 import { runConversationControlAction } from "@/components/conversation/conversation-control-feedback";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
@@ -13,6 +14,7 @@ import { InlineDisclosure } from "@/components/ui/disclosure";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { copyText } from "@/components/workspace/workbench-layout/types";
+import { isElectronRuntime } from "@/host-shell";
 import { formatMessage, useI18n } from "@/i18n";
 import { formatDurationSeconds, formatTokenCount } from "@/lib/usage-format";
 import { createClientOwnedActionId } from "@/notifications/client-identity";
@@ -202,26 +204,67 @@ function reportLeaseError(reason: unknown) {
   toast.error(reason instanceof Error ? reason.message : String(reason));
 }
 
-/** One provider request: thinking shown inline while it streams and folded afterwards, then the answer.
- * 一次供应商请求：思考在流式输出时内联展开、结束后收起，随后是回答。 */
-function AssistantStep(props: { step: AssistantReplyStep }) {
+/** Characters of streaming thinking kept for the one-line ticker; far wider than any assistant window.
+ * 单行滚动条保留的流式思考字符数；远宽于任何助手窗口。 */
+const THINKING_TICKER_TAIL = 400;
+
+/** Collapsed live thinking as one line that starts at the beginning and then keeps its newest text in view;
+ * it only moves forward and never rewinds.
+ * 收起状态下的实时思考单行：从开头输出，之后始终显示最新文字；只向前推进，从不回卷。 */
+function AssistantThinkingTicker(props: { text: string }) {
+  const ref = React.useRef<HTMLDivElement | null>(null);
+  const line = props.text.slice(-THINKING_TICKER_TAIL).replace(/\s+/gu, " ").trim();
+  React.useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    element.scrollLeft = element.scrollWidth;
+    element.toggleAttribute("data-overflow", element.scrollWidth > element.clientWidth);
+  }, [line]);
+  return <div aria-hidden="true" className="assistant-thinking-ticker" ref={ref}>{line}</div>;
+}
+
+/** Keeps a scrolling box at its bottom while its content grows, until the reader scrolls up; scrolling back to
+ * the bottom pins it again. A box that mounts (the thinking is expanded) starts at the bottom.
+ * 内容增长时让滚动框保持在底部，直到读者向上滚动；滚回底部后重新锁定。新挂载（思考展开）的滚动框从底部开始。 */
+function useStickToBottom(content: string) {
+  const element = React.useRef<HTMLDivElement | null>(null);
+  const pinned = React.useRef(true);
+  const ref = React.useCallback((node: HTMLDivElement | null) => {
+    element.current = node;
+    pinned.current = true;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, []);
+  React.useLayoutEffect(() => {
+    const node = element.current;
+    if (node && pinned.current) node.scrollTop = node.scrollHeight;
+  }, [content]);
+  const onScroll = React.useCallback(() => {
+    const node = element.current;
+    if (node) pinned.current = node.scrollHeight - node.scrollTop - node.clientHeight < 8;
+  }, []);
+  return { ref, onScroll };
+}
+
+/** One provider request: thinking folded by default (a one-line ticker while it streams), then the answer.
+ * 一次供应商请求：思考默认收起（流式输出时显示单行滚动），随后是回答。 */
+export function AssistantStep(props: { step: AssistantReplyStep }) {
   const { t } = useI18n();
   const { step } = props;
-  // userThinkingOpen records an explicit toggle; until then the thinking follows its live state.
-  // userThinkingOpen 记录用户的明确切换；在此之前思考区跟随其实时状态。
-  const [userThinkingOpen, setUserThinkingOpen] = React.useState<boolean | null>(null);
+  const [thinkingOpen, setThinkingOpen] = React.useState(false);
   const thinkingLive = Boolean(step.reasoning?.streaming) && !step.answer;
+  const thinkingScroll = useStickToBottom(step.reasoning?.text ?? "");
   return (
     <div className="assistant-step">
       {step.reasoning ? (
         <InlineDisclosure
           label={thinkingLive ? t("assistantDock.thinkingLive") : t("assistantDock.thinking")}
-          onOpenChange={setUserThinkingOpen}
-          open={userThinkingOpen ?? thinkingLive}
+          onOpenChange={setThinkingOpen}
+          open={thinkingOpen}
         >
-          <div className="assistant-thinking-text">{step.reasoning.text}</div>
+          <div className="assistant-thinking-text" onScroll={thinkingScroll.onScroll} ref={thinkingScroll.ref}>{step.reasoning.text}</div>
         </InlineDisclosure>
       ) : null}
+      {step.reasoning && thinkingLive && !thinkingOpen ? <AssistantThinkingTicker text={step.reasoning.text} /> : null}
       {step.tools.length > 0 ? (
         <div className="assistant-tool-list">
           {step.tools.map((tool) => <span key={tool.id} className="assistant-tool-chip">{tool.name}</span>)}
@@ -299,6 +342,7 @@ export function AssistantComposer(props: {
   const { assistant } = props;
   const [text, setText] = React.useState(() => assistantDrafts.get(assistant.id) ?? "");
   const [pending, setPending] = React.useState(false);
+  const inputRef = React.useRef<HTMLTextAreaElement | null>(null);
   const capabilities = useAssistantAttachmentCapabilities(props.sessionConfig);
   const staging = useComposerAttachments({
     attachmentCapabilities: capabilities,
@@ -385,20 +429,32 @@ export function AssistantComposer(props: {
         }}
       />
       <div className="assistant-composer-row">
-        <Textarea
-          aria-label={formatMessage(t("assistantDock.placeholder"), { name: assistant.name })}
-          className="assistant-composer-input"
-          onChange={(event) => setText(event.target.value)}
-          onPaste={paste}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-            event.preventDefault();
-            void send();
-          }}
-          placeholder={formatMessage(t("assistantDock.placeholder"), { name: assistant.name })}
-          rows={1}
+        {/* The desktop shell has no native editing menu, so the input uses the main composer's one. */}
+        {/* 桌面壳没有原生编辑菜单，因此输入框使用与主输入区相同的菜单。 */}
+        <ComposerTextContextMenu
+          disabled={false}
+          enabled={isElectronRuntime()}
+          onChange={setText}
+          ownerKey={`assistant:${assistant.id}`}
+          textareaRef={inputRef}
           value={text}
-        />
+        >
+          <Textarea
+            aria-label={formatMessage(t("assistantDock.placeholder"), { name: assistant.name })}
+            className="assistant-composer-input"
+            onChange={(event) => setText(event.target.value)}
+            onPaste={paste}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              void send();
+            }}
+            placeholder={formatMessage(t("assistantDock.placeholder"), { name: assistant.name })}
+            ref={inputRef}
+            rows={1}
+            value={text}
+          />
+        </ComposerTextContextMenu>
         {props.running ? (
           <Button aria-label={t("assistantDock.stop")} onClick={() => void stop()} size="icon-sm" type="button" variant="secondary">
             <Square size={14} />

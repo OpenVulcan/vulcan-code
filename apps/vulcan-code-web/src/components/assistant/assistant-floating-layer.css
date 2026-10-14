@@ -143,6 +143,21 @@
   white-space: pre-wrap;
 }
 
+/* The collapsed live thinking line keeps its newest text in view; it is scrolled from script, never by the user. */
+/* 折叠中的实时思考单行始终显示最新文本；由脚本滚动，不供用户滚动。 */
+.assistant-thinking-ticker {
+  overflow: hidden;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  white-space: nowrap;
+}
+
+.assistant-thinking-ticker[data-overflow] {
+  mask-image: linear-gradient(to right, transparent, #000 24px);
+}
+
 .assistant-tool-list {
   display: flex;
   flex-wrap: wrap;
