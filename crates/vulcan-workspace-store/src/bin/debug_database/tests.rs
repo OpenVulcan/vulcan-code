@@ -3,6 +3,29 @@
 
 use super::*;
 
+/// Historical source schema used only to exercise explicit retirement and backup preservation.
+/// 仅用于验证显式退役与备份保留的历史源结构。
+const RETIRED_PROJECT_SETTINGS_FIXTURE_SQL: &str = r#"
+CREATE TABLE project_vce_settings (
+    project_id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    revision INTEGER NOT NULL DEFAULT 1,
+    max_file_bytes INTEGER NOT NULL DEFAULT 1048576,
+    extra_ignore_patterns_json TEXT NOT NULL DEFAULT '[]',
+    allow_query_rewrite INTEGER NOT NULL DEFAULT 0,
+    allow_rerank INTEGER NOT NULL DEFAULT 1,
+    embedding_max_concurrency INTEGER NOT NULL DEFAULT 4,
+    query_max_concurrency INTEGER NOT NULL DEFAULT 3,
+    max_results INTEGER NOT NULL DEFAULT 10,
+    max_context_chars INTEGER NOT NULL DEFAULT 32000,
+    update_mode TEXT NOT NULL,
+    auto_update_min_interval_seconds INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    migrated_from_codebase_memory INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+"#;
+
 /// Create an isolated historical Debug shape containing credentials, projects and a dependent table.
 /// 创建隔离的历史 Debug 结构，包含凭据、项目及依赖表。
 /// `directory` owns all files; returns the database path with synthetic records only.
@@ -30,8 +53,10 @@ fn fixture(directory: &Path) -> PathBuf {
         .execute_batch("DROP TABLE ai_credential_secrets;")
         .unwrap();
     connection.execute_batch(&credential_sql).unwrap();
+    connection
+        .execute_batch(RETIRED_PROJECT_SETTINGS_FIXTURE_SQL)
+        .unwrap();
     connection.execute_batch("ALTER TABLE projects ADD COLUMN codebase_memory_enabled INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE project_vce_settings ADD COLUMN migrated_from_codebase_memory INTEGER NOT NULL DEFAULT 0;
         INSERT INTO projects (id, name, root_path, pinned, created_at, updated_at) VALUES ('project', 'Synthetic', '/synthetic', 1, 'created', 'updated');
         INSERT INTO project_vce_settings (project_id, enabled, update_mode, auto_update_min_interval_seconds, updated_at) VALUES ('project', 1, 'automatic', 600, 'updated');
         INSERT INTO ai_credential_secrets (secret_reference, format_version, revision, material_kind, secret_value, created_at_unix_ms, updated_at_unix_ms) VALUES ('key', 1, 2, 'api_key', 'synthetic-secret', 10, 20);
@@ -87,18 +112,16 @@ fn synchronization_preserves_rows_and_enables_paired_credentials() {
             .unwrap(),
         vec![0, 1, 255]
     );
-    assert_eq!(connection.query_row("SELECT auto_update_min_interval_seconds FROM project_vce_settings WHERE project_id='project'", [], |row| row.get::<_, i64>(0)).unwrap(), 600);
+    assert!(
+        !schema(&connection)
+            .unwrap()
+            .contains_key("project_vce_settings")
+    );
     assert!(
         !columns(&connection, "projects")
             .unwrap()
             .iter()
             .any(|(name, _)| name == "codebase_memory_enabled")
-    );
-    assert!(
-        !columns(&connection, "project_vce_settings")
-            .unwrap()
-            .iter()
-            .any(|(name, _)| name == "migrated_from_codebase_memory")
     );
     insert_pair(&connection).unwrap();
     assert!(
@@ -112,6 +135,7 @@ fn synchronization_preserves_rows_and_enables_paired_credentials() {
     // original keeps the historical schema and all original records unchanged.
     // original 保留历史结构及全部原始记录。
     let original = Connection::open(&backup).unwrap();
+    assert_eq!(original.query_row("SELECT auto_update_min_interval_seconds FROM project_vce_settings WHERE project_id='project'", [], |row| row.get::<_, i64>(0)).unwrap(), 600);
     verify_version(&original).unwrap();
     assert!(insert_pair(&original).is_err());
     assert!(
@@ -150,6 +174,9 @@ fn check_only_reports_drift_without_writing() {
 fn unsupported_mappings_do_not_drop_data() {
     for modification in [
         "ALTER TABLE projects ADD COLUMN future_setting TEXT",
+        "ALTER TABLE project_vce_settings ADD COLUMN future_setting TEXT",
+        "CREATE INDEX future_vce_index ON project_vce_settings(enabled)",
+        "CREATE TABLE future_dependency (id TEXT REFERENCES project_vce_settings(project_id))",
         "UPDATE projects SET codebase_memory_enabled=1",
         "CREATE VIEW old_projection AS SELECT codebase_memory_enabled FROM projects",
         "CREATE TRIGGER old_projection AFTER INSERT ON independent_records BEGIN UPDATE projects SET codebase_memory_enabled=1; END",
@@ -176,25 +203,25 @@ fn unsupported_mappings_do_not_drop_data() {
 /// 无参数及返回值；可空的历史列提供不符合新约束的夹具。
 #[test]
 fn failed_copy_rolls_back_all_prior_changes() {
-    // directory and path own the temporary historical database.
-    // directory 与 path 持有临时历史数据库。
+    // The fixture owns every original and backup byte.
+    // 夹具持有全部源库与备份字节。
     let directory = tempfile::tempdir().unwrap();
     let path = fixture(directory.path());
-    // connection reads the same isolated database throughout the rollback check.
-    // connection 在整个回滚检查期间读取同一隔离数据库。
+    // Keep the original constraint generation observable after a later copy fails.
+    // 保持原约束代际可观察，以验证后续复制失败时发生回滚。
     let connection = Connection::open(&path).unwrap();
-    // nullable_sql models the observed old optional update mode without inventing a default.
-    // nullable_sql 模拟已查证的旧版可选更新模式，不凭空补默认值。
-    let nullable_sql = schema(&connection).unwrap()["project_vce_settings"]
+    // Relax only a known source NOT NULL constraint so the authoritative target rejects its null.
+    // 仅放宽已确认源列的非空约束，让权威目标拒绝其中的空值。
+    let nullable_sql = schema(&connection).unwrap()["projects"]
         .sql
-        .replace("update_mode TEXT NOT NULL", "update_mode TEXT");
+        .replace("name TEXT NOT NULL", "name TEXT");
     connection
-        .execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE project_vce_settings;")
+        .execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE projects;")
         .unwrap();
     connection.execute_batch(&nullable_sql).unwrap();
-    connection.execute_batch("INSERT INTO project_vce_settings (project_id, update_mode, auto_update_min_interval_seconds, updated_at) VALUES ('project', NULL, 600, 'updated');").unwrap();
-    // original captures the schema before any attempted rebuild.
-    // original 捕获尝试重建前的结构。
+    connection.execute_batch("INSERT INTO projects (id, name, root_path, created_at, updated_at) VALUES ('project', NULL, '/synthetic', 'created', 'updated');").unwrap();
+    // Compare the complete original catalog after the failed transaction.
+    // 在失败事务之后比较完整原目录。
     let original = schema(&connection).unwrap();
     assert!(synchronize(&path, true).is_err());
     assert!(schema(&connection).unwrap() == original);
@@ -205,6 +232,11 @@ fn failed_copy_rolls_back_all_prior_changes() {
                 .get::<_, i64>(0))
             .unwrap(),
         1
+    );
+    assert!(
+        schema(&connection)
+            .unwrap()
+            .contains_key("project_vce_settings")
     );
     assert!(std::fs::read_dir(directory.path()).unwrap().any(|entry| {
         entry

@@ -721,10 +721,10 @@ fn session_without_reasoning_history_keeps_encoding_on_declared_routes() {
 ///
 /// # Remarks
 /// 说明
-/// This reproduces the VCE retrieval shape: the first turn calls a tool, the continuation re-sends
+/// This reproduces a tool retrieval shape: the first turn calls a tool, the continuation re-sends
 /// the whole history. The only difference between the two requests is whether that first turn still
 /// carries its reasoning.
-/// 这复现了 VCE 检索形态：第一个回合调用工具，续跑重发整段历史。
+/// 这复现了 工具检索形态：第一个回合调用工具，续跑重发整段历史。
 /// 两个请求之间唯一的差别是第一个回合是否仍携带其推理。
 fn tool_call_then_continue_request(with_reasoning: bool) -> AiExecutionRequest {
     let mut request = minimal_request();

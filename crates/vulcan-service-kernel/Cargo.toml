@@ -30,7 +30,6 @@ tokio = { workspace = true, features = ["process", "rt-multi-thread"] }
 uuid.workspace = true
 vulcan-agent-runtime.workspace = true
 vulcan-ai-contract.workspace = true
-vulcan-context-engine = { workspace = true, features = ["host-ai-contract"] }
 vulcan-memorymesh-core.workspace = true
 vulcan-llm-core.workspace = true
 keyring.workspace = true

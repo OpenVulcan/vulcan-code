@@ -21,7 +21,7 @@ use vulcan_context::{
 
 /// Identifies the current persisted AI configuration schema.
 /// 标识当前持久化 AI 配置 Schema。
-pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 19;
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 20;
 
 /// Largest integer that can cross the JSON-to-JavaScript settings boundary without precision loss.
 /// 可在 JSON 到 JavaScript 设置边界间无精度损失传递的最大整数。
@@ -432,13 +432,6 @@ pub struct InferenceProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<InferenceRouteConfiguration>,
 }
-
-#[path = "context_engine_embedding_policy.rs"]
-mod context_engine_embedding_policy;
-pub use context_engine_embedding_policy::{
-    ContextEngineEmbeddingCompatibilityRecord, ContextEngineEmbeddingDecision,
-    ContextEngineEmbeddingScope,
-};
 
 /// Persists operation-specific internal model defaults without account selection.
 /// 持久化不含账号选择的操作专属内部模型默认值。
@@ -879,10 +872,6 @@ pub struct PersistedAiConfiguration {
     /// 按稳定消费者配置档标识分组的独立推理路由。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inference_profiles: BTreeMap<String, InferenceProfile>,
-    /// Exact user-reviewed ContextEngine embedding compatibility; never shared with VMM or knowledge.
-    /// 用户审查的精确 ContextEngine 向量兼容关系；绝不与 VMM 或知识库共享。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub context_engine_embedding_compatibility: Vec<ContextEngineEmbeddingCompatibilityRecord>,
     /// Operation-specific internal model defaults.
     /// 操作专属内部模型默认值。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -981,11 +970,10 @@ impl Default for PersistedAiConfiguration {
             context_compaction_window_nodes: ContextCompactionWindowConfiguration::default(),
             new_session_context_compaction_window_node_id: None,
             internal_model_enabled_overrides: BTreeMap::new(),
-            inference_profiles: BTreeMap::from([
-                (String::from("vce"), InferenceProfile::default()),
-                (String::from("vmm"), InferenceProfile::default()),
-            ]),
-            context_engine_embedding_compatibility: Vec::new(),
+            inference_profiles: BTreeMap::from([(
+                String::from("vmm"),
+                InferenceProfile::default(),
+            )]),
             internal_model_overrides: BTreeMap::new(),
             secondary_routes: BTreeMap::new(),
             provider_tool_selections: BTreeMap::new(),
@@ -1193,7 +1181,7 @@ impl PersistedAiConfiguration {
                 self.schema_version
             ));
         }
-        for profile_id in ["vce", "vmm"] {
+        for profile_id in ["vmm"] {
             if !self.inference_profiles.contains_key(profile_id) {
                 return Err(format!(
                     "Persisted AI configuration is missing the required `{profile_id}` inference profile."

@@ -14,9 +14,6 @@ struct ValidatedProjectRow {
     /// Exact pinned state decoded from the numeric protocol flag.
     /// 从数值协议标记解码出的精确置顶状态。
     pinned: bool,
-    /// Validated project-owned native code-semantic settings.
-    /// 经过校验的项目自有原生代码语义设置。
-    vce: ProjectVceSettings,
     /// Exact archive state decoded from the numeric protocol flag.
     /// 从数值协议标记解码出的精确归档状态。
     archived: bool,
@@ -73,82 +70,6 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
             ));
         }
     };
-    let vce_enabled = validate_project_boolean(&row.id, "VCE enabled", row.vce_enabled)?;
-    let vce_revision = u64::try_from(row.vce_revision).map_err(|error| {
-        format!(
-            "Project index `{}` contains an invalid VCE revision `{}`: {error}",
-            row.id, row.vce_revision
-        )
-    })?;
-    if vce_revision == 0 {
-        return Err(format!(
-            "The VCE revision of project index `{}` must be greater than zero.",
-            row.id
-        ));
-    }
-    let vce_max_file_bytes =
-        positive_project_u64(&row.id, "VCE maximum file bytes", row.vce_max_file_bytes)?;
-    let vce_embedding_max_concurrency = positive_project_usize(
-        &row.id,
-        "VCE embedding concurrency",
-        row.vce_embedding_max_concurrency,
-    )?;
-    let vce_query_max_concurrency = positive_project_usize(
-        &row.id,
-        "VCE query concurrency",
-        row.vce_query_max_concurrency,
-    )?;
-    let vce_max_results = positive_project_usize(&row.id, "VCE result count", row.vce_max_results)?;
-    let vce_max_context_chars =
-        positive_project_usize(&row.id, "VCE context characters", row.vce_max_context_chars)?;
-    let vce_extra_ignore_patterns = serde_json::from_str::<Vec<String>>(
-        &row.vce_extra_ignore_patterns_json,
-    )
-    .map_err(|error| {
-        format!(
-            "The VCE ignore rules JSON of project index `{}` is invalid: {error}",
-            row.id
-        )
-    })?;
-    let vce = ProjectVceSettings {
-        enabled: vce_enabled,
-        update_mode: match row.vce_update_mode.as_str() {
-            "manual" => vulcan_workbench_model::ProjectVceUpdateMode::Manual,
-            "automatic" => vulcan_workbench_model::ProjectVceUpdateMode::Automatic,
-            invalid => {
-                return Err(format!(
-                    "The semantic update mode of project index `{}` is invalid: `{invalid}`.",
-                    row.id
-                ));
-            }
-        },
-        auto_update_min_interval_seconds: u32::try_from(row.vce_auto_update_min_interval_seconds)
-            .map_err(|error| {
-            format!(
-                "The semantic update interval of project index `{}` is invalid: {error}",
-                row.id
-            )
-        })?,
-        revision: vce_revision,
-        max_file_bytes: vce_max_file_bytes,
-        extra_ignore_patterns: vce_extra_ignore_patterns,
-        allow_query_rewrite: validate_project_boolean(
-            &row.id,
-            "VCE query rewrite",
-            row.vce_allow_query_rewrite,
-        )?,
-        allow_rerank: validate_project_boolean(&row.id, "VCE rerank", row.vce_allow_rerank)?,
-        embedding_max_concurrency: vce_embedding_max_concurrency,
-        query_max_concurrency: vce_query_max_concurrency,
-        max_results: vce_max_results,
-        max_context_chars: vce_max_context_chars,
-    };
-    vce.validate().map_err(|error| {
-        format!(
-            "The VCE settings of project index `{}` are invalid: {error}",
-            row.id
-        )
-    })?;
     // archived must be exact before it can decide whether default-project seeding writes data.
     // archived 在决定默认项目播种是否写入数据前必须保持精确。
     let archived = match row.archived {
@@ -172,64 +93,9 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
     Ok(ValidatedProjectRow {
         stored: row,
         pinned,
-        vce,
         archived,
         sort_order,
     })
-}
-
-/// Decodes one strict SQLite 0/1 project flag.
-/// 解码一个严格的 SQLite 0/1 项目标记。
-///
-/// # Parameters
-/// 参数
-/// `project_id` and `field_name` identify diagnostics; `value` is the raw SQLite integer.
-/// `project_id` 与 `field_name` 标识诊断；`value` 是原始 SQLite 整数。
-///
-/// # Returns
-/// 返回值
-/// The exact boolean value or an explicit corruption error.
-/// 返回精确布尔值或明确的损坏错误。
-fn validate_project_boolean(
-    project_id: &str,
-    field_name: &str,
-    value: i64,
-) -> Result<bool, String> {
-    match value {
-        0 => Ok(false),
-        1 => Ok(true),
-        value => Err(format!(
-            "Project index `{project_id}` contains an invalid {field_name} flag `{value}`."
-        )),
-    }
-}
-
-/// Converts one positive SQLite integer into a project-owned `u64` setting.
-/// 将一个正数 SQLite 整数转换为项目自有 `u64` 设置。
-fn positive_project_u64(project_id: &str, field_name: &str, value: i64) -> Result<u64, String> {
-    let value = u64::try_from(value).map_err(|error| {
-        format!("Project index `{project_id}` contains an invalid {field_name} `{value}`: {error}")
-    })?;
-    if value == 0 {
-        return Err(format!(
-            "The {field_name} of project index `{project_id}` must be greater than zero."
-        ));
-    }
-    Ok(value)
-}
-
-/// Converts one positive SQLite integer into a platform-sized project setting.
-/// 将一个正数 SQLite 整数转换为平台宽度的项目设置。
-fn positive_project_usize(project_id: &str, field_name: &str, value: i64) -> Result<usize, String> {
-    let value = usize::try_from(value).map_err(|error| {
-        format!("Project index `{project_id}` contains an invalid {field_name} `{value}`: {error}")
-    })?;
-    if value == 0 {
-        return Err(format!(
-            "The {field_name} of project index `{project_id}` must be greater than zero."
-        ));
-    }
-    Ok(value)
 }
 
 /// Queries and validates every project row before any workspace-level decision uses it.
@@ -444,8 +310,7 @@ pub async fn load_workspace_index_report(
             row.icon_pack.clone(),
             row.icon_key.clone(),
             Vec::new(),
-        )
-        .with_vce_settings(validated_row.vce.clone());
+        );
 
         if validated_row.archived {
             archived_task_projects.push(project);
@@ -860,55 +725,8 @@ mod tests {
             sort_order: 0,
             icon_pack: None,
             icon_key: None,
-            vce_enabled: 0,
-            vce_revision: 1,
-            vce_update_mode: String::from("manual"),
-            vce_auto_update_min_interval_seconds: 300,
-            vce_max_file_bytes: 1_048_576,
-            vce_extra_ignore_patterns_json: String::from("[]"),
-            vce_allow_query_rewrite: 0,
-            vce_allow_rerank: 1,
-            vce_embedding_max_concurrency: 4,
-            vce_query_max_concurrency: 3,
-            vce_max_results: 10,
-            vce_max_context_chars: 32_000,
             archived: 0,
         }
-    }
-
-    /// Verify persisted project update policies load exactly and malformed values are rejected.
-    /// 验证持久化项目更新策略精确加载，且格式错误的值被拒绝。
-    ///
-    /// Takes no parameters and returns nothing; checks loading and bounds.
-    /// 无参数、无返回值；检查加载与边界。
-    #[test]
-    fn project_vce_policy_loading_preserves_explicit_choices() {
-        let base = stored_project_row_for_loading_test();
-        // explicit selects automatic updates and an independently persisted interval.
-        // explicit 选择自动更新及独立持久化间隔。
-        let mut explicit = base.clone();
-        explicit.vce_update_mode = String::from("automatic");
-        explicit.vce_auto_update_min_interval_seconds = 600;
-        // selected is the exact settings row after normal loading validation.
-        // selected 是通过常规加载校验后的精确设置记录。
-        let selected = validate_project_row(explicit).expect("explicit policy");
-        assert_eq!(
-            selected.vce.update_mode,
-            vulcan_workbench_model::ProjectVceUpdateMode::Automatic
-        );
-        assert_eq!(selected.vce.auto_update_min_interval_seconds, 600);
-        for interval in [-1, 0, 59, 86_401, i64::MAX] {
-            // invalid tests explicit invalid values rather than treating them as absent.
-            // invalid 测试明确无效值，不能将其当成缺省。
-            let mut invalid = base.clone();
-            invalid.vce_auto_update_min_interval_seconds = interval;
-            assert!(validate_project_row(invalid).is_err());
-        }
-        // invalid_mode must not be converted into manual or automatic by a fallback.
-        // invalid_mode 不得被兜底转换为手动或自动。
-        let mut invalid_mode = base;
-        invalid_mode.vce_update_mode = String::from("true");
-        assert!(validate_project_row(invalid_mode).is_err());
     }
 
     /// Verifies project validation rejects every scalar state that previously used coercion or clamping.

@@ -219,9 +219,9 @@ pub async fn bootstrap_application_data_plane() -> Result<DataPlaneBootstrapRepo
         let sqlite_binding_id = build_application_sqlite_binding_id();
         let system_statistics_sqlite_binding_id = build_system_statistics_sqlite_binding_id();
 
-        // The binding identifiers stay in the runtime metadata because plugin and VCE LanceDB paths use
+        // The binding identifiers stay in the runtime metadata because plugin LanceDB paths use
         // them to address the host's own in-process databases.
-        // 绑定标识符保留在运行期元数据中，因为插件与 VCE 的 LanceDB 路径用它们寻址宿主自身的进程内数据库。
+        // 绑定标识符保留在运行期元数据中，因为插件的 LanceDB 路径用它们寻址宿主自身的进程内数据库。
         // Initialization checks the declared version; existing Debug structures are synchronized separately.
         // 初始化检查声明版本；已有 Debug 结构由独立入口同步。
         {
@@ -457,24 +457,6 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE INDEX IF NOT EXISTS idx_projects_sort
 ON projects(pinned DESC, sort_order ASC, updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS project_vce_settings (
-    project_id TEXT PRIMARY KEY,
-    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
-    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
-    max_file_bytes INTEGER NOT NULL DEFAULT 1048576 CHECK(max_file_bytes > 0),
-    extra_ignore_patterns_json TEXT NOT NULL DEFAULT '[]',
-    allow_query_rewrite INTEGER NOT NULL DEFAULT 0 CHECK(allow_query_rewrite IN (0, 1)),
-    allow_rerank INTEGER NOT NULL DEFAULT 1 CHECK(allow_rerank IN (0, 1)),
-    embedding_max_concurrency INTEGER NOT NULL DEFAULT 4 CHECK(embedding_max_concurrency > 0),
-    query_max_concurrency INTEGER NOT NULL DEFAULT 3 CHECK(query_max_concurrency > 0),
-    max_results INTEGER NOT NULL DEFAULT 10 CHECK(max_results > 0),
-    max_context_chars INTEGER NOT NULL DEFAULT 32000 CHECK(max_context_chars > 0),
-    update_mode TEXT NOT NULL CHECK(update_mode IN ('manual', 'automatic')),
-    auto_update_min_interval_seconds INTEGER NOT NULL CHECK(auto_update_min_interval_seconds BETWEEN 60 AND 86400),
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-);
 
 CREATE TABLE IF NOT EXISTS workspace_session_index (
     id TEXT PRIMARY KEY,
@@ -881,7 +863,6 @@ mod tests {
             ("table", "knowledge_libraries"),
             ("table", "knowledge_library_project_bindings"),
             ("table", "project_git_review_preferences"),
-            ("table", "project_vce_settings"),
             ("table", "projects"),
             ("table", "thread_goals"),
             ("table", "workspace_session_index"),
@@ -938,19 +919,6 @@ mod tests {
         connection
             .execute_batch(&build_application_schema_script())
             .expect("re-applying the v1 initialization must be idempotent");
-    }
-
-    /// Verifies new databases own typed VCE settings in their own table.
-    /// 验证新数据库在独立表中持有类型化 VCE 设置。
-    #[test]
-    fn project_schema_includes_independent_vce_settings() {
-        let schema = build_application_schema_script();
-
-        assert!(schema.contains("CREATE TABLE IF NOT EXISTS project_vce_settings"));
-        assert!(schema.contains("extra_ignore_patterns_json TEXT NOT NULL DEFAULT '[]'"));
-        assert!(
-            schema.contains("FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE")
-        );
     }
 
     /// Verifies that each bootstrap receives one distinct SQLite binding id while preserving the stable diagnostic tag prefix.
