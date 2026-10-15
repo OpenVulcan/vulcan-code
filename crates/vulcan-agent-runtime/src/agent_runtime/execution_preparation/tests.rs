@@ -40,6 +40,52 @@ use vulcan_tools_manager::{
 };
 use vulcan_vmm::VmmConfigLayer;
 
+/// Verifies visible CodeKit entries inject the package main help with its stable provenance; returns no value.
+/// 验证可见的 CodeKit 入口按稳定来源标识注入包主帮助；无参数与返回值。
+#[test]
+fn visible_codekit_injects_package_main_help_without_vce() {
+    // A fixture marker proves the main-help payload reaches the prompt without freezing published wording.
+    // 夹具标识证明主帮助载荷进入提示词，不绑定已发布文案。
+    let package = LuaSkillPackageHelp::new(
+        "vulcan-codekit",
+        "",
+        "codekit_main_help_fixture",
+        Vec::new(),
+        vec![LuaSkillPromptEntry::new(
+            "vulcan-codekit-rg",
+            "",
+            LuaSkillRegistration::Direct,
+        )],
+    );
+    // The descriptor uses the same LuaSkills origin identity as real registered entries.
+    // 描述符使用真实注册入口相同的 LuaSkills 来源身份。
+    let visible = test_resolved_tool("vulcan-codekit-rg", VulcanToolSourceKind::LuaSkills);
+    // Collect only the package contribution produced by the request assembly helper.
+    // 仅收集请求组装辅助函数产生的包贡献。
+    let mut segments = Vec::new();
+    super::append_luaskill_package_segments(
+        &mut segments,
+        std::slice::from_ref(&package),
+        &[visible.descriptor],
+    );
+    // Locate by producer identity so unrelated future contributions cannot shift the assertion.
+    // 按生产者身份定位，防止后续无关贡献增删导致断言位置漂移。
+    let injected = segments
+        .iter()
+        .find(|segment| {
+            segment.baseline_provenance.as_ref().is_some_and(|provenance| {
+                provenance.kind == PromptBaselineKind::PromptSkillInjection
+                    && provenance.source_id == "luaskills/vulcan-codekit"
+            })
+        })
+        .expect("visible CodeKit must inject its package main help");
+    assert!(injected.body.contains(&package.main_content));
+
+    segments.clear();
+    super::append_luaskill_package_segments(&mut segments, &[package], &[]);
+    assert!(segments.is_empty());
+}
+
 /// Plugin prompt contributions retain one producer identity per contribution.
 /// 插件提示词贡献为每条贡献保留独立的生产者身份。
 #[test]
