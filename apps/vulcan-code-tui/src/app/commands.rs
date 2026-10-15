@@ -37,7 +37,7 @@ pub enum AppCommand {
     AgentsArea,
     Skills,
     Plugins,
-    ContextIndex,
+
     AreaPicker,
     History,
     Attach,
@@ -48,7 +48,7 @@ pub enum AppCommand {
 }
 
 impl AppCommand {
-    pub const ALL: [AppCommand; 31] = [
+    pub const ALL: [AppCommand; 30] = [
         AppCommand::NewConversation,
         AppCommand::AddProject,
         AppCommand::Attach,
@@ -76,7 +76,6 @@ impl AppCommand {
         AppCommand::AgentsArea,
         AppCommand::Skills,
         AppCommand::Plugins,
-        AppCommand::ContextIndex,
         AppCommand::OpenWeb,
         AppCommand::Help,
         AppCommand::Quit,
@@ -112,7 +111,7 @@ impl AppCommand {
             AppCommand::AgentsArea => "agents",
             AppCommand::Skills => "skills",
             AppCommand::Plugins => "plugins",
-            AppCommand::ContextIndex => "index",
+
             AppCommand::AreaPicker => "areas",
             AppCommand::History => "history",
             AppCommand::Attach => "attach",
@@ -173,7 +172,7 @@ impl AppCommand {
             AppCommand::AgentsArea => tr!("area.agents"),
             AppCommand::Skills => tr!("area.agentSkills"),
             AppCommand::Plugins => tr!("area.skills"),
-            AppCommand::ContextIndex => tr!("codeContext.project.projectSemanticIndex"),
+
             AppCommand::AreaPicker => tr!("tui.area.switch"),
             AppCommand::History => tr!("tui.history.title"),
             AppCommand::Attach => tr!("tui.attach.title"),

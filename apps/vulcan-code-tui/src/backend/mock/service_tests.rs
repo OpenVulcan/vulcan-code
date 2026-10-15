@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::service_api::{
-    knowledge_base as kb, memory_actions as vmm, settings_actions as settings, vce,
+    knowledge_base as kb, memory_actions as vmm, settings_actions as settings,
 };
 use vulcan_service_api::SystemPromptScope;
 /// Managed browsing and reading round-trip exact identities, folder boundaries and pagination.
@@ -316,68 +316,6 @@ fn deleting_all_libraries_does_not_break_creation() {
     assert_eq!(
         service.answer(&kb::list_knowledge_sources(id)).unwrap(),
         json!([])
-    );
-}
-
-/// Per-project revisions, frozen maintenance actions and replay keys protect demo index jobs.
-/// 逐项目修订、冻结的维护动作及重放键保护演示索引任务。
-#[test]
-fn vce_scope_versions_and_job_replay_match_the_service_boundary() {
-    // Service.
-    // 合成服务权威状态。
-    let mut service = FakeService::new();
-    service.register_project("new-project");
-    // Empty.
-    // 尚未初始化的项目概览。
-    let empty = service
-        .answer(&vce::load_vce_project_overview("new-project"))
-        .unwrap();
-    assert!(empty["status"]["checkpointVersion"].is_null());
-    // Plan call.
-    // 准确维护预检调用。
-    let plan_call = vce::plan_vce_maintenance("p-tui", "repair", 1);
-    // Plan.
-    // 已审查操作计划。
-    let plan = service.answer(&plan_call).unwrap();
-    // Execute.
-    // 由预检构建的执行请求。
-    let mut execute = vce::execute_vce_maintenance(&plan_call, &plan, 1).unwrap();
-    execute.params["request"]["actionIds"] = json!(["unreviewed"]);
-    assert!(service.answer(&execute).is_err());
-    execute.params["request"]["actionIds"] = json!(["demo-maintenance-action"]);
-    // Job.
-    // 持久任务回执。
-    let job = service.answer(&execute).unwrap();
-    assert_eq!(service.answer(&execute).unwrap(), job);
-    assert_eq!(
-        service.answer(&vce::load_vce_job("p-tui", None)).unwrap(),
-        job
-    );
-    assert!(
-        service
-            .answer(&vce::load_vce_job("p-core", None))
-            .unwrap()
-            .is_null()
-    );
-    service
-        .answer(&vce::update_vce_project_settings(
-            "p-tui",
-            1,
-            json!({"enabled":false}),
-        ))
-        .unwrap();
-    // Fresh plan.
-    // 新观察的维护计划。
-    let fresh_plan = service.answer(&plan_call).unwrap();
-    // Stale.
-    // 已过期的确认请求。
-    let stale = vce::execute_vce_maintenance(&plan_call, &fresh_plan, 1).unwrap();
-    assert!(service.answer(&stale).is_err());
-    assert_eq!(
-        service
-            .answer(&vce::load_vce_project_overview("p-core"))
-            .unwrap()["settings"]["revision"],
-        1
     );
 }
 

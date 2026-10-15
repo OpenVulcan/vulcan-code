@@ -18,6 +18,9 @@ pub struct FakeService {
     /// System-facing workbench fields, containing no real credentials.
     /// 面向系统页面的工作台字段，不包含真实凭据。
     pub workbench: Value,
+    /// Registered host project identities, shared by project-scoped mock settings.
+    /// 已登记的宿主项目身份，由项目作用域的模拟设置共用。
+    project_ids: BTreeSet<String>,
     /// Raw loader fixtures keyed by exact RPC method.
     /// 按准确 RPC 方法索引的原始加载器夹具。
     loads: Value,
@@ -27,9 +30,7 @@ pub struct FakeService {
     /// Sources, jobs and search rows owned by exact library identities.
     /// 由准确知识库标识持有的来源、任务及搜索条目。
     knowledge: BTreeMap<String, Value>,
-    /// Settings, jobs and plans owned by exact host project identities.
-    /// 由准确宿主项目标识持有的设置、任务及计划。
-    vce_projects: BTreeMap<String, Value>,
+
     /// Native VMM authorities keyed by exact action.
     /// 按准确动作索引的原生 VMM 权威数据。
     memory: Value,
@@ -404,19 +405,6 @@ impl FakeService {
                 "documents":fixture["knowledgeDocuments"],
             }),
         )]);
-        // Vce projects.
-        // 逐宿主项目独立的合成索引状态。
-        let mut vce_projects = BTreeMap::new();
-        for project in ["p-tui", "p-core", "p-lua"] {
-            // Overview.
-            // 所选项目权威概览。
-            let mut overview = loads["service_get_vce_project_overview"].clone();
-            overview["status"]["projectId"] = json!(project);
-            vce_projects.insert(
-                project.into(),
-                json!({"overview":overview,"job":null,"plan":null,"jobs":{},"commands":{}}),
-            );
-        }
         let plugin = plugins::fixture();
         let mut workbench = fixture["workbench"].clone();
         workbench["plugins"]
@@ -424,13 +412,19 @@ impl FakeService {
             .expect("plugins fixture")
             .push(plugin["summary"].clone());
         Self {
+            // Derive initial membership from the same project fixture owned by World.
+            // 从 World 持有的同一项目夹具派生初始成员身份。
+            project_ids: super::fixtures::projects()
+                .into_iter()
+                .map(|project| project.id)
+                .collect(),
             workbench,
             library_defaults: loads["service_list_knowledge_libraries"][0].clone(),
             loads,
             memory: fixture["memory"].clone(),
             records,
             knowledge,
-            vce_projects,
+
             previews: BTreeMap::new(),
             serial: 1,
             version: 1,
@@ -456,7 +450,7 @@ impl FakeService {
         else {
             return Ok(None);
         };
-        if !self.vce_projects.contains_key(id) {
+        if !self.project_ids.contains(id) {
             return Err(format!("unknown project: {id}"));
         }
         Ok(Some(id.to_string()))
@@ -540,27 +534,12 @@ impl FakeService {
         id
     }
 
-    /// Registers one newly added host project with independent uninitialized VCE state.
-    /// 为一个新增宿主项目登记独立、尚未初始化的 VCE 状态。
+    /// Registers one newly added host project for project-scoped mock settings.
+    /// 为项目作用域的模拟设置登记一个新增宿主项目。
     /// `id` is the exact project identity created by World; existing state is preserved.
     /// `id` 为 World 创建的准确项目身份；保留既有状态。
     pub fn register_project(&mut self, id: &str) {
-        if self.vce_projects.contains_key(id) {
-            return;
-        }
-        // Defaults come from the declared fixture, while all index-owned counts start empty.
-        // 默认设置来自声明的夹具，所有索引持有的计数从空值开始。
-        let mut overview = self.loads["service_get_vce_project_overview"].clone();
-        overview["status"]["projectId"] = json!(id);
-        overview["status"]["lifecycle"] = json!("uninitialized");
-        overview["status"]["checkpointVersion"] = Value::Null;
-        overview["status"]["presentFiles"] = json!(0);
-        overview["status"]["checkpointBlobs"] = json!(0);
-        overview["counts"] = json!({"files":0,"chunks":0});
-        self.vce_projects.insert(
-            id.to_string(),
-            json!({"overview":overview,"job":null,"plan":null,"jobs":{},"commands":{}}),
-        );
+        self.project_ids.insert(id.to_string());
     }
 
     /// Appends a sidebar archive operation to the same workbench catalog the page queries.
@@ -706,27 +685,7 @@ impl FakeService {
                             .collect(),
                     ));
                 }
-                "service_get_vce_project_overview" | "service_get_vce_job" => {
-                    // Exact entity identity.
-                    // 准确实体身份。
-                    let id = string(&call.params, "/request/projectId")?;
-                    // Project.
-                    // 所选项目数据。
-                    let project = self.vce_projects.get(id).ok_or("Unknown demo project")?;
-                    if call.method == "service_get_vce_project_overview" {
-                        return Ok(project["overview"].clone());
-                    }
-                    // Exact history requests cannot accidentally return another job.
-                    // 准确历史请求不能意外返回另一个任务。
-                    let job_id = required(&call.params, "/request/jobId")?;
-                    if job_id.is_null() {
-                        return Ok(project["job"].clone());
-                    }
-                    return Ok(project["jobs"]
-                        .get(job_id.as_str().ok_or("Job id")?)
-                        .cloned()
-                        .unwrap_or(Value::Null));
-                }
+
                 // The demo keeps one sign-in status and reports it for the requested server.
                 // 演示仅保留一个登录状态，并按所请求服务器报告。
                 "service_system_prompt_settings" => {
@@ -846,30 +805,7 @@ impl FakeService {
                 "contentFingerprint":"demo-plugin-fingerprint","permissions":["filesystem_read"],"installSecretRequirements":[]}),
                 );
             }
-            "service_plan_vce_maintenance" => {
-                // Project.
-                // 所选项目数据。
-                let project = self
-                    .vce_projects
-                    .get_mut(string(params, "/request/projectId")?)
-                    .ok_or("Unknown demo project")?;
-                // Plan.
-                // 已审查操作计划。
-                let plan = json!({"checkpointVersion":project["overview"]["status"]["checkpointVersion"],
-                    "mode":required(params,"/request/mode")?,"embeddingDimension":384,
-                    "embeddingFingerprint":"demo-embedding-fingerprint","actions":[{"actionId":"demo-maintenance-action","description":"Demo index maintenance","destructive":false,"blobNames":[]}],
-                    "affectedBlobCount":0,"physicalTables":[]});
-                project["plan"] = plan.clone();
-                return Ok(plan);
-            }
-            "service_preflight_vce_embedding_route" => {
-                // Route.
-                // 目录中的推理路由。
-                let route = required(params, "/request/route")?;
-                return Ok(json!({"candidate":if route.is_null() {Value::Null} else {
-                    json!({"route":route,"dimension":required(params,"/request/dimension")?,"physicalFingerprint":"demo-vector"})},
-                    "projects":[],"revision":"demo-preflight-revision"}));
-            }
+
             "service_save_git_commit_settings" => {
                 self.workbench["gitCommit"] = required(params, "/request")?.clone()
             }
@@ -1598,137 +1534,7 @@ impl FakeService {
                     .get_mut(string(params, "/libraryId")?)
                     .ok_or("Unknown demo library")?["job"]["state"] = json!("cancelled")
             }
-            "service_update_vce_project_settings" => {
-                // Overview.
-                // 所选项目权威概览。
-                let overview = &mut self
-                    .vce_projects
-                    .get_mut(string(params, "/request/projectId")?)
-                    .ok_or("Unknown demo project")?["overview"];
-                if required(params, "/request/expectedRevision")?
-                    != &overview["settings"]["revision"]
-                {
-                    return Err("VCE settings changed".into());
-                }
-                // Revision.
-                // 权威修订号。
-                let revision = overview["settings"]["revision"]
-                    .as_i64()
-                    .ok_or("revision fixture")?
-                    + 1;
-                merge(
-                    &mut overview["settings"],
-                    required(params, "/request/settings")?,
-                );
-                overview["settings"]["revision"] = json!(revision);
-                overview["status"]["settingsRevision"] = json!(revision);
-                overview["status"]["enabled"] = overview["settings"]["enabled"].clone();
-            }
-            "service_submit_vce_job" | "service_execute_vce_maintenance" => {
-                // Compare frozen settings/checkpoint guards before creating a durable demo receipt.
-                // 创建持久演示回执前，比较冻结的设置与检查点保护值。
-                let project_id = string(params, "/request/projectId")?;
-                // Exact protocol request.
-                // 协议请求文档。
-                let request = required(params, "/request")?;
-                // Key.
-                // 当前结构持有的键。
-                let key = string(request, "/idempotencyKey")?;
-                // Project.
-                // 所选项目数据。
-                let project = self
-                    .vce_projects
-                    .get(project_id)
-                    .ok_or("Unknown demo project")?;
-                if let Some(replay) = project["commands"].get(key) {
-                    if replay["request"] != *request {
-                        return Err("Idempotency key changed intent".into());
-                    }
-                    return Ok(replay["job"].clone());
-                }
-                if required(request, "/expectedSettingsRevision")?
-                    != &project["overview"]["settings"]["revision"]
-                    || required(request, "/expectedCheckpointVersion")?
-                        != &project["overview"]["status"]["checkpointVersion"]
-                {
-                    return Err("VCE plan is stale".into());
-                }
-                // Kind.
-                // 已声明的操作类别。
-                let kind = if call.method == "service_execute_vce_maintenance" {
-                    // Plan.
-                    // 已审查操作计划。
-                    let plan = &project["plan"];
-                    // Actions.
-                    // 声明的操作集合。
-                    let actions: Vec<_> = required(plan, "/actions")?
-                        .as_array()
-                        .ok_or("Planned actions")?
-                        .iter()
-                        .map(|action| action["actionId"].clone())
-                        .collect();
-                    if required(request, "/mode")? != &plan["mode"]
-                        || required(request, "/expectedEmbeddingFingerprint")?
-                            != &plan["embeddingFingerprint"]
-                        || required(request, "/actionIds")? != &json!(actions)
-                    {
-                        return Err("VCE maintenance targets changed".into());
-                    }
-                    if plan["mode"] == "compact" {
-                        "compact"
-                    } else {
-                        "rebuild"
-                    }
-                } else {
-                    match string(request, "/action")? {
-                        "initialize" => "initialize",
-                        "synchronize" => "sync",
-                        _ => return Err("Unknown job action".into()),
-                    }
-                };
-                // Exact entity identity.
-                // 准确实体身份。
-                let id = self.id("vce-job");
-                // Created.
-                // 合成任务创建时间。
-                let created = now_ms();
-                // Job.
-                // 持久任务回执。
-                let job = json!({"jobId":id,"projectId":project_id,"state":"queued","kind":kind,
-                    "sequence":1,"createdAtUnixMs":created,"updatedAtUnixMs":created});
-                // Project.
-                // 所选项目数据。
-                let project = self
-                    .vce_projects
-                    .get_mut(project_id)
-                    .ok_or("Unknown demo project")?;
-                project["job"] = job.clone();
-                project["jobs"][&id] = job.clone();
-                project["commands"][key] = json!({"request":request,"job":job});
-                return Ok(job);
-            }
-            "service_cancel_vce_job" => {
-                // Job.
-                // 持久任务回执。
-                let job = &mut self
-                    .vce_projects
-                    .get_mut(string(params, "/request/projectId")?)
-                    .ok_or("Unknown demo project")?["job"];
-                if required(params, "/request/jobId")? != &job["jobId"] {
-                    return Err("Unknown demo job".into());
-                }
-                job["state"] = json!("cancelled");
-                job["sequence"] = json!(job["sequence"].as_u64().ok_or("job sequence")? + 1);
-                // Receipt.
-                // 持久任务回执。
-                let receipt = job.clone();
-                // Exact entity identity.
-                // 准确实体身份。
-                let id = string(params, "/request/jobId")?;
-                self.vce_projects
-                    .get_mut(string(params, "/request/projectId")?)
-                    .ok_or("Demo project")?["jobs"][id] = receipt;
-            }
+
             "service_delete_archived_conversations" | "service_restore_archived_conversations" => {
                 // Ids.
                 // 准确身份集合。

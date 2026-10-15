@@ -232,8 +232,8 @@ fn catalogs_use_real_categories_and_effective_skill_counts() {
         ),
     );
     assert_eq!(item_ids(&app, PageId::SkillList), ["plugin/other"]);
-    // Removing a selected category resets both views without depending on VCE project changes.
-    // 删除已选分类时重置两种视图，不依赖 VCE 项目变化。
+    // Removing a selected category resets both views without depending on unrelated project changes.
+    // 删除已选分类时重置两种视图，不依赖无关的项目变化。
     app.skill_category = "b".into();
     workbench["subagentCatalog"]["categories"] = json!([]);
     workbench["agentSkills"]["categories"] = json!([]);

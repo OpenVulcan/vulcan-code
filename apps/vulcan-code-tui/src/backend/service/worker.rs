@@ -245,9 +245,7 @@ pub struct Worker {
     /// Dispatch sequence per slot; stale responses cannot overwrite a later selection or reload.
     /// 每个槽位的发送序号；过期响应无法覆盖较新的选择或刷新。
     load_sequences: HashMap<Slot, u64>,
-    /// Latest job sequence per project and job; older socket/read results are ignored.
-    /// 每个项目及任务的最新序号；忽略较旧套接字或读取结果。
-    vce_job_sequences: HashMap<(String, String), u64>,
+
     /// Last emitted workbench slot, to emit only changes.
     /// 最近一次发出的工作台槽位，只在变化时发出。
     workbench_slot: Value,
@@ -329,7 +327,7 @@ impl Worker {
             git_parked: HashMap::new(),
             loaders: HashMap::new(),
             load_sequences: HashMap::new(),
-            vce_job_sequences: HashMap::new(),
+
             workbench_slot: Value::Null,
             workbench_slot_valid: false,
         }
@@ -466,7 +464,6 @@ impl Worker {
         self.revision = 0;
         self.windows.clear();
         self.navigations.clear();
-        self.vce_job_sequences.clear();
         self.apply_snapshot(snapshot);
         if let Some(id) = self.selected.clone() {
             if is_draft(&id) {
@@ -665,21 +662,6 @@ impl Worker {
         scrub_secrets(&mut value);
         match call.kind.clone() {
             CallKind::Load(slot) => {
-                if slot == Slot::VceJob && !value.is_null() {
-                    let Some(job) = self.read::<api::VceJobSummary>(call.method, value.clone())
-                    else {
-                        return;
-                    };
-                    let identity = (job.project_id, job.job_id);
-                    if self
-                        .vce_job_sequences
-                        .get(&identity)
-                        .is_some_and(|last| *last > job.sequence)
-                    {
-                        return;
-                    }
-                    self.vce_job_sequences.insert(identity, job.sequence);
-                }
                 self.emit(BackendEvent::Slot { slot, call, value });
             }
             CallKind::Mutate(slots) => {
@@ -1260,58 +1242,8 @@ impl Worker {
             api::ServiceEvent::WorkspaceGitChanged(change) => {
                 self.git_changed(&change.workspace_path, &change.repository_keys);
             }
-            api::ServiceEvent::VceProjectChanged(change) => {
-                for slot in [Slot::VceOverview, Slot::VceStatus] {
-                    if let Some(loader) = self.loaders.get(&slot).cloned()
-                        && (slot == Slot::VceStatus
-                            || loader.param("/request/projectId") == change.project_id.as_str())
-                    {
-                        self.service_call(loader);
-                    }
-                }
-            }
-            api::ServiceEvent::VceJobChanged(job) => self.vce_job(*job),
-            _ => {}
-        }
-    }
 
-    /// Publishes a VCE job update for the loaded project unless an equal or newer one was seen.
-    /// 为已加载项目发布 VCE 任务更新，除非已见过相同或更新的序号。
-    fn vce_job(&mut self, job: api::VceJobSummary) {
-        let Some(loader) = self.loaders.get(&Slot::VceJob).cloned() else {
-            return;
-        };
-        if loader.param("/request/projectId") != job.project_id.as_str() {
-            return;
-        }
-        let identity = (job.project_id.clone(), job.job_id.clone());
-        if self
-            .vce_job_sequences
-            .get(&identity)
-            .is_some_and(|last| *last >= job.sequence)
-        {
-            return;
-        }
-        self.vce_job_sequences.insert(identity, job.sequence);
-        // An event is newer authority than any previously dispatched job read.
-        // 事件的权威状态新于此前发送的任务读取。
-        *self.load_sequences.entry(Slot::VceJob).or_default() += 1;
-        let finished = matches!(
-            job.state,
-            api::VceJobStateSummary::Succeeded
-                | api::VceJobStateSummary::Failed
-                | api::VceJobStateSummary::Cancelled
-                | api::VceJobStateSummary::Interrupted
-        );
-        let mut value = serde_json::to_value(&job).unwrap_or(Value::Null);
-        scrub_secrets(&mut value);
-        self.emit(BackendEvent::Slot {
-            slot: Slot::VceJob,
-            call: loader,
-            value,
-        });
-        if finished && let Some(overview) = self.loaders.get(&Slot::VceOverview).cloned() {
-            self.service_call(overview);
+            _ => {}
         }
     }
 
@@ -2523,9 +2455,9 @@ fn base64(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{RpcServer, vce_job};
+    use super::super::test_support::RpcServer;
     use super::*;
-    use crate::service_api::{knowledge_base, settings_actions, vce};
+    use crate::service_api::{knowledge_base, settings_actions};
     /// Real asynchronous document failures publish the exact reader scope and a sanitized cause.
     /// 真实异步文档失败发布准确阅读范围及脱敏原因。
     #[test]
@@ -2771,40 +2703,6 @@ mod tests {
         assert_eq!(worker.revision, 42);
         assert!(events.try_recv().is_err());
         assert!(!worker.handle_input(Input::Shutdown));
-        server.thread.join().unwrap();
-    }
-
-    /// Publishes matching VCE jobs once and ignores older socket and read sequences.
-    /// 单次发布匹配的 VCE 任务，并忽略较旧套接字与读取序号。
-    #[test]
-    fn vce_job_events_are_scoped_and_monotonic() {
-        // Server.
-        // 当前服务器或本地合成监听器。
-        let server = RpcServer::start(0, |_| Value::Null);
-        // Worker; Events.
-        // 串行服务工作线程状态；事件集合或事件接收通道。
-        let (mut worker, events, _) = worker_fixture(server.client.clone());
-        // Loader.
-        // 准确槽位加载器。
-        let loader = vce::load_vce_job("demo-project", None);
-        worker.loaders.insert(Slot::VceJob, loader.clone());
-        let changed = |project: &str, sequence| {
-            api::ServiceEvent::VceJobChanged(Box::new(vce_job(project, sequence)))
-        };
-        worker.service_event(changed("demo-project", 4));
-        worker.service_event(changed("demo-project", 3));
-        worker.call_done(
-            loader,
-            serde_json::to_value(vce_job("demo-project", 3)).unwrap(),
-        );
-        worker.service_event(changed("other-project", 5));
-        // Received.
-        // 接收到的消息。
-        let received: Vec<_> = events.try_iter().collect();
-        assert_eq!(received.len(), 1);
-        assert!(
-            matches!(&received[0],BackendEvent::Slot{slot:Slot::VceJob,value,..} if value["sequence"] == 4)
-        );
         server.thread.join().unwrap();
     }
 
