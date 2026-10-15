@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  knowledgeCurationCandidates,
-  knowledgeEmbeddingCandidates,
-} from "./knowledge-library-create-dialog";
+import { knowledgeEmbeddingCandidates, knowledgeRouteFromCandidate, knowledgeRouteKey, knowledgeSettingsFromDraft } from "./knowledge-mode";
 import type { PublicAiInternalInferenceCandidate } from "@/types/public-ai";
 
 // candidateFixture builds one exact OpenCode Go candidate for shared-pool filtering tests.
@@ -47,9 +44,9 @@ function candidateFixture(
       },
       model_parameters: [],
       embedding: operation === "embedding_create" ? {
-        tasks: [],
-        output_kinds: [],
-        encodings: [],
+        tasks: ["query", "document"],
+        output_kinds: ["dense"],
+        encodings: ["float"],
         dimensions: [768],
         normalization: "l2",
         distance_metric: "cosine",
@@ -60,19 +57,8 @@ function candidateFixture(
 }
 
 describe("knowledge internal model pool", () => {
-  it("shows an enabled OpenCode Go LLM independently from conversation publication", () => {
-    const enabledBackground = candidateFixture(
-      "conversation_respond",
-      "internal_background",
-      true,
-    );
-    const candidates = [
-      enabledBackground,
-      candidateFixture("conversation_respond", "external_service", true),
-      candidateFixture("conversation_respond", "internal_background", false),
-    ];
-
-    expect(knowledgeCurationCandidates(candidates)).toEqual([enabledBackground]);
+  it("does not admit conversation models as embedding routes", () => {
+    expect(knowledgeEmbeddingCandidates([candidateFixture("conversation_respond", "internal_background", true)])).toEqual([]);
   });
 
   it("requires enabled background scope and an embedding capability", () => {
@@ -82,5 +68,34 @@ describe("knowledge internal model pool", () => {
       candidateFixture("embedding_create", "external_service", true),
       candidateFixture("embedding_create", "internal_background", false),
     ])).toEqual([enabledEmbedding]);
+  });
+
+  it("requires explicit modes and exact supported dimensions without guessing", () => {
+    // This admitted route is the sole source of embedding settings.
+    // 此准入路由为嵌入设置唯一来源。
+    const [candidate] = knowledgeEmbeddingCandidates([candidateFixture("embedding_create", "internal_background", true)]);
+    expect(knowledgeSettingsFromDraft(null, candidate, "768")).toBeNull();
+    expect(knowledgeSettingsFromDraft("browse", undefined, "")).toEqual({ indexMode: "browse", embedding: null });
+    expect(knowledgeSettingsFromDraft("hybrid", undefined, "768")).toBeNull();
+    for (const dimensions of ["", "0", "768.5", "512", "Infinity", "NaN"]) expect(knowledgeSettingsFromDraft("vector", candidate, dimensions)).toBeNull();
+    expect(knowledgeSettingsFromDraft("hybrid", candidate, "768")).toEqual({ indexMode: "hybrid", embedding: { route: knowledgeRouteFromCandidate(candidate), dimensions: 768, batchSize: null } });
+    for (const batch of ["0", "1.5", "NaN", "4294967296"]) expect(knowledgeSettingsFromDraft("vector", candidate, "768", batch)).toBeNull();
+  });
+
+  it("does not admit unsupported declared metrics, tasks or encodings", () => {
+    // A copy changes only a verified capability member for each admission probe.
+    // 每个准入探测的副本仅更改已验证能力成员。
+    const base = candidateFixture("embedding_create", "internal_background", true);
+    if (base.capabilities.embedding === undefined) throw new Error("Synthetic embedding capability missing");
+    for (const patch of [{ distance_metric: "unknown" }, { tasks: ["query"] }, { encodings: [] }, { output_kinds: [] }, { maximum_inputs: 0 }]) {
+      expect(knowledgeEmbeddingCandidates([{ ...base, capabilities: { ...base.capabilities, embedding: { ...base.capabilities.embedding, ...patch } } }])).toEqual([]);
+    }
+  });
+
+  it("retains route identity without delimiter collisions", () => {
+    // IDs may contain punctuation; tuple serialization preserves field boundaries.
+    // 身份可含标点；元组序列化保留字段边界。
+    const route = knowledgeRouteFromCandidate(candidateFixture("embedding_create", "internal_background", true));
+    expect(knowledgeRouteKey({ ...route, providerId: "a:b", modelId: "c" })).not.toBe(knowledgeRouteKey({ ...route, providerId: "a", modelId: "b:c" }));
   });
 });

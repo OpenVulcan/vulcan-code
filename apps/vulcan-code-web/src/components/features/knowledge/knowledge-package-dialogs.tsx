@@ -1,41 +1,25 @@
 import * as React from "react";
-import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Archive, ArrowUp, Check, ChevronRight, FileArchive, Folder, FolderOpen, HardDrive, RefreshCw, TriangleAlert } from "lucide-react";
-
+import { ArrowUp, Check, ChevronRight, FileArchive, Folder, FolderOpen, HardDrive, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { useI18n } from "@/i18n";
 import { browseKnowledgePackages } from "@/service/knowledge-base-service";
-import type { KnowledgeLibrarySummary, KnowledgePackageFileListing, KnowledgePackageInspection } from "@/types";
+import type { KnowledgePackageFileListing, KnowledgePackageInspection } from "@/types/knowledge-base";
 import { formatBytes } from "@/lib/display-format";
+import { KNOWLEDGE_MODE_COPY } from "./knowledge-mode";
 import "@/styles/project-folder-picker.css";
 
-// knowledgePackagePathKey normalizes a native path for root-selection matching.
-// knowledgePackagePathKey 规范化原生路径以匹配根目录选择状态。
+// Parameters: path is a native directory identity. Returns its comparison key for the host-declared root list.
+// 参数：path 为原生目录身份。返回其在宿主声明根列表中的比较键。
 function knowledgePackagePathKey(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/g, "").toLocaleLowerCase() || "/";
 }
 
-// findKnowledgePackageNameConflict resolves the exact existing row matching one normalized candidate name.
-// findKnowledgePackageNameConflict 解析与规范化候选名称精确匹配的现有知识库行。
-export function findKnowledgePackageNameConflict(
-  libraries: KnowledgeLibrarySummary[],
-  name: string,
-): KnowledgeLibrarySummary | null {
-  // normalizedName mirrors the backend's trim plus locale-independent lowercase comparison key.
-  // normalizedName 对齐后端“去除首尾空白并执行非区域化小写”的比较键。
-  const normalizedName = name.trim().toLowerCase();
-  if (!normalizedName) return null;
-  return libraries.find((library) => library.name.trim().toLowerCase() === normalizedName) ?? null;
-}
-
-// KnowledgePackagePickerDialog lets the user navigate host directories and select one ordinary .vkb file.
-// KnowledgePackagePickerDialog 允许用户浏览宿主目录并选择一个普通 .vkb 文件。
-// Parameters: props supplies open state and package-check callbacks; returns host directory navigation, an exact file selection and guarded actions.
-// 参数：props 提供打开状态及知识库包检查回调；返回宿主目录导航、精确文件选择及受保护操作。
+// Parameters: props owns picker visibility and exact-file inspection. Returns host directory navigation without mutating content.
+// 参数：props 拥有选择器可见性及精确文件检查。返回宿主目录导航，不变更内容。
 export function KnowledgePackagePickerDialog(props: {
   // Whether the package picker is visible.
   // 知识库包选择器是否可见。
@@ -103,6 +87,9 @@ export function KnowledgePackagePickerDialog(props: {
     const sequence = browseSequenceRef.current + 1;
     browseSequenceRef.current = sequence;
     setLoading(true);
+    // Navigation revokes the previous directory before a failed read can expose selectable stale files.
+    // 导航先撤销先前目录，避免失败读取暴露可选旧文件。
+    setListing(null);
     setError(null);
     setSelectedPath(null);
     try {
@@ -192,146 +179,66 @@ export function KnowledgePackagePickerDialog(props: {
   );
 }
 
-// KnowledgePackageImportDialog confirms a unique-name import or one explicit replacement target.
-// KnowledgePackageImportDialog 确认唯一名称导入或一个显式覆盖目标。
-// Parameters: props supplies package preview, existing libraries and import callbacks; returns local draft fields and exact-target replacement confirmation.
-// 参数：props 提供包预览、现有资料库及导入回调；返回本地草稿字段与精确目标覆盖确认。
-export function KnowledgePackageImportDialog(props: {
-  // Validated package inspection currently awaiting confirmation.
-  // 当前等待确认的已校验知识库包检查结果。
-  inspection: KnowledgePackageInspection | null;
-  // Authoritative existing libraries used for live name-conflict detection.
-  // 用于实时名称冲突检测的权威现有知识库列表。
-  libraries: KnowledgeLibrarySummary[];
-  // Whether an import mutation is active.
-  // 是否存在活动导入变更。
+// A reviewed archive may only create a new independent library.
+// 已审阅归档仅可创建新的独立知识库。
+interface KnowledgePackageImportDialogProps {
+  // Frozen exact path, complete byte fingerprint and validated manifest.
+  // 冻结精确路径、完整字节指纹及已验证清单。
+  inspection: KnowledgePackageInspection;
+  // Parent mutation state blocks overlapping imports.
+  // 父级变更状态阻止重叠导入。
   busy: boolean;
-  // Handles dialog visibility changes.
-  // 处理弹窗可见性变化。
-  onOpenChange: (open: boolean) => void;
-  // Executes one confirmed import strategy.
-  // 执行一个已确认的导入策略。
-  onImport: (name: string, strategy: "create" | "replace", targetLibraryId: string | null) => Promise<void>;
-}) {
-  // t resolves user-visible import-decision copy.
-  // t 解析用户可见的导入决策文案。
+  // Closes the reviewed archive without executing it.
+  // 关闭已审阅归档，不执行导入。
+  onClose: () => void;
+  // Imports exact reviewed bytes under name; returns after the committed creation and refresh attempt.
+  // 以 name 导入精确已审阅字节；提交创建及刷新尝试后返回。
+  onImport: (name: string) => Promise<void>;
+}
+
+// Confirms a current-format content package, with no replace-existing or legacy compatibility path.
+// 确认当前格式内容套件，不提供替换既有库或旧版兼容入口。
+// Parameters: props supplies the immutable inspection and explicit create callback. Returns name, cost disclosure and confirmation.
+// 参数：props 提供不可变检查及明确创建回调。返回名称、成本说明及确认。
+export function KnowledgePackageImportDialog({ inspection, busy, onClose, onImport }: KnowledgePackageImportDialogProps) {
+  // Visible package labels use the application locale.
+  // 可见套件标签使用应用语言。
   const { t } = useI18n();
-  // name stores the proposed target library name.
-  // name 保存建议使用的目标知识库名称。
-  const [name, setName] = React.useState("");
-  // strategy stores the explicit non-overwriting or replacement decision.
-  // strategy 保存显式的不覆盖新建或覆盖决策。
-  const [strategy, setStrategy] = React.useState<"create" | "replace">("create");
-  // replacementTarget freezes the exact library reviewed by the second destructive decision.
-  // replacementTarget 冻结第二次破坏性决策已审阅的精确知识库。
-  const [replacementTarget, setReplacementTarget] = React.useState<KnowledgeLibrarySummary | null>(null);
-  // error stores a failed import request while preserving the user's decision.
-  // error 保存失败的导入请求，同时保留用户决策。
+  // The manifest is the sole source of preview metadata.
+  // 清单为预览元数据唯一来源。
+  const manifest = inspection.manifest;
+  // Names are human-editable while every imported byte remains fingerprint-bound.
+  // 名称可由人工编辑，而全部导入字节保持指纹绑定。
+  const [name, setName] = React.useState(manifest.name);
+  // Failed imports retain their exact reviewed identity and diagnosis.
+  // 导入失败保留精确已审阅身份及诊断。
   const [error, setError] = React.useState<string | null>(null);
-  // submitting provides immediate visual feedback before the parent busy projection rerenders.
-  // submitting 在父级忙碌投影重新渲染前提供即时视觉反馈。
-  const [submitting, setSubmitting] = React.useState(false);
-  // submittingRef synchronously serializes destructive confirmation and package import.
-  // submittingRef 同步串行化破坏性确认与知识库包导入。
-  const submittingRef = React.useRef(false);
-
-  React.useEffect(() => {
-    setName(props.inspection?.package.name ?? "");
-    setStrategy("create");
+  // Prevent duplicate confirmation before parent busy publication.
+  // 在父级忙碌发布前防止重复确认。
+  const submitting = React.useRef(false);
+  // Executes one exact reviewed import and preserves errors; returns after the parent-owned transaction.
+  // 执行一次精确已审阅导入并保留错误；父级拥有事务后返回。
+  async function submit(): Promise<void> {
+    if (busy || submitting.current || !name.trim()) return;
+    submitting.current = true;
     setError(null);
-  }, [props.inspection?.archivePath, props.inspection?.package.name]);
-
-  // conflict is the exact current registry row matching the edited name.
-  // conflict 是与编辑后名称匹配的精确当前注册记录。
-  const conflict = findKnowledgePackageNameConflict(props.libraries, name);
-  // createBlocked prevents implicit overwrite and empty-name submission.
-  // createBlocked 阻止隐式覆盖与空名称提交。
-  const createBlocked = !name.trim() || Boolean(conflict);
-  // effectiveBusy merges the local synchronous submission with the parent mutation state.
-  // effectiveBusy 合并本地同步提交状态与父级变更状态。
-  const effectiveBusy = props.busy || submitting;
-
-  // handleImport enforces the explicit replacement confirmation before any mutation request.
-  // handleImport 在发送任何变更请求前强制执行显式覆盖确认。
-  // Parameters: replacementConfirmed proves the selected conflict was explicitly confirmed; returns a promise settling after validation and the guarded import attempt.
-  // 参数：replacementConfirmed 证明选中冲突已经明确确认；返回在校验和受保护导入尝试完成后结束的 Promise。
-  async function handleImport(replacementConfirmed = false): Promise<void> {
-    if (!props.inspection || props.busy || submittingRef.current) return;
-    if (strategy === "create" && createBlocked) return;
-    if (strategy === "replace") {
-      if (!conflict) return;
-      if (!replacementConfirmed) { setReplacementTarget(conflict); return; }
-      if (conflict.id !== replacementTarget?.id) { setError(t("knowledge.experience.targetChanged")); return; }
-    }
-    submittingRef.current = true;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await props.onImport(name.trim(), strategy, strategy === "replace" ? conflict?.id ?? null : null);
-      setReplacementTarget(null);
-      props.onOpenChange(false);
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
-    } finally {
-      submittingRef.current = false;
-      setSubmitting(false);
-    }
+    try { await onImport(name.trim()); onClose(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { submitting.current = false; }
   }
-
-  // packageInfo is the validated immutable metadata displayed for the decision.
-  // packageInfo 是决策界面展示的已校验不可变元数据。
-  const packageInfo = props.inspection?.package;
-  return (
-    <Dialog open={props.inspection !== null} onOpenChange={(open) => !submittingRef.current && !props.busy && props.onOpenChange(open)}>
-      <DialogContent className="knowledge-package-import-dialog" showCloseButton={!effectiveBusy}>
-        <DialogHeader><DialogTitle>{t("knowledge.package.importTitle")}</DialogTitle></DialogHeader>
-        {packageInfo ? (
-          <div className="knowledge-package-import-body">
-            <div className="knowledge-package-summary">
-              <Archive size={22} />
-              <div><strong>{packageInfo.name}</strong><span>{t("knowledge.package.counts").replace("{documents}", String(packageInfo.documentCount)).replace("{chunks}", String(packageInfo.chunkCount)).replace("{bytes}", formatBytes(packageInfo.contentBytes))}</span></div>
-            </div>
-            <label className="knowledge-package-name"><span>{t("knowledge.name")}</span><Input disabled={effectiveBusy || strategy === "replace"} onChange={(event) => {
-              setName(event.target.value);
-              setStrategy("create");
-            }} value={strategy === "replace" && conflict ? conflict.name : name} /></label>
-            {conflict ? <div className="knowledge-package-conflict"><TriangleAlert size={18} /><span>{t("knowledge.package.nameConflict").replace("{name}", conflict.name)}</span></div> : null}
-            <div className="knowledge-package-strategies">
-              <label className={strategy === "create" ? "selected" : ""}>
-                <input checked={strategy === "create"} disabled={effectiveBusy} name="knowledge-package-strategy" onChange={() => setStrategy("create")} type="radio" />
-                <span><strong>{t("knowledge.package.createStrategy")}</strong><small>{conflict ? t("knowledge.package.renameRequired") : t("knowledge.package.createDescription")}</small></span>
-              </label>
-              {conflict ? (
-                <label className={strategy === "replace" ? "selected danger" : "danger"}>
-                  <input checked={strategy === "replace"} disabled={effectiveBusy} name="knowledge-package-strategy" onChange={() => setStrategy("replace")} type="radio" />
-                  <span><strong>{t("knowledge.package.replaceStrategy")}</strong><small>{t("knowledge.package.replaceDescription")}</small></span>
-                </label>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-        {error ? <div className="project-folder-picker-error">{error}</div> : null}
-        <DialogFooter>
-          <Button disabled={effectiveBusy} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("conversation.action.cancel")}</Button>
-          <Button disabled={effectiveBusy || (strategy === "create" ? createBlocked : !conflict)} onClick={() => void handleImport()} type="button" variant={strategy === "replace" ? "destructive" : "default"}>{effectiveBusy ? <Spinner className="size-4" /> : <Check size={16} />}{strategy === "replace" ? t("knowledge.package.replaceStrategy") : t("knowledge.package.import")}</Button>
-        </DialogFooter>
-      </DialogContent>
-      <AlertDialog open={replacementTarget !== null} onOpenChange={(open) => { if (!open && !submittingRef.current) setReplacementTarget(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("knowledge.package.replaceStrategy")}</AlertDialogTitle>
-            <AlertDialogDescription>{t("knowledge.package.replaceConfirm")
-              .replace("{name}", replacementTarget?.name ?? "")
-              .replace("{documents}", String(replacementTarget?.documentCount ?? 0))
-              .replace("{chunks}", String(replacementTarget?.chunkCount ?? 0))}</AlertDialogDescription>
-          </AlertDialogHeader>
-          {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={effectiveBusy}>{t("conversation.action.cancel")}</AlertDialogCancel>
-            <AlertDialogAction disabled={effectiveBusy || !conflict} onClick={(event) => { event.preventDefault(); void handleImport(true); }} variant="destructive">{t("knowledge.package.replaceStrategy")}</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </Dialog>
-  );
+  return <Dialog open onOpenChange={(open) => { if (!open && !busy && !submitting.current) onClose(); }}>
+    <DialogContent>
+      <DialogHeader><DialogTitle>{t("knowledge.package.import")}</DialogTitle><DialogDescription>{t("knowledge.package.independent")}</DialogDescription></DialogHeader>
+      <div className="space-y-3">
+        <p className="select-text break-words text-sm">{inspection.archivePath}</p>
+        <p>{manifest.description}</p>
+        <p>{t("knowledge.package.contentCounts").replace("{documents}", String(manifest.documentCount)).replace("{folders}", String(manifest.folderCount))}</p>
+        <p>{t(KNOWLEDGE_MODE_COPY[manifest.settings.indexMode].label)}</p>
+        <p className="text-sm text-muted-foreground">{t(KNOWLEDGE_MODE_COPY[manifest.settings.indexMode].description)}</p>
+        <label className="grid gap-1">{t("knowledge.name")}<Input aria-label={t("knowledge.name")} disabled={busy} value={name} onChange={(event) => setName(event.target.value)} /></label>
+        {error !== null ? <pre role="alert" className="select-text whitespace-pre-wrap break-words text-sm text-destructive">{error}</pre> : null}
+      </div>
+      <DialogFooter><Button variant="outline" disabled={busy} onClick={onClose}>{t("conversation.action.cancel")}</Button><Button disabled={busy || !name.trim()} onClick={() => void submit()}>{t("knowledge.package.import")}</Button></DialogFooter>
+    </DialogContent>
+  </Dialog>;
 }

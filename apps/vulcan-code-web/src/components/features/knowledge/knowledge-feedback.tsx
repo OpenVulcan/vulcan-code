@@ -4,6 +4,21 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useI18n } from "@/i18n";
 
+// Keeps exact read errors separate from empty results and exposes only an explicit read retry.
+// 将精确读取错误与空结果区分，仅提供显式读取重试。
+// Parameters: error is the diagnostic; onRetry repeats the owning read; busy blocks overlap. Returns a selectable error banner.
+// 参数：error 为诊断；onRetry 重复所属读取；busy 阻止重叠。返回可选择错误提示条。
+export function KnowledgeReadFailure({ error, onRetry, busy = false }: { error: string; onRetry: () => void; busy?: boolean }) {
+  // Labels share the page locale; diagnostic content remains unchanged.
+  // 标签共享页面语言；诊断内容保持原样。
+  const { t } = useI18n();
+  return <div role="alert" className="space-y-2 rounded-md border border-destructive/30 p-3 text-sm">
+    <p>{t("knowledge.readFailed")}</p>
+    <details><summary>{t("toolPresentation.output.errorDetails")}</summary><pre className="max-h-40 select-text overflow-auto whitespace-pre-wrap break-words">{error}</pre></details>
+    <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onRetry()}>{t("knowledge.refresh")}</Button>
+  </div>;
+}
+
 // KnowledgeMessageDialog shows a complete, selectable diagnostic within the current application window.
 // KnowledgeMessageDialog 在当前应用窗口内显示完整、可选择的诊断内容。
 // Parameters: message is the exact diagnostic or null; onClose dismisses it; restoreFocus optionally restores the owning control. Returns the shared dialog.

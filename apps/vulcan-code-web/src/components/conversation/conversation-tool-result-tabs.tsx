@@ -19,7 +19,7 @@ const DIRECT_TOOL_IDS = new Set(["todolist", "get_goal", "create_goal", "update_
 const RESULT_LABELS: Readonly<Record<string, TranslationKey>> = {
   vulcan_codekit_ast_tree: "toolDomain.tabs.astTree", vulcan_codekit_ast_detail: "toolDomain.tabs.astDetail", vulcan_codekit_rg: "toolDomain.search.results",
   vulcan_codekit_node_source: "toolDomain.tabs.nodeSource", vulcan_codekit_markdown_menu: "toolDomain.tabs.documentMenu",
-  knowledge_search: "toolDomain.tabs.retrieval", knowledge_browse: "toolDomain.knowledge.directory", knowledge_read: "toolDomain.tabs.knowledgeContent",
+  knowledge_search: "toolDomain.tabs.retrieval", knowledge_list: "toolDomain.knowledge.directory", knowledge_read: "toolDomain.tabs.knowledgeContent", knowledge_write: "toolDomain.knowledge.change",
   vmm_memory_search: "toolDomain.tabs.memoryResults", vmm_turn_details: "toolDomain.memory.turnDetails", runtime_config: "toolDomain.tabs.configDetails",
   codebase_retrieval: "toolDomain.tabs.codeRetrieval", context7_resolve_library_id: "toolDomain.tabs.library", context7_query_docs: "toolDomain.tabs.docContent",
   web_search: "toolDomain.search.results", web_extract: "toolDomain.extract.content",

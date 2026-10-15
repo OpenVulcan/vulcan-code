@@ -20,7 +20,8 @@ vi.mock("@/i18n", () => ({ useI18n: () => ({ t: translate }) }));
 // library 提供完整的当前设置契约，不访问模型。
 const library: KnowledgeLibrarySummary = {
   id: "library-a", name: "Library A", description: "", lifecycleState: "active", documentCount: 0, chunkCount: 0, indexStatus: "ready", createdAtMs: 1, updatedAtMs: 1,
-  settings: { retrievalMode: "raw_bm25", fallbackPolicy: "explicit_only", curation: { enabled: false, promptVersion: "knowledge-display-v1" }, displayIndex: { status: "not_created", generatedDocumentCount: 0 }, embedding: { enabled: false, embeddingBatchSize: 10, batchSizeSource: "fallback_default" }, vectorIndex: { status: "disabled" } },
+  settings: { indexMode: "bm25", embedding: null },
+  errorMessage: null, pendingSummaryCount: 0, headChangeSeq: 0, lastChangeAtMs: null,
 };
 // inherited is the authoritative default projection for the synthetic project.
 // inherited 是合成项目的权威默认投影。
@@ -70,7 +71,7 @@ it("restores project defaults after an explicit session override through the sam
   expect(item("knowledge.composer.inherit").getAttribute("aria-checked")).toBe("false");
   services.selection.mockResolvedValue(inherited);
   await act(async () => item("knowledge.composer.inherit").click());
-  expect(services.save).toHaveBeenCalledExactlyOnceWith("project-a", "session-a", "inherit", []);
+  expect(services.save).toHaveBeenCalledExactlyOnceWith({ projectId: "project-a", conversationId: "session-a", mode: "inherit", libraryIds: [] });
   expect(item("Library A").getAttribute("aria-checked")).toBe("true");
   expect(item("Library B").getAttribute("aria-checked")).toBe("false");
 });
@@ -105,7 +106,7 @@ it("serializes writes and refreshes the new owner after an old session write com
   let finish!: () => void;
   services.save.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
   await act(async () => { item("Library B").click(); item("Library B").click(); });
-  expect(services.save).toHaveBeenCalledExactlyOnceWith("project-a", "session-a", "explicit", ["library-a", "library-b"]);
+  expect(services.save).toHaveBeenCalledExactlyOnceWith({ projectId: "project-a", conversationId: "session-a", mode: "explicit", libraryIds: ["library-a", "library-b"] });
   await render({ projectId: "project-b", conversationId: "session-b" });
   services.libraries.mockResolvedValue([{ ...library, id: "library-c", name: "Library C" }]);
   services.selection.mockImplementation(async (id: string) => id === "session-b"
@@ -150,7 +151,7 @@ it("keeps current effective libraries when inheritance is turned off", async () 
   await render(); await openSubmenu();
   services.selection.mockResolvedValue({ mode: "explicit", libraryIds: ["library-a"], effectiveLibraryIds: ["library-a"] });
   await act(async () => item("knowledge.composer.inherit").click());
-  expect(services.save).toHaveBeenCalledExactlyOnceWith("project-a", "session-a", "explicit", ["library-a"]);
+  expect(services.save).toHaveBeenCalledExactlyOnceWith({ projectId: "project-a", conversationId: "session-a", mode: "explicit", libraryIds: ["library-a"] });
   expect(item("knowledge.composer.inherit").getAttribute("aria-checked")).toBe("false");
   expect(item("Library A").getAttribute("aria-checked")).toBe("true");
 });
@@ -168,7 +169,7 @@ it("rejects a stale read after switching conversations and recovers a rejected w
   await act(async () => item("Library A").click());
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("knowledge.composer.saveFailed");
   await act(async () => item("knowledge.composer.retry").click());
-  expect(services.save).toHaveBeenCalledExactlyOnceWith("project-a", "new-current", "explicit", ["library-a"]);
+  expect(services.save).toHaveBeenCalledExactlyOnceWith({ projectId: "project-a", conversationId: "new-current", mode: "explicit", libraryIds: ["library-a"] });
   expect(item("Library A").getAttribute("aria-checked")).toBe("false");
 });
 

@@ -142,12 +142,7 @@ export function ProjectKnowledgeBasesSection(props: {
     guard.busy = true;
     setSavingLibraryId(libraryId);
     try {
-      await setKnowledgeProjectBinding(
-        libraryId,
-        projectId,
-        authorized,
-        authorized && defaultEnabled,
-      );
+      await setKnowledgeProjectBinding({ libraryId, projectId, authorized, defaultEnabled: authorized && defaultEnabled });
       notifyKnowledgeProjectBindingsChanged(projectId);
       if (guard.active && saveInFlightRef.current === guard && activeProjectIdRef.current === projectId) {
         // refreshed proves the successful write is also reflected by an authoritative read.

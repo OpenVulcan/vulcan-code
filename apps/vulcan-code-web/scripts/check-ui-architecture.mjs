@@ -31,7 +31,6 @@ const oversizedComponentCeilings = new Map([
   ["components/conversation/conversation-workspace.tsx#ConversationWorkspace", 471],
   ["components/features/browser/browser-area.tsx#BrowserArea", 753],
   ["components/features/code-context/code-context-area.tsx#CodeContextArea", 423],
-  ["components/features/knowledge/knowledge-base-area.tsx#KnowledgeBaseArea", 478],
   ["components/features/memory/vmm-data-page.tsx#VmmDataPage", 472],
   ["components/features/memory/vmm-identity-project-page.tsx#VmmIdentityProjectPage", 411],
   ["components/features/memory/vmm-native-memory-records.tsx#VmmNativeMemoryRecords", 492],
@@ -119,7 +118,7 @@ const feedbackShellPattern = /^(?!page-)[a-z0-9-]+-(?:empty-state|empty|notice)$
 const legacyFeedbackShells = new Set([
   "composer-capability-dialog-empty", "composer-capability-summary-empty", "context-empty-state", "context-injection-delete-notice",
   "conversation-session-commit-empty", "diff-empty-state", "diff-file-tree-empty", "file-change-empty", "knowledge-empty",
-  "knowledge-operation-empty", "markdown-tool-empty", "model-account-card-empty", "model-picker-empty", "project-folder-picker-empty",
+  "markdown-tool-empty", "model-account-card-empty", "model-picker-empty", "project-folder-picker-empty",
   "project-folder-picker-notice", "project-terminal-empty", "session-review-repository-notice", "settings-archive-empty",
   "settings-error-notice", "subagent-orchestration-empty", "system-error-reconciliation-notice", "workspace-files-panel-notice",
   "workspace-subagent-empty",

@@ -78,7 +78,7 @@ export function SkillsArea(props: {
       ) : props.activeTab === "context-engine" ? (
         <ContextEngineArea workbenchRevision={props.workbench.revision} />
       ) : props.activeTab === "knowledge" ? (
-        <KnowledgeBaseArea />
+        <KnowledgeBaseArea projects={props.workbench.projects} />
       ) : null}
       {pluginSelection ? (
         <div key={pluginSelection.subAreaId}>

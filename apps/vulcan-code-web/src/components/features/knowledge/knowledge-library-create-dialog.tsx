@@ -1,273 +1,138 @@
 import * as React from "react";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Combobox } from "@/components/ui/combobox";
 import { useI18n } from "@/i18n";
-import { isPublicAiReasoningEffort, PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS } from "@/lib/reasoning-effort-labels";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { PublicAiInternalInferenceCandidate } from "@/types/public-ai";
-import type { KnowledgeRetrievalMode } from "@/types";
+import { loadPublicAiSettings } from "@/service/settings-actions-service";
+import type { KnowledgeIndexMode, KnowledgeLibraryCreateRequest, KnowledgeLibrarySummary } from "@/types/knowledge-base";
+import { KnowledgeReadFailure } from "./knowledge-feedback";
+import { useKnowledgeRead } from "./use-knowledge-read";
+import { KNOWLEDGE_MODE_COPY, knowledgeEmbeddingCandidates, knowledgeRouteKey, knowledgeRouteFromCandidate, knowledgeSettingsFromDraft } from "./knowledge-mode";
 
-// KnowledgeLibraryCreateDialogModel describes the creation choices returned to the host page.
-// KnowledgeLibraryCreateDialogModel 描述返回给宿主页面的创建选项。
-export interface KnowledgeLibraryCreateDialogModel {
-  // Retrieval policy selected by the user.
-  // 用户选择的检索策略。
-  retrievalMode: KnowledgeRetrievalMode;
-  // Selected curation candidate, or null for raw BM25.
-  // 选中的整理模型候选，原始 BM25 模式下为空。
-  curationCandidate: PublicAiInternalInferenceCandidate | null;
-  // Selected provider-neutral reasoning effort for the curation model.
-  // 整理模型选中的供应商无关推理级别。
-  reasoningEffort: string;
-  // Selected embedding candidate, or null when vectors are disabled.
-  // 选中的向量模型候选，关闭向量时为空。
-  embeddingCandidate: PublicAiInternalInferenceCandidate | null;
-  // Optional configured embedding dimension.
-  // 可选的向量配置维度。
-  configuredDimension: number | null;
-  // Optional user batch override.
-  // 可选的用户批量覆盖值。
-  requestedBatchSize: number | null;
-  // User-confirmed compatibility note for reusing a same-dimension index.
-  // 用户确认复用同维度索引时填写的兼容性风险说明。
-  compatibilityOverride: string;
-}
-
-// KnowledgeLibraryCreateDialogProps defines the controlled creation wizard boundary.
-// KnowledgeLibraryCreateDialogProps 定义受控创建向导的边界。
+// One mounted dialog owns either a new library draft or an exact existing library mode change.
+// 一个已挂载对话框拥有新库草稿或精确既有库模式变更。
 export interface KnowledgeLibraryCreateDialogProps {
-  // Whether the dialog is visible.
-  // 对话框是否可见。
-  open: boolean;
-  // Parent-owned mutation state freezes creation and editing controls while saving.
-  // 父组件持有的变更状态在保存期间冻结创建和编辑控件。
-  busy?: boolean;
-  // Dialog title shown for create or edit operations.
-  // 创建或编辑操作显示的对话框标题。
-  title?: string;
-  // Submit button label.
-  // 提交按钮文案。
-  submitLabel?: string;
-  // User-visible library name.
-  // 用户可见资料库名称。
-  name: string;
-  // Candidate routes from the official capability snapshot.
-  // 来自官方能力快照的候选路由。
-  candidates: PublicAiInternalInferenceCandidate[];
-  // Current controlled retrieval mode.
-  // 当前受控检索模式。
-  retrievalMode: KnowledgeRetrievalMode;
-  // Current curation candidate key.
-  // 当前整理候选键。
-  curationCandidateKey: string;
-  // Current curation reasoning effort.
-  // 当前整理推理级别。
-  reasoningEffort: string;
-  // Current embedding candidate key.
-  // 当前向量候选键。
-  embeddingCandidateKey: string;
-  // Configured dimension input.
-  // 配置维度输入。
-  configuredDimension: string;
-  // Batch override input.
-  // 批量覆盖输入。
-  requestedBatchSize: string;
-  // Compatibility note for an existing vector index.
-  // 现有向量索引的兼容性风险说明。
-  compatibilityOverride: string;
-  // Controlled state callbacks.
-  // 受控状态回调。
-  onOpenChange: (open: boolean) => void;
-  onNameChange: (name: string) => void;
-  onRetrievalModeChange: (mode: KnowledgeRetrievalMode) => void;
-  onCurationCandidateChange: (key: string) => void;
-  onReasoningEffortChange: (value: string) => void;
-  onEmbeddingCandidateChange: (key: string) => void;
-  onConfiguredDimensionChange: (value: string) => void;
-  onRequestedBatchSizeChange: (value: string) => void;
-  // Updates the compatibility note.
-  // 更新兼容性说明。
-  onCompatibilityOverrideChange: (value: string) => void;
-  onSubmit: (model: KnowledgeLibraryCreateDialogModel) => void;
+  // Existing immutable owner; null selects creation.
+  // 既有不可变所有者；空值选择创建。
+  library: KnowledgeLibrarySummary | null;
+  // Blocks fields while the parent owns a mutation.
+  // 父组件拥有变更时阻止字段操作。
+  busy: boolean;
+  // Dismisses this exact mounted draft.
+  // 关闭此精确挂载草稿。
+  onClose: () => void;
+  // Receives explicit human name, purpose and settings; resolves only after committed save and refresh.
+  // 接收显式人工名称、用途及设置；仅在提交保存及刷新后完成。
+  onSubmit: (request: KnowledgeLibraryCreateRequest) => Promise<void>;
 }
 
-// routeKey creates a stable UI key from the exact immutable route identity.
-// routeKey 根据不可变路由身份创建稳定 UI 键。
-function routeKey(candidate: PublicAiInternalInferenceCandidate): string {
-  const route = candidate.route;
-  return [route.provider_id, route.service_entry_id, route.connection_id, route.model_id, route.operation, route.binding.kind, route.binding.kind === "protocol" ? route.binding.protocol_profile_id : route.binding.action_binding_id].join("/");
-}
-
-// candidateLabel formats a route without exposing credentials.
-// candidateLabel 格式化路由且不暴露凭据。
-// Parameters: candidate is one exact knowledge-model route; returns a readable provider/model/account label without secrets.
-// 参数：candidate 是一条精确知识库模型路由；返回不含秘密的供应商、模型和账号标签。
-function candidateLabel(candidate: PublicAiInternalInferenceCandidate): string {
-  return `${candidate.modelDisplayName} · ${candidate.providerDisplayName} · ${candidate.connectionDisplayName}`;
-}
-
-// knowledgeCurationCandidates returns enabled background LLM routes from the shared internal pool.
-// knowledgeCurationCandidates 从共享内部模型池返回已启用的后台 LLM 路由。
-export function knowledgeCurationCandidates(
-  candidates: PublicAiInternalInferenceCandidate[],
-): PublicAiInternalInferenceCandidate[] {
-  return candidates.filter((candidate) => (
-    candidate.enabled
-    && candidate.route.usage_scope === "internal_background"
-    && candidate.route.operation === "conversation_respond"
-  ));
-}
-
-// knowledgeEmbeddingCandidates returns enabled background embedding routes with declared capabilities.
-// knowledgeEmbeddingCandidates 返回已启用且声明向量能力的后台向量路由。
-export function knowledgeEmbeddingCandidates(
-  candidates: PublicAiInternalInferenceCandidate[],
-): PublicAiInternalInferenceCandidate[] {
-  return candidates.filter((candidate) => (
-    candidate.enabled
-    && candidate.route.usage_scope === "internal_background"
-    && candidate.route.operation === "embedding_create"
-    && Boolean(candidate.capabilities.embedding)
-  ));
-}
-
-// KnowledgeLibraryCreateDialog renders creation-time policy and model selection.
-// KnowledgeLibraryCreateDialog 渲染创建阶段的策略与模型选择。
-// Parameters: controlled props supply name, retrieval/model policy drafts, busy state and field/submit callbacks; returns the validated create or edit form.
-// 参数：受控属性提供名称、检索和模型策略草稿、忙碌状态及字段和提交回调；返回经过校验的创建或编辑表单。
-export function KnowledgeLibraryCreateDialog({
-  open,
-  busy = false,
-  title,
-  submitLabel,
-  name,
-  candidates,
-  retrievalMode,
-  curationCandidateKey,
-  reasoningEffort,
-  embeddingCandidateKey,
-  configuredDimension,
-  requestedBatchSize,
-  compatibilityOverride,
-  onOpenChange,
-  onNameChange,
-  onRetrievalModeChange,
-  onCurationCandidateChange,
-  onReasoningEffortChange,
-  onEmbeddingCandidateChange,
-  onConfiguredDimensionChange,
-  onRequestedBatchSizeChange,
-  onCompatibilityOverrideChange,
-  onSubmit,
-}: KnowledgeLibraryCreateDialogProps) {
-  // t localizes the shared model selection interaction without changing route identities.
-  // t 本地化共享模型选择交互，不改变路由身份。
+// Renders explicit creation/mode choices and official model admission without content-editing controls.
+// 渲染显式创建及模式选择与官方模型准入，不提供内容编辑控件。
+// Parameters: props freezes the exact owner and mutation callbacks. Returns an accessible controlled dialog.
+// 参数：props 冻结精确所有者及变更回调。返回无障碍受控弹窗。
+export function KnowledgeLibraryCreateDialog({ library, busy, onClose, onSubmit }: KnowledgeLibraryCreateDialogProps) {
+  // Labels share the application's current language.
+  // 标签共享应用当前语言。
   const { t } = useI18n();
-  const curationCandidates = knowledgeCurationCandidates(candidates);
-  const embeddingCandidates = knowledgeEmbeddingCandidates(candidates);
-  const requiresCuration = retrievalMode !== "raw_bm25";
-  const requiresEmbedding = retrievalMode === "display_hybrid";
-  const curationCandidate = curationCandidates.find((candidate) => routeKey(candidate) === curationCandidateKey) ?? null;
-  const reasoningEfforts = React.useMemo(
-    () => Array.from(new Set(curationCandidate?.capabilities.reasoning_efforts ?? [])),
-    [curationCandidate],
-  );
-  React.useEffect(() => {
-    if (!open || !requiresCuration || reasoningEfforts.length === 0 || reasoningEffort) return;
-    onReasoningEffortChange(reasoningEfforts[0]);
-  }, [onReasoningEffortChange, open, reasoningEffort, reasoningEfforts, requiresCuration]);
-  const embeddingCandidate = embeddingCandidates.find((candidate) => routeKey(candidate) === embeddingCandidateKey) ?? null;
-  const embeddingCapabilities = embeddingCandidate?.capabilities.embedding;
-  const dimensions = React.useMemo(() => {
-    if (!embeddingCapabilities) return [];
-    // Only an explicit discrete list constrains the selector; default_dimensions is a recommendation.
-    // 只有官方明确声明的离散列表才限制选择器；default_dimensions 只是推荐值。
-    const declared = embeddingCapabilities.dimensions.length > 0
-      ? embeddingCapabilities.dimensions
-      : [];
-    return Array.from(new Set(declared)).sort((left, right) => left - right);
-  }, [embeddingCapabilities]);
-  const maximumInputs = embeddingCapabilities?.maximum_inputs;
-  const configuredDimensionNumber = configuredDimension.trim() ? Number(configuredDimension) : null;
-  // Retained numeric overrides still cross Option<u32> even when the user turns vector retrieval off.
-  // 即使用户关闭向量检索，保留的数值覆盖仍需经过 Option<u32> 契约。
-  const dimensionRepresentable = configuredDimensionNumber === null || (Number.isSafeInteger(configuredDimensionNumber) && configuredDimensionNumber > 0 && configuredDimensionNumber <= 4_294_967_295);
-  const dimensionValid = embeddingCapabilities
-    ? configuredDimensionNumber !== null
-      && Number.isSafeInteger(configuredDimensionNumber)
-      && configuredDimensionNumber > 0
-      && dimensionRepresentable
-      && (dimensions.length === 0 || dimensions.includes(configuredDimensionNumber))
-      && (embeddingCapabilities.minimum_dimensions === undefined || configuredDimensionNumber >= embeddingCapabilities.minimum_dimensions)
-      && (embeddingCapabilities.maximum_dimensions === undefined || configuredDimensionNumber <= embeddingCapabilities.maximum_dimensions)
-    : false;
-  // Batch validation mirrors Option<u32> and resolve_embedding_batch_size without replacing invalid text.
-  // 批量校验对齐 Option<u32> 和 resolve_embedding_batch_size，不替换无效文本。
-  const batchNumber = requestedBatchSize.trim() ? Number(requestedBatchSize) : null;
-  const batchValid = batchNumber === null || (Number.isSafeInteger(batchNumber) && batchNumber > 0 && batchNumber <= 4_294_967_295 && (maximumInputs === undefined || batchNumber <= maximumInputs));
-  const reasoningValid = !requiresCuration || reasoningEfforts.length === 0 || reasoningEfforts.includes(reasoningEffort);
-  return (
-    <Dialog onOpenChange={(nextOpen) => { if (!busy) onOpenChange(nextOpen) }} open={open}>
-      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden p-0">
-        <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12"><DialogTitle>{title ?? t("knowledge.experience.createTitle")}</DialogTitle></DialogHeader>
-        <fieldset disabled={busy} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-          {requiresCuration ? <p className="text-sm text-muted-foreground">{t("knowledge.skipped.policy")}</p> : null}
-          <Input aria-label={t("knowledge.name")} onChange={(event) => onNameChange(event.target.value)} placeholder={t("knowledge.name")} value={name} />
-          <label className="space-y-1"><span>{t("knowledge.experience.retrievalMode")}</span><Select onValueChange={(value) => onRetrievalModeChange(value as KnowledgeRetrievalMode)} value={retrievalMode}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="raw_bm25">{t("knowledge.experience.rawMode")}</SelectItem>
-              <SelectItem value="display_bm25">{t("knowledge.experience.displayMode")}</SelectItem>
-              <SelectItem value="display_hybrid">{t("knowledge.experience.hybridMode")}</SelectItem>
-            </SelectContent>
-          </Select></label>
-          {requiresCuration ? <div className="space-y-1"><span>{t("settings.modelExperience.curationModel")}</span><Combobox
-            ariaLabel={t("settings.modelExperience.curationModel")}
-            emptyText={t("settings.modelExperience.curationNoMatch")}
-            searchPlaceholder={t("settings.modelExperience.modelSearch")}
-            placeholder={t(curationCandidateKey && !curationCandidate ? "settings.modelExperience.curationUnavailable" : curationCandidates.length ? "settings.modelExperience.chooseCuration" : "settings.modelExperience.noCuration")}
-            onValueChange={onCurationCandidateChange}
-            value={curationCandidateKey}
-            options={curationCandidates.map((candidate) => ({
-              value: routeKey(candidate), label: candidateLabel(candidate),
-              description: `${candidate.serviceEntryDisplayName} · ${candidate.route.model_id}`,
-              keywords: [candidate.route.provider_id, candidate.route.connection_id, candidate.route.model_id],
-            }))}
-          /></div> : null}
-          {requiresCuration && reasoningEfforts.length > 0 ? <label className="space-y-1"><span>{t("knowledge.experience.reasoning")}</span><Select onValueChange={onReasoningEffortChange} value={reasoningEffort || undefined}>
-            <SelectTrigger><SelectValue placeholder={t("knowledge.experience.reasoningPlaceholder")} /></SelectTrigger>
-            <SelectContent>{reasoningEffort && !reasoningValid && <SelectItem disabled value={reasoningEffort}>{t("settings.modelExperience.invalidValue")}: {reasoningEffort}</SelectItem>}{reasoningEfforts.map((effort) => <SelectItem key={effort} value={effort}>{isPublicAiReasoningEffort(effort) ? t(PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS[effort]) : effort}</SelectItem>)}</SelectContent>
-          </Select><span className="text-sm text-muted-foreground">{t("knowledge.experience.reasoningHint")}</span></label> : null}
-          {requiresEmbedding ? <>
-            <div className="space-y-1"><span>{t("settings.modelExperience.embeddingModel")}</span><Combobox
-              ariaLabel={t("settings.modelExperience.embeddingModel")}
-              emptyText={t("settings.modelExperience.embeddingNoMatch")}
-              searchPlaceholder={t("settings.modelExperience.modelSearch")}
-              placeholder={t(embeddingCandidateKey && !embeddingCandidate ? "settings.modelExperience.embeddingUnavailable" : embeddingCandidates.length ? "settings.modelExperience.chooseEmbedding" : "settings.modelExperience.noEmbedding")}
-              onValueChange={onEmbeddingCandidateChange}
-              value={embeddingCandidateKey}
-              options={embeddingCandidates.map((candidate) => ({
-                value: routeKey(candidate), label: candidateLabel(candidate),
-                description: `${candidate.serviceEntryDisplayName} · ${candidate.route.model_id}`,
-                keywords: [candidate.route.provider_id, candidate.route.connection_id, candidate.route.model_id],
-              }))}
-            /></div>
-            <label className="space-y-1"><span>{t("knowledge.experience.dimensions")}</span>{dimensions.length > 0 ? <Select onValueChange={onConfiguredDimensionChange} value={configuredDimension}>
-              <SelectTrigger><SelectValue placeholder={t("knowledge.experience.dimensionsPlaceholder")} /></SelectTrigger>
-              <SelectContent>{dimensions.map((dimension) => <SelectItem key={dimension} value={String(dimension)}>{dimension}</SelectItem>)}</SelectContent>
-            </Select> : <Input inputMode="numeric" min={embeddingCapabilities?.minimum_dimensions} max={embeddingCapabilities?.maximum_dimensions} onChange={(event) => onConfiguredDimensionChange(event.target.value)} placeholder={embeddingCapabilities?.default_dimensions ? String(embeddingCapabilities.default_dimensions) : t("knowledge.experience.dimensionsInput")} type="number" value={configuredDimension} />}{configuredDimension && !dimensionValid ? <span className="text-sm text-destructive">{t("knowledge.experience.dimensionsInvalid")}</span> : null}</label>
-            <label className="space-y-1"><span>{t("knowledge.experience.batch").replace("{limit}", maximumInputs === undefined ? t("knowledge.experience.batchFallback") : String(maximumInputs))}</span><Input aria-invalid={!batchValid} inputMode="numeric" min={1} max={maximumInputs ?? 4_294_967_295} onChange={(event) => onRequestedBatchSizeChange(event.target.value)} placeholder={maximumInputs ? String(maximumInputs) : "10"} type="number" value={requestedBatchSize} />{!batchValid && <span role="alert" className="text-sm text-destructive">{t("settings.modelExperience.invalidValue")}</span>}</label>
-            <label className="space-y-1"><span>{t("knowledge.experience.compatibility")}</span><Input onChange={(event) => onCompatibilityOverrideChange(event.target.value)} placeholder={t("knowledge.experience.compatibilityPlaceholder")} value={compatibilityOverride} /><span className="text-sm text-muted-foreground">{t("knowledge.experience.compatibilityHint")}</span></label>
-          </> : null}
-          {!requiresEmbedding && (!dimensionRepresentable || !batchValid) ? <p role="alert" className="text-sm text-destructive">{t("settings.modelExperience.retainedEmbeddingInvalid")}</p> : null}
-        </fieldset>
-        <DialogFooter className="shrink-0 px-5 py-3">
-          <Button disabled={busy} onClick={() => onOpenChange(false)} variant="outline">{t("conversation.action.cancel")}</Button>
-          <Button disabled={busy || !name.trim() || !reasoningValid || !dimensionRepresentable || !batchValid || (requiresCuration && !curationCandidate) || (requiresEmbedding && (!embeddingCandidate || !dimensionValid))} onClick={() => onSubmit({ retrievalMode, curationCandidate, reasoningEffort, embeddingCandidate, configuredDimension: configuredDimensionNumber, requestedBatchSize: batchNumber, compatibilityOverride: compatibilityOverride.trim() })}>{submitLabel ?? t("knowledge.create")}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
+  // Existing embedding fields belong only to this frozen dialog owner.
+  // 既有嵌入字段仅属于此冻结对话框所有者。
+  const initialEmbedding = library === null || library.settings === null ? null : library.settings.embedding;
+  // New libraries require a conscious mode selection; existing modes are read from their sole settings owner.
+  // 新库要求主动选择模式；既有模式从其唯一设置所有者读取。
+  const [mode, setMode] = React.useState<KnowledgeIndexMode | null>(library === null || library.settings === null ? null : library.settings.indexMode);
+  // Name is editable only during creation.
+  // 名称仅在创建期间可编辑。
+  const [name, setName] = React.useState(library === null ? "" : library.name);
+  // Purpose guides the AI's conscious content maintenance.
+  // 用途指导 AI 主动维护内容。
+  const [description, setDescription] = React.useState(library === null ? "" : library.description);
+  // The selected model has one exact route identity; no first-option default is chosen.
+  // 选定模型具有一个精确路由身份；不选择首个选项作为默认值。
+  const [routeKey, setRouteKey] = React.useState(() => initialEmbedding === null || initialEmbedding.route.connectionId === null ? "" : knowledgeRouteKey({
+    providerId: initialEmbedding.route.providerId, serviceEntryId: initialEmbedding.route.serviceEntryId,
+    connectionId: initialEmbedding.route.connectionId, modelId: initialEmbedding.route.modelId,
+    bindingKind: initialEmbedding.route.bindingKind, protocol: initialEmbedding.route.protocol,
+  }));
+  // Output size is explicit, with only declared model defaults eligible for prefilling.
+  // 输出大小明确，仅声明模型默认值可预填。
+  const [dimension, setDimension] = React.useState(initialEmbedding === null ? "" : String(initialEmbedding.dimensions));
+  // Retain a saved batch unless the human selects another route or explicitly clears it.
+  // 保留已保存批量，除非人工选择其他路由或明确清空。
+  const [batch, setBatch] = React.useState(initialEmbedding === null ? "" : String(initialEmbedding.batchSize));
+  // Failed saves retain the exact draft for correction.
+  // 保存失败保留精确草稿以便修正。
+  const [error, setError] = React.useState<string | null>(null);
+  // This ref closes the double-click window before React publishes the parent busy state.
+  // 此引用在 React 发布父级忙碌状态前封闭双击窗口。
+  const saving = React.useRef(false);
+  // The shared settings endpoint is the sole candidate producer.
+  // 共享设置端点为唯一候选产出者。
+  const load = React.useCallback(loadPublicAiSettings, []);
+  // Candidate reads keep failures distinct from an empty valid catalog.
+  // 候选读取将失败与有效空目录区分。
+  const models = useKnowledgeRead("knowledge-models", load);
+  // Declared embedding membership narrows the model's optional capability.
+  // 声明嵌入成员关系收窄模型可选能力。
+  const candidates = knowledgeEmbeddingCandidates(models.value === null ? [] : models.value.internalInferenceCandidates);
+  // Match only the chosen route, never a sibling model with a similar display name.
+  // 仅匹配选定路由，绝非展示名称相近的同级模型。
+  const selected = candidates.find((candidate) => knowledgeRouteKey(knowledgeRouteFromCandidate(candidate)) === routeKey);
+  // Vector modes alone require model controls and inference cost disclosure.
+  // 仅向量模式需要模型控件及推理成本说明。
+  const vector = mode === "vector" || mode === "hybrid";
+  // Null represents an unfinished or invalid draft, never a persisted fallback.
+  // 空值代表未完成或非法草稿，绝非持久兜底。
+  const settings = knowledgeSettingsFromDraft(mode, selected, dimension, batch);
+
+  // Saves one ready draft and preserves failures; returns after the exact caller transaction completes.
+  // 保存一个就绪草稿并保留失败；精确调用方事务完成后返回。
+  async function submit(): Promise<void> {
+    if (busy || saving.current || settings === null || name.trim() === "") return;
+    saving.current = true;
+    setError(null);
+    try { await onSubmit({ name: name.trim(), description, settings, projectIds: [] }); onClose(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { saving.current = false; }
+  }
+
+  return <Dialog open onOpenChange={(open) => { if (!open && !busy && !saving.current) onClose(); }}>
+    <DialogContent>
+      <DialogHeader><DialogTitle>{t(library === null ? "knowledge.policy.createTitle" : "knowledge.policy.modeTitle")}</DialogTitle><DialogDescription>{t("knowledge.policy.description")}</DialogDescription></DialogHeader>
+      <div className="space-y-4">
+        {library === null ? <>
+          <label className="grid gap-1">{t("knowledge.name")}<Input aria-label={t("knowledge.name")} value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
+          <label className="grid gap-1">{t("knowledge.purpose")}<Input aria-label={t("knowledge.purpose")} value={description} disabled={busy} onChange={(event) => setDescription(event.target.value)} /></label>
+        </> : <p className="font-medium">{library.name}</p>}
+        <label className="grid gap-1">{t("knowledge.indexMode")}
+          <Select value={mode === null ? "" : mode} disabled={busy} onValueChange={(value: KnowledgeIndexMode) => setMode(value)}>
+            <SelectTrigger aria-label={t("knowledge.indexMode")}><SelectValue placeholder={t("knowledge.policy.chooseMode")} /></SelectTrigger>
+            <SelectContent>{(Object.keys(KNOWLEDGE_MODE_COPY) as KnowledgeIndexMode[]).map((value) => <SelectItem key={value} value={value}>{t(KNOWLEDGE_MODE_COPY[value].label)}</SelectItem>)}</SelectContent>
+          </Select>
+        </label>
+        {mode !== null ? <p className="text-sm text-muted-foreground">{t(KNOWLEDGE_MODE_COPY[mode].description)}</p> : null}
+        {vector ? <>
+          {models.error !== null ? <KnowledgeReadFailure error={models.error} onRetry={models.refresh} busy={models.loading} /> : null}
+          <Combobox value={routeKey} disabled={busy || models.loading} ariaLabel={t("knowledge.policy.embedding")}
+            placeholder={t("knowledge.policy.chooseModel")} searchPlaceholder={t("knowledge.policy.chooseModel")} emptyText={t("knowledge.policy.noModels")}
+            options={candidates.map((candidate) => ({ value: knowledgeRouteKey(knowledgeRouteFromCandidate(candidate)), label: candidate.modelDisplayName + " · " + candidate.providerDisplayName + " · " + candidate.connectionDisplayName }))}
+            onValueChange={(value) => {
+              setRouteKey(value);
+              // Only the exact selected candidate may prefill its declared default output dimension.
+              // 仅精确选定候选可预填其声明默认输出维度。
+              const candidate = candidates.find((entry) => knowledgeRouteKey(knowledgeRouteFromCandidate(entry)) === value);
+              setDimension(candidate !== undefined && candidate.capabilities.embedding.default_dimensions !== undefined ? String(candidate.capabilities.embedding.default_dimensions) : "");
+              setBatch("");
+            }} />
+          <label className="grid gap-1">{t("knowledge.policy.dimension")}<Input type="number" min={1} step={1} aria-label={t("knowledge.policy.dimension")} disabled={busy} value={dimension} onChange={(event) => setDimension(event.target.value)} /></label>
+          <label className="grid gap-1">{t("knowledge.policy.batch")}<Input type="number" min={1} step={1} aria-label={t("knowledge.policy.batch")} disabled={busy} value={batch} onChange={(event) => setBatch(event.target.value)} /></label>
+          <p className="text-sm text-muted-foreground">{t("knowledge.policy.serverBatch")}</p>
+          {settings === null ? <p role="status" className="text-sm text-muted-foreground">{t("knowledge.policy.dimensionRequired")}</p> : null}
+        </> : null}
+        {error !== null ? <pre role="alert" className="select-text whitespace-pre-wrap break-words text-sm text-destructive">{error}</pre> : null}
+      </div>
+      <DialogFooter><Button variant="outline" disabled={busy} onClick={onClose}>{t("conversation.action.cancel")}</Button><Button disabled={busy || settings === null || !name.trim()} onClick={() => void submit()}>{t(library === null ? "knowledge.create" : "memory.common.save")}</Button></DialogFooter>
+    </DialogContent>
+  </Dialog>;
 }

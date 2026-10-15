@@ -33,7 +33,7 @@ describe("V1 domain results from actual runtime contracts", () => {
     expect(domain.sections[0].value).toEqual([{ header: "Scope", question: "Proceed?" }]);
     expect(domain.sections[1]).toMatchObject({ value: body, markdown: true });
   });
-  it.each(["knowledge_search", "knowledge_browse", "knowledge_read", "codebase_retrieval",
+  it.each(["knowledge_search", "knowledge_list", "knowledge_read", "knowledge_write", "codebase_retrieval",
     "vmm_memory_search", "vmm_turn_details", "vmm_memory_write", "vmm_memory_delete",
     "get_goal", "create_goal", "update_goal", "image_understand", "video_understand",
     "audio_understand", "browser_list", "browser_open", "browser_select", "browser_close"])(
@@ -121,9 +121,11 @@ describe("V1 domain results from actual runtime contracts", () => {
   });
 
   it("surfaces partial knowledge and extract failures alongside available results", () => {
-    const knowledge = resolveV1ToolDomainPresentation(event("knowledge_search", { queries: ["test"] }, { results: [{ query: "test", hits: [{ title: "Found", content: "Result" }], failures: [{ libraryId: "failed", error: "Unavailable" }], warnings: [] }] }));
-    expect(knowledge.diagnostic).toContain("部分知识库检索失败");
-    expect(knowledge.sections[0].value).toEqual([{ title: "Found", content: "Result" }]);
+    // The current shared Markdown preserves partial diagnostics without a second result parser.
+    // 当前共享 Markdown 保留部分诊断，不使用第二个结果解析器。
+    const markdown = "# Knowledge search\nResult\nFailure: Unavailable";
+    const knowledge = resolveV1ToolDomainPresentation(event("knowledge_search", { queries: ["test"] }, markdown));
+    expect(knowledge.sections[0]).toMatchObject({ value: markdown, markdown: true });
     const extract = resolveV1ToolDomainPresentation(event("web_extract", { model: "provider/model", args: {} }, { kind: "extract", extract: { results: [{ url: "https://example.com", content: "Found" }], failures: [{ url: "https://example.org", error: "Unavailable" }] } }));
     expect(extract.diagnostic).toContain("部分网页提取失败");
     expect(extract.sections).toHaveLength(2);

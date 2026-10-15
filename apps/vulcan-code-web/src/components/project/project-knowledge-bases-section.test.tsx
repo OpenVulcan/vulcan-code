@@ -18,7 +18,8 @@ function translate(key: string): string { return key; }
 // library 是遵守当前知识库设置合同的完整合成摘要。
 const library: KnowledgeLibrarySummary = {
   id: "library", name: "Synthetic library", description: "", lifecycleState: "active", documentCount: 0, chunkCount: 0, indexStatus: "ready", createdAtMs: 1, updatedAtMs: 1,
-  settings: { retrievalMode: "raw_bm25", fallbackPolicy: "explicit_only", curation: { enabled: false, promptVersion: "knowledge-display-v1" }, displayIndex: { status: "not_created", generatedDocumentCount: 0 }, embedding: { enabled: false, embeddingBatchSize: 10, batchSizeSource: "fallback_default" }, vectorIndex: { status: "disabled" } },
+  settings: { indexMode: "bm25", embedding: null },
+  errorMessage: null, pendingSummaryCount: 0, headChangeSeq: 0, lastChangeAtMs: null,
 };
 
 describe("project knowledge authoritative state", () => {
@@ -51,7 +52,7 @@ describe("project knowledge authoritative state", () => {
     await act(async () => root.render(<ProjectKnowledgeBasesSection projectId="a" />));
     services.libraries.mockRejectedValueOnce(new Error("refresh failed"));
     await act(async () => host.querySelector<HTMLButtonElement>('[role="checkbox"]')!.click());
-    expect(services.save).toHaveBeenCalledWith("library", "a", true, false);
+    expect(services.save).toHaveBeenCalledWith({ libraryId: "library", projectId: "a", authorized: true, defaultEnabled: false });
     expect(services.success).not.toHaveBeenCalled();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("projectSettings.knowledgeBasesSavedRefreshFailed");
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("refresh failed");

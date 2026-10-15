@@ -231,7 +231,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
     // committed 防止把确认读取失败误报为写入失败。
     let committed = false;
     try {
-      await setSessionKnowledgeLibraries(props.projectId, props.conversationId, mode, libraryIds);
+      await setSessionKnowledgeLibraries({ projectId: props.projectId, conversationId: props.conversationId, mode, libraryIds });
       committed = true;
       // The completed write remains valid, but an obsolete owner no longer needs a confirmation read.
       // 已完成的写入仍有效，但过期归属无需再执行确认读取。

@@ -10,11 +10,10 @@ export function formatKnowledgeIndexStatus(status: string, t: (key: TranslationK
   // These states come from workspace-store knowledge_base/runtime/library.rs and fts.rs.
   // 这些状态来自 workspace-store 的 knowledge_base/runtime/library.rs 与 fts.rs。
   switch (status) {
-    case "empty": return t("knowledge.indexStatus.empty");
     case "ready": return t("knowledge.indexStatus.ready");
-    case "dirty": return t("knowledge.indexStatus.dirty");
-    case "rebuilding": return t("knowledge.indexStatus.rebuilding");
-    case "failed": return t("knowledge.indexStatus.failed");
+    case "building": return t("knowledge.indexStatus.building");
+    case "disabled": return t("knowledge.indexStatus.disabled");
+    case "error": return t("knowledge.indexStatus.error");
     default: return "-";
   }
 }

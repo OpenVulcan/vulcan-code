@@ -254,43 +254,28 @@ export function resolveV1ToolDomainPresentation(tool: ToolCallEvent, t: (key: Tr
     }
     case "knowledge_search":
       summary = Array.isArray(tool.input.queries) ? tool.input.queries.join(" · ") : "";
-      if (Array.isArray(object?.results)) {
-        // queryResult is one independently executed knowledge query.
-        // queryResult 是一个独立执行的知识查询。
-        for (const queryResult of object.results) {
-          // group owns this query's hits, failures and warnings.
-          // group 持有本查询的命中、失败与提示。
-          const group = domainObject(queryResult);
-          addSection(sections, formatMessage(t("toolDomain.knowledge.search"), { query: textField(group, "query") }), group?.hits);
-          if (Array.isArray(group?.failures) && group.failures.length > 0) {
-            diagnostic = t("toolDomain.knowledge.partialFailure");
-            addSection(sections, t("toolDomain.knowledge.failed"), group.failures);
-          }
-          if (Array.isArray(group?.warnings) && group.warnings.length > 0) addSection(sections, t("toolDomain.knowledge.warnings"), group.warnings);
-        }
-      }
+      // The current tool returns shared Markdown containing hits and explicit per-library lag/failures.
+      // 当前工具返回共享 Markdown，包含命中及明确逐库滞后和失败。
+      if (typeof result === "string") addSection(sections, t("toolDomain.tabs.retrieval"), result, true);
       break;
-    case "knowledge_browse":
-      summary = textField(tool.input, "directory");
-      addSection(sections, t("toolDomain.knowledge.directory"), object?.documents);
-      addSection(sections, t("toolDomain.knowledge.nextCursor"), object?.nextCursor);
+    case "knowledge_list":
+      summary = textField(tool.input, "path");
+      if (typeof result === "string") addSection(sections, t("toolDomain.knowledge.directory"), result, true);
       break;
     case "knowledge_read": {
-      // result is discriminated by targetType in execute_knowledge_read.
-      // execute_knowledge_read 使用 targetType 区分 result。
-      const read = domainObject(object?.result);
-      summary = textField(tool.input, "targetId");
-      if (read?.targetType === "document") {
-        addSection(sections, t("toolDomain.knowledge.documentSource"), read.document);
-        addSection(sections, t("toolDomain.knowledge.readRange"), fields(read, ["startLine", "endLine", "truncated"]));
-        addSection(sections, t("toolDomain.knowledge.content"), read.content, true);
-      } else if (read?.targetType === "chunk") {
-        // chunk is the exact KnowledgeChunk returned by the chunk branch.
-        // chunk 是片段分支返回的精确 KnowledgeChunk。
-        const chunk = domainObject(read.chunk);
-        addSection(sections, t("toolDomain.knowledge.chunkSource"), fields(chunk, ["documentId", "headingPath", "startLine", "endLine"]));
-        addSection(sections, t("toolDomain.knowledge.content"), chunk?.content, true);
-      }
+      // The strict schema declares mutually exclusive stable ID and logical path selectors.
+      // 严格模式声明互斥稳定身份及逻辑路径选择器。
+      summary = typeof tool.input.documentId === "string" ? tool.input.documentId : textField(tool.input, "path");
+      if (typeof result === "string") addSection(sections, t("toolDomain.knowledge.content"), result, true);
+      break;
+    }
+    case "knowledge_write": {
+      // The write receipt contains identities and counts only; file-ingest bodies never enter this card.
+      // 写入回执仅含身份及数量；文件搬运正文绝不进入此卡片。
+      const receipt = hostPayload(tool.output, "knowledge_write_v1");
+      summary = typeof tool.input.documentId === "string" ? tool.input.documentId : textField(tool.input, "path");
+      if (receipt !== null) addSection(sections, t("toolDomain.knowledge.change"), receipt);
+      if (typeof result === "string") addSection(sections, t("toolDomain.knowledge.change"), result, true);
       break;
     }
     case "vmm_memory_search":
