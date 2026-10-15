@@ -77,6 +77,64 @@ fn human() -> KnowledgeChangeActor {
     }
 }
 
+/// An overlarge later edit cannot publish an earlier candidate edit, revision, history item or index update.
+/// 后续超大编辑不能发布先前候选编辑、修订号、历史项或索引更新。
+#[tokio::test]
+async fn amplified_edits_reject_without_partial_content_or_history() {
+    // Each source is small; the repeated second replacement would exceed the shared document budget.
+    // 每个来源都很小；重复的第二次替换会超过共享文档预算。
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Bm25).await;
+    // The input size is a test workload, not another production safety boundary.
+    // 输入大小为测试工作量，而非另一生产安全边界。
+    let text = "a".repeat(4096);
+    // Stable receipt identity selects the exact current document for both edits.
+    // 稳定回执身份为两次编辑选择精确当前文档。
+    let document = add(&runtime, &library, "bounded-edit.md", &text).await;
+    // Record the complete permanent history before the rejected invocation.
+    // 在被拒调用前记录完整永久历史。
+    let history = runtime.list_changes(&library, None, 20).await.unwrap();
+    // Both exact replacements belong to one indivisible AI write invocation.
+    // 两次精确替换属于一个不可分割 AI 写入调用。
+    let request = KnowledgeWriteRequest {
+        action: "edit".into(),
+        document_id: Some(document.id.clone()),
+        expected_revision: Some(document.revision),
+        edits: Some(vec![
+            KnowledgeTextEdit {
+                old_text: "a".into(),
+                new_text: "x".into(),
+                replace_all: true,
+            },
+            KnowledgeTextEdit {
+                old_text: "x".into(),
+                new_text: "b".repeat(MAX_KNOWLEDGE_BODY_BYTES / text.len() + 1),
+                replace_all: true,
+            },
+        ]),
+        ..Default::default()
+    };
+    assert_eq!(
+        runtime
+            .write_content(&library, "project", request, ai())
+            .await
+            .unwrap_err(),
+        "ERR_KNOWLEDGE_BODY_TOO_LARGE"
+    );
+    // The failed allocation admission leaves current content and its optimistic token untouched.
+    // 失败分配准入保持当前内容及其乐观令牌不变。
+    let current = runtime
+        .read_document(&library, Some(&document.id), None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(current.document, document);
+    assert_eq!(current.content, text);
+    assert_eq!(
+        runtime.list_changes(&library, None, 20).await.unwrap(),
+        history
+    );
+    assert!(runtime.index_integrity(&library).await.unwrap().healthy);
+}
+
 /// Exercises concurrent per-term dictionary changes without content-history side effects.
 /// 验证并发单词词典变更不产生内容历史副作用。
 /// Uses an isolated library; takes no parameters and returns no value.

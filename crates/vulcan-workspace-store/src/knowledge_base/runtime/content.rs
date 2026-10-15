@@ -150,6 +150,35 @@ fn body(connection: &Connection, hash: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Checks replacement expansion before allocating its resulting text.
+/// 在分配结果文本前检查替换扩张。
+/// Parameters: text/old/new byte lengths and the actual nonoverlapping replacement count describe one exact edit.
+/// 参数：正文、旧文本及新文本的字节长度与实际非重叠替换次数描述一次精确编辑。
+/// Returns the bounded result size, or the shared body-limit error on expansion, arithmetic overflow or invalid subtraction.
+/// 返回有界结果大小；扩张、算术溢出或无效减法时返回共享正文限制错误。
+fn checked_edit_output_bytes(
+    text: usize,
+    old: usize,
+    new: usize,
+    replacements: usize,
+) -> Result<usize, String> {
+    // Removing matched bytes first permits shrinking edits at the exact shared body boundary.
+    // 先移除匹配字节，使精确共享正文边界上的缩减编辑仍可执行。
+    let remaining = old
+        .checked_mul(replacements)
+        .and_then(|removed| text.checked_sub(removed))
+        .ok_or("ERR_KNOWLEDGE_BODY_TOO_LARGE")?;
+    // Repeated replacement must never allocate an amplified string before its budget is known.
+    // 重复替换绝不能在预算已知前分配被放大的字符串。
+    let inserted = new
+        .checked_mul(replacements)
+        .ok_or("ERR_KNOWLEDGE_BODY_TOO_LARGE")?;
+    remaining
+        .checked_add(inserted)
+        .filter(|bytes| *bytes <= MAX_KNOWLEDGE_BODY_BYTES)
+        .ok_or_else(|| "ERR_KNOWLEDGE_BODY_TOO_LARGE".into())
+}
+
 /// Validates a complete document and body; returns stable diagnostics before any commit.
 /// 验证完整文档与正文；在提交前返回稳定诊断。
 fn validate_document(document: &KnowledgeDocumentSummary, body: &str) -> Result<(), String> {
@@ -817,6 +846,14 @@ impl KnowledgeBaseRuntime {
                                         if count == 0 || (count != 1 && !edit.replace_all) {
                                             return Err("ERR_KNOWLEDGE_EDIT_MATCH_COUNT".into());
                                         }
+                                        // Rust replacement allocates its complete result; enforce the output budget first.
+                                        // Rust 替换会分配完整结果；先执行输出预算检查。
+                                        checked_edit_output_bytes(
+                                            text.len(),
+                                            edit.old_text.len(),
+                                            edit.new_text.len(),
+                                            if edit.replace_all { count } else { 1 },
+                                        )?;
                                         text = if edit.replace_all {
                                             text.replace(&edit.old_text, &edit.new_text)
                                         } else {
@@ -1383,5 +1420,57 @@ impl KnowledgeBaseRuntime {
         .await?;
         self.wake_knowledge_worker(library_id).await;
         Ok(receipt)
+    }
+}
+
+#[cfg(test)]
+mod edit_allocation_tests {
+    use super::*;
+
+    /// Output admission uses UTF-8 byte lengths and permits exact-boundary shrink or unchanged-size edits.
+    /// 输出准入使用 UTF-8 字节长度，并允许精确边界缩减或大小不变的编辑。
+    #[test]
+    fn replacement_size_preserves_utf8_and_shared_boundaries() {
+        // These source and expected values prove byte accounting without locking user-facing wording.
+        // 这些来源及预期值证明字节记账，不锁定面向用户措辞。
+        let (text, old, new, expected) = ("éé", "é", "汉", "汉汉");
+        assert_eq!(
+            checked_edit_output_bytes(text.len(), old.len(), new.len(), 2).unwrap(),
+            expected.len()
+        );
+        assert_eq!(
+            checked_edit_output_bytes(MAX_KNOWLEDGE_BODY_BYTES, 1, 1, MAX_KNOWLEDGE_BODY_BYTES)
+                .unwrap(),
+            MAX_KNOWLEDGE_BODY_BYTES
+        );
+        assert_eq!(
+            checked_edit_output_bytes(MAX_KNOWLEDGE_BODY_BYTES, 1, 0, MAX_KNOWLEDGE_BODY_BYTES)
+                .unwrap(),
+            0
+        );
+    }
+
+    /// Amplification and usize overflow reject using lengths alone, without allocating dangerous text.
+    /// 放大及 usize 溢出仅凭长度即被拒绝，不分配危险文本。
+    #[test]
+    fn repeated_expansion_and_arithmetic_overflow_are_rejected_before_allocation() {
+        for (text, old, new, count) in [
+            (
+                MAX_KNOWLEDGE_BODY_BYTES,
+                1,
+                MAX_KNOWLEDGE_BODY_BYTES,
+                MAX_KNOWLEDGE_BODY_BYTES,
+            ),
+            (1, 1, usize::MAX, 2),
+            (usize::MAX, 1, usize::MAX, 2),
+            (usize::MAX, 1, usize::MAX, 1),
+            (usize::MAX, usize::MAX, 0, 2),
+            (MAX_KNOWLEDGE_BODY_BYTES, 0, 1, 1),
+        ] {
+            assert_eq!(
+                checked_edit_output_bytes(text, old, new, count).unwrap_err(),
+                "ERR_KNOWLEDGE_BODY_TOO_LARGE"
+            );
+        }
     }
 }
