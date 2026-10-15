@@ -1275,8 +1275,12 @@ mod tests {
         }];
 
         assert!(
-            validate_project_mutation_identity_rows("project-a", &matching_rows, "test project mutation")
-                .is_ok()
+            validate_project_mutation_identity_rows(
+                "project-a",
+                &matching_rows,
+                "test project mutation"
+            )
+            .is_ok()
         );
         assert!(
             validate_project_mutation_identity_rows("project-a", &[], "test project mutation")
@@ -1284,9 +1288,13 @@ mod tests {
                 .contains("state changed")
         );
         assert!(
-            validate_project_mutation_identity_rows("project-a", &mismatched_rows, "test project mutation",)
-                .expect_err("mismatched mutation identity should fail")
-                .contains("unexpected project identifier")
+            validate_project_mutation_identity_rows(
+                "project-a",
+                &mismatched_rows,
+                "test project mutation",
+            )
+            .expect_err("mismatched mutation identity should fail")
+            .contains("unexpected project identifier")
         );
     }
 

@@ -61,6 +61,7 @@ pub use resource_catalog::{
     project_resource_catalog_path, project_resource_locator, resolve_project_resource,
     resolve_project_resource_source,
 };
+pub use session_index_v1::SESSION_ASSISTANT_NAME_MAX_CHARS;
 pub use session_usage::{load_session_lifetime_usage, save_session_lifetime_usage};
 #[cfg(feature = "test-support")]
 pub use session_v1_store::create_session_v1_storage_fixture;
@@ -79,7 +80,6 @@ pub use session_v1_store::{
     project_session_lifecycle_v1, publish_edit_session_v1, session_v1_format_is_unsupported,
     set_session_assistant_v1, set_session_unread_v1,
 };
-pub use session_index_v1::SESSION_ASSISTANT_NAME_MAX_CHARS;
 pub use session_vmm_v1::{load_session_vmm_state, persist_session_vmm_state};
 pub use vce_batch_artifacts::persist_vce_batch_artifact;
 

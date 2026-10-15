@@ -35,8 +35,7 @@ use super::session_index_v1::{
     ensure_session_index_v1_schema, insert_session_index_v1, list_active_session_index_v1,
     list_archived_session_index_v1, locate_session_index_v1, project_session_lifecycle_index_v1,
     set_session_index_assistant_v1, set_session_index_unread_v1, validate_new_session_index_v1,
-    validate_project_partition,
-    validate_relative_path,
+    validate_project_partition, validate_relative_path,
 };
 use super::session_v1::event_window::{
     EventWindowReadReport, load_provider_event_range, load_recent_turn_window,
@@ -1161,15 +1160,15 @@ pub async fn session_v1_format_is_unsupported(
 ) -> Result<bool, SessionV1StoreError> {
     let locator = locate_session_v1_storage(host_runtime, session_id).await?;
     let metadata_path = locator.layout.metadata_path();
-    index_probe::run_io(move || {
-        match super::session_v1::documents::read_metadata(&metadata_path) {
+    index_probe::run_io(
+        move || match super::session_v1::documents::read_metadata(&metadata_path) {
             Ok(_) => Ok(false),
             Err(error) if error.code == SessionV1StorageErrorCode::UnsupportedDevelopmentFormat => {
                 Ok(true)
             }
             Err(error) => Err(SessionV1StoreError::from(error)),
-        }
-    })
+        },
+    )
     .await
     .map_err(|detail| SessionIndexV1Error::Read {
         session_id: Some(session_id.to_string()),
