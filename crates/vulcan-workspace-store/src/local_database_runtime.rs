@@ -192,15 +192,12 @@ impl LanceDbDirectoryBinding {
 ///
 /// Why the file, not only a logical name / 为何是文件，而不只是逻辑名:
 ///
-/// [`LogicalDatabase`] enumerates the host's **singular** databases, and that is all it can do. Two
-/// of the storage surfaces are not singular: the knowledge base keeps one relational
-/// database and one display database **per library**, while plugin and
-/// skill storage keep one per instance. There is no fixed set to enumerate, so those bindings are
-/// keyed by the file the subsystem derived.
-///
-/// [`LogicalDatabase`] 枚举宿主**单例**数据库，这也是它唯一能做的事。部分存储面并非
-/// 单例：知识库**每个资料库**各有一个关系库与一个显示库，插件与技能存储每个实例一个。
-/// 没有固定集合可枚举，因此这些绑定以子系统派生的文件为键。
+/// [`LogicalDatabase`] enumerates the host's singular databases; other surfaces own files per instance.
+/// [`LogicalDatabase`] 枚举宿主单例数据库；其他存储面按实例持有文件。
+/// Knowledge bases own relational and display databases per library; plugins and skills own files per instance.
+/// 知识库每库持有关系库和显示库；插件与技能按实例持有文件。
+/// Such bindings are keyed by subsystem-derived files, with no fixed set to enumerate.
+/// 此类绑定以子系统派生的文件为键，无法枚举固定集合。
 ///
 /// Why the options travel with the binding / 为何选项随绑定一起传递:
 ///
