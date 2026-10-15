@@ -31,8 +31,6 @@ vi.mock("@/components/shell/activity-rail", () => ({
   // ActivityRail 保留真实布局的会话路由回调，同时简化无关树展示。
   ActivityRail: (props: { onSelectSessions: () => void }) => <button onClick={props.onSelectSessions}>Return through session rail</button>,
 }));
-vi.mock("@/components/features/code-context/vce-project-surface", () => ({ VceProjectSurfaceProvider: ({ children }: { children: React.ReactNode }) => children }));
-vi.mock("@/components/features/code-context/vce-job-observer-context", () => ({ VceJobObserverProvider: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock("@/components/project/terminal/project-floating-terminal-layer", () => ({ ProjectFloatingTerminalLayer: () => null }));
 vi.mock("@/components/workspace/workspace-shell", () => ({
   // WorkspaceShell substitutes only presentation; navigation callbacks are supplied by the actual WorkbenchLayout.

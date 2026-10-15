@@ -5,7 +5,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import type { KnowledgeProjectBinding, VmmConfigDraftSummary } from "@/types";
-import { createVceActivityFixture } from "@/components/features/code-context/vce-activity-test-fixture";
 import { ProjectOverviewSection } from "./project-overview-section";
 
 // reads isolate only host IO; the overview and its real callbacks stay mounted.
@@ -35,7 +34,7 @@ const initialProps: OverviewProps = {
   memory: { selectedProjectId: "project-other", runtime: { processReady: true, backendState: "ready", scopeReady: true,
     precheckReady: true, postactionReady: true, profileInstructionReady: true, rerankReady: true,
     outboxCount: 0, profileSyncCount: 0, completedTurns: 2, profilePreview: "" } },
-  agentOverrides: {}, agentLoaded: false, agentLoading: false, agentError: null, vceActivity: null, vceError: null,
+  agentOverrides: {}, agentLoaded: false, agentLoading: false, agentError: null,
   onOpenSection: () => undefined,
 };
 // host and root isolate each mounted overview lifecycle.
@@ -76,10 +75,9 @@ describe("project overview authority and navigation", () => {
   });
   it("shows verified native binding and indexed availability without leaking another session or credentials", async () => {
     reads.bindings.mockResolvedValue([{ projectId: "project-a", libraryId: "library-a", defaultEnabled: true }]);
-    await renderOverview({ vmmDraft: draft, agentLoaded: true, vceActivity: createVceActivityFixture() });
+    await renderOverview({ vmmDraft: draft, agentLoaded: true });
     expect(host.textContent).toContain("「Project A memory」(#7)");
     expect(host.textContent).toContain("可使用 1 个知识库，其中 1 个默认开启");
-    expect(host.textContent).toContain("代码索引可以搜索");
     expect(host.textContent).toContain("这个项目当前没有运行中的会话");
     expect(host.textContent).not.toContain("当前会话: 记忆可用");
     expect(host.textContent).not.toContain("secret-never-render");
@@ -93,11 +91,10 @@ describe("project overview authority and navigation", () => {
     reads.bindings.mockImplementation((projectId: string) => projectId === "project-a"
       ? new Promise<KnowledgeProjectBinding[]>((resolve) => { finishOld = resolve; }) : Promise.resolve([]));
     await renderOverview();
-    await renderOverview({ project: { id: "project-b", name: "Project B", path: "D:/workspace/project-b" }, vceActivity: createVceActivityFixture("project-a") });
+    await renderOverview({ project: { id: "project-b", name: "Project B", path: "D:/workspace/project-b" } });
     await act(async () => finishOld([{ libraryId: "old", projectId: "project-a", defaultEnabled: true }]));
     expect(host.textContent).toContain("可使用 0 个知识库");
     expect(host.textContent).not.toContain("可使用 1 个知识库");
-    expect(host.textContent).toContain("还没读到索引状态");
     expect(reads.unsubscribe).toHaveBeenCalledTimes(1);
   });
   it("routes every setting action in the same project and retains readable paths after clipboard failure", async () => {
@@ -106,30 +103,23 @@ describe("project overview authority and navigation", () => {
     const open = vi.fn();
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
     await renderOverview({ onOpenSection: open });
-    for (const label of ["记忆设置", "代码语义索引设置", "知识库设置", "技能设置", "查看与清理附件"]) {
+    for (const label of ["记忆设置", "知识库设置", "技能设置", "查看与清理附件"]) {
       await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.click());
     }
-    expect(open.mock.calls.map(([section]) => section)).toEqual(["vmm", "code-context", "knowledge-bases", "agent-skills", "attachments"]);
+    expect(open.mock.calls.map(([section]) => section)).toEqual(["vmm", "knowledge-bases", "agent-skills", "attachments"]);
     await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="复制项目路径"]')!.click());
     expect(host.textContent).toContain("复制失败，可以直接选中路径手动复制");
     expect(host.querySelector(".project-overview-path")!.textContent).toContain("D:/workspace/project-a");
   });
   it("exposes a missing native owner and actual model-route failures instead of claiming readiness", async () => {
     reads.catalog.mockResolvedValue({ data: { kind: "native_project_catalog", value: { projects: [], bindings: [{ vulcanProjectId: "project-a", ownerProjectId: 7, linkedProjectIds: [] }] } } });
-    // index keeps a real ready lifecycle but explicitly revokes query admission through the host contract.
-    // index 保留真实 ready 生命周期，但通过宿主契约明确撤销查询准入。
-    const index = createVceActivityFixture();
-    index.queryAvailable = false; index.configuration.ready = false; index.configuration.issues = ["embedding route unavailable"];
-    await renderOverview({ vmmDraft: draft, vceActivity: index });
+    await renderOverview({ vmmDraft: draft });
     expect(host.querySelector('[role="alert"]')!.textContent).toContain("关联的记忆项目 #7 已不存在");
-    expect(host.querySelector('[role="alert"]')!.textContent).toContain("embedding route unavailable");
-    expect(host.textContent).toContain("代码索引暂时无法搜索");
   });
   it("uses the existing locale mechanism for new status and action text", async () => {
     await renderOverview({}, "en-US");
     expect(host.textContent).toContain("Memory settings not loaded yet");
     expect(host.textContent).toContain("0 knowledge bases available");
-    expect(host.querySelector('button[aria-label="Code semantic index settings"]')).not.toBeNull();
   });
   it("discards a native catalog that returns after project navigation", async () => {
     // finishOld publishes an old catalog after the next project's own unbound catalog has arrived.

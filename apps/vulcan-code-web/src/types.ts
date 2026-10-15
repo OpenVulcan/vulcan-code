@@ -1,6 +1,5 @@
 export * from "./types/startup";
 export * from "./types/projects-files";
-export * from "./types/vce";
 export * from "./types/conversation";
 export * from "./types/composer-skills";
 export * from "./types/settings-providers";

@@ -577,7 +577,6 @@ fn build_git_commit_summary_execution_request(
 ) -> ExecutionPreparationRequest {
     ExecutionPreparationRequest {
         session_id,
-        vce_retrieval_handler: None,
         execution_scope: ExecutionScope::ContextCompaction {
             node_id: SessionNodeId::from(session_id),
         },

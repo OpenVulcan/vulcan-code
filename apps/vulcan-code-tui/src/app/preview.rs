@@ -11,13 +11,9 @@ use serde_json::Value;
 
 /// Builds only fields declared by a validated preview and its frozen next request.
 /// 仅构建已验证预检及其冻结下一请求声明的字段。
-/// Parameters: preview selects the contract; result owns evidence; next owns the exact request. Returns validated field definitions.
-/// 参数：preview 选择契约；result 拥有证据；next 拥有精确请求。返回已验证字段定义。
-fn input_fields(
-    preview: Preview,
-    result: &Value,
-    next: &ServiceCall,
-) -> Option<Vec<super::form::FormField>> {
+/// Parameters: preview selects the contract; next owns the exact request. Returns validated field definitions.
+/// 参数：preview 选择契约；next 拥有精确请求。返回已验证字段定义。
+fn input_fields(preview: Preview, next: &ServiceCall) -> Option<Vec<super::form::FormField>> {
     use super::form::FormField;
     match preview {
         Preview::KnowledgePackage => Some(vec![FormField {
@@ -51,44 +47,7 @@ fn input_fields(
                 })
             })
             .collect(),
-        Preview::VceEmbedding => result
-            .get("projects")?
-            .as_array()?
-            .iter()
-            .enumerate()
-            .map(|(index, project)| {
-                // A hard-rebuild reason makes compatibility unavailable in the upstream UI.
-                // 上游界面在存在强制重建原因时不允许选择兼容。
-                let hard_rebuild = project.pointer("/impact/hardRebuildReason")?;
-                Some(FormField {
-                    title: if hard_rebuild.is_null() {
-                        tr!(
-                            "tui.preview.projectDecision",
-                            project = project.get("projectName")?.as_str()?
-                        )
-                    } else {
-                        tr!(
-                            "tui.preview.projectRebuild",
-                            project = project.get("projectName")?.as_str()?
-                        )
-                    },
-                    pointer: format!(
-                        "/request/vceEmbeddingConfirmation/decisions/{index}/decision"
-                    ),
-                    secret: false,
-                    optional: false,
-                    parse: if hard_rebuild.is_null() {
-                        |input| {
-                            matches!(input, "compatible" | "rebuild")
-                                .then(|| Value::String(input.to_string()))
-                        }
-                    } else {
-                        |input| (input == "rebuild").then(|| Value::String(input.to_string()))
-                    },
-                    validate: |_, _| true,
-                })
-            })
-            .collect(),
+
         _ => Some(Vec::new()),
     }
 }
@@ -127,16 +86,7 @@ pub fn open(app: &mut App, call: ServiceCall, result: Value) {
                 tr!("skills.plugins.authorizeAndInstall")
             },
         ),
-        Preview::VceMaintenance { .. } => (
-            tr!("codeContext.area.confirmIndexMaintenance"),
-            tr!("tui.preview.maintenance"),
-            tr!("codeContext.area.confirmIndexMaintenance"),
-        ),
-        Preview::VceEmbedding => (
-            tr!("tui.field.embeddingReview"),
-            tr!("tui.field.embeddingDecision"),
-            tr!("tui.field.confirm"),
-        ),
+
         Preview::VmmProject => (
             tr!("vmm.nativeProjects.title"),
             tr!("tui.preview.projectImpact"),
@@ -168,15 +118,12 @@ pub fn open(app: &mut App, call: ServiceCall, result: Value) {
     let frozen = match preview {
         Preview::KnowledgePackage => next.param("/request").clone(),
         Preview::PluginInstall => next.param("/approvedPermissions").clone(),
-        Preview::VceMaintenance { .. } => next.param("/request/actionIds").clone(),
-        Preview::VceEmbedding => next
-            .param("/request/vceEmbeddingConfirmation/decisions")
-            .clone(),
+
         _ => next.param("/request/payload").clone(),
     };
     // Field definitions enforce the same choices allowed by the WebUI preflight dialog.
     // 字段定义约束为 WebUI 预检对话框允许的相同选择。
-    let Some(fields) = input_fields(preview, &result, &next) else {
+    let Some(fields) = input_fields(preview, &next) else {
         app.toast(NoticeSeverity::Warning, tr!("tui.preview.unconfirmable"));
         return;
     };
@@ -235,8 +182,7 @@ mod tests {
             .expect("current inspection");
         // Field lookup follows a stable declared pointer.
         // 字段查找遵循稳定声明指针。
-        let fields =
-            input_fields(Preview::KnowledgePackage, &inspection, &next).expect("package input");
+        let fields = input_fields(Preview::KnowledgePackage, &next).expect("package input");
         // Only the display name can be changed after preview.
         // 预检后仅可更改展示名称。
         let name = fields
@@ -251,26 +197,5 @@ mod tests {
             next.param("/request/archivePath"),
             &inspection["archivePath"]
         );
-    }
-
-    /// Preserves the existing VCE hard-rebuild confirmation regression.
-    /// 保留既有 VCE 强制重建确认回归。
-    #[test]
-    fn embedding_fields_use_the_service_hard_rebuild_gate() {
-        // Review.
-        // 服务端预检审查结果。
-        let review = json!({"revision":"r","candidate":null,"projects":[
-            {"projectName":"Compatible","compatible":true,"impact":{"scope":{"project_id":"a"},"hardRebuildReason":null}},
-            {"projectName":"Changed","compatible":false,"impact":{"scope":{"project_id":"b"},"hardRebuildReason":"schema changed"}}]});
-        // Next.
-        // 明确的下一步请求或值。
-        let next = crate::service_api::vce::save_reviewed_embedding(&review).unwrap();
-        // Fields.
-        // 顺序输入字段。
-        let fields = input_fields(Preview::VceEmbedding, &review, &next).unwrap();
-        assert!((fields[0].parse)("compatible").is_some());
-        assert!((fields[1].parse)("compatible").is_none());
-        assert!((fields[1].parse)("rebuild").is_some());
-        assert!(next.params.pointer(&fields[1].pointer).is_some());
     }
 }

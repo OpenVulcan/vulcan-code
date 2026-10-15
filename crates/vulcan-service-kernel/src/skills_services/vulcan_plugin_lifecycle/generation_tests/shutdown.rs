@@ -322,8 +322,8 @@ async fn service_plugin_publication_and_projection_allow_open_admission() {
 
 /// Recover a retained reversible service through the real service resume path before publishing again.
 /// 再次发布前，通过真实服务恢复路径恢复保留的可恢复服务。
-/// No inputs or return value; covers failed window close without claiming to restore stopped VCE or MCP runtimes.
-/// 无输入或返回值；覆盖窗口关闭失败，不声称恢复已停止的 VCE 或 MCP 运行时。
+/// No inputs or return value; covers failed window close without claiming to restore stopped MCP runtimes.
+/// 无输入或返回值；覆盖窗口关闭失败，不声称恢复已停止的 MCP 运行时。
 #[tokio::test]
 async fn service_plugin_publication_and_projection_resume_after_recoverable_shutdown() {
     // No process teardown occurs: the host retained usable runtimes after window close failed.

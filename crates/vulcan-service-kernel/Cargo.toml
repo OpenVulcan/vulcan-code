@@ -30,7 +30,6 @@ tokio = { workspace = true, features = ["process", "rt-multi-thread"] }
 uuid.workspace = true
 vulcan-agent-runtime.workspace = true
 vulcan-ai-contract.workspace = true
-vulcan-context-engine = { workspace = true, features = ["host-ai-contract"] }
 vulcan-memorymesh-core.workspace = true
 vulcan-llm-core.workspace = true
 keyring.workspace = true
@@ -87,8 +86,8 @@ vulcan-runtime-assets = { workspace = true, features = ["test-support"] }
 # Parses explicitly authorized live-test configuration without invoking mutating startup recovery.
 # 解析明确授权的真实测试配置，不调用会修改配置的启动恢复流程。
 toml.workspace = true
-# Exposes the deterministic HostAI Port for VCE adapter lifecycle tests only.
-# 仅为 VCE 适配器生命周期测试暴露确定性 HostAI Port。
+# Exposes the deterministic HostAI Port for background inference consumer tests.
+# 为后台推理消费者测试暴露确定性 HostAI Port。
 vulcan-ai-contract = { workspace = true, features = ["test-support"] }
 # Exposes exact V1 storage fixtures only while compiling service-kernel tests.
 # 仅在编译 service-kernel 测试时暴露精确 V1 存储夹具。

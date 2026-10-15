@@ -21,14 +21,14 @@ function workbenchFixture(): WorkbenchSnapshot {
   } as unknown as WorkbenchSnapshot;
 }
 
-describe("project VCE settings visibility", () => {
+describe("project settings navigation", () => {
   // Project intent remains configurable without giving settings navigation runtime admission authority.
   // 项目意图保持可配置，设置导航不拥有运行时准入权威。
-  it("keeps the semantic settings node for both disabled and enabled project intent", () => {
-    const project = { pinned: false, vceEnabled: true } as ProjectSummary;
+  it("excludes the retired code index from project navigation", () => {
+    const project = { pinned: false } as ProjectSummary;
 
     const closed = projectSettingsSections(
-      { ...project, vceEnabled: false },
+      { ...project },
       workbenchFixture(),
       translationFixture,
       null,
@@ -40,14 +40,14 @@ describe("project VCE settings visibility", () => {
       null,
     );
 
-    expect(closed.find((section) => section.id === "code-context")?.detail).toBe("projectSettings.codeContext.disabled");
-    expect(ready.some((section) => section.id === "code-context")).toBe(true);
+    expect(closed.map((section) => section.id)).not.toContain("code-context");
+    expect(ready.map((section) => section.id)).not.toContain("code-context");
   });
 
   // A settings dialog may target a different project from the selected conversation's memory snapshot.
   // 设置弹窗可能属于另一个项目，不能读取当前会话的记忆快照来决定其覆盖状态。
   it("uses only the dialog project's loaded memory authority", () => {
-    const project = { id: "other-project", pinned: false, vceEnabled: false } as ProjectSummary;
+    const project = { id: "other-project", pinned: false } as ProjectSummary;
     const workbench = workbenchFixture();
     expect(projectSettingsSections(project, workbench, translationFixture, true).find((section) => section.id === "vmm")?.detail).toBe("projectSettings.projectOverride");
     expect(projectSettingsSections(project, workbench, translationFixture, false).find((section) => section.id === "vmm")?.detail).toBe("projectSettings.inheritGlobal");

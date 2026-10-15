@@ -780,47 +780,6 @@
               "operation": "conversation_respond"
             }
           }
-        },
-        "vce": {
-          "embedding": {
-            "provider_id": "demo-provider",
-            "service_entry_id": "demo-api",
-            "connection_id": "demo-connection",
-            "binding": {
-              "kind": "protocol",
-              "protocol_profile_id": "demo-protocol"
-            },
-            "usage_scope": "internal_background",
-            "model_id": "demo-model-1",
-            "operation": "embedding_create"
-          },
-          "embedding_dimensions": 384,
-          "rerank": {
-            "provider_id": "demo-provider",
-            "service_entry_id": "demo-api",
-            "connection_id": "demo-connection",
-            "binding": {
-              "kind": "protocol",
-              "protocol_profile_id": "demo-protocol"
-            },
-            "usage_scope": "internal_background",
-            "model_id": "demo-model-2",
-            "operation": "rerank_documents"
-          },
-          "llm_routes": {
-            "code_retrieval.query_rewrite": {
-              "provider_id": "demo-provider",
-              "service_entry_id": "demo-api",
-              "connection_id": "demo-connection",
-              "binding": {
-                "kind": "protocol",
-                "protocol_profile_id": "demo-protocol"
-              },
-              "usage_scope": "internal_background",
-              "model_id": "demo-model-0",
-              "operation": "conversation_respond"
-            }
-          }
         }
       },
       "inferenceRouteDiagnostics": [],
@@ -1013,81 +972,6 @@
         "defaultEnabled": true
       }
     ],
-    "service_get_vce_configuration_status": {
-      "ready": true,
-      "consumerProfileId": "vce",
-      "queryRewritePurposeId": "code_retrieval.query_rewrite",
-      "reasoningPolicy": "fixed_off",
-      "embedding": {
-        "configured": true,
-        "available": true
-      },
-      "queryRewrite": {
-        "configured": true,
-        "available": true
-      },
-      "rerank": {
-        "configured": true,
-        "available": true
-      },
-      "issues": []
-    },
-    "service_get_vce_project_overview": {
-      "configuration": {
-        "ready": true,
-        "consumerProfileId": "vce",
-        "queryRewritePurposeId": "code_retrieval.query_rewrite",
-        "reasoningPolicy": "fixed_off",
-        "embedding": {
-          "configured": true,
-          "available": true
-        },
-        "queryRewrite": {
-          "configured": true,
-          "available": true
-        },
-        "rerank": {
-          "configured": true,
-          "available": true
-        },
-        "issues": []
-      },
-      "settings": {
-        "enabled": true,
-        "updateMode": "manual",
-        "autoUpdateMinIntervalSeconds": 60,
-        "revision": 1,
-        "maxFileBytes": 1048576,
-        "defaultIgnorePatterns": [
-          "target/**"
-        ],
-        "extraIgnorePatterns": [],
-        "allowQueryRewrite": true,
-        "allowRerank": true,
-        "embeddingMaxConcurrency": 4,
-        "queryMaxConcurrency": 4,
-        "maxResults": 20,
-        "maxContextChars": 16000
-      },
-      "status": {
-        "projectId": "p-tui",
-        "enabled": true,
-        "settingsRevision": 1,
-        "lifecycle": "ready",
-        "checkpointVersion": 1,
-        "presentFiles": 2,
-        "checkpointBlobs": 2,
-        "lastError": null
-      },
-      "counts": {
-        "files": 2,
-        "chunks": 2
-      },
-      "integrity": {
-        "state": "ok"
-      }
-    },
-    "service_get_vce_job": null,
     "service_output_style_catalog": {
       "defaultId": "default",
       "selectedId": "default",

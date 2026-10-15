@@ -172,6 +172,7 @@ fn knowledge_retirement_refuses_unknown_shape_and_dependencies() {
         "ALTER TABLE knowledge_import_jobs ADD COLUMN future_metadata TEXT;",
         "CREATE INDEX unmanaged_job_index ON knowledge_import_jobs(state);",
         "CREATE TABLE retained_references(id TEXT REFERENCES knowledge_import_jobs(id));",
+        "CREATE TABLE retained_references(id TEXT REFERENCES KNOWLEDGE_IMPORT_JOBS(id));",
     ] {
         // Unknown dependencies are independent synthetic cases.
         // 未知依赖为相互独立合成情况。
@@ -195,4 +196,44 @@ fn knowledge_retirement_refuses_unknown_shape_and_dependencies() {
         );
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
+}
+
+/// Retires a differently cased import table and its index, because SQLite table identity ignores ASCII case.
+/// 退役大小写不同的导入表及其索引，因为 SQLite 表身份不区分 ASCII 大小写。
+/// Takes no parameters and returns no value; the retired table must stay recoverable from the backup.
+/// 无参数及返回值；退役表必须仍可从备份恢复。
+#[test]
+fn knowledge_retirement_matches_table_identity_case_insensitively() {
+    // The case variant is isolated from every other fixture.
+    // 大小写变体与其他夹具相互隔离。
+    let directory = tempfile::tempdir().unwrap();
+    let path = fixture(directory.path());
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "ALTER TABLE knowledge_import_jobs RENAME TO retired_jobs_stage;
+             ALTER TABLE retired_jobs_stage RENAME TO Knowledge_Import_Jobs;",
+        )
+        .unwrap();
+    // backup keeps the renamed source table with its single historical row.
+    // backup 保留已改名的源表及其唯一历史行。
+    let backup = synchronize(&path, true).unwrap().unwrap();
+    let current = Connection::open(&path).unwrap();
+    assert!(
+        !schema(&current)
+            .unwrap()
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("knowledge_import_jobs"))
+    );
+    assert_eq!(
+        Connection::open(&backup)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM knowledge_import_jobs", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        1
+    );
+    assert!(synchronize(&path, false).unwrap().is_none());
 }

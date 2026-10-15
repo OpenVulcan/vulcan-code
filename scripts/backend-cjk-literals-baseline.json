@@ -3,7 +3,6 @@
   "apps/vulcan-code-tui/src/backend/mock/insight.rs": 21,
   "apps/vulcan-code-tui/src/backend/mock/mod.rs": 1,
   "apps/vulcan-code-tui/src/backend/mock/script.rs": 35,
-  "crates/vulcan-context-engine/src/query.rs": 67,
   "crates/vulcan-i18n/build.rs": 3,
   "crates/vulcan-memorymesh-core-contracts/src/ids.rs": 13,
   "crates/vulcan-memorymesh-core-engine/src/precheck.rs": 36,

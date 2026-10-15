@@ -16,10 +16,6 @@ use crate::{
     public_ai_workbench_selection_after_route_revocation,
 };
 
-#[cfg(test)]
-#[path = "publication/vce_compensation_tests.rs"]
-mod vce_compensation_tests;
-
 /// Combines two independent rollback results without hiding either failure.
 /// 合并两个独立回滚结果且不隐藏任何失败。
 ///
@@ -959,10 +955,6 @@ where
         guard.workbench.clone()
     };
     emit_workbench_event(app, &workbench);
-    // VCE consumes the committed public-AI generation and closes every project runtime when a
-    // required route disappears or becomes incompatible.
-    // VCE 消费已提交的公共 AI 代际；任一必需路由消失或不兼容时关闭全部项目运行时。
-    crate::vce::schedule_vce_reconciliation(app.clone(), state.clone());
     schedule_native_memory_revalidation(app.clone(), state.clone());
     Ok(workbench)
 }

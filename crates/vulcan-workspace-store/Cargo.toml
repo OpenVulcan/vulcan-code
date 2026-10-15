@@ -43,7 +43,6 @@ vulcan-sqlite-engine.workspace = true
 vulcan-lancedb-engine.workspace = true
 vulcan-ai-contract.workspace = true
 vulcan-context.workspace = true
-vulcan-context-engine.workspace = true
 vulcan-core.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-session-core.workspace = true

@@ -241,14 +241,6 @@ pub struct ProjectSummary {
     /// 用于渲染项目的可选图标键。
     #[serde(default)]
     pub icon_key: Option<String>,
-    /// Whether the native code-semantic index is enabled for this project.
-    /// 此项目是否启用了原生代码语义索引。
-    #[serde(default)]
-    pub vce_enabled: bool,
-    /// Persisted optimistic revision of this project's VCE settings.
-    /// 此项目 VCE 设置的持久化乐观修订号。
-    #[serde(default)]
-    pub vce_settings_revision: u64,
 }
 
 /// Summarizes one filesystem directory row returned to WebUI folder pickers.

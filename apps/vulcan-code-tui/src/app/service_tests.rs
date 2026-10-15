@@ -3,9 +3,7 @@
 
 use super::action::{UiAction, perform};
 use super::*;
-use crate::service_api::{
-    ServiceCall, Slot, knowledge_base, memory_actions, settings_actions, vce,
-};
+use crate::service_api::{ServiceCall, Slot, knowledge_base, memory_actions, settings_actions};
 use serde_json::{Value, json};
 use std::sync::mpsc::{self, Receiver};
 
@@ -265,7 +263,7 @@ fn pending_mutation_gate_is_released_on_completion_or_disconnect() {
     perform(&mut app, UiAction::Send(Command::Call(mutation.clone())));
     perform(
         &mut app,
-        UiAction::Send(Command::Call(vce::load_vce_configuration_status())),
+        UiAction::Send(Command::Call(settings_actions::load_public_ai_settings())),
     );
     assert_eq!(commands.try_iter().count(), 2);
     assert!(app.call_pending);
@@ -284,17 +282,12 @@ fn scoped_responses_do_not_cross_selected_owners() {
     // 当前应用状态。
     let (mut app, _) = isolated_app();
     app.library = Some("b".into());
-    app.vce_project = Some("project-b".into());
     app.vmm_project = Some(102);
     app.profile_target = "project".into();
     for (slot, call) in [
         (
             Slot::KnowledgeWords,
             knowledge_base::list_knowledge_custom_words("a"),
-        ),
-        (
-            Slot::VceOverview,
-            vce::load_vce_project_overview("project-a"),
         ),
         (Slot::VmmRecords, memory_actions::native_memory_records(101)),
         (

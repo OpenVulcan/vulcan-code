@@ -606,9 +606,7 @@ pub struct App {
     /// VMM DTO 页面共用的原生项目与画像选择。
     pub vmm_project: Option<i64>,
     pub profile_target: String,
-    /// Host project whose VCE overview is currently loaded.
-    /// 当前已加载 VCE 概览所属的宿主项目。
-    pub vce_project: Option<String>,
+
     /// Project whose permission strategy is shown.
     /// 显示其权限策略的项目。
     pub judge_policy_project: Option<String>,
@@ -754,7 +752,7 @@ impl App {
             slot_errors: HashMap::new(),
             vmm_project: None,
             profile_target: "user".into(),
-            vce_project: None,
+
             judge_policy_project: None,
             memory_query: String::new(),
             knowledge: knowledge_state::KnowledgeUiState::default(),
@@ -930,20 +928,7 @@ impl App {
                     self.skill_category.clear();
                     self.pages.remove(&PageId::SkillList);
                 }
-                if !self
-                    .projects
-                    .iter()
-                    .any(|project| Some(&project.id) == self.vce_project.as_ref())
-                {
-                    // Preserve the existing project-owner reconciliation.
-                    // 保留原有项目归属校正。
-                    let next = self.projects.first().map(|project| project.id.clone());
-                    changed = next != self.vce_project;
-                    self.vce_project = next;
-                    for slot in [Slot::VceOverview, Slot::VceJob] {
-                        self.slots.clear(slot);
-                    }
-                }
+
                 if !self
                     .projects
                     .iter()
@@ -1632,9 +1617,7 @@ impl App {
                 call.param("/request/libraryId").as_str() == self.library.as_deref()
                     && call.param("/request/query").as_str() == Some(self.knowledge.query.as_str())
             }
-            Slot::VceOverview | Slot::VceJob => {
-                call.param("/request/projectId").as_str() == self.vce_project.as_deref()
-            }
+
             Slot::ProjectPermissionJudgePolicy | Slot::ProjectUnattendedDefault => {
                 call.param("/projectId").as_str() == self.judge_policy_project.as_deref()
             }
@@ -1867,7 +1850,7 @@ fn completed_notice(function: &str) -> String {
         | "delete_subagent_definition"
         | "delete_archived_conversations" => tr!("tui.notice.deleted"),
         "restore_archived_conversations" => tr!("tui.notice.completed"),
-        "import_knowledge_directory" | "submit_vce_job" | "execute_vce_maintenance" => {
+        "import_knowledge_directory" => {
             tr!("tui.notice.submitted")
         }
         "test_public_ai_inference_route" => tr!("tui.notice.testPassed"),

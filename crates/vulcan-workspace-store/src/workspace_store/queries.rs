@@ -10,21 +10,8 @@ pub(super) async fn query_project_rows(
         LogicalDatabase::AppState,
         r#"
 SELECT p.id, p.name, p.root_path, p.pinned, p.sort_order, p.icon_pack, p.icon_key,
-       p.archived,
-       v.enabled AS vce_enabled,
-       v.update_mode AS vce_update_mode,
-       v.auto_update_min_interval_seconds AS vce_auto_update_min_interval_seconds,
-       v.revision AS vce_revision,
-       v.max_file_bytes AS vce_max_file_bytes,
-       v.extra_ignore_patterns_json AS vce_extra_ignore_patterns_json,
-       v.allow_query_rewrite AS vce_allow_query_rewrite,
-       v.allow_rerank AS vce_allow_rerank,
-       v.embedding_max_concurrency AS vce_embedding_max_concurrency,
-       v.query_max_concurrency AS vce_query_max_concurrency,
-       v.max_results AS vce_max_results,
-       v.max_context_chars AS vce_max_context_chars
+       p.archived
 FROM projects p
-JOIN project_vce_settings v ON v.project_id = p.id
 ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC;
 "#,
         &[],

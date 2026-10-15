@@ -57,7 +57,7 @@ afterEach(async () => {
 // The project navigation offers the permission strategy only while a judge is configured.
 // 仅在判定器已配置时，项目导航才提供权限策略。
 it("lists the permission strategy only while a judge is configured", () => {
-  const project = { id: "project-a", pinned: false, vceEnabled: false } as ProjectSummary;
+  const project = { id: "project-a", pinned: false } as ProjectSummary;
   const has = (backend: JudgeBackend | null) => projectSettingsSections(
     project,
     { conversations: [], agentSkills: { records: [] }, permissionJudgeBackend: backend } as unknown as WorkbenchSnapshot,

@@ -123,25 +123,6 @@ async fn prepare_child_execution_request(
     request.vmm_runtime_ready =
         crate::webui_prompt_lifecycle::webui_vmm_runtime_readiness(&invocation.state)?
             .service_ready;
-    // VCE remains owned by its current service API; this caller only binds the project-authorized port.
-    // VCE 仍归当前服务 API 持有；此调用方只绑定项目已授权端口。
-    if crate::vce::vce_project_tool_enabled(&invocation.state, target.locator.project_id()) {
-        // Release the state lock before constructing the callback or discovering browser bindings.
-        // 在构建回调或发现浏览器绑定之前释放状态锁。
-        let manager = invocation
-            .state
-            .lock()
-            .map_err(|error| error.to_string())?
-            .vce_runtime
-            .clone();
-        request.vce_retrieval_handler = manager
-            .map(|manager| crate::vce::vce_retrieval_handler(invocation.state.clone(), manager));
-    }
-    if request.vce_retrieval_handler.is_none() {
-        request
-            .tool_request_hidden_tool_ids
-            .push(vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID.to_owned());
-    }
     request.supplemental_mcp_tools =
         crate::browser::prepare_browser_mcp_bindings(invocation.state.clone(), session_id).await?;
     Ok(request)
@@ -211,7 +192,6 @@ fn build_child_base_request(
     // 每个瞬态字段均显式声明；子恢复逻辑提供捕获的可执行设置。
     let request = ExecutionPreparationRequest {
         session_id,
-        vce_retrieval_handler: None,
         execution_scope: vulcan_session_core::ExecutionScope::TaskSession {
             root_session_id: root_id.into(),
             task_session_id: session_id.into(),

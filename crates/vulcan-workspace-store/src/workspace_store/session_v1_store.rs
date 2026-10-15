@@ -2791,13 +2791,6 @@ connection.close()
         // 播种生产 v1 结构，然后删除 V1 会话索引。这使该夹具成为加载路径必须容忍的确切意义上的旧配置：
         // 其他表都是当前的，只有它必须在其缺失下存活的索引不存在。
         //
-        // A hand-written minimal schema was used before, and it had already rotted: it lacked
-        // `project_vce_settings`, which the project query joins, so this fixture could not have
-        // loaded even before the migration. Seeding the real schema is what keeps it from rotting
-        // again, because a new table arrives here automatically.
-        //
-        // 此前使用的是手写极简结构，而它已经腐坏：它缺少项目查询要连接的 `project_vce_settings`，因此
-        // 该夹具在迁移之前就已无法加载。播种真实结构正是防止它再次腐坏的办法，因为新增的表会自动出现在这里。
         local_sql::execute_script(
             app,
             LogicalDatabase::AppState,
@@ -2833,19 +2826,6 @@ INSERT INTO projects (
         .success
         .then_some(())
         .expect("legacy workspace project insert must succeed");
-        // The project query inner-joins these settings, so the row is part of a loadable profile.
-        // 项目查询内连接这些设置，因此该行是可加载配置的一部分。
-        local_sql::execute_batch(
-            app,
-            LogicalDatabase::AppState,
-            "INSERT INTO project_vce_settings (project_id, updated_at, update_mode, auto_update_min_interval_seconds) VALUES (?1, '1', 'manual', 300);",
-            &[vec![SqliteValue::Text("project-id".to_string())]],
-        )
-        .expect("insert legacy project VCE settings")
-        .success
-        .then_some(())
-        .expect("legacy project VCE settings insert must succeed");
-
         let startup_snapshot =
             super::super::loading::load_workspace_index_snapshot(host_runtime.clone())
                 .await

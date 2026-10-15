@@ -47,10 +47,9 @@ cargo nextest run --locked --lib -p <crate> --run-ignored only --test-threads=1 
 
 | crate | 测试 | 前置条件 |
 | --- | --- | --- |
-| vulcan-context-engine | `records_offline_performance_baseline` | 显式记录性能基线 |
 | vulcan-lancedb-engine | `performance_lancedb_operations_report_p50_p95` | 显式性能测量 |
 | vulcan-sqlite-engine | `performance_batch_write_and_query_stream_report_p50_p95`、`performance_concurrent_reads_report_p50_p95`、`performance_connection_open_cost_breakdown`、`performance_fts_search_reports_p50_p95` | 显式性能测量 |
-| vulcan-workspace-store | `in_process_native_compaction_meets_vce_performance_targets`、`shared_storage_scale_baseline`、`performance_active_tail_sizes_report_p50_p95`、`performance_completed_turn_phase_costs` | 完整性能矩阵或 Release 基线 |
+| vulcan-workspace-store | `shared_storage_scale_baseline`、`performance_active_tail_sizes_report_p50_p95`、`performance_completed_turn_phase_costs` | 完整性能矩阵或 Release 基线 |
 | vulcan-agent-runtime | `vm_pool_startup_resource_probe` | `VULCAN_VM_PROBE_PROFILE` 选择 `old` 或 `new`，分别使用独立进程 |
 | vulcan-service-kernel | `real_plugin_empty_database_stage_measurements` | `VULCAN_PLUGIN_TEST_LUA_RUNTIME` 指向已安装的原生 Lua 包 |
 
@@ -73,8 +72,6 @@ cargo nextest run --locked --lib -p <crate> --run-ignored only --test-threads=1 
 | crate | 测试 | 执行限制 |
 | --- | --- | --- |
 | vulcan-service-kernel | `live_saved_fixed_model_generates_git_summary_without_mutating_user_settings` | 明确允许计费调用并设置 `GIT_SUMMARY_LIVE_ACCEPTANCE=1` |
-| vulcan-service-kernel | `live_saved_models_index_and_retrieve_temporary_project` | 明确允许计费调用，设置 `VCE_LIVE_ACCEPTANCE=1` 与 `VCE_LIVE_DIMENSION` |
 | vulcan-service-kernel | `live_saved_routes_execute_native_vmm_contract_and_lifecycle` | 明确允许计费调用并设置 `NATIVE_VMM_LIVE_ACCEPTANCE=1` |
-| vulcan-service-kernel | `real_browser_vce_lifecycle_host` | 人工浏览器宿主，必须设置隔离 `VULCAN_VCE_BROWSER_TEST_ROOT` |
 | vulcan-service-kernel | `real_controller_policy_components_over_http`、`real_controller_native_workbench_over_http` | 使用各自的私有浏览器验收入口，不作为自动结束的普通测试 |
 | vulcan-workspace-store | `writer_lease_child` | 仅由有界父测试以专用环境启动 |

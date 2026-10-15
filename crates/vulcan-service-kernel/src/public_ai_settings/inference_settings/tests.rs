@@ -252,7 +252,9 @@ fn other_consumers_keep_entry_or_default_behavior() {
         &profiles, "vmm", true
     ));
     assert!(!luaskills_clear_skips_profile_creation(
-        &profiles, "vce", true
+        &profiles,
+        "test-consumer",
+        true
     ));
 }
 
@@ -303,10 +305,10 @@ fn luaskills_profile_with_remaining_state_is_retained() {
 #[test]
 fn other_consumer_profiles_are_never_removed() {
     let mut profiles: BTreeMap<String, InferenceProfile> = BTreeMap::new();
-    profiles.insert(String::from("vce"), InferenceProfile::default());
-    remove_emptied_luaskills_profile(&mut profiles, "vce");
+    profiles.insert(String::from("test-consumer"), InferenceProfile::default());
+    remove_emptied_luaskills_profile(&mut profiles, "test-consumer");
     assert!(
-        profiles.contains_key("vce"),
+        profiles.contains_key("test-consumer"),
         "removal is scoped to LuaSkills so no other consumer semantics change"
     );
 }
@@ -354,8 +356,6 @@ fn luaskills_route_boundary_rejects_forged_purposes_operations_and_scopes() {
             AiOperation::ConversationRespond,
             InferenceUsageScope::InternalBackground,
         )),
-        embedding_dimensions: None,
-        vce_embedding_confirmation: None,
         reasoning_effort: None,
     };
     assert!(validate_luaskills_inference_route_request(&llm).is_ok());

@@ -52,9 +52,7 @@ pub enum LocalSetting {
     /// Selected native VMM project; changing it reloads the visible records.
     /// 选中的原生 VMM 项目；变更后重新加载可见记录。
     VmmProject,
-    /// Selected host project for the VCE overview.
-    /// VCE 概览选中的宿主项目。
-    VceProject,
+
     /// Project shown on the permission strategy page.
     /// 权限策略页显示的项目。
     JudgePolicyProject,
@@ -830,11 +828,7 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                     app.slots.clear(crate::service_api::Slot::VmmRecords);
                     app.slots.clear(crate::service_api::Slot::VmmProfile);
                 }
-                LocalSetting::VceProject => {
-                    app.vce_project = Some(value.as_str().to_string());
-                    app.slots.clear(crate::service_api::Slot::VceOverview);
-                    app.slots.clear(crate::service_api::Slot::VceJob);
-                }
+
                 LocalSetting::JudgePolicyProject => {
                     app.judge_policy_project = Some(value.as_str().to_string());
                     app.slots

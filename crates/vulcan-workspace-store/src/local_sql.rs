@@ -742,9 +742,9 @@ pub async fn list_custom_words_async(
 ///
 /// Closing is access to the database like any other, so it takes the same gate. A close that ran outside
 /// the gate could take the file's lock away between two statements of one operation, which is exactly what
-/// a VCE layout change must not be able to do.
+/// a database layout change must not be able to do.
 /// 关闭与任何其他访问一样属于对数据库的访问，因此它取同一道门。在门外运行的关闭可能在一个操作的两条语句之间
-/// 把该文件的锁拿走，而这正是 VCE 布局变更绝不能做到的事。
+/// 把该文件的锁拿走，而这正是 数据库布局变更绝不能做到的事。
 ///
 /// # Parameters / 参数
 /// `runtime` is shared for the blocking task and `binding` names the file to close.

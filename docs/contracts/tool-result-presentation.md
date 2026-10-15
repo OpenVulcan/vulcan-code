@@ -18,7 +18,6 @@
 | 文件读取 | `tooling/native/file_read.rs`、既有文件读取契约 | 路径、行范围、准确原文、续读说明 | 原有行映射与导航；没有正文副本 |
 | 文件列表、属性 | `tooling/native/file_result.rs` | 条目类型、路径、大小、截断；实际编码和换行属性 | 无 |
 | 文件写改删移、补丁 | 同上及 `file_write.rs`、`file_edit.rs`、`apply_patch.rs` | 实际变更路径、操作、增删统计、匹配数 | 变更集进入工具事件；可靠提取后从输出宿主字段移除副本 |
-| 代码检索 | `vulcan-service-kernel/src/vce/services/tool_result.rs` | 来源、行范围、每个片段一次、真实降级信息 | 无；内部 VCE 响应不变 |
 | 知识列表、读取、搜索、写入 | `tooling/native/knowledge_base/result_markdown.rs` | 库用途、逻辑目录、当前文档身份与修订、正文、引用行、来源、续读及部分失败；写入只返回变更回执与有界大纲 | 写入附 `knowledge_write_v1` 最小身份与计数；其余无 |
 | VMM 搜索、详情、写删 | `tooling/native/vmm/result_markdown.rs` | 可操作身份、记忆、时间线独有信息、最终回答、逐项结果 | 无；领域存储不变 |
 | 供应商文字、搜索、提取 | `provider_tool_bridge/result_markdown.rs` | 正文、排序、来源、图片证据、失败来源 | 无；不再复制完整归一化结果 |

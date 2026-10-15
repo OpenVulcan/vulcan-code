@@ -29,9 +29,6 @@ export function activeSkillHeaderSummary(
   if (activeTab === "mcp-servers") {
     return { title: t("settings.mcpServers"), detail: t("settings.mcpServers.description") }
   }
-  if (activeTab === "context-engine") {
-    return { title: t("area.contextEngine"), detail: t("area.contextEngine.description") }
-  }
   if (activeTab === "knowledge") {
     return { title: t("area.knowledge"), detail: t("area.knowledge.description") }
   }

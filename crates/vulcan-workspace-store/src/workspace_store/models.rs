@@ -61,42 +61,6 @@ pub(super) struct StoredProjectRow {
     /// Optional project icon key stored in SQLite.
     /// 存储在 SQLite 中的可选项目图标键。
     pub(super) icon_key: Option<String>,
-    /// SQLite numeric native code-semantic enablement flag.
-    /// SQLite 数值型原生代码语义启用标记。
-    pub(super) vce_enabled: i64,
-    /// Persisted project update policy.
-    /// 持久化项目更新策略。
-    pub(super) vce_update_mode: String,
-    /// Automatic update interval in seconds, validated before use.
-    /// 使用前校验的自动更新间隔秒数。
-    pub(super) vce_auto_update_min_interval_seconds: i64,
-    /// Positive optimistic revision for the project-owned VCE settings.
-    /// 项目自有 VCE 设置使用的正数乐观修订号。
-    pub(super) vce_revision: i64,
-    /// Maximum admitted UTF-8 source size in bytes.
-    /// 允许准入的 UTF-8 源码最大字节数。
-    pub(super) vce_max_file_bytes: i64,
-    /// JSON array of additional gitignore-style project patterns.
-    /// 附加 gitignore 风格项目模式的 JSON 数组。
-    pub(super) vce_extra_ignore_patterns_json: String,
-    /// SQLite numeric query-rewrite permission flag.
-    /// SQLite 数值型查询改写许可标记。
-    pub(super) vce_allow_query_rewrite: i64,
-    /// SQLite numeric rerank permission flag.
-    /// SQLite 数值型重排许可标记。
-    pub(super) vce_allow_rerank: i64,
-    /// Maximum concurrent embedding batches.
-    /// 向量批次最大并发数。
-    pub(super) vce_embedding_max_concurrency: i64,
-    /// Maximum concurrent query variants.
-    /// 查询变体最大并发数。
-    pub(super) vce_query_max_concurrency: i64,
-    /// Maximum selected retrieval results.
-    /// 检索结果最大选择数量。
-    pub(super) vce_max_results: i64,
-    /// Maximum aggregate rendered context characters.
-    /// 渲染上下文最大总字符数。
-    pub(super) vce_max_context_chars: i64,
     /// SQLite numeric archived flag.
     /// SQLite 数值型归档标记。
     pub(super) archived: i64,

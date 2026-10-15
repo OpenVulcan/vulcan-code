@@ -114,14 +114,6 @@ pub(crate) struct PublicAiInternalModelEnabledSaveRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PublicAiInferenceRouteSaveRequest {
-    /// VCE-only explicit dimension; peer consumers retain their existing defaults and save contract.
-    /// 仅 VCE 使用的明确维度；其他消费者保留既有默认值及保存契约。
-    #[serde(default)]
-    embedding_dimensions: Option<u32>,
-    /// VCE-only reviewed impact; this cannot be supplied to another consumer or operation.
-    /// 仅 VCE 使用的已审查影响；不能提供给其他消费者或操作。
-    #[serde(default)]
-    vce_embedding_confirmation: Option<super::vce_embedding_settings::VceEmbeddingSaveConfirmation>,
     /// Stable consumer profile identifier.
     /// 稳定消费者配置档标识。
     consumer_profile_id: String,
@@ -567,39 +559,6 @@ pub(crate) async fn service_save_public_ai_inference_route(
     // transaction 串行化校验、激活与工作台发布。
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    // The existing route RPC remains the only save transaction; VCE must not bypass its preflight.
-    // 现有路由 RPC 仍是唯一保存事务；VCE 不得绕过其预检。
-    let vce_embedding_save = request.consumer_profile_id == crate::vce::VCE_CONSUMER_PROFILE_ID
-        && request.operation == AiOperation::EmbeddingCreate;
-    if !vce_embedding_save
-        && (request.embedding_dimensions.is_some() || request.vce_embedding_confirmation.is_some())
-    {
-        return Err(String::from(
-            "ContextEngine embedding confirmation is not valid for this inference consumer or operation",
-        ));
-    }
-    let vce_policy = if vce_embedding_save {
-        let confirmation = request.vce_embedding_confirmation.as_ref().ok_or_else(|| {
-            String::from(
-                "ContextEngine embedding changes require a reviewed preflight confirmation",
-            )
-        })?;
-        Some(
-            super::vce_embedding_settings::prepare_vce_embedding_save(
-                &state,
-                runtime.as_ref(),
-                &current_configuration,
-                super::vce_embedding_settings::VceEmbeddingPreflightRequest {
-                    route: request.route.clone(),
-                    dimension: request.embedding_dimensions,
-                },
-                confirmation,
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
     let effective_reasoning_effort = vmm_saved_reasoning_effort(
         request.consumer_profile_id.as_str(),
         request.purpose_id.as_deref(),
@@ -680,9 +639,6 @@ pub(crate) async fn service_save_public_ai_inference_route(
                     }
                     AiOperation::EmbeddingCreate => {
                         profile.embedding = request.route.clone();
-                        if vce_embedding_save {
-                            profile.embedding_dimensions = request.embedding_dimensions;
-                        }
                     }
                     AiOperation::RerankDocuments => {
                         profile.rerank = request.route.clone();
@@ -696,9 +652,6 @@ pub(crate) async fn service_save_public_ai_inference_route(
                             request.operation.as_str()
                         ));
                     }
-                }
-                if let Some(policy) = vce_policy {
-                    configuration.context_engine_embedding_compatibility = policy;
                 }
             }
             // A LuaSkills profile that lost its last route is removed so an explicitly

@@ -26,7 +26,6 @@ pub mod project_actions;
 pub mod setter;
 pub mod settings_actions;
 pub mod skills_actions;
-pub mod vce;
 pub mod workbench_snapshot;
 
 use std::borrow::Cow;
@@ -145,15 +144,6 @@ pub enum Slot {
     /// Exact project library grants used by session defaults.
     /// 会话默认使用的精确项目知识库授权。
     ProjectKnowledgeBindings,
-    /// `loadVceConfigurationStatus`
-    /// 语义代码引擎的全局配置状态。
-    VceStatus,
-    /// `loadVceProjectOverview` of the selected project.
-    /// 选中项目的语义代码引擎概览。
-    VceOverview,
-    /// Latest semantic index job for the selected project.
-    /// 选中项目最近的语义索引任务。
-    VceJob,
     /// `runVmmMemoryAction(native_project_catalog)`
     /// 原生记忆项目及绑定目录。
     VmmProjects,
@@ -280,13 +270,7 @@ pub enum Preview {
     /// `inspectLocalPlugin` → `installLocalPlugin` / `updateLocalPlugin`
     /// 本地插件检查转为安装或更新。
     PluginInstall,
-    /// `planVceMaintenance` → `executeVceMaintenance`; carries the settings revision the
-    /// confirmation freezes.
-    /// 携带确认时冻结的设置修订号。
-    VceMaintenance { settings_revision: i64 },
-    /// Read-only embedding impact review before the atomic route and dimension save.
-    /// 路由与维度原子保存前的只读向量影响审查。
-    VceEmbedding,
+
     /// `native_project_{clear,delete,migration}_preview` → `nativeProjectConfirmationRequest`
     /// 原生项目清空、删除或迁移预检转为确认执行。
     VmmProject,
@@ -638,10 +622,7 @@ pub fn confirm_preview(
                 == Some("userInstalled");
             skills_actions::install_local_plugin(call, result, update)
         }
-        Preview::VceMaintenance { settings_revision } => {
-            vce::execute_vce_maintenance(call, result, settings_revision)
-        }
-        Preview::VceEmbedding => vce::save_reviewed_embedding(result),
+
         Preview::VmmProject => memory_actions::native_project_confirmation(call, result),
         Preview::VmmRemoval => memory_actions::native_removal_recycle(result),
         Preview::VmmRetention => memory_actions::native_retention_run(result),

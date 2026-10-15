@@ -23,7 +23,8 @@ pub(crate) fn current_root() -> Option<std::path::PathBuf> {
 async fn configuration_root_scope_does_not_leak_to_peer_tasks() {
     // No file is created; the path only identifies this independently scoped test.
     // 不创建文件；路径仅标识这个独立作用域测试。
-    let root = std::env::temp_dir().join(format!("vce-config-scope-{}", uuid::Uuid::new_v4()));
+    let root =
+        std::env::temp_dir().join(format!("public-ai-config-scope-{}", uuid::Uuid::new_v4()));
     assert!(current_root().is_none());
     PUBLIC_AI_CONFIGURATION_ROOT
         .scope(root.clone(), async {

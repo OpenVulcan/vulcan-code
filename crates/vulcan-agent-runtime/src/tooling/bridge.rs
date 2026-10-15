@@ -77,7 +77,6 @@ pub fn build_vulcan_tools_manager(
     controller_runtime: Option<HostRuntimeHandle>,
     native_goal_runtime: Option<Arc<dyn crate::tooling::native::NativeGoalRuntime>>,
     knowledge_access: Option<crate::agent_runtime::ExecutionKnowledgeAccessContext>,
-    vce_retrieval_handler: Option<crate::agent_runtime::VceRetrievalHandler>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
     candidate_luaskills_dispatch_tools: Vec<RuntimeEntryDescriptor>,
@@ -123,14 +122,6 @@ pub fn build_vulcan_tools_manager(
         if native_tool_id_is_vmm_memory_tool(&tool_id) && !vmm_ai_tools_enabled {
             continue;
         }
-        // codebase_retrieval is absent, not merely failing at invocation, while its host gate is closed.
-        // 当宿主闸门关闭时，codebase_retrieval 必须完全不可见，而不只是调用时报错。
-        if tool_id == vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID
-            && vce_retrieval_handler.is_none()
-        {
-            occupied_public_tool_ids.insert(tool_id);
-            continue;
-        }
         if native_tool_id_is_knowledge_tool(&tool_id)
             && knowledge_access
                 .as_ref()
@@ -162,7 +153,6 @@ pub fn build_vulcan_tools_manager(
         let native_goal_runtime_for_context = native_goal_runtime.clone();
         let native_browser_runtime_for_context = native_browser_runtime.clone();
         let knowledge_access_for_context = knowledge_access.clone();
-        let vce_retrieval_handler_for_context = vce_retrieval_handler.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
         let prepared_prompt_skills_for_context = prepared_prompt_skills.clone();
         let prompt_skill_user_root_for_context = prompt_skill_user_root.clone();
@@ -182,7 +172,6 @@ pub fn build_vulcan_tools_manager(
                 let controller_runtime = controller_runtime_for_context.clone();
                 let goal_runtime = native_goal_runtime_for_context.clone();
                 let knowledge_access = knowledge_access_for_context.clone();
-                let vce_retrieval_handler = vce_retrieval_handler_for_context.clone();
                 let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
                 let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
                 let prepared_prompt_skills = prepared_prompt_skills_for_context.clone();
@@ -204,7 +193,6 @@ pub fn build_vulcan_tools_manager(
                                 goal_runtime,
                                 native_browser_runtime,
                                 knowledge_access,
-                                vce_retrieval_handler,
                                 enabled_prompt_skill_names,
                                 prepared_prompt_skills,
                                 prompt_skill_user_root,

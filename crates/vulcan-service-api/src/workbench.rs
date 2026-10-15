@@ -9,9 +9,6 @@ pub struct ProjectSettingsDomainRevisions {
     /// Latest VMM settings invalidation revision.
     /// 最新 VMM 设置失效版本。
     pub vmm: u64,
-    /// Latest native code-semantic settings invalidation revision.
-    /// 最新原生代码语义设置失效版本。
-    pub vce: u64,
     /// Latest Agent Skill override invalidation revision.
     /// 最新 Agent Skill 覆盖失效版本。
     pub agent_skills: u64,

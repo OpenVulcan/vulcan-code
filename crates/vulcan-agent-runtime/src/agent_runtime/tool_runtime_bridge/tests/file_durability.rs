@@ -65,7 +65,6 @@ fn file_write_receipt_rejection_preserves_disk_effects_without_replay() {
                     controller_runtime: None,
                     goal_runtime: None,
                     knowledge_access: None,
-                    vce_retrieval_handler: None,
                     spill_root: None,
                     enabled_prompt_skill_names: Vec::new(),
                     prepared_prompt_skills: Vec::new(),

@@ -9811,7 +9811,6 @@ dependencies = [
  "vulcan-change-set",
  "vulcan-context",
  "vulcan-context-compaction",
- "vulcan-context-engine",
  "vulcan-context-injection",
  "vulcan-core",
  "vulcan-hooks",
@@ -9938,19 +9937,6 @@ dependencies = [
  "vulcan-context",
  "vulcan-prompt-composer",
  "vulcan-runtime-assets",
- "workspace-hack",
-]
-
-[[package]]
-name = "vulcan-context-engine"
-version = "0.1.0"
-dependencies = [
- "futures",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tokio",
- "vulcan-ai-contract",
  "workspace-hack",
 ]
 
@@ -10418,7 +10404,6 @@ dependencies = [
  "vulcan-change-set",
  "vulcan-context",
  "vulcan-context-compaction",
- "vulcan-context-engine",
  "vulcan-context-injection",
  "vulcan-core",
  "vulcan-file-watcher",
@@ -10642,7 +10627,6 @@ dependencies = [
  "uuid",
  "vulcan-ai-contract",
  "vulcan-context",
- "vulcan-context-engine",
  "vulcan-core",
  "vulcan-lancedb-engine",
  "vulcan-runtime-assets",
@@ -11459,7 +11443,6 @@ dependencies = [
  "foldhash 0.2.0",
  "form_urlencoded",
  "futures-channel",
- "futures-core",
  "futures-io",
  "futures-sink",
  "futures-task",

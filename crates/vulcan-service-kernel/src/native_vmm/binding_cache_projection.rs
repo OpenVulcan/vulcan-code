@@ -171,8 +171,8 @@ fn reconcile_profile_source(
         read_source: source.cloned(),
         ..Default::default()
     };
-    // Remove only VMM-owned profile injections, preserving knowledge-base, VCE and user-owned groups.
-    // 只移除 VMM 自有画像注入，保留知识库、VCE 及用户自有分组。
+    // Remove only VMM-owned profile injections, preserving knowledge-base and user-owned groups.
+    // 只移除 VMM 自有画像注入，保留知识库及用户自有分组。
     vulcan_agent_runtime::agent_runtime::vmm_hooks::clear_vmm_profile_injections(
         &mut runtime.context_injection_state,
         &mut Vec::new(),

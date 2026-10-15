@@ -273,7 +273,7 @@ fn registered_connection_handles() -> &'static Mutex<HashSet<usize>> {
 /// the distinction matters, because the two readings suggest opposite fixes.
 ///
 /// **Status.** The lazy creation is load-bearing, not redundant: `load_custom_words` selects from the table, so the
-/// table must exist in every database the engine opens — including the knowledge-base, display and VCE databases,
+/// table must exist in every database the engine opens — including the knowledge-base and display databases,
 /// each of which has its own v1 entry. Moving creation into those entries is the design this comment originally
 /// described; it is **not** done, and is recorded as outstanding rather than quietly asserted.
 ///
@@ -288,7 +288,7 @@ fn registered_connection_handles() -> &'static Mutex<HashSet<usize>> {
 /// 一个 WAL 数据库"的代价，而不是执行这条特定语句。记下这一区分很重要，因为两种读法指向相反的修法。
 ///
 /// **状态。** 惰性创建是承重的、不是冗余的：`load_custom_words` 从该表查询，因此该表必须存在于引擎打开的每一个数据库中
-/// ——包括知识库库、显示库与 VCE 库，它们各有自己的 v1 入口。把创建移入那些入口才是本注释最初描述的设计；它**尚未**
+/// ——包括知识库库与显示库，它们各有自己的 v1 入口。把创建移入那些入口才是本注释最初描述的设计；它**尚未**
 /// 完成，因此记录为遗留项，而不是被悄然断言为已完成。
 pub fn dictionary_table_schema_script() -> &'static str {
     concat!(

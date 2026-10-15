@@ -878,21 +878,21 @@ fn connection_enabled_state_is_sparse_reversible_and_removes_routing_preferences
 ///
 /// # Returns
 /// 返回值
-/// Completes when VCE retains its numeric choice and legacy VMM keeps an absent choice.
-/// 当 VCE 保留数值选择、旧 VMM 保持未设置时正常完成。
+/// Completes when the test consumer retains its numeric choice and legacy VMM keeps an absent choice.
+/// 当测试消费者保留数值选择、旧 VMM 保持未设置时正常完成。
 #[test]
 fn inference_profile_preserves_explicit_consumer_embedding_dimensions() {
-    // Each profile owns its choice; a missing peer value must not inherit VCE's setting.
-    // 每个配置档独立拥有选择；缺少设置的配置档不能继承 VCE 的维度。
+    // Each profile owns its choice; a missing peer value must not inherit the test consumer's setting.
+    // 每个配置档独立拥有选择；缺少设置的配置档不能继承测试消费者的维度。
     let profiles: BTreeMap<String, InferenceProfile> = serde_json::from_value(serde_json::json!({
-        "vce": { "embedding_dimensions": 1024 },
+        "test-consumer": { "embedding_dimensions": 1024 },
         "vmm": {}
     }))
     .expect("valid consumer profiles");
     // Re-serialization exposes accidental field loss without relying on a new Rust field.
     // 再次序列化用于发现字段丢失，而不依赖新增 Rust 字段访问。
     let serialized = serde_json::to_value(&profiles).expect("serializable consumer profiles");
-    assert_eq!(serialized["vce"]["embedding_dimensions"], 1024);
+    assert_eq!(serialized["test-consumer"]["embedding_dimensions"], 1024);
     assert!(serialized["vmm"].get("embedding_dimensions").is_none());
 }
 
@@ -900,14 +900,18 @@ fn inference_profile_preserves_explicit_consumer_embedding_dimensions() {
 /// 验证缺少必需系统推理配置档的当前 Schema 文件会被拒绝。
 #[test]
 fn current_schema_rejects_missing_system_inference_profile() {
-    for profile_id in ["vce", "vmm"] {
-        let mut configuration = PersistedAiConfiguration::default();
-        configuration.inference_profiles.remove(profile_id);
-        assert!(
-            configuration.validate_current_schema().is_err(),
-            "missing {profile_id} profile must fail"
-        );
-    }
+    // The retired consumer must not be recreated by in-memory defaults.
+    // 内存默认值不能重新创建已经退役的消费者。
+    assert!(
+        !PersistedAiConfiguration::default()
+            .inference_profiles
+            .contains_key("vce")
+    );
+    // Configuration omits the sole remaining required system consumer.
+    // 配置删除唯一仍然必需的系统消费者。
+    let mut configuration = PersistedAiConfiguration::default();
+    configuration.inference_profiles.remove("vmm");
+    assert!(configuration.validate_current_schema().is_err());
 }
 
 /// Verifies protocol execution settings reject model limits as unknown fields.

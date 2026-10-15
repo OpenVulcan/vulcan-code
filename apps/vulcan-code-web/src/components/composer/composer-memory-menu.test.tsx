@@ -23,10 +23,6 @@ class MenuResizeObserver {
   // 无副作用地结束测试观察器。
   disconnect() {}
 }
-
-// Unrelated menus are excluded so this test performs no project or provider requests.
-// 排除无关菜单，确保本测试不发起项目或供应商请求。
-vi.mock("@/components/features/code-context/vce-project-controls", () => ({ VceComposerMenu: () => null }))
 vi.mock("./composer-knowledge-control", () => ({ ComposerKnowledgeControl: () => null }))
 
 // Exercises actual Radix menus and verifies configuration navigation never changes user policy.

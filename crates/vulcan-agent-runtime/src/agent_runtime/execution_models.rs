@@ -10,10 +10,9 @@ use crate::provider_config::{
     PersistedPromptConfiguration, PersistedPromptPersonalitySelection,
     ProjectPromptSkillsConfiguration,
 };
-use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fmt, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 use vulcan_ai_contract::AiErrorCategory;
 use vulcan_ai_contract::HostMessageKind;
 use vulcan_context::{
@@ -163,85 +162,6 @@ pub struct ExecutionSessionGoalContext {
     pub prompt_context: String,
 }
 
-/// Host callback used by the single native VCE code-semantic retrieval tool.
-/// 唯一原生 VCE 代码语义检索工具使用的宿主回调。
-type VceRetrievalCallback =
-    dyn Fn(String, String) -> BoxFuture<'static, Result<Value, String>> + Send + Sync;
-
-/// VceRetrievalHandler exposes one host-owned project-scoped semantic retrieval callback.
-/// VceRetrievalHandler 暴露一个由宿主持有且受项目作用域约束的语义检索回调。
-#[derive(Clone)]
-pub struct VceRetrievalHandler {
-    /// Shared asynchronous callback that performs one authorized project retrieval.
-    /// 执行一次已授权项目检索的共享异步回调。
-    invoke: Arc<VceRetrievalCallback>,
-}
-
-impl fmt::Debug for VceRetrievalHandler {
-    /// Redacts callback implementation details from diagnostics.
-    /// 从诊断中隐藏回调实现细节。
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("VceRetrievalHandler(..)")
-    }
-}
-
-impl PartialEq for VceRetrievalHandler {
-    /// Compares callback identity instead of captured implementation state.
-    /// 比较回调身份而不是捕获的实现状态。
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.invoke, &other.invoke)
-    }
-}
-
-impl Eq for VceRetrievalHandler {}
-
-impl VceRetrievalHandler {
-    /// Creates one host-owned VCE retrieval callback wrapper.
-    /// 创建一个由宿主持有的 VCE 检索回调包装器。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `invoke` accepts the authoritative project id and the validated information request.
-    /// `invoke` 接收权威项目标识和经过校验的信息请求。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A cloneable callback handle safe to freeze in one execution request.
-    /// 返回可安全冻结到单次执行请求中的可克隆回调句柄。
-    pub fn new(
-        invoke: impl Fn(String, String) -> BoxFuture<'static, Result<Value, String>>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self {
-        Self {
-            invoke: Arc::new(invoke),
-        }
-    }
-
-    /// Executes one project-scoped semantic retrieval.
-    /// 执行一次项目作用域语义检索。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `project_id` is the immutable host project identity for the current turn.
-    /// `project_id` 是当前回合不可变的宿主项目身份。
-    /// `information_request` is the validated natural-language retrieval request.
-    /// `information_request` 是经过校验的自然语言检索请求。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The bounded model-facing retrieval payload or an explicit lifecycle error.
-    /// 返回有界模型侧检索载荷或显式生命周期错误。
-    pub async fn retrieve(
-        &self,
-        project_id: String,
-        information_request: String,
-    ) -> Result<Value, String> {
-        (self.invoke)(project_id, information_request).await
-    }
-}
-
 /// Immutable knowledge-library authorization captured for one provider execution.
 /// 为一次 Provider 执行捕获的不可变知识库授权快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,9 +199,6 @@ pub struct ExecutionPreparationRequest {
     /// Target session identifier.
     /// 目标会话标识。
     pub session_id: SessionId,
-    /// Optional host-owned VCE semantic retrieval callback frozen for this execution.
-    /// 为本次执行冻结的可选宿主 VCE 语义检索回调。
-    pub vce_retrieval_handler: Option<VceRetrievalHandler>,
     /// Shared execution scope used by main-session and task-session routers.
     /// 主会话与子代理会话路由共用的执行范围。
     pub execution_scope: ExecutionScope,

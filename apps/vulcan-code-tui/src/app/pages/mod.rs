@@ -108,10 +108,6 @@ impl Area {
                 (Some("LuaSkills".into()), vec![LuaSkills, LuaSettings]),
                 (Some(tr!("settings.mcpServers")), vec![Mcp]),
                 (
-                    Some(tr!("area.contextEngine")),
-                    vec![IndexProjects, EngineSettings],
-                ),
-                (
                     Some(tr!("skills.navigation.plugins")),
                     vec![VulcanPlugins, PluginMount],
                 ),
@@ -264,8 +260,7 @@ pub enum PageId {
     SkillList,
     LuaSkills,
     LuaSettings,
-    IndexProjects,
-    EngineSettings,
+
     VulcanPlugins,
     /// The open plugin detail mount; navigation lists one row per runtime-ready mount.
     /// 当前打开的插件详情挂载；导航为每个运行就绪的挂载列出一行。
@@ -317,8 +312,7 @@ impl PageId {
             PageId::SkillList => tr!("area.agentSkills"),
             PageId::LuaSkills => tr!("skills.navigation.list"),
             PageId::LuaSettings => tr!("skills.navigation.luaSettings"),
-            PageId::IndexProjects => tr!("codeContext.project.projectSemanticIndex"),
-            PageId::EngineSettings => tr!("tui.index.engineSettings"),
+
             PageId::VulcanPlugins => tr!("skills.navigation.externalPlugins"),
             PageId::PluginMount => tr!("tui.plugin.page"),
         }
@@ -394,7 +388,6 @@ impl PageId {
             | Self::Credentials
             | Self::Models
             | Self::MemoryInference
-            | Self::EngineSettings
             | Self::GitCommit => calls.push(settings::load_public_ai_settings()),
             Self::Mcp => {
                 calls.push(api::mcp_settings::load_mcp_runtime_snapshot());
@@ -469,15 +462,7 @@ impl PageId {
             page if page.area() == Area::Knowledge => calls.extend(knowledge::loaders(app, page)),
             _ => {}
         }
-        if matches!(self, Self::IndexProjects | Self::EngineSettings) {
-            calls.push(api::vce::load_vce_configuration_status());
-        }
-        if self == Self::IndexProjects
-            && let Some(project) = &app.vce_project
-        {
-            calls.push(api::vce::load_vce_project_overview(project));
-            calls.push(api::vce::load_vce_job(project, None));
-        }
+
         calls
     }
 
@@ -1099,8 +1084,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::SkillList => catalog::skills(app),
         PageId::LuaSkills => plugins::lua_skills(app),
         PageId::LuaSettings => plugins::lua_settings(app),
-        PageId::IndexProjects => plugins::index(app),
-        PageId::EngineSettings => plugins::engine(app),
+
         PageId::VulcanPlugins => plugins::plugins(app),
         PageId::PluginMount => plugin_settings::rows(app),
     };

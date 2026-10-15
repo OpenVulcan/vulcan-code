@@ -1187,8 +1187,6 @@ mod tests {
             pinned: false,
             icon_pack: None,
             icon_key: None,
-            vce_enabled: false,
-            vce_settings_revision: 1,
         }];
         guard.workspace_snapshot = Some(WorkspaceSnapshot {
             task_projects: vec![TaskProjectSummary::new(

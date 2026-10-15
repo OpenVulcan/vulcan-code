@@ -86,7 +86,6 @@ export function useWorkbenchRevisionGates(input: WorkbenchRevisionGatesInput) {
   if (!projectSettingsRevisionInitializedRef.current) {
     for (const [projectId, revisions] of Object.entries(workbenchState.projectSettingsRevisions.byProject)) {
       acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vmm`, revisions.vmm);
-      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vce`, revisions.vce);
       acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:agentSkills`, revisions.agentSkills);
     }
     projectSettingsRevisionInitializedRef.current = true;
@@ -157,7 +156,6 @@ export function useWorkbenchRevisionGates(input: WorkbenchRevisionGatesInput) {
     acceptedProjectSettingsRevisionByKeyRef.current.clear();
     acceptedGlobalProjectSettingsRevisionByDomainRef.current = {
       vmm: 0,
-      vce: 0,
       agentSkills: 0,
     };
     return true;
@@ -510,10 +508,6 @@ export function useWorkbenchServiceSync(gates: WorkbenchRevisionGates, props: Wo
         acceptedGlobalProjectSettingsRevisionByDomainRef.current.vmm,
         props.workbench.projectSettingsRevisions.global.vmm,
       ),
-      vce: Math.max(
-        acceptedGlobalProjectSettingsRevisionByDomainRef.current.vce,
-        props.workbench.projectSettingsRevisions.global.vce,
-      ),
       agentSkills: Math.max(
         acceptedGlobalProjectSettingsRevisionByDomainRef.current.agentSkills,
         props.workbench.projectSettingsRevisions.global.agentSkills,
@@ -532,17 +526,12 @@ export function useWorkbenchServiceSync(gates: WorkbenchRevisionGates, props: Wo
           acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vmm`) ?? 0,
           revisions.vmm,
         ),
-        vce: Math.max(
-          acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vce`) ?? 0,
-          revisions.vce,
-        ),
         agentSkills: Math.max(
           acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:agentSkills`) ?? 0,
           revisions.agentSkills,
         ),
       };
       acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vmm`, acceptedRevisions.vmm);
-      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vce`, acceptedRevisions.vce);
       acceptedProjectSettingsRevisionByKeyRef.current.set(
         `${projectId}:agentSkills`,
         acceptedRevisions.agentSkills,
@@ -773,7 +762,6 @@ export function useWorkbenchServiceSync(gates: WorkbenchRevisionGates, props: Wo
         const acceptedDomains = acceptedProjectSettingsRevisions.get(projectId)
           ?? {
             vmm: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vmm`) ?? 0,
-            vce: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vce`) ?? 0,
             agentSkills: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:agentSkills`) ?? 0,
           };
         acceptedProjectSettingsRevisions.set(projectId, {

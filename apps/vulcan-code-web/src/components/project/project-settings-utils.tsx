@@ -59,14 +59,6 @@ export function projectSettingsSections(
       detail: t("conversation.collaboration.status.granted"),
     },
   ];
-  sections.splice(2, 0, {
-      id: "code-context",
-      icon: <Network size={16} />,
-      label: t("projectSettings.codeContext.title"),
-      detail: project.vceEnabled
-        ? t("projectSettings.codeContext.enabled")
-        : t("projectSettings.codeContext.disabled"),
-  });
   // The permission strategy exists only while the judge is enabled.
   // 权限策略仅在判定启用时存在。
   if (workbench.permissionJudgeBackend) {

@@ -17,10 +17,8 @@ use std::{
 };
 use tokio::sync::broadcast;
 use vulcan_ai_contract::{
-    AiOperation, AiStreamEvent, DecisionRequest, DecisionResponse, DispatchOutcome,
-    EmbeddingBatchCollectedResult, EmbeddingBatchPlan, EmbeddingBatchSnapshot,
-    EmbeddingBatchSubmission, EmbeddingBatchTaskPlan, EmbeddingBatchUploadedInput,
-    EmbeddingResponse, HostAiCallContext, HostAiCapabilityHandle, HostAiCapabilityRegistration,
+    AiOperation, AiStreamEvent, DecisionRequest, DecisionResponse, EmbeddingResponse,
+    HostAiCallContext, HostAiCapabilityHandle, HostAiCapabilityRegistration,
     HostAiEmbeddingRequest, HostAiEmbeddingResponse, HostAiError, HostAiErrorCode,
     HostAiEventStream, HostAiExecutionHandle, HostAiExecutionPhase, HostAiExecutionSnapshot,
     HostAiPort, InferenceCallerContext, InferenceCapabilitySnapshot, InferencePermission,
@@ -217,39 +215,6 @@ impl ConfiguredInferenceHostAiPort {
         )
     }
 
-    /// Validates one asynchronous embedding Batch call against its registered host capability.
-    /// 根据已注册宿主能力校验一次异步向量 Batch 调用。
-    fn validate_embedding_batch_call(
-        &self,
-        handle: &HostAiCapabilityHandle,
-        context: &HostAiCallContext,
-        request: &HostAiEmbeddingRequest,
-    ) -> Result<(), HostAiError> {
-        request.validate()?;
-        if request.request.consumer_profile_id != handle.consumer_profile_id {
-            return Err(HostAiError::new(
-                HostAiErrorCode::PermissionDenied,
-                "Embedding Batch request profile does not match the capability handle.",
-            )
-            .with_request_context(context, Some(request.request.request_id.as_str())));
-        }
-        self.validate_call(
-            handle,
-            context,
-            request.request.request_id.as_str(),
-            AiOperation::EmbeddingCreate,
-            None,
-            InferencePermission::Embedding,
-        )?;
-        if context.cancellation.is_cancelled() {
-            return Err(Self::cancelled(
-                context,
-                request.request.request_id.as_str(),
-            ));
-        }
-        Ok(())
-    }
-
     /// Produces a cancellation error carrying the current operation identity.
     /// 生成携带当前操作标识的取消错误。
     fn cancelled(context: &HostAiCallContext, request_id: &str) -> HostAiError {
@@ -258,19 +223,6 @@ impl ConfiguredInferenceHostAiPort {
             "Host AI operation was cancelled.",
         )
         .with_request_context(context, Some(request_id))
-    }
-
-    /// Produces a conservative cancellation error after a non-idempotent operation started.
-    /// 在非幂等操作已经开始后生成保守的取消错误。
-    fn cancelled_after_dispatch_began(
-        context: &HostAiCallContext,
-        request_id: &str,
-    ) -> HostAiError {
-        let mut error = Self::cancelled(context, request_id);
-        // The host cannot distinguish permit waiting from an HTTP request whose response was lost.
-        // 宿主无法区分等待许可与 HTTP 请求已送达但响应丢失，因此必须保留不确定结果。
-        error.dispatch_outcome = DispatchOutcome::Unknown;
-        error
     }
 
     /// Maps a configured-inference error into the provider-neutral HostAiError shape.
@@ -564,230 +516,6 @@ impl HostAiPort for ConfiguredInferenceHostAiPort {
             registered.snapshot = snapshot.clone();
         }
         Ok(snapshot)
-    }
-
-    /// Plans asynchronous embedding Batch tasks without reaching the provider boundary.
-    /// 在不触达供应商边界的情况下规划异步向量 Batch 任务。
-    fn plan_embedding_batch(
-        &self,
-        handle: &HostAiCapabilityHandle,
-        request: &HostAiEmbeddingRequest,
-    ) -> Result<EmbeddingBatchPlan, HostAiError> {
-        request.validate()?;
-        self.ensure_registered_handle(handle)?;
-        if request.request.consumer_profile_id != handle.consumer_profile_id {
-            return Err(HostAiError::new(
-                HostAiErrorCode::PermissionDenied,
-                "Embedding Batch request profile does not match the capability handle.",
-            )
-            .with_request_id(request.request.request_id.as_str()));
-        }
-        self.service
-            .plan_embedding_batch(&handle.caller, request.request.clone())
-            .map_err(|error| {
-                Self::map_error(error, None, Some(request.request.request_id.as_str()), None)
-            })
-    }
-
-    /// Uploads one exact file-backed embedding Batch input before task creation.
-    /// 在创建任务前上传一个精确的文件型向量 Batch 输入。
-    async fn upload_embedding_batch_input(
-        &self,
-        handle: &HostAiCapabilityHandle,
-        context: HostAiCallContext,
-        request: HostAiEmbeddingRequest,
-        request_fingerprint: String,
-        task: EmbeddingBatchTaskPlan,
-    ) -> Result<EmbeddingBatchUploadedInput, HostAiError> {
-        let request_id = request.request.request_id.clone();
-        self.validate_embedding_batch_call(handle, &context, &request)?;
-        let caller = Self::caller_for_context(handle, &context)
-            .map_err(|error| error.with_request_context(&context, Some(request_id.as_str())))?;
-        let operation = self.service.upload_embedding_batch_input(
-            &caller,
-            request.request,
-            request_fingerprint,
-            task,
-        );
-        tokio::pin!(operation);
-        tokio::select! {
-            result = &mut operation => result.map_err(|error| Self::map_error(error, Some(&context), Some(request_id.as_str()), None)),
-            _ = context.cancellation.cancelled() => Err(Self::cancelled_after_dispatch_began(&context, request_id.as_str())),
-        }
-    }
-
-    /// Submits one exact planned embedding Batch task without automatic retry.
-    /// 在不自动重试的情况下提交一个精确规划的向量 Batch 任务。
-    async fn submit_embedding_batch(
-        &self,
-        handle: &HostAiCapabilityHandle,
-        context: HostAiCallContext,
-        request: HostAiEmbeddingRequest,
-        request_fingerprint: String,
-        task: EmbeddingBatchTaskPlan,
-        uploaded_input: Option<EmbeddingBatchUploadedInput>,
-    ) -> Result<EmbeddingBatchSubmission, HostAiError> {
-        let request_id = request.request.request_id.clone();
-        self.validate_embedding_batch_call(handle, &context, &request)?;
-        let caller = Self::caller_for_context(handle, &context)
-            .map_err(|error| error.with_request_context(&context, Some(request_id.as_str())))?;
-        let operation = self.service.submit_embedding_batch(
-            &caller,
-            request.request,
-            request_fingerprint,
-            task,
-            uploaded_input,
-        );
-        tokio::pin!(operation);
-        tokio::select! {
-            result = &mut operation => result.map_err(|error| Self::map_error(error, Some(&context), Some(request_id.as_str()), None)),
-            _ = context.cancellation.cancelled() => Err(Self::cancelled_after_dispatch_began(&context, request_id.as_str())),
-        }
-    }
-
-    /// Reconciles one file-backed task after an indeterminate creation response.
-    /// 在创建响应不确定后对账一个文件型任务。
-    async fn reconcile_embedding_batch_submission(
-        &self,
-        handle: &HostAiCapabilityHandle,
-        context: HostAiCallContext,
-        request: HostAiEmbeddingRequest,
-        request_fingerprint: String,
-        task: EmbeddingBatchTaskPlan,
-        uploaded_input: EmbeddingBatchUploadedInput,
-    ) -> Result<Option<EmbeddingBatchSubmission>, HostAiError> {
-        let request_id = request.request.request_id.clone();
-        self.validate_embedding_batch_call(handle, &context, &request)?;
-        let caller = Self::caller_for_context(handle, &context)
-            .map_err(|error| error.with_request_context(&context, Some(request_id.as_str())))?;
-        let operation = self.service.reconcile_embedding_batch_submission(
-            &caller,
-            request.request,
-            request_fingerprint,
-            task,
-            uploaded_input,
-        );
-        tokio::pin!(operation);
-        tokio::select! {
-            result = &mut operation => result.map_err(|error| Self::map_error(error, Some(&context), Some(request_id.as_str()), None)),
-            _ = context.cancellation.cancelled() => Err(Self::cancelled(&context, request_id.as_str())),
-        }
-    }
-
-    /// Polls one durable embedding Batch submission without replaying it.
-    /// 在不重放的情况下轮询一个持久向量 Batch 提交。
-    async fn embedding_batch_status(
-        &self,
-        handle: &HostAiCapabilityHandle,
-        context: HostAiCallContext,
-        request: HostAiEmbeddingRequest,
-        request_fingerprint: String,
-        submission: EmbeddingBatchSubmission,
-    ) -> Result<EmbeddingBatchSnapshot, HostAiError> {
-        let request_id = request.request.request_id.clone();
-        self.validate_embedding_batch_call(handle, &context, &request)?;
-        let caller = Self::caller_for_context(handle, &context)
-            .map_err(|error| error.with_request_context(&context, Some(request_id.as_str())))?;
-        let operation = self.service.embedding_batch_status(
-            &caller,
-            request.request,
-            request_fingerprint,
-            submission,
-        );
-        tokio::pin!(operation);
-        tokio::select! {
-            result = &mut operation => result.map_err(|error| Self::map_error(error, Some(&context), Some(request_id.as_str()), None)),
-            _ = context.cancellation.cancelled() => Err(Self::cancelled(&context, request_id.as_str())),
-        }
-    }
-
-    /// Collects and normalizes one completed embedding Batch task.
-    /// 收集并归一化一个已完成向量 Batch 任务。
-    async fn collect_embedding_batch(
-        &self,
-        handle: &HostAiCapabilityHandle,
-        context: HostAiCallContext,
-        request: HostAiEmbeddingRequest,
-        request_fingerprint: String,
-        task: EmbeddingBatchTaskPlan,
-        snapshot: EmbeddingBatchSnapshot,
-    ) -> Result<EmbeddingBatchCollectedResult, HostAiError> {
-        let request_id = request.request.request_id.clone();
-        self.validate_embedding_batch_call(handle, &context, &request)?;
-        let caller = Self::caller_for_context(handle, &context)
-            .map_err(|error| error.with_request_context(&context, Some(request_id.as_str())))?;
-        let operation = self.service.collect_embedding_batch(
-            &caller,
-            request.request,
-            request_fingerprint,
-            task,
-            snapshot,
-        );
-        tokio::pin!(operation);
-        tokio::select! {
-            result = &mut operation => result.map_err(|error| Self::map_error(error, Some(&context), Some(request_id.as_str()), None)),
-            _ = context.cancellation.cancelled() => Err(Self::cancelled(&context, request_id.as_str())),
-        }
-    }
-
-    /// Deletes one temporary provider Batch input after the consumer durably stores every result.
-    /// 在调用方持久保存全部结果后删除一个供应商 Batch 临时输入。
-    async fn cleanup_embedding_batch_input(
-        &self,
-        handle: &HostAiCapabilityHandle,
-        context: HostAiCallContext,
-        request: HostAiEmbeddingRequest,
-        request_fingerprint: String,
-        submission: EmbeddingBatchSubmission,
-    ) -> Result<(), HostAiError> {
-        let request_id = request.request.request_id.clone();
-        self.validate_embedding_batch_call(handle, &context, &request)?;
-        let caller = Self::caller_for_context(handle, &context)
-            .map_err(|error| error.with_request_context(&context, Some(request_id.as_str())))?;
-        let operation = self.service.cleanup_embedding_batch_input(
-            &caller,
-            request.request,
-            request_fingerprint,
-            submission,
-        );
-        tokio::pin!(operation);
-        tokio::select! {
-            result = &mut operation => result.map_err(|error| Self::map_error(error, Some(&context), Some(request_id.as_str()), None)),
-            _ = context.cancellation.cancelled() => Err(Self::cancelled(&context, request_id.as_str())),
-        }
-    }
-
-    /// Cancels one durable embedding Batch submission when the provider supports it.
-    /// 在供应商支持时取消一个持久向量 Batch 提交。
-    async fn cancel_embedding_batch(
-        &self,
-        handle: &HostAiCapabilityHandle,
-        context: HostAiCallContext,
-        request: HostAiEmbeddingRequest,
-        request_fingerprint: String,
-        submission: EmbeddingBatchSubmission,
-    ) -> Result<EmbeddingBatchSnapshot, HostAiError> {
-        let request_id = request.request.request_id.clone();
-        self.validate_embedding_batch_call(handle, &context, &request)?;
-        authorize_embedding_batch_cancellation(
-            &handle.caller,
-            handle.consumer_profile_id.as_str(),
-            &context,
-            request_id.as_str(),
-        )?;
-        let caller = Self::caller_for_context(handle, &context)
-            .map_err(|error| error.with_request_context(&context, Some(request_id.as_str())))?;
-        let operation = self.service.cancel_embedding_batch(
-            &caller,
-            request.request,
-            request_fingerprint,
-            submission,
-        );
-        tokio::pin!(operation);
-        tokio::select! {
-            result = &mut operation => result.map_err(|error| Self::map_error(error, Some(&context), Some(request_id.as_str()), None)),
-            _ = context.cancellation.cancelled() => Err(Self::cancelled(&context, request_id.as_str())),
-        }
     }
 
     /// Executes one embedding batch with host cancellation and deadline context.
@@ -1156,90 +884,13 @@ impl HostAiPort for ConfiguredInferenceHostAiPort {
     }
 }
 
-/// Authorizes the additional destructive permission required for provider Batch cancellation.
-/// 授权取消供应商 Batch 所需的额外破坏性权限。
-///
-/// `caller` and `consumer_profile_id` are host-issued authority; context fields preserve diagnostics.
-/// `caller` 与 `consumer_profile_id` 是宿主签发权限；上下文字段用于保留诊断身份。
-/// Returns unit only when the caller explicitly owns cancellation authority.
-/// 仅当调用方明确拥有取消权限时返回空值。
-fn authorize_embedding_batch_cancellation(
-    caller: &InferenceCallerContext,
-    consumer_profile_id: &str,
-    context: &HostAiCallContext,
-    request_id: &str,
-) -> Result<(), HostAiError> {
-    caller
-        .authorize(consumer_profile_id, InferencePermission::Cancel)
-        .map_err(|message| {
-            HostAiError::new(HostAiErrorCode::PermissionDenied, message)
-                .with_request_context(context, Some(request_id))
-        })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        ConfiguredInferenceHostAiPort, authorize_embedding_batch_cancellation, earliest_deadline,
-    };
+    use super::{ConfiguredInferenceHostAiPort, earliest_deadline};
     use crate::configured_inference::{
         ConfiguredInferenceError, ConfiguredInferenceErrorCategory, ConfiguredInferenceFailureStage,
     };
-    use std::collections::BTreeSet;
-    use vulcan_ai_contract::{
-        DispatchOutcome, ExecutionRouteSnapshot, HostAiCallContext, InferenceCallerBudget,
-        InferenceCallerContext, InferencePermission, InferenceSchedulingClass, InferenceUsageScope,
-    };
-
-    /// Verifies embedding authority alone cannot cancel a durable provider Batch.
-    /// 验证仅有向量权限不能取消持久供应商 Batch。
-    #[test]
-    fn embedding_batch_cancellation_requires_explicit_cancel_permission() {
-        // caller deliberately owns embedding and status but not destructive cancellation authority.
-        // caller 有意持有向量与状态权限，但不持有破坏性的取消权限。
-        let caller = InferenceCallerContext {
-            caller_id: String::from("vce-test"),
-            allowed_consumer_profile_ids: BTreeSet::from([String::from("vce")]),
-            permissions: BTreeSet::from([
-                InferencePermission::Embedding,
-                InferencePermission::Status,
-            ]),
-            usage_scope: InferenceUsageScope::InternalBackground,
-            scheduling_class: InferenceSchedulingClass::ByUsageScope,
-            interactive_session_id: None,
-            deadline_unix_ms: None,
-            budget: InferenceCallerBudget {
-                max_concurrent_executions: 1,
-                max_input_units_per_request: None,
-                max_output_tokens_per_request: None,
-                max_requests_per_minute: None,
-                max_input_units_per_minute: None,
-                max_execution_duration_ms: None,
-            },
-        };
-        // context carries the exact operation identity into a controlled permission error.
-        // context 把精确操作身份带入受控权限错误。
-        let context = HostAiCallContext::new("batch-cancel");
-
-        let error = authorize_embedding_batch_cancellation(&caller, "vce", &context, "request-1")
-            .expect_err("missing cancellation authority must be rejected");
-        assert_eq!(
-            error.code,
-            vulcan_ai_contract::HostAiErrorCode::PermissionDenied
-        );
-    }
-
-    /// Verifies cancellation after a non-idempotent operation starts never claims no dispatch.
-    /// 验证非幂等操作开始后的取消绝不会声称尚未分派。
-    #[test]
-    fn non_idempotent_cancellation_preserves_unknown_dispatch() {
-        let context = HostAiCallContext::new("batch-submit");
-
-        let error =
-            ConfiguredInferenceHostAiPort::cancelled_after_dispatch_began(&context, "request-1");
-
-        assert_eq!(error.dispatch_outcome, DispatchOutcome::Unknown);
-    }
+    use vulcan_ai_contract::{ExecutionRouteSnapshot, InferenceUsageScope};
 
     /// Verifies explicit and duration-derived deadlines always choose the earliest boundary.
     /// 验证显式截止时间与时长派生截止时间始终选择更早边界。

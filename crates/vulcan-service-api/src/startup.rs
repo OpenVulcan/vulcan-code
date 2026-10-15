@@ -168,9 +168,6 @@ pub struct ServiceActiveWorkSummary {
     /// Number of active agent stream tasks.
     /// 活动智能体流任务数。
     pub active_stream_tasks: u64,
-    /// Number of detailed VCE jobs currently tracked.
-    /// 当前跟踪的详细 VCE 任务数。
-    pub vce_jobs: u64,
     /// Number of running project terminals.
     /// 运行中的项目终端数。
     pub running_terminals: u64,

@@ -7,7 +7,6 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     future::Future,
-    path::PathBuf,
     sync::{
         Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -15,7 +14,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use time::OffsetDateTime;
-use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast, oneshot, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast, watch};
 use uuid::Uuid;
 use vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_public_reasoning_effort;
 use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::{
@@ -28,8 +27,6 @@ use vulcan_agent_runtime::provider_input_normalizer::protocol_profile_supports_s
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiOperation, AiStreamEvent, ContentItem,
     DecisionQuestionKind, DecisionRequest, DecisionResponse, DispatchOutcome,
-    EmbeddingBatchCollectedResult, EmbeddingBatchPlan, EmbeddingBatchSnapshot,
-    EmbeddingBatchSubmission, EmbeddingBatchTaskPlan, EmbeddingBatchUploadedInput,
     EmbeddingInputContent, EmbeddingRequest, EmbeddingResponse, ExecutionRouteSnapshot,
     InferenceCallerContext, InferenceCapabilitySnapshot, InferenceOperationCapability,
     InferencePermission, InferenceUsageScope, ModelCapabilities, ModelParameterValue,
@@ -47,10 +44,9 @@ use vulcan_llm_core::{
 };
 use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
 use vulcan_provider_adapters::{
-    EmbeddingBatchArtifactKind, EmbeddingBatchArtifactSink, InferenceRouteConfiguration,
-    InternalModelOverrides, PersistedAiConfiguration, ProviderExecutionFailure,
-    ProviderWireRequestCapture, PublicAiRuntime, ResolvedPublicAiSelection,
-    registered_native_embedding_batch_capabilities,
+    InferenceRouteConfiguration, InternalModelOverrides, PersistedAiConfiguration,
+    ProviderExecutionFailure, ProviderWireRequestCapture, PublicAiRuntime,
+    ResolvedPublicAiSelection,
 };
 use vulcan_provider_config::config::PersistedProviderRetryConfiguration;
 use vulcan_workspace_store::data_plane::HostRuntimeHandle;
@@ -67,70 +63,6 @@ const LLM_EVENT_BUFFER_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// VMM 已配置推理传输请求追踪的版本化磁盘契约。
 const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str =
     "vulcan.configured-inference-provider-request-trace.v1";
-/// Versioned disk contract for VCE native embedding request diagnostics.
-/// VCE 原生向量请求诊断使用的版本化磁盘契约。
-const VCE_EMBEDDING_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str =
-    "vulcan.vce-embedding-provider-request-trace.v1";
-
-/// Owns opt-in VCE Batch artifacts for one host-authenticated project.
-/// 持有一个经宿主认证项目的自愿开启的 VCE Batch 产物。
-struct VceEmbeddingBatchArtifactSink {
-    /// Existing application data root whose `vce` directory is the artifact sibling.
-    /// 现有应用数据根目录，其 `vce` 目录与产物目录同级。
-    data_root: PathBuf,
-    /// Exact project identity supplied by the VCE capability registration.
-    /// 由 VCE 能力注册提供的精确项目身份。
-    project_id: String,
-}
-
-#[async_trait::async_trait]
-impl EmbeddingBatchArtifactSink for VceEmbeddingBatchArtifactSink {
-    /// Writes exact request or response bytes off the async executor.
-    /// 在异步执行器之外写入精确请求或返回字节。
-    ///
-    /// `task_id` identifies one immutable Batch task, `kind` chooses its file, and `bytes` stay exact.
-    /// `task_id` 标识一个不可变 Batch 任务，`kind` 选择文件，`bytes` 保持精确。
-    ///
-    /// Returns a storage error without changing the Provider operation.
-    /// 返回存储错误而不改变供应商操作。
-    async fn persist(
-        &self,
-        task_id: &str,
-        kind: EmbeddingBatchArtifactKind,
-        bytes: &[u8],
-    ) -> Result<(), String> {
-        // Map the typed artifact to its fixed diagnostic file name.
-        // 将强类型产物映射为固定诊断文件名。
-        let file_name = match kind {
-            EmbeddingBatchArtifactKind::RequestJsonl => String::from("request.jsonl"),
-            EmbeddingBatchArtifactKind::RequestJson => String::from("request.json"),
-            EmbeddingBatchArtifactKind::OutputJsonl => String::from("output.jsonl"),
-            EmbeddingBatchArtifactKind::OutputJson => String::from("output.json"),
-            EmbeddingBatchArtifactKind::ErrorJsonl => String::from("error.jsonl"),
-            EmbeddingBatchArtifactKind::TerminalStatusJson => {
-                format!("status-{}.json", hex::encode(Sha256::digest(bytes)))
-            }
-        };
-        // Move only owned values into the blocking filesystem worker.
-        // 仅将拥有所有权的值移入阻塞式文件系统工作线程。
-        let data_root = self.data_root.clone();
-        let project_id = self.project_id.clone();
-        let task_id = task_id.to_owned();
-        let bytes = bytes.to_vec();
-        tokio::task::spawn_blocking(move || {
-            vulcan_workspace_store::workspace_store::persist_vce_batch_artifact(
-                &data_root,
-                project_id.as_str(),
-                task_id.as_str(),
-                file_name.as_str(),
-                &bytes,
-            )
-        })
-        .await
-        .map_err(|error| format!("VCE Batch artifact writer failed: {error}"))??;
-        Ok(())
-    }
-}
 /// Process-local tie breaker for configured-inference traces captured in one millisecond.
 /// 同一毫秒内捕获的已配置推理追踪使用的进程内消歧序号。
 static CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -206,18 +138,6 @@ const INFERENCE_SCHEDULER_BACKGROUND_CAPACITY: u32 = 1;
 /// Allows bounded priority bypass before one waiting lower-priority class must progress.
 /// 允许有限次数优先级越过，之后必须推进一个等待中的较低优先级类别。
 const INFERENCE_SCHEDULER_MAX_PRIORITY_BYPASS: u32 = 8;
-
-/// Defines how a caller deadline is classified after one Batch provider future starts polling.
-/// 定义一个 Batch 供应商 Future 开始轮询后调用方截止时间的分派分类方式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EmbeddingBatchDeadlineDispatchPolicy {
-    /// The operation is safely repeatable and does not require uncertain-dispatch recovery.
-    /// 操作可安全重复，不需要不确定分派恢复。
-    Repeatable,
-    /// The operation can create a remote file or billable task, so delivery is indeterminate.
-    /// 操作可能创建远端文件或计费任务，因此送达情况不确定。
-    NonIdempotent,
-}
 
 /// Identifies one stable configured-inference failure category.
 /// 标识一种稳定的已配置推理失败类别。
@@ -364,45 +284,6 @@ impl ConfiguredInferenceError {
             route: None,
             stage: ConfiguredInferenceFailureStage::ConfiguredInference,
         }
-    }
-
-    /// Preserves an indeterminate dispatch outcome when a non-idempotent Batch call reaches its deadline.
-    /// 在非幂等 Batch 调用达到截止时间时保留不确定分派结果。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `self` is the caller-deadline failure produced after the provider future started polling.
-    /// `self` 是供应商 Future 开始轮询后产生的调用方截止时间失败。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The same controlled failure carrying a normalized timeout with unknown dispatch semantics.
-    /// 返回携带规范化超时及不确定分派语义的同一受控失败。
-    fn with_unknown_batch_dispatch(mut self) -> Self {
-        self.provider_error = Some(Box::new(AiExecutionError {
-            category: AiErrorCategory::Timeout,
-            subcategory: Some(String::from("caller_deadline")),
-            stage: String::from("dispatch"),
-            http_status: None,
-            transport: None,
-            websocket_close_code: None,
-            upstream_code: None,
-            upstream_type: None,
-            upstream_parameter: None,
-            upstream_message: None,
-            request_id: None,
-            provider_id: None,
-            entry_id: None,
-            model_id: None,
-            message: self.message.clone(),
-            dispatch_outcome: DispatchOutcome::Unknown,
-            semantic_output_observed: false,
-            side_effect_observed: false,
-            terminal: true,
-            retryable: false,
-            retry_after: None,
-        }));
-        self
     }
 
     /// Converts one provider terminal event into a controlled failure.
@@ -1191,35 +1072,6 @@ impl InternalInferenceTelemetryFacts {
         self.input_item_count = input_item_count;
         self.output_item_count = output_item_count;
         self.vector_dimensions = vector_dimensions;
-        self
-    }
-
-    /// Rebinds telemetry to the exact frozen execution route used by a supplemental action.
-    /// 将遥测重新绑定到补充动作实际使用的精确冻结执行路由。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `route` is the content-free route snapshot returned by the same identity resolution as dispatch.
-    /// `route` 是由与分派相同的身份解析返回且不含内容的路由快照。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The same lifecycle record with every route identifier replaced atomically.
-    /// 返回以原子方式替换全部路由标识后的同一生命周期记录。
-    fn with_execution_route(mut self, route: &ExecutionRouteSnapshot) -> Self {
-        self.usage_scope = route.usage_scope;
-        self.provider_id = route.provider_id.clone();
-        self.service_entry_id = route.service_entry_id.clone();
-        self.connection_id = route.connection_id.clone();
-        self.protocol_profile_id = route.protocol_binding_id.clone();
-        self.action_binding_id = route.action_binding_id.clone();
-        self.secondary_route_id = route.secondary_route_id.clone();
-        self.secondary_provider_name = route.secondary_provider_name.clone();
-        self.secondary_endpoint_name = route.secondary_endpoint_name.clone();
-        self.model_id = route.model_id.clone();
-        self.capability_revision = route.capability_revision.clone();
-        self.catalog_revision = route.catalog_revision.clone();
-        self.route_revision = route.route_revision.clone();
         self
     }
 
@@ -2248,15 +2100,7 @@ impl ConfiguredInferenceService {
                 unavailable_reason: None,
                 route: Some(configured_route_snapshot(&selection, route)),
                 embedding: selection.model.capabilities.embedding.clone(),
-                embedding_batch: (route.operation == AiOperation::EmbeddingCreate)
-                    .then(|| {
-                        registered_native_embedding_batch_capabilities(
-                            &selection.route.entry,
-                            selection.model.id.as_str(),
-                        )
-                        .cloned()
-                    })
-                    .flatten(),
+                embedding_batch: None,
                 rerank: selection.model.capabilities.rerank.clone(),
             },
             Err(error) => {
@@ -2533,505 +2377,6 @@ impl ConfiguredInferenceService {
         .await
     }
 
-    /// Plans deterministic asynchronous embedding Batch tasks through the configured route.
-    /// 通过已配置路由规划确定性的异步向量 Batch 任务。
-    pub fn plan_embedding_batch(
-        &self,
-        caller: &InferenceCallerContext,
-        request: EmbeddingRequest,
-    ) -> Result<EmbeddingBatchPlan, ConfiguredInferenceError> {
-        request.validate().map_err(|message| {
-            ConfiguredInferenceError::new(ConfiguredInferenceErrorCategory::Contract, message)
-        })?;
-        authorize_caller(
-            caller,
-            request.consumer_profile_id.as_str(),
-            InferencePermission::Embedding,
-        )?;
-        // Batch aggregate size is governed by the frozen per-task item, payload, and task-count limits.
-        // Batch 聚合大小由冻结的单任务条目、负载字节及任务数量上限约束。
-        let configuration = self.configuration_snapshot()?;
-        let route = configured_operation_route(
-            &configuration,
-            request.consumer_profile_id.as_str(),
-            AiOperation::EmbeddingCreate,
-            None,
-        )?;
-        validate_route_scope(route, caller)?;
-        let selection = self
-            .runtime
-            .resolve_internal_inference_selection(&configuration, route)
-            .map_err(configuration_error)?;
-        let request = embedding_request_with_internal_defaults(&configuration, &selection, request);
-        self.runtime
-            .plan_internal_embedding_batch(&selection, &request, caller.usage_scope)
-            .map_err(ConfiguredInferenceError::from_provider_failure)
-    }
-
-    /// Uploads one exact file-backed embedding Batch input before task creation.
-    /// 在创建任务前上传一个精确的文件型向量 Batch 输入。
-    pub async fn upload_embedding_batch_input(
-        &self,
-        caller: &InferenceCallerContext,
-        request: EmbeddingRequest,
-        request_fingerprint: String,
-        task: EmbeddingBatchTaskPlan,
-    ) -> Result<EmbeddingBatchUploadedInput, ConfiguredInferenceError> {
-        let (selection, request, route_snapshot) =
-            self.resolve_embedding_batch_call(caller, request, request_fingerprint.as_str())?;
-        validate_embedding_batch_task(&task)?;
-        // Freeze the enabled switch for this upload operation.
-        // 为本次上传操作冻结开关状态。
-        let artifact_sink = self.vce_batch_artifact_sink(caller);
-        let _permit = self.acquire_caller_permit(caller, 1).await?;
-        self.execute_embedding_batch_provider_operation(
-            caller,
-            &request,
-            &selection,
-            &route_snapshot,
-            "internal_embedding_batch_upload",
-            Some(u64::from(task.input_count)),
-            EmbeddingBatchDeadlineDispatchPolicy::NonIdempotent,
-            self.runtime.upload_internal_embedding_batch_input(
-                &selection,
-                &request,
-                &task,
-                artifact_sink
-                    .as_ref()
-                    .map(|sink| sink as &dyn EmbeddingBatchArtifactSink),
-            ),
-            |_| (RequestUsage::default(), None),
-        )
-        .await
-    }
-
-    /// Submits one planned asynchronous embedding Batch task without automatic replay.
-    /// 提交一个已规划异步向量 Batch 任务且不执行自动重放。
-    pub async fn submit_embedding_batch(
-        &self,
-        caller: &InferenceCallerContext,
-        request: EmbeddingRequest,
-        request_fingerprint: String,
-        task: EmbeddingBatchTaskPlan,
-        uploaded_input: Option<EmbeddingBatchUploadedInput>,
-    ) -> Result<EmbeddingBatchSubmission, ConfiguredInferenceError> {
-        let (selection, request, route_snapshot) =
-            self.resolve_embedding_batch_call(caller, request, request_fingerprint.as_str())?;
-        validate_embedding_batch_task(&task)?;
-        // Freeze the enabled switch for this submission operation.
-        // 为本次提交操作冻结开关状态。
-        let artifact_sink = self.vce_batch_artifact_sink(caller);
-        let _permit = self.acquire_caller_permit(caller, 1).await?;
-        self.execute_embedding_batch_provider_operation(
-            caller,
-            &request,
-            &selection,
-            &route_snapshot,
-            "internal_embedding_batch_submit",
-            Some(u64::from(task.input_count)),
-            EmbeddingBatchDeadlineDispatchPolicy::NonIdempotent,
-            self.runtime.submit_internal_embedding_batch(
-                &selection,
-                &request,
-                &task,
-                uploaded_input.as_ref(),
-                artifact_sink
-                    .as_ref()
-                    .map(|sink| sink as &dyn EmbeddingBatchArtifactSink),
-            ),
-            |_| (RequestUsage::default(), None),
-        )
-        .await
-    }
-
-    /// Reconciles one file-backed task whose creation response was indeterminate.
-    /// 对账一个创建响应不确定的文件型任务。
-    pub async fn reconcile_embedding_batch_submission(
-        &self,
-        caller: &InferenceCallerContext,
-        request: EmbeddingRequest,
-        request_fingerprint: String,
-        task: EmbeddingBatchTaskPlan,
-        uploaded_input: EmbeddingBatchUploadedInput,
-    ) -> Result<Option<EmbeddingBatchSubmission>, ConfiguredInferenceError> {
-        let (selection, request, route_snapshot) =
-            self.resolve_embedding_batch_call(caller, request, request_fingerprint.as_str())?;
-        validate_embedding_batch_task(&task)?;
-        let _permit = self.acquire_caller_permit(caller, 1).await?;
-        self.execute_embedding_batch_provider_operation(
-            caller,
-            &request,
-            &selection,
-            &route_snapshot,
-            "internal_embedding_batch_reconcile",
-            Some(u64::from(task.input_count)),
-            EmbeddingBatchDeadlineDispatchPolicy::Repeatable,
-            self.runtime.reconcile_internal_embedding_batch_submission(
-                &selection,
-                &task,
-                &uploaded_input,
-            ),
-            |_| (RequestUsage::default(), None),
-        )
-        .await
-    }
-
-    /// Polls one durable asynchronous embedding Batch submission without resubmission.
-    /// 在不重新提交的情况下轮询一个持久异步向量 Batch 提交。
-    pub async fn embedding_batch_status(
-        &self,
-        caller: &InferenceCallerContext,
-        request: EmbeddingRequest,
-        request_fingerprint: String,
-        submission: EmbeddingBatchSubmission,
-    ) -> Result<EmbeddingBatchSnapshot, ConfiguredInferenceError> {
-        let (selection, request, route_snapshot) =
-            self.resolve_embedding_batch_call(caller, request, request_fingerprint.as_str())?;
-        validate_embedding_batch_submission(&submission)?;
-        // Freeze the enabled switch for this status observation.
-        // 为本次状态观测冻结开关状态。
-        let artifact_sink = self.vce_batch_artifact_sink(caller);
-        let _permit = self.acquire_caller_permit(caller, 1).await?;
-        self.execute_embedding_batch_provider_operation(
-            caller,
-            &request,
-            &selection,
-            &route_snapshot,
-            "internal_embedding_batch_status",
-            None,
-            EmbeddingBatchDeadlineDispatchPolicy::Repeatable,
-            self.runtime.internal_embedding_batch_status(
-                &selection,
-                &submission,
-                artifact_sink
-                    .as_ref()
-                    .map(|sink| sink as &dyn EmbeddingBatchArtifactSink),
-            ),
-            |snapshot| {
-                (
-                    RequestUsage::default(),
-                    snapshot.completed_requests.map(u64::from),
-                )
-            },
-        )
-        .await
-    }
-
-    /// Collects one completed asynchronous embedding Batch task.
-    /// 收集一个已完成异步向量 Batch 任务。
-    pub async fn collect_embedding_batch(
-        &self,
-        caller: &InferenceCallerContext,
-        request: EmbeddingRequest,
-        request_fingerprint: String,
-        task: EmbeddingBatchTaskPlan,
-        snapshot: EmbeddingBatchSnapshot,
-    ) -> Result<EmbeddingBatchCollectedResult, ConfiguredInferenceError> {
-        let (selection, request, route_snapshot) =
-            self.resolve_embedding_batch_call(caller, request, request_fingerprint.as_str())?;
-        validate_embedding_batch_task(&task)?;
-        validate_embedding_batch_submission(&snapshot.submission)?;
-        if snapshot.submission.task_id != task.task_id {
-            return Err(ConfiguredInferenceError::new(
-                ConfiguredInferenceErrorCategory::Contract,
-                "Embedding Batch snapshot does not belong to the collected task.",
-            ));
-        }
-        snapshot.validate().map_err(|message| {
-            ConfiguredInferenceError::new(ConfiguredInferenceErrorCategory::Contract, message)
-        })?;
-        // Freeze the enabled switch for this result collection.
-        // 为本次结果收集冻结开关状态。
-        let artifact_sink = self.vce_batch_artifact_sink(caller);
-        let _permit = self.acquire_caller_permit(caller, 1).await?;
-        self.execute_embedding_batch_provider_operation(
-            caller,
-            &request,
-            &selection,
-            &route_snapshot,
-            "internal_embedding_batch_collect",
-            Some(u64::from(task.input_count)),
-            EmbeddingBatchDeadlineDispatchPolicy::Repeatable,
-            self.runtime.collect_internal_embedding_batch(
-                &selection,
-                &request,
-                &task,
-                &snapshot,
-                caller.usage_scope,
-                artifact_sink
-                    .as_ref()
-                    .map(|sink| sink as &dyn EmbeddingBatchArtifactSink),
-            ),
-            |collected| {
-                (
-                    collected.response.usage.clone(),
-                    Some(u64::try_from(collected.response.results.len()).unwrap_or(u64::MAX)),
-                )
-            },
-        )
-        .await
-    }
-
-    /// Deletes one temporary embedding Batch input file after durable consumer ingestion.
-    /// 在调用方持久入库后删除一个临时向量 Batch 输入文件。
-    pub async fn cleanup_embedding_batch_input(
-        &self,
-        caller: &InferenceCallerContext,
-        request: EmbeddingRequest,
-        request_fingerprint: String,
-        submission: EmbeddingBatchSubmission,
-    ) -> Result<(), ConfiguredInferenceError> {
-        let (selection, request, route_snapshot) =
-            self.resolve_embedding_batch_call(caller, request, request_fingerprint.as_str())?;
-        validate_embedding_batch_submission(&submission)?;
-        let _permit = self.acquire_caller_permit(caller, 1).await?;
-        self.execute_embedding_batch_provider_operation(
-            caller,
-            &request,
-            &selection,
-            &route_snapshot,
-            "internal_embedding_batch_cleanup",
-            None,
-            EmbeddingBatchDeadlineDispatchPolicy::Repeatable,
-            self.runtime
-                .cleanup_internal_embedding_batch_input(&selection, &submission),
-            |_| (RequestUsage::default(), None),
-        )
-        .await
-    }
-
-    /// Cancels one durable asynchronous embedding Batch submission when supported.
-    /// 在供应商支持时取消一个持久异步向量 Batch 提交。
-    pub async fn cancel_embedding_batch(
-        &self,
-        caller: &InferenceCallerContext,
-        request: EmbeddingRequest,
-        request_fingerprint: String,
-        submission: EmbeddingBatchSubmission,
-    ) -> Result<EmbeddingBatchSnapshot, ConfiguredInferenceError> {
-        authorize_caller(
-            caller,
-            request.consumer_profile_id.as_str(),
-            InferencePermission::Cancel,
-        )?;
-        let (selection, request, route_snapshot) =
-            self.resolve_embedding_batch_call(caller, request, request_fingerprint.as_str())?;
-        validate_embedding_batch_submission(&submission)?;
-        let _permit = self.acquire_caller_permit(caller, 1).await?;
-        self.execute_embedding_batch_provider_operation(
-            caller,
-            &request,
-            &selection,
-            &route_snapshot,
-            "internal_embedding_batch_cancel",
-            None,
-            EmbeddingBatchDeadlineDispatchPolicy::Repeatable,
-            self.runtime
-                .cancel_internal_embedding_batch(&selection, &submission),
-            |snapshot| {
-                (
-                    RequestUsage::default(),
-                    snapshot.completed_requests.map(u64::from),
-                )
-            },
-        )
-        .await
-    }
-
-    /// Resolves one authorized asynchronous embedding Batch call to immutable route facts.
-    /// 将一次已授权异步向量 Batch 调用解析为不可变路由事实。
-    /// Selects VCE file capture only for the authenticated VCE caller and enabled global switch.
-    /// 仅为经认证的 VCE 调用方且全局开关已开启时选择 VCE 文件捕获。
-    ///
-    /// `caller` is the host-issued inference identity; the result is absent when capture is disabled.
-    /// `caller` 是宿主签发的推理身份；捕获关闭时返回空值。
-    fn vce_batch_artifact_sink(
-        &self,
-        caller: &InferenceCallerContext,
-    ) -> Option<VceEmbeddingBatchArtifactSink> {
-        if !self.provider_request_trace_enabled.load(Ordering::Acquire) {
-            return None;
-        }
-        // The host VCE registration owns this exact project-scoped caller prefix.
-        // 宿主 VCE 注册持有这一精确的项目调用方前缀。
-        let project_id = caller.caller_id.strip_prefix("vulcan-code-vce:")?;
-        if project_id.is_empty() {
-            return None;
-        }
-        Some(VceEmbeddingBatchArtifactSink {
-            data_root: vulcan_workspace_store::data_plane::application_data_root(),
-            project_id: project_id.to_owned(),
-        })
-    }
-
-    fn resolve_embedding_batch_call(
-        &self,
-        caller: &InferenceCallerContext,
-        request: EmbeddingRequest,
-        request_fingerprint: &str,
-    ) -> Result<
-        (
-            ResolvedPublicAiSelection,
-            EmbeddingRequest,
-            ExecutionRouteSnapshot,
-        ),
-        ConfiguredInferenceError,
-    > {
-        request.validate().map_err(|message| {
-            ConfiguredInferenceError::new(ConfiguredInferenceErrorCategory::Contract, message)
-        })?;
-        authorize_caller(
-            caller,
-            request.consumer_profile_id.as_str(),
-            InferencePermission::Embedding,
-        )?;
-        // Lifecycle calls revalidate the frozen Batch partition instead of applying the synchronous request budget.
-        // 生命周期调用重新校验冻结 Batch 分区，而不套用同步请求预算。
-        let configuration = self.configuration_snapshot()?;
-        let route = configured_operation_route(
-            &configuration,
-            request.consumer_profile_id.as_str(),
-            AiOperation::EmbeddingCreate,
-            None,
-        )?;
-        validate_route_scope(route, caller)?;
-        let selection = self
-            .runtime
-            .resolve_internal_inference_selection(&configuration, route)
-            .map_err(configuration_error)?;
-        let request = embedding_request_with_internal_defaults(&configuration, &selection, request);
-        let (route_snapshot, current_request_fingerprint) = self
-            .runtime
-            .internal_embedding_batch_request_identity(&selection, &request, caller.usage_scope)
-            .map_err(ConfiguredInferenceError::from_provider_failure)?;
-        validate_embedding_batch_request_fingerprint(
-            current_request_fingerprint.as_str(),
-            request_fingerprint,
-        )?;
-        Ok((selection, request, route_snapshot))
-    }
-
-    /// Executes one non-replayed embedding Batch lifecycle request with deadline and telemetry.
-    /// 在截止时间与遥测约束下执行一次不重放的向量 Batch 生命周期请求。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `caller`, `request`, and `selection` are the authorized frozen call facts;
-    /// `owner_kind` identifies the lifecycle operation, `input_item_count` is content-free
-    /// cardinality, `deadline_dispatch_policy` declares whether a timed-out started call can be
-    /// replayed, `attempt` is exactly one provider request, and `success_metrics` extracts
-    /// normalized usage and output count without retaining payload content.
-    /// `caller`、`request` 与 `selection` 是已授权的冻结调用事实；`owner_kind` 标识生命周期操作，
-    /// `input_item_count` 是不含内容的基数，`deadline_dispatch_policy` 声明已启动调用超时后
-    /// 能否重放，`attempt` 是恰好一次供应商请求，`success_metrics` 在不保留载荷内容的前提下
-    /// 提取归一化用量与输出数量。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The provider result, or a route-bound controlled failure after emitting terminal telemetry.
-    /// 返回供应商结果；失败时在发出终态遥测后返回绑定路由的受控错误。
-    // Frozen route identity, caller identity and execution accounting are separate authorities.
-    // 冻结路由身份、调用方身份及执行计量属于不同权威。
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Frozen route identity, caller identity and execution accounting are separate authorities."
-    )]
-    async fn execute_embedding_batch_provider_operation<T, Attempt, SuccessMetrics>(
-        &self,
-        caller: &InferenceCallerContext,
-        request: &EmbeddingRequest,
-        selection: &ResolvedPublicAiSelection,
-        route_snapshot: &ExecutionRouteSnapshot,
-        owner_kind: &'static str,
-        input_item_count: Option<u64>,
-        deadline_dispatch_policy: EmbeddingBatchDeadlineDispatchPolicy,
-        attempt: Attempt,
-        success_metrics: SuccessMetrics,
-    ) -> Result<T, ConfiguredInferenceError>
-    where
-        Attempt: Future<Output = Result<T, ProviderExecutionFailure>>,
-        SuccessMetrics: FnOnce(&T) -> (RequestUsage, Option<u64>),
-    {
-        let telemetry_execution_id = Uuid::new_v4().to_string();
-        let started_at_unix_ms = current_unix_millis();
-        let started_facts = InternalInferenceTelemetryFacts::from_selection(
-            caller,
-            request.consumer_profile_id.as_str(),
-            request.request_id.as_str(),
-            telemetry_execution_id.as_str(),
-            owner_kind,
-            selection,
-            started_at_unix_ms,
-            0,
-            "succeeded",
-            &RequestUsage::default(),
-            None,
-        )
-        .with_execution_route(route_snapshot)
-        .with_metrics(input_item_count, None, request.dimensions.map(u64::from));
-        self.emit_internal_inference_started(&started_facts);
-        let result =
-            match await_provider_attempt_with_deadline(attempt, caller.deadline_unix_ms).await {
-                Ok(Ok(value)) => Ok(value),
-                Ok(Err(failure)) => Err(ConfiguredInferenceError::from_provider_failure(failure)),
-                Err(error) => Err(match deadline_dispatch_policy {
-                    EmbeddingBatchDeadlineDispatchPolicy::Repeatable => error,
-                    EmbeddingBatchDeadlineDispatchPolicy::NonIdempotent => {
-                        error.with_unknown_batch_dispatch()
-                    }
-                }),
-            }
-            .map_err(|error| error.with_route(route_snapshot.clone()));
-        match result {
-            Ok(value) => {
-                let first_response_at_unix_ms = current_unix_millis();
-                let (usage, output_item_count) = success_metrics(&value);
-                let facts = InternalInferenceTelemetryFacts::succeeded(
-                    caller,
-                    request.consumer_profile_id.as_str(),
-                    request.request_id.as_str(),
-                    telemetry_execution_id.as_str(),
-                    owner_kind,
-                    selection,
-                    started_at_unix_ms,
-                    first_response_at_unix_ms.saturating_sub(started_at_unix_ms),
-                    &usage,
-                )
-                .with_execution_route(route_snapshot)
-                .with_metrics(
-                    input_item_count,
-                    output_item_count,
-                    request.dimensions.map(u64::from),
-                )
-                .with_first_response(Some(first_response_at_unix_ms));
-                self.emit_internal_inference_first_response(&facts);
-                self.emit_internal_inference_telemetry(facts);
-                Ok(value)
-            }
-            Err(error) => {
-                self.emit_internal_inference_telemetry(
-                    InternalInferenceTelemetryFacts::failed(
-                        caller,
-                        request.consumer_profile_id.as_str(),
-                        request.request_id.as_str(),
-                        telemetry_execution_id.as_str(),
-                        owner_kind,
-                        selection,
-                        started_at_unix_ms,
-                        &error,
-                    )
-                    .with_execution_route(route_snapshot)
-                    .with_metrics(
-                        input_item_count,
-                        None,
-                        request.dimensions.map(u64::from),
-                    ),
-                );
-                Err(error)
-            }
-        }
-    }
-
     /// Executes the elected embedding leader after shared request reservation.
     /// 在共享请求预留后执行选出的向量领导请求。
     ///
@@ -3098,40 +2443,29 @@ impl ConfiguredInferenceService {
             request.dimensions.map(u64::from),
         );
         self.emit_internal_inference_started(&started_facts);
-        let captured_wire_request = Arc::new(Mutex::new(None::<ProviderWireRequestCapture>));
-        let captured_wire_request_for_attempt = Arc::clone(&captured_wire_request);
         let runtime_for_attempt = Arc::clone(&self.runtime);
         let selection_for_attempt = selection.clone();
         let request_for_attempt = request.clone();
         let usage_scope_for_attempt = caller.usage_scope;
         let (result, retry_count) = self
             .execute_non_streaming_provider_with_retry(caller, &started_facts, || {
-                let captured_wire_request = Arc::clone(&captured_wire_request_for_attempt);
                 let runtime = Arc::clone(&runtime_for_attempt);
                 let selection = selection_for_attempt.clone();
                 let request = request_for_attempt.clone();
                 async move {
-                    let (capture_sender, capture_receiver) = oneshot::channel();
-                    let result = runtime
+                    runtime
                         .execute_internal_embedding_with_wire_request_capture(
                             &selection,
                             &request,
                             usage_scope_for_attempt,
-                            Some(capture_sender),
+                            None,
                         )
-                        .await;
-                    if let Ok(captured) = capture_receiver.await
-                        && let Ok(mut retained) = captured_wire_request.lock()
-                    {
-                        *retained = Some(captured);
-                    }
-                    result
+                        .await
                 }
             })
             .await;
         // result keeps malformed successful responses on the same terminal telemetry path as provider failures.
         // result 让格式错误的成功响应与 Provider 失败进入同一终态遥测路径。
-        let diagnostic_route = route_snapshot.clone();
         let result = result
             .and_then(|response| {
                 response.validate_for_request(&request).map_err(|message| {
@@ -3143,18 +2477,6 @@ impl ConfiguredInferenceService {
                 Ok(response)
             })
             .map_err(|error| error.with_route(route_snapshot));
-        if let Err(error) = &result
-            && let Ok(mut retained) = captured_wire_request.lock()
-            && let Some(captured) = retained.take()
-        {
-            Self::persist_vce_embedding_provider_request_trace(
-                &request,
-                &diagnostic_route,
-                error,
-                retry_count,
-                captured,
-            );
-        }
         match result {
             Ok(response) => {
                 let first_response_at_unix_ms = current_unix_millis();
@@ -4126,76 +3448,6 @@ impl ConfiguredInferenceService {
             }
         });
         Some(capture_sender)
-    }
-
-    /// Persists the exact native embedding request when its terminal attempt fails.
-    /// 原生向量终态尝试失败时持久化精确请求。
-    ///
-    /// `captured` is produced immediately before provider dispatch with credential-shaped header
-    /// values redacted; the logical request and normalized error remain alongside it.
-    /// `captured` 在供应商分派前立即生成且已脱敏凭据形态请求头；逻辑请求与规范化错误一并保存。
-    fn persist_vce_embedding_provider_request_trace(
-        request: &EmbeddingRequest,
-        route: &ExecutionRouteSnapshot,
-        error: &ConfiguredInferenceError,
-        retry_count: u32,
-        captured: ProviderWireRequestCapture,
-    ) {
-        let sequence = CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SEQUENCE
-            .fetch_add(1, Ordering::Relaxed)
-            .saturating_add(1);
-        let slot_index = sequence.saturating_sub(1)
-            % vulcan_workspace_store::workspace_store::CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SLOT_COUNT;
-        let consumer_profile_id = request.consumer_profile_id.clone();
-        let trace = json!({
-            "schema_version": VCE_EMBEDDING_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION,
-            "captured_at_unix_ms": current_unix_millis(),
-            "process_sequence": sequence,
-            "request_stage": "embedding",
-            "request": request,
-            "route": route,
-            "retry_count": retry_count,
-            "error": error,
-            "api_request": {
-                "capture_point": "native_embedding_transport_dispatch",
-                "transport": captured.transport,
-                "method": captured.method,
-                "path": captured.path,
-                "resolved_url": captured.resolved_url,
-                "headers": captured.headers,
-                "credential_values_redacted": true,
-                "body": captured.body,
-            },
-        });
-        let data_root = vulcan_workspace_store::data_plane::application_data_root();
-        tokio::spawn(async move {
-            let persisted = tokio::task::spawn_blocking(move || {
-                vulcan_workspace_store::workspace_store::persist_configured_inference_provider_request_trace(
-                    &data_root,
-                    consumer_profile_id.as_str(),
-                    slot_index,
-                    &trace,
-                )
-            })
-            .await;
-            match persisted {
-                Ok(Ok(path)) => tracing::info!(
-                    "[vce-embedding-provider-request-trace] sequence={} path={}",
-                    sequence,
-                    path.display()
-                ),
-                Ok(Err(error)) => tracing::warn!(
-                    "[vce-embedding-provider-request-trace] sequence={} persist_failed={}",
-                    sequence,
-                    error
-                ),
-                Err(error) => tracing::warn!(
-                    "[vce-embedding-provider-request-trace] sequence={} writer_failed={}",
-                    sequence,
-                    error
-                ),
-            }
-        });
     }
 
     /// Drives one provider stream into the shared restricted execution record.
@@ -6080,71 +5332,6 @@ pub(crate) fn configured_route_snapshot(
     }
 }
 
-/// Validates the immutable shape of one lifecycle task before provider dispatch.
-/// 在供应商分派前校验一项生命周期任务的不可变结构。
-///
-/// # Parameters
-/// 参数
-/// `task` is the exact durable task selected from the caller-validated frozen plan.
-/// `task` 是从调用方已校验冻结计划中选出的精确持久任务。
-///
-/// # Returns
-/// 返回值
-/// Unit for a well-formed immutable task, or a contract error before provider I/O.
-/// 不可变任务结构正确时返回空值，否则在供应商 I/O 前返回契约错误。
-fn validate_embedding_batch_task(
-    task: &EmbeddingBatchTaskPlan,
-) -> Result<(), ConfiguredInferenceError> {
-    task.validate().map_err(|message| {
-        ConfiguredInferenceError::new(ConfiguredInferenceErrorCategory::Contract, message)
-    })
-}
-
-/// Compares a lifecycle call with the opaque request-and-route fingerprint frozen at planning.
-/// 将生命周期调用与规划时冻结的不透明请求及路由指纹进行比较。
-///
-/// # Parameters
-/// 参数
-/// `current` is reconstructed from one current immutable configuration snapshot and `expected` is durable caller state.
-/// `current` 从一份当前不可变配置快照重建，`expected` 是调用方持久状态。
-///
-/// # Returns
-/// 返回值
-/// Unit for an exact match, or a contract error before any provider request.
-/// 精确匹配时返回空值，否则在任何供应商请求前返回契约错误。
-fn validate_embedding_batch_request_fingerprint(
-    current: &str,
-    expected: &str,
-) -> Result<(), ConfiguredInferenceError> {
-    if current == expected {
-        return Ok(());
-    }
-    Err(ConfiguredInferenceError::new(
-        ConfiguredInferenceErrorCategory::Contract,
-        "Embedding Batch lifecycle request does not match its dispatch-frozen route and payload.",
-    ))
-}
-
-/// Validates one durable provider submission before provider lifecycle I/O.
-/// 在供应商生命周期 I/O 前校验一项持久供应商提交。
-///
-/// # Parameters
-/// 参数
-/// `submission` carries durable task and provider identities from the caller-validated plan.
-/// `submission` 携带来自调用方已校验计划的持久任务及供应商身份。
-///
-/// # Returns
-/// 返回值
-/// Unit for a complete durable identity, or a contract error before provider I/O.
-/// 持久身份完整时返回空值，否则在供应商 I/O 前返回契约错误。
-fn validate_embedding_batch_submission(
-    submission: &EmbeddingBatchSubmission,
-) -> Result<(), ConfiguredInferenceError> {
-    submission.validate().map_err(|message| {
-        ConfiguredInferenceError::new(ConfiguredInferenceErrorCategory::Contract, message)
-    })
-}
-
 /// Projects one frozen provider-internal selection into non-secret route facts.
 /// 将一项冻结的供应商内部选择投影为不含秘密的路由事实。
 ///
@@ -7367,14 +6554,6 @@ mod tests {
         InferenceProfile, InferenceRouteBinding, InferenceRouteConfiguration,
     };
 
-    /// Verifies every remote lifecycle call remains bound to the planning fingerprint.
-    /// 验证每次远端生命周期调用都保持绑定到规划指纹。
-    #[test]
-    fn embedding_batch_lifecycle_rejects_route_or_payload_drift() {
-        assert!(validate_embedding_batch_request_fingerprint("frozen", "frozen").is_ok());
-        assert!(validate_embedding_batch_request_fingerprint("current", "frozen").is_err());
-    }
-
     /// Assert dimension precedence without changing another consumer's default policy.
     /// 验证维度优先级且不改变其他消费者的默认策略。
     ///
@@ -7382,11 +6561,11 @@ mod tests {
     /// 无参数、无返回值；隔离或优先级断言不成立时测试失败。
     #[test]
     fn consumer_embedding_dimensions_preserve_admission_and_isolate_peers() {
-        // configuration contains one explicit VCE dimension and a legacy VMM profile.
-        // configuration 包含 VCE 明确维度与沿用旧策略的 VMM 配置档。
+        // configuration contains one explicit test dimension and a VMM profile.
+        // configuration 包含测试消费者的明确维度与 VMM 配置档。
         let mut configuration = PersistedAiConfiguration::default();
         configuration.inference_profiles.insert(
-            String::from("vce"),
+            String::from("test-consumer"),
             InferenceProfile {
                 embedding_dimensions: Some(1024),
                 ..Default::default()
@@ -7396,11 +6575,11 @@ mod tests {
             .inference_profiles
             .insert(String::from("vmm"), InferenceProfile::default());
         assert_eq!(
-            consumer_embedding_request_dimensions(&configuration, "vce", None),
+            consumer_embedding_request_dimensions(&configuration, "test-consumer", None),
             Some(1024)
         );
         assert_eq!(
-            consumer_embedding_request_dimensions(&configuration, "vce", Some(2048)),
+            consumer_embedding_request_dimensions(&configuration, "test-consumer", Some(2048)),
             Some(2048)
         );
         assert_eq!(
@@ -7633,26 +6812,6 @@ mod tests {
             .expect("opted-in VMM execution should allocate one capture channel");
         drop(capture);
         tokio::task::yield_now().await;
-    }
-
-    /// Verifies Batch file capture follows the existing switch and the exact VCE caller identity.
-    /// 验证 Batch 文件捕获遵循现有开关及精确 VCE 调用方身份。
-    #[test]
-    fn vce_batch_artifact_capture_is_opt_in_and_project_scoped() {
-        let runtime = Arc::new(PublicAiRuntime::unavailable().expect("test public AI runtime"));
-        let mut caller = test_caller();
-        caller.caller_id = String::from("vulcan-code-vce:project-A");
-        let disabled = ConfiguredInferenceService::new(Arc::clone(&runtime));
-        assert!(disabled.vce_batch_artifact_sink(&caller).is_none());
-
-        let enabled =
-            ConfiguredInferenceService::new(runtime).with_provider_request_trace_enabled(true);
-        let sink = enabled
-            .vce_batch_artifact_sink(&caller)
-            .expect("VCE capture enabled");
-        assert_eq!(sink.project_id, "project-A");
-        caller.caller_id = String::from("vulcan-code-vmm:project-A");
-        assert!(enabled.vce_batch_artifact_sink(&caller).is_none());
     }
 
     /// Verifies cache identities are caller-isolated, bounded, and never contain untrusted key text.
@@ -8200,7 +7359,7 @@ mod tests {
         ]);
 
         let effective_effort = apply_restricted_reasoning_policy(
-            "vce",
+            "test-consumer",
             "query_rewrite",
             &capabilities,
             &BTreeSet::from([String::from("provider.reasoning_budget")]),
@@ -8874,27 +8033,6 @@ mod tests {
 
         assert_eq!(error.category, ConfiguredInferenceErrorCategory::Limit);
         assert!(error.message.contains("deadline"));
-    }
-
-    /// Verifies a non-idempotent Batch deadline retains an unknown dispatch outcome.
-    /// 验证非幂等 Batch 截止时间会保留不确定分派结果。
-    #[tokio::test]
-    async fn non_idempotent_batch_deadline_preserves_unknown_dispatch() {
-        let operation = std::future::pending::<
-            Result<(), vulcan_provider_adapters::ProviderExecutionFailure>,
-        >();
-        let error =
-            await_provider_attempt_with_deadline(operation, Some(current_unix_millis() + 1))
-                .await
-                .expect_err("pending provider operation must reach its deadline")
-                .with_unknown_batch_dispatch();
-        let provider_error = error
-            .provider_error
-            .expect("non-idempotent deadline must retain provider semantics");
-
-        assert_eq!(provider_error.category, AiErrorCategory::Timeout);
-        assert_eq!(provider_error.dispatch_outcome, DispatchOutcome::Unknown);
-        assert!(!provider_error.retryable);
     }
 
     /// Verifies text-encoded JSON is materialized into the strong terminal result.

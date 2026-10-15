@@ -61,9 +61,9 @@ use crate::data_plane::APP_SCHEMA_VERSION;
 /// 宿主持有的一个逻辑数据库资源。
 ///
 /// The set covers every storage surface the plan names for Phase Four: application, system
-/// statistics, VCE, VMM, knowledge base, plugin and skill.
+/// statistics, VMM, knowledge base, plugin and skill.
 ///
-/// 该集合覆盖方案为阶段四列出的全部存储面：应用、系统统计、VCE、VMM、知识库、插件与技能。
+/// 该集合覆盖方案为阶段四列出的全部存储面：应用、系统统计、VMM、知识库、插件与技能。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum LogicalDatabase {
     /// Application state (projects, sessions, preferences, credentials).
@@ -72,9 +72,6 @@ pub enum LogicalDatabase {
     /// Host-owned provider usage and system statistics.
     /// 宿主持有的 Provider 用量与系统统计。
     SystemStatistics,
-    /// VCE metadata and vector tables.
-    /// VCE 元数据与向量表。
-    VceMetadata,
     /// VMM metadata and lexical index.
     /// VMM 元数据与词法索引。
     VmmMetadata,
@@ -92,11 +89,10 @@ pub enum LogicalDatabase {
 impl LogicalDatabase {
     /// Returns every logical database, so callers can iterate the whole set without drifting.
     /// 返回全部逻辑数据库，使调用方无需自行维护而遍历完整集合。
-    pub fn all() -> [Self; 7] {
+    pub fn all() -> [Self; 6] {
         [
             Self::AppState,
             Self::SystemStatistics,
-            Self::VceMetadata,
             Self::VmmMetadata,
             Self::KnowledgeBase,
             Self::PluginStorage,
@@ -110,7 +106,6 @@ impl LogicalDatabase {
         match self {
             Self::AppState => "app-state",
             Self::SystemStatistics => "system-statistics",
-            Self::VceMetadata => "vce-metadata",
             Self::VmmMetadata => "vmm-metadata",
             Self::KnowledgeBase => "knowledge-base",
             Self::PluginStorage => "plugin-storage",
@@ -124,13 +119,13 @@ impl LogicalDatabase {
 ///
 /// Why a directory rather than a logical name / 为何是目录而不是逻辑名:
 ///
-/// LanceDB databases are not a fixed set. The application has one, every VCE project has its own,
-/// and every plugin has its own, so the number of databases is unbounded and cannot be enumerated by
+/// LanceDB databases are not a fixed set. The application and individual plugins own separate
+/// directories, so the number of databases is unbounded and cannot be enumerated by
 /// a `LogicalDatabase` variant. What is stable is the rule the controller used and that the plan
 /// keeps: one subsystem derives one directory and the engine holds its tables directly in it. The
 /// directory itself is therefore the identity, and it is the cache key.
 ///
-/// LanceDB 数据库不是固定集合。应用有一个，每个 VCE 项目各有一个，每个插件也各有一个，因此数据库
+/// LanceDB 数据库不是固定集合。应用有一个，每个插件也各有一个，因此数据库
 /// 数量无界，无法用 `LogicalDatabase` 变体枚举。稳定的是控制器曾使用且方案保留的规则：一个子系统派生
 /// 一个目录，引擎把表直接放在其中。因此目录本身就是身份，也是缓存键。
 ///
@@ -197,15 +192,12 @@ impl LanceDbDirectoryBinding {
 ///
 /// Why the file, not only a logical name / 为何是文件，而不只是逻辑名:
 ///
-/// [`LogicalDatabase`] enumerates the host's **singular** databases, and that is all it can do. Two
-/// of the seven surfaces the plan names are not singular: the knowledge base keeps one relational
-/// database and one display database **per library**, VCE keeps one per project, and plugin and
-/// skill storage keep one per instance. There is no fixed set to enumerate, so those bindings are
-/// keyed by the file the subsystem derived.
-///
-/// [`LogicalDatabase`] 枚举宿主**单例**数据库，这也是它唯一能做的事。方案点名的七个存储面中有两个并非
-/// 单例：知识库**每个资料库**各有一个关系库与一个显示库，VCE 每个项目一个，插件与技能存储每个实例一个。
-/// 没有固定集合可枚举，因此这些绑定以子系统派生的文件为键。
+/// [`LogicalDatabase`] enumerates the host's singular databases; other surfaces own files per instance.
+/// [`LogicalDatabase`] 枚举宿主单例数据库；其他存储面按实例持有文件。
+/// Knowledge bases own relational and display databases per library; plugins and skills own files per instance.
+/// 知识库每库持有关系库和显示库；插件与技能按实例持有文件。
+/// Such bindings are keyed by subsystem-derived files, with no fixed set to enumerate.
+/// 此类绑定以子系统派生的文件为键，无法枚举固定集合。
 ///
 /// Why the options travel with the binding / 为何选项随绑定一起传递:
 ///
@@ -734,11 +726,11 @@ pub struct LocalDatabaseRuntime {
     /// 每个物理目录一个 LanceDB 引擎，并记录打开它的绑定。
     ///
     /// The key is the resolved directory rather than a subsystem name because LanceDB databases are
-    /// unbounded — one per VCE project and one per plugin. Keying by directory is also what upholds
+    /// unbounded — one per knowledge library and one per plugin. Keying by directory is also what upholds
     /// the engine's own invariant: a second engine over one directory would hold a second set of
     /// per-table locks for the same tables.
     ///
-    /// 键是解析后的目录而非子系统名，因为 LanceDB 数据库数量无界——每个 VCE 项目一个、每个插件一个。
+    /// 键是解析后的目录而非子系统名，因为 LanceDB 数据库数量无界——每个知识库一个、每个插件一个。
     /// 按目录键控也维护了引擎自身的不变量：同一目录上的第二个引擎会为相同的表持有第二套表级锁。
     /// The owning runtime is cached beside the directory, not only the engine it produced.
     /// 与目录一同缓存的是**拥有者运行时**，而不仅是它产出的引擎。
@@ -759,12 +751,12 @@ pub struct LocalDatabaseRuntime {
     /// Bindings registered under a caller-chosen name.
     /// 以调用方选择的名称登记的绑定。
     ///
-    /// Subsystems whose databases are unbounded — one per knowledge base, per VCE project, per plugin
+    /// Subsystems whose databases are unbounded — one per knowledge base, per plugin
     /// — address them through an identity they generate themselves rather than through a
     /// [`LogicalDatabase`] variant. This registry is what turns such an identity back into the binding,
     /// so a helper that only holds the identity can reach the engine without eagerly opening the
     /// database and taking its lock (see the lock constraint).
-    /// 数据库数量无界的子系统——每个知识库、每个 VCE 项目、每个插件各一个——通过它们自行生成的身份而非
+    /// 数据库数量无界的子系统——每个知识库、每个插件各一个——通过它们自行生成的身份而非
     /// [`LogicalDatabase`] 变体来寻址这些数据库。本注册表把这样的身份还原为绑定，因此只持有身份的助手无需
     /// 提前打开数据库并取得其锁即可抵达引擎（参见锁约束）。
     named: Arc<Mutex<HashMap<String, SqliteFileBinding>>>,
@@ -1669,9 +1661,9 @@ impl LocalDatabaseRuntime {
             opened.clear();
         }
 
-        // The engine registry also contains unbounded named databases for skills, plugins, VCE and knowledge
+        // The engine registry also contains unbounded named databases for skills, plugins and knowledge
         // bases. Clearing only fixed logical paths would retain their ownership locks after shutdown.
-        // 引擎注册表还包含技能、插件、VCE 与知识库的无界命名数据库。若只清理固定逻辑路径，关闭后仍会保留
+        // 引擎注册表还包含技能、插件与知识库的无界命名数据库。若只清理固定逻辑路径，关闭后仍会保留
         // 它们的所有权锁。
         self.sqlite.close_all_databases();
 
@@ -2001,7 +1993,7 @@ mod tests {
         ))
         .expect("runtime should open");
 
-        assert!(runtime.connect(LogicalDatabase::VceMetadata).is_err());
+        assert!(runtime.connect(LogicalDatabase::VmmMetadata).is_err());
     }
 
     #[test]
@@ -2045,16 +2037,16 @@ mod tests {
         ))
         .expect("runtime should open");
 
-        let path = directory.path().join("vce.sqlite3");
+        let path = directory.path().join("vmm.sqlite3");
         runtime
-            .bind(LogicalDatabase::VceMetadata, path.clone())
+            .bind(LogicalDatabase::VmmMetadata, path.clone())
             .expect("first bind");
         runtime
-            .bind(LogicalDatabase::VceMetadata, path.clone())
+            .bind(LogicalDatabase::VmmMetadata, path.clone())
             .expect("re-binding the same path must be a no-op");
 
         let other = directory.path().join("other.sqlite3");
-        match runtime.bind(LogicalDatabase::VceMetadata, other.clone()) {
+        match runtime.bind(LogicalDatabase::VmmMetadata, other.clone()) {
             Err(LocalDatabaseError::BindingConflict {
                 existing,
                 requested,
@@ -2070,7 +2062,7 @@ mod tests {
         // 被拒绝的改绑不得生效。
         assert_eq!(
             runtime
-                .path_for(LogicalDatabase::VceMetadata)
+                .path_for(LogicalDatabase::VmmMetadata)
                 .expect("path"),
             path
         );

@@ -7,7 +7,6 @@ export type ComposerSettingsSection =
   | "style"
   | "answer"
   | "knowledge"
-  | "semantic"
   | "tools"
   | "thinking"
   | "memory";

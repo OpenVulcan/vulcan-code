@@ -780,34 +780,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
     // checks the live generation and derives ownership from the trusted execution session.
     // 浏览器工具仅在精确插件启用时注册；每次调用仍核对实时代次并从可信执行会话确定归属。
     request.native_browser_runtime = crate::browser::native_browser_runtime(state.clone())?;
-    // vceProjectReady binds tool visibility to both the exact project and the current global model contract.
-    // vceProjectReady 将工具可见性同时绑定到精确项目与当前全局模型契约。
-    let vce_project_ready = request
-        .project_id
-        .as_deref()
-        .is_some_and(|project_id| crate::vce::vce_project_tool_enabled(state, project_id));
-    // vceRetrievalHandler freezes the current process manager while retaining a live fail-closed callback.
-    // vceRetrievalHandler 冻结当前进程管理器，同时保留实时失败关闭回调。
-    request.vce_retrieval_handler = if vce_project_ready {
-        let manager = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?
-            .vce_runtime
-            .clone();
-        manager.map(|manager| crate::vce::vce_retrieval_handler(state.clone(), manager))
-    } else {
-        None
-    };
-    if request.vce_retrieval_handler.is_none()
-        && !request
-            .tool_request_hidden_tool_ids
-            .iter()
-            .any(|tool_id| tool_id == vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID)
-    {
-        request.tool_request_hidden_tool_ids.push(String::from(
-            vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID,
-        ));
-    }
+
     let goal_context_started_at = current_unix_millis_value();
     match purpose {
         PromptContinuationPurpose::Business => {
@@ -1701,9 +1674,9 @@ fn abandon_failed_webui_prompt_vmm_turn(
 /// Shapes one main-session request from the creation-frozen dedicated profile, if any.
 /// 依据创建时冻结的专职配置塑形主会话请求（如有）。
 ///
-/// Dedicated sessions never use collaboration, subagents, goals, plans, VMM memory or the
-/// semantic engine; tool admission and prompt composition read `dedicated_session`.
-/// 专职会话从不使用协作、子代理、目标、计划、VMM 记忆或语意引擎；工具准入与提示词组合读取
+/// Dedicated sessions never use collaboration, subagents, goals, plans or VMM memory;
+/// tool admission and prompt composition read `dedicated_session`.
+/// 专职会话从不使用协作、子代理、目标、计划与 VMM 记忆；工具准入与提示词组合读取
 /// `dedicated_session`。
 fn apply_dedicated_session_shaping(
     handle: &crate::session_runtime_registry_v1::SessionHandle,
@@ -1725,7 +1698,6 @@ fn apply_dedicated_session_shaping(
     request.native_goal_runtime = None;
     request.session_goal_context = None;
     request.session_plan_context = None;
-    request.vce_retrieval_handler = None;
     request.vmm_runtime_ready = false;
     request.runtime_policy.vmm_enabled = false;
     request.runtime_policy.memory_recall_enabled = false;

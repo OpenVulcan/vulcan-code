@@ -213,11 +213,6 @@ export function resolveV1ToolDomainPresentation(tool: ToolCallEvent, t: (key: Tr
       }
       break;
     }
-    case "codebase_retrieval":
-      summary = textField(tool.input, "information_request");
-      if (Array.isArray(object?.hits)) addSection(sections, t("toolDomain.code.hits"), object.hits.map((hit) => fields(domainObject(hit), ["path", "startLine", "endLine", "content", "source", "score"])));
-      addSection(sections, t("toolDomain.code.degradations"), object?.degradations);
-      break;
     case "submit_plan": {
       // artifact is the accepted plan body captured at the write boundary.
       // artifact 是在写入边界捕获的已接受计划正文。

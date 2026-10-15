@@ -29,8 +29,8 @@
   `progressId` 时，服务以 `dedicatedPromptDraftProgress` 事件（主题 `dedicated.prompt_draft.progress`）推送
   节流后的思考与输出增量；进度只用于展示，最终结果以 RPC 响应为准。
 - `tool_access`：`none` 不开放通用工具（仅保留创建时启用的知识库工具），也不注入提示词技能、工作区
-  信息与权限模式通知；`standard` 开放通用工具但排除子代理、协作、Goal、Plan、VMM 记忆与语意检索工具。
-  两种方式都不使用子代理、上下文压缩（自动压缩跳过，手动压缩报错）、VMM 记忆与语意引擎。
+  信息与权限模式通知；`standard` 开放通用工具但排除子代理、协作、Goal、Plan 与 VMM 记忆工具。
+  两种方式都不使用子代理、上下文压缩（自动压缩跳过，手动压缩报错）与 VMM 记忆。
   知识库四工具为 `knowledge_list`、`knowledge_read`、`knowledge_search`、`knowledge_write`；两档均保留创建时启用库
   所允许的工具，全部库仅浏览时不注册搜索。库模式决定检索方式，会话不保存检索策略；写入仍实时复核授权。
   内容与生命周期边界见 [AI 管理知识库](knowledge-base.md)，修改工具过滤或选择字段时同步两份契约及测试。
@@ -98,7 +98,7 @@
   拒绝的操作。转录中的用户消息编辑与回合分叉按钮同样不显示（编辑重生成与分叉在创建后即冻结）。
 - **快速指令**：服务目录只提供稳定 `id` 与 `command`，说明文案为共享键 `composer.slash.<id>`。
   `composerSlashCommandsForSession`（`components/composer/composer-model.ts`）按会话种类筛选：专职会话隐藏
-  被冻结或不适用的指令（`/compact`、`/plan`、`/goal`、`/style`、`/answer`、`/knowledge`、`/semantic`、
+  被冻结或不适用的指令（`/compact`、`/plan`、`/goal`、`/style`、`/answer`、`/knowledge`、
   `/memory`），`/skill` 与 `/skills` 仅在 `standard` 工具开放方式下显示；未知 `id` 一律不显示。
 - **侧栏标记**：专职会话行在标题前显示 `Bot` 图标，提示文字为 `composer.draft.kindDedicated`。
 - **浮动助手**（`components/assistant/`）：记忆锁定条在锁定后提供“转换为助手”并弹出命名对话框；转换的会话

@@ -2,7 +2,6 @@ import { useI18n } from "@/i18n"
 import { PageEmptyState } from "@/components/page"
 import type { WorkbenchSnapshot } from "@/types"
 import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mount-panel"
-import { ContextEngineArea } from "@/components/features/context-engine/context-engine-area"
 import { KnowledgeBaseArea } from "@/components/features/knowledge/knowledge-base-area"
 import { McpSettingsArea } from "@/components/features/settings/mcp-settings-area"
 
@@ -75,8 +74,6 @@ export function SkillsArea(props: {
         />
       ) : props.activeTab === "mcp-servers" ? (
         <McpSettingsArea actions={props.skillActions} servers={props.workbench.mcpServers ?? []} onOpenDiagnostics={props.onOpenDiagnostics} />
-      ) : props.activeTab === "context-engine" ? (
-        <ContextEngineArea workbenchRevision={props.workbench.revision} />
       ) : props.activeTab === "knowledge" ? (
         <KnowledgeBaseArea projects={props.workbench.projects} />
       ) : null}

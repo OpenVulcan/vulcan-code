@@ -145,8 +145,6 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         pending_prompt_process_mirrors: BTreeMap::new(),
         agent_runtime: None,
         native_vmm_maintenance: None,
-        vce_runtime: None,
-        vce_watcher: None,
         workspace_watcher: None,
         service_runtime: None,
         webui_service_discovery: None,

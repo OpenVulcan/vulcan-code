@@ -55,8 +55,8 @@ pub use agent_runtime::{
     ExecutionPromptPurpose, ExecutionProviderVisibleAgentMessage, ExecutionRunReport,
     ExecutionSessionGoalContext, ExecutionStreamEvent, RuntimeFoundation,
     RuntimePromptIntervention, RuntimePromptInterventionError, RuntimeSkillKind,
-    TransientReasoningStatus, TransientReasoningStatusKind, VceRetrievalHandler,
-    ensure_runtime_defaults, stream_runtime_run, stream_runtime_run_with_intervention,
+    TransientReasoningStatus, TransientReasoningStatusKind, ensure_runtime_defaults,
+    stream_runtime_run, stream_runtime_run_with_intervention,
     stream_runtime_run_with_intervention_and_plugins,
     stream_runtime_run_with_intervention_plugins_and_public_ai,
 };

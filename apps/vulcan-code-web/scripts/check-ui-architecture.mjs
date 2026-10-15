@@ -30,7 +30,6 @@ const oversizedComponentCeilings = new Map([
   ["components/conversation/chat-area.tsx#ChatArea", 496],
   ["components/conversation/conversation-workspace.tsx#ConversationWorkspace", 471],
   ["components/features/browser/browser-area.tsx#BrowserArea", 753],
-  ["components/features/code-context/code-context-area.tsx#CodeContextArea", 423],
   ["components/features/memory/vmm-data-page.tsx#VmmDataPage", 472],
   ["components/features/memory/vmm-identity-project-page.tsx#VmmIdentityProjectPage", 411],
   ["components/features/memory/vmm-native-memory-records.tsx#VmmNativeMemoryRecords", 492],

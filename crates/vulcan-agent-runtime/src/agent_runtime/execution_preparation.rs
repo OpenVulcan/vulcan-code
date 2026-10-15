@@ -41,13 +41,10 @@ use vulcan_tools_manager::{
 };
 
 pub(crate) mod captured_child_tool_admission;
-#[path = "execution_preparation/codebase_tool_routing_prompt.rs"]
-mod codebase_tool_routing_prompt;
 mod dedicated_session;
 #[path = "execution_preparation/tool_exposure.rs"]
 mod tool_exposure;
 
-use codebase_tool_routing_prompt::codebase_tool_routing_prompt;
 use tool_exposure::{
     filter_resolved_tool_set_by_tool_exposure, filter_vulcan_plugin_tool_groups,
     resolve_execution_tool_exposure,
@@ -348,7 +345,6 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         request.controller_runtime.clone(),
         request.native_goal_runtime.clone(),
         request.knowledge_access.clone(),
-        request.vce_retrieval_handler.clone(),
         tool_exposure.native_tool_ids.clone(),
         tool_exposure.luaskills_tools.clone(),
         implicit_luaskills,
@@ -440,14 +436,6 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
 
     if let Some(reasoning_note) = model_blueprint.reasoning.note.as_ref() {
         warnings.push(reasoning_note.clone());
-    }
-
-    if let Some(segment) = codebase_tool_routing_prompt(&resolved_tools.descriptors) {
-        additional_developer_segments.push(AdditionalPromptSegment::dynamic(
-            "Codebase Tool Routing",
-            segment,
-            "Final provider-visible codebase tool contract",
-        ));
     }
 
     let temperature = if model_blueprint.supports_temperature() {

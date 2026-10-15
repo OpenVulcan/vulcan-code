@@ -19,6 +19,25 @@ mod knowledge_tests;
 /// 等待既有写入者或读取者的最长时间；锁重试不会无限等待。
 const LOCK_WAIT: Duration = Duration::from_secs(5);
 
+/// Exact retired source columns verified against its production DDL and the existing Debug database.
+/// 对照退役前生产建表语句与既有 Debug 库核实的准确列清单。
+const RETIRED_PROJECT_SETTINGS_COLUMNS: &[(&str, &str)] = &[
+    ("project_id", "TEXT"),
+    ("enabled", "INTEGER"),
+    ("revision", "INTEGER"),
+    ("max_file_bytes", "INTEGER"),
+    ("extra_ignore_patterns_json", "TEXT"),
+    ("allow_query_rewrite", "INTEGER"),
+    ("allow_rerank", "INTEGER"),
+    ("embedding_max_concurrency", "INTEGER"),
+    ("query_max_concurrency", "INTEGER"),
+    ("max_results", "INTEGER"),
+    ("max_context_chars", "INTEGER"),
+    ("update_mode", "TEXT"),
+    ("auto_update_min_interval_seconds", "INTEGER"),
+    ("updated_at", "TEXT"),
+];
+
 /// One actual SQLite object; SQL is obtained from an initialized authoritative schema.
 /// 一个实际 SQLite 对象；SQL 来自已初始化的权威结构。
 #[derive(Clone, PartialEq, Eq)]
@@ -38,8 +57,8 @@ struct SchemaObject {
 /// 计划重建的表、更新的索引及精确保留的列映射。
 #[derive(Default)]
 struct Changes {
-    /// Explicitly retired whole tables retained only in the verified pre-sync backup.
-    /// 明确废弃整表，仅保留在已验证同步前备份中。
+    /// Explicitly retired tables whose original rows remain available only in the verified backup.
+    /// 明确退役的表，其原始记录仅保留在已经验证的备份中。
     retired_tables: Vec<String>,
     /// Existing or new tables whose authoritative definition differs.
     /// 与权威定义不同的既有表或新表。
@@ -150,10 +169,7 @@ fn synchronize(path: &Path, apply: bool) -> Result<Option<PathBuf>, String> {
         return Ok(None);
     }
     println!("Tables to synchronize: {}", changes.tables.join(", "));
-    println!(
-        "Retired tables to preserve in backup: {}",
-        changes.retired_tables.join(", ")
-    );
+    println!("Tables to retire: {}", changes.retired_tables.join(", "));
     println!("Indexes to synchronize: {}", changes.indexes.join(", "));
     if !apply {
         return Err("Schema drift detected; run the independent command with --apply.".into());
@@ -261,12 +277,45 @@ fn plan(
     let mut changes = Changes::default();
     // The removed import pipeline has no replacement counters; never reinterpret its rows as new operations.
     // 已移除导入流水线不存在替代计数；绝不将其行重解释为新操作。
-    if let Some(import_jobs) = current.get("knowledge_import_jobs") {
+    if let Some((import_name, import_jobs)) = current
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("knowledge_import_jobs"))
+    {
         if desired.contains_key("knowledge_import_jobs") || import_jobs.kind != "table" {
             return Err("Unexpected knowledge import retirement schema.".into());
         }
         validate_retired_knowledge_jobs(connection)?;
-        changes.retired_tables.push("knowledge_import_jobs".into());
+        changes.retired_tables.push(import_name.clone());
+    }
+    // SQLite table identities ignore ASCII letter case, including names preserved by foreign-key metadata.
+    // SQLite 表身份不区分 ASCII 大小写，外键元数据保留的名称也遵守此规则。
+    if let Some((retired_name, retired)) = current
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("project_vce_settings"))
+    {
+        if retired.kind != "table" {
+            return Err("The retired project settings object must be a table.".into());
+        }
+        // Compare the complete source shape; subsets and future columns are not inferred historical versions.
+        // 比较完整源结构，不把列子集或未来新增列推测为受支持历史版本。
+        let mut actual: BTreeMap<_, _> = columns(connection, retired_name)?.into_iter().collect();
+        // This optional integer marker is the only separately verified historical addition.
+        // 此可选整数标记是唯一已经单独核实的历史新增列。
+        if let Some(kind) = actual.remove("migrated_from_codebase_memory")
+            && kind != "INTEGER"
+        {
+            return Err("The retired project marker requires its verified integer type.".into());
+        }
+        // Expected columns have one definition and are compared without depending on declaration order.
+        // 预期列只有一处定义，比较不依赖声明顺序。
+        let expected = RETIRED_PROJECT_SETTINGS_COLUMNS
+            .iter()
+            .map(|(name, kind)| (name.to_string(), kind.to_string()))
+            .collect();
+        if actual != expected {
+            return Err("Retired project settings require the verified column mapping; no data was removed.".into());
+        }
+        changes.retired_tables.push(retired_name.clone());
     }
     if desired
         .values()
@@ -305,12 +354,11 @@ fn plan(
                     }
                     continue;
                 }
-                // These two retired flags were verified in local Debug storage and have no current readers.
-                // 这两个废弃标志已在本地 Debug 存储中查证，当前源码已无读取者。
+                // This retired project flag was verified in local Debug storage and has no current readers.
+                // 此废弃项目标志已经在本地 Debug 存储中查证，当前源码已无读取者。
                 if !matches!(
                     (name.as_str(), column.as_str()),
                     ("projects", "codebase_memory_enabled")
-                        | ("project_vce_settings", "migrated_from_codebase_memory")
                 ) {
                     return Err(format!(
                         "Unmapped existing column {name}.{column}; no data was removed."
@@ -354,6 +402,31 @@ fn plan(
         }
     }
     for (name, object) in current {
+        if !changes.retired_tables.is_empty()
+            && object.kind == "table"
+            && !changes.retired_tables.contains(name)
+        {
+            // Inspect SQLite's own foreign-key metadata before retiring a table referenced by newer work.
+            // 在退役可能被更新工作引用的表之前，检查 SQLite 自身的外键元数据。
+            let mut statement =
+                sql(connection.prepare("SELECT \"table\" FROM pragma_foreign_key_list(?1)"))?;
+            // Referenced names contain structural metadata only; no row values enter diagnostics.
+            // 引用名称仅包含结构元数据，不将记录值写入诊断。
+            let references = sql(
+                sql(statement.query_map([name], |row| row.get::<_, String>(0)))?
+                    .collect::<Result<Vec<_>, _>>(),
+            )?;
+            if references.iter().any(|table| {
+                changes
+                    .retired_tables
+                    .iter()
+                    .any(|retired| retired.eq_ignore_ascii_case(table))
+            }) {
+                return Err(format!(
+                    "Dependent table {name} requires an explicit mapping before retiring tables."
+                ));
+            }
+        }
         // Views and triggers can reference another table; their dependencies require explicit mapping.
         // 视图和触发器可能引用其他表；其依赖关系需要显式映射。
         if (!changes.tables.is_empty() || !changes.retired_tables.is_empty())
@@ -363,29 +436,16 @@ fn plan(
                 "Dependent object {name} requires an explicit mapping before rebuilding tables."
             ));
         }
+        // Only the verified import-job index may disappear with its retired table.
+        // 只有已核实的导入任务索引可以随其退役表一同移除。
         if changes.retired_tables.contains(&object.table)
             && object.kind != "table"
-            && !(object.kind == "index" && name == "idx_knowledge_import_jobs_library")
+            && !(object.kind == "index"
+                && name.eq_ignore_ascii_case("idx_knowledge_import_jobs_library"))
         {
             return Err(format!(
                 "Unmanaged retired-table dependency {name} requires an explicit mapping."
             ));
-        }
-        if object.kind == "table" && !changes.retired_tables.contains(name) {
-            for retired in &changes.retired_tables {
-                // Reject even empty dependent tables instead of publishing a dangling foreign-key definition.
-                // 即使依赖表为空也拒绝，避免发布悬空外键定义。
-                let dependent: bool = sql(connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list(?1) WHERE \"table\"=?2)",
-                    [name, retired],
-                    |row| row.get(0),
-                ))?;
-                if dependent {
-                    return Err(format!(
-                        "Foreign-key dependency {name} on retired {retired} requires an explicit mapping."
-                    ));
-                }
-            }
         }
         if changes.tables.contains(&object.table)
             && object.kind != "table"

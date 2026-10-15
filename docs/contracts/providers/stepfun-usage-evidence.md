@@ -44,4 +44,4 @@
 - 发现工作区清单使用 CRLF，而目录内 `.gitattributes` 要求 LF；若直接提交，Git 转换后的字节将与原索引不符。因此按现有仓库规则统一为 LF，再用仓库 CLI 重建索引，保留本次尚未提交的索引修订 77；其他供应商条目没有变化。
 - 重建后 `validate-all` 对十九份清单及完整性索引校验通过，并再次执行 `make.ps1 sync`。
 - 最终 StepFun 清单为 28817 字节，源文件及同步副本 SHA-256 均为 `7d301cf2264e1064f38f4760cb409b98fdff7ec81ec5f5736f65b62db72d7792`；最终索引两份副本 SHA-256 均为 `d717a97f556e03f0f7e1eeaf032fa9ceffff40e552fd5e30d973ba19a80c9c6e`。上节摘要记录的是换行规范化之前的验证结果。
-- 定向测试仍报告两处现有未使用导入警告，位于本次未修改的 `context_engine_embedding_policy.rs` 和 `runtime/selection/tests/accounts.rs`；未将这些无关修改混入此次提交。
+- 当时的定向测试曾报告两处未使用导入警告；此项只记录该次验证边界，不代表当前构建状态。其中代码导航策略模块现已退役，见[代码导航契约](../code-navigation.md)。

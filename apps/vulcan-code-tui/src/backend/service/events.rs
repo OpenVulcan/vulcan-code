@@ -206,14 +206,19 @@ mod tests {
             .unwrap();
             socket
                 .send(Message::text(
-                    serde_json::json!({"kind":"vceJobChanged","payload":{"projectId":"demo-project"}})
+                    serde_json::json!({"kind":"workspaceGitChanged","payload":{"projectId":"demo-project"}})
                         .to_string(),
                 ))
                 .unwrap();
-            let event = ServiceEvent::VceJobChanged(Box::new(super::super::test_support::vce_job(
-                "demo-project",
-                2,
-            )));
+            // Event.
+            // 由共享协议构造的合成工作区事件。
+            let event = ServiceEvent::WorkspaceGitChanged(Box::new(
+                vulcan_service_api::WorkspaceGitChangedEvent {
+                    project_id: Some("demo-project".to_string()),
+                    workspace_path: "D:/demo".to_string(),
+                    repository_keys: vec!["demo-repository".to_string()],
+                },
+            ));
             socket
                 .send(Message::text(serde_json::to_string(&event).unwrap()))
                 .unwrap();
@@ -229,13 +234,13 @@ mod tests {
         // 不符合共享类型的帧携带类别被拒绝，而不是被丢弃。
         let frame = input.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(
-            matches!(frame,Input::Rejected{generation:7,kind,detail} if kind == "vceJobChanged" && detail.contains("missing field"))
+            matches!(frame,Input::Rejected{generation:7,kind,detail} if kind == "workspaceGitChanged" && detail.contains("missing field"))
         );
         // Frame.
         // 当前事件帧。
         let frame = input.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(
-            matches!(frame,Input::Service{generation:7,event} if matches!(&*event, ServiceEvent::VceJobChanged(job) if job.sequence == 2))
+            matches!(frame,Input::Service{generation:7,event} if matches!(&*event, ServiceEvent::WorkspaceGitChanged(event) if event.workspace_path == "D:/demo"))
         );
         assert!(matches!(
             input.recv_timeout(Duration::from_secs(2)).unwrap(),

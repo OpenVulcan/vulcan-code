@@ -36,7 +36,6 @@ fn build_task_start_test_runtime_context(
         ExecutionPreparationRequest {
             session_id: parent_session_id,
             session_storage_directory: None,
-            vce_retrieval_handler: None,
             execution_scope: ExecutionScope::MainSession {
                 session_id: SessionNodeId::from(parent_session_id),
             },

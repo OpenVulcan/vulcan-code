@@ -17,12 +17,6 @@ export interface ProjectSummary {
   // Optional icon key selected for the project.
   // 项目选择的可选图标键。
   iconKey?: string | null;
-  // Whether the native code-semantic index is enabled for this project.
-  // 此项目是否启用了原生代码语义索引。
-  vceEnabled?: boolean;
-  // Persisted optimistic VCE settings revision.
-  // 持久化 VCE 乐观设置修订号。
-  vceSettingsRevision?: number;
 }
 
 // ProjectDirectoryEntrySummary describes one child directory returned by the service.

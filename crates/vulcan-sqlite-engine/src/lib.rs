@@ -14,7 +14,7 @@
 //! - It does not accept an "arbitrary relative path under a space root" style input.
 //! - It does not read Vulcan configuration files.
 //! - It does not launch out-of-process threads, ports or network services.
-//! - It does not carry frontend state, VCE job state or business generations.
+//! - It does not carry frontend state, consumer job state or business generations.
 //! - It returns structured local errors, never gRPC status codes.
 //!
 //! The `unsafe_code` lint is relaxed in this crate for two reasons: the FTS5 Jieba tokenizer, whose

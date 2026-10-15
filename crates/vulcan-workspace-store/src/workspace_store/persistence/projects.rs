@@ -12,8 +12,8 @@ use super::*;
 ///
 /// # Returns / 返回值
 ///
-/// Success after the project and its initial semantic settings commit together, or an explicit error.
-/// 项目及其初始语义设置共同提交后返回成功，否则返回显式错误。
+/// Success after the project commits successfully, or an explicit error.
+/// 项目提交成功后返回成功，否则返回显式错误。
 async fn upsert_active_project(
     host_runtime: &HostRuntimeHandle,
     project: &TaskProjectSummary,
@@ -25,13 +25,6 @@ async fn upsert_active_project(
     // sort_order 使用受检查转换，避免项目顺序在宽 usize 宿主上发生截断。
     let sort_order = i64::try_from(project.order)
         .map_err(|_| String::from("Failed to write the active project: the project order exceeds the SQLite integer range."))?;
-    // Validate and encode both rows before the engine can commit any project metadata.
-    // 在宿主运行时可能提交任何项目元数据之前，完成两条记录的校验和编码。
-    let vce_values = project_persistence_sql_values(&project_vce_settings_params(
-        &project.id,
-        &project.vce,
-        now.clone(),
-    )?)?;
     // Preserve the existing typed field order, including SQL NULL for absent icon overrides.
     // 保持既有强类型字段顺序，包括缺失图标覆盖对应的 SQL NULL。
     let project_values = project_persistence_sql_values(&[
@@ -72,23 +65,6 @@ ON CONFLICT(id) DO UPDATE SET
     archived = excluded.archived,
     sort_order = excluded.sort_order,
     updated_at = excluded.updated_at;
-INSERT INTO project_vce_settings (
-    project_id,
-    enabled,
-    revision,
-    max_file_bytes,
-    extra_ignore_patterns_json,
-    allow_query_rewrite,
-    allow_rerank,
-    embedding_max_concurrency,
-    query_max_concurrency,
-    max_results,
-    max_context_chars,
-    updated_at,
-    update_mode,
-    auto_update_min_interval_seconds
-) VALUES ({vce_values})
-ON CONFLICT(project_id) DO NOTHING;
 COMMIT;
 "#,
     );
@@ -99,15 +75,13 @@ COMMIT;
         vec![],
     )
     .await
-    .map_err(|error| {
-        format!("Failed to write the active project and VCE settings transaction: {error}")
-    })?;
+    .map_err(|error| format!("Failed to write the active project transaction: {error}"))?;
 
     Ok(())
 }
 
-/// Encode the exact scalar subset produced by the project and VCE parameter builders.
-/// 编码项目及 VCE 参数构建器产生的精确标量子集。
+/// Encode the exact scalar subset produced by the project parameter builder.
+/// 编码项目参数构建器产生的精确标量子集。
 /// `parameters` contains ordered integers, text, or NULL; returns SQL values or an explicit type error.
 /// `parameters` 包含有序整数、文本或 NULL；返回 SQL 值，或明确的类型错误。
 fn project_persistence_sql_values(parameters: &[SqliteValue]) -> Result<String, String> {
@@ -130,52 +104,6 @@ fn project_persistence_sql_values(parameters: &[SqliteValue]) -> Result<String, 
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|values| values.join(", "))
-}
-
-/// Encodes one validated project VCE settings row into stable SQLite parameters.
-/// 将一条经过校验的项目 VCE 设置记录编码为稳定 SQLite 参数。
-fn project_vce_settings_params(
-    project_id: &str,
-    settings: &ProjectVceSettings,
-    updated_at: String,
-) -> Result<Vec<SqliteValue>, String> {
-    settings.validate()?;
-    let revision = i64::try_from(settings.revision)
-        .map_err(|_| String::from("The VCE settings revision exceeds the SQLite integer range."))?;
-    let max_file_bytes = i64::try_from(settings.max_file_bytes)
-        .map_err(|_| String::from("The VCE maximum file bytes exceed the SQLite integer range."))?;
-    let embedding_max_concurrency =
-        i64::try_from(settings.embedding_max_concurrency).map_err(|_| {
-            String::from("The VCE embedding concurrency exceeds the SQLite integer range.")
-        })?;
-    let query_max_concurrency = i64::try_from(settings.query_max_concurrency)
-        .map_err(|_| String::from("The VCE query concurrency exceeds the SQLite integer range."))?;
-    let max_results = i64::try_from(settings.max_results)
-        .map_err(|_| String::from("The VCE result count exceeds the SQLite integer range."))?;
-    let max_context_chars = i64::try_from(settings.max_context_chars).map_err(|_| {
-        String::from("The VCE context character count exceeds the SQLite integer range.")
-    })?;
-    let ignore_patterns = serde_json::to_string(&settings.extra_ignore_patterns)
-        .map_err(|error| format!("Failed to serialize the VCE ignore rules: {error}"))?;
-    Ok(vec![
-        SqliteValue::Text(project_id.to_owned()),
-        SqliteValue::Integer(i64::from(settings.enabled)),
-        SqliteValue::Integer(revision),
-        SqliteValue::Integer(max_file_bytes),
-        SqliteValue::Text(ignore_patterns),
-        SqliteValue::Integer(i64::from(settings.allow_query_rewrite)),
-        SqliteValue::Integer(i64::from(settings.allow_rerank)),
-        SqliteValue::Integer(embedding_max_concurrency),
-        SqliteValue::Integer(query_max_concurrency),
-        SqliteValue::Integer(max_results),
-        SqliteValue::Integer(max_context_chars),
-        SqliteValue::Text(updated_at),
-        SqliteValue::Text(match settings.update_mode {
-            vulcan_workbench_model::ProjectVceUpdateMode::Manual => String::from("manual"),
-            vulcan_workbench_model::ProjectVceUpdateMode::Automatic => String::from("automatic"),
-        }),
-        SqliteValue::Integer(i64::from(settings.auto_update_min_interval_seconds)),
-    ])
 }
 
 /// Identity row returned by one guarded project mutation.
@@ -877,81 +805,6 @@ RETURNING id;
     validate_project_mutation_identity_rows(project_id, &rows, "rename the project")
 }
 
-/// Replaces one active project's VCE settings under an exact optimistic revision.
-/// 在精确乐观修订号保护下替换一个活动项目的 VCE 设置。
-///
-/// # Parameters
-/// 参数
-/// `host_runtime` owns the authoritative application SQLite binding.
-/// `host_runtime` 持有权威应用 SQLite 绑定。
-/// `project_id` is the exact active project identity.
-/// `project_id` 是精确的活动项目身份。
-/// `expected_revision` is the currently observed project settings revision.
-/// `expected_revision` 是当前观察到的项目设置修订号。
-/// `settings` contains the complete next settings revision.
-/// `settings` 包含完整的下一版设置。
-///
-/// # Returns
-/// 返回值
-/// Success only after one exact active project row is updated.
-/// 仅在一个精确活动项目记录完成更新后返回成功。
-pub async fn persist_project_vce_settings(
-    host_runtime: HostRuntimeHandle,
-    project_id: &str,
-    expected_revision: u64,
-    settings: &ProjectVceSettings,
-) -> Result<(), String> {
-    validate_project_mutation_id(project_id, "update the VCE project settings")?;
-    settings.validate()?;
-    let expected_next = expected_revision
-        .checked_add(1)
-        .ok_or_else(|| String::from("The VCE settings revisions are exhausted."))?;
-    if settings.revision != expected_next {
-        return Err(String::from(
-            "VCE settings must increment the revision by exactly one.",
-        ));
-    }
-    let mut parameters =
-        project_vce_settings_params(project_id, settings, current_unix_millis_text())?;
-    parameters.push(SqliteValue::Integer(
-        i64::try_from(expected_revision).map_err(|_| {
-            String::from("The expected VCE revision exceeds the SQLite integer range.")
-        })?,
-    ));
-    let result = local_sql::query_json_async(
-        &host_runtime.local,
-        LogicalDatabase::AppState,
-        r#"
-UPDATE project_vce_settings
-SET enabled = ?2,
-    revision = ?3,
-    max_file_bytes = ?4,
-    extra_ignore_patterns_json = ?5,
-    allow_query_rewrite = ?6,
-    allow_rerank = ?7,
-    embedding_max_concurrency = ?8,
-    query_max_concurrency = ?9,
-    max_results = ?10,
-    max_context_chars = ?11,
-    updated_at = ?12,
-    update_mode = ?13,
-    auto_update_min_interval_seconds = ?14
-WHERE project_id = ?1
-  AND revision = ?15
-  AND EXISTS (
-      SELECT 1 FROM projects
-      WHERE projects.id = project_vce_settings.project_id AND projects.archived = 0
-  )
-RETURNING project_id AS id;
-"#,
-        parameters.clone(),
-    )
-    .await
-    .map_err(|error| format!("Failed to update the VCE project settings: {error}"))?;
-    let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
-    validate_project_mutation_identity_rows(project_id, &rows, "update the VCE project settings")
-}
-
 /// Persists one active project's complete icon override pair.
 /// 持久化单个活动项目的完整图标覆盖对。
 ///
@@ -1209,54 +1062,6 @@ mod tests {
         for unsupported in [SqliteValue::Real(1.5), SqliteValue::Blob(vec![1])] {
             assert!(project_persistence_sql_values(&[unsupported]).is_err());
         }
-    }
-
-    /// Verifies VCE settings encode every persisted field in the SQL placeholder order.
-    /// 验证 VCE 设置会按 SQL 占位符顺序编码全部持久化字段。
-    #[test]
-    fn project_vce_settings_parameters_preserve_typed_contract() {
-        let settings = ProjectVceSettings {
-            enabled: true,
-            update_mode: vulcan_workbench_model::ProjectVceUpdateMode::Automatic,
-            auto_update_min_interval_seconds: 600,
-            revision: 7,
-            max_file_bytes: 2_097_152,
-            extra_ignore_patterns: vec![String::from("generated/**")],
-            allow_query_rewrite: true,
-            allow_rerank: false,
-            embedding_max_concurrency: 6,
-            query_max_concurrency: 2,
-            max_results: 12,
-            max_context_chars: 48_000,
-        };
-
-        let parameters = project_vce_settings_params(
-            "project-a",
-            &settings,
-            String::from("2026-09-04T00:00:00Z"),
-        )
-        .expect("encode valid VCE settings");
-
-        assert_eq!(parameters.len(), 14);
-        assert_eq!(
-            parameters,
-            vec![
-                SqliteValue::Text(String::from("project-a")),
-                SqliteValue::Integer(1),
-                SqliteValue::Integer(7),
-                SqliteValue::Integer(2_097_152),
-                SqliteValue::Text(String::from("[\"generated/**\"]")),
-                SqliteValue::Integer(1),
-                SqliteValue::Integer(0),
-                SqliteValue::Integer(6),
-                SqliteValue::Integer(2),
-                SqliteValue::Integer(12),
-                SqliteValue::Integer(48_000),
-                SqliteValue::Text(String::from("2026-09-04T00:00:00Z")),
-                SqliteValue::Text(String::from("automatic")),
-                SqliteValue::Integer(600),
-            ]
-        );
     }
 
     /// Verifies guarded single-row mutations require one exact returned identity.
