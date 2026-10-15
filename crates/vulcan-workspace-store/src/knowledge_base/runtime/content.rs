@@ -334,7 +334,7 @@ fn new_document(
         .into(),
         keywords: vec![],
         body_sha256: super::super::sha256_hex(body.as_bytes()),
-        line_count: body.split_inclusive('\n').count(),
+        line_count: super::super::knowledge_body_lines(body).count(),
         embed_policy: embed,
         provenance,
         revision: 1,
@@ -416,21 +416,62 @@ fn rebuild_document(
     Ok(())
 }
 
+/// Complete candidate transition and authenticated audit context for one atomic change.
+/// 一次原子变更的完整候选过渡与已认证审计上下文。
+struct SnapshotChange<'a> {
+    /// Published documents before the change.
+    /// 变更前已发布文档。
+    before: &'a Documents,
+    /// Published explicit folders before the change.
+    /// 变更前已发布显式目录。
+    before_folders: &'a Folders,
+    /// Complete candidate documents.
+    /// 完整候选文档。
+    after: Documents,
+    /// Complete candidate explicit folders.
+    /// 完整候选显式目录。
+    after_folders: Folders,
+    /// New exact body bytes keyed by their verified hashes.
+    /// 按已验证哈希索引的新精确正文字节。
+    bodies: BTreeMap<String, String>,
+    /// Runtime-authenticated invocation identity.
+    /// 运行时已认证调用身份。
+    actor: &'a KnowledgeChangeActor,
+    /// Exact content operation discriminator.
+    /// 精确内容操作判别标识。
+    operation: &'a str,
+    /// Auditable intent.
+    /// 可审计意图。
+    note: &'a str,
+    /// Explicit restore target, absent for ordinary writes.
+    /// 显式还原目标；普通写入为空。
+    restore_target_seq: Option<u64>,
+    /// Frozen library-owned indexing policy.
+    /// 冻结的库自身索引策略。
+    settings: &'a KnowledgeLibrarySettings,
+}
+
 /// Commits a candidate snapshot plus immutable images and derived chunks as one transaction.
 /// 将候选快照、不可变镜像和派生切块作为单事务提交。
 fn commit_snapshot(
     connection: &mut Connection,
-    before: &Documents,
-    before_folders: &Folders,
-    mut after: Documents,
-    mut after_folders: Folders,
-    bodies: BTreeMap<String, String>,
-    actor: &KnowledgeChangeActor,
-    operation: &str,
-    note: &str,
-    target: Option<u64>,
-    settings: &KnowledgeLibrarySettings,
+    change: SnapshotChange<'_>,
 ) -> Result<KnowledgeWriteResult, String> {
+    // Candidate state and audit context share one transaction boundary.
+    // 候选状态与审计上下文共享一个事务边界。
+    let SnapshotChange {
+        before,
+        before_folders,
+        mut after,
+        mut after_folders,
+        bodies,
+        actor,
+        operation,
+        note,
+        restore_target_seq: target,
+        settings,
+    } = change;
+
     validate_namespace(&after, &after_folders)?;
     if !matches!(actor.kind.as_str(), "ai" | "user" | "system") {
         return Err("ERR_KNOWLEDGE_ACTOR_INVALID".into());
@@ -440,6 +481,15 @@ fn commit_snapshot(
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
+    // An incremental write must not declare a partially built upgrade fully indexed.
+    // 增量写入不得将部分构建的升级宣告为全部已索引。
+    let index_was_ready = transaction
+        .query_row(
+            "SELECT value='ready' FROM knowledge_metadata WHERE key='index_status';",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|error| error.to_string())?;
     // One invocation always produces exactly one change, including a no-op human restore.
     // 一次调用始终只产生一条变更，包括无差异人工还原。
     let now = unix_epoch_millis()?;
@@ -525,26 +575,14 @@ fn commit_snapshot(
     }
     // Missing hashes are queued once; ready and exhausted failed hashes remain untouched.
     // 缺失哈希只排队一次；就绪和已耗尽失败哈希保持不变。
-    let pending = if let Some(embedding) = &settings.embedding {
-        let space = vector_space_id(embedding)?;
-        transaction.execute("INSERT OR IGNORE INTO kb_vector_state(content_sha256,vector_space_id,state,attempts,last_error,updated_at_ms) SELECT DISTINCT content_sha256,?,'pending',0,'',? FROM kb_chunks WHERE embed=1;",params![space,now]).map_err(|e|e.to_string())?;
-        transaction
-            .query_row(
-                "SELECT COUNT(*) FROM kb_vector_state WHERE vector_space_id=? AND state='pending';",
-                [space],
-                |r| unsigned_column(r, 0),
-            )
-            .map_err(|e| e.to_string())?
-    } else {
-        0
-    };
+    let pending = super::vector::queue_current_embeddings(&transaction, settings)?;
     transaction
         .execute(
             "UPDATE knowledge_metadata SET value=? WHERE key='head_change_seq';",
             [seq.to_string()],
         )
         .map_err(|e| e.to_string())?;
-    if settings.index_mode.has_fts() {
+    if settings.index_mode.has_fts() && index_was_ready {
         transaction
             .execute(
                 "UPDATE knowledge_metadata SET value=? WHERE key='indexed_change_seq';",
@@ -578,15 +616,14 @@ impl KnowledgeBaseRuntime {
         // This check runs after admission and before SQLite mutation to close revocation races.
         // 该检查在准入后、SQLite 变更前运行，以封闭撤销竞态。
         let library = self.require_active_library(library_id).await?;
-        if let Some(project_id) = project_id {
-            if !self
+        if let Some(project_id) = project_id
+            && !self
                 .authorized_library_ids(project_id, false)
                 .await?
                 .iter()
                 .any(|id| id == library_id)
-            {
-                return Err("ERR_KNOWLEDGE_NOT_AUTHORIZED".into());
-            }
+        {
+            return Err("ERR_KNOWLEDGE_NOT_AUTHORIZED".into());
         }
         library
             .settings
@@ -619,7 +656,7 @@ impl KnowledgeBaseRuntime {
         // Binding validation never upgrades a library.
         // 绑定验证绝不升级知识库。
         let (_, binding_id) = self.ensure_library_binding(library_id).await?;
-        local_sql::with_connection_async(
+        let receipt = local_sql::with_connection_async(
             &self.host_runtime.local,
             self.resolve_library_binding(&binding_id)?,
             move |connection| {
@@ -776,7 +813,7 @@ impl KnowledgeBaseRuntime {
                                 .checked_add(1)
                                 .ok_or("ERR_KNOWLEDGE_REVISION_OVERFLOW")?;
                             document.body_sha256 = super::super::sha256_hex(text.as_bytes());
-                            document.line_count = text.split_inclusive('\n').count();
+                            document.line_count = super::super::knowledge_body_lines(&text).count();
                             validate_document(document, &text)?;
                             bodies.insert(document.body_sha256.clone(), text);
                         }
@@ -784,20 +821,24 @@ impl KnowledgeBaseRuntime {
                 }
                 commit_snapshot(
                     connection,
-                    &before,
-                    &before_folders,
-                    after,
-                    after_folders,
-                    bodies,
-                    &actor,
-                    &request.action,
-                    &request.note,
-                    None,
-                    &settings,
+                    SnapshotChange {
+                        before: &before,
+                        before_folders: &before_folders,
+                        after,
+                        after_folders,
+                        bodies,
+                        actor: &actor,
+                        operation: &request.action,
+                        note: &request.note,
+                        restore_target_seq: None,
+                        settings: &settings,
+                    },
                 )
             },
         )
-        .await
+        .await?;
+        self.wake_knowledge_worker(library_id).await;
+        Ok(receipt)
     }
 
     /// Reads one ID or path with a bounded inclusive line window; returns exact text and continuation.
@@ -839,22 +880,20 @@ impl KnowledgeBaseRuntime {
                     .ok_or("ERR_KNOWLEDGE_DOCUMENT_NOT_FOUND")?
                     .clone();
                 let text = body(connection, &document.body_sha256)?;
-                let lines: Vec<_> = text.split_inclusive('\n').collect();
-                if start > lines.len().max(1) {
+                let total_lines = document.line_count;
+                if start > total_lines.max(1) {
                     return Err("ERR_KNOWLEDGE_READ_RANGE".into());
                 }
-                let end = end.min(lines.len());
+                let end = end.min(total_lines);
                 Ok(KnowledgeDocumentContent {
                     document,
-                    content: lines
-                        .iter()
+                    content: super::super::knowledge_body_lines(&text)
                         .skip(start - 1)
                         .take(end.saturating_sub(start - 1))
-                        .copied()
                         .collect(),
                     start_line: start,
                     end_line: end,
-                    next_line: (end < lines.len()).then_some(end + 1),
+                    next_line: (end < total_lines).then_some(end + 1),
                 })
             },
         )
@@ -1147,7 +1186,7 @@ impl KnowledgeBaseRuntime {
         // All reverse image reads and the final commit occur on one guarded connection.
         // 全部逆向镜像读取与最终提交在同一受守卫连接完成。
         let (_, binding_id) = self.ensure_library_binding(library_id).await?;
-        local_sql::with_connection_async(&self.host_runtime.local,self.resolve_library_binding(&binding_id)?,move |connection| {
+        let receipt = local_sql::with_connection_async(&self.host_runtime.local,self.resolve_library_binding(&binding_id)?,move |connection| {
             if target_seq!=0 && !connection.query_row("SELECT EXISTS(SELECT 1 FROM kb_changes WHERE seq=?);",[sql_integer(target_seq)?],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? {return Err("ERR_KNOWLEDGE_CHANGE_NOT_FOUND".into());}
             let before=documents(connection)?;
             let before_folders=folders(connection)?;
@@ -1166,21 +1205,21 @@ impl KnowledgeBaseRuntime {
                 }
             }
             for (id,document) in &mut after {
-                if let Some(current)=before.get(id) {
-                    if same_document_content(current,document) {*document=current.clone();continue;}
-                }
+                if let Some(current)=before.get(id)
+                    && same_document_content(current,document) {*document=current.clone();continue;}
                 // A deleted then restored document must also reject tokens issued before deletion.
                 // 已删除后还原的文档也必须拒绝删除前签发的令牌。
                 let previous_revision:u64=connection.query_row("SELECT COALESCE(MAX(revision),0) FROM (SELECT CAST(json_extract(before_json,'$.revision') AS INTEGER) AS revision FROM kb_change_items WHERE entity='document' AND entity_key=? UNION ALL SELECT CAST(json_extract(after_json,'$.revision') AS INTEGER) FROM kb_change_items WHERE entity='document' AND entity_key=?);",params![id,id],|r|unsigned_column(r,0)).map_err(|e|e.to_string())?;
                 document.revision=previous_revision.checked_add(1).ok_or("ERR_KNOWLEDGE_REVISION_OVERFLOW")?;
             }
             for (key,folder) in &mut after_folders {
-                if let Some(current)=before_folders.get(key) {
-                    if folder.path==current.path && folder.description==current.description {*folder=current.clone();}
-                }
+                if let Some(current)=before_folders.get(key)
+                    && folder.path==current.path && folder.description==current.description {*folder=current.clone();}
             }
-            commit_snapshot(connection,&before,&before_folders,after,after_folders,BTreeMap::new(),&actor,"restore",&note,Some(target_seq),&settings)
-        }).await
+            commit_snapshot(connection, SnapshotChange { before: &before, before_folders: &before_folders, after, after_folders, bodies: BTreeMap::new(), actor: &actor, operation: "restore", note: &note, restore_target_seq: Some(target_seq), settings: &settings })
+        }).await?;
+        self.wake_knowledge_worker(library_id).await;
+        Ok(receipt)
     }
 
     /// Ingests prevalidated host-decoded files atomically; unchanged source hashes produce no change.
@@ -1223,7 +1262,7 @@ impl KnowledgeBaseRuntime {
         // Source bodies never cross the AI result path.
         // 来源正文绝不跨越 AI 结果路径。
         let (_, binding_id) = self.ensure_library_binding(library_id).await?;
-        local_sql::with_connection_async(
+        let receipt = local_sql::with_connection_async(
             &self.host_runtime.local,
             self.resolve_library_binding(&binding_id)?,
             move |connection| {
@@ -1242,21 +1281,22 @@ impl KnowledgeBaseRuntime {
                         return Err("ERR_KNOWLEDGE_INGEST_DUPLICATE_TARGET".into());
                     }
                     let existing = before.values().find(|d| d.path_key == key);
-                    if let Some(current) = existing {
-                        if current.provenance.iter().any(|p| {
+                    if let Some(current) = existing
+                        && current.provenance.iter().any(|p| {
                             p.kind == "file"
                                 && p.reference == source.provenance.reference
                                 && p.sha256 == source.provenance.sha256
-                        }) {
-                            unchanged.push(path);
-                            continue;
-                        }
+                        })
+                    {
+                        unchanged.push(path);
+                        continue;
                     }
                     let mut document = if let Some(current) = existing {
                         let mut document = current.clone();
                         document.title = source.title;
                         document.body_sha256 = super::super::sha256_hex(source.body.as_bytes());
-                        document.line_count = source.body.split_inclusive('\n').count();
+                        document.line_count =
+                            super::super::knowledge_body_lines(&source.body).count();
                         document.revision = document
                             .revision
                             .checked_add(1)
@@ -1300,21 +1340,25 @@ impl KnowledgeBaseRuntime {
                 }
                 let mut receipt = commit_snapshot(
                     connection,
-                    &before,
-                    &before_folders,
-                    after,
-                    before_folders.clone(),
-                    bodies,
-                    &actor,
-                    "ingest",
-                    &note,
-                    None,
-                    &settings,
+                    SnapshotChange {
+                        before: &before,
+                        before_folders: &before_folders,
+                        after,
+                        after_folders: before_folders.clone(),
+                        bodies,
+                        actor: &actor,
+                        operation: "ingest",
+                        note: &note,
+                        restore_target_seq: None,
+                        settings: &settings,
+                    },
                 )?;
                 receipt.unchanged = unchanged;
                 Ok(receipt)
             },
         )
-        .await
+        .await?;
+        self.wake_knowledge_worker(library_id).await;
+        Ok(receipt)
     }
 }

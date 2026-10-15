@@ -2,6 +2,8 @@
 //! 精确版本 AI 管理内容与还原语义的行为回归。
 
 use super::*;
+#[path = "vector_tests.rs"]
+mod vector_tests;
 use crate::data_plane::{HostRuntimeMetadata, build_application_schema_script};
 
 /// Creates an isolated real host, application schema and authorized project; returns lifetime root and runtime.
@@ -378,7 +380,7 @@ async fn restore_reproduces_every_content_snapshot_and_retains_history() {
             .iter()
             .filter_map(|e| e.document.as_ref())
             .collect();
-        let receipt = if documents.is_empty() || seed % 4 == 0 {
+        let receipt = if documents.is_empty() || seed.is_multiple_of(4) {
             runtime
                 .write_content(
                     &library,
@@ -911,4 +913,39 @@ async fn explicit_empty_nested_folders_have_browsable_ancestors() {
         .await
         .expect("restore nested folders");
     assert_eq!(snapshot(&runtime, &library).await, before);
+}
+
+/// Verifies line references agree with Markdown normalization while original separators remain unchanged.
+/// 验证行引用与 Markdown 规范化一致，同时原始分隔符保持不变。
+#[tokio::test]
+async fn exact_body_windows_preserve_all_supported_newline_forms() {
+    // Mixed separators must retain their byte identity through storage and line windows.
+    // 混合分隔符经过存储和行窗口后必须保留字节身份。
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    for (name, text) in [
+        ("cr", "one\rtwo\rthree\r"),
+        ("crlf", "one\r\ntwo\r\nthree\r\n"),
+        ("mixed", "one\rtwo\nthree\r\n"),
+    ] {
+        // The path is selected semantically so added fixtures cannot shift row positions.
+        // 路径按语义选择，使新增夹具不能改变行位置。
+        let document = add(&runtime, &library, &format!("{name}.md"), text).await;
+        assert_eq!(document.line_count, 3);
+        assert_eq!(
+            runtime
+                .read_document(&library, Some(&document.id), None, None, None)
+                .await
+                .expect("full read")
+                .content,
+            text
+        );
+        // Window two corresponds to the same logical line regardless of separator encoding.
+        // 无论分隔符编码如何，第二行窗口对应相同逻辑行。
+        let middle = runtime
+            .read_document(&library, Some(&document.id), None, Some(2), Some(2))
+            .await
+            .expect("middle line");
+        assert_eq!(middle.content.trim_end_matches(['\r', '\n']), "two");
+        assert_eq!(middle.next_line, Some(3));
+    }
 }

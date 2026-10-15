@@ -84,6 +84,11 @@ impl KnowledgeBaseRuntime {
                 &library_id,
             )?;
         }
+        if initialized.is_ok() && settings.index_mode.has_vectors() {
+            // Empty vector libraries still publish a usable empty space without paid inference.
+            // 空向量库仍发布可用空空间，无需付费推理。
+            self.wake_knowledge_worker(&library_id).await;
+        }
         initialized
     }
 
@@ -264,6 +269,9 @@ impl KnowledgeBaseRuntime {
             vec![int(unix_epoch_millis()?), text(library_id)],
         )
         .await?;
+        // Existing vector readers finish before their exact host bindings are closed.
+        // 已有向量读取者在精确宿主绑定关闭前完成。
+        let _publication = self.vector_space_lock(library_id).await.write_owned().await;
         self.release_library_binding(library_id).await?;
         self.remove_host_owned_child_directory_if_exists(
             &self.library_root(library_id)?,

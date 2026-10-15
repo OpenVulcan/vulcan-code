@@ -696,6 +696,25 @@ CREATE TABLE IF NOT EXISTS knowledge_import_jobs (
 CREATE INDEX IF NOT EXISTS idx_knowledge_import_jobs_library
 ON knowledge_import_jobs(library_id, created_at_ms DESC);
 
+CREATE TABLE IF NOT EXISTS knowledge_operations (
+    id TEXT PRIMARY KEY,
+    library_id TEXT NOT NULL REFERENCES knowledge_libraries(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    state TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    total_items INTEGER NOT NULL DEFAULT 0,
+    processed_items INTEGER NOT NULL DEFAULT 0,
+    current_item TEXT,
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    observability_json TEXT NOT NULL DEFAULT '{{}}',
+    error_message TEXT,
+    created_at_ms INTEGER NOT NULL,
+    started_at_ms INTEGER,
+    finished_at_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_operations_library
+ON knowledge_operations(library_id, created_at_ms DESC);
+
 PRAGMA user_version = {schema_version};
 "#,
         schema_version = APP_SCHEMA_VERSION,
@@ -880,6 +899,7 @@ mod tests {
             ("table", "knowledge_import_jobs"),
             ("table", "knowledge_libraries"),
             ("table", "knowledge_library_project_bindings"),
+            ("table", "knowledge_operations"),
             ("table", "project_git_review_preferences"),
             ("table", "project_vce_settings"),
             ("table", "projects"),
@@ -887,6 +907,7 @@ mod tests {
             ("table", "workspace_session_index"),
             ("index", "idx_knowledge_import_jobs_library"),
             ("index", "idx_knowledge_library_project_bindings_project"),
+            ("index", "idx_knowledge_operations_library"),
             ("index", "idx_project_git_review_preferences_project"),
             ("index", "idx_projects_sort"),
             ("index", "idx_thread_goals_status"),

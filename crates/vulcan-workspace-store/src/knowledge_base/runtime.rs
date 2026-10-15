@@ -5,7 +5,10 @@ mod authorization;
 mod content;
 mod fts;
 mod library;
+mod operations;
+mod retrieval;
 mod storage;
+mod vector;
 
 use super::models::*;
 use super::schema::{KNOWLEDGE_FTS_INDEX, KNOWLEDGE_SCHEMA_VERSION};
@@ -48,6 +51,15 @@ pub(crate) struct KnowledgeBaseRuntimeSharedState {
     /// Active LanceDB bindings.
     /// 活动 LanceDB 绑定。
     active_vector_bindings: Mutex<BTreeSet<String>>,
+    /// Host-registered embedding executor; it is never inferred from provider configuration.
+    /// 宿主注册的嵌入执行器；绝不从供应商配置推断。
+    embedding_executor: tokio::sync::RwLock<Option<KnowledgeEmbeddingExecutor>>,
+    /// Running workers and wake epochs, shared by every service/tool wrapper.
+    /// 全部服务和工具包装共享的运行中工作器与唤醒代次。
+    vector_workers: Mutex<BTreeMap<String, Arc<std::sync::atomic::AtomicU64>>>,
+    /// Reader leases keep an active vector space alive through query inference and result mapping.
+    /// 读取租约使活动向量空间在查询推理和结果映射期间保持存活。
+    vector_space_locks: Mutex<BTreeMap<String, Arc<tokio::sync::RwLock<()>>>>,
 }
 
 impl KnowledgeBaseRuntime {

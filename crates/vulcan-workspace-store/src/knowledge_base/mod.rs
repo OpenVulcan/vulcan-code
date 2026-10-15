@@ -7,8 +7,9 @@ mod runtime;
 mod schema;
 
 pub use markdown::{
-    CHUNK_OVERLAP_TOKENS, HARD_CHUNK_TOKENS, TARGET_CHUNK_TOKENS, chunk_markdown,
-    extract_document_title, normalize_markdown_newlines, sha256_hex,
+    CHUNK_OVERLAP_TOKENS, HARD_CHUNK_TOKENS, KnowledgeBodyLines, TARGET_CHUNK_TOKENS,
+    chunk_markdown, extract_document_title, knowledge_body_lines, normalize_markdown_newlines,
+    sha256_hex,
 };
 pub use models::*;
 pub use runtime::KnowledgeBaseRuntime;

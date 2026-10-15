@@ -197,7 +197,6 @@ pub struct KnowledgeLibrarySettings {
 impl KnowledgeLibrarySettings {
     /// Validates explicit settings; returns an English diagnostic for invalid mode or route data.
     /// 验证显式设置；模式或路由非法时返回英文诊断。
-
     pub fn validate(&self) -> Result<(), String> {
         if self.index_mode.has_vectors() != self.embedding.is_some() {
             return Err("ERR_KNOWLEDGE_EMBEDDING_REQUIRED: vector modes require an embedding route; other modes must omit it".into());
@@ -705,4 +704,233 @@ pub struct KnowledgeIndexIntegritySummary {
     /// Whether all required derived state agrees with current authority.
     /// 全部必需派生状态是否与当前权威一致。
     pub healthy: bool,
+}
+
+/// Exact host embedding request for document batches or query vectors.
+/// 文档批次或查询向量的精确宿主嵌入请求。
+#[derive(Debug, Clone)]
+pub struct KnowledgeEmbeddingRequest {
+    /// Frozen semantic route and vector space.
+    /// 冻结语义路由与向量空间。
+    pub embedding: KnowledgeEmbeddingSettings,
+    /// Ordered decoded inputs.
+    /// 有序解码输入。
+    pub inputs: Vec<String>,
+    /// Whether inputs are retrieval queries rather than stored documents.
+    /// 输入是否为检索查询而非存储文档。
+    pub is_query: bool,
+}
+
+/// Asynchronous host inference result; vectors correspond exactly to request order.
+/// 异步宿主推理结果；向量与请求顺序精确对应。
+pub type KnowledgeEmbeddingFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Vec<f32>>, String>> + Send>>;
+/// Registered host executor; tests install a fake and never call a paid service.
+/// 已注册宿主执行器；测试安装假实现且不调用付费服务。
+pub type KnowledgeEmbeddingExecutor =
+    std::sync::Arc<dyn Fn(KnowledgeEmbeddingRequest) -> KnowledgeEmbeddingFuture + Send + Sync>;
+
+/// Persistent background operation replacing directory-import jobs.
+/// 替代目录导入任务的持久后台操作。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeOperationSummary {
+    /// Stable operation UUID.
+    /// 稳定操作 UUID。
+    pub id: String,
+    /// Owning library UUID.
+    /// 所属知识库 UUID。
+    pub library_id: String,
+    /// Explicit index_mode, rebuild or retry kind.
+    /// 显式模式、重建或重试类别。
+    pub kind: String,
+    /// Queued, running, completed, cancelled or failed.
+    /// 排队、运行、完成、取消或失败。
+    pub state: String,
+    /// Current processing phase.
+    /// 当前处理阶段。
+    pub phase: String,
+    /// Current total required content hashes or FTS chunks.
+    /// 当前必需内容哈希或全文切块总数。
+    pub total_items: u64,
+    /// Successfully processed items.
+    /// 已成功处理条目。
+    pub processed_items: u64,
+    /// Current content identity when processing.
+    /// 处理中的当前内容身份。
+    pub current_item: Option<String>,
+    /// Explicit warnings.
+    /// 明确告警。
+    pub warnings: Vec<String>,
+    /// English background failure diagnostic.
+    /// 英文后台失败诊断。
+    pub error_message: Option<String>,
+    /// Queued time.
+    /// 排队时间。
+    pub created_at_ms: i64,
+    /// First execution time.
+    /// 首次执行时间。
+    pub started_at_ms: Option<i64>,
+    /// Terminal time.
+    /// 终止时间。
+    pub finished_at_ms: Option<i64>,
+}
+
+/// Failure projection links current documents to an embedding hash.
+/// 失败投影将当前文档关联到嵌入哈希。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeEmbeddingFailure {
+    /// Current document UUID.
+    /// 当前文档 UUID。
+    pub document_id: String,
+    /// Current document path.
+    /// 当前文档路径。
+    pub path: String,
+    /// Current chunk UUID.
+    /// 当前切块 UUID。
+    pub chunk_id: String,
+    /// Content-addressed input hash.
+    /// 内容寻址输入哈希。
+    pub content_sha256: String,
+    /// Attempts already performed.
+    /// 已执行尝试数。
+    pub attempts: u32,
+    /// English error retained for human retry.
+    /// 保留供人工重试的英文错误。
+    pub last_error: String,
+}
+
+/// Current desired space progress and independently active search space.
+/// 当前期望空间进度与独立活动检索空间。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeEmbeddingStatus {
+    /// Desired vector-space identity.
+    /// 期望向量空间身份。
+    pub desired_space_id: Option<String>,
+    /// Currently active search space.
+    /// 当前活动检索空间。
+    pub active_space_id: Option<String>,
+    /// Pending current content hashes.
+    /// 待生成当前内容哈希数。
+    pub pending: u64,
+    /// Ready current content hashes.
+    /// 就绪当前内容哈希数。
+    pub ready: u64,
+    /// Exhausted failed current content hashes.
+    /// 耗尽重试的失败当前内容哈希数。
+    pub failed: u64,
+    /// Whether automatic work was explicitly cancelled.
+    /// 自动工作是否被显式取消。
+    pub paused: bool,
+    /// Bounded failure detail page.
+    /// 有界失败详情页。
+    pub failures: Vec<KnowledgeEmbeddingFailure>,
+    /// Exclusive next failure offset.
+    /// 排他下一失败偏移。
+    pub next_offset: Option<u64>,
+}
+
+/// One current chunk matched by the library's declared search capabilities.
+/// 被库声明检索能力匹配的一个当前切块。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeSearchHit {
+    /// Owning library UUID.
+    /// 所属知识库 UUID。
+    pub library_id: String,
+    /// Human library name.
+    /// 人工库名称。
+    pub library_name: String,
+    /// Stable current document UUID.
+    /// 稳定当前文档 UUID。
+    pub document_id: String,
+    /// Current document path.
+    /// 当前文档路径。
+    pub path: String,
+    /// Current AI title.
+    /// 当前 AI 标题。
+    pub title: String,
+    /// Current AI summary.
+    /// 当前 AI 摘要。
+    pub summary: String,
+    /// Exact current chunk identity.
+    /// 精确当前切块身份。
+    pub chunk_id: String,
+    /// Summary or body discriminator.
+    /// 摘要或正文判别标识。
+    pub kind: String,
+    /// Current heading ancestry.
+    /// 当前标题层级。
+    pub heading_path: String,
+    /// Inclusive document first line; summary chunks use zero.
+    /// 包含边界的文档首行；摘要切块为零。
+    pub start_line: usize,
+    /// Inclusive document last line.
+    /// 包含边界的文档末行。
+    pub end_line: usize,
+    /// Untrusted reference content.
+    /// 不可信参考内容。
+    pub content: String,
+    /// Reciprocal-rank fusion score.
+    /// 倒数排名融合分数。
+    pub score: f64,
+    /// Explicit BM25 or vector contributing capabilities.
+    /// 明确贡献的全文或向量能力。
+    pub match_kinds: Vec<String>,
+}
+
+/// Declared capability state accompanying every searched library.
+/// 伴随每个检索库返回的声明能力状态。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeSearchLibraryStatus {
+    /// Library UUID.
+    /// 知识库 UUID。
+    pub library_id: String,
+    /// Exact declared mode.
+    /// 精确声明模式。
+    pub index_mode: KnowledgeIndexMode,
+    /// Ready, building or disabled FTS capability.
+    /// 就绪、构建中或禁用的全文能力。
+    pub fts_status: String,
+    /// Current embedding progress and active/desired space distinction.
+    /// 当前嵌入进度以及活动和期望空间区分。
+    pub embeddings: KnowledgeEmbeddingStatus,
+}
+
+/// Explicit per-library query failure; partial hybrid results never hide this diagnostic.
+/// 明确每库查询失败；部分混合结果绝不隐藏该诊断。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeSearchFailure {
+    /// Exact failed library.
+    /// 精确失败知识库。
+    pub library_id: String,
+    /// Query that failed or no query for library admission.
+    /// 失败查询；库准入失败时为空。
+    pub query: Option<String>,
+    /// English capability or inference error.
+    /// 英文能力或推理错误。
+    pub error: String,
+}
+
+/// Federated search result with explicit mode and backlog status for every participating library.
+/// 联合检索结果，包含每个参与库的明确模式和积压状态。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeSearchResult {
+    /// Exact queries evaluated.
+    /// 已评估精确查询。
+    pub queries: Vec<String>,
+    /// Ranked current chunks.
+    /// 已排名当前切块。
+    pub hits: Vec<KnowledgeSearchHit>,
+    /// Explicit per-library capability state.
+    /// 明确每库能力状态。
+    pub libraries: Vec<KnowledgeSearchLibraryStatus>,
+    /// Visible partial failures.
+    /// 可见部分失败。
+    pub failures: Vec<KnowledgeSearchFailure>,
 }

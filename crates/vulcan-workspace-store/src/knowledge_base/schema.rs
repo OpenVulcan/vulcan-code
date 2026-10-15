@@ -18,7 +18,8 @@ CREATE TABLE knowledge_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO knowledge_metadata VALUES
  ('schema_version', '{KNOWLEDGE_SCHEMA_VERSION}'), ('library_id', '{library_id}'),
  ('head_change_seq', '0'), ('dictionary_revision', '0'), ('indexed_dictionary_revision', '0'),
- ('indexed_change_seq', '0'), ('index_status', 'empty');
+ ('indexed_change_seq', '0'), ('index_status', 'empty'),
+ ('active_embedding', 'null'), ('vector_worker_paused', '0');
 CREATE TABLE kb_blobs(sha256 TEXT PRIMARY KEY, content TEXT NOT NULL, byte_size INTEGER NOT NULL CHECK(byte_size >= 0));
 CREATE TABLE kb_folders(path_key TEXT PRIMARY KEY, path TEXT NOT NULL, description TEXT NOT NULL,
  created_change_seq INTEGER NOT NULL, updated_change_seq INTEGER NOT NULL);
@@ -37,6 +38,7 @@ CREATE TABLE kb_changes(seq INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT
 CREATE TABLE kb_change_items(change_seq INTEGER NOT NULL REFERENCES kb_changes(seq), ordinal INTEGER NOT NULL,
  entity TEXT NOT NULL CHECK(entity IN ('document', 'folder')), entity_key TEXT NOT NULL,
  before_json TEXT, after_json TEXT, PRIMARY KEY(change_seq, ordinal));
+CREATE INDEX idx_kb_change_entity ON kb_change_items(entity,entity_key,change_seq);
 CREATE TABLE kb_chunks(id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES kb_documents(id) ON DELETE CASCADE,
  ordinal INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('summary', 'body')), heading_path TEXT NOT NULL,
  start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, text TEXT NOT NULL, content_sha256 TEXT NOT NULL,
@@ -45,6 +47,7 @@ CREATE INDEX idx_kb_chunks_hash ON kb_chunks(content_sha256);
 CREATE TABLE kb_vector_state(content_sha256 TEXT NOT NULL, vector_space_id TEXT NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('pending', 'ready', 'failed')), attempts INTEGER NOT NULL CHECK(attempts >= 0),
  last_error TEXT NOT NULL, updated_at_ms INTEGER NOT NULL, PRIMARY KEY(content_sha256, vector_space_id));
+CREATE INDEX idx_kb_vector_pending ON kb_vector_state(vector_space_id,state,content_sha256);
 "#
     ) + vulcan_sqlite_engine::tokenizer::dictionary_table_schema_script()
 }

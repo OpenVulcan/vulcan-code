@@ -1,472 +1,637 @@
-//! LanceDB generation tables, vector batches, and indexed model-space state.
-//! LanceDB 代次表、向量批次与已索引模型空间状态。
+//! Content-addressed vector spaces and resumable host-driven embedding workers.
+//! 内容寻址向量空间与可恢复宿主嵌入工作器。
 
-use super::super::models::{
-    KnowledgeDisplayIndexStatus, KnowledgeLibrarySummary, KnowledgeModelSnapshot,
-    KnowledgeVectorIndexStatus,
-};
-use super::{KnowledgeBaseRuntime, MAX_SEARCH_LIMIT, unix_epoch_millis, validate_generation_id};
-use super::{int, text};
-use crate::local_database_runtime::LogicalDatabase;
-use crate::local_sql;
-use vulcan_lancedb_engine::types::{
-    LanceDbColumnDef, LanceDbColumnType, LanceDbCreateTableInput, LanceDbDropTableInput,
-    LanceDbInputFormat, LanceDbOutputFormat, LanceDbSearchInput, LanceDbUpsertInput,
-};
+use super::*;
+use rusqlite::{Connection, params};
+use std::sync::atomic::{AtomicU64, Ordering};
+use vulcan_lancedb_engine::{engine::LanceDbEngine, error::LanceDbEngineError, types::*};
 
-impl KnowledgeBaseRuntime {
-    /// Ensures the isolated LanceDB backend used by one library's vector generations.
-    /// 确保一个资料库向量代次使用的隔离 LanceDB 后端。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical UUID of the owning library.
-    /// `library_id` 是所属知识库的规范 UUID。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after the documented operation completes, or its explicit failure.
-    /// 返回所述操作完成后的成功结果，或其明确错误。
-    pub async fn ensure_vector_storage(&self, library_id: &str) -> Result<(), String> {
-        self.require_active_library(library_id).await?;
-        self.activate_vector_binding(library_id, true).await?;
-        Ok(())
-    }
+/// One reserved batch; its exact vector space remains frozen during asynchronous inference.
+/// 一份已保留批次；异步推理期间精确向量空间保持冻结。
+struct EmbeddingBatch {
+    /// Frozen request route and dimensions.
+    /// 冻结请求路由和维度。
+    embedding: KnowledgeEmbeddingSettings,
+    /// Semantic space identity.
+    /// 语义空间身份。
+    space: String,
+    /// Ordered distinct input hashes and text.
+    /// 有序去重输入哈希与文本。
+    inputs: Vec<(String, String)>,
+}
 
-    /// Creates one dimension-specific LanceDB vector generation table.
-    /// 创建一张维度固定且按代次隔离的 LanceDB 向量表。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical UUID of the owning library.
-    /// `library_id` 是所属知识库的规范 UUID。
-    /// `generation` is the canonical UUID of the exact derived generation.
-    /// `generation` 是精确派生代次的规范 UUID。
-    /// `dimension` is the configured nonzero dimension of the generation vector column.
-    /// `dimension` 是配置的代次向量列非零维度。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the dimension-specific generation table name, or a creation error.
-    /// 返回维度特定的代次表名称，或创建错误。
-    pub async fn prepare_vector_generation(
-        &self,
-        library_id: &str,
-        generation: &str,
-        dimension: u32,
-    ) -> Result<String, String> {
-        validate_generation_id(generation)?;
-        if dimension == 0 {
-            return Err(String::from(
-                "The vector generation dimension must be greater than 0",
-            ));
-        }
-        let previous_dimension = self
-            .get_library(library_id)
-            .await?
-            .settings
-            .vector_index
-            .indexed_dimension;
-        self.ensure_vector_storage(library_id).await?;
-        let (_space_id, binding_id) = self.vector_binding_identity(library_id)?;
-        let table_name = vector_table_name(generation)?;
-        // A changed dimension cannot reuse the old Lance schema; same-dimension retries remain upserts.
-        // 维度变化不能复用旧 Lance 表结构；同维度重试仍使用 upsert 保留可恢复性。
-        // One engine acquisition serves both the optional drop and the create below, so the cached
-        // engine is looked up once per operation rather than once per statement.
-        // 一次引擎获取同时服务于下方的可选删除与创建，因此每个操作只查找一次已缓存的引擎。
-        let vector_engine = self.resolve_vector_engine(&binding_id).await?;
-        let drop_error = if previous_dimension != Some(dimension) {
-            vector_engine
-                .drop_table(LanceDbDropTableInput {
-                    table_name: table_name.clone(),
-                })
-                .await
-                .err()
-        } else {
-            None
-        };
-        let create_result = vector_engine
-            .create_table(LanceDbCreateTableInput {
-                table_name: table_name.clone(),
-                columns: vec![
-                    LanceDbColumnDef {
-                        name: String::from("id"),
-                        column_type: LanceDbColumnType::String,
-                        vector_dim: 0,
-                        nullable: false,
-                    },
-                    LanceDbColumnDef {
-                        name: String::from("display_chunk_id"),
-                        column_type: LanceDbColumnType::String,
-                        vector_dim: 0,
-                        nullable: false,
-                    },
-                    LanceDbColumnDef {
-                        name: String::from("generation"),
-                        column_type: LanceDbColumnType::String,
-                        vector_dim: 0,
-                        nullable: false,
-                    },
-                    LanceDbColumnDef {
-                        name: String::from("vector"),
-                        column_type: LanceDbColumnType::VectorFloat32,
-                        vector_dim: dimension,
-                        nullable: false,
-                    },
-                ],
-                overwrite_if_exists: true,
-            })
-            .await;
-        if let Err(error) = create_result {
-            return Err(match drop_error {
-                Some(drop_error) => format!(
-                    "Failed to create the knowledge LanceDB vector generation: {error}; dropping the old-dimension table also failed: {drop_error}"
-                ),
-                None => {
-                    format!("Failed to create the knowledge LanceDB vector generation: {error}")
-                }
-            });
-        }
-        Ok(table_name)
-    }
+/// Requires one exact metadata value; returns corruption if the declared key is absent.
+/// 要求精确元数据值；声明键缺失时返回损坏。
+fn metadata(connection: &Connection, key: &str) -> Result<String, String> {
+    connection
+        .query_row(
+            "SELECT value FROM knowledge_metadata WHERE key=?;",
+            [key],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())
+}
 
-    /// Writes one complete embedding batch into a validated vector generation.
-    /// 将一个完整的 Embedding 批次写入已校验的向量代次。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical UUID of the owning library.
-    /// `library_id` 是所属知识库的规范 UUID。
-    /// `generation` is the canonical UUID of the exact derived generation.
-    /// `generation` 是精确派生代次的规范 UUID。
-    /// `dimension` is the configured nonzero dimension of the generation vector column.
-    /// `dimension` 是配置的代次向量列非零维度。
-    /// `table_name` is the validated generation-scoped LanceDB table identity.
-    /// `table_name` 是待校验的代次级 LanceDB 表身份。
-    /// `rows` is the embedding JSON rows required by the in-process engine contract.
-    /// `rows` 是进程内引擎契约要求的 Embedding JSON 行。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the engine-reported input row count, or a validation/write error.
-    /// 返回引擎报告的输入行数，或校验/写入错误。
-    pub async fn write_vector_rows(
-        &self,
-        library_id: &str,
-        table_name: &str,
-        generation: &str,
-        rows: &[serde_json::Value],
-        dimension: u32,
-    ) -> Result<u64, String> {
-        validate_generation_id(generation)?;
-        validate_vector_table_name(table_name)?;
-        if rows.is_empty() {
-            return Ok(0);
-        }
-        let expected_dimension = usize::try_from(dimension).map_err(|_| {
-            String::from("The vector dimension exceeds the range supported by this platform")
-        })?;
-        for row in rows {
-            let vector = row
-                .get("vector")
-                .and_then(serde_json::Value::as_array)
-                .ok_or_else(|| String::from("A vector write row is missing the vector array"))?;
-            if vector.len() != expected_dimension {
-                return Err(format!(
-                    "The vector write dimension {} disagrees with the configured dimension {}",
-                    vector.len(),
-                    expected_dimension
-                ));
-            }
-            if row.get("generation").and_then(serde_json::Value::as_str) != Some(generation) {
-                return Err(String::from(
-                    "The vector write row generation is inconsistent",
-                ));
-            }
-        }
-        // The binding is re-established here rather than assumed. In-memory activation is per runtime, so a
-        // process that has just restarted has an empty activation set even though the library, the settings row
-        // and the LanceDB directory all persisted. Without this, a resumed write or a hybrid search would ask
-        // for a named binding the new process never registered and fail on intact storage.
-        // 此处重新建立绑定而不是假定它已存在。内存中的激活状态是按运行时独立的，因此刚重启的进程其激活集合为空，
-        // 即便资料库、设置行与 LanceDB 目录都已持久化。没有这一步，续写或混合检索会去索取一个本进程从未登记的
-        // 具名绑定，从而在一块完好的存储上失败。
-        // Creation stays disallowed: this call writes into a table `prepare_vector_generation` created, so a
-        // missing directory here is a real inconsistency and must be reported rather than created.
-        // 仍不允许创建：本次调用写入的是 `prepare_vector_generation` 已创建的表，因此此处目录缺失是真实的不一致，
-        // 必须报出而不是被创建出来。
-        let (_space_id, binding_id) = self.activate_vector_binding(library_id, false).await?;
-        let data = serde_json::to_vec(rows)
-            .map_err(|error| format!("Failed to encode LanceDB vector rows: {error}"))?;
-        let result = self
-            .resolve_vector_engine(&binding_id)
-            .await?
-            .vector_upsert(LanceDbUpsertInput {
-                table_name: String::from(table_name),
-                input_format: LanceDbInputFormat::JsonRows,
-                data,
-                key_columns: vec![String::from("id")],
-            })
-            .await
-            .map_err(|error| {
-                format!("Failed to write the knowledge LanceDB vector batch: {error}")
-            })?;
-        Ok(result.input_rows)
-    }
+/// Reads the explicitly nullable active embedding snapshot; no alternate route is inferred.
+/// 读取显式可空的活动嵌入快照；不推断替代路由。
+pub(super) fn active_embedding(
+    connection: &Connection,
+) -> Result<Option<KnowledgeEmbeddingSettings>, String> {
+    serde_json::from_str(&metadata(connection, "active_embedding")?).map_err(|e| e.to_string())
+}
 
-    /// Searches one active vector generation and returns engine JSON rows.
-    /// 检索一份活动向量代次并返回引擎 JSON 行。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical UUID of the owning library.
-    /// `library_id` 是所属知识库的规范 UUID。
-    /// `generation` is the canonical UUID of the exact derived generation.
-    /// `generation` 是精确派生代次的规范 UUID。
-    /// `limit` is the requested result/page bound, clamped by this API.
-    /// `limit` 是请求的结果或分页上限，由当前接口限制。
-    /// `table_name` is the validated generation-scoped LanceDB table identity.
-    /// `table_name` 是待校验的代次级 LanceDB 表身份。
-    /// `vector` is the nonempty query vector in the indexed model space.
-    /// `vector` 是已索引模型空间中的非空查询向量。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the decoded engine result rows, or a validation/query error.
-    /// 返回解码后的引擎结果行，或校验/查询错误。
-    pub async fn search_vector_rows(
-        &self,
-        library_id: &str,
-        table_name: &str,
-        generation: &str,
-        vector: Vec<f32>,
-        limit: u32,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        validate_generation_id(generation)?;
-        validate_vector_table_name(table_name)?;
-        if vector.is_empty() {
-            return Err(String::from("The vector query must not be empty"));
-        }
-        // This is the production hybrid-search path's read, and it must stand on its own. Activation is per
-        // runtime, so after a restart the persisted `Ready` status and active generation are present while the
-        // named binding is not; relying on an earlier call in the same process to have registered it is exactly
-        // what made hybrid search fail on a restarted, fully intact library.
-        // 这是生产混合检索路径的读取，必须自足。激活状态按运行时独立，因此重启后持久化的 `Ready` 状态与活动代次
-        // 都在，而具名绑定不在；指望本进程中较早的某次调用已把它登记好，正是让混合检索在一个已重启且完好的资料库上
-        // 失败的原因。
-        // Creation is disallowed because a search must never bring a backend artifact into existence.
-        // 不允许创建：检索绝不应让一个后端产物从无到有。
-        let (_space_id, binding_id) = self.activate_vector_binding(library_id, false).await?;
-        let result = self
-            .resolve_vector_engine(&binding_id)
-            .await?
-            .vector_search(LanceDbSearchInput {
-                table_name: String::from(table_name),
-                vector,
-                limit: limit.clamp(1, MAX_SEARCH_LIMIT),
-                filter: format!("generation = '{generation}'"),
-                vector_column: String::from("vector"),
-                output_format: LanceDbOutputFormat::JsonRows,
-            })
-            .await
-            .map_err(|error| format!("Failed to search the knowledge LanceDB vectors: {error}"))?;
-        serde_json::from_slice(&result.data).map_err(|error| {
-            format!("Failed to parse the knowledge LanceDB search results: {error}")
-        })
-    }
-
-    /// Persists a successful vector generation and its exact model-space snapshot.
-    /// 持久化成功的向量代次及其精确模型空间快照。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical UUID of the owning library.
-    /// `library_id` 是所属知识库的规范 UUID。
-    /// `generation` is the canonical UUID of the exact derived generation.
-    /// `generation` 是精确派生代次的规范 UUID。
-    /// `dimension` is the configured nonzero dimension of the generation vector column.
-    /// `dimension` 是配置的代次向量列非零维度。
-    /// `model_snapshot` is the exact model-space snapshot captured for the completed vectors.
-    /// `model_snapshot` 是已完成向量所记录的精确模型空间快照。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the updated persisted library summary, or a validation/storage error.
-    /// 返回更新后持久化知识库摘要，或校验/存储错误。
-    pub async fn mark_vector_generation_ready(
-        &self,
-        library_id: &str,
-        generation: &str,
-        model_snapshot: KnowledgeModelSnapshot,
-        dimension: u32,
-    ) -> Result<KnowledgeLibrarySummary, String> {
-        validate_generation_id(generation)?;
-        if dimension == 0 {
-            return Err(String::from(
-                "The vector index dimension must be greater than 0",
-            ));
-        }
-        let _guard = self.library_mutation_guard(library_id).await?;
-        let current = self.require_active_library(library_id).await?;
-        if !current.settings.embedding.enabled {
-            return Err(String::from(
-                "No embedding model is enabled for this library",
-            ));
-        }
-        if current.settings.display_index.status != KnowledgeDisplayIndexStatus::Ready
-            || current.settings.display_index.active_generation.as_deref() != Some(generation)
-        {
-            return Err(String::from(
-                "The active display-library generation changed; refusing to publish the mismatched vector index",
-            ));
-        }
-        let mut settings = current.settings.clone();
-        let model_fingerprint = settings
-            .embedding
-            .desired_model_fingerprint
-            .clone()
-            .ok_or_else(|| String::from("The embedding model fingerprint is not configured yet"))?;
-        settings.vector_index.status = KnowledgeVectorIndexStatus::Ready;
-        settings.vector_index.active_generation = Some(generation.to_string());
-        settings.vector_index.indexed_model_fingerprint = Some(model_fingerprint);
-        settings.vector_index.indexed_dimension = Some(dimension);
-        settings.vector_index.compatibility_override = None;
-        settings.vector_index.last_error = None;
-        settings.embedding.observed_dimension = Some(dimension);
-        settings.embedding.indexed_dimension = Some(dimension);
-        settings.embedding.last_successful_sync_snapshot = Some(model_snapshot);
-        settings.normalize_derived_compatibility();
-        settings.validate()?;
-        let settings_json = serde_json::to_string(&settings).map_err(|error| {
-            format!("Failed to serialize the vector index success state: {error}")
-        })?;
-        local_sql::execute_script_async(
-            &self.host_runtime.local,
-            LogicalDatabase::AppState,
-                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
-                vec![
-                    text(&settings_json),
-                    int(unix_epoch_millis()?),
-                    text(library_id),
-                ],
-            ).await
-            .map_err(|error| format!("Failed to save the vector index success state: {error}"))?;
-        self.get_library(library_id).await
-    }
-
-    /// Persists one vector-build lifecycle status without mutating model choices.
-    /// 持久化向量构建生命周期状态且不改变模型选择。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical UUID of the owning library.
-    /// `library_id` 是所属知识库的规范 UUID。
-    /// `status` is the explicit derived-build lifecycle state to persist.
-    /// `status` 是待持久化的明确派生构建生命周期状态。
-    /// `last_error` is the optional diagnostic associated with that state.
-    /// `last_error` 是该状态关联的可选诊断。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the updated persisted library summary, or a validation/storage error.
-    /// 返回更新后持久化知识库摘要，或校验/存储错误。
-    pub async fn set_vector_index_status(
-        &self,
-        library_id: &str,
-        status: KnowledgeVectorIndexStatus,
-        last_error: Option<String>,
-    ) -> Result<KnowledgeLibrarySummary, String> {
-        let _guard = self.library_mutation_guard(library_id).await?;
-        let current = self.require_active_library(library_id).await?;
-        let mut settings = current.settings.clone();
-        settings.vector_index.status = status;
-        settings.vector_index.last_error = last_error;
-        settings.normalize_derived_compatibility();
-        settings.validate()?;
-        let settings_json = serde_json::to_string(&settings)
-            .map_err(|error| format!("Failed to serialize the vector index state: {error}"))?;
-        local_sql::execute_script_async(
-            &self.host_runtime.local,
-            LogicalDatabase::AppState,
-                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
-                vec![
-                    text(&settings_json),
-                    int(unix_epoch_millis()?),
-                    text(library_id),
-                ],
-            ).await
-            .map_err(|error| format!("Failed to save the vector index lifecycle state: {error}"))?;
-        self.get_library(library_id).await
+/// Reads the exact persisted pause flag; rejects every undeclared representation.
+/// 读取精确持久暂停标记；拒绝全部未声明表示。
+fn paused(connection: &Connection) -> Result<bool, String> {
+    match metadata(connection, "vector_worker_paused")?.as_str() {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err("ERR_KNOWLEDGE_WORKER_PAUSE_INVALID".into()),
     }
 }
 
-/// Returns the generation-scoped LanceDB table name after validating its UUID.
-/// 校验代次 UUID 后返回代次作用域的 LanceDB 表名称。
-///
-/// # Parameters
-/// 参数
-/// `generation` is the canonical UUID of the exact derived generation.
-/// `generation` 是精确派生代次的规范 UUID。
-///
-/// # Returns
-/// 返回值
-/// Returns the generation-scoped LanceDB table name, or an invalid UUID error.
-/// 返回代次级 LanceDB 表名称，或非法 UUID 错误。
-pub(super) fn vector_table_name(generation: &str) -> Result<String, String> {
-    validate_generation_id(generation)?;
-    Ok(format!("knowledge_vectors_{}", generation.replace('-', "")))
+/// Queues current embedding hashes without resetting ready or exhausted states; returns pending count.
+/// 排队当前嵌入哈希且不重置就绪或耗尽状态；返回待处理数。
+pub(super) fn queue_current_embeddings(
+    connection: &Connection,
+    settings: &KnowledgeLibrarySettings,
+) -> Result<u64, String> {
+    // Absence is an explicit property of nonvector modes, not a guessed route fallback.
+    // 缺失是非向量模式的显式属性，绝非猜测路由兜底。
+    let Some(embedding) = &settings.embedding else {
+        return Ok(0);
+    };
+    // Semantic identity excludes batch configuration.
+    // 语义身份排除批量配置。
+    let space = content::vector_space_id(embedding)?;
+    connection.execute("INSERT OR IGNORE INTO kb_vector_state(content_sha256,vector_space_id,state,attempts,last_error,updated_at_ms) SELECT DISTINCT content_sha256,?,'pending',0,'',? FROM kb_chunks WHERE embed=1;",
+        params![space,unix_epoch_millis()?]).map_err(|e|e.to_string())?;
+    connection
+        .execute(
+            "UPDATE knowledge_metadata SET value='0' WHERE key='vector_worker_paused';",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    current_counts(connection, &space).map(|(pending, _, _)| pending)
 }
 
-/// Validates an activity pointer loaded from vector metadata before table access.
-/// 在访问向量表前校验从元数据读取的活动表名称。
-///
-/// # Parameters
-/// 参数
-/// `table_name` is the validated generation-scoped LanceDB table identity.
-/// `table_name` 是待校验的代次级 LanceDB 表身份。
-///
-/// # Returns
-/// 返回值
-/// Returns success after the documented operation completes, or its explicit failure.
-/// 返回所述操作完成后的成功结果，或其明确错误。
-fn validate_vector_table_name(table_name: &str) -> Result<(), String> {
-    let prefix = "knowledge_vectors_";
-    let suffix = table_name
-        .strip_prefix(prefix)
-        .ok_or_else(|| String::from("The knowledge vector table name prefix is invalid."))?;
-    if suffix.len() != 32 || !suffix.chars().all(|value| value.is_ascii_hexdigit()) {
-        return Err(String::from(
-            "The knowledge vector table name format is invalid.",
-        ));
+/// Returns distinct pending, ready and failed hashes still referenced by current embedded chunks.
+/// 返回仍被当前嵌入切块引用的去重待处理、就绪和失败哈希数。
+fn current_counts(connection: &Connection, space: &str) -> Result<(u64, u64, u64), String> {
+    connection.query_row("SELECT COALESCE(SUM(state='pending'),0),COALESCE(SUM(state='ready'),0),COALESCE(SUM(state='failed'),0) FROM kb_vector_state s WHERE vector_space_id=? AND EXISTS(SELECT 1 FROM kb_chunks c WHERE c.content_sha256=s.content_sha256 AND c.embed=1);",
+        [space],|r|Ok((unsigned_column(r,0)?,unsigned_column(r,1)?,unsigned_column(r,2)?))).map_err(|e|e.to_string())
+}
+
+/// Validates a SHA-256 space identity and derives the sole host-owned Lance table name.
+/// 验证 SHA-256 空间身份并派生唯一宿主 Lance 表名。
+pub(super) fn table_name(space: &str) -> Result<String, String> {
+    validate_sha256(space)?;
+    Ok(format!("kb_{space}"))
+}
+
+/// Validates the exact lowercase SHA-256 wire shape before SQL or table-name interpolation.
+/// 在 SQL 或表名插值前验证精确小写 SHA-256 线格式。
+pub(super) fn validate_sha256(value: &str) -> Result<(), String> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err("ERR_KNOWLEDGE_SHA256_INVALID".into());
     }
     Ok(())
 }
 
-/// Maps an abandoned vector build to the durable state exposed after restart.
-/// 将遗留向量构建映射为重启后公开的持久化状态。
-///
-/// # Parameters
-/// 参数
-/// `status` is the explicit derived-build lifecycle state to persist.
-/// `status` 是待持久化的明确派生构建生命周期状态。
-/// `has_active_generation` is whether a previously published generation remains available.
-/// `has_active_generation` 是此前发布的代次是否仍存在。
-///
-/// # Returns
-/// 返回值
-/// Returns a reconciled status only for an abandoned building state.
-/// 返回仅针对遗留构建中状态的协调后状态。
-pub(super) fn recovered_vector_index_status(
-    status: KnowledgeVectorIndexStatus,
-    has_active_generation: bool,
-) -> Option<KnowledgeVectorIndexStatus> {
-    if status != KnowledgeVectorIndexStatus::Building {
-        return None;
+impl KnowledgeBaseRuntime {
+    /// Installs the host executor and resumes eligible work; fake executors use the identical pipeline.
+    /// 安装宿主执行器并恢复具备资格工作；假执行器使用相同管线。
+    pub async fn set_embedding_executor(
+        &self,
+        executor: KnowledgeEmbeddingExecutor,
+    ) -> Result<(), String> {
+        *self.shared.embedding_executor.write().await = Some(executor);
+        self.recover_interrupted_jobs().await
     }
-    Some(if has_active_generation {
-        KnowledgeVectorIndexStatus::Stale
-    } else {
-        KnowledgeVectorIndexStatus::Failed
-    })
+
+    /// Coalesces a wake into exactly one worker per library; committed writes never fail from scheduling.
+    /// 将唤醒合并为每库恰好一个工作器；已提交写入不会因调度而失败。
+    pub async fn wake_knowledge_worker(&self, library_id: &str) {
+        // The map lock closes the idle-exit versus new-write wake race.
+        // 映射锁封闭空闲退出与新写入唤醒竞态。
+        let mut workers = self.shared.vector_workers.lock().await;
+        if let Some(epoch) = workers.get(library_id) {
+            epoch.fetch_add(1, Ordering::SeqCst);
+            return;
+        }
+        // A worker owns one wake epoch until it removes itself under the same map lock.
+        // 工作器在同一映射锁下移除自身前拥有一份唤醒代次。
+        let epoch = Arc::new(AtomicU64::new(1));
+        workers.insert(library_id.into(), epoch.clone());
+        // The spawned worker retains the established host rather than constructing another data plane.
+        // 派生工作器持有既有宿主，而非构建另一个数据面。
+        let runtime = self.clone();
+        // Own the canonical target across the asynchronous task lifetime.
+        // 跨异步任务生命周期持有规范目标。
+        let library_id = library_id.to_string();
+        tokio::spawn(async move {
+            loop {
+                let observed = epoch.load(Ordering::SeqCst);
+                let result = runtime.embedding_step(&library_id).await;
+                if let Err(error) = &result {
+                    let _guard = runtime.library_mutation_guard(&library_id).await;
+                    if let Err(record_error) = runtime
+                        .update_knowledge_operation_locked(&library_id, "failed", 0, 0, Some(error))
+                        .await
+                    {
+                        tracing::error!(
+                            "Failed to record knowledge worker failure: {record_error}"
+                        );
+                    }
+                }
+                if matches!(result, Ok(true)) {
+                    continue;
+                }
+                let mut workers = runtime.shared.vector_workers.lock().await;
+                if epoch.load(Ordering::SeqCst) != observed {
+                    drop(workers);
+                    continue;
+                }
+                workers.remove(&library_id);
+                return;
+            }
+        });
+    }
+
+    /// Reports desired-space progress and a bounded current-document failure page; no history hashes leak in counts.
+    /// 报告期望空间进度和有界当前文档失败页；计数不混入历史哈希。
+    pub async fn embedding_status(
+        &self,
+        library_id: &str,
+        limit: u32,
+        offset: u64,
+    ) -> Result<KnowledgeEmbeddingStatus, String> {
+        if limit == 0 || limit > MAX_KNOWLEDGE_PAGE_SIZE {
+            return Err("ERR_KNOWLEDGE_EMBEDDING_PAGE_RANGE".into());
+        }
+        // The desired route comes only from current library policy.
+        // 期望路由仅来自当前知识库策略。
+        let settings = self
+            .require_active_library(library_id)
+            .await?
+            .settings
+            .ok_or("ERR_KNOWLEDGE_SETTINGS_MISSING")?;
+        // Status is read without scheduling or modifying vector work.
+        // 状态读取不调度或修改向量工作。
+        let (_, binding) = self.ensure_library_binding(library_id).await?;
+        local_sql::with_read_snapshot_async(&self.host_runtime.local,self.resolve_library_binding(binding)?,move |connection|{
+            let active=active_embedding(connection)?.as_ref().map(content::vector_space_id).transpose()?;
+            let desired=settings.embedding.as_ref().map(content::vector_space_id).transpose()?;
+            let paused=paused(connection)?;
+            let (pending,ready,failed)=match &desired{Some(space)=>current_counts(connection,space)?,None=>(0,0,0)};
+            let mut failures=Vec::new();
+            if let Some(space)=&desired{
+                let mut statement=connection.prepare("SELECT d.id,d.path,c.id,c.content_sha256,s.attempts,s.last_error FROM kb_chunks c JOIN kb_documents d ON d.id=c.document_id JOIN kb_vector_state s ON s.content_sha256=c.content_sha256 WHERE s.vector_space_id=? AND s.state='failed' AND c.embed=1 ORDER BY d.path_key,c.ordinal LIMIT ? OFFSET ?;").map_err(|e|e.to_string())?;
+                failures=statement.query_map(params![space,limit+1,sql_integer(offset)?],|r|Ok(KnowledgeEmbeddingFailure{document_id:r.get(0)?,path:r.get(1)?,chunk_id:r.get(2)?,content_sha256:r.get(3)?,attempts:r.get(4)?,last_error:r.get(5)?})).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+            }
+            let next_offset=if failures.len()>limit as usize{failures.truncate(limit as usize);Some(offset.checked_add(u64::from(limit)).ok_or("ERR_KNOWLEDGE_INTEGER_RANGE")?)}else{None};
+            Ok(KnowledgeEmbeddingStatus{desired_space_id:desired,active_space_id:active,pending,ready,failed,paused,failures,next_offset})
+        }).await
+    }
+
+    /// Opens the exact host vector engine; a search cannot create a missing artifact.
+    /// 打开精确宿主向量引擎；检索不能创建缺失产物。
+    pub(super) async fn knowledge_vector_engine(
+        &self,
+        library_id: &str,
+        create: bool,
+    ) -> Result<LanceDbEngine, String> {
+        // Binding activation is host-shared across independently rebuilt wrappers.
+        // 绑定激活在独立重建包装之间由宿主共享。
+        let (_, binding) = self.activate_vector_binding(library_id, create).await?;
+        self.resolve_vector_engine(binding).await
+    }
+
+    /// Creates only a missing derived table and queues invalidated ready hashes; never overwrites an existing space.
+    /// 仅创建缺失派生表并排队失效就绪哈希；绝不覆盖已有空间。
+    async fn ensure_vector_table_locked(
+        &self,
+        library_id: &str,
+        embedding: &KnowledgeEmbeddingSettings,
+    ) -> Result<(), String> {
+        // Table identity is derived from the exact semantic space.
+        // 表身份从精确语义空间派生。
+        let space = content::vector_space_id(embedding)?;
+        // User-controlled route strings never enter a Lance table name.
+        // 用户控制的路由字符串绝不进入 Lance 表名。
+        let table = table_name(&space)?;
+        // Creation is restricted to the explicit background construction path.
+        // 创建仅限显式后台构建路径。
+        let engine = self.knowledge_vector_engine(library_id, true).await?;
+        match engine
+            .table_statistics(LanceDbTableStatisticsInput {
+                table_name: table.clone(),
+                compaction: Default::default(),
+            })
+            .await
+        {
+            Ok(_) => {}
+            Err(LanceDbEngineError::TableNotFound { .. }) => {
+                engine
+                    .create_table(LanceDbCreateTableInput {
+                        table_name: table,
+                        columns: vec![
+                            LanceDbColumnDef {
+                                name: "id".into(),
+                                column_type: LanceDbColumnType::String,
+                                vector_dim: 0,
+                                nullable: false,
+                            },
+                            LanceDbColumnDef {
+                                name: "vector".into(),
+                                column_type: LanceDbColumnType::VectorFloat32,
+                                vector_dim: embedding.dimensions,
+                                nullable: false,
+                            },
+                        ],
+                        overwrite_if_exists: false,
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let (_, binding) = self.ensure_library_binding(library_id).await?;
+                local_sql::execute_script_async(&self.host_runtime.local,self.resolve_library_binding(binding)?,
+                    "UPDATE kb_vector_state SET state='pending',attempts=0,last_error='The vector table was missing; regeneration is queued',updated_at_ms=? WHERE vector_space_id=? AND state='ready';",
+                    vec![int(unix_epoch_millis()?),text(&space)]).await?;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+        // Persist exact ownership for removal and crash-safe orphan cleanup.
+        // 持久化精确归属，供删除与崩溃安全孤立清理。
+        let (_, binding) = self.ensure_library_binding(library_id).await?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding)?,
+            "INSERT INTO knowledge_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING;",
+            vec![
+                text(format!("vector_table:{space}")),
+                text(serde_json::to_string(embedding).map_err(|e| e.to_string())?),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Removes obsolete vector spaces after publication or all spaces on downgrade; caller owns the library lock.
+    /// 发布后移除过期向量空间，降级时移除全部；调用方拥有知识库锁。
+    async fn remove_vector_tables_locked(
+        &self,
+        library_id: &str,
+        keep: Option<&str>,
+    ) -> Result<(), String> {
+        // Publication waits for queries holding the old space through inference and mapping.
+        // 发布等待在推理与映射期间持有旧空间的查询。
+        let _publication = self.vector_space_lock(library_id).await.write_owned().await;
+        // Ownership keys are the exact set of tables this library constructed.
+        // 归属键精确限定该库构建的表集合。
+        let (_, binding) = self.ensure_library_binding(library_id).await?;
+        // The keep identity is validated before any destructive derived cleanup.
+        // 破坏性派生清理前验证保留身份。
+        let keep = keep.map(str::to_string);
+        // Read only explicit space registrations, not guessed directory candidates.
+        // 仅读取显式空间注册，不猜测目录候选。
+        let spaces=local_sql::with_read_snapshot_async(&self.host_runtime.local,self.resolve_library_binding(&binding)?,|connection|{
+            let mut statement=connection.prepare("SELECT substr(key,length('vector_table:')+1) FROM knowledge_metadata WHERE key LIKE 'vector_table:%';").map_err(|e|e.to_string())?;
+            statement.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
+        }).await?;
+        for space in spaces {
+            if keep.as_deref() == Some(&space) {
+                continue;
+            }
+            let table = table_name(&space)?;
+            let engine = self.knowledge_vector_engine(library_id, false).await?;
+            match engine
+                .drop_table(LanceDbDropTableInput { table_name: table })
+                .await
+            {
+                Ok(_) | Err(LanceDbEngineError::TableNotFound { .. }) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+            local_sql::with_connection_async(
+                &self.host_runtime.local,
+                self.resolve_library_binding(&binding)?,
+                move |connection| {
+                    let transaction = connection
+                        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                        .map_err(|e| e.to_string())?;
+                    transaction
+                        .execute(
+                            "DELETE FROM knowledge_metadata WHERE key=?;",
+                            [format!("vector_table:{space}")],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    transaction
+                        .execute(
+                            "DELETE FROM kb_vector_state WHERE vector_space_id=?;",
+                            [space],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    transaction.commit().map_err(|e| e.to_string())
+                },
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Removes all vector capabilities on an explicit downgrade; returns only after exact derived cleanup.
+    /// 在显式降级时移除全部向量能力；精确派生清理完成后才返回。
+    pub(super) async fn clear_vector_tables_locked(&self, library_id: &str) -> Result<(), String> {
+        self.remove_vector_tables_locked(library_id, None).await?;
+        // State rows without a table may exist when construction was cancelled before creation.
+        // 构建在建表前取消时可能存在尚无表的状态行。
+        let (_, binding) = self.ensure_library_binding(library_id).await?;
+        local_sql::execute_script_async(&self.host_runtime.local,self.resolve_library_binding(binding)?,
+            "DELETE FROM kb_vector_state;UPDATE knowledge_metadata SET value='null' WHERE key='active_embedding';",vec![]).await?;
+        Ok(())
+    }
+}
+
+impl KnowledgeBaseRuntime {
+    /// Returns the host-owned reader/publication lock for one exact library.
+    /// 返回一个精确知识库的宿主读取与发布锁。
+    pub(super) async fn vector_space_lock(&self, library_id: &str) -> Arc<tokio::sync::RwLock<()>> {
+        // All callers acquire the library mutation guard before taking this lock.
+        // 全部调用方在获取该锁前先获取知识库变更守卫。
+        self.shared
+            .vector_space_locks
+            .lock()
+            .await
+            .entry(library_id.into())
+            .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(())))
+            .clone()
+    }
+
+    /// Reserves the next exact batch or publishes a complete space; caller receives no speculative route.
+    /// 保留下个精确批次或发布完整空间；调用方不会收到猜测路由。
+    async fn prepare_embedding_batch(
+        &self,
+        library_id: &str,
+    ) -> Result<Option<EmbeddingBatch>, String> {
+        // One mutation domain protects settings, current chunk membership and attempt reservations.
+        // 一个变更域保护设置、当前切块成员和尝试保留。
+        let _guard = self.library_mutation_guard(library_id).await?;
+        // Invalid or deleted libraries stop before any derived artifact can be recreated.
+        // 非法或已删除库在重建任何派生产物前停止。
+        let settings = self
+            .require_active_library(library_id)
+            .await?
+            .settings
+            .ok_or("ERR_KNOWLEDGE_SETTINGS_MISSING")?;
+        // Resolve the exact existing content binding.
+        // 解析精确已有内容绑定。
+        let (_, binding) = self.ensure_library_binding(library_id).await?;
+        // Reconcile interrupted FTS work before reserving paid vector requests.
+        // 保留付费向量请求前协调中断的全文工作。
+        let is_paused = local_sql::with_connection_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding)?,
+            {
+                let settings = settings.clone();
+                move |connection| {
+                    if paused(connection)? {
+                        return Ok(true);
+                    }
+                    let status = metadata(connection, "index_status")?;
+                    if (settings.index_mode.has_fts() && status != "ready")
+                        || (!settings.index_mode.has_fts() && status != "disabled")
+                    {
+                        let transaction = connection
+                            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                            .map_err(|e| e.to_string())?;
+                        fts::rebuild_fts(&transaction, settings.index_mode.has_fts())?;
+                        transaction.commit().map_err(|e| e.to_string())?;
+                    }
+                    Ok(false)
+                }
+            },
+        )
+        .await?;
+        if is_paused {
+            return Ok(None);
+        }
+        // Nonvector targets complete after FTS reconciliation and exact derived vector removal.
+        // 非向量目标在全文协调和精确派生向量移除后完成。
+        let Some(embedding) = settings.embedding.clone() else {
+            self.clear_vector_tables_locked(library_id).await?;
+            let count = local_sql::with_read_snapshot_async(
+                &self.host_runtime.local,
+                self.resolve_library_binding(&binding)?,
+                |connection| {
+                    connection
+                        .query_row("SELECT COUNT(*) FROM kb_chunks;", [], |r| {
+                            unsigned_column(r, 0)
+                        })
+                        .map_err(|e| e.to_string())
+                },
+            )
+            .await?;
+            self.update_knowledge_operation_locked(library_id, "completed", count, count, None)
+                .await?;
+            return Ok(None);
+        };
+        self.ensure_vector_table_locked(library_id, &embedding)
+            .await?;
+        // The space identity binds attempt counters to this exact frozen model space.
+        // 空间身份将尝试计数绑定到该精确冻结模型空间。
+        let space = content::vector_space_id(&embedding)?;
+        // Reserve attempts before inference; a crash consumes the accepted attempt rather than duplicating it silently.
+        // 推理前保留尝试；崩溃消耗已接受尝试，而非静默重复。
+        let inputs=local_sql::with_connection_async(&self.host_runtime.local,self.resolve_library_binding(&binding)?,{
+            let embedding=embedding.clone();
+            let settings=settings.clone();
+            let space=space.clone();
+            move |connection|{
+                let transaction=connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e|e.to_string())?;
+                queue_current_embeddings(&transaction,&settings)?;
+                transaction.execute("UPDATE kb_vector_state SET state='failed',last_error='Embedding was interrupted at the automatic attempt limit',updated_at_ms=? WHERE vector_space_id=? AND state='pending' AND attempts>=?;",
+                    params![unix_epoch_millis()?,space,MAX_KNOWLEDGE_EMBEDDING_ATTEMPTS]).map_err(|e|e.to_string())?;
+                let inputs={
+                    let mut statement=transaction.prepare("SELECT s.content_sha256,MIN(c.text) FROM kb_vector_state s JOIN kb_chunks c ON c.content_sha256=s.content_sha256 WHERE s.vector_space_id=? AND s.state='pending' AND s.attempts<? AND c.embed=1 GROUP BY s.content_sha256 ORDER BY s.content_sha256 LIMIT ?;").map_err(|e|e.to_string())?;
+                    statement.query_map(params![space,MAX_KNOWLEDGE_EMBEDDING_ATTEMPTS,embedding.batch_size],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?
+                };
+                for (hash,_) in &inputs{
+                    transaction.execute("UPDATE kb_vector_state SET attempts=attempts+1,updated_at_ms=? WHERE vector_space_id=? AND content_sha256=? AND state='pending';",params![unix_epoch_millis()?,space,hash]).map_err(|e|e.to_string())?;
+                }
+                transaction.commit().map_err(|e|e.to_string())?;
+                Ok(inputs)
+            }
+        }).await?;
+        // Progress is a live projection of current hashes, including new writes admitted during a build.
+        // 进度是当前哈希的实时投影，包括构建期间准入的新写入。
+        let counts = local_sql::with_read_snapshot_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding)?,
+            {
+                let space = space.clone();
+                move |connection| current_counts(connection, &space)
+            },
+        )
+        .await?;
+        if inputs.is_empty() {
+            let (pending, ready, failed) = counts;
+            if pending == 0 && failed == 0 {
+                // Publish before cleanup, then wait for old readers before dropping the old space.
+                // 清理前发布，随后等待旧读取者结束再删除旧空间。
+                local_sql::execute_script_async(
+                    &self.host_runtime.local,
+                    self.resolve_library_binding(&binding)?,
+                    "UPDATE knowledge_metadata SET value=? WHERE key='active_embedding';",
+                    vec![text(
+                        serde_json::to_string(&Some(&embedding)).map_err(|e| e.to_string())?,
+                    )],
+                )
+                .await?;
+                self.remove_vector_tables_locked(library_id, Some(&space))
+                    .await?;
+                self.update_knowledge_operation_locked(library_id, "completed", ready, ready, None)
+                    .await?;
+            } else {
+                self.update_knowledge_operation_locked(
+                    library_id,
+                    "failed",
+                    pending + ready + failed,
+                    ready,
+                    Some("ERR_KNOWLEDGE_EMBEDDINGS_FAILED: exhausted items require human retry"),
+                )
+                .await?;
+            }
+            return Ok(None);
+        }
+        self.update_knowledge_operation_locked(
+            library_id,
+            "running",
+            counts.0 + counts.1 + counts.2,
+            counts.1,
+            None,
+        )
+        .await?;
+        Ok(Some(EmbeddingBatch {
+            embedding,
+            space,
+            inputs,
+        }))
+    }
+
+    /// Runs one frozen batch outside the mutation lock and commits only into its still-current desired space.
+    /// 在变更锁外运行一批冻结请求，仅向仍为当前期望的空间提交。
+    async fn embedding_step(&self, library_id: &str) -> Result<bool, String> {
+        // Reservation returns no batch when paused, complete, exhausted or in a nonvector mode.
+        // 暂停、完成、耗尽或非向量模式时，保留入口不返回批次。
+        let Some(batch) = self.prepare_embedding_batch(library_id).await? else {
+            return Ok(false);
+        };
+        // Clone the registered host executor without retaining its registration lock during inference.
+        // 克隆已注册宿主执行器，推理期间不持有注册锁。
+        let executor = self.shared.embedding_executor.read().await.clone();
+        // The provider is called only with the declared route, dimension and ordered inputs.
+        // 仅使用声明的路由、维度和有序输入调用供应商。
+        let result = match executor {
+            Some(executor) => {
+                executor(KnowledgeEmbeddingRequest {
+                    embedding: batch.embedding.clone(),
+                    inputs: batch.inputs.iter().map(|(_, text)| text.clone()).collect(),
+                    is_query: false,
+                })
+                .await
+            }
+            None => Err("ERR_KNOWLEDGE_EMBEDDING_EXECUTOR_UNAVAILABLE".into()),
+        };
+        // A route or mode change that completed during inference invalidates this publication.
+        // 推理期间完成的路由或模式变更使该次发布失效。
+        let _guard = self.library_mutation_guard(library_id).await?;
+        // Deleted libraries cannot resurrect from delayed inference results.
+        // 已删除库不能因延迟推理结果复活。
+        let settings = self
+            .require_active_library(library_id)
+            .await?
+            .settings
+            .ok_or("ERR_KNOWLEDGE_SETTINGS_MISSING")?;
+        if settings
+            .embedding
+            .as_ref()
+            .map(content::vector_space_id)
+            .transpose()?
+            .as_deref()
+            != Some(&batch.space)
+        {
+            return Ok(true);
+        }
+        // Cancellation is checked after asynchronous inference and before every Lance/SQLite publication.
+        // 异步推理后、每次 Lance 和 SQLite 发布前检查取消。
+        let (_, binding) = self.ensure_library_binding(library_id).await?;
+        if local_sql::with_read_snapshot_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(&binding)?,
+            paused,
+        )
+        .await?
+        {
+            return Ok(false);
+        }
+        // Item validation supports partial success without mislabeling an invalid vector as ready.
+        // 条目验证支持部分成功，不将非法向量标成就绪。
+        let results:Vec<Result<Vec<f32>,String>>=match result{
+            Ok(vectors) if vectors.len()==batch.inputs.len()=>vectors.into_iter().map(|vector|{
+                if vector.len()!=batch.embedding.dimensions as usize || vector.iter().any(|value|!value.is_finite()){
+                    Err("ERR_KNOWLEDGE_EMBEDDING_VECTOR_INVALID: dimension or finite-value validation failed".into())
+                }else{Ok(vector)}
+            }).collect(),
+            Ok(_)=>vec![Err("ERR_KNOWLEDGE_EMBEDDING_RESPONSE_COUNT".into());batch.inputs.len()],
+            Err(error)=>vec![Err(error);batch.inputs.len()]
+        };
+        // Only valid vectors reach Lance, keyed by their immutable input digest.
+        // 仅合法向量进入 Lance，以不可变输入摘要为键。
+        let rows: Vec<_> = batch
+            .inputs
+            .iter()
+            .zip(&results)
+            .filter_map(|((hash, _), result)| {
+                result
+                    .as_ref()
+                    .ok()
+                    .map(|vector| serde_json::json!({"id":hash,"vector":vector}))
+            })
+            .collect();
+        // Storage failure applies to all otherwise successful rows; retry stays content-addressed and idempotent.
+        // 存储失败应用到全部原本成功行；重试保持内容寻址和幂等。
+        let write_error = if rows.is_empty() {
+            None
+        } else {
+            self.knowledge_vector_engine(library_id, false)
+                .await?
+                .vector_upsert(LanceDbUpsertInput {
+                    table_name: table_name(&batch.space)?,
+                    input_format: LanceDbInputFormat::JsonRows,
+                    data: serde_json::to_vec(&rows).map_err(|e| e.to_string())?,
+                    key_columns: vec!["id".into()],
+                })
+                .await
+                .err()
+                .map(|e| e.to_string())
+        };
+        local_sql::with_connection_async(&self.host_runtime.local,self.resolve_library_binding(binding)?,move |connection|{
+            let transaction=connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e|e.to_string())?;
+            for ((hash,_),result) in batch.inputs.into_iter().zip(results){
+                let error=match result{Err(error)=>Some(error),Ok(_)=>write_error.clone()};
+                if let Some(error)=error{
+                    transaction.execute("UPDATE kb_vector_state SET state=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,last_error=?,updated_at_ms=? WHERE vector_space_id=? AND content_sha256=?;",
+                        params![MAX_KNOWLEDGE_EMBEDDING_ATTEMPTS,error,unix_epoch_millis()?,batch.space,hash]).map_err(|e|e.to_string())?;
+                }else{
+                    transaction.execute("UPDATE kb_vector_state SET state='ready',last_error='',updated_at_ms=? WHERE vector_space_id=? AND content_sha256=?;",
+                        params![unix_epoch_millis()?,batch.space,hash]).map_err(|e|e.to_string())?;
+                }
+            }
+            transaction.commit().map_err(|e|e.to_string())
+        }).await?;
+        Ok(true)
+    }
 }

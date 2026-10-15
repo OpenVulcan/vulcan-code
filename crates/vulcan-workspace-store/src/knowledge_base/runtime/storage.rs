@@ -924,45 +924,6 @@ impl KnowledgeBaseRuntime {
         .map_err(|error| format!("Knowledge SQLite query failed: {error}"))?;
         decode_rows(&result.json_data)
     }
-
-    /// Executes one repeated typed statement against a library database.
-    /// 对知识库数据库执行一条重复的类型化语句。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `space_id` is the already derived storage-space identity.
-    /// `space_id` 是已经派生的存储空间身份。
-    /// `binding_id` is the exact SQLite binding within that storage space.
-    /// `binding_id` 是该存储空间内的精确 SQLite 绑定。
-    /// `sql` is the existing parameterized SQL statement.
-    /// `sql` 是现有参数化 SQL 语句。
-    /// `items` is the ordered parameter rows for repeated statement execution.
-    /// `items` 是重复语句执行的有序参数行。
-    /// `context` is the operation-specific error prefix.
-    /// `context` 是操作专属错误前缀。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after the documented operation completes, or its explicit failure.
-    /// 返回所述操作完成后的成功结果，或其明确错误。
-    pub(super) async fn execute_library_batch(
-        &self,
-        _space_id: &str,
-        binding_id: &str,
-        sql: &str,
-        items: Vec<Vec<SqliteValue>>,
-        context: &str,
-    ) -> Result<(), String> {
-        local_sql::execute_batch_async(
-            &self.host_runtime.local,
-            self.resolve_library_binding(binding_id)?,
-            sql,
-            items,
-        )
-        .await
-        .map_err(|error| format!("{context}: {error}"))?;
-        Ok(())
-    }
 }
 
 /// Atomically persists one securely created temporary file over a stable destination.

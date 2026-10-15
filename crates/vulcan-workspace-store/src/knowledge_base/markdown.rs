@@ -64,6 +64,51 @@ pub fn normalize_markdown_newlines(content: &str) -> String {
     content.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+/// Exact body-line iterator recognizing LF, CRLF and CR without rewriting source bytes.
+/// 识别 LF、CRLF 和 CR 且不改写来源字节的精确正文行迭代器。
+pub struct KnowledgeBodyLines<'a> {
+    /// Unconsumed exact UTF-8 suffix.
+    /// 尚未消费的精确 UTF-8 后缀。
+    remaining: &'a str,
+}
+
+impl<'a> Iterator for KnowledgeBodyLines<'a> {
+    type Item = &'a str;
+
+    /// Returns the next line including its original separator, or None after all bytes are consumed.
+    /// 返回包含原始分隔符的下一行，全部字节消费后返回空值。
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining.is_empty() {
+            return None;
+        }
+        // ASCII separator positions are always valid UTF-8 slicing boundaries.
+        // ASCII 分隔符位置始终是合法 UTF-8 切片边界。
+        let bytes = self.remaining.as_bytes();
+        // CRLF is one logical separator, matching the Markdown chunker's normalization authority.
+        // CRLF 是一个逻辑分隔符，与 Markdown 切块规范化权威一致。
+        let end = match bytes.iter().position(|byte| matches!(byte, b'\r' | b'\n')) {
+            Some(position)
+                if bytes[position] == b'\r' && bytes.get(position + 1) == Some(&b'\n') =>
+            {
+                position + 2
+            }
+            Some(position) => position + 1,
+            None => bytes.len(),
+        };
+        // Keep original separators in the yielded slice rather than materializing normalized text.
+        // 在产出切片中保留原分隔符，而非物化规范化文本。
+        let (line, remaining) = self.remaining.split_at(end);
+        self.remaining = remaining;
+        Some(line)
+    }
+}
+
+/// Iterates exact body lines with the chunker's logical line semantics; returns a zero-allocation iterator.
+/// 按切块器逻辑行语义遍历精确正文行；返回零分配迭代器。
+pub fn knowledge_body_lines(content: &str) -> KnowledgeBodyLines<'_> {
+    KnowledgeBodyLines { remaining: content }
+}
+
 /// Extracts the first level-one heading or falls back to the file stem.
 /// 提取第一个一级标题，若不存在则回退到文件主名。
 pub fn extract_document_title(content: &str, file_stem: &str) -> String {
