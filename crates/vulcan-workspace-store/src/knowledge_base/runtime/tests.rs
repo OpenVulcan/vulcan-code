@@ -2,6 +2,8 @@
 //! 精确版本 AI 管理内容与还原语义的行为回归。
 
 use super::*;
+#[path = "package_tests.rs"]
+mod package_tests;
 #[path = "vector_tests.rs"]
 mod vector_tests;
 use crate::data_plane::{HostRuntimeMetadata, build_application_schema_script};

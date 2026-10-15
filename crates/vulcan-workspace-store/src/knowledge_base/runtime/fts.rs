@@ -155,19 +155,7 @@ impl KnowledgeBaseRuntime {
         library_id: &str,
         words: Vec<KnowledgeCustomWord>,
     ) -> Result<Vec<KnowledgeCustomWord>, String> {
-        // Reject duplicate terms and invalid weights before any dictionary mutation.
-        // 词典变更前拒绝重复词语和非法权重。
-        let mut unique = BTreeSet::new();
-        for entry in &words {
-            if entry.word.trim() != entry.word
-                || entry.word.is_empty()
-                || entry.word.chars().any(char::is_control)
-                || entry.weight == 0
-                || !unique.insert(entry.word.clone())
-            {
-                return Err("ERR_KNOWLEDGE_CUSTOM_WORD_INVALID".into());
-            }
-        }
+        validate_custom_words(&words)?;
         // Dictionary replacement participates in the same library mutation domain.
         // 词典替换参与同一知识库变更域。
         let guard = self.library_mutation_guard(library_id).await?;
@@ -194,4 +182,23 @@ impl KnowledgeBaseRuntime {
         drop(guard);
         self.list_custom_words(library_id).await
     }
+}
+
+/// Validates complete custom dictionary settings; returns an explicit invalid-term or duplicate error.
+/// 验证完整自定义词典设置；返回明确非法词语或重复错误。
+pub(super) fn validate_custom_words(words: &[KnowledgeCustomWord]) -> Result<(), String> {
+    // Settings and portable packages share exactly the same validation authority.
+    // 设置与可移植套件共享完全相同的验证权威。
+    let mut unique = BTreeSet::new();
+    for entry in words {
+        if entry.word.trim() != entry.word
+            || entry.word.is_empty()
+            || entry.word.chars().any(char::is_control)
+            || entry.weight == 0
+            || !unique.insert(&entry.word)
+        {
+            return Err("ERR_KNOWLEDGE_CUSTOM_WORD_INVALID".into());
+        }
+    }
+    Ok(())
 }

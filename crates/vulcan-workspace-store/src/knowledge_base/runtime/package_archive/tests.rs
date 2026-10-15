@@ -1,240 +1,247 @@
-//! Portable archive boundary checks and shared binary package fixtures.
-//! 可移植归档边界检查与共享二进制包夹具。
+//! Strict archive-format tests using bounded synthetic data only.
+//! 仅使用有界合成数据的严格归档格式测试。
 
 use super::*;
-use crate::knowledge_base::models::KnowledgeLibrarySettings;
-use tempfile::tempdir;
+use std::io::Cursor;
 
-/// Writes one compact package fixture with caller-controlled metadata entry and optional extra entry.
-/// 写入一个紧凑知识库包夹具，允许调用方控制元数据条目及可选额外条目。
-fn write_package_fixture(
-    path: &Path,
-    package: &KnowledgePackageManifest,
-    manifest: &KnowledgeManifest,
-    database: &[u8],
-    metadata_entry: &str,
-    extra_entry: Option<&str>,
-) {
-    let file = File::create(path).expect("create package fixture");
-    let mut writer = ZipWriter::new(file);
+/// Builds a current empty manifest; all fields are format data rather than historical snapshots.
+/// 构建当前空清单；全部字段为格式数据，而非历史快照。
+fn manifest() -> KnowledgePackageManifest {
+    KnowledgePackageManifest {
+        format: KNOWLEDGE_PACKAGE_FORMAT.into(),
+        version: KNOWLEDGE_PACKAGE_VERSION,
+        name: "Package fixture".into(),
+        description: "Portable current content".into(),
+        settings: KnowledgeLibrarySettings {
+            index_mode: KnowledgeIndexMode::Browse,
+            embedding: None,
+        },
+        custom_words: vec![],
+        document_count: 0,
+        folder_count: 0,
+        content_sha256: super::super::super::sha256_hex(b""),
+        exported_at_ms: 1,
+    }
+}
+
+/// Writes exactly two named entries, allowing explicit hostile entry-name fixtures.
+/// 写入恰好两条命名记录，允许显式恶意条目名称夹具。
+fn archive(path: &Path, manifest: &serde_json::Value, content: &[u8], content_name: &str) {
+    // A stored ZIP makes later corruption fixtures independent of compression internals.
+    // 不压缩 ZIP 使后续损坏夹具独立于压缩内部细节。
+    let mut writer = ZipWriter::new(File::create(path).expect("create archive"));
+    // Entry encoding is deliberately explicit and portable.
+    // 条目编码刻意显式且可移植。
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
     writer
-        .start_file(metadata_entry, options)
-        .expect("start package metadata");
+        .start_file(MANIFEST_ENTRY, options)
+        .expect("manifest entry");
     writer
-        .write_all(&serde_json::to_vec(package).expect("serialize package metadata"))
-        .expect("write package metadata");
+        .write_all(&serde_json::to_vec(manifest).expect("manifest bytes"))
+        .expect("write manifest");
     writer
-        .start_file(KNOWLEDGE_PACKAGE_LIBRARY_MANIFEST_ENTRY, options)
-        .expect("start package manifest");
-    writer
-        .write_all(&serde_json::to_vec(manifest).expect("serialize package manifest"))
-        .expect("write package manifest");
-    writer
-        .start_file(KNOWLEDGE_PACKAGE_DATABASE_ENTRY, options)
-        .expect("start package database");
-    writer.write_all(database).expect("write package database");
-    if let Some(extra_entry) = extra_entry {
-        writer
-            .start_file(extra_entry, options)
-            .expect("start extra package entry");
-        writer
-            .write_all(b"extra")
-            .expect("write extra package entry");
+        .start_file(content_name, options)
+        .expect("content entry");
+    writer.write_all(content).expect("write content");
+    writer.finish().expect("finish archive");
+}
+
+/// Verifies exact version acceptance, strict current settings and read-only rejection of old versions.
+/// 验证精确版本接受、严格当前设置及只读拒绝旧版本。
+#[test]
+fn package_versions_and_strict_shapes_are_enforced() {
+    // Every rejected file is checked for byte preservation.
+    // 每个被拒绝文件都检查字节保留。
+    let root = tempfile::tempdir().expect("root");
+    // A real bounded ZIP is used rather than a source-string or content golden guard.
+    // 使用真实有界 ZIP，而非源码字符串或内容黄金守卫。
+    let path = root.path().join("version.vkb");
+    for version in [0, 1, 2, KNOWLEDGE_PACKAGE_VERSION + 1] {
+        let mut header = serde_json::to_value(manifest()).expect("manifest");
+        header["version"] = serde_json::json!(version);
+        archive(&path, &header, b"", CONTENT_ENTRY);
+        let before = fs::read(&path).expect("before");
+        assert!(
+            prepare_knowledge_package(&path, None)
+                .err()
+                .expect("old/future refusal")
+                .starts_with("ERR_KNOWLEDGE_PACKAGE_VERSION_UNSUPPORTED")
+        );
+        assert_eq!(fs::read(&path).expect("after"), before);
     }
-    writer.finish().expect("finish package fixture");
+    // Only the exact supported version and current field set are accepted.
+    // 仅接受精确支持版本与当前字段集合。
+    let header = serde_json::to_value(manifest()).expect("manifest");
+    archive(&path, &header, b"", CONTENT_ENTRY);
+    assert!(prepare_knowledge_package(&path, None).is_ok());
+    // Obsolete retrieval fields are never interpreted as a new index mode.
+    // 过时检索字段绝不解释为新索引模式。
+    let mut invalid = header;
+    invalid["settings"]["retrievalMode"] = serde_json::json!("raw_bm25");
+    archive(&path, &invalid, b"", CONTENT_ENTRY);
+    assert!(prepare_knowledge_package(&path, None).is_err());
 }
 
-/// Builds matching metadata for one compact package fixture.
-/// 为一个紧凑知识库包夹具构建相互匹配的元数据。
-fn package_fixture_metadata(database: &[u8]) -> (KnowledgePackageManifest, KnowledgeManifest) {
-    let source_library_id = String::from("550e8400-e29b-41d4-a716-446655440000");
-    let package = KnowledgePackageManifest {
-        format: String::from(KNOWLEDGE_PACKAGE_FORMAT),
-        package_version: KNOWLEDGE_PACKAGE_VERSION,
-        source_library_id: source_library_id.clone(),
-        name: String::from("测试知识库"),
-        description: String::from("fixture"),
-        settings: KnowledgeLibrarySettings::default(),
-        schema_version: KNOWLEDGE_SCHEMA_VERSION,
-        document_count: 0,
-        chunk_count: 0,
-        index_status: String::from("ready"),
-        exported_at_ms: 1,
-        content_sha256: hex::encode(Sha256::digest(database)),
-        content_bytes: database.len() as u64,
-        derived_artifacts: Vec::new(),
-    };
-    let manifest = KnowledgeManifest {
-        library_id: source_library_id,
-        name: package.name.clone(),
-        schema_version: KNOWLEDGE_SCHEMA_VERSION,
-    };
-    (package, manifest)
-}
-
-/// Rewrites only the declared source identity while retaining the original SQLite bytes and digest.
-/// 仅重写声明的来源身份，同时保留原始 SQLite 字节与摘要。
-pub(in super::super) fn write_identity_mismatch_package(source: &Path, destination: &Path) {
-    // archive reads the three exact entries from a valid exported package.
-    // archive 从一个有效导出包中读取三个精确条目。
-    let input = File::open(source).expect("open valid source package");
-    let mut archive = ZipArchive::new(input).expect("parse valid source package");
-    // package changes provenance metadata without changing the database content.
-    // package 修改来源元数据，但不改变数据库内容。
-    let mut package: KnowledgePackageManifest = {
-        let mut entry = archive
-            .by_name(KNOWLEDGE_PACKAGE_METADATA_ENTRY)
-            .expect("read source package metadata");
-        serde_json::from_reader(&mut entry).expect("decode source package metadata")
-    };
-    // manifest mirrors the forged identity so the outer package checks still pass.
-    // manifest 镜像伪造身份，使知识库包外层检查仍能通过。
-    let mut manifest: KnowledgeManifest = {
-        let mut entry = archive
-            .by_name(KNOWLEDGE_PACKAGE_LIBRARY_MANIFEST_ENTRY)
-            .expect("read source package manifest");
-        serde_json::from_reader(&mut entry).expect("decode source package manifest")
-    };
-    // database retains the real embedded identity and therefore must fail full inspection.
-    // database 保留真实内嵌身份，因此必须无法通过完整检查。
-    let mut database = Vec::new();
-    archive
-        .by_name(KNOWLEDGE_PACKAGE_DATABASE_ENTRY)
-        .expect("read source package database")
-        .read_to_end(&mut database)
-        .expect("decode source package database");
-    // forgedIdentity is canonical but intentionally differs from the SQLite metadata row.
-    // forgedIdentity 是规范标识，但刻意不同于 SQLite 元数据记录。
-    let forged_identity = String::from("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
-    package.source_library_id.clone_from(&forged_identity);
-    manifest.library_id = forged_identity;
-    write_package_fixture(
-        destination,
-        &package,
-        &manifest,
-        &database,
-        KNOWLEDGE_PACKAGE_METADATA_ENTRY,
-        None,
-    );
-}
-
-/// Verifies the minimal three-entry fixture obeys exact metadata, entry and digest validation.
-/// 验证最小三条目夹具遵守精确元数据、条目与摘要校验。
+/// Verifies traversal, legacy artifacts, duplicate entries and inconsistent manifests are rejected.
+/// 验证遍历路径、旧产物、重复条目和不一致清单被拒绝。
 #[test]
-fn package_preparation_enforces_exact_entries_and_digest() {
-    let temporary = tempdir().expect("create package fixture root");
-    let database = b"SQLite format 3\0fixture";
-    let (package, manifest) = package_fixture_metadata(database);
-    let valid_path = temporary.path().join("valid.vkb");
-    write_package_fixture(
-        &valid_path,
-        &package,
-        &manifest,
-        database,
-        KNOWLEDGE_PACKAGE_METADATA_ENTRY,
-        None,
+fn package_entry_set_and_content_integrity_are_closed() {
+    let root = tempfile::tempdir().expect("root");
+    let path = root.path().join("hostile.vkb");
+    let header = serde_json::to_value(manifest()).expect("manifest");
+    for entry in [
+        "../content.jsonl",
+        "library/content.sqlite3",
+        "history.jsonl",
+        "vectors.bin",
+    ] {
+        archive(&path, &header, b"", entry);
+        assert!(
+            prepare_knowledge_package(&path, None)
+                .err()
+                .expect("entry refusal")
+                .starts_with("ERR_KNOWLEDGE_PACKAGE_ENTRY_INVALID")
+        );
+    }
+    // Renaming ZIP names preserves payload CRC while creating a true duplicate-name container.
+    // 重命名 ZIP 名称保留载荷校验，同时创建真实重复名称容器。
+    archive(&path, &header, b"", CONTENT_ENTRY);
+    let mut bytes = fs::read(&path).expect("archive bytes");
+    assert_eq!(
+        CONTENT_ENTRY.len(),
+        MANIFEST_ENTRY.len(),
+        "ZIP fixture names may have evolved; update the same-length duplicate-name fixture"
     );
-    let prepared =
-        prepare_knowledge_package(&valid_path, temporary.path()).expect("prepare matching package");
-    assert_eq!(prepared.package, package);
-
-    let mut corrupt_package = package.clone();
-    corrupt_package.content_sha256 = "0".repeat(64);
-    let corrupt_path = temporary.path().join("corrupt.vkb");
-    write_package_fixture(
-        &corrupt_path,
-        &corrupt_package,
-        &manifest,
-        database,
-        KNOWLEDGE_PACKAGE_METADATA_ENTRY,
-        None,
-    );
-    assert!(prepare_knowledge_package(&corrupt_path, temporary.path()).is_err());
-
-    let traversal_path = temporary.path().join("traversal.vkb");
-    write_package_fixture(
-        &traversal_path,
-        &package,
-        &manifest,
-        database,
-        "../package.json",
-        None,
-    );
-    assert!(prepare_knowledge_package(&traversal_path, temporary.path()).is_err());
-
-    let extra_path = temporary.path().join("extra.vkb");
-    write_package_fixture(
-        &extra_path,
-        &package,
-        &manifest,
-        database,
-        KNOWLEDGE_PACKAGE_METADATA_ENTRY,
-        Some("unexpected.txt"),
-    );
-    assert!(prepare_knowledge_package(&extra_path, temporary.path()).is_err());
-
-    // unsupportedPackage proves the format protocol field is enforced.
-    // unsupportedPackage 证明格式协议字段会被强制校验。
-    let mut unsupported_package = package.clone();
-    unsupported_package.format = String::from("unsupported-format");
-    let unsupported_path = temporary.path().join("unsupported.vkb");
-    write_package_fixture(
-        &unsupported_path,
-        &unsupported_package,
-        &manifest,
-        database,
-        KNOWLEDGE_PACKAGE_METADATA_ENTRY,
-        None,
-    );
-    assert!(prepare_knowledge_package(&unsupported_path, temporary.path()).is_err());
-
-    // incompatiblePackage proves the SQLite schema version is checked independently.
-    // incompatiblePackage 证明 SQLite 结构版本会被独立校验。
-    let mut incompatible_package = package;
-    incompatible_package.schema_version += 1;
-    let incompatible_path = temporary.path().join("incompatible.vkb");
-    write_package_fixture(
-        &incompatible_path,
-        &incompatible_package,
-        &manifest,
-        database,
-        KNOWLEDGE_PACKAGE_METADATA_ENTRY,
-        None,
-    );
-    assert!(prepare_knowledge_package(&incompatible_path, temporary.path()).is_err());
-}
-
-/// Verifies bounded ZIP readers reject decompressed metadata beyond the configured limit.
-/// 验证有界 ZIP 读取器拒绝超过配置上限的解压元数据。
-#[test]
-fn bounded_package_entry_rejects_expansion_over_limit() {
-    // oversized creates one byte beyond the exact test limit.
-    // oversized 创建比精确测试上限多一个字节的数据。
-    let mut oversized = std::io::Cursor::new(vec![0_u8; 17]);
-    assert!(read_bounded_zip_entry(&mut oversized, 16, "fixture").is_err());
-}
-
-/// Verifies long or filesystem-reserved names remain bounded in exported archive names.
-/// 验证过长或文件系统保留字符名称生成的导出归档名保持有界。
-#[test]
-fn portable_archive_name_is_safe_and_bounded() {
-    let archive_name = portable_knowledge_archive_name(
-        &format!("CON:<>?*{}", "界".repeat(200)),
-        123456789,
-        "550e8400-e29b-41d4-a716-446655440000",
-    );
-    assert!(archive_name.ends_with("-123456789-550e8400-e29b-41d4-a716-446655440000.vkb"));
+    let positions: Vec<_> = bytes
+        .windows(CONTENT_ENTRY.len())
+        .enumerate()
+        .filter_map(|(index, value)| (value == CONTENT_ENTRY.as_bytes()).then_some(index))
+        .collect();
+    for position in positions {
+        bytes[position..position + MANIFEST_ENTRY.len()].copy_from_slice(MANIFEST_ENTRY.as_bytes());
+    }
+    fs::write(&path, bytes).expect("duplicate names");
+    assert!(prepare_knowledge_package(&path, None).is_err());
+    // The manifest digest and counts must agree with decoded logical content.
+    // 清单摘要和数量必须与解码逻辑内容一致。
+    let mut wrong_digest = header.clone();
+    wrong_digest["contentSha256"] = serde_json::json!("0".repeat(64));
+    archive(&path, &wrong_digest, b"", CONTENT_ENTRY);
     assert!(
-        archive_name
-            .chars()
-            .all(|character| !matches!(character, ':' | '<' | '>' | '?' | '*'))
+        prepare_knowledge_package(&path, None)
+            .err()
+            .expect("digest")
+            .starts_with("ERR_KNOWLEDGE_PACKAGE_CONTENT_DIGEST")
+    );
+    let mut wrong_count = header;
+    wrong_count["documentCount"] = serde_json::json!(1);
+    archive(&path, &wrong_count, b"", CONTENT_ENTRY);
+    assert!(
+        prepare_knowledge_package(&path, None)
+            .err()
+            .expect("count")
+            .starts_with("ERR_KNOWLEDGE_PACKAGE_COUNT_MISMATCH")
+    );
+}
+
+/// Verifies the decompression reader enforces actual bytes and exact declared lengths using small bounds.
+/// 验证解压读取器通过小边界约束实际字节和精确声明长度。
+#[test]
+fn decompression_bounds_do_not_trust_declared_sizes() {
+    assert!(read_bounded_entry(&mut Cursor::new(b"abc"), 3, 2).is_err());
+    assert!(
+        read_bounded_entry(&mut Cursor::new(b"abc"), 2, 2)
+            .expect_err("actual bound")
+            .starts_with("ERR_KNOWLEDGE_PACKAGE_TOO_LARGE")
     );
     assert!(
-        archive_name.chars().count()
-            <= 48
-                + "-123456789-550e8400-e29b-41d4-a716-446655440000.vkb"
-                    .chars()
-                    .count()
+        read_bounded_entry(&mut Cursor::new(b"abc"), 1, 10)
+            .expect_err("declared size")
+            .starts_with("ERR_KNOWLEDGE_PACKAGE_SIZE_MISMATCH")
+    );
+    assert_eq!(
+        read_bounded_entry(&mut Cursor::new(b"abc"), 3, 3).expect("exact bound"),
+        b"abc"
+    );
+}
+
+/// Verifies preview checksum binding and manifest bounds before current-content allocation.
+/// 验证当前内容分配前的预检校验和绑定及清单边界。
+#[test]
+fn inspection_digest_and_manifest_limit_precede_import() {
+    let root = tempfile::tempdir().expect("root");
+    let path = root.path().join("bounded.vkb");
+    let header = serde_json::to_value(manifest()).expect("manifest");
+    archive(&path, &header, b"", CONTENT_ENTRY);
+    let inspected = prepare_knowledge_package(&path, None)
+        .expect("inspect")
+        .inspection;
+    assert!(prepare_knowledge_package(&path, Some(&inspected.sha256)).is_ok());
+    let mut changed = header;
+    changed["description"] = serde_json::json!("Changed after preview");
+    archive(&path, &changed, b"", CONTENT_ENTRY);
+    assert!(
+        prepare_knowledge_package(&path, Some(&inspected.sha256))
+            .err()
+            .expect("changed")
+            .starts_with("ERR_KNOWLEDGE_PACKAGE_CHANGED")
+    );
+    // The declared manifest count is checked before allocating logical record objects.
+    // 声明清单数量在分配逻辑记录对象前检查。
+    changed["folderCount"] = serde_json::json!(MAX_KNOWLEDGE_PACKAGE_ENTRIES + 1);
+    archive(&path, &changed, b"", CONTENT_ENTRY);
+    assert!(
+        prepare_knowledge_package(&path, None)
+            .err()
+            .expect("entry limit")
+            .starts_with("ERR_KNOWLEDGE_PACKAGE_ENTRY_LIMIT")
+    );
+}
+
+/// Verifies invalid paths, summary states and conflicting document/directory namespaces cannot publish.
+/// 验证非法路径、摘要状态和冲突文档目录命名空间不能发布。
+#[test]
+fn logical_content_contract_is_validated_before_publication() {
+    // This valid document is varied only along explicit current-format constraints.
+    // 仅沿显式当前格式约束变化该有效文档。
+    let document = KnowledgePackageDocument {
+        path: "guide/a.md".into(),
+        title: "A".into(),
+        summary: "".into(),
+        summary_state: "pending".into(),
+        keywords: vec![],
+        body: "# A\nExact body\r\n".into(),
+        embed_policy: KnowledgeEmbedPolicy::Summary,
+        provenance: vec![],
+    };
+    for path in ["../a", "a//b", "/a.md", "a\\b"] {
+        let mut invalid = document.clone();
+        invalid.path = path.into();
+        assert!(
+            content::prepare_package_content(vec![KnowledgePackageRecord::Document(invalid)])
+                .is_err()
+        );
+    }
+    assert!(
+        content::prepare_package_content(vec![
+            KnowledgePackageRecord::Document(document.clone()),
+            KnowledgePackageRecord::Document(document.clone())
+        ])
+        .is_err()
+    );
+    assert!(
+        content::prepare_package_content(vec![
+            KnowledgePackageRecord::Document(document.clone()),
+            KnowledgePackageRecord::Folder(KnowledgePackageFolder {
+                path: "guide/a.md".into(),
+                description: "conflict".into()
+            })
+        ])
+        .is_err()
+    );
+    let mut invalid = document;
+    invalid.summary_state = "unknown".into();
+    assert!(
+        content::prepare_package_content(vec![KnowledgePackageRecord::Document(invalid)]).is_err()
     );
 }

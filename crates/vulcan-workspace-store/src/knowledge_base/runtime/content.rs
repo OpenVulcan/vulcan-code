@@ -7,6 +7,12 @@ use serde::{Serialize, de::DeserializeOwned};
 use unicode_normalization::UnicodeNormalization;
 use vulcan_sqlite_engine::{fts::ensure_fts_index, tokenizer::TokenizerMode};
 
+mod package_content;
+pub(super) use package_content::{
+    PackageExportContent, ValidatedPackageContent, prepare_package_content,
+    serialize_package_content,
+};
+
 /// Fixed row projection shared by all document reads.
 /// 全部文档读取共享的固定行投影。
 const DOCUMENT_COLUMNS: &str = "id,path,path_key,folder_path,title,summary,summary_state,keywords_json,body_sha256,line_count,embed_policy,provenance_json,revision,created_change_seq,updated_change_seq";
@@ -156,8 +162,15 @@ fn validate_document(document: &KnowledgeDocumentSummary, body: &str) -> Result<
     if document.summary.chars().count() > MAX_KNOWLEDGE_SUMMARY_CHARS {
         return Err("ERR_KNOWLEDGE_SUMMARY_TOO_LONG".into());
     }
-    if document.summary_state == "provided" && document.summary.trim().is_empty() {
-        return Err("ERR_KNOWLEDGE_SUMMARY_REQUIRED".into());
+    match document.summary_state.as_str() {
+        "provided" | "stale" if document.summary.trim().is_empty() => {
+            return Err("ERR_KNOWLEDGE_SUMMARY_REQUIRED".into());
+        }
+        "pending" if !document.summary.is_empty() => {
+            return Err("ERR_KNOWLEDGE_SUMMARY_STATE_INVALID".into());
+        }
+        "provided" | "pending" | "stale" => {}
+        _ => return Err("ERR_KNOWLEDGE_SUMMARY_STATE_INVALID".into()),
     }
     if document.keywords.len() > MAX_KNOWLEDGE_KEYWORDS
         || document

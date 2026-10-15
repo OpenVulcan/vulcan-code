@@ -239,9 +239,29 @@ impl KnowledgeBaseRuntime {
     /// Revokes and deletes an exact host-owned library, including unsupported formats; returns success on removal.
     /// 撤销并删除精确宿主知识库，包括不支持格式；移除成功后返回。
     pub async fn delete_library(&self, library_id: &str) -> Result<(), String> {
-        // No content opening is required for deleting an unsupported library.
-        // 删除不支持格式的库无需打开内容。
+        // Unsupported formats can still be deleted without opening their content.
+        // 不支持格式仍可删除，无需打开其内容。
         let _guard = self.library_mutation_guard(library_id).await?;
+        self.delete_library_locked(library_id).await
+    }
+}
+
+/// Validates a human library name; returns a trimmed nonempty bounded value.
+/// 验证人工库名称；返回裁剪后的非空有界值。
+pub(super) fn validate_library_name(name: &str) -> Result<String, String> {
+    if name.trim().is_empty()
+        || name.trim().chars().count() > MAX_KNOWLEDGE_PATH_SEGMENT_CHARS
+        || name.chars().any(char::is_control)
+    {
+        return Err("ERR_KNOWLEDGE_NAME_INVALID".into());
+    }
+    Ok(name.trim().into())
+}
+
+impl KnowledgeBaseRuntime {
+    /// Removes an already locked registry identity and exact host-owned storage; returns explicit I/O failures.
+    /// 移除已持锁注册身份及精确宿主存储；返回明确输入输出错误。
+    async fn delete_library_locked(&self, library_id: &str) -> Result<(), String> {
         // Ensure this identity really belongs to the registry before removing storage.
         // 移除存储前确保该身份确实属于注册表。
         let exists = local_sql::with_read_snapshot_async(
@@ -286,16 +306,22 @@ impl KnowledgeBaseRuntime {
         .await
         .map(|_| ())
     }
-}
-
-/// Validates a human library name; returns a trimmed nonempty bounded value.
-/// 验证人工库名称；返回裁剪后的非空有界值。
-fn validate_library_name(name: &str) -> Result<String, String> {
-    if name.trim().is_empty()
-        || name.trim().chars().count() > MAX_KNOWLEDGE_PATH_SEGMENT_CHARS
-        || name.chars().any(char::is_control)
-    {
-        return Err("ERR_KNOWLEDGE_NAME_INVALID".into());
+    /// Cleans a failed new installation only while it still has no content history or current rows.
+    /// 仅在仍无内容历史或当前行时清理失败新安装。
+    /// The empty check and deletion share one lock so concurrent AI or human content cannot be discarded.
+    /// 空检查和删除共享一把锁，确保并发 AI 或人工内容不会被丢弃。
+    pub(super) async fn discard_empty_library(&self, library_id: &str) -> Result<(), String> {
+        // Never infer emptiness from an unreadable or unsupported format.
+        // 绝不从不可读或不支持的格式推断空状态。
+        let _guard = self.library_mutation_guard(library_id).await?;
+        // Counts and head come from exact current-format SQLite authority.
+        // 数量和变更头来自精确当前格式 SQLite 权威。
+        let library = self.require_active_library(library_id).await?;
+        if library.head_change_seq != 0 || library.document_count != 0 || library.chunk_count != 0 {
+            return Err(
+                "ERR_KNOWLEDGE_IMPORT_CLEANUP_CONFLICT: changed content was preserved".into(),
+            );
+        }
+        self.delete_library_locked(library_id).await
     }
-    Ok(name.trim().into())
 }

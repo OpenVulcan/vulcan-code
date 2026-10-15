@@ -11,7 +11,7 @@ const WORKER_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Creates a synthetic route for a declared mode; returns no network endpoint.
 /// 为声明模式创建合成路由；不返回网络端点。
-fn vector_settings(mode: KnowledgeIndexMode, name: &str) -> KnowledgeLibrarySettings {
+pub(super) fn vector_settings(mode: KnowledgeIndexMode, name: &str) -> KnowledgeLibrarySettings {
     KnowledgeLibrarySettings {
         index_mode: mode,
         embedding: mode.has_vectors().then(|| KnowledgeEmbeddingSettings {
@@ -44,7 +44,7 @@ fn fake_vectors(request: &KnowledgeEmbeddingRequest) -> Vec<Vec<f32>> {
 
 /// Returns a fake executor counting only document requests.
 /// 返回仅计数文档请求的假执行器。
-fn fake_executor(calls: Arc<AtomicUsize>) -> KnowledgeEmbeddingExecutor {
+pub(super) fn fake_executor(calls: Arc<AtomicUsize>) -> KnowledgeEmbeddingExecutor {
     Arc::new(move |request| {
         if !request.is_query {
             calls.fetch_add(1, Ordering::SeqCst);
@@ -55,7 +55,10 @@ fn fake_executor(calls: Arc<AtomicUsize>) -> KnowledgeEmbeddingExecutor {
 
 /// Waits for this exact library worker to exit and returns authoritative embedding status.
 /// 等待精确知识库工作器退出并返回权威嵌入状态。
-async fn settled(runtime: &KnowledgeBaseRuntime, library: &str) -> KnowledgeEmbeddingStatus {
+pub(super) async fn settled(
+    runtime: &KnowledgeBaseRuntime,
+    library: &str,
+) -> KnowledgeEmbeddingStatus {
     tokio::time::timeout(WORKER_TIMEOUT, async {
         loop {
             if !runtime

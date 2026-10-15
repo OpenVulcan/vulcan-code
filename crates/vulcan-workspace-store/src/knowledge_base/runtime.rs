@@ -6,6 +6,8 @@ mod content;
 mod fts;
 mod library;
 mod operations;
+mod package_archive;
+mod package_lifecycle;
 mod retrieval;
 mod storage;
 mod vector;

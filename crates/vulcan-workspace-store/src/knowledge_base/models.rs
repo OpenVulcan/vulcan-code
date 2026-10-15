@@ -934,3 +934,140 @@ pub struct KnowledgeSearchResult {
     /// 可见部分失败。
     pub failures: Vec<KnowledgeSearchFailure>,
 }
+
+/// Maximum logical folder/document records in one portable package.
+/// 单个可移植套件的逻辑目录与文档记录数上限。
+pub const MAX_KNOWLEDGE_PACKAGE_ENTRIES: usize = 10_000;
+/// Independent bound on the portable JSON manifest.
+/// 可移植 JSON 清单的独立大小上限。
+pub const MAX_KNOWLEDGE_PACKAGE_MANIFEST_BYTES: u64 = 1024 * 1024;
+
+/// Portable current folder content, excluding audit sequence metadata.
+/// 可移植当前目录内容，排除审计序号元数据。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnowledgePackageFolder {
+    /// Exact canonical relative path.
+    /// 精确规范相对路径。
+    pub path: String,
+    /// AI-maintained directory purpose.
+    /// AI 维护的目录用途。
+    pub description: String,
+}
+
+/// Portable document content; stable local IDs, revisions and derived indexes are excluded.
+/// 可移植文档内容；排除本地稳定身份、修订与派生索引。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnowledgePackageDocument {
+    /// Exact canonical relative path.
+    /// 精确规范相对路径。
+    pub path: String,
+    /// AI-maintained title.
+    /// AI 维护的标题。
+    pub title: String,
+    /// Exact current summary.
+    /// 精确当前摘要。
+    pub summary: String,
+    /// Provided, pending or stale summary state.
+    /// 已提供、待补充或待复核摘要状态。
+    pub summary_state: String,
+    /// AI-maintained keywords.
+    /// AI 维护的关键词。
+    pub keywords: Vec<String>,
+    /// Exact UTF-8 body, preserving source separators.
+    /// 精确 UTF-8 正文，保留来源分隔符。
+    pub body: String,
+    /// Declared vector inclusion policy.
+    /// 声明的向量收录策略。
+    pub embed_policy: KnowledgeEmbedPolicy,
+    /// Exact source observations.
+    /// 精确来源观测。
+    pub provenance: Vec<KnowledgeProvenance>,
+}
+
+/// One strict JSONL entity record; content is never executed or treated as instructions.
+/// 一条严格 JSONL 实体记录；内容绝不执行或作为指令。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "entity", rename_all = "snake_case")]
+pub enum KnowledgePackageRecord {
+    /// Explicit directory metadata.
+    /// 显式目录元数据。
+    Folder(KnowledgePackageFolder),
+    /// Current document content.
+    /// 当前文档内容。
+    Document(KnowledgePackageDocument),
+}
+
+/// Exact current portable format manifest; previous versions are refused before content decoding.
+/// 精确当前可移植格式清单；内容解码前拒绝旧版本。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnowledgePackageManifest {
+    /// Stable package family.
+    /// 稳定套件家族。
+    pub format: String,
+    /// Exact supported format version.
+    /// 精确支持的格式版本。
+    pub version: u32,
+    /// Human library name.
+    /// 人工知识库名称。
+    pub name: String,
+    /// Human library purpose.
+    /// 人工知识库用途。
+    pub description: String,
+    /// Frozen current indexing configuration.
+    /// 冻结当前索引配置。
+    pub settings: KnowledgeLibrarySettings,
+    /// Current custom dictionary configuration.
+    /// 当前自定义词典配置。
+    pub custom_words: Vec<KnowledgeCustomWord>,
+    /// Exact document record count.
+    /// 精确文档记录数。
+    pub document_count: usize,
+    /// Exact explicit folder record count.
+    /// 精确显式目录记录数。
+    pub folder_count: usize,
+    /// Digest of exact uncompressed content.jsonl bytes.
+    /// 精确未压缩 content.jsonl 字节的摘要。
+    pub content_sha256: String,
+    /// Host export timestamp.
+    /// 宿主导出时间戳。
+    pub exported_at_ms: i64,
+}
+
+/// Frozen inspection identity used to prevent import-after-preview races.
+/// 防止预检后导入竞态的冻结检查身份。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgePackageInspection {
+    /// Exact canonical archive path.
+    /// 精确规范归档路径。
+    pub archive_path: String,
+    /// Digest of the complete verified archive.
+    /// 完整已验证归档的摘要。
+    pub sha256: String,
+    /// Actual compressed archive size.
+    /// 实际压缩归档大小。
+    pub byte_size: u64,
+    /// Strict validated current-format manifest.
+    /// 严格验证的当前格式清单。
+    pub manifest: KnowledgePackageManifest,
+}
+
+/// Atomic export receipt, sharing the exact inspected package identity.
+/// 原子导出回执，共享精确已检查套件身份。
+pub type KnowledgePackageExportResult = KnowledgePackageInspection;
+
+/// Successful new-library import receipt; history begins at its sole import change.
+/// 成功新库导入回执；历史从唯一导入变更开始。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgePackageImportResult {
+    /// Newly created library and derived progress.
+    /// 新建知识库与派生进度。
+    pub library: KnowledgeLibrarySummary,
+    /// Sole initial content change.
+    /// 唯一初始内容变更。
+    pub change_seq: u64,
+}
