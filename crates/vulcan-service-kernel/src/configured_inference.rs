@@ -2377,13 +2377,6 @@ impl ConfiguredInferenceService {
         .await
     }
 
-    // Frozen route identity, caller identity and execution accounting are separate authorities.
-    // 冻结路由身份、调用方身份及执行计量属于不同权威。
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Frozen route identity, caller identity and execution accounting are separate authorities."
-    )]
-
     /// Executes the elected embedding leader after shared request reservation.
     /// 在共享请求预留后执行选出的向量领导请求。
     ///
