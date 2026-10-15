@@ -143,11 +143,8 @@ pub(crate) async fn service_test_public_ai_inference_route(
             })?;
             // dimensions freezes the same consumer choice used by indexing and retrieval.
             // dimensions 冻结与建库、检索相同的消费者维度选择。
-            let dimensions = settings_embedding_dimensions(
-                &configuration,
-                &request.consumer_profile_id,
-                embedding,
-            )?;
+            let dimensions =
+                settings_embedding_dimensions(&configuration, &request.consumer_profile_id);
             let task = settings_embedding_task(&request.consumer_profile_id, embedding)?;
             let request_id = format!("settings_embedding_test_{}", uuid::Uuid::new_v4().simple());
             let response = service
@@ -308,25 +305,21 @@ pub(crate) async fn service_test_public_ai_inference_route(
     }
 }
 
-/// Validate the saved dimension before a settings test can issue a provider request.
-/// 在设置测试发起供应商请求前校验已保存维度。
+/// Reads the selected consumer's optional saved dimension for a settings inference test.
+/// 为设置推理测试读取选中消费者的可选已保存维度。
 ///
-/// `configuration` owns the profiles; `consumer_profile_id` identifies the exact consumer;
-/// `_capabilities` is its resolved model declaration. Returns the saved dimension, if any.
-/// `configuration` 持有配置档；`consumer_profile_id` 标识精确消费者；
-/// `_capabilities` 是解析后的模型声明。返回已保存维度，未保存时为空。
+/// `configuration` owns the profiles; `consumer_profile_id` identifies the exact consumer.
+/// Returns only that consumer's saved dimension, or none when no dimension is persisted.
+/// `configuration` 持有配置档；`consumer_profile_id` 标识精确消费者。
+/// 仅返回该消费者的已保存维度，未持久化维度时返回空值。
 fn settings_embedding_dimensions(
     configuration: &PersistedAiConfiguration,
     consumer_profile_id: &str,
-    _capabilities: &vulcan_ai_contract::EmbeddingCapabilities,
-) -> Result<Option<u32>, String> {
-    // dimensions belongs exclusively to the selected profile, never a peer consumer.
-    // dimensions 仅属于选中的配置档，绝不借用其他消费者。
-    let dimensions = configuration
+) -> Option<u32> {
+    configuration
         .inference_profiles
         .get(consumer_profile_id)
-        .and_then(|profile| profile.embedding_dimensions);
-    Ok(dimensions)
+        .and_then(|profile| profile.embedding_dimensions)
 }
 
 /// Returns the configured inference service without retaining the shared state lock.
