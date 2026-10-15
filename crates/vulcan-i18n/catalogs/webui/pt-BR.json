@@ -4990,7 +4990,7 @@
   "skills.routes.savedAndActiveImmediately": "Salvo e ativo imediatamente.",
   "skills.routes.clearedTheCapabilityIs": "Limpo; o recurso agora está desativado.",
   "skills.routes.internalModelRoutes": "Rotas de modelos internas",
-  "skills.routes.luaskillsBindsOneExact": "O LuaSkills vincula uma rota exata para respostas temporárias a perguntas e outra para embeddings; nunca reutiliza o modelo de conversa nem os usos de memória/motor de contexto.",
+  "skills.routes.luaskillsBindsOneExact": "O LuaSkills vincula uma rota exata para respostas temporárias a perguntas e outra para embeddings; nunca reutiliza o modelo de conversa nem as configurações de memória.",
   "skills.routes.theSavedTemporaryQuestion": "A rota salva de respostas temporárias está indisponível e o LuaSkills não a chamará. Selecione uma rota disponível ou limpe a configuração atual.",
   "skills.routes.temporaryQuestionAnsweringTemporary": "Respostas temporárias a perguntas (temporary_llm)",
   "skills.routes.temporaryLlmRoute": "Rota de LLM temporária",

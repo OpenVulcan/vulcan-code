@@ -4990,7 +4990,7 @@
   "skills.routes.savedAndActiveImmediately": "Сохранено и сразу действует.",
   "skills.routes.clearedTheCapabilityIs": "Очищено; возможность теперь отключена.",
   "skills.routes.internalModelRoutes": "Внутренние маршруты моделей",
-  "skills.routes.luaskillsBindsOneExact": "LuaSkills привязывает один точный маршрут для временных ответов на вопросы и один для эмбеддингов; модель беседы и назначения памяти/движка контекста никогда не используются повторно.",
+  "skills.routes.luaskillsBindsOneExact": "LuaSkills привязывает один точный маршрут для временных ответов на вопросы и один для эмбеддингов; модель беседы и настройки памяти никогда не используются повторно.",
   "skills.routes.theSavedTemporaryQuestion": "Сохранённый маршрут временных ответов на вопросы недоступен, и LuaSkills не будет его вызывать. Выберите доступный маршрут или очистите текущую конфигурацию.",
   "skills.routes.temporaryQuestionAnsweringTemporary": "Временные ответы на вопросы (temporary_llm)",
   "skills.routes.temporaryLlmRoute": "Маршрут временной LLM",

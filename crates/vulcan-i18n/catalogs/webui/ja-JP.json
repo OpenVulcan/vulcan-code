@@ -4990,7 +4990,7 @@
   "skills.routes.savedAndActiveImmediately": "保存し、すぐに有効になりました。",
   "skills.routes.clearedTheCapabilityIs": "クリアしました。この機能は無効になりました。",
   "skills.routes.internalModelRoutes": "内部モデルルート",
-  "skills.routes.luaskillsBindsOneExact": "LuaSkills は一時的な質問応答と埋め込みにそれぞれ 1 つの正確なルートをバインドします。会話モデルやメモリ／コンテキストエンジン用途は再利用しません。",
+  "skills.routes.luaskillsBindsOneExact": "LuaSkills は一時的な質問応答と埋め込みにそれぞれ 1 つの正確なルートをバインドします。会話モデルやメモリ設定は再利用しません。",
   "skills.routes.theSavedTemporaryQuestion": "保存済みの一時質問応答ルートは利用できないため、LuaSkills は呼び出しません。利用可能なルートを選択するか、現在の設定をクリアしてください。",
   "skills.routes.temporaryQuestionAnsweringTemporary": "一時的な質問応答（temporary_llm）",
   "skills.routes.temporaryLlmRoute": "一時 LLM ルート",

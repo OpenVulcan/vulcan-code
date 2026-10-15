@@ -4990,7 +4990,7 @@
   "skills.routes.savedAndActiveImmediately": "已保存并立即生效。",
   "skills.routes.clearedTheCapabilityIs": "已清除，该能力立即停用。",
   "skills.routes.internalModelRoutes": "内部模型路由",
-  "skills.routes.luaskillsBindsOneExact": "LuaSkills 的临时问答与向量能力各自绑定一条精确路由，不复用会话模型或记忆/上下文引擎的用途。",
+  "skills.routes.luaskillsBindsOneExact": "LuaSkills 的临时问答与向量能力各自绑定一条精确路由，不复用会话模型或记忆推理设置。",
   "skills.routes.theSavedTemporaryQuestion": "已保存的临时问答路由当前不可用，LuaSkills 不会调用它。请选择可用路由或清除当前配置。",
   "skills.routes.temporaryQuestionAnsweringTemporary": "临时问答（temporary_llm）",
   "skills.routes.temporaryLlmRoute": "临时问答路由",

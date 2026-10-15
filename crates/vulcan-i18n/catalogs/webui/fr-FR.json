@@ -4990,7 +4990,7 @@
   "skills.routes.savedAndActiveImmediately": "Enregistré et actif immédiatement.",
   "skills.routes.clearedTheCapabilityIs": "Effacé ; la capacité est désormais désactivée.",
   "skills.routes.internalModelRoutes": "Routes de modèles internes",
-  "skills.routes.luaskillsBindsOneExact": "LuaSkills associe une route exacte pour les réponses ponctuelles aux questions et une autre pour les embeddings ; il ne réutilise jamais le modèle de conversation ni les usages de mémoire ou de moteur de contexte.",
+  "skills.routes.luaskillsBindsOneExact": "LuaSkills associe une route exacte pour les réponses ponctuelles aux questions et une autre pour les embeddings ; il ne réutilise jamais le modèle de conversation ni les paramètres de mémoire.",
   "skills.routes.theSavedTemporaryQuestion": "La route de réponses ponctuelles enregistrée est indisponible et LuaSkills ne l’appellera pas. Sélectionnez une route disponible ou effacez la configuration actuelle.",
   "skills.routes.temporaryQuestionAnsweringTemporary": "Réponses ponctuelles aux questions (temporary_llm)",
   "skills.routes.temporaryLlmRoute": "Route LLM ponctuelle",

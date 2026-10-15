@@ -4990,7 +4990,7 @@
   "skills.routes.savedAndActiveImmediately": "Gespeichert und sofort aktiv.",
   "skills.routes.clearedTheCapabilityIs": "Gelöscht; die Funktion ist jetzt deaktiviert.",
   "skills.routes.internalModelRoutes": "Interne Modellrouten",
-  "skills.routes.luaskillsBindsOneExact": "LuaSkills bindet je eine exakte Route für temporäre Fragebeantwortung und für Embeddings; das Unterhaltungsmodell und die Zwecke Gedächtnis/Kontext-Engine werden nie wiederverwendet.",
+  "skills.routes.luaskillsBindsOneExact": "LuaSkills bindet je eine exakte Route für temporäre Fragebeantwortung und für Embeddings; das Unterhaltungsmodell und die Gedächtnis-Einstellungen werden nie wiederverwendet.",
   "skills.routes.theSavedTemporaryQuestion": "Die gespeicherte Route für temporäre Fragebeantwortung ist nicht verfügbar, und LuaSkills ruft sie nicht auf. Wählen Sie eine verfügbare Route oder löschen Sie die aktuelle Konfiguration.",
   "skills.routes.temporaryQuestionAnsweringTemporary": "Temporäre Fragebeantwortung (temporary_llm)",
   "skills.routes.temporaryLlmRoute": "Temporäre LLM-Route",

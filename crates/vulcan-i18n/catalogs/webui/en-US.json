@@ -4990,7 +4990,7 @@
   "skills.routes.savedAndActiveImmediately": "Saved and active immediately.",
   "skills.routes.clearedTheCapabilityIs": "Cleared; the capability is now disabled.",
   "skills.routes.internalModelRoutes": "Internal model routes",
-  "skills.routes.luaskillsBindsOneExact": "LuaSkills binds one exact route for temporary question answering and one for embeddings; it never reuses the conversation model or the memory purposes.",
+  "skills.routes.luaskillsBindsOneExact": "LuaSkills binds one exact route for temporary question answering and one for embeddings; it never reuses the conversation model or memory inference settings.",
   "skills.routes.theSavedTemporaryQuestion": "The saved temporary question-answering route is unavailable and LuaSkills will not call it. Select an available route or clear the current configuration.",
   "skills.routes.temporaryQuestionAnsweringTemporary": "Temporary question answering (temporary_llm)",
   "skills.routes.temporaryLlmRoute": "Temporary LLM route",

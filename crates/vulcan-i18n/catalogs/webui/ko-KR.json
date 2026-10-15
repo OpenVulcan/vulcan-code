@@ -4990,7 +4990,7 @@
   "skills.routes.savedAndActiveImmediately": "저장되었으며 즉시 적용됩니다.",
   "skills.routes.clearedTheCapabilityIs": "지워졌습니다. 이제 이 기능은 비활성화됩니다.",
   "skills.routes.internalModelRoutes": "내부 모델 경로",
-  "skills.routes.luaskillsBindsOneExact": "LuaSkills는 임시 질의응답과 임베딩에 각각 정확한 경로 하나를 바인딩하며, 대화 모델이나 메모리/컨텍스트 엔진 용도를 재사용하지 않습니다.",
+  "skills.routes.luaskillsBindsOneExact": "LuaSkills는 임시 질의응답과 임베딩에 각각 정확한 경로 하나를 바인딩하며, 대화 모델이나 메모리 설정를 재사용하지 않습니다.",
   "skills.routes.theSavedTemporaryQuestion": "저장된 임시 질의응답 경로를 사용할 수 없어 LuaSkills가 호출하지 않습니다. 사용 가능한 경로를 선택하거나 현재 구성을 지우세요.",
   "skills.routes.temporaryQuestionAnsweringTemporary": "임시 질의응답(temporary_llm)",
   "skills.routes.temporaryLlmRoute": "임시 LLM 경로",
