@@ -73,10 +73,13 @@ fn visible_codekit_injects_package_main_help() {
     let injected = segments
         .iter()
         .find(|segment| {
-            segment.baseline_provenance.as_ref().is_some_and(|provenance| {
-                provenance.kind == PromptBaselineKind::PromptSkillInjection
-                    && provenance.source_id == "luaskills/vulcan-codekit"
-            })
+            segment
+                .baseline_provenance
+                .as_ref()
+                .is_some_and(|provenance| {
+                    provenance.kind == PromptBaselineKind::PromptSkillInjection
+                        && provenance.source_id == "luaskills/vulcan-codekit"
+                })
         })
         .expect("visible CodeKit must inject its package main help");
     assert!(injected.body.contains(&package.main_content));

@@ -2,8 +2,8 @@
 //! 验证有界 CodeKit 长行预览在宿主共享预算下仍可分页。
 
 use vulcan_host_tools::result_format::{
-    DEFAULT_INLINE_TOOL_RESULT_BYTES, HostRenderOptions, HostTextRenderInput,
-    HostToolOverflowMode, ToolResultBudgetSnapshot, render_tool_result_text,
+    DEFAULT_INLINE_TOOL_RESULT_BYTES, HostRenderOptions, HostTextRenderInput, HostToolOverflowMode,
+    ToolResultBudgetSnapshot, render_tool_result_text,
 };
 
 /// Exercises many bounded long-line previews through the real page renderer; returns no value.

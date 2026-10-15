@@ -490,9 +490,6 @@ pub enum ProjectSettingsDomain {
     /// Project-scoped VMM configuration.
     /// 项目级 VMM 配置。
     Vmm,
-    /// Project-scoped native code-semantic index settings.
-    /// 项目级原生代码语义索引设置。
-    Vce,
     /// Project-scoped Agent Skill overrides.
     /// 项目级 Agent Skill 覆盖。
     AgentSkills,

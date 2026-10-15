@@ -312,15 +312,13 @@ pub(crate) async fn service_test_public_ai_inference_route(
 /// 在设置测试发起供应商请求前校验已保存维度。
 ///
 /// `configuration` owns the profiles; `consumer_profile_id` identifies the exact consumer;
-/// `capabilities` is its resolved model declaration. Returns its saved dimension or an
-/// error for an incomplete VCE choice; other consumers retain optional default semantics.
+/// `_capabilities` is its resolved model declaration. Returns the saved dimension, if any.
 /// `configuration` 持有配置档；`consumer_profile_id` 标识精确消费者；
-/// `capabilities` 是解析后的模型声明。返回保存维度，VCE 选择不完整时返回错误；
-/// 其他消费者保留可选默认语义。
+/// `_capabilities` 是解析后的模型声明。返回已保存维度，未保存时为空。
 fn settings_embedding_dimensions(
     configuration: &PersistedAiConfiguration,
     consumer_profile_id: &str,
-    capabilities: &vulcan_ai_contract::EmbeddingCapabilities,
+    _capabilities: &vulcan_ai_contract::EmbeddingCapabilities,
 ) -> Result<Option<u32>, String> {
     // dimensions belongs exclusively to the selected profile, never a peer consumer.
     // dimensions 仅属于选中的配置档，绝不借用其他消费者。
@@ -328,16 +326,6 @@ fn settings_embedding_dimensions(
         .inference_profiles
         .get(consumer_profile_id)
         .and_then(|profile| profile.embedding_dimensions);
-    if consumer_profile_id == crate::vce::VCE_CONSUMER_PROFILE_ID {
-        // dimension must be explicitly saved before testing VCE or admitting its engine.
-        // dimension 必须在测试 VCE 或准入引擎前由用户明确保存。
-        let dimension = dimensions.ok_or_else(|| {
-            String::from(
-                "Confirm and save the vector dimension in the semantic engine settings first.",
-            )
-        })?;
-        crate::vce::validate_explicit_embedding_dimension(capabilities, dimension)?;
-    }
     Ok(dimensions)
 }
 

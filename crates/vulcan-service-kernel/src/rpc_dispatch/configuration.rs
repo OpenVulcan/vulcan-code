@@ -85,7 +85,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_internal_model_enabled",
     "service_save_public_ai_internal_model_overrides",
     "service_save_public_ai_inference_route",
-    "service_preflight_vce_embedding_route",
     "service_test_public_ai_inference_route",
     "service_save_public_ai_provider_tool_selection",
     "service_save_public_ai_multimodal_understanding_candidate",
@@ -603,10 +602,6 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "request")?,
             )
             .await,
-        ),
-        "service_preflight_vce_embedding_route" => rpc_json_result(
-            service_preflight_vce_embedding_route(state, rpc_required_param(params, "request")?)
-                .await,
         ),
         "service_test_public_ai_inference_route" => rpc_json_result(
             service_test_public_ai_inference_route(state, rpc_required_param(params, "request")?)

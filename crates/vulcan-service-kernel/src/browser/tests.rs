@@ -3463,7 +3463,6 @@ fn browser_status_snapshot_reports_stopping_during_drain() {
         vulcan_service_api::ServiceLifecycle::Stopping
     );
     assert_eq!(snapshot.active_work.active_stream_tasks, 0);
-    assert_eq!(snapshot.active_work.vce_jobs, 0);
     assert_eq!(snapshot.active_work.running_terminals, 0);
     crate::service_resume_after_failed_app_shutdown(&state).expect("resume shutdown");
     let recovered = crate::service_status_snapshot_from_state(&state);

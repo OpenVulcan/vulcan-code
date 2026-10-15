@@ -1968,11 +1968,7 @@ async fn task_runtime_preparation_request_clears_parent_transient_runtime_state(
     assert!(child_request.session_plan_context.is_none());
     assert!(child_request.embedded_turn_usage_segments.is_empty());
     assert_eq!(child_request.session_id, task_id);
-    assert_eq!(
-        child_request.project_id.as_deref(),
-        Some("parent-project")
-    );
-
+    assert_eq!(child_request.project_id.as_deref(), Some("parent-project"));
 }
 
 /// Verifies a child request inherits the immutable knowledge snapshot without losing its storage handle.

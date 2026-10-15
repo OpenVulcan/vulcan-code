@@ -49,10 +49,6 @@ mod startup_updates;
 mod credential_startup_tests;
 
 #[cfg(test)]
-#[path = "service_bootstrap/vce_startup_tests.rs"]
-mod vce_startup_tests;
-
-#[cfg(test)]
 mod host_database_provider_lifecycle_tests {
     use super::*;
     use std::collections::HashMap;
@@ -1373,8 +1369,8 @@ fn run_service_bootstrap(
             luaskills_model_availability.llm, luaskills_model_availability.embedding
         ));
     }
-    // workspaceWatcher owns the single physical notify backend shared by Git and VCE subscribers.
-    // workspaceWatcher 持有供 Git 与 VCE 订阅者共享的唯一物理 notify 后端。
+    // workspaceWatcher owns the single physical notify backend shared by Git subscribers.
+    // workspaceWatcher 持有供 Git 订阅者共享的唯一物理 notify 后端。
     let workspace_watcher = match crate::workspace_watcher::WorkspaceWatcherCenter::new() {
         Ok(watcher) => Some(watcher),
         Err(error) => {
@@ -1382,36 +1378,7 @@ fn run_service_bootstrap(
             None
         }
     };
-    // vceRuntime reuses the shared HostAI and controller services while isolating code-semantic data.
-    // vceRuntime 复用共享 HostAI 与 Controller 服务，同时隔离代码语义数据。
-    let vce_runtime = match runtime.block_on(async {
-        vulcan_workspace_store::vce_data_plane::bootstrap_vce_data_plane(&controller_runtime).await
-    }) {
-        Ok(data_plane) => Some(crate::vce::VceRuntimeManager::new(
-            Arc::clone(&internal_ai_port),
-            data_plane,
-            event_emitter.clone(),
-            crate::vce::vce_publication_authority(state),
-        )),
-        Err(error) => {
-            tracing::warn!("[webui-service] optional native VCE bootstrap unavailable: {error}");
-            None
-        }
-    };
-    // vceWatcher receives an independent subscriber while reusing the shared physical backend.
-    // vceWatcher 接收独立订阅者，同时复用共享物理后端。
-    let vce_watcher = match (workspace_watcher.as_ref(), vce_runtime.as_ref()) {
-        (Some(watcher), Some(manager)) => {
-            let _runtime_guard = runtime.enter();
-            Some(crate::vce::VceWatcherService::new(
-                watcher,
-                manager.clone(),
-                event_emitter.clone(),
-                Arc::clone(&runtime),
-            ))
-        }
-        _ => None,
-    };
+
     let global_vmm_effective =
         vulcan_vmm::VmmEffectiveConfig::resolve(&provider_configuration.vmm, None, None);
     // nativeVmmBootstrap initializes one independent local backend without making ExternalGrpc
@@ -1885,8 +1852,6 @@ fn run_service_bootstrap(
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.agent_runtime = Some(agent_runtime);
         guard.native_vmm_maintenance = native_vmm_maintenance;
-        guard.vce_runtime = vce_runtime;
-        guard.vce_watcher = vce_watcher;
         guard.workspace_watcher = workspace_watcher;
         guard.service_runtime = Some(runtime.clone());
         guard.controller_runtime = Some(controller_runtime);
@@ -1903,13 +1868,6 @@ fn run_service_bootstrap(
         initial_projection_started_at,
         format!("selected={selected_session_id}"),
     );
-    // VCE startup retains only its already-created service boundary; project indexing is explicit.
-    // VCE 启动只保留已创建的服务边界；项目索引必须由用户明确触发。
-    let vce_started_at = start_bootstrap_stage("vce");
-    logs.push(String::from(
-        "The semantic engine service is prepared; project indexes wait for the user to explicitly create or sync them.",
-    ));
-    trace_bootstrap_stage("vce", vce_started_at, "result=lazy_ready");
     // runtime_guard makes the retained service runtime current while the notify loop is spawned.
     // runtime_guard 在生成 notify 循环期间使保留的服务运行时成为当前运行时。
     let _runtime_guard = runtime.enter();

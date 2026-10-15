@@ -963,7 +963,6 @@ pub fn service_status_snapshot_from_state(
         lifecycle_fallback,
         revision,
         active_stream_tasks,
-        vce_jobs,
         registry_draining,
         drain_active,
         last_bootstrap_failure,
@@ -981,7 +980,6 @@ pub fn service_status_snapshot_from_state(
             service_lifecycle_from_startup_phase(&guard.startup.phase),
             guard.workbench_generation,
             guard.active_stream_tasks.len() as u64,
-            crate::vce::vce_retained_job_gauge(guard.vce_runtime.as_ref()),
             guard
                 .session_runtime_registry
                 .shutdown_admission_is_closed(),
@@ -993,7 +991,6 @@ pub fn service_status_snapshot_from_state(
     let running_terminals = service_terminal_running_gauge();
     let active_work = ServiceActiveWorkSummary {
         active_stream_tasks,
-        vce_jobs,
         running_terminals,
     };
     // lifecycle reports explicit shutdown and recovery states before bootstrap phases so
