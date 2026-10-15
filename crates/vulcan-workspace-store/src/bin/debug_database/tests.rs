@@ -178,6 +178,7 @@ fn unsupported_mappings_do_not_drop_data() {
         "ALTER TABLE project_vce_settings DROP COLUMN max_results",
         "CREATE INDEX future_vce_index ON project_vce_settings(enabled)",
         "CREATE TABLE future_dependency (id TEXT REFERENCES project_vce_settings(project_id))",
+        "CREATE TABLE future_dependency (id TEXT REFERENCES PROJECT_VCE_SETTINGS(project_id))",
         "UPDATE projects SET codebase_memory_enabled=1",
         "CREATE VIEW old_projection AS SELECT codebase_memory_enabled FROM projects",
         "CREATE TRIGGER old_projection AFTER INSERT ON independent_records BEGIN UPDATE projects SET codebase_memory_enabled=1; END",
@@ -196,6 +197,49 @@ fn unsupported_mappings_do_not_drop_data() {
         assert!(std::fs::read(&path).unwrap() == original);
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
+}
+
+/// Retires the same SQLite table identity under a different ASCII spelling and preserves its backup.
+/// 退役使用不同 ASCII 大小写拼写的同一 SQLite 表身份，并保留其备份。
+/// No parameters or return value; all database files belong to this temporary fixture.
+/// 无参数及返回值；全部数据库文件均归当前临时夹具所有。
+#[test]
+fn retired_table_identity_uses_sqlite_case_rules() {
+    // The isolated fixture contains one retired settings row and unrelated retained rows.
+    // 隔离夹具包含一条退役设置记录及其他需要保留的记录。
+    let directory = tempfile::tempdir().unwrap();
+    // The target path remains private to the fixture throughout synchronization.
+    // 同步全过程中目标路径始终归夹具私有。
+    let path = fixture(directory.path());
+    // SQLite requires an intermediate identity for a rename that changes only letter case.
+    // SQLite 对仅改变大小写的重命名需要一个中间身份。
+    let connection = Connection::open(&path).unwrap();
+    connection.execute_batch("ALTER TABLE project_vce_settings RENAME TO retired_case_intermediate; ALTER TABLE retired_case_intermediate RENAME TO PROJECT_VCE_SETTINGS;").unwrap();
+    drop(connection);
+    // The production mapping must recognize the identity without guessing a different table shape.
+    // 生产映射必须识别该身份，且不能推测其他表结构。
+    let backup = synchronize(&path, true).unwrap().unwrap();
+    // The target no longer contains the retired table under any ASCII spelling.
+    // 目标库不再包含任意 ASCII 大小写拼写的退役表。
+    let current = Connection::open(&path).unwrap();
+    assert!(
+        !schema(&current)
+            .unwrap()
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("project_vce_settings"))
+    );
+    // The backup still resolves the original row through SQLite's identifier rules.
+    // 备份仍可按 SQLite 标识符规则读取原始记录。
+    let original = Connection::open(&backup).unwrap();
+    assert_eq!(
+        original
+            .query_row("SELECT COUNT(*) FROM project_vce_settings", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        1
+    );
 }
 
 /// Verify a target NOT NULL failure rolls back earlier table rebuilds and retains the backup.

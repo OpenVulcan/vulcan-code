@@ -56,6 +56,7 @@ rtk cargo run -p vulcan-workspace-store --features debug-db-maintenance --bin vu
 代码导航退役还明确允许删除整张 `project_vce_settings` 表，原始记录只保留在完整备份中。
 该映射逐列核实已退役设置的列名与类型，包含历史 `migrated_from_codebase_memory` 标记；不再单独迁移
 该标记或推测更新策略默认值。未知列、生成列、额外索引、关联外键以及相关视图或触发器都会使维护停止。
+表身份与外键引用按 SQLite 的 ASCII 大小写不敏感规则核对，不能由空子表或不同大小写绕过依赖检查。
 此映射的权威是维护工具与退役回归测试；再次变更历史映射时须同步本文。磁盘上的旧代码索引目录不自动删除。
 
 恢复时先退出 Core，保留失败库及其 WAL/SHM 文件，再使用 SQLite 工具从已验证快照恢复。

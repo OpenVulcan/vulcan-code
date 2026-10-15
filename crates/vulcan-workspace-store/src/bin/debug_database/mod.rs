@@ -269,15 +269,18 @@ fn plan(
     // changes accumulate only supported differences; unrelated tables stay untouched.
     // changes 仅收集受支持的差异；不触碰无关表。
     let mut changes = Changes::default();
-    if let Some(retired) = current.get("project_vce_settings") {
+    // SQLite table identities ignore ASCII letter case, including names preserved by foreign-key metadata.
+    // SQLite 表身份不区分 ASCII 大小写，外键元数据保留的名称也遵守此规则。
+    if let Some((retired_name, retired)) = current
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("project_vce_settings"))
+    {
         if retired.kind != "table" {
             return Err("The retired project settings object must be a table.".into());
         }
         // Compare the complete source shape; subsets and future columns are not inferred historical versions.
         // 比较完整源结构，不把列子集或未来新增列推测为受支持历史版本。
-        let mut actual: BTreeMap<_, _> = columns(connection, "project_vce_settings")?
-            .into_iter()
-            .collect();
+        let mut actual: BTreeMap<_, _> = columns(connection, retired_name)?.into_iter().collect();
         // This optional integer marker is the only separately verified historical addition.
         // 此可选整数标记是唯一已经单独核实的历史新增列。
         if let Some(kind) = actual.remove("migrated_from_codebase_memory")
@@ -294,7 +297,7 @@ fn plan(
         if actual != expected {
             return Err("Retired project settings require the verified column mapping; no data was removed.".into());
         }
-        changes.retired_tables.push("project_vce_settings".into());
+        changes.retired_tables.push(retired_name.clone());
     }
     if desired
         .values()
@@ -387,10 +390,12 @@ fn plan(
                 sql(statement.query_map([name], |row| row.get::<_, String>(0)))?
                     .collect::<Result<Vec<_>, _>>(),
             )?;
-            if references
-                .iter()
-                .any(|table| changes.retired_tables.contains(table))
-            {
+            if references.iter().any(|table| {
+                changes
+                    .retired_tables
+                    .iter()
+                    .any(|retired| retired.eq_ignore_ascii_case(table))
+            }) {
                 return Err(format!(
                     "Dependent table {name} requires an explicit mapping before retiring tables."
                 ));
