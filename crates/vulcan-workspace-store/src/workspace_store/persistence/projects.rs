@@ -76,7 +76,7 @@ COMMIT;
     )
     .await
     .map_err(|error| {
-        format!("Failed to write the active project and project transaction: {error}")
+        format!("Failed to write the active project transaction: {error}")
     })?;
 
     Ok(())

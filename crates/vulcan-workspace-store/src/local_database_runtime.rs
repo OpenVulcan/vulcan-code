@@ -119,7 +119,8 @@ impl LogicalDatabase {
 ///
 /// Why a directory rather than a logical name / 为何是目录而不是逻辑名:
 ///
-/// LanceDB databases are not a fixed set. The application has one,  every plugin has its own, so the number of databases is unbounded and cannot be enumerated by
+/// LanceDB databases are not a fixed set. The application and individual plugins own separate
+/// directories, so the number of databases is unbounded and cannot be enumerated by
 /// a `LogicalDatabase` variant. What is stable is the rule the controller used and that the plan
 /// keeps: one subsystem derives one directory and the engine holds its tables directly in it. The
 /// directory itself is therefore the identity, and it is the cache key.
@@ -192,12 +193,12 @@ impl LanceDbDirectoryBinding {
 /// Why the file, not only a logical name / 为何是文件，而不只是逻辑名:
 ///
 /// [`LogicalDatabase`] enumerates the host's **singular** databases, and that is all it can do. Two
-/// of the seven surfaces the plan names are not singular: the knowledge base keeps one relational
-/// database and one display database **per library**, plugin and
+/// of the storage surfaces are not singular: the knowledge base keeps one relational
+/// database and one display database **per library**, while plugin and
 /// skill storage keep one per instance. There is no fixed set to enumerate, so those bindings are
 /// keyed by the file the subsystem derived.
 ///
-/// [`LogicalDatabase`] 枚举宿主**单例**数据库，这也是它唯一能做的事。方案点名的七个存储面中有两个并非
+/// [`LogicalDatabase`] 枚举宿主**单例**数据库，这也是它唯一能做的事。部分存储面并非
 /// 单例：知识库**每个资料库**各有一个关系库与一个显示库，插件与技能存储每个实例一个。
 /// 没有固定集合可枚举，因此这些绑定以子系统派生的文件为键。
 ///

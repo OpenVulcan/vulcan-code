@@ -17,8 +17,8 @@ use std::{
 };
 use tokio::sync::broadcast;
 use vulcan_ai_contract::{
-    AiOperation, AiStreamEvent, DecisionRequest, DecisionResponse, DispatchOutcome,
-    EmbeddingResponse, HostAiCallContext, HostAiCapabilityHandle, HostAiCapabilityRegistration,
+    AiOperation, AiStreamEvent, DecisionRequest, DecisionResponse, EmbeddingResponse,
+    HostAiCallContext, HostAiCapabilityHandle, HostAiCapabilityRegistration,
     HostAiEmbeddingRequest, HostAiEmbeddingResponse, HostAiError, HostAiErrorCode,
     HostAiEventStream, HostAiExecutionHandle, HostAiExecutionPhase, HostAiExecutionSnapshot,
     HostAiPort, InferenceCallerContext, InferenceCapabilitySnapshot, InferencePermission,
@@ -223,19 +223,6 @@ impl ConfiguredInferenceHostAiPort {
             "Host AI operation was cancelled.",
         )
         .with_request_context(context, Some(request_id))
-    }
-
-    /// Produces a conservative cancellation error after a non-idempotent operation started.
-    /// 在非幂等操作已经开始后生成保守的取消错误。
-    fn cancelled_after_dispatch_began(
-        context: &HostAiCallContext,
-        request_id: &str,
-    ) -> HostAiError {
-        let mut error = Self::cancelled(context, request_id);
-        // The host cannot distinguish permit waiting from an HTTP request whose response was lost.
-        // 宿主无法区分等待许可与 HTTP 请求已送达但响应丢失，因此必须保留不确定结果。
-        error.dispatch_outcome = DispatchOutcome::Unknown;
-        error
     }
 
     /// Maps a configured-inference error into the provider-neutral HostAiError shape.
@@ -903,21 +890,7 @@ mod tests {
     use crate::configured_inference::{
         ConfiguredInferenceError, ConfiguredInferenceErrorCategory, ConfiguredInferenceFailureStage,
     };
-    use vulcan_ai_contract::{
-        DispatchOutcome, ExecutionRouteSnapshot, HostAiCallContext, InferenceUsageScope,
-    };
-
-    /// Verifies cancellation after a non-idempotent operation starts never claims no dispatch.
-    /// 验证非幂等操作开始后的取消绝不会声称尚未分派。
-    #[test]
-    fn non_idempotent_cancellation_preserves_unknown_dispatch() {
-        let context = HostAiCallContext::new("batch-submit");
-
-        let error =
-            ConfiguredInferenceHostAiPort::cancelled_after_dispatch_began(&context, "request-1");
-
-        assert_eq!(error.dispatch_outcome, DispatchOutcome::Unknown);
-    }
+    use vulcan_ai_contract::{ExecutionRouteSnapshot, InferenceUsageScope};
 
     /// Verifies explicit and duration-derived deadlines always choose the earliest boundary.
     /// 验证显式截止时间与时长派生截止时间始终选择更早边界。

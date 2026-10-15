@@ -1075,35 +1075,6 @@ impl InternalInferenceTelemetryFacts {
         self
     }
 
-    /// Rebinds telemetry to the exact frozen execution route used by a supplemental action.
-    /// 将遥测重新绑定到补充动作实际使用的精确冻结执行路由。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `route` is the content-free route snapshot returned by the same identity resolution as dispatch.
-    /// `route` 是由与分派相同的身份解析返回且不含内容的路由快照。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The same lifecycle record with every route identifier replaced atomically.
-    /// 返回以原子方式替换全部路由标识后的同一生命周期记录。
-    fn with_execution_route(mut self, route: &ExecutionRouteSnapshot) -> Self {
-        self.usage_scope = route.usage_scope;
-        self.provider_id = route.provider_id.clone();
-        self.service_entry_id = route.service_entry_id.clone();
-        self.connection_id = route.connection_id.clone();
-        self.protocol_profile_id = route.protocol_binding_id.clone();
-        self.action_binding_id = route.action_binding_id.clone();
-        self.secondary_route_id = route.secondary_route_id.clone();
-        self.secondary_provider_name = route.secondary_provider_name.clone();
-        self.secondary_endpoint_name = route.secondary_endpoint_name.clone();
-        self.model_id = route.model_id.clone();
-        self.capability_revision = route.capability_revision.clone();
-        self.catalog_revision = route.catalog_revision.clone();
-        self.route_revision = route.route_revision.clone();
-        self
-    }
-
     /// Adds the first semantic provider-response timestamp.
     /// 增加首个供应商语义响应时间戳。
     ///
