@@ -2,7 +2,9 @@
 //! 将精确文件仅经宿主搬运为单次原子知识变更。
 
 use super::*;
-use vulcan_host_tools::file_runtime::{LocalTextSourceFailure, collect_local_text_sources};
+use vulcan_host_tools::file_runtime::{
+    LocalTextSource, LocalTextSourceFailure, collect_local_text_sources,
+};
 
 /// Closed ingest arguments after the parent removes libraryId.
 /// 父入口移除 libraryId 后的封闭搬运参数。
@@ -18,8 +20,8 @@ struct IngestArgs {
     /// Logical library destination prefix.
     /// 逻辑库目标前缀。
     target_folder: String,
-    /// Explicit summaries keyed by canonical source path.
-    /// 以规范来源路径为键的显式摘要。
+    /// Explicit summaries keyed by source path, selector or logical destination.
+    /// 以来源路径、选择器或逻辑目标为键的显式摘要。
     #[serde(default)]
     summaries: BTreeMap<String, String>,
     /// Explicit vector inclusion; default summary.
@@ -79,21 +81,23 @@ pub(super) async fn execute(
     .await
     .map_err(|error| NativeToolError::new(format!("ERR_KNOWLEDGE_TRANSFER_TASK: {error}")))?
     .map_err(|error| NativeToolError::new(format!("{}: {}", error.code, error.message)))?;
-    // Summaries for rejected or unmatched sources remain explicit per-item diagnostics.
-    // 被拒绝或未匹配来源的摘要保持明确逐项诊断。
-    let observed: BTreeSet<_> = batch
+    // Glob-relative structure is preserved; normalization and conflict checks belong to storage.
+    // 保留相对 glob 的结构；规范化及冲突检查归存储所有。
+    let paths: Vec<String> = batch
         .sources
         .iter()
-        .map(|source| source.source_path.as_str())
+        .map(|source| {
+            if target_folder.is_empty() {
+                source.relative_path.clone()
+            } else {
+                format!("{}/{}", target_folder, source.relative_path)
+            }
+        })
         .collect();
-    // A rejected binary source must not abort unrelated valid files merely because it had a summary.
-    // 被拒绝二进制来源不能仅因携带摘要就中止其他有效文件。
-    let unapplied_summaries: Vec<_> = args
-        .summaries
-        .keys()
-        .filter(|key| !observed.contains(key.as_str()))
-        .cloned()
-        .collect();
+    // Summaries for rejected or unmatched sources remain explicit per-item diagnostics.
+    // 被拒绝或未匹配来源的摘要保持明确逐项诊断。
+    let (mut summaries, unapplied_summaries) =
+        match_summaries(&batch.sources, &paths, args.summaries)?;
     // A single observation time binds all snapshots in this atomic ingest call.
     // 单个观测时间绑定此原子搬运调用中的全部快照。
     let at_ms = i64::try_from(
@@ -112,14 +116,7 @@ pub(super) async fn execute(
     // Accepted files become one transaction, with original byte digests as provenance.
     // 已接受文件成为一笔事务，并以原始字节摘要作为来源证据。
     let mut documents = Vec::with_capacity(batch.sources.len());
-    for source in batch.sources {
-        // Glob-relative structure is preserved; normalization and conflict checks belong to storage.
-        // 保留相对 glob 的结构；规范化及冲突检查归存储所有。
-        let path = if target_folder.is_empty() {
-            source.relative_path.clone()
-        } else {
-            format!("{}/{}", target_folder, source.relative_path)
-        };
+    for (index, (source, path)) in batch.sources.into_iter().zip(paths).enumerate() {
         // Title derivation reuses the chunker's parser and has a bounded metadata projection.
         // 标题派生复用切块器解析器，并形成有界元数据投影。
         let title: String = extract_document_title(
@@ -145,7 +142,7 @@ pub(super) async fn execute(
             path,
             title,
             body: source.text,
-            summary: args.summaries.get(&source.source_path).cloned(),
+            summary: summaries.remove(&index),
             provenance: KnowledgeProvenance {
                 kind: "file".into(),
                 reference: source.source_path,
@@ -199,6 +196,65 @@ pub(super) async fn execute(
         ));
     }
     Ok(write_result(library_id, &receipt, output))
+}
+
+/// Assigns each summary key to the accepted source it names: the canonical source path, the
+/// exact non-glob selector as requested, or the logical library destination path.
+/// 将每个摘要键分配给其指名的已接受来源：规范来源路径、按请求原文的精确非 glob 选择器，
+/// 或逻辑库目标路径。
+/// `sources` and `paths` are index-aligned. Returns summaries by source index plus keys naming
+/// no accepted source; a key naming two sources or two keys naming one source reject the call.
+/// `sources` 与 `paths` 按下标对齐。返回按来源下标的摘要及未指名任何已接受来源的键；
+/// 一个键指名两个来源或两个键指名同一来源时拒绝调用。
+fn match_summaries(
+    sources: &[LocalTextSource],
+    paths: &[String],
+    summaries: BTreeMap<String, String>,
+) -> Result<(BTreeMap<usize, String>, Vec<String>), NativeToolError> {
+    // Every accepted alias points at the source indexes it names.
+    // 每个已接受别名指向其指名的来源下标。
+    let mut aliases: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
+    for (index, (source, path)) in sources.iter().zip(paths).enumerate() {
+        let logical = normalize_knowledge_path(path, false).map_or_else(|_| path.clone(), |n| n.1);
+        for alias in [source.source_path.clone(), logical]
+            .into_iter()
+            .chain(source.selectors.iter().cloned())
+        {
+            aliases.entry(alias).or_default().insert(index);
+        }
+    }
+    let mut matched = BTreeMap::new();
+    let mut unapplied = Vec::new();
+    for (key, summary) in summaries {
+        // Logical keys are compared in the same path-key form storage uses for uniqueness.
+        // 逻辑键按存储用于唯一性的相同路径键形式比较。
+        let logical = normalize_knowledge_path(&key, false).ok().map(|n| n.1);
+        let targets: BTreeSet<usize> = [Some(&key), logical.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|alias| aliases.get(alias))
+            .flatten()
+            .copied()
+            .collect();
+        let mut targets = targets.into_iter();
+        match (targets.next(), targets.next()) {
+            (None, _) => unapplied.push(key),
+            (Some(index), None) => {
+                if matched.insert(index, summary).is_some() {
+                    return Err(NativeToolError::new(format!(
+                        "ERR_KNOWLEDGE_SUMMARY_DUPLICATE: more than one summaries key names {}",
+                        paths[index]
+                    )));
+                }
+            }
+            (Some(_), Some(_)) => {
+                return Err(NativeToolError::new(format!(
+                    "ERR_KNOWLEDGE_SUMMARY_AMBIGUOUS: summaries key {key} names more than one source"
+                )));
+            }
+        }
+    }
+    Ok((matched, unapplied))
 }
 
 /// Appends each native source `failure` to `output`, with exact identity and stable code.

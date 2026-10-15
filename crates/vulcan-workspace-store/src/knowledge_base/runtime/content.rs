@@ -668,6 +668,29 @@ fn commit_snapshot(
     })
 }
 
+/// Builds the receipt for a call that changed nothing; `unchanged` names the observed paths.
+/// 为未产生任何变更的调用构建回执；`unchanged` 列出已观测路径。
+/// Returns no change sequence and the real desired-space backlog, without writing history.
+/// 返回空变更序号及真实期望空间积压，不写入历史。
+fn unchanged_receipt(
+    connection: &Connection,
+    settings: &KnowledgeLibrarySettings,
+    unchanged: Vec<String>,
+) -> Result<KnowledgeWriteResult, String> {
+    let pending_embeddings = match &settings.embedding {
+        Some(embedding) if settings.index_mode.has_vectors() => {
+            super::vector::current_counts(connection, &vector_space_id(embedding)?)?.0
+        }
+        _ => 0,
+    };
+    Ok(KnowledgeWriteResult {
+        change_seq: None,
+        documents: vec![],
+        unchanged,
+        pending_embeddings,
+    })
+}
+
 impl KnowledgeBaseRuntime {
     /// Revalidates project authorization while holding the library mutation guard; returns exact settings.
     /// 持库变更锁时重新验证项目授权；返回精确设置。
@@ -738,6 +761,9 @@ impl KnowledgeBaseRuntime {
                 // New body bytes are keyed by their verified digest.
                 // 新正文字节按已验证摘要索引。
                 let mut bodies = BTreeMap::new();
+                // The logical path named in an unchanged receipt.
+                // 无变化回执中列出的逻辑路径。
+                let subject: String;
                 match request.action.as_str() {
                     "create" => {
                         let mut document = new_document(
@@ -756,10 +782,12 @@ impl KnowledgeBaseRuntime {
                             document.body_sha256.clone(),
                             required(&request.body, "body")?.clone(),
                         );
+                        subject = document.path.clone();
                         after.insert(document.id.clone(), document);
                     }
                     "folder" | "delete_folder" => {
                         let (path, key) = normalize_path(required(&request.path, "path")?, false)?;
+                        subject = path.clone();
                         if request.action == "delete_folder" {
                             if before
                                 .values()
@@ -774,19 +802,25 @@ impl KnowledgeBaseRuntime {
                                 return Err("ERR_KNOWLEDGE_FOLDER_NOT_FOUND".into());
                             }
                         } else {
-                            after_folders.insert(
-                                key.clone(),
-                                KnowledgeFolder {
-                                    path_key: key.clone(),
-                                    path,
-                                    description: required(&request.description, "description")?
-                                        .clone(),
-                                    created_change_seq: before_folders
-                                        .get(&key)
-                                        .map_or(0, |f| f.created_change_seq),
-                                    updated_change_seq: 0,
-                                },
-                            );
+                            let description = required(&request.description, "description")?;
+                            // An identical upsert leaves the published folder untouched.
+                            // 完全相同的写入保持已发布目录不变。
+                            if !before_folders.get(&key).is_some_and(|folder| {
+                                folder.path == path && &folder.description == description
+                            }) {
+                                after_folders.insert(
+                                    key.clone(),
+                                    KnowledgeFolder {
+                                        path_key: key.clone(),
+                                        path,
+                                        description: description.clone(),
+                                        created_change_seq: before_folders
+                                            .get(&key)
+                                            .map_or(0, |f| f.created_change_seq),
+                                        updated_change_seq: 0,
+                                    },
+                                );
+                            }
                         }
                     }
                     _ => {
@@ -803,6 +837,7 @@ impl KnowledgeBaseRuntime {
                         {
                             return Err("ERR_KNOWLEDGE_REVISION_CONFLICT".into());
                         }
+                        subject = document.path.clone();
                         if request.action == "delete" {
                             after.remove(&id);
                         } else {
@@ -818,11 +853,6 @@ impl KnowledgeBaseRuntime {
                                     }
                                     if let Some(value) = &request.body {
                                         text = value.clone();
-                                        if request.summary.is_none()
-                                            && document.summary_state == "provided"
-                                        {
-                                            document.summary_state = "stale".into();
-                                        }
                                     }
                                     if let Some(value) = &request.keywords {
                                         document.keywords = value.clone();
@@ -863,8 +893,6 @@ impl KnowledgeBaseRuntime {
                                     if let Some(value) = &request.summary {
                                         document.summary = value.clone();
                                         document.summary_state = "provided".into();
-                                    } else if document.summary_state == "provided" {
-                                        document.summary_state = "stale".into();
                                     }
                                 }
                                 "move" => {
@@ -879,16 +907,34 @@ impl KnowledgeBaseRuntime {
                                 }
                                 _ => return Err("ERR_KNOWLEDGE_ACTION_INVALID".into()),
                             }
-                            document.revision = document
-                                .revision
-                                .checked_add(1)
-                                .ok_or("ERR_KNOWLEDGE_REVISION_OVERFLOW")?;
-                            document.body_sha256 = super::super::sha256_hex(text.as_bytes());
+                            let body_sha256 = super::super::sha256_hex(text.as_bytes());
+                            // Only a real body change invalidates a summary the AI did not resupply.
+                            // 仅真实正文变化才使 AI 未重新提供的摘要待复核。
+                            if body_sha256 != document.body_sha256
+                                && request.summary.is_none()
+                                && document.summary_state == "provided"
+                            {
+                                document.summary_state = "stale".into();
+                            }
+                            document.body_sha256 = body_sha256;
                             document.line_count = super::super::knowledge_body_lines(&text).count();
-                            validate_document(document, &text)?;
-                            bodies.insert(document.body_sha256.clone(), text);
+                            // A candidate identical to the published row keeps its revision and records nothing.
+                            // 与已发布行完全相同的候选保留修订号且不记录任何变更。
+                            if before.get(&id) != Some(&*document) {
+                                document.revision = document
+                                    .revision
+                                    .checked_add(1)
+                                    .ok_or("ERR_KNOWLEDGE_REVISION_OVERFLOW")?;
+                                validate_document(document, &text)?;
+                                bodies.insert(document.body_sha256.clone(), text);
+                            }
                         }
                     }
+                }
+                // A call whose candidates equal the published state appends no history.
+                // 候选与已发布状态相同的调用不追加历史。
+                if after == before && after_folders == before_folders {
+                    return unchanged_receipt(connection, &settings, vec![subject]);
                 }
                 commit_snapshot(
                     connection,
@@ -908,7 +954,9 @@ impl KnowledgeBaseRuntime {
             },
         )
         .await?;
-        self.wake_knowledge_worker(library_id).await;
+        if receipt.change_seq.is_some() {
+            self.wake_knowledge_worker(library_id).await;
+        }
         Ok(receipt)
     }
 
@@ -1332,6 +1380,18 @@ impl KnowledgeBaseRuntime {
                         return Err("ERR_KNOWLEDGE_INGEST_DUPLICATE_TARGET".into());
                     }
                     let existing = before.values().find(|d| d.path_key == key);
+                    // Ingest refreshes only its own mirror; other documents need a revision-checked update.
+                    // 搬运只刷新自身镜像；其他文档必须经过修订校验的更新。
+                    if let Some(current) = existing
+                        && !current.provenance.iter().any(|p| {
+                            p.kind == "file" && p.reference == source.provenance.reference
+                        })
+                    {
+                        return Err(format!(
+                            "ERR_KNOWLEDGE_INGEST_TARGET_EXISTS: {} already holds a document not ingested from this source; choose another targetFolder or use update with expectedRevision",
+                            current.path
+                        ));
+                    }
                     if let Some(current) = existing
                         && current.provenance.iter().any(|p| {
                             p.kind == "file"
@@ -1382,21 +1442,7 @@ impl KnowledgeBaseRuntime {
                     after.insert(document.id.clone(), document);
                 }
                 if bodies.is_empty() {
-                    // An unchanged source still reports the real desired-space backlog.
-                    // 无变化来源仍报告真实期望空间积压。
-                    let pending_embeddings = match &settings.embedding {
-                        Some(embedding) if settings.index_mode.has_vectors() => {
-                            super::vector::current_counts(connection, &vector_space_id(embedding)?)?
-                                .0
-                        }
-                        _ => 0,
-                    };
-                    return Ok(KnowledgeWriteResult {
-                        change_seq: None,
-                        documents: vec![],
-                        unchanged,
-                        pending_embeddings,
-                    });
+                    return unchanged_receipt(connection, &settings, unchanged);
                 }
                 let mut receipt = commit_snapshot(
                     connection,

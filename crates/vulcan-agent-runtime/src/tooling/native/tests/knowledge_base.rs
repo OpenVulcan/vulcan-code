@@ -396,6 +396,135 @@ async fn knowledge_ingest_preserves_body_and_never_echoes_it() {
     assert!(changed.document.revision > doc.document.revision);
 }
 
+/// Verifies summaries addressed as written or by destination, and that ingest never replaces
+/// a document it did not mirror from the same source.
+/// 验证按原样路径或目标路径指定的摘要，以及搬运绝不替换非同源镜像的文档。
+#[tokio::test]
+async fn knowledge_ingest_matches_written_summary_keys_and_protects_other_documents() {
+    let (root, host, runtime, library) = fixture().await;
+    std::fs::create_dir_all(root.path().join("notes")).unwrap();
+    std::fs::write(root.path().join("notes/a.md"), "# A\n").unwrap();
+    std::fs::write(root.path().join("notes/b.md"), "# B\n").unwrap();
+    // One key repeats the selector text; the other names the destination inside the library.
+    // 一个键重复选择器原文；另一个键指名库内目标路径。
+    build_knowledge_write_tool()
+        .invoke(request(&host, &library, root.path(), json!({"libraryId":library,"action":"ingest","sources":["notes/a.md","notes/b.md"],"targetFolder":"refs","summaries":{"notes/a.md":"Selector summary","refs/b.md":"Destination summary"}})))
+        .await
+        .unwrap();
+    for (path, summary) in [
+        ("refs/a.md", "Selector summary"),
+        ("refs/b.md", "Destination summary"),
+    ] {
+        let document = runtime
+            .read_document(&library, None, Some(path), None, None)
+            .await
+            .unwrap()
+            .document;
+        assert_eq!(
+            (document.summary.as_str(), document.summary_state.as_str()),
+            (summary, "provided")
+        );
+    }
+    // Two keys for one source are rejected before anything is written.
+    // 同一来源的两个键在写入任何内容前即被拒绝。
+    let duplicate = build_knowledge_write_tool()
+        .invoke(request(&host, &library, root.path(), json!({"libraryId":library,"action":"ingest","sources":["notes/a.md"],"targetFolder":"refs","summaries":{"notes/a.md":"One","refs/a.md":"Two"}})))
+        .await
+        .unwrap_err();
+    assert!(
+        duplicate
+            .message
+            .starts_with("ERR_KNOWLEDGE_SUMMARY_DUPLICATE")
+    );
+    // An AI-authored document at the destination is not silently replaced by a file.
+    // 目标处由 AI 撰写的文档不会被文件静默替换。
+    build_knowledge_write_tool()
+        .invoke(request(&host, &library, root.path(), json!({"libraryId":library,"action":"create","path":"own/a.md","title":"Own","summary":"Written by AI","body":"kept"})))
+        .await
+        .unwrap();
+    let changes = runtime
+        .list_changes(&library, None, 20)
+        .await
+        .unwrap()
+        .len();
+    let conflict = build_knowledge_write_tool()
+        .invoke(request(&host, &library, root.path(), json!({"libraryId":library,"action":"ingest","sources":["notes/a.md"],"targetFolder":"own"})))
+        .await
+        .unwrap_err();
+    assert!(
+        conflict
+            .message
+            .starts_with("ERR_KNOWLEDGE_INGEST_TARGET_EXISTS")
+    );
+    assert_eq!(
+        runtime
+            .list_changes(&library, None, 20)
+            .await
+            .unwrap()
+            .len(),
+        changes
+    );
+    let own = runtime
+        .read_document(&library, None, Some("own/a.md"), None, None)
+        .await
+        .unwrap();
+    assert_eq!(own.content, "kept");
+}
+
+/// Verifies that writes equal to the published state append no history and keep revisions.
+/// 验证与已发布状态相同的写入不追加历史且保留修订号。
+#[tokio::test]
+async fn knowledge_identical_writes_record_no_change() {
+    let (root, host, runtime, library) = fixture().await;
+    build_knowledge_write_tool()
+        .invoke(request(&host, &library, root.path(), json!({"libraryId":library,"action":"create","path":"guide.md","title":"Guide","summary":"Summary","body":"body"})))
+        .await
+        .unwrap();
+    build_knowledge_write_tool()
+        .invoke(request(
+            &host,
+            &library,
+            root.path(),
+            json!({"libraryId":library,"action":"folder","path":"docs","description":"Purpose"}),
+        ))
+        .await
+        .unwrap();
+    let changes = runtime
+        .list_changes(&library, None, 20)
+        .await
+        .unwrap()
+        .len();
+    for arguments in [
+        json!({"libraryId":library,"action":"update","path":"guide.md","expectedRevision":1,"title":"Guide","summary":"Summary","body":"body"}),
+        json!({"libraryId":library,"action":"edit","path":"guide.md","expectedRevision":1,"edits":[{"oldText":"body","newText":"body"}]}),
+        json!({"libraryId":library,"action":"move","path":"guide.md","expectedRevision":1,"newPath":"guide.md"}),
+        json!({"libraryId":library,"action":"folder","path":"docs","description":"Purpose"}),
+    ] {
+        let result = build_knowledge_write_tool()
+            .invoke(request(&host, &library, root.path(), arguments))
+            .await
+            .unwrap();
+        assert!(result.host_result.unwrap().payload["change_seq"].is_null());
+    }
+    assert_eq!(
+        runtime
+            .list_changes(&library, None, 20)
+            .await
+            .unwrap()
+            .len(),
+        changes
+    );
+    let document = runtime
+        .read_document(&library, None, Some("guide.md"), None, None)
+        .await
+        .unwrap()
+        .document;
+    assert_eq!(
+        (document.revision, document.summary_state.as_str()),
+        (1, "provided")
+    );
+}
+
 /// Rechecks live authorization and exact actor identity before any content mutation.
 /// 在任何内容变更前复核实时授权及精确执行者身份。
 #[tokio::test]

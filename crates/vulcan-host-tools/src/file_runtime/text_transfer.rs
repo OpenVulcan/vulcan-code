@@ -13,6 +13,9 @@ pub struct LocalTextSource {
     /// Relative destination below the glob base, or filename for an explicit file.
     /// glob 基准下的相对目标；显式文件则为文件名。
     pub relative_path: String,
+    /// Exact non-glob selectors, as requested, that named this file.
+    /// 按请求原文指名此文件的精确非 glob 选择器。
+    pub selectors: Vec<String>,
     /// Exact decoded Unicode text, preserving line endings.
     /// 保留换行符的精确解码 Unicode 文本。
     pub text: String,
@@ -75,9 +78,16 @@ pub fn collect_local_text_sources(
     let mut batch = LocalTextBatch::default();
     for source in sources {
         match expand_source(workspace_root, source) {
-            Ok(files) => {
+            Ok((files, explicit)) => {
                 for (path, relative) in files {
-                    candidates.entry(path).or_insert(relative);
+                    // The first selector owns the destination; explicit selectors stay addressable.
+                    // 首个选择器拥有目标；显式选择器保持可寻址。
+                    let entry = candidates
+                        .entry(path)
+                        .or_insert_with(|| (relative, Vec::new()));
+                    if explicit {
+                        entry.1.push(source.clone());
+                    }
                     if candidates.len() > max_files {
                         return Err(FileToolError::new(
                             "transfer_limit",
@@ -96,8 +106,8 @@ pub fn collect_local_text_sources(
     // This sum counts decoded UTF-8, matching the destination's actual body storage.
     // 此和累计解码 UTF-8，与目标实际正文存储一致。
     let mut total_bytes = 0usize;
-    for (path, relative_path) in candidates {
-        match read_source(&path, relative_path, max_file_bytes) {
+    for (path, (relative_path, selectors)) in candidates {
+        match read_source(&path, relative_path, selectors, max_file_bytes) {
             Ok(source) => {
                 total_bytes = total_bytes.checked_add(source.text.len()).ok_or_else(|| {
                     FileToolError::new("transfer_limit", "The transfer byte count overflowed.")
@@ -122,12 +132,13 @@ pub fn collect_local_text_sources(
 
 /// Resolves `source` into native regular-file candidates and glob-relative destination names.
 /// 将 `source` 解析为原生普通文件候选及相对 glob 的目标名称。
-/// `workspace_root` owns relative/environment path semantics; returns paths or the native failure.
-/// `workspace_root` 拥有相对及环境路径语义；返回路径或原生失败。
+/// `workspace_root` owns relative/environment path semantics; returns paths plus whether the
+/// selector named one exact file, or the native failure.
+/// `workspace_root` 拥有相对及环境路径语义；返回路径及选择器是否指名单一精确文件，或原生失败。
 fn expand_source(
     workspace_root: &Path,
     source: &str,
-) -> Result<Vec<(PathBuf, String)>, FileToolError> {
+) -> Result<(Vec<(PathBuf, String)>, bool), FileToolError> {
     validate_search_text(Some(source), "source")?;
     // Lexical resolution is shared with file_read; wildcard components are split only afterwards.
     // 词法解析与 file_read 共享；仅在之后拆分通配符组件。
@@ -161,7 +172,7 @@ fn expand_source(
                 FileToolError::new("invalid_path", "The source filename is not Unicode.")
             })?
             .to_owned();
-        return Ok(vec![(path, name)]);
+        return Ok((vec![(path, name)], true));
     }
     // Resolve the fixed base through the same containment checks used by the file tool.
     // 通过文件工具使用的相同包含检查解析固定基准。
@@ -199,7 +210,7 @@ fn expand_source(
             "The glob matched no regular files.",
         ));
     }
-    Ok(matches)
+    Ok((matches, false))
 }
 
 /// Matches relative `segments` against `pattern`, reusing native scalar glob matching for each segment.
@@ -229,11 +240,13 @@ fn matches_segments(segments: &[&str], pattern: &[String]) -> bool {
 
 /// Reads `path` with the native snapshot codec and caller `limit`; returns one exact transfer record.
 /// 通过原生快照编解码器及调用方 `limit` 读取 `path`；返回一条精确搬运记录。
-/// `relative_path` is the already resolved logical suffix; errors reject only this file.
-/// `relative_path` 为已解析逻辑后缀；错误仅拒绝此文件。
+/// `relative_path` is the already resolved logical suffix and `selectors` the explicit requests
+/// naming it; errors reject only this file.
+/// `relative_path` 为已解析逻辑后缀，`selectors` 为指名它的显式请求；错误仅拒绝此文件。
 fn read_source(
     path: &Path,
     relative_path: String,
+    selectors: Vec<String>,
     limit: usize,
 ) -> Result<LocalTextSource, FileToolError> {
     // Native text decoding preserves the original Unicode text and all newline sequences.
@@ -257,6 +270,7 @@ fn read_source(
     Ok(LocalTextSource {
         source_path: display_path(&canonical),
         relative_path,
+        selectors,
         text: snapshot.document.text,
         sha256,
     })
