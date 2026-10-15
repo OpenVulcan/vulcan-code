@@ -195,7 +195,8 @@
   "crates/vulcan-tools-manager/src/result_markdown.rs": 1,
   "crates/vulcan-workbench-model/src/subagent/tests/metadata.rs": 7,
   "crates/vulcan-workspace-store/src/knowledge_base/markdown.rs": 4,
-  "crates/vulcan-workspace-store/src/knowledge_base/runtime/tests.rs": 1,
+  "crates/vulcan-workspace-store/src/knowledge_base/runtime/storage/tests.rs": 1,
+  "crates/vulcan-workspace-store/src/knowledge_base/runtime/tests.rs": 7,
   "crates/vulcan-workspace-store/src/vmm_data_plane/lexical_tests.rs": 13,
   "crates/vulcan-workspace-store/src/workspace_store/persistence/projects.rs": 1
 }
