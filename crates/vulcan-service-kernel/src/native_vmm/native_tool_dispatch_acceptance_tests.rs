@@ -77,6 +77,7 @@ fn manager(
 /// 构建一个明确合成但类型完整的调用身份，由实际管理器桥接消费。
 fn invocation(session_id: uuid::Uuid, sequence: u64) -> VulcanToolInvocationContext {
     VulcanToolInvocationContext {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         session_id: session_id.to_string(),
         request_stream_id: RequestStreamId::try_new(format!("native-tool-stream-{sequence}"))
             .expect("stream identity"),

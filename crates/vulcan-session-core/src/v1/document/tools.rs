@@ -82,6 +82,9 @@ pub struct ToolPreparation {
 /// 为一条已准备 Provider 工具调用预留的持久化本地身份。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedToolReceipt {
+    /// Exact turn bound to the durable ToolCall event.
+    /// 与持久 ToolCall 事件绑定的精确回合。
+    pub turn_id: TurnId,
     /// Owning physical API identity.
     /// 所属物理 API 身份。
     pub api_call_id: ApiCallId,
@@ -452,6 +455,7 @@ impl SessionDocument {
             });
             api.tool_seqs.push(seq);
             tool_receipts.push(PreparedToolReceipt {
+                turn_id: api.turn_id,
                 api_call_id,
                 tool_call_id,
                 request_stream_id: preparation.request_stream_id,
@@ -561,6 +565,9 @@ impl SessionDocument {
                 }
             }
             receipts.push(PreparedToolReceipt {
+                turn_id: event.turn_id.ok_or(DomainError::InvalidToolIdentity {
+                    field: "prepared_batch_turn_id",
+                })?,
                 api_call_id,
                 tool_call_id: tool.tool_call_id,
                 request_stream_id: tool.request_stream_id.clone(),

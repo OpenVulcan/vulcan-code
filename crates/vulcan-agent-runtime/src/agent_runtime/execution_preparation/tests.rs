@@ -16,8 +16,8 @@ use crate::provider_config::{
     ProjectPromptSkillsConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
 };
 use crate::tooling::native::{
-    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, KNOWLEDGE_BROWSE_TOOL_ID, KNOWLEDGE_READ_TOOL_ID,
-    KNOWLEDGE_SEARCH_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
+    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, KNOWLEDGE_LIST_TOOL_ID, KNOWLEDGE_READ_TOOL_ID,
+    KNOWLEDGE_SEARCH_TOOL_ID, KNOWLEDGE_WRITE_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
 };
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::json;
@@ -535,8 +535,9 @@ fn prepare_execution_hides_knowledge_tools_without_effective_access() {
         .collect::<Vec<_>>();
 
     assert!(!definition_ids.contains(&KNOWLEDGE_SEARCH_TOOL_ID));
-    assert!(!definition_ids.contains(&KNOWLEDGE_BROWSE_TOOL_ID));
+    assert!(!definition_ids.contains(&KNOWLEDGE_LIST_TOOL_ID));
     assert!(!definition_ids.contains(&KNOWLEDGE_READ_TOOL_ID));
+    assert!(!definition_ids.contains(&KNOWLEDGE_WRITE_TOOL_ID));
 }
 
 /// Verifies all three read-only tools become visible for one non-empty immutable access snapshot.
@@ -549,8 +550,7 @@ fn prepare_execution_exposes_knowledge_tools_for_effective_access() {
     request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: String::from("project-a"),
         library_ids: vec![String::from("550e8400-e29b-41d4-a716-446655440000")],
-        retrieval_mode: None,
-        knowledge_search_handler: None,
+        search_enabled: true,
     });
 
     let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
@@ -563,8 +563,58 @@ fn prepare_execution_exposes_knowledge_tools_for_effective_access() {
         .collect::<Vec<_>>();
 
     assert!(definition_ids.contains(&KNOWLEDGE_SEARCH_TOOL_ID));
-    assert!(definition_ids.contains(&KNOWLEDGE_BROWSE_TOOL_ID));
+    assert!(definition_ids.contains(&KNOWLEDGE_LIST_TOOL_ID));
     assert!(definition_ids.contains(&KNOWLEDGE_READ_TOOL_ID));
+    assert!(definition_ids.contains(&KNOWLEDGE_WRITE_TOOL_ID));
+
+    // An all-browse snapshot retains listing/reading/writing but has no search capability.
+    // 全浏览快照保留列举、读取及写入，但没有检索能力。
+    request.knowledge_access.as_mut().unwrap().search_enabled = false;
+    let browse = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+        .expect("browse preparation");
+    let browse_ids = browse
+        .tool_snapshot
+        .resolved_tool_definitions
+        .iter()
+        .map(|definition| definition.descriptor.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(!browse_ids.contains(&KNOWLEDGE_SEARCH_TOOL_ID));
+    assert!(browse_ids.contains(&KNOWLEDGE_LIST_TOOL_ID));
+    assert!(browse_ids.contains(&KNOWLEDGE_READ_TOOL_ID));
+    assert!(browse_ids.contains(&KNOWLEDGE_WRITE_TOOL_ID));
+
+    // Plan requests retain all read tools and remove the persistent write from both surfaces.
+    // 计划请求保留全部只读工具，并从两个表面移除持久写入。
+    request.execution_mode = "Plan".into();
+    request.knowledge_access.as_mut().unwrap().search_enabled = true;
+    let plan = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+        .expect("plan knowledge preparation");
+    assert!(
+        !plan
+            .tool_snapshot
+            .resolved_tool_definitions
+            .iter()
+            .any(|definition| definition.descriptor.id == KNOWLEDGE_WRITE_TOOL_ID)
+    );
+    assert!(
+        !plan
+            .preparation
+            .tool_descriptors
+            .iter()
+            .any(|descriptor| descriptor.id == KNOWLEDGE_WRITE_TOOL_ID)
+    );
+    for id in [
+        KNOWLEDGE_READ_TOOL_ID,
+        KNOWLEDGE_LIST_TOOL_ID,
+        KNOWLEDGE_SEARCH_TOOL_ID,
+    ] {
+        assert!(
+            plan.tool_snapshot
+                .resolved_tool_definitions
+                .iter()
+                .any(|definition| definition.descriptor.id == id)
+        );
+    }
 }
 
 /// Auxiliary execution excludes business mutators from both visibility and invocation.

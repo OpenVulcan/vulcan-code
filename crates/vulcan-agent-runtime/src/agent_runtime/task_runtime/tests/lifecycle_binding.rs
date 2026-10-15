@@ -129,6 +129,7 @@ impl NativeAgentCollaborationRuntime for RejectingHost {
 /// 为隔离原生工具入口创建精确工具坐标，不使用 Provider。
 fn context(parent: Uuid) -> VulcanToolInvocationContext {
     VulcanToolInvocationContext {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         session_id: parent.to_string(),
         request_stream_id: RequestStreamId::try_new("native-spawn-stream").unwrap(),
         api_call_id: ApiCallId::try_new(1).unwrap(),

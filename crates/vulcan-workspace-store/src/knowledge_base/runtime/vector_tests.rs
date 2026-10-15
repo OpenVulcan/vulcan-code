@@ -9,6 +9,67 @@ use std::time::Duration;
 /// 有限本地工作器截止时间；不使用付费推理。
 const WORKER_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Unchanged ingest reports an in-flight desired-space backlog without appending history.
+/// 无变化搬运报告在途期望空间积压，同时不追加历史。
+#[tokio::test]
+async fn unchanged_ingest_preserves_real_pending_embedding_count() {
+    // This fixture starts without vectors so its initial content state is deterministic.
+    // 此夹具以无向量状态开始，使初始内容状态确定。
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    // The gate prevents the pending state from racing to ready before the receipt is read.
+    // 闸门防止读取回执前待处理状态竞态变为就绪。
+    let release = Arc::new(tokio::sync::Notify::new());
+    // One permit wakes the sole document batch; no paid endpoint is installed.
+    // 单个许可唤醒唯一文档批次；不安装付费端点。
+    let worker_release = release.clone();
+    runtime
+        .set_embedding_executor(Arc::new(move |request| {
+            // Each asynchronous request owns its own gate reference.
+            // 每个异步请求拥有自身闸门引用。
+            let release = worker_release.clone();
+            Box::pin(async move {
+                release.notified().await;
+                Ok(fake_vectors(&request))
+            })
+        }))
+        .await
+        .unwrap();
+    runtime
+        .set_index_mode(
+            &library,
+            vector_settings(KnowledgeIndexMode::Vector, "unchanged"),
+        )
+        .await
+        .unwrap();
+    settled(&runtime, &library).await;
+    // The summary is embedded even while the transferred body remains outside the AI result.
+    // 即使搬运正文留在 AI 结果之外，摘要仍被嵌入。
+    let mut input = source("original exact text");
+    input.embed = KnowledgeEmbedPolicy::Summary;
+    runtime
+        .ingest_documents(&library, "project", vec![input.clone()], ai(), "first")
+        .await
+        .unwrap();
+    // A second observation of the same bytes is content-idempotent and still reports the queue.
+    // 第二次观测相同字节在内容上幂等，仍报告队列。
+    let receipt = runtime
+        .ingest_documents(&library, "project", vec![input], ai(), "same")
+        .await
+        .unwrap();
+    assert!(receipt.change_seq.is_none());
+    assert!(receipt.pending_embeddings > 0);
+    assert_eq!(
+        runtime
+            .list_changes(&library, None, 20)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    release.notify_one();
+    assert_eq!(settled(&runtime, &library).await.pending, 0);
+}
+
 /// Creates a synthetic route for a declared mode; returns no network endpoint.
 /// 为声明模式创建合成路由；不返回网络端点。
 pub(super) fn vector_settings(mode: KnowledgeIndexMode, name: &str) -> KnowledgeLibrarySettings {

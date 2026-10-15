@@ -792,6 +792,7 @@ fn prepare_reply_question_tool_call(
         })
         .unwrap();
     VulcanToolInvocationContext {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         session_id: target.session_id().to_string(),
         request_stream_id,
         api_call_id,
@@ -1171,6 +1172,7 @@ fn prepare_wait_question_tool_call(
         })
         .unwrap();
     VulcanToolInvocationContext {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         session_id: handle.session_id().to_string(),
         request_stream_id,
         api_call_id,

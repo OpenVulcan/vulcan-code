@@ -35,7 +35,7 @@ pub(crate) fn native_tool_id_is_vmm_memory_tool(tool_id: &str) -> bool {
 pub(crate) fn native_tool_id_is_knowledge_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
-        "knowledge_search" | "knowledge_browse" | "knowledge_read"
+        "knowledge_search" | "knowledge_list" | "knowledge_read" | "knowledge_write"
     )
 }
 

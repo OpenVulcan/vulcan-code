@@ -400,6 +400,7 @@ fn tool_context(child: &Arc<SessionHandle>, tool: &str, stamp: i64) -> VulcanToo
         .value;
     let call = receipt.tools.into_iter().next().unwrap();
     VulcanToolInvocationContext {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         session_id: child.session_id().to_string(),
         request_stream_id: stream,
         api_call_id,

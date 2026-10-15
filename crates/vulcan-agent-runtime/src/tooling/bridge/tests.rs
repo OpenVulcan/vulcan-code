@@ -1042,6 +1042,7 @@ fn frozen_bridge_tools(
 fn frozen_bridge_context() -> VulcanToolInvocationContext {
     use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
     VulcanToolInvocationContext {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         session_id: String::from("frozen-owner"),
         request_stream_id: RequestStreamId::try_new("frozen-stream").expect("valid stream id"),
         api_call_id: ApiCallId::try_new(1).expect("valid API id"),

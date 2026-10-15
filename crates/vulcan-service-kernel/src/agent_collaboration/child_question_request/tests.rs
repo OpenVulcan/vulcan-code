@@ -32,7 +32,7 @@ fn child_question_request_preserves_history_without_parent_template() {
         ..SessionEffectiveConfig::default()
     };
     let profile = ChildExecutionProfile {
-        version: 1,
+        version: vulcan_session_core::v1::child_execution::CHILD_EXECUTION_PROFILE_VERSION,
         root_session_id: root_id.to_string(),
         parent_session_id: root_id.to_string(),
         task_id: SubagentTaskId::try_new(child_id.to_string()).unwrap(),

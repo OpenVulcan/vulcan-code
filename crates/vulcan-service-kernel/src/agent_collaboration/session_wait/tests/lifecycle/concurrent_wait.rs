@@ -74,6 +74,7 @@ fn prepare_concurrent_wait_contexts(
         .into_iter()
         .zip(names)
         .map(|(tool, name)| VulcanToolInvocationContext {
+            turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
             session_id: source.session_id().to_string(),
             request_stream_id: tool.request_stream_id,
             api_call_id,

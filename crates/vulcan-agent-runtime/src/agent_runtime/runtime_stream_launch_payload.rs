@@ -790,7 +790,7 @@ mod tests {
                 ..SessionEffectiveConfig::default()
             };
             let profile = ChildExecutionProfile {
-                version: 1,
+                version: vulcan_session_core::v1::child_execution::CHILD_EXECUTION_PROFILE_VERSION,
                 root_session_id: root_id.to_string(),
                 parent_session_id: root_id.to_string(),
                 task_id: SubagentTaskId::try_new(Uuid::nil().to_string()).unwrap(),

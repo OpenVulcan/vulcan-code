@@ -2663,6 +2663,8 @@ async fn tool_batch_persists_prepared_running_finished_and_unique_stats() {
             prepared
                 .iter()
                 .map(|(seq, tool)| PreparedToolInvocationIdentity {
+                    turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1)
+                        .expect("synthetic turn"),
                     api_call_id: tool.api_call_id,
                     tool_call_id: tool.tool_call_id,
                     request_stream_id: tool.request_stream_id.clone(),

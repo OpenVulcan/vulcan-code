@@ -24,7 +24,7 @@ pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 /// migrating it; per-version migrations become mandatory from V0.2 (AGENTS.md section 1 rule 12).
 /// 当前元数据模式版本。发布前版本（V0.1.x）拒绝其他任何版本而不迁移；自 V0.2 起才必须提供逐版本迁移
 /// （AGENTS.md 第一节第 12 条）。
-pub const METADATA_SCHEMA_VERSION: u32 = 7;
+pub const METADATA_SCHEMA_VERSION: u32 = 8;
 
 /// Maximum number of Unicode scalar values accepted in one Goal objective.
 /// 一个 Goal 目标内容允许的 Unicode 标量值最大数量。
@@ -495,22 +495,6 @@ pub enum KnowledgeLibrarySelectionMode {
     Explicit,
 }
 
-/// Session-selected retrieval policy for knowledge tools.
-/// 会话为知识工具选择的检索策略。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum KnowledgeRetrievalMode {
-    /// Return raw BM25 matches.
-    /// 返回原始 BM25 匹配结果。
-    RawBm25,
-    /// Return display-oriented BM25 matches.
-    /// 返回面向展示的 BM25 匹配结果。
-    DisplayBm25,
-    /// Return display-oriented hybrid matches.
-    /// 返回面向展示的混合检索结果。
-    DisplayHybrid,
-}
-
 /// Complete session-owned knowledge-library selection.
 /// 当前会话持有的完整知识库选择。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -523,19 +507,13 @@ pub struct KnowledgeLibrarySelectionConfig {
     /// 按规范顺序排列的显式知识库标识。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub library_ids: Vec<String>,
-    /// Optional retrieval policy selected for knowledge tools.
-    /// 为知识工具选择的可选检索策略。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retrieval_mode: Option<KnowledgeRetrievalMode>,
 }
 
 impl KnowledgeLibrarySelectionConfig {
     /// Returns whether this selection is the project-inherited default.
     /// 返回该选择是否为继承项目配置的默认状态。
     pub fn is_default(&self) -> bool {
-        self.mode == KnowledgeLibrarySelectionMode::Inherit
-            && self.library_ids.is_empty()
-            && self.retrieval_mode.is_none()
+        self.mode == KnowledgeLibrarySelectionMode::Inherit && self.library_ids.is_empty()
     }
 }
 

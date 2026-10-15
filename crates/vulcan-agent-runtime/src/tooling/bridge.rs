@@ -138,6 +138,15 @@ pub fn build_vulcan_tools_manager(
         {
             continue;
         }
+        // Library-owned browse modes have no search capability in this immutable turn snapshot.
+        // 库自身的浏览模式在此不可变回合快照中没有检索能力。
+        if tool_id == crate::tooling::native::KNOWLEDGE_SEARCH_TOOL_ID
+            && knowledge_access
+                .as_ref()
+                .is_none_or(|context| !context.search_enabled)
+        {
+            continue;
+        }
         let Some(definition) = native_catalog.definition(&tool_id) else {
             continue;
         };
@@ -185,6 +194,7 @@ pub fn build_vulcan_tools_manager(
                         .invoke(
                             &tool_id,
                             NativeToolExecutionRequest {
+                                invocation_context: Some(context.clone()),
                                 arguments: args,
                                 session_id: Uuid::parse_str(&context.session_id).ok(),
                                 host_project_id,

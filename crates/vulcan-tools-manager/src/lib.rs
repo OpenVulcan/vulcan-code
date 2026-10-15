@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
+use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId, TurnId};
 
 mod manager;
 pub mod public_name;

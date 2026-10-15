@@ -1674,6 +1674,7 @@ function: before
         use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
 
         VulcanToolInvocationContext {
+            turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
             session_id: String::from("browser-hook-session"),
             request_stream_id: RequestStreamId::try_new("browser-hook-stream")
                 .expect("test request stream id"),

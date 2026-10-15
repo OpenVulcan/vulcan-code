@@ -88,6 +88,7 @@ mod tests {
     /// 返回不含隐式项目或回调权限的请求。
     fn request(arguments: Value) -> NativeToolExecutionRequest {
         NativeToolExecutionRequest {
+            invocation_context: None,
             arguments,
             session_id: None,
             native_browser_runtime: None,

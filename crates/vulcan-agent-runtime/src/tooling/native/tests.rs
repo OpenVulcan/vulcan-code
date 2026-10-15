@@ -5,15 +5,15 @@ use super::{
     MAX_COMMAND_SESSION_READ_WAIT_MS, NativeGoalRuntime, NativeGoalSnapshot, NativeGoalStatus,
     NativeGoalTerminalStatus, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, TerminalSessionInput,
     TerminalSessionToolAction, TerminalSessionToolArgs, TerminalSessionWaitPolicy,
-    build_agent_list_tool, build_create_goal_tool, build_get_goal_tool,
-    build_knowledge_browse_tool, build_knowledge_read_tool, build_knowledge_search_tool,
+    build_agent_list_tool, build_create_goal_tool, build_get_goal_tool, build_knowledge_list_tool,
+    build_knowledge_read_tool, build_knowledge_search_tool, build_knowledge_write_tool,
     build_mcp_server_list_tool, build_native_tool_catalog, build_prompt_skill_detail_tool,
     build_shell_command_tool, build_skill_list_tool, build_submit_plan_tool,
     build_terminal_session_host_payload, build_terminal_session_render_input,
     build_terminal_session_tool, build_todolist_tool, build_update_goal_tool,
     build_workspace_describe_tool, coalesce_terminal_output_chunks,
     default_terminal_session_backend, display_submit_plan_path, goal_response_value,
-    knowledge_document_lines, normalize_terminal_session_name, resolve_session_shell_behavior,
+    normalize_terminal_session_name, resolve_session_shell_behavior,
     resolve_shell_command_launcher, resolve_shell_command_working_directory,
     shell_command_args_schema, shell_specific_newline, terminal_inputs_request_interrupt,
     terminal_interrupt_drain_chunk_is_visible, terminal_output_chunks_contain_pattern,
@@ -70,6 +70,7 @@ fn long_lived_terminal_test_command() -> &'static str {
 /// 构建一条仅变更参数的原生工具执行请求。
 fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionRequest {
     NativeToolExecutionRequest {
+        invocation_context: None,
         arguments,
         session_id: None,
         native_browser_runtime: None,

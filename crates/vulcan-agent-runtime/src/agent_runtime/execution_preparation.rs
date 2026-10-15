@@ -379,6 +379,13 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     );
     if !request.execution_mode.eq_ignore_ascii_case("plan") {
         remove_resolved_tool(&mut resolved_tools, SUBMIT_PLAN_TOOL_ID);
+    } else {
+        // Knowledge writes are absent from Plan requests as well as blocked at invocation.
+        // 知识写入既不出现在计划请求中，也在调用时受拦截。
+        remove_resolved_tool(
+            &mut resolved_tools,
+            crate::tooling::native::KNOWLEDGE_WRITE_TOOL_ID,
+        );
     }
     filter_resolved_tool_set_by_tool_exposure(&mut resolved_tools, &tool_exposure);
     remove_request_hidden_tools(&mut resolved_tools, &request.tool_request_hidden_tool_ids);

@@ -1,7 +1,7 @@
 use super::DomainError;
 use crate::v1::config::{
-    KnowledgeRetrievalMode, ProviderMediaUnderstandingModelTargetConfig,
-    ProviderMediaUnderstandingReasoningEffort, ProviderToolTargetConfig, VmmSessionPolicyConfig,
+    ProviderMediaUnderstandingModelTargetConfig, ProviderMediaUnderstandingReasoningEffort,
+    ProviderToolTargetConfig, VmmSessionPolicyConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -64,9 +64,6 @@ pub struct ChildKnowledgeAccess {
     /// Canonical original library set; empty means no accessible library.
     /// 规范原知识库集合；空集合表示没有可访问知识库。
     pub library_ids: BTreeSet<String>,
-    /// Original optional retrieval policy.
-    /// 原可选检索策略。
-    pub retrieval_mode: Option<KnowledgeRetrievalMode>,
 }
 
 /// Exact non-secret media override captured from the child request.

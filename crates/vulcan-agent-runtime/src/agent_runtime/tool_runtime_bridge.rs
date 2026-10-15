@@ -1179,6 +1179,7 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             ));
         };
         let context = VulcanToolInvocationContext {
+            turn_id: identity.turn_id,
             session_id: self.session_id.to_string(),
             request_stream_id: RequestStreamId::try_new(request.request_stream_id.clone())
                 .map_err(|error| VulcanCoreError::InvalidState {

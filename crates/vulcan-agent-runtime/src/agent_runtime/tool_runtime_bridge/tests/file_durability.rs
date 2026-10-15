@@ -56,6 +56,7 @@ fn file_write_receipt_rejection_preserves_disk_effects_without_replay() {
             invocation_calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {
                 file.invoke(NativeToolExecutionRequest {
+                    invocation_context: None,
                     arguments,
                     session_id: None,
                     native_browser_runtime: None,
@@ -169,6 +170,8 @@ fn file_write_receipt_rejection_preserves_disk_effects_without_replay() {
                             acknowledge_tool_batch_projection_barrier_from_event(
                                 &event,
                                 vec![PreparedToolReceipt {
+                                    turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1)
+                                        .expect("synthetic turn"),
                                     api_call_id: ApiCallId::try_new(1).unwrap(),
                                     tool_call_id: ToolCallId::try_new(2).unwrap(),
                                     request_stream_id: RequestStreamId::try_new(

@@ -984,7 +984,9 @@ fn waiting_ask_answer_cancel_and_continue_keep_one_turn() -> Result<(), DomainEr
 #[test]
 fn prepared_tool_batch_receipt_is_exact_and_restart_idempotent() -> Result<(), DomainError> {
     let mut doc = new_document();
-    doc.submit_root_input_fixture("tools", Vec::new(), T0)?;
+    // The prepared receipt must retain the exact business turn through retries and reloads.
+    // 准备回执必须在重试及重载后保留精确业务回合。
+    let turn = doc.submit_root_input_fixture("tools", Vec::new(), T0)?;
     let api = doc.start_api(ApiPurposeKind::MainGeneration, replay_request(), T0 + 1)?;
     let preparations = vec![
         prepared_tool("ask", "provider-tool-1"),
@@ -1002,6 +1004,7 @@ fn prepared_tool_batch_receipt_is_exact_and_restart_idempotent() -> Result<(), D
     assert_eq!(receipt.api_call_id, api);
     assert_eq!(receipt.tools.len(), preparations.len());
     for (mapped, preparation) in receipt.tools.iter().zip(&preparations) {
+        assert_eq!(mapped.turn_id, turn);
         assert_eq!(mapped.api_call_id, api);
         assert_eq!(mapped.request_stream_id, preparation.request_stream_id);
         assert!(matches!(

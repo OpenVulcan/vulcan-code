@@ -185,6 +185,7 @@ async fn admit_source_tool_call(
         .unwrap();
     (
         VulcanToolInvocationContext {
+            turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
             session_id: invocation.source_session_id.to_string(),
             request_stream_id,
             api_call_id,

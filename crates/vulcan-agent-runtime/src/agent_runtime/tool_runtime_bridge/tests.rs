@@ -79,6 +79,7 @@ fn install_test_invocation_identity(
     tool_seq: u64,
 ) -> PreparedToolReceipt {
     let receipt = PreparedToolReceipt {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         api_call_id: ApiCallId::try_new(api_call_id).expect("test API id should be valid"),
         tool_call_id: ToolCallId::try_new(tool_call_id).expect("test tool id should be valid"),
         request_stream_id: RequestStreamId::try_new(request.request_stream_id.clone())
@@ -128,6 +129,7 @@ fn build_demo_manager() -> (
                     Ok(VulcanToolInvocationResult::from_model_output(json!({
                         "args": args,
                         "session_id": context.session_id,
+                        "turn_id": context.turn_id.value(),
                         "api_call_id": context.api_call_id.value(),
                         "tool_call_id": context.tool_call_id.value(),
                         "provider_tool_call_id": context.provider_tool_call_id,
@@ -653,6 +655,7 @@ fn parallel_managed_tools_receive_exact_invocation_identity() {
         .build()
         .expect("runtime should build");
     let first_identity = PreparedToolReceipt {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(175).expect("synthetic turn"),
         api_call_id: ApiCallId::try_new(201).expect("first API id should be valid"),
         tool_call_id: ToolCallId::try_new(202).expect("first tool id should be valid"),
         request_stream_id: RequestStreamId::try_new(first.request_stream_id.clone())
@@ -660,6 +663,7 @@ fn parallel_managed_tools_receive_exact_invocation_identity() {
         tool_seq: Seq::try_new(203).expect("first tool seq should be valid"),
     };
     let second_identity = PreparedToolReceipt {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(175).expect("synthetic turn"),
         api_call_id: ApiCallId::try_new(201).expect("second API id should be valid"),
         tool_call_id: ToolCallId::try_new(204).expect("second tool id should be valid"),
         request_stream_id: RequestStreamId::try_new(second.request_stream_id.clone())
@@ -688,6 +692,7 @@ fn parallel_managed_tools_receive_exact_invocation_identity() {
         let output: serde_json::Value =
             serde_json::from_str(&result.model_output).expect("parallel output should be JSON");
         assert_eq!(output["session_id"], session_id.to_string());
+        assert_eq!(output["turn_id"], expected_identity.turn_id.value());
         assert_eq!(output["api_call_id"], expected_identity.api_call_id.value());
         assert_eq!(
             output["tool_call_id"],
@@ -743,6 +748,7 @@ fn prepared_tool_batch_barrier_installs_exact_parallel_invocation_identities() {
     ];
     let identities = vec![
         PreparedToolReceipt {
+            turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
             api_call_id: ApiCallId::try_new(211).expect("prepared API id should be valid"),
             tool_call_id: ToolCallId::try_new(212).expect("first prepared tool id should be valid"),
             request_stream_id: RequestStreamId::try_new(requests[0].request_stream_id.clone())
@@ -750,6 +756,7 @@ fn prepared_tool_batch_barrier_installs_exact_parallel_invocation_identities() {
             tool_seq: Seq::try_new(213).expect("first prepared tool seq should be valid"),
         },
         PreparedToolReceipt {
+            turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
             api_call_id: ApiCallId::try_new(211).expect("prepared API id should be valid"),
             tool_call_id: ToolCallId::try_new(214)
                 .expect("second prepared tool id should be valid"),
@@ -1589,6 +1596,8 @@ fn streaming_tool_executor_rejects_only_scoped_tool_ids() {
             &[rejected_request.clone(), allowed_request.clone()],
             vec![
                 PreparedToolReceipt {
+                    turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1)
+                        .expect("synthetic turn"),
                     api_call_id: ApiCallId::try_new(1401).expect("batch API id should be valid"),
                     tool_call_id: ToolCallId::try_new(1402)
                         .expect("rejected tool id should be valid"),
@@ -1599,6 +1608,8 @@ fn streaming_tool_executor_rejects_only_scoped_tool_ids() {
                     tool_seq: Seq::try_new(1403).expect("rejected tool seq should be valid"),
                 },
                 PreparedToolReceipt {
+                    turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1)
+                        .expect("synthetic turn"),
                     api_call_id: ApiCallId::try_new(1401).expect("batch API id should be valid"),
                     tool_call_id: ToolCallId::try_new(1404)
                         .expect("allowed tool id should be valid"),

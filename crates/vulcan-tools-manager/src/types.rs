@@ -275,6 +275,9 @@ pub type VulcanToolInvokeHandler =
 /// 一次精确 Provider 工具调用的不可变身份上下文。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VulcanToolInvocationContext {
+    /// Exact turn from the durable tool preparation receipt.
+    /// 来自持久工具准备回执的精确回合。
+    pub turn_id: TurnId,
     /// Stable owner session identity selected before Provider dispatch.
     /// 在 Provider 分派前选定的稳定所有者会话身份。
     pub session_id: String,

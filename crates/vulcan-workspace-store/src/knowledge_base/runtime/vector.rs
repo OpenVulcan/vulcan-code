@@ -77,7 +77,10 @@ pub(super) fn queue_current_embeddings(
 
 /// Returns distinct pending, ready and failed hashes still referenced by current embedded chunks.
 /// 返回仍被当前嵌入切块引用的去重待处理、就绪和失败哈希数。
-fn current_counts(connection: &Connection, space: &str) -> Result<(u64, u64, u64), String> {
+pub(super) fn current_counts(
+    connection: &Connection,
+    space: &str,
+) -> Result<(u64, u64, u64), String> {
     connection.query_row("SELECT COALESCE(SUM(state='pending'),0),COALESCE(SUM(state='ready'),0),COALESCE(SUM(state='failed'),0) FROM kb_vector_state s WHERE vector_space_id=? AND EXISTS(SELECT 1 FROM kb_chunks c WHERE c.content_sha256=s.content_sha256 AND c.embed=1);",
         [space],|r|Ok((unsigned_column(r,0)?,unsigned_column(r,1)?,unsigned_column(r,2)?))).map_err(|e|e.to_string())
 }

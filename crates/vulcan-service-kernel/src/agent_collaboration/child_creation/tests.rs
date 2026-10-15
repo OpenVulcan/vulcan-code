@@ -210,6 +210,7 @@ fn initial_child_creation_failure_settles_without_child_file() {
     let revision = parent.read(|document| document.durable_revision()).unwrap();
     let reservation = ChildTaskReservationRequest {
         invocation: VulcanToolInvocationContext {
+            turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
             session_id: parent.session_id().to_string(),
             request_stream_id: RequestStreamId::try_new("creation-failure-stream").unwrap(),
             api_call_id: ApiCallId::try_new(1).unwrap(),

@@ -231,7 +231,7 @@ fn question_request_profile(
     effective.prompt_skills.enabled = vec![String::from("child-skill")];
     effective.context_compaction.context_budget = Some(32_000);
     ChildExecutionProfile {
-        version: 1,
+        version: vulcan_session_core::v1::child_execution::CHILD_EXECUTION_PROFILE_VERSION,
         root_session_id: root.to_string(),
         parent_session_id: root.to_string(),
         task_id: SubagentTaskId::try_new(task_id.to_string()).unwrap(),
@@ -457,7 +457,6 @@ fn recovered_child_repreparation_preserves_narrowed_knowledge() {
         vulcan_session_core::v1::child_execution::ChildKnowledgeAccess {
             project_id: "project".into(),
             library_ids: BTreeSet::from(["allowed".into(), "revoked".into()]),
-            retrieval_mode: None,
         },
     );
     let mut request = test_parent_execution_request(task_id);
@@ -469,8 +468,7 @@ fn recovered_child_repreparation_preserves_narrowed_knowledge() {
     request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: "project".into(),
         library_ids: vec!["allowed".into()],
-        retrieval_mode: None,
-        knowledge_search_handler: None,
+        search_enabled: true,
     });
     let provider_config = ProviderConfigurationFile::default();
     let foundation = RuntimeFoundation::build_from_optional_mcp_access(
@@ -607,8 +605,7 @@ fn child_request_overrides_roundtrip_through_question_restoration() {
     original.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: "child-project".into(),
         library_ids: vec!["child-library".into()],
-        retrieval_mode: Some("display_hybrid".into()),
-        knowledge_search_handler: None,
+        search_enabled: true,
     });
     // Profile capture uses the same helper called by real child business preparation.
     // 配置捕获使用真实子业务准备调用的相同助手。
@@ -628,8 +625,7 @@ fn child_request_overrides_roundtrip_through_question_restoration() {
     restored.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: "foreign-project".into(),
         library_ids: vec!["foreign-library".into()],
-        retrieval_mode: None,
-        knowledge_search_handler: None,
+        search_enabled: true,
     });
     restore_child_question_request(&mut restored, &profile, 7).unwrap();
     assert_eq!(
@@ -666,8 +662,8 @@ fn child_request_overrides_roundtrip_through_question_restoration() {
     );
 }
 
-/// Rejects unknown knowledge modes and project mismatches before creating a durable ceiling.
-/// 在生成可靠权限上限前拒绝未知知识检索模式及项目不匹配。
+/// Captures exact knowledge identity ceilings and rejects project mismatches before persistence.
+/// 在持久化前捕获精确知识身份上限并拒绝项目不匹配。
 #[test]
 fn child_request_overrides_knowledge_capture_is_exact() {
     // Request identity and authorized context must agree before any provider work.
@@ -677,30 +673,27 @@ fn child_request_overrides_knowledge_capture_is_exact() {
     request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: "foreign".into(),
         library_ids: vec!["library".into()],
-        retrieval_mode: None,
-        knowledge_search_handler: None,
+        search_enabled: true,
     });
     assert!(capture_child_request_overrides(&request).is_err());
     request.knowledge_access.as_mut().unwrap().project_id = "project".into();
-    // Every declared retrieval policy must survive serialization without substitution.
-    // 每个已声明检索策略必须通过序列化保留，不能被替换。
-    for mode in [
-        None,
-        Some("raw_bm25"),
-        Some("display_bm25"),
-        Some("display_hybrid"),
-    ] {
-        request.knowledge_access.as_mut().unwrap().retrieval_mode = mode.map(str::to_owned);
-        // Captured JSON uses the exact protocol spelling for retrieval policies.
-        // 捕获的 JSON 使用检索策略的精确协议拼写。
-        let captured = capture_child_request_overrides(&request).unwrap();
-        assert_eq!(
-            serde_json::to_value(captured).unwrap()["knowledge_access"]["retrieval_mode"],
-            serde_json::to_value(mode).unwrap()
-        );
-    }
-    request.knowledge_access.as_mut().unwrap().retrieval_mode = Some("unknown".into());
-    assert!(capture_child_request_overrides(&request).is_err());
+    // Search visibility is recomputed from live library modes rather than persisted as a policy.
+    // 检索可见性根据实时库模式重新计算，不作为策略持久化。
+    let captured = capture_child_request_overrides(&request).unwrap();
+    assert_eq!(
+        captured.knowledge_access.as_ref().unwrap().library_ids,
+        BTreeSet::from(["library".into()])
+    );
+    // Old per-session policy fields are rejected even under the new outer profile version.
+    // 即使外层配置使用新版本，也拒绝旧会话级策略字段。
+    let mut old = serde_json::to_value(&captured).unwrap();
+    old["knowledge_access"]["retrieval_mode"] = "raw_bm25".into();
+    assert!(
+        serde_json::from_value::<
+            vulcan_session_core::v1::child_execution::ChildExecutionRequestOverrides,
+        >(old)
+        .is_err()
+    );
     // Absence removes stale style and callback state from a later request template.
     // 缺省设置移除后续请求模板中的过期风格及回调状态。
     request.output_style_snapshot = Some(vulcan_prompt_composer::PromptOutputStyleSnapshot::new(
@@ -2049,8 +2042,7 @@ fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
     parent_request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: String::from("project-a"),
         library_ids: vec![String::from("550e8400-e29b-41d4-a716-446655440000")],
-        retrieval_mode: None,
-        knowledge_search_handler: None,
+        search_enabled: true,
     });
     let context = TaskExecutionRuntimeContext::new(
         provider_config,

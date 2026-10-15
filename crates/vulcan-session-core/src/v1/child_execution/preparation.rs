@@ -83,7 +83,7 @@ impl ChildExecutionPreparation {
         // Binding only supplies document-owned coordinates; every executable setting is moved unchanged.
         // 绑定仅提供文档自有坐标；每个可执行设置均原样移入。
         let profile = ChildExecutionProfile {
-            version: 1,
+            version: crate::v1::child_execution::CHILD_EXECUTION_PROFILE_VERSION,
             root_session_id: self.root_session_id.to_string(),
             parent_session_id: self.parent_session_id.to_string(),
             task_id: SubagentTaskId::try_new(session_id.clone())?,

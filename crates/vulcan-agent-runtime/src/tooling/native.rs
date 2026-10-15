@@ -209,7 +209,10 @@ pub trait NativeGoalRuntime: fmt::Debug + Send + Sync {
 pub const KNOWLEDGE_SEARCH_TOOL_ID: &str = "knowledge_search";
 /// Stable identifier for project knowledge browsing.
 /// 项目资料浏览的稳定标识。
-pub const KNOWLEDGE_BROWSE_TOOL_ID: &str = "knowledge_browse";
+pub const KNOWLEDGE_LIST_TOOL_ID: &str = "knowledge_list";
+/// Stable identifier for AI-owned knowledge content mutations.
+/// AI 所有知识内容变更的稳定标识。
+pub const KNOWLEDGE_WRITE_TOOL_ID: &str = "knowledge_write";
 /// Stable identifier for project knowledge reading.
 /// 项目资料读取的稳定标识。
 pub const KNOWLEDGE_READ_TOOL_ID: &str = "knowledge_read";
@@ -354,6 +357,9 @@ impl Error for NativeToolError {}
 /// 连同运行时上下文一起传给原生工具的单条宿主执行请求。
 #[derive(Debug, Clone)]
 pub struct NativeToolExecutionRequest {
+    /// Exact host invocation identity; absent for direct non-provider utility calls.
+    /// 精确宿主调用身份；直接非 Provider 实用调用时缺省。
+    pub invocation_context: Option<vulcan_tools_manager::VulcanToolInvocationContext>,
     /// Raw JSON arguments provided by the model-side tool call.
     /// 由模型侧工具调用提供的原始 JSON 参数。
     pub arguments: Value,
@@ -517,8 +523,9 @@ pub fn build_native_tool_catalog(
         build_update_goal_tool(),
         build_declare_intent_tool(),
         build_knowledge_search_tool(),
-        build_knowledge_browse_tool(),
+        build_knowledge_list_tool(),
         build_knowledge_read_tool(),
+        build_knowledge_write_tool(),
         build_codebase_retrieval_tool(),
         build_prompt_skill_detail_tool(),
         build_shell_command_tool(shell_support.clone(), plugin_runtime),

@@ -3,6 +3,14 @@
 
 mod authorization;
 mod content;
+
+/// Canonicalizes `path` with the storage authority; `allow_root` permits an empty folder selector.
+/// 通过存储权威规范化 `path`；`allow_root` 允许空目录选择器。
+/// Returns the NFC display path and comparison key, or the same error as every content mutation.
+/// 返回 NFC 显示路径及比较键，或与全部内容变更相同的错误。
+pub fn normalize_knowledge_path(path: &str, allow_root: bool) -> Result<(String, String), String> {
+    content::normalize_path(path, allow_root)
+}
 mod fts;
 mod library;
 mod operations;

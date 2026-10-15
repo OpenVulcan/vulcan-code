@@ -425,6 +425,8 @@ async fn durable_child_preparation_failure_prevents_activation() {
                 port: host.clone(),
                 reservation: ChildTaskReservationRequest {
                     invocation: VulcanToolInvocationContext {
+                        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1)
+                            .expect("synthetic turn"),
                         session_id: parent.to_string(),
                         request_stream_id: RequestStreamId::try_new("admission-stream").unwrap(),
                         api_call_id: ApiCallId::try_new(1).unwrap(),

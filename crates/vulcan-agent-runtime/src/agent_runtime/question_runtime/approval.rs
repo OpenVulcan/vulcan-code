@@ -163,6 +163,7 @@ mod tests {
     /// 一次合成受管控调用的精确坐标。
     fn context() -> VulcanToolInvocationContext {
         VulcanToolInvocationContext {
+            turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
             session_id: Uuid::nil().to_string(),
             request_stream_id: RequestStreamId::try_new("approval-stream").unwrap(),
             api_call_id: ApiCallId::try_new(1).unwrap(),

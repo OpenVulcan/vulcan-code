@@ -22,8 +22,10 @@ V0.1.x 是发布前版本，不保留任何元数据迁移：
 版本历史（仅说明，不再提供迁移代码）：4 引入 `config.answer_mode`，5 引入 `mode.access.permission`
 （`read_only` / `workspace_write` / `full_access`，新会话默认 `workspace_write`），6 引入必填可空的
 `dedicated`（专职会话配置：工具开放、基础提示词与记忆锁定区间，见[专职会话](dedicated-sessions.md)），7 引入可选的
-`mode.access.unattended`（无人值守模式，保存开启时用户确认的 `deny_policy` 快照，缺省表示关闭）。更新到新版本后，
-旧版本的本地会话将无法打开。
+`mode.access.unattended`（无人值守模式，保存开启时用户确认的 `deny_policy` 快照，缺省表示关闭），8 删除
+会话知识库选择及子执行访问中的检索策略字段，模式统一归知识库所有。子执行配置自身版本同时由 1 递增至
+`CHILD_EXECUTION_PROFILE_VERSION`（当前为 2），仍保存在 `metadata.json` 的 `child_execution_profile` 中；
+不读取旧版本，也不迁移、补值或探测旧字段。更新到新版本后，旧版本本地会话将无法打开。
 
 旧版本会话无法加载，因此也无法走“先归档再删除”。唯一清理入口是 `service_delete_unsupported_conversation`：
 在会话生命周期守卫内先以 `session_v1_format_is_unsupported` 只读元数据确认其为 `UnsupportedDevelopmentFormat`，

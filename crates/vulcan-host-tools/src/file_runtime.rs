@@ -22,6 +22,11 @@ use std::time::UNIX_EPOCH;
 use tokio::task;
 use vulcan_change_set::persistent_change_set_from_host_result;
 
+mod text_transfer;
+pub use text_transfer::{
+    LocalTextBatch, LocalTextSource, LocalTextSourceFailure, collect_local_text_sources,
+};
+
 /// Maximum number of read/list/search targets accepted in one request.
 /// 单次请求允许处理的读取、列表或搜索目标最大数量。
 pub const MAX_FILE_TARGETS: usize = 10;

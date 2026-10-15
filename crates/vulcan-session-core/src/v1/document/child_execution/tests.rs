@@ -351,7 +351,7 @@ fn fixture() -> (SessionDocument, ChildExecutionProfile) {
         .unwrap()
         .into_value();
     let profile = ChildExecutionProfile {
-        version: 1,
+        version: crate::v1::child_execution::CHILD_EXECUTION_PROFILE_VERSION,
         root_session_id: String::from("root"),
         parent_session_id: String::from("parent"),
         task_id: SubagentTaskId::try_new("child").unwrap(),
@@ -616,7 +616,11 @@ fn child_profile_rejects_foreign_or_unknown_owner() {
     let before = document.clone();
     for invalid in [
         ChildExecutionProfile {
-            version: 2,
+            version: crate::v1::child_execution::CHILD_EXECUTION_PROFILE_VERSION - 1,
+            ..profile.clone()
+        },
+        ChildExecutionProfile {
+            version: crate::v1::child_execution::CHILD_EXECUTION_PROFILE_VERSION + 1,
             ..profile.clone()
         },
         ChildExecutionProfile {
@@ -655,7 +659,7 @@ fn child_profile_rejects_foreign_or_unknown_owner() {
         .child_execution_profile
         .as_mut()
         .unwrap()
-        .version = 2;
+        .version = crate::v1::child_execution::CHILD_EXECUTION_PROFILE_VERSION + 1;
     assert!(
         SessionDocument::from_parts(
             document.metadata.clone(),

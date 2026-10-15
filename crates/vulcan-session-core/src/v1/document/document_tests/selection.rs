@@ -479,7 +479,6 @@ fn knowledge_and_vmm_selections_are_atomic_idempotent_and_strict() -> Result<(),
     let knowledge = KnowledgeLibrarySelectionConfig {
         mode: KnowledgeLibrarySelectionMode::Explicit,
         library_ids: vec!["library-a".to_string(), "library-b".to_string()],
-        retrieval_mode: Some(crate::v1::config::KnowledgeRetrievalMode::DisplayHybrid),
     };
     assert!(doc.set_knowledge_library_selection(knowledge.clone(), T0 + 1)?);
     assert_eq!(doc.metadata.config.selection.knowledge_libraries, knowledge);
@@ -502,7 +501,6 @@ fn knowledge_and_vmm_selections_are_atomic_idempotent_and_strict() -> Result<(),
     invalid_metadata.config.selection.knowledge_libraries = KnowledgeLibrarySelectionConfig {
         mode: KnowledgeLibrarySelectionMode::Inherit,
         library_ids: vec!["library-a".to_string()],
-        retrieval_mode: None,
     };
     assert!(matches!(
         SessionDocument::from_parts(
@@ -554,7 +552,6 @@ fn session_selection_bundle_is_single_revision_idempotent_and_failure_atomic()
         knowledge_libraries: KnowledgeLibrarySelectionConfig {
             mode: KnowledgeLibrarySelectionMode::Explicit,
             library_ids: vec!["library-a".to_string()],
-            retrieval_mode: Some(crate::v1::config::KnowledgeRetrievalMode::DisplayBm25),
         },
         vmm: VmmSessionPolicyConfig {
             precheck_enabled: Some(true),

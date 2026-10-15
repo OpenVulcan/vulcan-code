@@ -119,6 +119,62 @@ pub fn extract_document_title(content: &str, file_stem: &str) -> String {
         .unwrap_or_else(|| file_stem.to_string())
 }
 
+/// Extracts only parsed Markdown headings from `content` within the remaining `byte_budget`.
+/// 在剩余 `byte_budget` 内仅提取 `content` 中已解析的 Markdown 标题。
+/// Returns bounded headings and whether any were omitted; fenced-code text never becomes an outline.
+/// 返回有界标题及是否省略了条目；围栏代码文本不会成为大纲。
+pub fn extract_document_outline(content: &str, byte_budget: usize) -> (Vec<String>, bool) {
+    // Normalization follows the same heading parser used by source chunking.
+    // 规范化沿用来源切块使用的相同标题解析器。
+    let normalized = normalize_markdown_newlines(content);
+    // Only actual heading events contribute text to the model-visible receipt.
+    // 仅实际标题事件向模型可见回执贡献文本。
+    let headings = extract_heading_boundaries(&normalized);
+    // The output is bounded by both item count and the caller's aggregate byte budget.
+    // 输出同时受条目数及调用方累计字节预算约束。
+    let mut output = Vec::new();
+    // Count exact heading bytes rather than body bytes or estimated tokens.
+    // 计算精确标题字节，而非正文字节或估算 token。
+    let mut bytes = 0usize;
+    for heading in headings {
+        if output.len() >= super::MAX_KNOWLEDGE_OUTLINE_LINES
+            || heading.title.len() > byte_budget.saturating_sub(bytes)
+        {
+            return (output, true);
+        }
+        bytes += heading.title.len();
+        output.push(heading.title);
+    }
+    (output, false)
+}
+
+/// Parsed outlines exclude code and bound both Unicode bytes and heading count.
+/// 已解析大纲排除代码，并同时约束 Unicode 字节及标题数量。
+#[cfg(test)]
+#[test]
+fn knowledge_outline_has_no_body_or_fenced_headings() {
+    // Only real heading events can become a transfer receipt.
+    // 仅真实标题事件可成为搬运回执。
+    let content = "# Title\r\nprivate-body\r\n```md\r\n# Fake\r\n```\r\n## 中文\r\n";
+    assert_eq!(
+        extract_document_outline(content, usize::MAX),
+        (vec!["Title".into(), "中文".into()], false)
+    );
+    assert_eq!(
+        extract_document_outline(content, "Title".len()),
+        (vec!["Title".into()], true)
+    );
+    assert_eq!(extract_document_outline(content, 0), (Vec::new(), true));
+    // A source with many headings retains only the shared heading-count limit.
+    // 标题很多的来源仅保留共享标题数量上限。
+    let many = "# Heading\n".repeat(super::MAX_KNOWLEDGE_OUTLINE_LINES + 1);
+    assert_eq!(
+        extract_document_outline(&many, usize::MAX).0.len(),
+        super::MAX_KNOWLEDGE_OUTLINE_LINES
+    );
+    assert!(extract_document_outline(&many, usize::MAX).1);
+}
+
 /// Splits normalized Markdown into deterministic source-citable chunks.
 /// 将规范化 Markdown 拆分为确定性且可引用来源的切片。
 pub fn chunk_markdown(content: &str) -> Vec<ParsedMarkdownChunk> {

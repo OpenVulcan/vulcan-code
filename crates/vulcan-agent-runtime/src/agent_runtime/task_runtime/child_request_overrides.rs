@@ -4,8 +4,7 @@ use vulcan_session_core::v1::child_execution::{
     ChildOutputStyleSnapshot,
 };
 use vulcan_session_core::v1::config::{
-    KnowledgeRetrievalMode, ProviderMediaUnderstandingModelTargetConfig, ProviderToolTargetConfig,
-    VmmSessionPolicyConfig,
+    ProviderMediaUnderstandingModelTargetConfig, ProviderToolTargetConfig, VmmSessionPolicyConfig,
 };
 use vulcan_workbench_model::{
     SessionMediaUnderstandingModelSelection, SessionMediaUnderstandingSelection,
@@ -88,23 +87,9 @@ pub(super) fn capture_child_request_overrides(
                         "Child knowledge access belongs to a different project.",
                     ));
                 }
-                // Reject unknown policies rather than changing retrieval semantics during restoration.
-                // 拒绝未知策略，防止恢复时改变检索语义。
-                let retrieval_mode = match access.retrieval_mode.as_deref() {
-                    None => None,
-                    Some("raw_bm25") => Some(KnowledgeRetrievalMode::RawBm25),
-                    Some("display_bm25") => Some(KnowledgeRetrievalMode::DisplayBm25),
-                    Some("display_hybrid") => Some(KnowledgeRetrievalMode::DisplayHybrid),
-                    Some(_) => {
-                        return Err(String::from(
-                            "Child knowledge access has an unsupported retrieval mode.",
-                        ));
-                    }
-                };
                 Ok(ChildKnowledgeAccess {
                     project_id: access.project_id.clone(),
                     library_ids: access.library_ids.iter().cloned().collect(),
-                    retrieval_mode,
                 })
             })
             .transpose()?,

@@ -15,6 +15,10 @@ pub use request_overrides::{
     ChildOutputStyleSnapshot,
 };
 
+/// Exact child profile format; version 2 removes per-session knowledge retrieval policies.
+/// 精确子执行配置格式；版本 2 删除会话级知识检索策略。
+pub const CHILD_EXECUTION_PROFILE_VERSION: u32 = 2;
+
 /// Captures resolved child configuration without serializing executable runtime handles.
 /// 捕获已解析子配置，不序列化可执行运行时句柄。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -191,7 +195,7 @@ impl ChildExecutionProfile {
                 field: "child_execution_profile.temperature",
             });
         }
-        if self.version != 1 {
+        if self.version != CHILD_EXECUTION_PROFILE_VERSION {
             return Err(DomainError::CollaborationStateViolation {
                 field: "child_execution_profile.version",
             });

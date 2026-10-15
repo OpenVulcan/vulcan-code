@@ -310,6 +310,7 @@ async fn shell_command_tool_executes_simple_command() {
     );
     let result = tool
         .invoke(NativeToolExecutionRequest {
+            invocation_context: None,
             arguments: json!({
                 "command": "echo hello"
             }),
@@ -355,6 +356,7 @@ async fn shell_command_tool_spills_oversized_output_to_page_file() {
     );
     let result = tool
         .invoke(NativeToolExecutionRequest {
+            invocation_context: None,
             arguments: json!({
                 "command": "yes 0123456789abcdefghij | head -n 20000"
             }),

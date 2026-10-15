@@ -35,6 +35,18 @@ pub const MAX_KNOWLEDGE_PATH_SEGMENT_CHARS: usize = 128;
 /// 每篇搬运回执标题行数上限。
 pub const MAX_KNOWLEDGE_OUTLINE_LINES: usize = 40;
 
+/// Total UTF-8 heading bytes exposed by one ingest receipt.
+/// 单次搬运回执暴露的标题 UTF-8 总字节数。
+pub const MAX_KNOWLEDGE_OUTLINE_BYTES: usize = 64 * 1024;
+
+/// Maximum Unicode scalars in an AI-maintained document title.
+/// AI 维护文档标题的 Unicode 标量数量上限。
+pub const MAX_KNOWLEDGE_TITLE_CHARS: usize = 512;
+
+/// Maximum descendant levels in one logical listing.
+/// 单次逻辑列表的最大后代层数。
+pub const MAX_KNOWLEDGE_LIST_DEPTH: usize = 3;
+
 /// Automatic attempts before human retry.
 /// 人工重试前的自动尝试次数。
 pub const MAX_KNOWLEDGE_EMBEDDING_ATTEMPTS: u32 = 3;

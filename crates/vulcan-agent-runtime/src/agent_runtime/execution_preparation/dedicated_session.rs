@@ -103,6 +103,16 @@ mod tests {
             "knowledge_search",
             native
         ));
+        for access in [DedicatedToolAccess::None, DedicatedToolAccess::Standard] {
+            for tool in [
+                "knowledge_list",
+                "knowledge_read",
+                "knowledge_search",
+                "knowledge_write",
+            ] {
+                assert!(tool_allowed(access, tool, native));
+            }
+        }
         assert!(!tool_allowed(DedicatedToolAccess::None, "ask", managed));
         assert!(!tool_allowed(
             DedicatedToolAccess::None,

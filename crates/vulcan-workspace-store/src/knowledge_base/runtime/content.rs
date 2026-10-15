@@ -159,6 +159,9 @@ fn validate_document(document: &KnowledgeDocumentSummary, body: &str) -> Result<
     if document.title.trim().is_empty() {
         return Err("ERR_KNOWLEDGE_TITLE_REQUIRED".into());
     }
+    if document.title.chars().count() > MAX_KNOWLEDGE_TITLE_CHARS {
+        return Err("ERR_KNOWLEDGE_TITLE_TOO_LONG".into());
+    }
     if document.summary.chars().count() > MAX_KNOWLEDGE_SUMMARY_CHARS {
         return Err("ERR_KNOWLEDGE_SUMMARY_TOO_LONG".into());
     }
@@ -924,7 +927,10 @@ impl KnowledgeBaseRuntime {
         limit: u32,
     ) -> Result<KnowledgeListPage, String> {
         self.require_active_library(library_id).await?;
-        if !(1..=3).contains(&depth) || limit == 0 || limit > MAX_KNOWLEDGE_PAGE_SIZE {
+        if !(1..=MAX_KNOWLEDGE_LIST_DEPTH).contains(&depth)
+            || limit == 0
+            || limit > MAX_KNOWLEDGE_PAGE_SIZE
+        {
             return Err("ERR_KNOWLEDGE_LIST_RANGE".into());
         }
         // Cursor scope includes the exact library, normalized directory and requested depth.
@@ -1344,11 +1350,20 @@ impl KnowledgeBaseRuntime {
                     after.insert(document.id.clone(), document);
                 }
                 if bodies.is_empty() {
+                    // An unchanged source still reports the real desired-space backlog.
+                    // 无变化来源仍报告真实期望空间积压。
+                    let pending_embeddings = match &settings.embedding {
+                        Some(embedding) if settings.index_mode.has_vectors() => {
+                            super::vector::current_counts(connection, &vector_space_id(embedding)?)?
+                                .0
+                        }
+                        _ => 0,
+                    };
                     return Ok(KnowledgeWriteResult {
                         change_seq: None,
                         documents: vec![],
                         unchanged,
-                        pending_embeddings: 0,
+                        pending_embeddings,
                     });
                 }
                 let mut receipt = commit_snapshot(

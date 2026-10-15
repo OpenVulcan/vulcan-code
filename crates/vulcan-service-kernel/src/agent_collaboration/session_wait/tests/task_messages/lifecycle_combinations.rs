@@ -258,6 +258,7 @@ async fn admit_real_tool_call(
         })
         .unwrap();
     VulcanToolInvocationContext {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         session_id: invocation.source_session_id.to_string(),
         request_stream_id,
         api_call_id,
@@ -1717,6 +1718,7 @@ fn prepare_reply_tool_call_on_active_api(
         })
         .unwrap();
     VulcanToolInvocationContext {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         session_id: handle.session_id().to_string(),
         request_stream_id,
         api_call_id,
@@ -1817,6 +1819,7 @@ fn admit_wait_question_tool_call(
         })
         .unwrap();
     VulcanToolInvocationContext {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         session_id: invocation.source_session_id.to_string(),
         request_stream_id,
         api_call_id,

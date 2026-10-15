@@ -3,6 +3,29 @@
 
 use super::command_rules::{high_risk_category, is_known_read_only};
 use super::*;
+
+/// Knowledge mutations and host ingest reads bypass approval under their declared access contract.
+/// 知识变更及宿主搬运读取按已声明访问契约无需审批。
+#[test]
+fn knowledge_and_ingest_file_reads_are_ungoverned() {
+    for tool in [
+        "knowledge_list",
+        "knowledge_read",
+        "knowledge_search",
+        "knowledge_write",
+        "file_read",
+    ] {
+        for args in [
+            serde_json::json!({}),
+            serde_json::json!({"action":"ingest","sources":["C:/external/file.md"]}),
+        ] {
+            assert!(matches!(
+                classify_native(tool, &args),
+                PermissionSubject::Ungoverned
+            ));
+        }
+    }
+}
 use crate::tooling::native::FILE_READ_TOOL_ID;
 use serde_json::json;
 use vulcan_tools_manager::{
@@ -171,6 +194,7 @@ fn trace() -> JudgeTrace {
 fn context() -> VulcanToolInvocationContext {
     use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
     VulcanToolInvocationContext {
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
         session_id: SessionId::nil().to_string(),
         request_stream_id: RequestStreamId::try_new("gate-stream").unwrap(),
         api_call_id: ApiCallId::try_new(1).unwrap(),
