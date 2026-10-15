@@ -545,9 +545,7 @@ impl LanceDbEngine {
             }
 
             // Omission uses the engine default; explicit counts stay within its sole upper bound.
-
             // 省略使用引擎默认值；显式数量保持在唯一上限内。
-
             let limit = if input.limit == 0 {
                 DEFAULT_SEARCH_LIMIT
             } else {
@@ -560,9 +558,7 @@ impl LanceDbEngine {
             }
 
             // Capture the exact projected schema while the table guard is active.
-
             // 表守卫生效期间捕获精确投影结构。
-
             let output_schema = query.output_schema().await.map_err(map_lancedb_error)?;
             // The native query owns distance computation and row ordering.
             // 原生查询拥有距离计算及行顺序。
@@ -575,9 +571,7 @@ impl LanceDbEngine {
         };
 
         // Count logical rows independently of output encoding.
-
         // 独立于输出编码统计逻辑行。
-
         let rows = count_rows(&batches);
         // Resolve only the explicitly supported wire encoding.
         // 仅解析明确支持的线协议编码。
