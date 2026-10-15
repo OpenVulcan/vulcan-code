@@ -131,6 +131,8 @@
 
 ### TUI
 
+- 已保存专职会话的知识库页按工作台 `dedicated` 标记只读展示当前有效选择，继承及库开关不携带写入动作；
+  TUI 不参与专职会话的创建窗口设置。
 - TUI 不提供创建或锁定入口；锁定、解锁通知以共享键 `conversation.dedicatedNotice.locked` / `.unlocked`
   显示在记录区（`backend/service/map.rs`），不显示原始 `reason_code`。
 - 侧栏会话行以 `ConversationSummary.dedicated` 在标题前显示主色 `◆` 种类标记（`ui/sidebar.rs`）。

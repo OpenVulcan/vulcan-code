@@ -19,8 +19,8 @@ pub(super) fn session_scope(app: &App) -> Option<(String, String)> {
 
 /// Shows inheritance and explicit IDs without a retrieval strategy override.
 /// 显示继承及明确身份，不包含检索策略覆盖。
-/// Parameters: app supplies exact current session, project, grants and effective selection. Returns server-backed selection switches.
-/// 参数：app 提供精确当前会话、项目、授权及有效选择。返回服务支持选择开关。
+/// Parameters: app supplies exact session, project, grants and effective selection. Returns writable ordinary or read-only dedicated switches.
+/// 参数：app 提供精确会话、项目、授权及有效选择。返回普通会话可写或专职会话只读开关。
 pub(crate) fn session_selection(app: &App) -> Vec<Row> {
     // Global selection is independent from the library currently open in the manager.
     // 全局会话选择独立于管理器当前打开知识库。
@@ -29,11 +29,20 @@ pub(crate) fn session_selection(app: &App) -> Vec<Row> {
         rows.push(note(tr!("tui.knowledge.sessionUnavailable"), Tone::Muted));
         return rows;
     };
+    // Workbench ownership proves the saved kind; dedicated selections are fixed at creation.
+    // 工作台归属证明已保存种类；专职选择在创建时固定。
+    let conversation = app.conversation().expect("resolved session");
+    // Only ordinary sessions may dispatch a selection mutation from the TUI.
+    // 仅普通会话可从 TUI 派发选择变更。
+    let editable = !conversation.dedicated;
     rows.push(info(
         tr!("knowledge.composer.label"),
-        app.conversation().expect("resolved session").title.clone(),
+        conversation.title.clone(),
         Tone::Normal,
     ));
+    if !editable {
+        rows.push(note(tr!("tui.knowledge.sessionFrozen"), Tone::Muted));
+    }
     if !ready(app, Slot::KnowledgeSelection, &mut rows)
         || !ready(app, Slot::KnowledgeAuthorizedLibraries, &mut rows)
         || !ready(app, Slot::ProjectKnowledgeBindings, &mut rows)
@@ -71,22 +80,24 @@ pub(crate) fn session_selection(app: &App) -> Vec<Row> {
         item("inherit", tr!("knowledge.composer.inherit"), "").actions(vec![switch(
             tr!("knowledge.composer.inherit"),
             inherited,
-            Some(call(knowledge::set_session_knowledge_libraries(
-                SessionKnowledgeLibrarySelectionRequest {
-                    project_id: project_id.clone(),
-                    conversation_id: conversation_id.clone(),
-                    mode: if inherited {
-                        "explicit".into()
-                    } else {
-                        "inherit".into()
+            editable.then(|| {
+                call(knowledge::set_session_knowledge_libraries(
+                    SessionKnowledgeLibrarySelectionRequest {
+                        project_id: project_id.clone(),
+                        conversation_id: conversation_id.clone(),
+                        mode: if inherited {
+                            "explicit".into()
+                        } else {
+                            "inherit".into()
+                        },
+                        library_ids: if inherited {
+                            effective.clone()
+                        } else {
+                            Vec::new()
+                        },
                     },
-                    library_ids: if inherited {
-                        effective.clone()
-                    } else {
-                        Vec::new()
-                    },
-                },
-            ))),
+                ))
+            }),
         )]),
     );
     for library in a(app.slots.value(Slot::KnowledgeAuthorizedLibraries), "") {
@@ -128,14 +139,16 @@ pub(crate) fn session_selection(app: &App) -> Vec<Row> {
                 .actions(vec![switch(
                     tr!("knowledge.composer.label"),
                     enabled,
-                    Some(call(knowledge::set_session_knowledge_libraries(
-                        SessionKnowledgeLibrarySelectionRequest {
-                            project_id: project_id.clone(),
-                            conversation_id: conversation_id.clone(),
-                            mode: "explicit".into(),
-                            library_ids: ids.into_iter().collect(),
-                        },
-                    ))),
+                    editable.then(|| {
+                        call(knowledge::set_session_knowledge_libraries(
+                            SessionKnowledgeLibrarySelectionRequest {
+                                project_id: project_id.clone(),
+                                conversation_id: conversation_id.clone(),
+                                mode: "explicit".into(),
+                                library_ids: ids.into_iter().collect(),
+                            },
+                        ))
+                    }),
                 )]),
         );
     }

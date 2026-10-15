@@ -92,6 +92,84 @@ fn search_call(library: &str, query: &str) -> ServiceCall {
     })
 }
 
+/// Saved dedicated sessions retain visible effective selections without exposing rejected writes.
+/// 已保存专职会话保留可见有效选择，不暴露会被拒绝的写入。
+/// Parameters: none. Returns after checking ordinary and dedicated pages through the same real renderer.
+/// 参数：无。经同一真实渲染器检查普通及专职页面后返回。
+#[test]
+fn dedicated_knowledge_selection_is_read_only_without_hiding_enabled_libraries() {
+    // An inert transport makes any accidental page-triggered request observable.
+    // 静默传输使任何页面意外触发的请求可被观察。
+    let (mut app, commands, _) = fixture_app();
+    // The workbench kind flag is the same authoritative field used by the live mapper.
+    // 工作台种类标记与实时映射器使用同一个权威字段。
+    app.conversations = vec![crate::model::ConversationSummary {
+        id: "saved-session".into(),
+        title: "Saved".into(),
+        project_id: Some("project".into()),
+        run_phase: crate::model::RunPhase::Completed,
+        last_updated_label: String::new(),
+        unread: false,
+        attention: false,
+        dedicated: false,
+    }];
+    app.selected = Some("saved-session".into());
+    for (slot, call, value) in [
+        (
+            Slot::KnowledgeSelection,
+            kb::get_session_knowledge_libraries("saved-session"),
+            json!({"mode":"explicit","libraryIds":["enabled-library"],"effectiveLibraryIds":["enabled-library"]}),
+        ),
+        (
+            Slot::KnowledgeAuthorizedLibraries,
+            kb::list_knowledge_libraries(Some("project")),
+            json!([
+                {"id":"enabled-library","name":"Enabled","description":"Purpose","settings":{"indexMode":"bm25"}},
+                {"id":"disabled-library","name":"Disabled","description":"Purpose","settings":{"indexMode":"browse"}}
+            ]),
+        ),
+        (
+            Slot::ProjectKnowledgeBindings,
+            kb::list_project_knowledge_bindings("project"),
+            json!([]),
+        ),
+    ] {
+        app.apply(BackendEvent::Slot { slot, call, value });
+    }
+    commands.try_iter().for_each(drop);
+    // An ordinary saved session still owns all three explicit mutation switches.
+    // 普通已保存会话仍拥有全部三个明确变更开关。
+    let ordinary = rows(&app, PageId::KnowledgeSession);
+    assert_eq!(ordinary.iter().filter(|row| matches!(&row.kind, RowKind::Item { actions, .. } if actions.iter().any(|action| action.action.is_some()))).count(), 3);
+    // The same selection becomes read-only solely because its actual workbench kind changes.
+    // 仅因实际工作台种类改变，同一选择变为只读。
+    app.conversations
+        .iter_mut()
+        .find(|conversation| conversation.id == "saved-session")
+        .unwrap()
+        .dedicated = true;
+    // Effective membership stays visible while every switch loses its dispatch action.
+    // 有效成员关系保持可见，同时全部开关失去派发动作。
+    let dedicated = rows(&app, PageId::KnowledgeSession);
+    assert!(dedicated.iter().any(|row| matches!(&row.kind, RowKind::Item { id, actions, .. } if id == "enabled-library" && actions.iter().any(|action| action.switch == Some(true)))));
+    assert!(dedicated.iter().all(|row| match &row.kind {
+        RowKind::Item { actions, .. } => actions.iter().all(|action| action.action.is_none()),
+        // Read-only recovery remains available on every service-backed page.
+        // 每个服务支持页面仍保留只读恢复。
+        RowKind::Button {
+            action: UiAction::ReloadPage,
+            ..
+        } => true,
+        RowKind::Button { .. }
+        | RowKind::Toggle { .. }
+        | RowKind::Choice { .. }
+        | RowKind::Number { .. }
+        | RowKind::Text { .. } => false,
+        _ => true,
+    }));
+    assert!(commands.try_iter().next().is_none());
+}
+
 /// Search edits invalidate earlier results and blank input never calls a model.
 /// 检索编辑撤销早先结果，空输入绝不调用模型。
 #[test]
