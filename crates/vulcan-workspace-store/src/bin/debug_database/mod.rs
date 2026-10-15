@@ -9,6 +9,12 @@ use vulcan_workspace_store::data_plane::{
     APP_SCHEMA_VERSION, application_sqlite_path, build_application_schema_script,
 };
 
+mod knowledge_retirement;
+use knowledge_retirement::validate_retired_knowledge_jobs;
+
+#[cfg(test)]
+mod knowledge_tests;
+
 /// Maximum wait for an existing writer or reader; no busy retry can wait indefinitely.
 /// 等待既有写入者或读取者的最长时间；锁重试不会无限等待。
 const LOCK_WAIT: Duration = Duration::from_secs(5);
@@ -32,6 +38,9 @@ struct SchemaObject {
 /// 计划重建的表、更新的索引及精确保留的列映射。
 #[derive(Default)]
 struct Changes {
+    /// Explicitly retired whole tables retained only in the verified pre-sync backup.
+    /// 明确废弃整表，仅保留在已验证同步前备份中。
+    retired_tables: Vec<String>,
     /// Existing or new tables whose authoritative definition differs.
     /// 与权威定义不同的既有表或新表。
     tables: Vec<String>,
@@ -136,10 +145,15 @@ fn synchronize(path: &Path, apply: bool) -> Result<Option<PathBuf>, String> {
     // changes reject unsupported mappings before any data or schema writes.
     // changes 在任何数据或结构写入之前拒绝不受支持的映射。
     let changes = plan(&transaction, &expected, &current, &desired)?;
-    if changes.tables.is_empty() && changes.indexes.is_empty() {
+    if changes.tables.is_empty() && changes.indexes.is_empty() && changes.retired_tables.is_empty()
+    {
         return Ok(None);
     }
     println!("Tables to synchronize: {}", changes.tables.join(", "));
+    println!(
+        "Retired tables to preserve in backup: {}",
+        changes.retired_tables.join(", ")
+    );
     println!("Indexes to synchronize: {}", changes.indexes.join(", "));
     if !apply {
         return Err("Schema drift detected; run the independent command with --apply.".into());
@@ -155,7 +169,10 @@ fn synchronize(path: &Path, apply: bool) -> Result<Option<PathBuf>, String> {
     // remaining confirms every managed object matches the authoritative DDL before commit.
     // remaining 在提交前确认每个受管对象都与权威 DDL 一致。
     let remaining = plan(&transaction, &expected, &schema(&transaction)?, &desired)?;
-    if !remaining.tables.is_empty() || !remaining.indexes.is_empty() {
+    if !remaining.tables.is_empty()
+        || !remaining.indexes.is_empty()
+        || !remaining.retired_tables.is_empty()
+    {
         return Err("Schema synchronization did not reach the declared structure.".into());
     }
     sql(transaction.commit())?;
@@ -242,6 +259,15 @@ fn plan(
     // changes accumulate only supported differences; unrelated tables stay untouched.
     // changes 仅收集受支持的差异；不触碰无关表。
     let mut changes = Changes::default();
+    // The removed import pipeline has no replacement counters; never reinterpret its rows as new operations.
+    // 已移除导入流水线不存在替代计数；绝不将其行重解释为新操作。
+    if let Some(import_jobs) = current.get("knowledge_import_jobs") {
+        if desired.contains_key("knowledge_import_jobs") || import_jobs.kind != "table" {
+            return Err("Unexpected knowledge import retirement schema.".into());
+        }
+        validate_retired_knowledge_jobs(connection)?;
+        changes.retired_tables.push("knowledge_import_jobs".into());
+    }
     if desired
         .values()
         .any(|object| !matches!(object.kind.as_str(), "table" | "index"))
@@ -267,10 +293,18 @@ fn plan(
                     ));
                 }
             }
-            for (column, _) in source_columns
+            for (column, kind) in source_columns
                 .iter()
                 .filter(|column| !target_columns.contains(column))
             {
+                // The old timestamp is derived import presentation state, deliberately preserved only in backup.
+                // 旧时间戳为派生导入展示状态，明确仅保留在备份。
+                if name == "knowledge_libraries" && column == "last_completed_import_at_ms" {
+                    if kind != "INTEGER" {
+                        return Err("Unexpected retired knowledge timestamp type.".into());
+                    }
+                    continue;
+                }
                 // These two retired flags were verified in local Debug storage and have no current readers.
                 // 这两个废弃标志已在本地 Debug 存储中查证，当前源码已无读取者。
                 if !matches!(
@@ -322,10 +356,36 @@ fn plan(
     for (name, object) in current {
         // Views and triggers can reference another table; their dependencies require explicit mapping.
         // 视图和触发器可能引用其他表；其依赖关系需要显式映射。
-        if !changes.tables.is_empty() && matches!(object.kind.as_str(), "view" | "trigger") {
+        if (!changes.tables.is_empty() || !changes.retired_tables.is_empty())
+            && matches!(object.kind.as_str(), "view" | "trigger")
+        {
             return Err(format!(
                 "Dependent object {name} requires an explicit mapping before rebuilding tables."
             ));
+        }
+        if changes.retired_tables.contains(&object.table)
+            && object.kind != "table"
+            && !(object.kind == "index" && name == "idx_knowledge_import_jobs_library")
+        {
+            return Err(format!(
+                "Unmanaged retired-table dependency {name} requires an explicit mapping."
+            ));
+        }
+        if object.kind == "table" && !changes.retired_tables.contains(name) {
+            for retired in &changes.retired_tables {
+                // Reject even empty dependent tables instead of publishing a dangling foreign-key definition.
+                // 即使依赖表为空也拒绝，避免发布悬空外键定义。
+                let dependent: bool = sql(connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list(?1) WHERE \"table\"=?2)",
+                    [name, retired],
+                    |row| row.get(0),
+                ))?;
+                if dependent {
+                    return Err(format!(
+                        "Foreign-key dependency {name} on retired {retired} requires an explicit mapping."
+                    ));
+                }
+            }
         }
         if changes.tables.contains(&object.table)
             && object.kind != "table"
@@ -432,6 +492,9 @@ fn apply_changes(
     desired: &BTreeMap<String, SchemaObject>,
     changes: &Changes,
 ) -> Result<(), String> {
+    for name in &changes.retired_tables {
+        sql(connection.execute_batch(&format!("DROP TABLE main.{};", identifier(name))))?;
+    }
     for name in &changes.tables {
         if current.contains_key(name) {
             sql(connection.execute_batch(&format!("DROP TABLE main.{};", identifier(name))))?;
@@ -468,6 +531,11 @@ fn verify_retained_rows(
     // updated 保存一份最终目录，供全部未变表比较共用。
     let updated = schema(connection)?;
     for (name, object) in current.iter().filter(|(_, object)| object.kind == "table") {
+        // Entire retired tables are intentionally absent from main and remain in before_sync unchanged.
+        // 整张废弃表按设计不在 main 中，保持原样留在 before_sync。
+        if changes.retired_tables.contains(name) {
+            continue;
+        }
         // retained uses explicit target mappings only for managed tables; all other columns are preserved.
         // retained 对受管表使用显式目标映射；其他表保留全部列。
         let retained = match changes.columns.get(name) {

@@ -646,7 +646,6 @@ CREATE TABLE IF NOT EXISTS knowledge_libraries (
     document_count INTEGER NOT NULL DEFAULT 0,
     chunk_count INTEGER NOT NULL DEFAULT 0,
     index_status TEXT NOT NULL DEFAULT 'empty',
-    last_completed_import_at_ms INTEGER,
     settings_json TEXT NOT NULL DEFAULT '{{}}',
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL
@@ -665,36 +664,6 @@ CREATE TABLE IF NOT EXISTS knowledge_library_project_bindings (
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_library_project_bindings_project
 ON knowledge_library_project_bindings(project_id, default_enabled DESC, library_id);
-
-CREATE TABLE IF NOT EXISTS knowledge_import_jobs (
-    id TEXT PRIMARY KEY,
-    library_id TEXT NOT NULL,
-    source_root TEXT NOT NULL,
-    operation_kind TEXT NOT NULL DEFAULT 'import',
-    state TEXT NOT NULL,
-    phase TEXT NOT NULL,
-    scanned_files INTEGER NOT NULL DEFAULT 0,
-    total_files INTEGER NOT NULL DEFAULT 0,
-    processed_files INTEGER NOT NULL DEFAULT 0,
-    total_index_items INTEGER NOT NULL DEFAULT 0,
-    processed_index_items INTEGER NOT NULL DEFAULT 0,
-    current_file TEXT,
-    changed_files INTEGER NOT NULL DEFAULT 0,
-    unchanged_files INTEGER NOT NULL DEFAULT 0,
-    deleted_files INTEGER NOT NULL DEFAULT 0,
-    skipped_files INTEGER NOT NULL DEFAULT 0,
-    processed_bytes INTEGER NOT NULL DEFAULT 0,
-    warnings_json TEXT NOT NULL DEFAULT '[]',
-    observability_json TEXT NOT NULL DEFAULT '{{}}',
-    error_message TEXT,
-    created_at_ms INTEGER NOT NULL,
-    started_at_ms INTEGER,
-    finished_at_ms INTEGER,
-    FOREIGN KEY (library_id) REFERENCES knowledge_libraries(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_import_jobs_library
-ON knowledge_import_jobs(library_id, created_at_ms DESC);
 
 CREATE TABLE IF NOT EXISTS knowledge_operations (
     id TEXT PRIMARY KEY,
@@ -896,7 +865,6 @@ mod tests {
         let mut expected: Vec<(String, String)> = [
             ("table", AI_CREDENTIAL_SECRETS_TABLE),
             ("table", "app_metadata"),
-            ("table", "knowledge_import_jobs"),
             ("table", "knowledge_libraries"),
             ("table", "knowledge_library_project_bindings"),
             ("table", "knowledge_operations"),
@@ -905,7 +873,6 @@ mod tests {
             ("table", "projects"),
             ("table", "thread_goals"),
             ("table", "workspace_session_index"),
-            ("index", "idx_knowledge_import_jobs_library"),
             ("index", "idx_knowledge_library_project_bindings_project"),
             ("index", "idx_knowledge_operations_library"),
             ("index", "idx_project_git_review_preferences_project"),

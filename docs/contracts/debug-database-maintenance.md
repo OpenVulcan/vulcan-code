@@ -54,6 +54,17 @@ rtk cargo run -p vulcan-workspace-store --features debug-db-maintenance --bin vu
 `project_vce_settings.migrated_from_codebase_memory`。仅在其所有值均为 0 时允许移除，原值仍留在备份；
 非零或空值必须停止并确定迁移语义。旧版可空 VCE 更新策略只有本身已符合新约束才能复制，禁止猜测默认值。
 
+知识库内容改由 AI 管理后，另有两项明确移除映射：
+
+- 允许移除 `knowledge_libraries.last_completed_import_at_ms`，包含非空值；原值完整保留在备份中，
+  不推测转换为内容变更时间。当前变更时间来自每库不可变变更日志。
+- 允许移除已废弃的 `knowledge_import_jobs` 及其既有库索引，但必须核对已查证的列形状，且不存在
+  `queued` 或 `running` 行。原表保留在备份中，不将其计数转换成 `knowledge_operations`。
+  未映射列、额外索引、视图、触发器及其他表指向该表的外键均明确拒绝，包含空的依赖表。
+
+上述映射仅属于显式离线维护命令；应用启动、每库内容、套件与会话元数据都不新增旧格式兼容。
+同步仍保持应用数据库 v1，并验证项目授权、既有通用操作及其他保留数据的值、类型和重复次数。
+
 恢复时先退出 Core，保留失败库及其 WAL/SHM 文件，再使用 SQLite 工具从已验证快照恢复。
 不能在运行中的服务旁覆盖单个主文件，也不能删掉库或备份来绕过结构错误。
 
@@ -70,3 +81,5 @@ rtk cargo test -p vulcan-workspace-store --lib data_plane::tests -- --test-threa
 
 夹具仅使用临时 SQLite 数据库。覆盖双密钥约束更新、保留值及类型、父表重建不级联丢失子行、可读备份、
 幂等、只读检查不写文件、未知映射和视图/触发器依赖拒绝、复制失败整体回滚、WAL 备份、写锁争用及未知版本拒绝。
+知识库回归另覆盖非零旧导入时间的备份保留、整张旧任务表移除、排队及运行任务拒绝，以及未知列、
+额外索引和外键依赖拒绝；不对真实服务发起操作。
