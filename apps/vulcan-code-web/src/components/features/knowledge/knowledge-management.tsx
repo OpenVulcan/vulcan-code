@@ -1,12 +1,16 @@
 import * as React from "react";
+import { BookMarked, FolderGit2, Link2, Plus, X } from "lucide-react";
+import { PageEmptyState } from "@/components/page";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n";
 import { listKnowledgeCustomWords, listKnowledgeProjectBindings } from "@/service/knowledge-base-service";
 import type { WorkbenchSnapshot } from "@/types";
 import type { KnowledgeProjectBindingRequest } from "@/types/knowledge-base";
 import { KnowledgeReadFailure } from "./knowledge-feedback";
+import { fillKnowledgeText } from "./knowledge-visuals";
 import { useKnowledgeRead } from "./use-knowledge-read";
 
 // Exact library owner and parent mutation ceiling for human-only settings.
@@ -55,21 +59,29 @@ export function KnowledgeBindings({ libraryId, projects, busy, onSave }: Knowled
     try { await onSave(request); if (!await read.refresh(true)) setError(t("knowledge.changedRefreshFailed")); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }
-  return <section className="space-y-3">
-    <p className="text-sm text-muted-foreground">{t("knowledge.bindings.description")}</p>
+  // Authorized rows are counted only among current workbench projects.
+  // 仅在当前工作台项目中统计已授权行。
+  const authorizedCount = read.value === null ? 0 : projects.filter((project) => read.value !== null && read.value.some((row) => row.projectId === project.id)).length;
+  return <>
+    <div className="knowledge-toolbar">
+      <p className="knowledge-hint"><Link2 size={14} aria-hidden="true" />{t("knowledge.bindings.description")}</p>
+      {read.value !== null && projects.length > 0 ? <span className="knowledge-badge" data-tone={authorizedCount > 0 ? "primary" : "neutral"}>{fillKnowledgeText(t("knowledge.bindings.authorizedCount"), { count: authorizedCount, total: projects.length })}</span> : null}
+    </div>
     {read.loading && read.value === null ? <StreamPlaceholder label={t("knowledge.librariesLoading")} /> : null}
     {read.error !== null ? <KnowledgeReadFailure error={read.error} onRetry={read.refresh} /> : null}
-    {error !== null ? <pre role="alert" className="select-text whitespace-pre-wrap break-words text-sm text-destructive">{error}</pre> : null}
-    {read.value !== null ? <ul className="space-y-2">{projects.map((project) => {
+    {error !== null ? <pre role="alert" className="knowledge-error">{error}</pre> : null}
+    {read.value !== null && projects.length === 0 ? <PageEmptyState icon={<FolderGit2 />} title={t("knowledge.bindings.empty")} /> : null}
+    {read.value !== null && projects.length > 0 ? <ul className="knowledge-list">{projects.map((project) => {
       // Presence means authorization because set_project_binding deletes revoked rows.
       // 存在即表示授权，因为 set_project_binding 删除已撤销行。
       const binding = read.value === null ? undefined : read.value.find((row) => row.projectId === project.id);
-      return <li key={project.id} className="flex flex-wrap items-center gap-4 rounded-md border p-3"><strong>{project.name}</strong>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={binding !== undefined} disabled={busy || read.loading} onChange={(event) => void save({ libraryId, projectId: project.id, authorized: event.target.checked, defaultEnabled: event.target.checked && binding !== undefined && binding.defaultEnabled })} />{t("knowledge.bindings.authorized")}</label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={binding !== undefined && binding.defaultEnabled} disabled={busy || read.loading || binding === undefined} onChange={(event) => void save({ libraryId, projectId: project.id, authorized: true, defaultEnabled: event.target.checked })} />{t("knowledge.bindings.default")}</label>
+      return <li key={project.id} className="knowledge-project-row" data-authorized={binding !== undefined}>
+        <span className="knowledge-project-name"><strong>{project.name}</strong><small title={project.path}>{project.path}</small></span>
+        <label className="knowledge-switch"><Switch checked={binding !== undefined} disabled={busy || read.loading} onCheckedChange={(checked) => void save({ libraryId, projectId: project.id, authorized: checked, defaultEnabled: checked && binding !== undefined && binding.defaultEnabled })} />{t("knowledge.bindings.authorized")}</label>
+        <label className="knowledge-switch"><Switch checked={binding !== undefined && binding.defaultEnabled} disabled={busy || read.loading || binding === undefined} onCheckedChange={(checked) => void save({ libraryId, projectId: project.id, authorized: true, defaultEnabled: checked })} />{t("knowledge.bindings.default")}</label>
       </li>;
     })}</ul> : null}
-  </section>;
+  </>;
 }
 
 // Custom dictionary mutation callbacks never accept document content.
@@ -119,16 +131,20 @@ export function KnowledgeDictionary({ libraryId, busy, onSave, onRemove }: Knowl
     try { await action(); if (!await read.refresh(true)) setError(t("knowledge.changedRefreshFailed")); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }
-  return <section className="space-y-3">
-    <p className="text-sm text-muted-foreground">{t("knowledge.dictionary.description")}</p>
+  return <>
+    <p className="knowledge-hint"><BookMarked size={14} aria-hidden="true" />{t("knowledge.dictionary.description")}</p>
     {read.loading && read.value === null ? <StreamPlaceholder label={t("knowledge.librariesLoading")} /> : null}
     {read.error !== null ? <KnowledgeReadFailure error={read.error} onRetry={read.refresh} /> : null}
-    {error !== null ? <pre role="alert" className="select-text whitespace-pre-wrap break-words text-sm text-destructive">{error}</pre> : null}
-    <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => { event.preventDefault(); if (valid && !busy && read.value !== null && !read.loading) void perform(() => onSave(word.trim(), number)); }}>
-      <label className="grid gap-1">{t("knowledge.dictionary.word")}<Input aria-label={t("knowledge.dictionary.word")} value={word} disabled={busy || read.loading || read.value === null} onChange={(event) => setWord(event.target.value)} /></label>
-      <label className="grid gap-1">{t("knowledge.dictionary.weight")}<Input type="number" min={1} step={1} aria-label={t("knowledge.dictionary.weight")} value={weight} disabled={busy || read.loading || read.value === null} onChange={(event) => setWeight(event.target.value)} /></label>
-      <Button type="submit" disabled={busy || read.loading || read.value === null || !valid}>{t("memory.common.save")}</Button>
+    {error !== null ? <pre role="alert" className="knowledge-error">{error}</pre> : null}
+    <form className="knowledge-term-form" onSubmit={(event) => { event.preventDefault(); if (valid && !busy && read.value !== null && !read.loading) void perform(() => onSave(word.trim(), number)); }}>
+      <label>{t("knowledge.dictionary.word")}<Input aria-label={t("knowledge.dictionary.word")} value={word} disabled={busy || read.loading || read.value === null} onChange={(event) => setWord(event.target.value)} /></label>
+      <label>{t("knowledge.dictionary.weight")}<Input type="number" min={1} step={1} aria-label={t("knowledge.dictionary.weight")} value={weight} disabled={busy || read.loading || read.value === null} onChange={(event) => setWeight(event.target.value)} /></label>
+      <Button type="submit" disabled={busy || read.loading || read.value === null || !valid}><Plus size={14} />{t("memory.common.save")}</Button>
     </form>
-    {read.value !== null ? <ul className="space-y-1">{read.value.map((entry) => <li className="flex items-center justify-between gap-2 rounded-md border p-2" key={entry.word}><button type="button" disabled={busy || read.loading} className="text-left" onClick={() => { setWord(entry.word); setWeight(String(entry.weight)); }}>{entry.word} · {entry.weight}</button><Button variant="outline" size="sm" disabled={busy || read.loading} onClick={() => void perform(() => onRemove(entry.word))}>{t("knowledge.dictionary.remove")}</Button></li>)}</ul> : null}
-  </section>;
+    {read.value !== null && read.value.length === 0 ? <PageEmptyState icon={<BookMarked />} title={t("knowledge.dictionary.empty")} /> : null}
+    {read.value !== null && read.value.length > 0 ? <ul className="knowledge-terms">{read.value.map((entry) => <li className="knowledge-term" key={entry.word}>
+      <button type="button" disabled={busy || read.loading} onClick={() => { setWord(entry.word); setWeight(String(entry.weight)); }}>{entry.word}<small>{entry.weight}</small></button>
+      <button type="button" aria-label={t("knowledge.dictionary.remove") + " " + entry.word} title={t("knowledge.dictionary.remove")} disabled={busy || read.loading} onClick={() => void perform(() => onRemove(entry.word))}><X size={13} aria-hidden="true" /></button>
+    </li>)}</ul> : null}
+  </>;
 }

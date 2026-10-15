@@ -35,12 +35,13 @@ it("reads folders lazily, uses stable document IDs and follows the actual bounde
   const documentButton = [...host.querySelectorAll("button")].find((entry) => entry.textContent?.includes(knowledgeDocumentFixture.title))!;
   await act(async () => documentButton.click());
   expect(service.read).toHaveBeenCalledExactlyOnceWith({ libraryId: knowledgeLibraryFixture.id, documentId: knowledgeDocumentFixture.id, startLine: 1 });
-  // Only the body reader's next control is inside this dialog.
-  // 此弹窗内仅有正文阅读器的下一页控件。
-  const next = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((entry) => entry.textContent === "knowledge.page.next")!;
+  // Only the body reader's next control is inside the labeled reader region.
+  // 带标签的阅读区域内仅有正文阅读器的下一页控件。
+  const reader = host.querySelector('section[aria-label="knowledge.view"]')!;
+  const next = [...reader.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent === "knowledge.page.next")!;
   await act(async () => next.click());
   expect(service.read).toHaveBeenLastCalledWith({ libraryId: knowledgeLibraryFixture.id, documentId: knowledgeDocumentFixture.id, startLine: 7 });
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Body 7");
+  expect(reader.textContent).toContain("Body 7");
   expect(document.querySelector('textarea, [contenteditable="true"]')).toBeNull();
   expect(service.search).not.toHaveBeenCalled();
 });

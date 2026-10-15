@@ -1,5 +1,6 @@
 import * as React from "react";
-import { BookOpen, Download, Plus, RefreshCw, Settings2, Trash2, Upload } from "lucide-react";
+import { BookMarked, BookOpen, Download, FileText, Gauge, History, Library, Link2, PencilLine, Plus, RefreshCw, Search, Settings2, Trash2, Upload } from "lucide-react";
+import { PageEmptyState, PageNotice } from "@/components/page";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
@@ -19,7 +20,7 @@ import { KnowledgeContent } from "./knowledge-content";
 import { KnowledgeHistory } from "./knowledge-history";
 import { KnowledgeIndex } from "./knowledge-index";
 import { KnowledgeBindings, KnowledgeDictionary } from "./knowledge-management";
-import { KNOWLEDGE_MODE_COPY } from "./knowledge-mode";
+import { KnowledgeLibraryCard, KnowledgeLibraryHero, knowledgeLibraryReadable } from "./knowledge-library-overview";
 import { useKnowledgeRead } from "./use-knowledge-read";
 import "@/styles/knowledge.css";
 
@@ -42,7 +43,7 @@ type KnowledgePolicyDialog = { kind: "create" } | { kind: "mode"; library: Knowl
 export function KnowledgeBaseArea({ projects }: KnowledgeBaseAreaProps) {
   // All visible manager copy comes from shared catalogs.
   // 全部可见管理文案来自共享目录。
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   // Registry failures remain distinct from a valid empty library collection.
   // 注册表失败与有效空知识库集合保持不同。
   const load = React.useCallback(() => knowledge.listKnowledgeLibraries(), []);
@@ -129,10 +130,10 @@ export function KnowledgeBaseArea({ projects }: KnowledgeBaseAreaProps) {
     } catch (reason) { if (active.current) setDeleteError(reason instanceof Error ? reason.message : String(reason)); }
   }
 
-  return <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-4">
-    <header className="flex flex-wrap items-center justify-between gap-3">
-      <div><h2 className="flex items-center gap-2 text-lg font-semibold"><BookOpen size={20} />{t("knowledge.title")}</h2><p className="text-sm text-muted-foreground">{t("knowledge.managedDescription")}</p></div>
-      <div className="flex flex-wrap gap-2">
+  return <div className="knowledge-page">
+    <header className="knowledge-page-header">
+      <div className="knowledge-page-title"><span className="knowledge-icon-tile"><BookOpen size={19} aria-hidden="true" /></span><div><h2>{t("knowledge.title")}</h2><p>{t("knowledge.managedDescription")}</p></div></div>
+      <div className="knowledge-actions">
         <Button variant="outline" disabled={busy || registry.loading} onClick={() => void registry.refresh(true)}><RefreshCw size={16} />{t("skills.action.refresh")}</Button>
         <Button variant="outline" disabled={!writable} onClick={() => setPickingPackage(true)}><Upload size={16} />{t("knowledge.package.import")}</Button>
         <Button disabled={!writable} onClick={() => setPolicy({ kind: "create" })}><Plus size={16} />{t("knowledge.create")}</Button>
@@ -140,38 +141,32 @@ export function KnowledgeBaseArea({ projects }: KnowledgeBaseAreaProps) {
     </header>
     {registry.error !== null ? <KnowledgeReadFailure error={registry.error} busy={busy || registry.loading} onRetry={registry.refresh} /> : null}
     {registry.loading && registry.value === null ? <StreamPlaceholder label={t("knowledge.librariesLoading")} /> : null}
-    {registry.value !== null ? <div className="knowledge-managed-layout grid min-h-0 gap-4">
-      <aside className="space-y-3">
-        <Input aria-label={t("knowledge.filter")} placeholder={t("knowledge.filter")} value={filter} onChange={(event) => setFilter(event.target.value)} />
-        {registry.value.length === 0 ? <p className="p-3 text-sm text-muted-foreground">{t("knowledge.empty")}</p> : null}
-        <ul className="space-y-2">{visible.map((library) => <li key={library.id}><button type="button" aria-pressed={library.id === selectedId} disabled={busy} className={"w-full rounded-md border p-3 text-left " + (library.id === selectedId ? "bg-accent" : "hover:bg-muted")} onClick={() => setSelectedId(library.id)}>
-          <strong className="block break-words">{library.name}</strong><span className="block break-words text-xs text-muted-foreground">{library.description}</span>
-          {library.lifecycleState === "active" && library.settings !== null ? <small>{t(KNOWLEDGE_MODE_COPY[library.settings.indexMode].label)} · {t("knowledge.documentCount").replace("{count}", String(library.documentCount))}</small> : <small className="text-destructive">{t("knowledge.unavailable")}</small>}
-        </button></li>)}</ul>
+    {registry.value !== null ? <div className="knowledge-workspace">
+      <aside className="knowledge-rail">
+        <div className="knowledge-search-field"><Search size={14} aria-hidden="true" /><Input aria-label={t("knowledge.filter")} placeholder={t("knowledge.filter")} value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
+        {registry.value.length === 0 ? <PageEmptyState icon={<Library />} title={t("knowledge.empty")} /> : null}
+        {registry.value.length > 0 && visible.length === 0 ? <p className="knowledge-rail-note">{t("knowledge.filterEmpty")}</p> : null}
+        <ul className="knowledge-rail-list">{visible.map((library) => <li key={library.id}><KnowledgeLibraryCard library={library} t={t} selected={library.id === selectedId} disabled={busy} onSelect={() => setSelectedId(library.id)} /></li>)}</ul>
       </aside>
-      <section className="min-w-0 space-y-4 rounded-lg border p-4">
-        {selected === undefined ? <p className="text-sm text-muted-foreground">{t("knowledge.selectLibrary")}</p> : <>
-          <header className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="break-words text-lg font-medium">{selected.name}</h3><p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{selected.description}</p></div>
-            <div className="flex flex-wrap gap-2">
-              {selected.lifecycleState === "active" && selected.settings !== null ? <><Button size="sm" variant="outline" disabled={!writable} onClick={() => setMetadata(selected)}>{t("knowledge.metadata")}</Button><Button size="sm" variant="outline" disabled={!writable} onClick={() => setPolicy({ kind: "mode", library: selected })}><Settings2 size={14} />{t("knowledge.indexMode")}</Button><Button size="sm" variant="outline" disabled={!writable} onClick={() => setExporting(selected)}><Download size={14} />{t("knowledge.package.export")}</Button></> : null}
-              <Button size="sm" variant="outline" disabled={!writable} onClick={() => { setDeleteError(null); setDeleting(selected); }}><Trash2 size={14} />{t("knowledge.delete")}</Button>
-            </div>
-          </header>
-          {selected.lifecycleState !== "active" || selected.settings === null ? <div role="alert"><p>{t("knowledge.unavailableDeleteOnly")}</p>{selected.errorMessage !== null ? <pre className="select-text whitespace-pre-wrap break-words text-sm">{selected.errorMessage}</pre> : null}</div> :
-            <Tabs key={selected.id} defaultValue="content">
-              <TabsList className="h-auto max-w-full flex-wrap"><TabsTrigger value="content">{t("knowledge.tabs.content")}</TabsTrigger><TabsTrigger value="history">{t("knowledge.tabs.history")}</TabsTrigger><TabsTrigger value="index">{t("knowledge.tabs.index")}</TabsTrigger><TabsTrigger value="bindings">{t("knowledge.tabs.bindings")}</TabsTrigger><TabsTrigger value="dictionary">{t("knowledge.tabs.dictionary")}</TabsTrigger></TabsList>
-              <TabsContent value="content"><KnowledgeContent library={selected} /></TabsContent>
-              <TabsContent value="history"><KnowledgeHistory library={selected} busy={!writable} onRestore={(targetSeq) => runMutation(async () => { await knowledge.restoreKnowledgeLibrary({ libraryId: selected.id, targetSeq, note: "" }); })} /></TabsContent>
-              <TabsContent value="index"><KnowledgeIndex library={selected} busy={!writable}
-                onRebuild={() => runMutation(async () => { await knowledge.rebuildKnowledgeIndex(selected.id); })}
-                onRepair={() => runMutation(async () => { await knowledge.repairKnowledgeIndex(selected.id); })}
-                onCancel={(operationId) => runMutation(async () => { await knowledge.cancelKnowledgeOperation({ libraryId: selected.id, operationId }); })}
-                onRetry={(documentIds) => runMutation(async () => { await knowledge.retryKnowledgeEmbeddings({ libraryId: selected.id, documentIds }); })} /></TabsContent>
-              <TabsContent value="bindings"><KnowledgeBindings libraryId={selected.id} projects={projects} busy={!writable} onSave={(request) => runMutation(async () => { await knowledge.setKnowledgeProjectBinding(request); knowledge.notifyKnowledgeProjectBindingsChanged(request.projectId); })} /></TabsContent>
-              <TabsContent value="dictionary"><KnowledgeDictionary libraryId={selected.id} busy={!writable} onSave={(word, weight) => runMutation(async () => { await knowledge.upsertKnowledgeCustomWord({ libraryId: selected.id, word, weight }); })} onRemove={(word) => runMutation(async () => { await knowledge.removeKnowledgeCustomWord(selected.id, word); })} /></TabsContent>
-            </Tabs>}
-        </>}
-      </section>
+      {selected === undefined ? <section className="knowledge-detail knowledge-detail-placeholder"><PageEmptyState icon={<Library />} title={t("knowledge.selectLibrary")} description={t("knowledge.content.readOnly")} /></section> : <section className="knowledge-detail">
+        <KnowledgeLibraryHero library={selected} t={t} locale={locale} actions={<>
+          {knowledgeLibraryReadable(selected) ? <><Button size="sm" variant="outline" disabled={!writable} onClick={() => setMetadata(selected)}><PencilLine size={14} />{t("knowledge.metadata")}</Button><Button size="sm" variant="outline" disabled={!writable} onClick={() => setPolicy({ kind: "mode", library: selected })}><Settings2 size={14} />{t("knowledge.indexMode")}</Button><Button size="sm" variant="outline" disabled={!writable} onClick={() => setExporting(selected)}><Download size={14} />{t("knowledge.package.export")}</Button></> : null}
+          <Button size="sm" variant="outline" disabled={!writable} onClick={() => { setDeleteError(null); setDeleting(selected); }}><Trash2 size={14} />{t("knowledge.delete")}</Button>
+        </>} />
+        {!knowledgeLibraryReadable(selected) ? <div className="knowledge-tabs"><PageNotice tone="error" title={t("knowledge.unavailableDeleteOnly")} details={selected.errorMessage ?? undefined} detailsLabel={t("toolPresentation.output.errorDetails")} /></div> :
+          <Tabs key={selected.id} defaultValue="content" className="knowledge-tabs">
+            <TabsList><TabsTrigger value="content"><FileText size={14} />{t("knowledge.tabs.content")}</TabsTrigger><TabsTrigger value="history"><History size={14} />{t("knowledge.tabs.history")}</TabsTrigger><TabsTrigger value="index"><Gauge size={14} />{t("knowledge.tabs.index")}</TabsTrigger><TabsTrigger value="bindings"><Link2 size={14} />{t("knowledge.tabs.bindings")}</TabsTrigger><TabsTrigger value="dictionary"><BookMarked size={14} />{t("knowledge.tabs.dictionary")}</TabsTrigger></TabsList>
+            <TabsContent value="content" className="knowledge-tab-panel"><KnowledgeContent library={selected} /></TabsContent>
+            <TabsContent value="history" className="knowledge-tab-panel"><KnowledgeHistory library={selected} busy={!writable} onRestore={(targetSeq) => runMutation(async () => { await knowledge.restoreKnowledgeLibrary({ libraryId: selected.id, targetSeq, note: "" }); })} /></TabsContent>
+            <TabsContent value="index" className="knowledge-tab-panel"><KnowledgeIndex library={selected} busy={!writable}
+              onRebuild={() => runMutation(async () => { await knowledge.rebuildKnowledgeIndex(selected.id); })}
+              onRepair={() => runMutation(async () => { await knowledge.repairKnowledgeIndex(selected.id); })}
+              onCancel={(operationId) => runMutation(async () => { await knowledge.cancelKnowledgeOperation({ libraryId: selected.id, operationId }); })}
+              onRetry={(documentIds) => runMutation(async () => { await knowledge.retryKnowledgeEmbeddings({ libraryId: selected.id, documentIds }); })} /></TabsContent>
+            <TabsContent value="bindings" className="knowledge-tab-panel"><KnowledgeBindings libraryId={selected.id} projects={projects} busy={!writable} onSave={(request) => runMutation(async () => { await knowledge.setKnowledgeProjectBinding(request); knowledge.notifyKnowledgeProjectBindingsChanged(request.projectId); })} /></TabsContent>
+            <TabsContent value="dictionary" className="knowledge-tab-panel"><KnowledgeDictionary libraryId={selected.id} busy={!writable} onSave={(word, weight) => runMutation(async () => { await knowledge.upsertKnowledgeCustomWord({ libraryId: selected.id, word, weight }); })} onRemove={(word) => runMutation(async () => { await knowledge.removeKnowledgeCustomWord(selected.id, word); })} /></TabsContent>
+          </Tabs>}
+      </section>}
     </div> : null}
     {policy !== null ? <KnowledgeLibraryCreateDialog library={policy.kind === "create" ? null : policy.library} busy={!writable} onClose={() => setPolicy(null)} onSubmit={(request) => runMutation(async () => {
       if (policy.kind === "create") {

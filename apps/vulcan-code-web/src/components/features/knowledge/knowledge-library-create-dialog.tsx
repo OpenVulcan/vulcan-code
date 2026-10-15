@@ -1,8 +1,8 @@
 import * as React from "react";
+import { Coins, HardDrive } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Combobox } from "@/components/ui/combobox";
 import { useI18n } from "@/i18n";
 import { loadPublicAiSettings } from "@/service/settings-actions-service";
@@ -10,6 +10,7 @@ import type { KnowledgeIndexMode, KnowledgeLibraryCreateRequest, KnowledgeLibrar
 import { KnowledgeReadFailure } from "./knowledge-feedback";
 import { useKnowledgeRead } from "./use-knowledge-read";
 import { KNOWLEDGE_MODE_COPY, knowledgeEmbeddingCandidates, knowledgeRouteKey, knowledgeRouteFromCandidate, knowledgeSettingsFromDraft } from "./knowledge-mode";
+import { KNOWLEDGE_MODE_ICONS } from "./knowledge-visuals";
 
 // One mounted dialog owns either a new library draft or an exact existing library mode change.
 // 一个已挂载对话框拥有新库草稿或精确既有库模式变更。
@@ -67,6 +68,9 @@ export function KnowledgeLibraryCreateDialog({ library, busy, onClose, onSubmit 
   // This ref closes the double-click window before React publishes the parent busy state.
   // 此引用在 React 发布父级忙碌状态前封闭双击窗口。
   const saving = React.useRef(false);
+  // Mode cards name themselves by label and describe themselves by their capability text.
+  // 模式卡片以标签命名，并以能力说明作为描述。
+  const cardId = React.useId();
   // The shared settings endpoint is the sole candidate producer.
   // 共享设置端点为唯一候选产出者。
   const load = React.useCallback(loadPublicAiSettings, []);
@@ -98,20 +102,28 @@ export function KnowledgeLibraryCreateDialog({ library, busy, onClose, onSubmit 
   }
 
   return <Dialog open onOpenChange={(open) => { if (!open && !busy && !saving.current) onClose(); }}>
-    <DialogContent>
+    <DialogContent size="lg">
       <DialogHeader><DialogTitle>{t(library === null ? "knowledge.policy.createTitle" : "knowledge.policy.modeTitle")}</DialogTitle><DialogDescription>{t("knowledge.policy.description")}</DialogDescription></DialogHeader>
-      <div className="space-y-4">
+      <div className="knowledge-form">
         {library === null ? <>
-          <label className="grid gap-1">{t("knowledge.name")}<Input aria-label={t("knowledge.name")} value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
-          <label className="grid gap-1">{t("knowledge.purpose")}<Input aria-label={t("knowledge.purpose")} value={description} disabled={busy} onChange={(event) => setDescription(event.target.value)} /></label>
+          <label>{t("knowledge.name")}<Input aria-label={t("knowledge.name")} value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
+          <label>{t("knowledge.purpose")}<Input aria-label={t("knowledge.purpose")} placeholder={t("knowledge.metadataDescription")} value={description} disabled={busy} onChange={(event) => setDescription(event.target.value)} /></label>
         </> : <p className="font-medium">{library.name}</p>}
-        <label className="grid gap-1">{t("knowledge.indexMode")}
-          <Select value={mode === null ? "" : mode} disabled={busy} onValueChange={(value: KnowledgeIndexMode) => setMode(value)}>
-            <SelectTrigger aria-label={t("knowledge.indexMode")}><SelectValue placeholder={t("knowledge.policy.chooseMode")} /></SelectTrigger>
-            <SelectContent>{(Object.keys(KNOWLEDGE_MODE_COPY) as KnowledgeIndexMode[]).map((value) => <SelectItem key={value} value={value}>{t(KNOWLEDGE_MODE_COPY[value].label)}</SelectItem>)}</SelectContent>
-          </Select>
-        </label>
-        {mode !== null ? <p className="text-sm text-muted-foreground">{t(KNOWLEDGE_MODE_COPY[mode].description)}</p> : null}
+        <div className="knowledge-mode-grid" role="radiogroup" aria-label={t("knowledge.indexMode")}>
+          {(Object.keys(KNOWLEDGE_MODE_COPY) as KnowledgeIndexMode[]).map((value) => {
+            // Each card names its capability and whether it incurs background embedding calls.
+            // 每张卡片说明其能力，以及是否产生后台嵌入调用。
+            const Icon = KNOWLEDGE_MODE_ICONS[value];
+            const costly = value === "vector" || value === "hybrid";
+            return <button type="button" role="radio" aria-checked={mode === value} aria-labelledby={cardId + value + "-label"} aria-describedby={cardId + value + "-text"} className="knowledge-mode-card" data-mode={value} disabled={busy} key={value} onClick={() => setMode(value)}>
+              <span><Icon size={16} aria-hidden="true" /></span>
+              <strong id={cardId + value + "-label"}>{t(KNOWLEDGE_MODE_COPY[value].label)}</strong>
+              <p id={cardId + value + "-text"}>{t(KNOWLEDGE_MODE_COPY[value].description)}</p>
+              <small>{costly ? <Coins size={11} aria-hidden="true" /> : <HardDrive size={11} aria-hidden="true" />}{t(costly ? "knowledge.policy.costHint" : "knowledge.policy.localHint")}</small>
+            </button>;
+          })}
+        </div>
+        {mode === null ? <p className="knowledge-hint">{t("knowledge.policy.chooseMode")}</p> : null}
         {vector ? <>
           {models.error !== null ? <KnowledgeReadFailure error={models.error} onRetry={models.refresh} busy={models.loading} /> : null}
           <Combobox value={routeKey} disabled={busy || models.loading} ariaLabel={t("knowledge.policy.embedding")}
@@ -125,12 +137,14 @@ export function KnowledgeLibraryCreateDialog({ library, busy, onClose, onSubmit 
               setDimension(candidate !== undefined && candidate.capabilities.embedding.default_dimensions !== undefined ? String(candidate.capabilities.embedding.default_dimensions) : "");
               setBatch("");
             }} />
-          <label className="grid gap-1">{t("knowledge.policy.dimension")}<Input type="number" min={1} step={1} aria-label={t("knowledge.policy.dimension")} disabled={busy} value={dimension} onChange={(event) => setDimension(event.target.value)} /></label>
-          <label className="grid gap-1">{t("knowledge.policy.batch")}<Input type="number" min={1} step={1} aria-label={t("knowledge.policy.batch")} disabled={busy} value={batch} onChange={(event) => setBatch(event.target.value)} /></label>
-          <p className="text-sm text-muted-foreground">{t("knowledge.policy.serverBatch")}</p>
-          {settings === null ? <p role="status" className="text-sm text-muted-foreground">{t("knowledge.policy.dimensionRequired")}</p> : null}
+          <div className="knowledge-form-row">
+            <label>{t("knowledge.policy.dimension")}<Input type="number" min={1} step={1} aria-label={t("knowledge.policy.dimension")} disabled={busy} value={dimension} onChange={(event) => setDimension(event.target.value)} /></label>
+            <label>{t("knowledge.policy.batch")}<Input type="number" min={1} step={1} aria-label={t("knowledge.policy.batch")} disabled={busy} value={batch} onChange={(event) => setBatch(event.target.value)} /></label>
+          </div>
+          <p className="knowledge-hint">{t("knowledge.policy.serverBatch")}</p>
+          {settings === null ? <p role="status" className="knowledge-hint">{t("knowledge.policy.dimensionRequired")}</p> : null}
         </> : null}
-        {error !== null ? <pre role="alert" className="select-text whitespace-pre-wrap break-words text-sm text-destructive">{error}</pre> : null}
+        {error !== null ? <pre role="alert" className="knowledge-error">{error}</pre> : null}
       </div>
       <DialogFooter><Button variant="outline" disabled={busy} onClick={onClose}>{t("conversation.action.cancel")}</Button><Button disabled={busy || settings === null || !name.trim()} onClick={() => void submit()}>{t(library === null ? "knowledge.create" : "memory.common.save")}</Button></DialogFooter>
     </DialogContent>
