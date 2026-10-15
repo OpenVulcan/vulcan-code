@@ -1,6 +1,6 @@
 # AI 管理知识库重构方案
 
-> 状态：执行中。目标已建立；按阶段实施、验证与本地提交，不推送。完成后循环审核并自动修复，连续五轮无问题才结束。
+> 状态：已完成。九阶段实施、验证及本地提交全部完成；连续五轮完整审核无问题，未推送。
 > 方案依据 2026-10-15 对当前源码的查证；执行前必须按第 3 节逐项复核，事实以当时源码为准（AGENTS 第一节第 1 条）。
 
 ## 1. 目标
@@ -419,7 +419,7 @@ URL 直接搬运（AI 可先用现有网页工具取得内容再 `create`）；�
 - 工作分支：`codex/ai-managed-knowledge-base`。
 - 不实现老版本数据兼容、迁移或自动降级；应用开发数据库仅经独立显式维护入口备份后同步。
 - 审核规则：实现及验证完成后逐轮核对完整变更，发现问题立即修复并重置连续通过计数；累计连续五轮无问题后交付。
-- 当前阶段：存储、向量、套件与工具阶段已提交，继续服务内核及开发数据库维护；界面与最终审核尚未完成。
+- 当前阶段：全部实施、最终验证和连续五轮审核已闭环，执行变更总结完整保存；归档后仅保留本地提交，不推送。
 
 ### 第一阶段：存储层
 
@@ -635,3 +635,359 @@ URL 直接搬运（AI 可先用现有网页工具取得内容再 `create`）；�
 - 扩展恢复回归先复现旧暂停导致已确认恢复卡住；统一协调入口已同时处理取消及明确活动操作，完成/失败操作不改变暂停，未知操作状态明确拒绝。不根据内容写入猜测恢复意图；正在完成最后复核。
 - 扩展的取消、内容变更、人工恢复及全新宿主恢复回归已通过；再次执行存储全量及严格检查。服务层未再变动，27 项内核测试的结果保留；最后全仓全目标 Clippy 继续覆盖当前全部消费者。
 - 最后版本的知识库 43 项再次通过。源码冻结，随后只记录审核与验证结果并归档；最终连续五轮重新从零开始。
+
+### 第十三轮完整审核：最终连续通过一轮
+
+- 最终实现固定为 `628aee03fe5552a25efa7d5e474cdab95a4b173c`，重新审核原基线至该提交的全部九阶段。之后的工作树只允许增加本计划的记录。
+- 从实体及调用归属重新核对闭合动作、实时授权、唯一预算、预分配校验、单事务内容及镜像、单调修订和人工还原；新库套件仍只产生一条人工导入历史。
+- 重新复核四模式、当前哈希与冻结路由、套件及搬运、完整工具暴露、两端只读与生命周期、严格版本及显式维护；最终暂停协调只承认真实持久操作，完成/失败不擅自恢复，未知状态明确失败。
+- 存储 43 项及包含维护特性的全目标严格 Clippy 均通过，未发现新问题；最终连续通过计数为 1。
+
+### 第十四轮完整审核：最终连续通过两轮
+
+- 保持同一固定实现范围，重新检查全部阶段间的异步、任务及配置寿命，重点核对内容排队、取消、恢复、当前哈希发布与查询租约。
+- 取消和已接受恢复由同一持久意图入口协调；队列预留及迟到发布都复核，写入/搬运/还原不解锁人工暂停；全新宿主恢复已有明确操作不需要第二次用户点击。实际回归覆盖这两种提交窗口。
+- 复核每库合并唤醒、锁顺序、旧空间读取、模型冻结、删除及配置事务、两端非重叠轮询与稳定任务身份；确认没有因本轮修复改变套件、授权、工具或持久格式边界。
+- 本轮未发现新问题，源码未变；最终连续通过计数为 2。
+
+### 第十五轮完整审核：最终连续通过三轮
+
+- 仍以固定全量实现范围复核九阶段，重点从不可信参数、原生文件和归档输入反向核对边界与唯一来源。
+- 核对封闭请求、互斥文档选择器、真实执行者、项目与会话库上限、原生路径及共享遍历、单快照文本摘要、有界标题输出、套件条目及解压预算、完整指纹与当前实体校验；写入前置预分配限制保持有效。
+- 版本先于类型内容读取；旧库、旧套件及旧会话不迁移。显式开发库维护与应用启动分离，人工与 AI 内容职责、两端只读及独立新库导入均未改变。
+- 本轮未发现新问题；当前源码的最终 `make check` 已全部通过。最终连续通过计数为 3。
+
+### 第十六轮完整审核：最终连续通过四轮
+
+- 再次逐阶段对照方案及两端调用链，重点检查交互归属、只读内容、确认、分页、任务错误与恢复。
+- 核对 WebUI 可撤销访问及请求序号、TUI 连接代际/槽位序号/实际选择器；历史按实际序号及侧别、正文按服务行续读，不依据列表位置推测归属。还原及导入冻结实际身份并明确确认。
+- 普通会话可修改选择，已保存专职会话只读；禁用动作不能通过键盘或鼠标派发。错误格式只允许原因及删除，未知任务不授权维护动作，暂停/失败停止轮询，自动刷新不重放付费搜索或已提交写入。
+- 同时复核存储、向量、套件、工具、格式、维护及目录文案，没有发现新问题；最终连续通过计数为 4。
+
+### 第十七轮完整审核：最终连续通过五轮
+
+- 最后再次检查固定提交 `628aee03fe5552a25efa7d5e474cdab95a4b173c` 相对原基线的全量实现与九阶段验收矩阵，重点确认接口对照、依赖和门禁范围、持久格式、契约及实际提交范围。
+- 当前 RPC 注册、WebUI 与 TUI 的方法集合已从源码独立提取对比，均为相同的 36 个精确方法。当前契约 36 个本地链接有效；14 个本地提交均保留指定署名，未推送；实现锁定点后没有任何源码差异。
+- 最新存储 43 项、维护特性全目标严格 Clippy 及 `make check` 全部通过；服务内核 27 项、TUI 173 项、WebUI 2448 项与完整构建及其余分项验证结果均已核对。默认并发限制、原体积预算及断言棘轮未放宽。
+- 再次只读检查实际 Debug 库，退出码 0，输出 `Schema v1 is current; no changes.`。不增加旧版本数据兼容；真实服务、付费模型及真实终端人工验收仍与离线验证明确区分。
+- 本轮未发现问题。最终连续通过计数为 5，满足任务结束条件；接下来仅保存完整执行变更总结、归档计划及本地提交，不再修改实现。
+
+
+## 最终闭环验证
+
+- 实现及审核固定提交：`628aee03fe5552a25efa7d5e474cdab95a4b173c`。之后只追加执行记录并归档计划，未再改变实现。
+- 连续五轮完整审核通过；此前发现的分配预算、专职选择、取消及中断边界已自动修复，注释格式亦已整理。
+- 方案九阶段逐项完成，全部要求的离线门禁已通过；严格拒绝旧库、旧套件及旧会话格式，不增加兼容、迁移、备用协议或自动降级。
+- 实际 Debug 数据库已在完整备份后经独立工具显式同步，最终只读检查为 `Schema v1 is current; no changes.`。
+
+### 最终验证结果
+
+| 验证 | 最终结果 |
+| --- | --- |
+| 知识库存储定向测试 | 43 项通过，包含取消后内容变化、中断、恢复及编辑预分配回归 |
+| 显式开发库维护测试 | 9 项通过 |
+| 应用数据面测试 | 30 项通过，1 项既有性能用例忽略 |
+| 元数据严格读取测试 | 4 项通过 |
+| 原生文本搬运 | 2 项通过 |
+| 原生知识库工具 | 13 项通过 |
+| 工具权限分类 | 17 项通过 |
+| 专职工具过滤 | 1 项通过 |
+| 服务内核知识库 | 27 项通过 |
+| 内核 RPC 分发 | 15 项通过 |
+| 服务请求格式 | 3 项通过 |
+| 共享语言目录 | 5 项通过 |
+| LanceDB 显式距离与既有写入检索、过滤 | 三项定向回归通过 |
+| TUI 全量 | 173 项通过，包含三组程序目标及无头界面、回环传输 |
+| WebUI 全量 | 2448 项通过，1 项既有用例跳过 |
+| WebUI 完整构建 | lint、类型、架构、Vite、体积预算全部通过 |
+| 全工作区全目标检查 | 216 个 crate 检查通过 |
+| 包含开发库维护特性的存储严格检查 | 全目标 Clippy 通过 |
+| 最终整仓静态门禁 | `make check` 全部通过，保留默认并发限制 |
+| 契约链接及差异空白 | 当前 9 份契约的 36 个本地链接有效，差异空白检查通过 |
+
+## 执行变更总结
+
+### 一、核心修复与调整概述
+
+- 完成“人工管理生命周期、AI 管理内容”知识库：统一逻辑目录及文档、永久前后镜像、人工确认还原、单调修订、四种明确索引模式与后台向量状态。
+- 四个工具接通注册、回合构建、模式与专职过滤、实时授权、执行及两端结果投影；原生搬运正文留在宿主，最多只返回有界真实标题。
+- 重写当前内容套件及 36 方法服务链路，完成 WebUI/TUI 同等生命周期、只读正文、永久历史、失败补生成及套件审阅确认；删除来源扫描、整理库及旧策略入口。
+- 采用当前格式严格拒绝，独立维护开发数据库；不在启动流程做迁移。审核发现的问题均复现并修复后重新计数，最终连续五轮无问题。
+
+### 二、📂文件变更清单
+
+相对任务基线，共新增 40 个、修改 164 个、删除 24 个文件。以下为最终完整清单，计划路径按归档后列出。
+
+#### 新增
+
+- `apps/vulcan-code-tui/src/app/knowledge_actions.rs`
+- `apps/vulcan-code-tui/src/app/knowledge_state.rs`
+- `apps/vulcan-code-tui/src/app/pages/knowledge_content.rs`
+- `apps/vulcan-code-tui/src/app/pages/knowledge_history.rs`
+- `apps/vulcan-code-tui/src/app/pages/knowledge_management.rs`
+- `apps/vulcan-code-tui/src/app/pages/knowledge_session.rs`
+- `apps/vulcan-code-tui/src/backend/mock/service_knowledge.rs`
+- `apps/vulcan-code-tui/src/backend/mock/service_knowledge_tests.rs`
+- `apps/vulcan-code-tui/src/service_api/knowledge_contract_tests.rs`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-content.test.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-content.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-document-reader.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-history.test.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-history.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-index.test.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-index.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-management.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-metadata-dialog.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-mode.ts`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-package-dialogs.test.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-test-fixtures.ts`
+- `apps/vulcan-code-web/src/components/features/knowledge/use-knowledge-read.ts`
+- `apps/vulcan-code-web/src/lib/knowledge-status-labels.ts`
+- `apps/vulcan-code-web/src/service/knowledge-base-service.test.ts`
+- `crates/vulcan-agent-runtime/src/tooling/native/knowledge_base/ingest.rs`
+- `crates/vulcan-host-tools/src/file_runtime/text_transfer.rs`
+- `crates/vulcan-service-api/src/knowledge_base/tests.rs`
+- `crates/vulcan-service-kernel/src/knowledge_base_services/embedding.rs`
+- `crates/vulcan-service-kernel/src/knowledge_base_services/embedding/tests.rs`
+- `crates/vulcan-service-kernel/src/knowledge_base_services/session.rs`
+- `crates/vulcan-service-kernel/src/knowledge_base_services/settings.rs`
+- `crates/vulcan-workspace-store/src/bin/debug_database/knowledge_retirement.rs`
+- `crates/vulcan-workspace-store/src/bin/debug_database/knowledge_tests.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/content.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/content/history_read.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/content/package_content.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/package_tests.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/vector_tests.rs`
+- `docs/contracts/knowledge-base.md`
+- `docs/completed/20261015/01-AI_MANAGED_KNOWLEDGE_BASE.md`
+
+#### 修改
+
+- `AGENTS.md`
+- `Cargo.lock`
+- `Cargo.toml`
+- `apps/vulcan-code-tui/AGENTS.md`
+- `apps/vulcan-code-tui/src/app/action.rs`
+- `apps/vulcan-code-tui/src/app/catalog_tests.rs`
+- `apps/vulcan-code-tui/src/app/input/mod.rs`
+- `apps/vulcan-code-tui/src/app/mod.rs`
+- `apps/vulcan-code-tui/src/app/overlay.rs`
+- `apps/vulcan-code-tui/src/app/pages/knowledge.rs`
+- `apps/vulcan-code-tui/src/app/pages/mod.rs`
+- `apps/vulcan-code-tui/src/app/permission_mode.rs`
+- `apps/vulcan-code-tui/src/app/preview.rs`
+- `apps/vulcan-code-tui/src/app/service_tests.rs`
+- `apps/vulcan-code-tui/src/backend/mock/mod.rs`
+- `apps/vulcan-code-tui/src/backend/mock/service-fixtures.json`
+- `apps/vulcan-code-tui/src/backend/mock/service.rs`
+- `apps/vulcan-code-tui/src/backend/mock/service_tests.rs`
+- `apps/vulcan-code-tui/src/backend/service/worker.rs`
+- `apps/vulcan-code-tui/src/render_smoke_tests.rs`
+- `apps/vulcan-code-tui/src/service_api/contracts_tests.rs`
+- `apps/vulcan-code-tui/src/service_api/knowledge_base.rs`
+- `apps/vulcan-code-tui/src/service_api/mod.rs`
+- `apps/vulcan-code-tui/src/ui/dialogs.rs`
+- `apps/vulcan-code-web/scripts/check-ui-architecture.mjs`
+- `apps/vulcan-code-web/src/components/composer/composer-knowledge-control.tsx`
+- `apps/vulcan-code-web/src/components/composer/composer-knowledge-interactions.test.tsx`
+- `apps/vulcan-code-web/src/components/conversation/conversation-tool-result-tabs.tsx`
+- `apps/vulcan-code-web/src/components/conversation/tool-presentations/native-semantic-tool-presentation.test.ts`
+- `apps/vulcan-code-web/src/components/conversation/tool-presentations/native-semantic-tool-presentation.ts`
+- `apps/vulcan-code-web/src/components/conversation/tool-presentations/types.ts`
+- `apps/vulcan-code-web/src/components/conversation/tool-presentations/v1-tool-domain-presentation.test.ts`
+- `apps/vulcan-code-web/src/components/conversation/tool-presentations/v1-tool-domain-presentation.ts`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-base-area.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-feedback.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-library-create-dialog.test.ts`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-library-create-dialog.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-operation-feedback.test.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-package-dialogs.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-read-recovery.test.tsx`
+- `apps/vulcan-code-web/src/components/features/skills/skills-area.tsx`
+- `apps/vulcan-code-web/src/components/project/project-knowledge-bases-section.test.tsx`
+- `apps/vulcan-code-web/src/components/project/project-knowledge-bases-section.tsx`
+- `apps/vulcan-code-web/src/lib/knowledge-index-status.ts`
+- `apps/vulcan-code-web/src/service/knowledge-base-service.ts`
+- `apps/vulcan-code-web/src/styles/knowledge.css`
+- `apps/vulcan-code-web/src/types/knowledge-base.ts`
+- `crates/vulcan-agent-runtime/src/agent_runtime/execution_models.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/execution_preparation.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/execution_preparation/dedicated_session.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/execution_preparation/tests.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/mod.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/question_runtime/approval.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/runtime.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/runtime_stream_launch_payload.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/task_runtime/child_request_overrides.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/task_runtime/tests/lifecycle_binding.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/task_runtime/tests/preparation_config.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/task_runtime/tests/runtime_flow/startup_profile.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/tool_permission.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/tool_permission/tests.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/tool_runtime_bridge.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/tool_runtime_bridge/tests.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/tool_runtime_bridge/tests/file_durability.rs`
+- `crates/vulcan-agent-runtime/src/agent_runtime/vulcan_plugin_hooks.rs`
+- `crates/vulcan-agent-runtime/src/lib.rs`
+- `crates/vulcan-agent-runtime/src/tooling/bridge.rs`
+- `crates/vulcan-agent-runtime/src/tooling/bridge/descriptors.rs`
+- `crates/vulcan-agent-runtime/src/tooling/bridge/tests.rs`
+- `crates/vulcan-agent-runtime/src/tooling/native.rs`
+- `crates/vulcan-agent-runtime/src/tooling/native/browser.rs`
+- `crates/vulcan-agent-runtime/src/tooling/native/codebase_retrieval.rs`
+- `crates/vulcan-agent-runtime/src/tooling/native/knowledge_base.rs`
+- `crates/vulcan-agent-runtime/src/tooling/native/knowledge_base/result_markdown.rs`
+- `crates/vulcan-agent-runtime/src/tooling/native/tests.rs`
+- `crates/vulcan-agent-runtime/src/tooling/native/tests/knowledge_base.rs`
+- `crates/vulcan-agent-runtime/src/tooling/native/tests/planning.rs`
+- `crates/vulcan-agent-runtime/src/tooling/native/tests/shell.rs`
+- `crates/vulcan-agent-runtime/src/tooling/native/tests/terminal.rs`
+- `crates/vulcan-host-tools/src/file_runtime.rs`
+- `crates/vulcan-i18n/catalogs/tui/en-US.json`
+- `crates/vulcan-i18n/catalogs/tui/zh-CN.json`
+- `crates/vulcan-i18n/catalogs/tui/zh-HK.json`
+- `crates/vulcan-i18n/catalogs/tui/zh-TW.json`
+- `crates/vulcan-i18n/catalogs/webui/de-DE.json`
+- `crates/vulcan-i18n/catalogs/webui/en-US.json`
+- `crates/vulcan-i18n/catalogs/webui/es-ES.json`
+- `crates/vulcan-i18n/catalogs/webui/fr-FR.json`
+- `crates/vulcan-i18n/catalogs/webui/ja-JP.json`
+- `crates/vulcan-i18n/catalogs/webui/ko-KR.json`
+- `crates/vulcan-i18n/catalogs/webui/pt-BR.json`
+- `crates/vulcan-i18n/catalogs/webui/ru-RU.json`
+- `crates/vulcan-i18n/catalogs/webui/zh-CN.json`
+- `crates/vulcan-i18n/catalogs/webui/zh-HK.json`
+- `crates/vulcan-i18n/catalogs/webui/zh-TW.json`
+- `crates/vulcan-lancedb-engine/Cargo.toml`
+- `crates/vulcan-lancedb-engine/src/engine.rs`
+- `crates/vulcan-lancedb-engine/src/types.rs`
+- `crates/vulcan-mcp-runtime/src/lib.rs`
+- `crates/vulcan-service-api/src/knowledge_base.rs`
+- `crates/vulcan-service-kernel/src/agent_collaboration/child_creation/tests.rs`
+- `crates/vulcan-service-kernel/src/agent_collaboration/child_question_request/tests.rs`
+- `crates/vulcan-service-kernel/src/agent_collaboration/child_question_request/tests/compaction/main_only.rs`
+- `crates/vulcan-service-kernel/src/agent_collaboration/native_dispatch_tests/mod.rs`
+- `crates/vulcan-service-kernel/src/agent_collaboration/session_wait/tests.rs`
+- `crates/vulcan-service-kernel/src/agent_collaboration/session_wait/tests/lifecycle.rs`
+- `crates/vulcan-service-kernel/src/agent_collaboration/session_wait/tests/lifecycle/concurrent_wait.rs`
+- `crates/vulcan-service-kernel/src/agent_collaboration/session_wait/tests/task_messages.rs`
+- `crates/vulcan-service-kernel/src/agent_collaboration/session_wait/tests/task_messages/lifecycle_combinations.rs`
+- `crates/vulcan-service-kernel/src/agent_stream/provider_v1_sink/tests.rs`
+- `crates/vulcan-service-kernel/src/agent_stream/stream_task.rs`
+- `crates/vulcan-service-kernel/src/agent_stream/stream_task/question_knowledge.rs`
+- `crates/vulcan-service-kernel/src/conversation_submission.rs`
+- `crates/vulcan-service-kernel/src/knowledge_base_services.rs`
+- `crates/vulcan-service-kernel/src/lib.rs`
+- `crates/vulcan-service-kernel/src/native_vmm/native_tool_dispatch_acceptance_tests.rs`
+- `crates/vulcan-service-kernel/src/public_ai_settings.rs`
+- `crates/vulcan-service-kernel/src/public_ai_settings/inference_settings.rs`
+- `crates/vulcan-service-kernel/src/rpc_dispatch.rs`
+- `crates/vulcan-service-kernel/src/rpc_dispatch/knowledge_base.rs`
+- `crates/vulcan-service-kernel/src/service_bootstrap.rs`
+- `crates/vulcan-service-kernel/src/session_goal_lifecycle/state_cache.rs`
+- `crates/vulcan-service-kernel/src/session_request_config_v1.rs`
+- `crates/vulcan-service-runtime/src/luaskills_bridge/local_github_tests.rs`
+- `crates/vulcan-session-core/src/v1/child_execution.rs`
+- `crates/vulcan-session-core/src/v1/child_execution/preparation.rs`
+- `crates/vulcan-session-core/src/v1/child_execution/request_overrides.rs`
+- `crates/vulcan-session-core/src/v1/config.rs`
+- `crates/vulcan-session-core/src/v1/document/child_execution/tests.rs`
+- `crates/vulcan-session-core/src/v1/document/document_tests/selection.rs`
+- `crates/vulcan-session-core/src/v1/document/document_tests/tools.rs`
+- `crates/vulcan-session-core/src/v1/document/tools.rs`
+- `crates/vulcan-tools-manager/src/lib.rs`
+- `crates/vulcan-tools-manager/src/types.rs`
+- `crates/vulcan-workbench-model/src/session_addon.rs`
+- `crates/vulcan-workspace-store/Cargo.toml`
+- `crates/vulcan-workspace-store/src/bin/debug_database/mod.rs`
+- `crates/vulcan-workspace-store/src/data_plane.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/markdown.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/mod.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/models.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/fts.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/library.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/operations.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/package_archive.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/package_archive/tests.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/package_lifecycle.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/retrieval.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/storage.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/tests.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/vector.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/schema.rs`
+- `crates/vulcan-workspace-store/src/workspace_store/index_read.rs`
+- `crates/vulcan-workspace-store/src/workspace_store/mod.rs`
+- `crates/vulcan-workspace-store/src/workspace_store/persistence/projects.rs`
+- `crates/vulcan-workspace-store/src/workspace_store/session_v1_store.rs`
+- `docs/contracts/debug-database-maintenance.md`
+- `docs/contracts/dedicated-sessions.md`
+- `docs/contracts/session-metadata-migrations.md`
+- `docs/contracts/tool-result-presentation.md`
+- `docs/contracts/tui-design.md`
+- `docs/contracts/tui-service-adaptation.md`
+- `scripts/wording-assertions-baseline.json`
+
+#### 删除
+
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-area-types.ts`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-base-area.test.ts`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-file-confirmation-dialog.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-file-confirmation.test.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-import-progress.test.ts`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-library-viewer-dialog.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-library-viewer.test.ts`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-operation-dialog.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-operation-progress.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-package-dialogs.test.ts`
+- `apps/vulcan-code-web/src/components/features/knowledge/knowledge-skipped-documents.tsx`
+- `apps/vulcan-code-web/src/components/features/knowledge/use-knowledge-library-policy-dialogs.ts`
+- `apps/vulcan-code-web/src/components/features/knowledge/use-knowledge-operation-job.ts`
+- `crates/vulcan-service-kernel/src/knowledge_base_services/display_requests.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/display.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/file_selection.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/import.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/import/tests.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/operations/tests.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/package_lifecycle/tests.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/raw_corpus.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/storage/tests.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/runtime/storage/tests/selection_tests.rs`
+- `crates/vulcan-workspace-store/src/knowledge_base/selection.rs`
+
+### 三、💻关键代码调整详情
+
+- 存储由独立实体、内容寻址正文、永久变更镜像及当前切块组成；`commit_snapshot` 在单事务中发布正文、实体、历史、FTS 和向量排队，任何失败整体回滚。`restore_content` 保留原历史并从历史最大修订分配新令牌，消除还原后的旧令牌复活。
+- `write_content` 精确编辑先按实际匹配次数计算 UTF-8 结果大小，检查乘加溢出及唯一正文预算，再分配字符串；批量后续失败不发布先前候选。
+- 向量工作器按当前哈希和冻结空间预留尝试、验证有限值与维度、落盘后发布就绪；旧查询持有空间租约。当前内容排队不解除人工暂停，保留及发布时协调持久任务意图，人工明确恢复后才继续。
+- 嵌入执行器先安装再恢复任务，使用弱服务引用；每次携带真实库身份，内部配置按库与空间派生并与删除串行，防止路由串用与延迟复活。
+- 套件只含当前配置及目录/文档数据，完整指纹、有界解压、内容摘要与命名空间先校验后建库；不覆盖既有库，不携带历史或向量。
+- `knowledge_list/read/search/write` 使用封闭形状及实际准备回执；搬运复用原生路径、遍历、忽略和编解码。`sources` 只用于文件路径，`provenance` 只用于结构化来源对象。
+- WebUI 共享撤销式读取寿命及会话 Markdown；TUI 共享精确 DTO、后台槽位序号、键鼠动作入口和只读正文。分页使用服务续读值，变更后读取失败只允许重读；内容变化不自动重放付费搜索。已保存专职会话的知识选择只读。
+- 新持久格式、开发库维护映射、当前契约与共享语言目录同步更新。另以独立提交仅格式化六个已证实未修改的基线文件，满足全仓格式门禁，未改业务行为。
+
+### 四、⚠️遗留问题与注意事项
+
+- 本方案范围内无未完成实现项，连续五轮审核未发现遗留可执行缺陷；审核并不等同于所有运行环境中的无缺陷保证。
+- 验证使用隔离存储、真实本地 LanceDB、假嵌入器、模拟服务及合成回环传输；未访问真实运行宿主、未调用付费模型、未进行真实终端人工验收，不据离线证据宣称这些运行验收已通过。
+- 两项既有跳过/忽略分别为数据面性能用例与 WebUI 用例。未新增跳过，不以放宽预算或提高断言基线取得通过。
+- WebUI 工作台样式 gzip 为 73992 字节，原上限 74000 字节；初始 JavaScript gzip 为 674079 字节。后续界面改动继续执行完整构建，阈值未提高。
+- 原生搬运限文本；非文本、URL 直接搬运、历史压缩、向量回收及跨库引用仍为方案明确非目标。
+- 全部提交仅保存在本地工作分支，未推送。
+
+### 本地提交记录
+
+- `3b11db34`：完成实体存储及永久可还原历史。
+- `d5304ad9`：完成当前哈希索引与可恢复向量工作器。
+- `fc463b07`：完成版本化当前内容套件。
+- `40866a52`：完成审计身份工具及原生文本搬运。
+- `035702ab`：完成生命周期服务及冻结嵌入执行。
+- `656041dc`：完成旧导入表退役及显式开发库维护。
+- `48586920`：完成知识库与永久历史的网页端管理。
+- `ca5ea2e1`：完成终端端生命周期及完整请求镜像。
+- `d5c44bf6`：仅整理六个基线文件的格式以满足整仓门禁。
+- `ea1a7d0b`：完成契约与共享工具呈现。
+- `54827128`：修复精确编辑的预分配预算。
+- `844b093a`：修复专职会话终端知识选择只读边界。
+- `eb0833b3`：整理审核记录及逐行双语注释格式。
+- `628aee03`：修复内容变更、取消及恢复的持久意图协调。
