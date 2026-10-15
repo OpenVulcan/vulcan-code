@@ -182,6 +182,22 @@ pub struct LanceDbUpsertResult {
     pub deleted_rows: u64,
 }
 
+/// Declared floating-vector distance used by an explicitly owned semantic space.
+/// 显式所有语义空间使用的已声明浮点向量距离。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LanceDbDistanceMetric {
+    /// Euclidean distance, matching the engine's established default.
+    /// 欧氏距离，与引擎既有默认值一致。
+    Euclidean,
+    /// Cosine distance without assuming pre-normalized values.
+    /// 不假设数值已归一化的余弦距离。
+    Cosine,
+    /// Descending dot-product similarity.
+    /// 按点积相似度降序排列。
+    DotProduct,
+}
+
 /// Input for one vector search.
 /// 一次向量检索的输入。
 #[derive(Debug, Clone)]

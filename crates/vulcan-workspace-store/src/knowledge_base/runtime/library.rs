@@ -44,32 +44,58 @@ impl KnowledgeBaseRuntime {
         project_ids: &[String],
         settings: &KnowledgeLibrarySettings,
     ) -> Result<KnowledgeLibrarySummary, String> {
-        settings.validate()?;
-        // Normalize only human metadata; content paths use the stricter content validator.
-        // 仅规范人工元数据；内容路径使用更严格的内容验证器。
-        let name = validate_library_name(name)?;
-        // Allocate one stable identity before any durable write.
-        // 持久写入前分配一个稳定身份。
+        // Allocate the immutable owner used by every embedding request and derived profile.
+        // 分配全部嵌入请求及派生配置档使用的不可变所有者。
         let library_id = Uuid::new_v4().to_string();
-        // Registry and manifest share this creation time and explicit policy.
-        // 注册表和清单共享该创建时间与显式策略。
+        // The complete creation interval excludes writes, deletion and project revocation.
+        // 完整创建区间排除写入、删除及项目撤销。
+        let guard = self.library_mutation_guard(&library_id).await?;
+        // Route snapshots contain no consumer identity; the library ID is the sole owner.
+        // 路由快照不包含消费方身份；知识库身份为唯一所有者。
+        let settings = settings.clone();
+        settings.validate()?;
+        // Only human metadata is trimmed; content paths use their separate strict authority.
+        // 仅修剪人工元数据；内容路径使用各自严格权威。
+        let name = validate_library_name(name)?;
+        // One timestamp binds the registry and initial project authorizations.
+        // 一个时间戳绑定注册记录及初始项目授权。
         let now = unix_epoch_millis()?;
-        local_sql::execute_script_async(&self.host_runtime.local, LogicalDatabase::AppState,
-            "INSERT INTO knowledge_libraries(id,name,name_key,description,lifecycle_state,settings_json,created_at_ms,updated_at_ms) VALUES(?,?,?,?,'active',?,?,?);",
-            vec![text(&library_id), text(&name), text(name.to_lowercase()), text(description.trim()),
-                text(serde_json::to_string(settings).map_err(|e| e.to_string())?), int(now), int(now)]).await?;
-        // Initialization failure must not leave an apparently usable empty library.
-        // 初始化失败不得留下看似可用的空库。
+        // No registry row or partial project authorization is visible until storage is initialized.
+        // 存储初始化前不暴露注册行或部分项目授权。
         let initialized = async {
             self.initialize_library_storage(&library_id, &name).await?;
-            self.rebuild_index(&library_id).await?;
-            for project_id in project_ids {
-                self.set_project_binding(&library_id, project_id, true, true)
-                    .await?;
-            }
+            // The new empty index can be built directly while this method owns the mutation lock.
+            // 此方法拥有变更锁时，可直接构建新空索引。
+            let (_, binding) = self.ensure_library_binding(&library_id).await?;
+            local_sql::with_connection_async(&self.host_runtime.local, self.resolve_library_binding(binding)?, {
+                let enabled = settings.index_mode.has_fts();
+                move |connection| fts::rebuild_fts(connection, enabled)
+            }).await?;
+            // Registry publication and every initial binding form one application transaction.
+            // 注册发布及每项初始绑定构成一笔应用事务。
+            let id = library_id.clone();
+            // Own human fields before entering the blocking database boundary.
+            // 进入阻塞数据库边界前持有人工字段。
+            let name = name.clone();
+            // Initial project identities are explicit caller input, never inferred from workspace paths.
+            // 初始项目身份为显式调用方输入，绝不从工作区路径推断。
+            let projects = project_ids.to_vec();
+            // Persist the already validated policy without post-publication rewriting.
+            // 持久化已验证策略，不在发布后改写。
+            let policy = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
+            // Purpose is human metadata and has no AI content side effect.
+            // 用途为人工元数据，不产生 AI 内容副作用。
+            let description = description.trim().to_string();
+            local_sql::with_connection_async(&self.host_runtime.local, LogicalDatabase::AppState, move |connection| {
+                let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
+                transaction.execute("INSERT INTO knowledge_libraries(id,name,name_key,description,lifecycle_state,settings_json,created_at_ms,updated_at_ms) VALUES(?,?,?,?,'active',?,?,?);", rusqlite::params![id,name,name.to_lowercase(),description,policy,now,now]).map_err(|error|error.to_string())?;
+                for project in projects {
+                    transaction.execute("INSERT INTO knowledge_library_project_bindings(library_id,project_id,default_enabled,created_at_ms,updated_at_ms) VALUES(?,?,1,?,?) ON CONFLICT(library_id,project_id) DO NOTHING;", rusqlite::params![id,project,now,now]).map_err(|error|error.to_string())?;
+                }
+                transaction.commit().map_err(|error|error.to_string())
+            }).await?;
             self.get_library(&library_id).await
-        }
-        .await;
+        }.await;
         if initialized.is_err() {
             self.release_library_binding(&library_id).await?;
             local_sql::execute_script_async(
@@ -84,9 +110,10 @@ impl KnowledgeBaseRuntime {
                 &library_id,
             )?;
         }
+        drop(guard);
         if initialized.is_ok() && settings.index_mode.has_vectors() {
-            // Empty vector libraries still publish a usable empty space without paid inference.
-            // 空向量库仍发布可用空空间，无需付费推理。
+            // Empty vector libraries become usable without sending any inference request.
+            // 空向量库无需发送任何推理请求即可可用。
             self.wake_knowledge_worker(&library_id).await;
         }
         initialized

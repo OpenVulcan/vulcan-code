@@ -95,7 +95,7 @@ pub(super) fn table_name(space: &str) -> Result<String, String> {
 /// Validates the exact lowercase SHA-256 wire shape before SQL or table-name interpolation.
 /// 在 SQL 或表名插值前验证精确小写 SHA-256 线格式。
 pub(super) fn validate_sha256(value: &str) -> Result<(), String> {
-    if value.len() != 64
+    if value.len() != KNOWLEDGE_SHA256_HEX_CHARS
         || !value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -392,6 +392,20 @@ impl KnowledgeBaseRuntime {
         // Resolve the exact existing content binding.
         // 解析精确已有内容绑定。
         let (_, binding) = self.ensure_library_binding(library_id).await?;
+        // Application job intent is authoritative across a crash between two database commits.
+        // 应用任务意图在两个数据库提交间崩溃后仍为权威。
+        let operation = self.get_operation(library_id, None).await?;
+        if operation
+            .as_ref()
+            .is_some_and(|operation| operation.state == "cancelled")
+        {
+            return Ok(None);
+        }
+        // A queued rebuild must actually rebuild even if its metadata mark was interrupted.
+        // 即使元数据标记被中断，排队重建也必须实际重建。
+        let rebuild_requested = operation
+            .as_ref()
+            .is_some_and(|operation| operation.kind == "rebuild" && operation.state == "queued");
         // Reconcile interrupted FTS work before reserving paid vector requests.
         // 保留付费向量请求前协调中断的全文工作。
         let is_paused = local_sql::with_connection_async(
@@ -404,7 +418,7 @@ impl KnowledgeBaseRuntime {
                         return Ok(true);
                     }
                     let status = metadata(connection, "index_status")?;
-                    if (settings.index_mode.has_fts() && status != "ready")
+                    if (settings.index_mode.has_fts() && (status != "ready" || rebuild_requested))
                         || (!settings.index_mode.has_fts() && status != "disabled")
                     {
                         let transaction = connection
@@ -540,6 +554,7 @@ impl KnowledgeBaseRuntime {
         let result = match executor {
             Some(executor) => {
                 executor(KnowledgeEmbeddingRequest {
+                    library_id: library_id.to_string(),
                     embedding: batch.embedding.clone(),
                     inputs: batch.inputs.iter().map(|(_, text)| text.clone()).collect(),
                     is_query: false,

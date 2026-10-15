@@ -21,6 +21,39 @@ struct VectorRank {
 }
 
 impl KnowledgeBaseRuntime {
+    /// Filters bounded `hits` against `library_id`'s current exact chunk/revision snapshot; returns retained candidates.
+    /// 根据 `library_id` 当前精确切块及修订快照过滤有界 `hits`；返回保留候选。
+    async fn current_search_hits(
+        &self,
+        library_id: &str,
+        hits: Vec<KnowledgeSearchHit>,
+    ) -> Result<Vec<KnowledgeSearchHit>, String> {
+        // Current-row verification shares the deletion/mutation domain and never spans provider inference.
+        // 当前行验证共享删除及变更域，且绝不跨越供应商推理。
+        let _mutation = self.library_mutation_guard(library_id).await?;
+        self.require_active_library(library_id).await?;
+        // The known binding is retained for the complete final read snapshot.
+        // 为完整最终读取快照保留既有绑定。
+        let (_, binding) = self.ensure_library_binding(library_id).await?;
+        local_sql::with_read_snapshot_async(&self.host_runtime.local,self.resolve_library_binding(binding)?,move |connection| {
+            // Reuse one indexed existence query instead of scanning all current library metadata.
+            // 复用一个有索引的存在性查询，不扫描全部当前库元数据。
+            let mut statement = connection.prepare("SELECT EXISTS(SELECT 1 FROM kb_chunks c JOIN kb_documents d ON d.id=c.document_id WHERE c.id=? AND c.content_sha256=? AND d.id=? AND d.revision=?);").map_err(|error|error.to_string())?;
+            // Every returned reference belongs to the same final logical snapshot.
+            // 每份返回参考资料属于相同最终逻辑快照。
+            let mut retained = Vec::new();
+            for hit in hits {
+                // SQLite stores the same checked signed revision used by document publication.
+                // SQLite 保存与文档发布相同的已检查有符号修订。
+                let revision = i64::try_from(hit.revision).map_err(|error|error.to_string())?;
+                if statement.query_row(params![hit.chunk_id,hit.content_sha256,hit.document_id,revision],|row|row.get::<_,bool>(0)).map_err(|error|error.to_string())? {
+                    retained.push(hit);
+                }
+            }
+            Ok(retained)
+        }).await
+    }
+
     /// Searches explicit libraries using their own modes and fuses independent queries; returns visible partial failures.
     /// 使用各自模式检索显式知识库并融合独立查询；返回可见部分失败。
     pub async fn search(
@@ -42,9 +75,10 @@ impl KnowledgeBaseRuntime {
         // Stable identities deduplicate repeated library selectors without duplicating ranks.
         // 稳定身份去重重复知识库选择器，不重复排名。
         let libraries: BTreeSet<_> = library_ids.iter().collect();
-        // Chunk identity is scoped by its physical library.
-        // 切块身份由物理知识库限定范围。
-        let mut fused: BTreeMap<(String, String), KnowledgeSearchHit> = BTreeMap::new();
+        // Ranks can combine only the same physical library, chunk, content and document revision.
+        // 排名仅可合并相同物理库、切块、内容及文档修订。
+        let mut fused: BTreeMap<(String, String, String, u64), KnowledgeSearchHit> =
+            BTreeMap::new();
         // Every library reports its explicit mode even when it contributes no hits.
         // 每个知识库即使没有命中也报告显式模式。
         let mut statuses = BTreeMap::new();
@@ -64,7 +98,12 @@ impl KnowledgeBaseRuntime {
                             });
                         }
                         for hit in hits {
-                            let key = (hit.library_id.clone(), hit.chunk_id.clone());
+                            let key = (
+                                hit.library_id.clone(),
+                                hit.chunk_id.clone(),
+                                hit.content_sha256.clone(),
+                                hit.revision,
+                            );
                             if let Some(existing) = fused.get_mut(&key) {
                                 existing.score += hit.score;
                                 for kind in hit.match_kinds {
@@ -88,6 +127,27 @@ impl KnowledgeBaseRuntime {
         // Scores compare ranks rather than incompatible raw BM25 and vector distances.
         // 分数比较排名，而非不可比较的原始全文分数与向量距离。
         let mut hits: Vec<_> = fused.into_values().collect();
+        // Revalidate all merged query generations once against each library's current snapshot.
+        // 针对各库当前快照一次复核全部合并查询代次。
+        let mut current_hits = Vec::new();
+        for library in library_ids.iter().collect::<BTreeSet<_>>() {
+            // Take only this library's bounded candidate list into its exact read snapshot.
+            // 仅将此库有界候选列表带入其精确读取快照。
+            let candidates = hits
+                .iter()
+                .filter(|hit| &hit.library_id == library)
+                .cloned()
+                .collect::<Vec<_>>();
+            match self.current_search_hits(library, candidates).await {
+                Ok(rows) => current_hits.extend(rows),
+                Err(error) => failures.push(KnowledgeSearchFailure {
+                    library_id: library.clone(),
+                    query: None,
+                    error,
+                }),
+            }
+        }
+        hits = current_hits;
         hits.sort_by(|a, b| {
             b.score
                 .total_cmp(&a.score)
@@ -237,7 +297,7 @@ impl KnowledgeBaseRuntime {
         // Final metadata is one current read snapshot, independent of inference latency.
         // 最终元数据为一个当前读取快照，与推理延迟独立。
         let mut hits=local_sql::with_read_snapshot_async(&self.host_runtime.local,self.resolve_library_binding(binding)?,move |connection|{
-            let mut statement=connection.prepare("SELECT c.id,c.content_sha256,d.id,d.path,d.title,d.summary,c.kind,c.heading_path,c.start_line,c.end_line,c.text,(c.embed=1 AND EXISTS(SELECT 1 FROM kb_vector_state s WHERE s.vector_space_id=? AND s.content_sha256=c.content_sha256 AND s.state='ready')) FROM kb_chunks c JOIN kb_documents d ON d.id=c.document_id WHERE c.id IN (SELECT value FROM json_each(?)) OR (c.embed=1 AND c.content_sha256 IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM kb_vector_state s WHERE s.vector_space_id=? AND s.content_sha256=c.content_sha256 AND s.state='ready')) ORDER BY d.path_key,c.ordinal;").map_err(|e|e.to_string())?;
+            let mut statement=connection.prepare("SELECT c.id,c.content_sha256,d.id,d.path,d.title,d.summary,c.kind,c.heading_path,c.start_line,c.end_line,c.text,(c.embed=1 AND EXISTS(SELECT 1 FROM kb_vector_state s WHERE s.vector_space_id=? AND s.content_sha256=c.content_sha256 AND s.state='ready')),d.revision FROM kb_chunks c JOIN kb_documents d ON d.id=c.document_id WHERE c.id IN (SELECT value FROM json_each(?)) OR (c.embed=1 AND c.content_sha256 IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM kb_vector_state s WHERE s.vector_space_id=? AND s.content_sha256=c.content_sha256 AND s.state='ready')) ORDER BY d.path_key,c.ordinal;").map_err(|e|e.to_string())?;
             let rows=statement.query_map(params![active_space,fts_ids,vector_hashes,active_space],|r|{
                 let id=r.get::<_,String>(0)?;
                 let hash=r.get::<_,String>(1)?;
@@ -246,7 +306,7 @@ impl KnowledgeBaseRuntime {
                 if let Some(rank)=fts_ranks.get(&(id.clone(),hash.clone())){score+=rank;kinds.push("bm25".into());}
                 if r.get::<_,bool>(11)?&& let Some(rank)=vector_ranks.get(&hash){score+=rank;kinds.push("vector".into());}
                 if kinds.is_empty(){return Ok(None);}
-                Ok(Some(KnowledgeSearchHit{library_id:library_id.clone(),library_name:library_name.clone(),document_id:r.get(2)?,path:r.get(3)?,title:r.get(4)?,summary:r.get(5)?,chunk_id:id,kind:r.get(6)?,heading_path:r.get(7)?,start_line:unsigned_column(r,8)?,end_line:unsigned_column(r,9)?,content:r.get(10)?,score,match_kinds:kinds}))
+                Ok(Some(KnowledgeSearchHit{library_id:library_id.clone(),library_name:library_name.clone(),document_id:r.get(2)?,revision:unsigned_column(r,12)?,content_sha256:hash,path:r.get(3)?,title:r.get(4)?,summary:r.get(5)?,chunk_id:id,kind:r.get(6)?,heading_path:r.get(7)?,start_line:unsigned_column(r,8)?,end_line:unsigned_column(r,9)?,content:r.get(10)?,score,match_kinds:kinds}))
             }).map_err(|e|e.to_string())?;
             rows.filter_map(|r|match r{Ok(Some(hit))=>Some(Ok(hit)),Ok(None)=>None,Err(error)=>Some(Err(error.to_string()))}).collect::<Result<Vec<_>,_>>()
         }).await?;
@@ -305,6 +365,7 @@ impl KnowledgeBaseRuntime {
         // Query task semantics are distinct from document embeddings.
         // 查询任务语义与文档嵌入不同。
         let vectors = executor(KnowledgeEmbeddingRequest {
+            library_id: library_id.to_string(),
             embedding: embedding.clone(),
             inputs: vec![query.into()],
             is_query: true,
@@ -343,14 +404,17 @@ impl KnowledgeBaseRuntime {
                     .join(",")
             );
             let result = engine
-                .vector_search(LanceDbSearchInput {
-                    table_name: vector::table_name(&space)?,
-                    vector: vector.clone(),
-                    limit,
-                    filter,
-                    vector_column: "vector".into(),
-                    output_format: LanceDbOutputFormat::JsonRows,
-                })
+                .vector_search_with_metric(
+                    LanceDbSearchInput {
+                        table_name: vector::table_name(&space)?,
+                        vector: vector.clone(),
+                        limit,
+                        filter,
+                        vector_column: "vector".into(),
+                        output_format: LanceDbOutputFormat::JsonRows,
+                    },
+                    embedding.metric,
+                )
                 .await
                 .map_err(|e| e.to_string())?;
             let rows: Vec<VectorRank> =

@@ -46,6 +46,79 @@ fn metadata_integer(connection: &Connection, key: &str) -> Result<u64, String> {
 }
 
 impl KnowledgeBaseRuntime {
+    /// Upserts `word` with positive `weight` in `library_id`; returns the atomically refreshed dictionary.
+    /// 在 `library_id` 中以正 `weight` 更新或插入 `word`；返回原子刷新词典。
+    pub async fn upsert_custom_word(
+        &self,
+        library_id: &str,
+        word: &str,
+        weight: u32,
+    ) -> Result<Vec<KnowledgeCustomWord>, String> {
+        validate_custom_words(&[KnowledgeCustomWord {
+            word: word.into(),
+            weight,
+        }])?;
+        self.mutate_custom_word(library_id, word, Some(weight))
+            .await
+    }
+
+    /// Removes exact `word` from `library_id`; returns the dictionary without a read/replace race.
+    /// 从 `library_id` 移除精确 `word`；返回词典，避免读取后替换竞争。
+    pub async fn remove_custom_word(
+        &self,
+        library_id: &str,
+        word: &str,
+    ) -> Result<Vec<KnowledgeCustomWord>, String> {
+        validate_custom_words(&[KnowledgeCustomWord {
+            word: word.into(),
+            weight: 1,
+        }])?;
+        self.mutate_custom_word(library_id, word, None).await
+    }
+
+    /// Applies `weight` (Some = upsert, None = remove) to `word` under `library_id`'s lock; returns current terms.
+    /// 在 `library_id` 锁内对 `word` 应用 `weight`（Some 为更新插入，None 为移除）；返回当前词语。
+    async fn mutate_custom_word(
+        &self,
+        library_id: &str,
+        word: &str,
+        weight: Option<u32>,
+    ) -> Result<Vec<KnowledgeCustomWord>, String> {
+        // Hold the same mutation domain as content and full dictionary replacement.
+        // 持有与内容及全量词典替换相同的变更域。
+        let guard = self.library_mutation_guard(library_id).await?;
+        // Read the sole current mode before rebuilding derived FTS.
+        // 重建派生全文索引前读取唯一当前模式。
+        let settings = self
+            .require_active_library(library_id)
+            .await?
+            .settings
+            .ok_or("ERR_KNOWLEDGE_SETTINGS_MISSING")?;
+        // Resolve the exact library connection and move the term into its transaction.
+        // 解析精确库连接，并将词语移入其事务。
+        let (_, binding_id) = self.ensure_library_binding(library_id).await?;
+        // The owned term cannot change while the asynchronous transaction executes.
+        // 异步事务执行期间自有词语不会变化。
+        let word = word.to_owned();
+        local_sql::with_connection_async(&self.host_runtime.local, self.resolve_library_binding(&binding_id)?, move |connection| {
+            // Dictionary content, revision and derived index publish together.
+            // 词典内容、修订及派生索引共同发布。
+            let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error|error.to_string())?;
+            match weight {
+                Some(weight) => { tokenizer::upsert_custom_word(&transaction, &word, weight as usize).map_err(|error|error.to_string())?; }
+                None => { tokenizer::remove_custom_word(&transaction, &word).map_err(|error|error.to_string())?; }
+            }
+            transaction.execute("UPDATE knowledge_metadata SET value=CAST(value AS INTEGER)+1 WHERE key='dictionary_revision';", []).map_err(|error|error.to_string())?;
+            rebuild_fts(&transaction, settings.index_mode.has_fts())?;
+            transaction.commit().map_err(|error|error.to_string())
+        }).await?;
+        // Read while still owning the mutation lock so the response describes this publication.
+        // 仍持有变更锁时读取，使响应描述本次发布。
+        let result = self.list_custom_words(library_id).await;
+        drop(guard);
+        result
+    }
+
     /// Rebuilds only current derived FTS data; returns integrity after an atomic publication.
     /// 仅重建当前派生全文数据；原子发布后返回完整性。
     pub async fn rebuild_index(

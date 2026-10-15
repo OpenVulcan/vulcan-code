@@ -179,9 +179,9 @@ fn knowledge_write_schema() -> Value {
             "body":{"type":"string","description":format!("Exact Markdown body, at most {MAX_KNOWLEDGE_BODY_BYTES} UTF-8 bytes.")},
             "keywords":{"type":"array","maxItems":MAX_KNOWLEDGE_KEYWORDS,"items":{"type":"string","minLength":1,"maxLength":MAX_KNOWLEDGE_PATH_SEGMENT_CHARS}},
             "embed":{"type":"string","enum":["summary","full","none"],"description":"Default summary; full embeds body chunks too; none excludes all vectors."},
-            "provenance":{"type":"array","description":"Create/update only: observed structured source evidence. Ingest derives file evidence itself.","items":{
+            "provenance":{"type":"array","maxItems":MAX_KNOWLEDGE_PROVENANCE_ITEMS,"description":"Create/update only: observed structured source evidence. Ingest derives file evidence itself.","items":{
                 "type":"object","additionalProperties":false,
-                "properties":{"kind":{"type":"string","enum":["file","url","session"]},"ref":{"type":"string"},"sha256":{"type":"string"},"observedAtMs":{"type":"integer"}},
+                "properties":{"kind":{"type":"string","enum":["file","url","session"]},"ref":{"type":"string","minLength":1,"maxLength":MAX_KNOWLEDGE_REFERENCE_CHARS},"sha256":{"type":"string","minLength":KNOWLEDGE_SHA256_HEX_CHARS,"maxLength":KNOWLEDGE_SHA256_HEX_CHARS},"observedAtMs":{"type":"integer"}},
                 "required":["kind","ref","observedAtMs"]
             }},
             "edits":{"type":"array","minItems":1,"items":{
@@ -190,11 +190,11 @@ fn knowledge_write_schema() -> Value {
                 "required":["oldText","newText"]
             }},
             "newPath":{"type":"string","description":"Move destination; document ID stays stable."},
-            "description":{"type":"string","description":"Folder purpose, maintained by AI."},
+            "description":{"type":"string","maxLength":MAX_KNOWLEDGE_METADATA_CHARS,"description":"Folder purpose, maintained by AI."},
             "sources":{"type":"array","minItems":1,"maxItems":MAX_KNOWLEDGE_INGEST_FILES,"items":{"type":"string"},"description":"Ingest only: local paths or globs using * and ?, and ** for recursive segments. Relative paths use the workspace; absolute paths and ${env:NAME} placeholders are supported. Default file-tool ignores apply to glob traversal."},
             "targetFolder":{"type":"string","description":"Ingest only: logical destination prefix; empty means root."},
             "summaries":{"type":"object","additionalProperties":{"type":"string","maxLength":MAX_KNOWLEDGE_SUMMARY_CHARS},"description":"Ingest only: optional summaries keyed by canonical absolute source path. Omitted summaries are pending or stale. Unmatched or rejected sources report unapplied summaries."},
-            "note":{"type":"string","description":"Auditable reason for this atomic change."}
+            "note":{"type":"string","maxLength":MAX_KNOWLEDGE_METADATA_CHARS,"description":"Auditable reason for this atomic change."}
         },
         "required":["libraryId","action"]
     })

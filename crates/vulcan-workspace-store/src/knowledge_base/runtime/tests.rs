@@ -77,6 +77,56 @@ fn human() -> KnowledgeChangeActor {
     }
 }
 
+/// Exercises concurrent per-term dictionary changes without content-history side effects.
+/// 验证并发单词词典变更不产生内容历史副作用。
+/// Uses an isolated library; takes no parameters and returns no value.
+/// 使用隔离知识库；无参数及返回值。
+#[tokio::test]
+async fn concurrent_dictionary_terms_are_not_lost_by_read_replace_races() {
+    // Both updates share one library but distinct dictionary keys.
+    // 两次更新共享一个知识库，但词典键不同。
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Bm25).await;
+    // Joining the public operations permits contention at their real mutation lock.
+    // 联合公开操作允许在真实变更锁上争用。
+    let (first, second) = tokio::join!(
+        runtime.upsert_custom_word(&library, "alpha", 2),
+        runtime.upsert_custom_word(&library, "beta", 3)
+    );
+    first.unwrap();
+    second.unwrap();
+    // Compare by key rather than mutable dictionary row ordering.
+    // 按键比较，不依赖可变化的词典行顺序。
+    let terms = runtime.list_custom_words(&library).await.unwrap();
+    assert_eq!(terms.len(), 2);
+    assert!(
+        terms
+            .iter()
+            .any(|term| term.word == "alpha" && term.weight == 2)
+    );
+    assert!(
+        terms
+            .iter()
+            .any(|term| term.word == "beta" && term.weight == 3)
+    );
+    runtime.remove_custom_word(&library, "alpha").await.unwrap();
+    assert!(
+        runtime
+            .list_custom_words(&library)
+            .await
+            .unwrap()
+            .iter()
+            .all(|term| term.word != "alpha")
+    );
+    assert!(runtime.index_integrity(&library).await.unwrap().healthy);
+    assert!(
+        runtime
+            .list_changes(&library, None, 20)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
 /// Builds an explicit create request; returns a complete required-field payload.
 /// 构建显式创建请求；返回完整必填字段载荷。
 fn create(path: &str, body: &str) -> KnowledgeWriteRequest {
@@ -950,4 +1000,184 @@ async fn exact_body_windows_preserve_all_supported_newline_forms() {
         assert_eq!(middle.content.trim_end_matches(['\r', '\n']), "two");
         assert_eq!(middle.next_line, Some(3));
     }
+}
+
+/// History pages and both document sides remain exact after later updates.
+/// 后续更新后，历史分页及文档两侧仍保持精确。
+#[tokio::test]
+async fn history_pages_and_body_windows_never_substitute_current_content() {
+    // All images belong to one isolated real content database.
+    // 全部镜像属于一个隔离的真实内容数据库。
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    // A single batch supplies multiple immutable items for page continuation.
+    // 单个批次为分页续读提供多个不可变条目。
+    let input = (0..3)
+        .map(|number| {
+            let mut item = source("first\r\nsecond\r\n");
+            item.path = format!("files/{number}.txt");
+            item
+        })
+        .collect();
+    // The first history point contains every imported body once by hash.
+    // 首个历史点通过哈希保留全部导入正文。
+    let receipt = runtime
+        .ingest_documents(&library, "project", input, ai(), "batch")
+        .await
+        .unwrap();
+    // Collect exact entity identities independently of SQL row positions.
+    // 独立于 SQL 行位置收集精确实体身份。
+    let mut ids = BTreeSet::new();
+    // A stable offset advances only within this immutable change.
+    // 稳定偏移仅在此不可变变更内推进。
+    let mut offset = 0;
+    loop {
+        let page = runtime
+            .get_change_page(&library, receipt.change_seq.unwrap(), offset, 1)
+            .await
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        ids.insert(page.items[0].entity_key.clone());
+        match page.next_offset {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+    assert_eq!(ids.len(), 3);
+    // Select the document by its feature path, not its page order.
+    // 按特征路径选择文档，而非分页顺序。
+    let document = runtime
+        .read_document(&library, None, Some("files/1.txt"), None, None)
+        .await
+        .unwrap()
+        .document;
+    // A later body replacement must never change historical reads.
+    // 后续正文替换绝不能改变历史读取。
+    let changed = runtime
+        .write_content(
+            &library,
+            "project",
+            KnowledgeWriteRequest {
+                action: "update".into(),
+                document_id: Some(document.id.clone()),
+                expected_revision: Some(document.revision),
+                body: Some("current text".into()),
+                ..Default::default()
+            },
+            ai(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .read_change_document(
+                &library,
+                changed.change_seq.unwrap(),
+                &document.id,
+                KnowledgeChangeSide::Before,
+                Some(2),
+                Some(2)
+            )
+            .await
+            .unwrap()
+            .content,
+        "second\r\n"
+    );
+    assert_eq!(
+        runtime
+            .read_change_document(
+                &library,
+                changed.change_seq.unwrap(),
+                &document.id,
+                KnowledgeChangeSide::After,
+                None,
+                None
+            )
+            .await
+            .unwrap()
+            .content,
+        "current text"
+    );
+    assert_eq!(
+        runtime
+            .read_change_document(
+                &library,
+                receipt.change_seq.unwrap(),
+                &document.id,
+                KnowledgeChangeSide::After,
+                None,
+                None
+            )
+            .await
+            .unwrap()
+            .content,
+        "first\r\nsecond\r\n"
+    );
+    assert_eq!(
+        runtime
+            .read_change_document(
+                &library,
+                receipt.change_seq.unwrap(),
+                &document.id,
+                KnowledgeChangeSide::Before,
+                None,
+                None
+            )
+            .await
+            .unwrap_err(),
+        "ERR_KNOWLEDGE_CHANGE_SIDE_EMPTY"
+    );
+    assert_eq!(
+        runtime
+            .read_change_document(
+                &library,
+                receipt.change_seq.unwrap(),
+                "foreign",
+                KnowledgeChangeSide::After,
+                None,
+                None
+            )
+            .await
+            .unwrap_err(),
+        "ERR_KNOWLEDGE_CHANGE_ITEM_NOT_FOUND"
+    );
+}
+
+/// Initial authorization publication is all-or-nothing when a project reference fails.
+/// 初始项目引用失败时，授权发布为全部生效或全部不生效。
+#[tokio::test]
+async fn library_creation_does_not_publish_partial_project_bindings() {
+    // The existing fixture is the only library that must survive the rejected creation.
+    // 已有夹具为被拒绝创建后唯一必须保留的知识库。
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    assert!(
+        runtime
+            .create_library(
+                "Rejected",
+                "purpose",
+                &["project".into(), "missing-project".into()],
+                &KnowledgeLibrarySettings {
+                    index_mode: KnowledgeIndexMode::Browse,
+                    embedding: None
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        runtime
+            .authorized_library_ids("project", false)
+            .await
+            .unwrap(),
+        vec![library.clone()]
+    );
+    assert_eq!(
+        runtime
+            .list_libraries(None)
+            .await
+            .unwrap()
+            .iter()
+            .map(|library| library.id.clone())
+            .collect::<Vec<_>>(),
+        vec![library]
+    );
 }

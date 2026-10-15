@@ -31,6 +31,64 @@ fn operation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<KnowledgeOperation
 }
 
 impl KnowledgeBaseRuntime {
+    /// Queues a durable derived-index rebuild for `library_id`; returns its stable operation identity.
+    /// 为 `library_id` 排队持久派生索引重建；返回稳定操作身份。
+    /// Existing content/history and ready vectors remain authoritative; exhausted vectors require explicit retry.
+    /// 已有内容、历史及就绪向量保持权威；耗尽向量需要显式重试。
+    pub async fn rebuild_index_operation(
+        &self,
+        library_id: &str,
+    ) -> Result<KnowledgeOperationSummary, String> {
+        // Rebuild admission shares the library's sole mutation boundary.
+        // 重建准入共享知识库唯一变更边界。
+        let guard = self.library_mutation_guard(library_id).await?;
+        // The persisted mode determines which derived capabilities are required.
+        // 持久模式决定需要哪些派生能力。
+        let settings = self
+            .require_active_library(library_id)
+            .await?
+            .settings
+            .ok_or("ERR_KNOWLEDGE_SETTINGS_MISSING")?;
+        // Admit one stable job before marking work pending.
+        // 标记工作待处理前接纳一个稳定任务。
+        let operation = self
+            .begin_operation_locked(library_id, "rebuild", None)
+            .await?;
+        // The background worker handles FTS rebuild and missing vector-table recovery.
+        // 后台工作器处理全文重建及缺失向量表恢复。
+        let (_, binding) = self.ensure_library_binding(library_id).await?;
+        local_sql::with_connection_async(
+            &self.host_runtime.local,
+            self.resolve_library_binding(binding)?,
+            move |connection| {
+                let transaction = connection
+                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(|error| error.to_string())?;
+                transaction
+                    .execute(
+                        "UPDATE knowledge_metadata SET value=? WHERE key='index_status';",
+                        [if settings.index_mode.has_fts() {
+                            "building"
+                        } else {
+                            "disabled"
+                        }],
+                    )
+                    .map_err(|error| error.to_string())?;
+                transaction
+                    .execute(
+                        "UPDATE knowledge_metadata SET value='0' WHERE key='vector_worker_paused';",
+                        [],
+                    )
+                    .map_err(|error| error.to_string())?;
+                transaction.commit().map_err(|error| error.to_string())
+            },
+        )
+        .await?;
+        drop(guard);
+        self.wake_knowledge_worker(library_id).await;
+        Ok(operation)
+    }
+
     /// Reads a stable operation ID or latest library operation; returns absence without inventing progress.
     /// 读取稳定操作身份或库最新操作；缺失时不虚构进度。
     pub async fn get_operation(

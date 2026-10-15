@@ -2,6 +2,7 @@
 //! AI 维护知识与显式人工生命周期模型。
 
 use serde::{Deserialize, Serialize};
+pub use vulcan_lancedb_engine::types::LanceDbDistanceMetric as KnowledgeVectorMetric;
 
 /// Maximum UTF-8 bytes in one body.
 /// 单篇正文的最大 UTF-8 字节数。
@@ -47,6 +48,26 @@ pub const MAX_KNOWLEDGE_TITLE_CHARS: usize = 512;
 /// 单次逻辑列表的最大后代层数。
 pub const MAX_KNOWLEDGE_LIST_DEPTH: usize = 3;
 
+/// Maximum Unicode scalars in a folder description or audit note.
+/// 目录说明或审计说明中的最大 Unicode 标量数。
+pub const MAX_KNOWLEDGE_METADATA_CHARS: usize = 2000;
+
+/// Maximum source observations per document image.
+/// 每个文档镜像的来源观测数量上限。
+pub const MAX_KNOWLEDGE_PROVENANCE_ITEMS: usize = 32;
+
+/// Maximum Unicode scalars in one source reference.
+/// 单个来源引用的最大 Unicode 标量数。
+pub const MAX_KNOWLEDGE_REFERENCE_CHARS: usize = 4096;
+
+/// Maximum serialized history item bytes returned by one page.
+/// 单页返回的历史条目序列化字节上限。
+pub const MAX_KNOWLEDGE_HISTORY_BYTES: usize = 2 * 1024 * 1024;
+
+/// Exact number of ASCII hex digits in a SHA-256 digest.
+/// SHA-256 摘要中的精确 ASCII 十六进制位数。
+pub const KNOWLEDGE_SHA256_HEX_CHARS: usize = 64;
+
 /// Automatic attempts before human retry.
 /// 人工重试前的自动尝试次数。
 pub const MAX_KNOWLEDGE_EMBEDDING_ATTEMPTS: u32 = 3;
@@ -74,6 +95,10 @@ pub const KNOWLEDGE_RRF_K: f64 = 60.0;
 /// Default embedding batch bounded by model capabilities.
 /// 受模型能力限制的默认嵌入批量。
 pub const KNOWLEDGE_DEFAULT_EMBEDDING_BATCH_SIZE: u32 = 64;
+
+/// Maximum physical inputs retained in one knowledge embedding batch.
+/// 单个知识嵌入批次保留的物理输入数量上限。
+pub const MAX_KNOWLEDGE_EMBEDDING_BATCH_SIZE: u32 = KNOWLEDGE_DEFAULT_EMBEDDING_BATCH_SIZE;
 
 /// Portable package family.
 /// 可移植套件家族。
@@ -148,9 +173,6 @@ impl KnowledgeRouteBindingKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct KnowledgeRouteReference {
-    /// Authorization and budget owner.
-    /// 授权和预算归属。
-    pub consumer_profile_id: String,
     /// Provider identity.
     /// 供应商身份。
     pub provider_id: String,
@@ -179,6 +201,9 @@ pub struct KnowledgeRouteReference {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct KnowledgeEmbeddingSettings {
+    /// Frozen distance declared by the selected model capability.
+    /// 选定模型能力声明的冻结距离。
+    pub metric: KnowledgeVectorMetric,
     /// Route shared by document and query embeddings.
     /// 文档与查询嵌入共用路由。
     pub route: KnowledgeRouteReference,
@@ -216,12 +241,12 @@ impl KnowledgeLibrarySettings {
         if let Some(embedding) = &self.embedding {
             if embedding.dimensions == 0
                 || embedding.batch_size == 0
+                || embedding.batch_size > MAX_KNOWLEDGE_EMBEDDING_BATCH_SIZE
                 || embedding.model_fingerprint.trim().is_empty()
             {
                 return Err("ERR_KNOWLEDGE_EMBEDDING_INVALID: dimension, batch and fingerprint must be specified".into());
             }
             for value in [
-                &embedding.route.consumer_profile_id,
                 &embedding.route.provider_id,
                 &embedding.route.protocol,
                 &embedding.route.service_entry_id,
@@ -237,6 +262,14 @@ impl KnowledgeLibrarySettings {
         }
         Ok(())
     }
+}
+
+/// Returns the host-owned inference namespace for the exact `library_id`.
+/// 返回精确 `library_id` 的宿主所有推理命名空间。
+/// The result scopes derived space profiles; it never grants a route by itself.
+/// 结果为派生空间配置档划定范围；其自身绝不授予路由。
+pub fn knowledge_consumer_profile_id(library_id: &str) -> String {
+    format!("knowledge_base:{library_id}")
 }
 
 /// Registry projection; invalid libraries expose their reason and deletion only.
@@ -552,6 +585,22 @@ pub struct KnowledgeChangeDetail {
     /// Ordered images.
     /// 有序镜像。
     pub items: Vec<KnowledgeChangeItem>,
+    /// Exclusive next item offset for this immutable change.
+    /// 此不可变变更的排他下一条目偏移。
+    pub next_offset: Option<u64>,
+}
+
+/// Exact side of one immutable history image.
+/// 单个不可变历史镜像的精确侧别。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeChangeSide {
+    /// State immediately before the change.
+    /// 变更紧前状态。
+    Before,
+    /// State immediately after the change.
+    /// 变更紧后状态。
+    After,
 }
 
 /// Exact literal edit checked before committing.
@@ -722,6 +771,9 @@ pub struct KnowledgeIndexIntegritySummary {
 /// 文档批次或查询向量的精确宿主嵌入请求。
 #[derive(Debug, Clone)]
 pub struct KnowledgeEmbeddingRequest {
+    /// Actual physical library owner, independent of portable route fields.
+    /// 实际物理知识库所有者，独立于可移植路由字段。
+    pub library_id: String,
     /// Frozen semantic route and vector space.
     /// 冻结语义路由与向量空间。
     pub embedding: KnowledgeEmbeddingSettings,
@@ -858,6 +910,12 @@ pub struct KnowledgeSearchHit {
     /// Stable current document UUID.
     /// 稳定当前文档 UUID。
     pub document_id: String,
+    /// Exact document revision ranked and projected by this result.
+    /// 此结果排名及投影的精确文档修订。
+    pub revision: u64,
+    /// Exact chunk content hash used to isolate concurrent query generations.
+    /// 用于隔离并发查询代次的精确切块内容哈希。
+    pub content_sha256: String,
     /// Current document path.
     /// 当前文档路径。
     pub path: String,

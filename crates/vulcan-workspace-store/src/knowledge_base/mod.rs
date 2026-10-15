@@ -14,5 +14,6 @@ pub use markdown::{
 pub use models::*;
 pub use runtime::KnowledgeBaseRuntime;
 pub(crate) use runtime::KnowledgeBaseRuntimeSharedState;
+pub use runtime::knowledge_vector_space_id;
 pub use runtime::normalize_knowledge_path;
 pub use schema::KNOWLEDGE_SCHEMA_VERSION;

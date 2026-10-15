@@ -11,6 +11,14 @@ mod content;
 pub fn normalize_knowledge_path(path: &str, allow_root: bool) -> Result<(String, String), String> {
     content::normalize_path(path, allow_root)
 }
+
+/// Returns the exact semantic space for `embedding`, excluding batching and including its frozen route.
+/// 返回 `embedding` 的精确语义空间，排除批量设置并包含冻结路由。
+/// Errors expose serialization failure rather than inventing a replacement fingerprint.
+/// 错误暴露序列化失败，绝不虚构替代指纹。
+pub fn knowledge_vector_space_id(embedding: &KnowledgeEmbeddingSettings) -> Result<String, String> {
+    content::vector_space_id(embedding)
+}
 mod fts;
 mod library;
 mod operations;

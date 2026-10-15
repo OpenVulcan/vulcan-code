@@ -15,13 +15,15 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_set_knowledge_project_binding",
     "service_list_knowledge_project_bindings",
     "service_list_project_knowledge_bindings",
-    "service_list_knowledge_sources",
-    "service_import_knowledge_directory",
-    "service_preview_knowledge_import",
-    "service_preview_knowledge_display",
-    "service_update_knowledge_ignored_files",
-    "service_cancel_knowledge_import",
-    "service_get_knowledge_import_job",
+    "service_set_knowledge_index_mode",
+    "service_get_knowledge_operation",
+    "service_cancel_knowledge_operation",
+    "service_list_knowledge_changes",
+    "service_get_knowledge_change",
+    "service_read_knowledge_change_document",
+    "service_restore_knowledge_library",
+    "service_get_knowledge_embedding_status",
+    "service_retry_knowledge_embeddings",
     "service_rebuild_knowledge_index",
     "service_repair_knowledge_index",
     "service_get_knowledge_index_integrity",
@@ -32,8 +34,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_list_knowledge_library_folders",
     "service_read_knowledge_library_document",
     "service_search_knowledge_library",
-    "service_build_knowledge_display_index",
-    "service_build_knowledge_vector_index",
     "service_export_knowledge_package",
     "service_inspect_knowledge_package",
     "service_import_knowledge_package",
@@ -53,82 +53,92 @@ pub(super) async fn dispatch(
     method: &str,
     params: &Value,
 ) -> Result<ServiceRpcDispatch, WebuiServiceRpcError> {
+    // Closed DTOs reject removed fields; exact method names have no legacy aliases.
+    // 封闭 DTO 拒绝已移除字段；精确方法名不保留旧别名。
     let result = match method {
-        "service_list_knowledge_libraries" => {
-            let project_id = params
-                .get("projectId")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            service_list_knowledge_libraries(state, project_id).await
-        }
         "service_create_knowledge_library" => {
-            service_create_knowledge_library(app, state, rpc_required_param(params, "request")?)
-                .await
+            service_create_knowledge_library(state, rpc_required_param(params, "request")?).await
         }
         "service_set_knowledge_library_settings" => {
-            service_set_knowledge_library_settings(
-                app,
-                state,
-                rpc_required_param(params, "request")?,
-            )
-            .await
+            service_set_knowledge_library_settings(state, rpc_required_param(params, "request")?)
+                .await
         }
         "service_rename_knowledge_library" => {
             service_rename_knowledge_library(state, rpc_required_param(params, "request")?).await
         }
-        "service_delete_knowledge_library" => {
-            service_delete_knowledge_library(app, state, rpc_required_param(params, "libraryId")?)
-                .await
+        "service_set_knowledge_index_mode" => {
+            service_set_knowledge_index_mode(state, rpc_required_param(params, "request")?).await
         }
         "service_set_knowledge_project_binding" => {
             service_set_knowledge_project_binding(state, rpc_required_param(params, "request")?)
                 .await
         }
+        "service_get_knowledge_operation" => {
+            service_get_knowledge_operation(state, rpc_required_param(params, "request")?).await
+        }
+        "service_cancel_knowledge_operation" => {
+            service_cancel_knowledge_operation(state, rpc_required_param(params, "request")?).await
+        }
+        "service_upsert_knowledge_custom_word" => {
+            service_upsert_knowledge_custom_word(state, rpc_required_param(params, "request")?)
+                .await
+        }
+        "service_list_knowledge_library_documents" => {
+            service_list_knowledge_library_documents(state, rpc_required_param(params, "request")?)
+                .await
+        }
+        "service_list_knowledge_library_folders" => {
+            service_list_knowledge_library_folders(state, rpc_required_param(params, "request")?)
+                .await
+        }
+        "service_read_knowledge_library_document" => {
+            service_read_knowledge_library_document(state, rpc_required_param(params, "request")?)
+                .await
+        }
+        "service_search_knowledge_library" => {
+            service_search_knowledge_library(state, rpc_required_param(params, "request")?).await
+        }
+        "service_list_knowledge_changes" => {
+            service_list_knowledge_changes(state, rpc_required_param(params, "request")?).await
+        }
+        "service_get_knowledge_change" => {
+            service_get_knowledge_change(state, rpc_required_param(params, "request")?).await
+        }
+        "service_read_knowledge_change_document" => {
+            service_read_knowledge_change_document(state, rpc_required_param(params, "request")?)
+                .await
+        }
+        "service_restore_knowledge_library" => {
+            service_restore_knowledge_library(state, rpc_required_param(params, "request")?).await
+        }
+        "service_get_knowledge_embedding_status" => {
+            service_get_knowledge_embedding_status(state, rpc_required_param(params, "request")?)
+                .await
+        }
+        "service_retry_knowledge_embeddings" => {
+            service_retry_knowledge_embeddings(state, rpc_required_param(params, "request")?).await
+        }
+        "service_export_knowledge_package" => {
+            service_export_knowledge_package(state, rpc_required_param(params, "request")?).await
+        }
+        "service_inspect_knowledge_package" => {
+            service_inspect_knowledge_package(state, rpc_required_param(params, "request")?).await
+        }
+        "service_import_knowledge_package" => {
+            service_import_knowledge_package(state, rpc_required_param(params, "request")?).await
+        }
+        "service_list_knowledge_documents" => {
+            service_list_knowledge_documents(state, rpc_required_param(params, "request")?).await
+        }
+        "service_read_knowledge_document" => {
+            service_read_knowledge_document(state, rpc_required_param(params, "request")?).await
+        }
+        "service_search_knowledge" => {
+            service_search_knowledge(state, rpc_required_param(params, "request")?).await
+        }
         "service_list_knowledge_project_bindings" => {
             service_list_knowledge_project_bindings(state, rpc_required_param(params, "libraryId")?)
                 .await
-        }
-        "service_list_project_knowledge_bindings" => {
-            service_list_project_knowledge_bindings(state, rpc_required_param(params, "projectId")?)
-                .await
-        }
-        "service_list_knowledge_sources" => {
-            service_list_knowledge_sources(state, rpc_required_param(params, "libraryId")?).await
-        }
-        "service_import_knowledge_directory" => {
-            service_import_knowledge_directory(state, rpc_required_param(params, "request")?).await
-        }
-        "service_preview_knowledge_import" => {
-            service_preview_knowledge_import(
-                state,
-                rpc_required_param(params, "libraryId")?,
-                rpc_required_param(params, "sourceRoot")?,
-                rpc_optional_param(params, "sourceId")?,
-            )
-            .await
-        }
-        "service_preview_knowledge_display" => {
-            service_preview_knowledge_display(state, rpc_required_param(params, "libraryId")?).await
-        }
-        "service_update_knowledge_ignored_files" => {
-            service_update_knowledge_ignored_files(
-                state,
-                rpc_required_param(params, "libraryId")?,
-                rpc_required_param(params, "files")?,
-                rpc_required_param(params, "ignored")?,
-            )
-            .await
-        }
-        "service_cancel_knowledge_import" => {
-            service_cancel_knowledge_import(
-                state,
-                rpc_required_param(params, "libraryId")?,
-                rpc_required_param(params, "jobId")?,
-            )
-            .await
-        }
-        "service_get_knowledge_import_job" => {
-            service_get_knowledge_import_job(state, rpc_required_param(params, "libraryId")?).await
         }
         "service_rebuild_knowledge_index" => {
             service_rebuild_knowledge_index(state, rpc_required_param(params, "libraryId")?).await
@@ -144,8 +154,15 @@ pub(super) async fn dispatch(
             service_list_knowledge_custom_words(state, rpc_required_param(params, "libraryId")?)
                 .await
         }
-        "service_upsert_knowledge_custom_word" => {
-            service_upsert_knowledge_custom_word(state, rpc_required_param(params, "request")?)
+        "service_list_knowledge_libraries" => {
+            service_list_knowledge_libraries(state, rpc_optional_param(params, "projectId")?).await
+        }
+        "service_delete_knowledge_library" => {
+            service_delete_knowledge_library(app, state, rpc_required_param(params, "libraryId")?)
+                .await
+        }
+        "service_list_project_knowledge_bindings" => {
+            service_list_project_knowledge_bindings(state, rpc_required_param(params, "projectId")?)
                 .await
         }
         "service_remove_knowledge_custom_word" => {
@@ -156,69 +173,8 @@ pub(super) async fn dispatch(
             )
             .await
         }
-        "service_list_knowledge_library_documents" => {
-            service_list_knowledge_library_documents(state, rpc_required_param(params, "request")?)
-                .await
-        }
-        "service_list_knowledge_library_folders" => {
-            service_list_knowledge_library_folders(state, rpc_required_param(params, "libraryId")?)
-                .await
-        }
-        "service_read_knowledge_library_document" => {
-            service_read_knowledge_library_document(
-                state,
-                rpc_required_param(params, "libraryId")?,
-                rpc_required_param(params, "documentId")?,
-                rpc_optional_param(params, "corpus")?,
-            )
-            .await
-        }
-        "service_search_knowledge_library" => {
-            service_search_knowledge_library(state, rpc_required_param(params, "request")?).await
-        }
-        "service_build_knowledge_display_index" => {
-            service_build_knowledge_display_index(
-                state,
-                rpc_required_param(params, "libraryId")?,
-                rpc_required_param(params, "confirmation")?,
-            )
-            .await
-        }
-        "service_build_knowledge_vector_index" => {
-            service_build_knowledge_vector_index(state, rpc_required_param(params, "libraryId")?)
-                .await
-        }
-        "service_export_knowledge_package" => {
-            service_export_knowledge_package(state, rpc_required_param(params, "request")?).await
-        }
-        "service_inspect_knowledge_package" => {
-            service_inspect_knowledge_package(state, rpc_required_param(params, "request")?).await
-        }
-        "service_import_knowledge_package" => {
-            service_import_knowledge_package(app, state, rpc_required_param(params, "request")?)
-                .await
-        }
-        "service_browse_knowledge_packages" => service_browse_knowledge_packages(
-            state,
-            params
-                .get("path")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        ),
-        "service_list_knowledge_documents" => {
-            service_list_knowledge_documents(state, rpc_required_param(params, "request")?).await
-        }
-        "service_read_knowledge_document" => {
-            service_read_knowledge_document(
-                state,
-                rpc_required_param(params, "projectId")?,
-                rpc_required_param(params, "libraryId")?,
-                rpc_required_param(params, "documentId")?,
-            )
-            .await
-        }
-        "service_search_knowledge" => {
-            service_search_knowledge(state, rpc_required_param(params, "request")?).await
+        "service_browse_knowledge_packages" => {
+            service_browse_knowledge_packages(state, rpc_optional_param(params, "path")?)
         }
         "service_set_session_knowledge_libraries" => {
             service_set_session_knowledge_libraries(

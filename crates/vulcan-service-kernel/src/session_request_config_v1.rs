@@ -1520,9 +1520,6 @@ mod tests {
             knowledge_libraries: KnowledgeLibrarySelectionConfig {
                 mode: vulcan_session_core::v1::config::KnowledgeLibrarySelectionMode::Explicit,
                 library_ids: vec![String::from("library-a")],
-                retrieval_mode: Some(
-                    vulcan_session_core::v1::config::KnowledgeRetrievalMode::DisplayBm25,
-                ),
             },
             vmm: VmmSessionPolicyConfig {
                 precheck_enabled: Some(true),
@@ -1602,9 +1599,6 @@ mod tests {
         let knowledge = KnowledgeLibrarySelectionConfig {
             mode: vulcan_session_core::v1::config::KnowledgeLibrarySelectionMode::Explicit,
             library_ids: vec![String::from("library-a"), String::from("library-b")],
-            retrieval_mode: Some(
-                vulcan_session_core::v1::config::KnowledgeRetrievalMode::DisplayHybrid,
-            ),
         };
 
         assert!(

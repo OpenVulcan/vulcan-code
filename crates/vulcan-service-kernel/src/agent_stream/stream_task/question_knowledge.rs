@@ -3,7 +3,6 @@
 
 use super::*;
 use vulcan_session_core::v1::child_execution::ChildKnowledgeAccess;
-use vulcan_session_core::v1::config::KnowledgeRetrievalMode;
 
 /// Resolves `captured` access under the canonical `project_id` using current service authorization.
 /// 使用当前服务授权，在规范 `project_id` 下解析 `captured` 访问范围。
@@ -34,9 +33,13 @@ pub(crate) async fn resolve_child_question_knowledge(
                 .into_iter()
                 .collect();
             access = intersect_child_knowledge(project_id, captured, &authorized)?;
+            access.search_enabled = crate::knowledge_base_services::knowledge_search_enabled(
+                &runtime,
+                &access.library_ids,
+            )
+            .await?;
         }
     }
-    access.knowledge_search_handler = Some(build_knowledge_search_handler(state.clone()));
     Ok(access)
 }
 
@@ -54,8 +57,8 @@ fn intersect_child_knowledge(
             "Captured child knowledge access belongs to a different project.",
         ));
     }
-    // An empty explicit result suppresses workspace defaults in the generic stream launcher.
-    // 显式空结果阻止通用流启动器应用工作区默认值。
+    // An empty explicit result suppresses project defaults; search is admitted separately from current modes.
+    // 显式空结果阻止项目默认值；检索从当前模式另行准入。
     let library_ids = captured
         .map(|ceiling| {
             ceiling
@@ -65,23 +68,10 @@ fn intersect_child_knowledge(
                 .collect()
         })
         .unwrap_or_default();
-    // Preserve the exact policy, including an unspecified mode.
-    // 保留精确策略，包括未指定模式。
-    let retrieval_mode = captured
-        .and_then(|ceiling| ceiling.retrieval_mode.as_ref())
-        .map(|mode| {
-            match mode {
-                KnowledgeRetrievalMode::RawBm25 => "raw_bm25",
-                KnowledgeRetrievalMode::DisplayBm25 => "display_bm25",
-                KnowledgeRetrievalMode::DisplayHybrid => "display_hybrid",
-            }
-            .to_owned()
-        });
     Ok(ExecutionKnowledgeAccessContext {
         project_id: project_id.to_owned(),
         library_ids,
-        retrieval_mode,
-        knowledge_search_handler: None,
+        search_enabled: false,
     })
 }
 
@@ -98,16 +88,15 @@ mod tests {
         let captured = ChildKnowledgeAccess {
             project_id: "project".into(),
             library_ids: BTreeSet::from(["retained".into(), "revoked".into()]),
-            retrieval_mode: Some(KnowledgeRetrievalMode::DisplayHybrid),
         };
         // A newly granted library belongs only to current defaults, not the captured child.
         // 新授权知识库仅属于当前默认范围，不属于捕获的子代理。
         let authorized = BTreeSet::from(["retained".into(), "new".into()]);
-        // The intersection retains original policy and one still-authorized library.
-        // 交集保留原策略及仍然授权的一个知识库。
+        // The intersection retains one original still-authorized library; mode admission remains live.
+        // 交集保留一个原有且仍授权的知识库；模式准入保持实时。
         let access = intersect_child_knowledge("project", Some(&captured), &authorized).unwrap();
         assert_eq!(access.library_ids, vec!["retained"]);
-        assert_eq!(access.retrieval_mode.as_deref(), Some("display_hybrid"));
+        assert!(!access.search_enabled);
         assert!(intersect_child_knowledge("other", Some(&captured), &authorized).is_err());
         assert!(
             intersect_child_knowledge("project", Some(&captured), &BTreeSet::new())

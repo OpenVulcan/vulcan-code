@@ -30,10 +30,6 @@ use crate::{
     configured_inference::VMM_CONSUMER_PROFILE_ID,
 };
 
-/// Stable LLM purpose key used by the library-owned configured-inference profile.
-/// 资料库独立配置推理档案使用的稳定 LLM 用途键。
-pub(crate) const KNOWLEDGE_CURATION_PURPOSE_ID: &str = "knowledge_display_curation";
-
 /// Browser-facing diagnostic for one persisted inference-profile route.
 /// 面向浏览器的一条持久化推理配置档路由诊断。
 #[derive(Debug, Clone, Serialize)]
@@ -1089,13 +1085,13 @@ pub(super) fn build_internal_inference_candidates(
 /// 参数
 /// `state` owns the current settings snapshot; provider/service/model ids and `binding` identify the exact registered route.
 /// `state` 持有当前设置快照；供应商、服务、模型标识及 `binding` 指定精确已注册路由。
-/// `connection_id` optionally narrows the credential; `operation` and `usage_scope` identify the required consumer capability.
-/// `connection_id` 可选地收窄凭据；`operation` 与 `usage_scope` 指定所需消费者能力。
+/// `connection_id` must identify the exact credential; `operation` and `usage_scope` require background embedding.
+/// `connection_id` 必须标识精确凭据；`operation` 与 `usage_scope` 要求后台嵌入。
 ///
 /// # Returns
 /// 返回值
-/// Returns one enabled exact candidate, or an explicit missing/disabled-route error.
-/// 返回一个已启用精确候选，或显式缺失/禁用路由错误。
+/// Returns a consistent execution snapshot and embedding capabilities, or an explicit admission error.
+/// 返回一致执行快照及嵌入能力，或明确准入错误。
 // The candidate binds exact provider, entry, connection and model identities to operation and usage scope.
 // 候选项将精确供应商、入口、连接及模型身份绑定到操作和用途。
 #[expect(
@@ -1111,48 +1107,65 @@ pub(crate) fn resolve_knowledge_internal_inference_candidate(
     binding: &InferenceRouteBinding,
     operation: AiOperation,
     usage_scope: InferenceUsageScope,
-) -> Result<PublicAiInternalInferenceCandidate, String> {
-    let (runtime, configuration) = public_ai_runtime_and_configuration(state)?;
-    let providers = runtime.effective_providers(&configuration)?;
-    let catalogs = runtime.catalog_snapshot()?;
-    let candidate = build_internal_inference_candidates(&configuration, &providers, &catalogs)?
-        .into_iter()
-        .find(|candidate| {
-            candidate.route.provider_id == provider_id
-                && candidate.route.service_entry_id == service_entry_id
-                && connection_id.is_none_or(|value| candidate.route.connection_id == value)
-                && candidate.route.model_id == model_id
-                && candidate.route.binding == *binding
-                && candidate.route.operation == operation
-                && candidate.route.usage_scope == usage_scope
-        })
-        .ok_or_else(|| {
-            format!(
-                "No executable official knowledge model route found: provider={provider_id}, service={service_entry_id}, model={model_id}, operation={}",
-                operation.as_str()
-            )
-        })?;
-    if !candidate.enabled {
-        return Err(format!(
-            "The knowledge model is not enabled for internal use in the model list: provider={provider_id}, model={model_id}"
-        ));
+) -> Result<
+    (
+        vulcan_ai_contract::ExecutionRouteSnapshot,
+        vulcan_ai_contract::EmbeddingCapabilities,
+    ),
+    String,
+> {
+    if operation != AiOperation::EmbeddingCreate
+        || usage_scope != InferenceUsageScope::InternalBackground
+    {
+        return Err("ERR_KNOWLEDGE_EMBEDDING_ROUTE_REQUIRED".into());
     }
-    Ok(candidate)
+    // Resolve the exact route once through the same admission used by actual inference.
+    // 通过真实推理使用的相同准入解析一次精确路由。
+    let (runtime, configuration) = public_ai_runtime_and_configuration(state)?;
+    // Missing connection identity is never filled from a system default.
+    // 缺失连接身份绝不从系统默认值填充。
+    let route = InferenceRouteConfiguration {
+        provider_id: provider_id.into(),
+        service_entry_id: service_entry_id.into(),
+        connection_id: connection_id
+            .ok_or("ERR_KNOWLEDGE_CONNECTION_REQUIRED")?
+            .into(),
+        model_id: model_id.into(),
+        binding: binding.clone(),
+        operation,
+        usage_scope,
+    };
+    // One resolved selection owns both physical execution and capability facts.
+    // 同一已解析选择同时拥有真实执行及能力事实。
+    let selection = runtime.resolve_internal_inference_selection(&configuration, &route)?;
+    // Only a declared embedding contract can create a persistent vector space.
+    // 只有声明的嵌入契约才能创建持久向量空间。
+    let capabilities = selection
+        .model
+        .capabilities
+        .embedding
+        .clone()
+        .ok_or("ERR_KNOWLEDGE_EMBEDDING_CAPABILITY_MISSING")?;
+    Ok((
+        crate::configured_inference::configured_route_snapshot(&selection, &route),
+        capabilities,
+    ))
 }
 
-/// Synchronizes one library-owned inference profile with its validated model routes.
-/// 将一个资料库独立拥有的推理配置档同步为经过校验的模型路由。
+/// Creates an immutable library-space embedding profile, or verifies that its exact policy already exists.
+/// 创建不可变库空间嵌入配置档，或验证其精确策略已存在。
 ///
-/// The profile is intentionally keyed by the immutable library identifier so two libraries
-/// can select different models without overwriting one another or the VMM profile.
-/// 配置档故意使用不可变资料库标识作为键，确保不同资料库可以选择不同模型，且不会覆盖 VMM 配置档。
+/// The caller derives the profile ID from the physical library and frozen space fingerprint.
+/// 调用方从物理知识库及冻结空间指纹派生配置档身份。
 ///
 /// # Parameters
 /// 参数
 /// `app` publishes changes; `state` owns runtime/configuration; `consumer_profile_id` identifies the independent library profile.
 /// `app` 发布变更；`state` 持有运行时与配置；`consumer_profile_id` 标识独立资料库配置档。
-/// `curation_route` and `embedding_route` replace their slots or clear them when absent.
-/// `curation_route` 与 `embedding_route` 替换对应槽位，缺失时清除该槽位。
+/// `library_id` is the live registry owner, checked inside the configuration transaction.
+/// `library_id` 为实时注册所有者，在配置事务内检查。
+/// `embedding_route` is the exact background embedding route and `dimensions` freezes its output size.
+/// `embedding_route` 为精确后台嵌入路由，`dimensions` 冻结其输出大小。
 ///
 /// # Returns
 /// 返回值
@@ -1161,63 +1174,71 @@ pub(crate) fn resolve_knowledge_internal_inference_candidate(
 pub(crate) async fn sync_knowledge_inference_profile(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
+    library_id: &str,
     consumer_profile_id: &str,
-    curation_route: Option<InferenceRouteConfiguration>,
-    embedding_route: Option<InferenceRouteConfiguration>,
+    embedding_route: InferenceRouteConfiguration,
+    dimensions: u32,
 ) -> Result<(), String> {
     validate_non_empty("consumerProfileId", consumer_profile_id)?;
-    // transaction serializes route validation through profile and Workbench publication.
-    // transaction 把路由校验串行化到配置档与工作台发布完成。
-    let transaction = begin_public_ai_configuration_transaction().await;
-    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    for route in [curation_route.as_ref(), embedding_route.as_ref()]
-        .into_iter()
-        .flatten()
+    if embedding_route.operation != AiOperation::EmbeddingCreate
+        || embedding_route.usage_scope != InferenceUsageScope::InternalBackground
+        || dimensions == 0
     {
-        if !matches!(
-            route.operation,
-            AiOperation::ConversationRespond | AiOperation::EmbeddingCreate
-        ) {
-            return Err(format!(
-                "The knowledge library profile does not support internal operation `{}`",
-                route.operation.as_str()
-            ));
-        }
-        let selection =
-            runtime.resolve_internal_inference_selection(&current_configuration, route)?;
-        validate_vmm_llm_reasoning_policy(
-            consumer_profile_id,
-            None,
-            route.operation,
-            &selection.model.capabilities,
-            None,
-        )?;
-        validate_vmm_llm_structured_output_policy(
-            consumer_profile_id,
-            route.operation,
-            route,
-            &selection.model.capabilities,
-        )?;
+        return Err("ERR_KNOWLEDGE_EMBEDDING_PROFILE_INVALID".into());
     }
-    let (_configuration, ()) = mutate_public_ai_configuration_and_publish_in_transaction(
+    // One transaction serializes immutable-profile admission with configuration publication.
+    // 一笔事务将不可变配置档准入与配置发布串行化。
+    let transaction = begin_public_ai_configuration_transaction().await;
+    // Deletion removes profiles under this same configuration transaction after removing the registry row.
+    // 删除在移除注册行后通过相同配置事务移除配置档。
+    // Recheck ownership here so a delayed worker cannot recreate profiles after that cleanup.
+    // 在此复核归属，防止延迟工作器在清理之后重建配置档。
+    let knowledge = state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .knowledge_runtime
+        .clone()
+        .ok_or("ERR_KNOWLEDGE_RUNTIME_UNAVAILABLE")?;
+    // Current registry lifecycle is the sole admission authority for derived profile persistence.
+    // 当前注册生命周期为派生配置档持久化唯一准入权威。
+    let library = knowledge.get_library(library_id).await?;
+    if library.lifecycle_state != "active" {
+        return Err("ERR_KNOWLEDGE_LIBRARY_INACTIVE".into());
+    }
+    if !consumer_profile_id.starts_with(&format!(
+        "{}:",
+        vulcan_workspace_store::knowledge_base::knowledge_consumer_profile_id(library_id)
+    )) {
+        return Err("ERR_KNOWLEDGE_PROFILE_OWNER_MISMATCH".into());
+    }
+    // Current configured inference remains the route/capability authority.
+    // 当前配置推理仍为路由及能力权威。
+    let (runtime, current) = public_ai_runtime_and_configuration(&state)?;
+    runtime.resolve_internal_inference_selection(&current, &embedding_route)?;
+    // A space owns one exact route and dimension; old spaces never inherit a newer route.
+    // 一个空间拥有一条精确路由及维度；旧空间绝不继承更新路由。
+    let profile = InferenceProfile {
+        embedding: Some(embedding_route),
+        embedding_dimensions: Some(dimensions),
+        ..Default::default()
+    };
+    if let Some(existing) = current.inference_profiles.get(consumer_profile_id) {
+        return if existing == &profile {
+            Ok(())
+        } else {
+            Err("ERR_KNOWLEDGE_FROZEN_PROFILE_CONFLICT".into())
+        };
+    }
+    mutate_public_ai_configuration_and_publish_in_transaction(
         &app,
         &state,
         runtime.as_ref(),
-        &current_configuration,
-        "Failed to save the knowledge library dedicated model configuration",
+        &current,
+        "Failed to save the knowledge embedding space profile",
         |configuration| {
-            let profile = configuration
+            configuration
                 .inference_profiles
-                .entry(consumer_profile_id.to_string())
-                .or_default();
-            if let Some(route) = curation_route.clone() {
-                profile
-                    .llm_routes
-                    .insert(String::from(KNOWLEDGE_CURATION_PURPOSE_ID), route);
-            } else {
-                profile.llm_routes.remove(KNOWLEDGE_CURATION_PURPOSE_ID);
-            }
-            profile.embedding = embedding_route.clone();
+                .insert(consumer_profile_id.to_string(), profile);
             Ok(())
         },
         |_configuration| Ok(()),
@@ -1226,42 +1247,60 @@ pub(crate) async fn sync_knowledge_inference_profile(
     Ok(())
 }
 
-/// Removes one library-owned inference profile after the library is deleted.
-/// 删除资料库后移除该资料库独立拥有的推理配置档。
+/// Removes all library-owned space profiles after the library is deleted.
+/// 删除资料库后移除该资料库拥有的全部空间配置档。
 ///
 /// # Parameters
 /// 参数
-/// `app` publishes changes; `state` owns runtime/configuration; `consumer_profile_id` identifies the exact profile to remove.
-/// `app` 发布变更；`state` 持有运行时与配置；`consumer_profile_id` 标识待移除的精确配置档。
+/// `app` publishes changes; `state` owns runtime/configuration; `consumer_namespace` identifies the validated library namespace.
+/// `app` 发布变更；`state` 持有运行时及配置；`consumer_namespace` 标识已验证库命名空间。
 ///
 /// # Returns
 /// 返回值
-/// Returns success after removing only that profile and publishing, or an explicit failure.
-/// 只移除该配置档并发布后返回成功，或返回显式失败。
-pub(crate) async fn remove_knowledge_inference_profile(
+/// Returns removed exact profile IDs after publication, or an explicit failure.
+/// 发布后返回已移除精确配置档身份，或明确失败。
+pub(crate) async fn remove_knowledge_inference_profiles(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    consumer_profile_id: &str,
-) -> Result<(), String> {
-    validate_non_empty("consumerProfileId", consumer_profile_id)?;
-    // transaction serializes profile removal through Workbench publication.
-    // transaction 把配置档删除串行化到工作台发布完成。
+    consumer_namespace: &str,
+) -> Result<Vec<String>, String> {
+    validate_non_empty("consumerNamespace", consumer_namespace)?;
+    // The caller derives this exact namespace from a validated physical library UUID.
+    // 调用方从已验证物理知识库 UUID 派生此精确命名空间。
     let transaction = begin_public_ai_configuration_transaction().await;
-    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    let (_configuration, ()) = mutate_public_ai_configuration_and_publish_in_transaction(
+    // Removal touches only profiles owned by this library and its immutable spaces.
+    // 移除仅涉及此知识库及其不可变空间拥有的配置档。
+    let (runtime, current) = public_ai_runtime_and_configuration(&state)?;
+    // Colon boundaries prevent a prefix-like sibling library from being removed.
+    // 冒号边界防止移除仅前缀相似的同级知识库。
+    let prefix = format!("{consumer_namespace}:");
+    // Exact IDs also support deleting an unsupported library's obsolete dedicated profile.
+    // 精确身份同时支持删除不受支持库的废弃独立配置档。
+    let removed: Vec<_> = current
+        .inference_profiles
+        .keys()
+        .filter(|id| id.as_str() == consumer_namespace || id.starts_with(&prefix))
+        .cloned()
+        .collect();
+    if removed.is_empty() {
+        return Ok(removed);
+    }
+    mutate_public_ai_configuration_and_publish_in_transaction(
         &app,
         &state,
         runtime.as_ref(),
-        &current_configuration,
-        "Failed to delete the knowledge library dedicated model configuration",
+        &current,
+        "Failed to remove the knowledge library inference profiles",
         |configuration| {
-            configuration.inference_profiles.remove(consumer_profile_id);
+            for id in &removed {
+                configuration.inference_profiles.remove(id);
+            }
             Ok(())
         },
         |_configuration| Ok(()),
     )?;
     drop(transaction);
-    Ok(())
+    Ok(removed)
 }
 
 #[cfg(test)]

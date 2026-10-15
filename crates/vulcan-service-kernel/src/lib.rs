@@ -30,7 +30,7 @@ use vulcan_agent_runtime::conversation_protocol::SessionConversationState;
 use vulcan_agent_runtime::conversation_protocol::conversation_state_from_session_messages;
 use vulcan_agent_runtime::{
     ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
-    ExecutionRunReport, ExecutionStreamEvent, KnowledgeSearchHandler,
+    ExecutionRunReport, ExecutionStreamEvent,
     TransientReasoningStatus as RuntimeTransientReasoningStatus,
     TransientReasoningStatusKind as RuntimeTransientReasoningStatusKind,
     agent_profile::AgentProfileCatalog,

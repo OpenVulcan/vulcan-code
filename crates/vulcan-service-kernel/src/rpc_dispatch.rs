@@ -273,8 +273,10 @@ mod tests {
         assert!(methods.contains("service_delete_archived_conversations"));
         assert!(methods.contains("service_create_knowledge_library"));
         assert!(methods.contains("service_set_knowledge_library_settings"));
-        assert!(methods.contains("service_list_knowledge_sources"));
-        assert!(methods.contains("service_import_knowledge_directory"));
+        assert!(methods.contains("service_list_knowledge_changes"));
+        assert!(methods.contains("service_restore_knowledge_library"));
+        assert!(!methods.contains("service_list_knowledge_sources"));
+        assert!(!methods.contains("service_import_knowledge_directory"));
         assert!(methods.contains("service_search_knowledge_library"));
         assert!(methods.contains("service_search_knowledge"));
         assert!(methods.contains("service_set_session_knowledge_libraries"));

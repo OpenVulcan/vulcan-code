@@ -16,8 +16,7 @@ use vulcan_service_api::{
 };
 use vulcan_session_core::v1::config::{
     ActiveRequestConfig, KnowledgeLibrarySelectionConfig as KnowledgeLibrarySelectionConfigV1,
-    KnowledgeLibrarySelectionMode as KnowledgeLibrarySelectionModeV1,
-    KnowledgeRetrievalMode as KnowledgeRetrievalModeV1, VmmSessionPolicyConfig,
+    KnowledgeLibrarySelectionMode as KnowledgeLibrarySelectionModeV1, VmmSessionPolicyConfig,
 };
 use vulcan_session_core::v1::document::{
     ContinuationTerminalProjection, SessionSelectionBundleInput,
@@ -168,10 +167,6 @@ pub(super) struct SubmissionKnowledgeSelection {
     /// Exact authorized library identifiers.
     /// 精确且已授权的知识库标识列表。
     library_ids: Vec<String>,
-    /// Optional explicit retrieval policy for knowledge tools.
-    /// 知识库工具可选的显式检索策略。
-    #[serde(default)]
-    retrieval_mode: Option<String>,
 }
 
 /// Captures one initial user goal created before the first prompt is submitted.
@@ -463,28 +458,13 @@ async fn apply_submission_session_settings(
                 "Knowledge libraries not authorized for the current project: {denied}"
             ));
         }
-        let retrieval_mode = match selection.retrieval_mode.as_deref() {
-            None => None,
-            Some("raw_bm25") => Some(KnowledgeRetrievalModeV1::RawBm25),
-            Some("display_bm25") => Some(KnowledgeRetrievalModeV1::DisplayBm25),
-            Some("display_hybrid") => Some(KnowledgeRetrievalModeV1::DisplayHybrid),
-            Some(other) => {
-                return Err(format!(
-                    "Unknown knowledge library retrieval strategy: {other}"
-                ));
-            }
-        };
         let mut library_ids = selection.library_ids.clone();
         library_ids.sort();
         library_ids.dedup();
         if mode == KnowledgeLibrarySelectionModeV1::Inherit {
             library_ids.clear();
         }
-        KnowledgeLibrarySelectionConfigV1 {
-            mode,
-            library_ids,
-            retrieval_mode,
-        }
+        KnowledgeLibrarySelectionConfigV1 { mode, library_ids }
     } else {
         KnowledgeLibrarySelectionConfigV1::default()
     };
@@ -609,14 +589,6 @@ async fn apply_submission_session_settings(
                 }
             },
             library_ids: selection.knowledge_libraries.library_ids.clone(),
-            retrieval_mode: selection
-                .knowledge_libraries
-                .retrieval_mode
-                .map(|mode| match mode {
-                    KnowledgeRetrievalModeV1::RawBm25 => String::from("raw_bm25"),
-                    KnowledgeRetrievalModeV1::DisplayBm25 => String::from("display_bm25"),
-                    KnowledgeRetrievalModeV1::DisplayHybrid => String::from("display_hybrid"),
-                }),
         };
     }
     if allow_output_style_activation {

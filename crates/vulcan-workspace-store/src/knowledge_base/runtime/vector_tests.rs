@@ -9,6 +9,155 @@ use std::time::Duration;
 /// 有限本地工作器截止时间；不使用付费推理。
 const WORKER_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Verifies multi-query fusion never merges reused chunk IDs across document revisions.
+/// 验证多查询融合绝不跨文档修订合并复用切块身份。
+/// Uses gated fake inference over real stores; takes no inputs and returns no value.
+/// 在真实存储上使用闸门假推理；无输入及返回值。
+#[tokio::test]
+async fn multi_query_fusion_revalidates_changed_document_generations() {
+    // Start with a fully indexed document whose summary and body will both change.
+    // 从完整索引文档开始，其摘要及正文均将变化。
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    // Full embedding makes both chunk kinds observable to both query generations.
+    // 完整嵌入使两类切块均对两个查询代次可见。
+    let mut input = create("document.md", "old body");
+    input.embed = Some(KnowledgeEmbedPolicy::Full);
+    // Preserve the exact original revision for the concurrent update.
+    // 为并发更新保留精确原始修订。
+    let original = runtime
+        .write_content(&library, "project", input, ai())
+        .await
+        .unwrap()
+        .documents
+        .into_iter()
+        .next()
+        .unwrap();
+    runtime
+        .set_embedding_executor(fake_executor(Arc::new(AtomicUsize::new(0))))
+        .await
+        .unwrap();
+    runtime
+        .set_index_mode(
+            &library,
+            vector_settings(KnowledgeIndexMode::Vector, "fusion"),
+        )
+        .await
+        .unwrap();
+    settled(&runtime, &library).await;
+    // Signal only when the first query has already been merged and the second query begins.
+    // 仅在首个查询已融合且第二查询开始时发信号。
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    // Keep the second query in inference while content commits and vectors refresh.
+    // 内容提交及向量刷新期间将第二查询保持在推理中。
+    let release = Arc::new(tokio::sync::Notify::new());
+    // The closure captures independent gate references for each finite call.
+    // 闭包为每次有限调用捕获独立闸门引用。
+    let arrived_call = arrived.clone();
+    // Query and document workers share the executor but only the named query is blocked.
+    // 查询及文档工作器共享执行器，但仅指定查询被阻塞。
+    let release_call = release.clone();
+    runtime
+        .set_embedding_executor(Arc::new(move |request| {
+            // Every future owns its gate clones.
+            // 每个 future 拥有其闸门克隆。
+            let arrived = arrived_call.clone();
+            // Document batches must remain free to finish during the query pause.
+            // 查询暂停期间文档批次必须保持可完成。
+            let release = release_call.clone();
+            Box::pin(async move {
+                if request.is_query && request.inputs.iter().any(|input| input == "second") {
+                    arrived.notify_one();
+                    release.notified().await;
+                }
+                Ok(fake_vectors(&request))
+            })
+        }))
+        .await
+        .unwrap();
+    // Spawn the full public multi-query path, not an internal fusion reproduction.
+    // 启动完整公开多查询链路，而非内部融合复现。
+    let search_runtime = runtime.clone();
+    // The owned selector fixes the physical library throughout the request.
+    // 自有选择器在请求期间固定物理库。
+    let search_library = library.clone();
+    // The task returns after final current-generation validation.
+    // 任务在最终当前代次验证后返回。
+    let search = tokio::spawn(async move {
+        search_runtime
+            .search(
+                &[search_library],
+                &["first".into(), "second".into(), "third".into()],
+                10,
+            )
+            .await
+    });
+    tokio::time::timeout(WORKER_TIMEOUT, arrived.notified())
+        .await
+        .unwrap();
+    // One update replaces both ranked texts while retaining document/chunk identities.
+    // 一次更新替换两类已排名文本，同时保留文档及切块身份。
+    let changed = runtime
+        .write_content(
+            &library,
+            "project",
+            KnowledgeWriteRequest {
+                action: "update".into(),
+                document_id: Some(original.id),
+                expected_revision: Some(original.revision),
+                body: Some("new body".into()),
+                summary: Some("new summary".into()),
+                ..Default::default()
+            },
+            ai(),
+        )
+        .await
+        .unwrap()
+        .documents
+        .into_iter()
+        .next()
+        .unwrap();
+    // Wait for ready hashes, not worker exit: publication intentionally waits for this active query lease.
+    // 等待哈希就绪，而非工作器退出：发布按设计等待此活动查询租约。
+    tokio::time::timeout(WORKER_TIMEOUT, async {
+        loop {
+            if runtime
+                .embedding_status(&library, 1, 0)
+                .await
+                .unwrap()
+                .pending
+                == 0
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    release.notify_one();
+    // The old generation cannot consume the new generation's valid rank or retain stale text.
+    // 旧代次不能消费新代次合法排名，也不能保留过时文本。
+    let result = tokio::time::timeout(WORKER_TIMEOUT, search)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(result.failures.is_empty(), "{:?}", result.failures);
+    assert!(!result.hits.is_empty());
+    assert!(
+        result
+            .hits
+            .iter()
+            .all(|hit| hit.revision == changed.revision && !hit.content.contains("old body"))
+    );
+    assert!(
+        result
+            .hits
+            .iter()
+            .all(|hit| hit.score <= 1.0 / (KNOWLEDGE_RRF_K + 1.0))
+    );
+}
+
 /// Unchanged ingest reports an in-flight desired-space backlog without appending history.
 /// 无变化搬运报告在途期望空间积压，同时不追加历史。
 #[tokio::test]
@@ -76,8 +225,8 @@ pub(super) fn vector_settings(mode: KnowledgeIndexMode, name: &str) -> Knowledge
     KnowledgeLibrarySettings {
         index_mode: mode,
         embedding: mode.has_vectors().then(|| KnowledgeEmbeddingSettings {
+            metric: KnowledgeVectorMetric::Euclidean,
             route: KnowledgeRouteReference {
-                consumer_profile_id: "fixture".into(),
                 provider_id: "fixture".into(),
                 protocol: "fixture".into(),
                 binding_kind: KnowledgeRouteBindingKind::Protocol,

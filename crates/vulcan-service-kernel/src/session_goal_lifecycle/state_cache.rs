@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 use vulcan_session_core::v1::config::{
-    GoalState, KnowledgeLibrarySelectionConfig, KnowledgeLibrarySelectionMode,
-    KnowledgeRetrievalMode, QueuedInput, VmmSessionPolicyConfig,
+    GoalState, KnowledgeLibrarySelectionConfig, KnowledgeLibrarySelectionMode, QueuedInput,
+    VmmSessionPolicyConfig,
 };
 use vulcan_session_core::v1::document::SessionDocument;
 use vulcan_session_core::v1::ids::{ResourceId, Seq, TurnId};
@@ -203,14 +203,6 @@ fn apply_session_v1_runtime_projection(
             }
         },
         library_ids: projection.knowledge_libraries.library_ids.clone(),
-        retrieval_mode: projection
-            .knowledge_libraries
-            .retrieval_mode
-            .map(|mode| match mode {
-                KnowledgeRetrievalMode::RawBm25 => String::from("raw_bm25"),
-                KnowledgeRetrievalMode::DisplayBm25 => String::from("display_bm25"),
-                KnowledgeRetrievalMode::DisplayHybrid => String::from("display_hybrid"),
-            }),
     };
     runtime_state.vmm.precheck_enabled = projection.vmm.precheck_enabled;
     runtime_state.vmm.memory_writeback_enabled = projection.vmm.memory_writeback_enabled;
@@ -1005,7 +997,6 @@ mod tests {
                     KnowledgeLibrarySelectionConfig {
                         mode: KnowledgeLibrarySelectionMode::Explicit,
                         library_ids: vec![String::from("library-a")],
-                        retrieval_mode: Some(KnowledgeRetrievalMode::DisplayHybrid),
                     },
                     7,
                 )
@@ -1107,13 +1098,6 @@ mod tests {
         assert_eq!(
             runtime_state.knowledge_library_selection.library_ids,
             vec![String::from("library-a")]
-        );
-        assert_eq!(
-            runtime_state
-                .knowledge_library_selection
-                .retrieval_mode
-                .as_deref(),
-            Some("display_hybrid")
         );
         assert_eq!(runtime_state.vmm.precheck_enabled, Some(false));
         assert_eq!(runtime_state.vmm.memory_writeback_enabled, Some(true));

@@ -137,12 +137,6 @@ pub(super) use custom_providers::{
 };
 // Preserve internal-inference request paths when dispatch infers their contracts.
 // 分发层推导契约时保留内部推理请求路径。
-pub(super) use inference_settings::{
-    KNOWLEDGE_CURATION_PURPOSE_ID, remove_knowledge_inference_profile,
-    resolve_knowledge_internal_inference_candidate, service_save_public_ai_inference_route,
-    service_save_public_ai_internal_model_enabled, service_save_public_ai_internal_model_overrides,
-    sync_knowledge_inference_profile,
-};
 #[expect(
     unused_imports,
     reason = "Preserve the original internal-inference request type paths."
@@ -151,6 +145,11 @@ pub(super) use inference_settings::{
     PublicAiInferenceRouteDiagnostic, PublicAiInferenceRouteSaveRequest,
     PublicAiInternalInferenceCandidate, PublicAiInternalModelEnabledSaveRequest,
     PublicAiInternalModelOverridesSaveRequest,
+};
+pub(super) use inference_settings::{
+    remove_knowledge_inference_profiles, resolve_knowledge_internal_inference_candidate,
+    service_save_public_ai_inference_route, service_save_public_ai_internal_model_enabled,
+    service_save_public_ai_internal_model_overrides, sync_knowledge_inference_profile,
 };
 pub(super) use inference_testing::service_test_public_ai_inference_route;
 // Preserve the original crate-visible RPC type paths even when dispatch infers their types.

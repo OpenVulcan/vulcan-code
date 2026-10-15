@@ -555,19 +555,6 @@ fn run_service_bootstrap(
     let knowledge_runtime = vulcan_workspace_store::knowledge_base::KnowledgeBaseRuntime::new(
         controller_runtime.clone(),
     );
-    // knowledge_recovery_started_at measures only exact persisted interrupted-job recovery.
-    // knowledge_recovery_started_at 仅测量精确的持久化中断任务恢复。
-    let knowledge_recovery_started_at = start_bootstrap_stage("knowledge_job_recovery");
-    bootstrap_step(
-        runtime.block_on(knowledge_runtime.recover_interrupted_jobs()),
-        "vldb",
-        "VLDB",
-    )?;
-    trace_bootstrap_stage(
-        "knowledge_job_recovery",
-        knowledge_recovery_started_at,
-        "result=ready",
-    );
 
     update_startup(
         state,
@@ -1898,6 +1885,22 @@ fn run_service_bootstrap(
     // Initial configuration publication is complete; later navigation acquires its own scoped guard.
     // 首次配置发布已完成；后续导航获取自己的作用域守卫。
     drop(selected_model_projection);
+    // Recovery must follow retained AI-port publication and executor installation.
+    // 恢复必须在保留 AI 端口发布及执行器安装之后。
+    let knowledge_recovery_started_at = start_bootstrap_stage("knowledge_job_recovery");
+    bootstrap_step(
+        runtime.block_on(crate::knowledge_base_services::start_knowledge_workers(
+            state,
+            event_emitter,
+        )),
+        "vldb",
+        "VLDB",
+    )?;
+    trace_bootstrap_stage(
+        "knowledge_job_recovery",
+        knowledge_recovery_started_at,
+        "result=ready",
+    );
     trace_bootstrap_stage(
         "initial_workbench_projection",
         initial_projection_started_at,

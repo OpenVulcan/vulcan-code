@@ -7,6 +7,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use unicode_normalization::UnicodeNormalization;
 use vulcan_sqlite_engine::{fts::ensure_fts_index, tokenizer::TokenizerMode};
 
+mod history_read;
 mod package_content;
 pub(super) use package_content::{
     PackageExportContent, ValidatedPackageContent, prepare_package_content,
@@ -183,11 +184,18 @@ fn validate_document(document: &KnowledgeDocumentSummary, body: &str) -> Result<
     {
         return Err("ERR_KNOWLEDGE_KEYWORDS_INVALID".into());
     }
-    if document
-        .provenance
-        .iter()
-        .any(|p| !matches!(p.kind.as_str(), "file" | "url" | "session") || p.reference.is_empty())
-    {
+    if document.provenance.len() > MAX_KNOWLEDGE_PROVENANCE_ITEMS {
+        return Err("ERR_KNOWLEDGE_PROVENANCE_LIMIT".into());
+    }
+    if document.provenance.iter().any(|p| {
+        !matches!(p.kind.as_str(), "file" | "url" | "session")
+            || p.reference.is_empty()
+            || p.reference.chars().count() > MAX_KNOWLEDGE_REFERENCE_CHARS
+            || p.sha256.as_ref().is_some_and(|hash| {
+                hash.len() != KNOWLEDGE_SHA256_HEX_CHARS
+                    || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+    }) {
         return Err("ERR_KNOWLEDGE_PROVENANCE_INVALID".into());
     }
     Ok(())
@@ -196,6 +204,12 @@ fn validate_document(document: &KnowledgeDocumentSummary, body: &str) -> Result<
 /// Validates the complete namespace; returns conflicts between documents and explicit or implicit folders.
 /// 验证完整命名空间；返回文档与显式或隐式目录冲突。
 fn validate_namespace(documents: &Documents, folders: &Folders) -> Result<(), String> {
+    if folders
+        .values()
+        .any(|folder| folder.description.chars().count() > MAX_KNOWLEDGE_METADATA_CHARS)
+    {
+        return Err("ERR_KNOWLEDGE_DESCRIPTION_LIMIT".into());
+    }
     // A document may never occupy an ancestor folder, regardless of case or Unicode spelling.
     // 无论文档大小写和 Unicode 拼写如何，都不得占用祖先目录。
     let mut keys = BTreeSet::new();
@@ -369,6 +383,7 @@ pub(super) fn vector_space_id(embedding: &KnowledgeEmbeddingSettings) -> Result<
             &embedding.route,
             &embedding.model_fingerprint,
             embedding.dimensions,
+            embedding.metric,
         ))?
         .as_bytes(),
     ))
@@ -489,6 +504,9 @@ fn commit_snapshot(
     } = change;
 
     validate_namespace(&after, &after_folders)?;
+    if note.chars().count() > MAX_KNOWLEDGE_METADATA_CHARS {
+        return Err("ERR_KNOWLEDGE_NOTE_LIMIT".into());
+    }
     if !matches!(actor.kind.as_str(), "ai" | "user" | "system") {
         return Err("ERR_KNOWLEDGE_ACTOR_INVALID".into());
     }
@@ -868,49 +886,38 @@ impl KnowledgeBaseRuntime {
         end_line: Option<usize>,
     ) -> Result<KnowledgeDocumentContent, String> {
         self.require_active_library(library_id).await?;
-        // Reject invalid ranges before loading any body.
-        // 加载正文前拒绝非法范围。
-        let start = start_line.unwrap_or(1);
-        // The default window derives from the single shared line limit.
-        // 默认窗口从唯一共享行上限派生。
-        let end = end_line.unwrap_or_else(|| start.saturating_add(MAX_KNOWLEDGE_READ_LINES - 1));
-        if start == 0 || end < start || end - start >= MAX_KNOWLEDGE_READ_LINES {
-            return Err("ERR_KNOWLEDGE_READ_RANGE".into());
-        }
-        // Own selectors before crossing the asynchronous blocking boundary.
-        // 跨越异步阻塞边界前持有选择器所有权。
-        let id = document_id.map(str::to_string);
-        // A path is an explicit alternative selector, never a fallback for an unknown ID.
-        // 路径是显式可选选择器，绝非未知身份的兜底。
-        let path = path.map(str::to_string);
-        // The read snapshot keeps metadata and body in the same generation.
-        // 读取快照使元数据和正文保持同一代次。
-        let (_, binding_id) = self.ensure_library_binding(library_id).await?;
+        // Current and historical reads share the same inclusive range authority.
+        // 当前与历史读取共享相同包含边界范围权威。
+        let (start, end) = history_read::read_range(start_line, end_line)?;
+        // The declared selector chooses exactly one indexed SQL field before loading any metadata.
+        // 声明选择器在加载任何元数据前精确选择一个已索引 SQL 字段。
+        let (column, value) =
+            match (document_id, path) {
+                (Some(id), None) => ("id", id.to_string()),
+                (None, Some(path)) => ("path_key", normalize_path(path, false)?.1),
+                _ => return Err(
+                    "ERR_KNOWLEDGE_DOCUMENT_SELECTOR: specify exactly one of documentId or path"
+                        .into(),
+                ),
+            };
+        // The snapshot binds the single selected row to its exact content-addressed body.
+        // 快照将唯一选中行绑定至精确内容寻址正文。
+        let (_, binding) = self.ensure_library_binding(library_id).await?;
         local_sql::with_read_snapshot_async(
             &self.host_runtime.local,
-            self.resolve_library_binding(&binding_id)?,
+            self.resolve_library_binding(binding)?,
             move |connection| {
-                let docs = documents(connection)?;
-                let document = docs
-                    .get(&select_document(&docs, id.as_deref(), path.as_deref())?)
-                    .ok_or("ERR_KNOWLEDGE_DOCUMENT_NOT_FOUND")?
-                    .clone();
+                let document = connection
+                    .query_row(
+                        &format!("SELECT {DOCUMENT_COLUMNS} FROM kb_documents WHERE {column}=?;"),
+                        [value],
+                        document_row,
+                    )
+                    .optional()
+                    .map_err(|error| error.to_string())?
+                    .ok_or("ERR_KNOWLEDGE_DOCUMENT_NOT_FOUND")?;
                 let text = body(connection, &document.body_sha256)?;
-                let total_lines = document.line_count;
-                if start > total_lines.max(1) {
-                    return Err("ERR_KNOWLEDGE_READ_RANGE".into());
-                }
-                let end = end.min(total_lines);
-                Ok(KnowledgeDocumentContent {
-                    document,
-                    content: super::super::knowledge_body_lines(&text)
-                        .skip(start - 1)
-                        .take(end.saturating_sub(start - 1))
-                        .collect(),
-                    start_line: start,
-                    end_line: end,
-                    next_line: (end < total_lines).then_some(end + 1),
-                })
+                history_read::document_window(document, &text, start, end)
             },
         )
         .await
@@ -1156,27 +1163,15 @@ impl KnowledgeBaseRuntime {
         }).await
     }
 
-    /// Reads one exact history point and complete images; returns a missing-change error explicitly.
-    /// 读取一个精确历史点与完整镜像；明确返回变更缺失错误。
+    /// Reads the first bounded page of exact `seq` images in `library_id`; returns an explicit continuation.
+    /// 读取 `library_id` 中精确 `seq` 镜像的首个有界页；返回显式续读标识。
     pub async fn get_change(
         &self,
         library_id: &str,
         seq: u64,
     ) -> Result<KnowledgeChangeDetail, String> {
-        self.require_active_library(library_id).await?;
-        // Summary and items are read from one consistent snapshot.
-        // 摘要与条目从同一一致快照读取。
-        let (_, binding_id) = self.ensure_library_binding(library_id).await?;
-        local_sql::with_read_snapshot_async(&self.host_runtime.local,self.resolve_library_binding(&binding_id)?,move |connection| {
-            let change=connection.query_row(&format!("SELECT {CHANGE_COLUMNS} FROM kb_changes c WHERE c.seq=?;"),[sql_integer(seq)?],change_row).optional().map_err(|e|e.to_string())?.ok_or("ERR_KNOWLEDGE_CHANGE_NOT_FOUND")?;
-            let mut statement=connection.prepare("SELECT entity,entity_key,before_json,after_json FROM kb_change_items WHERE change_seq=? ORDER BY ordinal;").map_err(|e|e.to_string())?;
-            let items=statement.query_map([sql_integer(seq)?],|r| {
-                let before=r.get::<_,Option<String>>(2)?.map(|s|serde_json::from_str(&s)).transpose().map_err(|e|rusqlite::Error::FromSqlConversionFailure(2,rusqlite::types::Type::Text,Box::new(e)))?;
-                let after=r.get::<_,Option<String>>(3)?.map(|s|serde_json::from_str(&s)).transpose().map_err(|e|rusqlite::Error::FromSqlConversionFailure(3,rusqlite::types::Type::Text,Box::new(e)))?;
-                Ok(KnowledgeChangeItem{entity:r.get(0)?,entity_key:r.get(1)?,before,after})
-            }).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
-            Ok(KnowledgeChangeDetail{change,items})
-        }).await
+        self.get_change_page(library_id, seq, 0, MAX_KNOWLEDGE_PAGE_SIZE)
+            .await
     }
 
     /// Restores exact content at target_seq as one new human change; retains all prior history.

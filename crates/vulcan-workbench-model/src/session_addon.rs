@@ -90,7 +90,7 @@ pub enum SessionKnowledgeLibrarySelectionMode {
 /// Durable per-session knowledge-library selection.
 /// 持久化的每会话知识库选择。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionKnowledgeLibrarySelection {
     /// Selection strategy.
     /// 选择策略。
@@ -100,10 +100,6 @@ pub struct SessionKnowledgeLibrarySelection {
     /// 显式知识库标识符，仅在 explicit 模式下使用。
     #[serde(default)]
     pub library_ids: Vec<String>,
-    /// Optional retrieval policy explicitly selected for the session tools.
-    /// 会话工具显式选择的可选检索策略。
-    #[serde(default)]
-    pub retrieval_mode: Option<String>,
 }
 
 impl SessionKnowledgeLibrarySelection {
@@ -119,13 +115,6 @@ impl SessionKnowledgeLibrarySelection {
         self.library_ids.dedup();
         if self.mode == SessionKnowledgeLibrarySelectionMode::Inherit {
             self.library_ids.clear();
-        }
-        if self
-            .retrieval_mode
-            .as_deref()
-            .is_some_and(|mode| !matches!(mode, "raw_bm25" | "display_bm25" | "display_hybrid"))
-        {
-            self.retrieval_mode = None;
         }
         self
     }
@@ -181,7 +170,6 @@ mod tests {
         let selection = SessionKnowledgeLibrarySelection {
             mode: SessionKnowledgeLibrarySelectionMode::Explicit,
             library_ids: vec![String::from("b"), String::from("a"), String::from("b")],
-            retrieval_mode: None,
         };
 
         assert_eq!(selection.normalized().library_ids, vec!["a", "b"]);
@@ -194,7 +182,6 @@ mod tests {
         let selection = SessionKnowledgeLibrarySelection {
             mode: SessionKnowledgeLibrarySelectionMode::Inherit,
             library_ids: vec![String::from("ignored")],
-            retrieval_mode: None,
         };
 
         assert!(selection.normalized().library_ids.is_empty());

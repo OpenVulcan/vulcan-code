@@ -58,9 +58,9 @@ use crate::storage_format::{blob_v2_refusal_reason, verify_table_format};
 use crate::types::{
     LanceDbColumnDef, LanceDbColumnType, LanceDbCompactTableInput, LanceDbCompactTableResult,
     LanceDbCompactionMetrics, LanceDbCompactionOptions, LanceDbCreateTableInput,
-    LanceDbCreateTableResult, LanceDbDeleteInput, LanceDbDeleteResult, LanceDbDropTableInput,
-    LanceDbDropTableResult, LanceDbFragmentSummary, LanceDbInputFormat, LanceDbOutputFormat,
-    LanceDbSearchInput, LanceDbSearchResult, LanceDbTableStatisticsInput,
+    LanceDbCreateTableResult, LanceDbDeleteInput, LanceDbDeleteResult, LanceDbDistanceMetric,
+    LanceDbDropTableInput, LanceDbDropTableResult, LanceDbFragmentSummary, LanceDbInputFormat,
+    LanceDbOutputFormat, LanceDbSearchInput, LanceDbSearchResult, LanceDbTableStatisticsInput,
     LanceDbTableStatisticsResult, LanceDbUpsertInput, LanceDbUpsertResult,
 };
 
@@ -474,6 +474,19 @@ impl LanceDbEngine {
         &self,
         input: LanceDbSearchInput,
     ) -> EngineResult<LanceDbSearchResult> {
+        self.vector_search_with_metric(input, LanceDbDistanceMetric::Euclidean)
+            .await
+    }
+
+    /// Searches `input` using the explicitly frozen `metric`; returns rows ordered by that distance.
+    /// 使用显式冻结 `metric` 检索 `input`；返回按该距离排序的行。
+    pub async fn vector_search_with_metric(
+        &self,
+        input: LanceDbSearchInput,
+        metric: LanceDbDistanceMetric,
+    ) -> EngineResult<LanceDbSearchResult> {
+        // Canonical physical table identity selects its shared lock.
+        // 规范物理表身份选择其共享锁。
         let table_name = normalize_table_name(&input.table_name);
         validate_table_name(&table_name)?;
         if table_name.is_empty() {
@@ -506,17 +519,34 @@ impl LanceDbEngine {
         // the table barrier. Only the query itself needs it.
         // 表守卫刻意在编码前释放，使耗时的编码不会占用表屏障。只有查询本身需要它。
         let (batches, output_schema) = {
+            // The read guard prevents concurrent table destruction during the query.
+            // 读取守卫防止查询期间并发销毁表。
             let _table_guard = self.acquire_table_read(&table_name).await;
+            // The global permit respects the configured engine concurrency ceiling.
+            // 全局许可遵守已配置引擎并发上限。
             let _concurrency_permit = self.acquire_concurrency_permit().await?;
+            // Open only the declared physical table.
+            // 仅打开声明物理表。
             let table = self.open_table(&table_name).await?;
+            // Freeze the requested distance before filters and execution.
+            // 在过滤及执行之前冻结请求距离。
             let mut query = table
                 .query()
                 .nearest_to(input.vector.clone())
-                .map_err(map_lancedb_error)?;
+                .map_err(map_lancedb_error)?
+                .distance_type(match metric {
+                    LanceDbDistanceMetric::Euclidean => lancedb::DistanceType::L2,
+                    LanceDbDistanceMetric::Cosine => lancedb::DistanceType::Cosine,
+                    LanceDbDistanceMetric::DotProduct => lancedb::DistanceType::Dot,
+                });
 
             if !input.vector_column.trim().is_empty() {
                 query = query.column(input.vector_column.trim());
             }
+
+            // Omission uses the engine default; explicit counts stay within its sole upper bound.
+
+            // 省略使用引擎默认值；显式数量保持在唯一上限内。
 
             let limit = if input.limit == 0 {
                 DEFAULT_SEARCH_LIMIT
@@ -529,17 +559,37 @@ impl LanceDbEngine {
                 query = query.only_if(input.filter.trim());
             }
 
+            // Capture the exact projected schema while the table guard is active.
+
+            // 表守卫生效期间捕获精确投影结构。
+
             let output_schema = query.output_schema().await.map_err(map_lancedb_error)?;
+            // The native query owns distance computation and row ordering.
+            // 原生查询拥有距离计算及行顺序。
             let stream = query.execute().await.map_err(map_lancedb_error)?;
+            // Collect native batches before releasing the table guard.
+            // 释放表守卫前收集原生批次。
             let batches: Vec<RecordBatch> =
                 stream.try_collect().await.map_err(map_lancedb_error)?;
             (batches, output_schema)
         };
 
+        // Count logical rows independently of output encoding.
+
+        // 独立于输出编码统计逻辑行。
+
         let rows = count_rows(&batches);
+        // Resolve only the explicitly supported wire encoding.
+        // 仅解析明确支持的线协议编码。
         let output_format = normalize_output_format(input.output_format);
+        // Move the projected schema into the bounded encoding task.
+        // 将投影结构移入有界编码任务。
         let schema = output_schema.clone();
+        // The encoding task owns its batch handles without retaining a table lock.
+        // 编码任务拥有批次句柄，不保留表锁。
         let encoded = batches.clone();
+        // Offload CPU encoding and surface join or serialization failures.
+        // 将编码计算移出异步线程，并暴露连接或序列化失败。
         let data = tokio::task::spawn_blocking(move || match output_format {
             LanceDbOutputFormat::JsonRows => encode_batches_as_json(&schema, &encoded),
             LanceDbOutputFormat::Unspecified | LanceDbOutputFormat::ArrowIpc => {
@@ -1563,8 +1613,9 @@ mod tests {
     use crate::types::{
         LanceDbColumnDef, LanceDbColumnType, LanceDbCompactTableInput, LanceDbCompactionMetrics,
         LanceDbCompactionOptions, LanceDbCreateTableInput, LanceDbDeleteInput,
-        LanceDbFragmentSummary, LanceDbInputFormat, LanceDbOutputFormat, LanceDbSearchInput,
-        LanceDbTableStatisticsInput, LanceDbTableStatisticsResult, LanceDbUpsertInput,
+        LanceDbDistanceMetric, LanceDbFragmentSummary, LanceDbInputFormat, LanceDbOutputFormat,
+        LanceDbSearchInput, LanceDbTableStatisticsInput, LanceDbTableStatisticsResult,
+        LanceDbUpsertInput,
     };
     use serde_json::json;
     use std::sync::Arc;
@@ -2106,6 +2157,62 @@ mod tests {
         let rows: Vec<serde_json::Value> =
             serde_json::from_slice(&search.data).expect("search output must be JSON");
         assert_eq!(rows[0]["id"], json!("a"), "nearest row must rank first");
+    }
+
+    /// Verifies `vector_search_with_metric` ranks one table by each explicit metric; uses only an isolated local database.
+    /// 验证 `vector_search_with_metric` 按各显式度量排列同表；仅使用隔离本地数据库。
+    /// Takes no parameters and returns no value; failures identify incorrect engine distance admission.
+    /// 无参数及返回值；失败指出错误的引擎距离准入。
+    #[tokio::test]
+    async fn explicit_distance_metrics_rank_distinct_nearest_rows() {
+        // A single nonnormalized fixture distinguishes L2, cosine and dot product rankings.
+        // 单份非归一化夹具区分 L2、余弦及点积排名。
+        let (_directory, engine) = isolated_engine(4).await;
+        engine
+            .create_table(documents_definition("metrics"))
+            .await
+            .unwrap();
+        engine
+            .vector_upsert(json_upsert(
+                "metrics",
+                vec![
+                    json_row("near", "near", [1.0, 1.0, 0.0]),
+                    json_row("parallel", "parallel", [10.0, 0.0, 0.0]),
+                    json_row("large", "large", [100.0, 50.0, 0.0]),
+                ],
+            ))
+            .await
+            .unwrap();
+        for (metric, expected) in [
+            (LanceDbDistanceMetric::Euclidean, "near"),
+            (LanceDbDistanceMetric::Cosine, "parallel"),
+            (LanceDbDistanceMetric::DotProduct, "large"),
+        ] {
+            // Only the declared metric changes; vector, data and query shape remain identical.
+            // 仅声明度量变化；向量、数据及查询形状保持一致。
+            let result = engine
+                .vector_search_with_metric(
+                    LanceDbSearchInput {
+                        table_name: "metrics".into(),
+                        vector: vec![1.0, 0.0, 0.0],
+                        limit: 1,
+                        filter: String::new(),
+                        vector_column: "vector".into(),
+                        output_format: LanceDbOutputFormat::JsonRows,
+                    },
+                    metric,
+                )
+                .await
+                .unwrap();
+            // The top result is a semantic rank assertion, independent of fixture insertion order.
+            // 首位结果为语义排名断言，独立于夹具插入顺序。
+            let rows: Vec<serde_json::Value> = serde_json::from_slice(&result.data).unwrap();
+            assert_eq!(
+                rows.first().unwrap()["id"],
+                json!(expected),
+                "wrong rank for {metric:?}"
+            );
+        }
     }
 
     /// Verifies a keyed upsert updates rather than duplicating.

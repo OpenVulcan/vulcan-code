@@ -764,12 +764,6 @@ fn spawn_agent_stream_task_with_restart_state(
                 }
             };
         }
-        if let Some(access) = request.knowledge_access.as_mut()
-            && access.knowledge_search_handler.is_none()
-        {
-            access.knowledge_search_handler =
-                Some(build_knowledge_search_handler(task_state.clone()));
-        }
         let stream_task_started_at = current_unix_millis_value();
         webui_after_precheck_trace(
             "after_precheck_20_stream_task_entered",
@@ -2005,11 +1999,14 @@ async fn resolve_turn_knowledge_access(
     };
     library_ids.sort();
     library_ids.dedup();
+    // Search availability follows each selected library's current mode, never a session strategy.
+    // 检索可用性遵循各选定库当前模式，绝非会话策略。
+    let search_enabled =
+        crate::knowledge_base_services::knowledge_search_enabled(&runtime, &library_ids).await?;
     Ok(Some(ExecutionKnowledgeAccessContext {
         project_id,
         library_ids,
-        retrieval_mode: selection.retrieval_mode,
-        knowledge_search_handler: Some(build_knowledge_search_handler(state.clone())),
+        search_enabled,
     }))
 }
 use content_delta::trace_content_delta_stream_event;
