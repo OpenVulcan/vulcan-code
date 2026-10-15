@@ -13,7 +13,10 @@
 pub mod answer_mode;
 #[cfg(test)]
 mod contracts_tests;
+
 pub mod knowledge_base;
+#[cfg(test)]
+mod knowledge_contract_tests;
 pub mod licenses;
 pub mod mcp_settings;
 pub mod memory_actions;
@@ -97,14 +100,14 @@ pub enum Slot {
     /// `listKnowledgeLibraries`
     /// 知识库目录。
     KnowledgeLibraries,
-    /// `listKnowledgeSources` of the open library.
-    /// 当前打开知识库的来源。
-    KnowledgeSources,
+    /// Current custom dictionary of the exact selected library.
+    /// 精确所选知识库的当前自定义词典。
+    KnowledgeWords,
     /// `listKnowledgeProjectBindings` of the open library.
     /// 当前打开知识库的项目绑定。
     KnowledgeBindings,
-    /// `getKnowledgeImportJob` of the open library.
-    /// 当前打开知识库的导入任务。
+    /// `getKnowledgeOperation` of the open library.
+    /// 当前打开知识库的通用操作。
     KnowledgeJob,
     /// `getKnowledgeIndexIntegrity` of the open library.
     /// 当前打开知识库的索引完整性。
@@ -118,9 +121,30 @@ pub enum Slot {
     /// One bounded page of managed document summaries.
     /// 托管文档摘要的一页有界结果。
     KnowledgeDocuments,
-    /// Exact document and corpus content selected for reading.
-    /// 为阅读选择的准确文档及语料正文。
+    /// Exact current or immutable historical body window selected for reading.
+    /// 为阅读选择的精确当前或不可变历史正文窗口。
     KnowledgeDocument,
+    /// Current desired/active vector spaces and bounded failure details.
+    /// 当前期望及活动向量空间和有界失败详情。
+    KnowledgeEmbeddings,
+    /// Immutable bounded history summaries.
+    /// 不可变有界历史摘要。
+    KnowledgeChanges,
+    /// Exact immutable history change and bounded pre/post images.
+    /// 精确不可变历史变更及有界前后镜像。
+    KnowledgeChange,
+    /// Native package directory and exact archive file entries.
+    /// 原生套件目录及精确归档文件条目。
+    KnowledgePackages,
+    /// Currently authorized session library selection.
+    /// 当前授权会话知识库选择。
+    KnowledgeSelection,
+    /// Exact current project's authorized libraries for session choice; separate from the global registry.
+    /// 当前精确项目用于会话选择的授权知识库；与全局注册表分离。
+    KnowledgeAuthorizedLibraries,
+    /// Exact project library grants used by session defaults.
+    /// 会话默认使用的精确项目知识库授权。
+    ProjectKnowledgeBindings,
     /// `loadVceConfigurationStatus`
     /// 语义代码引擎的全局配置状态。
     VceStatus,
@@ -250,12 +274,9 @@ pub enum CallKind {
 /// 预检结果打开的确认类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preview {
-    /// `previewKnowledgeImport` → `importKnowledgeDirectory`
-    /// 知识库目录匯入预检转为确认执行。
-    KnowledgeImport,
-    /// Reviewed display-corpus generation using the server's file confirmation.
-    /// 使用服务端文件确认的已审查展示语料生成。
-    KnowledgeDisplay,
+    /// Current package inspection freezes the full archive fingerprint before independent import.
+    /// 当前套件检查在独立导入前冻结完整归档指纹。
+    KnowledgePackage,
     /// `inspectLocalPlugin` → `installLocalPlugin` / `updateLocalPlugin`
     /// 本地插件检查转为安装或更新。
     PluginInstall,
@@ -597,8 +618,7 @@ pub fn confirm_preview(
         return None;
     };
     match preview {
-        Preview::KnowledgeImport => knowledge_base::import_knowledge_directory(call, result),
-        Preview::KnowledgeDisplay => knowledge_base::build_knowledge_display_index(call, result),
+        Preview::KnowledgePackage => knowledge_base::confirmed_package_import(result),
         Preview::PluginInstall => {
             // Plugin id.
             // 准确插件身份。

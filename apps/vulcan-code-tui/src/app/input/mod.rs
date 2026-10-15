@@ -476,7 +476,7 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
             app.overlay = Some(Overlay::Picker(Picker::new(
                 PickerKind::Language,
                 tr!("global.language"),
-                tr!("knowledge.search"),
+                tr!("tui.page.search"),
                 items,
             )));
         }
@@ -600,7 +600,7 @@ fn open_palette(app: &mut App) {
     let mut picker = Picker::new(
         PickerKind::Palette,
         tr!("tui.palette.title"),
-        tr!("knowledge.search"),
+        tr!("tui.page.search"),
         items,
     );
     picker.cursor = 0;

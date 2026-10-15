@@ -289,8 +289,8 @@ fn scoped_responses_do_not_cross_selected_owners() {
     app.profile_target = "project".into();
     for (slot, call) in [
         (
-            Slot::KnowledgeSources,
-            knowledge_base::list_knowledge_sources("a"),
+            Slot::KnowledgeWords,
+            knowledge_base::list_knowledge_custom_words("a"),
         ),
         (
             Slot::VceOverview,
@@ -327,8 +327,8 @@ fn reconnect_and_catalog_removal_reload_current_scope() {
     app.area = pages::Area::Knowledge;
     app.library = Some("deleted".into());
     app.slots.set(
-        Slot::KnowledgeSources,
-        knowledge_base::list_knowledge_sources("deleted"),
+        Slot::KnowledgeWords,
+        knowledge_base::list_knowledge_custom_words("deleted"),
         json!([{"id":"old"}]),
     );
     app.apply(BackendEvent::Connection(ConnectionState::Connected));
@@ -339,11 +339,11 @@ fn reconnect_and_catalog_removal_reload_current_scope() {
     );
     app.apply(BackendEvent::Slot {
         slot: Slot::KnowledgeLibraries,
-        call: knowledge_base::list_knowledge_libraries(),
+        call: knowledge_base::list_knowledge_libraries(None),
         value: json!([{"id":"survivor"}]),
     });
     assert_eq!(app.library.as_deref(), Some("survivor"));
-    assert!(!app.slots.loaded(Slot::KnowledgeSources));
+    assert!(!app.slots.loaded(Slot::KnowledgeWords));
 }
 
 /// The system prompt editor follows the loaded scope: unchanged text rereads, edits save to the

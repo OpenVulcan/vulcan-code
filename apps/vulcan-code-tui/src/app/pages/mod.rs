@@ -147,9 +147,14 @@ impl Area {
                     KnowledgeDocument,
                     KnowledgeSearch,
                     KnowledgeSettings,
-                    KnowledgeSources,
+                    KnowledgeDictionary,
                     KnowledgeBindings,
                     KnowledgeMaintenance,
+                    KnowledgePolicy,
+                    KnowledgeHistory,
+                    KnowledgeChange,
+                    KnowledgePackages,
+                    KnowledgeSession,
                 ],
             )],
             Area::Settings => vec![
@@ -225,21 +230,36 @@ pub enum PageId {
     /// Browses paged managed documents in the selected library.
     /// 浏览所选知识库中分页的托管文档。
     KnowledgeDocuments,
-    /// Reads one exact document in its raw or display corpus.
-    /// 阅读原始或展示语料中的单个准确文档。
+    /// Reads one exact current or immutable historical document.
+    /// 阅读单个精确当前或不可变历史文档。
     KnowledgeDocument,
-    /// Edits the selected library's retrieval and inference policy.
-    /// 编辑所选知识库的检索及推理策略。
+    /// Edits only human library name and purpose metadata.
+    /// 仅编辑人工知识库名称及用途元信息。
     KnowledgeSettings,
-    /// Manages directory sources for the selected library.
-    /// 管理所选知识库的目录来源。
-    KnowledgeSources,
+    /// Atomically manages the selected library's custom dictionary terms.
+    /// 原子管理所选知识库自定义词典词语。
+    KnowledgeDictionary,
     /// Manages project authorization and default inclusion.
     /// 管理项目授权及默认使用状态。
     KnowledgeBindings,
     /// Observes and maintains indexes and the retained operation job.
     /// 观察及维护索引和保留的操作任务。
     KnowledgeMaintenance,
+    /// Explicit unsaved creation or mode-change policy form.
+    /// 明确未保存创建或模式变更策略表单。
+    KnowledgePolicy,
+    /// Permanent immutable history summary pages.
+    /// 永久不可变历史摘要页。
+    KnowledgeHistory,
+    /// Bounded before/after images of one immutable change.
+    /// 单个不可变变更的有界前后镜像。
+    KnowledgeChange,
+    /// Native current-format package browsing and exact-file inspection.
+    /// 原生当前格式套件浏览及精确文件检查。
+    KnowledgePackages,
+    /// Exact selected saved session's authorized knowledge selection.
+    /// 精确所选已保存会话的授权知识库选择。
+    KnowledgeSession,
     AgentList,
     SkillList,
     LuaSkills,
@@ -281,13 +301,18 @@ impl PageId {
             PageId::MemoryAdvanced => tr!("memory.advanced.title"),
             PageId::KnowledgeBases => tr!("area.knowledge"),
             PageId::KnowledgeLibrary => tr!("tui.knowledge.overview"),
-            PageId::KnowledgeSearch => tr!("knowledge.search"),
+            PageId::KnowledgeSearch => tr!("knowledge.content.search"),
             PageId::KnowledgeDocuments => tr!("tui.knowledge.documents"),
             PageId::KnowledgeDocument => tr!("tui.knowledge.document"),
             PageId::KnowledgeSettings => tr!("tui.knowledge.settings"),
-            PageId::KnowledgeSources => tr!("tui.field.sources"),
+            PageId::KnowledgeDictionary => tr!("knowledge.tabs.dictionary"),
             PageId::KnowledgeBindings => tr!("tui.field.projectBindings"),
             PageId::KnowledgeMaintenance => tr!("tui.knowledge.maintenance"),
+            PageId::KnowledgePolicy => tr!("knowledge.indexMode"),
+            PageId::KnowledgeHistory => tr!("knowledge.tabs.history"),
+            PageId::KnowledgeChange => tr!("knowledge.history.compare"),
+            PageId::KnowledgePackages => tr!("knowledge.package.import"),
+            PageId::KnowledgeSession => tr!("knowledge.composer.aria"),
             PageId::AgentList => tr!("area.agents"),
             PageId::SkillList => tr!("area.agentSkills"),
             PageId::LuaSkills => tr!("skills.navigation.list"),
@@ -347,9 +372,7 @@ impl PageId {
     /// Returns this page's exact WebUI loaders, scoped to the current library or project.
     /// 返回本页精确的 WebUI 加载器，并限定到当前知识库或项目。
     pub fn loaders(self, app: &App) -> Vec<ServiceCall> {
-        use api::{
-            knowledge_base as knowledge, memory_actions as memory, settings_actions as settings,
-        };
+        use api::{memory_actions as memory, settings_actions as settings};
         // Workbench is refreshed separately by its snapshot and event stream.
         // 工作台由其快照与事件流单独刷新。
         let mut calls = Vec::new();
@@ -443,55 +466,7 @@ impl PageId {
                     calls.push(loader.clone());
                 }
             }
-            page if page.area() == Area::Knowledge => {
-                calls.push(knowledge::list_knowledge_libraries());
-                if page == Self::KnowledgeSettings {
-                    calls.push(settings::load_public_ai_settings());
-                }
-                if let Some(library) = &app.library {
-                    match page {
-                        Self::KnowledgeLibrary | Self::KnowledgeMaintenance => {
-                            calls.push(knowledge::get_knowledge_index_integrity(library));
-                            calls.push(knowledge::get_knowledge_import_job(library));
-                        }
-                        Self::KnowledgeSources => {
-                            calls.push(knowledge::list_knowledge_sources(library));
-                            calls.push(knowledge::get_knowledge_import_job(library));
-                        }
-                        Self::KnowledgeBindings => {
-                            calls.push(knowledge::list_knowledge_project_bindings(library))
-                        }
-                        Self::KnowledgeDocuments => {
-                            calls.push(knowledge::list_managed_knowledge_document_folders(library));
-                            // One sentinel record proves whether the next page exists even under a folder filter.
-                            // 一个哨兵记录用于确认是否有下一页，目录筛选时同样准确。
-                            calls.push(knowledge::list_managed_knowledge_documents(
-                                library,
-                                app.knowledge_folder.as_deref(),
-                                knowledge::DOCUMENT_PAGE_SIZE + 1,
-                                app.knowledge_offset,
-                            ));
-                        }
-                        Self::KnowledgeDocument => {
-                            if let Some(document) = &app.knowledge_document {
-                                calls.push(knowledge::read_managed_knowledge_document(
-                                    library,
-                                    document,
-                                    &app.knowledge_corpus,
-                                ));
-                            }
-                        }
-                        Self::KnowledgeSearch if !app.knowledge_query.is_empty() => {
-                            calls.push(knowledge::search_managed_knowledge_library(
-                                library,
-                                &app.knowledge_query,
-                                None,
-                            ));
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            page if page.area() == Area::Knowledge => calls.extend(knowledge::loaders(app, page)),
             _ => {}
         }
         if matches!(self, Self::IndexProjects | Self::EngineSettings) {
@@ -510,6 +485,9 @@ impl PageId {
     /// 本页在内容仍可能变化时持续重读的槽位。
     pub fn live_slots(self) -> &'static [Slot] {
         match self {
+            Self::KnowledgeLibrary | Self::KnowledgeMaintenance => {
+                &[Slot::KnowledgeJob, Slot::KnowledgeEmbeddings]
+            }
             Self::Capabilities => &[Slot::ProviderTasks],
             Self::Mcp => &[Slot::McpOAuth],
             Self::PermissionJudge | Self::SetupGuide => &[Slot::PermissionJudgeStatus],
@@ -546,8 +524,8 @@ impl PageId {
                 PromptThen::ModelSearch,
             ),
             page if page.area() == Area::Knowledge => (
-                tr!("knowledge.search"),
-                &app.knowledge_query,
+                tr!("knowledge.content.search"),
+                &app.knowledge.query,
                 PromptThen::KnowledgeSearch,
             ),
             _ => return None,
@@ -1109,9 +1087,14 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::KnowledgeDocuments => knowledge::documents(app),
         PageId::KnowledgeDocument => knowledge::document(app),
         PageId::KnowledgeSettings => knowledge::settings(app),
-        PageId::KnowledgeSources => knowledge::sources(app),
+        PageId::KnowledgeDictionary => knowledge::dictionary(app),
         PageId::KnowledgeBindings => knowledge::bindings(app),
         PageId::KnowledgeMaintenance => knowledge::maintenance(app),
+        PageId::KnowledgePolicy => knowledge::policy(app),
+        PageId::KnowledgeHistory => knowledge::history(app),
+        PageId::KnowledgeChange => knowledge::change(app),
+        PageId::KnowledgePackages => knowledge::packages(app),
+        PageId::KnowledgeSession => knowledge::session_selection(app),
         PageId::AgentList => catalog::agents(app),
         PageId::SkillList => catalog::skills(app),
         PageId::LuaSkills => plugins::lua_skills(app),

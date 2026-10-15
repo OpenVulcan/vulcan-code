@@ -8,9 +8,16 @@ use std::collections::{BTreeMap, BTreeSet};
 #[path = "service_plugins.rs"]
 mod plugins;
 
+#[path = "service_knowledge.rs"]
+mod knowledge;
+
 #[cfg(test)]
 #[path = "service_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "service_knowledge_tests.rs"]
+mod knowledge_tests;
 
 /// Owns synthetic service DTOs; known mutations change the authority queried by later loaders.
 /// 持有合成服务 DTO；已知变更修改后续加载器查询的权威状态。
@@ -21,12 +28,9 @@ pub struct FakeService {
     /// Raw loader fixtures keyed by exact RPC method.
     /// 按准确 RPC 方法索引的原始加载器夹具。
     loads: Value,
-    /// Independent library defaults survive deletion of every catalog row.
-    /// 独立知识库默认值在全部目录条目删除后仍然保留。
-    library_defaults: Value,
-    /// Sources, jobs and search rows owned by exact library identities.
-    /// 由准确知识库标识持有的来源、任务及搜索条目。
-    knowledge: BTreeMap<String, Value>,
+    /// Current-format synthetic content, history and lifecycle authority.
+    /// 当前格式合成内容、历史及生命周期权威。
+    knowledge: knowledge::KnowledgeService,
     /// Settings, jobs and plans owned by exact host project identities.
     /// 由准确宿主项目标识持有的设置、任务及计划。
     vce_projects: BTreeMap<String, Value>,
@@ -54,25 +58,6 @@ pub struct FakeService {
     /// Base system prompt layers: built-in text, the user override and per-project overrides.
     /// 基础系统提示词层级：内置正文、用户覆盖及逐项目覆盖。
     system_prompts: Value,
-}
-
-/// Exact synthetic import key exposed by the demo preflight.
-/// 演示预检公开的准确合成导入键。
-const DEMO_IMPORT_FILE_KEY: &str = "demo/readme.md";
-/// Relative managed path belongs to a separate documented preview field.
-/// 相对托管路径属于独立的文档定义预检字段。
-const DEMO_IMPORT_RELATIVE_PATH: &str = "readme.md";
-
-/// Builds the mock's stable root-identity/path key from an exact managed document summary.
-/// 从准确托管文档摘要构建模拟的稳定根身份、路径键。
-/// `entry` owns document.sourceId and relativePath; returns the distinct confirmation key.
-/// `entry` 持有 document.sourceId 及 relativePath；返回唯一确认键。
-fn display_file_key(entry: &Value) -> Result<String, String> {
-    Ok(format!(
-        "{}:{}",
-        string(entry, "/document/sourceId")?,
-        string(entry, "/document/relativePath")?
-    ))
 }
 
 /// Gets a required request value and reports malformed input explicitly.
@@ -394,16 +379,9 @@ impl FakeService {
                 json!({"storageVersion":1,"projectId":102,"sessions":[],"turns":[],"memories":[],"profileNodes":[]}),
             ),
         ]);
-        // Knowledge.
-        // 逐知识库独立的合成状态。
-        let knowledge = BTreeMap::from([(
-            "demo-library".into(),
-            json!({
-                "sources":loads["service_list_knowledge_sources"],"job":loads["service_get_knowledge_import_job"],
-                "integrity":loads["service_get_knowledge_index_integrity"],"search":loads["service_search_knowledge_library"],
-                "documents":fixture["knowledgeDocuments"],
-            }),
-        )]);
+        // Current fixture state has no source-directory or corpus compatibility.
+        // 当前夹具状态不兼容来源目录或语料。
+        let knowledge = knowledge::KnowledgeService::new(&fixture);
         // Vce projects.
         // 逐宿主项目独立的合成索引状态。
         let mut vce_projects = BTreeMap::new();
@@ -425,7 +403,6 @@ impl FakeService {
             .push(plugin["summary"].clone());
         Self {
             workbench,
-            library_defaults: loads["service_list_knowledge_libraries"][0].clone(),
             loads,
             memory: fixture["memory"].clone(),
             records,
@@ -572,6 +549,18 @@ impl FakeService {
             .push(json!({"id":id,"title":title,"projectName":project}));
     }
 
+    /// Supplies exact current host ownership before knowledge RPC execution.
+    /// 在知识库 RPC 执行前提供精确当前宿主归属。
+    /// Parameters: projects and conversations are typed World records. Returns after reconciling live ownership.
+    /// 参数：projects 及 conversations 为强类型 World 记录。校正实时归属后返回。
+    pub fn sync_knowledge_context(
+        &mut self,
+        projects: &[crate::model::Project],
+        conversations: &[crate::model::ConversationSummary],
+    ) {
+        self.knowledge.context(projects, conversations);
+    }
+
     /// Routes one call, applying known writes and allowing unmodeled mutations as the demo does.
     /// 分发单次调用，应用已知写入；演示中允许尚未建模的变更。
     pub fn answer(&mut self, call: &ServiceCall) -> Result<Value, String> {
@@ -584,128 +573,11 @@ impl FakeService {
         if Self::is_plugin_method(call.method) {
             return self.plugin(call.method, &call.params);
         }
+        if call.method.contains("knowledge") {
+            return self.knowledge.answer(call);
+        }
         if let CallKind::Load(_) = call.kind {
             match call.method {
-                "service_list_knowledge_sources"
-                | "service_get_knowledge_import_job"
-                | "service_get_knowledge_index_integrity"
-                | "service_search_knowledge_library" => {
-                    // Exact entity identity.
-                    // 准确实体身份。
-                    let id = if call.method == "service_search_knowledge_library" {
-                        string(&call.params, "/request/libraryId")?
-                    } else {
-                        string(&call.params, "/libraryId")?
-                    };
-                    // Library.
-                    // 所选知识库。
-                    let library = self.knowledge.get(id).ok_or("Unknown demo library")?;
-                    // Field.
-                    // 准确字段定义。
-                    let field = match call.method {
-                        "service_list_knowledge_sources" => "sources",
-                        "service_get_knowledge_import_job" => "job",
-                        "service_get_knowledge_index_integrity" => "integrity",
-                        _ => "search",
-                    };
-                    // Value.
-                    // 当前协议值。
-                    let mut value = library[field].clone();
-                    if field == "search" {
-                        value["query"] = required(&call.params, "/request/query")?.clone();
-                    }
-                    return Ok(value);
-                }
-                "service_list_knowledge_library_documents" => {
-                    // Managed document summaries are owned by the requested library.
-                    // 托管文档摘要属于请求的知识库。
-                    let library = self
-                        .knowledge
-                        .get(string(&call.params, "/request/libraryId")?)
-                        .ok_or("Unknown demo library")?;
-                    // None includes all folders; the empty string is an exact root-folder filter.
-                    // None 包含全部目录；空字符串为准确根目录筛选。
-                    let folder = required(&call.params, "/request/folderPath")?;
-                    // Pagination is bounded by the exact request values.
-                    // 分页由准确请求值限定。
-                    let offset = required(&call.params, "/request/offset")?
-                        .as_u64()
-                        .ok_or("Document offset")? as usize;
-                    // Requested document limit, including the caller's next-page sentinel.
-                    // 请求文档数量限制，包含调用方的下一页哨兵。
-                    let limit = required(&call.params, "/request/limit")?
-                        .as_u64()
-                        .ok_or("Document limit")? as usize;
-                    return Ok(Value::Array(
-                        library["documents"]
-                            .as_array()
-                            .ok_or("Documents fixture")?
-                            .iter()
-                            .filter(|entry| {
-                                folder.is_null() || entry["document"]["folderPath"] == *folder
-                            })
-                            .skip(offset)
-                            .take(limit)
-                            .map(|entry| entry["document"].clone())
-                            .collect(),
-                    ));
-                }
-                "service_list_knowledge_library_folders" => {
-                    // Derive exact distinct managed folders, never native directories.
-                    // 派生准确唯一托管目录，不使用原生目录。
-                    let library = self
-                        .knowledge
-                        .get(string(&call.params, "/libraryId")?)
-                        .ok_or("Unknown demo library")?;
-                    // A sorted set gives deterministic fixture navigation.
-                    // 有序集合提供确定性夹具导航。
-                    let folders: std::collections::BTreeSet<&str> = library["documents"]
-                        .as_array()
-                        .ok_or("Documents fixture")?
-                        .iter()
-                        .map(|entry| string(entry, "/document/folderPath"))
-                        .collect::<Result<_, _>>()?;
-                    return Ok(json!(folders));
-                }
-                "service_read_knowledge_library_document" => {
-                    // The reader resolves one exact managed document identity.
-                    // 阅读器解析单个准确托管文档身份。
-                    let library = self
-                        .knowledge
-                        .get(string(&call.params, "/libraryId")?)
-                        .ok_or("Unknown demo library")?;
-                    // Reject unknown documents rather than returning another library's fixture.
-                    // 拒绝未知文档，不返回其他知识库夹具。
-                    let document = library["documents"]
-                        .as_array()
-                        .ok_or("Documents fixture")?
-                        .iter()
-                        .find(|entry| entry["document"]["id"] == call.params["documentId"])
-                        .ok_or("Unknown demo document")?;
-                    // Both declared corpus variants have independent content availability.
-                    // 两种已声明语料变体拥有独立正文可用状态。
-                    let corpus = string(&call.params, "/corpus")?;
-                    if !matches!(corpus, "raw" | "display") {
-                        return Err("Unknown document corpus".into());
-                    }
-                    return Ok(
-                        json!({"document":document["document"],"content":document[corpus].as_str().ok_or("Document corpus is not built")?}),
-                    );
-                }
-                "service_list_knowledge_project_bindings" => {
-                    // Exact entity identity.
-                    // 准确实体身份。
-                    let id = required(&call.params, "/libraryId")?;
-                    return Ok(Value::Array(
-                        self.loads[call.method]
-                            .as_array()
-                            .ok_or("bindings fixture")?
-                            .iter()
-                            .filter(|binding| binding.get("libraryId") == Some(id))
-                            .cloned()
-                            .collect(),
-                    ));
-                }
                 "service_get_vce_project_overview" | "service_get_vce_job" => {
                     // Exact entity identity.
                     // 准确实体身份。
@@ -762,84 +634,6 @@ impl FakeService {
         // 准确 RPC 参数。
         let params = &call.params;
         match call.method {
-            "service_preview_knowledge_import" => {
-                return Ok(json!({"fingerprint":"demo-import-fingerprint",
-                "entries":[{"key":DEMO_IMPORT_FILE_KEY,"relativePath":DEMO_IMPORT_RELATIVE_PATH,"disposition":"ready","sourceRoot":required(params,"/sourceRoot")?}]}));
-            }
-            "service_preview_knowledge_display" => {
-                // Preflight returns only the selected library's managed raw documents.
-                // 预检只返回所选知识库的托管原始文档。
-                let library = self
-                    .knowledge
-                    .get(string(params, "/libraryId")?)
-                    .ok_or("Unknown demo library")?;
-                return Ok(
-                    json!({"fingerprint":"demo-display-fingerprint","entries":library["documents"].as_array().ok_or("Documents fixture")?.iter()
-                    .map(|entry| Ok(json!({"key":display_file_key(entry)?,"relativePath":entry["document"]["relativePath"],"disposition":"ready"}))).collect::<Result<Vec<Value>,String>>()?}),
-                );
-            }
-            "service_build_knowledge_display_index" => {
-                if string(params, "/confirmation/previewFingerprint")? != "demo-display-fingerprint"
-                {
-                    return Err("Display preview changed".into());
-                }
-                // The frozen keys select exact managed documents in this library.
-                // 冻结键选择此知识库内准确托管文档。
-                let selected = required(params, "/confirmation/selectedFileKeys")?
-                    .as_array()
-                    .ok_or("Display selection")?;
-                // Scoped mutable raw/display content store.
-                // 限定范围的可变原始、展示正文存储。
-                let library = self
-                    .knowledge
-                    .get_mut(string(params, "/libraryId")?)
-                    .ok_or("Unknown demo library")?;
-                // Root/path keys are opaque confirmations and cannot be replaced with bare relative paths.
-                // 根身份、路径键属于不透明确认，不能替换成裸相对路径。
-                let ready = library["documents"]
-                    .as_array()
-                    .ok_or("Documents fixture")?
-                    .iter()
-                    .map(display_file_key)
-                    .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-                // Reject duplicate or unreviewed targets before changing any corpus content.
-                // 改变任何语料正文前拒绝重复或未审查目标。
-                let mut seen = std::collections::BTreeSet::new();
-                if !selected.iter().all(|key| {
-                    key.as_str()
-                        .is_some_and(|key| ready.contains(key) && seen.insert(key))
-                }) {
-                    return Err("Unreviewed or duplicate display key".into());
-                }
-                for document in library["documents"]
-                    .as_array_mut()
-                    .ok_or("Documents fixture")?
-                {
-                    if selected.contains(&json!(display_file_key(document)?)) {
-                        document["display"] = document["raw"].clone();
-                    }
-                }
-                library["job"] = json!({"id":"demo-display-job","libraryId":params["libraryId"],"operationKind":"display_build","state":"succeeded","phase":"completed","warnings":[]});
-                row_mut(
-                    &mut self.loads["service_list_knowledge_libraries"],
-                    "id",
-                    required(params, "/libraryId")?,
-                )?["settings"]["displayIndex"]["status"] = json!("ready");
-            }
-            "service_build_knowledge_vector_index" => {
-                // A synthetic completed job models the same retained operation contract.
-                // 合成完成任务模拟相同保留操作契约。
-                let library = self
-                    .knowledge
-                    .get_mut(string(params, "/libraryId")?)
-                    .ok_or("Unknown demo library")?;
-                library["job"] = json!({"id":"demo-vector-job","libraryId":params["libraryId"],"operationKind":"vector_build","state":"succeeded","phase":"completed","warnings":[]});
-                row_mut(
-                    &mut self.loads["service_list_knowledge_libraries"],
-                    "id",
-                    required(params, "/libraryId")?,
-                )?["settings"]["vectorIndex"]["status"] = json!("ready");
-            }
             "service_inspect_local_plugin" => {
                 return Ok(
                     json!({"pluginId":"demo-installed-plugin","name":"Demo Installed Plugin",
@@ -1396,207 +1190,6 @@ impl FakeService {
                     .as_array_mut()
                     .ok_or("MCP configurations")?
                     .retain(|server| server.get("id") != params.get("serverId"));
-            }
-            "service_create_knowledge_library" => {
-                // Exact protocol request.
-                // 协议请求文档。
-                let request = required(params, "/request")?;
-                // Library.
-                // 所选知识库。
-                let mut library = self.library_defaults.clone();
-                // Exact entity identity.
-                // 准确实体身份。
-                let id = self.id("library");
-                library["id"] = json!(id);
-                library["name"] = required(request, "/name")?.clone();
-                library["description"] = required(request, "/description")?.clone();
-                library["documentCount"] = json!(0);
-                library["chunkCount"] = json!(0);
-                merge(&mut library["settings"], required(request, "/settings")?);
-                self.knowledge.insert(
-                    id.clone(),
-                    json!({"sources":[],"job":null,"documents":[],
-                    "integrity":{"libraryId":id,"state":"ok"},
-                    "search":{"libraryId":id,"query":"","hits":[]}}),
-                );
-                self.loads["service_list_knowledge_libraries"]
-                    .as_array_mut()
-                    .ok_or("library fixture")?
-                    .push(library);
-            }
-            "service_rename_knowledge_library" => {
-                // Current row.
-                // 当前条目。
-                let row = row_mut(
-                    &mut self.loads["service_list_knowledge_libraries"],
-                    "id",
-                    required(params, "/request/libraryId")?,
-                )?;
-                row["name"] = required(params, "/request/name")?.clone();
-                row["description"] = required(params, "/request/description")?.clone();
-            }
-            "service_delete_knowledge_library" => {
-                // Exact entity identity.
-                // 准确实体身份。
-                let id = string(params, "/libraryId")?;
-                self.knowledge.remove(id);
-                self.loads["service_list_knowledge_libraries"]
-                    .as_array_mut()
-                    .ok_or("library fixture")?
-                    .retain(|library| library["id"] != id);
-                self.loads["service_list_knowledge_project_bindings"]
-                    .as_array_mut()
-                    .ok_or("bindings fixture")?
-                    .retain(|binding| binding["libraryId"] != id);
-            }
-            "service_set_knowledge_library_settings" => {
-                // Current row.
-                // 当前条目。
-                let row = row_mut(
-                    &mut self.loads["service_list_knowledge_libraries"],
-                    "id",
-                    required(params, "/request/libraryId")?,
-                )?;
-                merge(&mut row["settings"], required(params, "/request/settings")?);
-            }
-            "service_set_knowledge_project_binding" => {
-                // Exact protocol request.
-                // 协议请求文档。
-                let request = required(params, "/request")?;
-                // Bindings.
-                // 权威绑定集合。
-                let bindings = self.loads["service_list_knowledge_project_bindings"]
-                    .as_array_mut()
-                    .ok_or("bindings fixture")?;
-                bindings.retain(|binding| {
-                    !(binding.get("libraryId") == request.get("libraryId")
-                        && binding.get("projectId") == request.get("projectId"))
-                });
-                if request["authorized"] == true {
-                    bindings.push(json!({"libraryId":request["libraryId"],"projectId":request["projectId"],"defaultEnabled":request["defaultEnabled"]}));
-                }
-            }
-            "service_import_knowledge_directory" => {
-                if string(params, "/request/previewFingerprint")? != "demo-import-fingerprint" {
-                    return Err("Import preview changed".into());
-                }
-                // The demo preview publishes a single exact key/path mapping.
-                // 演示预检发布单个准确的键、路径映射。
-                let mut seen = std::collections::BTreeSet::new();
-                if !required(params, "/request/selectedFileKeys")?
-                    .as_array()
-                    .ok_or("Selected files")?
-                    .iter()
-                    .all(|key| {
-                        key.as_str() == Some(DEMO_IMPORT_FILE_KEY) && seen.insert(key.as_str())
-                    })
-                {
-                    return Err("Unreviewed or duplicate import key".into());
-                }
-                // Exact reviewed file keys and durable source identity.
-                // 准确已审查文件键及持久来源身份。
-                let selected = required(params, "/request/selectedFileKeys")?
-                    .as_array()
-                    .ok_or("Selected files")?;
-                // Existing source remaps keep their identity; new imports allocate a distinct source.
-                // 已有来源重映射保留身份；新导入分配独立来源。
-                let source_id = match required(params, "/request/sourceId")? {
-                    Value::Null => self.id("source"),
-                    Value::String(id) => id.clone(),
-                    _ => return Err("Source id".into()),
-                };
-                // Target library content store.
-                // 目标知识库正文存储。
-                let state = self
-                    .knowledge
-                    .get_mut(string(params, "/request/libraryId")?)
-                    .ok_or("Unknown demo library")?;
-                // Update the exact existing source or append the newly allocated source.
-                // 更新准确已有来源或追加新分配来源。
-                let sources = state["sources"].as_array_mut().ok_or("Sources fixture")?;
-                if let Some(source) = sources.iter_mut().find(|source| source["id"] == source_id) {
-                    source["canonicalRoot"] = required(params, "/request/sourceRoot")?.clone();
-                } else if !required(params, "/request/sourceId")?.is_null() {
-                    return Err("Unknown demo source".into());
-                } else {
-                    sources.push(json!({"id":source_id,"canonicalRoot":required(params,"/request/sourceRoot")?,
-                        "displayName":"Imported demo source","documentCount":selected.len(),"chunkCount":selected.len()}));
-                }
-                for _ in selected {
-                    // Slash-separated managed paths define the folder without native path guessing.
-                    // 斜杠分隔的托管路径定义目录，不猜测原生路径。
-                    let relative_path = DEMO_IMPORT_RELATIVE_PATH;
-                    // The published preview path, rather than its independently defined file key, owns folder structure.
-                    // 已发布预检路径而非独立定义的文件键持有目录结构。
-                    let folder = relative_path
-                        .rsplit_once('/')
-                        .map_or("", |(folder, _)| folder);
-                    // Stable document identity is derived solely within the mock's declared source fixture.
-                    // 稳定文档身份仅在模拟声明的来源夹具内派生。
-                    let document_id = state["documents"]
-                        .as_array()
-                        .ok_or("Documents fixture")?
-                        .iter()
-                        .find(|entry| {
-                            entry["document"]["sourceId"] == source_id
-                                && entry["document"]["relativePath"] == relative_path
-                        })
-                        .map(|entry| string(entry, "/document/id").map(str::to_string))
-                        .transpose()?
-                        .unwrap_or_else(|| format!("{source_id}:{relative_path}"));
-                    // Replace the same logical document on rescan instead of duplicating it.
-                    // 重新扫描替换同一逻辑文档，不重复追加。
-                    let documents = state["documents"]
-                        .as_array_mut()
-                        .ok_or("Documents fixture")?;
-                    documents.retain(|entry| entry["document"]["id"] != document_id);
-                    documents.push(json!({"document":{"id":document_id,"sourceId":source_id,"relativePath":relative_path,"folderPath":folder,
-                        "title":relative_path,"byteSize":22,"lineCount":1,"chunkCount":1,"updatedAtMs":0},"raw":"Synthetic imported text","display":null}));
-                }
-                // Reflect actual stored content counts after imports and rescans.
-                // 导入及重新扫描后反映真实已存正文计数。
-                let count = state["documents"]
-                    .as_array()
-                    .ok_or("Documents fixture")?
-                    .len();
-                // Each source count reflects the same authoritative managed document store.
-                // 每个来源计数反映相同权威托管文档存储。
-                let documents = state["documents"]
-                    .as_array()
-                    .ok_or("Documents fixture")?
-                    .clone();
-                for source in state["sources"].as_array_mut().ok_or("Sources fixture")? {
-                    // Exact source-owned document count after rescan/remap.
-                    // 重新扫描及重映射后准确的来源文档数。
-                    let owned = documents
-                        .iter()
-                        .filter(|entry| entry["document"]["sourceId"] == source["id"])
-                        .count();
-                    source["documentCount"] = json!(owned);
-                    source["chunkCount"] = json!(owned);
-                }
-                state["job"] = json!({"id":"demo-import-job","libraryId":required(params,"/request/libraryId")?,
-                    "operationKind":"import","state":"succeeded","phase":"completed","processedFiles":selected.len(),"totalFiles":selected.len(),"warnings":[]});
-                // The catalog reflects the same library-owned document store.
-                // 目录反映同一知识库持有的文档存储。
-                let library = row_mut(
-                    &mut self.loads["service_list_knowledge_libraries"],
-                    "id",
-                    required(params, "/request/libraryId")?,
-                )?;
-                library["documentCount"] = json!(count);
-                library["chunkCount"] = json!(count);
-            }
-            "service_rebuild_knowledge_index" | "service_repair_knowledge_index" => {
-                self.knowledge
-                    .get_mut(string(params, "/libraryId")?)
-                    .ok_or("Unknown demo library")?["job"] = json!({
-                "id":"demo-index-job","libraryId":required(params,"/libraryId")?,"operationKind":if call.method.contains("repair") {"repair"} else {"rebuild"},"state":"succeeded"})
-            }
-            "service_cancel_knowledge_import" => {
-                self.knowledge
-                    .get_mut(string(params, "/libraryId")?)
-                    .ok_or("Unknown demo library")?["job"]["state"] = json!("cancelled")
             }
             "service_update_vce_project_settings" => {
                 // Overview.

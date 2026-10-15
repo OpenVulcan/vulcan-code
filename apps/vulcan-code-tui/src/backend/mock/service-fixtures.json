@@ -989,40 +989,21 @@
       {
         "id": "demo-library",
         "name": "Demo Knowledge",
-        "description": "Synthetic Markdown corpus",
+        "description": "Synthetic AI-managed library",
         "settings": {
-          "retrievalMode": "raw_bm25",
-          "fallbackPolicy": "explicit_only",
-          "curation": {
-            "enabled": false
-          },
-          "embedding": {
-            "enabled": false
-          },
-          "displayIndex": {
-            "status": "not_created"
-          },
-          "vectorIndex": {
-            "status": "not_created"
-          }
+          "indexMode": "bm25",
+          "embedding": null
         },
-        "lifecycleState": "ready",
+        "lifecycleState": "active",
+        "errorMessage": null,
         "documentCount": 24,
-        "chunkCount": 24,
+        "chunkCount": 48,
+        "pendingSummaryCount": 0,
         "indexStatus": "ready",
+        "headChangeSeq": 1,
+        "lastChangeAtMs": 1,
         "createdAtMs": 0,
         "updatedAtMs": 0
-      }
-    ],
-    "service_list_knowledge_sources": [
-      {
-        "id": "demo-source",
-        "canonicalRoot": "C:\\demo\\knowledge",
-        "displayName": "Demo Source",
-        "documentCount": 24,
-        "chunkCount": 24,
-        "createdAtMs": 0,
-        "lastScannedAtMs": 0
       }
     ],
     "service_list_knowledge_project_bindings": [
@@ -1032,22 +1013,6 @@
         "defaultEnabled": true
       }
     ],
-    "service_get_knowledge_index_integrity": {
-      "libraryId": "demo-library",
-      "indexExists": true,
-      "searchable": true,
-      "indexStatus": "ready",
-      "tokenizer": "jieba",
-      "contentRevision": 1,
-      "indexedContentRevision": 1,
-      "dictionaryRevision": 1,
-      "indexedDictionaryRevision": 1,
-      "authoritativeChunkCount": 24,
-      "indexedChunkCount": 24,
-      "missingOrMismatchedCount": 0,
-      "orphanOrMismatchedCount": 0
-    },
-    "service_get_knowledge_import_job": null,
     "service_get_vce_configuration_status": {
       "ready": true,
       "consumerProfileId": "vce",
@@ -1170,28 +1135,6 @@
     "service_license_body": {
       "section_id": "demo-license",
       "text": "Synthetic license body"
-    },
-    "service_search_knowledge_library": {
-      "libraryId": "demo-library",
-      "query": "",
-      "hits": [
-        {
-          "libraryId": "demo-library",
-          "documentId": "demo-document",
-          "chunkId": "demo-chunk",
-          "content": "Synthetic demo knowledge content",
-          "score": 1.0,
-          "retrievalMode": "raw_bm25",
-          "title": "Demo readme",
-          "relativePath": "readme.md",
-          "libraryName": "Demo Knowledge",
-          "headingPath": "",
-          "startLine": 1,
-          "endLine": 1
-        }
-      ],
-      "failures": [],
-      "ftsQueries": []
     },
     "service_list_provider_tasks": [
       {
@@ -1360,8 +1303,24 @@
     "service_project_permission_judge_policy": {
       "projectId": "",
       "options": [
-        { "key": "cross_project_writes", "defaultMode": "allow", "modes": ["allow", "review"], "chosenMode": null },
-        { "key": "database_reset", "defaultMode": "confirm", "modes": ["confirm", "allow"], "chosenMode": "allow" }
+        {
+          "key": "cross_project_writes",
+          "defaultMode": "allow",
+          "modes": [
+            "allow",
+            "review"
+          ],
+          "chosenMode": null
+        },
+        {
+          "key": "database_reset",
+          "defaultMode": "confirm",
+          "modes": [
+            "confirm",
+            "allow"
+          ],
+          "chosenMode": "allow"
+        }
       ],
       "unsupportedOptions": {},
       "issue": null
@@ -1877,364 +1836,568 @@
   },
   "knowledgeDocuments": [
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document",
-        "sourceId": "demo-source",
-        "relativePath": "readme.md",
+        "path": "readme.md",
+        "pathKey": "readme.md",
         "folderPath": "",
         "title": "Demo readme",
-        "byteSize": 65,
+        "summary": "Synthetic demo knowledge content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "d4e153f74dc81f64347521ca023540a01ac418cd0c23eb2dc4452ab6e6283539",
         "lineCount": 5,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Demo readme\n\nSynthetic demo knowledge content\n\n  indented line\n",
-      "display": null
+      "body": "# Demo readme\n\nSynthetic demo knowledge content\n\n  indented line\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-1",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-01.md",
+        "path": "guide/document-01.md",
+        "pathKey": "guide/document-01.md",
         "folderPath": "guide",
         "title": "Document 1",
-        "byteSize": 40,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "9db27ce784e8fc43251c4e72fc646763f2bba702451f76c49588f84e7a8bd00a",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 1\n\nSynthetic guide content 1\n",
-      "display": null
+      "body": "# Document 1\n\nSynthetic guide content 1\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-2",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-02.md",
+        "path": "guide/document-02.md",
+        "pathKey": "guide/document-02.md",
         "folderPath": "guide",
         "title": "Document 2",
-        "byteSize": 40,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "eb86c2e4a10d1224f860212e1e3c2ee803c09630133b9b4f9c4dbff90e0ed9f7",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 2\n\nSynthetic guide content 2\n",
-      "display": null
+      "body": "# Document 2\n\nSynthetic guide content 2\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-3",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-03.md",
+        "path": "guide/document-03.md",
+        "pathKey": "guide/document-03.md",
         "folderPath": "guide",
         "title": "Document 3",
-        "byteSize": 40,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "f76294ccbc3004f32860fea96fadf0240a1577f3cf646614702d73b316430c4c",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 3\n\nSynthetic guide content 3\n",
-      "display": null
+      "body": "# Document 3\n\nSynthetic guide content 3\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-4",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-04.md",
+        "path": "guide/document-04.md",
+        "pathKey": "guide/document-04.md",
         "folderPath": "guide",
         "title": "Document 4",
-        "byteSize": 40,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "dff82084bca4bc398b5e9ddaaa2e4b54edc9b39ac233cec84b97a53d55698c99",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 4\n\nSynthetic guide content 4\n",
-      "display": null
+      "body": "# Document 4\n\nSynthetic guide content 4\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-5",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-05.md",
+        "path": "guide/document-05.md",
+        "pathKey": "guide/document-05.md",
         "folderPath": "guide",
         "title": "Document 5",
-        "byteSize": 40,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "2d995f6d18939cd95f20d83ad7083b7e902ff4851952ff03e744e08623e6026a",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 5\n\nSynthetic guide content 5\n",
-      "display": null
+      "body": "# Document 5\n\nSynthetic guide content 5\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-6",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-06.md",
+        "path": "guide/document-06.md",
+        "pathKey": "guide/document-06.md",
         "folderPath": "guide",
         "title": "Document 6",
-        "byteSize": 40,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "082a46e698865a2af73e3b288bd1ea99232a1c4378287843edc5b0215881e638",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 6\n\nSynthetic guide content 6\n",
-      "display": null
+      "body": "# Document 6\n\nSynthetic guide content 6\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-7",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-07.md",
+        "path": "guide/document-07.md",
+        "pathKey": "guide/document-07.md",
         "folderPath": "guide",
         "title": "Document 7",
-        "byteSize": 40,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "98b7cbfde77d90427f973b291d2e39283f9379a2d2c15e0937757bc2bbfe45e1",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 7\n\nSynthetic guide content 7\n",
-      "display": null
+      "body": "# Document 7\n\nSynthetic guide content 7\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-8",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-08.md",
+        "path": "guide/document-08.md",
+        "pathKey": "guide/document-08.md",
         "folderPath": "guide",
         "title": "Document 8",
-        "byteSize": 40,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "a3a38c54f61da822c57d222c5ae1f6fd12d0876eaec82e239cc898ea3640e3be",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 8\n\nSynthetic guide content 8\n",
-      "display": null
+      "body": "# Document 8\n\nSynthetic guide content 8\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-9",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-09.md",
+        "path": "guide/document-09.md",
+        "pathKey": "guide/document-09.md",
         "folderPath": "guide",
         "title": "Document 9",
-        "byteSize": 40,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "33cd2b13f4e97d85e1b98a2e7c640d6365df39e06bf5bc5cc3f9a312f543b1e3",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 9\n\nSynthetic guide content 9\n",
-      "display": null
+      "body": "# Document 9\n\nSynthetic guide content 9\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-10",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-10.md",
+        "path": "guide/document-10.md",
+        "pathKey": "guide/document-10.md",
         "folderPath": "guide",
         "title": "Document 10",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "f9322a8b67c2b0534c759afead77fa94ee3bc256455e2452d2e7aa13724d4843",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 10\n\nSynthetic guide content 10\n",
-      "display": null
+      "body": "# Document 10\n\nSynthetic guide content 10\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-11",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-11.md",
+        "path": "guide/document-11.md",
+        "pathKey": "guide/document-11.md",
         "folderPath": "guide",
         "title": "Document 11",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "4b5ded0d8c35fc04c6b3da906e7f13b14ad1a589e190317bd364c71936ccdb78",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 11\n\nSynthetic guide content 11\n",
-      "display": null
+      "body": "# Document 11\n\nSynthetic guide content 11\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-12",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-12.md",
+        "path": "guide/document-12.md",
+        "pathKey": "guide/document-12.md",
         "folderPath": "guide",
         "title": "Document 12",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "5d5a588897b91e3388cb49b2c37bfb99346315eec7b7cab96ca79294ca8456c1",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 12\n\nSynthetic guide content 12\n",
-      "display": null
+      "body": "# Document 12\n\nSynthetic guide content 12\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-13",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-13.md",
+        "path": "guide/document-13.md",
+        "pathKey": "guide/document-13.md",
         "folderPath": "guide",
         "title": "Document 13",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "bddc8f9abfb72a7e07038ab7af60cf9c0fa005a477a7b9985b797d480d4da359",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 13\n\nSynthetic guide content 13\n",
-      "display": null
+      "body": "# Document 13\n\nSynthetic guide content 13\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-14",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-14.md",
+        "path": "guide/document-14.md",
+        "pathKey": "guide/document-14.md",
         "folderPath": "guide",
         "title": "Document 14",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "a26d8e4f7dd1ad7505580e46c6f3ad8d0424df3506be25c1936a6989ceaad80c",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 14\n\nSynthetic guide content 14\n",
-      "display": null
+      "body": "# Document 14\n\nSynthetic guide content 14\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-15",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-15.md",
+        "path": "guide/document-15.md",
+        "pathKey": "guide/document-15.md",
         "folderPath": "guide",
         "title": "Document 15",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "1f10493092730c09df29d164586b5200965a22361f0f37bf51137e2b0d955a45",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 15\n\nSynthetic guide content 15\n",
-      "display": null
+      "body": "# Document 15\n\nSynthetic guide content 15\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-16",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-16.md",
+        "path": "guide/document-16.md",
+        "pathKey": "guide/document-16.md",
         "folderPath": "guide",
         "title": "Document 16",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "c71aa3516edd18ce37aa0e9cd1a823cfe8f5f4bfe7f27d9ce2058b73f4045780",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 16\n\nSynthetic guide content 16\n",
-      "display": null
+      "body": "# Document 16\n\nSynthetic guide content 16\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-17",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-17.md",
+        "path": "guide/document-17.md",
+        "pathKey": "guide/document-17.md",
         "folderPath": "guide",
         "title": "Document 17",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "8c564abdd0ee3471e48ed789785cdfd7ce23d693ee262ea912cb151fa8636717",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 17\n\nSynthetic guide content 17\n",
-      "display": null
+      "body": "# Document 17\n\nSynthetic guide content 17\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-18",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-18.md",
+        "path": "guide/document-18.md",
+        "pathKey": "guide/document-18.md",
         "folderPath": "guide",
         "title": "Document 18",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "ab0512ca4ae86bb26b962b014453f12fb7a46e0a75d5e1ba606777cebbe044ba",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 18\n\nSynthetic guide content 18\n",
-      "display": null
+      "body": "# Document 18\n\nSynthetic guide content 18\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-19",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-19.md",
+        "path": "guide/document-19.md",
+        "pathKey": "guide/document-19.md",
         "folderPath": "guide",
         "title": "Document 19",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "d2871abd214b370e1640ac110292a1dc239a2b7692e730a7bdc9aa3215860efc",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 19\n\nSynthetic guide content 19\n",
-      "display": null
+      "body": "# Document 19\n\nSynthetic guide content 19\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-20",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-20.md",
+        "path": "guide/document-20.md",
+        "pathKey": "guide/document-20.md",
         "folderPath": "guide",
         "title": "Document 20",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "f6cf93f1bd078753efc1e1bed348fc5ba8443ea344cfadaf2bf37ca3b6d91d63",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 20\n\nSynthetic guide content 20\n",
-      "display": null
+      "body": "# Document 20\n\nSynthetic guide content 20\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-21",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-21.md",
+        "path": "guide/document-21.md",
+        "pathKey": "guide/document-21.md",
         "folderPath": "guide",
         "title": "Document 21",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "e905d2f3e9a4ab1740f7557850a817a2882f1322e8c42043facab7402861e663",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 21\n\nSynthetic guide content 21\n",
-      "display": null
+      "body": "# Document 21\n\nSynthetic guide content 21\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-22",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-22.md",
+        "path": "guide/document-22.md",
+        "pathKey": "guide/document-22.md",
         "folderPath": "guide",
         "title": "Document 22",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "fe01254fad0aafed571a9482b1399b5ff4d64c78c88c21bed287e57061d60090",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 22\n\nSynthetic guide content 22\n",
-      "display": null
+      "body": "# Document 22\n\nSynthetic guide content 22\n"
     },
     {
+      "libraryId": "demo-library",
       "document": {
         "id": "demo-document-23",
-        "sourceId": "demo-source",
-        "relativePath": "guide/document-23.md",
+        "path": "guide/document-23.md",
+        "pathKey": "guide/document-23.md",
         "folderPath": "guide",
         "title": "Document 23",
-        "byteSize": 42,
+        "summary": "Synthetic guide content",
+        "summaryState": "provided",
+        "keywords": [
+          "synthetic"
+        ],
+        "bodySha256": "429e8db142612a9291c8c53721e1eb8758e1e0f74cbe663538a6426fb961c121",
         "lineCount": 3,
-        "chunkCount": 1,
-        "updatedAtMs": 0
+        "embedPolicy": "summary",
+        "provenance": [],
+        "revision": 1,
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
       },
-      "raw": "# Document 23\n\nSynthetic guide content 23\n",
-      "display": null
+      "body": "# Document 23\n\nSynthetic guide content 23\n"
+    }
+  ],
+  "knowledgeFolders": [
+    {
+      "libraryId": "demo-library",
+      "folder": {
+        "pathKey": "guide",
+        "path": "guide",
+        "description": "Synthetic guide documents",
+        "createdChangeSeq": 1,
+        "updatedChangeSeq": 1
+      }
     }
   ]
 }

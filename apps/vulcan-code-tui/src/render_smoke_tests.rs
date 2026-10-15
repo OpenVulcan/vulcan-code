@@ -66,7 +66,7 @@ fn catalog_navigation_and_managed_reader_are_mouse_keyboard_accessible() {
         });
         app.apply(BackendEvent::Slot {
             slot: Slot::KnowledgeLibraries,
-            call: kb::list_knowledge_libraries(),
+            call: kb::list_knowledge_libraries(None),
             value: fixture["loads"]["service_list_knowledge_libraries"].clone(),
         });
         // Fresh terminal buffers prevent old wide-character cells from masking layout defects.
@@ -144,25 +144,23 @@ fn catalog_navigation_and_managed_reader_are_mouse_keyboard_accessible() {
         input::handle_event(&mut app, key(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(app.current_page(), Some(PageId::KnowledgeDocuments));
         assert!(observer.try_iter().any(|command|matches!(command,Command::Call(call)
-            if call.method == "service_list_knowledge_library_documents" && call.param("/request/libraryId") == "demo-library" && call.param("/request/limit") == 21)));
-        app.apply(BackendEvent::Slot {
-            slot: Slot::KnowledgeFolders,
-            call: kb::list_managed_knowledge_document_folders("demo-library"),
-            value: json!(["", "guide"]),
-        });
-        app.apply(BackendEvent::Slot {
-            slot: Slot::KnowledgeDocuments,
-            call: kb::list_managed_knowledge_documents("demo-library", None, 21, 0),
-            value: Value::Array(
-                fixture["knowledgeDocuments"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .take(21)
-                    .map(|entry| entry["document"].clone())
-                    .collect(),
-            ),
-        });
+            if call.method == "service_list_knowledge_library_documents" && call.param("/request/libraryId") == "demo-library" && call.param("/request/limit") == 20)));
+        // The logical directory page contains no body or external-source identity.
+        // 逻辑目录页不包含正文或外部来源身份。
+        let entry = fixture["knowledgeDocuments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["document"]["id"] == "demo-document")
+            .expect("document fixture may have changed");
+        // This request exactly matches the UI's current root page and shared viewport.
+        // 此请求精确匹配界面当前根页及共享视口。
+        let directory = PageId::KnowledgeDocuments
+            .loaders(&app)
+            .into_iter()
+            .find(|call| call.method == "service_list_knowledge_library_documents")
+            .unwrap();
+        app.apply(BackendEvent::Slot {slot:Slot::KnowledgeDocuments,call:directory,value:json!({"entries":[{"kind":"document","path":entry["document"]["path"],"description":entry["document"]["summary"],"documentCount":1,"document":entry["document"]}],"nextCursor":null,"headChangeSeq":1})});
         // Exact reader action is located from its rendered document row.
         // 从已渲染文档行定位准确阅读动作。
         let row = rows(&app, PageId::KnowledgeDocuments)
@@ -179,49 +177,52 @@ fn catalog_navigation_and_managed_reader_are_mouse_keyboard_accessible() {
         );
         assert_eq!(app.current_page(), Some(PageId::KnowledgeDocument));
         assert!(observer.try_iter().any(|command|matches!(command,Command::Call(call)
-            if call.method == "service_read_knowledge_library_document" && call.param("/documentId") == "demo-document" && call.param("/corpus") == "raw")));
-        app.apply(BackendEvent::Slot {slot:Slot::KnowledgeDocument,call:kb::read_managed_knowledge_document("demo-library","demo-document","raw"),
-            value:json!({"document":fixture["knowledgeDocuments"][0]["document"],"content":fixture["knowledgeDocuments"][0]["raw"]})});
+            if call.method == "service_read_knowledge_library_document" && call.param("/request/documentId") == "demo-document" && call.param("/request/startLine") == 1)));
+        // The selected current-body loader is the sole reader request authority.
+        // 选定当前正文加载器为唯一阅读请求权威。
+        let reader = PageId::KnowledgeDocument
+            .loaders(&app)
+            .into_iter()
+            .find(|call| call.method == "service_read_knowledge_library_document")
+            .unwrap();
+        app.apply(BackendEvent::Slot {slot:Slot::KnowledgeDocument,call:reader.clone(),value:json!({"document":entry["document"],"content":entry["body"],"startLine":1,"endLine":5,"nextLine":null})});
         terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
         input::handle_event(&mut app, key(KeyCode::PageDown, KeyModifiers::NONE));
         terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
         assert!(buffer_text(terminal.backend().buffer()).contains("Synthetic demo"));
         assert!(buffer_text(terminal.backend().buffer()).contains("    indented line"));
         snapshot(&mut app, &format!("managed-reader-{width}"));
-        perform(
-            &mut app,
-            UiAction::Edit(
-                crate::app::action::Edit::Local(crate::app::action::LocalSetting::KnowledgeCorpus),
-                crate::model::SettingValue::Text("display".into()),
-            ),
-        );
         app.apply(BackendEvent::SlotFailed {
             slot: Slot::KnowledgeDocument,
-            call: kb::read_managed_knowledge_document("demo-library", "demo-document", "display"),
-            message: "Display document is not built".into(),
+            call: reader,
+            message: "ERR_TEST_BODY_UNAVAILABLE".into(),
         });
         app.toasts.clear();
         terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-        assert!(buffer_text(terminal.backend().buffer()).contains("not built"));
+        assert!(buffer_text(terminal.backend().buffer()).contains("ERR_TEST_BODY"));
         snapshot(&mut app, &format!("managed-reader-error-{width}"));
     }
 }
 
-/// Renders and clicks a guarded import flow using inert channels at both terminal widths.
-/// 在两种终端宽度下使用静默通道渲染并点击受保护导入流程。
-/// No worker or service discovery runs; only the final request is observed.
-/// 不运行工作器或服务发现；仅观察最终请求。
+/// Reviews package evidence, confirms once and edits only the independent new-library name.
+/// 审阅套件证据、仅确认一次，并只编辑独立新库名称。
+/// Both layouts use inert channels, with no real service discovery or mutation.
+/// 两种布局均使用静默通道，不执行真实服务发现或变更。
 #[test]
-fn preview_review_mouse_confirmation_and_subset_input_render() {
-    use crate::backend::{BackendEvent, BackendHandle, Command, ConnectionState};
+fn package_review_mouse_confirmation_and_name_input_render() {
+    use crate::backend::{BackendEvent, BackendHandle, ConnectionState};
     use crate::service_api::knowledge_base;
-    use serde_json::{Value, json};
+    use serde_json::json;
     use std::sync::mpsc;
-    // Wide and narrow layouts must expose the same approval actions.
-    // 宽窄布局必须公开相同的批准动作。
     for (width, height) in [(160, 45), (64, 20)] {
+        // Requests are observable but never executed.
+        // 请求可观察，但绝不执行。
         let (commands, observer) = mpsc::channel();
+        // No backend event producer is connected.
+        // 不连接后端事件生产者。
         let (_, events) = mpsc::channel();
+        // Shared rendering and dispatch are used at both widths.
+        // 两种宽度均使用共享渲染及分发。
         let mut app = App::new(
             BackendHandle {
                 commands,
@@ -233,73 +234,43 @@ fn preview_review_mouse_confirmation_and_subset_input_render() {
             true,
         );
         app.apply(BackendEvent::Connection(ConnectionState::Connected));
-        // Many preview rows exercise scrolling without moving the approval button out of reach.
-        // 较多预检行验证滚动，且不能让批准按钮无法触达。
-        let entries: Vec<Value> = (0..40)
-            .map(|index| json!({"key":format!("file-{index}.md"),"disposition":"ready"}))
-            .collect();
-        app.apply(BackendEvent::Preview {
-            call: knowledge_base::preview_knowledge_import("demo", "C:/demo", None),
-            result: json!({"fingerprint":"preview-1","entries":entries}),
-        });
+        app.apply(BackendEvent::Preview {call:knowledge_base::inspect_knowledge_package(vulcan_service_api::KnowledgePackageInspectRequest {archive_path:"X:/synthetic/package.vkb".into()}),result:json!({"archivePath":"X:/synthetic/package.vkb","sha256":"a".repeat(64),"byteSize":17,"manifest":{"name":"Independent","version":3,"documentCount":7,"folderCount":2}})});
+        // Full immutable evidence remains scrollable before final confirmation.
+        // 最终确认前完整不可变证据保持可滚动。
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
         assert!(matches!(app.overlay, Some(Overlay::Detail(_))));
-        snapshot(&mut app, &format!("import-preview-{width}"));
-        click(&mut app, "preview approval", |target| {
+        snapshot(&mut app, &format!("package-review-{width}"));
+        click(&mut app, "reviewed package", |target| {
             matches!(target, Target::Do(UiAction::SheetPick(0)))
         });
         terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-        click(&mut app, "final confirmation", |target| {
+        click(&mut app, "final package confirmation", |target| {
             matches!(target, Target::Do(UiAction::ConfirmAccept))
         });
         assert!(matches!(app.overlay, Some(Overlay::Prompt(_))));
+        assert!(observer.try_recv().is_err());
         input::handle_event(&mut app, key(KeyCode::Char('u'), KeyModifiers::CONTROL));
-        input::handle_event(&mut app, Event::Paste("outside.md".into()));
         input::handle_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(&app.overlay,Some(Overlay::Prompt(dialog)) if dialog.error.is_some()));
-        assert!(observer.try_recv().is_err());
-        // Replace the ready list through the same paste and newline events available in a terminal.
-        // 通过终端可用的相同粘贴及换行事件替换就绪列表。
-        input::handle_event(&mut app, key(KeyCode::Char('u'), KeyModifiers::CONTROL));
-        input::handle_event(&mut app, Event::Paste("file-3.md".into()));
-        input::handle_event(&mut app, key(KeyCode::Enter, KeyModifiers::ALT));
-        input::handle_event(&mut app, Event::Paste("file-7.md".into()));
-        assert!(matches!(&app.overlay, Some(Overlay::Prompt(dialog))
-            if dialog.input == "file-3.md\nfile-7.md" && dialog.error.is_none()));
-        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-        // Each selected key must occupy its own visible row, without accidental concatenation.
-        // 每个选中键必须占据独立可见行，不能意外拼接。
-        let rendered = terminal.backend().buffer();
-        // Text rows observed directly from the rendered terminal cells.
-        // 从已渲染终端单元格直接观察的文本行。
-        let key_rows: Vec<String> = (0..height)
-            .map(|row| {
-                (0..width)
-                    .map(|column| rendered[(column, row)].symbol())
-                    .collect()
-            })
-            .collect();
-        assert!(
-            key_rows
-                .iter()
-                .any(|row| row.contains("file-3.md") && !row.contains("file-7.md"))
-        );
-        assert!(
-            key_rows
-                .iter()
-                .any(|row| row.contains("file-7.md") && !row.contains("file-3.md"))
-        );
-        snapshot(&mut app, &format!("import-selection-{width}"));
+        input::handle_event(&mut app, Event::Paste("Reviewed new library".into()));
         input::handle_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
+        // The exact frozen archive survives the editable-name form.
+        // 精确冻结归档在可编辑名称表单后保持不变。
         let Command::Call(call) = observer.try_recv().unwrap() else {
-            panic!("import call")
+            panic!("expected current package import");
         };
+        assert_eq!(call.method, "service_import_knowledge_package");
+        assert_eq!(call.param("/request/name"), "Reviewed new library");
         assert_eq!(
-            call.param("/request/selectedFileKeys"),
-            &json!(["file-3.md", "file-7.md"])
+            call.param("/request/archivePath"),
+            "X:/synthetic/package.vkb"
         );
-        assert_eq!(call.param("/request/previewFingerprint"), "preview-1");
+        assert_eq!(
+            call.param("/request/expectedSha256"),
+            &json!("a".repeat(64))
+        );
+        input::handle_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(observer.try_recv().is_err());
     }
 }
@@ -833,14 +804,7 @@ fn mouse_reaches_areas_overlays_and_dialogs() {
     // Library subviews use the shared view selector and independent page state.
     // 知识库子视图使用共享视图选择器及独立页面状态。
     for page in Area::Knowledge.pages() {
-        if page == crate::app::pages::PageId::KnowledgeDocument {
-            crate::app::action::perform(
-                &mut h.app,
-                UiAction::OpenKnowledgeDocument("demo-document".into()),
-            );
-        } else {
-            crate::app::action::perform(&mut h.app, UiAction::GoPage(page));
-        }
+        crate::app::action::perform(&mut h.app, UiAction::GoPage(page));
         h.settle();
         snapshot(&mut h.app, &format!("{page:?}"));
     }

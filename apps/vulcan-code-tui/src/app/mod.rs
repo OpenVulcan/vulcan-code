@@ -19,6 +19,8 @@ pub mod history;
 pub mod hit;
 pub mod input;
 pub mod insight;
+pub mod knowledge_actions;
+pub mod knowledge_state;
 pub mod menus;
 #[cfg(test)]
 mod model_list_tests;
@@ -610,10 +612,12 @@ pub struct App {
     /// Project whose permission strategy is shown.
     /// 显示其权限策略的项目。
     pub judge_policy_project: Option<String>,
-    /// Local record filter and service-backed knowledge query.
-    /// 本地记录筛选与服务端知识库检索条件。
+    /// Local record filter for the memory page.
+    /// 记忆页面的本地记录筛选。
     pub memory_query: String,
-    pub knowledge_query: String,
+    /// Read-only knowledge selectors and the explicit unsaved human policy draft.
+    /// 只读知识选择器及明确未保存人工策略草稿。
+    pub knowledge: knowledge_state::KnowledgeUiState,
     /// Exact selected knowledge library; None denotes an empty or not-yet-loaded catalog.
     /// 准确所选知识库；None 表示目录为空或尚未加载。
     pub library: Option<String>,
@@ -632,21 +636,6 @@ pub struct App {
     /// When each plugin data section last received a result, by data slot index.
     /// 每个插件数据区块最近收到结果的时间，以数据槽位下标为键。
     pub plugin_loaded_at: HashMap<u8, std::time::SystemTime>,
-    /// Exact document folder filter; None requests all folders.
-    /// 准确文档目录筛选；None 请求全部目录。
-    pub knowledge_folder: Option<String>,
-    /// Offset into the selected folder's authoritative document listing.
-    /// 所选目录权威文档列表中的偏移量。
-    pub knowledge_offset: usize,
-    /// Immutable document identity selected for the reader.
-    /// 为阅读器选中的不可变文档身份。
-    pub knowledge_document: Option<String>,
-    /// Declared raw/display corpus of the selected document reader.
-    /// 所选文档阅读器声明的 raw/display 语料。
-    pub knowledge_corpus: String,
-    /// Next read-only observation of an active job; None also prevents overlapping polls.
-    /// 活动任务的下一次只读观察时间；None 同时防止轮询重叠。
-    knowledge_poll_due: Option<Instant>,
     /// Next re-read of a live provider-task or sign-in slot; armed only by a result, so reads never overlap.
     /// 实时供应商任务或登录槽位的下一次重读；只由结果设置，因此读取不会重叠。
     live_poll_due: std::collections::BTreeMap<crate::service_api::Slot, Instant>,
@@ -768,18 +757,13 @@ impl App {
             vce_project: None,
             judge_policy_project: None,
             memory_query: String::new(),
-            knowledge_query: String::new(),
+            knowledge: knowledge_state::KnowledgeUiState::default(),
             library: None,
             knowledge_page: PageId::KnowledgeLibrary,
             plugin_mount: None,
             plugin_tab: None,
             plugin_periods: HashMap::new(),
             plugin_loaded_at: HashMap::new(),
-            knowledge_folder: None,
-            knowledge_offset: 0,
-            knowledge_document: None,
-            knowledge_corpus: "raw".into(),
-            knowledge_poll_due: None,
             live_poll_due: std::collections::BTreeMap::new(),
             agent_category: String::new(),
             skill_category: String::new(),
@@ -845,14 +829,9 @@ impl App {
             return;
         }
         self.library = library;
-        self.knowledge_folder = None;
-        self.knowledge_offset = 0;
-        self.knowledge_document = None;
-        self.knowledge_query.clear();
-        self.knowledge_corpus = "raw".into();
-        self.knowledge_poll_due = None;
+        self.knowledge = knowledge_state::KnowledgeUiState::default();
         for slot in [
-            crate::service_api::Slot::KnowledgeSources,
+            crate::service_api::Slot::KnowledgeWords,
             crate::service_api::Slot::KnowledgeBindings,
             crate::service_api::Slot::KnowledgeIntegrity,
             crate::service_api::Slot::KnowledgeJob,
@@ -860,6 +839,9 @@ impl App {
             crate::service_api::Slot::KnowledgeFolders,
             crate::service_api::Slot::KnowledgeDocuments,
             crate::service_api::Slot::KnowledgeDocument,
+            crate::service_api::Slot::KnowledgeEmbeddings,
+            crate::service_api::Slot::KnowledgeChanges,
+            crate::service_api::Slot::KnowledgeChange,
         ] {
             self.slots.clear(slot);
             self.slot_errors.remove(&slot);
@@ -1082,20 +1064,6 @@ impl App {
         if self.quit_armed_until.is_some_and(|until| until <= now) {
             self.quit_armed_until = None;
         }
-        if self.area == Area::Knowledge
-            && self.knowledge_poll_due.is_some_and(|due| due <= now)
-            && let Some(library) = self.library.clone()
-        {
-            // The next deadline is armed by a successful job result, preventing request accumulation.
-            // 下一次时限由成功任务结果设置，避免请求堆积。
-            self.knowledge_poll_due = None;
-            action::perform(
-                self,
-                action::UiAction::Send(Command::Call(
-                    crate::service_api::knowledge_base::get_knowledge_import_job(&library),
-                )),
-            );
-        }
         // A due slot is re-read only while its page is open; leaving the page drops the schedule.
         // 到期槽位仅在其页面打开时重读；离开页面即放弃该计划。
         let page = self.current_page();
@@ -1123,6 +1091,17 @@ impl App {
         use crate::service_api::Slot;
         let value = self.slots.value(slot);
         let interval = match slot {
+            Slot::KnowledgeJob => matches!(
+                value.get("state").and_then(serde_json::Value::as_str),
+                Some("queued" | "running")
+            )
+            .then_some(KNOWLEDGE_JOB_POLL_INTERVAL),
+            Slot::KnowledgeEmbeddings => (value
+                .get("pending")
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|count| count > 0)
+                && value.get("paused").and_then(serde_json::Value::as_bool) == Some(false))
+            .then_some(KNOWLEDGE_JOB_POLL_INTERVAL),
             Slot::ProviderTasks => value
                 .as_array()
                 .is_some_and(|tasks| {
@@ -1462,6 +1441,36 @@ impl App {
                 if !self.slot_is_current(slot, &call) {
                     return;
                 }
+                // Initial or recovered registry reads may unlock dependent library reads for the same selection.
+                // 初始或已恢复注册表读取可为相同选择解锁依赖知识库读取。
+                let needs_knowledge_reads = slot == crate::service_api::Slot::KnowledgeLibraries
+                    && !self.slots.loaded(slot);
+                // Selection reconciliation may already load the newly selected owner's page.
+                // 选择校正可能已加载新选定所有者页面。
+                let previous_library = self.library.clone();
+                // Content heads and settings revoke paid query results; refreshing metadata never replays a query.
+                // 内容头及设置撤销付费查询结果；刷新元信息绝不重放查询。
+                let knowledge_changed = slot == crate::service_api::Slot::KnowledgeLibraries && self.library.as_deref().is_some_and(|id| {
+                    // Compare the same immutable library identity in two complete registry snapshots.
+                    // 对比两个完整注册表快照中相同不可变知识库身份。
+                    let old = self.slots.value(slot).as_array().and_then(|rows| rows.iter().find(|row| row["id"] == id));
+                    // A missing new row is handled by normal catalog removal reconciliation below.
+                    // 缺少新条目由下方正常目录移除校正处理。
+                    let new = value.as_array().and_then(|rows| rows.iter().find(|row| row["id"] == id));
+                    matches!((old, new), (Some(old), Some(new)) if old["headChangeSeq"] != new["headChangeSeq"] || old["settings"] != new["settings"])
+                });
+                if knowledge_changed {
+                    self.knowledge.query.clear();
+                    self.knowledge.cursors = vec![None];
+                    for stale in [
+                        crate::service_api::Slot::KnowledgeSearch,
+                        crate::service_api::Slot::KnowledgeDocuments,
+                        crate::service_api::Slot::KnowledgeFolders,
+                    ] {
+                        self.slots.clear(stale);
+                        self.slot_errors.remove(&stale);
+                    }
+                }
                 // Terminal job transitions refresh the currently visible library content exactly once.
                 // 任务进入终态时，只刷新一次当前可见知识库内容。
                 let was_active_job = slot == crate::service_api::Slot::KnowledgeJob
@@ -1507,14 +1516,26 @@ impl App {
                         self.slots.at(slot, "/state").as_str(),
                         Some("queued" | "running")
                     );
-                    self.knowledge_poll_due =
-                        active.then_some(self.now + KNOWLEDGE_JOB_POLL_INTERVAL);
-                    if was_active_job && !active && self.area == Area::Knowledge {
+                    if was_active_job
+                        && !active
+                        && self.current_page().is_some_and(|page| {
+                            page.live_slots()
+                                .contains(&crate::service_api::Slot::KnowledgeJob)
+                        })
+                    {
                         self.load_page();
                     }
                 }
                 self.arm_live_poll(slot);
                 self.accept_catalog(slot);
+                if (needs_knowledge_reads || knowledge_changed)
+                    && self.library == previous_library
+                    && self
+                        .current_page()
+                        .is_some_and(|page| page.area() == Area::Knowledge)
+                {
+                    self.load_page();
+                }
             }
             BackendEvent::SlotFailed {
                 slot,
@@ -1526,14 +1547,25 @@ impl App {
                 }
                 self.slots.clear(slot);
                 self.slot_errors.insert(slot, message);
-                if slot == crate::service_api::Slot::KnowledgeJob {
-                    self.knowledge_poll_due = None;
-                }
                 self.live_poll_due.remove(&slot);
             }
             BackendEvent::Preview { call, result } => preview::open(self, call, result),
             BackendEvent::CallFinished => self.call_pending = false,
-            BackendEvent::Notice(notice) => self.notice(notice),
+            BackendEvent::Notice(notice) => {
+                // A committed policy/create request ends its draft even if the following registry read failed.
+                // 已提交策略或创建请求结束其草稿，即使后续注册表读取失败。
+                if matches!(
+                    &notice,
+                    Notice::Completed("create_knowledge_library" | "set_knowledge_index_mode")
+                ) {
+                    self.knowledge.draft = None;
+                    if self.current_page() == Some(PageId::KnowledgePolicy) {
+                        self.knowledge_page = PageId::KnowledgeBases;
+                        self.load_page();
+                    }
+                }
+                self.notice(notice);
+            }
         }
     }
 
@@ -1546,27 +1578,59 @@ impl App {
     ) -> bool {
         use crate::service_api::Slot;
         match slot {
-            Slot::KnowledgeSources
-            | Slot::KnowledgeBindings
-            | Slot::KnowledgeIntegrity
-            | Slot::KnowledgeJob
-            | Slot::KnowledgeFolders => {
+            Slot::KnowledgeWords | Slot::KnowledgeBindings | Slot::KnowledgeIntegrity => {
                 call.param("/libraryId").as_str() == self.library.as_deref()
             }
-            Slot::KnowledgeDocuments => {
+            Slot::KnowledgeJob => {
                 call.param("/request/libraryId").as_str() == self.library.as_deref()
-                    && call.param("/request/folderPath")
-                        == &serde_json::json!(self.knowledge_folder)
-                    && call.param("/request/offset").as_u64() == Some(self.knowledge_offset as u64)
             }
-            Slot::KnowledgeDocument => {
-                call.param("/libraryId").as_str() == self.library.as_deref()
-                    && call.param("/documentId").as_str() == self.knowledge_document.as_deref()
-                    && call.param("/corpus").as_str() == Some(self.knowledge_corpus.as_str())
+            Slot::KnowledgeEmbeddings => {
+                call.param("/request/libraryId").as_str() == self.library.as_deref()
+                    && call.param("/request/offset").as_u64()
+                        == self.knowledge.failure_offsets.last().copied()
             }
+            Slot::KnowledgeChanges => {
+                call.param("/request/libraryId").as_str() == self.library.as_deref()
+                    && call.param("/request/beforeSeq")
+                        == &serde_json::json!(
+                            self.knowledge
+                                .history_before
+                                .last()
+                                .expect("initial history boundary")
+                        )
+            }
+            Slot::KnowledgeChange => {
+                call.param("/request/libraryId").as_str() == self.library.as_deref()
+                    && call.param("/request/seq").as_u64() == self.knowledge.change_seq
+                    && call.param("/request/offset").as_u64()
+                        == self.knowledge.change_offsets.last().copied()
+            }
+            Slot::KnowledgePackages => {
+                call.param("/path") == &serde_json::json!(self.knowledge.package_path)
+            }
+            Slot::KnowledgeSelection => self.conversation().is_some_and(|conversation| {
+                call.param("/conversationId").as_str() == Some(conversation.id.as_str())
+            }),
+            Slot::KnowledgeAuthorizedLibraries | Slot::ProjectKnowledgeBindings => self
+                .conversation()
+                .and_then(|conversation| conversation.project_id.as_deref())
+                .is_some_and(|project_id| call.param("/projectId").as_str() == Some(project_id)),
+            Slot::KnowledgeFolders => self.library.as_ref().is_some_and(|id| {
+                call.params == serde_json::json!({"request":self.knowledge.directory_request(id)})
+            }),
+            Slot::KnowledgeDocuments => self.library.as_ref().is_some_and(|id| {
+                call.params == serde_json::json!({"request":self.knowledge.directory_request(id)})
+            }),
+            Slot::KnowledgeDocument => self
+                .library
+                .as_deref()
+                .and_then(|id| self.knowledge.document_call(id))
+                .is_some_and(|expected| {
+                    call.method == expected.method && call.params == expected.params
+                }),
             Slot::KnowledgeSearch => {
                 call.param("/request/libraryId").as_str() == self.library.as_deref()
-                    && call.param("/request/query").as_str() == Some(self.knowledge_query.as_str())
+                    && call.param("/request/query").as_str() == Some(self.knowledge.query.as_str())
             }
             Slot::VceOverview | Slot::VceJob => {
                 call.param("/request/projectId").as_str() == self.vce_project.as_deref()

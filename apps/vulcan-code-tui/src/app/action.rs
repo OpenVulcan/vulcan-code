@@ -37,12 +37,9 @@ pub enum LocalSetting {
     /// Selected knowledge view, independent from the library list.
     /// 所选知识视图，独立于知识库列表。
     KnowledgeView,
-    /// Exact selected managed-document folder.
-    /// 准确的托管文档目录选择。
-    KnowledgeFolder,
-    /// Raw/display corpus for the selected document.
-    /// 所选文档的原始或展示语料。
-    KnowledgeCorpus,
+    /// Unsaved human lifecycle field; never writes through a setting edit.
+    /// 未保存人工生命周期字段；绝不通过设置编辑写入。
+    KnowledgeDraft(super::knowledge_state::KnowledgeDraftField),
     /// Local agent enabled-state filter.
     /// 本地智能体启用状态筛选。
     AgentStatus,
@@ -148,7 +145,9 @@ pub enum PromptThen {
         min: i64,
         max: i64,
     },
-    KnowledgeCreate,
+    /// A move-only continuation already consumed by prompt acceptance.
+    /// 已由输入接受消费的仅移动后续动作。
+    Discard,
     /// Collects replacement text after confirming the native resource's purpose.
     /// 确认原生资源用途后收集替换正文。
     ResourceWrite(String),
@@ -288,15 +287,9 @@ pub enum UiAction {
     /// Selects a server-owned prompt-skill category, or the empty all-categories filter.
     /// 选择服务端提示词技能分类，或空的全部分类筛选。
     SkillCategory(String),
-    /// Opens one immutable managed document in the current library.
-    /// 打开当前知识库中的单个不可变托管文档。
-    OpenKnowledgeDocument(String),
-    /// Moves the managed listing to an explicit page offset.
-    /// 将托管列表移动到明确分页偏移量。
-    KnowledgeOffset(usize),
-    /// Opens the folder picker to add a source directory to this library.
-    /// 打开文件夹选择器，为此知识库添加来源目录。
-    AddKnowledgeSource(String),
+    /// Exact read navigation and explicit human lifecycle draft action.
+    /// 精确读取导航及明确人工生命周期草稿动作。
+    Knowledge(super::knowledge_actions::KnowledgeAction),
     /// Opens the folder picker to install a local plugin directory.
     /// 打开文件夹选择器以安装本地插件目录。
     InstallPlugin,
@@ -477,23 +470,7 @@ pub fn perform(app: &mut App, action: UiAction) {
             app.select_library(Some(id));
             perform(app, UiAction::GoPage(PageId::KnowledgeLibrary));
         }
-        UiAction::OpenKnowledgeDocument(id) => {
-            app.knowledge_document = Some(id);
-            app.slots.clear(crate::service_api::Slot::KnowledgeDocument);
-            app.pages.remove(&PageId::KnowledgeDocument);
-            perform(app, UiAction::GoPage(PageId::KnowledgeDocument));
-        }
-        UiAction::KnowledgeOffset(offset) => {
-            app.knowledge_offset = offset;
-            app.slots
-                .clear(crate::service_api::Slot::KnowledgeDocuments);
-            app.pages.remove(&PageId::KnowledgeDocuments);
-            app.load_page();
-        }
-        UiAction::AddKnowledgeSource(library) => {
-            app.select_library(Some(library));
-            open_folder(app, FolderMode::KnowledgeSource, None);
-        }
+        UiAction::Knowledge(action) => super::knowledge_actions::perform(app, action),
         UiAction::InstallPlugin => open_folder(app, FolderMode::Plugin, None),
         UiAction::OpenPluginMount { plugin, mount } => {
             let target = Some((plugin, mount));
@@ -827,23 +804,9 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                         app.knowledge_page = page;
                     }
                 }
-                LocalSetting::KnowledgeFolder => {
-                    // JSON option values distinguish all folders (null) from the root folder (empty string).
-                    // JSON 选项值区分全部目录（null）与根目录（空字符串）。
-                    let Ok(folder) = serde_json::from_str::<Option<String>>(value.as_str()) else {
-                        app.toast(NoticeSeverity::Error, tr!("tui.form.invalid"));
-                        return;
-                    };
-                    app.knowledge_folder = folder;
-                    app.knowledge_offset = 0;
-                    app.slots
-                        .clear(crate::service_api::Slot::KnowledgeDocuments);
-                    app.pages.remove(&PageId::KnowledgeDocuments);
-                }
-                LocalSetting::KnowledgeCorpus => {
-                    app.knowledge_corpus = value.as_str().to_string();
-                    app.slots.clear(crate::service_api::Slot::KnowledgeDocument);
-                    app.pages.remove(&PageId::KnowledgeDocument);
+                LocalSetting::KnowledgeDraft(field) => {
+                    super::knowledge_actions::edit_draft(app, field, &value);
+                    return;
                 }
                 LocalSetting::AgentStatus => {
                     app.agent_status = value.as_str().to_string();
@@ -927,7 +890,7 @@ fn open_choice(
     app.overlay = Some(Overlay::Picker(Picker::new(
         PickerKind::Choice,
         title,
-        tr!("knowledge.search"),
+        tr!("tui.page.search"),
         items,
     )));
 }
@@ -946,7 +909,7 @@ pub fn open_area_picker(app: &mut App) {
     app.overlay = Some(Overlay::Picker(Picker::new(
         PickerKind::Area,
         tr!("tui.area.switch"),
-        tr!("knowledge.search"),
+        tr!("tui.page.search"),
         items,
     )));
 }
@@ -980,7 +943,7 @@ fn accept_prompt(app: &mut App) {
     let Some(Overlay::Prompt(mut dialog)) = app.overlay.take() else {
         return;
     };
-    let then = std::mem::replace(&mut dialog.then, PromptThen::KnowledgeCreate);
+    let then = std::mem::replace(&mut dialog.then, PromptThen::Discard);
     match then {
         PromptThen::ResourceWrite(path) => {
             let request = crate::service_api::memory_actions::native_resource_write(&path, &value);
@@ -1021,20 +984,10 @@ fn accept_prompt(app: &mut App) {
                 app.overlay = Some(Overlay::Prompt(dialog));
             }
         },
-        PromptThen::KnowledgeCreate => perform(
-            app,
-            UiAction::Send(Command::Call(
-                crate::service_api::knowledge_base::create_knowledge_library(
-                    &value,
-                    "",
-                    &[],
-                    serde_json::json!({}),
-                ),
-            )),
-        ),
+        PromptThen::Discard => {}
         PromptThen::MemorySearch => app.memory_query = value,
         PromptThen::KnowledgeSearch => {
-            app.knowledge_query = value;
+            app.knowledge.query = value;
             app.slots.clear(crate::service_api::Slot::KnowledgeSearch);
             app.slot_errors
                 .remove(&crate::service_api::Slot::KnowledgeSearch);
@@ -1153,14 +1106,6 @@ fn use_directory(app: &mut App, mode: FolderMode, path: String) {
     // 目录选择仅构建请求；后端负责全部服务副作用。
     let command = match mode {
         FolderMode::Project => Command::AddProjectFromPath { path },
-        FolderMode::KnowledgeSource => {
-            let Some(library) = &app.library else {
-                return;
-            };
-            Command::Call(
-                crate::service_api::knowledge_base::preview_knowledge_import(library, &path, None),
-            )
-        }
         FolderMode::Plugin => Command::Call(
             crate::service_api::skills_actions::inspect_local_plugin(&path),
         ),

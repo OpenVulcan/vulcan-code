@@ -2539,20 +2539,26 @@ mod tests {
             );
             assert_eq!(
                 request.body["params"],
-                json!({"libraryId":"library","documentId":"doc","corpus":"display"})
+                json!({"request":{"libraryId":"library","documentId":"doc","path":null,"startLine":null,"endLine":null}})
             );
-            json!({"ok":false,"error":{"message":"Display document is not built"}})
+            json!({"ok":false,"error":{"message":"ERR_TEST_BODY_UNAVAILABLE"}})
         });
         // Isolated worker and channels never discover an external endpoint.
         // 隔离工作线程及通道不发现外部端点。
         let (mut worker, events, input) = worker_fixture(server.client.clone());
         worker.service_call(knowledge_base::read_managed_knowledge_document(
-            "library", "doc", "display",
+            vulcan_service_api::KnowledgeDocumentReadRequest {
+                library_id: "library".into(),
+                document_id: Some("doc".into()),
+                path: None,
+                start_line: None,
+                end_line: None,
+            },
         ));
         worker.handle_input(input.recv_timeout(Duration::from_secs(2)).unwrap());
         assert!(events.try_iter().any(|event|matches!(event,BackendEvent::SlotFailed{slot:Slot::KnowledgeDocument,call,message}
-            if call.param("/libraryId") == "library" && call.param("/documentId") == "doc" && call.param("/corpus") == "display"
-               && message == "Display document is not built")));
+            if call.param("/request/libraryId") == "library" && call.param("/request/documentId") == "doc"
+               && message == "ERR_TEST_BODY_UNAVAILABLE")));
         server.thread.join().unwrap();
     }
 
@@ -2582,20 +2588,24 @@ mod tests {
         // 当前服务器或本地合成监听器。
         let server = RpcServer::start(2, |request| {
             json!({"ok":true,"result":{
-            "query":request.body.pointer("/params/request/query").unwrap()}})
+            "queries":[request.body.pointer("/params/request/query").unwrap()],"hits":[],"libraries":[],"failures":[]}})
         });
         // Worker; Events; Current input.
         // 串行服务工作线程状态；事件集合或事件接收通道；当前输入。
         let (mut worker, events, input) = worker_fixture(server.client.clone());
         worker.service_call(knowledge_base::search_managed_knowledge_library(
-            "demo-library",
-            "old",
-            None,
+            vulcan_service_api::KnowledgeLibrarySearchRequest {
+                library_id: "demo-library".into(),
+                query: "old".into(),
+                limit: 7,
+            },
         ));
         worker.service_call(knowledge_base::search_managed_knowledge_library(
-            "demo-library",
-            "new",
-            None,
+            vulcan_service_api::KnowledgeLibrarySearchRequest {
+                library_id: "demo-library".into(),
+                query: "new".into(),
+                limit: 7,
+            },
         ));
         for _ in 0..2 {
             worker.handle_input(input.recv_timeout(Duration::from_secs(2)).unwrap());
@@ -2605,7 +2615,7 @@ mod tests {
         let received: Vec<_> = events.try_iter().collect();
         assert_eq!(received.len(), 1);
         assert!(
-            matches!(&received[0],BackendEvent::Slot{slot:Slot::KnowledgeSearch,value,..} if value["query"] == "new")
+            matches!(&received[0],BackendEvent::Slot{slot:Slot::KnowledgeSearch,value,..} if value["queries"] == json!(["new"]))
         );
         assert_eq!(
             worker.loaders[&Slot::KnowledgeSearch].param("/request/query"),

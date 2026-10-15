@@ -1,17 +1,20 @@
-// Catalog and library regressions exercise real actions through isolated channels.
-// 目录及知识库回归测试通过隔离通道执行真实动作。
+//! Knowledge lifecycle regressions execute real UI actions through inert channels.
+//! 知识库生命周期回归通过静默通道执行真实界面动作。
 
 use super::action::{Edit, LocalSetting, UiAction, perform};
+use super::knowledge_actions::KnowledgeAction;
+use super::knowledge_state::{KNOWLEDGE_PAGE_SIZE, KnowledgeDocumentAddress, KnowledgeDraftField};
 use super::pages::{RowKind, navigation, rows};
 use super::*;
-use crate::service_api::{Slot, knowledge_base as kb, workbench_snapshot};
+use crate::service_api::{ServiceCall, Slot, knowledge_base as kb, workbench_snapshot};
 use serde_json::{Value, json};
 use std::sync::mpsc::{self, Receiver};
+use vulcan_service_api::*;
 
-/// Builds a disconnected fixture app with an observer and no worker or discovery I/O.
-/// 构建带观察端的断开夹具应用，不运行工作器或服务发现输入输出。
-/// Returns the app, command receiver and immutable synthetic source document.
-/// 返回应用、命令接收端及不可变合成来源文档。
+/// Builds an inert app and current shared fixtures without discovery or user-state I/O.
+/// 构建静默应用及当前共享夹具，不执行发现或用户状态输入输出。
+/// Parameters: none. Returns the app, request observer and immutable fixture document.
+/// 参数：无。返回应用、请求观察端及不可变夹具文档。
 fn fixture_app() -> (App, Receiver<Command>, Value) {
     // Isolated command channel exposes requests without executing them.
     // 隔离命令通道公开请求，但不执行。
@@ -42,17 +45,17 @@ fn fixture_app() -> (App, Receiver<Command>, Value) {
     });
     app.apply(BackendEvent::Slot {
         slot: Slot::KnowledgeLibraries,
-        call: kb::list_knowledge_libraries(),
+        call: kb::list_knowledge_libraries(None),
         value: fixture["loads"]["service_list_knowledge_libraries"].clone(),
     });
     receiver.try_iter().for_each(drop);
     (app, receiver, fixture)
 }
 
-/// Extracts actual catalog item identities, excluding toolbar controls.
-/// 提取实际目录条目身份，排除工具栏控件。
-/// `app` and `page` select rendered rows; returns their stable Item identifiers.
-/// `app` 及 `page` 选择渲染行；返回其稳定 Item 标识。
+/// Collects stable item identities from a real rendered page.
+/// 从真实渲染页面收集稳定条目身份。
+/// Parameters: app and page own the view. Returns item IDs only.
+/// 参数：app 及 page 拥有视图。仅返回条目身份。
 fn item_ids(app: &App, page: PageId) -> Vec<String> {
     rows(app, page)
         .into_iter()
@@ -62,23 +65,50 @@ fn item_ids(app: &App, page: PageId) -> Vec<String> {
         })
         .collect()
 }
-/// Editing a search query clears stale hits immediately and blank input clears the local filter.
-/// 编辑查询时立即清空旧命中，空输入清除本地筛选。
+
+/// Builds the exact current reader request used by the UI's initial body window.
+/// 构建界面初始正文窗口使用的精确当前阅读请求。
+/// Parameters: library/id select the current owner and document; start selects its first line. Returns an unexecuted call.
+/// 参数：library 及 id 选择当前所有者及文档；start 选择首行。返回未执行调用。
+fn read_call(library: &str, id: &str, start: usize) -> ServiceCall {
+    kb::read_managed_knowledge_document(KnowledgeDocumentReadRequest {
+        library_id: library.into(),
+        document_id: Some(id.into()),
+        path: None,
+        start_line: Some(start),
+        end_line: None,
+    })
+}
+
+/// Builds an explicit single-library human search request.
+/// 构建明确单库人工检索请求。
+/// Parameters: library/query are exact current inputs. Returns an unexecuted search call.
+/// 参数：library 及 query 为精确当前输入。返回未执行检索调用。
+fn search_call(library: &str, query: &str) -> ServiceCall {
+    kb::search_managed_knowledge_library(KnowledgeLibrarySearchRequest {
+        library_id: library.into(),
+        query: query.into(),
+        limit: KNOWLEDGE_PAGE_SIZE,
+    })
+}
+
+/// Search edits invalidate earlier results and blank input never calls a model.
+/// 检索编辑撤销早先结果，空输入绝不调用模型。
 #[test]
 fn search_edits_prefill_queries_and_invalidate_previous_hits() {
-    // Inert app with an existing completed search.
-    // 已有完成搜索的静默应用。
+    // The channel records real dispatcher effects.
+    // 通道记录真实分发器效果。
     let (mut app, commands, _) = fixture_app();
-    app.knowledge_query = "old".into();
+    app.knowledge.query = "old".into();
     perform(&mut app, UiAction::GoPage(PageId::KnowledgeSearch));
     commands.try_iter().for_each(drop);
     app.slots.set(
         Slot::KnowledgeSearch,
-        kb::search_managed_knowledge_library("demo-library", "old", None),
+        search_call("demo-library", "old"),
         json!({"hits":[{"documentId":"old"}]}),
     );
-    // Prepared prompt avoids overlapping mutable and immutable app borrows.
-    // 预备输入框避免应用的可变及不可变借用重叠。
+    // Shared prompt handling is the only query submission path.
+    // 共享输入处理为唯一查询提交路径。
     let prompt = PageId::KnowledgeSearch.search(&app).unwrap();
     perform(&mut app, prompt);
     assert!(matches!(&app.overlay,Some(Overlay::Prompt(dialog)) if dialog.input == "old"));
@@ -86,63 +116,429 @@ fn search_edits_prefill_queries_and_invalidate_previous_hits() {
         dialog.input = "new".into();
     }
     perform(&mut app, UiAction::PromptAccept);
-    assert_eq!(app.knowledge_query, "new");
+    assert_eq!(app.knowledge.query, "new");
     assert!(!app.slots.loaded(Slot::KnowledgeSearch));
     assert!(commands.try_iter().any(|command|matches!(command,Command::Call(call) if call.method == "service_search_knowledge_library" && call.param("/request/query") == "new")));
-    // Opening and clearing the same search uses its retained current query.
-    // 打开并清除同一搜索时使用其保留的当前查询。
+    // Clearing retains no query result and emits no search call.
+    // 清空后不保留查询结果，也不发出检索调用。
     let prompt = PageId::KnowledgeSearch.search(&app).unwrap();
     perform(&mut app, prompt);
     if let Some(Overlay::Prompt(dialog)) = &mut app.overlay {
         dialog.input.clear();
     }
     perform(&mut app, UiAction::PromptAccept);
-    assert!(app.knowledge_query.is_empty());
+    assert!(app.knowledge.query.is_empty());
     assert!(!commands.try_iter().any(|command|matches!(command,Command::Call(call) if call.method == "service_search_knowledge_library")));
 }
-/// Persistent reader errors reject stale owners and a matching retry restores readable content.
-/// 持久阅读错误拒绝旧归属，匹配重试恢复可读正文。
+
+/// Reader errors remain visible, reject stale ownership and recover only by an exact read retry.
+/// 阅读错误保持可见、拒绝过期归属，并仅经精确读取重试恢复。
 #[test]
 fn reader_failures_stay_visible_until_a_matching_retry() {
-    // Isolated document reader and command observer.
-    // 隔离文档阅读器及命令观察端。
-    let (mut app, commands, _) = fixture_app();
+    // No RPC executes in this regression.
+    // 此回归不执行 RPC。
+    let (mut app, commands, fixture) = fixture_app();
     perform(
         &mut app,
-        UiAction::OpenKnowledgeDocument("demo-document".into()),
+        UiAction::Knowledge(KnowledgeAction::Document(
+            KnowledgeDocumentAddress::Current("demo-document".into()),
+        )),
     );
     commands.try_iter().for_each(drop);
     app.apply(BackendEvent::SlotFailed {
         slot: Slot::KnowledgeDocument,
-        call: kb::read_managed_knowledge_document("other", "demo-document", "raw"),
+        call: read_call("other", "demo-document", 1),
         message: "stale error".into(),
     });
     assert!(!app.slot_errors.contains_key(&Slot::KnowledgeDocument));
+    // This synthetic diagnostic is retained by exact scope, independently of toast lifetime.
+    // 此合成诊断按精确范围保留，独立于提示寿命。
+    let diagnostic = "ERR_TEST_BODY_UNAVAILABLE";
     app.apply(BackendEvent::SlotFailed {
         slot: Slot::KnowledgeDocument,
-        call: kb::read_managed_knowledge_document("demo-library", "demo-document", "raw"),
-        message: "Document corpus is not built".into(),
+        call: read_call("demo-library", "demo-document", 1),
+        message: diagnostic.into(),
     });
     app.toasts.clear();
     assert!(
         rows(&app, PageId::KnowledgeDocument)
             .iter()
-            .any(|row| row.label == "Document corpus is not built")
+            .any(|row| row.label == diagnostic)
     );
     perform(&mut app, UiAction::ReloadPage);
     assert!(!app.slot_errors.contains_key(&Slot::KnowledgeDocument));
-    assert!(commands.try_iter().any(|command|matches!(command,Command::Call(call) if call.method == "service_read_knowledge_library_document")));
-    app.apply(BackendEvent::Slot {slot:Slot::KnowledgeDocument,call:kb::read_managed_knowledge_document("demo-library","demo-document","raw"),
-        value:json!({"document":{"title":"Current","relativePath":"readme.md"},"content":"restored text"})});
-    assert!(
-        rows(&app, PageId::KnowledgeDocument).iter().any(
-            |row| matches!(&row.kind,RowKind::Document{content} if content == "restored text")
-        )
-    );
+    assert!(commands.try_iter().any(|command|matches!(command,Command::Call(call) if call.method=="service_read_knowledge_library_document")));
+    // Locate the fixture by stable identity rather than an evolving array position.
+    // 按稳定身份定位夹具，而非会演进的数组位置。
+    let entry = fixture["knowledgeDocuments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["document"]["id"] == "demo-document")
+        .expect("document fixture may have changed");
+    app.apply(BackendEvent::Slot { slot:Slot::KnowledgeDocument,call:read_call("demo-library","demo-document",1),value:json!({"document":entry["document"],"content":entry["body"],"startLine":1,"endLine":5,"nextLine":null}) });
+    assert!(rows(&app,PageId::KnowledgeDocument).iter().any(|row|matches!(&row.kind, RowKind::Document {content} if content==entry["body"].as_str().unwrap())));
 }
 
-/// Server categories control navigation order, counts, source resolution and local filtering.
-/// 服务分类控制导航顺序、计数、来源解析及本地筛选。
+/// Library changes reset local selectors and reject stale current and historical body responses.
+/// 知识库变化重置本地选择器，并拒绝过期当前及历史正文响应。
+#[test]
+fn library_selection_and_document_scope_reject_stale_results() {
+    // A second explicit registry owner exercises library identity isolation.
+    // 第二个明确注册表所有者验证知识库身份隔离。
+    let (mut app, commands, fixture) = fixture_app();
+    // Clone the selected exact row solely to synthesize another physical library.
+    // 仅克隆所选精确条目以合成另一物理知识库。
+    let mut second = fixture["loads"]["service_list_knowledge_libraries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "demo-library")
+        .unwrap()
+        .clone();
+    second["id"] = json!("second-library");
+    second["name"] = json!("Second");
+    // Both current metadata rows belong to one complete registry snapshot.
+    // 两个当前元信息条目属于一个完整注册表快照。
+    let mut catalog = fixture["loads"]["service_list_knowledge_libraries"].clone();
+    catalog.as_array_mut().unwrap().push(second);
+    app.apply(BackendEvent::Slot {
+        slot: Slot::KnowledgeLibraries,
+        call: kb::list_knowledge_libraries(None),
+        value: catalog,
+    });
+    app.knowledge.folder = "guide".into();
+    app.knowledge.cursors.push(Some("opaque".into()));
+    app.knowledge.query = "old".into();
+    perform(&mut app, UiAction::OpenLibrary("second-library".into()));
+    assert_eq!(app.library.as_deref(), Some("second-library"));
+    assert!(app.knowledge.folder.is_empty() && app.knowledge.query.is_empty());
+    assert_eq!(app.knowledge.cursors, [None]);
+    perform(&mut app, UiAction::GoPage(PageId::KnowledgeDocuments));
+    commands.try_iter().for_each(drop);
+    // Owner, path and cursor must each match the exact current directory request.
+    // 所有者、路径及游标必须各自匹配精确当前目录请求。
+    for (library, path, cursor) in [
+        ("demo-library", "", None),
+        ("second-library", "guide", None),
+        ("second-library", "", Some("old".to_string())),
+    ] {
+        app.apply(BackendEvent::Slot {
+            slot: Slot::KnowledgeDocuments,
+            call: kb::list_managed_knowledge_documents(KnowledgeLibraryDocumentListRequest {
+                library_id: library.into(),
+                path: path.into(),
+                depth: 1,
+                cursor,
+                limit: KNOWLEDGE_PAGE_SIZE,
+            }),
+            value: json!({"entries":[]}),
+        });
+        assert!(!app.slots.loaded(Slot::KnowledgeDocuments));
+    }
+    app.knowledge.document = Some(KnowledgeDocumentAddress::Current("wanted".into()));
+    for call in [
+        read_call("demo-library", "wanted", 1),
+        read_call("second-library", "other", 1),
+        read_call("second-library", "wanted", 9),
+        kb::read_knowledge_change_document(KnowledgeChangeDocumentReadRequest {
+            library_id: "second-library".into(),
+            seq: 7,
+            document_id: "wanted".into(),
+            side: KnowledgeChangeSideRequest::Before,
+            start_line: Some(1),
+            end_line: None,
+        }),
+    ] {
+        app.apply(BackendEvent::Slot {
+            slot: Slot::KnowledgeDocument,
+            call,
+            value: json!({"content":"stale"}),
+        });
+        assert!(!app.slots.loaded(Slot::KnowledgeDocument));
+    }
+    app.apply(BackendEvent::Slot {
+        slot: Slot::KnowledgeDocument,
+        call: read_call("second-library", "wanted", 1),
+        value: json!({"content":"current"}),
+    });
+    assert_eq!(app.slots.at(Slot::KnowledgeDocument, "/content"), "current");
+}
+
+/// Directory and body continuations use service-issued values without local arithmetic.
+/// 目录及正文续读使用服务签发值，不进行本地算术推测。
+#[test]
+fn managed_document_browse_uses_exact_folders_and_reader_contract() {
+    // Only actual dispatcher requests are observed.
+    // 仅观察实际分发器请求。
+    let (mut app, commands, _) = fixture_app();
+    perform(
+        &mut app,
+        UiAction::Knowledge(KnowledgeAction::Folder("guide".into())),
+    );
+    assert!(commands.try_iter().any(|command|matches!(command,Command::Call(call) if call.method=="service_list_knowledge_library_documents" && call.param("/request/path")=="guide" && call.param("/request/cursor").is_null())));
+    perform(
+        &mut app,
+        UiAction::Knowledge(KnowledgeAction::DirectoryNext("opaque-head-cursor".into())),
+    );
+    assert!(commands.try_iter().any(|command|matches!(command,Command::Call(call) if call.method=="service_list_knowledge_library_documents" && call.param("/request/cursor")=="opaque-head-cursor")));
+    perform(
+        &mut app,
+        UiAction::Knowledge(KnowledgeAction::DirectoryBack),
+    );
+    assert_eq!(app.knowledge.cursors, [None]);
+    perform(
+        &mut app,
+        UiAction::Knowledge(KnowledgeAction::Document(
+            KnowledgeDocumentAddress::Historical {
+                seq: 23,
+                document_id: "stable".into(),
+                side: KnowledgeChangeSideRequest::Before,
+            },
+        )),
+    );
+    commands.try_iter().for_each(drop);
+    perform(&mut app, UiAction::Knowledge(KnowledgeAction::BodyNext(37)));
+    assert!(commands.try_iter().any(|command|matches!(command,Command::Call(call) if call.method=="service_read_knowledge_change_document" && call.param("/request/seq")==23 && call.param("/request/side")=="before" && call.param("/request/startLine")==37)));
+}
+
+/// Durable jobs poll without overlap, stop on errors and never replay a paid search.
+/// 持久任务轮询不重叠、在错误时停止，并绝不重放付费检索。
+#[test]
+fn knowledge_jobs_poll_without_overlap_and_refresh_at_completion() {
+    // Maintenance is an explicit live-status page.
+    // 维护为明确实时状态页面。
+    let (mut app, commands, _) = fixture_app();
+    perform(&mut app, UiAction::GoPage(PageId::KnowledgeMaintenance));
+    commands.try_iter().for_each(drop);
+    // Latest-job discovery retains one exact library request.
+    // 最新任务发现保留一个精确知识库请求。
+    let call = kb::get_knowledge_operation(KnowledgeOperationRequest {
+        library_id: "demo-library".into(),
+        operation_id: None,
+    });
+    app.apply(BackendEvent::Slot {
+        slot: Slot::KnowledgeJob,
+        call: call.clone(),
+        value: json!({"id":"job","state":"running"}),
+    });
+    // Successful observations alone arm the next polling deadline.
+    // 仅成功观察设置下一轮询时限。
+    let due = app.now + KNOWLEDGE_JOB_POLL_INTERVAL;
+    app.tick(due - Duration::from_millis(1));
+    assert!(commands.try_recv().is_err());
+    app.tick(due);
+    assert!(
+        matches!(commands.try_recv().unwrap(),Command::Call(call) if call.method=="service_get_knowledge_operation")
+    );
+    app.tick(due + Duration::from_secs(20));
+    assert!(commands.try_recv().is_err());
+    app.apply(BackendEvent::SlotFailed {
+        slot: Slot::KnowledgeJob,
+        call: call.clone(),
+        message: "ERR_TEST_JOB".into(),
+    });
+    app.tick(due + Duration::from_secs(30));
+    assert!(commands.try_recv().is_err());
+    app.apply(BackendEvent::Slot {
+        slot: Slot::KnowledgeJob,
+        call: call.clone(),
+        value: json!({"id":"job","state":"running"}),
+    });
+    app.apply(BackendEvent::Slot {
+        slot: Slot::KnowledgeJob,
+        call,
+        value: json!({"id":"job","state":"completed"}),
+    });
+    assert!(commands.try_iter().any(|command|matches!(command,Command::Call(call) if call.method=="service_get_knowledge_index_integrity")));
+}
+
+/// Changed heads revoke search results and continuations without implicitly submitting another query.
+/// 变化头撤销检索结果及续读标识，不隐式提交另一查询。
+#[test]
+fn registry_changes_revoke_queries_without_paid_replay() {
+    // The original query has completed under a specific content head.
+    // 原查询在特定内容头下已完成。
+    let (mut app, commands, fixture) = fixture_app();
+    app.knowledge.query = "synthetic".into();
+    perform(&mut app, UiAction::GoPage(PageId::KnowledgeSearch));
+    commands.try_iter().for_each(drop);
+    app.slots.set(
+        Slot::KnowledgeSearch,
+        search_call("demo-library", "synthetic"),
+        json!({"hits":[]}),
+    );
+    app.knowledge.cursors.push(Some("old-head".into()));
+    // A new authoritative head makes old results stale even when the library ID is unchanged.
+    // 即使知识库身份未变，新权威头仍让旧结果过期。
+    let mut catalog = fixture["loads"]["service_list_knowledge_libraries"].clone();
+    catalog
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|row| row["id"] == "demo-library")
+        .unwrap()["headChangeSeq"] = json!(9);
+    app.apply(BackendEvent::Slot {
+        slot: Slot::KnowledgeLibraries,
+        call: kb::list_knowledge_libraries(None),
+        value: catalog,
+    });
+    assert!(app.knowledge.query.is_empty());
+    assert!(!app.slots.loaded(Slot::KnowledgeSearch));
+    assert_eq!(app.knowledge.cursors, [None]);
+    assert!(!commands.try_iter().any(|command|matches!(command,Command::Call(call) if call.method=="service_search_knowledge_library")));
+}
+
+/// Human creation requires a selected mode and saves only once after explicit submission.
+/// 人工创建要求选定模式，并仅在明确提交后保存一次。
+#[test]
+fn creation_drafts_are_local_explicit_and_not_replayed() {
+    // No lifecycle request is sent while choosing local fields.
+    // 选择本地字段期间不发送生命周期请求。
+    let (mut app, commands, _) = fixture_app();
+    perform(&mut app, UiAction::Knowledge(KnowledgeAction::Create));
+    commands.try_iter().for_each(drop);
+    assert!(app.knowledge.draft.as_ref().unwrap().mode.is_none());
+    perform(
+        &mut app,
+        UiAction::Edit(
+            Edit::Local(LocalSetting::KnowledgeDraft(KnowledgeDraftField::Name)),
+            SettingValue::Text("New".into()),
+        ),
+    );
+    perform(&mut app, UiAction::Knowledge(KnowledgeAction::SaveDraft));
+    assert!(commands.try_recv().is_err());
+    perform(
+        &mut app,
+        UiAction::Edit(
+            Edit::Local(LocalSetting::KnowledgeDraft(KnowledgeDraftField::Mode)),
+            SettingValue::Text("bm25".into()),
+        ),
+    );
+    assert!(commands.try_recv().is_err());
+    perform(&mut app, UiAction::Knowledge(KnowledgeAction::SaveDraft));
+    // The shared mutation gate prevents a second keyboard or mouse activation.
+    // 共享变更闸门阻止第二次键盘或鼠标激活。
+    perform(&mut app, UiAction::Knowledge(KnowledgeAction::SaveDraft));
+    // Only one fully explicit create envelope reaches the backend boundary.
+    // 仅一个完整明确创建封装到达后端边界。
+    let sent = commands
+        .try_iter()
+        .filter_map(|command| {
+            if let Command::Call(call) = command {
+                Some(call)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].method, "service_create_knowledge_library");
+    assert_eq!(sent[0].param("/request/settings/indexMode"), "bm25");
+    app.apply(BackendEvent::Notice(crate::backend::Notice::Completed(
+        "create_knowledge_library",
+    )));
+    assert!(app.knowledge.draft.is_none());
+}
+
+/// Unknown and failed job reads expose no lifecycle operation, while exact active IDs remain cancellable.
+/// 未知及失败任务读取不暴露生命周期操作，精确活动身份仍可取消。
+#[test]
+fn maintenance_requires_a_known_current_operation_state() {
+    // This app never executes the rendered operation calls.
+    // 此应用绝不执行已渲染操作调用。
+    let (mut app, _, _) = fixture_app();
+    // The current operation loader has a stable physical owner.
+    // 当前操作加载器具有稳定物理所有者。
+    let call = kb::get_knowledge_operation(KnowledgeOperationRequest {
+        library_id: "demo-library".into(),
+        operation_id: None,
+    });
+    for value in [json!({"state":"future_state"}), json!({}), json!(false)] {
+        app.slots.set(Slot::KnowledgeJob, call.clone(), value);
+        assert!(!rows(&app,PageId::KnowledgeMaintenance).iter().any(|row|matches!(&row.kind,RowKind::Button {action:UiAction::Send(Command::Call(call)),..} if matches!(call.kind,crate::service_api::CallKind::Mutate(_)))));
+    }
+    app.slots.set(Slot::KnowledgeJob, call.clone(), Value::Null);
+    assert!(rows(&app,PageId::KnowledgeMaintenance).iter().any(|row|matches!(&row.kind,RowKind::Button {action:UiAction::Send(Command::Call(call)),..} if call.method=="service_rebuild_knowledge_index")));
+    app.apply(BackendEvent::SlotFailed {
+        slot: Slot::KnowledgeJob,
+        call: call.clone(),
+        message: "ERR_TEST_JOB".into(),
+    });
+    assert!(!rows(&app,PageId::KnowledgeMaintenance).iter().any(|row|matches!(&row.kind,RowKind::Button {action:UiAction::Send(Command::Call(call)),..} if matches!(call.kind,crate::service_api::CallKind::Mutate(_)))));
+    app.apply(BackendEvent::Slot {
+        slot: Slot::KnowledgeJob,
+        call,
+        value: json!({"id":"stable-operation","state":"running"}),
+    });
+    assert!(rows(&app,PageId::KnowledgeMaintenance).iter().any(|row|matches!(&row.kind,RowKind::Button {action:UiAction::Send(Command::Call(call)),..} if call.method=="service_cancel_knowledge_operation" && call.param("/request/operationId")=="stable-operation")));
+}
+
+/// Immutable history navigation retains real sequences and restoration waits for final confirmation.
+/// 不可变历史导航保留真实序号，还原等待最终确认。
+#[test]
+fn history_uses_actual_sequences_and_explicit_restore_confirmation() {
+    // Gapped synthetic sequences prevent contiguous-sequence assumptions.
+    // 有间隔合成序号防止连续序号假设。
+    let (mut app, commands, _) = fixture_app();
+    perform(&mut app, UiAction::GoPage(PageId::KnowledgeHistory));
+    commands.try_iter().for_each(drop);
+    // The next-page sentinel is a viewport policy, separate from storage bounds.
+    // 下一页哨兵为视口策略，与存储边界分离。
+    let changes=(0..=KNOWLEDGE_PAGE_SIZE).map(|index|json!({"seq":300-u64::from(index)*7,"operation":"update","actor":{"kind":"ai"},"note":"test"})).collect::<Vec<_>>();
+    app.slots.set(
+        Slot::KnowledgeChanges,
+        kb::list_knowledge_changes(KnowledgeChangeListRequest {
+            library_id: "demo-library".into(),
+            before_seq: None,
+            limit: KNOWLEDGE_PAGE_SIZE + 1,
+        }),
+        json!(changes),
+    );
+    // The rendered action freezes the actual last visible immutable sequence.
+    // 已渲染动作冻结实际最后可见不可变序号。
+    let next = rows(&app, PageId::KnowledgeHistory)
+        .into_iter()
+        .find_map(|row| match row.kind {
+            RowKind::Button {
+                action: UiAction::Knowledge(KnowledgeAction::HistoryNext(seq)),
+                ..
+            } => Some(seq),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(next, 300 - u64::from(KNOWLEDGE_PAGE_SIZE - 1) * 7);
+    perform(
+        &mut app,
+        UiAction::Knowledge(KnowledgeAction::HistoryNext(next)),
+    );
+    assert!(commands.try_iter().any(|command|matches!(command,Command::Call(call) if call.method=="service_list_knowledge_changes" && call.param("/request/beforeSeq")==next)));
+    perform(&mut app, UiAction::Knowledge(KnowledgeAction::HistoryBack));
+    commands.try_iter().for_each(drop);
+    app.slots.set(
+        Slot::KnowledgeChanges,
+        kb::list_knowledge_changes(KnowledgeChangeListRequest {
+            library_id: "demo-library".into(),
+            before_seq: None,
+            limit: KNOWLEDGE_PAGE_SIZE + 1,
+        }),
+        json!(changes),
+    );
+    // Choose an actual row's confirmation, without relying on its action index or translated label.
+    // 选择实际行确认，不依赖动作下标或翻译标签。
+    let restore=rows(&app,PageId::KnowledgeHistory).into_iter().find_map(|row|match row.kind {RowKind::Item {actions,..}=>actions.into_iter().filter_map(|action|action.action).find(|action|matches!(action,UiAction::Confirm(dialog) if matches!(&dialog.then,UiAction::Send(Command::Call(call)) if call.method=="service_restore_knowledge_library" && call.param("/request/targetSeq")==300))),_=>None}).unwrap();
+    perform(&mut app, restore);
+    assert!(commands.try_recv().is_err());
+    perform(&mut app, UiAction::ConfirmAccept);
+    assert!(
+        matches!(commands.try_recv().unwrap(),Command::Call(call) if call.method=="service_restore_knowledge_library" && call.param("/request/libraryId")=="demo-library" && call.param("/request/targetSeq")==300)
+    );
+    perform(&mut app, UiAction::ConfirmAccept);
+    assert!(commands.try_recv().is_err());
+}
+
+/// Server categories still own agent and skill navigation independently of knowledge changes.
+/// 服务分类仍独立于知识库变化拥有智能体及技能导航。
 #[test]
 fn catalogs_use_real_categories_and_effective_skill_counts() {
     // Synthetic app and exact command observer.
@@ -247,154 +643,4 @@ fn catalogs_use_real_categories_and_effective_skill_counts() {
         commands.try_recv().is_err(),
         "catalog filters must not write to the backend"
     );
-}
-
-/// Changing libraries clears reader state and late document responses must match every browse dimension.
-/// 切换知识库清空阅读状态，迟到文档响应必须匹配每个浏览维度。
-#[test]
-fn library_selection_and_document_scope_reject_stale_results() {
-    // Synthetic app with one initially selected library.
-    // 初始选中一个知识库的合成应用。
-    let (mut app, commands, fixture) = fixture_app();
-    // A second real catalog identity, not a sidebar page index.
-    // 第二个真实目录身份，不使用侧栏页面下标。
-    let mut catalog = fixture["loads"]["service_list_knowledge_libraries"].clone();
-    // Separate empty library for owner switching.
-    // 用于切换归属的独立空知识库。
-    let mut second = catalog[0].clone();
-    second["id"] = json!("second-library");
-    second["name"] = json!("Second Library");
-    second["documentCount"] = json!(0);
-    catalog.as_array_mut().unwrap().push(second);
-    app.apply(BackendEvent::Slot {
-        slot: Slot::KnowledgeLibraries,
-        call: kb::list_knowledge_libraries(),
-        value: catalog,
-    });
-    perform(&mut app, UiAction::GoPage(PageId::KnowledgeDocuments));
-    assert_eq!(app.current_page(), Some(PageId::KnowledgeDocuments));
-    assert_eq!(app.navigation_index(), 1);
-    app.knowledge_folder = Some("guide".into());
-    app.knowledge_offset = kb::DOCUMENT_PAGE_SIZE;
-    app.knowledge_document = Some("demo-document".into());
-    app.knowledge_query = "old query".into();
-    app.slots.set(
-        Slot::KnowledgeDocument,
-        kb::read_managed_knowledge_document("demo-library", "demo-document", "raw"),
-        json!({"content":"old text"}),
-    );
-    perform(&mut app, UiAction::Navigate(2));
-    assert_eq!(app.library.as_deref(), Some("second-library"));
-    assert_eq!(app.current_page(), Some(PageId::KnowledgeLibrary));
-    assert_eq!(app.knowledge_folder, None);
-    assert_eq!(app.knowledge_offset, 0);
-    assert_eq!(app.knowledge_document, None);
-    assert!(app.knowledge_query.is_empty());
-    assert!(!app.slots.loaded(Slot::KnowledgeDocument));
-    assert!(commands.try_iter().any(|command| matches!(command, Command::Call(call) if call.method == "service_get_knowledge_import_job" && call.param("/libraryId") == "second-library")));
-    perform(&mut app, UiAction::GoPage(PageId::KnowledgeDocuments));
-    for call in [
-        kb::list_managed_knowledge_documents("demo-library", None, 21, 0),
-        kb::list_managed_knowledge_documents("second-library", Some("guide"), 21, 0),
-        kb::list_managed_knowledge_documents("second-library", None, 21, 20),
-    ] {
-        app.apply(BackendEvent::Slot {
-            slot: Slot::KnowledgeDocuments,
-            call,
-            value: json!([{"id":"stale"}]),
-        });
-        assert!(!app.slots.loaded(Slot::KnowledgeDocuments));
-    }
-    app.knowledge_document = Some("wanted".into());
-    for call in [
-        kb::read_managed_knowledge_document("demo-library", "wanted", "raw"),
-        kb::read_managed_knowledge_document("second-library", "other", "raw"),
-        kb::read_managed_knowledge_document("second-library", "wanted", "display"),
-    ] {
-        app.apply(BackendEvent::Slot {
-            slot: Slot::KnowledgeDocument,
-            call,
-            value: json!({"content":"stale"}),
-        });
-        assert!(!app.slots.loaded(Slot::KnowledgeDocument));
-    }
-    app.apply(BackendEvent::Slot {
-        slot: Slot::KnowledgeDocument,
-        call: kb::read_managed_knowledge_document("second-library", "wanted", "raw"),
-        value: json!({"content":"current"}),
-    });
-    assert_eq!(app.slots.at(Slot::KnowledgeDocument, "/content"), "current");
-}
-
-/// Root-folder filtering stays distinct from all-folders pagination and readers preserve raw newlines.
-/// 根目录筛选与全部目录分页保持独立，阅读器保留原始换行。
-#[test]
-fn managed_document_browse_uses_exact_folders_and_reader_contract() {
-    // Synthetic app and backend observer.
-    // 合成应用及后端观察端。
-    let (mut app, commands, fixture) = fixture_app();
-    perform(&mut app, UiAction::GoPage(PageId::KnowledgeDocuments));
-    assert!(commands.try_iter().any(|command| matches!(command, Command::Call(call)
-        if call.method == "service_list_knowledge_library_documents" && call.param("/request/limit") == 21 && call.param("/request/folderPath").is_null())));
-    perform(
-        &mut app,
-        UiAction::Edit(
-            Edit::Local(LocalSetting::KnowledgeFolder),
-            SettingValue::Text(json!("").to_string()),
-        ),
-    );
-    assert_eq!(app.knowledge_folder.as_deref(), Some(""));
-    assert!(commands.try_iter().any(|command| matches!(command, Command::Call(call)
-        if call.method == "service_list_knowledge_library_documents" && call.param("/request/folderPath") == "" && call.param("/request/offset") == 0)));
-    perform(
-        &mut app,
-        UiAction::OpenKnowledgeDocument("demo-document".into()),
-    );
-    assert!(commands.try_iter().any(|command| matches!(command, Command::Call(call)
-        if call.method == "service_read_knowledge_library_document" && call.param("/documentId") == "demo-document" && call.param("/corpus") == "raw")));
-    app.apply(BackendEvent::Slot {slot:Slot::KnowledgeDocument,call:kb::read_managed_knowledge_document("demo-library","demo-document","raw"),
-        value:json!({"document":fixture["knowledgeDocuments"][0]["document"],"content":fixture["knowledgeDocuments"][0]["raw"]})});
-    assert!(
-        rows(&app, PageId::KnowledgeDocument)
-            .iter()
-            .any(|row| matches!(&row.kind, RowKind::Document { content } if content.contains("\n  indented line\n")))
-    );
-}
-
-/// Active jobs schedule one observation at a time and terminal transitions refresh visible content.
-/// 活动任务每次只安排一次观察，进入终态后刷新可见内容。
-#[test]
-fn knowledge_jobs_poll_without_overlap_and_refresh_at_completion() {
-    // Synthetic app and exact command observer.
-    // 合成应用及准确命令观察端。
-    let (mut app, commands, _) = fixture_app();
-    perform(&mut app, UiAction::GoPage(PageId::KnowledgeDocuments));
-    commands.try_iter().for_each(drop);
-    app.apply(BackendEvent::Slot {
-        slot: Slot::KnowledgeJob,
-        call: kb::get_knowledge_import_job("demo-library"),
-        value: json!({"id":"job","state":"running"}),
-    });
-    // Poll deadline follows the successful observation, independently from render frame frequency.
-    // 轮询时限跟随成功观察，与渲染帧频率独立。
-    let due = app.now + KNOWLEDGE_JOB_POLL_INTERVAL;
-    app.tick(due - Duration::from_millis(1));
-    assert!(commands.try_recv().is_err());
-    app.tick(due);
-    assert!(
-        matches!(commands.try_recv().unwrap(), Command::Call(call) if call.method == "service_get_knowledge_import_job")
-    );
-    app.tick(due + Duration::from_secs(20));
-    assert!(
-        commands.try_recv().is_err(),
-        "an outstanding observation must not accumulate polls"
-    );
-    app.apply(BackendEvent::Slot {
-        slot: Slot::KnowledgeJob,
-        call: kb::get_knowledge_import_job("demo-library"),
-        value: json!({"id":"job","state":"succeeded"}),
-    });
-    assert!(commands.try_iter().any(|command| matches!(command, Command::Call(call) if call.method == "service_list_knowledge_library_documents")));
-    app.tick(due + Duration::from_secs(30));
-    assert!(commands.try_recv().is_err(), "terminal jobs stop polling");
 }

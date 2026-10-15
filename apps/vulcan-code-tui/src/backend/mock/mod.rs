@@ -1457,6 +1457,10 @@ impl World {
     /// Answers one `service_api` call from the fake service, routed like the service worker.
     /// 由假服务响应一次 `service_api` 调用，分发方式与服务工作线程一致。
     fn handle_call(&mut self, call: ServiceCall) {
+        if call.method.contains("knowledge") {
+            self.service
+                .sync_knowledge_context(&self.projects, &self.conversations);
+        }
         let operation = !matches!(call.kind, CallKind::Load(_));
         let mut value = match self.service.answer(&call) {
             Ok(value) => value,

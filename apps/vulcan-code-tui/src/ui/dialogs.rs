@@ -326,7 +326,6 @@ pub fn render_folder(app: &App, picker: &mut FolderPicker, area: Rect, buf: &mut
     let title = match picker.mode {
         FolderMode::Project => tr!("sidebar.addProject"),
         FolderMode::Attachment => tr!("composer.attachment.add"),
-        FolderMode::KnowledgeSource => tr!("tui.knowledge.addSource"),
         FolderMode::Plugin => tr!("tui.plugins.installLocal"),
     };
     let height = area.height.saturating_sub(4).clamp(10, 26);
@@ -563,7 +562,7 @@ pub fn render_folder(app: &App, picker: &mut FolderPicker, area: Rect, buf: &mut
         UiAction::Close,
     )];
     match picker.mode {
-        FolderMode::Project | FolderMode::KnowledgeSource | FolderMode::Plugin => {
+        FolderMode::Project | FolderMode::Plugin => {
             if selected_is_dir {
                 items.push((
                     format!("▸ {}", tr!("tui.folder.open")),

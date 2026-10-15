@@ -4,52 +4,6 @@
 use super::*;
 use crate::model::SettingValue;
 use serde_json::json;
-/// Knowledge readers preserve the exact WebUI browse and corpus request envelopes.
-/// 知识库阅读器保留准确 WebUI 浏览及语料请求结构。
-#[test]
-fn knowledge_document_requests_and_display_confirmation_match_webui() {
-    // Null folder and empty root folder are distinct documented requests.
-    // 空值目录与空字符串根目录为不同的文档定义请求。
-    let all = knowledge_base::list_managed_knowledge_documents("library", None, 21, 20);
-    assert_eq!(all.method, "service_list_knowledge_library_documents");
-    assert_eq!(
-        all.params,
-        json!({"request":{"libraryId":"library","folderPath":null,"limit":21,"offset":20}})
-    );
-    assert_eq!(
-        knowledge_base::list_managed_knowledge_documents("library", Some(""), 21, 0)
-            .param("/request/folderPath"),
-        ""
-    );
-    assert_eq!(
-        knowledge_base::read_managed_knowledge_document("library", "doc", "display").params,
-        json!({"libraryId":"library","documentId":"doc","corpus":"display"})
-    );
-    // Only ready documents may enter the distinct display-build confirmation envelope.
-    // 只有就绪文档可进入独立展示构建确认结构。
-    let preview = knowledge_base::preview_knowledge_display("library");
-    // Exact server preflight response includes an ignored document.
-    // 准确服务预检响应包含被忽略文档。
-    let response = json!({"fingerprint":"f","entries":[{"key":"a.md","disposition":"ready"},{"key":"b.md","disposition":"ignored"}]});
-    // Confirmed unexecuted build call.
-    // 已确认且尚未执行的构建调用。
-    let build = confirm_preview(&preview, &response, &Value::Null).unwrap();
-    assert_eq!(build.method, "service_build_knowledge_display_index");
-    assert_eq!(
-        build.params,
-        json!({"libraryId":"library","confirmation":{"previewFingerprint":"f","selectedFileKeys":["a.md"]}})
-    );
-    assert!(
-        confirm_preview(
-            &preview,
-            &json!({"fingerprint":"","entries":[]}),
-            &Value::Null
-        )
-        .is_none()
-    );
-    assert!(confirm_preview(&preview,&json!({"fingerprint":"f","entries":[{"key":"a","disposition":"ready"},{"key":"a","disposition":"ready"}]}),&Value::Null).is_none());
-}
-
 /// Keeps unrelated settings intact and rejects absent or non-finite editable fields.
 /// 保持无关设置完整，并拒绝缺失字段或非有限的可编辑值。
 #[test]
@@ -99,34 +53,6 @@ fn editors_keep_siblings_and_validate_numeric_domains() {
             .param("/request/backoff"),
         0.75
     );
-}
-
-/// Imports only ready identities and retains a nullable source identity for rescans.
-/// 仅导入就绪身份，并为重新扫描保留允许为空的来源身份。
-#[test]
-fn knowledge_import_freezes_fingerprint_and_ready_files() {
-    // The preview has both an admitted file and a rejected file.
-    // 预检同时包含一个准入文件及一个被拒绝文件。
-    let preview = knowledge_base::preview_knowledge_import("library", "C:/demo", Some("source"));
-    // Result.
-    // 服务结果。
-    let mut result = json!({"fingerprint":"fingerprint-1","entries":[
-        {"disposition":"ready","key":"a.md"},{"disposition":"rejected","key":"b.md"}]});
-    // Exact service call.
-    // 准确服务调用。
-    let call = knowledge_base::import_knowledge_directory(&preview, &result).unwrap();
-    assert_eq!(call.param("/request/previewFingerprint"), "fingerprint-1");
-    assert_eq!(call.param("/request/sourceId"), "source");
-    assert_eq!(call.param("/request/selectedFileKeys"), &json!(["a.md"]));
-    result["entries"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"disposition":"ready","key":"a.md"}));
-    assert!(knowledge_base::import_knowledge_directory(&preview, &result).is_none());
-    result["entries"] = json!([]);
-    assert!(knowledge_base::import_knowledge_directory(&preview, &result).is_some());
-    result["fingerprint"] = json!("");
-    assert!(knowledge_base::import_knowledge_directory(&preview, &result).is_none());
 }
 
 /// Installation consent preserves declared permissions and collects only named transient secrets.

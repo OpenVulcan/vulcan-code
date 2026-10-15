@@ -118,7 +118,7 @@ fn picker(items: Vec<PickerItem>) -> Overlay {
     Overlay::Picker(Picker::new(
         PickerKind::Choice,
         tr!("permissionMode.label"),
-        tr!("knowledge.search"),
+        tr!("tui.page.search"),
         items,
     ))
 }

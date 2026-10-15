@@ -193,9 +193,6 @@ pub enum FolderMode {
     /// Pick a file to attach to the prompt.
     /// 选择要附加到提示的文件。
     Attachment,
-    /// Pick a source directory for the selected knowledge library.
-    /// 为所选知识库选择来源目录。
-    KnowledgeSource,
     /// Pick a local plugin directory to install.
     /// 选择要安装的本地插件目录。
     Plugin,
