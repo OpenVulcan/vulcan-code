@@ -9,15 +9,9 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type {
-  VceJobSummary,
-  VceProjectSettingsInput,
-  VceProjectSettingsSummary,
   VmmConfigDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
-import { CodeContextArea } from "@/components/features/code-context/code-context-area";
-import { useVceProjectActivity } from "@/components/features/code-context/use-vce-project-activity";
-import { useVceActionScope } from "@/components/features/code-context/use-vce-action-scope";
 import { useI18n } from "@/i18n";
 import {
   ProjectAgentSkillsSection,
@@ -58,10 +52,6 @@ export {
   projectAttachmentPreviewFallback,
   projectConversationCount,
 } from "./project-settings-utils";
-import {
-  submitVceJob,
-  updateVceProjectSettings,
-} from "@/service/vce-service";
 
 // PROJECT_SETTINGS_RETRY_BASE_DELAY_MS is the first reconnect recovery delay.
 // PROJECT_SETTINGS_RETRY_BASE_DELAY_MS 是首次连接恢复重试的等待时间。
@@ -108,9 +98,6 @@ export function ProjectSettingsDialog(props: {
   // Closes the dialog without forcing a save.
   // 关闭弹窗且不强制保存。
   onCancel: () => void;
-  // Close this dialog and navigate to the fixed ContextEngine model settings page; no inputs or return value.
-  // 关闭本弹窗并导航到固定语义引擎模型设置页；无输入及返回值。
-  onOpenEngineSettings: () => void;
   // Loads project Agent Skill overrides.
   // 加载项目 Agent Skill 覆盖。
   onLoadAgentSkillOverrides: (projectId: string) => Promise<Record<string, string>>;
@@ -192,15 +179,6 @@ export function ProjectSettingsDialog(props: {
   // cleanupReport stores the latest successful cleanup execution report.
   // cleanupReport 保存最近一次成功的清理执行报告。
   const [cleanupReport, setCleanupReport] = React.useState<ProjectAttachmentCleanupReportSummary | null>(null);
-  // vceActivity shares lightweight project authority with the composer and floating status node.
-  // vceActivity 与输入区及浮动状态节点共享轻量项目权威。
-  const vceActivity = useVceProjectActivity(projectId, String(props.settingsRevision.vce));
-  // vceOverview intentionally excludes management scans; the detail panel loads those on demand.
-  // vceOverview 明确不包含管理扫描；详情面板按需加载这些数据。
-  const vceOverview = vceActivity.activity;
-  // vceMutationBusy tracks one user-initiated settings save or refresh.
-  // vceMutationBusy 跟踪一次用户发起的设置保存或刷新。
-  const [vceMutationBusy, setVceMutationBusy] = React.useState(false);
   // loadedVmmRevisionByProjectRef advances only after one VMM read succeeds.
   // loadedVmmRevisionByProjectRef 仅在一次 VMM 读取成功后推进。
   const loadedVmmRevisionByProjectRef = React.useRef<Map<string, number>>(new Map());
@@ -246,16 +224,6 @@ export function ProjectSettingsDialog(props: {
   // cleanupOperationInFlightRef synchronously rejects duplicate preview or execute requests.
   // cleanupOperationInFlightRef 同步拒绝重复的预览或执行请求。
   const cleanupOperationInFlightRef = React.useRef(false);
-  // vceMutationInFlightRef synchronously rejects duplicate settings or refresh actions.
-  // vceMutationInFlightRef 同步拒绝重复的设置或刷新操作。
-  const vceMutationInFlightRef = React.useRef(false);
-  // VCE actions also expire on service reconnection, independently of VMM's dialog ownership.
-  // VCE 操作也在服务重连时失效，与 VMM 的弹窗归属独立。
-  const isCurrentVceAction = useVceActionScope(projectId);
-  React.useLayoutEffect(() => {
-    vceMutationInFlightRef.current = false;
-    setVceMutationBusy(false);
-  }, [isCurrentVceAction]);
 
   React.useLayoutEffect(() => {
     // A fresh object distinguishes closing and reopening the same project from the previous dialog lifetime.
@@ -267,7 +235,6 @@ export function ProjectSettingsDialog(props: {
     agentSaveInFlightRef.current = false;
     cleanupOperationSequenceRef.current += 1;
     cleanupOperationInFlightRef.current = false;
-    vceMutationInFlightRef.current = false;
   }, [projectId]);
 
   React.useLayoutEffect(() => {
@@ -301,7 +268,6 @@ export function ProjectSettingsDialog(props: {
     setCleanupBusy("idle");
     setCleanupPreview(null);
     setCleanupReport(null);
-    setVceMutationBusy(false);
   }, [projectId]);
 
   // Configuration remains reachable even when models are unavailable; runtime actions keep separate gates.
@@ -441,7 +407,6 @@ export function ProjectSettingsDialog(props: {
   // effectiveProject 在下一份工作台投影到达前镜像刚保存的设置。
   const effectiveProject = {
     ...project,
-    vceEnabled: vceOverview?.settings.enabled ?? project.vceEnabled,
   };
   const sections = projectSettingsSections(
     effectiveProject,
@@ -664,86 +629,6 @@ export function ProjectSettingsDialog(props: {
   const cleanupPreviewMatchesCurrent = cleanupPreview
     && cleanupPreview.cutoffDate === cleanupCutoffDate
     && cleanupPreview.matchedAssetCount > 0;
-  // vceBusy disables actions while either the authoritative read or one mutation is active.
-  // vceBusy 在权威读取或一次变更进行期间禁用操作。
-  const vceBusy = vceOverview === null || vceMutationBusy;
-
-  // saveVceSettings persists one complete settings document and reloads authoritative diagnostics.
-  // saveVceSettings 持久化一份完整设置文档，并重新加载权威诊断。
-  const saveVceSettings = async (settings: VceProjectSettingsInput, expectedRevision: number): Promise<VceProjectSettingsSummary> => {
-    if (!projectId || !vceOverview || vceBusy || vceMutationInFlightRef.current) {
-      throw new Error(t("projectSettings.vce.waitForPending"));
-    }
-    const targetProjectId = projectId;
-    const requestOwner = projectActionOwnerRef.current;
-    vceMutationInFlightRef.current = true;
-    setVceMutationBusy(true);
-    try {
-      const saved = await updateVceProjectSettings(
-        targetProjectId,
-        expectedRevision,
-        settings,
-      );
-      if (projectActionOwnerRef.current === requestOwner && isCurrentVceAction()) {
-        await vceActivity.reload();
-      }
-      if (projectActionOwnerRef.current === requestOwner && isCurrentVceAction()) {
-        toast.success(t("projectSettings.vce.settingsSaved"));
-      }
-      return saved;
-    } catch (error) {
-      if (projectActionOwnerRef.current === requestOwner && isCurrentVceAction()) {
-        toast.error(error instanceof Error ? error.message : String(error));
-      }
-      throw error;
-    } finally {
-      if (projectActionOwnerRef.current === requestOwner && isCurrentVceAction()) {
-        vceMutationInFlightRef.current = false;
-        setVceMutationBusy(false);
-      }
-    }
-  };
-
-  // Admit one explicit initialization/synchronization and return its durable receipt immediately.
-  // 准入一次明确初始化或同步，并立即返回其持久回执。
-  // Takes no arguments; the visible authoritative revision and checkpoint guard this button action.
-  // 无参数；可见权威修订与检查点保护此按钮操作。
-  const refreshVceIndex = async (): Promise<VceJobSummary> => {
-    if (!projectId || !vceOverview || vceBusy || vceMutationInFlightRef.current) {
-      throw new Error(t("projectSettings.vce.waitForPending"));
-    }
-    const targetProjectId = projectId;
-    const requestOwner = projectActionOwnerRef.current;
-    vceMutationInFlightRef.current = true;
-    setVceMutationBusy(true);
-    try {
-      const checkpoint = vceOverview.status.checkpointVersion ?? null;
-      const receipt = await submitVceJob({
-        projectId: targetProjectId,
-        action: checkpoint === null ? "initialize" : "synchronize",
-        idempotencyKey: crypto.randomUUID(),
-        expectedSettingsRevision: vceOverview.settings.revision,
-        expectedCheckpointVersion: checkpoint,
-      });
-      if (receipt.projectId !== targetProjectId) {
-        throw new Error("VCE job admission returned a mismatched project identity.");
-      }
-      if (projectActionOwnerRef.current === requestOwner && isCurrentVceAction()) {
-        toast.success(t("projectSettings.vce.jobSubmitted"));
-      }
-      return receipt;
-    } catch (error) {
-      if (projectActionOwnerRef.current === requestOwner && isCurrentVceAction()) {
-        toast.error(error instanceof Error ? error.message : String(error));
-      }
-      throw error;
-    } finally {
-      if (projectActionOwnerRef.current === requestOwner && isCurrentVceAction()) {
-        vceMutationInFlightRef.current = false;
-        setVceMutationBusy(false);
-      }
-    }
-  };
 
   return (
     <Dialog open={Boolean(project)} onOpenChange={(open) => !open && props.onCancel()}>
@@ -783,8 +668,6 @@ export function ProjectSettingsDialog(props: {
                 memory={props.workbench.vmmMemory}
                 onOpenSection={setActiveSection}
                 project={project}
-                vceActivity={vceOverview}
-                vceError={vceActivity.error}
                 vmmDraft={overviewAuthority.vmmProjectId === project.id ? vmmDraft : null}
                 vmmLoading={vmmBusy === "loading"}
                 vmmError={overviewAuthority.projectId === project.id ? overviewAuthority.vmmError : null}
@@ -819,21 +702,6 @@ export function ProjectSettingsDialog(props: {
                 agentOverrides={agentOverrides}
                 onSetProjectAgentSkill={(name, stateKey) => void setProjectAgentSkill(name, stateKey)}
                 workbench={props.workbench}
-              />
-            ) : null}
-
-            {activeSection === "code-context" ? (
-              <CodeContextArea
-                busy={vceBusy}
-                key={project.id}
-                onOverviewChanged={() => { void vceActivity.reload(); }}
-                activityError={vceActivity.error}
-                onReloadActivity={vceActivity.reload}
-                onRefresh={refreshVceIndex}
-                onSave={saveVceSettings}
-                onOpenEngineSettings={props.onOpenEngineSettings}
-                overview={vceOverview}
-                projectId={project.id}
               />
             ) : null}
 

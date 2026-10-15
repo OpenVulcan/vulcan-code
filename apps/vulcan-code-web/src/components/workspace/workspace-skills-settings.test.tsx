@@ -11,23 +11,21 @@ import { PluginWorkspaceMenu } from "./workspace-skills-settings";
 function noop(): void {}
 
 describe("PluginWorkspaceMenu", () => {
-  // The ContextEngine entry is a fixed peer of LuaSkills settings, not plugin-management content.
-  // ContextEngine 入口是 LuaSkills 设置的固定同级节点，而非插件管理内容。
-  it("renders the fixed ContextEngine node before plugin management", () => {
+  // Plugin management and the installed plugin list retain their navigation order.
+  // 插件管理与已安装插件列表保持既有导航顺序。
+  it("renders plugin management before the installed plugin list", () => {
     // markup captures the real expanded plugin-area menu in Chinese.
     // markup 捕获真实的中文展开插件功能区菜单。
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
         <PluginWorkspaceMenu
-          activeSubArea="context-engine"
+          activeSubArea="plugins"
           onSelectSubArea={noop}
           workbench={{ plugins: [] } as unknown as WorkbenchSnapshot}
         />
       </I18nProvider>,
     );
 
-    expect(markup).toContain("代码语义索引");
-    expect(markup.indexOf("代码语义索引")).toBeLessThan(markup.indexOf("插件管理"));
     expect(markup).toContain('aria-label="内置插件与管理"');
     expect(markup).toContain('aria-label="插件列表"');
     expect(markup.indexOf("插件管理")).toBeLessThan(markup.indexOf('aria-label="插件列表"'));

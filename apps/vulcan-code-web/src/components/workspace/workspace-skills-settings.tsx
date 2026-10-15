@@ -103,7 +103,6 @@ export function PluginWorkspaceMenu(props: {
     { icon: <Hammer size={15} />, id: "catalog", label: t("skills.navigation.list") },
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
     { icon: <Plug size={15} />, id: "mcp-servers", label: t("settings.mcpServers") },
-    { icon: <ScanSearch size={15} />, id: "context-engine", label: t("area.contextEngine") },
     { icon: <BookMarked size={15} />, id: "knowledge", label: t("area.knowledge") },
     { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
     { icon: <Wrench size={15} />, id: "plugin-maintenance", label: t("skills.navigation.pluginMaintenance") },
@@ -150,9 +149,6 @@ export function skillSubAreaLabel(
   }
   if (subArea === "mcp-servers") {
     return t("settings.mcpServers");
-  }
-  if (subArea === "context-engine") {
-    return t("area.contextEngine");
   }
   if (subArea === "knowledge") {
     return t("area.knowledge");

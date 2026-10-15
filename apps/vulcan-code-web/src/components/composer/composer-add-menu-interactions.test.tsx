@@ -7,10 +7,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ComposerAttachmentMenu } from "./composer-attachment-controls";
 import { ComposerSettingsHostContext } from "./composer-settings-host";
 import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-collapse-preferences";
-
-// Independent context/knowledge owners have their own interaction suites; this harness owns the add menu itself.
-// 独立的上下文与知识库归属已有交互测试；本测试仅持有加号菜单本身。
-vi.mock("@/components/features/code-context/vce-project-controls", () => ({ VceComposerMenu: () => null }));
 vi.mock("./composer-knowledge-control", () => ({ ComposerKnowledgeControl: () => null }));
 
 // MenuProps is the production menu contract; callbacks record exact public intents without host writes.

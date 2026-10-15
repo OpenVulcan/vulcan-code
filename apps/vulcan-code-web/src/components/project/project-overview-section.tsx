@@ -6,7 +6,7 @@ import { InlineDisclosure } from "@/components/ui/disclosure";
 import { useI18n } from "@/i18n";
 import { listProjectKnowledgeBindings, subscribeKnowledgeProjectBindingsChanged } from "@/service/knowledge-base-service";
 import { runVmmMemoryAction } from "@/service/memory-actions-service";
-import type { KnowledgeProjectBinding, ProjectSummary, VceProjectActivityResponse, VmmConfigDraftSummary, VmmMemorySnapshot, VmmNativeProjectCatalogSummary } from "@/types";
+import type { KnowledgeProjectBinding, ProjectSummary, VmmConfigDraftSummary, VmmMemorySnapshot, VmmNativeProjectCatalogSummary } from "@/types";
 import type { ProjectSettingsSectionId } from "./project-settings-types";
 import "@/styles/project-overview.css";
 
@@ -30,9 +30,6 @@ export function ProjectOverviewSection(props: {
   // Skill override authority distinguishes successful empty results from failed or pending reads.
   // 技能覆盖权威区分成功空结果与失败或待定读取。
   agentOverrides: Record<string, string>; agentLoaded: boolean; agentLoading: boolean; agentError: string | null;
-  // Lightweight semantic metadata is already observed by the dialog; no index scan is started here.
-  // 弹窗已观察轻量语义元数据；此处不启动索引扫描。
-  vceActivity: VceProjectActivityResponse | null; vceError: string | null;
   // Selects one existing settings section in the same project dialog.
   // 在同一项目弹窗中选择一个既有设置分区。
   onOpenSection: (section: ProjectSettingsSectionId) => void;
@@ -98,14 +95,10 @@ export function ProjectOverviewSection(props: {
   const owner = binding && nativeCatalog?.value?.projects.find((item) => item.projectId === binding.ownerProjectId);
   const projectKnowledge = knowledge?.projectId === props.project.id ? knowledge : null;
   const runtime = props.memory.selectedProjectId === props.project.id ? props.memory.runtime : null;
-  // index accepts only the observer's matching project metadata.
-  // index 只接受观察器内项目身份匹配的元数据。
-  const index = props.vceActivity?.status.projectId === props.project.id ? props.vceActivity : null;
   // issues contains only observed failures, never an inferred healthy state.
   // issues 仅包含已观察的失败，绝不推断健康状态。
-  const issues = [props.vmmError, props.agentError, props.vceError, index?.status.lastError, projectKnowledge?.error,
+  const issues = [props.vmmError, props.agentError, projectKnowledge?.error,
     runtime?.backendError, runtime?.scopeError, runtime?.precheckError, runtime?.postactionError,
-    ...(index && !index.configuration.ready ? index.configuration.issues : []),
     props.vmmDraft?.backendMode === "native" ? nativeCatalog?.error : null,
     props.vmmDraft?.backendMode === "native" && binding && !owner ? t("projectOverview.missingOwner").replace("{id}", String(binding.ownerProjectId)) : null].filter((issue): issue is string => Boolean(issue));
   // openAction preserves the existing section identity and gives every status a useful next step.
@@ -143,11 +136,6 @@ export function ProjectOverviewSection(props: {
           <small>{runtime ? `${t("projectOverview.session")}: ${t(runtime.scopeReady ? "projectOverview.scopeReady" : "projectOverview.scopeNotReady")} · ${t(runtime.precheckReady ? "projectOverview.precheckReady" : "projectOverview.precheckNotReady")} · ${t(runtime.postactionReady ? "projectOverview.postactionReady" : "projectOverview.postactionNotReady")}` : t("projectOverview.runtimeUnknown")}</small>
         </>}
       </div>{openAction("vmm", t("projectOverview.memorySettings"))}</section>
-      <section><div><strong>{t("projectSettings.codeContext.title")}</strong>
-        <p>{t(index ? !index.settings.enabled ? "projectOverview.indexDisabled" : index.queryAvailable ? "projectOverview.queryReady" : "projectOverview.queryUnavailable" : "projectOverview.indexUnknown")}</p>
-        {index?.settings.enabled ? <><small>{t(index.sourceFreshness.watching ? "projectOverview.watching" : "projectOverview.notWatching")}{index.sourceFreshness.pendingChanges || index.sourceFreshness.reconciliationRequired ? ` · ${t("projectOverview.pending")}` : ""} · {t("projectOverview.files").replace("{count}", String(index.status.presentFiles))}</small>
-          {!index.configuration.ready ? <small>{t("projectOverview.routesUnavailable")}</small> : null}</> : null}
-      </div>{openAction("code-context", t("projectOverview.codeSettings"))}</section>
       <section><div><strong>{t("projectSettings.knowledgeBases")}</strong><p>{projectKnowledge?.rows
         ? t("projectOverview.knowledgeCount").replace("{total}", String(projectKnowledge.rows.length)).replace("{enabled}", String(projectKnowledge.rows.filter((item) => item.defaultEnabled).length))
         : projectKnowledge?.error ? t("projectOverview.knowledgeFailed") : <InlineStreamPlaceholder label={t("projectOverview.knowledgeLoading")} />}</p></div>{openAction("knowledge-bases", t("projectOverview.knowledgeSettings"))}</section>

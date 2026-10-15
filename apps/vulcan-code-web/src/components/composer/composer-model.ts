@@ -201,7 +201,6 @@ const COMPOSER_SLASH_COMMAND_DESCRIPTORS: Readonly<Record<string, ComposerSlashC
   style: { descriptionKey: "composer.slash.style", dedicated: "never" },
   answer: { descriptionKey: "composer.slash.answer", dedicated: "never" },
   knowledge: { descriptionKey: "composer.slash.knowledge", dedicated: "never" },
-  semantic: { descriptionKey: "composer.slash.semantic", dedicated: "never" },
   collapse: { descriptionKey: "composer.slash.collapse", dedicated: "always" },
   thinking: { descriptionKey: "composer.slash.thinking", dedicated: "always" },
   memory: { descriptionKey: "composer.slash.memory", dedicated: "never" },

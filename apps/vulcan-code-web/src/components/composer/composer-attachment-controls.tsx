@@ -4,7 +4,6 @@ import { ComposerSettingsHostContext } from "./composer-settings-host";
 import { setConversationToolCollapseOverride, useToolCollapsePreference } from "@/components/conversation/tool-collapse-preferences";
 import { setConversationThinkingPopupOverride, useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
 import { composerAttachmentMedia } from "./composer-attachment-media";
-import { VceComposerMenu } from "@/components/features/code-context/vce-project-controls";
 import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
 import { MemoryBrainIcon } from "@/components/shell/memory-brain-icon";
 import { composerAttachmentIdentity } from "@/service/composer-attachment-reference";
@@ -285,7 +284,7 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
           onOpenKnowledge={props.onOpenKnowledge}
           projectId={props.projectId}
         />
-        <VceComposerMenu />
+        
         </>}
         <RequestedSettingsSub section="tools">
           <DropdownMenuSubTrigger><Workflow size={15} /><span>{t("composer.collapseTools")}</span></DropdownMenuSubTrigger>

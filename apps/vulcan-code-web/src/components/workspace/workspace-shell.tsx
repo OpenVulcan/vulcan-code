@@ -2,7 +2,6 @@ import { WorkspaceDirectoryLayout } from "@/components/workspace/workspace-direc
 import { FeatureLoadBoundary } from "@/components/features/feature-shell-content";
 import React from "react";
 import { toast } from "sonner";
-import { useVceProjectVisibility } from "@/components/features/code-context/vce-project-surface";
 import { ChatArea } from "@/components/conversation/chat-area";
 import {
   ConversationSessionCommitDialog,
@@ -159,9 +158,6 @@ function resolveWorkspaceSubagentTask(
 // Parameters: props supplies workspace authorities and page actions. Returns the sidebar, selected page and owned floating panels.
 // 参数：props 提供工作区权威数据和页面动作。返回侧栏、选中页面及其持有的浮动面板。
 function WorkspaceShellContent(props: WorkspaceShellProps) {
-  // Shared semantic state can make the floating panel visible without Git, terminals, or agents.
-  // 共享语义状态可独立于 Git、终端或智能体使浮动面板可见。
-  const semanticNodeVisible = useVceProjectVisibility();
   // sidebar controls the left navigation panel (project tree or feature menu) that can collapse automatically.
   // sidebar 控制可自动折叠的左侧导航面板（项目树或功能菜单）。
   const sidebar = useSidebar();
@@ -652,7 +648,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   );
   // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.
   // sessionToolPanelVisible 仅在浮动工具面板存在可渲染内容时打开。
-  const sessionToolPanelVisible = (props.mainView === "chat" && semanticNodeVisible) || (hasSelectedChatConversation && (
+  const sessionToolPanelVisible = (hasSelectedChatConversation && (
     sessionGitCommitActionVisible
     || visibleSessionTerminalSessions.length > 0
     || visibleSessionSubagentTaskCount > 0

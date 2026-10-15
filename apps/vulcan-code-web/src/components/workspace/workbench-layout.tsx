@@ -3,8 +3,6 @@ import { ComposerSettingsHostContext } from "@/components/composer/composer-sett
 import { DraftComposerContext, type DraftComposerContextValue } from "@/components/composer/dedicated/draft-composer-context";
 import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-collapse-preferences";
 import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
-import { VceProjectSurfaceProvider } from "@/components/features/code-context/vce-project-surface";
-import { VceJobObserverProvider } from "@/components/features/code-context/vce-job-observer-context";
 import type { SkillActionProps } from "@/components/features/skills/skill-area-types";
 import {
   FeatureShell as ExtractedFeatureShell,
@@ -589,9 +587,6 @@ export function WorkbenchLayout(props: {
   // selectedRouteProjectId changes only when the user selects a conversation or draft in another project.
   // selectedRouteProjectId 仅在用户选择另一个项目的会话或草稿时变化。
   const selectedRouteProjectId = selectedDraftConversation?.projectId ?? selectedConversation?.projectId ?? null;
-  // Semantic controls follow the conversation owner, not an independently selected terminal project.
-  // 语义控件跟随会话归属，而非独立选择的终端项目。
-  const selectedVceProject = workbenchState.projects.find((project) => project.id === selectedRouteProjectId) ?? null;
   // activeProject resolves the explicit owner used by project-level floating tools.
   // activeProject 解析项目级浮动工具使用的明确归属项目。
   const activeProject = workbenchState.projects.find((project) => project.id === activeProjectId) ?? null;
@@ -1054,8 +1049,6 @@ export function WorkbenchLayout(props: {
         return { handled: true, openTarget: "settings", settingsSection: "answer" };
       case "knowledge":
         return { handled: true, openTarget: "settings", settingsSection: "knowledge" };
-      case "semantic":
-        return { handled: true, openTarget: "settings", settingsSection: "semantic" };
       case "collapse":
         return { handled: true, openTarget: "settings", settingsSection: "tools" };
       case "thinking":
@@ -1096,16 +1089,6 @@ export function WorkbenchLayout(props: {
     <ComposerSettingsHostContext.Provider value={settingsHost}>
     <DraftComposerContext.Provider value={draftComposerContext}>
     <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
-      <VceJobObserverProvider serviceEpoch={props.serviceInstanceEpoch}>
-      <VceProjectSurfaceProvider
-      // Only the visible chat owns these observations; project settings subscribe independently.
-      // 仅可见会话持有这些观察；项目设置自行独立订阅。
-      projectId={showConsoleSidebar && workspaceMainView === "chat" ? selectedVceProject?.id ?? null : null}
-      projectEnabled={selectedVceProject?.vceEnabled === true}
-      revisionKey={`${props.serviceInstanceEpoch}:${globalProjectSettingsRevision.vce}:${selectedVceProject ? projectSettingsRevisionById[selectedVceProject.id]?.vce ?? 0 : 0}`}
-      onOpenEngineSettings={() => { handleOpenWorkspaceSkills(); setActiveWorkbenchSkillSubArea("context-engine"); }}
-      onOpenProjectSettings={() => { if (selectedVceProject) setProjectSettingsTarget({ project: selectedVceProject, initialSection: "code-context" }); }}
-    >
     <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
       {floatingMediaUploadProgresses.length > 0 ? (
         <div className="media-upload-progress-stack">
@@ -1312,16 +1295,12 @@ export function WorkbenchLayout(props: {
               globalProjectSettingsRevision.vmm,
               projectSettingsRevisionById[projectSettingsTarget.project.id]?.vmm ?? 0,
             ),
-            vce: Math.max(
-              globalProjectSettingsRevision.vce,
-              projectSettingsRevisionById[projectSettingsTarget.project.id]?.vce ?? 0,
-            ),
             agentSkills: Math.max(
               globalProjectSettingsRevision.agentSkills,
               projectSettingsRevisionById[projectSettingsTarget.project.id]?.agentSkills ?? 0,
             ),
           }
-          : { vmm: 0, vce: 0, agentSkills: 0 }}
+          : { vmm: 0, agentSkills: 0 }}
         projectSettingsTarget={projectSettingsTarget}
         removeProjectSubmitting={removeProjectSubmitting}
         removeProjectTarget={removeProjectTarget}
@@ -1332,11 +1311,6 @@ export function WorkbenchLayout(props: {
         onCancelArchiveProject={handleCancelArchiveProject}
         onCancelProjectIcon={() => setProjectIconTarget(null)}
         onCancelProjectSettings={() => setProjectSettingsTarget(null)}
-        onOpenEngineSettings={() => {
-          setProjectSettingsTarget(null);
-          handleOpenWorkspaceSkills();
-          setActiveWorkbenchSkillSubArea("context-engine");
-        }}
         onCancelRemoveProject={handleCancelRemoveProject}
         onCancelRename={() => setRenameTarget(null)}
         onCancelStopConversationRun={() => resolveStopConversationRunChoice(null)}
@@ -1358,8 +1332,6 @@ export function WorkbenchLayout(props: {
         onSubmitPendingQuestion={handlePendingQuestionSubmit}
       /></React.Suspense> : null}
     </div>
-      </VceProjectSurfaceProvider>
-      </VceJobObserverProvider>
     </ComposerMediaUploadProgressContext.Provider>
     </DraftComposerContext.Provider>
     </ComposerSettingsHostContext.Provider>

@@ -22,8 +22,6 @@ vi.mock("@/components/conversation/chat-area/conversation-scroll-controller", ()
 vi.mock("@/components/ui/sidebar", () => ({ SidebarTrigger: () => null }));
 vi.mock("@/components/plugins/dynamic-plugin-mount-panel", () => ({ DynamicPluginMountPanel: () => null }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
-vi.mock("@/components/features/code-context/vce-project-controls", () => ({ VceFloatingNode: () => null }));
-vi.mock("@/components/features/code-context/vce-project-surface", () => ({ useVceProjectVisibility: () => false }));
 
 // host/root own isolated DOM and never open native windows or execute service mutations.
 // host/root 持有隔离文档，不打开原生窗口或执行服务写入。

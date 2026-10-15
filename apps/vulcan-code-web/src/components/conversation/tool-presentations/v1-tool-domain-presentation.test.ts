@@ -33,7 +33,7 @@ describe("V1 domain results from actual runtime contracts", () => {
     expect(domain.sections[0].value).toEqual([{ header: "Scope", question: "Proceed?" }]);
     expect(domain.sections[1]).toMatchObject({ value: body, markdown: true });
   });
-  it.each(["knowledge_search", "knowledge_browse", "knowledge_read", "codebase_retrieval",
+  it.each(["knowledge_search", "knowledge_browse", "knowledge_read",
     "vmm_memory_search", "vmm_turn_details", "vmm_memory_write", "vmm_memory_delete",
     "get_goal", "create_goal", "update_goal", "image_understand", "video_understand",
     "audio_understand", "browser_list", "browser_open", "browser_select", "browser_close"])(
@@ -99,12 +99,6 @@ describe("V1 domain results from actual runtime contracts", () => {
     expect(domain.sections[0].value).toEqual({ objective: "Finish", status: "active", tokensUsed: 0, timeUsedSeconds: 0 });
     expect(domain.sections).toHaveLength(1);
     expect(resolveV1ToolDomainPresentation(event("get_goal", {}, { goal: null })).sections[0].value).toBe("尚未设置目标");
-  });
-
-  it("retains source lines and code exactly while keeping internal blob identity in raw details", () => {
-    const domain = resolveV1ToolDomainPresentation(event("codebase_retrieval", { information_request: "Find settings" }, { hits: [{ id: "occurrence", blobName: "internal-blob", path: "src/settings.ts", startLine: 4, endLine: 5, content: "const x = 1;\nreturn x;", source: "semantic", score: 0.75 }], degradations: ["Rerank unavailable"] }));
-    expect(domain.sections[0].value).toEqual([{ path: "src/settings.ts", startLine: 4, endLine: 5, content: "const x = 1;\nreturn x;", source: "semantic", score: 0.75 }]);
-    expect(domain.sections[1].value).toEqual(["Rerank unavailable"]);
   });
 
   it("uses the exact accepted plan artifact without rereading a file", () => {
