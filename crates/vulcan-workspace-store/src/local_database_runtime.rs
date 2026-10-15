@@ -89,7 +89,7 @@ pub enum LogicalDatabase {
 impl LogicalDatabase {
     /// Returns every logical database, so callers can iterate the whole set without drifting.
     /// 返回全部逻辑数据库，使调用方无需自行维护而遍历完整集合。
-    pub fn all() -> [Self; 7] {
+    pub fn all() -> [Self; 6] {
         [
             Self::AppState,
             Self::SystemStatistics,

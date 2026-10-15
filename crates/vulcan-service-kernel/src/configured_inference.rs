@@ -2407,25 +2407,6 @@ impl ConfiguredInferenceService {
         .await
     }
 
-    /// Executes one non-replayed embedding Batch lifecycle request with deadline and telemetry.
-    /// 在截止时间与遥测约束下执行一次不重放的向量 Batch 生命周期请求。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `caller`, `request`, and `selection` are the authorized frozen call facts;
-    /// `owner_kind` identifies the lifecycle operation, `input_item_count` is content-free
-    /// cardinality, `deadline_dispatch_policy` declares whether a timed-out started call can be
-    /// replayed, `attempt` is exactly one provider request, and `success_metrics` extracts
-    /// normalized usage and output count without retaining payload content.
-    /// `caller`、`request` 与 `selection` 是已授权的冻结调用事实；`owner_kind` 标识生命周期操作，
-    /// `input_item_count` 是不含内容的基数，`deadline_dispatch_policy` 声明已启动调用超时后
-    /// 能否重放，`attempt` 是恰好一次供应商请求，`success_metrics` 在不保留载荷内容的前提下
-    /// 提取归一化用量与输出数量。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The provider result, or a route-bound controlled failure after emitting terminal telemetry.
-    /// 返回供应商结果；失败时在发出终态遥测后返回绑定路由的受控错误。
     // Frozen route identity, caller identity and execution accounting are separate authorities.
     // 冻结路由身份、调用方身份及执行计量属于不同权威。
     #[expect(

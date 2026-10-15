@@ -143,7 +143,6 @@ const COMPOSER_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("style", "/style"),
     ("answer", "/answer"),
     ("knowledge", "/knowledge"),
-    ("semantic", "/semantic"),
     ("collapse", "/collapse"),
     ("thinking", "/thinking"),
     ("memory", "/memory"),

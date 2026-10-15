@@ -44,9 +44,9 @@ const DEDICATED_EXCLUDED_TOOL_IDS: [&str; 16] = [
 ///
 /// Knowledge tools are registered only when libraries were enabled at creation, so they stay
 /// in both access levels; `none` admits nothing else, `standard` drops collaboration, subagent,
-/// goal, plan, memory and semantic-engine tools.
+/// goal, plan and memory tools.
 /// 知识库工具只在创建时启用了知识库时注册，因此两种方式都保留；`none` 不再允许其他工具，
-/// `standard` 移除协作、子代理、目标、计划、记忆与语意引擎工具。
+/// `standard` 移除协作、子代理、目标、计划与记忆工具。
 fn tool_allowed(
     tool_access: DedicatedToolAccess,
     tool_id: &str,

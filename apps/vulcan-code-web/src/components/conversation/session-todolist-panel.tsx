@@ -514,7 +514,6 @@ export function ConversationSessionTodolistPanel(props: {
             <strong>{subagentTasks.length}</strong>
           </span>
         ) : null}
-        
         <Maximize2 className="conversation-session-tool-expand-hint" size={12} />
       </button>
     );
@@ -589,7 +588,6 @@ export function ConversationSessionTodolistPanel(props: {
           onOpenReviewChanges={() => props.onOpenReviewChanges()}
         />
       ) : null}
-      
       {hasTerminalSessions ? (
         <ConversationSessionTerminalSection
           summariesById={terminalSummaryById}

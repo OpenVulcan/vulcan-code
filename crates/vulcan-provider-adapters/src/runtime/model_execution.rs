@@ -9,8 +9,8 @@ use crate::{
 };
 use vulcan_ai_contract::{
     AiExecutionRequest, AiMessage, AiOperation, ContentItem, DecisionRequest, DecisionResponse,
-    EmbeddingRequest, EmbeddingResponse, InferenceUsageScope, MessageRole,
-    PromptCachePolicy, ReasoningControlMode, ReasoningEffort, RerankRequest, RerankResponse,
+    EmbeddingRequest, EmbeddingResponse, InferenceUsageScope, MessageRole, PromptCachePolicy,
+    ReasoningControlMode, ReasoningEffort, RerankRequest, RerankResponse,
 };
 
 /// Carries one successful remote Responses compaction result with its owning route identity.

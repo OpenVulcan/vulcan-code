@@ -271,8 +271,8 @@ impl SqliteRuntime {
     /// 关闭全部已注册数据库句柄，并返回移除的注册数量。
     ///
     /// This is the runtime-wide lifecycle boundary used by an embedding host. It includes dynamically
-    /// registered skill, plugin, VCE and knowledge-base databases, not only the host's fixed logical files.
-    /// 这是嵌入宿主使用的运行时级生命周期边界。它覆盖动态注册的技能、插件、VCE 与知识库数据库，而不只
+    /// registered skill, plugin and knowledge-base databases, not only the host's fixed logical files.
+    /// 这是嵌入宿主使用的运行时级生命周期边界。它覆盖动态注册的技能、插件与知识库数据库，而不只
     /// 包含宿主的固定逻辑文件。
     pub fn close_all_databases(&self) -> usize {
         let mut databases = lock_unpoisoned(&self.databases);

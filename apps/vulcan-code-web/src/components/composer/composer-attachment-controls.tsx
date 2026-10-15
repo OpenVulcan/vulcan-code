@@ -246,8 +246,8 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
   // Explicit selection stays distinct from the effective global value.
   // 明确选择始终与实际生效的全局值区分。
   const thinkingPreference = useThinkingDisplayPreference(toolCollapse.scope, props.thinkingDisplayMode);
-  // Settings frozen with a dedicated session (style, answer mode, knowledge, semantic engine, memory) are hidden.
-  // 随专职会话冻结的设置（风格、回答模式、知识库、语意引擎、记忆）不再显示。
+  // Settings frozen with a dedicated session (style, answer mode, knowledge, memory) are hidden.
+  // 随专职会话冻结的设置（风格、回答模式、知识库、记忆）不再显示。
   const dedicated = useDedicatedComposer();
   // Slash commands open this menu, optionally at one submenu; closing it clears the request.
   // slash 指令可打开本菜单并直接展开某个子菜单；关闭菜单即清除该请求。
@@ -284,7 +284,6 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
           onOpenKnowledge={props.onOpenKnowledge}
           projectId={props.projectId}
         />
-        
         </>}
         <RequestedSettingsSub section="tools">
           <DropdownMenuSubTrigger><Workflow size={15} /><span>{t("composer.collapseTools")}</span></DropdownMenuSubTrigger>

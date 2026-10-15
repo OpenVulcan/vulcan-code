@@ -1928,7 +1928,7 @@ mod tests {
             contract_version: INFERENCE_CONTRACT_VERSION,
             request_id: String::from("request-batch"),
             idempotency_key: None,
-            consumer_profile_id: String::from("vce"),
+            consumer_profile_id: String::from("batch-test-consumer"),
             inputs: vec![
                 EmbeddingInput {
                     input_id: String::from("chunk-1"),

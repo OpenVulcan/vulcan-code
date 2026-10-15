@@ -11441,7 +11441,6 @@ dependencies = [
  "foldhash 0.2.0",
  "form_urlencoded",
  "futures-channel",
- "futures-core",
  "futures-io",
  "futures-sink",
  "futures-task",

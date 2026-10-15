@@ -1674,9 +1674,9 @@ fn abandon_failed_webui_prompt_vmm_turn(
 /// Shapes one main-session request from the creation-frozen dedicated profile, if any.
 /// 依据创建时冻结的专职配置塑形主会话请求（如有）。
 ///
-/// Dedicated sessions never use collaboration, subagents, goals, plans, VMM memory or the
-/// semantic engine; tool admission and prompt composition read `dedicated_session`.
-/// 专职会话从不使用协作、子代理、目标、计划、VMM 记忆或语意引擎；工具准入与提示词组合读取
+/// Dedicated sessions never use collaboration, subagents, goals, plans or VMM memory;
+/// tool admission and prompt composition read `dedicated_session`.
+/// 专职会话从不使用协作、子代理、目标、计划与 VMM 记忆；工具准入与提示词组合读取
 /// `dedicated_session`。
 fn apply_dedicated_session_shaping(
     handle: &crate::session_runtime_registry_v1::SessionHandle,

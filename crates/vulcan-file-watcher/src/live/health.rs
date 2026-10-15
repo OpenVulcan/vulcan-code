@@ -262,7 +262,7 @@ mod tests {
         // parent is a unique test-owned directory; no existing project is registered or removed.
         // parent 是测试专有唯一目录；不注册或移除任何现有项目。
         let parent = std::env::temp_dir().join(format!(
-            "vce-restored-health-{}-{}",
+            "watcher-restored-health-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -319,7 +319,7 @@ mod tests {
         // Use a unique empty directory, never a user's project or existing index.
         // 使用唯一空目录，绝不使用用户项目或既有索引。
         let root = std::env::temp_dir().join(format!(
-            "vce-watch-health-{}",
+            "watcher-health-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")

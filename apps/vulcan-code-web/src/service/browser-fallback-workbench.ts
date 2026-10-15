@@ -28,7 +28,7 @@ export const browserFallbackStartup: StartupSnapshot = {
 // browserFallbackSlashCommands 在预览模式中镜像 service 投影出的指令目录。
 const browserFallbackSlashCommands: ComposerSlashCommandSummary[] = [
   "model", "reasoning", "compact", "plan", "goal", "settings", "style", "answer",
-  "knowledge", "semantic", "collapse", "thinking", "memory", "skill", "skills",
+  "knowledge", "collapse", "thinking", "memory", "skill", "skills",
 ].map((id) => ({ id, command: `/${id}` }));
 
 // BrowserFallbackWorkbench is used when the WebUI runs outside Tauri during frontend development.

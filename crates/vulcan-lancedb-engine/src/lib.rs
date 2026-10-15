@@ -14,7 +14,7 @@
 //! - It does not accept an "arbitrary relative path under a space root" style input.
 //! - It does not read Vulcan configuration files.
 //! - It does not launch out-of-process threads, ports or network services.
-//! - It does not carry frontend state, VCE job state or business generations.
+//! - It does not carry frontend state, consumer job state or business generations.
 //! - It returns structured local errors, never gRPC status codes.
 //!
 //! v1 data format baseline: every table creation path pins [`lancedb::LanceFileVersion::V2_1`]
