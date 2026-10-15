@@ -75,9 +75,7 @@ COMMIT;
         vec![],
     )
     .await
-    .map_err(|error| {
-        format!("Failed to write the active project transaction: {error}")
-    })?;
+    .map_err(|error| format!("Failed to write the active project transaction: {error}"))?;
 
     Ok(())
 }

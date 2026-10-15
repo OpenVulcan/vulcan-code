@@ -211,11 +211,16 @@ mod tests {
         );
         prune_rows(&mut connection, &report.rows).expect("prune observed rows");
         let remaining: i64 = connection
-            .query_row("SELECT COUNT(*) FROM session_dedicated_index_v1", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM session_dedicated_index_v1",
+                [],
+                |row| row.get(0),
+            )
             .expect("count markers");
-        assert_eq!(remaining, 0, "a pruned locator must not leave its dedicated marker");
+        assert_eq!(
+            remaining, 0,
+            "a pruned locator must not leave its dedicated marker"
+        );
     }
 
     /// Converting projects the dedicated kind with the name, restoring clears only the name,
@@ -252,11 +257,16 @@ mod tests {
             .expect("convert again");
         prune_rows(&mut connection, &restored.rows).expect("prune observed rows");
         let remaining: i64 = connection
-            .query_row("SELECT COUNT(*) FROM session_assistant_index_v1", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM session_assistant_index_v1",
+                [],
+                |row| row.get(0),
+            )
             .expect("count assistants");
-        assert_eq!(remaining, 0, "a pruned locator must not leave its assistant row");
+        assert_eq!(
+            remaining, 0,
+            "a pruned locator must not leave its assistant row"
+        );
     }
 
     /// A newer locator or lifecycle prevents stale deletion and rolls back earlier batch removals.

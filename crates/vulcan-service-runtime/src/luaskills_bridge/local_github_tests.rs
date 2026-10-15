@@ -894,7 +894,10 @@ fn production_install_and_update_use_local_github_routes_safely() {
     server.select_latest(2);
     let error = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID))
         .expect_err("invalid archive update must fail");
-    assert!(error.contains("Failed to update the LuaSkills skill"), "{error}");
+    assert!(
+        error.contains("Failed to update the LuaSkills skill"),
+        "{error}"
+    );
     let after_failure = load_luaskills_catalog(&handle).expect("catalog after failed update");
     assert_eq!(catalog_version(&after_failure, FIXTURE_SKILL_ID), "2.0.0");
     assert!(
