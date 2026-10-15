@@ -23,10 +23,13 @@
 不存在独立的系统快照、虚构系统命令或系统设置草稿。
 
 通用读取按连接代际及槽位序号过滤。应用层另按知识库、VCE 项目、VMM 项目、画像目标、搜索词、
-文档目录与偏移、文档身份及语料检查归属。失败同样检查归属，并持续显示脱敏原因直到匹配重试或结果。
+逻辑目录与服务游标、当前或历史文档身份、变更侧别及行窗口检查归属。失败同样检查归属，并持续显示脱敏原因直到匹配重试或结果。
 变更后的重读失败会清空旧值并保留加载器，页面重新加载可重试。
 工作台快照读取失败或格式错误时同样清空可编辑槽位，并禁止其他局部增量重新发布旧设置；只有完整权威快照恢复后才重新发布。
 完整文档写入串行等待权威刷新；重连会重送当前页面加载器。
+知识库模式与创建草稿仅在 app 内存中保留，明确保存才发送共享请求，不另建持久草稿协议。
+知识库变更的刷新集合排除搜索，内容头或模式变化清空旧查询；任务、完整性及向量状态分开读取，失败时停止对应轮询。
+知识库内容及生命周期契约见 [AI 管理知识库](knowledge-base.md)。
 
 侧栏会话命令（重命名、归档等）是类型化 `Command`，由工作线程直接调用对应 RPC。归档返回存储错误码
 `unsupported_development_format`（会话以旧格式保存，无法加载或归档）时，工作线程发出
@@ -86,15 +89,18 @@ hydration 的 `session_config.unattended`，只在当前为自动审批时出现
 | 插件设置页 | 设置版面标签、字段整份配置写入、凭据状态/设置/删除、操作、数据区块参数与刷新、包内文档阅读 | PluginUi、PluginConfig、PluginCredential(n)、PluginData(n)、PluginAsset |
 | VCE 项目索引 | 项目选择、概览、十一项设置、忽略模式、初始化/同步、任务读取/取消、维护计划及执行 | VceStatus、VceOverview、VceJob |
 | VCE 引擎设置 | 背景推理路由、模型能力过滤、明确向量维度、路由预检及逐项目兼容/重建 | PublicAiSettings、VceStatus |
-| 知识库列表 | 创建、重命名、描述修改、删除 | KnowledgeLibraries |
-| 单库概览 | 按库名导航、文档/切片数量、检索策略、可读完整性及任务进度、快捷操作 | KnowledgeLibraries、KnowledgeIntegrity、KnowledgeJob |
-| 文档列表 | 目录筛选、根目录与全部目录区分、每页 20 条及哨兵分页、打开准确文档 | KnowledgeFolders、KnowledgeDocuments |
-| 文档阅读 | 原始/展示语料读取、保留缩进与空行、滚动、返回列表、持久错误及重试 | KnowledgeDocument |
-| 知识检索 | 保留及编辑查询、立即清空旧命中、受管理知识库检索、引用路径/行号/正文、打开命中文档、失败与警告 | KnowledgeSearch |
-| 单库设置 | 名称/描述、检索模式、回退策略、整理/向量路由及维度/批量 | KnowledgeLibraries、PublicAiSettings |
-| 单库来源 | 导入目录、重新扫描、更换目录且保留来源身份、任务进度 | KnowledgeSources、KnowledgeJob |
+| 知识库列表 | 创建空库、明确模式及模型、删除；错误格式只显示原因与删除 | KnowledgeLibraries、PublicAiSettings |
+| 单库概览 | 按真实库名导航、当前文档/切块/摘要数量、模式、完整性及稳定作业 | KnowledgeLibraries、KnowledgeIntegrity、KnowledgeJob、KnowledgeEmbeddings |
+| 逻辑目录 | 按路径进入目录、服务不透明游标续读、只读元信息、打开稳定文档身份 | KnowledgeDocuments |
+| 文档阅读 | 当前及精确历史前后侧别分开读取，保留缩进及空行，服务 nextLine 续读，持久错误与重试 | KnowledgeDocument |
+| 知识检索 | 明确人工查询，按库模式检索、引用身份/路径/行号、索引滞后及部分失败；变更刷新不重发查询 | KnowledgeSearch |
+| 单库设置 | 名称/用途元信息；明确四种模式及当前嵌入候选、维度、批量的本地草稿，保存时完整校验 | KnowledgeLibraries、PublicAiSettings |
+| 永久历史 | 摘要与前后镜像分页、按侧别读取历史正文，明确确认后还原到存在序号或初始空库 | KnowledgeChanges、KnowledgeChange、KnowledgeDocument |
 | 项目授权 | 授权存在状态、已授权知识库默认使用状态 | KnowledgeBindings |
-| 索引维护 | 可读完整性、修复/重建、展示预检与确认构建、向量构建、活动任务取消及自动进度读取 | KnowledgeIntegrity、KnowledgeJob、KnowledgeLibraries |
+| 会话选择 | 已保存会话所属项目、继承或明确库集合；有效库由实时授权约束 | KnowledgeSelection、KnowledgeAuthorizedLibraries、ProjectKnowledgeBindings |
+| 词典 | 原子新增或更新单词、移除精确词条 | KnowledgeWords |
+| 索引维护 | 完整性、稳定任务进度与取消、活动/期望向量空间、失败分页及全部/逐文档重试 | KnowledgeIntegrity、KnowledgeJob、KnowledgeEmbeddings |
+| 当前内容套件 | 宿主目录及文件浏览、导出、完整指纹预检、明确确认后以新名称导入独立库 | KnowledgePackages、KnowledgeLibraries、套件预检 |
 | VMM 概览 | 原生项目目录与宿主绑定 | VmmProjects |
 | VMM 内容 | 项目选择、会话/轮次/记忆全文、按会话或轮次预检回收 | VmmProjects、VmmRecords |
 | VMM 画像 | 用户/项目目标选择、全部有效状态及来源查看 | VmmProjects、VmmProfile |
@@ -122,28 +128,42 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 
 | TUI 构建器 | WebUI 函数 | RPC 方法或 VMM 动作 |
 | --- | --- | --- |
-| `knowledge_base::list_knowledge_libraries` | listKnowledgeLibraries | `service_list_knowledge_libraries` |
 | `knowledge_base::create_knowledge_library` | createKnowledgeLibrary | `service_create_knowledge_library` |
 | `knowledge_base::update_knowledge_library_settings` | updateKnowledgeLibrarySettings | `service_set_knowledge_library_settings` |
 | `knowledge_base::rename_knowledge_library` | renameKnowledgeLibrary | `service_rename_knowledge_library` |
-| `knowledge_base::delete_knowledge_library` | deleteKnowledgeLibrary | `service_delete_knowledge_library` |
-| `knowledge_base::list_knowledge_sources` | listKnowledgeSources | `service_list_knowledge_sources` |
-| `knowledge_base::list_knowledge_project_bindings` | listKnowledgeProjectBindings | `service_list_knowledge_project_bindings` |
-| `knowledge_base::get_knowledge_import_job` | getKnowledgeImportJob | `service_get_knowledge_import_job` |
+| `knowledge_base::set_knowledge_index_mode` | setKnowledgeIndexMode | `service_set_knowledge_index_mode` |
 | `knowledge_base::set_knowledge_project_binding` | setKnowledgeProjectBinding | `service_set_knowledge_project_binding` |
-| `knowledge_base::preview_knowledge_import` | previewKnowledgeImport | `service_preview_knowledge_import` |
-| `knowledge_base::import_knowledge_directory` | importKnowledgeDirectory | `service_import_knowledge_directory` |
-| `knowledge_base::cancel_knowledge_import` | cancelKnowledgeImport | `service_cancel_knowledge_import` |
-| `knowledge_base::rebuild_knowledge_index` | rebuildKnowledgeIndex | `service_rebuild_knowledge_index` |
-| `knowledge_base::repair_knowledge_index` | repairKnowledgeIndex | `service_repair_knowledge_index` |
-| `knowledge_base::get_knowledge_index_integrity` | getKnowledgeIndexIntegrity | `service_get_knowledge_index_integrity` |
-| `knowledge_base::search_managed_knowledge_library` | searchManagedKnowledgeLibrary | `service_search_knowledge_library` |
+| `knowledge_base::get_knowledge_operation` | getKnowledgeOperation | `service_get_knowledge_operation` |
+| `knowledge_base::cancel_knowledge_operation` | cancelKnowledgeOperation | `service_cancel_knowledge_operation` |
+| `knowledge_base::upsert_knowledge_custom_word` | upsertKnowledgeCustomWord | `service_upsert_knowledge_custom_word` |
 | `knowledge_base::list_managed_knowledge_documents` | listManagedKnowledgeDocuments | `service_list_knowledge_library_documents` |
 | `knowledge_base::list_managed_knowledge_document_folders` | listManagedKnowledgeDocumentFolders | `service_list_knowledge_library_folders` |
 | `knowledge_base::read_managed_knowledge_document` | readManagedKnowledgeDocument | `service_read_knowledge_library_document` |
-| `knowledge_base::preview_knowledge_display` | previewKnowledgeDisplay | `service_preview_knowledge_display` |
-| `knowledge_base::build_knowledge_display_index` | buildKnowledgeDisplayIndex | `service_build_knowledge_display_index` |
-| `knowledge_base::build_knowledge_vector_index` | buildKnowledgeVectorIndex | `service_build_knowledge_vector_index` |
+| `knowledge_base::search_managed_knowledge_library` | searchManagedKnowledgeLibrary | `service_search_knowledge_library` |
+| `knowledge_base::list_knowledge_changes` | listKnowledgeChanges | `service_list_knowledge_changes` |
+| `knowledge_base::get_knowledge_change` | getKnowledgeChange | `service_get_knowledge_change` |
+| `knowledge_base::read_knowledge_change_document` | readKnowledgeChangeDocument | `service_read_knowledge_change_document` |
+| `knowledge_base::restore_knowledge_library` | restoreKnowledgeLibrary | `service_restore_knowledge_library` |
+| `knowledge_base::get_knowledge_embedding_status` | getKnowledgeEmbeddingStatus | `service_get_knowledge_embedding_status` |
+| `knowledge_base::retry_knowledge_embeddings` | retryKnowledgeEmbeddings | `service_retry_knowledge_embeddings` |
+| `knowledge_base::export_knowledge_package` | exportKnowledgePackage | `service_export_knowledge_package` |
+| `knowledge_base::inspect_knowledge_package` | inspectKnowledgePackage | `service_inspect_knowledge_package` |
+| `knowledge_base::import_knowledge_package` | importKnowledgePackage | `service_import_knowledge_package` |
+| `knowledge_base::list_knowledge_documents` | listKnowledgeDocuments | `service_list_knowledge_documents` |
+| `knowledge_base::read_knowledge_document` | readKnowledgeDocument | `service_read_knowledge_document` |
+| `knowledge_base::search_knowledge` | searchKnowledge | `service_search_knowledge` |
+| `knowledge_base::set_session_knowledge_libraries` | setSessionKnowledgeLibraries | `service_set_session_knowledge_libraries` |
+| `knowledge_base::list_knowledge_libraries` | listKnowledgeLibraries | `service_list_knowledge_libraries` |
+| `knowledge_base::delete_knowledge_library` | deleteKnowledgeLibrary | `service_delete_knowledge_library` |
+| `knowledge_base::list_knowledge_project_bindings` | listKnowledgeProjectBindings | `service_list_knowledge_project_bindings` |
+| `knowledge_base::list_project_knowledge_bindings` | listProjectKnowledgeBindings | `service_list_project_knowledge_bindings` |
+| `knowledge_base::remove_knowledge_custom_word` | removeKnowledgeCustomWord | `service_remove_knowledge_custom_word` |
+| `knowledge_base::rebuild_knowledge_index` | rebuildKnowledgeIndex | `service_rebuild_knowledge_index` |
+| `knowledge_base::repair_knowledge_index` | repairKnowledgeIndex | `service_repair_knowledge_index` |
+| `knowledge_base::get_knowledge_index_integrity` | getKnowledgeIndexIntegrity | `service_get_knowledge_index_integrity` |
+| `knowledge_base::list_knowledge_custom_words` | listKnowledgeCustomWords | `service_list_knowledge_custom_words` |
+| `knowledge_base::browse_knowledge_packages` | browseKnowledgePackages | `service_browse_knowledge_packages` |
+| `knowledge_base::get_session_knowledge_libraries` | getSessionKnowledgeLibraries | `service_get_session_knowledge_libraries` |
 | `licenses::load_license_catalog` | loadLicenseCatalog | `service_license_catalog` |
 | `licenses::load_license_body` | loadLicenseBody | `service_license_body` |
 | `mcp_settings::load_mcp_runtime_snapshot` | loadMcpRuntimeSnapshot | `service_mcp_runtime_snapshot` |
@@ -297,7 +317,8 @@ Git 目录/仓库监听（`workspace.git.setMonitoring`）/差异/分支/提交�
 
 | 操作 | 确认请求冻结的依据 |
 | --- | --- |
-| 知识目录导入 | libraryId/sourceRoot/sourceId、previewFingerprint；selectedFileKeys 只能为本次 ready 集合的不重复子集 |
+| 知识套件导入 | 精确 archivePath、预检完整 sha256 作为 expectedSha256；只可修改独立新库名称，不提供覆盖既有库 |
+| 知识历史还原 | 精确 libraryId、存在的 targetSeq 或初始空库 0；确认后追加新变更，绝不删除历史 |
 | 插件安装/更新 | sourcePath、contentFingerprint、全部批准权限、注册表依赖同意；初始密钥按 serverId/secretKey 逐项遮蔽输入 |
 | VCE 维护 | settingsRevision、checkpointVersion、embeddingFingerprint、完整 actionIds、mode、幂等键；无检查点仅允许 rebuild |
 | VCE 路由 | preflightRevision、准确候选路由与正维度、每个独立项目的 compatible/rebuild 决定；hardRebuildReason 强制 rebuild |
@@ -322,15 +343,17 @@ ServiceCall、Setter、Form、输入框及发现端点的 Debug 输出省略机�
 连接仅保留公开元数据，知识库创建不依赖已有条目，VCE 按项目保留修订和幂等任务，
 VMM 按项目独立保存记录，预检核对版本与目标，回收恢复只合并已移动记录并检查身份冲突。
 向量、词法及保留计数随活动记录与回收批次刷新；演示夹具的向量保持当前代次，计数不代表索引完整性。
-未知演示变更按交接约定回成功；这类回执不作为真实功能或端到端验收证据。
+知识库模拟服务单独持有当前格式的目录、正文、永久历史、项目授权、会话选择、稳定作业与合成套件文件，旧知识方法及字段明确拒绝。
+其他未知演示变更仍按既有约定回成功；这类回执不作为真实功能或端到端验收证据。
+知识库模拟向量和搜索采用明确简化数据，不证明生产分词、排序、向量质量或真实文件安全；对应边界由存储及回环服务测试验证。
 
 ## 验证范围
 
 验证命令与范围见 [TUI 结构说明](tui-design.md#验证)。
 测试覆盖同级字段保护、数值边界、预检指纹/版本/目标、密钥回显清理与单次发送、
 HTTP 认证信封、WebSocket 帧、乱序读取、重连代际、工作器关闭、页面归属过滤、
-模拟状态修改及回收恢复、分类与生效版本筛选、目录分页、正文与语料读取、持久错误重试及无重叠任务轮询。
+模拟状态修改及回收恢复、分类与生效版本筛选、服务游标分页、当前/历史正文、精确侧别、不可变序号、套件指纹确认、持久错误重试、无重叠任务轮询及付费查询不自动重放。
 无头渲染在 160×45 和 64×20 下覆盖系统页面、工作台与预检浮层，并驱动分类和知识库的点击、按键及滚轮；
 阅读页检查实际终端单元格中的正文缩进及读取失败消息。
 服务表单、资源正文及数组设置保留多行粘贴；Alt/Shift+Enter 换行，普通 Enter 仍确认。
-Ctrl+U 清空后可粘贴替换全文或文件键列表，输入框显示末尾六行；凭据粘贴保留原始字节并始终遮蔽。
+Ctrl+U 清空后可粘贴替换当前字段全文，输入框显示末尾六行；凭据粘贴保留原始字节并始终遮蔽。

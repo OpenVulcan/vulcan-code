@@ -19,7 +19,7 @@
 | 文件列表、属性 | `tooling/native/file_result.rs` | 条目类型、路径、大小、截断；实际编码和换行属性 | 无 |
 | 文件写改删移、补丁 | 同上及 `file_write.rs`、`file_edit.rs`、`apply_patch.rs` | 实际变更路径、操作、增删统计、匹配数 | 变更集进入工具事件；可靠提取后从输出宿主字段移除副本 |
 | 代码检索 | `vulcan-service-kernel/src/vce/services/tool_result.rs` | 来源、行范围、每个片段一次、真实降级信息 | 无；内部 VCE 响应不变 |
-| 知识搜索、浏览、读取 | `tooling/native/knowledge_base/result_markdown.rs` | 查询、文档与片段身份、正文、来源、续读游标、部分失败 | 无 |
+| 知识列表、读取、搜索、写入 | `tooling/native/knowledge_base/result_markdown.rs` | 库用途、逻辑目录、当前文档身份与修订、正文、引用行、来源、续读及部分失败；写入只返回变更回执与有界大纲 | 写入附 `knowledge_write_v1` 最小身份与计数；其余无 |
 | VMM 搜索、详情、写删 | `tooling/native/vmm/result_markdown.rs` | 可操作身份、记忆、时间线独有信息、最终回答、逐项结果 | 无；领域存储不变 |
 | 供应商文字、搜索、提取 | `provider_tool_bridge/result_markdown.rs` | 正文、排序、来源、图片证据、失败来源 | 无；不再复制完整归一化结果 |
 | 媒体理解 | `media_understanding/result_markdown.rs` | 答案、独有片段、时间戳、警告；未知时间不写零 | 无 |
@@ -60,6 +60,7 @@
 | 关闭代理／`subagent_control` | 工具名、精确匹配身份、停止身份与数量、已关闭名称与数量、关闭标志、清队列数量、阅读标记 | 既有关闭面板解析器及前端状态；不能因去 JSON 丢失关闭通知 |
 | 等待／`agent_wait_ack_v1` | `reports[].work_id/outcome/reason`、`status`、`interrupted`、`context_messages_pending`、`format` | 内核 `result_wait::persisted_report_identities` 确认消费，前端状态；没有消息正文 |
 | 跨会话／`collaboration_receipt_v1` | `format`、返回时的 `question_id` | 问题卡关联现有领域状态，正文延迟加载 |
+| 知识写入／`knowledge_write_v1` | `library_id`、`change_seq`、`documents[].id/path/revision`、`pending_embeddings` | `v1-tool-domain-presentation.ts` 展示最小变更回执；不复制文档正文或搬运字节，内容及历史边界见 [知识库契约](knowledge-base.md) |
 | 待办／`todolist` | 已接受条目和解释 | `selectConversationSessionTodolistV1`、待办控件；模型只收到短回执 |
 | 媒体资源／`generated_attachments` | 资产描述、实际本地路径、媒体属性 | `conversation-media-generation-result.tsx` 按资产身份匹配、播放；模型只得到可操作引用、名称、类型和大小 |
 | 命令／`command_run`、`command_session` | 实际命令、工作目录、Shell、身份、退出状态、字节计数、失败与溢出信息 | 命令卡和实际执行提示；未保存完整命令输出副本 |

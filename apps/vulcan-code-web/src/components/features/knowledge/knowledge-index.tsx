@@ -6,7 +6,7 @@ import { getKnowledgeEmbeddingStatus, getKnowledgeIndexIntegrity, getKnowledgeOp
 import type { KnowledgeLibrarySummary } from "@/types/knowledge-base";
 import { KnowledgeReadFailure } from "./knowledge-feedback";
 import { useKnowledgeRead } from "./use-knowledge-read";
-import { knowledgeOperationLabel } from "./knowledge-status-labels";
+import { knowledgeOperationLabel } from "@/lib/knowledge-status-labels";
 
 // WebUI progress cadence is a client presentation policy; only one status poll may be pending.
 // WebUI 进度节奏为客户端展示策略；同时仅可等待一次状态轮询。

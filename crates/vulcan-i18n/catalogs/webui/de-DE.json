@@ -556,7 +556,7 @@
   "area.agents.description": "Agenten, Expertenprofile und Delegierungs-Prompts",
   "area.memory.description": "VMM-Gedächtnis für Nutzer, Projekte und Unterhaltungen",
   "area.contextEngine.description": "Semantische Codeindizierung, Modellrouten und Laufzeitstatus von ContextEngine",
-  "area.knowledge.description": "Projekt-Markdown mit Jieba-BM25-Suche",
+  "area.knowledge.description": "KI pflegt Inhalte, Sie verwalten Wissensbibliotheken",
   "knowledge.name": "Name der Wissensbibliothek",
   "knowledge.create": "Erstellen",
   "knowledge.refresh": "Aktualisieren",

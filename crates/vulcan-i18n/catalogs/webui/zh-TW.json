@@ -556,7 +556,7 @@
   "area.agents.description": "代理、專家設定檔與派工提示詞",
   "area.memory.description": "VMM 使用者、專案與對話記憶",
   "area.contextEngine.description": "ContextEngine 程式碼語意索引、模型路由與執行狀態",
-  "area.knowledge.description": "Markdown、Jieba 與 BM25 專案資料",
+  "area.knowledge.description": "AI 維護內容，人工管理知識庫",
   "knowledge.name": "知識庫名稱",
   "knowledge.create": "建立",
   "knowledge.refresh": "重新整理",

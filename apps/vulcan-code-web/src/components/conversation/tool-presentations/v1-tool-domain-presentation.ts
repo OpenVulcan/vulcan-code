@@ -1,4 +1,5 @@
 import { formatMessage, type TranslationKey } from "@/i18n";
+import { knowledgeChangeLabel } from "@/lib/knowledge-status-labels";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import type { ToolJsonValue, ToolPayload } from "@/service/conversation-event-window-store";
 import { modelExtensionToolTitleKey } from "./model-extension-tool-presentation";
@@ -273,7 +274,13 @@ export function resolveV1ToolDomainPresentation(tool: ToolCallEvent, t: (key: Tr
       // The write receipt contains identities and counts only; file-ingest bodies never enter this card.
       // 写入回执仅含身份及数量；文件搬运正文绝不进入此卡片。
       const receipt = hostPayload(tool.output, "knowledge_write_v1");
-      summary = typeof tool.input.documentId === "string" ? tool.input.documentId : textField(tool.input, "path");
+      // Partial streaming input may not yet contain its declared action; do not invent one.
+      // 部分流式输入可能尚无声明动作；不虚构动作。
+      const action = typeof tool.input.action === "string" ? knowledgeChangeLabel(tool.input.action, t) : "";
+      // Document ID and path are the schema-declared mutually exclusive selectors.
+      // 文档身份及路径为结构声明互斥选择器。
+      const selector = typeof tool.input.documentId === "string" ? tool.input.documentId : textField(tool.input, "path");
+      summary = [action, selector].filter(Boolean).join(" · ");
       if (receipt !== null) addSection(sections, t("toolDomain.knowledge.change"), receipt);
       if (typeof result === "string") addSection(sections, t("toolDomain.knowledge.change"), result, true);
       break;

@@ -556,7 +556,7 @@
   "area.agents.description": "Agents, expert profiles, and delegation prompts",
   "area.memory.description": "VMM user, project, and conversation memory",
   "area.contextEngine.description": "ContextEngine code-semantic indexing, model routes, and runtime status",
-  "area.knowledge.description": "Project Markdown with Jieba BM25 search",
+  "area.knowledge.description": "AI maintains content; you manage libraries",
   "knowledge.name": "Knowledge library name",
   "knowledge.create": "Create",
   "knowledge.refresh": "Refresh",

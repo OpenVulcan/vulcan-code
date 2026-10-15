@@ -25,6 +25,17 @@ function event(name: string, input: ToolPayload, result?: ToolJsonValue, host?: 
 }
 
 describe("V1 domain results from actual runtime contracts", () => {
+  it("shows the declared knowledge write action and target beside the minimal committed receipt", () => {
+    // The accepted host receipt contains identities and counts without document text.
+    // 已接受宿主回执包含身份及数量，不包含文档文本。
+    const receipt = { library_id: "library", change_seq: 23, documents: [{ id: "document", path: "guide/new.md", revision: 9 }], pending_embeddings: 1 };
+    // The sole current input owns the action; the accepted receipt owns its resulting revision and sequence.
+    // 唯一当前输入拥有动作；已接受回执拥有结果修订号及序号。
+    const domain = resolveV1ToolDomainPresentation(event("knowledge_write", { action: "move", documentId: "document", newPath: "guide/new.md", expectedRevision: 8 }, "# Knowledge change", { kind: "knowledge_write_v1", payload: receipt }));
+    expect(domain.summary).toBe(`${zh("knowledge.change.move")} · document`);
+    expect(domain.sections.map((section) => section.value)).toContainEqual(receipt);
+  });
+
   it("reads current Ask replies from the sole body and preserves original questions", () => {
     const answer = "yes🦀, exactly";
     const body = `## User Answers\n\n- Scope: ${answer}\n`;

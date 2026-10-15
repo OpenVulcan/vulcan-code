@@ -10,7 +10,7 @@ import type { KnowledgeChange, KnowledgeChangeItem, KnowledgeLibrarySummary } fr
 import { KnowledgeHistoricalDocumentReader } from "./knowledge-document-reader";
 import { KnowledgeReadFailure } from "./knowledge-feedback";
 import { useKnowledgeRead } from "./use-knowledge-read";
-import { knowledgeChangeLabel } from "./knowledge-status-labels";
+import { knowledgeChangeLabel } from "@/lib/knowledge-status-labels";
 
 // This client display length is a viewport policy; the service remains the request upper-bound authority.
 // 此客户端展示长度为视口策略；请求上限权威仍归服务。

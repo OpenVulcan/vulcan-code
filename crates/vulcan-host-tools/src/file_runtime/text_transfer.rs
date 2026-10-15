@@ -276,11 +276,14 @@ mod tests {
         fs::create_dir_all(root.path().join("src/nested")).unwrap();
         fs::create_dir_all(root.path().join("src/.git")).unwrap();
         fs::write(root.path().join("src/plain.md"), "plain\r\n").unwrap();
+        // The same Unicode input is the round-trip authority after native decoding.
+        // 同一 Unicode 输入为原生解码后往返权威。
+        let text = "# 标题\r\ntext\n";
         // A BOM fixes encoding without relying on statistical detection of a short fixture.
         // BOM 固定编码，无需依赖短夹具的统计探测。
         let bytes: Vec<_> = [0xff, 0xfe]
             .into_iter()
-            .chain("# 标题\r\ntext\n".encode_utf16().flat_map(u16::to_le_bytes))
+            .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
             .collect();
         fs::write(root.path().join("src/nested/utf16.md"), &bytes).unwrap();
         fs::write(root.path().join("src/.git/hidden.md"), "ignored").unwrap();
@@ -297,7 +300,7 @@ mod tests {
             .iter()
             .find(|source| source.relative_path == "nested/utf16.md")
             .expect("expected source path may have changed in fixture");
-        assert_eq!(source.text, "# 标题\r\ntext\n");
+        assert_eq!(source.text, text);
         assert_eq!(source.sha256, hex::encode(Sha256::digest(&bytes)));
         assert!(Path::new(&source.source_path).is_absolute());
         assert!(

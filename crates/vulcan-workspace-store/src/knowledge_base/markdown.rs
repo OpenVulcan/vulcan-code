@@ -155,16 +155,20 @@ pub fn extract_document_outline(content: &str, byte_budget: usize) -> (Vec<Strin
 fn knowledge_outline_has_no_body_or_fenced_headings() {
     // Only real heading events can become a transfer receipt.
     // 仅真实标题事件可成为搬运回执。
-    let content = "# Title\r\nprivate-body\r\n```md\r\n# Fake\r\n```\r\n## 中文\r\n";
+    let unicode_heading = "中文";
+    // Heading text comes from this source input rather than an independently maintained wording assertion.
+    // 标题文本来自此来源输入，而非独立维护的措辞断言。
+    let content =
+        format!("# Title\r\nprivate-body\r\n```md\r\n# Fake\r\n```\r\n## {unicode_heading}\r\n");
     assert_eq!(
-        extract_document_outline(content, usize::MAX),
-        (vec!["Title".into(), "中文".into()], false)
+        extract_document_outline(&content, usize::MAX),
+        (vec!["Title".into(), unicode_heading.into()], false)
     );
     assert_eq!(
-        extract_document_outline(content, "Title".len()),
+        extract_document_outline(&content, "Title".len()),
         (vec!["Title".into()], true)
     );
-    assert_eq!(extract_document_outline(content, 0), (Vec::new(), true));
+    assert_eq!(extract_document_outline(&content, 0), (Vec::new(), true));
     // A source with many headings retains only the shared heading-count limit.
     // 标题很多的来源仅保留共享标题数量上限。
     let many = "# Heading\n".repeat(super::MAX_KNOWLEDGE_OUTLINE_LINES + 1);

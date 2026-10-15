@@ -556,7 +556,7 @@
   "area.agents.description": "エージェント、エキスパートプロフィール、委任プロンプト",
   "area.memory.description": "VMM のユーザー、プロジェクト、会話のメモリ",
   "area.contextEngine.description": "ContextEngine のコードセマンティックインデックス、モデルルート、実行状態",
-  "area.knowledge.description": "Jieba BM25 検索に対応したプロジェクトの Markdown",
+  "area.knowledge.description": "AI が内容を管理し、ユーザーが知識庫を管理します",
   "knowledge.name": "ナレッジライブラリ名",
   "knowledge.create": "作成",
   "knowledge.refresh": "更新",

@@ -556,7 +556,7 @@
   "area.agents.description": "Agentes, perfiles de experto e instrucciones de delegación",
   "area.memory.description": "Memoria de usuario, proyecto y conversación de VMM",
   "area.contextEngine.description": "Indexación semántica de código de ContextEngine, rutas de modelos y estado de ejecución",
-  "area.knowledge.description": "Markdown del proyecto con búsqueda Jieba BM25",
+  "area.knowledge.description": "La IA mantiene el contenido; tú gestionas las bibliotecas",
   "knowledge.name": "Nombre de la biblioteca de conocimiento",
   "knowledge.create": "Crear",
   "knowledge.refresh": "Actualizar",

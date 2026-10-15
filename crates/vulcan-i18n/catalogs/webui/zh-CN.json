@@ -556,7 +556,7 @@
   "area.agents.description": "智能体、专家画像与调度提示词",
   "area.memory.description": "VMM 用户、项目与会话记忆",
   "area.contextEngine.description": "ContextEngine 代码语义索引、模型路由与运行状态",
-  "area.knowledge.description": "Markdown、Jieba 与 BM25 项目资料",
+  "area.knowledge.description": "AI 维护内容，人工管理知识库",
   "knowledge.name": "知识库名称",
   "knowledge.create": "创建",
   "knowledge.refresh": "刷新",

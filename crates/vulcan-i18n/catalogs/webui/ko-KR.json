@@ -556,7 +556,7 @@
   "area.agents.description": "에이전트, 전문가 프로필 및 위임 프롬프트",
   "area.memory.description": "VMM 사용자, 프로젝트 및 대화 메모리",
   "area.contextEngine.description": "ContextEngine 코드 의미 인덱싱, 모델 경로 및 실행 상태",
-  "area.knowledge.description": "Jieba BM25 검색을 지원하는 프로젝트 Markdown",
+  "area.knowledge.description": "AI가 콘텐츠를 관리하고 사용자가 지식 라이브러리를 관리합니다",
   "knowledge.name": "지식 라이브러리 이름",
   "knowledge.create": "만들기",
   "knowledge.refresh": "새로 고침",
