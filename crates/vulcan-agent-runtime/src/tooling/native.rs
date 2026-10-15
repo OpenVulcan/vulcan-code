@@ -213,9 +213,6 @@ pub const KNOWLEDGE_BROWSE_TOOL_ID: &str = "knowledge_browse";
 /// Stable identifier for project knowledge reading.
 /// 项目资料读取的稳定标识。
 pub const KNOWLEDGE_READ_TOOL_ID: &str = "knowledge_read";
-/// Re-export the single canonical VCE semantic retrieval tool identifier.
-/// 重新导出唯一规范的 VCE 语义检索工具标识。
-pub use vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID;
 /// Stable identifier for read-only LuaSkills package configuration discovery.
 /// 只读 LuaSkills 技能包配置发现的稳定标识。
 pub const RUNTIME_CONFIG_TOOL_ID: &str = "runtime-config";
@@ -232,7 +229,6 @@ const TERMINAL_INTERRUPT_DRAIN_MAX_MS: u64 = 1_500;
 /// 合并相邻模型可见终端分片时使用的软字节限制。
 const TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 2_048;
 mod apply_patch;
-mod codebase_retrieval;
 mod file;
 mod file_edit;
 mod file_read;
@@ -243,7 +239,6 @@ mod prompt_skill;
 mod registry;
 mod shell_command;
 pub(crate) use apply_patch::*;
-pub(crate) use codebase_retrieval::*;
 pub(crate) use file::*;
 pub(crate) use file_edit::*;
 pub(crate) use file_read::*;
@@ -378,9 +373,6 @@ pub struct NativeToolExecutionRequest {
     /// Optional project-authorized and session-enabled knowledge-library snapshot.
     /// 可选的项目授权且会话已启用知识库快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,
-    /// Optional host-owned VCE semantic retrieval callback for this execution.
-    /// 本次执行使用的可选宿主 VCE 语义检索回调。
-    pub vce_retrieval_handler: Option<crate::agent_runtime::VceRetrievalHandler>,
     /// Optional host-managed spill directory used for oversized output paging.
     /// 用于超长输出分页落盘的可选宿主管理超限目录。
     pub spill_root: Option<PathBuf>,
@@ -519,7 +511,6 @@ pub fn build_native_tool_catalog(
         build_knowledge_search_tool(),
         build_knowledge_browse_tool(),
         build_knowledge_read_tool(),
-        build_codebase_retrieval_tool(),
         build_prompt_skill_detail_tool(),
         build_shell_command_tool(shell_support.clone(), plugin_runtime),
         build_terminal_session_tool(command_session_runtime, shell_support),

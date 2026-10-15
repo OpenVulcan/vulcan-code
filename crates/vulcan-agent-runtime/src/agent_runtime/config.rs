@@ -472,7 +472,6 @@ fn default_analysis_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
             String::from("file"),
             String::from("shell_command"),
             String::from("terminal_session"),
-            String::from(vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID),
             String::from("vmm_memory_search"),
             String::from("vmm_turn_details"),
         ],
@@ -942,7 +941,6 @@ mod tests {
                 String::from("file"),
                 String::from("shell_command"),
                 String::from("terminal_session"),
-                String::from(vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID),
                 String::from("vmm_memory_search"),
                 String::from("vmm_turn_details"),
             ]

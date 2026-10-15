@@ -43,7 +43,7 @@ use vulcan_vmm::VmmConfigLayer;
 /// Verifies visible CodeKit entries inject the package main help with its stable provenance; returns no value.
 /// 验证可见的 CodeKit 入口按稳定来源标识注入包主帮助；无参数与返回值。
 #[test]
-fn visible_codekit_injects_package_main_help_without_vce() {
+fn visible_codekit_injects_package_main_help() {
     // A fixture marker proves the main-help payload reaches the prompt without freezing published wording.
     // 夹具标识证明主帮助载荷进入提示词，不绑定已发布文案。
     let package = LuaSkillPackageHelp::new(
@@ -1013,7 +1013,6 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
     ExecutionPreparationRequest {
         session_id,
         session_storage_directory: None,
-        vce_retrieval_handler: None,
         execution_scope: ExecutionScope::MainSession {
             session_id: SessionNodeId::from(session_id),
         },

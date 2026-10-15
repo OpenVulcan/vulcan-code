@@ -78,7 +78,6 @@ fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionReque
         controller_runtime: None,
         goal_runtime: None,
         knowledge_access: None,
-        vce_retrieval_handler: None,
         spill_root: None,
         enabled_prompt_skill_names: Vec::new(),
         prepared_prompt_skills: Vec::new(),
@@ -121,6 +120,10 @@ fn native_catalog_registers_browser_and_file_tools() {
         None,
         None,
     );
+
+    // Retired semantic retrieval must have no native registration or execution entry.
+    // 已退役的语义检索不能保留原生注册或执行入口。
+    assert!(catalog.definition("codebase_retrieval").is_none());
 
     for tool_id in [
         BROWSER_LIST_TOOL_ID,

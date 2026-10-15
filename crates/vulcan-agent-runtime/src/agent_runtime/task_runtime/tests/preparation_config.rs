@@ -22,7 +22,6 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
     ExecutionPreparationRequest {
         session_id,
         session_storage_directory: None,
-        vce_retrieval_handler: None,
         execution_scope: ExecutionScope::MainSession {
             session_id: SessionNodeId::from(session_id),
         },
@@ -1853,29 +1852,7 @@ async fn task_runtime_preparation_request_clears_parent_transient_runtime_state(
         None,
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
-    // The VCE callback retains live host authority while child-local turn state is rebuilt.
-    // 重建子任务回合状态时，VCE 回调仍保留实时宿主权威。
-    let vce_ready = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    // Share this exact gate with the callback; cloning a request must not snapshot its readiness value.
-    // 与回调共享这一精确门禁；克隆请求不能把就绪值固定成快照。
-    let callback_ready = Arc::clone(&vce_ready);
-    parent_request.project_id = Some(String::from("parent-vce-project"));
-    parent_request.vce_retrieval_handler = Some(crate::VceRetrievalHandler::new(
-        move |project_id, information_request| {
-            // This clone models the host authority retained across asynchronous retrieval.
-            // 此克隆模拟异步检索期间保留的宿主权威。
-            let ready = Arc::clone(&callback_ready);
-            Box::pin(async move {
-                if !ready.load(std::sync::atomic::Ordering::Acquire) {
-                    return Err(String::from("VCE fixture project is disabled"));
-                }
-                Ok(serde_json::json!({
-                    "project_id": project_id,
-                    "information_request": information_request,
-                }))
-            })
-        },
-    ));
+    parent_request.project_id = Some(String::from("parent-project"));
     parent_request.provider_route_lease_identity =
         Some(vulcan_workbench_model::SessionProviderRouteLeaseIdentity {
             schema_version: 1,
@@ -1993,33 +1970,9 @@ async fn task_runtime_preparation_request_clears_parent_transient_runtime_state(
     assert_eq!(child_request.session_id, task_id);
     assert_eq!(
         child_request.project_id.as_deref(),
-        Some("parent-vce-project")
+        Some("parent-project")
     );
-    // The inherited callable uses the host project, not the child session ID or model-selected project.
-    // 继承的可调用对象使用宿主项目，不使用子会话编号或模型选择的项目。
-    let handler = child_request
-        .vce_retrieval_handler
-        .expect("inherited VCE callback");
-    // Preserve the authoritative project independently from the child's execution identity.
-    // 独立于子任务执行身份保留权威项目。
-    let project_id = child_request
-        .project_id
-        .expect("inherited project authority");
-    // Observe the callback result before revoking the same shared gate.
-    // 撤销同一个共享门禁前观察回调结果。
-    let result = handler
-        .retrieve(project_id.clone(), String::from("find parser"))
-        .await
-        .expect("ready inherited host callback");
-    assert_eq!(result["project_id"], "parent-vce-project");
-    vce_ready.store(false, std::sync::atomic::Ordering::Release);
-    assert_eq!(
-        handler
-            .retrieve(project_id, String::from("find parser"))
-            .await
-            .expect_err("revocation remains live after child preparation"),
-        "VCE fixture project is disabled"
-    );
+
 }
 
 /// Verifies a child request inherits the immutable knowledge snapshot without losing its storage handle.

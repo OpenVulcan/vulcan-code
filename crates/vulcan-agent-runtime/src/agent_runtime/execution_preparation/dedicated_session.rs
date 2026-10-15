@@ -59,7 +59,6 @@ fn tool_allowed(
         DedicatedToolAccess::None => false,
         DedicatedToolAccess::Standard => {
             !native_tool_id_is_vmm_memory_tool(tool_id)
-                && tool_id != vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID
                 && !vulcan_subagent_core::CORE_SUBAGENT_TOOLS.contains(&tool_id)
                 && !DEDICATED_EXCLUDED_TOOL_IDS.contains(&tool_id)
         }
@@ -120,7 +119,6 @@ mod tests {
             "create_goal",
             "submit_plan",
             "vmm_memory_search",
-            "codebase_retrieval",
             "send_session_message",
         ] {
             assert!(
