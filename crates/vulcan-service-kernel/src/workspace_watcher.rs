@@ -31,9 +31,17 @@ async fn workspace_watcher_preserves_git_subscription_after_peer_release() {
     // Each consumer owns its subscription and registration independently.
     // 每个消费者独立持有自己的订阅及注册。
     let center = WorkspaceWatcherCenter::new().expect("physical workspace watcher");
+    // Git owns this event receiver independently of the peer subscription.
+    // Git 独立持有此事件接收端，不依赖并行订阅。
     let (git, mut events) = center.subscribe();
+    // Retain Git's registration until the change has been observed.
+    // 在观察到变更之前持续持有 Git 的注册句柄。
     let _git_registration = git.register_path(root.clone(), true);
+    // The peer watches the same path so releasing it exercises shared physical ownership.
+    // 并行消费者监听相同路径，使释放操作覆盖共享物理所有权。
     let (peer, _peer_events) = center.subscribe();
+    // Only this registration is released before writing the fixture.
+    // 写入夹具之前仅释放此注册句柄。
     let peer_registration = peer.register_path(root.clone(), true);
     drop(peer_registration);
     drop(peer);
