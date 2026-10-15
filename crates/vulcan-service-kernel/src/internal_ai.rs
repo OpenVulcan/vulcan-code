@@ -903,10 +903,8 @@ mod tests {
     use crate::configured_inference::{
         ConfiguredInferenceError, ConfiguredInferenceErrorCategory, ConfiguredInferenceFailureStage,
     };
-    use std::collections::BTreeSet;
     use vulcan_ai_contract::{
-        DispatchOutcome, ExecutionRouteSnapshot, HostAiCallContext, InferenceCallerBudget,
-        InferenceCallerContext, InferencePermission, InferenceSchedulingClass, InferenceUsageScope,
+        DispatchOutcome, ExecutionRouteSnapshot, HostAiCallContext, InferenceUsageScope,
     };
 
     /// Verifies cancellation after a non-idempotent operation starts never claims no dispatch.

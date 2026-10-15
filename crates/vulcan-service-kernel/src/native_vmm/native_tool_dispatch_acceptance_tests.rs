@@ -56,7 +56,6 @@ fn manager(
         None,
         None,
         None,
-        None,
         memory_tool_ids(),
         Vec::new(),
         Vec::new(),

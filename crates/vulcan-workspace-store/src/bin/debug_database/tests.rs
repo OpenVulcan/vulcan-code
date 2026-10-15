@@ -175,6 +175,7 @@ fn unsupported_mappings_do_not_drop_data() {
     for modification in [
         "ALTER TABLE projects ADD COLUMN future_setting TEXT",
         "ALTER TABLE project_vce_settings ADD COLUMN future_setting TEXT",
+        "ALTER TABLE project_vce_settings DROP COLUMN max_results",
         "CREATE INDEX future_vce_index ON project_vce_settings(enabled)",
         "CREATE TABLE future_dependency (id TEXT REFERENCES project_vce_settings(project_id))",
         "UPDATE projects SET codebase_memory_enabled=1",

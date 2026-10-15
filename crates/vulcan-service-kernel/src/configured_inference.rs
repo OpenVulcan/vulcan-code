@@ -7,7 +7,6 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     future::Future,
-    path::PathBuf,
     sync::{
         Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -15,7 +14,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use time::OffsetDateTime;
-use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast, oneshot, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast, watch};
 use uuid::Uuid;
 use vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_public_reasoning_effort;
 use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::{

@@ -13,6 +13,25 @@ use vulcan_workspace_store::data_plane::{
 /// 等待既有写入者或读取者的最长时间；锁重试不会无限等待。
 const LOCK_WAIT: Duration = Duration::from_secs(5);
 
+/// Exact retired source columns verified against its production DDL and the existing Debug database.
+/// 对照退役前生产建表语句与既有 Debug 库核实的准确列清单。
+const RETIRED_PROJECT_SETTINGS_COLUMNS: &[(&str, &str)] = &[
+    ("project_id", "TEXT"),
+    ("enabled", "INTEGER"),
+    ("revision", "INTEGER"),
+    ("max_file_bytes", "INTEGER"),
+    ("extra_ignore_patterns_json", "TEXT"),
+    ("allow_query_rewrite", "INTEGER"),
+    ("allow_rerank", "INTEGER"),
+    ("embedding_max_concurrency", "INTEGER"),
+    ("query_max_concurrency", "INTEGER"),
+    ("max_results", "INTEGER"),
+    ("max_context_chars", "INTEGER"),
+    ("update_mode", "TEXT"),
+    ("auto_update_min_interval_seconds", "INTEGER"),
+    ("updated_at", "TEXT"),
+];
+
 /// One actual SQLite object; SQL is obtained from an initialized authoritative schema.
 /// 一个实际 SQLite 对象；SQL 来自已初始化的权威结构。
 #[derive(Clone, PartialEq, Eq)]
@@ -254,33 +273,26 @@ fn plan(
         if retired.kind != "table" {
             return Err("The retired project settings object must be a table.".into());
         }
-        // This exact mapping was verified against the removed source DDL and the existing Debug catalog.
-        // 此精确映射已经通过被删除的源 DDL 以及现有 Debug 目录核实。
-        for (column, kind) in columns(connection, "project_vce_settings")? {
-            // Unknown columns may belong to newer work; never erase them through the retirement mapping.
-            // 未知列可能属于更新的工作，不能通过退役映射将其抹除。
-            let supported = match column.as_str() {
-                "project_id" | "extra_ignore_patterns_json" | "update_mode" | "updated_at" => {
-                    kind == "TEXT"
-                }
-                "enabled"
-                | "revision"
-                | "max_file_bytes"
-                | "allow_query_rewrite"
-                | "allow_rerank"
-                | "embedding_max_concurrency"
-                | "query_max_concurrency"
-                | "max_results"
-                | "max_context_chars"
-                | "auto_update_min_interval_seconds"
-                | "migrated_from_codebase_memory" => kind == "INTEGER",
-                _ => false,
-            };
-            if !supported {
-                return Err(format!(
-                    "Unmapped retired column project_vce_settings.{column}; no data was removed."
-                ));
-            }
+        // Compare the complete source shape; subsets and future columns are not inferred historical versions.
+        // 比较完整源结构，不把列子集或未来新增列推测为受支持历史版本。
+        let mut actual: BTreeMap<_, _> = columns(connection, "project_vce_settings")?
+            .into_iter()
+            .collect();
+        // This optional integer marker is the only separately verified historical addition.
+        // 此可选整数标记是唯一已经单独核实的历史新增列。
+        if let Some(kind) = actual.remove("migrated_from_codebase_memory")
+            && kind != "INTEGER"
+        {
+            return Err("The retired project marker requires its verified integer type.".into());
+        }
+        // Expected columns have one definition and are compared without depending on declaration order.
+        // 预期列只有一处定义，比较不依赖声明顺序。
+        let expected = RETIRED_PROJECT_SETTINGS_COLUMNS
+            .iter()
+            .map(|(name, kind)| (name.to_string(), kind.to_string()))
+            .collect();
+        if actual != expected {
+            return Err("Retired project settings require the verified column mapping; no data was removed.".into());
         }
         changes.retired_tables.push("project_vce_settings".into());
     }

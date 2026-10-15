@@ -1181,12 +1181,11 @@ impl PersistedAiConfiguration {
                 self.schema_version
             ));
         }
-        for profile_id in ["vmm"] {
-            if !self.inference_profiles.contains_key(profile_id) {
-                return Err(format!(
-                    "Persisted AI configuration is missing the required `{profile_id}` inference profile."
-                ));
-            }
+        if !self.inference_profiles.contains_key("vmm") {
+            return Err(
+                "Persisted AI configuration is missing the required `vmm` inference profile."
+                    .to_string(),
+            );
         }
         for defaults in self.custom_provider_model_defaults.values() {
             defaults.validate()?;
