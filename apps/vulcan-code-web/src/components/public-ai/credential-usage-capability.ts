@@ -19,6 +19,7 @@ export function usageCapabilitySupportsQuotaWindows(
     || capability === "tavily_credits"
     || capability === "kimi_coding_plan"
     || capability === "command_code_usage"
+    || capability === "open_design_wallet"
 }
 
 // usageCapabilityRequiresManagementKey returns whether one registered usage primitive needs a separate credential.

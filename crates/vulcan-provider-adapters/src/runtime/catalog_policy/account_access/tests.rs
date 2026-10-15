@@ -218,6 +218,7 @@ fn manifest_account_model_access_projects_commandcode_catalog() {
         id: String::from("purchased-credits"),
         display_name: String::from("Purchased credits"),
         bucket_name: None,
+        duration_seconds: None,
         used: Some(String::from("0")),
         remaining: Some(String::from("0.25")),
         total: Some(String::from("0.25")),

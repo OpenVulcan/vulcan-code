@@ -102,7 +102,9 @@ export function useCredentialUsageOverview(props: CredentialUsageOverviewProps):
   // model converts account facts into the exact localized values consumed by the pure view.
   // model 将账号事实转换为纯视图消费的精确本地化值。
   const model: CredentialUsageOverviewViewModel = {
-    balanceLabel: t("composer.accountCard.balance"),
+    balanceLabel: t(props.credentialProfile?.account_usage_query === "open_design_wallet"
+      ? "composer.accountCard.premiumBalance"
+      : "composer.accountCard.balance"),
     balanceValue: accountBalanceLabel(props.usage),
     planLabel: t(nonPlanAccount ? "composer.accountCard.accountType" : "composer.accountCard.plan"),
     planValue: planName,
@@ -261,6 +263,9 @@ function CredentialUsageSummary(props: {
   if (props.usage.quota_windows.length === 0) {
     return <span className="text-center text-xs text-muted-foreground">{t("composer.accountCard.noQuotaWindows")}</span>
   }
+  if (props.credentialProfile?.account_usage_query === "open_design_wallet") {
+    return <OpenDesignUsageSummary windows={props.usage.quota_windows} />
+  }
   return (
     <div className="w-full space-y-1.5">
       {props.usage.quota_windows.slice(0, 3).map((window) => (
@@ -272,6 +277,63 @@ function CredentialUsageSummary(props: {
               ? commandCodeUsageWindowLabel(window, t)
               : window.display_name}
           window={window}
+        />
+      ))}
+    </div>
+  )
+}
+
+// Localizes a provider-reported duration; window supplies exact metadata and t resolves catalog keys.
+// 本地化供应商报告的周期；window 提供精确元数据，t 解析目录键。
+// Returns a Design Plan period label, or the explicit invalid-data label for malformed metadata.
+// 返回 Design Plan 周期名称；元数据非法时返回明确的无效数据标签。
+export function openDesignUsageWindowLabel(
+  window: PublicAiAccountUsageWindow,
+  t: (key: TranslationKey) => string,
+): string {
+  // duration must be supplied by the verified preflight, never inferred from timestamps or policy names.
+  // duration 必须由已验证预检提供，绝不从时间戳或策略名称推断。
+  const duration = window.duration_seconds
+  if (duration === undefined || !Number.isSafeInteger(duration) || duration <= 0) {
+    return t("composer.accountCard.usageInvalid")
+  }
+  // Calendar labels derive from whole periods, while arbitrary valid periods retain their seconds.
+  // 日期单位标签由完整周期派生，其他合法周期保留秒数。
+  const secondsPerHour = 60 * 60
+  const secondsPerDay = 24 * secondsPerHour
+  if (duration % secondsPerDay === 0) {
+    return t("composer.accountCard.openDesignDays").replace("{count}", String(duration / secondsPerDay))
+  }
+  if (duration % secondsPerHour === 0) {
+    return t("composer.accountCard.openDesignHours").replace("{count}", String(duration / secondsPerHour))
+  }
+  return t("composer.accountCard.openDesignSeconds").replace("{count}", String(duration))
+}
+
+// Renders independent plan windows from props.windows; returns percentage bars and server-owned reset times.
+// 根据 props.windows 渲染独立套餐窗口；返回百分比进度条及服务端重置时间。
+function OpenDesignUsageSummary(props: { windows: PublicAiAccountUsageWindow[] }) {
+  // t resolves period names without embedding a second provider or language catalog.
+  // t 解析周期名称，不内嵌第二份供应商或语言目录。
+  const { t } = useI18n()
+  // The mounted card refreshes minute-resolution countdowns even when account usage is unchanged.
+  // 已挂载卡片在账户用量未变化时也刷新分钟精度的倒计时。
+  const [, setClock] = React.useState(Date.now)
+  React.useEffect(() => {
+    // interval is scoped to this visible summary and is removed when its card closes.
+    // interval 作用于当前可见摘要，卡片关闭后即移除。
+    const interval = window.setInterval(() => setClock(Date.now()), 60_000)
+    return () => window.clearInterval(interval)
+  }, [])
+  return (
+    <div className="w-full space-y-2" data-slot="open-design-plan-usage">
+      {props.windows.map((window) => (
+        <UsageWindowMetric
+          key={window.id}
+          label={openDesignUsageWindowLabel(window, t)}
+          window={window}
+          showRemainingPercentage
+          showReset
         />
       ))}
     </div>
@@ -537,6 +599,12 @@ function UsageWindowMetric(props: {
   // window is the exact normalized provider observation.
   // window 是精确规范化供应商观测。
   window?: PublicAiAccountUsageWindow
+  // showRemainingPercentage presents large credit pools as a readable percentage instead of raw counters.
+  // showRemainingPercentage 将大型积分池显示为易读百分比而非原始计数。
+  showRemainingPercentage?: boolean
+  // showReset includes the provider-owned reset time beneath this independent window.
+  // showReset 在独立窗口下方显示供应商持有的重置时间。
+  showReset?: boolean
 }) {
   // t resolves quota value labels in the active locale.
   // t 使用当前语言解析额度值标签。
@@ -546,7 +614,9 @@ function UsageWindowMetric(props: {
   const percentage = usageWindowPercentage(props.window)
   // value preserves the provider's exact quota semantics.
   // value 保留供应商的精确额度语义。
-  const value = usageWindowValue(props.window, t)
+  const value = props.showRemainingPercentage && percentage !== null && props.window?.available
+    ? `${t("composer.accountCard.remaining")} ${percentage}%`
+    : usageWindowValue(props.window, t)
   return (
     <div className="min-w-0 space-y-0.5">
       <div className="flex flex-wrap items-center justify-between gap-1">
@@ -566,6 +636,11 @@ function UsageWindowMetric(props: {
           style={{ width: `${percentage}%` }}
         />
       </div> : null}
+      {props.showReset && props.window?.resets_at ? (
+        <div className="text-right text-[10px] tabular-nums text-muted-foreground" data-slot="quota-window-reset">
+          {t("composer.accountCard.reset")} {usageResetDuration(props.window.resets_at)}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -584,6 +659,17 @@ export function usageWindowPercentage(window?: PublicAiAccountUsageWindow): numb
   const explicit = Number(window.remaining_percent)
   if (window.remaining_percent !== undefined && window.remaining_percent.trim() !== "" && Number.isFinite(explicit)) {
     return Math.max(0, Math.min(100, explicit))
+  }
+  // Integer credit pools can exceed Number's range; divide exactly before converting a bounded percentage.
+  // 整数积分池可能超过 Number 范围；先精确相除，再转换有界百分比。
+  if (window.remaining !== undefined && window.total !== undefined
+    && /^\d+$/.test(window.remaining) && /^\d+$/.test(window.total)) {
+    // The hundredth-percent ratio stays exact even for counters larger than a fixed-width integer.
+    // 即使计数超过固定宽度整数，百分之一百分点比例仍保持精确。
+    const total = BigInt(window.total)
+    if (total === 0n) return null
+    const basisPoints = (BigInt(window.remaining) * 10_000n) / total
+    return Number(basisPoints > 10_000n ? 10_000n : basisPoints) / 100
   }
   // remaining and total preserve exact count-based quota semantics.
   // remaining 与 total 保留基于次数的精确额度语义。

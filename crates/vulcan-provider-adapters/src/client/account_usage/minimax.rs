@@ -169,6 +169,7 @@ fn minimax_quota_window(input: MiniMaxQuotaWindowInput) -> Result<AccountUsageWi
         id: input.id,
         display_name: input.display_name,
         bucket_name: Some(input.bucket_name),
+        duration_seconds: None,
         used: (input.available && !input.unlimited)
             .then(|| input.total.saturating_sub(input.remaining).to_string()),
         remaining: (input.available && !input.unlimited).then(|| input.remaining.to_string()),

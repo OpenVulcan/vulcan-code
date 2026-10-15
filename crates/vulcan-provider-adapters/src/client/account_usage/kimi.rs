@@ -188,6 +188,7 @@ fn kimi_usage_window(
         id: id.to_string(),
         display_name: display_name.to_string(),
         bucket_name: bucket_name.filter(|value| !value.is_empty()),
+        duration_seconds: None,
         used,
         remaining,
         total,

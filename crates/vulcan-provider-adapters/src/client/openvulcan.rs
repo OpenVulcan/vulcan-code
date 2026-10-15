@@ -273,6 +273,7 @@ pub(super) async fn query_usage(
             ),
             display_name: balance.source_type.clone(),
             bucket_name: Some(balance.source_type),
+            duration_seconds: None,
             used: Some(points(balance.consumed_point_micro)),
             remaining: Some(points(balance.remaining_point_micro)),
             total: Some(points(balance.granted_point_micro)),

@@ -9,6 +9,7 @@ import {
   formatCurrencyAmount,
   credentialUsageIsNonPlanAccount,
   kimiUsageWindowLabel,
+  openDesignUsageWindowLabel,
   usageWindowValue,
   usageWindowPercentage,
 } from "./credential-usage-overview"
@@ -107,9 +108,46 @@ describe("usageCapabilitySupportsQuotaWindows", () => {
     expect(usageCapabilitySupportsQuotaWindows("tavily_credits")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("kimi_coding_plan")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("command_code_usage")).toBe(true)
+    expect(usageCapabilitySupportsQuotaWindows("open_design_wallet")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("open_router_credits")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("deep_seek_balance")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("unsupported")).toBe(false)
+  })
+})
+
+describe("OpenDesign plan presentation", () => {
+  // Period labels follow explicit metadata rather than policy names or mutable array positions.
+  // 周期标签跟随显式元数据，而不是策略名称或可变数组位置。
+  it("localizes provider durations and rejects missing duration metadata", () => {
+    // Translation keys identify formatting behavior without freezing localized wording.
+    // 目录键标识格式行为，不锁定本地化文案。
+    const translation = (key: TranslationKey) => `${key} {count}`
+    for (const [seconds, key, count] of [
+      [18000, "composer.accountCard.openDesignHours", 5],
+      [604800, "composer.accountCard.openDesignDays", 7],
+      [75, "composer.accountCard.openDesignSeconds", 75],
+    ] as const) {
+      expect(openDesignUsageWindowLabel({ ...kimiUsageWindow("opaque-policy"), duration_seconds: seconds }, translation))
+        .toBe(`${key} ${count}`)
+    }
+    expect(openDesignUsageWindowLabel(kimiUsageWindow("opaque-policy"), (key) => key))
+      .toBe("composer.accountCard.usageInvalid")
+  })
+
+  // The percentage must stay finite even when a credit pool exceeds the entire Number range.
+  // 即使积分池超出 Number 的整个范围，百分比也必须保持有限值。
+  it("divides arbitrary-size integer quotas before converting to a percentage", () => {
+    // Synthetic counters exceed floating-point range while preserving an exact half-full ratio.
+    // 合成计数超出浮点数范围，同时保留精确的一半剩余比例。
+    const window = {
+      ...kimiUsageWindow("huge-policy"),
+      remaining: `5${"0".repeat(399)}`,
+      total: `1${"0".repeat(400)}`,
+    }
+    expect(usageWindowPercentage(window)).toBe(50)
+    expect(usageWindowPercentage({ ...window, remaining: "0" })).toBe(0)
+    expect(usageWindowPercentage({ ...window, remaining: window.total })).toBe(100)
+    expect(usageWindowPercentage({ ...window, available: false })).toBeNull()
   })
 })
 

@@ -1431,6 +1431,9 @@ export interface PublicAiAccountUsageWindow {
   id: string;
   display_name: string;
   bucket_name?: string;
+  // Provider-reported whole-second period used to localize quota window labels.
+  // 供应商报告的整秒周期，用于本地化额度窗口名称。
+  duration_seconds?: number;
   used?: string;
   remaining?: string;
   total?: string;

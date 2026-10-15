@@ -814,8 +814,8 @@ pub enum AccountUsageQueryKind {
     /// CommandCode account identity, credits, subscription, and usage-summary endpoints.
     /// CommandCode 账号身份、额度、订阅与用量汇总端点。
     CommandCodeUsage,
-    /// OpenDesign wallet balance authenticated with its account-control credential.
-    /// 使用账户控制凭据认证的 OpenDesign 钱包余额。
+    /// OpenDesign Design Plan windows and separate wallet balance using its account-control credential.
+    /// 使用账户控制凭据查询 OpenDesign Design Plan 窗口及独立钱包余额。
     OpenDesignWallet,
 }
 

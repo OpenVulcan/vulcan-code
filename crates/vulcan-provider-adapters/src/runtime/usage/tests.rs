@@ -13,6 +13,7 @@ fn transient_usage_failure_preserves_account_access_evidence() {
         id: String::from("purchased-credits"),
         display_name: String::from("Purchased credits"),
         bucket_name: None,
+        duration_seconds: None,
         used: Some(String::from("0")),
         remaining: Some(String::from("1.5")),
         total: Some(String::from("1.5")),

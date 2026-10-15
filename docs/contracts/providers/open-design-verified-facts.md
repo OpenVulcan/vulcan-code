@@ -50,7 +50,8 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
 - 官方营销目录列出 12 个模型，测试 Key 实际只返回 11 个。
   **Hunyuan H4 Preview 未返回，未取得精确 ID、容量及可执行协议证据，因此不创建可用规则。**
 - API Key 凭据档的 `account_usage_query` 为 `unsupported`；账号授权凭据档使用
-  `open_design_wallet`，以独立 `controlKey` 查询美元钱包余额，不把套餐窗口等同于钱包余额。
+  `open_design_wallet`，以独立 `controlKey` 查询 Design Plan 套餐窗口和美元钱包余额。
+  两类额度独立显示，不把钱包金额当作常规模型的套餐剩余额度。
 - `metadata.context_limit` 是本次声明的容量来源；`context_budget` 是上游客户端预算，
   不将它误当模型硬上限。输出使用该网关明确发布的 `output_budget = 32000`。
 
@@ -124,11 +125,21 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
   `runtimeKey` 只通过推理值访问器投影到模型发现和推理；钱包专用访问器选择 `controlKey`。
   两者没有已验证的刷新协议，不制造 Refresh Token 或过期时间。失效后重新授权。
 - 钱包：`GET https://amr-api.open-design.ai/api/v1/wallet/balance`，
-  `Authorization: Bearer <controlKey>`。金额来自字符串 `balanceUsd`，固定币种 USD；
-  保留所有十进制位，拒绝数字类型、负数、指数及非法小数。`updatedAt` 是上游更新时间，
-  宿主快照的 `observed_at` 使用实际查询时间。没有证据的用量与套餐窗口保持空。
+  `Authorization: Bearer <controlKey>`。此请求提供当前已鉴权的 `workspaceId` 和
+  `workspaceMemberId`，作为后续套餐查询的唯一作用域来源。
+- 套餐预检：`GET /api/v1/workspaces/{workspaceId}/billing/preflight`，继续使用 `controlKey`，
+  不发送模型参数。返回结构版本必须为 1，工作区、成员及 `codingPlan.workspaceId` 必须与钱包身份
+  一致。`codingPlan.tier` 提供实时套餐身份；每个窗口独立保留 `policyId`、`durationSeconds`、
+  `usedCredits`、`remainingCredits`、`limitCredits`、`windowStart` 和 `resetsAt`。
+  2026-10-15 的真实 Go 账户返回 18000 秒、604800 秒两个窗口。重置时间可空时保持空，不自行推算。
+- 预检中的 `balanceUsd` 独立投影到美元钱包余额；该接口明确允许带负号的十进制字符串。
+  保留所有十进制位，拒绝 JSON 数字、指数及非法小数。套餐积分保留任意大小的整数字符串，
+  界面先用 BigInt 计算比例再转为有界百分比。钱包余额不写入套餐的 `remaining_amount`，
+  也不与两个并行窗口求和；钱包余额为零不构成套餐耗尽证据。最终请求计费与准入仍由上游网关决定。
+- 套餐读取失败使整次观测暂不可用，不退化为“仅余额查询成功”；`observed_at` 使用实际查询时间。
+  [套餐协议脱敏证据](open-design-plan-20261015-evidence.json) 包含官方 CLI 的隔离请求捕获与真实接口字段。
 - 已提供的测试 API Key 访问正式钱包接口返回 401，因此保留 API Key 档的余额不支持声明。
-  Auth 钱包查询的 401/403 明确要求重新登录；其他错误保留为暂时不可用，不回显可能包含凭据的上游正文。
+  Auth 账户查询的 401/403 明确要求重新登录；其他错误保留为暂时不可用，不回显可能包含凭据的上游正文。
 - 成对凭据使用 `open_design_auth` 类型并由既有事务原子保存；运行密钥、控制密钥、
   用户 ID、邮箱分别写入已有类型化列。SQLite 新增该类型的完整性约束，应用结构版本保持 v1。
   预发布开发数据库通过[独立维护入口](../debug-database-maintenance.md)同步最新结构，
@@ -187,3 +198,16 @@ Logo 原样取自指定仓库 `apps/web/public/logo.svg`，复制为前端
   后端中文字符串及文案断言检查通过。
 - 源清单、索引及 Schema 已通过 `make.ps1 sync` 同步，产物与权威资源字节一致。
 - 发布门禁通过：22 份供应商清单、42 个执行夹具，以及临时签名、验签和摘要校验。
+
+### 2026-10-15 套餐用量与钱包分离验证
+
+- 官方客户端的隔离请求捕获与真实账户接口确认了套餐预检路径、控制凭据角色及窗口字段；
+  脱敏字段证据见 [open-design-plan-20261015-evidence.json](open-design-plan-20261015-evidence.json)。
+- OpenDesign 后端定向测试 11 项、前端计算与卡片渲染测试 16 项、语言目录测试 5 项通过；
+  前端类型检查、定向 ESLint、服务内核所有目标编译检查及两项文案门禁通过。
+- 已执行资源同步并更新本机 Debug Core。通过正常应用接口查询既有 Auth 账户，确认实时套餐为 Go，
+  18000 秒与 604800 秒窗口独立保留精确积分和重置时刻；钱包单独显示，应用用量缓存与查询结果一致。
+- 浏览器实测显示 Go、5 小时与 7 天额度、独立进度条、重置倒计时及“高级模型余额”；
+  点击刷新后重新读取真实额度，短周期跨过重置边界后显示新的剩余额度和重置时间。
+- 本次没有数据库结构变更；本地数据库版本仍为 v1，完整性检查通过。未执行收费推理、额度耗尽测试
+  或其他套餐账户验收。

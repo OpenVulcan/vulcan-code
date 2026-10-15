@@ -150,6 +150,7 @@ fn tavily_usage_window(
         id: id.to_string(),
         display_name: display_name.to_string(),
         bucket_name: None,
+        duration_seconds: None,
         used: Some(used.to_string()),
         remaining,
         total: limit.map(|value| value.to_string()),

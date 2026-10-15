@@ -17,6 +17,10 @@ pub struct AccountUsageWindow {
     /// 可选额度桶或模型名称。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bucket_name: Option<String>,
+    /// Provider-reported duration of this quota window in whole seconds, when available.
+    /// 供应商报告的额度窗口整秒周期；仅在上游提供时存在。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<u64>,
     /// Provider-reported used quantity as an exact decimal string.
     /// 供应商报告的精确十进制字符串已用量。
     #[serde(default, skip_serializing_if = "Option::is_none")]

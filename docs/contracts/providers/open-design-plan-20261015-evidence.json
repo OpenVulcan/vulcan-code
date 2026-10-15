@@ -1,0 +1,138 @@
+{
+  "verified_at": "2026-10-15T05:44:23.855Z",
+  "upstream_source": {
+    "repository": "https://github.com/nexu-io/open-design",
+    "commit": "7da9a8aaa2d406bf3aa0a1cb9d4e8e1cd24c9095",
+    "paths": [
+      "apps/daemon/src/integrations/vela-billing.ts",
+      "apps/web/src/components/coding-plan-usage-model.ts",
+      "packages/contracts/src/api/collab.ts",
+      "specs/current/coding-plan-client-billing.md"
+    ]
+  },
+  "official_cli": {
+    "package": "@powerformer/vela-cli-win32-x64",
+    "version": "0.1.4",
+    "tarball": "https://registry.npmjs.org/@powerformer/vela-cli-win32-x64/-/vela-cli-win32-x64-0.1.4.tgz",
+    "integrity": "sha512-t/9JzqdKS6AWWjdT78U7ND1LcgBZg5zbuA4hpbf0ccGbeICZ0NPIkTgSvRk/pZgQ+0ZDn05vEO4/WgQgZHy3IA==",
+    "integrity_verified": true,
+    "evidence": "Exact GET paths and Bearer control-key role captured against an isolated loopback service with synthetic credentials."
+  },
+  "wallet_scope": {
+    "method": "GET",
+    "path": "/api/v1/wallet/balance",
+    "authorization": "Bearer <controlKey>",
+    "live_http_status": 200,
+    "required_fields": [
+      "workspaceId",
+      "workspaceMemberId"
+    ]
+  },
+  "plan_preflight": {
+    "method": "GET",
+    "path": "/api/v1/workspaces/{workspaceId}/billing/preflight",
+    "authorization": "Bearer <controlKey>",
+    "model_query_omitted": true,
+    "live_http_status": 200,
+    "field_types": {
+      "schemaVersion": "number",
+      "workspaceId": "string",
+      "workspaceMemberId": "string",
+      "modelId": "null",
+      "generatedAt": "string",
+      "balanceUsd": "string",
+      "codingPlan": {
+        "workspaceId": "string",
+        "generatedAt": "string",
+        "eligible": "boolean",
+        "tier": "string",
+        "windows": {
+          "type": "array",
+          "length": 2
+        }
+      },
+      "modelCovered": "null",
+      "funding": "string",
+      "fundingCheck": "string"
+    },
+    "window_field_types": {
+      "policyId": "string",
+      "durationSeconds": "number",
+      "resetMode": "string",
+      "usedCredits": "string",
+      "limitCredits": "string",
+      "remainingCredits": "string",
+      "windowStart": "string",
+      "resetsAt": "string"
+    },
+    "observed_durations_seconds": [
+      18000,
+      604800
+    ],
+    "observed_tier": "go",
+    "wallet_workspace_matches": true,
+    "wallet_member_matches": true
+  },
+  "summary_cross_check": {
+    "method": "GET",
+    "path": "/api/v1/billing/summary",
+    "live_http_status": 200,
+    "membership_matches_preflight": true,
+    "used_by_runtime": false
+  },
+  "projection": {
+    "plan_identity": "codingPlan.tier",
+    "window_identity": "codingPlan.windows[].policyId",
+    "duration": "durationSeconds",
+    "used": "usedCredits",
+    "remaining": "remainingCredits",
+    "total": "limitCredits",
+    "reset": "resetsAt",
+    "wallet_balance": "balanceUsd",
+    "wallet_as_plan_remaining": false,
+    "integer_precision": "arbitrary-size decimal strings; BigInt percentage calculation in UI",
+    "plan_failure": "failed complete observation; no wallet-only success fallback"
+  },
+  "secrets_included": false,
+  "account_identity_included": false,
+  "real_amounts_included": false,
+  "paid_inference_executed": false,
+  "application_verification": {
+    "verified_at": "2026-10-15T05:58:59.403Z",
+    "method": "service_query_public_ai_connection_usage",
+    "credential_mode": "auth",
+    "availability": "supported",
+    "plan_id": "go",
+    "plan_name": "Go",
+    "observed_durations_seconds": [
+      18000,
+      604800
+    ],
+    "independent_wallet": true,
+    "exact_credit_strings": true,
+    "reset_timestamps_present": true,
+    "usage_cache_matches": true,
+    "database_user_version": 1,
+    "database_quick_check": "ok",
+    "runtime_restart_confirmed": true,
+    "browser_ui": {
+      "source": "Local Vite frontend connected to the rebuilt Debug Core",
+      "plan_name_visible": true,
+      "independent_period_bars_visible": true,
+      "premium_wallet_label_visible": true,
+      "reset_countdowns_visible": true,
+      "manual_refresh_completed": true,
+      "screenshot_saved_outside_source": true
+    }
+  },
+  "validation": {
+    "provider_adapter_tests_passed": 11,
+    "frontend_tests_passed": 16,
+    "language_catalog_tests_passed": 5,
+    "frontend_typecheck_passed": true,
+    "targeted_eslint_passed": true,
+    "service_kernel_all_targets_check_passed": true,
+    "backend_cjk_guard_passed": true,
+    "wording_assertions_guard_passed": true
+  }
+}

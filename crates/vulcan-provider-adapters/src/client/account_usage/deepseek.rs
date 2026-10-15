@@ -89,6 +89,7 @@ fn decode_deepseek_balance(body: &str) -> Result<AccountUsageSnapshot, String> {
             id: format!("balance_{}", balance.currency.to_ascii_lowercase()),
             display_name: format!("{} balance", balance.currency),
             bucket_name: Some(String::from("Account balance")),
+            duration_seconds: None,
             used: None,
             remaining: Some(balance.total_balance.clone()),
             total: None,
