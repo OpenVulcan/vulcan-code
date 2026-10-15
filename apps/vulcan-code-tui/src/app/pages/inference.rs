@@ -183,7 +183,7 @@ fn route_row(
         let route = v(candidate, "/route");
         // Selection.
         // 已批准选择。
-        let selection = { route.clone() };
+        let selection = route.clone();
         options.push((
             selection.to_string(),
             format!(
@@ -196,7 +196,7 @@ fn route_row(
     }
     // Current.
     // 当前选中或已读取值。
-    let current = { current.to_string() };
+    let current = current.to_string();
     choice(
         label,
         options,
