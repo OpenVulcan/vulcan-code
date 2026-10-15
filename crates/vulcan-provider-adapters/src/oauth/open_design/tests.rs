@@ -18,11 +18,19 @@ fn challenge(lifetime_ms: i64) -> Value {
     })
 }
 
-/// Returns an approved synthetic pair with the official control and runtime destinations.
-/// 返回带官方控制及运行目标的获批合成凭据对。
+/// Returns a synthetic approved pair matching the live wire shape, which contains no destination URLs.
+/// 返回符合真实线路结构的合成获批凭据对，其中没有目标 URL。
+/// No parameters; returns secret-free fixture JSON for the complete device transaction.
+/// 无参数；返回供完整设备事务使用、不含真实秘密的夹具 JSON。
 fn approved() -> Value {
-    json!({"status":"approved", "controlKey":"private-control-key", "runtimeKey":"private-runtime-key",
-        "apiUrl":CONTROL_ORIGIN, "linkUrl":LINK_ORIGIN, "user":{"id":"synthetic-user","email":"test@example.invalid"}})
+    json!({
+        "deviceId":"synthetic-device", "userCode":"ABC123", "status":"approved",
+        "cliVersion":"0.1.0", "host":"Vulcan Code", "profile":"prod",
+        "expiresAt":"2026-10-15T05:07:15.762Z",
+        "controlKey":"private-control-key", "runtimeKey":"private-runtime-key",
+        "user":{"id":"synthetic-user", "authUserId":"synthetic-auth-user", "email":"test@example.invalid",
+            "name":"Synthetic User", "image":"https://example.invalid/avatar.png", "status":"active", "plan":"go"}
+    })
 }
 
 /// Waits for one terminal state; `runtime` and `id` identify the transaction under test.
@@ -228,21 +236,36 @@ async fn open_design_cancel_and_expiration_are_terminal() {
     server.await.unwrap();
 }
 
-/// Verifies unknown states and credential redirection fail without echoing secret bodies.
-/// 验证未知状态及凭据目标重定向失败，且不回显秘密正文。
+/// Verifies missing credentials, invalid account identity, unknown states and HTTP failures never expose secrets.
+/// 验证缺失凭据、非法账户身份、未知状态及 HTTP 失败均不会泄漏秘密。
+/// No parameters or return value; each invalid wire response must produce a failed exchange.
+/// 无参数及返回值；每个非法线路响应都必须使交换失败。
 #[tokio::test]
-async fn open_design_rejects_untrusted_token_responses() {
-    // wrong_origin retains valid credentials to ensure endpoint validation runs before acceptance.
-    // wrong_origin 保留有效凭据，确保接纳前先校验端点。
-    let mut wrong_origin = approved();
-    wrong_origin["apiUrl"] = json!("https://evil.example");
+async fn open_design_rejects_invalid_token_responses() {
+    // incomplete preserves a structurally valid response while removing each required credential field.
+    // incomplete 保留合法响应结构，并逐个移除必需凭据字段。
+    let mut incomplete = Vec::new();
+    for field in ["controlKey", "runtimeKey", "user"] {
+        // response isolates one missing-field failure without changing the other private values.
+        // response 隔离一个缺失字段错误，不改变其他私有值。
+        let mut response = approved();
+        response.as_object_mut().unwrap().remove(field);
+        incomplete.push((200, response.to_string()));
+    }
+    // invalid_user rejects nullable or missing identity instead of fabricating an account.
+    // invalid_user 拒绝可空或缺失身份，不伪造账户。
+    let mut invalid_user = approved();
+    invalid_user["user"] = json!({"id":"synthetic-user", "email":null});
+    incomplete.push((200, invalid_user.to_string()));
     for (status, body) in [
-        (200, wrong_origin.to_string()),
         (200, json!({"status":"private-control-key"}).to_string()),
         (200, json!({"status":"expired"}).to_string()),
         (401, approved().to_string()),
         (302, approved().to_string()),
-    ] {
+    ]
+    .into_iter()
+    .chain(incomplete)
+    {
         // Each transport is isolated, so a failed flow cannot reuse another device transaction.
         // 每次传输均隔离，失败流程不能复用其他设备事务。
         let (origin, server) = test_server(vec![(status, body, Duration::ZERO)]).await;

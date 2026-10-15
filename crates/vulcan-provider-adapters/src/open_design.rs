@@ -4,9 +4,6 @@
 /// Control authority shared by device authorization and wallet queries.
 /// 设备授权与钱包查询共用的控制端。
 pub(crate) const CONTROL_ORIGIN: &str = "https://amr-api.open-design.ai";
-/// Runtime authority returned by the production device authorization service.
-/// 生产设备授权服务返回的运行端。
-pub(crate) const LINK_ORIGIN: &str = "https://amr-link.open-design.ai";
 
 /// Builds a client that never forwards device or control credentials through redirects.
 /// 创建绝不通过重定向转发设备凭据或控制凭据的客户端。

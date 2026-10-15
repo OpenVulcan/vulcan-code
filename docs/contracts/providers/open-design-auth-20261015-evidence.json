@@ -1,5 +1,5 @@
 {
-  "verified_at": "2026-10-14T17:16:17.994Z",
+  "verified_at": "2026-10-15T05:06:44.471Z",
   "upstream_source": {
     "repository": "https://github.com/nexu-io/open-design",
     "commit": "7da9a8aaa2d406bf3aa0a1cb9d4e8e1cd24c9095",
@@ -46,7 +46,12 @@
       },
       "live_http_status": 200,
       "live_state": "pending",
-      "live_final_state": "expired"
+      "live_final_state": "expired",
+      "live_observed_states": [
+        "pending",
+        "expired",
+        "approved"
+      ]
     },
     "activation": {
       "origin": "https://open-design.ai",
@@ -57,18 +62,41 @@
       ]
     },
     "approved_response": {
-      "evidence": "Synthetic response accepted and persisted by the official Vela CLI 0.1.4; real device challenge expired without account approval.",
+      "evidence": "Live production token response after user-confirmed device authorization; only field names and types are retained.",
+      "live_http_status": 200,
+      "response_field_types": {
+        "deviceId": "string",
+        "userCode": "string",
+        "status": "string",
+        "cliVersion": "string",
+        "host": "string",
+        "profile": "string",
+        "expiresAt": "string",
+        "controlKey": "string",
+        "runtimeKey": "string",
+        "user": {
+          "id": "string",
+          "authUserId": "string",
+          "email": "string",
+          "name": "string",
+          "image": "string",
+          "status": "string",
+          "plan": "string"
+        }
+      },
       "required_fields": [
         "status",
         "controlKey",
         "runtimeKey",
-        "apiUrl",
-        "linkUrl",
         "user.id",
         "user.email"
       ],
-      "runtime_origin": "https://amr-link.open-design.ai",
-      "control_origin": "https://amr-api.open-design.ai"
+      "absent_fields": [
+        "apiUrl",
+        "linkUrl"
+      ],
+      "endpoint_authority": "Control requests use the registered host origin; inference uses the provider manifest. Neither destination is supplied by the approved response.",
+      "prior_fixture_correction": "The official CLI accepted synthetic apiUrl and linkUrl fields; that did not prove the production response required or returned them."
     },
     "lifecycle": {
       "observed_cli_states": [
@@ -92,8 +120,18 @@
       401,
       403
     ],
-    "live_account_verified": false,
-    "api_key_http_status": 401
+    "live_account_verified": true,
+    "api_key_http_status": 401,
+    "live_http_status": 200,
+    "response_field_types": {
+      "balanceUsd": "string",
+      "expiresAt": "string",
+      "updatedAt": "string",
+      "billingScopeVersion": "number",
+      "workspaceId": "string",
+      "workspaceMemberId": "string"
+    },
+    "live_amount_format_verified": true
   },
   "secrets_included": false,
   "runtime_discovery": {
@@ -101,5 +139,29 @@
     "method": "GET",
     "path": "/v1/models?all=true",
     "authorization": "Bearer <runtimeKey>"
+  },
+  "application_validation": {
+    "entrypoint": "Debug Core using the same authenticated RPC methods as the settings UI",
+    "device_authorization": "succeeded",
+    "connection_commit": "succeeded",
+    "credential_mode": "auth",
+    "catalog_discovery": {
+      "state": "ready",
+      "model_count": 11
+    },
+    "wallet_query": {
+      "availability": "supported",
+      "currency": "USD",
+      "decimal_string_verified": true,
+      "settings_cache_matches": true
+    },
+    "database": {
+      "user_version": 1,
+      "credential_material_kind": "open_design_auth",
+      "credential_pair_persisted": true,
+      "quick_check": "ok"
+    },
+    "ui_visual_verification": false,
+    "paid_inference_executed": false
   }
 }

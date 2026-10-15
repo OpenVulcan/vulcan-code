@@ -2,7 +2,7 @@
 //! 对照 Vela CLI 0.1.4 核实的 OpenDesign 原生设备授权。
 
 use super::*;
-use crate::open_design::{CONTROL_ORIGIN, LINK_ORIGIN};
+use crate::open_design::CONTROL_ORIGIN;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 /// Maximum lifetime retained for an upstream device challenge.
@@ -55,8 +55,8 @@ struct AccountIdentity {
     email: String,
 }
 
-/// Exact token states recognized by the official Vela client.
-/// 官方 Vela 客户端识别的精确令牌状态。
+/// Token states and approved fields verified against the production device authorization endpoint.
+/// 已通过生产设备授权端点验证的令牌状态及获批字段。
 #[derive(Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum TokenResponse {
@@ -66,8 +66,8 @@ enum TokenResponse {
     /// The device challenge can no longer be exchanged.
     /// 设备挑战已无法交换凭据。
     Expired,
-    /// Both credential roles and their trusted destinations were approved together.
-    /// 两种凭据角色及其可信目标已共同获批。
+    /// Both credential roles were approved together; destinations remain host-owned constants.
+    /// 两种凭据角色已共同获批；目标地址始终由宿主常量持有。
     Approved {
         /// Account-control credential, never used for inference.
         /// 账户控制凭据，绝不用于推理。
@@ -77,14 +77,6 @@ enum TokenResponse {
         /// 推理凭据，绝不替代控制凭据。
         #[serde(rename = "runtimeKey")]
         runtime_key: String,
-        /// Control destination returned by the authority.
-        /// 授权端返回的控制目标。
-        #[serde(rename = "apiUrl")]
-        api_url: String,
-        /// Runtime destination returned by the authority.
-        /// 授权端返回的运行目标。
-        #[serde(rename = "linkUrl")]
-        link_url: String,
         /// Account bound to this credential pair.
         /// 与此凭据对绑定的账户。
         user: AccountIdentity,
@@ -283,12 +275,10 @@ async fn poll(
             TokenResponse::Approved {
                 control_key,
                 runtime_key,
-                api_url,
-                link_url,
                 user,
             } => {
-                validate_authority(&api_url, CONTROL_ORIGIN)?;
-                validate_authority(&link_url, LINK_ORIGIN)?;
+                // The production response contains no URLs; credentials stay bound to the registered endpoints.
+                // 生产响应不包含 URL；凭据始终绑定已注册端点。
                 // material preserves the distinct roles atomically, with no invented refresh token.
                 // material 原子保留不同角色，不伪造刷新令牌。
                 let material = CredentialSecretMaterial::OpenDesignAuth {
@@ -302,24 +292,6 @@ async fn poll(
             }
         }
     }
-}
-
-/// Confirms an approved destination is exactly the registered production origin.
-/// 确认获批目标精确匹配已注册的生产源。
-///
-/// `value` is provider data and `expected` is a host constant. Returns success or a closed error.
-/// `value` 是供应商数据，`expected` 是宿主常量。返回成功或封闭错误。
-fn validate_authority(value: &str, expected: &str) -> Result<(), String> {
-    // parsed URL permits only the equivalent root slash, never arbitrary paths or credentials.
-    // 解析后的 URL 仅允许等价根斜杠，绝不允许任意路径或用户信息。
-    let url =
-        Url::parse(value).map_err(|_| String::from("OpenDesign returned an invalid authority."))?;
-    if url.as_str() != format!("{expected}/") {
-        return Err(String::from(
-            "OpenDesign returned an untrusted credential authority.",
-        ));
-    }
-    Ok(())
 }
 
 /// Reads a bounded successful JSON response without including provider bodies in diagnostics.
