@@ -131,6 +131,7 @@ arrow-ipc = "58.1.0"
 arrow-schema = "58.1.0"
 fs4 = "1.1.0"
 jieba-rs = "0.10.3"
+unicode-normalization = "0.1.25"
 # Only local paths are opened, but lancedb 0.38.0 fails to compile without `remote`: its job
 # module names `Error::Http`, a variant that exists only under that feature. Drop it once
 # upstream gates that code; it also pulls in the duplicate axum 0.7 stack.

@@ -1,904 +1,914 @@
-//! Cross-domain restart-state and real in-process knowledge runtime regressions.
-//! 跨领域重启状态与真实进程内知识库运行时回归。
+//! Behavioral regressions for exact-version AI-managed content and restore semantics.
+//! 精确版本 AI 管理内容与还原语义的行为回归。
 
-use super::package_lifecycle::{
-    KNOWLEDGE_REPLACEMENT_JOURNAL_VERSION, KNOWLEDGE_REPLACEMENT_PHASE_COMMITTED,
-    KNOWLEDGE_REPLACEMENT_PHASE_PREPARED, KnowledgeReplacementJournal,
-};
-
-use super::package_archive::tests::write_identity_mismatch_package;
-use super::text;
 use super::*;
 use crate::data_plane::{HostRuntimeMetadata, build_application_schema_script};
-use crate::knowledge_base::models::{
-    KnowledgeDisplayIndexStatus, KnowledgeOperationKind, KnowledgeVectorIndexStatus,
-};
-use crate::local_sql;
-use crate::runtime_assets;
-use std::fs;
-use std::path::Path;
-use std::time::{Duration, Instant};
-use tempfile::tempdir;
 
-/// Verifies restart recovery preserves published generations and releases abandoned building flags.
-/// 验证重启恢复会保留已发布代次并释放遗留构建中标记。
-#[test]
-fn interrupted_derived_index_statuses_become_actionable() {
-    assert_eq!(
-        recovered_display_index_status(KnowledgeDisplayIndexStatus::Building, true),
-        Some(KnowledgeDisplayIndexStatus::Stale)
-    );
-    assert_eq!(
-        recovered_display_index_status(KnowledgeDisplayIndexStatus::Building, false),
-        Some(KnowledgeDisplayIndexStatus::Failed)
-    );
-    assert_eq!(
-        recovered_display_index_status(KnowledgeDisplayIndexStatus::Ready, true),
-        None
-    );
-    assert_eq!(
-        recovered_vector_index_status(KnowledgeVectorIndexStatus::Building, true),
-        Some(KnowledgeVectorIndexStatus::Stale)
-    );
-    assert_eq!(
-        recovered_vector_index_status(KnowledgeVectorIndexStatus::Building, false),
-        Some(KnowledgeVectorIndexStatus::Failed)
-    );
-}
-
-/// Exercises create, Markdown import, Jieba BM25 search, incremental deletion, and safe removal against the in-process engine.
-/// 使用进程内引擎验证创建、Markdown 导入、Jieba BM25 检索、增量删除与安全移除。
-#[tokio::test(flavor = "current_thread")]
-async fn in_process_markdown_bm25_end_to_end() {
-    let temporary = tempdir().expect("create knowledge end-to-end root");
-    let data_root = temporary.path().join("data");
-    let source_root = temporary.path().join("source");
-    fs::create_dir_all(source_root.join("guide")).expect("create source tree");
-    fs::write(
-        source_root.join("guide").join("search.md"),
-        "# 检索设计\n\n火山知识库使用结巴分词和 BM25 检索。\n\ngetskilllevelup(actor, 10)\n",
-    )
-    .expect("write Chinese Markdown fixture");
-    fs::write(source_root.join("ignored.txt"), "must not import").expect("write ignored fixture");
-
-    let app_path = data_root.join("sqlite").join("app-workspace.sqlite3");
-    fs::create_dir_all(app_path.parent().expect("app database parent"))
-        .expect("create app database parent");
-
-    // The application database is opened by the in-process runtime through the real host handle.
-    // The fixture exercises the same exclusive `<db>.vldb.lock` and binding registry as production,
-    // without a fake data plane or an external process.
-    // 应用数据库由进程内运行时通过真实宿主句柄打开。夹具验证与生产一致的独占
-    // `<db>.vldb.lock` 与绑定注册表，不使用伪造数据面或外部进程。
+/// Creates an isolated real host, application schema and authorized project; returns lifetime root and runtime.
+/// 创建隔离真实宿主、应用结构和已授权项目；返回生命周期根目录与运行时。
+async fn fixture(mode: KnowledgeIndexMode) -> (tempfile::TempDir, KnowledgeBaseRuntime, String) {
+    // Every fixture owns all persistent paths and binding identities.
+    // 每个夹具拥有全部持久路径和绑定身份。
+    let root = tempfile::tempdir().expect("fixture root");
+    // The real local database runtime creates the same SQLite bindings as production.
+    // 真实本地数据库运行时创建与生产相同的 SQLite 绑定。
+    let database = root.path().join("sqlite/app.sqlite3");
+    std::fs::create_dir_all(database.parent().expect("database parent"))
+        .expect("create SQLite directory");
+    // Shared wrappers later reuse this exact host identity.
+    // 后续共享包装复用该精确宿主身份。
     let runtime = KnowledgeBaseRuntime::new(HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
-        data_root: data_root.clone(),
-        sqlite_path: app_path.clone(),
-        sqlite_binding_id: String::from("knowledge-e2e-app"),
-        system_statistics_sqlite_path: app_path,
-        system_statistics_sqlite_binding_id: String::from("knowledge-e2e-app-statistics"),
+        data_root: root.path().to_path_buf(),
+        sqlite_path: database.clone(),
+        sqlite_binding_id: format!("kb-test-{}", Uuid::new_v4()),
+        system_statistics_sqlite_path: database,
+        system_statistics_sqlite_binding_id: format!("kb-stat-{}", Uuid::new_v4()),
     }));
     local_sql::execute_script_async(
         &runtime.host_runtime.local,
         LogicalDatabase::AppState,
-        &build_application_schema_script(),
-        Vec::new(),
+        build_application_schema_script(),
+        vec![],
     )
     .await
-    .expect("initialize app schema");
-
-    // abandonedExtraction simulates a package TempDir left behind by process termination.
-    // abandonedExtraction 模拟进程终止后遗留的知识库包临时解压目录。
-    let abandoned_extraction = runtime
-        .knowledge_root()
-        .join(".package-inspect-crash-fixture");
-    fs::create_dir_all(&abandoned_extraction).expect("create abandoned package extraction fixture");
-    fs::write(abandoned_extraction.join("content.sqlite3"), b"abandoned")
-        .expect("write abandoned package extraction fixture");
-    runtime
-        .recover_interrupted_jobs()
-        .await
-        .expect("clean abandoned package extraction at startup");
-    assert!(!abandoned_extraction.exists());
-
+    .expect("application schema");
+    local_sql::execute_script_async(&runtime.host_runtime.local,LogicalDatabase::AppState,
+        "INSERT INTO projects(id,name,root_path,created_at,updated_at) VALUES('project','fixture','fixture','','');",vec![]).await.expect("project");
+    // Storage tests use only free full-text/browse modes; vector worker tests use explicit fake routes later.
+    // 存储测试仅使用免费全文或浏览模式；后续向量工作器测试使用显式假路由。
     let library = runtime
-        .create_library("端到端知识库", "", &[])
+        .create_library(
+            "Fixture",
+            "AI content fixture",
+            &["project".into()],
+            &KnowledgeLibrarySettings {
+                index_mode: mode,
+                embedding: None,
+            },
+        )
         .await
-        .expect("create isolated library");
-    let library = runtime
-        .rename_library(&library.id, "端到端知识库已重命名", "")
+        .expect("create library");
+    (root, runtime, library.id)
+}
+
+/// Returns a complete AI invocation identity for behavior tests.
+/// 为行为测试返回完整 AI 调用身份。
+fn ai() -> KnowledgeChangeActor {
+    KnowledgeChangeActor {
+        kind: "ai".into(),
+        session_id: Some("child-session".into()),
+        turn_id: Some("turn".into()),
+        tool_call_id: Some(Uuid::new_v4().to_string()),
+    }
+}
+
+/// Returns the only actor permitted to restore content.
+/// 返回唯一允许还原内容的执行者。
+fn human() -> KnowledgeChangeActor {
+    KnowledgeChangeActor {
+        kind: "user".into(),
+        session_id: None,
+        turn_id: None,
+        tool_call_id: None,
+    }
+}
+
+/// Builds an explicit create request; returns a complete required-field payload.
+/// 构建显式创建请求；返回完整必填字段载荷。
+fn create(path: &str, body: &str) -> KnowledgeWriteRequest {
+    KnowledgeWriteRequest {
+        action: "create".into(),
+        path: Some(path.into()),
+        title: Some("Document".into()),
+        summary: Some("Useful summary".into()),
+        body: Some(body.into()),
+        ..Default::default()
+    }
+}
+
+/// Creates one document and returns its exact receipt row by path.
+/// 创建一篇文档并按路径返回其精确回执行。
+async fn add(
+    runtime: &KnowledgeBaseRuntime,
+    library: &str,
+    path: &str,
+    body: &str,
+) -> KnowledgeDocumentSummary {
+    // A create action must emit exactly one affected surviving row.
+    // 创建动作必须产生恰好一条受影响仍存记录。
+    let receipt = runtime
+        .write_content(library, "project", create(path, body), ai())
         .await
-        .expect("replace existing manifest during rename");
-    assert_eq!(library.name, "端到端知识库已重命名");
-    let first_import = runtime
-        .import_markdown_directory(&library.id, &source_root)
-        .await
-        .expect("import Markdown through Jieba FTS");
-    assert_eq!(first_import.scanned_files, 1);
-    assert_eq!(first_import.changed_files, 1);
-    let completed_job = runtime
-        .latest_import_job(&library.id)
-        .await
-        .expect("load completed import job")
-        .expect("completed import job exists");
-    assert_eq!(completed_job.operation_kind, KnowledgeOperationKind::Import);
-    assert_eq!(completed_job.total_files, 1);
-    assert_eq!(completed_job.processed_files, 1);
-    assert_eq!(completed_job.current_file, None);
-    assert_eq!(
-        runtime
-            .list_documents(&library.id, None, 20, 0)
-            .await
-            .expect("list imported documents")
-            .len(),
-        1
-    );
-    // SourceSummary separates the authoritative document total from its searchable chunk total.
-    // SourceSummary 将权威文档总数与其可检索切片总数分开。
-    let source_summary = runtime
-        .list_sources(&library.id)
-        .await
-        .expect("list durable source summary")
+        .expect("create document");
+    assert_eq!(receipt.documents.len(), 1);
+    receipt
+        .documents
         .into_iter()
-        .next()
-        .expect("source summary exists");
-    assert_eq!(source_summary.document_count, 1);
-    assert_eq!(source_summary.chunk_count, first_import.chunk_count);
-    let initial_integrity = runtime
-        .inspect_index_integrity(&library.id)
-        .await
-        .expect("inspect ready index integrity");
-    assert!(initial_integrity.searchable);
-    assert_eq!(
-        initial_integrity.authoritative_chunk_count,
-        first_import.chunk_count
-    );
-    assert_eq!(
-        initial_integrity.indexed_chunk_count,
-        first_import.chunk_count
-    );
-    let search = runtime
-        .search(std::slice::from_ref(&library.id), "火山知识库", 10)
-        .await
-        .expect("search Chinese content");
-    // A per-library error is reported as a failure with empty hits rather than as an Err, so asserting
-    // only on hits turns a broken query into a misleading "no results" message. Asserting the failure
-    // list is empty keeps the real cause visible.
-    // 逐库错误会以"失败条目 + 空命中"而非 Err 的形式报告，因此只断言命中会把查询损坏变成误导性的
-    // "无结果"消息。断言失败列表为空可让真正原因保持可见。
-    assert!(
-        search.failures.is_empty(),
-        "per-library search failures: {:?}",
-        search.failures
-    );
-    assert!(!search.hits.is_empty());
-    assert!(!search.fts_queries[0].expression.is_empty());
-    // independentRuntime reproduces the native AI tool path that reconstructs the runtime from the same host handle.
-    // independentRuntime 复现原生 AI 工具使用同一宿主句柄重新构造运行时的路径。
-    let independent_runtime = KnowledgeBaseRuntime::new(runtime.host_runtime.clone());
-    // independentSearch must reuse the host binding instead of reopening the locked SQLite file.
-    // independentSearch 必须复用宿主绑定，而不是重新打开已经锁定的 SQLite 文件。
-    let independent_search = independent_runtime
-        .search(std::slice::from_ref(&library.id), "火山知识库", 10)
-        .await
-        .expect("search Chinese content through independent runtime");
-    assert!(!independent_search.hits.is_empty());
-    // thirdRuntime exposes host-registry state corruption after one same-binding re-enable.
-    // thirdRuntime 用于暴露同一绑定重复启用一次后的宿主注册表状态损坏。
-    let third_runtime = KnowledgeBaseRuntime::new(runtime.host_runtime.clone());
-    // thirdSearch must remain idempotent even after the binding has already been enabled twice.
-    // thirdSearch 必须在绑定已经启用两次后仍保持幂等。
-    let third_search = third_runtime
-        .search(std::slice::from_ref(&library.id), "火山知识库", 10)
-        .await
-        .expect("search Chinese content through third runtime");
-    assert!(
-        third_search.failures.is_empty(),
-        "third runtime search failures: {:?}",
-        third_search.failures
-    );
-    assert!(!third_search.hits.is_empty());
-    let substring_search = runtime
-        .search(std::slice::from_ref(&library.id), "levelup", 10)
-        .await
-        .expect("supplement Jieba BM25 with identifier substring matches");
-    assert_eq!(substring_search.hits.len(), 1);
-    assert_eq!(substring_search.hits[0].match_kind, "substring");
+        .find(|d| d.path == path)
+        .expect("created path may have changed")
+}
 
-    // LegacyEncodingLibrary isolates GBK ingestion from the UTF-8 incremental fixtures below.
-    // LegacyEncodingLibrary 将 GBK 导入与下方 UTF-8 增量夹具隔离。
-    let legacy_encoding_root = temporary.path().join("legacy-encoding-source");
-    fs::create_dir_all(&legacy_encoding_root).expect("create legacy encoding source root");
-    let legacy_markdown = "# 服务端等级\n\n服务端用户等级获取规则使用 GBK 文档。\n";
-    let (legacy_bytes, _, legacy_encode_had_errors) = encoding_rs::GBK.encode(legacy_markdown);
-    assert!(!legacy_encode_had_errors);
-    fs::write(
-        legacy_encoding_root.join("server-level.md"),
-        legacy_bytes.as_ref(),
-    )
-    .expect("write GBK Markdown fixture");
-    let legacy_encoding_library = runtime
-        .create_library("GBK 知识库", "", &[])
+/// Captures complete content and explicit folders while excluding regenerated audit/revision metadata.
+/// 捕获完整内容和显式目录，同时排除重新生成的审计与修订元数据。
+async fn snapshot(runtime: &KnowledgeBaseRuntime, library: &str) -> serde_json::Value {
+    // Comparison reads every entity without depending on directory page positions.
+    // 比较读取全部实体，不依赖目录页位置。
+    let (_, binding) = runtime
+        .ensure_library_binding(library)
         .await
-        .expect("create GBK library");
-    let legacy_encoding_import = runtime
-        .import_markdown_directory(&legacy_encoding_library.id, &legacy_encoding_root)
-        .await
-        .expect("import GBK Markdown through the shared decoder");
-    assert_eq!(legacy_encoding_import.changed_files, 1);
-    let legacy_encoding_search = runtime
-        .search(
-            std::slice::from_ref(&legacy_encoding_library.id),
-            "用户等级",
-            10,
-        )
-        .await
-        .expect("search GBK Markdown through Jieba BM25");
-    assert!(!legacy_encoding_search.hits.is_empty());
-    runtime
-        .delete_library(&legacy_encoding_library.id)
-        .await
-        .expect("delete GBK library");
+        .expect("binding");
+    local_sql::with_read_snapshot_async(&runtime.host_runtime.local,runtime.resolve_library_binding(binding).expect("resolve"),|connection|{
+        let mut docs=connection.prepare("SELECT d.id,d.path,d.title,d.summary,d.summary_state,d.keywords_json,b.content,d.embed_policy,d.provenance_json FROM kb_documents d JOIN kb_blobs b ON b.sha256=d.body_sha256 ORDER BY d.id;").map_err(|e|e.to_string())?;
+        let documents=docs.query_map([],|row| (0..9).map(|column|row.get::<_,String>(column)).collect::<rusqlite::Result<Vec<_>>>()).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        let mut dirs=connection.prepare("SELECT path_key,path,description FROM kb_folders ORDER BY path_key;").map_err(|e|e.to_string())?;
+        let folders=dirs.query_map([],|row|(0..3).map(|column|row.get::<_,String>(column)).collect::<rusqlite::Result<Vec<_>>>()).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        Ok(serde_json::json!({"documents":documents,"folders":folders}))
+    }).await.expect("consistent content snapshot")
+}
 
-    // ImportTimestamp must describe content ingestion rather than later derived-index maintenance.
-    // ImportTimestamp 必须描述内容导入，而不是后续派生索引维护。
-    let import_timestamp = runtime
-        .get_library(&library.id)
-        .await
-        .expect("load successful import timestamp")
-        .last_completed_import_at_ms;
-    assert!(import_timestamp.is_some());
-    let rebuilt_rows = runtime
-        .rebuild_index(&library.id)
-        .await
-        .expect("manually rebuild Jieba index through parameter-safe statements");
-    assert_eq!(rebuilt_rows, first_import.chunk_count);
-    let rebuilt_library = runtime
-        .get_library(&library.id)
-        .await
-        .expect("load registry counts after manual rebuild");
-    assert_eq!(rebuilt_library.document_count, 1);
-    assert_eq!(rebuilt_library.chunk_count, first_import.chunk_count);
-    assert_eq!(
-        rebuilt_library.last_completed_import_at_ms,
-        import_timestamp
-    );
-
-    // KnowledgeBinding identifies the exact physical database used by the recovery fixture.
-    // KnowledgeBinding 标识恢复夹具使用的准确物理数据库。
-    let (_knowledge_space_id, knowledge_binding_id) = runtime
-        .ensure_library_binding(&library.id)
-        .await
-        .expect("resolve library binding for recovery fixture");
-    local_sql::execute_script_async(
-        &runtime.host_runtime.local,
-        runtime
-            .resolve_library_binding(&knowledge_binding_id)
-            .expect("resolve library binding for recovery fixture"),
-        "UPDATE knowledge_metadata SET value = 'dirty' WHERE key = 'index_status'; UPDATE knowledge_metadata SET value = '0' WHERE key = 'indexed_content_revision';",
-        Vec::new(),
-    ).await
-    .expect("mark index dirty for recovery import");
-    // RecoveryImport must detect unchanged documents while repairing only derived FTS state.
-    // RecoveryImport 必须识别未变化文档，同时仅修复派生 FTS 状态。
-    let recovery_import = runtime
-        .import_markdown_directory(&library.id, &source_root)
-        .await
-        .expect("recover dirty FTS through cancellable batches");
-    assert_eq!(recovery_import.changed_files, 0);
-    // RecoveredJob exposes the completed batched index counters.
-    // RecoveredJob 暴露已完成的批量索引计数。
-    let recovered_job = runtime
-        .latest_import_job(&library.id)
-        .await
-        .expect("load recovered import job")
-        .expect("recovered import job exists");
-    assert!(recovered_job.total_index_items > 0);
-    assert_eq!(
-        recovered_job.processed_index_items,
-        recovered_job.total_index_items
-    );
-    assert!(
-        !runtime
-            .search(std::slice::from_ref(&library.id), "火山知识库", 10)
-            .await
-            .expect("search recovered index")
-            .hits
-            .is_empty()
-    );
-
-    let package_directory = temporary.path().join("packages");
-    fs::create_dir(&package_directory).expect("create package export directory");
-    let export = runtime
-        .export_package(&library.id, &package_directory)
-        .await
-        .expect("export complete ready library");
-    // tamperedIndexBinding keeps ready metadata while removing every physical FTS row.
-    // tamperedIndexBinding 在保留 ready 元数据的同时删除全部物理 FTS 记录。
-    let (_tampered_index_space_id, tampered_index_binding_id) = runtime
-        .ensure_library_binding(&library.id)
-        .await
-        .expect("activate library for FTS integrity fixture");
-    local_sql::execute_script_async(
-        &runtime.host_runtime.local,
-        runtime
-            .resolve_library_binding(&tampered_index_binding_id)
-            .expect("resolve tampered index binding"),
-        format!("DELETE FROM {KNOWLEDGE_FTS_INDEX};"),
-        Vec::new(),
-    )
-    .await
-    .expect("remove FTS rows without changing ready metadata");
+/// Verifies all write actions emit one change, exact edits reject ambiguity and move preserves identity.
+/// 验证全部写动作产生一条变更、精确编辑拒绝歧义且移动保留身份。
+#[tokio::test]
+async fn actions_are_atomic_revision_checked_and_audited() {
+    // A real Jieba index participates in the same SQLite transaction.
+    // 真实结巴索引参与同一 SQLite 事务。
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Bm25).await;
+    // Capture the sole creation receipt by semantic path.
+    // 按语义路径捕获唯一创建回执。
+    let original = add(&runtime, &library, "guide/a.md", "# Start\nunique marker\n").await;
+    assert_eq!(original.revision, 1);
+    // A stale revision cannot alter either content or history.
+    // 过期修订不能改变内容或历史。
+    let stale = KnowledgeWriteRequest {
+        action: "update".into(),
+        document_id: Some(original.id.clone()),
+        expected_revision: Some(0),
+        title: Some("Rejected".into()),
+        ..Default::default()
+    };
     assert!(
         runtime
-            .export_package(&library.id, &package_directory)
+            .write_content(&library, "project", stale, ai())
             .await
-            .is_err(),
-        "export must reject ready metadata without exact FTS rows"
+            .unwrap_err()
+            .starts_with("ERR_KNOWLEDGE_REVISION_CONFLICT")
     );
-    let broken_integrity = runtime
-        .inspect_index_integrity(&library.id)
-        .await
-        .expect("inspect physically incomplete index");
-    assert!(!broken_integrity.searchable);
-    assert_eq!(broken_integrity.indexed_chunk_count, 0);
-    assert_eq!(
-        broken_integrity.missing_or_mismatched_count,
-        first_import.chunk_count
-    );
-    runtime
-        .repair_index(&library.id)
-        .await
-        .expect("repair missing FTS rows after integrity fixture");
-    assert!(
-        runtime
-            .inspect_index_integrity(&library.id)
-            .await
-            .expect("inspect repaired index")
-            .searchable
-    );
-    // DuplicateFixture proves integrity accounting and repair operate on physical row cardinality.
-    // DuplicateFixture 证明完整性计数与补全会处理物理记录基数。
-    local_sql::execute_script_async(
-        &runtime.host_runtime.local,
-        runtime
-            .resolve_library_binding(&tampered_index_binding_id)
-            .expect("resolve tampered index binding"),
-        format!(
-                "INSERT INTO {KNOWLEDGE_FTS_INDEX}(id, file_path, title, content) SELECT id, file_path, title, content FROM {KNOWLEDGE_FTS_INDEX} LIMIT 1;"
-            ),
-        Vec::new(),
-    ).await
-    .expect("insert one duplicate physical FTS row");
-    let duplicate_integrity = runtime
-        .inspect_index_integrity(&library.id)
-        .await
-        .expect("inspect duplicate physical FTS row");
-    assert!(!duplicate_integrity.searchable);
-    assert_eq!(
-        duplicate_integrity.indexed_chunk_count,
-        first_import.chunk_count + 1
-    );
-    assert_eq!(duplicate_integrity.orphan_or_mismatched_count, 1);
-    runtime
-        .repair_index(&library.id)
-        .await
-        .expect("remove duplicate physical FTS row during repair");
-    assert!(
-        runtime
-            .inspect_index_integrity(&library.id)
-            .await
-            .expect("inspect index repaired from duplicate row")
-            .searchable
-    );
-    // DetachedRebuild proves the operation continues after the initiating call returns.
-    // DetachedRebuild 证明操作在发起调用返回后仍会继续执行。
-    let detached_rebuild = runtime
-        .start_rebuild_index(&library.id)
-        .await
-        .expect("start detached rebuild");
-    assert_eq!(
-        detached_rebuild.operation_kind,
-        KnowledgeOperationKind::Rebuild
-    );
-    assert_eq!(detached_rebuild.state, "queued");
-    // TerminalJob is observed only through durable polling, mirroring a refreshed WebUI.
-    // TerminalJob 仅通过持久化轮询观察，与刷新后的 WebUI 行为一致。
-    let terminal_rebuild = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let job = runtime
-                .latest_import_job(&library.id)
-                .await
-                .expect("poll detached rebuild")
-                .expect("detached rebuild job exists");
-            if job.id == detached_rebuild.id && job.state == "completed" {
-                break job;
-            }
-            assert_ne!(job.state, "failed", "detached rebuild must not fail");
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("detached rebuild reaches terminal state");
-    assert_eq!(
-        terminal_rebuild.processed_index_items,
-        first_import.chunk_count
-    );
-    // identityMismatchPath contains valid hashes but forged package/manifest provenance.
-    // identityMismatchPath 包含有效摘要，但伪造了包与清单来源身份。
-    let identity_mismatch_path = package_directory.join("identity-mismatch.vkb");
-    write_identity_mismatch_package(Path::new(&export.archive_path), &identity_mismatch_path);
-    assert!(
-        runtime
-            .inspect_package(&identity_mismatch_path)
-            .await
-            .is_err(),
-        "full package inspection must reject a database identity mismatch"
-    );
-    let inspection = runtime
-        .inspect_package(Path::new(&export.archive_path))
-        .await
-        .expect("inspect exported package through real SQLite validation");
-    assert_eq!(inspection.package.document_count, 1);
-    assert_eq!(
-        inspection.conflicting_library.as_ref().map(|row| &row.id),
-        Some(&library.id)
-    );
-
-    let imported = runtime
-        .import_package_as_new(Path::new(&export.archive_path), "端到端知识库包副本")
-        .await
-        .expect("import package under a unique name");
-    assert_ne!(imported.library.id, library.id);
-    assert_eq!(
-        imported.library.document_count,
-        export.package.document_count
-    );
-    assert!(
-        !runtime
-            .search(std::slice::from_ref(&imported.library.id), "火山知识库", 10)
-            .await
-            .expect("search imported package without rebuilding")
-            .hits
-            .is_empty()
-    );
-    let replacement_target = runtime
-        .create_library("覆盖目标知识库", "", &[])
-        .await
-        .expect("create replacement target");
-    local_sql::execute_batch_async(
-        &runtime.host_runtime.local,
-        LogicalDatabase::AppState,
-        r#"INSERT INTO projects(
-                id, name, root_path, pinned, archived, sort_order, created_at, updated_at
-            ) VALUES (?, ?, ?, 0, 0, 0, ?, ?);"#,
-        vec![vec![
-            text("package-replacement-project"),
-            text("Package replacement project"),
-            text(
-                runtime
-                    .host_runtime
-                    .data_root
-                    .join("replacement-project")
-                    .display()
-                    .to_string(),
-            ),
-            text("2026-07-21T00:00:00Z"),
-            text("2026-07-21T00:00:00Z"),
-        ]],
-    )
-    .await
-    .expect("insert replacement project fixture");
-    runtime
-        .set_project_binding(
-            &replacement_target.id,
-            "package-replacement-project",
-            true,
-            true,
-        )
-        .await
-        .expect("bind replacement target to project");
-    let replaced = runtime
-        .replace_library_from_package(
-            Path::new(&export.archive_path),
-            &replacement_target.id,
-            "覆盖目标知识库",
-        )
-        .await
-        .expect("explicitly replace target from package");
-    assert_eq!(replaced.library.id, replacement_target.id);
-    assert_eq!(
-        runtime
-            .list_bindings_for_project("package-replacement-project")
-            .await
-            .expect("load preserved replacement binding")
-            .len(),
-        1
-    );
-    assert!(
-        !runtime
-            .search(
-                std::slice::from_ref(&replacement_target.id),
-                "火山知识库",
-                10,
-            )
-            .await
-            .expect("search replaced package without rebuilding")
-            .hits
-            .is_empty()
-    );
-    // preparedCrash simulates process termination after the original directory becomes a backup.
-    // preparedCrash 模拟原目录已成为备份后发生进程终止。
-    let prepared_crash_previous = runtime
-        .get_library(&replacement_target.id)
-        .await
-        .expect("load replacement target before prepared crash");
-    let prepared_crash_operation_id = Uuid::new_v4().to_string();
-    let (prepared_crash_backup, prepared_crash_journal_path, prepared_crash_backup_name) = runtime
-        .replacement_operation_artifacts(&replacement_target.id, &prepared_crash_operation_id)
-        .expect("derive prepared crash artifacts");
-    let prepared_crash_journal = KnowledgeReplacementJournal {
-        version: KNOWLEDGE_REPLACEMENT_JOURNAL_VERSION,
-        target_library_id: replacement_target.id.clone(),
-        backup_directory_name: prepared_crash_backup_name,
-        phase: String::from(KNOWLEDGE_REPLACEMENT_PHASE_PREPARED),
-        previous: prepared_crash_previous,
+    // Exact replacement has no fuzzy fallback.
+    // 精确替换没有模糊兜底。
+    let edit = KnowledgeWriteRequest {
+        action: "edit".into(),
+        document_id: Some(original.id.clone()),
+        expected_revision: Some(original.revision),
+        edits: Some(vec![KnowledgeTextEdit {
+            old_text: "unique".into(),
+            new_text: "replacement".into(),
+            replace_all: false,
+        }]),
+        summary: Some("Updated".into()),
+        ..Default::default()
     };
     runtime
-        .write_replacement_journal_atomic(&prepared_crash_journal_path, &prepared_crash_journal)
-        .expect("persist prepared crash journal");
-    runtime
-        .release_library_binding(&replacement_target.id)
+        .write_content(&library, "project", edit, ai())
         .await
-        .expect("release replacement target before prepared crash");
-    let prepared_crash_root = runtime
-        .library_root(&replacement_target.id)
-        .expect("resolve prepared crash target root");
-    fs::rename(&prepared_crash_root, &prepared_crash_backup)
-        .expect("simulate prepared crash after backup rename");
-    // preparedRecovery exercises durable recovery through a new wrapper sharing the same host binding state.
-    // preparedRecovery 通过共享同一宿主绑定状态的新包装实例验证持久恢复。
-    let prepared_recovery = KnowledgeBaseRuntime::new(runtime.host_runtime.clone());
-    prepared_recovery
-        .recover_interrupted_jobs()
+        .expect("edit");
+    // Re-read the current token before moving.
+    // 移动前重新读取当前令牌。
+    let current = runtime
+        .read_document(&library, Some(&original.id), None, None, None)
         .await
-        .expect("recover prepared replacement crash");
-    assert!(prepared_crash_root.is_dir());
-    assert!(!prepared_crash_backup.exists());
-    assert!(!prepared_crash_journal_path.exists());
-    assert!(
-        !prepared_recovery
-            .search(
-                std::slice::from_ref(&replacement_target.id),
-                "火山知识库",
-                10,
-            )
-            .await
-            .expect("search target after prepared crash recovery")
-            .hits
-            .is_empty()
-    );
-    prepared_recovery
-        .release_library_binding(&replacement_target.id)
-        .await
-        .expect("release prepared recovery target binding");
-
-    // committedCrash simulates termination after registry commit but before backup cleanup.
-    // committedCrash 模拟注册表提交后、备份清理前发生进程终止。
-    let committed_crash_previous = runtime
-        .get_library(&replacement_target.id)
-        .await
-        .expect("load replacement target before committed crash");
-    let (_committed_space_id, committed_binding_id) = runtime
-        .ensure_library_binding(&replacement_target.id)
-        .await
-        .expect("activate replacement target before committed crash");
-    local_sql::execute_script_async(
-        &runtime.host_runtime.local,
-        runtime
-            .resolve_library_binding(&committed_binding_id)
-            .expect("resolve committed binding"),
-        "PRAGMA wal_checkpoint(TRUNCATE);",
-        Vec::new(),
-    )
-    .await
-    .expect("checkpoint replacement target before committed crash");
-    runtime
-        .release_library_binding(&replacement_target.id)
-        .await
-        .expect("release replacement target before committed crash");
-    let committed_crash_operation_id = Uuid::new_v4().to_string();
-    let (committed_crash_backup, committed_crash_journal_path, committed_crash_backup_name) =
-        runtime
-            .replacement_operation_artifacts(&replacement_target.id, &committed_crash_operation_id)
-            .expect("derive committed crash artifacts");
-    fs::create_dir(&committed_crash_backup).expect("create committed crash backup");
-    fs::copy(
-        prepared_crash_root.join("manifest.json"),
-        committed_crash_backup.join("manifest.json"),
-    )
-    .expect("copy committed crash manifest backup");
-    fs::copy(
-        prepared_crash_root.join("content.sqlite3"),
-        committed_crash_backup.join("content.sqlite3"),
-    )
-    .expect("copy committed crash database backup");
-    let committed_crash_journal = KnowledgeReplacementJournal {
-        version: KNOWLEDGE_REPLACEMENT_JOURNAL_VERSION,
-        target_library_id: replacement_target.id.clone(),
-        backup_directory_name: committed_crash_backup_name,
-        phase: String::from(KNOWLEDGE_REPLACEMENT_PHASE_COMMITTED),
-        previous: committed_crash_previous,
-    };
-    runtime
-        .write_replacement_journal_atomic(&committed_crash_journal_path, &committed_crash_journal)
-        .expect("persist committed crash journal");
-    let committed_recovery = KnowledgeBaseRuntime::new(runtime.host_runtime.clone());
-    committed_recovery
-        .recover_interrupted_jobs()
-        .await
-        .expect("recover committed replacement crash");
-    assert!(!committed_crash_backup.exists());
-    assert!(!committed_crash_journal_path.exists());
-    assert_eq!(
-        committed_recovery
-            .list_bindings_for_project("package-replacement-project")
-            .await
-            .expect("load binding after committed crash recovery")
-            .len(),
-        1
-    );
-    committed_recovery
-        .release_library_binding(&replacement_target.id)
-        .await
-        .expect("release committed recovery target binding");
-
-    // failedReplacement injects a database-identity failure while validating the new staging copy.
-    // failedReplacement 在校验新的暂存副本期间注入数据库身份失败。
-    let failed_replacement = runtime
-        .replace_library_from_package(
-            &identity_mismatch_path,
-            &replacement_target.id,
-            "覆盖目标知识库",
+        .expect("read edited");
+    assert!(current.content.contains("replacement"));
+    let moved = runtime
+        .write_content(
+            &library,
+            "project",
+            KnowledgeWriteRequest {
+                action: "move".into(),
+                document_id: Some(original.id.clone()),
+                expected_revision: Some(current.document.revision),
+                new_path: Some("archive/a.md".into()),
+                ..Default::default()
+            },
+            ai(),
         )
-        .await;
-    assert!(failed_replacement.is_err());
+        .await
+        .expect("move");
     assert!(
-        !runtime
-            .search(
-                std::slice::from_ref(&replacement_target.id),
-                "火山知识库",
-                10,
-            )
-            .await
-            .expect("search original target after failed replacement rollback")
-            .hits
-            .is_empty()
+        moved
+            .documents
+            .iter()
+            .any(|d| d.id == original.id && d.path == "archive/a.md")
     );
-    assert_eq!(
+    // Folder updates are content operations, not registry settings mutations.
+    // 目录更新是内容操作，而非注册设置变更。
+    runtime
+        .write_content(
+            &library,
+            "project",
+            KnowledgeWriteRequest {
+                action: "folder".into(),
+                path: Some("empty".into()),
+                description: Some("AI folder".into()),
+                ..Default::default()
+            },
+            ai(),
+        )
+        .await
+        .expect("folder");
+    runtime
+        .write_content(
+            &library,
+            "project",
+            KnowledgeWriteRequest {
+                action: "delete_folder".into(),
+                path: Some("empty".into()),
+                ..Default::default()
+            },
+            ai(),
+        )
+        .await
+        .expect("delete folder");
+    let current = runtime
+        .read_document(&library, Some(&original.id), None, None, None)
+        .await
+        .expect("read moved");
+    runtime
+        .write_content(
+            &library,
+            "project",
+            KnowledgeWriteRequest {
+                action: "delete".into(),
+                document_id: Some(original.id.clone()),
+                expected_revision: Some(current.document.revision),
+                ..Default::default()
+            },
+            ai(),
+        )
+        .await
+        .expect("delete");
+    let history = runtime
+        .list_changes(&library, None, MAX_KNOWLEDGE_PAGE_SIZE)
+        .await
+        .expect("history");
+    assert_eq!(history.len(), 6);
+    for change in &history {
+        let detail = runtime
+            .get_change(&library, change.seq)
+            .await
+            .expect("detail");
+        assert_eq!(detail.items.len(), 1);
+        assert_eq!(change.actor.session_id.as_deref(), Some("child-session"));
+    }
+    assert!(
         runtime
-            .list_bindings_for_project("package-replacement-project")
+            .read_document(&library, Some(&original.id), None, None, None)
             .await
-            .expect("load binding after failed replacement rollback")
-            .len(),
-        1
+            .is_err()
     );
+}
 
-    // OptionalPerfSource measures the production-size host path only when explicitly requested.
-    // OptionalPerfSource 仅在显式请求时测量生产规模宿主路径。
-    if let Some(performance_source) = std::env::var_os("VULCAN_KNOWLEDGE_PERF_SOURCE") {
-        // PerformanceLibrary remains isolated from deterministic fixtures and is deleted before teardown.
-        // PerformanceLibrary 与确定性夹具隔离，并在清理前删除。
-        let performance_library = runtime
-            .create_library("知识库集合式索引性能测试", "", &[])
-            .await
-            .expect("create performance library");
-        let performance_started_at = Instant::now();
-        let performance_report = runtime
-            .import_markdown_directory(&performance_library.id, Path::new(&performance_source))
-            .await
-            .expect("import production-size performance source");
-        let performance_elapsed = performance_started_at.elapsed();
-        eprintln!(
-            "knowledge performance: files={}, chunks={}, elapsed_ms={}",
-            performance_report.scanned_files,
-            performance_report.chunk_count,
-            performance_elapsed.as_millis()
-        );
-        assert!(performance_report.scanned_files > 0);
-        // SearchTiming verifies the formerly slow production keyword path after tokenizer caching.
-        // SearchTiming 在 tokenizer 缓存后验证此前缓慢的真实关键词路径。
-        let search_started_at = Instant::now();
-        let performance_search = runtime
-            .search(std::slice::from_ref(&performance_library.id), "等级", 20)
-            .await
-            .expect("search production keyword through Jieba BM25");
-        let search_elapsed = search_started_at.elapsed();
-        eprintln!(
-            "knowledge search performance: query=等级, hits={}, elapsed_ms={}",
-            performance_search.hits.len(),
-            search_elapsed.as_millis()
-        );
-        assert!(!performance_search.hits.is_empty());
-        assert!(
-            search_elapsed < Duration::from_secs(3),
-            "production keyword search exceeded three seconds: {search_elapsed:?}"
-        );
-        // RebuildTiming covers the same authoritative corpus through the progress-aware replay path.
-        // RebuildTiming 通过带进度的回放路径覆盖同一份权威语料。
-        let rebuild_started_at = Instant::now();
-        let rebuilt_chunks = runtime
-            .rebuild_index(&performance_library.id)
-            .await
-            .expect("rebuild production-size Jieba index");
-        let rebuild_elapsed = rebuild_started_at.elapsed();
-        eprintln!(
-            "knowledge rebuild performance: chunks={}, elapsed_ms={}",
-            rebuilt_chunks,
-            rebuild_elapsed.as_millis()
-        );
-        assert_eq!(rebuilt_chunks, performance_report.chunk_count);
+/// Verifies namespace normalization, collisions, edit limits and invalid fields fail without history writes.
+/// 验证命名空间规范、冲突、编辑限制与非法字段均失败且不写历史。
+#[tokio::test]
+async fn invalid_requests_preserve_content_and_history() {
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    let document = add(&runtime, &library, "Café/a.md", "repeat repeat").await;
+    let baseline = snapshot(&runtime, &library).await;
+    for path in ["../escape", "a//b", "a/./b", "a\\b", "a\n"] {
         assert!(
             runtime
-                .inspect_index_integrity(&performance_library.id)
+                .write_content(&library, "project", create(path, "text"), ai())
                 .await
-                .expect("inspect performance library")
-                .searchable
+                .unwrap_err()
+                .starts_with("ERR_KNOWLEDGE_PATH_INVALID")
         );
-        runtime
-            .delete_library(&performance_library.id)
-            .await
-            .expect("delete performance library");
     }
-
-    runtime
-        .delete_library(&imported.library.id)
-        .await
-        .expect("delete imported package copy");
-    runtime
-        .delete_library(&replacement_target.id)
-        .await
-        .expect("delete replacement target");
-
-    fs::remove_file(source_root.join("guide").join("search.md")).expect("remove imported source");
-    let second_import = runtime
-        .import_markdown_directory(&library.id, &source_root)
-        .await
-        .expect("synchronize source deletion");
-    assert_eq!(second_import.deleted_files, 1);
     assert!(
         runtime
-            .search(std::slice::from_ref(&library.id), "火山知识库", 10)
+            .write_content(
+                &library,
+                "project",
+                create("CAFE\u{301}/A.md", "text"),
+                ai()
+            )
             .await
-            .expect("search rebuilt empty index")
-            .hits
-            .is_empty()
+            .unwrap_err()
+            .starts_with("ERR_KNOWLEDGE_PATH_CONFLICT")
     );
-    runtime
-        .delete_library(&library.id)
-        .await
-        .expect("delete isolated library");
-
-    // multiSourceLibrary isolates multi-root and source-remapping assertions from package fixtures.
-    // multiSourceLibrary 将多根目录与来源重新映射断言和知识库包夹具隔离。
-    let multi_source_library = runtime
-        .create_library("多来源增量知识库", "", &[])
-        .await
-        .expect("create multi-source library");
-    // sourceARoot is the first independently tracked Markdown root.
-    // sourceARoot 是第一个独立跟踪的 Markdown 根目录。
-    let source_a_root = temporary.path().join("source-a");
-    // sourceBRoot is the second independently tracked Markdown root.
-    // sourceBRoot 是第二个独立跟踪的 Markdown 根目录。
-    let source_b_root = temporary.path().join("source-b");
-    // relocatedSourceARoot simulates the first source being moved to another disk location.
-    // relocatedSourceARoot 模拟第一个来源移动到另一个磁盘位置。
-    let relocated_source_a_root = temporary.path().join("source-a-relocated");
-    fs::create_dir_all(&source_a_root).expect("create first source root");
-    fs::create_dir_all(&source_b_root).expect("create second source root");
-    fs::create_dir_all(&relocated_source_a_root).expect("create relocated source root");
-    fs::write(source_a_root.join("shared.md"), "# 来源 A\n\n稳定内容。\n")
-        .expect("write first source Markdown");
-    fs::write(source_b_root.join("shared.md"), "# 来源 B\n\n独立内容。\n")
-        .expect("write second source Markdown");
-    runtime
-        .import_markdown_directory(&multi_source_library.id, &source_a_root)
-        .await
-        .expect("import first source root");
-    runtime
-        .import_markdown_directory(&multi_source_library.id, &source_b_root)
-        .await
-        .expect("import second source root");
-    // sourceARootText is the canonical host representation persisted in knowledge_sources.
-    // sourceARootText 是持久化到 knowledge_sources 的规范宿主表示。
-    let source_a_root_text = runtime_assets::native_host_path_text_from_path(
-        &fs::canonicalize(&source_a_root).expect("canonicalize first source root"),
-    );
-    // initialSources proves two independent roots coexist even with the same relative file path.
-    // initialSources 证明即使相对文件路径相同，两个独立根目录仍可共存。
-    let initial_sources = runtime
-        .list_sources(&multi_source_library.id)
-        .await
-        .expect("list initial multi-source roots");
-    assert_eq!(initial_sources.len(), 2);
     assert!(
-        initial_sources
-            .iter()
-            .all(|source| source.document_count == 1)
+        runtime
+            .write_content(&library, "project", create("café", "text"), ai())
+            .await
+            .unwrap_err()
+            .starts_with("ERR_KNOWLEDGE_PATH_CONFLICT")
     );
-    // sourceA retains the durable identity that must survive a physical path remap.
-    // sourceA 保留在物理路径重新映射后仍必须不变的持久化身份。
-    let source_a = initial_sources
-        .iter()
-        .find(|source| source.canonical_root == source_a_root_text)
-        .expect("find first durable source")
-        .clone();
-    fs::copy(
-        source_a_root.join("shared.md"),
-        relocated_source_a_root.join("shared.md"),
-    )
-    .expect("copy unchanged Markdown into relocated root");
-    // relocationReport proves byte-identical content is skipped by SHA-256 after remapping.
-    // relocationReport 证明重新映射后字节完全相同的内容会被 SHA-256 跳过。
-    let relocation_report = runtime
-        .import_markdown_directory_for_source(
-            &multi_source_library.id,
-            Some(&source_a.id),
-            &relocated_source_a_root,
-        )
-        .await
-        .expect("remap first source and run incremental synchronization");
-    assert_eq!(relocation_report.changed_files, 0);
-    assert_eq!(relocation_report.unchanged_files, 1);
-    assert_eq!(relocation_report.deleted_files, 0);
-    // relocatedRootText is the new canonical path expected in the durable source row.
-    // relocatedRootText 是持久化来源记录中预期的新规范路径。
-    let relocated_root_text = runtime_assets::native_host_path_text_from_path(
-        &fs::canonicalize(&relocated_source_a_root).expect("canonicalize relocated source root"),
+    assert!(
+        runtime
+            .write_content(
+                &library,
+                "project",
+                create("too-large", &"x".repeat(MAX_KNOWLEDGE_BODY_BYTES + 1)),
+                ai()
+            )
+            .await
+            .unwrap_err()
+            .starts_with("ERR_KNOWLEDGE_BODY_TOO_LARGE")
     );
-    // remappedSources verifies only the selected source identity changed its physical root.
-    // remappedSources 验证只有选中的来源身份修改了物理根目录。
-    let remapped_sources = runtime
-        .list_sources(&multi_source_library.id)
-        .await
-        .expect("list remapped source roots");
-    assert_eq!(remapped_sources.len(), 2);
+    let ambiguous = KnowledgeWriteRequest {
+        action: "edit".into(),
+        document_id: Some(document.id.clone()),
+        expected_revision: Some(document.revision),
+        edits: Some(vec![KnowledgeTextEdit {
+            old_text: "repeat".into(),
+            new_text: "x".into(),
+            replace_all: false,
+        }]),
+        ..Default::default()
+    };
+    assert!(
+        runtime
+            .write_content(&library, "project", ambiguous, ai())
+            .await
+            .unwrap_err()
+            .starts_with("ERR_KNOWLEDGE_EDIT_MATCH_COUNT")
+    );
+    let unrelated = KnowledgeWriteRequest {
+        action: "delete".into(),
+        document_id: Some(document.id.clone()),
+        expected_revision: Some(document.revision),
+        body: Some("ignored?".into()),
+        ..Default::default()
+    };
+    assert!(
+        runtime
+            .write_content(&library, "project", unrelated, ai())
+            .await
+            .unwrap_err()
+            .starts_with("ERR_KNOWLEDGE_FIELD_UNEXPECTED")
+    );
+    assert_eq!(snapshot(&runtime, &library).await, baseline);
     assert_eq!(
-        remapped_sources
-            .iter()
-            .find(|source| source.id == source_a.id)
-            .expect("find remapped durable source")
-            .canonical_root,
-        relocated_root_text
+        runtime
+            .list_changes(&library, None, 20)
+            .await
+            .expect("history")
+            .len(),
+        1
     );
-    // conflictingRemap proves one physical root cannot be assigned to two durable sources.
-    // conflictingRemap 证明一个物理根目录不能分配给两个持久化来源。
-    let conflicting_remap = runtime
-        .import_markdown_directory_for_source(
-            &multi_source_library.id,
-            Some(&source_a.id),
-            &source_b_root,
-        )
-        .await;
-    assert!(conflicting_remap.is_err());
-    fs::write(
-        relocated_source_a_root.join("shared.md"),
-        "# 来源 A\n\n内容已经变化。\n",
-    )
-    .expect("change relocated Markdown content");
-    // changedHashReport proves only the modified source document is reparsed and reindexed.
-    // changedHashReport 证明只有内容变化的来源文档会重新解析并建立索引。
-    let changed_hash_report = runtime
-        .import_markdown_directory_for_source(
-            &multi_source_library.id,
-            Some(&source_a.id),
-            &relocated_source_a_root,
-        )
+}
+
+/// Verifies every point of a deterministic randomized operation sequence, including restoring restores.
+/// 验证确定性随机操作序列的每个历史点，包括还原还原操作。
+#[tokio::test]
+async fn restore_reproduces_every_content_snapshot_and_retains_history() {
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    let mut states = BTreeMap::new();
+    states.insert(0, snapshot(&runtime, &library).await);
+    // This deterministic generator varies action order without an extra test dependency.
+    // 该确定性生成器变化动作顺序，无需额外测试依赖。
+    let mut seed = 17u64;
+    for turn in 0..24 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let page = runtime
+            .list_content(&library, "", 3, None, MAX_KNOWLEDGE_PAGE_SIZE)
+            .await
+            .expect("list");
+        let documents: Vec<_> = page
+            .entries
+            .iter()
+            .filter_map(|e| e.document.as_ref())
+            .collect();
+        let receipt = if documents.is_empty() || seed % 4 == 0 {
+            runtime
+                .write_content(
+                    &library,
+                    "project",
+                    create(&format!("docs/{turn}.md"), &format!("# Item\n{seed}\n")),
+                    ai(),
+                )
+                .await
+                .expect("random create")
+        } else {
+            let chosen = documents
+                .iter()
+                .find(|d| d.id == documents.iter().min_by_key(|d| &d.id).expect("nonempty").id)
+                .expect("semantic document");
+            let request = match seed % 4 {
+                1 => KnowledgeWriteRequest {
+                    action: "update".into(),
+                    document_id: Some(chosen.id.clone()),
+                    expected_revision: Some(chosen.revision),
+                    body: Some(format!("new {seed}\n")),
+                    ..Default::default()
+                },
+                2 => KnowledgeWriteRequest {
+                    action: "move".into(),
+                    document_id: Some(chosen.id.clone()),
+                    expected_revision: Some(chosen.revision),
+                    new_path: Some(format!("moved/{turn}.md")),
+                    ..Default::default()
+                },
+                _ => KnowledgeWriteRequest {
+                    action: "delete".into(),
+                    document_id: Some(chosen.id.clone()),
+                    expected_revision: Some(chosen.revision),
+                    ..Default::default()
+                },
+            };
+            runtime
+                .write_content(&library, "project", request, ai())
+                .await
+                .expect("random mutation")
+        };
+        states.insert(
+            receipt.change_seq.expect("one change"),
+            snapshot(&runtime, &library).await,
+        );
+    }
+    // Restore points remain stable even as the restore operations append new history.
+    // 还原操作追加新历史时，历史还原点保持稳定。
+    let history_before = runtime
+        .list_changes(&library, None, MAX_KNOWLEDGE_PAGE_SIZE)
         .await
-        .expect("synchronize changed relocated source");
-    assert_eq!(changed_hash_report.changed_files, 1);
-    assert_eq!(changed_hash_report.unchanged_files, 0);
+        .expect("history")
+        .len();
+    for (target, expected) in &states {
+        runtime
+            .restore_content(&library, *target, human(), "verify historical state")
+            .await
+            .expect("restore target");
+        assert_eq!(
+            &snapshot(&runtime, &library).await,
+            expected,
+            "restore point {target}"
+        );
+    }
+    assert_eq!(
+        runtime
+            .list_changes(&library, None, MAX_KNOWLEDGE_PAGE_SIZE)
+            .await
+            .expect("history")
+            .len(),
+        history_before + states.len()
+    );
+    // A restore itself is an ordinary retained change and can be undone to a previous restore.
+    // 还原本身也是普通保留变更，可以撤销到之前的还原。
+    let latest = runtime
+        .list_changes(&library, None, MAX_KNOWLEDGE_PAGE_SIZE)
+        .await
+        .expect("history");
+    let restore = latest
+        .iter()
+        .filter(|c| c.operation == "restore")
+        .min_by_key(|c| c.seq)
+        .expect("first restore");
     runtime
-        .delete_library(&multi_source_library.id)
+        .restore_content(&library, restore.seq, human(), "restore a restore")
         .await
-        .expect("delete multi-source library");
+        .expect("restore restore");
+    assert_eq!(
+        snapshot(&runtime, &library).await,
+        *states.get(&0).expect("empty snapshot")
+    );
+}
+
+/// Verifies restoring a deleted document invalidates every token issued before deletion.
+/// 验证还原已删除文档使删除前签发的全部令牌失效。
+#[tokio::test]
+async fn restore_preserves_identity_without_revision_aba() {
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    let document = add(&runtime, &library, "a.md", "original").await;
+    let creation = runtime
+        .list_changes(&library, None, 20)
+        .await
+        .expect("creation")
+        .into_iter()
+        .find(|c| c.operation == "create")
+        .expect("create change")
+        .seq;
+    runtime
+        .write_content(
+            &library,
+            "project",
+            KnowledgeWriteRequest {
+                action: "delete".into(),
+                document_id: Some(document.id.clone()),
+                expected_revision: Some(document.revision),
+                ..Default::default()
+            },
+            ai(),
+        )
+        .await
+        .expect("delete");
+    runtime
+        .restore_content(&library, creation, human(), "recover")
+        .await
+        .expect("recover");
+    let restored = runtime
+        .read_document(&library, Some(&document.id), None, None, None)
+        .await
+        .expect("restored");
+    assert!(restored.document.revision > document.revision);
+    assert_eq!(restored.document.id, document.id);
+    assert!(
+        runtime
+            .write_content(
+                &library,
+                "project",
+                KnowledgeWriteRequest {
+                    action: "update".into(),
+                    document_id: Some(document.id),
+                    expected_revision: Some(document.revision),
+                    body: Some("stale".into()),
+                    ..Default::default()
+                },
+                ai()
+            )
+            .await
+            .unwrap_err()
+            .starts_with("ERR_KNOWLEDGE_REVISION_CONFLICT")
+    );
+}
+
+/// Creates a host-decoded file candidate with a real source-content digest.
+/// 创建具有真实来源内容摘要的宿主解码文件候选。
+fn source(body: &str) -> KnowledgeIngestDocument {
+    KnowledgeIngestDocument {
+        path: "files/a.txt".into(),
+        title: "Imported".into(),
+        body: body.into(),
+        summary: None,
+        provenance: KnowledgeProvenance {
+            kind: "file".into(),
+            reference: "D:/fixture/a.txt".into(),
+            sha256: Some(super::super::sha256_hex(body.as_bytes())),
+            observed_at_ms: 1,
+        },
+        embed: KnowledgeEmbedPolicy::None,
+    }
+}
+
+/// Verifies exact decoded bytes, unchanged no-op ingestion, stale summaries and one batch change.
+/// 验证精确解码字节、无变化搬运、过期摘要与单批变更。
+#[tokio::test]
+async fn ingest_preserves_bytes_and_summary_lifecycle() {
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    let first = runtime
+        .ingest_documents(
+            &library,
+            "project",
+            vec![source("# Source\r\n原文\r\n")],
+            ai(),
+            "ingest",
+        )
+        .await
+        .expect("ingest");
+    let document = first
+        .documents
+        .iter()
+        .find(|d| d.path == "files/a.txt")
+        .expect("imported document");
+    assert_eq!(document.summary_state, "pending");
+    assert_eq!(
+        runtime
+            .read_document(&library, Some(&document.id), None, None, None)
+            .await
+            .expect("read")
+            .content,
+        "# Source\r\n原文\r\n"
+    );
+    let no_op = runtime
+        .ingest_documents(
+            &library,
+            "project",
+            vec![source("# Source\r\n原文\r\n")],
+            ai(),
+            "unchanged",
+        )
+        .await
+        .expect("no-op");
+    assert_eq!(no_op.change_seq, None);
+    runtime
+        .write_content(
+            &library,
+            "project",
+            KnowledgeWriteRequest {
+                action: "update".into(),
+                document_id: Some(document.id.clone()),
+                expected_revision: Some(document.revision),
+                summary: Some("AI supplied".into()),
+                ..Default::default()
+            },
+            ai(),
+        )
+        .await
+        .expect("summary");
+    let changed = runtime
+        .ingest_documents(
+            &library,
+            "project",
+            vec![source("# Source\r\nchanged\r\n")],
+            ai(),
+            "source changed",
+        )
+        .await
+        .expect("changed ingest");
+    let updated = changed
+        .documents
+        .iter()
+        .find(|d| d.id == document.id)
+        .expect("stable document");
+    assert_eq!(updated.summary_state, "stale");
+    assert!(updated.revision > document.revision);
+    assert_eq!(
+        runtime
+            .list_changes(&library, None, 20)
+            .await
+            .expect("history")
+            .len(),
+        3
+    );
+}
+
+/// Verifies a cursor cannot cross a mutation and line windows preserve boundaries.
+/// 验证游标不能跨越变更，且行窗口保留边界。
+#[tokio::test]
+async fn listing_and_read_windows_are_bounded_and_consistent() {
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    add(&runtime, &library, "a.md", "one\ntwo\nthree\n").await;
+    add(&runtime, &library, "b.md", "body").await;
+    let page = runtime
+        .list_content(&library, "", 1, None, 1)
+        .await
+        .expect("first page");
+    let cursor = page.next_cursor.expect("continuation");
+    let window = runtime
+        .read_document(&library, None, Some("a.md"), Some(2), Some(2))
+        .await
+        .expect("middle window");
+    assert_eq!(window.content, "two\n");
+    assert_eq!(window.next_line, Some(3));
+    add(&runtime, &library, "c.md", "body").await;
+    assert!(
+        runtime
+            .list_content(&library, "", 1, Some(&cursor), 1)
+            .await
+            .unwrap_err()
+            .starts_with("ERR_KNOWLEDGE_CURSOR_STALE")
+    );
+    assert!(
+        runtime
+            .read_document(&library, None, Some("a.md"), Some(0), None)
+            .await
+            .is_err()
+    );
+}
+
+/// Verifies old format refusal is read-only and unsupported libraries can still be deleted.
+/// 验证旧格式拒绝为只读，且不支持格式的库仍可删除。
+#[tokio::test]
+async fn unsupported_format_is_explicit_and_deletable() {
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    let manifest_path = runtime
+        .library_root(&library)
+        .expect("root")
+        .join("manifest.json");
+    let old = serde_json::json!({"library_id":library,"name":"Fixture","schema_version":1});
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec(&old).expect("old manifest"),
+    )
+    .expect("write old manifest");
+    let before = std::fs::read(&manifest_path).expect("before");
+    let summary = runtime
+        .get_library(&library)
+        .await
+        .expect("error projection");
+    assert_eq!(summary.lifecycle_state, "error");
+    assert!(summary.settings.is_none());
+    assert!(summary.error_message.is_some());
+    assert!(
+        runtime
+            .write_content(&library, "project", create("a.md", "text"), ai())
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read(&manifest_path).expect("after"), before);
+    runtime
+        .delete_library(&library)
+        .await
+        .expect("delete unsupported library");
+    assert!(runtime.get_library(&library).await.is_err());
+}
+
+/// Verifies independent wrappers serialize concurrent optimistic updates and honor revocation.
+/// 验证独立包装串行化并发乐观更新并遵守撤销。
+#[tokio::test]
+async fn shared_host_serializes_writers_and_rechecks_authorization() {
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    let document = add(&runtime, &library, "a.md", "original").await;
+    let other = KnowledgeBaseRuntime::new(runtime.host_runtime.clone());
+    let first = KnowledgeWriteRequest {
+        action: "update".into(),
+        document_id: Some(document.id.clone()),
+        expected_revision: Some(document.revision),
+        body: Some("first".into()),
+        ..Default::default()
+    };
+    let second = KnowledgeWriteRequest {
+        body: Some("second".into()),
+        ..first.clone()
+    };
+    let (first, second) = tokio::join!(
+        runtime.write_content(&library, "project", first, ai()),
+        other.write_content(&library, "project", second, ai())
+    );
+    assert_ne!(first.is_ok(), second.is_ok());
+    runtime
+        .set_project_binding(&library, "project", false, false)
+        .await
+        .expect("revoke");
+    assert!(
+        other
+            .write_content(&library, "project", create("denied.md", "text"), ai())
+            .await
+            .unwrap_err()
+            .starts_with("ERR_KNOWLEDGE_NOT_AUTHORIZED")
+    );
+}
+
+/// Verifies an index write failure rolls back entities, blobs and history together.
+/// 验证索引写入失败使实体、正文和历史一起回滚。
+#[tokio::test]
+async fn derived_index_failure_rolls_back_the_entire_change() {
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Bm25).await;
+    add(&runtime, &library, "existing.md", "existing").await;
+    let baseline = snapshot(&runtime, &library).await;
+    let (_, binding) = runtime
+        .ensure_library_binding(&library)
+        .await
+        .expect("binding");
+    local_sql::with_connection_async(&runtime.host_runtime.local,runtime.resolve_library_binding(binding).expect("resolve"),|connection|{
+        connection.execute_batch("CREATE TRIGGER reject_chunk BEFORE INSERT ON kb_chunks BEGIN SELECT RAISE(ABORT,'fixture failure'); END;").map_err(|e|e.to_string())
+    }).await.expect("inject derived failure");
+    assert!(
+        runtime
+            .write_content(&library, "project", create("failed.md", "body"), ai())
+            .await
+            .is_err()
+    );
+    assert_eq!(snapshot(&runtime, &library).await, baseline);
+    assert_eq!(
+        runtime
+            .list_changes(&library, None, 20)
+            .await
+            .expect("history")
+            .len(),
+        1
+    );
+}
+
+/// Verifies FTS corruption is detected and repaired without altering content history.
+/// 验证全文损坏被检测并修复，且不改变内容历史。
+#[tokio::test]
+async fn fts_integrity_and_dictionary_rebuild_preserve_content_history() {
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Bm25).await;
+    assert!(
+        runtime
+            .index_integrity(&library)
+            .await
+            .expect("empty index")
+            .healthy
+    );
+    add(
+        &runtime,
+        &library,
+        "terms.md",
+        "# Terms\n火山知识库 customterm\n",
+    )
+    .await;
+    let baseline = snapshot(&runtime, &library).await;
+    let (_, binding) = runtime
+        .ensure_library_binding(&library)
+        .await
+        .expect("binding");
+    local_sql::with_connection_async(
+        &runtime.host_runtime.local,
+        runtime.resolve_library_binding(binding).expect("resolve"),
+        |connection| {
+            connection
+                .execute(&format!("DELETE FROM {KNOWLEDGE_FTS_INDEX};"), [])
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        },
+    )
+    .await
+    .expect("inject missing derived rows");
+    let damaged = runtime
+        .index_integrity(&library)
+        .await
+        .expect("damaged integrity");
+    assert!(!damaged.healthy);
+    assert!(damaged.mismatched_rows > 0);
+    assert!(
+        runtime
+            .rebuild_index(&library)
+            .await
+            .expect("rebuild")
+            .healthy
+    );
+    runtime
+        .set_custom_words(
+            &library,
+            vec![KnowledgeCustomWord {
+                word: "customterm".into(),
+                weight: 100,
+            }],
+        )
+        .await
+        .expect("replace terms");
+    assert!(
+        runtime
+            .list_custom_words(&library)
+            .await
+            .expect("terms")
+            .iter()
+            .any(|term| term.word == "customterm")
+    );
+    let rebuilt = runtime
+        .index_integrity(&library)
+        .await
+        .expect("rebuilt integrity");
+    assert!(rebuilt.healthy);
+    assert_eq!(
+        rebuilt.dictionary_revision,
+        rebuilt.indexed_dictionary_revision
+    );
+    assert_eq!(snapshot(&runtime, &library).await, baseline);
+    assert_eq!(
+        runtime
+            .list_changes(&library, None, 20)
+            .await
+            .expect("history")
+            .len(),
+        1
+    );
+}
+
+/// Verifies implicit directory ancestors exist even for an explicitly empty nested folder.
+/// 验证显式空嵌套目录也会产生隐式祖先目录。
+#[tokio::test]
+async fn explicit_empty_nested_folders_have_browsable_ancestors() {
+    let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    runtime
+        .write_content(
+            &library,
+            "project",
+            KnowledgeWriteRequest {
+                action: "folder".into(),
+                path: Some("first/second/third".into()),
+                description: Some("Deep purpose".into()),
+                ..Default::default()
+            },
+            ai(),
+        )
+        .await
+        .expect("nested empty folder");
+    let root = runtime
+        .list_content(&library, "", 1, None, 20)
+        .await
+        .expect("root");
+    assert!(
+        root.entries
+            .iter()
+            .any(|entry| entry.path == "first" && entry.kind == "folder")
+    );
+    let nested = runtime
+        .list_content(&library, "first/second", 1, None, 20)
+        .await
+        .expect("nested");
+    assert!(
+        nested
+            .entries
+            .iter()
+            .any(|entry| entry.path == "first/second/third" && entry.description == "Deep purpose")
+    );
+    let before = snapshot(&runtime, &library).await;
+    let point = runtime
+        .list_changes(&library, None, 20)
+        .await
+        .expect("history")
+        .into_iter()
+        .find(|c| c.operation == "folder")
+        .expect("folder change")
+        .seq;
+    runtime
+        .restore_content(&library, 0, human(), "empty")
+        .await
+        .expect("empty restore");
+    runtime
+        .restore_content(&library, point, human(), "folder restore")
+        .await
+        .expect("restore nested folders");
+    assert_eq!(snapshot(&runtime, &library).await, before);
 }

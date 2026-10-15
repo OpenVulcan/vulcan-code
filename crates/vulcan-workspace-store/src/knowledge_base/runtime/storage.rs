@@ -2,7 +2,7 @@
 //! 共享进程内绑定与宿主持有的知识库存储产物。
 
 use super::super::schema::library_schema_script;
-use super::{KNOWLEDGE_SCHEMA_VERSION, KnowledgeBaseRuntime, MAX_SEARCH_LIMIT};
+use super::{KNOWLEDGE_SCHEMA_VERSION, KnowledgeBaseRuntime, MAX_KNOWLEDGE_PAGE_SIZE};
 use crate::local_database_runtime::{LanceDbDirectoryBinding, LogicalDatabase, SqliteFileBinding};
 use crate::local_sql;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -91,30 +91,13 @@ impl KnowledgeBaseRuntime {
         &self,
         library_id: &str,
     ) -> Result<(String, String), String> {
+        // A cached handle never authorizes changed on-disk identity or format metadata.
+        // 缓存句柄绝不授权已改变的磁盘身份或格式元数据。
+        self.library_database_binding(library_id, false)?;
+        // Activation reuses only the connection lifetime; format validation remains unconditional.
+        // 激活仅复用连接生命周期；格式验证始终执行。
         let identities = self.activate_library_binding(library_id, false).await?;
         self.validate_bound_library_metadata(library_id, &identities.0, &identities.1)
-            .await?;
-        Ok(identities)
-    }
-
-    /// Ensures the derived display SQLite binding is active without re-enabling it repeatedly.
-    /// 确保派生显示库 SQLite 绑定已激活，避免重复启用同一文件锁。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical lowercase UUID of the physical library.
-    /// `library_id` 是物理知识库的规范小写 UUID。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/storage error.
-    /// 返回精确空间与后端绑定身份，或校验/存储错误。
-    pub(super) async fn ensure_display_binding(
-        &self,
-        library_id: &str,
-    ) -> Result<(String, String), String> {
-        let identities = self.activate_display_binding(library_id, false).await?;
-        self.validate_display_bound_metadata(library_id, &identities.0, &identities.1)
             .await?;
         Ok(identities)
     }
@@ -139,14 +122,21 @@ impl KnowledgeBaseRuntime {
         allow_database_creation: bool,
     ) -> Result<(String, String), String> {
         validate_library_id(library_id)?;
-        let _activation_guard = self.binding_activation_lock.lock().await;
-        if self.active_bindings.lock().await.contains(library_id) {
+        let _activation_guard = self.shared.binding_activation_lock.lock().await;
+        if self
+            .shared
+            .active_bindings
+            .lock()
+            .await
+            .contains(library_id)
+        {
             return self.library_binding_identity(library_id);
         }
         let identities = self
             .enable_library_binding(library_id, allow_database_creation)
             .await?;
-        self.active_bindings
+        self.shared
+            .active_bindings
             .lock()
             .await
             .insert(library_id.to_string());
@@ -167,12 +157,18 @@ impl KnowledgeBaseRuntime {
     /// 返回所述操作完成后的成功结果，或其明确错误。
     pub(super) async fn release_library_binding(&self, library_id: &str) -> Result<(), String> {
         {
-            let _activation_guard = self.binding_activation_lock.lock().await;
-            if self.active_bindings.lock().await.contains(library_id) {
+            let _activation_guard = self.shared.binding_activation_lock.lock().await;
+            if self
+                .shared
+                .active_bindings
+                .lock()
+                .await
+                .contains(library_id)
+            {
                 // The boundary waits for accepted SQLite work before the handle and its file lock are removed.
                 // 该边界会等待已接纳的 SQLite 工作完成，再移除句柄及其文件锁。
                 let (_space_id, binding_id) = self.library_binding_identity(library_id)?;
-                let binding = self.library_database_binding(library_id, false)?;
+                let binding = self.resolve_library_binding(&binding_id)?;
                 local_sql::close_database_file_async(&self.host_runtime.local, &binding)
                     .await
                     .map_err(|error| {
@@ -184,48 +180,10 @@ impl KnowledgeBaseRuntime {
                     .map_err(|error| {
                         format!("Failed to unregister the knowledge content binding: {error}")
                     })?;
-                self.active_bindings.lock().await.remove(library_id);
+                self.shared.active_bindings.lock().await.remove(library_id);
             }
         }
-        self.release_display_binding(library_id).await?;
         self.release_vector_binding(library_id).await
-    }
-
-    /// Disables one active derived display binding after a library is removed or replaced.
-    /// 删除或替换资料库后停用一个活动的派生显示库绑定。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical lowercase UUID of the physical library.
-    /// `library_id` 是物理知识库的规范小写 UUID。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after the documented operation completes, or its explicit failure.
-    /// 返回所述操作完成后的成功结果，或其明确错误。
-    async fn release_display_binding(&self, library_id: &str) -> Result<(), String> {
-        let _activation_guard = self.binding_activation_lock.lock().await;
-        if !self
-            .active_display_bindings
-            .lock()
-            .await
-            .contains(library_id)
-        {
-            return Ok(());
-        }
-        let (_space_id, binding_id) = self.display_binding_identity(library_id)?;
-        let binding = self.display_database_binding(library_id, false)?;
-        local_sql::close_database_file_async(&self.host_runtime.local, &binding)
-            .await
-            .map_err(|error| format!("Failed to close the knowledge display database: {error}"))?;
-        self.host_runtime
-            .local
-            .unregister_named_binding(&binding_id, &binding)
-            .map_err(|error| {
-                format!("Failed to unregister the knowledge display binding: {error}")
-            })?;
-        self.active_display_bindings.lock().await.remove(library_id);
-        Ok(())
     }
 
     /// Disables one active derived LanceDB binding after library removal or replacement.
@@ -241,8 +199,9 @@ impl KnowledgeBaseRuntime {
     /// Returns success after the documented operation completes, or its explicit failure.
     /// 返回所述操作完成后的成功结果，或其明确错误。
     async fn release_vector_binding(&self, library_id: &str) -> Result<(), String> {
-        let _activation_guard = self.binding_activation_lock.lock().await;
+        let _activation_guard = self.shared.binding_activation_lock.lock().await;
         if !self
+            .shared
             .active_vector_bindings
             .lock()
             .await
@@ -262,7 +221,11 @@ impl KnowledgeBaseRuntime {
             .map_err(|error| {
                 format!("Failed to unregister the knowledge LanceDB binding: {error}")
             })?;
-        self.active_vector_bindings.lock().await.remove(library_id);
+        self.shared
+            .active_vector_bindings
+            .lock()
+            .await
+            .remove(library_id);
         Ok(())
     }
 
@@ -286,8 +249,9 @@ impl KnowledgeBaseRuntime {
         allow_database_creation: bool,
     ) -> Result<(String, String), String> {
         validate_library_id(library_id)?;
-        let _activation_guard = self.binding_activation_lock.lock().await;
+        let _activation_guard = self.shared.binding_activation_lock.lock().await;
         if self
+            .shared
             .active_vector_bindings
             .lock()
             .await
@@ -298,7 +262,8 @@ impl KnowledgeBaseRuntime {
         let identities = self
             .enable_vector_binding(library_id, allow_database_creation)
             .await?;
-        self.active_vector_bindings
+        self.shared
+            .active_vector_bindings
             .lock()
             .await
             .insert(library_id.to_string());
@@ -336,127 +301,6 @@ impl KnowledgeBaseRuntime {
                 format!("Failed to register the knowledge LanceDB binding: {error}")
             })?;
         Ok((space_id, binding_id))
-    }
-
-    /// Serializes display binding activation and reuses the host-shared active cache.
-    /// 串行化显示库绑定激活并复用宿主共享的活动缓存。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical lowercase UUID of the physical library.
-    /// `library_id` 是物理知识库的规范小写 UUID。
-    /// `allow_database_creation` is whether this explicit creation path may accept a missing backend artifact.
-    /// `allow_database_creation` 是当前明确创建路径是否允许后端产物尚不存在。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/storage error.
-    /// 返回精确空间与后端绑定身份，或校验/存储错误。
-    pub(super) async fn activate_display_binding(
-        &self,
-        library_id: &str,
-        allow_database_creation: bool,
-    ) -> Result<(String, String), String> {
-        validate_library_id(library_id)?;
-        let _activation_guard = self.binding_activation_lock.lock().await;
-        if self
-            .active_display_bindings
-            .lock()
-            .await
-            .contains(library_id)
-        {
-            return self.display_binding_identity(library_id);
-        }
-        let identities = self
-            .enable_display_binding(library_id, allow_database_creation)
-            .await?;
-        self.active_display_bindings
-            .lock()
-            .await
-            .insert(library_id.to_string());
-        Ok(identities)
-    }
-
-    /// Validates the display artifact and enables its isolated SQLite backend.
-    /// 校验显示库存储产物并启用隔离 SQLite 后端。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical lowercase UUID of the physical library.
-    /// `library_id` 是物理知识库的规范小写 UUID。
-    /// `allow_database_creation` is whether this explicit creation path may accept a missing backend artifact.
-    /// `allow_database_creation` 是当前明确创建路径是否允许后端产物尚不存在。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/storage error.
-    /// 返回精确空间与后端绑定身份，或校验/存储错误。
-    async fn enable_display_binding(
-        &self,
-        library_id: &str,
-        allow_database_creation: bool,
-    ) -> Result<(String, String), String> {
-        let (space_id, binding_id) = self.display_binding_identity(library_id)?;
-        // Register the derived database path without holding an eager connection. Identity-addressed
-        // helpers open it through the host engine only for the lifetime of each operation.
-        // 登记派生数据库路径但不持有提前打开的连接。按身份寻址的助手仅在每次操作生命周期内通过宿主引擎打开它。
-        let database = self.display_database_binding(library_id, allow_database_creation)?;
-        self.register_library_binding(&binding_id, &database)?;
-        Ok((space_id, binding_id))
-    }
-
-    /// Verifies display metadata belongs to the requested library and schema version.
-    /// 校验显示库元数据属于目标资料库且结构版本一致。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical lowercase UUID of the physical library.
-    /// `library_id` 是物理知识库的规范小写 UUID。
-    /// `space_id` is the already derived storage-space identity.
-    /// `space_id` 是已经派生的存储空间身份。
-    /// `binding_id` is the exact SQLite binding within that storage space.
-    /// `binding_id` 是该存储空间内的精确 SQLite 绑定。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after the documented operation completes, or its explicit failure.
-    /// 返回所述操作完成后的成功结果，或其明确错误。
-    pub(super) async fn validate_display_bound_metadata(
-        &self,
-        library_id: &str,
-        space_id: &str,
-        binding_id: &str,
-    ) -> Result<(), String> {
-        #[derive(Deserialize)]
-        struct DisplayBoundMetadataRow {
-            /// Stored display library identifier.
-            /// 已存储的显示库资料库标识符。
-            library_id: String,
-            /// Stored display schema version.
-            /// 已存储的显示库结构版本。
-            schema_version: String,
-        }
-        let rows: Vec<DisplayBoundMetadataRow> = self
-            .query_library_rows(
-                space_id,
-                binding_id,
-                "SELECT MAX(CASE WHEN key = 'library_id' THEN value END) AS library_id, MAX(CASE WHEN key = 'schema_version' THEN value END) AS schema_version FROM display_metadata;",
-                Vec::new(),
-            )
-            .await?;
-        let row = rows
-            .into_iter()
-            .next()
-            .ok_or_else(|| String::from("The knowledge display-library metadata is missing."))?;
-        if row.library_id != library_id
-            || row.schema_version != KNOWLEDGE_SCHEMA_VERSION.to_string()
-        {
-            return Err(format!(
-                "The knowledge display-library identity or schema version does not match: library={}, schema={}",
-                row.library_id, row.schema_version
-            ));
-        }
-        Ok(())
     }
 
     /// Validates storage artifacts and enables one isolated SQLite binding.
@@ -509,89 +353,34 @@ impl KnowledgeBaseRuntime {
         space_id: &str,
         binding_id: &str,
     ) -> Result<(), String> {
+        /// Exact immutable identity and version markers; missing values are corruption.
+        /// 精确不可变身份与版本标记；缺值表示损坏。
         #[derive(Deserialize)]
         struct BoundMetadataRow {
-            /// Stored immutable library identifier.
-            /// 已存储的不可变知识库标识符。
+            /// Stored library UUID.
+            /// 已存储知识库 UUID。
             library_id: String,
-            /// Stored authoritative schema version.
-            /// 已存储的权威结构版本。
+            /// Exact stored format version.
+            /// 精确存储格式版本。
             schema_version: String,
         }
-        let rows: Vec<BoundMetadataRow> = self
-            .query_library_rows(
-                space_id,
-                binding_id,
-                r#"SELECT
-                    MAX(CASE WHEN key = 'library_id' THEN value END) AS library_id,
-                    MAX(CASE WHEN key = 'schema_version' THEN value END) AS schema_version
-                FROM knowledge_metadata;"#,
-                Vec::new(),
-            )
-            .await?;
+        // Read only metadata before touching any current-format content table.
+        // 接触任何当前格式内容表前仅读取元数据。
+        let rows: Vec<BoundMetadataRow> = self.query_library_rows(space_id, binding_id,
+            "SELECT MAX(CASE WHEN key='library_id' THEN value END) AS library_id, MAX(CASE WHEN key='schema_version' THEN value END) AS schema_version FROM knowledge_metadata;", vec![]).await?;
+        // Aggregate metadata must produce one typed row; NULL markers are rejected by deserialization.
+        // 聚合元数据必须产生一条类型化记录；空标记由反序列化拒绝。
         let row = rows
             .into_iter()
             .next()
-            .ok_or_else(|| String::from("Knowledge database metadata is missing."))?;
-        if row.library_id != library_id
-            || row.schema_version != KNOWLEDGE_SCHEMA_VERSION.to_string()
-        {
-            return Err(format!(
-                "Knowledge database identity or schema version mismatch: library={}, schema={}",
-                row.library_id, row.schema_version
-            ));
+            .ok_or("ERR_KNOWLEDGE_METADATA_MISSING")?;
+        if row.library_id != library_id {
+            return Err("ERR_KNOWLEDGE_IDENTITY_MISMATCH".into());
         }
-        Ok(())
-    }
-
-    /// Runs SQLite quick_check and rejects packages containing structural database corruption.
-    /// 运行 SQLite quick_check，并拒绝包含结构性数据库损坏的知识库包。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `space_id` is the already derived storage-space identity.
-    /// `space_id` 是已经派生的存储空间身份。
-    /// `binding_id` is the exact SQLite binding within that storage space.
-    /// `binding_id` 是该存储空间内的精确 SQLite 绑定。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after the documented operation completes, or its explicit failure.
-    /// 返回所述操作完成后的成功结果，或其明确错误。
-    pub(super) async fn verify_sqlite_quick_check(
-        &self,
-        space_id: &str,
-        binding_id: &str,
-    ) -> Result<(), String> {
-        /// One diagnostic row returned by SQLite PRAGMA quick_check.
-        /// SQLite PRAGMA quick_check 返回的一条诊断记录。
-        #[derive(Deserialize)]
-        struct QuickCheckRow {
-            /// Exact SQLite diagnostic, equal to ok only for a successful check.
-            /// 精确 SQLite 诊断，仅成功检查时等于 ok。
-            quick_check: String,
-        }
-        // rows contains one ok row for a healthy database or one or more corruption diagnostics.
-        // rows 对健康数据库包含一条 ok 记录，否则包含一条或多条损坏诊断。
-        let rows: Vec<QuickCheckRow> = self
-            .query_library_rows(space_id, binding_id, "PRAGMA quick_check;", Vec::new())
-            .await?;
-        if rows.len() != 1 || rows[0].quick_check != "ok" {
-            // diagnostics bounds corruption detail before returning it to the caller.
-            // diagnostics 在向调用方返回前限制损坏诊断数量。
-            let diagnostics = rows
-                .into_iter()
-                .map(|row| row.quick_check)
-                .take(8)
-                .collect::<Vec<_>>()
-                .join("; ");
+        if row.schema_version != KNOWLEDGE_SCHEMA_VERSION.to_string() {
             return Err(format!(
-                "The knowledge package SQLite quick_check failed: {}",
-                if diagnostics.is_empty() {
-                    "no diagnostics returned"
-                } else {
-                    diagnostics.as_str()
-                }
+                "ERR_KNOWLEDGE_FORMAT_UNSUPPORTED: Unsupported knowledge library format version {}; delete the library.",
+                row.schema_version
             ));
         }
         Ok(())
@@ -668,10 +457,13 @@ impl KnowledgeBaseRuntime {
                 .map_err(|error| format!("Failed to read the knowledge manifest: {error}"))?,
         )
         .map_err(|error| format!("Failed to parse the knowledge manifest: {error}"))?;
-        if manifest.library_id != library_id || manifest.schema_version != KNOWLEDGE_SCHEMA_VERSION
-        {
-            return Err(String::from(
-                "The knowledge manifest identity or schema version does not match.",
+        if manifest.library_id != library_id {
+            return Err("ERR_KNOWLEDGE_IDENTITY_MISMATCH".into());
+        }
+        if manifest.schema_version != KNOWLEDGE_SCHEMA_VERSION {
+            return Err(format!(
+                "ERR_KNOWLEDGE_FORMAT_UNSUPPORTED: Unsupported knowledge library format version {}; delete the library.",
+                manifest.schema_version
             ));
         }
         match fs::symlink_metadata(database_path) {
@@ -726,6 +518,7 @@ impl KnowledgeBaseRuntime {
             .register_named_binding(binding_id, binding)
             .map_err(|error| format!("Failed to register the knowledge binding: {error}"))
     }
+
     /// Resolves the per-library binding an addressing identity names.
     /// 解析寻址身份所指的按资料库绑定。
     ///
@@ -751,6 +544,7 @@ impl KnowledgeBaseRuntime {
             .named_binding(binding_id.as_ref())
             .map_err(|error| format!("Failed to resolve the knowledge library binding: {error}"))
     }
+
     /// Resolves the LanceDB engine for the directory an addressing identity names.
     /// 解析寻址身份所指目录的 LanceDB 引擎。
     ///
@@ -782,6 +576,7 @@ impl KnowledgeBaseRuntime {
             .await
             .map_err(|error| format!("Failed to open the knowledge LanceDB engine: {error}"))
     }
+
     pub(super) fn library_binding_identity(
         &self,
         library_id: &str,
@@ -791,29 +586,6 @@ impl KnowledgeBaseRuntime {
             format!("knowledge-{library_id}"),
             format!(
                 "knowledge-{}-{library_id}",
-                self.host_runtime.sqlite_binding_id
-            ),
-        ))
-    }
-
-    /// Returns the stable storage identities for one derived display database.
-    /// 返回一个派生显示库数据库使用的稳定存储身份。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical lowercase UUID of the physical library.
-    /// `library_id` 是物理知识库的规范小写 UUID。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the exact space and backend binding identities, or the validation/storage error.
-    /// 返回精确空间与后端绑定身份，或校验/存储错误。
-    fn display_binding_identity(&self, library_id: &str) -> Result<(String, String), String> {
-        validate_library_id(library_id)?;
-        Ok((
-            format!("knowledge-{library_id}"),
-            format!(
-                "knowledge-display-{}-{library_id}",
                 self.host_runtime.sqlite_binding_id
             ),
         ))
@@ -877,29 +649,6 @@ impl KnowledgeBaseRuntime {
             &database_path,
             allow_database_creation,
         )?;
-        Ok(library_sqlite_binding(database_path))
-    }
-
-    /// Returns the in-process binding for one library's derived display database.
-    /// 返回一个资料库派生显示库的进程内绑定。
-    ///
-    /// # Parameters / 参数
-    /// `library_id` is the canonical lowercase UUID of the physical library.
-    /// `library_id` 是物理知识库的规范小写 UUID。
-    /// `allow_database_creation` is whether this explicit creation path may accept a missing artifact.
-    /// `allow_database_creation` 是当前明确创建路径是否允许后端产物尚不存在。
-    ///
-    /// # Returns / 返回值
-    /// Returns the validated display-database binding, or the validation error.
-    /// 返回已验证的显示库数据库绑定，或校验错误。
-    pub(super) fn display_database_binding(
-        &self,
-        library_id: &str,
-        allow_database_creation: bool,
-    ) -> Result<SqliteFileBinding, String> {
-        let root = self.library_root(library_id)?;
-        let database_path = root.join("display.sqlite3");
-        validate_trusted_database_file(&database_path, allow_database_creation)?;
         Ok(library_sqlite_binding(database_path))
     }
 
@@ -1291,49 +1040,16 @@ fn library_sqlite_binding(path: PathBuf) -> SqliteFileBinding {
 /// Builds one per-library LanceDB binding with the knowledge base's declared limits.
 /// 使用知识库声明的限制构建一个按资料库的 LanceDB 绑定。
 ///
-/// `MAX_SEARCH_LIMIT` belongs to the knowledge base rather than to the engine's defaults, so it is
+/// `MAX_KNOWLEDGE_PAGE_SIZE` belongs to the knowledge base rather than to the engine's defaults, so it is
 /// passed explicitly for the same reason as the SQLite timeout above.
-/// `MAX_SEARCH_LIMIT` 属于知识库而非引擎默认值，因此与上述 SQLite 超时同理，被显式传入。
+/// `MAX_KNOWLEDGE_PAGE_SIZE` 属于知识库而非引擎默认值，因此与上述 SQLite 超时同理，被显式传入。
 fn vector_directory_binding(directory: PathBuf) -> LanceDbDirectoryBinding {
     LanceDbDirectoryBinding {
         directory,
         read_consistency_interval_ms: Some(250),
         max_upsert_payload: 16 * 1024 * 1024,
-        max_search_limit: MAX_SEARCH_LIMIT as usize,
+        max_search_limit: MAX_KNOWLEDGE_PAGE_SIZE as usize,
         max_concurrent_requests: 16,
-    }
-}
-
-/// Requires one derived database file to be absent or a trusted ordinary file.
-/// 要求一个派生数据库文件不存在，或是可信的普通文件。
-///
-/// # Parameters
-/// 参数
-/// `path` is the host-derived database path that may or may not exist.
-/// `path` 是可能存在或不存在的宿主派生数据库路径。
-/// `allow_creation` is whether a missing file is acceptable on this explicit creation path.
-/// `allow_creation` 是当前明确创建路径上文件缺失是否可接受。
-///
-/// # Returns
-/// 返回值
-/// Returns success for a trusted file or an allowed absence, or an explicit trust/read error.
-/// 对可信文件或允许的缺失返回成功，否则返回明确的信任／读取错误。
-fn validate_trusted_database_file(path: &Path, allow_creation: bool) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
-                return Err(format!(
-                    "The knowledge derived database is not a trusted regular file: {}",
-                    path.display()
-                ));
-            }
-            Ok(())
-        }
-        Err(error) if allow_creation && error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!(
-            "Failed to read the knowledge derived database ({}): {error}",
-            path.display()
-        )),
     }
 }
 
@@ -1377,6 +1093,3 @@ fn decode_rows<T: DeserializeOwned>(json: &str) -> Result<Vec<T>, String> {
     serde_json::from_str(json)
         .map_err(|error| format!("Failed to decode the knowledge query result: {error}"))
 }
-
-#[cfg(test)]
-mod tests;

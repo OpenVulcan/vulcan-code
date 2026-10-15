@@ -1,155 +1,43 @@
-//! Authoritative library registry lifecycle, settings, and summary projection.
-//! 权威知识库注册生命周期、设置与摘要投影。
+//! Library registry lifecycle and exact current-format projection.
+//! 知识库注册生命周期与精确当前格式投影。
 
-use super::super::models::{
-    KnowledgeDisplayIndexStatus, KnowledgeLibrarySettings, KnowledgeLibrarySummary,
-    KnowledgeModelSnapshot, KnowledgeVectorIndexStatus,
-};
-use super::CountRow;
-use super::{
-    KNOWLEDGE_SCHEMA_VERSION, KnowledgeBaseRuntime, KnowledgeManifest, nonnegative_u64,
-    unix_epoch_millis, validate_library_id,
-};
-use super::{int, text};
-use crate::local_database_runtime::LogicalDatabase;
-use crate::local_sql;
+use super::*;
+use rusqlite::OptionalExtension;
 use serde::Deserialize;
-use uuid::Uuid;
-use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
-/// One registry row decoded from the application database.
-/// 从应用数据库解码的一条知识库注册记录。
-#[derive(Debug, Deserialize)]
-pub(super) struct LibraryRow {
-    /// Immutable library identifier.
-    /// 不可变知识库标识符。
+/// Exact application registry row; settings are parsed only after format validation.
+/// 精确应用注册行；仅在格式验证后解析设置。
+#[derive(Deserialize)]
+struct LibraryRow {
+    /// Immutable UUID.
+    /// 不可变 UUID。
     id: String,
-    /// User-visible name.
-    /// 用户可见名称。
+    /// Human name.
+    /// 人工名称。
     name: String,
-    /// User-visible description.
-    /// 用户可见说明。
+    /// Human purpose.
+    /// 人工用途。
     description: String,
-    /// Durable lifecycle state.
-    /// 持久化生命周期状态。
+    /// Durable lifecycle.
+    /// 持久生命周期。
     lifecycle_state: String,
-    /// Authoritative document count.
-    /// 权威文档数量。
-    document_count: i64,
-    /// Authoritative chunk count.
-    /// 权威切片数量。
-    chunk_count: i64,
-    /// Derived index state.
-    /// 派生索引状态。
-    index_status: String,
-    /// JSON-encoded per-library settings.
-    /// JSON 编码的按资料库配置。
+    /// Exact persisted policy bytes.
+    /// 精确持久策略字节。
     settings_json: String,
-    /// Most recent completed import timestamp.
-    /// 最近完成导入时间戳。
-    last_completed_import_at_ms: Option<i64>,
     /// Creation timestamp.
-    /// 创建时间戳。
+    /// 创建时间。
     created_at_ms: i64,
-    /// Last update timestamp.
-    /// 最近更新时间戳。
+    /// Update timestamp.
+    /// 更新时间。
     updated_at_ms: i64,
 }
 
 impl KnowledgeBaseRuntime {
-    /// Creates one isolated knowledge library and optional initial project bindings.
-    /// 创建一个隔离知识库以及可选的初始项目绑定。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `name` is the user-facing library name, normalized by the existing name rules.
-    /// `name` 是按现有名称规则规范化的用户可见知识库名称。
-    /// `description` is the user-facing description persisted after trimming.
-    /// `description` 是去除首尾空白后持久化的用户可见说明。
-    /// `project_ids` is the exact projects receiving initial authorized/default-enabled bindings.
-    /// `project_ids` 是接收初始授权及默认启用绑定的精确项目列表。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the validated persisted library summary, or a validation/storage error.
-    /// 返回经校验的持久化知识库摘要，或校验/存储错误。
+    /// Creates an empty library with explicit name, purpose, project bindings and validated settings.
+    /// 使用显式名称、用途、项目绑定和已验证设置创建空库。
+    /// Returns the current registry projection or rolls back the new registry and storage on failure.
+    /// 返回当前注册投影；失败则回滚新注册记录和存储。
     pub async fn create_library(
-        &self,
-        name: &str,
-        description: &str,
-        project_ids: &[String],
-    ) -> Result<KnowledgeLibrarySummary, String> {
-        let normalized_name = validate_library_name(name)?;
-        let library_id = Uuid::new_v4().to_string();
-        let now = unix_epoch_millis()?;
-        let name_key = library_name_key(&normalized_name);
-        local_sql::execute_batch_async(
-            &self.host_runtime.local,
-            LogicalDatabase::AppState,
-            r#"INSERT INTO knowledge_libraries(
-                    id, name, name_key, description, lifecycle_state, document_count,
-                    chunk_count, index_status, settings_json, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, ?, ?, 'active', 0, 0, 'empty', ?, ?, ?);"#,
-            vec![vec![
-                text(&library_id),
-                text(&normalized_name),
-                text(&name_key),
-                text(description.trim()),
-                text("{}"),
-                int(now),
-                int(now),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("Failed to create the knowledge registry record: {error}"))?;
-
-        let initialize_result = async {
-            self.initialize_library_storage(&library_id, &normalized_name)
-                .await?;
-            for project_id in project_ids {
-                self.set_project_binding(&library_id, project_id, true, true)
-                    .await?;
-            }
-            Ok::<(), String>(())
-        }
-        .await;
-
-        if let Err(error) = initialize_result {
-            let _ = self.release_library_binding(&library_id).await;
-            let _ = local_sql::execute_script_async(
-                &self.host_runtime.local,
-                LogicalDatabase::AppState,
-                "DELETE FROM knowledge_libraries WHERE id = ?;",
-                vec![text(&library_id)],
-            )
-            .await;
-            let root = self.library_root(&library_id)?;
-            let _ = self.remove_host_owned_child_directory_if_exists(&root, &library_id);
-            return Err(error);
-        }
-
-        self.get_library(&library_id).await
-    }
-
-    /// Creates one library with an explicitly validated per-library retrieval configuration.
-    /// 使用经过显式校验的按资料库检索配置创建一个资料库。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `name` is the user-facing library name, normalized by the existing name rules.
-    /// `name` 是按现有名称规则规范化的用户可见知识库名称。
-    /// `description` is the user-facing description persisted after trimming.
-    /// `description` 是去除首尾空白后持久化的用户可见说明。
-    /// `project_ids` is the exact projects receiving initial authorized/default-enabled bindings.
-    /// `project_ids` 是接收初始授权及默认启用绑定的精确项目列表。
-    /// `settings` is the requested durable retrieval/model configuration.
-    /// `settings` 是请求的持久化检索与模型配置。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the validated persisted library summary, or a validation/storage error.
-    /// 返回经校验的持久化知识库摘要，或校验/存储错误。
-    pub async fn create_library_with_settings(
         &self,
         name: &str,
         description: &str,
@@ -157,698 +45,249 @@ impl KnowledgeBaseRuntime {
         settings: &KnowledgeLibrarySettings,
     ) -> Result<KnowledgeLibrarySummary, String> {
         settings.validate()?;
-        let normalized_name = validate_library_name(name)?;
+        // Normalize only human metadata; content paths use the stricter content validator.
+        // 仅规范人工元数据；内容路径使用更严格的内容验证器。
+        let name = validate_library_name(name)?;
+        // Allocate one stable identity before any durable write.
+        // 持久写入前分配一个稳定身份。
         let library_id = Uuid::new_v4().to_string();
+        // Registry and manifest share this creation time and explicit policy.
+        // 注册表和清单共享该创建时间与显式策略。
         let now = unix_epoch_millis()?;
-        let settings_json = serde_json::to_string(settings)
-            .map_err(|error| format!("Failed to serialize the knowledge configuration: {error}"))?;
-        local_sql::execute_batch_async(
-            &self.host_runtime.local,
-            LogicalDatabase::AppState,
-            r#"INSERT INTO knowledge_libraries(
-                    id, name, name_key, description, lifecycle_state, document_count,
-                    chunk_count, index_status, settings_json, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, ?, ?, 'active', 0, 0, 'empty', ?, ?, ?);"#,
-            vec![vec![
-                text(&library_id),
-                text(&normalized_name),
-                text(library_name_key(&normalized_name)),
-                text(description.trim()),
-                text(&settings_json),
-                int(now),
-                int(now),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("Failed to create the knowledge registry record: {error}"))?;
-        let initialize_result = async {
-            self.initialize_library_storage(&library_id, &normalized_name)
-                .await?;
+        local_sql::execute_script_async(&self.host_runtime.local, LogicalDatabase::AppState,
+            "INSERT INTO knowledge_libraries(id,name,name_key,description,lifecycle_state,settings_json,created_at_ms,updated_at_ms) VALUES(?,?,?,?,'active',?,?,?);",
+            vec![text(&library_id), text(&name), text(name.to_lowercase()), text(description.trim()),
+                text(serde_json::to_string(settings).map_err(|e| e.to_string())?), int(now), int(now)]).await?;
+        // Initialization failure must not leave an apparently usable empty library.
+        // 初始化失败不得留下看似可用的空库。
+        let initialized = async {
+            self.initialize_library_storage(&library_id, &name).await?;
+            self.rebuild_index(&library_id).await?;
             for project_id in project_ids {
                 self.set_project_binding(&library_id, project_id, true, true)
                     .await?;
             }
-            Ok::<(), String>(())
+            self.get_library(&library_id).await
         }
         .await;
-        if let Err(error) = initialize_result {
-            let _ = self.release_library_binding(&library_id).await;
-            let _ = local_sql::execute_script_async(
-                &self.host_runtime.local,
-                LogicalDatabase::AppState,
-                "DELETE FROM knowledge_libraries WHERE id = ?;",
-                vec![text(&library_id)],
-            )
-            .await;
-            let root = self.library_root(&library_id)?;
-            let _ = self.remove_host_owned_child_directory_if_exists(&root, &library_id);
-            return Err(error);
-        }
-        if settings.curation.enabled {
-            let mut persisted = settings.clone();
-            persisted.display_index.status = KnowledgeDisplayIndexStatus::Pending;
-            if persisted.embedding.enabled {
-                persisted.vector_index.status = KnowledgeVectorIndexStatus::Pending;
-            }
-            let settings_json = serde_json::to_string(&persisted).map_err(|error| {
-                format!("Failed to serialize the initial display-library state: {error}")
-            })?;
+        if initialized.is_err() {
+            self.release_library_binding(&library_id).await?;
             local_sql::execute_script_async(
                 &self.host_runtime.local,
                 LogicalDatabase::AppState,
-                    "UPDATE knowledge_libraries SET settings_json = ? WHERE id = ? AND lifecycle_state = 'active';",
-                    vec![text(&settings_json), text(&library_id)],
-                ).await
-                .map_err(|error| format!("Failed to save the initial display-library state: {error}"))?;
+                "DELETE FROM knowledge_libraries WHERE id=?;",
+                vec![text(&library_id)],
+            )
+            .await?;
+            self.remove_host_owned_child_directory_if_exists(
+                &self.library_root(&library_id)?,
+                &library_id,
+            )?;
         }
-        self.get_library(&library_id).await
+        initialized
     }
 
-    /// Updates and returns one library's durable retrieval and model configuration.
-    /// 更新并返回一个资料库持久化的检索与模型配置。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `settings` is the requested durable retrieval/model configuration.
-    /// `settings` 是请求的持久化检索与模型配置。
-    /// `library_id` is the canonical immutable library UUID.
-    /// `library_id` 是规范且不可变的知识库 UUID。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the validated persisted library summary, or a validation/storage error.
-    /// 返回经校验的持久化知识库摘要，或校验/存储错误。
-    pub async fn set_library_settings(
+    /// Lists all libraries or a project's authorized libraries, validating each exact current format.
+    /// 列出全部或项目已授权知识库，并验证每个精确当前格式。
+    /// Returns errors as library lifecycle projections so an unsupported library remains deletable.
+    /// 将库错误作为生命周期投影返回，确保不支持的库仍可删除。
+    pub async fn list_libraries(
+        &self,
+        project_id: Option<&str>,
+    ) -> Result<Vec<KnowledgeLibrarySummary>, String> {
+        // Binding filters are explicit and parameterized.
+        // 绑定过滤显式且参数化。
+        let (sql, params) = match project_id {
+            Some(project) => (
+                "SELECT l.id,l.name,l.description,l.lifecycle_state,l.settings_json,l.created_at_ms,l.updated_at_ms FROM knowledge_libraries l JOIN knowledge_library_project_bindings b ON b.library_id=l.id WHERE b.project_id=? ORDER BY l.name_key;",
+                vec![text(project)],
+            ),
+            None => (
+                "SELECT id,name,description,lifecycle_state,settings_json,created_at_ms,updated_at_ms FROM knowledge_libraries ORDER BY name_key;",
+                vec![],
+            ),
+        };
+        // Registry identity discovery never reads legacy content.
+        // 注册身份发现不读取旧内容。
+        let rows: Vec<LibraryRow> = self.query_app_rows(sql, &params).await?;
+        // Preserve library-local failures without hiding unrelated libraries.
+        // 保留库内错误，不隐藏其他知识库。
+        let mut summaries = Vec::with_capacity(rows.len());
+        for row in rows {
+            summaries.push(self.project_library(row).await?);
+        }
+        Ok(summaries)
+    }
+
+    /// Reads one exact registry identity and returns a validated projection or a missing-ID error.
+    /// 读取一个精确注册身份，返回已验证投影或身份缺失错误。
+    pub async fn get_library(&self, library_id: &str) -> Result<KnowledgeLibrarySummary, String> {
+        validate_library_id(library_id)?;
+        // Decode only current registry columns, independently of per-library format.
+        // 仅解码当前注册列，与每库格式独立。
+        let rows: Vec<LibraryRow> = self.query_app_rows(
+            "SELECT id,name,description,lifecycle_state,settings_json,created_at_ms,updated_at_ms FROM knowledge_libraries WHERE id=?;",
+            &[text(library_id)]).await?;
+        self.project_library(rows.into_iter().next().ok_or("ERR_KNOWLEDGE_NOT_FOUND")?)
+            .await
+    }
+
+    /// Projects exact counts and policy for a registry row; invalid formats become explicit error state.
+    /// 为注册行投影精确数量和策略；非法格式成为明确错误状态。
+    async fn project_library(&self, row: LibraryRow) -> Result<KnowledgeLibrarySummary, String> {
+        // Start with no policy so invalid data is never interpreted using a default mode.
+        // 初始策略为空，确保非法数据绝不按默认模式解释。
+        let mut summary = KnowledgeLibrarySummary {
+            id: row.id.clone(),
+            name: row.name,
+            description: row.description,
+            settings: None,
+            lifecycle_state: row.lifecycle_state,
+            error_message: None,
+            document_count: 0,
+            chunk_count: 0,
+            pending_summary_count: 0,
+            index_status: "error".into(),
+            head_change_seq: 0,
+            last_change_at_ms: None,
+            created_at_ms: row.created_at_ms,
+            updated_at_ms: row.updated_at_ms,
+        };
+        if summary.lifecycle_state == "deleting" {
+            return Ok(summary);
+        }
+        // Version validation precedes settings deserialization and every content query.
+        // 版本验证先于设置反序列化与全部内容查询。
+        let inspected = async {
+            let (_, binding_id) = self.ensure_library_binding(&row.id).await?;
+            let settings: KnowledgeLibrarySettings = serde_json::from_str(&row.settings_json)
+                .map_err(|e| format!("ERR_KNOWLEDGE_SETTINGS_FORMAT: {e}"))?;
+            settings.validate()?;
+            let stats = local_sql::with_read_snapshot_async(&self.host_runtime.local,
+                self.resolve_library_binding(&binding_id)?, |connection| {
+                    connection.query_row("SELECT (SELECT COUNT(*) FROM kb_documents),(SELECT COUNT(*) FROM kb_chunks),(SELECT COUNT(*) FROM kb_documents WHERE summary_state!='provided'),(SELECT COALESCE(MAX(seq),0) FROM kb_changes),(SELECT MAX(at_ms) FROM kb_changes),(SELECT value FROM knowledge_metadata WHERE key='index_status');",
+                        [], |r| Ok((unsigned_column::<u64>(r,0)?, unsigned_column::<u64>(r,1)?, unsigned_column::<u64>(r,2)?, unsigned_column::<u64>(r,3)?, r.get::<_,Option<i64>>(4)?, r.get::<_,String>(5)?))).map_err(|e| e.to_string())
+                }).await?;
+            Ok::<_,String>((settings,stats))
+        }.await;
+        match inspected {
+            Ok((settings, (documents, chunks, pending, head, last, status))) => {
+                summary.settings = Some(settings);
+                summary.document_count = documents;
+                summary.chunk_count = chunks;
+                summary.pending_summary_count = pending;
+                summary.head_change_seq = head;
+                summary.last_change_at_ms = last;
+                summary.index_status = status;
+            }
+            Err(error) => {
+                summary.lifecycle_state = "error".into();
+                summary.error_message = Some(error);
+            }
+        }
+        Ok(summary)
+    }
+
+    /// Requires an active current-format library; returns its exact settings projection.
+    /// 要求活动的当前格式知识库；返回其精确设置投影。
+    pub(super) async fn require_active_library(
         &self,
         library_id: &str,
-        settings: &KnowledgeLibrarySettings,
     ) -> Result<KnowledgeLibrarySummary, String> {
-        validate_library_id(library_id)?;
-        // The settings row participates in the same mutation domain as imports and index swaps.
-        // 配置记录与导入、索引切换属于同一变更域，必须使用同一把锁。
-        let _guard = self.library_mutation_guard(library_id).await?;
-        let current = self.get_library(library_id).await?;
-        let mut next = settings.clone();
-        // Only explicit file-management actions can change ignore rules.
-        // 只有明确的文件管理操作才能修改忽略规则。
-        next.ignored_files = current.settings.ignored_files.clone();
-        // Preserve immutable model identity while allowing profile canonicalization to update its owner.
-        // 保留不可变模型身份，同时允许 profile 规范化更新快照所属者。
-        let retain_snapshot_owner = |current_snapshot: &Option<KnowledgeModelSnapshot>,
-                                     requested_snapshot: &Option<KnowledgeModelSnapshot>|
-         -> Option<KnowledgeModelSnapshot> {
-            match (current_snapshot, requested_snapshot) {
-                (Some(current_snapshot), Some(requested_snapshot)) => {
-                    let mut retained = current_snapshot.clone();
-                    retained.route.consumer_profile_id =
-                        requested_snapshot.route.consumer_profile_id.clone();
-                    Some(retained)
-                }
-                (Some(current_snapshot), None) => Some(current_snapshot.clone()),
-                (None, Some(requested_snapshot)) => Some(requested_snapshot.clone()),
-                (None, None) => None,
-            }
-        };
-        if next.curation.last_successful_sync_snapshot.is_none() {
-            next.curation.last_successful_sync_snapshot = current
-                .settings
-                .curation
-                .last_successful_sync_snapshot
-                .clone();
+        // Every caller shares format validation, including writes after project authorization.
+        // 所有调用共享格式验证，包括项目授权后的写入。
+        let library = self.get_library(library_id).await?;
+        if library.lifecycle_state != "active" {
+            return Err(library
+                .error_message
+                .unwrap_or_else(|| "ERR_KNOWLEDGE_LIBRARY_INACTIVE".into()));
         }
-        if next.embedding.last_successful_sync_snapshot.is_none() {
-            next.embedding.last_successful_sync_snapshot = current
-                .settings
-                .embedding
-                .last_successful_sync_snapshot
-                .clone();
-        }
-        // The creation snapshot is immutable after the first successful configuration.
-        // 创建快照在首次成功配置后不可变，后续设置请求不能覆盖历史模型。
-        next.curation.created_model_snapshot = retain_snapshot_owner(
-            &current.settings.curation.created_model_snapshot,
-            &next.curation.created_model_snapshot,
-        );
-        next.embedding.created_model_snapshot = retain_snapshot_owner(
-            &current.settings.embedding.created_model_snapshot,
-            &next.embedding.created_model_snapshot,
-        );
-        let embedding_model_changed = current.settings.embedding.route != next.embedding.route
-            || current.settings.embedding.desired_model_fingerprint
-                != next.embedding.desired_model_fingerprint;
-        let embedding_dimension_changed =
-            current.settings.embedding.configured_dimension != next.embedding.configured_dimension;
-        let curation_configuration_changed = current.settings.curation.enabled
-            != next.curation.enabled
-            || current.settings.curation.route != next.curation.route
-            || current.settings.curation.desired_model_fingerprint
-                != next.curation.desired_model_fingerprint
-            || current.settings.curation.prompt_version != next.curation.prompt_version;
-        if !curation_configuration_changed {
-            next.display_index = current.settings.display_index.clone();
-        } else {
-            next.display_index = current.settings.display_index.clone();
-            next.display_index.status = if matches!(
-                next.display_index.status,
-                KnowledgeDisplayIndexStatus::NotCreated
-            ) && next.curation.enabled
-            {
-                KnowledgeDisplayIndexStatus::Pending
-            } else {
-                KnowledgeDisplayIndexStatus::Stale
-            };
-            next.display_index.last_error = Some(String::from(
-                "The display-library curation model or fixed prompt changed; the display library must be regenerated",
-            ));
-            next.display_index.pending_generation = None;
-            next.display_index.pending_source_content_revision = None;
-            next.display_index.pending_prompt_version = None;
-            next.display_index.pending_model_fingerprint = None;
-        }
-
-        if !embedding_model_changed && !embedding_dimension_changed && next.embedding.enabled {
-            next.vector_index = current.settings.vector_index.clone();
-            next.vector_index.compatibility_override =
-                settings.vector_index.compatibility_override.clone();
-            if next.vector_index.compatibility_override.is_none() {
-                next.vector_index.last_error = None;
-            }
-        }
-        if next.embedding.enabled && (embedding_model_changed || embedding_dimension_changed) {
-            next.vector_index = current.settings.vector_index.clone();
-            let override_note = settings
-                .vector_index
-                .compatibility_override
-                .as_deref()
-                .map(str::trim)
-                .filter(|note| !note.is_empty());
-            let same_dimension_override = !embedding_dimension_changed
-                && current.settings.vector_index.status == KnowledgeVectorIndexStatus::Ready
-                && current.settings.vector_index.indexed_dimension
-                    == next.embedding.configured_dimension
-                && override_note.is_some();
-            if embedding_dimension_changed {
-                next.vector_index.status = KnowledgeVectorIndexStatus::Disabled;
-                next.vector_index.compatibility_override = None;
-                next.vector_index.last_error = Some(String::from(
-                    "The vector dimension changed; probe again and rebuild the index before vector search can resume",
-                ));
-            } else if same_dimension_override {
-                next.vector_index.status = KnowledgeVectorIndexStatus::Ready;
-                next.vector_index.compatibility_override = override_note.map(ToOwned::to_owned);
-                next.vector_index.last_error = Some(format!(
-                    "Same-dimension model compatibility was confirmed manually; queries keep reusing the old vector index: {}",
-                    next.vector_index
-                        .compatibility_override
-                        .as_deref()
-                        .unwrap_or_default()
-                ));
-            } else {
-                next.vector_index.status = KnowledgeVectorIndexStatus::Stale;
-                next.vector_index.compatibility_override = None;
-                next.vector_index.last_error = Some(String::from(
-                    "The embedding model route changed; the old index is kept and must be rebuilt or confirmed compatible",
-                ));
-            }
-        }
-        if !next.embedding.enabled {
-            next.vector_index = super::models::KnowledgeVectorIndexState::default();
-        }
-        next.validate()?;
-        let settings_json = serde_json::to_string(&next)
-            .map_err(|error| format!("Failed to serialize the knowledge configuration: {error}"))?;
-        let updated_at_ms = unix_epoch_millis()?;
-        local_sql::execute_script_async(
-            &self.host_runtime.local,
-            LogicalDatabase::AppState,
-                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
-                vec![text(&settings_json), int(updated_at_ms), text(library_id)],
-            ).await
-            .map_err(|error| format!("Failed to save the knowledge configuration: {error}"))?;
-        self.get_library(library_id).await
+        Ok(library)
     }
 
-    /// Renames one active library without moving its physical directory or rebuilding FTS.
-    /// 重命名一个活动知识库，但不移动物理目录或重建 FTS。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `name` is the user-facing library name, normalized by the existing name rules.
-    /// `name` 是按现有名称规则规范化的用户可见知识库名称。
-    /// `description` is the user-facing description persisted after trimming.
-    /// `description` 是去除首尾空白后持久化的用户可见说明。
-    /// `library_id` is the canonical immutable library UUID.
-    /// `library_id` 是规范且不可变的知识库 UUID。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the validated persisted library summary, or a validation/storage error.
-    /// 返回经校验的持久化知识库摘要，或校验/存储错误。
+    /// Updates only human name and purpose; returns refreshed metadata without touching content.
+    /// 仅更新人工名称与用途；返回刷新元数据且不修改内容。
     pub async fn rename_library(
         &self,
         library_id: &str,
         name: &str,
         description: &str,
     ) -> Result<KnowledgeLibrarySummary, String> {
+        // Serialize metadata with content changes and deletion.
+        // 将元数据与内容变更和删除串行化。
         let _guard = self.library_mutation_guard(library_id).await?;
-        let current = self.require_active_library(library_id).await?;
-        let normalized_name = validate_library_name(name)?;
-        let now = unix_epoch_millis()?;
-        local_sql::execute_script_async(
-            &self.host_runtime.local,
-            LogicalDatabase::AppState,
-                "UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
-                vec![
-                    text(&normalized_name),
-                    text(library_name_key(&normalized_name)),
-                    text(description.trim()),
-                    int(now),
-                    text(library_id),
-                ],
-            ).await
-            .map_err(|error| format!("Failed to rename the knowledge library: {error}"))?;
-
-        let manifest = KnowledgeManifest {
-            library_id: library_id.to_string(),
-            name: normalized_name,
+        self.require_active_library(library_id).await?;
+        // Human names retain registry-level uniqueness.
+        // 人工名称保留注册级唯一约束。
+        let name = validate_library_name(name)?;
+        local_sql::execute_script_async(&self.host_runtime.local, LogicalDatabase::AppState,
+            "UPDATE knowledge_libraries SET name=?,name_key=?,description=?,updated_at_ms=? WHERE id=?;",
+            vec![text(&name),text(name.to_lowercase()),text(description.trim()),int(unix_epoch_millis()?),text(library_id)]).await?;
+        self.write_manifest_atomic(&KnowledgeManifest {
+            library_id: library_id.into(),
+            name,
             schema_version: KNOWLEDGE_SCHEMA_VERSION,
-        };
-        if let Err(error) = self.write_manifest_atomic(&manifest) {
-            let _ = local_sql::execute_script_async(
-                &self.host_runtime.local,
-                LogicalDatabase::AppState,
-                "UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?, updated_at_ms = ? WHERE id = ?;",
-                vec![
-                    text(&current.name),
-                    text(library_name_key(&current.name)),
-                    text(&current.description),
-                    int(current.updated_at_ms),
-                    text(library_id),
-                ],
-            ).await;
-            return Err(error);
-        }
+        })?;
         self.get_library(library_id).await
     }
 
-    /// Lists all libraries or only libraries authorized for one project.
-    /// 列出全部知识库，或仅列出授权给某个项目的知识库。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `project_id` is the exact project identity; an optional filter lists all lifecycle states when absent.
-    /// `project_id` 是精确项目身份；可选过滤未提供时列出全部生命周期记录。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the ordered registry summaries, restricted to active authorized libraries when project_id is present, or an error.
-    /// 返回有序注册摘要；提供项目时只含活动且已授权库，或返回错误。
-    pub async fn list_libraries(
-        &self,
-        project_id: Option<&str>,
-    ) -> Result<Vec<KnowledgeLibrarySummary>, String> {
-        let (sql, params): (&str, &[SqliteValue]) = if let Some(project_id) = project_id {
-            (
-                r#"SELECT l.id, l.name, l.description, l.lifecycle_state, l.document_count,
-                           l.chunk_count, l.index_status, l.settings_json, l.last_completed_import_at_ms,
-                           l.created_at_ms, l.updated_at_ms
-                    FROM knowledge_libraries l
-                    INNER JOIN knowledge_library_project_bindings b ON b.library_id = l.id
-                    WHERE b.project_id = ? AND l.lifecycle_state = 'active'
-                    ORDER BY l.name_key ASC;"#,
-                &[text(project_id)],
-            )
-        } else {
-            (
-                r#"SELECT id, name, description, lifecycle_state, document_count, chunk_count,
-                           index_status, settings_json, last_completed_import_at_ms, created_at_ms, updated_at_ms
-                    FROM knowledge_libraries ORDER BY name_key ASC;"#,
-                &[],
-            )
-        };
-        let rows: Vec<LibraryRow> = self.query_app_rows(sql, params).await?;
-        rows.into_iter().map(library_summary_from_row).collect()
-    }
-
-    /// Returns one library by immutable identifier.
-    /// 根据不可变标识符返回一个知识库。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical immutable library UUID.
-    /// `library_id` 是规范且不可变的知识库 UUID。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the validated persisted library summary, or a validation/storage error.
-    /// 返回经校验的持久化知识库摘要，或校验/存储错误。
-    pub async fn get_library(&self, library_id: &str) -> Result<KnowledgeLibrarySummary, String> {
-        validate_library_id(library_id)?;
-        let rows: Vec<LibraryRow> = self
-            .query_app_rows(
-                r#"SELECT id, name, description, lifecycle_state, document_count, chunk_count,
-                           index_status, settings_json, last_completed_import_at_ms, created_at_ms, updated_at_ms
-                    FROM knowledge_libraries WHERE id = ?;"#,
-                &[text(library_id)],
-            )
-            .await?;
-        rows.into_iter()
-            .next()
-            .ok_or_else(|| format!("Knowledge library not found: {library_id}"))
-            .and_then(library_summary_from_row)
-    }
-
-    /// Deletes one isolated library after revoking access and validating its canonical path.
-    /// 在撤销访问并验证规范路径后删除一个隔离知识库。
-    ///
-    /// A library left in the `deleting` state by an interrupted attempt resumes its removal, so a failed
-    /// deletion is always retryable instead of locking the library out of every operation.
-    /// 被中断的尝试留在 `deleting` 状态的知识库会继续移除，因此失败的删除总能重试，而不会让该知识库被所有操作拒之门外。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical immutable library UUID.
-    /// `library_id` 是规范且不可变的知识库 UUID。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after revoking access, removing storage and deleting the registry row, or an explicit failure.
-    /// 返回撤销访问、移除存储及删除注册记录后的成功，或明确失败。
+    /// Revokes and deletes an exact host-owned library, including unsupported formats; returns success on removal.
+    /// 撤销并删除精确宿主知识库，包括不支持格式；移除成功后返回。
     pub async fn delete_library(&self, library_id: &str) -> Result<(), String> {
+        // No content opening is required for deleting an unsupported library.
+        // 删除不支持格式的库无需打开内容。
         let _guard = self.library_mutation_guard(library_id).await?;
-        let library = self.get_library(library_id).await?;
-        match library.lifecycle_state.as_str() {
-            "active" => {
-                local_sql::execute_script_async(
-                    &self.host_runtime.local,
-                    LogicalDatabase::AppState,
-                    "UPDATE knowledge_libraries SET lifecycle_state = 'deleting', updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
-                    vec![int(unix_epoch_millis()?), text(library_id)],
-                )
-                .await
-                .map_err(|error| format!("Failed to revoke knowledge access: {error}"))?;
-            }
-            "deleting" => {}
-            state => {
-                return Err(format!(
-                    "The knowledge library cannot be deleted now: {library_id} ({state})"
-                ));
-            }
+        // Ensure this identity really belongs to the registry before removing storage.
+        // 移除存储前确保该身份确实属于注册表。
+        let exists = local_sql::with_read_snapshot_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            {
+                let id = library_id.to_string();
+                move |c| {
+                    c.query_row("SELECT id FROM knowledge_libraries WHERE id=?", [id], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .optional()
+                    .map_err(|e| e.to_string())
+                }
+            },
+        )
+        .await?;
+        if exists.is_none() {
+            return Err("ERR_KNOWLEDGE_NOT_FOUND".into());
         }
-
-        let (_space_id, binding_id) = self.library_binding_identity(library_id)?;
-        // A binding registers on first use in this process, so an unregistered one holds no WAL to checkpoint.
-        // 绑定在本进程首次使用时才登记，因此未登记的绑定没有需要检查点的 WAL。
-        if let Ok(binding) = self.resolve_library_binding(&binding_id) {
-            let _ = local_sql::execute_script_async(
-                &self.host_runtime.local,
-                binding,
-                "PRAGMA wal_checkpoint(TRUNCATE);",
-                Vec::new(),
-            )
-            .await;
-        }
-        self.release_library_binding(library_id).await?;
-
-        // Removal tolerates a directory an earlier attempt already removed and runs off the async workers.
-        // 移除容忍先前尝试已删除的目录，并在异步工作线程之外执行。
-        let root = self.library_root(library_id)?;
-        let runtime = self.clone();
-        let expected_name = library_id.to_string();
-        tokio::task::spawn_blocking(move || {
-            runtime.remove_host_owned_child_directory_if_exists(&root, &expected_name)
-        })
-        .await
-        .map_err(|error| format!("Failed to delete the knowledge directory task: {error}"))??;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
-            "DELETE FROM knowledge_libraries WHERE id = ? AND lifecycle_state = 'deleting';",
+            "UPDATE knowledge_libraries SET lifecycle_state='deleting',updated_at_ms=? WHERE id=?;",
+            vec![int(unix_epoch_millis()?), text(library_id)],
+        )
+        .await?;
+        self.release_library_binding(library_id).await?;
+        self.remove_host_owned_child_directory_if_exists(
+            &self.library_root(library_id)?,
+            library_id,
+        )?;
+        local_sql::execute_script_async(
+            &self.host_runtime.local,
+            LogicalDatabase::AppState,
+            "DELETE FROM knowledge_libraries WHERE id=?;",
             vec![text(library_id)],
         )
         .await
-        .map_err(|error| format!("Failed to delete the knowledge registry record: {error}"))?;
-        Ok(())
-    }
-
-    /// Marks derived display and vector indexes stale after authoritative content changes.
-    /// 在权威内容发生变化后将派生显示层与向量索引标记为过期。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical immutable library UUID.
-    /// `library_id` 是规范且不可变的知识库 UUID。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after any necessary derived-state projection, or a validation/storage error.
-    /// 返回必要派生状态投影后的成功，或校验/存储错误。
-    pub(super) async fn mark_derived_indexes_stale(&self, library_id: &str) -> Result<(), String> {
-        let library = self.get_library(library_id).await?;
-        let mut settings = library.settings;
-        let mut changed = false;
-        if settings.curation.enabled
-            && (matches!(
-                settings.display_index.status,
-                KnowledgeDisplayIndexStatus::Ready
-                    | KnowledgeDisplayIndexStatus::Stale
-                    | KnowledgeDisplayIndexStatus::Failed
-            ) || settings.display_index.pending_generation.is_some())
-        {
-            settings.display_index.status = KnowledgeDisplayIndexStatus::Stale;
-            // A pending generation belongs to one immutable source revision and cannot survive a content change.
-            // 待完成代次只属于一个不可变来源修订，不能跨越内容变化继续使用。
-            settings.display_index.pending_generation = None;
-            settings.display_index.pending_source_content_revision = None;
-            settings.display_index.pending_prompt_version = None;
-            settings.display_index.pending_model_fingerprint = None;
-            settings.display_index.last_error = Some(String::from(
-                "The raw Markdown content changed; the display library must be regenerated",
-            ));
-            changed = true;
-        }
-        if settings.embedding.enabled
-            && matches!(
-                settings.vector_index.status,
-                KnowledgeVectorIndexStatus::Ready | KnowledgeVectorIndexStatus::Failed
-            )
-        {
-            settings.vector_index.status = KnowledgeVectorIndexStatus::Stale;
-            settings.vector_index.last_error = Some(String::from(
-                "The raw or display Markdown content changed; the vector index must be rebuilt",
-            ));
-            changed = true;
-        }
-        if !changed {
-            return Ok(());
-        }
-        settings.validate()?;
-        let settings_json = serde_json::to_string(&settings).map_err(|error| {
-            format!("Failed to serialize the stale derived-index state: {error}")
-        })?;
-        local_sql::execute_script_async(
-            &self.host_runtime.local,
-            LogicalDatabase::AppState,
-                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
-                vec![
-                    text(&settings_json),
-                    int(unix_epoch_millis()?),
-                    text(library_id),
-                ],
-            ).await
-            .map_err(|error| format!("Failed to save the stale derived-index state: {error}"))?;
-        Ok(())
-    }
-
-    /// Ensures the central registry row exists and is active.
-    /// 确保中央注册记录存在且处于活动状态。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the canonical immutable library UUID.
-    /// `library_id` 是规范且不可变的知识库 UUID。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the validated persisted library summary, or a validation/storage error.
-    /// 返回经校验的持久化知识库摘要，或校验/存储错误。
-    pub(super) async fn require_active_library(
-        &self,
-        library_id: &str,
-    ) -> Result<KnowledgeLibrarySummary, String> {
-        let library = self.get_library(library_id).await?;
-        if library.lifecycle_state != "active" {
-            return Err(format!(
-                "Knowledge library is not accessible: {} ({})",
-                library.id, library.lifecycle_state
-            ));
-        }
-        Ok(library)
-    }
-
-    /// Projects authoritative counts and index state without advancing the last successful import time.
-    /// 投影权威计数与索引状态，但不推进最近一次成功导入时间。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the exact library owning this maintenance or registry projection.
-    /// `library_id` 是维护或注册表投影所属的精确知识库。
-    /// `counts` is the authoritative document/chunk aggregates being projected.
-    /// `counts` 是待投影的权威文档和切片聚合计数。
-    /// `index_status` is the exact derived-index state accompanying this count projection.
-    /// `index_status` 是本次计数投影关联的精确派生索引状态。
-    /// `updated_at_ms` is the projection time without changing the last successful import time.
-    /// `updated_at_ms` 是不改变最近成功导入时间的本次投影时间。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after the documented operation, or its explicit validation/storage error.
-    /// 返回所述操作完成后的成功，或明确校验/存储错误。
-    pub(super) async fn project_registry_authoritative_counts(
-        &self,
-        library_id: &str,
-        counts: &CountRow,
-        index_status: &str,
-        updated_at_ms: i64,
-    ) -> Result<(), String> {
-        local_sql::execute_script_async(
-            &self.host_runtime.local,
-            LogicalDatabase::AppState,
-                "UPDATE knowledge_libraries SET document_count = ?, chunk_count = ?, index_status = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
-                vec![
-                    int(counts.document_count),
-                    int(counts.chunk_count),
-                    text(index_status),
-                    int(updated_at_ms),
-                    text(library_id),
-                ],
-            ).await
-            .map_err(|error| format!("Failed to update the authoritative knowledge summary: {error}"))?;
-        Ok(())
-    }
-
-    /// Projects authoritative counts and terminal index state into the central registry.
-    /// 将权威计数与终态索引状态投影到中央注册表。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the exact library owning this maintenance or registry projection.
-    /// `library_id` 是维护或注册表投影所属的精确知识库。
-    /// `counts` is the authoritative document/chunk aggregates being projected.
-    /// `counts` 是待投影的权威文档和切片聚合计数。
-    /// `index_status` is the exact derived-index state accompanying this count projection.
-    /// `index_status` 是本次计数投影关联的精确派生索引状态。
-    /// `completed_at_ms` is the caller-supplied timestamp projected to both import and update fields.
-    /// `completed_at_ms` 是调用方传入、同时投影到导入和更新字段的时间戳。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after the documented operation, or its explicit validation/storage error.
-    /// 返回所述操作完成后的成功，或明确校验/存储错误。
-    pub(super) async fn project_registry_counts(
-        &self,
-        library_id: &str,
-        counts: &CountRow,
-        index_status: &str,
-        completed_at_ms: i64,
-    ) -> Result<(), String> {
-        local_sql::execute_script_async(
-            &self.host_runtime.local,
-            LogicalDatabase::AppState,
-                "UPDATE knowledge_libraries SET document_count = ?, chunk_count = ?, index_status = ?, last_completed_import_at_ms = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
-                vec![
-                    int(counts.document_count),
-                    int(counts.chunk_count),
-                    text(index_status),
-                    int(completed_at_ms),
-                    int(completed_at_ms),
-                    text(library_id),
-                ],
-            ).await
-            .map_err(|error| format!("Failed to update the central knowledge summary: {error}"))?;
-        Ok(())
+        .map(|_| ())
     }
 }
 
-/// Validates and normalizes a user-visible library name.
-/// 验证并规范化用户可见知识库名称。
-///
-/// # Parameters
-/// 参数
-/// `name` is the user-facing library name, normalized by the existing name rules.
-/// `name` 是按现有名称规则规范化的用户可见知识库名称。
-///
-/// # Returns
-/// 返回值
-/// Returns the trimmed nonempty bounded name, or a validation error.
-/// 返回去除首尾空白后的非空有界名称，或校验错误。
-pub(super) fn validate_library_name(name: &str) -> Result<String, String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err(String::from(
-            "The knowledge library name must not be empty.",
-        ));
+/// Validates a human library name; returns a trimmed nonempty bounded value.
+/// 验证人工库名称；返回裁剪后的非空有界值。
+fn validate_library_name(name: &str) -> Result<String, String> {
+    if name.trim().is_empty()
+        || name.trim().chars().count() > MAX_KNOWLEDGE_PATH_SEGMENT_CHARS
+        || name.chars().any(char::is_control)
+    {
+        return Err("ERR_KNOWLEDGE_NAME_INVALID".into());
     }
-    if trimmed.chars().count() > 120 {
-        return Err(String::from(
-            "The knowledge library name must not exceed 120 characters.",
-        ));
-    }
-    Ok(trimmed.to_string())
-}
-
-/// Produces the unique comparison key for a library name.
-/// 生成知识库名称的唯一比较键。
-///
-/// # Parameters
-/// 参数
-/// `name` is the user-facing library name, normalized by the existing name rules.
-/// `name` 是按现有名称规则规范化的用户可见知识库名称。
-///
-/// # Returns
-/// 返回值
-/// Returns the trimmed lowercase comparison key.
-/// 返回去除首尾空白后的名称小写比较键。
-pub(super) fn library_name_key(name: &str) -> String {
-    name.trim().to_lowercase()
-}
-
-/// Maps one registry row into the checked public summary.
-/// 将一条注册记录映射为已检查的公共摘要。
-///
-/// # Parameters
-/// 参数
-/// `row` is the decoded authoritative registry row.
-/// `row` 是已解码的权威注册记录。
-///
-/// # Returns
-/// 返回值
-/// Returns the validated persisted library summary, or a validation/storage error.
-/// 返回经校验的持久化知识库摘要，或校验/存储错误。
-pub(super) fn library_summary_from_row(row: LibraryRow) -> Result<KnowledgeLibrarySummary, String> {
-    let mut settings = if row.settings_json.trim().is_empty() || row.settings_json.trim() == "{}" {
-        KnowledgeLibrarySettings::default()
-    } else {
-        serde_json::from_str::<KnowledgeLibrarySettings>(&row.settings_json).map_err(|error| {
-            format!(
-                "Failed to parse the persisted configuration of knowledge library {}: {error}",
-                row.id
-            )
-        })?
-    };
-    settings.normalize_derived_compatibility();
-    settings.validate()?;
-    Ok(KnowledgeLibrarySummary {
-        id: row.id,
-        name: row.name,
-        description: row.description,
-        settings,
-        lifecycle_state: row.lifecycle_state,
-        document_count: nonnegative_u64(row.document_count, "document_count")?,
-        chunk_count: nonnegative_u64(row.chunk_count, "chunk_count")?,
-        index_status: row.index_status,
-        last_completed_import_at_ms: row.last_completed_import_at_ms,
-        created_at_ms: row.created_at_ms,
-        updated_at_ms: row.updated_at_ms,
-    })
+    Ok(name.trim().into())
 }
