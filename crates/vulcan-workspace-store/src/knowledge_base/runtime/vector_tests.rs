@@ -634,15 +634,29 @@ async fn replacement_keeps_old_space_until_every_current_hash_is_ready() {
 /// 验证请求准入后取消阻止延迟向量发布。
 #[tokio::test]
 async fn cancellation_prevents_delayed_vector_publication() {
+    // All storage and inference belong to one isolated library.
+    // 全部存储及推理属于一个隔离知识库。
     let (_root, runtime, library) = fixture(KnowledgeIndexMode::Browse).await;
+    // The fake exposes the exact document-inference admission boundary.
+    // 假执行器公开精确文档推理准入边界。
     let started = Arc::new(tokio::sync::Notify::new());
+    // Publication waits until cancellation and subsequent content actions have finished.
+    // 发布等待取消及后续内容动作完成。
     let release = Arc::new(tokio::sync::Notify::new());
     runtime
         .set_embedding_executor({
+            // Each request owns its gate references without retaining a mutation lock.
+            // 每个请求持有自己的闸门引用，不保留变更锁。
             let started = started.clone();
+            // The release gate is reused only after an explicit human resume.
+            // 释放闸门仅在明确人工恢复后复用。
             let release = release.clone();
             Arc::new(move |request| {
+                // Asynchronous ownership keeps these notifications valid until completion.
+                // 异步所有权使这些通知在完成前保持有效。
                 let started = started.clone();
+                // This request can complete only after the test releases its own permit.
+                // 此请求仅在测试释放其自身许可后完成。
                 let release = release.clone();
                 Box::pin(async move {
                     if !request.is_query {
@@ -655,7 +669,11 @@ async fn cancellation_prevents_delayed_vector_publication() {
         })
         .await
         .expect("gated fake");
-    add(&runtime, &library, "cancel.md", "content").await;
+    // The stored change sequence is the exact later restore target, independent of fixture order.
+    // 已存变更序号为稍后的精确还原目标，独立于夹具顺序。
+    let initial = add(&runtime, &library, "cancel.md", "content").await;
+    // One durable operation owns the cancelled background construction.
+    // 一个持久操作拥有被取消的后台构建。
     let operation = runtime
         .set_index_mode(
             &library,
@@ -672,8 +690,69 @@ async fn cancellation_prevents_delayed_vector_publication() {
             .await
             .expect("cancel")
     );
+    add(&runtime, &library, "later.md", "later content").await;
+    // Observe the pause immediately after an ordinary write.
+    // 普通写入后立即观测暂停。
+    let after_write = runtime.embedding_status(&library, 1, 0).await.unwrap();
+    // Ingestion and its unchanged observation use the same queue admission path.
+    // 搬运及其无变化观测使用同一排队准入路径。
+    let mut input = source("ingested after cancellation");
+    input.embed = KnowledgeEmbedPolicy::Summary;
+    runtime
+        .ingest_documents(&library, "project", vec![input.clone()], ai(), "new")
+        .await
+        .unwrap();
+    // New file content must not silently resume cancelled inference.
+    // 新文件内容不得静默恢复已取消推理。
+    let after_ingest = runtime.embedding_status(&library, 1, 0).await.unwrap();
+    // No-op observations preserve both audit idempotence and the human pause.
+    // 无变化观测同时保留审计幂等性及人工暂停。
+    let unchanged = runtime
+        .ingest_documents(&library, "project", vec![input], ai(), "unchanged")
+        .await
+        .unwrap();
+    // The unchanged branch also queues status and must remain read-only with respect to pause.
+    // 无变化分支也查询排队状态，但对暂停必须保持只读。
+    let after_unchanged = runtime.embedding_status(&library, 1, 0).await.unwrap();
+    runtime
+        .restore_content(
+            &library,
+            initial.updated_change_seq,
+            human(),
+            "restore while paused",
+        )
+        .await
+        .unwrap();
+    // Restore changes content while preserving the current explicit indexing lifecycle.
+    // 还原改变内容，同时保留当前明确索引生命周期。
+    let after_restore = runtime.embedding_status(&library, 1, 0).await.unwrap();
+    // Simulate interruption after durable cancellation but before its per-library pause commit.
+    // 模拟持久取消之后、每库暂停提交之前中断。
+    let (_, binding) = runtime.ensure_library_binding(&library).await.unwrap();
+    local_sql::execute_script_async(
+        &runtime.host_runtime.local,
+        runtime.resolve_library_binding(binding).unwrap(),
+        "UPDATE knowledge_metadata SET value='0' WHERE key='vector_worker_paused';",
+        vec![],
+    )
+    .await
+    .unwrap();
     release.notify_one();
+    // Wait for the delayed request to exit before evaluating any failed admission assertion.
+    // 判断任何失败准入断言前等待延迟请求退出。
     let state = settled(&runtime, &library).await;
+    for (action, observed) in [
+        ("write", after_write),
+        ("ingest", after_ingest),
+        ("unchanged ingest", after_unchanged),
+        ("restore", after_restore),
+    ] {
+        assert!(
+            observed.paused,
+            "{action} must preserve the explicit human pause"
+        );
+    }
+    assert!(unchanged.change_seq.is_none());
     assert!(state.paused);
     assert_eq!(state.ready, 0);
     assert!(state.pending > 0);
@@ -682,8 +761,83 @@ async fn cancellation_prevents_delayed_vector_publication() {
         runtime
             .get_operation(&library, Some(&operation.id))
             .await
-            .expect("operation")
-            .expect("stored job")
+            .unwrap()
+            .unwrap()
+            .state,
+        "cancelled"
+    );
+    // Explicit human retry is the declared authority to resume pending work.
+    // 明确人工重试是恢复待处理工作的声明权威。
+    let resumed = runtime.retry_embeddings(&library, &[]).await.unwrap();
+    tokio::time::timeout(WORKER_TIMEOUT, started.notified())
+        .await
+        .expect("explicit resume starts inference");
+    release.notify_one();
+    // The replacement operation completes without changing the old stable cancellation.
+    // 新操作完成，不改变旧稳定取消状态。
+    let completed = settled(&runtime, &library).await;
+    assert!(!completed.paused);
+    assert_eq!(completed.pending, 0);
+    assert!(completed.ready > 0);
+    assert_eq!(
+        runtime
+            .get_operation(&library, Some(&resumed.id))
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "completed"
+    );
+    assert_eq!(
+        runtime
+            .get_operation(&library, Some(&operation.id))
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "cancelled"
+    );
+    // A queued explicit retry is durable before its metadata resume commit; reconstruct that crash snapshot.
+    // 明确重试在元数据恢复提交前已持久；重建该崩溃快照。
+    local_sql::execute_script_async(&runtime.host_runtime.local, LogicalDatabase::AppState,
+        "UPDATE knowledge_operations SET state='queued',phase='queued',finished_at_ms=NULL WHERE id=?;",
+        vec![text(&resumed.id)]).await.unwrap();
+    // The old pause is valid until startup reconciles the newer explicit queued intent.
+    // 启动协调更新的明确排队意图前，旧暂停仍为有效值。
+    let (_, binding) = runtime.ensure_library_binding(&library).await.unwrap();
+    local_sql::execute_script_async(
+        &runtime.host_runtime.local,
+        runtime.resolve_library_binding(binding).unwrap(),
+        "UPDATE knowledge_metadata SET value='1' WHERE key='vector_worker_paused';",
+        vec![],
+    )
+    .await
+    .unwrap();
+    // A fresh host must finish this current-format operation without another user click or provider request.
+    // 全新宿主必须完成此当前格式操作，无需用户再次点击或供应商请求。
+    let recovered = reopen(&_root, runtime, &library, Arc::new(AtomicUsize::new(0))).await;
+    // Recovery uses the same stable operation and existing ready content hashes.
+    // 恢复使用同一稳定操作及已有就绪内容哈希。
+    let recovered_state = settled(&recovered, &library).await;
+    assert!(
+        !recovered_state.paused,
+        "A durable explicit resume must reconcile the earlier pause"
+    );
+    assert_eq!(
+        recovered
+            .get_operation(&library, Some(&resumed.id))
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "completed"
+    );
+    assert_eq!(
+        recovered
+            .get_operation(&library, Some(&operation.id))
+            .await
+            .unwrap()
+            .unwrap()
             .state,
         "cancelled"
     );

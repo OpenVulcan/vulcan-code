@@ -66,12 +66,8 @@ pub(super) fn queue_current_embeddings(
     let space = content::vector_space_id(embedding)?;
     connection.execute("INSERT OR IGNORE INTO kb_vector_state(content_sha256,vector_space_id,state,attempts,last_error,updated_at_ms) SELECT DISTINCT content_sha256,?,'pending',0,'',? FROM kb_chunks WHERE embed=1;",
         params![space,unix_epoch_millis()?]).map_err(|e|e.to_string())?;
-    connection
-        .execute(
-            "UPDATE knowledge_metadata SET value='0' WHERE key='vector_worker_paused';",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
+    // Content admission must preserve human cancellation; only explicit lifecycle actions resume work.
+    // 内容准入必须保留人工取消；仅明确生命周期动作恢复工作。
     current_counts(connection, &space).map(|(pending, _, _)| pending)
 }
 
@@ -373,6 +369,37 @@ impl KnowledgeBaseRuntime {
             .clone()
     }
 
+    /// Reads authoritative durable intent and reconciles explicit pause or resume while the caller holds the library mutation guard.
+    /// 调用方持有库变更守卫时，读取权威持久意图并协调明确暂停或恢复。
+    /// Parameters: library_id owns the operation; binding selects its verified current-format metadata. Returns the latest operation or an explicit storage error.
+    /// 参数：library_id 拥有操作；binding 选择其已验证当前格式元数据。返回最新操作或明确存储错误。
+    async fn knowledge_worker_operation_locked(
+        &self,
+        library_id: &str,
+        binding: &str,
+    ) -> Result<Option<KnowledgeOperationSummary>, String> {
+        // Durable explicit intent is authoritative across the application and per-library commits.
+        // 持久明确意图在应用及每库提交之间保持权威。
+        let operation = self.get_operation(library_id, None).await?;
+        // Only an accepted explicit active operation may clear an older human pause.
+        // 仅已接受的明确活动操作可以清除较早人工暂停。
+        let pause = match operation.as_ref().map(|operation| operation.state.as_str()) {
+            Some("cancelled") => Some("1"),
+            Some("queued" | "running") => Some("0"),
+            Some("completed" | "failed") | None => None,
+            Some(_) => return Err("ERR_KNOWLEDGE_OPERATION_STATE_INVALID".into()),
+        };
+        if let Some(pause) = pause {
+            local_sql::execute_script_async(
+                &self.host_runtime.local,
+                self.resolve_library_binding(binding)?,
+                "INSERT INTO knowledge_metadata(key,value) VALUES('vector_worker_paused',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE knowledge_metadata.value<>excluded.value;",
+                vec![text(pause)],
+            ).await?;
+        }
+        Ok(operation)
+    }
+
     /// Reserves the next exact batch or publishes a complete space; caller receives no speculative route.
     /// 保留下个精确批次或发布完整空间；调用方不会收到猜测路由。
     async fn prepare_embedding_batch(
@@ -394,7 +421,9 @@ impl KnowledgeBaseRuntime {
         let (_, binding) = self.ensure_library_binding(library_id).await?;
         // Application job intent is authoritative across a crash between two database commits.
         // 应用任务意图在两个数据库提交间崩溃后仍为权威。
-        let operation = self.get_operation(library_id, None).await?;
+        let operation = self
+            .knowledge_worker_operation_locked(library_id, &binding)
+            .await?;
         if operation
             .as_ref()
             .is_some_and(|operation| operation.state == "cancelled")
@@ -586,6 +615,17 @@ impl KnowledgeBaseRuntime {
         // Cancellation is checked after asynchronous inference and before every Lance/SQLite publication.
         // 异步推理后、每次 Lance 和 SQLite 发布前检查取消。
         let (_, binding) = self.ensure_library_binding(library_id).await?;
+        // Application cancellation is authoritative even if its per-library pause commit was interrupted.
+        // 即使每库暂停提交被中断，应用取消仍为权威。
+        let operation = self
+            .knowledge_worker_operation_locked(library_id, &binding)
+            .await?;
+        if operation
+            .as_ref()
+            .is_some_and(|operation| operation.state == "cancelled")
+        {
+            return Ok(false);
+        }
         if local_sql::with_read_snapshot_async(
             &self.host_runtime.local,
             self.resolve_library_binding(&binding)?,
