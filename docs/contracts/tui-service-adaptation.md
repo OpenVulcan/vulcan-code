@@ -22,7 +22,7 @@
 小数必须有限且在协议范围内；字符串列表只修改已确认的数组指针。
 不存在独立的系统快照、虚构系统命令或系统设置草稿。
 
-通用读取按连接代际及槽位序号过滤。应用层另按知识库、VCE 项目、VMM 项目、画像目标、搜索词、
+通用读取按连接代际及槽位序号过滤。应用层另按知识库、VMM 项目、画像目标、搜索词、
 文档目录与偏移、文档身份及语料检查归属。失败同样检查归属，并持续显示脱敏原因直到匹配重试或结果。
 变更后的重读失败会清空旧值并保留加载器，页面重新加载可重试。
 工作台快照读取失败或格式错误时同样清空可编辑槽位，并禁止其他局部增量重新发布旧设置；只有完整权威快照恢复后才重新发布。
@@ -84,8 +84,6 @@ hydration 的 `session_config.unattended`，只在当前为自动审批时出现
 | LuaSkills 设置 | 完整运行时配置、私有地址允许列表、运行时重试 | Workbench.luaSkills.runtimeSettings |
 | Vulcan 插件 | 检查包、审查权限及指纹、输入安装密钥、安装/更新、启用、卸载 | Workbench.plugins、插件预检 |
 | 插件设置页 | 设置版面标签、字段整份配置写入、凭据状态/设置/删除、操作、数据区块参数与刷新、包内文档阅读 | PluginUi、PluginConfig、PluginCredential(n)、PluginData(n)、PluginAsset |
-| VCE 项目索引 | 项目选择、概览、十一项设置、忽略模式、初始化/同步、任务读取/取消、维护计划及执行 | VceStatus、VceOverview、VceJob |
-| VCE 引擎设置 | 背景推理路由、模型能力过滤、明确向量维度、路由预检及逐项目兼容/重建 | PublicAiSettings、VceStatus |
 | 知识库列表 | 创建、重命名、描述修改、删除 | KnowledgeLibraries |
 | 单库概览 | 按库名导航、文档/切片数量、检索策略、可读完整性及任务进度、快捷操作 | KnowledgeLibraries、KnowledgeIntegrity、KnowledgeJob |
 | 文档列表 | 目录筛选、根目录与全部目录区分、每页 20 条及哨兵分页、打开准确文档 | KnowledgeFolders、KnowledgeDocuments |
@@ -274,16 +272,6 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `skills_actions::set_subagent_definition_enabled` | setSubagentDefinitionEnabled | `service_set_subagent_definition_enabled` |
 | `skills_actions::delete_subagent_definition` | deleteSubagentDefinition | `service_delete_subagent_definition` |
 | `skills_actions::restore_subagent_definition_default` | restoreSubagentDefinitionDefault | `service_restore_subagent_definition_default` |
-| `vce::preflight_vce_embedding_route` | preflightVceEmbeddingRoute | `service_preflight_vce_embedding_route` |
-| `vce::save_reviewed_embedding` | savePublicAiInferenceRoute | `service_save_public_ai_inference_route` |
-| `vce::load_vce_job` | loadVceJob | `service_get_vce_job` |
-| `vce::load_vce_configuration_status` | loadVceConfigurationStatus | `service_get_vce_configuration_status` |
-| `vce::load_vce_project_overview` | loadVceProjectOverview | `service_get_vce_project_overview` |
-| `vce::update_vce_project_settings` | updateVceProjectSettings | `service_update_vce_project_settings` |
-| `vce::submit_vce_job` | submitVceJob | `service_submit_vce_job` |
-| `vce::cancel_vce_job` | cancelVceJob | `service_cancel_vce_job` |
-| `vce::plan_vce_maintenance` | planVceMaintenance | `service_plan_vce_maintenance` |
-| `vce::execute_vce_maintenance` | executeVceMaintenance | `service_execute_vce_maintenance` |
 | `workbench_snapshot::load_workbench_snapshot` | loadWorkbenchSnapshot | `workbench.snapshot` |
 
 
@@ -299,8 +287,6 @@ Git 目录/仓库监听（`workspace.git.setMonitoring`）/差异/分支/提交�
 | --- | --- |
 | 知识目录导入 | libraryId/sourceRoot/sourceId、previewFingerprint；selectedFileKeys 只能为本次 ready 集合的不重复子集 |
 | 插件安装/更新 | sourcePath、contentFingerprint、全部批准权限、注册表依赖同意；初始密钥按 serverId/secretKey 逐项遮蔽输入 |
-| VCE 维护 | settingsRevision、checkpointVersion、embeddingFingerprint、完整 actionIds、mode、幂等键；无检查点仅允许 rebuild |
-| VCE 路由 | preflightRevision、准确候选路由与正维度、每个独立项目的 compatible/rebuild 决定；hardRebuildReason 强制 rebuild |
 | VMM 清空/删除/迁移 | 复用预检 commandId、storageVersion、准确项目身份；受保护项目不可删，绑定解除及迁移碰撞改名显式确认，迁移还保留 previewFingerprint |
 | VMM 会话/轮次回收及保留执行 | 服务签发的单次 previewId、confirmed；不重新发送可替换的目标清单 |
 | VMM 向量重建 | expectedStorageVersion、expectedPreviewFingerprint、confirmed |
@@ -319,7 +305,7 @@ ServiceCall、Setter、Form、输入框及发现端点的 Debug 输出省略机�
 错误文本移除已知输入密钥、JSON 转义形式及服务令牌。
 
 模拟服务只加载仓库内合成夹具，按相同方法分发。已建模写入修改权威 JSON：
-连接仅保留公开元数据，知识库创建不依赖已有条目，VCE 按项目保留修订和幂等任务，
+连接仅保留公开元数据，知识库创建不依赖已有条目，
 VMM 按项目独立保存记录，预检核对版本与目标，回收恢复只合并已移动记录并检查身份冲突。
 向量、词法及保留计数随活动记录与回收批次刷新；演示夹具的向量保持当前代次，计数不代表索引完整性。
 未知演示变更按交接约定回成功；这类回执不作为真实功能或端到端验收证据。

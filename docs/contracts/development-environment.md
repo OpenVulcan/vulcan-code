@@ -71,7 +71,7 @@ make init-system
 
 1. 以 Cargo 并发度 2 安装缺失的 `cargo-hakari`、`cargo-nextest`、`cargo-deny` 与 `cargo-about`，并将低于仓库最低要求的工具更新到兼容版本。
 2. 安装宿主依赖与内建工具。
-3. 安装 LuaSkills 运行时依赖；原生 VMM 与原生代码语义索引都在 VulcanCode 进程内运行，不需要独立运行时安装。
+3. 安装 LuaSkills 运行时依赖；原生 VMM 在 VulcanCode 进程内运行，不需要独立运行时安装。
 4. 取得 LanceDB 依赖闭包构建所需的随仓库 `protoc`（`protoc 31.1`）。`lancedb` 引入的 `lance-encoding` 会在其构建脚本中直接调用 `protoc`，因此没有它工作区无法编译；`.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向 `.cargo/protoc/` 下的该副本，开发机无需系统级 protobuf 安装。安装器先按锁定归档摘要验证，再解压并核验版本及头文件，准备完成后才替换安装；准备失败保留现有安装。下载产物不符时直接报错，不静默接受。该目录属于构建输入，已被 git 忽略，因此不随仓库提交。
 
 已满足版本要求的工具会被保留，不会重复安装。

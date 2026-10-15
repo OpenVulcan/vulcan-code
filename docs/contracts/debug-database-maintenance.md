@@ -5,7 +5,7 @@
 首次正式发布前（当前 V0.1.x），应用 SQLite 数据库的 `APP_SCHEMA_VERSION`、
 `PRAGMA user_version` 和 `app_metadata.schema_version` 保持 v1。结构变化直接更新当前 DDL，
 再使用独立维护命令同步本地既有 Debug 数据库。应用启动不执行历史结构迁移，也不通过重标版本
-掩盖结构差异。会话文档、会话元数据、系统统计、VCE/VMM 或知识库的独立存储格式不因此重置版本。
+掩盖结构差异。会话文档、会话元数据、系统统计、VMM 或知识库的独立存储格式不因此重置版本。
 
 结构权威是 `crates/vulcan-workspace-store/src/data_plane.rs` 中的
 `build_application_schema_script()`。维护程序在内存 SQLite 中执行该生成器，再读取
@@ -50,9 +50,13 @@ rtk cargo run -p vulcan-workspace-store --features debug-db-maintenance --bin vu
 触发器或未映射关联索引，
 必须在查证来源后补充明确映射和回归测试；命令直接拒绝，不自行推测字段用途、填充默认值或删除数据。
 
-当前明确支持移除两个已无源码读取者的旧字段：`projects.codebase_memory_enabled` 与
-`project_vce_settings.migrated_from_codebase_memory`。仅在其所有值均为 0 时允许移除，原值仍留在备份；
-非零或空值必须停止并确定迁移语义。旧版可空 VCE 更新策略只有本身已符合新约束才能复制，禁止猜测默认值。
+当前明确支持移除已无源码读取者的旧字段 `projects.codebase_memory_enabled`，仅在其所有值均为 0 时
+允许移除；非零或空值必须停止并确定迁移语义。
+
+代码导航退役还明确允许删除整张 `project_vce_settings` 表，原始记录只保留在完整备份中。
+该映射逐列核实已退役设置的列名与类型，包含历史 `migrated_from_codebase_memory` 标记；不再单独迁移
+该标记或推测更新策略默认值。未知列、生成列、额外索引、关联外键以及相关视图或触发器都会使维护停止。
+此映射的权威是维护工具与退役回归测试；再次变更历史映射时须同步本文。磁盘上的旧代码索引目录不自动删除。
 
 恢复时先退出 Core，保留失败库及其 WAL/SHM 文件，再使用 SQLite 工具从已验证快照恢复。
 不能在运行中的服务旁覆盖单个主文件，也不能删掉库或备份来绕过结构错误。
