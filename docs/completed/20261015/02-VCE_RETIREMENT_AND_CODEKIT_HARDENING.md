@@ -815,9 +815,13 @@ crates/vulcan-workspace-store/src/workspace_store/vce_batch_artifacts.rs
 | WebUI `pnpm run build` | 通过；工作台样式 gzip 73157 字节，初始 JavaScript gzip 657639 字节，预算未改 |
 | `make check` | 全部门禁通过（格式整理后重跑 `cargo fmt --all -- --check` 通过） |
 
-本机后续步骤（需用户确认后执行，不在合并提交内）：
+本机后续步骤（经用户确认后于合并提交之后执行）：
 
-- 退出 Core 后对真实 Debug 库执行 `vulcan-debug-db --check` → `--apply` → `--check`。
-  该库已完成知识库结构同步，预期只剩 `project_vce_settings` 待退役。
-- 两份 `ai-connections.toml` 需改为内部版本二十并移除 `inference_profiles.vce`，保留其他配置档。
-- `C:\Users\lingeasy\.vulcan-debug\code\vce` 可由用户手动删除。
+- 真实 Debug 库：确认无 Core 进程（仅独立代理服务），`--check` 只报告 `Tables to retire: project_vce_settings`；
+  `--apply` 先建立并验证完整备份 `app-workspace-before-sync-znbsCS.sqlite3`，全部保留值核验通过；
+  再次 `--check` 输出 `Schema v1 is current; no changes.`。
+- 两份 `ai-connections.toml`：各自先备份为同目录 `ai-connections.toml.v19.bak`，删除
+  `configuration.inference_profiles.vce` 全部表（Debug 39 行，Release 2 行），`configuration.schema_version`
+  改为 20，其他内容不变。随后用合并后的 `load_public_ai_connections_file_at_path` 实际加载两份文件均成功；
+  过程只输出表名与配置档名，不读取或输出任何值。
+- `C:\Users\lingeasy\.vulcan-debug\code\vce` 仍保留，由用户决定是否手动删除。
