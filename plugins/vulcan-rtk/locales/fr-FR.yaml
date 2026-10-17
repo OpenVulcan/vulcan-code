@@ -22,13 +22,18 @@ messages:
   disableTelemetry: "Désactiver la variable d’environnement de télémétrie RTK"
   disableTelemetryHelp: "Définir RTK_TELEMETRY_DISABLED=1 dans les processus de réécriture et de commandes déléguées."
   stats.title: "Statistiques de densité du contexte RTK"
-  stats.description: "Les statistiques d’économie de jetons sont mises en cache pendant trente minutes. Changer de vue quotidienne, hebdomadaire ou mensuelle n’envoie aucune nouvelle requête."
+  stats.historyTitle: Historique des statistiques
+  stats.clearHistory: Effacer l’historique des statistiques
+  stats.clearHistoryHelp: Efface définitivement les statistiques actuelles de commandes, d’économie de tokens et de récupération RTK, y compris celles du terminal partageant cet historique. Les réglages de routage sont conservés.
+  stats.historyCleared: Historique des statistiques effacé. Actualisation des statistiques en cours.
+  stats.description: "Les estimations de jetons sont mises en cache trente minutes. Les résumés excluent les sorties trop volumineuses ; le détail par commande les conserve et indique une économie pondérée."
   stats.unavailableHelp: "Les statistiques sont actuellement indisponibles."
   stats.empty: "Aucune statistique pour le moment"
   stats.noCommandBreakdown: "Aucune répartition par commande pour le moment"
   stats.savedTokens: "Jetons économisés"
-  stats.averageSavings: "Économie moyenne"
-  stats.commands: "Commandes"
+  stats.averageSavings: "Économie globale"
+  stats.commands: "Commandes incluses"
+  stats.excludedOutputs: "Sorties trop volumineuses exclues"
   stats.capacityRatio: "Capacité du contexte"
   stats.daily: "Quotidienne"
   stats.weekly: "Hebdomadaire"

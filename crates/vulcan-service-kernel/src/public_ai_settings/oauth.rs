@@ -5,7 +5,8 @@ use serde::Deserialize;
 use vulcan_provider_adapters::{
     CredentialMode, CredentialSecretEnvelope, CredentialSecretSnapshot, CredentialSecretStore,
     OAuthAuthorizationChallenge, OAuthClientConfiguration, OAuthTransactionPhase,
-    OAuthTransactionSnapshot, credential_authorization_binding,
+    OAuthTransactionSnapshot, PersistedAiConfiguration, PublicAiRuntime,
+    credential_authorization_binding,
 };
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -322,9 +323,12 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
             .await?;
             return Err(error);
         }
-        if let Err(error) = runtime
-            .refresh_connection_catalog(&validation_configuration, connection_id.as_str())
-            .await
+        if let Err(error) = refresh_reauthorized_connection_catalog(
+            runtime.as_ref(),
+            &validation_configuration,
+            connection_id.as_str(),
+        )
+        .await
         {
             let rollback_result = rollback_oauth_reauthorization_secret(
                 secret_store.as_ref(),
@@ -429,6 +433,28 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
     .await
 }
 
+/// Invalidates the previous account observation before validating a newly authorized catalog.
+/// 在验证新授权目录前，使上一账号观测失效。
+/// `runtime` owns account caches, `configuration` selects the new profile, and `connection_id` is exact.
+/// `runtime` 持有账号缓存，`configuration` 选择新配置档，`connection_id` 是精确连接标识。
+/// Returns success after catalog validation; the caller retains its complete before-image for rollback.
+/// 目录验证后返回成功；调用方保留完整前镜像以供回滚。
+async fn refresh_reauthorized_connection_catalog(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    connection_id: &str,
+) -> Result<(), String> {
+    // A stable connection ID may now belong to another user or billing workspace.
+    // 稳定连接 ID 此时可能已属于另一用户或计费工作区。
+    // Clear old quota and access evidence before rebuilding; fresh account-access queries may repopulate it.
+    // 重建前清除旧额度及访问证据；新的账号访问查询可重新填充缓存。
+    runtime.remove_connection_usage(connection_id)?;
+    runtime
+        .refresh_connection_catalog(configuration, connection_id)
+        .await
+        .map(|_| ())
+}
+
 /// Restores or removes an OAuth reauthorization secret after a later operation fails.
 /// 在后续操作失败后恢复或移除 OAuth 重新授权秘密。
 ///
@@ -456,3 +482,6 @@ async fn rollback_oauth_reauthorization_secret(
     )
     .await
 }
+
+#[cfg(test)]
+mod tests;

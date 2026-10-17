@@ -12,6 +12,125 @@ use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID, ProtocolRegistry,
 };
 
+/// Verifies Console OAuth uses Vulcan identity, exact workspace headers, and the declared authority.
+/// 验证 Console OAuth 使用 Vulcan 身份、精确工作区请求头与声明授权端。
+#[test]
+fn opencode_oauth_headers_preserve_client_and_workspace_identity() {
+    // secret contains a workspace distinct from the authenticated human user.
+    // secret 包含与已鉴权自然人用户不同的工作区。
+    let secret = crate::CredentialSecretEnvelope::new(
+        crate::CredentialSecretMaterial::OpencodeConsoleOAuth {
+            tokens: crate::OAuthTokenSet {
+                access_token: String::from("synthetic-access"),
+                refresh_token: String::from("synthetic-refresh"),
+                issued_at_unix_ms: 1,
+                expires_at_unix_ms: 2,
+                scopes: BTreeSet::new(),
+                account_subject: Some(String::from("user_demo")),
+                email: None,
+            },
+            organization_id: String::from("org_demo"),
+        },
+    )
+    .unwrap()
+    .execution_secret()
+    .unwrap();
+    // protocol and expected_url pin the published Go paths rather than the pay-as-you-go gateway.
+    // protocol 与 expected_url 固定已公布的 Go 路径，而非按量计费网关。
+    for (protocol, expected_url) in [
+        (
+            "openai-chat-completions.v1",
+            "https://opencode.ai/inference/go/openai/v1/chat/completions",
+        ),
+        (
+            "openai-responses.v1",
+            "https://opencode.ai/inference/go/openai/v1/responses",
+        ),
+    ] {
+        // route comes from the actual OAuth service entry rather than a duplicated test descriptor.
+        // route 来自真实 OAuth 服务入口，而非重复的测试描述符。
+        let mut route = bundled_manifest_route("opencode-go", "go-oauth-api", protocol);
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().unwrap()),
+        );
+        let encoded = client.encode_request(&route, &minimal_request()).unwrap();
+        assert_eq!(route.request_url(encoded.path.as_str()), expected_url);
+        let headers =
+            execution_headers(&route, &encoded.headers, &secret, Some("vulcan-session")).unwrap();
+        assert_eq!(headers["user-agent"], VULCAN_CODE_USER_AGENT);
+        assert_eq!(headers["x-opencode-session"], "vulcan-session");
+        assert_eq!(headers["x-org-id"], "org_demo");
+        assert_eq!(headers["authorization"], "Bearer synthetic-access");
+        assert!(!headers.contains_key("chatgpt-account-id"));
+        // Even the same-origin pay-as-you-go base must not replace the selected Go product.
+        // 即使同源的按量计费基础地址，也不得替换已选择的 Go 产品。
+        route.entry.base_url = String::from("https://opencode.ai/inference");
+        assert!(execution_headers(&route, &encoded.headers, &secret, None).is_err());
+        // A changed destination must fail before any private token is dispatched.
+        // 目的地址改变时，必须在分派任何私有令牌前失败。
+        route.entry.base_url = String::from("https://example.invalid/inference");
+        assert!(execution_headers(&route, &encoded.headers, &secret, None).is_err());
+    }
+}
+
+/// Verifies the Console API-key profile preserves Vulcan identity without adding OAuth workspace headers.
+/// 验证 Console API Key 凭据档保留 Vulcan 身份，且不添加 OAuth 工作区请求头。
+/// No parameters; checks both registered inference protocols using the compiled service declaration.
+/// 无参数；使用已编译服务声明检查两个已注册推理协议。
+#[test]
+fn opencode_api_key_headers_preserve_client_identity_without_workspace() {
+    // secret is synthetic static material rather than an OAuth credential with a workspace.
+    // secret 是合成静态材料，而非带工作区的 OAuth 凭据。
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("oc_sk_synthetic"))
+        .unwrap()
+        .execution_secret()
+        .unwrap();
+    // protocol and expected_url keep key-based inference on the same declared Go product paths.
+    // protocol 与 expected_url 将密钥推理保留在相同声明的 Go 产品路径上。
+    for (protocol, expected_url) in [
+        (
+            "openai-chat-completions.v1",
+            "https://opencode.ai/inference/go/openai/v1/chat/completions",
+        ),
+        (
+            "openai-responses.v1",
+            "https://opencode.ai/inference/go/openai/v1/responses",
+        ),
+    ] {
+        // route retains the shared Console endpoint and selects its explicitly declared key profile.
+        // route 保留共享 Console 端点，并选择其明确声明的密钥凭据档。
+        let mut route = bundled_manifest_route("opencode-go", "go-oauth-api", protocol);
+        // profile comes from the compiled manifest, avoiding a duplicated credential declaration.
+        // profile 来自已编译清单，避免重复定义凭据声明。
+        let profile = route
+            .entry
+            .credential_profile("console-api-key")
+            .expect("expected Console API-key profile may be outdated");
+        route.connection.credential_profile_id = profile.id.clone();
+        route.connection.credential_mode = profile.credential_mode;
+        // client applies the same request encoding and header projection as live inference.
+        // client 应用与在线推理相同的请求编码及请求头投影。
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().unwrap()),
+        );
+        // encoded keeps protocol-owned headers in the normal execution path.
+        // encoded 将协议持有的请求头保留在正常执行路径中。
+        let encoded = client.encode_request(&route, &minimal_request()).unwrap();
+        assert_eq!(route.request_url(encoded.path.as_str()), expected_url);
+        // headers must use the key and public application/session identities, with no organization guess.
+        // headers 必须使用密钥及公开应用和会话身份，不猜测组织。
+        let headers =
+            execution_headers(&route, &encoded.headers, &secret, Some("vulcan-session")).unwrap();
+        assert_eq!(headers["user-agent"], VULCAN_CODE_USER_AGENT);
+        assert_eq!(headers["x-opencode-session"], "vulcan-session");
+        assert_eq!(headers["authorization"], "Bearer oc_sk_synthetic");
+        assert!(!headers.contains_key("x-org-id"));
+        assert!(!headers.contains_key("chatgpt-account-id"));
+    }
+}
+
 /// Verifies protocol-required headers are merged while credential headers remain adapter-owned.
 /// 验证协议必需请求头会被合并，同时凭据请求头仍由适配器独占管理。
 #[test]

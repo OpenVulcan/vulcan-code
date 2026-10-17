@@ -22,13 +22,18 @@ messages:
   disableTelemetry: "Desativar a variável de ambiente de telemetria do RTK"
   disableTelemetryHelp: "Definir RTK_TELEMETRY_DISABLED=1 nos processos de reescrita e comandos delegados."
   stats.title: "Estatísticas de densidade do contexto RTK"
-  stats.description: "As estatísticas de economia de tokens ficam em cache por trinta minutos. Alternar entre as visualizações diária, semanal e mensal não envia outra solicitação."
+  stats.historyTitle: Histórico de estatísticas
+  stats.clearHistory: Limpar histórico de estatísticas
+  stats.clearHistoryHelp: Apaga permanentemente as estatísticas atuais de comandos, economia de tokens e recuperação do RTK, incluindo as do terminal que compartilha esse histórico. As configurações de roteamento são mantidas.
+  stats.historyCleared: Histórico de estatísticas limpo. Atualizando as estatísticas.
+  stats.description: "As estimativas de tokens ficam em cache por trinta minutos. Os resumos excluem saídas grandes demais; o detalhamento por comando as mantém e mostra a economia ponderada."
   stats.unavailableHelp: "As estatísticas estão indisponíveis no momento."
   stats.empty: "Ainda não há estatísticas"
   stats.noCommandBreakdown: "Ainda não há detalhamento por comando"
   stats.savedTokens: "Tokens economizados"
-  stats.averageSavings: "Economia média"
-  stats.commands: "Comandos"
+  stats.averageSavings: "Economia geral"
+  stats.commands: "Comandos incluídos"
+  stats.excludedOutputs: "Saídas grandes demais excluídas"
   stats.capacityRatio: "Capacidade do contexto"
   stats.daily: "Diária"
   stats.weekly: "Semanal"

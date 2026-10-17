@@ -16,6 +16,22 @@ Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。
 
 > **关于 `protoc`。** `.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向仓库随附的 `protoc`，使那些构建脚本直接调用 `protoc` 的第三方 crate（例如 `lancedb` 引入的 `lance-encoding`）无需系统级 protobuf 安装即可构建。通过 Cargo 的 `relative = true` 从仓库根解析路径，因此检出目录可以移动；Windows 启动命令时自动补充 `.exe`。显式设置的环境变量仍优先。
 
+## 终端启动服务与 TUI
+
+- `make service`（或 `make service release`）：在当前终端前台运行已经构建的 Core，固定使用已有的 `--headless` 模式，不创建托盘、Electron 或 Vite。它不编译；需要先完成 `make init-system`、`make sync` 和对应模式的完整构建。
+- `make bt`（或 `make bt release`）：完成与 `make build` 相同的全部构建及打包，再启动后台无头 Core、等待发现文档与 `/health` 身份一致且状态为就绪，最后在当前终端进入 TUI。构建或启动失败时不进入 TUI；它不调用桌面或 Vite 的启动入口。
+- TUI 使用 Core 的 `--describe` 所提供的数据目录绑定 `--service-root`，不猜测用户目录或服务端口。既有服务已经就绪时复用；启动中则等待，不竞争启动第二个进程。退出 TUI 不会停止后台 Core。新启动 Core 的诊断文件保存在 `target/core-cli/`，发现文档及其令牌不输出到命令行。
+
+普通完整构建不承担停止正在运行的发行物这一职责，Unix 下仍需先退出需要替换的发行实例；需要只更新 Core 时使用下述增量重启入口。`make run` 保持启动 Electron 的原意，不等同于纯服务启动。
+
+GNU Make 在 Unix 下通过 `make.sh` 分发构建及运行；直接执行 `pwsh -File make.ps1 build/run/service/br/bt/core-build/core-restart` 时也显式委托同一 Unix 入口，不会执行面向 Windows 的 Core 生命周期脚本。依赖初始化中原本共用的 PowerShell 安装器继续保留。
+
+### 清理编译产物
+
+`make clean` 仅执行 `cargo clean --profile dev`，清理 Debug 编译产物；`make clean release` 仅执行 `cargo clean --profile release`，清理 Release 编译产物。`release` 在此是模式参数，不会触发构建。Windows、Linux、macOS 共用相同语义；目标目录与目标三元组由 Cargo 根据环境变量及 `.cargo/config.toml` 解析，不手工猜测目录。清理不依赖 Node、pnpm 或下载依赖，不触碰 `output/`、`third_party/`、用户数据及另一模式的编译产物；它不会停止运行中的应用，文件被占用时保留 Cargo 的错误并退出。
+
+下载的构建输入统一保存在 `third_party/`，具体目录由 `scripts/build-input-paths.mjs` 定义。`output/` 仅保存运行与分发副本，可以重新同步及打包恢复。直接运行无参数 `cargo clean` 仍会清空整个 Cargo 目标目录，但不会删除这些持久输入。旧的 `target/browser-runtime/`、`target/build-input-cache/` 与 `target/electron-runtime-cache/` 不再作为下载源；切换入口前可显式复制到对应的新目录并核对完整性，脚本不会探测或静默回退到旧路径。
+
 ## Windows Debug 下只更新 Core
 
 应用 SQLite 结构变动后，在启动新 Core 前独立执行 Debug 数据库检查与同步，应用数据库版本保持 v1。
@@ -27,7 +43,7 @@ Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。
 
 “Vulcan 浏览器”保留插件设置入口，作为随包交付的内置组件。官方 MCP 固定为 `0.0.82`，其 Playwright 与 playwright-core 固定为 `1.64.0-alpha-1789764292000`；版本组合在 `scripts/browser-runtime.mjs` 中校验，不使用 `latest`。升级必须同时更新锁文件并重新验证 MCP 导航、快照、点击、截图及授权撤销。
 
-先执行 `make init-system` 准备受管 Node `24.18.0` 和 pnpm `11.11.0`，再执行 `make sync`。这两个入口都会通过 `scripts/managed-node.mjs` 补齐缺失的受管 Node/pnpm，使用官方精确版本地址并校验 SHA-256/SHA-512，不依赖已有 `output/browser` 或正在运行的 Core。同步阶段按锁文件准备插件依赖，并把对应 Chromium 下载到仓库 `target/browser-runtime/`；`make build` 仅使用已准备、已同步的输入，生成 `output/browser`，缺失时失败，不在运行期间下载。系统 Node/pnpm 仍属于下文规定的开发机前置工具。
+先执行 `make init-system` 准备受管 Node `24.18.0` 和 pnpm `11.11.0`，再执行 `make sync`。这两个入口都会通过 `scripts/managed-node.mjs` 在 `third_party/managed-node/` 补齐缺失的受管 Node/pnpm，使用官方精确版本地址并校验 SHA-256/SHA-512，再复制到 `output/dependencies/runtimes/node/`；删除发行副本后可从持久输入离线恢复，不依赖已有 `output/browser` 或正在运行的 Core。同步阶段按锁文件准备插件依赖，并把对应 Chromium 下载到仓库 `third_party/browser-runtime/<Playwright版本>/<系统-架构>/`；`make build` 仅使用已准备、已同步的输入，复制 Chromium 并生成 `output/browser`，缺失时失败，不在运行期间下载。Electron 构建下载缓存单独保存在 `third_party/electron-runtime-cache/`，不与 Chromium 混用。系统 Node/pnpm 仍属于下文规定的开发机前置工具。
 
 发行物中 `desktop/runtime/` 仅运行 Electron GUI；`browser/runtime/` 保存 Core 浏览器宿主及驱动，`browser/chromium/` 保存独立 Chromium，宿主由 `dependencies/runtimes/node/` 的受管 Node 启动。运行布局架构为 3，`browserHostExecutable` 与 `desktopExecutable` 分别声明两个程序；`tuiExecutable` 声明与服务同目录发布的终端客户端 `bin/vulcan-tui`，Windows 托盘的“打开终端客户端”只按该条目启动。旧版用户目录下的浏览器下载不会覆盖随包版本，也不会在启动时自动删除。
 
@@ -45,9 +61,17 @@ make core-restart
 
 只想验证编译而暂不重启时，使用 `make core-build`；它只把 `vulcan-code-service` 编译到 Cargo 的 Debug 目录，不替换正在运行的服务。`make core-restart` 自带增量编译，使用桌面运行入口共用的布局校验；编译和启动契约校验成功后，自动强制停止精确路径匹配的当前 Debug Core，原子替换 `output/bin/vulcan-code-service.exe` 并启动新 Core，无需手动退出托盘。其他发行目录或 Release 进程不在停止范围内；如果其他程序占有同一 Debug 数据目录，则拒绝重启。桌面壳与 Vite 保持运行，WebUI 断线后按新 Core 的发现信息重连。重启期间正在执行的 AI 请求会中断，应在重连后重新发起；需要优雅排空时可先自行从托盘退出服务。
 
-此入口目前只支持 Windows Debug。修改 `vulcan-terminal-host`、Electron、运行布局或 Core 与壳之间的启动协议时，使用完整 `make build`；修改权威运行资源时，先显式执行 `make sync`。`make core-restart` 不会同步资源；新 Core 退出且尚未健康就绪时，恢复原可执行文件备份。运行布局架构版本由 `scripts/desktop-runtime.mjs` 定义并校验，核心脚本不再维护独立版本数字。
+上述托盘及可见调试控制台行为属于 Windows Debug。修改 `vulcan-terminal-host`、Electron、运行布局或 Core 与壳之间的启动协议时，使用完整 `make build`；修改权威运行资源时，先显式执行 `make sync`。`make core-restart` 不会同步资源；新 Core 退出且尚未健康就绪时，恢复原可执行文件备份。运行布局架构版本由 `scripts/desktop-runtime.mjs` 定义并校验，核心脚本不再维护独立版本数字。
 
 核心重启保留可见的 Debug 控制台，不再隐藏窗口。宣布成功必须同时满足新进程健康身份匹配、托盘事件循环就绪以及 Windows 确认托盘注册；本次进程通过启动器指定的 `VULCAN_CORE_STARTUP_REPORT` 写入独立确认文件，位于 `target/core-restart/`。该变量只用于重启确认，不替代服务发现。Windows 可以将已注册图标放在折叠区域；图标外观改变不意味着服务未启动。关闭工作台窗口仍只结束桌面客户端，后台核心退出使用托盘菜单。
+
+### Linux / WSL 的 Core 增量更新
+
+Linux 的 `make core-build` 直接使用 Node 启动 `cargo build --locked -p vulcan-code-service --message-format=json`，只接受本轮 Cargo 报告且成功生成的唯一制品，不从固定 target 路径挑选旧文件，不要求 PowerShell 或 pnpm。
+
+`make core-restart` 要求已有匹配宿主、架构及 Debug 模式的完整发行物。它先编译并比较新旧 `--describe` 启动契约，复制并核验新制品摘要，再通过发现 PID、Linux `/proc/<pid>/exe` 和进程用户核对现有持有者。只向当前发行物的 Core 发送 `SIGTERM`；外部目录的实例或无法确认归属的进程不会被终止。旧持有者未能在限定时间内退出时，不替换程序。
+
+同目录暂存及原子改名用于发布新 Core，旧程序保留为独立 `.previous` 文件直到无头服务就绪。新服务启动失败且已安全退出时，恢复并重新启动旧程序；无法安全关闭或恢复时保留备份并明确报告路径。Electron、Vite、TUI 和同步资源不重建。该原生重启入口目前明确支持 Linux，Windows 保持既有托盘重启入口，macOS 不冒称已支持增量重启。
 
 ## Core 原生托盘边界
 
@@ -73,7 +97,7 @@ make init-system
 
 该命令按固定顺序执行：
 
-0. Linux 首先执行 `scripts/install_linux_system_deps.sh`，检查 GTK3/GLib/GObject/GIO、AppIndicator 或 Ayatana 的 `pkg-config` 元数据，并实际编译链接一个只验证 `libxdo` 开发文件的探针；不会运行探针。缺失时，通过 Debian/Ubuntu 的 APT 安装脚本中唯一声明的软件包集合，随后复核。已有依赖满足时不运行包管理器；普通账户没有非交互 sudo 权限时明确失败，提示管理员执行该脚本。其他发行版缺少依赖时要求先通过本机包管理器补齐；非 Linux 宿主跳过此步骤。运行库存在或桌面可以启动，不能替代开发头文件及 `.pc` 元数据。`make.sh` 和直接运行的 `make.ps1 init-system` 共用这个入口。
+0. Linux 首先执行 `scripts/install_linux_system_deps.sh`，检查 GTK3/GLib/GObject/GIO、AppIndicator 或 Ayatana 的 `pkg-config` 元数据，并实际编译链接一个只验证 `libxdo` 开发文件的探针；不会运行探针。缺失时先显示具体探针错误，再通过 Debian/Ubuntu 的 APT 安装脚本中唯一声明的软件包集合，随后复核。已有依赖满足时不请求管理员权限、不运行包管理器；普通账户可复用已缓存或免密的 sudo 授权。需要密码且输入与错误输出均连接终端时，初始化自动执行 `sudo -v` 请求 Linux 账户密码，成功后继续安装；拒绝或取消授权立即停止，不运行 APT 或后续初始化阶段。非交互环境不等待密码，明确要求在交互终端重新运行 `make init-system` 或由管理员准备依赖。只有系统包操作提升权限，Rust 工具与其他项目依赖仍由当前账户安装。其他发行版缺少依赖时要求先通过本机包管理器补齐；非 Linux 宿主跳过此步骤。运行库存在或桌面可以启动，不能替代开发头文件及 `.pc` 元数据。`make.sh` 和直接运行的 `make.ps1 init-system` 共用这个入口。
 1. 以 Cargo 并发度 2 安装缺失的 `cargo-hakari`、`cargo-nextest`、`cargo-deny` 与 `cargo-about`，并将低于仓库最低要求的工具更新到兼容版本。
 2. 安装宿主依赖与内建工具。
 3. 安装 LuaSkills 运行时依赖；原生 VMM 在 VulcanCode 进程内运行，不需要独立运行时安装。
@@ -187,7 +211,7 @@ scripts/build-inputs.lock.json 是内建 sg、rg 和 protoc 的版本、各平�
 
 同一清单的 `judge_runtime` 段锁定本机权限判定器的随包执行库：官方 ONNX Runtime CPU 核心库与 WebGPU 执行提供器插件（通用 GPU 路径，适配任意支持 WebGPU 的显卡）。`make init-system` 与 `make deps tools` 经 `install_bundled_tools` 依次安装 `bundled` 与 `judge-runtime` 两组；后者只把各归档中声明的成员复制到 `third_party/judge-runtime/<target>/`，并写入记录每个文件摘要的 `judge-runtime.json`。清单未声明的宿主（目前为没有官方构建的 macOS x64）只输出说明，不安装。`make sync` 通过 `install-locked-tools.mjs verify-judge-runtime` 按锁文件复核清单与全部摘要后复制到 `output/judge-runtime/`；已声明宿主缺失或文件被改动时同步失败并提示执行 `make deps tools`。发布布局校验要求已声明宿主的发行物包含该清单与两个库。CUDA 执行库因显卡与驱动差异不随包提供。
 
-已验证归档和许可证按摘要缓存在 target/build-input-cache/。联网初始化填充缓存后，可以运行 pwsh -File scripts/install_bundled_tools.ps1 -Offline 和 pwsh -File scripts/install_protoc.ps1 -Offline 重建对应安装。缺失缓存或摘要损坏直接失败，不联网、不换版本。离线能力只覆盖这些输入；完整项目离线构建还需预先准备 Cargo、pnpm 等各自的依赖缓存。
+已验证归档和许可证按摘要缓存在 `third_party/build-input-cache/`。联网初始化填充缓存后，可以运行 pwsh -File scripts/install_bundled_tools.ps1 -Offline 和 pwsh -File scripts/install_protoc.ps1 -Offline 重建对应安装。缺失缓存或摘要损坏直接失败，不联网、不换版本。离线能力只覆盖这些输入；完整项目离线构建还需预先准备 Cargo、pnpm 等各自的依赖缓存。
 
 安装使用独立暂存目录，先验证工具、许可证和 protoc 头文件，再替换目标。并发安装同一目标会明确拒绝；异常退出遗留的 .installing 目录需要确认旧安装进程已退出后清理，.previous 保存待恢复的旧安装，不可直接删除。常规替换失败会恢复旧目录。
 

@@ -22,13 +22,18 @@ messages:
   disableTelemetry: Disable RTK telemetry environment variable
   disableTelemetryHelp: Inject RTK_TELEMETRY_DISABLED=1 into rewrite and proxied command processes.
   stats.title: RTK context-density statistics
-  stats.description: Token savings are cached for thirty minutes. Switching daily, weekly, and monthly views never sends another request.
+  stats.description: Token estimates are cached for thirty minutes. Summaries exclude oversized outputs; command rows retain them and report weighted savings.
   stats.unavailableHelp: Statistics are currently unavailable.
+  stats.historyTitle: Statistics history
+  stats.clearHistory: Clear statistics history
+  stats.clearHistoryHelp: Permanently clear current RTK command, token-saving, and recall statistics, including terminal statistics that share this history. Routing settings are kept.
+  stats.historyCleared: Statistics history cleared. Statistics are refreshing.
   stats.empty: No statistics yet
   stats.noCommandBreakdown: No command breakdown yet
   stats.savedTokens: Tokens saved
-  stats.averageSavings: Average savings
-  stats.commands: Commands
+  stats.averageSavings: Overall savings
+  stats.commands: Included commands
+  stats.excludedOutputs: Oversized outputs excluded
   stats.capacityRatio: Context capacity
   stats.daily: Daily
   stats.weekly: Weekly

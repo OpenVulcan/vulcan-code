@@ -646,6 +646,7 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
             .args([test_name, "--exact", "--test-threads=1", "--nocapture"])
             .env(CHILD_MARKER, "1")
             .env("RTK_DB_PATH", &database)
+            .env("RTK_RECALL_DB", history.path().join("recall.db"))
             .env("RTK_TELEMETRY_DISABLED", "1")
             .output()
             .expect("isolated RTK integration process");
@@ -851,4 +852,42 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
         .canonicalize()
         .expect("resolve repository RTK plugin bin directory");
     assert_eq!(resolved_binary_directory, expected_binary_directory);
+}
+
+/// Verify the real RTK bundle's process protocol and statistics parsing with isolated native Lua execution.
+/// 使用隔离的原生 Lua 执行验证真实 RTK Bundle 的进程协议和统计解析。
+/// Takes no parameters and returns after all fixture behavior assertions succeed.
+/// 不接收参数，在全部夹具行为断言成功后返回。
+#[test]
+fn bundled_rtk_plugin_preserves_rewrite_and_statistics_contracts() {
+    // temporary owns the real Lua engine state without using the user's RTK history or configuration.
+    // temporary 持有真实 Lua 引擎状态，不使用用户的 RTK 历史或配置。
+    let temporary = tempfile::tempdir().expect("create RTK contract fixture directory");
+    // repository_root is derived from the owning crate rather than a machine-specific checkout path.
+    // repository_root 从所属 crate 派生，不依赖机器特定的检出路径。
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("resolve RTK fixture repository root");
+    // source reads the behavior harness; its production bundle and defaults are read independently at runtime.
+    // source 读取行为测试夹具；生产 Bundle 和默认配置在运行时独立读取。
+    let source = fs::read_to_string(repository_root.join("scripts/test_rtk_plugin.lua"))
+        .expect("read RTK behavior fixture");
+    // engine is the same isolated LuaSkills engine used by the plugin manager fixtures.
+    // engine 与插件管理器夹具使用同一隔离 LuaSkills 引擎。
+    let engine = super::test_engine(temporary.path());
+    // result comes from executing the real bundle with exact process-result fixtures, not source-text guards.
+    // result 来自使用精确进程结果夹具执行真实 Bundle，不使用源码文本守卫。
+    let result = engine
+        .run_lua(
+            &source,
+            &json!({
+                "plugin_path": repository_root.join("plugins/vulcan-rtk/runtime/plugin.bundle.lua"),
+                "defaults_path": repository_root.join("plugins/vulcan-rtk/config/defaults.json"),
+                "workspace_root": repository_root,
+            }),
+            None,
+        )
+        .expect("execute RTK rewrite and statistics behavior fixture");
+    assert_eq!(result["passed"], true);
 }

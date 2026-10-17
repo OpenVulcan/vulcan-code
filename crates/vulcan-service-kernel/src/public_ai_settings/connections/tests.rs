@@ -253,3 +253,111 @@ fn model_synchronization_requires_dynamic_directory() {
         assert!(error.contains("non-dynamic model directory"));
     }
 }
+
+/// Verifies Console key changes discard old usage while preserving unrelated accounts and rollback.
+/// 验证 Console 密钥变更丢弃旧用量，同时保留无关账号与回滚能力。
+/// No parameters; validates successful changes and restores the exact before-image after rejection.
+/// 无参数；验证成功变更，并在拒绝后恢复精确前镜像。
+#[tokio::test]
+async fn credential_identity_validation_discards_previous_usage_and_preserves_rollback_image() {
+    use super::*;
+    use crate::ai_credential_secret_store::repair_tests::CredentialRepairFixture;
+    for invalid_catalog in [false, true] {
+        // fixture owns a private SQLite database; no live credentials or provider requests are used.
+        // fixture 持有私有 SQLite 数据库；不使用在线凭据或供应商请求。
+        let fixture = CredentialRepairFixture::new().await;
+        // runtime uses the production credential adapter and the actual bundled declarations.
+        // runtime 使用生产凭据适配器与真实随包声明。
+        let runtime = PublicAiRuntime::first_batch(fixture.store.clone()).unwrap();
+        // configuration seeds two observations through the legacy unsupported, network-free query.
+        // configuration 通过旧版不受支持且无网络访问的查询植入两个观测。
+        let mut configuration = PersistedAiConfiguration::default();
+        for id in ["changed-account", "retained-account"] {
+            fixture
+                .store
+                .create_secret(
+                    id,
+                    &CredentialSecretEnvelope::new_api_key(String::from("sk-synthetic-old"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            configuration.connection_graph.connections.insert(
+                id.to_string(),
+                CredentialConnection {
+                    id: id.to_string(),
+                    provider_id: String::from("opencode-go"),
+                    service_entry_id: String::from("go-api"),
+                    credential_profile_id: String::from("api-key"),
+                    credential_mode: CredentialMode::Token,
+                    credential_id: id.to_string(),
+                    display_name: id.to_string(),
+                    secret_reference: id.to_string(),
+                    management_secret_reference: None,
+                    service_origin_override: None,
+                    prompt_cache_by_protocol: Default::default(),
+                },
+            );
+            runtime
+                .query_connection_usage(&configuration, id)
+                .await
+                .unwrap();
+        }
+        // previous_usage and before_image preserve account observations for transaction compensation.
+        // previous_usage 与 before_image 为事务补偿保留账号观测。
+        let previous_usage = runtime.usage_cache_snapshot().unwrap();
+        let before_image = runtime.capture_activation_snapshot().unwrap();
+        // replacement installs a different workspace-bound Console key under the same connection ID.
+        // replacement 在相同连接 ID 下安装另一个已绑定工作区的 Console 密钥。
+        let replacement = super::super::credential_repair::replace_credential_material(
+            fixture.store.as_ref(),
+            "changed-account",
+            CredentialSecretMaterial::ApiKey {
+                value: String::from("oc_sk_synthetic_new"),
+            },
+        )
+        .await
+        .unwrap();
+        // connection selects the new static-key profile without changing its stable cache key.
+        // connection 选择新的静态密钥凭据档，不改变稳定缓存键。
+        let connection = configuration
+            .connection_graph
+            .connections
+            .get_mut("changed-account")
+            .unwrap();
+        connection.service_entry_id = String::from("go-oauth-api");
+        connection.credential_profile_id = String::from("console-api-key");
+        if invalid_catalog {
+            connection.service_entry_id = String::from("unregistered-entry");
+        }
+        // result crosses the production entry used only after an explicit credential identity change.
+        // result 经过仅在显式凭据身份变更后使用的生产入口。
+        let result = validate_connection_credential(
+            &runtime,
+            &configuration,
+            "changed-account",
+            ServiceEntryKind::Conversation,
+        )
+        .await;
+        assert_eq!(result.is_err(), invalid_catalog);
+        // current_usage must neither retain the changed account nor disturb the other account.
+        // current_usage 不得保留变更账号，也不得影响另一账号。
+        let current_usage = runtime.usage_cache_snapshot().unwrap();
+        assert!(!current_usage.contains_key("changed-account"));
+        assert_eq!(
+            current_usage.get("retained-account"),
+            previous_usage.get("retained-account"),
+        );
+        if invalid_catalog {
+            rollback_replaced_secret(
+                fixture.store.as_ref(),
+                "changed-account",
+                Some(&replacement),
+            )
+            .await
+            .unwrap();
+            restore_public_ai_runtime_activation(&runtime, &before_image).unwrap();
+            assert_eq!(runtime.usage_cache_snapshot().unwrap(), previous_usage);
+        }
+    }
+}

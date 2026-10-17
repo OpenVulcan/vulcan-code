@@ -335,6 +335,11 @@ RPC 也必须在凭据校验和网络请求之前拒绝，以防旧客户端或�
 Kimi 与 MiniMax 虽然共享这一声明形状，但仍分别走宿主中已审核的 Device Code、PKCE、轮询、刷新、
 设备身份和区域资源 URL 校验。作者不能把这些协议改写成未经验证的通用字段映射。
 
+OpenCode Console 使用 `opencode_console` 注册设备授权，凭据固定工作区，并由 `opencode_go`
+查询真实套餐窗口；OAuth 另外查询独立余额，Console API Key 只查套餐窗口。
+请求使用 Vulcan Code 自有客户端身份；Console 凭据与旧 Go Key 路由分开，
+具体协议和同步触发点见 [OpenCode Go 协议记录](providers/opencode-go-verified-facts.md)。
+
 LLM 运行时只冻结连接、秘密引用、模型、协议和路由，不把可续期 Access Token 冻结到完整智能体执行结束。
 每次真实 LLM Provider 请求前，宿主必须为同一个 `secret_reference` 重读最新修订版；其他请求完成 OAuth
 刷新后，当前长任务的下一次请求必须立即使用新 Token。上游对可安全重放且尚未产生语义输出或副作用

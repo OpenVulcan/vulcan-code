@@ -121,6 +121,22 @@ invoke_tauri_build_and_run() {
     invoke_tauri_run "$IsRelease"
 }
 
+# Build the complete selected profile, then start Core and the foreground TUI without Vite.
+# 完整构建选定模式，然后启动 Core 和前台 TUI，不启动 Vite。
+# The argument is 0 for debug or 1 for release; a failed build prevents any launch.
+# 参数为 0 时使用 debug、为 1 时使用 release；构建失败时不执行任何启动。
+invoke_build_and_tui() {
+    # IsRelease selects the same profile for the build and the terminal launcher.
+    # IsRelease 为构建与终端启动器选择同一模式。
+    IsRelease=$1
+    invoke_tauri_build "$IsRelease"
+    if [ "$IsRelease" = "1" ]; then
+        node "$ScriptDir/scripts/desktop-runtime.mjs" tui release
+    else
+        node "$ScriptDir/scripts/desktop-runtime.mjs" tui debug
+    fi
+}
+
 # invoke_powershell_route delegates commands that still intentionally share PowerShell implementations.
 # invoke_powershell_route 委托仍刻意共享 PowerShell 实现的命令。
 invoke_powershell_route() {
@@ -184,6 +200,8 @@ show_usage() {
     echo "  ./make.sh br          # build Core/WebUI/Electron and run desktop with Vite"
     echo "  ./make.sh br release  # build Core/WebUI/Electron and run desktop"
     echo "  ./make.sh release     # Core/Electron/WebUI release build"
+    echo "  ./make.sh clean       # clean Debug Cargo artifacts; preserve output and downloads"
+    echo "  ./make.sh clean release # clean Release Cargo artifacts only"
     echo "  ./make.sh licenses    # generate Rust third-party notices for the About page"
     echo "  ./make.sh check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
     echo "  ./make.sh check       # static gates: fmt, clippy -D warnings, lint, typecheck"
@@ -191,9 +209,10 @@ show_usage() {
     echo "  ./make.sh test full   # every Rust test, isolated LuaSkills callbacks, and doctests"
     echo "  ./make.sh run         # run Electron desktop; start Vite when needed"
     echo "  ./make.sh run release # run Core/Electron/WebUI release build"
-    echo "  ./make.sh service     # start the tray/background Core only"
-    echo "  ./make.sh core-build  # Windows only: compile Debug Core without rebuilding GUI"
-    echo "  ./make.sh core-restart # Windows only: compile and restart Debug Core"
+    echo "  ./make.sh service     # run Core without a tray or desktop"
+    echo "  ./make.sh core-build  # compile Debug Core without rebuilding GUI"
+    echo "  ./make.sh core-restart # Linux: compile and restart Debug Core"
+    echo "  ./make.sh bt          # full build, start Core, and open TUI; no desktop or Vite"
     echo "  ./make.sh deps        # install host, bundled tools, and LuaSkills dependencies"
     echo "  ./make.sh deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     echo "  ./make.sh init-system # bootstrap Rust tools and all repository dependencies"
@@ -212,7 +231,7 @@ NormalizedVariant=$(normalize_command "$CommandVariant")
 
 # Validate host tools before any routed module imports newer Node APIs; Rust-only setup stays independent.
 # 在分发模块导入新版Node API之前验证宿主工具；纯Rust工具安装保持独立。
-if [ "$NormalizedMode:$NormalizedVariant" != "deps:rust-tools" ]; then
+if [ "$NormalizedMode" != "clean" ] && [ "$NormalizedMode:$NormalizedVariant" != "deps:rust-tools" ]; then
     if ! command -v node >/dev/null 2>&1; then
         echo "Node.js is required to check build prerequisites. Install Node.js, then run make init-system." >&2
         exit 1
@@ -221,6 +240,16 @@ if [ "$NormalizedMode:$NormalizedVariant" != "deps:rust-tools" ]; then
 fi
 
 case "$NormalizedMode" in
+    clean)
+        # Cargo resolves target-dir and target triples; never guess paths or delete the entire target tree.
+        # 由 Cargo 解析 target-dir 与目标三元组；不猜测路径，也不删除整个 target 目录树。
+        case "$NormalizedVariant" in
+            "") CleanProfile=dev ;;
+            release) CleanProfile=release ;;
+            *) echo "Unsupported clean profile: $CommandVariant" >&2; exit 1 ;;
+        esac
+        (cd "$ScriptDir" && cargo clean --profile "$CleanProfile")
+        ;;
     "")
         invoke_tauri_build 0
         ;;
@@ -268,6 +297,13 @@ case "$NormalizedMode" in
             show_usage
             exit 1
         fi
+        ;;
+    bt)
+        case "$NormalizedVariant" in
+            "") invoke_build_and_tui 0 ;;
+            release) invoke_build_and_tui 1 ;;
+            *) echo "Unsupported bt profile: $CommandVariant" >&2; exit 1 ;;
+        esac
         ;;
     licenses)
         if [ "$NormalizedVariant" != "" ]; then
@@ -318,14 +354,14 @@ case "$NormalizedMode" in
             echo "Unsupported core-build variant: '$CommandVariant'" >&2
             exit 1
         fi
-        invoke_powershell_route core-build
+        node "$ScriptDir/scripts/core-cli.mjs" build
         ;;
     core-restart)
         if [ "$NormalizedVariant" != "" ]; then
             echo "Unsupported core-restart variant: '$CommandVariant'" >&2
             exit 1
         fi
-        invoke_powershell_route core-restart
+        node "$ScriptDir/scripts/core-cli.mjs" restart
         ;;
     run)
         if [ "$NormalizedVariant" = "" ]; then

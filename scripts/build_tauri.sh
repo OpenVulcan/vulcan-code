@@ -45,6 +45,11 @@ esac
 
 cd "$ProjectDir"
 
+# Use the persistent cache for both package lifecycle scripts and the explicit Electron installer.
+# 为包生命周期脚本与显式 Electron 安装器共同使用持久缓存。
+electron_config_cache=$(node "$ProjectDir/scripts/build-input-paths.mjs" electron)
+export electron_config_cache
+
 # Validate release dependency locks even when node_modules already exists.
 # 即使 node_modules 已存在，也要验证发布依赖锁。
 if [ "$Release" = "1" ] || [ ! -d "$WebAppDir/node_modules" ]; then
@@ -58,7 +63,7 @@ fi
 # 即使 node_modules 已存在，官方安装器仍须核验可执行文件和版本标记。
 # Missing runtime downloads or extraction failures must stop before expensive Cargo compilation.
 # 运行时下载或解压失败必须在耗时的 Cargo 编译前终止。
-electron_config_cache="$ProjectDir/target/electron-runtime-cache" node "$ProjectDir/apps/vulcan-code-desktop/node_modules/electron/install.js"
+node "$ProjectDir/apps/vulcan-code-desktop/node_modules/electron/install.js"
 
 # CargoPackageArguments derives all shipped packages from the same inventory used by Windows and notices.
 # CargoPackageArguments 从 Windows 与声明生成共用的清单派生全部分发包。

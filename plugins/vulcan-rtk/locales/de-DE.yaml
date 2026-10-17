@@ -22,13 +22,18 @@ messages:
   disableTelemetry: "RTK-Telemetrie-Umgebungsvariable deaktivieren"
   disableTelemetryHelp: "RTK_TELEMETRY_DISABLED=1 in Umschreibungs- und Proxy-Befehlsprozessen setzen."
   stats.title: "Statistiken zur RTK-Kontextdichte"
-  stats.description: "Statistiken zur Token-Einsparung werden dreißig Minuten zwischengespeichert. Der Wechsel zwischen Tages-, Wochen- und Monatsansichten sendet keine weitere Anfrage."
+  stats.historyTitle: Statistikverlauf
+  stats.clearHistory: Statistikverlauf löschen
+  stats.clearHistoryHelp: Löscht die aktuellen RTK-Statistiken zu Befehlen, Token-Einsparungen und Wiederabrufen dauerhaft, einschließlich gemeinsam genutzter Terminalstatistiken. Routing-Einstellungen bleiben erhalten.
+  stats.historyCleared: Statistikverlauf gelöscht. Statistiken werden aktualisiert.
+  stats.description: "Token-Schätzungen werden dreißig Minuten zwischengespeichert. Zusammenfassungen schließen übergroße Ausgaben aus; Befehlszeilen enthalten sie und zeigen gewichtete Einsparungen."
   stats.unavailableHelp: "Statistiken sind derzeit nicht verfügbar."
   stats.empty: "Noch keine Statistiken"
   stats.noCommandBreakdown: "Noch keine Aufschlüsselung nach Befehl"
   stats.savedTokens: "Eingesparte Tokens"
-  stats.averageSavings: "Durchschnittliche Einsparung"
-  stats.commands: "Befehle"
+  stats.averageSavings: "Gesamteinsparung"
+  stats.commands: "Berücksichtigte Befehle"
+  stats.excludedOutputs: "Ausgeschlossene übergroße Ausgaben"
   stats.capacityRatio: "Kontextkapazität"
   stats.daily: "Täglich"
   stats.weekly: "Wöchentlich"

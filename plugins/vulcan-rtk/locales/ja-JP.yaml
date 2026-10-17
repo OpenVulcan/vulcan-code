@@ -22,13 +22,18 @@ messages:
   disableTelemetry: "RTK テレメトリ環境変数を無効にする"
   disableTelemetryHelp: "書き換えとプロキシコマンドのプロセスに RTK_TELEMETRY_DISABLED=1 を設定します。"
   stats.title: "RTK コンテキスト密度統計"
-  stats.description: "トークン削減統計は 30 分間キャッシュされます。日別・週別・月別の表示を切り替えても再リクエストしません。"
+  stats.historyTitle: 統計履歴
+  stats.clearHistory: 統計履歴を消去
+  stats.clearHistoryHelp: 現在の RTK のコマンド、トークン削減、再読み込みの統計を完全に消去します。同じ履歴を使う端末の統計も消去されます。ルーティング設定は保持されます。
+  stats.historyCleared: 統計履歴を消去しました。統計を更新しています。
+  stats.description: "トークン推定値は 30 分間キャッシュされます。集計は過大な出力を除外し、コマンド別明細はそれらを含めて加重削減率を表示します。"
   stats.unavailableHelp: "現在、統計を利用できません。"
   stats.empty: "統計はまだありません"
   stats.noCommandBreakdown: "コマンド別の統計はまだありません"
   stats.savedTokens: "削減トークン数"
-  stats.averageSavings: "平均削減率"
-  stats.commands: "コマンド数"
+  stats.averageSavings: "全体の削減率"
+  stats.commands: "集計対象コマンド数"
+  stats.excludedOutputs: "除外した過大な出力"
   stats.capacityRatio: "コンテキスト容量"
   stats.daily: "日別"
   stats.weekly: "週別"

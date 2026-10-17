@@ -48,7 +48,8 @@
       "id": "statistics",
       "title_message_key": "sections.statistics",
       "sections": [
-        "gain"
+        "gain",
+        "history"
       ]
     }
   ],
@@ -325,6 +326,9 @@
         "action": "statistics-get",
         "refreshable": true,
         "show_loaded_at": true,
+        "refresh_topics": [
+          "rtk.statistics"
+        ],
         "available_path": "available",
         "error_path": "error",
         "unavailable_message_key": "stats.unavailableHelp"
@@ -334,7 +338,7 @@
           "type": "metrics",
           "web": {
             "variant": "tiles",
-            "columns": 4
+            "columns": 5
           },
           "items": [
             {
@@ -350,6 +354,11 @@
             {
               "label_message_key": "stats.commands",
               "path": "summary.total_commands",
+              "format": "compact"
+            },
+            {
+              "label_message_key": "stats.excludedOutputs",
+              "path": "summary.oversized_excluded",
               "format": "compact"
             },
             {
@@ -434,7 +443,7 @@
               "format": "number"
             },
             {
-              "path": "avgSavingsPct",
+              "path": "savingsPct",
               "label_message_key": "stats.savingsRate",
               "format": "percent"
             },
@@ -449,6 +458,20 @@
               "format": "bar"
             }
           ]
+        }
+      ]
+    },
+    {
+      "id": "history",
+      "title_message_key": "stats.historyTitle",
+      "items": [
+        {
+          "type": "action",
+          "id": "clear-history",
+          "action": "statistics-clear",
+          "label_message_key": "stats.clearHistory",
+          "description_message_key": "stats.clearHistoryHelp",
+          "success_message_key": "stats.historyCleared"
         }
       ]
     }

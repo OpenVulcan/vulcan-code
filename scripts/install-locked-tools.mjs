@@ -6,6 +6,7 @@ import { access, chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { obtainLockedInput } from './locked-download.mjs';
+import { buildInputPaths } from './build-input-paths.mjs';
 
 // resolveToolPlatform maps explicit OS/CPU inputs to archive identities; unsupported hosts throw.
 // resolveToolPlatform 将明确的系统与处理器输入映射到归档身份；不支持的宿主抛出异常。
@@ -181,7 +182,7 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
   const root = path.resolve(repositoryRoot);
   // cache stores bytes keyed by their reviewed digest.
   // cache 按已评审摘要保存字节。
-  const cache = path.join(root, 'target', 'build-input-cache');
+  const cache = buildInputPaths(root).lockedDownloads;
   // destination is the established installation path consumed by Cargo or resource sync.
   // destination 是 Cargo 或资源同步使用的既有安装路径。
   const destination = group === 'protoc' ? path.join(root, '.cargo', 'protoc')

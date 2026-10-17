@@ -50,6 +50,10 @@ rtk cargo run -p vulcan-workspace-store --features debug-db-maintenance --bin vu
 触发器或未映射关联索引，
 必须在查证来源后补充明确映射和回归测试；命令直接拒绝，不自行推测字段用途、填充默认值或删除数据。
 
+OpenCode Console 授权增加 `opencode_console_oauth` 材料类型及必要计费工作区约束，不新增列。
+既有 `account_subject` 保存自然人主体，`account_id` 保存供应商计费工作区；同步旧表约束时仍按原列
+逐值保留，不从既有 Key 猜测组织或自动转换凭据模式。
+
 当前明确支持移除已无源码读取者的旧字段 `projects.codebase_memory_enabled`，仅在其所有值均为 0 时
 允许移除；非零或空值必须停止并确定迁移语义。
 

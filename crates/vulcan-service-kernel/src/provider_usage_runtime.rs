@@ -104,9 +104,9 @@ pub(crate) async fn persist_native_account_usage_snapshots(
 /// 返回一个已声明账户查询契约对应的稳定快照类别。
 fn account_usage_snapshot_kind(query: AccountUsageQueryKind) -> &'static str {
     match query {
-        AccountUsageQueryKind::MiniMaxTokenPlan | AccountUsageQueryKind::KimiCodingPlan => {
-            "token_plan"
-        }
+        AccountUsageQueryKind::MiniMaxTokenPlan
+        | AccountUsageQueryKind::KimiCodingPlan
+        | AccountUsageQueryKind::OpencodeGo => "token_plan",
         AccountUsageQueryKind::OpenRouterCredits
         | AccountUsageQueryKind::OpenVulcan
         | AccountUsageQueryKind::TavilyCredits

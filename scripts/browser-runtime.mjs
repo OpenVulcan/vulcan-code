@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { managedNodeVersions, prepareManagedNode } from './managed-node.mjs';
+import { buildInputPaths } from './build-input-paths.mjs';
 
 // repository and pluginNode identify the authoritative source package.
 // repository 与 pluginNode 标识权威源码包。
@@ -21,7 +22,7 @@ if (managedNodeVersions.node_version !== browserVersions.node || managedNodeVers
 }
 // cacheRoot separates Playwright Chromium from Electron and user browser state.
 // cacheRoot 将 Playwright Chromium 与 Electron、用户浏览器状态分离。
-export const browserCacheRoot = path.join(repository, 'target/browser-runtime', browserVersions.playwright, `${process.platform}-${process.arch}`);
+export const browserCacheRoot = path.join(buildInputPaths(repository).browsers, browserVersions.playwright, `${process.platform}-${process.arch}`);
 // execute captures machine-readable output from the exact managed Node binary.
 // execute 从精确受管 Node 程序捕获机器可读输出。
 const execute = promisify(execFile);

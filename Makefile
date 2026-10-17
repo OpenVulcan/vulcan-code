@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync vite start stop status build build-release release run run-release service core-build core-restart br br-release licenses check test full deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
+.PHONY: help sync vite start stop status build build-release release clean run run-release service core-build core-restart br br-release bt licenses check test full deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -67,11 +67,14 @@ help:
 	@echo "  make build         # Core/Electron/WebUI debug build"
 	@echo "  make build-release # Core/Electron/WebUI release build"
 	@echo "  make release       # Core/Electron/WebUI release build"
+	@echo "  make clean         # clean Debug Cargo artifacts; preserve output and downloads"
+	@echo "  make clean release # clean Release Cargo artifacts; preserve output and downloads"
 	@echo "  make run           # run Electron desktop; start Vite when needed"
 	@echo "  make run-release   # run Core/Electron/WebUI release build"
-	@echo "  make service       # start the tray/background Core only"
-	@echo "  make core-build    # Windows: compile Debug Core only; keep GUI running"
-	@echo "  make core-restart  # Windows: compile and restart Debug Core; keep GUI running"
+	@echo "  make service       # run Core without a tray or desktop"
+	@echo "  make core-build    # compile Debug Core only; keep clients running"
+	@echo "  make core-restart  # Windows/Linux: compile and restart Debug Core"
+	@echo "  make bt            # full build, start Core, and open TUI; no desktop or Vite"
 	@echo "  make br            # build Core/WebUI/Electron and run desktop with Vite"
 	@echo "  make br-release    # build Core/WebUI/Electron and run desktop"
 	@echo "  make licenses      # generate Rust third-party notices"
@@ -140,11 +143,16 @@ build-release:
 # release routes the short release build command or becomes a companion no-op for paired goals.
 # release 路由短形式 release 构建命令，或在组合目标中作为伴随空操作。
 release:
-ifneq ($(filter build build-release run run-release service br br-release,$(MAKECMDGOALS)),)
+ifneq ($(filter build build-release run run-release service br br-release bt clean,$(MAKECMDGOALS)),)
 	@:
 else
 	$(call route-command,release)
 endif
+
+# clean selects exactly one Cargo profile and never cleans the shared distribution or downloaded inputs.
+# clean 仅选择一个 Cargo 模式，不清理共享发行目录或已下载输入。
+clean:
+	$(call route-command,$(if $(filter release,$(MAKECMDGOALS)),clean release,clean))
 
 # run routes debug by default, or release when the release companion goal is present.
 # run 默认路由 debug，存在 release 伴随目标时路由 release。
@@ -181,6 +189,11 @@ br:
 # br-release 路由 release 构建并运行命令。
 br-release:
 	$(call route-command,br release)
+
+# bt completes the full build before starting the background Core and terminal client.
+# bt 完成完整构建后启动后台 Core 和终端客户端。
+bt:
+	$(call route-command,$(if $(filter release,$(MAKECMDGOALS)),bt release,bt))
 
 # licenses routes Rust third-party notice generation.
 # licenses 路由 Rust 第三方声明生成命令。

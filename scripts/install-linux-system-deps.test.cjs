@@ -15,8 +15,18 @@ case "\${0##*/}" in
   uname) printf '%s\\n' "$MOCK_KERNEL" ;;
   id) printf '%s\\n' "$MOCK_UID" ;;
   sudo)
-    [ "$MOCK_SUDO" = 1 ] || exit 1
-    shift
+    printf '%s\\n' "$*" >> "$MOCK_SUDO_LOG"
+    case "$1" in
+      -v)
+        [ "$MOCK_SUDO" = prompt ] || exit 1
+        [ "$MOCK_SUDO_VALIDATION_CODE" = 0 ] || exit "$MOCK_SUDO_VALIDATION_CODE"
+        : > "$MOCK_AUTHORIZED"
+        exit 0
+        ;;
+      -n) shift ;;
+      *) exit 99 ;;
+    esac
+    [ "$MOCK_SUDO" = 1 ] || [ -f "$MOCK_AUTHORIZED" ] || exit 1
     if [ "$1" = true ]; then exit 0; fi
     exec "$@"
     ;;
@@ -27,7 +37,10 @@ case "\${0##*/}" in
         appindicator3-0.1) [ "$MOCK_INDICATOR" = legacy ]; exit $? ;;
       esac
     done
-    [ "$MOCK_METADATA_READY" = 1 ] || [ -f "$MOCK_INSTALLED" ] || exit 1
+    if [ "$MOCK_METADATA_READY" != 1 ] && [ ! -f "$MOCK_INSTALLED" ]; then
+      echo 'E_TEST_MISSING_GTK_METADATA' >&2
+      exit 1
+    fi
     ;;
   cc)
     if [ "$MOCK_LINK_READY" != 1 ] && [ ! -f "$MOCK_INSTALLED" ]; then
@@ -73,6 +86,7 @@ function exercise(t, options) {
   const bin = path.join(temporary, 'bin');
   const fixture = path.join(temporary, 'command.sh');
   const aptLog = path.join(temporary, 'apt.log');
+  const sudoLog = path.join(temporary, 'sudo.log');
   mkdirSync(bin);
   writeFileSync(fixture, commandFixture, { mode: 0o755 });
   for (const command of ['env', 'mktemp', 'rm', 'rmdir', 'cat']) {
@@ -82,21 +96,41 @@ function exercise(t, options) {
     assert.equal(location.status, 0, location.stderr);
     symlinkSync(location.stdout.trim(), path.join(bin, command));
   }
-  for (const command of ['uname', 'id', 'sudo', 'pkg-config', 'cc', 'c++', 'make', ...(options.noApt ? [] : ['apt-get'])]) {
+  for (const command of ['uname', 'id', 'pkg-config', 'cc', 'c++', 'make',
+    ...(options.noSudo ? [] : ['sudo']), ...(options.noApt ? [] : ['apt-get'])]) {
     symlinkSync(fixture, path.join(bin, command));
   }
-  const result = spawnSync('/bin/sh', [path.join(__dirname, 'install_linux_system_deps.sh')], {
-    encoding: 'utf8', timeout: 10000,
+  // A real pseudoterminal exercises the installer's terminal checks without real sudo or APT.
+  // 使用真实伪终端验证安装器的终端判断，不调用真实 sudo 或 APT。
+  const installer = path.join(__dirname, 'install_linux_system_deps.sh');
+  let executable = '/bin/sh';
+  let argumentsList = [installer];
+  if (options.interactive) {
+    const terminal = spawnSync('/bin/sh', ['-c', 'command -v script'], { encoding: 'utf8' });
+    assert.equal(terminal.status, 0, 'Terminal tests require the util-linux script command.');
+    executable = terminal.stdout.trim();
+    // Quote every fixed path as one shell argument, including temporary paths containing spaces or apostrophes.
+    // 将每个固定路径引用为一个 shell 参数，覆盖包含空格或单引号的临时路径。
+    const command = ['/bin/sh', installer].map(argument => "'" + argument.replaceAll("'", "'\\''") + "'").join(' ');
+    argumentsList = ['-q', '-e', '-c', command, '/dev/null'];
+  }
+  const result = spawnSync(executable, argumentsList, {
+    encoding: 'utf8', timeout: 10000, input: '',
     env: {
-      ...process.env, PATH: bin, TMPDIR: temporary,
+      ...process.env, PATH: bin, TMPDIR: temporary, SHELL: '/bin/sh',
       MOCK_KERNEL: 'Linux', MOCK_UID: '0', MOCK_SUDO: '0', MOCK_INDICATOR: 'ayatana',
       MOCK_METADATA_READY: '0', MOCK_LINK_READY: '0', MOCK_UPDATE_CODE: '0', MOCK_INSTALL_CODE: '0',
-      MOCK_POST_UNREADY: '0', ...options.env,
+      MOCK_POST_UNREADY: '0', MOCK_SUDO_VALIDATION_CODE: '0', ...options.env,
       MOCK_INSTALLED: path.join(temporary, 'installed'), MOCK_APT_LOG: aptLog,
+      MOCK_AUTHORIZED: path.join(temporary, 'authorized'), MOCK_SUDO_LOG: sudoLog,
     },
   });
   assert.equal(result.error, undefined);
-  return { ...result, apt: existsSync(aptLog) ? readFileSync(aptLog, 'utf8').trim().split('\n') : [] };
+  return {
+    ...result, output: result.stdout + result.stderr,
+    apt: existsSync(aptLog) ? readFileSync(aptLog, 'utf8').trim().split('\n') : [],
+    sudo: existsSync(sudoLog) ? readFileSync(sudoLog, 'utf8').trim().split('\n') : [],
+  };
 }
 
 // These cases distinguish idempotence, supported indicator providers, privilege refusal and genuine installation failures.
@@ -106,11 +140,26 @@ for (const scenario of [
     env: { MOCK_UID: '1000', MOCK_METADATA_READY: '1', MOCK_LINK_READY: '1' }, code: 0, installs: false },
   { name: 'ready legacy AppIndicator dependencies are also supported',
     env: { MOCK_METADATA_READY: '1', MOCK_LINK_READY: '1', MOCK_INDICATOR: 'legacy' }, code: 0, installs: false },
-  { name: 'missing development metadata is installed and then verified', env: {}, code: 0, installs: true },
+  { name: 'missing development metadata is installed and then verified',
+    env: {}, code: 0, installs: true, diagnostic: /E_TEST_MISSING_GTK_METADATA/ },
   { name: 'missing libxdo headers trigger installation even with GTK metadata present',
-    env: { MOCK_METADATA_READY: '1' }, code: 0, installs: true },
+    env: { MOCK_METADATA_READY: '1' }, code: 0, installs: true, diagnostic: /xdo\.h/ },
   { name: 'available noninteractive sudo can install missing packages',
     env: { MOCK_UID: '1000', MOCK_SUDO: '1' }, code: 0, installs: true },
+  { name: 'terminal initialization requests sudo once and continues after authentication',
+    interactive: true, env: { MOCK_UID: '1000', MOCK_SUDO: 'prompt' }, code: 0, installs: true, authorizations: 1 },
+  { name: 'denied terminal sudo authentication prevents all package operations',
+    interactive: true, env: { MOCK_UID: '1000', MOCK_SUDO: 'prompt', MOCK_SUDO_VALIDATION_CODE: '31' },
+    code: 31, installs: false, authorizations: 1 },
+  { name: 'noninteractive initialization never requests a sudo password',
+    env: { MOCK_UID: '1000', MOCK_SUDO: 'prompt' }, code: 1, installs: false },
+  { name: 'ready dependencies do not request terminal sudo authorization',
+    interactive: true, env: { MOCK_UID: '1000', MOCK_SUDO: 'prompt', MOCK_METADATA_READY: '1', MOCK_LINK_READY: '1' },
+    code: 0, installs: false },
+  { name: 'cached sudo in a terminal needs no interactive authorization',
+    interactive: true, env: { MOCK_UID: '1000', MOCK_SUDO: '1' }, code: 0, installs: true },
+  { name: 'a missing sudo executable fails before invoking the package manager',
+    noSudo: true, env: { MOCK_UID: '1000' }, code: 1, installs: false },
   { name: 'ordinary users without sudo fail before running apt',
     env: { MOCK_UID: '1000' }, code: 1, installs: false },
   { name: 'unsupported package managers fail explicitly without invoking another manager',
@@ -128,7 +177,9 @@ for (const scenario of [
     // result is the observed process outcome; expected package roles remain independent from installer implementation.
     // result 是实际进程结果；期望的软件包职责独立于安装器实现。
     const result = exercise(t, scenario);
-    assert.equal(result.status, scenario.code, result.stdout + result.stderr);
+    assert.equal(result.status, scenario.code, result.output);
+    assert.equal(result.sudo.filter(operation => operation === '-v').length, scenario.authorizations || 0);
+    if (scenario.diagnostic) assert.match(result.output, scenario.diagnostic);
     assert.deepEqual(result.apt, scenario.apt || (scenario.installs ? [
       'update', 'install -y --no-install-recommends build-essential pkg-config libgtk-3-dev libxdo-dev libayatana-appindicator3-dev',
     ] : []));

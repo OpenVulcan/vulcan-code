@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { browserPackageInputs, browserVersions, verifyBrowserDependencies } from './browser-runtime.mjs';
 import { JUDGE_RUNTIME_MANIFEST, resolveToolPlatform } from './install-locked-tools.mjs';
+import { createCoreContext, ensureHeadlessCore } from './core-cli.mjs';
 
 // The repository is resolved from this script rather than the caller's working directory.
 // 仓库由脚本位置确定，不依赖调用方工作目录。
@@ -378,8 +379,8 @@ async function main() {
     process.stdout.write(output);
     return;
   }
-  if (!['package', 'run', 'service', 'layout'].includes(command) || !['debug', 'release'].includes(profile)) {
-    throw new Error('Usage: node scripts/desktop-runtime.mjs root|package|run|service|layout [debug|release]');
+  if (!['package', 'run', 'service', 'tui', 'layout'].includes(command) || !['debug', 'release'].includes(profile)) {
+    throw new Error('Usage: node scripts/desktop-runtime.mjs root|package|run|service|tui|layout [debug|release]');
   }
   if (command === 'package') {
   // Validate source artifacts before removing an existing generated application tree.
@@ -551,7 +552,15 @@ async function main() {
   const env = { ...process.env, VULCAN_RUNTIME_LAYOUT: manifestPath };
   await verifyServiceProfile(entry(layout.serviceExecutable));
   if (command === 'service') {
-    await run(entry(layout.serviceExecutable), ['--service'], { env });
+    await run(entry(layout.serviceExecutable), ['--headless'], { env });
+  } else if (command === 'tui') {
+    // Reuse the packaged launcher's discovery verification without opening Electron or Vite.
+    // 复用已打包启动器的发现身份校验，不打开 Electron 或 Vite。
+    const context = await createCoreContext(output, layout, profile);
+    await ensureHeadlessCore(context);
+    // TUI takes the user root above Core's code directory, exactly as the tray launcher does.
+    // TUI 接收 Core 的 code 目录上一级用户根，与托盘启动器保持一致。
+    await run(entry(layout.tuiExecutable), ['--service-root', path.dirname(context.description.dataRoot)], { env });
   } else {
     await run(entry(layout.desktopExecutable), [entry(layout.desktopEntry), `--service-executable=${entry(layout.serviceExecutable)}`], { env });
   }

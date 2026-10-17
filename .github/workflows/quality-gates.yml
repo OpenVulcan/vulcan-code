@@ -56,8 +56,8 @@ jobs:
           node-version: ${{ steps.versions.outputs.node }}
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          path: target/build-input-cache
-          key: build-inputs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-inputs.lock.json') }}
+          path: third_party/build-input-cache
+          key: build-inputs-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-inputs.lock.json') }}
       - name: Download and verify locked CLI tools
         run: node scripts/install-locked-tools.mjs bundled
       - name: Download and verify locked protoc
@@ -209,8 +209,8 @@ jobs:
           "Requested: $env:CACHE_REQUESTED" >> $env:GITHUB_STEP_SUMMARY
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          path: target/build-input-cache
-          key: rust-build-inputs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-inputs.lock.json') }}
+          path: third_party/build-input-cache
+          key: rust-build-inputs-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-inputs.lock.json') }}
       - name: Prepare only the dependencies consumed by Rust CI
         shell: pwsh
         run: |

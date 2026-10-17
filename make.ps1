@@ -206,6 +206,20 @@ function Invoke-TauriBuildAndRun {
     Invoke-TauriRun -IsRelease $IsRelease
 }
 
+# Build every distribution component, then enter TUI after the headless Core becomes ready.
+# 构建全部发行组件，然后在无头 Core 就绪后进入 TUI。
+# IsRelease selects the shared build/run profile; child failures terminate this command.
+# IsRelease 选择共用构建及运行模式；子进程失败时终止本命令。
+function Invoke-BuildAndTui {
+    param([bool]$IsRelease)
+    Invoke-TauriBuild -IsRelease $IsRelease -Restart
+    # Profile names follow the distribution manifest's existing debug/release contract.
+    # 模式名称遵循发行清单既有的 debug/release 契约。
+    $TuiProfile = if ($IsRelease) { 'release' } else { 'debug' }
+    & node (Join-Path $ScriptDir 'scripts/desktop-runtime.mjs') tui $TuiProfile
+    exit $LASTEXITCODE
+}
+
 # Invoke-CoreDebugCycle keeps the Electron shell and Vite process alive while building or restarting Core.
 # Invoke-CoreDebugCycle 在构建或重启 Core 时保留 Electron 壳与 Vite 进程。
 # Action selects build-only or the guarded, service-owned restart workflow; the function returns no value.
@@ -346,9 +360,12 @@ function Show-Usage {
     Write-Host "  ./make test full   # every Rust test, isolated LuaSkills callbacks, and doctests"
     Write-Host "  ./make run         # run Electron desktop; start Vite when needed"
     Write-Host "  ./make run release # run Core/Electron/WebUI release build"
-    Write-Host "  ./make service     # start the tray/background Core only"
+    Write-Host "  ./make service     # run Core without a tray or desktop"
+    Write-Host "  ./make bt          # full build, start Core, and open TUI; no desktop or Vite"
     Write-Host "  ./make core-build  # Windows: compile Debug Core only; keep GUI running"
     Write-Host "  ./make core-restart # Windows: compile and restart Debug Core; keep GUI running"
+    Write-Host "  ./make clean       # clean Debug Cargo artifacts; preserve output and downloads"
+    Write-Host "  ./make clean release # clean Release Cargo artifacts only"
     Write-Host "  ./make deps        # install host, bundled tools, and LuaSkills dependencies"
     Write-Host "  ./make deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     Write-Host "  ./make init-system # bootstrap Rust tools and all repository dependencies"
@@ -372,9 +389,19 @@ if ($RemainingArgs.Count -gt 0) {
     exit 1
 }
 
+# Explicit PowerShell invocations on Unix must use the same native build/run routes as GNU Make.
+# Unix 下显式调用 PowerShell 时，也必须使用与 GNU Make 相同的原生构建及运行入口。
+# Only these platform-owned routes delegate; shared dependency installers remain PowerShell-owned.
+# 仅委托这些平台所属入口；共享依赖安装器继续由 PowerShell 负责。
+if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows) -and
+    $NormalizedMode -in @('', 'build', 'release', 'run', 'service', 'br', 'bt', 'core-build', 'core-restart', 'clean')) {
+    & sh (Join-Path $ScriptDir 'make.sh') $NormalizedMode $NormalizedVariant
+    exit $LASTEXITCODE
+}
+
 # Run the same prerequisite policy as Unix before loading modules with modern Node APIs.
 # 在加载新版Node模块之前，执行与Unix相同的前置条件策略。
-if (-not ($NormalizedMode -eq 'deps' -and $NormalizedVariant -eq 'rust-tools')) {
+if ($NormalizedMode -ne 'clean' -and -not ($NormalizedMode -eq 'deps' -and $NormalizedVariant -eq 'rust-tools')) {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         throw 'Node.js is required to check build prerequisites. Install Node.js, then run make init-system.'
     }
@@ -383,6 +410,23 @@ if (-not ($NormalizedMode -eq 'deps' -and $NormalizedVariant -eq 'rust-tools')) 
 }
 
 switch ($NormalizedMode) {
+    'clean' {
+        if ($NormalizedVariant -ne '' -and $NormalizedVariant -ne 'release') {
+            throw "Unsupported clean profile: $CommandVariant"
+        }
+        # Cargo owns profile resolution, including configured target directories and target triples.
+        # 由 Cargo 负责模式解析，包括配置的目标目录和目标三元组。
+        $CleanProfile = if ($NormalizedVariant -eq 'release') { 'release' } else { 'dev' }
+        Push-Location $ScriptDir
+        try {
+            & cargo clean --profile $CleanProfile
+            # Preserve Cargo's actual status after restoring the caller's working directory.
+            # 恢复调用者工作目录后保留 Cargo 的真实退出状态。
+            $CleanExitCode = $LASTEXITCODE
+        }
+        finally { Pop-Location }
+        exit $CleanExitCode
+    }
     "" {
         Invoke-TauriBuild -IsRelease $false
     }
@@ -425,6 +469,14 @@ switch ($NormalizedMode) {
             Write-Error "Unsupported br command: '$CommandVariant'"
             Show-Usage
             exit 1
+        }
+    }
+    "bt" {
+        if ($NormalizedVariant -eq "" -or $NormalizedVariant -eq "release") {
+            Invoke-BuildAndTui -IsRelease ($NormalizedVariant -eq "release")
+        }
+        else {
+            throw "Unsupported bt profile: $CommandVariant"
         }
     }
     "licenses" {

@@ -82,3 +82,63 @@ describe("OpenDesign account card", () => {
     expect(root.textContent).toContain("composer.accountCard.usageUnavailable")
   })
 })
+
+describe("OpenCode account card", () => {
+  // An absent paid period is an account state, distinct from a provider lacking usage support.
+  // 缺失付费周期属于账号状态，与供应商不支持用量查询不同。
+  it("shows an inactive allowance when the workspace has no active subscription windows", () => {
+    // root renders an authoritative successful observation with no active windows.
+    // root 渲染权威成功观测，其不含有效窗口。
+    const root = document.createElement("div")
+    root.innerHTML = renderToStaticMarkup(
+      <CredentialUsageOverview
+        connection={{ ...connection, usage_capability: "opencode_go" }}
+        credentialProfile={{ ...profile, account_usage_query: "opencode_go" }}
+        usage={{ ...usage, quota_windows: [] }}
+        showQuotaSection
+      />,
+    )
+    expect(root.querySelector('[role="progressbar"]')).toBeNull()
+    expect(root.textContent).toContain("composer.accountCard.opencodeNoActiveQuota")
+    expect(root.textContent).not.toContain("composer.accountCard.noQuotaWindows")
+  })
+
+  // Each localized meter retains its own monetary allowance and source reset time beside the account balance.
+  // 每个本地化窗口在账号余额旁保留自身金额额度与来源重置时间。
+  it("renders three localized quota windows and an independent credit balance", () => {
+    // observation uses only the three identities emitted by the Console adapter.
+    // observation 只使用 Console 适配器产出的三个身份。
+    const observation: PublicAiAccountUsage = {
+      ...usage, plan_name: "OpenCode Go Plus", balance_amount: "1.50",
+      quota_windows: [
+        { id: "five-hour", display_name: "Provider five-hour label", total: "20", remaining: "15",
+          unit: "USD", unlimited: false, available: true },
+        { id: "week", display_name: "Provider weekly label", total: "50", remaining: "40",
+          unit: "USD", unlimited: false, available: true, resets_at: "2030-01-07T00:00:00Z" },
+        { id: "month", display_name: "Provider monthly label", total: "100", remaining: "90",
+          unit: "USD", unlimited: false, available: true, resets_at: "2030-02-01T00:00:00Z" },
+      ],
+    }
+    // root follows the same shared card used by account settings and the conversation selector.
+    // root 使用账号设置与会话选择器共用的卡片。
+    const root = document.createElement("div")
+    root.innerHTML = renderToStaticMarkup(
+      <CredentialUsageOverview
+        connection={{ ...connection, provider_id: "opencode-go", usage_capability: "opencode_go" }}
+        credentialProfile={{ ...profile, account_usage_query: "opencode_go" }}
+        usage={observation}
+        showQuotaSection
+      />,
+    )
+    expect(root.querySelectorAll('[role="progressbar"]')).toHaveLength(observation.quota_windows.length)
+    expect(root.querySelectorAll('[data-slot="quota-window-reset"]')).toHaveLength(
+      observation.quota_windows.filter((window) => window.resets_at).length,
+    )
+    for (const key of ["opencodeFiveHourQuota", "opencodeWeeklyQuota", "opencodeMonthlyQuota"]) {
+      expect(root.textContent).toContain(`composer.accountCard.${key}`)
+    }
+    expect(root.textContent).toContain("composer.accountCard.balance")
+    expect(root.textContent).toContain("1.50 USD")
+    expect(root.textContent).not.toContain("Provider weekly label")
+  })
+})

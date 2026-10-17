@@ -1,6 +1,10 @@
 //! Isolated real-engine plugin loading and query-stage measurements.
 //! 隔离真实引擎的插件加载与查询分段测量。
 
+#[cfg(target_os = "windows")]
+#[path = "plugin_storage_runtime_tests/rtk.rs"]
+mod rtk;
+
 use super::PluginStorageService;
 use crate::plugin_vldb::PluginVldbService;
 use luaskills::{LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig};

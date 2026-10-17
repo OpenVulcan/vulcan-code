@@ -789,6 +789,9 @@ pub enum AuthenticationProjection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountUsageQueryKind {
+    /// OpenCode Go subscription meters and independent Console credit balance.
+    /// OpenCode Go 订阅额度窗口及独立 Console 余额。
+    OpencodeGo,
     /// OpenVulcan base quota windows and independent expiring point balances.
     /// OpenVulcan 基础额度窗口及独立到期积分余额。
     OpenVulcan,

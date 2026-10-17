@@ -84,7 +84,7 @@ try {
             & chmod 755 $FixtureBinary
             if ($LASTEXITCODE -ne 0) { throw 'Fixture executable permission setup failed.' }
         }
-        $FixtureArchive = Join-Path $ThirdParty "rtk-fixture$FixtureExtension"
+        $FixtureArchive = Join-Path $ThirdParty "rtk-oss-fixture$FixtureExtension"
         if ($WindowsHost) { Compress-Archive -LiteralPath $FixtureBinary -DestinationPath $FixtureArchive }
         else {
             & $TarPath -czf $FixtureArchive -C $FixturePayload $BinaryName
@@ -97,6 +97,11 @@ try {
         # Returns the locally generated archive identity and digest with no network access.
         # 返回本地生成归档的身份及摘要，不访问网络。
         function Get-RtkAssetInfo { return $FixtureAsset }
+        # A legacy edition marker must not prevent the pinned OSS archive from replacing its executable.
+        # 旧发行类型的标记不得阻止固定 OSS 归档替换其可执行文件。
+        New-Item -ItemType Directory -Path (Join-Path $RtkBinRoot 'fixture') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $RtkBinRoot 'fixture/.installed-vfixture'), '')
+        [IO.File]::WriteAllText((Join-Path $RtkBinRoot "fixture/$BinaryName"), 'legacy-edition')
         if ($WindowsHost) {
             # ZIP extraction must work even when no tar application is available to the host installer.
             # 即使宿主安装器无法取得 tar 程序，ZIP 解压仍必须成功。
@@ -123,6 +128,9 @@ try {
         } finally { $env:TEMP = $OriginalTemp }
         $InstalledBinary = Join-Path $RtkBinRoot "fixture/$BinaryName"
         if ([IO.File]::ReadAllText($InstalledBinary) -ne [IO.File]::ReadAllText($FixtureBinary)) { throw 'RTK payload changed.' }
+        if (-not (Test-Path -LiteralPath (Join-Path $RtkBinRoot 'fixture/.installed-oss-vfixture'))) {
+            throw 'RTK OSS installation did not publish its edition-specific marker.'
+        }
         if ([IO.File]::ReadAllText($RtkLicenseFile) -ne 'fixture license') { throw 'License fixture was not installed.' }
         if (-not $WindowsHost) {
             & $InstalledBinary | Out-Null
@@ -158,7 +166,7 @@ try {
             $FixtureAsset.sha256 = (Get-FileHash -LiteralPath $FixtureArchive -Algorithm SHA256).Hash
             $Rejected = $false
             try { Install-RtkBinary } catch { $Rejected = $true }
-            if (-not $Rejected -or (Test-Path -LiteralPath (Join-Path $RtkBinRoot 'corrupt/.installed-vcorrupt'))) {
+            if (-not $Rejected -or (Test-Path -LiteralPath (Join-Path $RtkBinRoot 'corrupt/.installed-oss-vcorrupt'))) {
                 throw 'Failed RTK extraction published success.'
             }
             Write-Host 'PASS: failed RTK extraction does not publish an installed marker.'

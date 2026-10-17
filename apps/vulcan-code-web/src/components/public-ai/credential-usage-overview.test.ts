@@ -109,6 +109,7 @@ describe("usageCapabilitySupportsQuotaWindows", () => {
     expect(usageCapabilitySupportsQuotaWindows("kimi_coding_plan")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("command_code_usage")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("open_design_wallet")).toBe(true)
+    expect(usageCapabilitySupportsQuotaWindows("opencode_go")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("open_router_credits")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("deep_seek_balance")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("unsupported")).toBe(false)

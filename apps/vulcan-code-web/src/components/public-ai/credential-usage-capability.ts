@@ -16,6 +16,7 @@ export function usageCapabilitySupportsQuotaWindows(
   capability: PublicAiConnection["usage_capability"],
 ): boolean {
   return capability === "mini_max_token_plan"
+    || capability === "opencode_go"
     || capability === "tavily_credits"
     || capability === "kimi_coding_plan"
     || capability === "command_code_usage"

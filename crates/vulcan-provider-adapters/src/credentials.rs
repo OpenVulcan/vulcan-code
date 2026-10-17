@@ -56,6 +56,16 @@ pub struct CredentialSecretEnvelope {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CredentialSecretMaterial {
+    /// Renewable OpenCode Console authorization bound to one billing workspace.
+    /// 绑定到单一计费工作区的可续期 OpenCode Console 授权。
+    OpencodeConsoleOAuth {
+        /// Account-owned access and refresh tokens, including verified user identity.
+        /// 账号持有的访问与刷新令牌，包含已验证用户身份。
+        tokens: OAuthTokenSet,
+        /// Exact workspace selected by the device authorization service.
+        /// 设备授权服务选定的精确工作区。
+        organization_id: String,
+    },
     /// OpenDesign's approved non-renewable credential pair, stored and replaced atomically.
     /// OpenDesign 获批且不可续期的凭据对，原子存储及替换。
     OpenDesignAuth {
@@ -243,6 +253,9 @@ pub enum CredentialExecutionSecretKind {
 /// 承载一个已验证的执行秘密，且不实现调试序列化。
 #[derive(Clone, PartialEq, Eq)]
 pub struct CredentialExecutionSecret {
+    /// OpenCode billing workspace, kept separate from the Codex account header.
+    /// OpenCode 计费工作区，与 Codex 账号请求头分开保存。
+    opencode_organization_id: Option<String>,
     /// Private OpenDesign control credential; never returned by the inference value accessor.
     /// 私有 OpenDesign 控制凭据；绝不由推理值访问器返回。
     open_design_control_key: Option<String>,
@@ -404,6 +417,7 @@ impl CredentialSecretEnvelope {
             CredentialSecretMaterial::ApiKey { .. }
             | CredentialSecretMaterial::StaticBearer { .. } => CredentialMode::Token,
             CredentialSecretMaterial::OpenAiCodexOAuth { .. }
+            | CredentialSecretMaterial::OpencodeConsoleOAuth { .. }
             | CredentialSecretMaterial::ClaudeCodeOAuth { .. }
             | CredentialSecretMaterial::GoogleOAuth { .. }
             | CredentialSecretMaterial::MiniMaxOAuth { .. }
@@ -426,6 +440,7 @@ impl CredentialSecretEnvelope {
         matches!(
             self.material,
             CredentialSecretMaterial::OpenAiCodexOAuth { .. }
+                | CredentialSecretMaterial::OpencodeConsoleOAuth { .. }
                 | CredentialSecretMaterial::ClaudeCodeOAuth { .. }
                 | CredentialSecretMaterial::GoogleOAuth { .. }
                 | CredentialSecretMaterial::MiniMaxOAuth { .. }
@@ -502,7 +517,8 @@ impl CredentialSecretEnvelope {
                     None,
                     None,
                 ),
-                CredentialSecretMaterial::ClaudeCodeOAuth { tokens } => (
+                CredentialSecretMaterial::OpencodeConsoleOAuth { tokens, .. }
+                | CredentialSecretMaterial::ClaudeCodeOAuth { tokens } => (
                     CredentialExecutionSecretKind::Bearer,
                     tokens.access_token.clone(),
                     None,
@@ -560,6 +576,12 @@ impl CredentialSecretEnvelope {
                 ),
             };
         Ok(CredentialExecutionSecret {
+            opencode_organization_id: match &self.material {
+                CredentialSecretMaterial::OpencodeConsoleOAuth {
+                    organization_id, ..
+                } => Some(organization_id.clone()),
+                _ => None,
+            },
             open_design_control_key: match &self.material {
                 CredentialSecretMaterial::OpenDesignAuth { control_key, .. } => {
                     Some(control_key.clone())
@@ -610,6 +632,7 @@ impl CredentialSecretEnvelope {
                 expires_at_unix_ms, ..
             } => *expires_at_unix_ms,
             CredentialSecretMaterial::OpenAiCodexOAuth { tokens, .. }
+            | CredentialSecretMaterial::OpencodeConsoleOAuth { tokens, .. }
             | CredentialSecretMaterial::ClaudeCodeOAuth { tokens }
             | CredentialSecretMaterial::GoogleOAuth { tokens, .. }
             | CredentialSecretMaterial::MiniMaxOAuth { tokens, .. }
@@ -644,6 +667,20 @@ impl CredentialSecretEnvelope {
             ));
         }
         match &self.material {
+            CredentialSecretMaterial::OpencodeConsoleOAuth {
+                tokens,
+                organization_id,
+            } => {
+                tokens.validate()?;
+                crate::opencode::validate_organization_id(organization_id)?;
+                validate_bounded_identity(
+                    "OpenCode user id",
+                    tokens
+                        .account_subject
+                        .as_deref()
+                        .ok_or("OpenCode user identity is missing.")?,
+                )
+            }
             CredentialSecretMaterial::OpenDesignAuth {
                 runtime_key,
                 control_key,
@@ -801,6 +838,15 @@ impl OAuthTokenSet {
 }
 
 impl CredentialExecutionSecret {
+    /// Returns the exact OpenCode workspace required by inference and account queries.
+    /// 返回推理与账号查询所需的精确 OpenCode 工作区。
+    ///
+    /// No parameters; returns no workspace for credentials from other providers.
+    /// 无参数；其他供应商的凭据返回空工作区。
+    pub(crate) fn opencode_organization_id(&self) -> Option<&str> {
+        self.opencode_organization_id.as_deref()
+    }
+
     /// Resolves the dedicated control key for the registered OpenDesign wallet primitive.
     /// 为已注册的 OpenDesign 钱包原语解析专用控制密钥。
     ///

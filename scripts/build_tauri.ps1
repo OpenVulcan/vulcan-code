@@ -104,6 +104,10 @@ if (-not $Release) {
 # 打包运行时必须始终使用由当前源码树构建的桌面 JavaScript。
 if ($Release -or -not (Test-Path -LiteralPath (Join-Path $DesktopAppDir "node_modules"))) {
     Write-Host "==> Installing desktop dependencies..."
+    # Electron lifecycle downloads use the same durable cache as the Unix build.
+    # Electron 生命周期下载使用与 Unix 构建相同的持久缓存。
+    $env:electron_config_cache = (& node (Join-Path $ProjectDir 'scripts/build-input-paths.mjs') electron | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     pnpm --dir $DesktopAppDir install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

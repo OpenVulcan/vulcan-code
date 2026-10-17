@@ -54,12 +54,30 @@ test("settings layout route groups are disjoint and the curated group equals the
 // The page keeps the original three tabs: switches, routes and statistics read from one cached action.
 // 页面保留原有三个标签：开关、路由，以及读取单个缓存 Action 的统计。
 test("settings layout keeps the settings, routes and statistics tabs", () => {
-  assert.deepEqual(layout.tabs.map((tab) => [tab.id, tab.sections]), [["settings", ["general"]], ["routes", ["routes"]], ["statistics", ["gain"]]]);
+  assert.deepEqual(layout.tabs.map((tab) => tab.id), ["settings", "routes", "statistics"]);
+  assert.deepEqual(layout.tabs.flatMap((tab) => tab.sections).sort(), layout.sections.map((section) => section.id).sort());
   const gain = layout.sections.find((section) => section.id === "gain");
   assert.equal(gain.data.action, "statistics-get");
   assert.deepEqual(gain.blocks.map((block) => block.type), ["metrics", "chart", "table"]);
   assert.deepEqual(gain.blocks[1].periods.map((period) => period.id), ["daily", "weekly", "monthly"]);
   assert.ok(manifest.required_files.includes(layout.header.documents[0].asset), "the license document must be packaged");
+});
+
+// The clear button is a UI-only mutation whose existing invalidation topic refreshes the cached statistics section.
+// 清理按钮为仅供界面调用的变更，其既有失效主题会刷新缓存统计区块。
+test("statistics clearing is exposed as a UI mutation alongside the refreshed statistics", () => {
+  // clearAction is the manifest-owned mutation; the layout supplies no user-controlled CLI arguments.
+  // clearAction 为清单持有的变更；版面不提供用户可控 CLI 参数。
+  const clearAction = manifest.lua_runtime.actions.find((action) => action.id === "statistics-clear");
+  assert.equal(clearAction.effect, "mutation");
+  assert.deepEqual(clearAction.callers, ["plugin_ui"]);
+  assert.ok(manifest.required_files.includes(clearAction.output_schema_file));
+  // statisticsTab owns both the read-only data and the explicit user-operated clearing row.
+  // statisticsTab 同时持有只读数据和由用户显式操作的清理行。
+  const statisticsTab = layout.tabs.find((tab) => tab.id === "statistics");
+  const sections = layout.sections.filter((section) => statisticsTab.sections.includes(section.id));
+  assert.ok(sections.some((section) => (section.items ?? []).some((item) => item.type === "action" && item.action === clearAction.id)));
+  assert.ok(sections.some((section) => section.data?.action === "statistics-get" && section.data.refresh_topics.includes("rtk.statistics")));
 });
 
 // Shipped translations cover host languages, every layout key, and retain exact interpolation contracts.

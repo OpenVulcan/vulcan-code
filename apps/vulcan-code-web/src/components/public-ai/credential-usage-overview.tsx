@@ -261,7 +261,11 @@ function CredentialUsageSummary(props: {
     return <TavilyUsageSummary window={tavilyPlanWindow} />
   }
   if (props.usage.quota_windows.length === 0) {
-    return <span className="text-center text-xs text-muted-foreground">{t("composer.accountCard.noQuotaWindows")}</span>
+    return <span className="text-center text-xs text-muted-foreground">{t(
+      props.credentialProfile?.account_usage_query === "opencode_go"
+        ? "composer.accountCard.opencodeNoActiveQuota"
+        : "composer.accountCard.noQuotaWindows",
+    )}</span>
   }
   if (props.credentialProfile?.account_usage_query === "open_design_wallet") {
     return <OpenDesignUsageSummary windows={props.usage.quota_windows} />
@@ -275,12 +279,31 @@ function CredentialUsageSummary(props: {
             ? kimiUsageWindowLabel(window, t)
             : props.credentialProfile?.account_usage_query === "command_code_usage"
               ? commandCodeUsageWindowLabel(window, t)
-              : window.display_name}
+              : props.credentialProfile?.account_usage_query === "opencode_go"
+                ? opencodeUsageWindowLabel(window, t)
+                : window.display_name}
           window={window}
+          showReset={props.credentialProfile?.account_usage_query === "opencode_go"}
         />
       ))}
     </div>
   )
+}
+
+// Resolves OpenCode's closed quota-window identities through the shared language catalog.
+// 通过共享语言目录解析 OpenCode 封闭的额度窗口身份。
+// window supplies one normalized meter and t resolves catalog keys; returns a period or invalid-data label.
+// window 提供一个规范化窗口，t 解析目录键；返回周期或无效数据标签。
+function opencodeUsageWindowLabel(
+  window: PublicAiAccountUsageWindow,
+  t: (key: TranslationKey) => string,
+): string {
+  switch (window.id) {
+    case "five-hour": return t("composer.accountCard.opencodeFiveHourQuota")
+    case "week": return t("composer.accountCard.opencodeWeeklyQuota")
+    case "month": return t("composer.accountCard.opencodeMonthlyQuota")
+    default: return t("composer.accountCard.usageInvalid")
+  }
 }
 
 // Localizes a provider-reported duration; window supplies exact metadata and t resolves catalog keys.

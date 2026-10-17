@@ -554,14 +554,19 @@ pub(super) async fn add_public_ai_connection_with_secret(
 ///
 /// # Returns
 /// 返回值
-/// Success after either a conversation catalog refresh or a provider-tool usage probe.
-/// 在完成对话目录刷新或供应商工具用量探测后返回成功。
+/// Success after discarding the previous identity's usage and validating the new credential.
+/// 丢弃上一身份用量并验证新凭据后返回成功。
+/// Callers retain the activation before-image and restore it if validation or publication fails.
+/// 调用方保留激活前镜像，并在验证或发布失败时恢复。
 async fn validate_connection_credential(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     connection_id: &str,
     entry_kind: ServiceEntryKind,
 ) -> Result<(), String> {
+    // This entry point is used for new credentials or explicit identity changes, never a name edit.
+    // 此入口仅用于新凭据或显式身份变更，绝不用于名称编辑。
+    runtime.remove_connection_usage(connection_id)?;
     match entry_kind {
         ServiceEntryKind::Conversation => runtime
             .refresh_connection_catalog(configuration, connection_id)

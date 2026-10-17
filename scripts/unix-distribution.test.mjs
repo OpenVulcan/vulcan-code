@@ -82,7 +82,7 @@ for (const scenario of [
       for (const directory of ['scripts', 'fake-bin', 'output/bin', 'apps/vulcan-code-web/node_modules', 'apps/vulcan-code-desktop/node_modules/electron']) {
         await mkdir(path.join(root, directory), { recursive: true });
       }
-      for (const script of ['build_tauri.sh', 'publish-distribution.mjs', 'directory-publication.mjs', 'shipped-rust-packages.json', 'shipped-rust-packages.mjs']) {
+      for (const script of ['build_tauri.sh', 'build-input-paths.mjs', 'publish-distribution.mjs', 'directory-publication.mjs', 'shipped-rust-packages.json', 'shipped-rust-packages.mjs']) {
         await copyFile(path.join(sourceScripts, script), path.join(root, 'scripts', script));
       }
       await writeFile(path.join(root, 'scripts/desktop-runtime.mjs'), runtimeFixture);

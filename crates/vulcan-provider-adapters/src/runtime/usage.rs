@@ -31,6 +31,7 @@ pub(super) fn account_usage_secret_reference<'a>(
                 String::from("Add an optional OpenRouter management key to query account credits.")
             }),
         crate::AccountUsageQueryKind::Unsupported
+        | crate::AccountUsageQueryKind::OpencodeGo
         | crate::AccountUsageQueryKind::OpenVulcan
         | crate::AccountUsageQueryKind::MiniMaxTokenPlan
         | crate::AccountUsageQueryKind::TavilyCredits
@@ -267,6 +268,7 @@ impl PublicAiRuntime {
                 })?;
             let should_refresh = match profile.account_usage_query {
                 crate::AccountUsageQueryKind::OpenVulcan => true,
+                crate::AccountUsageQueryKind::OpencodeGo => true,
                 crate::AccountUsageQueryKind::Unsupported => false,
                 crate::AccountUsageQueryKind::MiniMaxTokenPlan => true,
                 crate::AccountUsageQueryKind::TavilyCredits => true,

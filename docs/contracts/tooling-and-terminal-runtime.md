@@ -45,6 +45,23 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   检测成功的启动器。
 - Windows 上 `bash`、`sh`、`zsh` 依赖可用的 Unix-like 环境，不能假定系统原生存在。
 
+## 随包 RTK OSS 接入
+
+- RTK 以 `plugins/vulcan-rtk/` 中的独立 OSS 可执行文件接入，仅保留 Shell 命令改写与 Git 提交上下文过滤；
+  不注册通用输出压缩 Hook，不部署完整引擎或 `rtk-proxy`。发行标签、制品名与摘要以
+  `scripts/install_host_deps.ps1` 为准；运行时依赖更新后必须显式执行 `make.ps1 sync`。
+- `rewrite` 的上游协议归属为固定发行标签下的 `src/hooks/rewrite_cmd.rs`：退出码 `0/3` 携带改写，
+  `1/2` 保持原命令；退出码不赋予 Vulcan 工具执行权限。超时或其他失败不得执行部分输出，
+  多行改写必须保留完整命令并检查其中全部 RTK 路由。
+- 统计协议归属为上游 `src/analytics/gain.rs` 与 `src/core/tracking.rs`：汇总保留其超大输入排除口径，
+  按命令明细使用加权节省率并允许负值；CLI 文本表使用 `gain --text`，原始 JSON 汇总不自行重算。
+  上游版本更新时须重新核对以上源码并同步插件行为测试与统计说明。
+- 统计页的清理入口仅由用户点击触发 `statistics-clear` 变更 Action，调用官方 `gain --reset --yes`，
+  不删除数据库文件、不修改路由配置；作用域与统计读取相同，共用该统计库的终端历史也会清空。
+  清理范围以上游 `src/analytics/gain.rs`、`src/core/tracking.rs` 与 `src/core/retriever.rs` 为准，
+  包括命令、Token、解析失败、Hook 与回读统计，保留可回读内容。插件私有 SQLite 仅保存界面递增修订号，
+  成功后发布 `rtk.statistics` 失效事件以刷新缓存；禁止使用进程局部计数器替代持久修订号。
+
 ## 最终返回预算与分页包装
 
 `ToolResultBudgetSnapshot.tool_result` 约束最终面向模型的文本，而非仅正文。模板、截断提示、分页指针及

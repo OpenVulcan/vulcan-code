@@ -13,7 +13,7 @@ use vulcan_llm_core::CODEX_RESPONSES_USER_AGENT;
 
 /// Stable VulcanCode user agent used by every non-Codex provider protocol.
 /// 所有非 Codex 供应商协议使用的稳定 VulcanCode 用户代理。
-pub(super) const VULCAN_CODE_USER_AGENT: &str = "vulcan-code/0.1";
+pub(crate) const VULCAN_CODE_USER_AGENT: &str = "vulcan-code/0.1";
 
 /// Host-owned marker that selects the Responses Lite wire contract.
 /// 由宿主持有、用于选择 Responses Lite 线路契约的标记。
@@ -257,6 +257,26 @@ pub(crate) fn execution_headers(
     if authentication == AuthenticationProjection::CodingDeviceBearer {
         insert_coding_device_identity_headers(&mut headers, secret)
             .map_err(pre_dispatch_failure)?;
+    }
+    if let Some(organization_id) = secret.opencode_organization_id() {
+        // A Console token is only valid on its declared inference authority and workspace.
+        // Console 令牌仅可用于其声明的推理授权端与工作区。
+        let base_url = crate::connection_endpoint::resolved_connection_protocol_base_url(
+            &route.connection,
+            &route.entry,
+            &route.protocol_route,
+        );
+        if base_url != crate::opencode::INFERENCE_URL {
+            return Err(pre_dispatch_failure(
+                "OpenCode OAuth requires the Console inference authority.",
+            ));
+        }
+        headers.insert(
+            HeaderName::from_static(crate::opencode::ORGANIZATION_HEADER),
+            HeaderValue::from_str(organization_id).map_err(|_| {
+                pre_dispatch_failure("OpenCode workspace contains invalid header characters.")
+            })?,
+        );
     }
     // User-Agent is a frozen protocol identity boundary. Only native Codex reproduces the
     // adopted Codex client value; every other protocol identifies VulcanCode itself.

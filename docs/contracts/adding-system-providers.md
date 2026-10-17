@@ -720,6 +720,9 @@ rtk git diff --check
 
 ### 11.1 OpenCode Go
 
+- Console API Key / OAuth 与旧 Go Key 使用独立服务入口；设备授权、工作区绑定及三类额度窗口见
+  [已核对协议](providers/opencode-go-verified-facts.md)，不得将 OAuth 令牌直接发送到旧 Key 网关。
+
 - 入口必须分别验证 Chat、Anthropic Messages 和 Responses；
 - 模型参数优先取 OpenCode 客户端源码和 models.dev，再用真实请求确认网关行为；
 - 同一 DeepSeek 模型在不同协议上的请求投影可以不同，应使用 Request Profile 表达；

@@ -501,6 +501,7 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
         'api_key',
         'static_bearer',
         'open_design_auth',
+        'opencode_console_oauth',
         'openvulcan_auth',
         'open_ai_codex_oauth',
         'claude_code_oauth',
@@ -556,6 +557,7 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
         )
         OR (
             material_kind IN (
+                'opencode_console_oauth',
                 'open_ai_codex_oauth',
                 'claude_code_oauth',
                 'google_oauth',
@@ -575,6 +577,10 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
     CHECK(
         material_kind != 'google_oauth'
         OR (oauth_client_id IS NOT NULL AND length(trim(oauth_client_id)) > 0)
+    ),
+    CHECK(
+        material_kind != 'opencode_console_oauth'
+        OR (account_id IS NOT NULL AND length(trim(account_id)) > 0)
     ),
     CHECK(
         material_kind != 'mini_max_oauth'

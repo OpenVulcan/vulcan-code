@@ -22,13 +22,18 @@ messages:
   disableTelemetry: 禁用 RTK 遥测环境变量
   disableTelemetryHelp: 为 rewrite 与代理命令进程注入 RTK_TELEMETRY_DISABLED=1。
   stats.title: RTK 上下文密度统计
-  stats.description: Token 节省统计缓存三十分钟；切换日、周、月视图不会再次发送请求。
+  stats.description: Token 估算缓存三十分钟；汇总不含超大输出，命令明细保留这些记录并采用加权节省率。
   stats.unavailableHelp: 统计当前不可用。
+  stats.historyTitle: 统计历史
+  stats.clearHistory: 清空统计历史
+  stats.clearHistoryHelp: 永久清空当前 RTK 的命令、Token 和回读统计；共用记录的终端统计也会清空，路由设置保留。
+  stats.historyCleared: 统计历史已清空，正在刷新统计。
   stats.empty: 暂无统计
   stats.noCommandBreakdown: 暂无命令分类统计
   stats.savedTokens: 节省 Token
-  stats.averageSavings: 平均节省率
-  stats.commands: 累计命令
+  stats.averageSavings: 总体节省率
+  stats.commands: 纳入统计命令
+  stats.excludedOutputs: 排除超大输出
   stats.capacityRatio: 上下文容量
   stats.daily: 日
   stats.weekly: 周

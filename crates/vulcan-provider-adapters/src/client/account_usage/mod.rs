@@ -7,6 +7,7 @@ mod deepseek;
 mod kimi;
 mod minimax;
 mod open_design;
+mod opencode;
 mod openrouter;
 mod tavily;
 
@@ -15,6 +16,7 @@ pub(super) use deepseek::query_deepseek_balance;
 pub(super) use kimi::query_kimi_coding_plan;
 pub(super) use minimax::query_minimax_token_plan;
 pub(super) use open_design::query_open_design_wallet;
+pub(super) use opencode::query_opencode_go;
 pub(super) use openrouter::query_openrouter_credits;
 pub(super) use tavily::query_tavily_credits;
 

@@ -30,17 +30,20 @@ $RtkPluginDir = Join-Path $ProjectDir "plugins\vulcan-rtk"
 $RtkBinRoot = Join-Path $RtkPluginDir "bin"
 
 # RtkRepo identifies the upstream RTK GitHub repository.
+# RtkRepo 标识上游 RTK GitHub 仓库。
 $RtkRepo = "rtk-ai/rtk"
 
-# RtkTag pins the exact RTK release used by this dependency bootstrap.
-$RtkTag = "v0.42.4"
+# RtkTag pins the stable Apache-2.0 OSS release used by this dependency bootstrap.
+# RtkTag 固定此依赖初始化使用的 Apache-2.0 OSS 稳定发行版。
+$RtkTag = "v1.0.1"
 
-# RtkLicenseUrl points at the tag-pinned source license because RTK binary assets do not include it.
+# RtkLicenseUrl pins source-license bytes independently of archive line-ending conversion.
+# RtkLicenseUrl 独立固定源码许可证字节，不受归档换行转换影响。
 $RtkLicenseUrl = "https://raw.githubusercontent.com/rtk-ai/rtk/$RtkTag/LICENSE"
 
 # RtkLicenseSha256 binds reused and downloaded license bytes to the exact pinned upstream tag.
 # RtkLicenseSha256 将复用与下载的许可证字节绑定到固定的上游标签。
-$RtkLicenseSha256 = "4044ade9c21d8b084d3d16a03375cf3b7e166b946a327bb37a3fbbdb53287cfd"
+$RtkLicenseSha256 = "33f694a31d9f9df3e292a9413a3cdb0113fa72698e2c719f657ff6b53165dcc4"
 
 # RtkLicenseFile stores the pinned license as part of the bundled plugin package.
 # RtkLicenseFile 把固定版本许可证保存为内建插件包的一部分。
@@ -160,7 +163,7 @@ function Get-RtkAssetInfo {
             plugin_target = "x86_64-pc-windows-msvc"
             archive_ext = ".zip"
             binary_name = "rtk.exe"
-            sha256 = "f0ec18963581657173bd6a51f5ba012b093823f844db749fec218581af30a568"
+            sha256 = "0e53e2eca471e15fbd3636e64e6bc0b182cbc278ed0339c80450a2dd03f4cd6b"
         }
     }
 
@@ -171,7 +174,7 @@ function Get-RtkAssetInfo {
                 plugin_target = "x86_64-unknown-linux-gnu"
                 archive_ext = ".tar.gz"
                 binary_name = "rtk"
-                sha256 = "34975116da11e09e502501daf758143e0b22ed3a42a10eb67fb693a6270d9e36"
+                sha256 = "a44e8ffc43981100b4ddf1710399a1649a6c874591aa6d0c0727fe6cbd983c41"
             }
         }
 
@@ -180,7 +183,7 @@ function Get-RtkAssetInfo {
             plugin_target = "aarch64-unknown-linux-gnu"
             archive_ext = ".tar.gz"
             binary_name = "rtk"
-            sha256 = "cc2b91c064eb670c097c184913c8fbcb1a943d53d7fe505375e96ba0c5b6459f"
+            sha256 = "ee24a43dac9162de55fea8460b5efcd56d401ec28b5117c921bffa8a57bc136e"
         }
     }
 
@@ -191,7 +194,7 @@ function Get-RtkAssetInfo {
                 plugin_target = "x86_64-apple-darwin"
                 archive_ext = ".tar.gz"
                 binary_name = "rtk"
-                sha256 = "84121316867613e61925c209607f033b2113bb0ce312c267a79d3e3e8f221e49"
+                sha256 = "2cf4d6dd2cabccbc74aa6aba2a48e60aad85b1a31e3d740e6ca0b2fa0060b06a"
             }
         }
 
@@ -200,7 +203,7 @@ function Get-RtkAssetInfo {
             plugin_target = "aarch64-apple-darwin"
             archive_ext = ".tar.gz"
             binary_name = "rtk"
-            sha256 = "f223ca074a0215af002679bc1d34ca92b93e25b3e8ae16aace6e84c06e586802"
+            sha256 = "4a4d9d09656ff29423336aa506e680afc3f7b6dafe84f0194a1c9a523a3c80e1"
         }
     }
 
@@ -215,14 +218,16 @@ function Install-RtkBinary {
 
     $assetInfo = Get-RtkAssetInfo
     $tagName = $RtkTag
-    $assetName = "rtk-$($assetInfo.target)$($assetInfo.archive_ext)"
+    # assetName selects only the OSS archive; its executable keeps the logical name rtk.
+    # assetName 只选择 OSS 归档；其中可执行文件继续使用逻辑名称 rtk。
+    $assetName = "rtk-oss-$($assetInfo.target)$($assetInfo.archive_ext)"
     # targetBinDir is the exact directory declared for this target in the plugin manifest.
     # targetBinDir 是插件清单为当前目标声明的精确目录。
     $targetBinDir = Join-Path $RtkBinRoot $assetInfo.plugin_target
     Ensure-Dir $targetBinDir
-    # markerFile records the pinned artifact version beside its target-specific executable.
-    # markerFile 在目标专属可执行文件旁记录固定制品版本。
-    $markerFile = Join-Path $targetBinDir ".installed-$tagName"
+    # markerFile records both edition and version so a full-edition installation cannot satisfy OSS readiness.
+    # markerFile 同时记录发行类型与版本，避免完整版安装被当作 OSS 已就绪。
+    $markerFile = Join-Path $targetBinDir ".installed-oss-$tagName"
     $localArchivePath = Find-LocalArchive -AssetName $assetName
     # binaryDest is the real plugin-owned executable path consumed at runtime.
     # binaryDest 是运行时使用的真实插件自有可执行文件路径。

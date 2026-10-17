@@ -23,8 +23,8 @@ mod secondary_routes;
 
 use account_usage::{
     query_command_code_usage, query_deepseek_balance, query_kimi_coding_plan,
-    query_minimax_token_plan, query_open_design_wallet, query_openrouter_credits,
-    query_tavily_credits,
+    query_minimax_token_plan, query_open_design_wallet, query_opencode_go,
+    query_openrouter_credits, query_tavily_credits,
 };
 pub use minimax_registration::MiniMaxKeyRegistration;
 use model_discovery::{
@@ -513,6 +513,7 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                 }
             };
         let result = match credential_profile.account_usage_query {
+            AccountUsageQueryKind::OpencodeGo => query_opencode_go(secret).await,
             AccountUsageQueryKind::OpenDesignWallet => query_open_design_wallet(secret).await,
             AccountUsageQueryKind::OpenVulcan => {
                 openvulcan::query_usage(&self.http, entry, secret).await

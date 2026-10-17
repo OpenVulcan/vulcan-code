@@ -212,6 +212,16 @@ fn credential_record_from_envelope(
         updated_at_unix_ms: timestamp,
     };
     match &secret.material {
+        CredentialSecretMaterial::OpencodeConsoleOAuth {
+            tokens,
+            organization_id,
+        } => {
+            record.material_kind = String::from("opencode_console_oauth");
+            apply_oauth_tokens(&mut record, tokens)?;
+            // Console workspaces are billing accounts; the human subject remains account_subject.
+            // Console 工作区即计费账号；自然人主体继续保留在 account_subject。
+            record.account_id = Some(organization_id.clone());
+        }
         CredentialSecretMaterial::OpenDesignAuth {
             runtime_key,
             control_key,
@@ -415,6 +425,13 @@ fn credential_envelope_from_record(
         },
         ("static_bearer", None) => CredentialSecretMaterial::StaticBearer {
             access_token: required_record_text(&record.access_token, "static bearer token")?,
+        },
+        ("opencode_console_oauth", None) => CredentialSecretMaterial::OpencodeConsoleOAuth {
+            tokens: oauth_tokens_from_record(&record)?,
+            organization_id: required_record_text(
+                &record.account_id,
+                "OpenCode billing workspace",
+            )?,
         },
         ("open_ai_codex_oauth", None) => CredentialSecretMaterial::OpenAiCodexOAuth {
             tokens: oauth_tokens_from_record(&record)?,
@@ -750,6 +767,26 @@ mod tests {
         assert!(restored == secret);
     }
 
+    /// Preserves the human subject separately from the OpenCode billing workspace.
+    /// 将自然人主体与 OpenCode 计费工作区分开保留。
+    #[test]
+    fn opencode_oauth_round_trips_with_exact_workspace() {
+        // secret has one stable workspace and an independently verified user subject.
+        // secret 具有单一稳定工作区与独立验证的用户主体。
+        let secret =
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::OpencodeConsoleOAuth {
+                tokens: oauth_tokens(),
+                organization_id: String::from("org_demo"),
+            })
+            .expect("Console fixture must validate");
+        // record uses the existing provider account column without changing its user subject.
+        // record 使用既有供应商账号列，不改变其用户主体。
+        let record = credential_record_from_envelope("secret-console", &secret).unwrap();
+        assert_eq!(record.account_id.as_deref(), Some("org_demo"));
+        assert_eq!(record.account_subject.as_deref(), Some("subject"));
+        assert!(credential_envelope_from_record(record).unwrap() == secret);
+    }
+
     /// Verifies that OAuth scopes remain a deterministic non-JSON field.
     /// 验证 OAuth Scope 保持确定性的非 JSON 字段。
     #[test]
@@ -785,6 +822,11 @@ mod tests {
         // secrets cover static, renewable and browser callback material projections.
         // secrets 覆盖静态、可续期及浏览器回调材料投影。
         let secrets = vec![
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::OpencodeConsoleOAuth {
+                tokens: oauth_tokens(),
+                organization_id: String::from("org_demo"),
+            })
+            .expect("Console fixture should be valid"),
             CredentialSecretEnvelope::new(CredentialSecretMaterial::OpenDesignAuth {
                 runtime_key: String::from("runtime-only"),
                 control_key: String::from("control-only"),

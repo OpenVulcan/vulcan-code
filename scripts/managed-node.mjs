@@ -1,11 +1,12 @@
 // Prepare the pinned shared Node runtime without starting Core or requiring an existing output.
 // 无需启动 Core 或预先存在 output，即可准备锁定的共享 Node 运行时。
-import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { buildInputPaths } from './build-input-paths.mjs';
 
 // repository locates the existing authoritative runtime version manifest.
 // repository 定位现有的权威运行时版本清单。
@@ -83,18 +84,46 @@ async function publish(target, identity, bytes, archiveName, archiveRoot, source
   }
 }
 
-// Prepare Node and pnpm beneath distributionRoot and return their exact launch paths.
-// 在 distributionRoot 下准备 Node 与 pnpm，并返回它们的精确启动路径。
-export async function prepareManagedNode(distributionRoot) {
+// Copy one validated cached runtime from source to destination; identity must match before publication.
+// 从 source 向 destination 复制一个已验证的缓存运行时；发布前 identity 必须匹配。
+// Preserve an existing valid installation and return without touching its files.
+// 保留已有有效安装，直接返回且不触碰其文件。
+async function synchronizeRuntime(source, destination, identity) {
+  if (await installed(destination, identity)) return;
+  // parent and staging keep publication on the destination filesystem, isolated from persistent inputs.
+  // parent 与 staging 使发布保持在目标文件系统内，并与持久输入隔离。
+  const parent = path.dirname(destination);
+  await mkdir(parent, { recursive: true });
+  const staging = await mkdtemp(path.join(parent, '.sync-'));
+  try {
+    // prepared is a full independent copy; relative symlinks must not be rewritten to the cache.
+    // prepared 是完整独立副本；相对符号链接不得被改写为指向缓存。
+    const prepared = path.join(staging, 'runtime');
+    await cp(source, prepared, { recursive: true, verbatimSymlinks: true });
+    await installed(prepared, identity);
+    try { await rename(prepared, destination); } catch (error) {
+      if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(error.code) || !await installed(destination, identity)) throw error;
+    }
+  } finally {
+    if (path.dirname(staging) !== parent || !path.basename(staging).startsWith('.sync-')) throw new Error('Invalid managed runtime staging boundary.');
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+// Prepare verified Node/pnpm in repositoryRoot's third_party, then copy into distributionRoot.
+// 在 repositoryRoot 的 third_party 中准备已验证 Node/pnpm，再复制至 distributionRoot。
+// Return exact distribution launch paths; the optional repositoryRoot isolates offline test fixtures.
+// 返回发行物的精确启动路径；可选 repositoryRoot 用于隔离离线测试夹具。
+export async function prepareManagedNode(distributionRoot, repositoryRoot = repository) {
   // platform follows the Core manifest, while archivePlatform follows Node's official archive names.
   // platform 遵循 Core 清单，而 archivePlatform 遵循 Node 官方归档命名。
   const platformNames = { win32: 'windows', linux: 'linux', darwin: 'macos' };
   const archiveNames = { win32: 'win', linux: 'linux', darwin: 'darwin' };
   const platform = `${platformNames[process.platform]}-${process.arch}`;
   if (!managedNodeVersions.supported_platforms.includes(platform)) throw new Error(`Unsupported managed Node platform: ${platform}`);
-  // nodeRoot is the shared, versioned distribution root, independent of output/browser.
-  // nodeRoot 是共享的版本化发行根目录，与 output/browser 无关。
-  const nodeRoot = path.resolve(distributionRoot, 'dependencies/runtimes/node');
+  // nodeRoot persists across Cargo cleanup and output reconstruction; output is only a deployment copy.
+  // nodeRoot 在 Cargo 清理及 output 重建后仍保留；output 仅是部署副本。
+  const nodeRoot = buildInputPaths(repositoryRoot).managedNode;
   await mkdir(nodeRoot, { recursive: true });
   // identities reproduce the native installer's exact public manifest contract.
   // identities 复用原生安装器精确的公开清单契约。
@@ -103,7 +132,6 @@ export async function prepareManagedNode(distributionRoot) {
   const nodeDirectory = path.join(nodeRoot, `node-${nodeIdentity.version}-${platform}`);
   const pnpmDirectory = path.join(nodeRoot, `pnpm-${pnpmIdentity.version}`);
   const executable = path.join(nodeDirectory, nodeIdentity.executable);
-  const pnpm = path.join(pnpmDirectory, pnpmIdentity.executable);
   if (!await installed(nodeDirectory, nodeIdentity)) {
     // asset and checksum are fetched from the same exact official Node release.
     // asset 与 checksum 从同一个精确的 Node 官方发布目录获取。
@@ -129,7 +157,13 @@ export async function prepareManagedNode(distributionRoot) {
     verifyDownload(bytes, metadata.dist.integrity.slice(7), 'sha512', 'base64');
     await publish(pnpmDirectory, pnpmIdentity, bytes, 'pnpm.tgz', 'package', metadata.dist.tarball, root => [executable, path.join(root, pnpmIdentity.executable), '--version']);
   }
-  return { executable, pnpm };
+  // distributionNode and distributionPnpm preserve the native installer's established runtime layout.
+  // distributionNode 与 distributionPnpm 保持原生安装器既有的运行时布局。
+  const distributionNode = path.resolve(distributionRoot, 'dependencies/runtimes/node', path.basename(nodeDirectory));
+  const distributionPnpm = path.resolve(distributionRoot, 'dependencies/runtimes/node', path.basename(pnpmDirectory));
+  await synchronizeRuntime(nodeDirectory, distributionNode, nodeIdentity);
+  await synchronizeRuntime(pnpmDirectory, distributionPnpm, pnpmIdentity);
+  return { executable: path.join(distributionNode, nodeIdentity.executable), pnpm: path.join(distributionPnpm, pnpmIdentity.executable) };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

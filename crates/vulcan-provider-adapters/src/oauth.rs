@@ -27,6 +27,7 @@ use tokio::{
 use uuid::Uuid;
 
 mod open_design;
+mod opencode;
 mod openvulcan;
 pub use openvulcan::revoke_openvulcan_authorization;
 
@@ -45,7 +46,7 @@ const GOOGLE_CODE_ASSIST_LOAD_URL: &str =
 const OAUTH_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(600);
 /// Maximum wall-clock time for one OAuth HTTP exchange including its complete response body.
 /// 单次 OAuth HTTP 交换（含完整响应体）的最长墙钟时间。
-const OAUTH_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const OAUTH_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum OAuth response bytes retained before closed JSON decoding.
 /// 封闭 JSON 解码前允许保留的 OAuth 响应最大字节数。
 const OAUTH_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
@@ -73,6 +74,9 @@ const KIMI_DEVICE_FLOW_DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthProviderKind {
+    /// OpenCode Console device authorization scoped to one workspace.
+    /// 作用于单一工作区的 OpenCode Console 设备授权。
+    OpencodeConsole,
     /// OpenVulcan China native PKCE authorization.
     /// OpenVulcan 中国版原生 PKCE 授权。
     OpenVulcanChina,
@@ -672,6 +676,9 @@ impl OAuthAuthorizationRuntime {
         if provider_kind == OAuthProviderKind::OpenDesign {
             return self.start_open_design(authorization_binding).await;
         }
+        if provider_kind == OAuthProviderKind::OpencodeConsole {
+            return self.start_opencode(authorization_binding).await;
+        }
         let transaction_id = format!("oauth_{}", Uuid::new_v4().simple());
         let state = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let verifier = build_pkce_verifier();
@@ -1105,6 +1112,10 @@ impl OAuthAuthorizationRuntime {
         material: &CredentialSecretMaterial,
     ) -> Result<CredentialSecretMaterial, String> {
         match material {
+            CredentialSecretMaterial::OpencodeConsoleOAuth {
+                tokens,
+                organization_id,
+            } => opencode::refresh(tokens, organization_id).await,
             CredentialSecretMaterial::OpenVulcanAuth { .. } => openvulcan::refresh(material).await,
             CredentialSecretMaterial::OpenDesignAuth { .. }
             | CredentialSecretMaterial::ApiKey { .. }
@@ -2555,6 +2566,7 @@ async fn bind_callback_listener(provider_kind: OAuthProviderKind) -> Result<TcpL
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
         | OAuthProviderKind::OpenDesign
+        | OAuthProviderKind::OpencodeConsole
         | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(
                 "This authorization flow requires its dedicated callback runtime.",
@@ -2588,6 +2600,7 @@ fn callback_redirect_uri(
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
         | OAuthProviderKind::OpenDesign
+        | OAuthProviderKind::OpencodeConsole
         | OAuthProviderKind::KimiCodingPlan => Err(String::from(
             "This authorization flow requires its dedicated callback runtime.",
         )),
@@ -2675,6 +2688,7 @@ fn build_oauth_flow(
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
         | OAuthProviderKind::OpenDesign
+        | OAuthProviderKind::OpencodeConsole
         | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(
                 "This authorization flow must be constructed by its dedicated runtime.",
@@ -2723,6 +2737,7 @@ fn build_oauth_flow(
             OAuthProviderKind::OpenVulcanChina
             | OAuthProviderKind::OpenVulcanGlobal
             | OAuthProviderKind::OpenDesign
+            | OAuthProviderKind::OpencodeConsole
             | OAuthProviderKind::KimiCodingPlan => {
                 return Err(String::from(
                     "This authorization flow must use its dedicated authorization URL.",
@@ -3066,6 +3081,7 @@ async fn exchange_authorization_code(
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
         | OAuthProviderKind::OpenDesign
+        | OAuthProviderKind::OpencodeConsole
         | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(
                 "This authorization flow must use its dedicated token exchange.",
@@ -3398,7 +3414,7 @@ where
 /// 返回值
 /// The closed response type or the first transport, size, JSON, depth, or shape failure.
 /// 返回封闭响应类型，或首个传输、大小、JSON、深度或结构失败。
-async fn decode_bounded_oauth_json_response<Response>(
+pub(crate) async fn decode_bounded_oauth_json_response<Response>(
     response: reqwest::Response,
     label: &str,
 ) -> Result<Response, String>

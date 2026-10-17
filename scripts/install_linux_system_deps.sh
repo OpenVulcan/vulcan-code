@@ -51,22 +51,35 @@ if native_dependencies_ready; then
 fi
 
 echo '==> Missing native Linux development files for GTK/GLib, AppIndicator, or libxdo.'
+# Report the failed probe before requesting privileges so users can see the actual missing files.
+# 请求权限前报告失败探针，使用户能够看到实际缺失的文件。
+cat "$ProbeDirectory/probe.log" >&2
 if ! command -v apt-get >/dev/null 2>&1; then
     echo 'Install GTK 3, GLib, AppIndicator/Ayatana and libxdo development packages with your distribution package manager, then rerun make init-system.' >&2
     exit 1
 fi
 
-# run_apt uses root or explicitly available noninteractive sudo; arguments are forwarded without shell reconstruction.
-# run_apt 使用 root 或明确可用的非交互 sudo；参数直接转发，不重新拼接 shell。
-# Accepts apt-get arguments and returns its exact status; a privilege failure prints the administrator entry.
-# 接收 apt-get 参数并返回其原始状态；权限不足时输出管理员入口。
+# run_apt uses root, cached sudo, or terminal-based sudo authentication without elevating later build stages.
+# run_apt 使用 root、已缓存的 sudo 或终端内的 sudo 验证，不提升后续构建阶段的权限。
+# Accepts apt-get arguments and returns the package manager or authentication failure status.
+# 接收 apt-get 参数，并返回包管理器或身份验证失败的状态码。
 run_apt() {
     if [ "$(id -u)" = 0 ]; then
         env DEBIAN_FRONTEND=noninteractive apt-get "$@"
-    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    elif command -v sudo >/dev/null 2>&1; then
+        if ! sudo -n true 2>/dev/null; then
+            # Ask sudo to authenticate only in a real terminal; automated runs must never wait for a password.
+            # 只在真实终端中交由 sudo 验证身份，自动化运行绝不能等待密码输入。
+            if [ ! -t 0 ] || [ ! -t 2 ]; then
+                echo 'Native Linux packages require administrator privileges. Rerun make init-system in an interactive terminal, or ask an administrator to run: sudo sh scripts/install_linux_system_deps.sh' >&2
+                return 1
+            fi
+            echo '==> Installing native Linux packages requires sudo authorization. Enter your Linux account password if prompted.' >&2
+            sudo -v || return $?
+        fi
         sudo -n env DEBIAN_FRONTEND=noninteractive apt-get "$@"
     else
-        echo 'Native Linux packages require administrator privileges. Run: sudo sh scripts/install_linux_system_deps.sh' >&2
+        echo 'Native Linux packages require administrator privileges. Ask an administrator to run: sudo sh scripts/install_linux_system_deps.sh' >&2
         return 1
     fi
 }

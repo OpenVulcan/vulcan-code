@@ -2,7 +2,7 @@
 // 针对 desktop-runtime.mjs 使用的打包输入检查编写定向测试。
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import os from 'node:os';
 import path from 'node:path';
@@ -205,6 +205,63 @@ async function createReleaseFixture({ chromium = true } = {}) {
 // 每个测试后删除临时夹具及其嵌套生成路径。
 async function removeFixture(root) {
   await rm(root, { recursive: true, force: true });
+}
+
+// Exercise the real terminal entrypoint with disposable executables inside the allowed target boundary.
+// 在允许的 target 边界内，使用可丢弃可执行文件验证真实终端入口。
+// Both commands use complete layouts; no user service, database, GUI, or network provider is started.
+// 两个命令均使用完整布局；不启动用户服务、数据库、GUI 或联网供应商。
+for (const command of ['service', 'tui']) {
+  test(`terminal ${command} launches the declared headless/terminal process only`, { skip: process.platform === 'win32' }, async t => {
+    // All generated files belong to one exact temporary child of repository target.
+    // 所有生成文件属于仓库 target 下一个精确临时子目录。
+    const script = fileURLToPath(new URL('./desktop-runtime.mjs', import.meta.url));
+    const target = path.resolve(path.dirname(script), '..', 'target');
+    await mkdir(target, { recursive: true });
+    const root = await mkdtemp(path.join(target, 'terminal-runtime-test-'));
+    assert.equal(path.dirname(root), target);
+    t.after(() => rm(root, { recursive: true, force: true }));
+    // Keep the same relative path shape as the complete package fixture.
+    // 保持与完整发行夹具相同的相对路径形状。
+    const layout = { ...fixtureLayout, schemaVersion: runtimeLayoutSchemaVersion, platform: process.platform, architecture: process.arch };
+    for (const relative of [layout.serviceExecutable, layout.desktopExecutable, layout.desktopEntry, layout.tuiExecutable,
+      layout.browserHostEntry, layout.browserHostExecutable, layout.chromiumExecutable,
+      path.posix.join(path.posix.dirname(layout.desktopEntry), '..', 'preload.cjs')]) {
+      await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+      await writeFile(path.join(root, relative), 'fixture');
+    }
+    await mkdir(path.join(root, layout.webuiRoot));
+    await writeFile(path.join(root, 'runtime-layout.json'), JSON.stringify(layout));
+    // This description follows the actual service's code-directory ownership contract.
+    // 此描述遵循真实服务对 code 目录的归属契约。
+    const description = { protocolVersion: 1, profile: 'debug', executablePath: path.join(root, layout.serviceExecutable),
+      dataRoot: path.join(root, 'user/code'), discoveryPath: path.join(root, 'user/code/webui-service.json'), modes: ['--headless'] };
+    await writeFile(path.join(root, layout.serviceExecutable), '#!/usr/bin/env node\n'
+      + `const fs = require('node:fs'); const description = ${JSON.stringify(description)};\n`
+      + `if (process.argv.includes('--describe')) console.log(JSON.stringify(description)); else fs.writeFileSync(${JSON.stringify(path.join(root, 'service-args.json'))}, JSON.stringify(process.argv.slice(2)));\n`, { mode: 0o755 });
+    // Reuse is represented at the launcher boundary; production health identity has separate tests.
+    // 在启动器边界表达实例复用；生产健康身份具有独立测试。
+    await writeFile(path.join(root, path.dirname(layout.desktopEntry), 'package.json'), '{"type":"module"}');
+    await writeFile(path.join(root, path.dirname(layout.desktopEntry), 'service-launcher.js'),
+      `export async function readServiceLaunchDescription() { return ${JSON.stringify(description)}; }\n`
+      + 'export async function readLiveServiceInstance() { return { pid: 123, status: "ready" }; }\n');
+    await writeFile(path.join(root, layout.tuiExecutable), '#!/usr/bin/env node\n'
+      + `require('node:fs').writeFileSync(${JSON.stringify(path.join(root, 'tui-args.json'))}, JSON.stringify(process.argv.slice(2)));\n`, { mode: 0o755 });
+    // These paths already existed as layout placeholders, so chmod must set their executable bits.
+    // 这些路径此前已作为布局占位文件存在，因此必须通过 chmod 设置可执行位。
+    await chmod(path.join(root, layout.serviceExecutable), 0o755);
+    await chmod(path.join(root, layout.tuiExecutable), 0o755);
+    const result = spawnSync(process.execPath, [script, command, 'debug'], {
+      env: { ...process.env, VULCAN_DESKTOP_DISTRIBUTION_ROOT: root }, encoding: 'utf8', timeout: 30_000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    if (command === 'service') {
+      assert.deepEqual(JSON.parse(await readFile(path.join(root, 'service-args.json'), 'utf8')), ['--headless']);
+    } else {
+      assert.deepEqual(JSON.parse(await readFile(path.join(root, 'tui-args.json'), 'utf8')), ['--service-root', path.join(root, 'user')]);
+      await assert.rejects(readFile(path.join(root, 'service-args.json')), { code: 'ENOENT' });
+    }
+  });
 }
 
 test('accepts a complete package layout', async (t) => {

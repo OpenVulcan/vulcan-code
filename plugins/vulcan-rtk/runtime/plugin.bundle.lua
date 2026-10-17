@@ -33,10 +33,16 @@ end
 -- Returns a string-only environment table.
 -- 返回仅包含字符串值的环境表。
 local function rtk_environment(config)
+    -- environment keeps bundled CLI output plain and suppresses standalone-agent installation hints.
+    -- environment 保持随包 CLI 输出为纯文本，并抑制独立代理的安装提示。
+    local environment = {
+        NO_COLOR = "1",
+        RTK_SUPPRESS_HOOK_WARNING = "1",
+    }
     if config.telemetryDisabled then
-        return { RTK_TELEMETRY_DISABLED = "1" }
+        environment.RTK_TELEMETRY_DISABLED = "1"
     end
-    return {}
+    return environment
 end
 
 -- Execute the manifest-declared RTK binary with bounded options.
@@ -76,13 +82,13 @@ local function decode_invocation(args)
     return vulcan.json.decode(args.invocation_json)
 end
 
--- Extract the first non-empty output line from `rtk rewrite`.
--- 从 `rtk rewrite` 输出中提取第一条非空行。
+-- Extract the first non-empty version line from the RTK self-check.
+-- 从 RTK 自检中提取第一条非空版本行。
 --
 -- stdout is the exact decoded process stdout.
 -- stdout 是进程精确解码后的标准输出。
--- Returns a trimmed command or nil when RTK did not match the input.
--- 返回去空白后的命令；RTK 未命中输入时返回 nil。
+-- Returns a trimmed version line or nil when the CLI emitted no version.
+-- 返回去空白后的版本行；CLI 未输出版本时返回 nil。
 local function first_non_empty_line(stdout)
     for line in string.gmatch(stdout or "", "[^\r\n]+") do
         -- trimmed removes only surrounding whitespace and preserves command quoting.
@@ -98,8 +104,8 @@ end
 -- Tokenize a rewritten command sufficiently to inspect RTK route boundaries.
 -- 对改写命令做足以检查 RTK 路由边界的分词。
 --
--- command is the exact single-line rewrite output.
--- command 是精确的单行 rewrite 输出。
+-- command is the complete rewrite output, including any shell command line breaks.
+-- command 是完整 rewrite 输出，包括其中的 Shell 命令换行。
 -- Returns ordered tokens while preserving quoted substrings as one token.
 -- 返回有序 Token，并把引号包裹内容保留为单个 Token。
 local function tokenize_command(command)
@@ -307,7 +313,7 @@ function M.transform_shell_command(args)
     -- invocation 是不可变的宿主 Hook 帧。
     local invocation = decode_invocation(args)
     -- payload is the exact host-owned shell transform protocol value.
-    -- payload 是精确的宿主持有 shell 转换协议值。
+    -- payload 是精确的宿主持有 Shell 转换协议值。
     local payload = invocation.payload.value
     -- config is the current complete plugin configuration.
     -- config 是当前完整插件配置。
@@ -315,23 +321,40 @@ function M.transform_shell_command(args)
     if not config.enabled or config.routeMode == "disabled" then
         return success({ payload = { value = payload } })
     end
-    -- rewrite invokes RTK without shell interpolation and inside the trusted workspace cwd.
-    -- rewrite 不经过 shell 插值，并在可信工作区 cwd 内调用 RTK。
+    -- rewrite runs the OSS CLI without shell interpolation; LuaSkills exposes its native exit code as code.
+    -- rewrite 不经 Shell 插值运行 OSS CLI；LuaSkills 通过 code 暴露其原生退出码。
     local rewrite = run_rtk({ "rewrite", payload.command }, payload.cwd, 2000, config)
-    -- rewritten is nil when RTK intentionally does not match the command.
-    -- RTK 有意不命中命令时 rewritten 为 nil。
-    local rewritten = first_non_empty_line(rewrite.stdout)
-    if rewritten == nil then
+    -- RTK 0/3 both carry rewrites; 1/2 leave the original command to Vulcan's existing permission pipeline.
+    -- RTK 的 0/3 均携带改写；1/2 将原命令留给 Vulcan 现有权限管线。
+    -- Neither accepted code grants permission, and partial timeout output must never become executable text.
+    -- 任何被接受的退出码都不授予权限，超时产生的部分输出绝不能成为可执行文本。
+    if rewrite.timed_out
+        or (rewrite.code ~= 0 and rewrite.code ~= 3)
+        or (rewrite.code == 0 and not rewrite.success)
+    then
         return success({
             payload = { value = payload },
             diagnostics = {{
-                severity = "info",
-                message = "RTK rewrite was not applied: " .. tostring(rewrite.error or rewrite.stderr or "no rewrite output"),
+                severity = (rewrite.code == 1 or rewrite.code == 2) and "info" or "warning",
+                message = "RTK rewrite was not applied (exit " .. tostring(rewrite.code) .. "): "
+                    .. tostring(rewrite.error or rewrite.stderr),
             }},
         })
     end
-    -- routes contains every RTK subcommand referenced by the rewrite.
-    -- routes 包含改写结果引用的全部 RTK 子命令。
+    -- rewritten retains the complete command, including newlines and quoted argument contents.
+    -- rewritten 保留完整命令，包括换行和引号中的参数内容。
+    local rewritten = string.match(rewrite.stdout, "^%s*(.-)%s*$")
+    if rewritten == "" then
+        return success({
+            payload = { value = payload },
+            diagnostics = {{
+                severity = "warning",
+                message = "RTK rewrite returned an empty command for exit " .. tostring(rewrite.code),
+            }},
+        })
+    end
+    -- routes contains every RTK subcommand referenced by the complete rewrite.
+    -- routes 包含完整改写引用的全部 RTK 子命令。
     local routes = collect_routes(rewritten)
     if not routes_allowed(routes, config) then
         return success({
@@ -343,8 +366,10 @@ function M.transform_shell_command(args)
         })
     end
     payload.command = rewritten
-    if config.telemetryDisabled then
-        payload.environment.RTK_TELEMETRY_DISABLED = "1"
+    -- The same declared environment applies to inspection and the eventual routed command.
+    -- 检查进程和最终路由命令使用同一组已声明环境变量。
+    for name, value in pairs(rtk_environment(config)) do
+        payload.environment[name] = value
     end
     table.insert(payload.binary_path_requests, {
         registration_id = invocation.registration.id,
@@ -497,21 +522,27 @@ end
 -- Returns an ordered JSON-array-compatible table.
 -- 返回一个有序且兼容 JSON 数组的表。
 local function parse_gain_by_command(stdout)
+    -- rows preserves the upstream ranking without dropping negative weighted savings.
+    -- rows 保留上游排名，不丢弃加权节省率为负的记录。
     local rows = {}
+    -- in_section begins only at RTK's by-command table rather than its summary or recall sections.
+    -- in_section 仅在 RTK 按命令表开始，不匹配汇总或回读区块。
     local in_section = false
     for line in tostring(stdout or ""):gmatch("[^\r\n]+") do
         if line:match("^By Command%s*$") then
             in_section = true
         elseif in_section then
+            -- These cells follow RTK 1.0's Command/Count/Saved/Total%/Time columns.
+            -- 这些单元格遵循 RTK 1.0 的 Command/Count/Saved/Total%/Time 列。
             local command, count, saved, savings_pct, duration = line:match(
-                "^%s*%d+%.%s%s(.-)%s%s+(%d+)%s+([%d%.]+[KMG]?)%s+([%d%.]+)%%%s+([%d%.]+[a-z]+)"
+                "^%s*%d+%.%s%s(.-)%s%s+(%d+)%s+([%d%.]+[KMG]?)%s+([%-]?[%d%.]+)%%%s+([%d%.]+[a-z]+)"
             )
             if command ~= nil then
                 table.insert(rows, {
                     command = command,
-                    count = tonumber(count) or 0,
+                    count = tonumber(count),
                     savedTokens = parse_compact_metric(saved),
-                    avgSavingsPct = tonumber(savings_pct) or 0,
+                    savingsPct = tonumber(savings_pct),
                     avgTimeMs = parse_duration_ms(duration),
                 })
             end
@@ -529,6 +560,80 @@ end
 -- plugin.yaml 中 `statistics-get` 的 action 超时必须容纳两次连续执行。
 local STATISTICS_PROCESS_TIMEOUT_MS = 60000
 
+-- Prepare only a durable UI revision; RTK continues to own its actual history and recall databases.
+-- 仅准备持久界面修订号；实际历史库和回读库继续由 RTK 持有。
+-- Takes no parameters and returns after the host validates the initial private schema.
+-- 不接收参数，在宿主校验初始私有 Schema 后返回。
+local function prepare_statistics_revision()
+    -- The revision stays inside JavaScript's exact integer range because the WebUI rejects unsafe event revisions.
+    -- 修订号保持在 JavaScript 的精确整数范围内，因为 WebUI 会拒绝不安全的事件修订号。
+    vulcan.host.call("vulcan.plugin.storage.sqlite.migrate", {
+        version = 1,
+        plugin_version = "0.1.2",
+        applied_at_ms = 0,
+        statements = {
+            [[CREATE TABLE rtk_ui_revision (
+                singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                revision INTEGER NOT NULL CHECK (revision >= 0 AND revision <= 9007199254740991)
+            )]],
+            "INSERT INTO rtk_ui_revision(singleton_id, revision) VALUES (1, 0)",
+        },
+    })
+end
+
+-- Advance the durable data revision and invalidate mounted statistics without disclosing command history.
+-- 递增持久数据修订号并使已挂载统计失效，不泄露命令历史。
+-- Takes no parameters and returns after the existing host event boundary accepts the revision.
+-- 不接收参数，在既有宿主事件边界接受修订号后返回。
+local function publish_statistics_revision()
+    vulcan.host.call("vulcan.plugin.storage.sqlite.execute", {
+        sql = "UPDATE rtk_ui_revision SET revision = revision + 1 WHERE singleton_id = 1",
+        params = vulcan.json.array(),
+    })
+    -- rows must contain the one schema-owned singleton; no clock or process-local counter can replace it.
+    -- rows 必须包含 Schema 持有的唯一单例；时钟或进程局部计数器不能替代它。
+    local rows = vulcan.host.call("vulcan.plugin.storage.sqlite.query", {
+        sql = "SELECT revision FROM rtk_ui_revision WHERE singleton_id = 1",
+        params = vulcan.json.array(),
+    }).rows
+    if #rows ~= 1 or type(rows[1].revision) ~= "number" then
+        error("RTK statistics revision is missing or invalid")
+    end
+    vulcan.host.call("vulcan.plugin.ui.invalidate", {
+        topic = "rtk.statistics",
+        revision = rows[1].revision,
+    })
+end
+
+-- Clear the current RTK statistics through its official non-interactive reset command.
+-- 通过 RTK 官方非交互重置命令清空当前统计。
+-- args is the generic UI action call table; this mutation accepts no user-supplied arguments.
+-- args 是通用界面 Action 调用表；此变更不接受用户提供的参数。
+-- Returns a cleared result only after reset and UI invalidation succeed; failures remain explicit.
+-- 仅在重置与界面失效通知成功后返回已清空结果；失败保持显式。
+function M.statistics_clear(args)
+    -- config preserves the user's routing and telemetry settings throughout the reset.
+    -- config 在重置期间保留用户的路由和遥测设置。
+    local config = read_config()
+    -- Validate private storage before changing RTK history, avoiding a reset when revision storage is unavailable.
+    -- 修改 RTK 历史前先校验私有存储，避免修订号存储不可用时仍执行重置。
+    prepare_statistics_revision()
+    -- result comes from the same declared binary and default statistics scope as statistics_get.
+    -- result 来自与 statistics_get 相同的已声明二进制和默认统计作用域。
+    local result = run_rtk({ "gain", "--reset", "--yes" }, nil, STATISTICS_PROCESS_TIMEOUT_MS, config)
+    if not result.success then
+        error("RTK statistics reset failed (exit " .. tostring(result.code) .. "): "
+            .. tostring(result.error or result.stderr), 0)
+    end
+    -- published and reason distinguish a completed reset from a later notification failure.
+    -- published 与 reason 区分已完成的重置和后续通知失败。
+    local published, reason = pcall(publish_statistics_revision)
+    if not published then
+        error("RTK statistics were cleared, but refreshing the statistics view failed: " .. tostring(reason), 0)
+    end
+    return success({ cleared = true })
+end
+
 -- Load RTK token-saving statistics for the mounted plugin UI.
 -- 为挂载的插件界面加载 RTK Token 节省统计。
 --
@@ -540,8 +645,8 @@ function M.statistics_get(args)
     -- config controls telemetry for the statistics process as well.
     -- config 同样控制统计进程的遥测行为。
     local config = read_config()
-    -- result is the bounded JSON export command result.
-    -- result 是受边界约束的 JSON 导出命令结果。
+    -- result is the bounded JSON export, including the upstream oversized_excluded summary field.
+    -- result 是有界 JSON 导出，包含上游汇总字段 oversized_excluded。
     local result = run_rtk({ "gain", "--all", "--format", "json" }, nil, STATISTICS_PROCESS_TIMEOUT_MS, config)
     if not result.success then
         return success({
@@ -554,12 +659,12 @@ function M.statistics_get(args)
             error = result.error or result.stderr or "RTK gain statistics failed",
         })
     end
-    -- statistics is the exact RTK JSON export augmented by the separate documented by-command table.
-    -- statistics 是精确 RTK JSON 导出，并补充独立的文档化按命令统计表。
+    -- statistics retains RTK's own summary and period accounting without inventing replacement totals.
+    -- statistics 保留 RTK 自身的汇总和周期统计口径，不自行补造替代总量。
     local statistics = vulcan.json.decode(result.stdout)
-    -- by_command_result reads the human table because RTK's JSON export does not include this breakdown.
-    -- by_command_result 读取人类可读表格，因为 RTK JSON 导出不包含此明细。
-    local by_command_result = run_rtk({ "gain" }, nil, STATISTICS_PROCESS_TIMEOUT_MS, config)
+    -- RTK 1.0 omits command rows from JSON; --text explicitly selects its supported static table.
+    -- RTK 1.0 的 JSON 不含命令明细；--text 显式选择其受支持的静态表格。
+    local by_command_result = run_rtk({ "gain", "--text" }, nil, STATISTICS_PROCESS_TIMEOUT_MS, config)
     statistics.available = true
     statistics.byCommand = by_command_result.success
         and parse_gain_by_command(by_command_result.stdout)

@@ -22,13 +22,18 @@ messages:
   disableTelemetry: "停用 RTK 遙測環境變數"
   disableTelemetryHelp: "為 rewrite 與代理指令程序注入 RTK_TELEMETRY_DISABLED=1。"
   stats.title: "RTK 上下文密度統計"
-  stats.description: "Token 節省統計快取三十分鐘；切換日、週、月檢視不會再次傳送請求。"
+  stats.historyTitle: 統計記錄
+  stats.clearHistory: 清空統計記錄
+  stats.clearHistoryHelp: 永久清空目前 RTK 的命令、Token 與回讀統計；共用記錄的終端機統計亦會清空，路由設定保留。
+  stats.historyCleared: 統計記錄已清空，正在重新整理統計。
+  stats.description: "Token 估算快取三十分鐘；總計不含超大輸出，指令明細保留這些紀錄並採用加權節省率。"
   stats.unavailableHelp: "目前無法取得統計。"
   stats.empty: "尚無統計"
   stats.noCommandBreakdown: "尚無指令分類統計"
   stats.savedTokens: "節省的 Token"
-  stats.averageSavings: "平均節省率"
-  stats.commands: "指令數"
+  stats.averageSavings: "整體節省率"
+  stats.commands: "納入統計指令"
+  stats.excludedOutputs: "排除超大輸出"
   stats.capacityRatio: "上下文容量"
   stats.daily: "每日"
   stats.weekly: "每週"

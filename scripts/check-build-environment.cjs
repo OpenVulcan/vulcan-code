@@ -37,17 +37,17 @@ function checkBuildEnvironment(options = {}) {
   const nodeVersion = options.nodeVersion || process.versions.node;
   const probe = options.probe || spawnSync;
   const issues = [];
-  const nodeModes = ['', 'build', 'br', 'release', 'sync', 'run', 'service', 'vite', 'check', 'test', 'init-system', 'deps', 'core-build', 'core-restart', 'check-deps', 'licenses'];
+  const nodeModes = ['', 'build', 'br', 'bt', 'release', 'sync', 'run', 'service', 'vite', 'check', 'test', 'init-system', 'deps', 'core-build', 'core-restart', 'check-deps', 'licenses'];
   if (!nodeModes.includes(mode) || (mode === 'deps' && variant === 'rust-tools')) return issues;
   if (!versionAtLeast(nodeVersion, versions.node_version)) {
     issues.push({ tool: 'node', code: 'unsupported_version', message: `Node.js ${nodeVersion} is too old; install Node.js >= ${versions.node_version}.` });
   }
   const commands = [];
-  if (['', 'build', 'br', 'release', 'sync', 'run', 'check', 'init-system'].includes(mode)
+  if (['', 'build', 'br', 'bt', 'release', 'sync', 'run', 'check', 'init-system'].includes(mode)
       || (mode === 'vite' && variant === 'start')) {
     commands.push({ tool: 'pnpm', minimum: versions.pnpm_version });
   }
-  if (platform === 'win32' || ['init-system', 'licenses', 'check-deps', 'core-build', 'core-restart'].includes(mode)
+  if (platform === 'win32' || ['init-system', 'licenses', 'check-deps'].includes(mode)
       || (mode === 'deps' && !['tools', 'rust-tools'].includes(variant))) {
     commands.push({ tool: 'pwsh', minimum: '7.0.0' });
   }

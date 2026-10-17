@@ -1,6 +1,6 @@
 schema_version: 2
 id: vulcan-rtk
-version: 0.1.0
+version: 0.1.2
 default_enabled: true
 display:
   name: Vulcan RTK
@@ -8,6 +8,7 @@ display:
 permissions:
   - process_binary
   - config
+  - storage_sqlite
   - ui_host_context
 platforms:
   excluded_targets:
@@ -18,6 +19,7 @@ required_files:
   - config/schema.json
   - config/defaults.json
   - ui/settings.json
+  - schemas/statistics-clear-output.json
   - locales/en.yaml
   - locales/zh-CN.yaml
   - locales/zh-TW.yaml
@@ -43,6 +45,8 @@ execution:
         aarch64-apple-darwin: bin/aarch64-apple-darwin/rtk
       allowed_env:
         - RTK_TELEMETRY_DISABLED
+        - RTK_SUPPRESS_HOOK_WARNING
+        - NO_COLOR
       allow_workspace_cwd: true
 runtime_requirements:
   protocol_version: 1
@@ -63,6 +67,22 @@ runtime_requirements:
       execution: native
       scope: invocation
     - name: vulcan.plugin.config.update
+      version: 1.0.0
+      execution: native
+      scope: invocation
+    - name: vulcan.plugin.storage.sqlite.migrate
+      version: 1.0.0
+      execution: native
+      scope: invocation
+    - name: vulcan.plugin.storage.sqlite.execute
+      version: 1.0.0
+      execution: native
+      scope: invocation
+    - name: vulcan.plugin.storage.sqlite.query
+      version: 1.0.0
+      execution: native
+      scope: invocation
+    - name: vulcan.plugin.ui.invalidate
       version: 1.0.0
       execution: native
       scope: invocation
@@ -104,6 +124,13 @@ lua_runtime:
       function: self_check
       output_schema_file: schemas/self-check-output.json
       timeout_ms: 5000
+      callers:
+        - plugin_ui
+    - id: statistics-clear
+      effect: mutation
+      function: statistics_clear
+      output_schema_file: schemas/statistics-clear-output.json
+      timeout_ms: 65000
       callers:
         - plugin_ui
   hooks:

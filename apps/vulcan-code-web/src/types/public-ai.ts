@@ -9,6 +9,7 @@ export type CredentialMode = "auth" | "token";
 // OAuthProviderKind identifies one registered account authorization protocol.
 // OAuthProviderKind 标识一个已注册账户授权协议。
 export type OAuthProviderKind =
+  | "opencode_console"
   | "open_vulcan_china"
   | "open_vulcan_global"
   | "open_ai_codex"
@@ -67,6 +68,7 @@ export interface PublicAiCredentialProfile {
   authorization?: PublicAiCredentialAuthorization;
   billing_kind: CredentialBillingKind;
   account_usage_query:
+    | "opencode_go"
     | "open_vulcan"
     | "unsupported"
     | "mini_max_token_plan"
@@ -525,6 +527,7 @@ export interface PublicAiConnection {
   credential_profile_id: string;
   billing_kind: CredentialBillingKind;
   usage_capability:
+    | "opencode_go"
     | "unsupported"
     | "mini_max_token_plan"
     | "open_router_credits"
