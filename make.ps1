@@ -267,8 +267,8 @@ function Invoke-DependencyInstall {
     }
 }
 
-# Invoke-SystemInitialization installs Rust tooling first, then initializes every repository-owned dependency domain.
-# Invoke-SystemInitialization 先安装 Rust 工具，再初始化仓库拥有的全部依赖域。
+# Invoke-SystemInitialization prepares native prerequisites, then initializes every repository-owned dependency domain.
+# Invoke-SystemInitialization 先准备原生前置依赖，再初始化仓库拥有的全部依赖域。
 # Variant must be empty because init-system is the single ordered bootstrap contract for a fresh environment.
 # Variant 必须为空，因为 init-system 是新环境的一键有序初始化契约。
 function Invoke-SystemInitialization {
@@ -280,6 +280,12 @@ function Invoke-SystemInitialization {
         throw "Unsupported init-system command: '$Variant'"
     }
 
+    # Direct PowerShell initialization on Linux shares the same native-library preparation as make.sh.
+    # 在 Linux 上直接使用 PowerShell 初始化时，与 make.sh 共用同一套原生库准备流程。
+    if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Linux)) {
+        & sh (Join-Path $ScriptDir 'scripts/install_linux_system_deps.sh')
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
     Invoke-DependencyInstall -DependencyKind "rust-tools"
     Invoke-DependencyInstall -DependencyKind "host"
     Invoke-DependencyInstall -DependencyKind "tools"
@@ -364,6 +370,16 @@ if ($RemainingArgs.Count -gt 0) {
     Write-Error ("Unsupported trailing arguments: {0}" -f ($RemainingArgs -join " "))
     Show-Usage
     exit 1
+}
+
+# Run the same prerequisite policy as Unix before loading modules with modern Node APIs.
+# 在加载新版Node模块之前，执行与Unix相同的前置条件策略。
+if (-not ($NormalizedMode -eq 'deps' -and $NormalizedVariant -eq 'rust-tools')) {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        throw 'Node.js is required to check build prerequisites. Install Node.js, then run make init-system.'
+    }
+    & node (Join-Path $ScriptDir 'scripts/check-build-environment.cjs') $NormalizedMode $NormalizedVariant
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 switch ($NormalizedMode) {

@@ -1,14 +1,9 @@
-# shipped_rust_packages.ps1 defines the Cargo packages whose binaries ship in the distribution bin directory.
-# shipped_rust_packages.ps1 定义其二进制随发行物 bin 目录分发的 Cargo 包。
+# shipped_rust_packages.ps1 reads the shared inventory of Cargo packages shipped in the distribution bin directory.
+# shipped_rust_packages.ps1 读取发行物 bin 目录随包分发的 Cargo 包共享清单。
 
-# ShippedRustPackages is the single source for distribution builds and third-party notice coverage.
-# ShippedRustPackages 是发行构建与第三方声明覆盖范围的唯一来源。
-$ShippedRustPackages = @(
-    'vulcan-code-service',
-    'vulcan-terminal-host',
-    'vulcan-judge-host',
-    'vulcan-code-tui'
-)
+# ShippedRustPackages derives from the same inventory as Unix builds and publication validation.
+# ShippedRustPackages 派生自与 Unix 构建、发布校验相同的共享清单。
+$ShippedRustPackages = @((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'shipped-rust-packages.json') -Raw -Encoding UTF8 | ConvertFrom-Json).package)
 
 # Get-ShippedRustPackageArguments expands the shipped package list into repeated Cargo `-p` selectors.
 # Get-ShippedRustPackageArguments 把分发包列表展开为重复的 Cargo `-p` 选择参数。

@@ -54,16 +54,28 @@ if [ "$Release" = "1" ] || [ ! -d "$ProjectDir/apps/vulcan-code-desktop/node_mod
     pnpm --dir "$ProjectDir/apps/vulcan-code-desktop" install --frozen-lockfile
 fi
 
+# The official installer verifies executable/version markers even when node_modules already exists.
+# 即使 node_modules 已存在，官方安装器仍须核验可执行文件和版本标记。
+# Missing runtime downloads or extraction failures must stop before expensive Cargo compilation.
+# 运行时下载或解压失败必须在耗时的 Cargo 编译前终止。
+electron_config_cache="$ProjectDir/target/electron-runtime-cache" node "$ProjectDir/apps/vulcan-code-desktop/node_modules/electron/install.js"
+
+# CargoPackageArguments derives all shipped packages from the same inventory used by Windows and notices.
+# CargoPackageArguments 从 Windows 与声明生成共用的清单派生全部分发包。
+CargoPackageArguments=$(node "$ProjectDir/scripts/shipped-rust-packages.mjs" cargo-args)
+
 if [ "$Release" = "1" ]; then
 
     echo "==> Building WebUI for release..."
     pnpm --dir "$WebAppDir" run build
 
     echo "==> Building Vulcan Core release..."
-    cargo build --locked -p vulcan-code-service -p vulcan-terminal-host --release
+    # Split only the fixed -p selectors and Cargo package names emitted by the inventory.
+    # 仅拆分清单输出的固定 -p 选择项和 Cargo 包名。
+    cargo build --locked $CargoPackageArguments --release
 else
     echo "==> Building Vulcan Core debug..."
-    cargo build --locked -p vulcan-code-service -p vulcan-terminal-host
+    cargo build --locked $CargoPackageArguments
 fi
 
 # CargoTargetDir stores Cargo's effective artifact root, including environment and config overrides.
@@ -103,6 +115,17 @@ fi
 # BuiltTerminalHostPath 保存与桌面壳 Cargo profile 一致的终端宿主制品路径。
 BuiltTerminalHostPath="$CargoTargetDir/$ProfileName/$TerminalHostFileName"
 
+# BuiltJudgeHostPath and BuiltTuiPath are required siblings of Core, never copied from an older output.
+# BuiltJudgeHostPath 与 BuiltTuiPath 是 Core 必需的同级制品，绝不从旧发行物取用。
+# ExecutableSuffix follows the detected host executable convention.
+# ExecutableSuffix 遵循已检测宿主的可执行文件命名约定。
+ExecutableSuffix=
+if [ "$IsWindowsPlatform" = "1" ]; then
+    ExecutableSuffix=.exe
+fi
+BuiltJudgeHostPath="$CargoTargetDir/$ProfileName/vulcan-judge-host$ExecutableSuffix"
+BuiltTuiPath="$CargoTargetDir/$ProfileName/vulcan-tui$ExecutableSuffix"
+
 # OutputBinDir stores runtime executables beneath the selected distribution root.
 # OutputBinDir 保存选定发行根目录下的运行时可执行文件。
 OutputBinDir="$OutputRootDir/bin"
@@ -123,6 +146,14 @@ if [ ! -f "$BuiltTerminalHostPath" ]; then
     echo "Built terminal host was not found: $BuiltTerminalHostPath" >&2
     exit 1
 fi
+# RequiredBinaryPath checks the current build before packaging can observe any stale output files.
+# RequiredBinaryPath 在打包读取任何旧发行文件之前，检查本轮构建制品。
+for RequiredBinaryPath in "$BuiltJudgeHostPath" "$BuiltTuiPath"; do
+    if [ ! -f "$RequiredBinaryPath" ]; then
+        echo "Built distribution binary was not found: $RequiredBinaryPath" >&2
+        exit 1
+    fi
+done
 
 # Debug distributions also serve a complete static WebUI through Core.
 # 调试发行物同样通过 Core 提供完整静态网页。
@@ -131,4 +162,4 @@ if [ "$Release" = "0" ]; then
 fi
 # Stage and validate a complete generation before switching the published directory.
 # 切换正式目录之前，暂存并验证完整一代。
-node "$ProjectDir/scripts/publish-distribution.mjs" "$ProfileName" "$BuiltBinaryPath" "$BuiltTerminalHostPath"
+node "$ProjectDir/scripts/publish-distribution.mjs" "$ProfileName" "$BuiltBinaryPath" "$BuiltTerminalHostPath" "$BuiltJudgeHostPath" "$BuiltTuiPath"

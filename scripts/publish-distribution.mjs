@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateRuntimeLayoutIdentity, verifyPackagedLayout } from './desktop-runtime.mjs';
 import { publishPreparedDirectory, recoverPublication } from './directory-publication.mjs';
+import { shippedBinaryNames } from './shipped-rust-packages.mjs';
 
 // acquirePublicationGuard serializes publishers; a dead process can be reclaimed under a separate recovery lock.
 // acquirePublicationGuard 将发布串行化；退出进程的所有权可在独立恢复锁下回收。
@@ -56,10 +57,19 @@ async function validateDistribution(root) {
 
 // publishDistribution stages synchronized resources and exact compiled binaries, then promotes the verified result.
 // publishDistribution 暂存已同步资源和精确编译二进制，再提升验证通过的结果。
-// repository, destination and binary paths are explicit; profile selects the existing packaging contract.
-// repository、destination 和二进制路径均明确；profile 选择既有打包契约。
-export async function publishDistribution(repository, destination, serviceBinary, terminalBinary, profile) {
+// repository and destination select the owned boundary; binaryPaths must provide the entire shipped inventory.
+// repository 与 destination 选择自有边界；binaryPaths 必须提供完整分发清单。
+// profile selects the existing packaging contract; return after promotion, or throw without publishing an incomplete generation.
+// profile 选择既有打包契约；提升后返回，失败时抛出异常，不发布不完整版本。
+export async function publishDistribution(repository, destination, binaryPaths, profile) {
   if (!['debug', 'release'].includes(profile)) throw new Error('Expected debug or release profile.');
+  // expected and supplied prevent stale output files from masking a missing or duplicated current Cargo artifact.
+  // expected 与 supplied 防止旧发行文件掩盖当前 Cargo 制品的缺失或重复。
+  const expected = shippedBinaryNames().sort();
+  const supplied = binaryPaths.map(binary => path.basename(binary)).sort();
+  if (expected.length !== supplied.length || expected.some((name, index) => name !== supplied[index])) {
+    throw new Error('Publication requires exactly the complete shipped Rust executable inventory.');
+  }
   // targetRoot is the only staging boundary accepted by the desktop packager.
   // targetRoot 是桌面打包器接受的唯一暂存边界。
   const targetRoot = path.join(repository, 'target');
@@ -81,8 +91,9 @@ export async function publishDistribution(repository, destination, serviceBinary
     stage = await mkdtemp(path.join(targetRoot, 'distribution-stage-'));
     await cp(destination, stage, { recursive: true, verbatimSymlinks: true });
     await mkdir(path.join(stage, 'bin'), { recursive: true });
-    await cp(serviceBinary, path.join(stage, 'bin', path.basename(serviceBinary)));
-    await cp(terminalBinary, path.join(stage, 'bin', path.basename(terminalBinary)));
+    for (const binary of binaryPaths) {
+      await cp(binary, path.join(stage, 'bin', path.basename(binary)));
+    }
     await rm(path.join(stage, 'bin', 'vulcan-windows-console-helper.exe'), { force: true });
     execFileSync(process.execPath, [path.join(repository, 'scripts/desktop-runtime.mjs'), 'package', profile], {
       env: { ...process.env, VULCAN_DESKTOP_DISTRIBUTION_ROOT: stage }, stdio: 'inherit', windowsHide: true,
@@ -101,10 +112,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   // repository is derived from the script, while destination is resolved by the authoritative packager.
   // repository 由脚本确定，destination 由权威打包器解析。
   const repository = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
-  // arguments require both successful Cargo artifacts and the selected profile.
-  // arguments 要求提供两个成功生成的 Cargo 制品及所选模式。
-  const [profile, serviceBinary, terminalBinary] = process.argv.slice(2);
-  if (!serviceBinary || !terminalBinary || process.argv.length !== 5) throw new Error('Usage: publish-distribution <profile> <service binary> <terminal binary>');
+  // binaryPaths must identify every successful Cargo artifact; inventory validation is shared with the API entry.
+  // binaryPaths 必须标识全部成功的 Cargo 制品；清单校验与 API 入口共用。
+  const [profile, ...binaryPaths] = process.argv.slice(2);
   const destination = execFileSync(process.execPath, [path.join(repository, 'scripts/desktop-runtime.mjs'), 'root'], { encoding: 'utf8' }).trim();
-  await publishDistribution(repository, destination, path.resolve(serviceBinary), path.resolve(terminalBinary), profile);
+  await publishDistribution(repository, destination, binaryPaths.map(binary => path.resolve(binary)), profile);
 }

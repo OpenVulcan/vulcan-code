@@ -133,7 +133,7 @@ function Assert-RustThirdPartyNoticeScope {
         }
     ) | Sort-Object -Unique
     if ($OutsideCrates.Count -gt 0) {
-        throw "Rust third-party notices include crates outside the shipped binaries' dependency graph: $($OutsideCrates -join ', '). Mark non-shipped workspace members ``publish = false`` or update scripts/shipped_rust_packages.ps1."
+        throw "Rust third-party notices include crates outside the shipped binaries' dependency graph: $($OutsideCrates -join ', '). Mark non-shipped workspace members ``publish = false`` or update scripts/shipped-rust-packages.json."
     }
 }
 

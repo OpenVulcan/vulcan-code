@@ -157,10 +157,14 @@ invoke_rust_dev_tools_deps() {
 # invoke_system_initialization bootstraps every repository dependency in the documented order.
 # invoke_system_initialization 按文档约定顺序引导全部仓库依赖。
 invoke_system_initialization() {
+    sh "$ScriptDir/scripts/install_linux_system_deps.sh"
     invoke_rust_dev_tools_deps
     invoke_powershell_route deps host
     invoke_bundled_tools_deps
     invoke_powershell_route deps lua
+    # Install the locked compiler and protobuf headers before reporting initialization complete.
+    # 报告初始化完成前，安装锁定的编译器与 protobuf 头文件。
+    node "$ScriptDir/scripts/install-locked-tools.mjs" protoc --repository-root "$ScriptDir"
     # Prepare pinned Node prerequisites before browser synchronization, without starting Core.
     # 在同步浏览器前准备锁定的 Node 前置依赖，无需启动 Core。
     node "$ScriptDir/scripts/managed-node.mjs" "$ScriptDir/output"
@@ -205,6 +209,16 @@ NormalizedMode=$(normalize_command "$CommandMode")
 # NormalizedVariant stores the canonical secondary token used to distinguish release runs from default runs.
 # NormalizedVariant 用于保存规范化的二级标记，以区分 release 运行与默认运行。
 NormalizedVariant=$(normalize_command "$CommandVariant")
+
+# Validate host tools before any routed module imports newer Node APIs; Rust-only setup stays independent.
+# 在分发模块导入新版Node API之前验证宿主工具；纯Rust工具安装保持独立。
+if [ "$NormalizedMode:$NormalizedVariant" != "deps:rust-tools" ]; then
+    if ! command -v node >/dev/null 2>&1; then
+        echo "Node.js is required to check build prerequisites. Install Node.js, then run make init-system." >&2
+        exit 1
+    fi
+    node "$ScriptDir/scripts/check-build-environment.cjs" "$NormalizedMode" "$NormalizedVariant"
+fi
 
 case "$NormalizedMode" in
     "")

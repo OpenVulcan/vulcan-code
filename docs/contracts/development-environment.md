@@ -63,18 +63,29 @@ Windows 图标与版本资源由 `winresource` 嵌入。故障通知直接调用
 
 在已经具备 `make`、Rustup stable、PowerShell 7 以及 Node.js/pnpm 的环境中，仓库依赖统一通过一个入口初始化：
 
+`make.sh` 与 `make.ps1` 在分发命令前共用 `scripts/check-build-environment.cjs` 检查宿主前置条件。系统 Node 与 pnpm 的最低版本派生自 `crates/vulcan-service-runtime/managed-runtimes.json`，不另写一份版本常量；需要 PowerShell 的入口同时检查 PowerShell 7。检查器使用旧 Node 也能运行的 CommonJS 和基础 API：服务器镜像自带旧 Node 时，会列出版本过旧、命令缺失或不可执行的具体问题，不先加载依赖 `fs/promises.cp` 等新版 API 的模块。仅安装 Rust 开发工具的 `make deps rust-tools` 不依赖 Node；`make help` 也不执行环境检查。
+
+该检查只诊断，不升级系统软件或改写用户 PATH。先安装或激活合适的宿主工具，再执行以下初始化；初始化完成后仍需显式 `make sync`，最后才能构建。受管发行运行时的精确锁定版本与宿主工具的最低版本要求是不同概念，不能用存在 `output/` 目录代替宿主检查通过。
+
 ```bash
 make init-system
 ```
 
 该命令按固定顺序执行：
 
+0. Linux 首先执行 `scripts/install_linux_system_deps.sh`，检查 GTK3/GLib/GObject/GIO、AppIndicator 或 Ayatana 的 `pkg-config` 元数据，并实际编译链接一个只验证 `libxdo` 开发文件的探针；不会运行探针。缺失时，通过 Debian/Ubuntu 的 APT 安装脚本中唯一声明的软件包集合，随后复核。已有依赖满足时不运行包管理器；普通账户没有非交互 sudo 权限时明确失败，提示管理员执行该脚本。其他发行版缺少依赖时要求先通过本机包管理器补齐；非 Linux 宿主跳过此步骤。运行库存在或桌面可以启动，不能替代开发头文件及 `.pc` 元数据。`make.sh` 和直接运行的 `make.ps1 init-system` 共用这个入口。
 1. 以 Cargo 并发度 2 安装缺失的 `cargo-hakari`、`cargo-nextest`、`cargo-deny` 与 `cargo-about`，并将低于仓库最低要求的工具更新到兼容版本。
 2. 安装宿主依赖与内建工具。
 3. 安装 LuaSkills 运行时依赖；原生 VMM 在 VulcanCode 进程内运行，不需要独立运行时安装。
 4. 取得 LanceDB 依赖闭包构建所需的随仓库 `protoc`（`protoc 31.1`）。`lancedb` 引入的 `lance-encoding` 会在其构建脚本中直接调用 `protoc`，因此没有它工作区无法编译；`.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向 `.cargo/protoc/` 下的该副本，开发机无需系统级 protobuf 安装。安装器先按锁定归档摘要验证，再解压并核验版本及头文件，准备完成后才替换安装；准备失败保留现有安装。下载产物不符时直接报错，不静默接受。该目录属于构建输入，已被 git 忽略，因此不随仓库提交。
 
 已满足版本要求的工具会被保留，不会重复安装。
+
+类 Unix 初始化同样必须实际执行锁定的 `protoc` 安装步骤，成功后才准备受管 Node 并报告完成。`node --test scripts/check-build-environment.test.cjs scripts/install-linux-system-deps.test.cjs` 使用隔离子程序验证真实入口的阶段顺序、失败传递，以及 Linux 系统依赖就绪时跳过安装、权限不足时拒绝、安装后仍未满足依赖时拒绝等行为，不运行真实包管理器或联网；`pwsh -NoProfile -File scripts/test_dependency_archive.ps1` 使用真实离线归档验证宿主与 Lua 安装器的解压、临时目录、标记及失败保留行为。
+
+宿主依赖与 Lua 运行时安装器通过 `scripts/dependency-archive.ps1` 共用解压规则：Windows 使用系统 `tar.exe` 或 PATH 中的同名应用，Linux/macOS 使用 PATH 中的 `tar`；ZIP 解压不额外要求 tar。RTK 临时文件使用平台临时目录接口，不要求 Unix 设置 Windows 的 `TEMP` 变量。原生 tar 返回非零退出码时立即失败，不继续发布文件或写入安装标记。
+
+RTK 安装器可复用 `third_party/` 中名称匹配且摘要正确的官方归档；检出目录中已有的 RTK 许可证也须与固定上游标签的 SHA-256 一致后才能复用，安装标记不能代替内容校验。网络受限时可从其他机器取得同一官方归档，经传输后仍由原安装器校验，不修改版本或跳过摘要验证。
 
 Rust 工具已存在时会只打印版本并跳过安装，不会重复编译或覆盖现有工具。Windows 通过 `make.ps1` 执行，类 Unix 环境通过 `make.sh` 转发到同一套 PowerShell 依赖入口。
 
@@ -183,6 +194,10 @@ scripts/build-inputs.lock.json 是内建 sg、rg 和 protoc 的版本、各平�
 发布构建每次执行前端与桌面的 pnpm install --frozen-lockfile，Rust 构建使用 --locked。依赖声明与锁文件不一致必须失败，不能在发行过程中更新锁文件。
 
 ## 类 Unix 完整发行目录切换
+
+全部平台的分发 Rust 包与二进制名称以 `scripts/shipped-rust-packages.json` 为唯一清单。PowerShell 的构建及第三方声明入口、Unix 的 Cargo 包选择与发布校验共用该清单。Unix 必须把 Core、终端宿主、判定宿主与 TUI 的本轮成功制品全部带入暂存目录；缺失或重复制品直接失败，不能借用旧 `output/bin` 文件补齐。`node --test scripts/unix-distribution.test.mjs scripts/directory-publication.test.mjs` 在隔离目录验证 debug/release 完整发布、旧 TUI 掩盖缺失制品的拒绝，以及切换失败时保留旧发行物；该测试不替代真实 Rust、Electron 和应用运行验收。
+
+Unix 构建在执行 Cargo 前，调用锁定 Electron npm 包自带的 `install.js` 核验运行时版本、路径标记及可执行文件。`node_modules` 存在不表示 Electron 运行时已下载；缺失时仍由官方安装器按该 npm 包内置校验和准备运行时，下载或解压失败立即终止，不跳过验证、不使用其他版本。网络受限时可以经其他机器取得同版本官方归档，完整摘要核验后填充该安装器的缓存，再由原安装器完成解压；不手写 `path.txt` 冒充安装成功。
 
 先退出当前发行物的服务与桌面，再执行构建。Unix 构建入口在所有编译成功后，将已有同步资源复制到仓库 target 内的独立暂存目录，加入新二进制并运行既有桌面打包、布局校验。准备失败不改动正式目录；缺少同步资源仍需显式执行 make sync，不在构建时隐式同步。
 

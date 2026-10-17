@@ -10,6 +10,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Use the same host-aware extractor as the Lua runtime installer.
+# 与 Lua 运行时安装器使用同一套按宿主选择的解压逻辑。
+. (Join-Path $PSScriptRoot 'dependency-archive.ps1')
 $ProjectDir = Split-Path $PSScriptRoot -Parent
 Set-Location $ProjectDir
 
@@ -34,6 +37,10 @@ $RtkTag = "v0.42.4"
 
 # RtkLicenseUrl points at the tag-pinned source license because RTK binary assets do not include it.
 $RtkLicenseUrl = "https://raw.githubusercontent.com/rtk-ai/rtk/$RtkTag/LICENSE"
+
+# RtkLicenseSha256 binds reused and downloaded license bytes to the exact pinned upstream tag.
+# RtkLicenseSha256 将复用与下载的许可证字节绑定到固定的上游标签。
+$RtkLicenseSha256 = "4044ade9c21d8b084d3d16a03375cf3b7e166b946a327bb37a3fbbdb53287cfd"
 
 # RtkLicenseFile stores the pinned license as part of the bundled plugin package.
 # RtkLicenseFile 把固定版本许可证保存为内建插件包的一部分。
@@ -102,14 +109,6 @@ function Test-ExpectedSha256 {
     if ($actualHash -ne $expectedHashLower) {
         throw ("Checksum mismatch for {0}. Expected {1}, got {2}" -f $Label, $expectedHashLower, $actualHash)
     }
-}
-
-function Get-AvailableTarPath {
-    $systemTar = "$env:SystemRoot\System32\tar.exe"
-    if (Test-Path -LiteralPath $systemTar) { return $systemTar }
-    $tarCommand = Get-Command "tar.exe" -ErrorAction SilentlyContinue
-    if ($tarCommand) { return $tarCommand.Source }
-    throw "tar.exe is required to extract host dependency archives"
 }
 
 function Get-CurrentArchitectureKey {
@@ -215,7 +214,6 @@ function Install-RtkBinary {
     Ensure-Dir $RtkBinRoot
 
     $assetInfo = Get-RtkAssetInfo
-    $tarPath = Get-AvailableTarPath
     $tagName = $RtkTag
     $assetName = "rtk-$($assetInfo.target)$($assetInfo.archive_ext)"
     # targetBinDir is the exact directory declared for this target in the plugin manifest.
@@ -249,10 +247,10 @@ function Install-RtkBinary {
         }
     }
 
-    $tempDir = Join-Path $env:TEMP ('rtk_{0}' -f $PID)
-    if (Test-Path -LiteralPath $tempDir) {
-        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    # tempRoot and tempDir use the platform API because Unix does not require a TEMP environment variable.
+    # tempRoot 与 tempDir 使用平台接口，因为 Unix 不要求存在 TEMP 环境变量。
+    $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $tempDir = Join-Path $tempRoot ('vulcan_rtk_' + [Guid]::NewGuid().ToString('N'))
     Ensure-Dir $tempDir
 
     try {
@@ -270,7 +268,7 @@ function Install-RtkBinary {
         if ($assetInfo.archive_ext -eq ".zip") {
             Expand-Archive -Path $archivePath -DestinationPath $tempDir -Force
         } else {
-            & $tarPath -xzf $archivePath -C $tempDir
+            Expand-DependencyTarArchive -ArchivePath $archivePath -DestinationPath $tempDir
         }
 
         $binarySource = Get-ChildItem -Path $tempDir -Recurse -File -Filter $assetInfo.binary_name -ErrorAction SilentlyContinue |
@@ -281,11 +279,17 @@ function Install-RtkBinary {
 
         Copy-Item -LiteralPath $binarySource.FullName -Destination $binaryDest -Force
 
-        Get-ChildItem -Path $targetBinDir -Filter ".installed-*" -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $targetBinDir -Filter ".installed-*" -File -Force -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
         New-Item -ItemType File -Path $markerFile -Force | Out-Null
         Write-Host "==> RTK host binary installed successfully."
     } finally {
+        # resolvedTempDir must remain an immediate child of the declared temporary root before recursive cleanup.
+        # 递归清理前，resolvedTempDir 必须仍为声明临时根目录的直属子目录。
+        $resolvedTempDir = [System.IO.Path]::GetFullPath($tempDir)
+        if ([System.IO.Path]::GetDirectoryName($resolvedTempDir) -ne $tempRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar)) {
+            throw "Refusing temporary cleanup outside the declared temporary root: $resolvedTempDir"
+        }
         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
@@ -299,18 +303,35 @@ function Install-RtkLicense {
     # licenseMarker records the exact tag represented by the packaged license.
     # licenseMarker 记录已打包许可证对应的精确标签。
     $licenseMarker = Join-Path $RtkBinRoot ".license-$RtkTag"
-    if ((Test-Path -LiteralPath $licenseMarker) -and (Test-Path -LiteralPath $RtkLicenseFile)) {
+    # licenseMatches treats markers as bookkeeping; only the actual bytes establish a reusable installation.
+    # licenseMatches 将标记仅视为记账信息；只有实际字节才能证明安装可复用。
+    $licenseMatches = (Test-Path -LiteralPath $RtkLicenseFile) -and
+        ((Get-FileHash -LiteralPath $RtkLicenseFile -Algorithm SHA256).Hash.ToLowerInvariant() -eq $RtkLicenseSha256)
+    if ((Test-Path -LiteralPath $licenseMarker) -and $licenseMatches) {
         Write-Host "==> RTK license already installed ($RtkTag)."
         return
     }
 
-    $tempLicenseFile = Join-Path $env:TEMP ('rtk_license_{0}' -f $PID)
+    # A fresh checkout can already contain the exact license; verify it before creating the installation marker.
+    # 新检出目录可能已包含精确许可证；先校验内容，再创建安装标记。
+    if ($licenseMatches) {
+        Get-ChildItem -LiteralPath $RtkBinRoot -Filter ".license-*" -File -Force -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType File -Path $licenseMarker -Force | Out-Null
+        Write-Host "==> Reusing verified RTK license ($RtkTag)."
+        return
+    }
+
+    # tempLicenseFile also uses the cross-platform temporary path API.
+    # tempLicenseFile 同样使用跨平台临时路径接口。
+    $tempLicenseFile = Join-Path ([System.IO.Path]::GetTempPath()) ('rtk_license_' + [Guid]::NewGuid().ToString('N'))
     try {
         Write-Host "==> Downloading RTK license: $RtkTag"
         Invoke-WebRequest -Uri $RtkLicenseUrl -OutFile $tempLicenseFile -UseBasicParsing
+        Test-ExpectedSha256 -Path $tempLicenseFile -ExpectedHash $RtkLicenseSha256 -Label "RTK $RtkTag license"
         Copy-Item -LiteralPath $tempLicenseFile -Destination $RtkLicenseFile -Force
 
-        Get-ChildItem -Path $RtkBinRoot -Filter ".license-*" -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $RtkBinRoot -Filter ".license-*" -File -Force -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
         New-Item -ItemType File -Path $licenseMarker -Force | Out-Null
         Write-Host "==> RTK license installed successfully."

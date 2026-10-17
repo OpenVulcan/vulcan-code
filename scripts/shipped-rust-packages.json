@@ -1,0 +1,6 @@
+[
+  { "package": "vulcan-code-service", "binary": "vulcan-code-service" },
+  { "package": "vulcan-terminal-host", "binary": "vulcan-terminal-host" },
+  { "package": "vulcan-judge-host", "binary": "vulcan-judge-host" },
+  { "package": "vulcan-code-tui", "binary": "vulcan-tui" }
+]

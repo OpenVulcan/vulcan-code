@@ -5,6 +5,9 @@
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/install_lua_deps.ps1
 
 $ErrorActionPreference = "Stop"
+# Use the same host-aware extractor as the host dependency installer.
+# 与宿主依赖安装器使用同一套按宿主选择的解压逻辑。
+. (Join-Path $PSScriptRoot 'dependency-archive.ps1')
 
 # Relaunch under PowerShell 7 when available so UTF-8 sources and modern script behavior stay stable.
 # 若检测到 PowerShell 7，则自动在其下重启，确保 UTF-8 源文件与现代脚本行为保持稳定。
@@ -275,29 +278,6 @@ function Get-CurrentPlatformKey {
     throw "Unsupported operating system for LuaSkills runtime assets."
 }
 
-function Get-AvailableTarPath {
-    <#
-    .SYNOPSIS
-    Resolve an available tar executable for .tar.gz extraction.
-    解析可用于解压 .tar.gz 的 tar 可执行文件。
-
-    .OUTPUTS
-    Full path or command path for tar.
-    tar 的完整路径或命令路径。
-    #>
-    $SystemTar = "$env:SystemRoot\System32\tar.exe"
-    if (Test-Path -LiteralPath $SystemTar) {
-        return $SystemTar
-    }
-
-    $TarCommand = Get-Command "tar.exe" -ErrorAction SilentlyContinue
-    if ($TarCommand) {
-        return $TarCommand.Source
-    }
-
-    throw "tar.exe is required to extract the LuaSkills runtime package."
-}
-
 function Get-ReleaseAssetInfo {
     <#
     .SYNOPSIS
@@ -527,16 +507,14 @@ function Install-LuaRuntimePayloads {
         return
     }
 
-    $TarPath = Get-AvailableTarPath
-    $RuntimeTempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("vulcan_runtime_packages_{0}" -f $PID)
-
-    if (Test-Path -LiteralPath $RuntimeTempDir) {
-        Remove-Item -LiteralPath $RuntimeTempDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    # RuntimeTemporaryRoot and RuntimeTempDir isolate this invocation without reusing another process's files.
+    # RuntimeTemporaryRoot 与 RuntimeTempDir 隔离本次调用，不复用其他进程的文件。
+    $RuntimeTemporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $RuntimeTempDir = Join-Path $RuntimeTemporaryRoot ('vulcan_runtime_packages_' + [Guid]::NewGuid().ToString('N'))
     Ensure-Dir $RuntimeTempDir
 
     try {
-        & $TarPath -xzf $RuntimeArchivePath -C $RuntimeTempDir
+        Expand-DependencyTarArchive -ArchivePath $RuntimeArchivePath -DestinationPath $RuntimeTempDir
 
         Clear-RuntimeInstallRoot
 
@@ -561,11 +539,17 @@ function Install-LuaRuntimePayloads {
             throw "LuaSkills packages manifest was not found after installing runtime packages."
         }
 
-        Get-ChildItem -Path $RuntimeInstallRoot -Filter ".installed-*" -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $RuntimeInstallRoot -Filter ".installed-*" -File -Force -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
         New-Item -ItemType File -Path $MarkerFile -Force | Out-Null
         Write-Host "==> LuaSkills runtime payloads installed to $RuntimeInstallRoot"
     } finally {
+        # ResolvedRuntimeTempDir is checked against its declared parent before recursive cleanup.
+        # 递归清理前，ResolvedRuntimeTempDir 必须通过声明父目录的边界检查。
+        $ResolvedRuntimeTempDir = [System.IO.Path]::GetFullPath($RuntimeTempDir)
+        if ([System.IO.Path]::GetDirectoryName($ResolvedRuntimeTempDir) -ne $RuntimeTemporaryRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar)) {
+            throw "Refusing temporary cleanup outside the declared temporary root: $ResolvedRuntimeTempDir"
+        }
         Remove-Item -LiteralPath $RuntimeTempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
