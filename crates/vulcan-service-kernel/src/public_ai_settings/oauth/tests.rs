@@ -20,8 +20,8 @@ async fn cached_runtime() -> (
     // runtime uses the actual bundled manifests and production SQLite credential adapter.
     // runtime 使用真实随包清单与生产 SQLite 凭据适配器。
     let runtime = PublicAiRuntime::first_batch(fixture.store.clone()).unwrap();
-    // configuration starts with two legacy Go Key connections whose usage primitive performs no I/O.
-    // configuration 从两个旧 Go Key 连接开始，其用量原语不执行 I/O。
+    // configuration seeds observations through an explicitly unsupported Anthropic query, without I/O.
+    // configuration 通过明确不支持的 Anthropic 查询植入观测，不执行 I/O。
     let mut configuration = PersistedAiConfiguration::default();
     for id in ["reauthorized-account", "retained-account"] {
         fixture
@@ -36,8 +36,8 @@ async fn cached_runtime() -> (
             id.to_string(),
             CredentialConnection {
                 id: id.to_string(),
-                provider_id: String::from("opencode-go"),
-                service_entry_id: String::from("go-api"),
+                provider_id: String::from("anthropic"),
+                service_entry_id: String::from("public-api"),
                 credential_profile_id: String::from("api-key"),
                 credential_mode: CredentialMode::Token,
                 credential_id: id.to_string(),
@@ -52,6 +52,15 @@ async fn cached_runtime() -> (
             .query_connection_usage(&configuration, id)
             .await
             .unwrap();
+        // connection restores the actual Go identity after the offline-only observation was seeded.
+        // connection 在仅离线植入观测后恢复真实 Go 身份。
+        let connection = configuration
+            .connection_graph
+            .connections
+            .get_mut(id)
+            .unwrap();
+        connection.provider_id = String::from("opencode-go");
+        connection.service_entry_id = String::from("go-api");
     }
     (fixture, runtime, configuration)
 }
@@ -98,7 +107,6 @@ async fn reauthorization_discards_previous_usage_and_preserves_rollback_image() 
             .connections
             .get_mut("reauthorized-account")
             .unwrap();
-        connection.service_entry_id = String::from("go-oauth-api");
         connection.credential_profile_id = String::from("account-oauth");
         connection.credential_mode = CredentialMode::Auth;
         if invalid_catalog {

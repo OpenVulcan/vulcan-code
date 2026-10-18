@@ -269,8 +269,8 @@ async fn credential_identity_validation_discards_previous_usage_and_preserves_ro
         // runtime uses the production credential adapter and the actual bundled declarations.
         // runtime 使用生产凭据适配器与真实随包声明。
         let runtime = PublicAiRuntime::first_batch(fixture.store.clone()).unwrap();
-        // configuration seeds two observations through the legacy unsupported, network-free query.
-        // configuration 通过旧版不受支持且无网络访问的查询植入两个观测。
+        // configuration seeds two observations through the explicitly unsupported Anthropic query.
+        // configuration 通过明确不支持的 Anthropic 查询植入两个观测。
         let mut configuration = PersistedAiConfiguration::default();
         for id in ["changed-account", "retained-account"] {
             fixture
@@ -286,8 +286,8 @@ async fn credential_identity_validation_discards_previous_usage_and_preserves_ro
                 id.to_string(),
                 CredentialConnection {
                     id: id.to_string(),
-                    provider_id: String::from("opencode-go"),
-                    service_entry_id: String::from("go-api"),
+                    provider_id: String::from("anthropic"),
+                    service_entry_id: String::from("public-api"),
                     credential_profile_id: String::from("api-key"),
                     credential_mode: CredentialMode::Token,
                     credential_id: id.to_string(),
@@ -302,6 +302,15 @@ async fn credential_identity_validation_discards_previous_usage_and_preserves_ro
                 .query_connection_usage(&configuration, id)
                 .await
                 .unwrap();
+            // connection returns to Go after the offline observation, before replacement is tested.
+            // connection 在离线植入观测后回到 Go，再验证凭据替换。
+            let connection = configuration
+                .connection_graph
+                .connections
+                .get_mut(id)
+                .unwrap();
+            connection.provider_id = String::from("opencode-go");
+            connection.service_entry_id = String::from("go-api");
         }
         // previous_usage and before_image preserve account observations for transaction compensation.
         // previous_usage 与 before_image 为事务补偿保留账号观测。
@@ -318,15 +327,13 @@ async fn credential_identity_validation_discards_previous_usage_and_preserves_ro
         )
         .await
         .unwrap();
-        // connection selects the new static-key profile without changing its stable cache key.
-        // connection 选择新的静态密钥凭据档，不改变稳定缓存键。
+        // connection keeps the shared Key profile and its stable cache key after secret replacement.
+        // connection 在替换秘密后保留共享 Key 凭据档及稳定缓存键。
         let connection = configuration
             .connection_graph
             .connections
             .get_mut("changed-account")
             .unwrap();
-        connection.service_entry_id = String::from("go-oauth-api");
-        connection.credential_profile_id = String::from("console-api-key");
         if invalid_catalog {
             connection.service_entry_id = String::from("unregistered-entry");
         }

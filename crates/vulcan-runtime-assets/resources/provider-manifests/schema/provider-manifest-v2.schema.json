@@ -2088,6 +2088,17 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["op", "path", "limit_path", "minimum"],
+          "properties": {
+            "op": {"const": "fit_thinking_budget"},
+            "path": {"type": "string"},
+            "limit_path": {"type": "string"},
+            "minimum": {"type": "integer", "minimum": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["op", "path", "value"],
           "properties": {
             "op": {"const": "set_literal"},

@@ -126,6 +126,82 @@ fn request_profile_rejects_non_object_target_ancestor_without_panic() {
     assert!(error.contains("non-object"), "{error}");
 }
 
+/// Verifies thinking budgets reserve answer space and reject malformed or impossible integer bounds.
+/// 验证思考预算预留答案空间，并拒绝格式错误或无法满足的整数边界。
+/// No parameters; checks fitting, overflow extremes, optional values, and pre-dispatch failures.
+/// 无参数；检查预算调整、溢出极值、可选值与分派前失败。
+#[test]
+fn thinking_budget_projection_respects_output_limits_and_integer_bounds() {
+    // profile uses the same declarative primitive as the provider's model-specific budget variant.
+    // profile 使用与供应商模型预算变体相同的声明式原语。
+    let profile = crate::provider_manifest::RequestProjectionProfile {
+        profile_id: String::from("thinking-budget.v1"),
+        revision: 1,
+        steps: vec![crate::provider_manifest::MappingStep::FitThinkingBudget {
+            path: String::from("/thinking/budget_tokens"),
+            limit_path: String::from("/max_tokens"),
+            minimum: 1024,
+        }],
+    };
+    for (budget, limit, expected) in [
+        (16000, 64000, 16000),
+        (31999, 32768, 16384),
+        (16000, 2049, 1024),
+        (u64::MAX, u64::MAX, u64::MAX / 2),
+    ] {
+        // projected comes from the production profile interpreter with no transport involved.
+        // projected 来自生产投影解释器，不涉及传输。
+        let projected = project_json_request_profiles(
+            std::slice::from_ref(&profile),
+            "budget-model",
+            json!({"max_tokens":limit,"thinking":{"type":"enabled","budget_tokens":budget}}),
+        )
+        .unwrap();
+        assert_eq!(projected["thinking"]["budget_tokens"], expected);
+        assert_eq!(projected["max_tokens"], limit);
+    }
+    for body in [
+        json!({"max_tokens":32768,"thinking":{"type":"disabled"}}),
+        json!({"thinking":{"type":"enabled","budget_tokens":16000}}),
+    ] {
+        assert_eq!(
+            project_json_request_profiles(
+                std::slice::from_ref(&profile),
+                "budget-model",
+                body.clone()
+            )
+            .unwrap(),
+            body,
+        );
+    }
+    for invalid in [json!(-1), json!(1.5), json!("16000"), Value::Null, json!(0)] {
+        assert!(
+            project_json_request_profiles(
+                std::slice::from_ref(&profile),
+                "budget-model",
+                json!({"max_tokens":32768,"thinking":{"budget_tokens":invalid}}),
+            )
+            .is_err()
+        );
+        assert!(
+            project_json_request_profiles(
+                std::slice::from_ref(&profile),
+                "budget-model",
+                json!({"max_tokens":invalid,"thinking":{"budget_tokens":16000}}),
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        project_json_request_profiles(
+            &[profile],
+            "budget-model",
+            json!({"max_tokens":1024,"thinking":{"budget_tokens":16000}}),
+        )
+        .is_err()
+    );
+}
+
 /// Verifies enum maps use one deterministic key representation for every supported scalar.
 /// 验证枚举映射为每一种受支持标量使用统一且确定的键表示。
 #[test]

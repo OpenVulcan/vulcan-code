@@ -7,6 +7,9 @@
 
 - OpenCode `v2` 固定提交 `4617210822bdbb31e5749751afbfb4584ccedac8`，
   `packages/core/src/plugin/provider/opencode.ts`：设备授权、组织作用域、刷新、用户及组织读取。
+- 同一提交的 `packages/core/src/models-dev/snapshot.txt`、`models-dev.ts`、`plugin/models-dev.ts`、
+  `aisdk-native.ts` 与 `variant.ts`：Go 模型目录、弃用过滤、SDK 协议、上下文、输出、模态及思考变体。
+  `packages/ai/src/protocols/shared.ts` 与 `anthropic-messages.ts`：显式思考预算与输出上限联动。
 - [官方推理协议](https://opencode.ai/v2/docs/console/api/inference/)、
   [Console 鉴权与服务账号](https://opencode.ai/v2/docs/console/api/)、
   [逐模型端点](https://opencode.ai/v2/docs/console/models/)、
@@ -30,7 +33,8 @@
 授权端固定为 `https://opencode.ai/console`。Vulcan Code 使用自有客户端标识 `vulcan-code`，
 不冒用上游的 `opencode-cli`；所有新请求复用推理模块持有的 Vulcan Code User-Agent。
 
-Console API Key 使用 `oc_sk_` 前缀及标准 `ApiKey` 材料；该 Key 已绑定工作区，
+API 模式使用标准 `ApiKey` 材料，密钥作为不透明 Bearer 发送，不按 `sk-` 或 `oc_sk_` 前缀区分网关。
+已验证的服务账号 Key 已绑定工作区，
 不生成 OAuth 组织身份，也不发送 `x-org-id`。官方服务账号权限与实测访问结果需分别记录，
 不能将这把 Key 的余额 `403` 扩大解释为所有 API Key 都不能访问余额。
 
@@ -55,18 +59,29 @@ Console API Key 使用 `oc_sk_` 前缀及标准 `ApiKey` 材料；该 Key 已绑
 
 ## 推理与既有连接
 
-Console 入口保留 `go-oauth-api` 身份，提供 `account-oauth` 与 `console-api-key` 两个凭据档。
-两者共用已定义的目录和协议，新增 Key 不改写既有连接的入口或凭据档。
+只保留 `go-api` 一个入口，认证选择为 `OpenCode Go Account`（`account-oauth`）与
+`OpenCode Go API`（`api-key`）。单入口供应商的添加账号对话框不再显示服务入口选择。
+原 API 连接保留入口、凭据档、连接 ID 及秘密引用；不保留旧网关运行模式或自动探测逻辑。
 两类凭据均使用 `https://opencode.ai/inference/go`；OAuth 发送 Bearer 令牌、
 `x-org-id` 与当前会话自己的 `x-opencode-session`。不经重定向转发凭据，不将新令牌发往旧 Go 网关。
-普通开放模型走 `/openai/v1/chat/completions`，GPT 5.6 Luna 走 `/openai/v1/responses`。
+普通开放模型走 `/openai/v1/chat/completions`，GPT、Grok、Muse Spark 走 `/openai/v1/responses`，
+Claude、MiniMax、Qwen 按源码 SDK 绑定走 `/anthropic/v1/messages`。鉴权配置还明确公布了
+MiniMax 与 Qwen 的 Go Anthropic 基地址；不能将通用公开模型表中的 Chat 路由覆盖到这个套餐配置。
+具有视频输入声明的 Messages 模型使用宿主既有 `anthropic-messages-video.v1` 编码扩展，端点不变。
 
-当前 Console 目录取既有已定义模型、核对当日 Go 套餐成员和线上模型身份的交集，共 8 项：
-DeepSeek V4 Pro、GLM-5.2、GLM-5.3、GPT-5.6 Luna、Kimi K2.7 Code、Kimi K3、MiniMax M3、Qwen3.8 Max。
-所有协议均按官方逐模型端点绑定；不从模型名称猜测。
-旧 `go-api/api-key` 入口、目录、模型选择与持久连接保持原有身份，不能将 Key 自动改写为 OAuth。
-旧 `sk-` Key 未完成新版 Console 用量接口的真实验证，旧入口仍不声明用量支持；
-已验证的 `oc_sk_` Key 应选择 Console 入口的 API Key 凭据档。
+Account 与 API 共用固定源码目录：上游 `opencode-go` 的 31 个未弃用文本输出模型。
+上下文、最大输出、输入模态及明确支持温度的模型逐项从同一快照映射；PDF 对应本仓的 `file` 资源。
+思考档位先按 SDK 协议执行 `Variant.resolve` 的规则，再映射到本仓控制字段；不把只声明在快照中、
+但该 SDK 没有生成的开关当作可选参数。Qwen3.7 Plus 的预算变体还按上游规则随实际输出上限缩减，
+输出不足以容纳最低预算时显式拒绝，绝不偷偷增大用户输出设置。
+
+静态源码目录不等同于账号实时可用性。核对日的鉴权配置包含 29 个 Go 模型，
+相对于该固定源码快照新增 Beam Free、Gemini 4 Argon Contributor、Step 5 Preview，
+未包含快照中的五个旧型号；上游会将远端配置叠加在源码目录上。
+本次按用户要求对齐固定 v2 源码目录，后续更新须同时核对快照、协议实现与生产配置，不能混用其他日期参数。
+
+删除旧入口不会在应用启动时迁移或回写配置。已保存的 `go-oauth-api/account-oauth` 连接需要通过
+显式维护将入口改为 `go-api`，秘密及其他账号字段保持原样；操作前保留原字节备份。
 
 ## 账户额度
 
@@ -99,3 +114,13 @@ OAuth 测试保留双端点读取及余额失败时整体失败的行为。
 在线诊断测试运行后删除，永久测试只保留不依赖真实服务的协议与行为覆盖。
 真实 OAuth 账号批准、令牌刷新、余额读取与付费模型调用仍须在用户完成授权后进行运行时验收，
 不将 API Key 实测或模拟通过写成 OAuth 线上验收通过。
+
+### 2026-10-18 提交前检查
+
+- Go 定向测试 16 项、思考预算边界测试 2 项、凭据替换及重授权回滚测试 2 项通过。
+- 22 个供应商声明与索引有效，107 个生产目标具备覆盖，45 个执行 fixture 通过。
+- 前端类型检查、账号设置文件的代码规范检查、相关 Rust 文件格式检查与暂存差异检查通过。
+- 清单按仓库要求保存为 LF，索引按实际暂存字节校验；本提交仅更新 Go 的供应商固定值。
+  资源同步后，72 个相关资源文件与发行目录逐字节一致。
+
+这些检查不增加真实 OAuth 授权或付费模型调用的线上验收范围。

@@ -175,10 +175,10 @@ APIKEY.FAN 证明了一个常见陷阱：同一个供应商的每个 API Key 可
 基地址和路由必须按真实入口拆分，避免重复 `/v1`：
 
 ```text
-base_url:     https://opencode.ai/zen/go/v1
-Chat:        /chat/completions
-Anthropic:   /messages
-Responses:   /responses
+base_url:     https://opencode.ai/inference/go
+Chat:        /openai/v1/chat/completions
+Anthropic:   /anthropic/v1/messages
+Responses:   /openai/v1/responses
 ```
 
 常见错误是把 `base_url` 写成已含 `/v1`，同时把 `endpoint_path` 再写成 `/v1/responses`，最终形成

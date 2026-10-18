@@ -3803,6 +3803,15 @@ fn validate_one_projection_payload(
             );
         }
         match step {
+            crate::provider_manifest::schema::MappingStep::FitThinkingBudget {
+                minimum, ..
+            } if *minimum == 0 => {
+                errors.push(ManifestValidationError::new(
+                    "invalid_thinking_budget_minimum",
+                    &step_path,
+                    "fit_thinking_budget minimum must be positive",
+                ));
+            }
             crate::provider_manifest::schema::MappingStep::EnumMap {
                 source_path,
                 mapping,
@@ -4244,6 +4253,7 @@ fn projection_step_write_path(
     match step {
         crate::provider_manifest::schema::MappingStep::SetLiteral { path, .. }
         | crate::provider_manifest::schema::MappingStep::SetDefaultIfMissing { path, .. }
+        | crate::provider_manifest::schema::MappingStep::FitThinkingBudget { path, .. }
         | crate::provider_manifest::schema::MappingStep::EnumMap { path, .. }
         | crate::provider_manifest::schema::MappingStep::WrapSingletonArray { path }
         | crate::provider_manifest::schema::MappingStep::UnwrapSingletonArray { path }
@@ -4283,6 +4293,12 @@ fn projection_step_sources(
 ) -> Vec<(crate::provider_manifest::schema::MappingStepSource, &str)> {
     use crate::provider_manifest::schema::{MappingStep, MappingStepSource};
     match step {
+        MappingStep::FitThinkingBudget {
+            path, limit_path, ..
+        } => vec![
+            (MappingStepSource::BodyJsonPointer, path.as_str()),
+            (MappingStepSource::BodyJsonPointer, limit_path.as_str()),
+        ],
         MappingStep::CopyJsonPointer { from, .. } | MappingStep::RenameJsonPointer { from, .. } => {
             vec![(MappingStepSource::BodyJsonPointer, from.as_str())]
         }
@@ -4359,6 +4375,7 @@ fn response_projection_step_requires_request_context(
 ) -> bool {
     match step {
         crate::provider_manifest::schema::MappingStep::StringTemplate { .. }
+        | crate::provider_manifest::schema::MappingStep::FitThinkingBudget { .. }
         | crate::provider_manifest::schema::MappingStep::CopyRequestField { .. } => true,
         crate::provider_manifest::schema::MappingStep::EnumMap { source, .. }
         | crate::provider_manifest::schema::MappingStep::ConditionalSet { source, .. }

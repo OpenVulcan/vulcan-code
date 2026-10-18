@@ -210,6 +210,135 @@ fn model_level_protocol_routing_uses_declared_bindings_per_model() {
     );
 }
 
+/// Verifies Go Account and API credentials resolve identical native model controls through production chains.
+/// 验证 Go Account 与 API 凭据通过生产链解析相同的原生模型控制参数。
+/// No parameters; checks adaptive thinking, explicit budgets, disabled thinking, and family-specific efforts.
+/// 无参数；检查自适应思考、显式预算、关闭思考及各协议家族的强度字段。
+#[test]
+fn opencode_credentials_share_model_protocols_and_native_parameter_projection() {
+    use vulcan_ai_contract::ReasoningEffort;
+    // manifests supplies the same compiled model bindings and profiles used by runtime selection.
+    // manifests 提供运行时选择使用的相同已编译模型绑定与投影。
+    let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
+    // manifest is the exact Go product authority, separate from pay-as-you-go OpenCode.
+    // manifest 是精确 Go 产品权威，与按量付费 OpenCode 分开。
+    let manifest = manifests
+        .get("opencode-go")
+        .expect("Go manifest must exist");
+    // client runs the actual protocol encoder after installing the production model projection chain.
+    // client 安装生产模型投影链后运行实际协议编码器。
+    let client = crate::execution::ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().unwrap()),
+    );
+    for credential_profile_id in ["account-oauth", "api-key"] {
+        for (model_id, effort, expected_thinking, expected_effort) in [
+            (
+                "qwen3.7-plus",
+                ReasoningEffort::High,
+                serde_json::json!({"type":"enabled","budget_tokens":16000}),
+                None,
+            ),
+            (
+                "qwen3.7-plus",
+                ReasoningEffort::Max,
+                serde_json::json!({"type":"enabled","budget_tokens":16384}),
+                None,
+            ),
+            (
+                "qwen3.7-plus",
+                ReasoningEffort::None,
+                serde_json::json!({"type":"disabled"}),
+                None,
+            ),
+            (
+                "qwen3.8-max",
+                ReasoningEffort::Low,
+                serde_json::json!({"type":"adaptive","display":"summarized"}),
+                Some("low"),
+            ),
+            (
+                "qwen3.8-max",
+                ReasoningEffort::XHigh,
+                serde_json::json!({"type":"adaptive","display":"summarized"}),
+                Some("xhigh"),
+            ),
+            (
+                "claude-haiku-5-5",
+                ReasoningEffort::High,
+                serde_json::json!({"type":"adaptive","display":"summarized"}),
+                Some("high"),
+            ),
+            (
+                "minimax-m3",
+                ReasoningEffort::Adaptive,
+                serde_json::json!({"type":"adaptive","display":"summarized"}),
+                None,
+            ),
+            (
+                "minimax-m3",
+                ReasoningEffort::None,
+                serde_json::json!({"type":"disabled"}),
+                None,
+            ),
+        ] {
+            // rule owns this model's sole protocol and inherited credential scope.
+            // rule 持有此模型的唯一协议与继承凭据作用域。
+            let rule = manifest
+                .rule_for_model("go-api", Some(credential_profile_id), model_id)
+                .expect("expected Go model may have changed in the upstream catalog");
+            // protocol must be declared by the exact model rule rather than selected by credential type.
+            // protocol 必须由精确模型规则声明，不按凭据种类选择。
+            let protocol = rule.selected_protocol.as_deref().unwrap();
+            // route uses the actual shared service definition and the exact credential profile.
+            // route 使用真实共享服务定义与精确凭据档。
+            let mut route = crate::execution::test_support::bundled_manifest_route(
+                "opencode-go",
+                "go-api",
+                protocol,
+            );
+            // credential_profile preserves material-mode identity while sharing the model route.
+            // credential_profile 在共享模型路由时保留材料模式身份。
+            let credential_profile = route
+                .entry
+                .credential_profile(credential_profile_id)
+                .unwrap();
+            route.connection.credential_profile_id = credential_profile.id.clone();
+            route.connection.credential_mode = credential_profile.credential_mode;
+            route.request_projection_profiles =
+                crate::runtime::selection::profiles::resolve_request_projection_chain(
+                    manifest,
+                    "go-api",
+                    Some(credential_profile_id),
+                    model_id,
+                    Vec::new(),
+                )
+                .unwrap();
+            // request exercises a real output bound so budget fitting is tested after model mapping.
+            // request 使用真实输出边界，在模型映射后验证预算调整。
+            let mut request = crate::execution::test_support::minimal_request();
+            request.model_id = model_id.to_string();
+            request.reasoning_effort = Some(effort);
+            request.output_token_limit = Some(32768);
+            // encoded must carry native thinking data and omit synthetic effort labels for toggles and budgets.
+            // encoded 必须携带原生思考数据，并对开关及预算省略合成强度标签。
+            let encoded = client.encode_request(&route, &request).unwrap();
+            assert_eq!(
+                encoded.body["thinking"], expected_thinking,
+                "{model_id} {credential_profile_id}"
+            );
+            assert_eq!(
+                encoded
+                    .body
+                    .pointer("/output_config/effort")
+                    .and_then(serde_json::Value::as_str),
+                expected_effort
+            );
+            assert_eq!(encoded.body["max_tokens"], 32768);
+        }
+    }
+}
+
 /// Verifies APIKEY.FAN routes a credential-only connection through its signed model binding.
 /// 验证 APIKEY.FAN 会通过已签名模型绑定路由仅含凭据身份的连接。
 #[test]

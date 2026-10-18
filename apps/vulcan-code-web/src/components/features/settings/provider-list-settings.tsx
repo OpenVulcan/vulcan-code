@@ -1149,7 +1149,7 @@ export function PublicAiConnectionDialog(props: {
               </Select>
             </span>
           </label>
-          <label className="settings-form-field">
+          {provider && provider.service_entries.length > 1 && <label className="settings-form-field">
             <span>{t("settings.credentials.serviceEntry")}</span>
             {provider?.credential_registration === "mini_max_regional_api_key"
               && credentialMode === "token" ? (
@@ -1170,7 +1170,7 @@ export function PublicAiConnectionDialog(props: {
                 </SelectContent>
               </Select>
             )}
-          </label>
+          </label>}
           <label className="settings-form-field">
             <span>{t("settings.credentials.credentialType")}</span>
             <Select

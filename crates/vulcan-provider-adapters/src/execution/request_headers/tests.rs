@@ -46,10 +46,14 @@ fn opencode_oauth_headers_preserve_client_and_workspace_identity() {
             "openai-responses.v1",
             "https://opencode.ai/inference/go/openai/v1/responses",
         ),
+        (
+            "anthropic-messages.v1",
+            "https://opencode.ai/inference/go/anthropic/v1/messages",
+        ),
     ] {
         // route comes from the actual OAuth service entry rather than a duplicated test descriptor.
         // route 来自真实 OAuth 服务入口，而非重复的测试描述符。
-        let mut route = bundled_manifest_route("opencode-go", "go-oauth-api", protocol);
+        let mut route = bundled_manifest_route("opencode-go", "go-api", protocol);
         let client = ProviderExecutionClient::new(
             reqwest::Client::new(),
             Arc::new(ProtocolRegistry::first_batch().unwrap()),
@@ -76,8 +80,8 @@ fn opencode_oauth_headers_preserve_client_and_workspace_identity() {
 
 /// Verifies the Console API-key profile preserves Vulcan identity without adding OAuth workspace headers.
 /// 验证 Console API Key 凭据档保留 Vulcan 身份，且不添加 OAuth 工作区请求头。
-/// No parameters; checks both registered inference protocols using the compiled service declaration.
-/// 无参数；使用已编译服务声明检查两个已注册推理协议。
+/// No parameters; checks every registered inference protocol using the compiled service declaration.
+/// 无参数；使用已编译服务声明检查全部已注册推理协议。
 #[test]
 fn opencode_api_key_headers_preserve_client_identity_without_workspace() {
     // secret is synthetic static material rather than an OAuth credential with a workspace.
@@ -97,16 +101,20 @@ fn opencode_api_key_headers_preserve_client_identity_without_workspace() {
             "openai-responses.v1",
             "https://opencode.ai/inference/go/openai/v1/responses",
         ),
+        (
+            "anthropic-messages.v1",
+            "https://opencode.ai/inference/go/anthropic/v1/messages",
+        ),
     ] {
         // route retains the shared Console endpoint and selects its explicitly declared key profile.
         // route 保留共享 Console 端点，并选择其明确声明的密钥凭据档。
-        let mut route = bundled_manifest_route("opencode-go", "go-oauth-api", protocol);
+        let mut route = bundled_manifest_route("opencode-go", "go-api", protocol);
         // profile comes from the compiled manifest, avoiding a duplicated credential declaration.
         // profile 来自已编译清单，避免重复定义凭据声明。
         let profile = route
             .entry
-            .credential_profile("console-api-key")
-            .expect("expected Console API-key profile may be outdated");
+            .credential_profile("api-key")
+            .expect("expected Go API-key profile may be outdated");
         route.connection.credential_profile_id = profile.id.clone();
         route.connection.credential_mode = profile.credential_mode;
         // client applies the same request encoding and header projection as live inference.

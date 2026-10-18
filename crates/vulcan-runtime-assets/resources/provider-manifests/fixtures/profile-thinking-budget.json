@@ -1,0 +1,34 @@
+{
+  "schema_version": "provider-manifest-profile-fixture.v1",
+  "fixture_id": "profile-thinking-budget",
+  "base_manifest": "opencode-go.json",
+  "required_transformers": ["fit_thinking_budget"],
+  "fixture_kind": "request",
+  "declaration": {
+    "profile_id": "fixture.thinking-budget.v1",
+    "description": "Fits an explicit thinking budget within the output limit before dispatch",
+    "payload": {
+      "profile_id": "fixture.thinking-budget.v1",
+      "revision": 1,
+      "steps": [
+        {
+          "op": "fit_thinking_budget",
+          "path": "/thinking/budget_tokens",
+          "limit_path": "/max_tokens",
+          "minimum": 1024
+        }
+      ]
+    }
+  },
+  "profile_id": "fixture.thinking-budget.v1",
+  "input": {
+    "max_tokens": 32768,
+    "thinking": {"type": "enabled", "budget_tokens": 31999}
+  },
+  "model_id": "fixture/model-v1",
+  "expectations": {
+    "/max_tokens": 32768,
+    "/thinking/type": "enabled",
+    "/thinking/budget_tokens": 16384
+  }
+}

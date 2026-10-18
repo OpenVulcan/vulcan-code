@@ -352,6 +352,7 @@ fn apply_response_mapping_step(
             }
         }
         crate::provider_manifest::MappingStep::StringTemplate { .. }
+        | crate::provider_manifest::MappingStep::FitThinkingBudget { .. }
         | crate::provider_manifest::MappingStep::CopyRequestField { .. } => {
             return Err(ProtocolConversionError::new(
                 "Response projection contains a request-only mapping step.",
@@ -470,6 +471,13 @@ pub(super) fn apply_mapping_step(
         }
         crate::provider_manifest::MappingStep::DeleteJsonPointer { path } => {
             delete_json_pointer(body, path);
+        }
+        crate::provider_manifest::MappingStep::FitThinkingBudget {
+            path,
+            limit_path,
+            minimum,
+        } => {
+            fit_thinking_budget(body, path, limit_path, *minimum)?;
         }
         crate::provider_manifest::MappingStep::EnumMap {
             path,
@@ -620,6 +628,57 @@ pub(super) fn apply_mapping_step(
         }
     }
     Ok(())
+}
+
+/// Fits an optional thinking budget using bounded integer arithmetic before dispatch.
+/// 在分派前使用有界整数运算调整可选思考预算。
+///
+/// `body` is the encoded request, `path` locates its budget, `limit_path` locates its optional
+/// output limit, and `minimum` is the manifest-declared positive budget floor.
+/// `body` 是已编码请求，`path` 定位预算，`limit_path` 定位可选输出上限，
+/// `minimum` 是清单声明的正数预算下限。
+/// Returns success for an absent budget or a valid fitted value; malformed or impossible limits fail.
+/// 预算缺失或调整后的值有效时成功；格式错误或无法满足的上限显式失败。
+fn fit_thinking_budget(
+    body: &mut Value,
+    path: &str,
+    limit_path: &str,
+    minimum: u64,
+) -> Result<(), ProviderExecutionFailure> {
+    // requested is optional only because disabled and adaptive thinking have no explicit token budget.
+    // requested 仅因关闭与自适应思考没有显式令牌预算而允许缺失。
+    let Some(requested) = pointer_value(body, path) else {
+        return Ok(());
+    };
+    // budget is exact unsigned wire data, never a floating-point or string conversion.
+    // budget 是精确无符号线路数据，不经过浮点数或字符串转换。
+    let budget = requested
+        .as_u64()
+        .ok_or_else(|| pre_dispatch_failure("Thinking budget must be an unsigned integer."))?;
+    if minimum == 0 || budget < minimum {
+        return Err(pre_dispatch_failure(
+            "Thinking budget is below its declared positive minimum.",
+        ));
+    }
+    // An absent output limit preserves the explicit upstream budget, as in OpenCode v2.
+    // 输出上限缺失时与 OpenCode v2 一样保留显式上游预算。
+    let Some(limit) = pointer_value(body, limit_path) else {
+        return Ok(());
+    };
+    // output_limit must leave room for both the minimum thinking budget and a final answer.
+    // output_limit 必须为最低思考预算及最终答案同时留出空间。
+    let output_limit = limit.as_u64().ok_or_else(|| {
+        pre_dispatch_failure("Thinking output limit must be an unsigned integer.")
+    })?;
+    if output_limit <= minimum {
+        return Err(pre_dispatch_failure(
+            "Output limit must exceed the minimum thinking budget.",
+        ));
+    }
+    // fitted mirrors the upstream half-output cap without multiplication or overflow.
+    // fitted 对齐上游输出一半的限制，避免乘法与溢出。
+    let fitted = budget.min((output_limit / 2).max(minimum));
+    write_json_pointer(body, path, Value::from(fitted))
 }
 
 /// Safely writes one request JSON pointer while creating missing object ancestors.

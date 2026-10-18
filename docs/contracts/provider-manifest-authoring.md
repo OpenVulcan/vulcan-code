@@ -129,6 +129,7 @@ set_default_if_missing
 copy_json_pointer
 rename_json_pointer
 delete_json_pointer
+fit_thinking_budget
 enum_map
 wrap_singleton_array
 unwrap_singleton_array
@@ -146,6 +147,12 @@ rebuild_json_template
 `reject_if_all_present` 使用 2 到 8 条带类型来源条件；只有全部条件存在才失败关闭。来源必须是
 绝对 JSON Pointer，或已注册的 `@request_field`。它用于把“两个规范字段不能同时出现”等交叉字段
 约束留在供应商 Profile 中，不允许生产代码再按供应商 ID 硬编码冲突。
+
+`fit_thinking_budget` 仅用于请求投影。`path` 指向可选的无符号思考预算，`limit_path` 指向同一
+请求体中的可选输出上限，`minimum` 声明正数预算下限。预算存在时必须为不小于下限的整数；
+输出上限存在时也必须是整数且严格大于预算下限，预算调整为原预算与 `max(minimum, floor(limit / 2))`
+中的较小值。预算或输出上限缺失时不补值；格式错误或无法同时容纳最低思考预算及答案时显式失败。
+此步骤用于表达 OpenCode v2 的预算与输出长度联动，不在宿主中硬编码供应商或模型身份。
 
 新增映射步骤时，必须先实现并注册宿主原语，再扩展 Schema、验证器、作者手册和可执行夹具；不得
 只在运行时代码中识别步骤而遗漏 `engine_contract`。夹具使用的临时执行、上传或转换原语也必须由

@@ -1854,6 +1854,44 @@ fn valid_projection_payload_accepts_bounded_steps() {
         .expect("bounded projection must validate");
 }
 
+/// Verifies budget fitting requires positive bounds and valid body pointers at compilation time.
+/// 验证预算调整在编译时要求正数边界与有效请求体指针。
+/// No parameters; asserts malformed declarations fail before any request can execute.
+/// 无参数；断言格式错误声明在任何请求执行前失败。
+#[test]
+fn thinking_budget_projection_rejects_invalid_minimum_and_limit_pointer() {
+    for (minimum, limit_path, expected_code) in [
+        (0, "/max_tokens", "invalid_thinking_budget_minimum"),
+        (1024, "max_tokens", "invalid_projection_pointer"),
+    ] {
+        // manifest isolates the new request step while retaining the real system validation boundary.
+        // manifest 隔离新的请求步骤，同时保留真实系统验证边界。
+        let mut manifest =
+            manifest_with_request_profile(crate::provider_manifest::RequestProfileDeclaration {
+                profile_id: String::from("test.request.v1"),
+                description: String::from("Budget boundary validation"),
+                payload: Some(crate::provider_manifest::RequestProjectionProfile {
+                    profile_id: String::from("test.request.v1"),
+                    revision: 1,
+                    steps: vec![crate::provider_manifest::MappingStep::FitThinkingBudget {
+                        path: String::from("/thinking/budget_tokens"),
+                        limit_path: limit_path.to_string(),
+                        minimum,
+                    }],
+                }),
+            });
+        manifest.engine_contract.required_transformers = vec![String::from("fit_thinking_budget")];
+        // errors must identify the malformed contract rather than accepting a runtime fallback.
+        // errors 必须标识格式错误的契约，不能接受运行时兜底。
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("invalid budget declaration must fail");
+        assert!(
+            errors.iter().any(|error| error.code == expected_code),
+            "{errors:?}"
+        );
+    }
+}
+
 /// Verifies an operation referencing an undeclared tool target is rejected.
 /// 验证引用未声明工具目标的操作被拒绝。
 #[test]

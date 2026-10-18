@@ -1347,6 +1347,19 @@ pub enum MappingStep {
         /// 要删除的目标 JSON Pointer 路径。
         path: String,
     },
+    /// Fits a positive thinking budget to half the declared output limit while respecting its minimum.
+    /// 将正数思考预算限制为声明输出上限的一半，同时遵守预算下限。
+    FitThinkingBudget {
+        /// Optional budget pointer; an absent budget leaves disabled or adaptive thinking untouched.
+        /// 可选预算指针；预算缺失时不改变关闭或自适应思考。
+        path: String,
+        /// Output-limit pointer in the same encoded request; absence retains the explicit budget.
+        /// 同一已编码请求中的输出上限指针；缺失时保留显式预算。
+        limit_path: String,
+        /// Positive minimum accepted by the selected protocol and model.
+        /// 所选协议与模型接受的正数预算下限。
+        minimum: u64,
+    },
     /// Maps a bounded source value through an explicit literal table.
     /// 通过显式字面量表映射一个有界源值。
     EnumMap {
@@ -1535,6 +1548,7 @@ pub(crate) const REGISTERED_MAPPING_TRANSFORMER_IDS: &[&str] = &[
     "copy_json_pointer",
     "rename_json_pointer",
     "delete_json_pointer",
+    "fit_thinking_budget",
     "enum_map",
     "wrap_singleton_array",
     "unwrap_singleton_array",
@@ -1564,6 +1578,7 @@ impl MappingStep {
             Self::CopyJsonPointer { .. } => "copy_json_pointer",
             Self::RenameJsonPointer { .. } => "rename_json_pointer",
             Self::DeleteJsonPointer { .. } => "delete_json_pointer",
+            Self::FitThinkingBudget { .. } => "fit_thinking_budget",
             Self::EnumMap { .. } => "enum_map",
             Self::WrapSingletonArray { .. } => "wrap_singleton_array",
             Self::UnwrapSingletonArray { .. } => "unwrap_singleton_array",
