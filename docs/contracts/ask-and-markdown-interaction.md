@@ -58,6 +58,9 @@
 - 回复只接受快照携带的 `allowLabel` 或 `denyLabel`；回复使工具恢复执行或返回拒绝，不完成工具，也不中断会话。
 - 放弃（拒绝请求）取消该调用并中断会话，与 Ask 相同，必须先进入停止确认。
 - 客户端按自身语言渲染权限事实，问题文本只是英文后备；未知高风险键按原样显示。
+- 设有审批等待上限时快照带 `deadlineUnixMs`，客户端显示剩余秒数（最后 10 秒醒目）。截止时间由服务掌握：到期由
+  服务经持久回复路径写入拒绝，先到的用户回答优先；客户端归零后不自行回复，只等待请求离开。等待秒数的设置见
+  [`permission-modes-and-judge.md`](permission-modes-and-judge.md)。
 - `Enter` 从不批准。WebUI 只经按钮允许或拒绝，`Esc` 进入停止确认，确认阶段 `Enter` 停止；
   TUI 用 `a` 允许、`d` 拒绝、`x` 进入停止确认，`Esc` 把焦点交回输入框。
 - 实现入口：[`tool-approval-bar.tsx`](../../apps/vulcan-code-web/src/components/ask/tool-approval-bar.tsx)、

@@ -13,6 +13,7 @@ use vulcan_agent_runtime::agent_runtime::tool_permission::{
     JudgeCall, JudgeFailure, JudgeTrace, JudgeVerdict, PermissionRecord,
 };
 use vulcan_permission_judge::protocol::{JudgeDevice, JudgeInput, JudgeOutcome};
+use vulcan_permission_judge::system::MAX_APPROVAL_TIMEOUT_SECONDS;
 use vulcan_permission_judge::{
     JudgePackage, JudgePolicy, cloud_policy, find_known_package, known_packages, render_call,
 };
@@ -79,6 +80,16 @@ pub(super) fn read_state(
         .permission_judge
         .clone();
     Ok((Arc::clone(&guard.permission_judge), settings))
+}
+
+/// Returns how long one approval waits for the user, or `None` when it waits until answered.
+/// 返回一次审批等待用户的时长；一直等到回答时返回 `None`。
+pub(crate) fn approval_timeout(
+    state: &SharedServiceBridgeState,
+) -> Result<Option<std::time::Duration>, String> {
+    let (_, settings) = read_state(state)?;
+    Ok((settings.approval_timeout_seconds > 0)
+        .then(|| std::time::Duration::from_secs(u64::from(settings.approval_timeout_seconds))))
 }
 
 /// Saves a judge settings mutation and returns the saved settings.
@@ -319,6 +330,8 @@ async fn snapshot(
             .collect(),
         llm_may_allow_blocked: settings.llm_may_allow_blocked,
         record_decisions: settings.record_decisions,
+        approval_timeout_seconds: settings.approval_timeout_seconds,
+        max_approval_timeout_seconds: MAX_APPROVAL_TIMEOUT_SECONDS,
         models: settings
             .models
             .iter()
@@ -415,6 +428,11 @@ pub(crate) async fn service_save_permission_judge_settings(
     request: PermissionJudgeSettingsSaveRequest,
 ) -> Result<PermissionJudgeSettingsSnapshot, String> {
     let (runtime, current) = read_state(&state)?;
+    if request.approval_timeout_seconds > MAX_APPROVAL_TIMEOUT_SECONDS {
+        return Err(format!(
+            "The approval wait cannot exceed {MAX_APPROVAL_TIMEOUT_SECONDS} seconds."
+        ));
+    }
     if request.backend == Some(JudgeBackend::Local) && current.active_model().is_none() {
         return Err(String::from(
             "Register and activate a local model before choosing the local judge.",
@@ -473,6 +491,7 @@ pub(crate) async fn service_save_permission_judge_settings(
         settings.cuda_library_directory = cuda_library_directory;
         settings.llm_may_allow_blocked = request.llm_may_allow_blocked;
         settings.record_decisions = request.record_decisions;
+        settings.approval_timeout_seconds = request.approval_timeout_seconds;
         Ok(())
     })
     .await?;

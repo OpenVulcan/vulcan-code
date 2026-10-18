@@ -163,6 +163,10 @@ export interface PermissionJudgeSettingsSnapshot {
   activeModelIssue: PermissionJudgeIssue | null;
   cuda: PermissionJudgeCudaSnapshot;
   status: PermissionJudgeStatus;
+  // Seconds an approval waits for the user before it is denied; 0 waits until answered.
+  // 审批在被拒绝前等待用户的秒数；0 表示一直等到回答。
+  approvalTimeoutSeconds: number;
+  maxApprovalTimeoutSeconds: number;
 }
 
 // PermissionJudgeSettingsSaveRequest saves the system-level choices.
@@ -173,6 +177,7 @@ export interface PermissionJudgeSettingsSaveRequest {
   cudaLibraryDirectory: string | null;
   llmMayAllowBlocked: boolean;
   recordDecisions: boolean;
+  approvalTimeoutSeconds: number;
 }
 
 // PermissionJudgeBenchmarkResult is one speed test, kept only on the page that ran it.
@@ -299,5 +304,31 @@ export interface ProjectUnattendedDefaultSnapshot {
   // null 表示采用系统默认值。
   denyPolicy: string | null;
   systemDenyPolicy: string;
+  maxChars: number;
+}
+
+// ReviewRules are the user's natural-language rules for the reviewing LLM; an empty group has no rules.
+// ReviewRules 是用户为复核 LLM 写的自然语言规则；空分组表示没有规则。
+export interface ReviewRules {
+  allow: string;
+  ask: string;
+  deny: string;
+}
+
+// ReviewRulesSystemDefaultSnapshot holds the review rules every project uses unless it keeps its own.
+// ReviewRulesSystemDefaultSnapshot 保存所有项目在未保留自身规则时使用的复核规则。
+export interface ReviewRulesSystemDefaultSnapshot {
+  rules: ReviewRules;
+  maxChars: number;
+}
+
+// ProjectReviewRulesSnapshot holds one project's rules next to the system rules it inherits.
+// ProjectReviewRulesSnapshot 保存一个项目的规则及其继承的系统规则。
+export interface ProjectReviewRulesSnapshot {
+  projectId: string;
+  // null follows the system rules.
+  // null 表示采用系统规则。
+  rules: ReviewRules | null;
+  systemRules: ReviewRules;
   maxChars: number;
 }

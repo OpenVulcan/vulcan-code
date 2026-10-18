@@ -939,6 +939,7 @@ impl App {
                     self.judge_policy_project = next;
                     self.slots.clear(Slot::ProjectPermissionJudgePolicy);
                     self.slots.clear(Slot::ProjectUnattendedDefault);
+                    self.slots.clear(Slot::ProjectReviewRules);
                 }
             }
             _ => {}
@@ -1035,6 +1036,13 @@ impl App {
             || !self.toasts.is_empty()
             || self.git.busy.is_some()
             || matches!(&self.overlay, Some(Overlay::Folder(picker)) if picker.loading)
+            // A counting-down approval redraws every frame so its remaining seconds stay current.
+            // 正在倒计时的审批每帧重绘，使剩余秒数保持最新。
+            || self
+                .session()
+                .and_then(|s| s.pending_question.as_ref())
+                .and_then(|question| question.approval.as_ref())
+                .is_some_and(|approval| approval.deadline_unix_ms.is_some())
             || self
                 .session()
                 .and_then(|s| s.reasoning_settled)
@@ -1618,7 +1626,9 @@ impl App {
                     && call.param("/request/query").as_str() == Some(self.knowledge.query.as_str())
             }
 
-            Slot::ProjectPermissionJudgePolicy | Slot::ProjectUnattendedDefault => {
+            Slot::ProjectPermissionJudgePolicy
+            | Slot::ProjectUnattendedDefault
+            | Slot::ProjectReviewRules => {
                 call.param("/projectId").as_str() == self.judge_policy_project.as_deref()
             }
             Slot::VmmRecords => {

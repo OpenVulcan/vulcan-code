@@ -455,6 +455,7 @@ fn pending_approval_snapshot(
                 reason: reason.clone(),
             },
         }),
+        deadline_unix_ms: prompt.deadline_unix_ms,
         allow_label: String::from(APPROVAL_ALLOW_LABEL),
         deny_label: String::from(APPROVAL_DENY_LABEL),
     }

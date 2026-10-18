@@ -246,6 +246,7 @@ fn pending_approval(approval: &api::PendingApprovalSnapshot) -> PendingApproval 
                 ApprovalReview::Unavailable(reason.clone())
             }
         }),
+        deadline_unix_ms: approval.deadline_unix_ms,
         allow_label: approval.allow_label.clone(),
         deny_label: approval.deny_label.clone(),
     }

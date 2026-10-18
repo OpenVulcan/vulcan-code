@@ -1295,6 +1295,7 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
             high_risk: high_risk.map(str::to_string),
             judge: None,
             review: None,
+            deadline_unix_ms: None,
             allow_label: "allow-label".into(),
             deny_label: "deny-label".into(),
         }),

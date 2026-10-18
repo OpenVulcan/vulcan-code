@@ -42,11 +42,32 @@ pub struct ToolApprovalPrompt {
     /// Review layer finding, when a reviewing LLM is configured for the call.
     /// 复核层结论（当调用配置了复核 LLM 时）。
     pub review: Option<ReviewFinding>,
+    /// When the approval is denied unanswered, in Unix milliseconds; absent waits for the user.
+    /// Set by the question runtime from the approval wait.
+    /// 审批未获回答而被拒绝的时间（Unix 毫秒）；缺省表示一直等待用户。由问题运行时按审批等待时间设置。
+    pub deadline_unix_ms: Option<u64>,
+}
+
+/// How one approval ended.
+/// 一次审批的结束方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalAnswer {
+    /// The user allowed the call once.
+    /// 用户允许本次调用。
+    Allowed,
+    /// The user denied the call.
+    /// 用户拒绝该调用。
+    Denied,
+    /// Nobody answered before the approval wait ran out, so the call was denied.
+    /// 审批等待时间耗尽前无人回答，因此调用被拒绝。
+    Expired,
 }
 
 impl QuestionRuntime {
-    /// Asks the user whether one gated call may run once; returns `true` when approved.
-    /// 询问用户受管控调用是否可以执行一次；批准时返回 `true`。
+    /// Asks the user whether one gated call may run once. With a `timeout`, an unanswered approval
+    /// is denied through the same durable reply a user's denial takes, and reported as expired.
+    /// 询问用户受管控调用是否可以执行一次。给出 `timeout` 时，未获回答的审批经由与用户拒绝相同的
+    /// 可靠回复被拒绝，并报告为已过期。
     /// `tool_name` and `tool_arguments` describe the gated call itself, so a rejection cancels it.
     /// `tool_name` 与 `tool_arguments` 描述受管控调用本身，因此拒绝时会取消该调用。
     pub async fn request_approval(
@@ -55,26 +76,59 @@ impl QuestionRuntime {
         context: VulcanToolInvocationContext,
         tool_name: String,
         tool_arguments: Value,
-        prompt: ToolApprovalPrompt,
-    ) -> Result<bool, String> {
+        mut prompt: ToolApprovalPrompt,
+        timeout: Option<Duration>,
+    ) -> Result<ApprovalAnswer, String> {
+        prompt.deadline_unix_ms = timeout.map(unix_ms_after);
         let question = approval_question(&tool_name, &prompt);
-        let reply = self
-            .suspend(
-                session_id,
-                context.request_stream_id,
-                context.api_call_id,
-                context.tool_call_id,
-                context.controller_tool_call_id,
-                context.provider_tool_call_id,
-                tool_name,
-                tool_arguments,
-                vec![question],
-                Some(prompt),
-            )
-            .await?;
+        let request_id = pending_request_id(session_id, context.api_call_id, context.tool_call_id);
+        let waiting = self.suspend(
+            session_id,
+            context.request_stream_id,
+            context.api_call_id,
+            context.tool_call_id,
+            context.controller_tool_call_id,
+            context.provider_tool_call_id,
+            tool_name,
+            tool_arguments,
+            vec![question],
+            Some(prompt),
+        );
+        tokio::pin!(waiting);
+        let mut expired = false;
+        let reply = match timeout {
+            None => waiting.await?,
+            Some(timeout) => tokio::select! {
+                // The wait registers the approval on its first poll, before the timer can fire.
+                // 等待在首次轮询时登记审批，早于计时器触发。
+                biased;
+                reply = &mut waiting => reply?,
+                () = tokio::time::sleep(timeout) => {
+                    // A user answer that won the race leaves nothing to deny.
+                    // 抢先到达的用户回答使这里无可拒绝。
+                    expired = self.reply(&request_id, vec![vec![String::from(APPROVAL_DENY_LABEL)]])?;
+                    waiting.await?
+                }
+            },
+        };
         validate_approval_answers(&reply.answers)?;
-        Ok(reply.answers[0][0] == APPROVAL_ALLOW_LABEL)
+        Ok(if reply.answers[0][0] == APPROVAL_ALLOW_LABEL {
+            ApprovalAnswer::Allowed
+        } else if expired {
+            ApprovalAnswer::Expired
+        } else {
+            ApprovalAnswer::Denied
+        })
     }
+}
+
+/// Absolute Unix milliseconds `after` from now.
+/// 从现在起 `after` 之后的绝对 Unix 毫秒数。
+fn unix_ms_after(after: Duration) -> u64 {
+    std::time::SystemTime::now()
+        .checked_add(after)
+        .and_then(|deadline| deadline.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |deadline| deadline.as_millis() as u64)
 }
 
 /// Accepts exactly one canonical approval label; anything else leaves the request pending.
@@ -179,12 +233,18 @@ mod tests {
     type ApprovalFixture = (
         Arc<QuestionRuntime>,
         Arc<Mutex<Vec<&'static str>>>,
-        tokio::task::JoinHandle<Result<bool, String>>,
+        tokio::task::JoinHandle<Result<ApprovalAnswer, String>>,
     );
+
+    /// Starts one approval for a shell command that waits for the user.
+    /// 为一条 shell 命令发起一直等待用户的审批。
+    fn start_approval() -> ApprovalFixture {
+        start_timed_approval(None)
+    }
 
     /// Starts one approval for a shell command and records every durability action by name.
     /// 为一条 shell 命令发起审批，并按名称记录每个可靠性动作。
-    fn start_approval() -> ApprovalFixture {
+    fn start_timed_approval(timeout: Option<Duration>) -> ApprovalFixture {
         let runtime = Arc::new(QuestionRuntime::new());
         let actions = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&actions);
@@ -215,7 +275,9 @@ mod tests {
                         high_risk: Some(HighRiskCategory::RecursiveDelete),
                         judge: Some(JudgeFinding::Scored(JudgeLabel::Block)),
                         review: None,
+                        deadline_unix_ms: None,
                     },
+                    timeout,
                 )
                 .await
         });
@@ -235,11 +297,20 @@ mod tests {
 
     #[tokio::test]
     async fn approval_answers_resume_the_tool_instead_of_completing_it() {
-        for (label, approved) in [(APPROVAL_ALLOW_LABEL, true), (APPROVAL_DENY_LABEL, false)] {
+        for (label, approved) in [
+            (APPROVAL_ALLOW_LABEL, ApprovalAnswer::Allowed),
+            (APPROVAL_DENY_LABEL, ApprovalAnswer::Denied),
+        ] {
             let (runtime, actions, task) = start_approval();
             let request = pending(&runtime).await;
             assert_eq!(request.tool_name, "shell_command");
-            assert!(request.approval.is_some());
+            assert_eq!(
+                request
+                    .approval
+                    .as_ref()
+                    .map(|prompt| prompt.deadline_unix_ms),
+                Some(None)
+            );
             assert!(
                 runtime
                     .reply(&request.id, vec![vec![String::from("Maybe")]])
@@ -255,6 +326,39 @@ mod tests {
             assert_eq!(task.await.unwrap(), Ok(approved));
             assert_eq!(*actions.lock().unwrap(), vec!["waiting", "resumed"]);
         }
+    }
+
+    /// An unanswered approval is denied durably when its wait runs out, and the projected deadline
+    /// tells clients when that happens.
+    /// 未获回答的审批在等待时间耗尽时被可靠地拒绝，投影的截止时间告知客户端何时发生。
+    #[tokio::test]
+    async fn an_unanswered_approval_expires_into_a_durable_denial() {
+        let (runtime, actions, task) = start_timed_approval(Some(Duration::from_millis(30)));
+        let request = pending(&runtime).await;
+        assert!(
+            request
+                .approval
+                .as_ref()
+                .and_then(|prompt| prompt.deadline_unix_ms)
+                .is_some()
+        );
+        assert_eq!(task.await.unwrap(), Ok(ApprovalAnswer::Expired));
+        assert!(runtime.list_pending().unwrap().is_empty());
+        assert_eq!(*actions.lock().unwrap(), vec!["waiting", "resumed"]);
+    }
+
+    /// An answer given within the wait is the user's, not an expiry.
+    /// 在等待时间内给出的回答属于用户，而非过期。
+    #[tokio::test]
+    async fn an_answer_within_the_wait_is_the_users() {
+        let (runtime, _, task) = start_timed_approval(Some(Duration::from_secs(60)));
+        let request = pending(&runtime).await;
+        assert!(
+            runtime
+                .reply(&request.id, vec![vec![String::from(APPROVAL_DENY_LABEL)]])
+                .unwrap()
+        );
+        assert_eq!(task.await.unwrap(), Ok(ApprovalAnswer::Denied));
     }
 
     #[tokio::test]

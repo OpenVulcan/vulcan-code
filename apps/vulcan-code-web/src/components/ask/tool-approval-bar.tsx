@@ -187,6 +187,7 @@ export function ToolApprovalRequest(props: ToolApprovalRequestProps) {
             ) : null}
             {approval.judge ? <ToolApprovalJudgeChip judge={approval.judge} t={t} /> : null}
             {approval.review ? <ToolApprovalReviewChip review={approval.review} t={t} /> : null}
+            {approval.deadlineUnixMs != null ? <ToolApprovalCountdown deadlineUnixMs={approval.deadlineUnixMs} t={t} /> : null}
           </div>
           {approval.review?.kind === "reviewed" && approval.review.reason ? (
             <p className="text-xs leading-5 text-muted-foreground" data-review-reason>{approval.review.reason}</p>
@@ -344,6 +345,41 @@ function ToolApprovalReviewChip(props: {
   return (
     <span className="rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground" data-review={review.verdict}>
       {key ? t(key) : review.verdict}
+    </span>
+  );
+}
+
+// secondsUntil returns the whole seconds left before a Unix-millisecond deadline, never below zero.
+// secondsUntil 返回距 Unix 毫秒截止时间剩余的整秒数，最小为零。
+function secondsUntil(deadlineUnixMs: number): number {
+  return Math.max(0, Math.ceil((deadlineUnixMs - Date.now()) / 1000));
+}
+
+// ToolApprovalCountdown shows how long the approval still waits before the service denies it; the
+// service owns the deadline, so reaching zero only waits for the request to leave.
+// ToolApprovalCountdown 展示审批在服务拒绝前还会等待多久；截止时间由服务掌握，因此归零后只等待请求离开。
+function ToolApprovalCountdown(props: {
+  // Unix milliseconds when the service denies the unanswered approval.
+  // 服务拒绝未回答审批的 Unix 毫秒时间。
+  deadlineUnixMs: number;
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: Translate;
+}) {
+  const { deadlineUnixMs } = props;
+  const [seconds, setSeconds] = React.useState(() => secondsUntil(deadlineUnixMs));
+  React.useEffect(() => {
+    setSeconds(secondsUntil(deadlineUnixMs));
+    const timer = window.setInterval(() => setSeconds(secondsUntil(deadlineUnixMs)), 1000);
+    return () => window.clearInterval(timer);
+  }, [deadlineUnixMs]);
+  return (
+    <span
+      aria-live="off"
+      className={cn("rounded-md px-1.5 py-0.5 tabular-nums", seconds <= 10 ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground")}
+      data-approval-countdown={seconds}
+    >
+      {formatMessage(props.t("ask.approval.countdown"), { seconds })}
     </span>
   );
 }

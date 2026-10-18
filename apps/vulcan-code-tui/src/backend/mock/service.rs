@@ -544,7 +544,7 @@ impl FakeService {
                 "service_system_prompt_settings" => {
                     return self.system_prompt_snapshot(required(&call.params, "/projectId")?);
                 }
-                "service_project_unattended_default" => {
+                "service_project_unattended_default" | "service_project_review_rules" => {
                     let mut policy = self.loads[call.method].clone();
                     policy["projectId"] = required(&call.params, "/projectId")?.clone();
                     return Ok(policy);
@@ -890,6 +890,7 @@ impl FakeService {
                     "device",
                     "llmMayAllowBlocked",
                     "recordDecisions",
+                    "approvalTimeoutSeconds",
                 ] {
                     snapshot[field] = required(request, &format!("/{field}"))?.clone();
                 }
@@ -902,6 +903,19 @@ impl FakeService {
                 let text = required(params, "/request/denyPolicy")?.clone();
                 self.loads["service_unattended_system_default"]["denyPolicy"] = text.clone();
                 self.loads["service_project_unattended_default"]["systemDenyPolicy"] = text;
+            }
+            "service_save_review_rules_system_default" => {
+                // The demo keeps one system rule set; a project that follows it shows the new rules.
+                // 演示保留一组系统规则；跟随它的项目显示新规则。
+                let rules = required(params, "/request/rules")?.clone();
+                self.loads["service_review_rules_system_default"]["rules"] = rules.clone();
+                self.loads["service_project_review_rules"]["systemRules"] = rules;
+            }
+            "service_save_project_review_rules" => {
+                // The demo keeps one project rule set; null follows the system rules.
+                // 演示保留一组项目规则；null 表示跟随系统规则。
+                self.loads["service_project_review_rules"]["rules"] =
+                    required(params, "/request/rules")?.clone();
             }
             "service_save_project_unattended_default" => {
                 // The demo keeps one project text; null follows the system default.

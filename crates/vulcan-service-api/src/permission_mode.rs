@@ -2,6 +2,7 @@
 //! 会话自有权限模式命令与可靠回执。
 
 use serde::{Deserialize, Serialize};
+use vulcan_permission_judge::system::ReviewRules;
 use vulcan_session_core::v1::config::{PermissionMode, UnattendedConfig};
 
 /// Permission mode update shared by WebUI and TUI.
@@ -144,4 +145,59 @@ pub struct ProjectUnattendedDefaultSaveRequest {
     /// Project default; `None` returns the project to the system default.
     /// 项目默认值；`None` 使项目恢复采用系统默认值。
     pub deny_policy: Option<String>,
+}
+
+/// System default rules of the permission reviewer.
+/// 权限复核器的系统默认规则。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewRulesSystemDefaultSnapshot {
+    /// Saved system rules; empty texts mean none.
+    /// 已保存的系统规则；空文本表示没有。
+    pub rules: ReviewRules,
+    /// Longest accepted text of one rule group, in Unicode scalar values.
+    /// 单组规则允许的最长文本（按 Unicode 标量值计）。
+    pub max_chars: usize,
+}
+
+/// Saves the system default rules of the permission reviewer.
+/// 保存权限复核器的系统默认规则。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewRulesSystemDefaultSaveRequest {
+    /// New system rules; empty texts mean none.
+    /// 新的系统规则；空文本表示没有。
+    pub rules: ReviewRules,
+}
+
+/// One project's rules for the permission reviewer.
+/// 一个项目的权限复核器规则。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectReviewRulesSnapshot {
+    /// Project identity.
+    /// 项目标识。
+    pub project_id: String,
+    /// Project rules; absent means the system default applies.
+    /// 项目规则；缺省表示采用系统默认值。
+    pub rules: Option<ReviewRules>,
+    /// System rules the project inherits while it sets none.
+    /// 项目未设置时继承的系统规则。
+    pub system_rules: ReviewRules,
+    /// Longest accepted text of one rule group, in Unicode scalar values.
+    /// 单组规则允许的最长文本（按 Unicode 标量值计）。
+    pub max_chars: usize,
+}
+
+/// Saves one project's rules for the permission reviewer.
+/// 保存一个项目的权限复核器规则。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectReviewRulesSaveRequest {
+    /// Project identity.
+    /// 项目标识。
+    pub project_id: String,
+    /// Project rules; `None` returns the project to the system default.
+    /// 项目规则；`None` 使项目恢复采用系统默认值。
+    pub rules: Option<ReviewRules>,
 }

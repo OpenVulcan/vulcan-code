@@ -188,6 +188,7 @@ fn save_request(snapshot: &Value) -> Value {
         "cudaLibraryDirectory": v(snapshot, "/cuda/lockedDirectory"),
         "llmMayAllowBlocked": b(snapshot, "/llmMayAllowBlocked"),
         "recordDecisions": b(snapshot, "/recordDecisions"),
+        "approvalTimeoutSeconds": n(snapshot, "/approvalTimeoutSeconds"),
     })
 }
 
@@ -405,6 +406,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         cloud_rows(&mut rows, ai, cloud_route);
     }
     review_rows(&mut rows, ai);
+    approval_rows(&mut rows, snapshot, &base);
     benchmark_rows(&mut rows, app, snapshot, status, configured);
     if local {
         model_rows(&mut rows, app, snapshot);
@@ -412,6 +414,25 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     }
     records_rows(&mut rows, app, &base);
     rows
+}
+
+/// How long an approval waits for the user before it is denied; the limit is the one the service publishes.
+/// 审批在被拒绝前等待用户的时长；上限取自服务发布的值。
+fn approval_rows(rows: &mut Vec<Row>, snapshot: &Value, base: &Value) {
+    rows.push(section(tr!("settings.permissionJudge.approval.title")));
+    rows.push(
+        number(
+            tr!("settings.permissionJudge.approval.timeout"),
+            n(base, "/approvalTimeoutSeconds"),
+            (0, n(snapshot, "/maxApprovalTimeoutSeconds"), 5),
+            dto(
+                base.clone(),
+                "/approvalTimeoutSeconds",
+                judge::save_permission_judge_settings,
+            ),
+        )
+        .detail(tr!("settings.permissionJudge.approval.timeoutHint")),
+    );
 }
 
 /// The device choice: usable devices only, with the unusable ones and the recommendation noted.
@@ -1267,6 +1288,7 @@ fn record_outcome_label(code: &str) -> String {
         "user_denied" => tr!("settings.permissionJudge.records.outcome.userDenied"),
         "failed" => tr!("settings.permissionJudge.records.outcome.failed"),
         "unattended_denied" => tr!("settings.permissionJudge.records.outcome.unattendedDenied"),
+        "approval_expired" => tr!("settings.permissionJudge.records.outcome.approvalExpired"),
         other => other.to_string(),
     }
 }
@@ -1581,12 +1603,13 @@ mod tests {
         let snapshot = json!({
             "backend": null, "device": null, "recommendedDevice": "webgpu",
             "llmMayAllowBlocked": true, "recordDecisions": true, "cuda": {"lockedDirectory": "D:/cuda"},
+            "approvalTimeoutSeconds": 90,
         });
         let base = save_request(&snapshot);
         assert_eq!(
             base,
             json!({"backend": null, "device": "webgpu", "cudaLibraryDirectory": "D:/cuda",
-                "llmMayAllowBlocked": true, "recordDecisions": true})
+                "llmMayAllowBlocked": true, "recordDecisions": true, "approvalTimeoutSeconds": 90})
         );
         // Other edits never configure the judge as a side effect.
         // 其他编辑不会顺带配置判定器。

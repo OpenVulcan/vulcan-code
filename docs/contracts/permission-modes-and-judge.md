@@ -20,6 +20,12 @@
 - **无人值守永不询问用户。** 开启无人值守的会话（含其子代理）不调用用户审批，用户层的结果恒为拒绝并把
   指引写回代理；复核 LLM 放行（仍受“允许 LLM 放行判定器拦截项”约束）才执行。同一调用在同一用户请求下
   连续被拒 `UNATTENDED_REVIEWED_REPEATS` 次后不再复核、直接拒绝，避免代理反复改写理由绕过。
+- **复核规则只是复核材料。** 用户在设置中写的自然语言复核规则（拒绝 / 问我 / 放行）只以 `<review_rules>`
+  区段进入复核 LLM 输入，不改变确定性规则、高风险或判定拦截约束、项目类别档位与无人值守拒绝策略；项目配置
+  读取失败时复核报错，不退回系统规则。长度上限只在 `MAX_REVIEW_RULE_CHARS` 定义。
+- **审批等待到期即拒绝。** 系统级 `approvalTimeoutSeconds` 大于 0 时，用户审批等待该秒数后按拒绝处理
+  （判定记录结果 `approval_expired`），绝不按放行处理；0 表示一直等到回答。上限只在
+  `MAX_APPROVAL_TIMEOUT_SECONDS` 定义，截止时间由服务掌握，客户端倒计时只是显示。
 - **代理理由只是复核材料。** `purpose` 参数与 `declare_intent` 只进入复核 LLM 输入的 `<agent_reason>` 区段，
   不改变任何确定性规则、判定档位或放行条件；理由长度上限只在 `MAX_PERMISSION_REASON_CHARS` 定义。
 - **模型是系统级，策略是项目级。** 后端、设备、模型登记表与复核路由只存在于用户全局配置；项目配置
@@ -119,6 +125,18 @@
 - **复核 LLM**：`permission_review` 配置档、用途 `tool_call_review` 的对话路由；只收到判定层结论标签，
   不收到原始分数。给用户的理由使用界面语言：宿主在 `<reply_language>` 区段写入已保存的界面语言（未保存时为
   系统语言），以代码与本族语名称表示。
+- **复核规则**：系统默认保存在用户全局判定设置的 `review_rules`
+  （`service_review_rules_system_default` / `service_save_review_rules_system_default`）；项目可在项目配置
+  `permission_judge.review_rules` 保留自己的整套规则，缺省表示跟随系统规则
+  （`service_project_review_rules` / `service_save_project_review_rules`，`null` 恢复跟随）。三组均为
+  `{ allow, ask, deny }` 文本，保存时去除首尾空白，超出上限拒绝保存。复核时按调用所在工作区取有效规则，
+  按拒绝 → 问我（无人值守时为拒绝）→ 放行的顺序应用；放行规则可覆盖“超出项目或改动共享状态即询问”的默认
+  指引，但不覆盖项目策略中设为 `confirm` 或 `review` 的类别。保存后下一次复核即生效。
+- **审批等待**：`approvalTimeoutSeconds` 随判定设置保存（保存请求必须携带，任何保存都不能因遗漏而改变它），
+  快照同时发布上限 `maxApprovalTimeoutSeconds`。宿主读取该值传给 `QuestionRuntime::request_approval`；挂起的
+  审批以 `deadlineUnixMs` 投影给客户端。到期时经持久回复路径写入拒绝，先到的用户回答优先；拒绝文本
+  `APPROVAL_EXPIRED_DENIAL` 告知代理无人及时回答、不要立即重试同一调用。等待适用于全部用户审批（含仅可查看
+  与工作区修改模式的审批），无人值守会话不进入用户审批。
 - **速度测试**：1 条与 10 条两种，用户触发，结果只留在当前界面；云端测试会产生费用，执行前先确认。
 
 ## 项目策略
@@ -135,7 +153,7 @@
 - **开关**：系统级 `recordDecisions`，出厂关闭，只有用户显式开启才写入；保存请求必须携带该字段，任何保存都不能
   因遗漏而改变它。关闭时不写入新记录，已有记录仍可查看、标记、导出与清除。
 - **记录范围**：只记录判定模型或复核 LLM 参与的决定；模式闸门与确定性规则直接决定的调用不记录。时间为判定
-  开始时刻，记录在最终结论（判定放行、复核放行或拒绝、用户放行或拒绝、失败）产生后写入，写入不阻塞调用。
+  开始时刻，记录在最终结论（判定放行、复核放行或拒绝、用户放行或拒绝、等待到期拒绝、失败）产生后写入，写入不阻塞调用。
 - **内容**：原样保存工具参数文本（含命令与路径）、工作区、会话、高风险类别、判定标签或错误与耗时、判定输入
   轨迹（后端、模型、策略版本、类别设置、渲染文本、本机三类分数或云端放行概率、输入令牌数）、复核结论与耗时。
 - **存储**：只保存在本机用户目录 `<用户 Vulcan 根>/code/judge-records/records.v1.jsonl`，不上传。滚动上限只在
@@ -159,6 +177,10 @@
   无人值守对话框（TUI 为文本输入框）预填分层默认值并注明来源，确认后才写入；开启中可编辑或关闭。
 - 无人值守默认值：WebUI 位于权限判定设置页工具区的“无人值守模式”子页面，TUI 为设置区的同名页面；系统默认与
   项目默认分开编辑，项目可切换“使用项目策略”，关闭时显示所跟随的系统文本。
+- 复核规则：WebUI 位于权限判定设置页复核路由区段的“复核规则”子页面，TUI 为设置区的同名页面；系统规则与
+  项目规则分开编辑，每组一个文本框；项目可切换“使用项目规则”，开启时以系统规则为起点，关闭时说明跟随系统规则。
+- 审批等待：WebUI 为权限判定设置页“审批请求”区段的秒数输入（失去焦点或回车时保存，超出范围恢复已保存值），
+  TUI 为权限判定页同名区段的数值行。
 - “权限判定”设置页：总览依次为配置状态与后端选择、所选后端的设置（本机为使用中模型、设备、CUDA 摘要与运行
   状态；云端为判定路由）、已配置时的类别授权摘要、复核路由（含“允许 LLM 放行判定器拦截项”）与工具入口；模型管理与登记、CUDA
   环境（组件安装、库文件夹、手动下载）、类别授权（选择项目后编辑类别档位）、诊断（模型状态表、速度测试）和判定记录（筛选、标记、导出、清除）是带返回按钮的子页面。状态按服务发布的
@@ -170,7 +192,8 @@
 - 初始化引导：第一步为权限判定，三选一（本机、云端、暂不启用）；“暂不启用”只关闭引导，不写入。WebUI 在判定未设定时于启动后自动
   打开一次（浏览器本地标记），之后可从设置页再次进入；TUI 没有本地持久偏好，只能从 `/setup` 或权限判定
   页进入，不自动弹出。
-- 用户审批复用 Ask 面板，显示命令或路径、权限模式、高风险类别、判定结论与复核理由。
+- 用户审批复用 Ask 面板，显示命令或路径、权限模式、高风险类别、判定结论与复核理由；设有等待上限时显示
+  剩余秒数，归零后只等待服务移除请求。
 
 ## 当前实现与验证入口
 
@@ -183,10 +206,12 @@
 | 会话模式修改与草稿首次提交 | `crates/vulcan-service-kernel/src/permission_mode.rs`、`conversation_submission.rs` |
 | 无人值守、连续拒绝记忆与代理理由 | `tool_permission.rs` 中的 `PermissionMemory`、`UNATTENDED_REVIEWED_REPEATS`；`tooling/native/declare_intent.rs` |
 | 无人值守默认值服务 | `crates/vulcan-service-kernel/src/permission_judge/unattended.rs` |
+| 复核规则服务与有效规则 | `crates/vulcan-service-kernel/src/permission_judge/review_rules.rs`；类型与上限在 `crates/vulcan-permission-judge/src/system.rs` |
+| 审批等待与到期拒绝 | `crates/vulcan-agent-runtime/src/agent_runtime/question_runtime/approval.rs`、`tool_permission.rs` 中的 `APPROVAL_EXPIRED_DENIAL` |
 | 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs` |
 | 判定记录存储、筛选、标记与导出 | `crates/vulcan-service-kernel/src/permission_judge/records.rs` |
 | 复核 LLM 请求 | `crates/vulcan-service-kernel/src/permission_judge/review.rs` |
 | 本机 worker、设备与 CUDA | `crates/vulcan-service-kernel/src/permission_judge/{worker,environment}.rs` |
 | 策略、模型包、官方清单、云端副本与门槛 | `crates/vulcan-permission-judge/src/{policy,package,known,cloud,decision}.rs` |
 | WebUI 界面 | `apps/vulcan-code-web/src/components/features/settings/permission-judge-*`、`components/features/onboarding/`、`components/project/project-permission-judge-section.tsx`、`components/composer/` |
-| TUI 界面 | `apps/vulcan-code-tui/src/app/pages/{permission_judge,setup_guide,project_permission_judge,unattended}.rs`、`app/permission_mode.rs` |
+| TUI 界面 | `apps/vulcan-code-tui/src/app/pages/{permission_judge,setup_guide,project_permission_judge,unattended,review_rules}.rs`、`app/permission_mode.rs` |

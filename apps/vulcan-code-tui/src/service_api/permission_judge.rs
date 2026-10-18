@@ -304,3 +304,65 @@ pub fn save_project_unattended_default(project_id: &str, deny_policy: Option<&st
         &[Slot::ProjectUnattendedDefault],
     )
 }
+
+// A system rules change also changes what a project that follows them shows.
+// 系统规则变化也会改变跟随它的项目所显示的内容。
+const REVIEW_RULES: &[Slot] = &[Slot::ReviewRulesSystemDefault, Slot::ProjectReviewRules];
+
+/// Builds the request for `service_review_rules_system_default`.
+/// 构建 `service_review_rules_system_default` 的请求。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_review_rules_system_default() -> ServiceCall {
+    ServiceCall::load(
+        "load_review_rules_system_default",
+        "service_review_rules_system_default",
+        json!({}),
+        Slot::ReviewRulesSystemDefault,
+    )
+}
+
+/// Builds the request for `service_save_review_rules_system_default`; the next review reads them.
+/// 构建 `service_save_review_rules_system_default` 的请求；下一次复核即读取它们。
+/// `rules` is the complete `{ allow, ask, deny }` object.
+/// `rules` 为完整的 `{ allow, ask, deny }` 对象。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_review_rules_system_default(rules: Value) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_review_rules_system_default",
+        "service_save_review_rules_system_default",
+        json!({ "request": { "rules": rules } }),
+        REVIEW_RULES,
+    )
+}
+
+/// Builds the request for `service_project_review_rules`.
+/// 构建 `service_project_review_rules` 的请求。
+/// `project_id` is the project whose review rules are read.
+/// `project_id` 为读取其复核规则的项目。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_project_review_rules(project_id: &str) -> ServiceCall {
+    ServiceCall::load(
+        "load_project_review_rules",
+        "service_project_review_rules",
+        json!({ "projectId": project_id }),
+        Slot::ProjectReviewRules,
+    )
+}
+
+/// Builds the request for `service_save_project_review_rules`.
+/// 构建 `service_save_project_review_rules` 的请求。
+/// `rules` is the project's complete rules object, or `Value::Null` to follow the system rules.
+/// `rules` 为项目完整的规则对象；为 `Value::Null` 时跟随系统规则。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_project_review_rules(project_id: &str, rules: Value) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_project_review_rules",
+        "service_save_project_review_rules",
+        json!({ "request": { "projectId": project_id, "rules": rules } }),
+        &[Slot::ProjectReviewRules],
+    )
+}

@@ -81,6 +81,8 @@ function snapshot(phase: PermissionJudgeWorkerStatus["phase"]): PermissionJudgeS
     devices: [{ device: "webgpu", unavailableReason: null }, { device: "cpu", unavailableReason: null }],
     llmMayAllowBlocked: false,
     recordDecisions: false,
+    approvalTimeoutSeconds: 0,
+    maxApprovalTimeoutSeconds: 3600,
     models: [{ id: "model-a", name: "A", path: "D:/models/a", knownPackageId: null, policyVersion: "1", precision: "fp16", totalBytes: 1, registeredAtMs: 1 }],
     activeModelId: "model-a", previousModelId: null, knownPackages: [], policyOptions: [], activeModelIssue: null,
     cuda: {
@@ -124,7 +126,7 @@ it("saves a changed choice at once with every system choice", async () => {
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), llmMayAllowBlocked: true });
   await act(async () => switchByKey("settings.permissionJudge.llmMayAllowBlocked").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false,
+    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false, approvalTimeoutSeconds: 0,
   });
 });
 
@@ -140,12 +142,12 @@ it("configures the judge only through the explicit use action", async () => {
   service.savePermissionJudgeSettings.mockResolvedValueOnce({ ...unset, llmMayAllowBlocked: true });
   await act(async () => switchByKey("settings.permissionJudge.llmMayAllowBlocked").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenLastCalledWith({
-    backend: null, device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false,
+    backend: null, device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false, approvalTimeoutSeconds: 0,
   });
   service.savePermissionJudgeSettings.mockResolvedValueOnce({ ...snapshot("ready"), llmMayAllowBlocked: true });
   await act(async () => buttonByKey("settings.permissionJudge.useBackend")!.click());
   expect(service.savePermissionJudgeSettings).toHaveBeenLastCalledWith({
-    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false,
+    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false, approvalTimeoutSeconds: 0,
   });
   expect(host.querySelector("[data-judge-switching]")).toBeNull();
 });
@@ -276,6 +278,29 @@ it("turns the decision log on from its page", async () => {
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), recordDecisions: true });
   await act(async () => switchByKey("settings.permissionJudge.records.enabled").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: true,
+    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: true, approvalTimeoutSeconds: 0,
   });
+});
+
+// The approval wait saves on commit within its published limit; text outside it returns to the saved value.
+// 审批等待时长在发布的上限内提交时保存；超出上限的输入恢复为已保存值。
+it("saves the approval wait only within its limit", async () => {
+  await mount("ready");
+  const input = host.querySelector<HTMLInputElement>("[data-approval-timeout]")!;
+  const commit = async (value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { input.focus(); input.blur(); });
+  };
+  await commit("3601");
+  expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
+  expect(input.value).toBe("0");
+  service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), approvalTimeoutSeconds: 90 });
+  await commit("90");
+  expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
+    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false, approvalTimeoutSeconds: 90,
+  });
+  expect(input.value).toBe("90");
 });

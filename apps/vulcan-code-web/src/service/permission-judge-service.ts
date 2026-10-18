@@ -12,7 +12,10 @@ import type {
   PermissionJudgeSettingsSnapshot,
   PermissionJudgeStatus,
   ProjectPermissionJudgePolicySnapshot,
+  ProjectReviewRulesSnapshot,
   ProjectUnattendedDefaultSnapshot,
+  ReviewRules,
+  ReviewRulesSystemDefaultSnapshot,
   UnattendedSystemDefaultSnapshot,
 } from "@/types";
 
@@ -175,5 +178,36 @@ export async function saveProjectUnattendedDefault(
 ): Promise<ProjectUnattendedDefaultSnapshot> {
   return serviceClient.request<ProjectUnattendedDefaultSnapshot>("service_save_project_unattended_default", {
     request: { projectId, denyPolicy },
+  });
+}
+
+// loadReviewRulesSystemDefault reads the review rules every project uses unless it keeps its own.
+// loadReviewRulesSystemDefault 读取所有项目在未保留自身规则时使用的复核规则。
+export async function loadReviewRulesSystemDefault(): Promise<ReviewRulesSystemDefaultSnapshot> {
+  return serviceClient.request<ReviewRulesSystemDefaultSnapshot>("service_review_rules_system_default", {});
+}
+
+// saveReviewRulesSystemDefault saves the system review rules; the next review reads them.
+// saveReviewRulesSystemDefault 保存系统复核规则；下一次复核即读取它们。
+export async function saveReviewRulesSystemDefault(rules: ReviewRules): Promise<ReviewRulesSystemDefaultSnapshot> {
+  return serviceClient.request<ReviewRulesSystemDefaultSnapshot>("service_save_review_rules_system_default", {
+    request: { rules },
+  });
+}
+
+// loadProjectReviewRules reads one project's review rules.
+// loadProjectReviewRules 读取一个项目的复核规则。
+export async function loadProjectReviewRules(projectId: string): Promise<ProjectReviewRulesSnapshot> {
+  return serviceClient.request<ProjectReviewRulesSnapshot>("service_project_review_rules", { projectId });
+}
+
+// saveProjectReviewRules saves one project's rules; null returns it to the system rules.
+// saveProjectReviewRules 保存一个项目的规则；null 使其恢复采用系统规则。
+export async function saveProjectReviewRules(
+  projectId: string,
+  rules: ReviewRules | null,
+): Promise<ProjectReviewRulesSnapshot> {
+  return serviceClient.request<ProjectReviewRulesSnapshot>("service_save_project_review_rules", {
+    request: { projectId, rules },
   });
 }

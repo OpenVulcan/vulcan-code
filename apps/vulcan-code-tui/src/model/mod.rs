@@ -305,6 +305,9 @@ pub struct PendingApproval {
     /// Permission reviewer finding, when a reviewing LLM is configured for the call.
     /// 权限复核结论（当调用配置了复核 LLM 时）。
     pub review: Option<ApprovalReview>,
+    /// Unix milliseconds when an unanswered approval is denied, when it has a wait limit.
+    /// 未回答的审批被拒绝时的 Unix 毫秒时间（设有等待上限时）。
+    pub deadline_unix_ms: Option<u64>,
     /// Canonical answers that run or refuse the call.
     /// 执行或拒绝调用的规范回答。
     pub allow_label: String,

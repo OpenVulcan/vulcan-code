@@ -120,3 +120,23 @@ it("shows the reviewer verdict with its reason and keeps an unavailable reviewer
   expect(host.querySelector("[data-review]")?.getAttribute("title")).toBe("offline");
   expect(host.querySelector("[data-review-reason]")).toBeNull();
 });
+
+it("counts down to the service deadline and shows nothing without one", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    vi.setSystemTime(1_000_000);
+    await mount(approvalRequest("timed", { deadlineUnixMs: 1_030_000 }));
+    const countdown = () => host.querySelector<HTMLElement>("[data-approval-countdown]");
+    expect(countdown()?.dataset.approvalCountdown).toBe("30");
+    await act(async () => { vi.advanceTimersByTime(25_000); });
+    expect(countdown()?.dataset.approvalCountdown).toBe("5");
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(countdown()?.dataset.approvalCountdown).toBe("0");
+    expect(action("allow").disabled).toBe(false);
+
+    await mount(approvalRequest("untimed"));
+    expect(countdown()).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});

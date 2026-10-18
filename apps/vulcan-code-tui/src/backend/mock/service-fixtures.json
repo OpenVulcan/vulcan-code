@@ -1084,6 +1084,8 @@
       ],
       "llmMayAllowBlocked": false,
       "recordDecisions": true,
+      "approvalTimeoutSeconds": 120,
+      "maxApprovalTimeoutSeconds": 3600,
       "models": [
         {
           "id": "demo-judge-official",
@@ -1182,6 +1184,24 @@
       "projectId": "",
       "denyPolicy": null,
       "systemDenyPolicy": "Never push to a remote.\nNever delete or reset a database.",
+      "maxChars": 4000
+    },
+    "service_review_rules_system_default": {
+      "rules": {
+        "allow": "Reading build logs anywhere on this machine.",
+        "ask": "Installing or upgrading packages.",
+        "deny": "Force-pushing to any branch."
+      },
+      "maxChars": 4000
+    },
+    "service_project_review_rules": {
+      "projectId": "",
+      "rules": null,
+      "systemRules": {
+        "allow": "Reading build logs anywhere on this machine.",
+        "ask": "Installing or upgrading packages.",
+        "deny": "Force-pushing to any branch."
+      },
       "maxChars": 4000
     },
     "service_project_permission_judge_policy": {

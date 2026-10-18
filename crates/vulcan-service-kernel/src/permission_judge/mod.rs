@@ -5,6 +5,7 @@ mod cloud;
 mod environment;
 mod records;
 mod review;
+mod review_rules;
 mod services;
 mod unattended;
 mod worker;
@@ -17,6 +18,10 @@ use vulcan_service_api::PermissionJudgeCudaInstall;
 pub(crate) use cloud::PERMISSION_JUDGE_CONSUMER_PROFILE_ID;
 pub(crate) use review::{
     PERMISSION_REVIEW_CONSUMER_PROFILE_ID, PERMISSION_REVIEW_PURPOSE_ID, review_call,
+};
+pub(crate) use review_rules::{
+    service_project_review_rules, service_review_rules_system_default,
+    service_save_project_review_rules, service_save_review_rules_system_default,
 };
 pub(crate) use services::*;
 pub(crate) use unattended::*;

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use vulcan_permission_judge::JudgeLabel;
 pub use vulcan_permission_judge::protocol::JudgeDevice;
-pub use vulcan_permission_judge::system::JudgeBackend;
+pub use vulcan_permission_judge::system::{JudgeBackend, ReviewRules};
 
 /// Everything the "Permission judge" settings page shows.
 /// “权限判定”设置页展示的全部内容。
@@ -31,6 +31,12 @@ pub struct PermissionJudgeSettingsSnapshot {
     /// Whether decisions are kept in the local decision log.
     /// 是否在本机判定记录中保存决定。
     pub record_decisions: bool,
+    /// Seconds a permission approval waits before the call is denied; zero waits for the user.
+    /// 权限审批在调用被拒绝前等待的秒数；为零时一直等待用户。
+    pub approval_timeout_seconds: u32,
+    /// Longest accepted approval wait, in seconds.
+    /// 允许的最长审批等待时间（秒）。
+    pub max_approval_timeout_seconds: u32,
     /// Registered local model packages.
     /// 已登记的本机模型包。
     pub models: Vec<PermissionJudgeModelSummary>,
@@ -409,6 +415,10 @@ pub struct PermissionJudgeSettingsSaveRequest {
     /// off by omission.
     /// 是否在本机判定记录中保存决定；必填，避免任何保存因遗漏而将其关闭。
     pub record_decisions: bool,
+    /// Seconds a permission approval waits before the call is denied; zero waits for the user.
+    /// Required so that no save clears it by omission.
+    /// 权限审批在调用被拒绝前等待的秒数；为零时一直等待用户。必填，避免任何保存因遗漏而将其清除。
+    pub approval_timeout_seconds: u32,
 }
 
 /// Registers a local model package after full verification.

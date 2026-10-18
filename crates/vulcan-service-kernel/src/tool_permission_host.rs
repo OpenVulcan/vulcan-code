@@ -4,7 +4,9 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use serde_json::Value;
-use vulcan_agent_runtime::agent_runtime::question_runtime::{QuestionRuntime, ToolApprovalPrompt};
+use vulcan_agent_runtime::agent_runtime::question_runtime::{
+    ApprovalAnswer, QuestionRuntime, ToolApprovalPrompt,
+};
 use vulcan_agent_runtime::agent_runtime::tool_permission::{
     JudgeCall, JudgeFailure, JudgeVerdict, LlmReview, PermissionMemory, PermissionRecord,
     ReviewCall, ToolPermissionHost,
@@ -89,9 +91,14 @@ impl ToolPermissionHost for KernelToolPermissionHost {
         tool_name: String,
         arguments: Value,
         prompt: ToolApprovalPrompt,
-    ) -> Result<bool, String> {
+    ) -> Result<ApprovalAnswer, String> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| String::from("The service is shutting down."))?;
+        let timeout = crate::permission_judge::approval_timeout(&state)?;
         self.question_runtime
-            .request_approval(session_id, context, tool_name, arguments, prompt)
+            .request_approval(session_id, context, tool_name, arguments, prompt, timeout)
             .await
     }
 

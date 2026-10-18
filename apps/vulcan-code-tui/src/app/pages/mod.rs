@@ -19,6 +19,7 @@ mod permission_judge;
 mod plugin_settings;
 mod plugins;
 mod project_permission_judge;
+mod review_rules;
 mod settings;
 mod setup_guide;
 mod unattended;
@@ -164,6 +165,7 @@ impl Area {
                         SetupGuide,
                         ProjectPermissionJudge,
                         Unattended,
+                        ReviewRules,
                     ],
                 ),
                 (
@@ -203,6 +205,9 @@ pub enum PageId {
     /// Default deny policies offered when a session turns unattended mode on.
     /// 会话开启无人值守模式时预填的默认拒绝策略。
     Unattended,
+    /// Natural-language rules the reviewing LLM applies, as a system default and per project.
+    /// 复核 LLM 应用的自然语言规则，包括系统默认值与各项目规则。
+    ReviewRules,
     Providers,
     Credentials,
     Models,
@@ -277,6 +282,7 @@ impl PageId {
             PageId::SetupGuide => tr!("setupGuide.title"),
             PageId::ProjectPermissionJudge => tr!("projectSettings.permissionJudge.title"),
             PageId::Unattended => tr!("settings.permissionJudge.unattended.title"),
+            PageId::ReviewRules => tr!("settings.permissionJudge.reviewRules.title"),
             PageId::Providers => tr!("tui.settings.providers"),
             PageId::Credentials => tr!("tui.settings.credentials"),
             PageId::Models => tr!("tui.settings.modelList"),
@@ -411,6 +417,12 @@ impl PageId {
                     calls.push(api::permission_judge::load_project_unattended_default(
                         project,
                     ));
+                }
+            }
+            Self::ReviewRules => {
+                calls.push(api::permission_judge::load_review_rules_system_default());
+                if let Some(project) = &app.judge_policy_project {
+                    calls.push(api::permission_judge::load_project_review_rules(project));
                 }
             }
             Self::PermissionJudge => calls.extend([
@@ -1049,6 +1061,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::SetupGuide => setup_guide::rows(app),
         PageId::ProjectPermissionJudge => project_permission_judge::rows(app),
         PageId::Unattended => unattended::rows(app),
+        PageId::ReviewRules => review_rules::rows(app),
         PageId::Providers => settings::providers(app),
         PageId::Credentials => settings::credentials(app),
         PageId::Models => models::models(app),

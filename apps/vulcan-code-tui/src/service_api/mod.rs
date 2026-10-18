@@ -219,6 +219,12 @@ pub enum Slot {
     /// `loadProjectUnattendedDefault` of the project chosen on the unattended defaults page.
     /// 无人值守默认值页所选项目的 `loadProjectUnattendedDefault`。
     ProjectUnattendedDefault,
+    /// `loadReviewRulesSystemDefault` of the review rules page.
+    /// 复核规则页的 `loadReviewRulesSystemDefault`。
+    ReviewRulesSystemDefault,
+    /// `loadProjectReviewRules` of the project chosen on the review rules page.
+    /// 复核规则页所选项目的 `loadProjectReviewRules`。
+    ProjectReviewRules,
 }
 
 impl Slot {

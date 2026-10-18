@@ -20,8 +20,10 @@ use vulcan_ai_contract::{
     InferenceSchedulingClass, InferenceUsageScope, MessageRole, ParallelToolCallPolicy,
     ReasoningOutputPolicy, ResponsesExecutionRequest, StructuredOutputPolicy, ToolChoicePolicy,
 };
+use vulcan_permission_judge::system::ReviewRules;
 use vulcan_runtime_assets::PERMISSION_REVIEW_MD;
 
+use super::review_rules::effective_review_rules;
 use super::services::{backend_policy, load_project_options, read_state};
 use crate::{SharedServiceBridgeState, service_ui_locale_from_state};
 
@@ -97,7 +99,9 @@ pub(crate) async fn review_call(
         return Ok(None);
     }
     let policy = project_policy(state, call.workspace_root.as_deref()).await;
-    let request = review_request(&call, &policy, &reply_language(state));
+    let (_, settings) = read_state(state)?;
+    let rules = effective_review_rules(call.workspace_root.as_deref(), &settings.review_rules)?;
+    let request = review_request(&call, &policy, &rules, &reply_language(state));
     let context = HostAiCallContext::new(request.request_id.clone())
         .with_deadline(Some(unix_ms_after(REVIEW_TIMEOUT)));
     let result = tokio::time::timeout(REVIEW_TIMEOUT, async {
@@ -223,11 +227,13 @@ fn reply_language(state: &SharedServiceBridgeState) -> String {
         )
 }
 
-/// Builds the restricted request for one call; `language` names the language of the reason.
-/// 为一次调用构建受限请求；`language` 指定理由使用的语言。
+/// Builds the restricted request for one call; `rules` are the user's review rules and
+/// `language` names the language of the reason.
+/// 为一次调用构建受限请求；`rules` 是用户的复核规则，`language` 指定理由使用的语言。
 fn review_request(
     call: &ReviewCall,
     policy: &[String],
+    rules: &ReviewRules,
     language: &str,
 ) -> ResponsesExecutionRequest {
     ResponsesExecutionRequest {
@@ -247,7 +253,7 @@ fn review_request(
             AiMessage {
                 role: MessageRole::User,
                 content: vec![ContentItem::Text {
-                    text: render_review_input(call, policy, language),
+                    text: render_review_input(call, policy, rules, language),
                 }],
                 provider_context_items: Vec::new(),
             },
@@ -278,10 +284,15 @@ fn review_request(
     }
 }
 
-/// Renders the reviewer's user turn; every call section is marked as data, and the host-chosen
-/// reply language follows them.
-/// 渲染复核器的用户轮；每个调用区段都标记为数据，宿主选定的回复语言位于其后。
-fn render_review_input(call: &ReviewCall, policy: &[String], language: &str) -> String {
+/// Renders the reviewer's user turn; every call section is marked as data, the user's review rules
+/// and the host-chosen reply language follow them.
+/// 渲染复核器的用户轮；每个调用区段都标记为数据，用户的复核规则与宿主选定的回复语言位于其后。
+fn render_review_input(
+    call: &ReviewCall,
+    policy: &[String],
+    rules: &ReviewRules,
+    language: &str,
+) -> String {
     let project = call
         .workspace_root
         .as_ref()
@@ -319,8 +330,21 @@ fn render_review_input(call: &ReviewCall, policy: &[String], language: &str) -> 
         }
         None => String::from("<attendance>\nattended\n</attendance>"),
     };
+    let rule = |text: &str| {
+        if text.is_empty() {
+            String::from("(none)")
+        } else {
+            text.to_string()
+        }
+    };
+    let rules = format!(
+        "<review_rules>\n<deny>\n{}\n</deny>\n<ask>\n{}\n</ask>\n<allow>\n{}\n</allow>\n</review_rules>",
+        rule(&rules.deny),
+        rule(&rules.ask),
+        rule(&rules.allow),
+    );
     format!(
-        "<call>\nProject: {project}\nTool: {}\nArguments: {}\n</call>\n\n<agent_reason>\npurpose: {}\ndeclared_intent: {}\n</agent_reason>\n\n<user_request>\n{user_request}\n</user_request>\n\n<project_policy>\n{policy}\n</project_policy>\n\n<signals>\njudge: {judge}\nhigh_risk: {high_risk}\n</signals>\n\n{attendance}\n\n<reply_language>\n{language}\n</reply_language>",
+        "<call>\nProject: {project}\nTool: {}\nArguments: {}\n</call>\n\n<agent_reason>\npurpose: {}\ndeclared_intent: {}\n</agent_reason>\n\n<user_request>\n{user_request}\n</user_request>\n\n<project_policy>\n{policy}\n</project_policy>\n\n<signals>\njudge: {judge}\nhigh_risk: {high_risk}\n</signals>\n\n{rules}\n\n{attendance}\n\n<reply_language>\n{language}\n</reply_language>",
         call.tool_name,
         call.arguments,
         reason(&call.purpose),
@@ -421,7 +445,17 @@ mod tests {
             intent: None,
             unattended: None,
         };
-        let request = review_request(&call, &[String::from("writes = allow")], "zh-TW (繁體中文)");
+        let rules = ReviewRules {
+            allow: String::new(),
+            ask: String::from("pushes to any remote"),
+            deny: String::new(),
+        };
+        let request = review_request(
+            &call,
+            &[String::from("writes = allow")],
+            &rules,
+            "zh-TW (繁體中文)",
+        );
         assert_eq!(
             request.consumer_profile_id,
             PERMISSION_REVIEW_CONSUMER_PROFILE_ID
@@ -438,6 +472,8 @@ mod tests {
             "<user_request>",
             "<project_policy>",
             "<signals>",
+            "<ask>\npushes to any remote\n</ask>",
+            "<allow>\n(none)\n</allow>",
             "<reply_language>\nzh-TW (繁體中文)\n</reply_language>",
         ] {
             assert!(text.contains(section), "missing {section}");
@@ -468,7 +504,7 @@ mod tests {
             intent: Some(String::from("publish the release branch")),
             unattended: Some(String::from("never push to remote")),
         };
-        let request = review_request(&call, &[], "en-US (English)");
+        let request = review_request(&call, &[], &ReviewRules::default(), "en-US (English)");
         let ContentItem::Text { text } = &request.messages[1].content[0] else {
             panic!("the user turn must be text");
         };

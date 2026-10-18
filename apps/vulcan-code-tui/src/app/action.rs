@@ -835,6 +835,8 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                         .clear(crate::service_api::Slot::ProjectPermissionJudgePolicy);
                     app.slots
                         .clear(crate::service_api::Slot::ProjectUnattendedDefault);
+                    app.slots
+                        .clear(crate::service_api::Slot::ProjectReviewRules);
                 }
                 LocalSetting::ProfileTarget => {
                     app.profile_target = value.as_str().to_string();

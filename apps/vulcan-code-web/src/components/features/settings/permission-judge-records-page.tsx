@@ -43,6 +43,7 @@ const OUTCOME_KEYS: Record<string, TranslationKey> = {
   user_denied: "settings.permissionJudge.records.outcome.userDenied",
   failed: "settings.permissionJudge.records.outcome.failed",
   unattended_denied: "settings.permissionJudge.records.outcome.unattendedDenied",
+  approval_expired: "settings.permissionJudge.records.outcome.approvalExpired",
 };
 const MARK_LABELS: JudgeLabel[] = ["allow", "review", "block"];
 // Value of the workspace filter that keeps every workspace; NUL never occurs in a path, and the

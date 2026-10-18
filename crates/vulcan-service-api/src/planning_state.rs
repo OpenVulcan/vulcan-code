@@ -50,6 +50,10 @@ pub struct PendingApprovalSnapshot {
     /// 权限复核结论（当调用配置了复核 LLM 时）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<PendingApprovalReview>,
+    /// Unix milliseconds when an unanswered approval is denied; absent when it waits until answered.
+    /// 未回答的审批被拒绝时的 Unix 毫秒时间；一直等到回答时缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_unix_ms: Option<u64>,
     /// Reply label that runs the call once.
     /// 执行一次调用的回复标签。
     pub allow_label: String,

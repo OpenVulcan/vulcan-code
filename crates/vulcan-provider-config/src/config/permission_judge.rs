@@ -7,7 +7,7 @@
 
 use super::*;
 pub use vulcan_permission_judge::protocol::JudgeDevice;
-pub use vulcan_permission_judge::system::JudgeBackend;
+pub use vulcan_permission_judge::system::{JudgeBackend, ReviewRules};
 
 /// Returns whether a persisted boolean is false so the default stays out of JSON.
 /// 判断持久化布尔值是否为 false，使默认值不写入 JSON。
@@ -93,6 +93,20 @@ pub struct PersistedPermissionJudgeConfiguration {
     /// 确认的文本。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub unattended_deny_policy: String,
+    /// System default rules the permission reviewer applies; projects may replace them.
+    /// 权限复核器应用的系统默认规则；项目可以替换它们。
+    #[serde(default, skip_serializing_if = "ReviewRules::is_empty")]
+    pub review_rules: ReviewRules,
+    /// Seconds a permission approval waits before the call is denied; zero waits for the user.
+    /// 权限审批在调用被拒绝前等待的秒数；为零时一直等待用户。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub approval_timeout_seconds: u32,
+}
+
+/// Returns whether a persisted count is zero so the default stays out of JSON.
+/// 判断持久化计数是否为零，使默认值不写入 JSON。
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Why a registry change was refused.
@@ -236,13 +250,19 @@ pub struct ProjectPermissionJudgeConfiguration {
     /// 无人值守模式的项目默认拒绝策略；缺省表示采用系统默认值，空文本表示本项目不提供策略。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unattended_deny_policy: Option<String>,
+    /// Project rules for the permission reviewer; absent means the system default applies.
+    /// 权限复核器的项目规则；缺省表示采用系统默认值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_rules: Option<ReviewRules>,
 }
 
 impl ProjectPermissionJudgeConfiguration {
     /// Returns whether the project chose nothing.
     /// 返回项目是否没有任何选择。
     pub fn is_empty(&self) -> bool {
-        self.options.is_empty() && self.unattended_deny_policy.is_none()
+        self.options.is_empty()
+            && self.unattended_deny_policy.is_none()
+            && self.review_rules.is_none()
     }
 }
 

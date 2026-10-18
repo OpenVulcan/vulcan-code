@@ -78,6 +78,9 @@ struct FixedHost {
     reviewed: std::sync::Mutex<Vec<ReviewCall>>,
     records: std::sync::Mutex<Vec<PermissionRecord>>,
     unattended: std::sync::Mutex<Option<String>>,
+    /// Lets every approval run out unanswered instead of answering it.
+    /// 让每次审批无人回答直至等待时间耗尽，而不是回答它。
+    expire: std::sync::Mutex<bool>,
     memory: PermissionMemory,
 }
 
@@ -116,6 +119,7 @@ impl FixedHost {
             reviewed: std::sync::Mutex::new(Vec::new()),
             records: std::sync::Mutex::new(Vec::new()),
             unattended: std::sync::Mutex::new(None),
+            expire: std::sync::Mutex::new(false),
             memory: PermissionMemory::default(),
         })
     }
@@ -143,9 +147,18 @@ impl ToolPermissionHost for FixedHost {
         tool_name: String,
         _arguments: Value,
         prompt: ToolApprovalPrompt,
-    ) -> Result<bool, String> {
+    ) -> Result<ApprovalAnswer, String> {
         self.prompts.lock().unwrap().push((tool_name, prompt));
-        self.approval.clone()
+        if *self.expire.lock().unwrap() {
+            return Ok(ApprovalAnswer::Expired);
+        }
+        self.approval.clone().map(|allowed| {
+            if allowed {
+                ApprovalAnswer::Allowed
+            } else {
+                ApprovalAnswer::Denied
+            }
+        })
     }
 
     async fn judge(&self, call: JudgeCall) -> Result<Option<JudgeVerdict>, JudgeFailure> {
@@ -689,8 +702,17 @@ async fn gate_asks_the_user_for_escalated_calls_and_fails_closed() {
                 high_risk: None,
                 judge: None,
                 review: None,
+                deadline_unix_ms: None,
             }
         )]
+    );
+    // An approval nobody answers in time is denied with its own outcome and guidance.
+    // 无人及时回答的审批以其专属结果与指引被拒绝。
+    let expiring = FixedHost::new(Ok(PermissionMode::ReadOnly), Ok(true));
+    *expiring.expire.lock().unwrap() = true;
+    assert_eq!(
+        admit(Arc::clone(&expiring), args.clone()).await,
+        ToolPermissionVerdict::Deny(String::from(APPROVAL_EXPIRED_DENIAL))
     );
     assert_eq!(
         admit(

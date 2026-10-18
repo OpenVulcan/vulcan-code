@@ -25,6 +25,7 @@ fn choice_request(snapshot: &Value, backend: &str) -> Value {
         "cudaLibraryDirectory": v(snapshot, "/cuda/lockedDirectory"),
         "llmMayAllowBlocked": b(snapshot, "/llmMayAllowBlocked"),
         "recordDecisions": b(snapshot, "/recordDecisions"),
+        "approvalTimeoutSeconds": n(snapshot, "/approvalTimeoutSeconds"),
     })
 }
 
@@ -165,6 +166,7 @@ mod tests {
         json!({
             "backend": null, "device": null, "recommendedDevice": "cpu",
             "llmMayAllowBlocked": true, "recordDecisions": true, "cuda": { "lockedDirectory": "D:/cuda" },
+            "approvalTimeoutSeconds": 120,
         })
     }
 
@@ -177,7 +179,7 @@ mod tests {
             json!({
                 "backend": "local", "device": "cpu",
                 "cudaLibraryDirectory": "D:/cuda", "llmMayAllowBlocked": true,
-                "recordDecisions": true,
+                "recordDecisions": true, "approvalTimeoutSeconds": 120,
             })
         );
     }

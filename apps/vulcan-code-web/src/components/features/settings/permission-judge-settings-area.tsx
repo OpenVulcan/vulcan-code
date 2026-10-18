@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Activity, Bot, Box, ChevronLeft, History, ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
+import { Activity, Bot, Box, ChevronLeft, History, ChevronRight, Gauge, ListChecks, RefreshCw, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import {
   PageBody, PageEmptyState, PageFacts, PageHint, PageItem, PageNotice, PageRow, PageSection, PageToolbar, type PageFact,
@@ -7,6 +7,7 @@ import {
 import { StatusPill } from "@/components/shared/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
@@ -21,6 +22,7 @@ import { DEVICE_KEYS, MODE_KEYS, OPTION_HINT_KEYS, OPTION_KEYS, PHASE_KEYS, REAS
 import { PermissionJudgePolicyPage } from "@/components/features/settings/permission-judge-policy-page";
 import { PermissionJudgeRecordsPage } from "@/components/features/settings/permission-judge-records-page";
 import { PermissionJudgeRegisterForm } from "@/components/features/settings/permission-judge-register-form";
+import { PermissionJudgeReviewRulesPage } from "@/components/features/settings/permission-judge-review-rules-page";
 import { PermissionJudgeUnattendedPage } from "@/components/features/settings/permission-judge-unattended-page";
 import { PermissionJudgeEntryContext } from "@/components/composer/permission-judge-entry-context";
 import { PermissionReviewRouteSection } from "@/components/features/settings/permission-review-route-section";
@@ -73,6 +75,7 @@ interface Choices {
   cudaLibraryDirectory: string | null;
   llmMayAllowBlocked: boolean;
   recordDecisions: boolean;
+  approvalTimeoutSeconds: number;
 }
 
 // savedChoices reads the saved choices; an unset backend is local and an unset device follows the
@@ -85,12 +88,13 @@ function savedChoices(snapshot: PermissionJudgeSettingsSnapshot): Choices {
     cudaLibraryDirectory: snapshot.cuda.lockedDirectory,
     llmMayAllowBlocked: snapshot.llmMayAllowBlocked,
     recordDecisions: snapshot.recordDecisions,
+    approvalTimeoutSeconds: snapshot.approvalTimeoutSeconds,
   };
 }
 
 // View is the page shown inside the settings frame: the overview or one of its sub-pages.
 // View 是设置框架内显示的页面：总览或其子页面之一。
-type View = "overview" | "models" | "cuda" | "diagnostics" | "records" | "policy" | "unattended";
+type View = "overview" | "models" | "cuda" | "diagnostics" | "records" | "policy" | "unattended" | "reviewRules";
 
 // Failure is one failed action: a readable outcome plus the raw service error.
 // Failure 是一次失败的操作：可读结果加原始服务错误。
@@ -271,6 +275,9 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   if (view === "policy") {
     return subPage(t("settings.permissionJudge.policy.title"), <PermissionJudgePolicyPage projects={props.projects ?? []} />);
   }
+  if (view === "reviewRules") {
+    return subPage(t("settings.permissionJudge.reviewRules.title"), <PermissionJudgeReviewRulesPage projects={props.projects ?? []} />);
+  }
   if (view === "unattended") {
     return subPage(t("settings.permissionJudge.unattended.title"), <PermissionJudgeUnattendedPage projects={props.projects ?? []} />);
   }
@@ -450,7 +457,18 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
         <Switch aria-label={t("settings.permissionJudge.llmMayAllowBlocked")} checked={choices.llmMayAllowBlocked}
           disabled={busy !== null} onCheckedChange={(llmMayAllowBlocked) => persist({ llmMayAllowBlocked })} />
       </PageRow>
+      <PageItem icon={<ListChecks />} title={t("settings.permissionJudge.reviewRules.title")}
+        description={t("settings.permissionJudge.reviewRules.entryHint")} actions={open("reviewRules")} />
     </PermissionReviewRouteSection>
+
+    <PageSection layout="rows" data-judge-approval="" title={t("settings.permissionJudge.approval.title")}
+      description={t("settings.permissionJudge.approval.description")}>
+      <PageRow label={t("settings.permissionJudge.approval.timeout")} description={t("settings.permissionJudge.approval.timeoutHint")}>
+        <ApprovalTimeoutInput value={choices.approvalTimeoutSeconds} max={snapshot.maxApprovalTimeoutSeconds}
+          disabled={busy !== null} label={t("settings.permissionJudge.approval.timeout")}
+          onCommit={(approvalTimeoutSeconds) => persist({ approvalTimeoutSeconds })} />
+      </PageRow>
+    </PageSection>
 
     <PageSection layout="rows" data-judge-tools="" title={t("settings.permissionJudge.tools")}>
       <PageItem icon={<Bot />} title={t("settings.permissionJudge.unattended.title")}
@@ -464,6 +482,33 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
         description={t("settings.permissionJudge.records.entryHint")} actions={open("records")} />
     </PageSection>
   </PageBody>;
+}
+
+// ApprovalTimeoutInput edits the approval wait in seconds and saves it when the field loses focus or
+// Enter is pressed; text outside 0..max returns to the saved value.
+// ApprovalTimeoutInput 以秒为单位编辑审批等待时长，在失去焦点或按下回车时保存；超出 0..max 的输入恢复为
+// 已保存值。
+function ApprovalTimeoutInput(props: {
+  value: number;
+  max: number;
+  disabled: boolean;
+  label: string;
+  onCommit: (seconds: number) => void;
+}) {
+  const [draft, setDraft] = React.useState(String(props.value));
+  React.useEffect(() => setDraft(String(props.value)), [props.value]);
+  const commit = () => {
+    const seconds = Number(draft);
+    if (draft.trim() === "" || !Number.isInteger(seconds) || seconds < 0 || seconds > props.max) {
+      setDraft(String(props.value));
+      return;
+    }
+    if (seconds !== props.value) props.onCommit(seconds);
+  };
+  return <Input type="number" inputMode="numeric" min={0} max={props.max} step={1} className="h-8 w-28"
+    aria-label={props.label} data-approval-timeout="" disabled={props.disabled} value={draft}
+    onChange={(event) => setDraft(event.currentTarget.value)} onBlur={commit}
+    onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />;
 }
 
 // WorkerStatusSection shows the loaded model's phase, memory, GPU use and latency.

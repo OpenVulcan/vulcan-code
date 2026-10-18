@@ -29,7 +29,7 @@ use vulcan_tools_manager::{
     text_looks_read_only, tool_is_allowed_in_plan_with_args,
 };
 
-use crate::agent_runtime::question_runtime::ToolApprovalPrompt;
+use crate::agent_runtime::question_runtime::{ApprovalAnswer, ToolApprovalPrompt};
 use crate::model::SessionId;
 use crate::tooling::native::{
     APPLY_PATCH_TOOL_ID, DECLARE_INTENT_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_TOOL_ID,
@@ -41,6 +41,10 @@ pub use command_rules::HighRiskCategory;
 /// Model-visible explanation returned when the user denies an escalated call.
 /// 用户拒绝升级调用时返回给模型的说明。
 pub const USER_DENIAL: &str = "The user denied permission for this call, so it was not executed. Do not retry it or work around the denial. Continue with other work, or stop and explain what you intended to do.";
+
+/// Model-visible explanation returned when nobody answers an approval before its wait runs out.
+/// 审批等待时间耗尽前无人回答时返回给模型的说明。
+pub const APPROVAL_EXPIRED_DENIAL: &str = "Nobody answered the approval prompt for this call before its wait ran out, so it was not executed. Do not retry it now. Continue with other work, or stop and explain what you intended to do so the user can approve it later.";
 
 /// Model-visible prefix of the explanation returned when the reviewing LLM denies a call.
 /// 复核 LLM 拒绝调用时返回给模型的说明前缀。
@@ -90,8 +94,9 @@ pub trait ToolPermissionHost: Send + Sync {
         None
     }
 
-    /// Waits for the user's decision on one escalated call; `true` runs it once.
-    /// 等待用户对一次升级调用的决定；`true` 表示执行一次。
+    /// Waits for the user's decision on one escalated call; the host may deny it unanswered once
+    /// the user's approval wait runs out.
+    /// 等待用户对一次升级调用的决定；用户设定的审批等待时间耗尽后，宿主可以在无人回答时拒绝它。
     /// An error means the call cannot continue, exactly like a failed or abandoned Ask.
     /// 错误表示调用无法继续，与失败或被放弃的 Ask 完全相同。
     async fn request_approval(
@@ -101,7 +106,7 @@ pub trait ToolPermissionHost: Send + Sync {
         tool_name: String,
         arguments: Value,
         prompt: ToolApprovalPrompt,
-    ) -> Result<bool, String>;
+    ) -> Result<ApprovalAnswer, String>;
 
     /// Scores one escalated call with the configured judge model; `Ok(None)` means no judge is
     /// configured. An error means the judge is configured but could not score this call.
@@ -198,6 +203,9 @@ pub enum PermissionOutcome {
     /// The user denied the call.
     /// 用户拒绝。
     UserDenied,
+    /// Nobody answered the approval before its wait ran out.
+    /// 审批等待时间耗尽前无人回答。
+    ApprovalExpired,
     /// The approval could not finish.
     /// 审批无法完成。
     Failed,
@@ -216,6 +224,7 @@ impl PermissionOutcome {
             Self::ReviewDenied => "review_denied",
             Self::UserAllowed => "user_allowed",
             Self::UserDenied => "user_denied",
+            Self::ApprovalExpired => "approval_expired",
             Self::Failed => "failed",
             Self::UnattendedDenied => "unattended_denied",
         }
@@ -1170,6 +1179,7 @@ async fn decide_escalated(
         high_risk,
         judge,
         review: review.clone(),
+        deadline_unix_ms: None,
     };
     match host
         .request_approval(
@@ -1181,14 +1191,19 @@ async fn decide_escalated(
         )
         .await
     {
-        Ok(true) => decided(
+        Ok(ApprovalAnswer::Allowed) => decided(
             ToolPermissionVerdict::Proceed,
             PermissionOutcome::UserAllowed,
             review,
         ),
-        Ok(false) => decided(
+        Ok(ApprovalAnswer::Denied) => decided(
             ToolPermissionVerdict::Deny(String::from(USER_DENIAL)),
             PermissionOutcome::UserDenied,
+            review,
+        ),
+        Ok(ApprovalAnswer::Expired) => decided(
+            ToolPermissionVerdict::Deny(String::from(APPROVAL_EXPIRED_DENIAL)),
+            PermissionOutcome::ApprovalExpired,
             review,
         ),
         Err(error) => decided(

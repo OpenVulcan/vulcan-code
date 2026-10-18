@@ -223,7 +223,33 @@ fn approval_rows(app: &App, approval: &PendingApproval, width: usize) -> Vec<Row
         }
         None => {}
     }
+    if let Some(deadline) = approval.deadline_unix_ms {
+        let seconds = seconds_until(deadline);
+        // The service owns the deadline; reaching zero only waits for the request to leave.
+        // 截止时间由服务掌握；归零后只等待请求离开。
+        let style = if seconds <= 10 {
+            Style::new().fg(theme.danger)
+        } else {
+            theme.muted_text()
+        };
+        push_wrapped(
+            &mut rows,
+            tr!("ask.approval.countdown", seconds = seconds),
+            style,
+        );
+    }
     rows
+}
+
+/// Whole seconds left before a Unix-millisecond deadline, never below zero.
+/// 距 Unix 毫秒截止时间剩余的整秒数，最小为零。
+fn seconds_until(deadline_unix_ms: u64) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        });
+    deadline_unix_ms.saturating_sub(now).div_ceil(1000)
 }
 
 fn body_rows(app: &App, pending: &PendingQuestion, width: usize) -> Vec<Row> {

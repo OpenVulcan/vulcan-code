@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 use vulcan_core::types::{
@@ -25,7 +26,7 @@ use crate::agent_runtime::tool_runtime_bridge::{
 };
 
 mod approval;
-pub use approval::{APPROVAL_ALLOW_LABEL, APPROVAL_DENY_LABEL, ToolApprovalPrompt};
+pub use approval::{APPROVAL_ALLOW_LABEL, APPROVAL_DENY_LABEL, ApprovalAnswer, ToolApprovalPrompt};
 
 /// Fallible callback invoked whenever pending-question visibility changes.
 /// 待回答问题可见性变化时触发的可失败回调。
@@ -262,6 +263,22 @@ pub struct QuestionRuntime {
     next_sequence: AtomicU64,
 }
 
+/// Route identity of the pending request of one tool call: a transitional UI projection of the
+/// authoritative V1 local identity. Provider-native ids never become keys.
+/// 一次工具调用的待处理请求路由标识：权威 V1 本地身份的过渡 UI 投影。Provider 原生 id 绝不成为主键。
+fn pending_request_id(
+    session_id: SessionId,
+    api_call_id: ApiCallId,
+    tool_call_id: ToolCallId,
+) -> String {
+    format!(
+        "{}:{}:{}",
+        session_id,
+        api_call_id.value(),
+        tool_call_id.value()
+    )
+}
+
 impl Default for QuestionRuntime {
     /// Builds one empty question runtime with a fresh monotonic sequence allocator.
     /// 构建一份带全新单调序号分配器的空问题运行时。
@@ -403,16 +420,7 @@ impl QuestionRuntime {
         // durabilityCallback is acquired before registration so a callback-lock failure cannot create a process-only Ask.
         // durabilityCallback 在注册前获取，确保回调锁失败不会创建仅存在于进程内的 Ask。
         let durability_callback = self.durability_callback_snapshot()?;
-        // requestId is only a transitional UI route projection of the authoritative V1 local
-        // identity. Provider-native ids remain optional correlation data and never become keys.
-        // requestId 只是权威 V1 本地身份的过渡 UI 路由投影；Provider 原生 id 仅为可选
-        // 关联数据，绝不成为主键。
-        let request_id = format!(
-            "{}:{}:{}",
-            session_id,
-            api_call_id.value(),
-            tool_call_id.value()
-        );
+        let request_id = pending_request_id(session_id, api_call_id, tool_call_id);
         let (sender, receiver) = oneshot::channel::<PendingQuestionCompletion>();
         {
             let mut pending = self.pending.write().map_err(|_| {

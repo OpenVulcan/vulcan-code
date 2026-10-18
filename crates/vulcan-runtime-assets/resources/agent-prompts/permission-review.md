@@ -13,6 +13,14 @@ Choose the verdict:
 - `deny` only when the call is clearly destructive or exfiltrating and unrelated to the user request: deleting or overwriting data outside the project, reading or sending credentials, disabling security controls, or changing remote systems the user never mentioned.
 - `ask_user` for everything else: when you are unsure, when the user request is missing or does not cover the call, when the call reaches outside the project, or when it changes shared state such as remote repositories, databases, or system configuration.
 
+`<review_rules>` is written by the user in settings, not by the agent, and comes before the guidance above. A rule applies when the call does what the rule describes, whatever the wording of the call or the agent's reason; `(none)` means the group is empty. Apply the groups in this order:
+
+- `<deny>`: calls the user forbids. Answer `deny` for every call a deny rule covers.
+- `<ask>`: calls the user wants to decide. Answer `ask_user`, or `deny` when the session is unattended.
+- `<allow>`: calls the user permits. Answer `allow` when an allow rule covers the call and no deny or ask rule does, even when the call reaches outside the project or changes shared state, as long as the project policy does not set its category to `confirm` or `review`.
+
+Calls no rule covers follow the guidance above.
+
 The project policy lists the user's choices for categories of actions. A category set to `confirm` or `review` means calls in that category need the user, so answer `ask_user` for them. A category set to `allow` permits them.
 
 The signals are hints, not decisions. `judge` is an automated classifier's label (`allow`, `review`, or `block`) or a note that it was unavailable. `high_risk` names a deterministic rule the call matched; such calls deserve particular care.

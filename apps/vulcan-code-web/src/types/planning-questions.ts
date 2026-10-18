@@ -97,6 +97,9 @@ export interface PendingApprovalSnapshot {
   // Permission reviewer finding, when a reviewing LLM is configured for the call.
   // 权限复核结论（当调用配置了复核 LLM 时）。
   review?: PendingApprovalReview | null;
+  // Unix milliseconds when an unanswered approval is denied; absent when it waits until answered.
+  // 未回答的审批被拒绝时的 Unix 毫秒时间；一直等到回答时缺省。
+  deadlineUnixMs?: number | null;
   // Canonical answer that runs the call once.
   // 执行一次调用的规范回答。
   allowLabel: string;

@@ -131,6 +131,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_unattended_system_default",
     "service_project_unattended_default",
     "service_save_project_unattended_default",
+    "service_review_rules_system_default",
+    "service_save_review_rules_system_default",
+    "service_project_review_rules",
+    "service_save_project_review_rules",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -872,6 +876,28 @@ pub(super) async fn dispatch(
         }
         "service_save_project_unattended_default" => {
             rpc_json_result(permission_judge::service_save_project_unattended_default(
+                state,
+                rpc_required_param(params, "request")?,
+            ))
+        }
+        "service_review_rules_system_default" => {
+            rpc_json_result(permission_judge::service_review_rules_system_default(state))
+        }
+        "service_save_review_rules_system_default" => rpc_json_result(
+            permission_judge::service_save_review_rules_system_default(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_project_review_rules" => {
+            rpc_json_result(permission_judge::service_project_review_rules(
+                state,
+                rpc_required_param(params, "projectId")?,
+            ))
+        }
+        "service_save_project_review_rules" => {
+            rpc_json_result(permission_judge::service_save_project_review_rules(
                 state,
                 rpc_required_param(params, "request")?,
             ))

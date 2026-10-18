@@ -110,6 +110,7 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
       cudaLibraryDirectory: snapshot.cuda.lockedDirectory,
       llmMayAllowBlocked: snapshot.llmMayAllowBlocked,
       recordDecisions: snapshot.recordDecisions,
+      approvalTimeoutSeconds: snapshot.approvalTimeoutSeconds,
     });
     toast.success(t("settings.permissionJudge.saved"));
     props.onOpenChange(false);
