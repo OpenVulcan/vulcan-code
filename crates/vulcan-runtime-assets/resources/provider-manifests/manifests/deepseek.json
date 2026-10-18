@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "deepseek",
-  "revision": 16,
-  "published_at": "2026-10-09T00:00:00Z",
+  "revision": 17,
+  "published_at": "2026-10-18T13:38:38Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -13,7 +13,8 @@
     "required_execution_primitives": [
       "deepseek_responses_plaintext_v1",
       "deepseek_chat_reasoning_content_v1",
-      "deepseek_anthropic_thinking_v1"
+      "deepseek_anthropic_thinking_v1",
+      "http_json_sync"
     ],
     "required_upload_primitives": [
       "multipart_file"
@@ -24,7 +25,10 @@
       "delete_json_pointer",
       "delete_unless_equals",
       "enum_map",
-      "remove_if_empty"
+      "remove_if_empty",
+      "rename_json_pointer",
+      "set_literal",
+      "rebuild_json_template"
     ]
   },
   "display": {
@@ -581,9 +585,70 @@
           }
         ]
       }
+    },
+    {
+      "profile_id": "deepseek.search.request.v1",
+      "description": "Map the shared search result limit to count and request summaries without full page bodies.",
+      "payload": {
+        "profile_id": "deepseek.search.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rename_json_pointer",
+            "from": "/max_results",
+            "to": "/count"
+          },
+          {
+            "op": "set_literal",
+            "path": "/need_content",
+            "value": false
+          }
+        ]
+      }
     }
   ],
-  "response_profiles": [],
+  "response_profiles": [
+    {
+      "profile_id": "deepseek.search.response.v1",
+      "description": "Use the documented long summary as each normalized search excerpt.",
+      "payload": {
+        "profile_id": "deepseek.search.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "results": {
+                "$vulcan_map": {
+                  "path": "/results",
+                  "template": {
+                    "title": {
+                      "$vulcan_ref": {
+                        "scope": "item",
+                        "path": "/title"
+                      }
+                    },
+                    "url": {
+                      "$vulcan_ref": {
+                        "scope": "item",
+                        "path": "/url"
+                      }
+                    },
+                    "content": {
+                      "$vulcan_ref": {
+                        "scope": "item",
+                        "path": "/summary"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
   "upload_channels": [
     {
       "upload_channel_id": "official-api.image-file",
@@ -613,11 +678,145 @@
       "reference_scope": "credential"
     }
   ],
-  "operations": [],
-  "tool_targets": [],
+  "operations": [
+    {
+      "operation_id": "deepseek.web_search",
+      "operation": "web_search",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [],
+      "tool_target_refs": ["official-api.search"],
+      "request_profile_refs": ["deepseek.search.request.v1"],
+      "response_profile_refs": ["deepseek.search.response.v1"],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "deepseek.web_fetch",
+      "operation": "web_extract",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [],
+      "tool_target_refs": ["official-api.fetch"],
+      "request_profile_refs": [],
+      "response_profile_refs": [],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 60000,
+      "idempotent": false
+    }
+  ],
+  "tool_targets": [
+    {
+      "target_id": "official-api.search",
+      "description": "Search the public web with the selected DeepSeek API account and return ranked long summaries. Query operators include site:, -site:, lang:, after:, before: and quoted phrases. Use webpage fetching for full Markdown content. Successful non-empty searches are billed per request.",
+      "service_entry_id": "official-api",
+      "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "search",
+      "display_name": "DeepSeek Search",
+      "tool_id": "vulcan_web_search",
+      "capability": "web_search",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "DeepSeek web search arguments. The existing account API key authorizes this independent endpoint.",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S",
+            "description": "The exact search query, including optional supported search operators."
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10,
+            "description": "Maximum number of ordered results; maps to the API count field."
+          },
+          "ori_question": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Optional original user question to clarify search intent; null omits the hint."
+          },
+          "localization": {
+            "type": "string",
+            "description": "Optional IP address used to prioritize localized results."
+          }
+        },
+        "required": ["query"]
+      },
+      "output": {
+        "kind": "search",
+        "source_path": "/results",
+        "normalized_result_path": "search"
+      },
+      "execution": {
+        "endpoint_path": "/v1/tools/search",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "official-api.fetch",
+      "description": "Fetch one public HTTP or HTTPS webpage with the selected DeepSeek API account and return its Markdown body. The URL must include a host and must not contain a username or password. Successful requests with content are billed per request.",
+      "service_entry_id": "official-api",
+      "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "fetch",
+      "display_name": "DeepSeek Fetch",
+      "tool_id": "vulcan_web_extract",
+      "capability": "web_extract",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "description": "Fetch one webpage through the authenticated DeepSeek API; this is not a direct host download.",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192,
+            "format": "uri",
+            "pattern": "^https?://(?:\\[[^\\s\\[\\]/?#@]+\\]|[^\\s/:?#@]+)(?::[0-9]*)?(?:[/?#][^\\s]*)?$",
+            "description": "One absolute, credential-free HTTP or HTTPS webpage URL."
+          }
+        },
+        "required": ["url"]
+      },
+      "output": {
+        "kind": "text",
+        "source_path": "/content",
+        "normalized_result_path": "text"
+      },
+      "execution": {
+        "endpoint_path": "/v1/tools/fetch",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    }
+  ],
   "provenance": {
     "status": "migrated",
     "sources": [
+      {
+        "url": "https://api-docs.deepseek.com/zh-cn/guides/search/",
+        "note": "Reviewed 2026-10-18: independent POST /v1/tools/search and /v1/tools/fetch reuse Bearer API-key authentication. Search returns long summaries even when need_content=false; Fetch returns Markdown content. Each endpoint is limited to 5 account-level QPS and bills successful non-empty requests. Existing server-side tool calls begin per-request billing on 2026-11-01 at 00:00 Beijing time."
+      },
+      {
+        "url": "https://api-docs.deepseek.com/zh-cn/api/search/",
+        "note": "Search request limits: query contains 1-128 non-blank Unicode characters, count is 1-50 with default 10, and ori_question is optional and nullable with a 1-128 character string limit. Normalize the required summary field, not the normally empty content field."
+      },
+      {
+        "url": "https://api-docs.deepseek.com/zh-cn/api/fetch/",
+        "note": "Fetch accepts one credential-free HTTP/HTTPS URL of at most 8192 characters and returns title plus a Markdown content string. The existing text output decoder preserves that body without inventing a URL-bearing response array."
+      },
       {
         "url": "https://api-docs.deepseek.com/zh-cn/guides/vision",
         "note": "Official Chat/Anthropic/Responses image-input formats, MIME types, and limits for deepseek-flash. The 32 MiB constraint is the Base64/URL per-image limit; remote URL passthrough remains undeclared."

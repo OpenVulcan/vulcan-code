@@ -1,0 +1,149 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "deepseek-search-generic",
+  "base_manifest": "deepseek.json",
+  "production_target_refs": [
+    "deepseek::official-api.search"
+  ],
+  "tool_target": {
+    "target_id": "official-api.fixture-search",
+    "description": "Search the public web with the selected DeepSeek API account and return ranked long summaries. Query operators include site:, -site:, lang:, after:, before: and quoted phrases. Use webpage fetching for full Markdown content. Successful non-empty searches are billed per request.",
+    "service_entry_id": "official-api",
+    "credential_profile_ids": [
+      "api-key"
+    ],
+    "upstream_target_id": "search",
+    "display_name": "DeepSeek Search",
+    "tool_id": "fixture_deepseek_search",
+    "capability": "web_search",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "description": "DeepSeek web search arguments. The existing account API key authorizes this independent endpoint.",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "\\S",
+          "description": "The exact search query, including optional supported search operators."
+        },
+        "max_results": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 10,
+          "description": "Maximum number of ordered results; maps to the API count field."
+        },
+        "ori_question": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Optional original user question to clarify search intent; null omits the hint."
+        },
+        "localization": {
+          "type": "string",
+          "description": "Optional IP address used to prioritize localized results."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "output": {
+      "kind": "search",
+      "source_path": "/results",
+      "normalized_result_path": "search"
+    },
+    "execution": {
+      "endpoint_path": "/v1/tools/search",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.deepseek-search",
+    "operation": "web_search",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [],
+    "tool_target_refs": [
+      "official-api.fixture-search"
+    ],
+    "request_profile_refs": [
+      "deepseek.search.request.v1"
+    ],
+    "response_profile_refs": [
+      "deepseek.search.response.v1"
+    ],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "required_upload_primitives": [],
+  "required_transformers": [],
+  "arguments": {
+    "query": "DeepSeek site:example.com",
+    "ori_question": null,
+    "localization": "203.0.113.1"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/v1/tools/search",
+      "expected_json_body": {
+        "query": "DeepSeek site:example.com",
+        "count": 10,
+        "ori_question": null,
+        "localization": "203.0.113.1",
+        "need_content": false
+      },
+      "expected_headers": {
+        "authorization": "Bearer fixture-secret",
+        "content-type": "application/json"
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "results": [
+          {
+            "rerank_score": 2.4,
+            "title": "DeepSeek documentation",
+            "url": "http://example.com/search",
+            "snippet": "Short excerpt.",
+            "summary": "Long summary for model consumption.",
+            "content": "",
+            "site_name": null,
+            "site_icon": null,
+            "date": null,
+            "authority": -1
+          }
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "search",
+  "expected_search_output": {
+    "query": "DeepSeek site:example.com",
+    "results": [
+      {
+        "rank": 1,
+        "title": "DeepSeek documentation",
+        "url": "http://example.com/search",
+        "source_domain": "example.com",
+        "snippet": "Long summary for model consumption."
+      }
+    ]
+  }
+}

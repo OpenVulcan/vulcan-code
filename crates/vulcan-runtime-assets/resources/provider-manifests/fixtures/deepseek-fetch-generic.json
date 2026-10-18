@@ -1,0 +1,97 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "deepseek-fetch-generic",
+  "base_manifest": "deepseek.json",
+  "production_target_refs": [
+    "deepseek::official-api.fetch"
+  ],
+  "tool_target": {
+    "target_id": "official-api.fixture-fetch",
+    "description": "Fetch one public HTTP or HTTPS webpage with the selected DeepSeek API account and return its Markdown body. The URL must include a host and must not contain a username or password. Successful requests with content are billed per request.",
+    "service_entry_id": "official-api",
+    "credential_profile_ids": [
+      "api-key"
+    ],
+    "upstream_target_id": "fetch",
+    "display_name": "DeepSeek Fetch",
+    "tool_id": "fixture_deepseek_fetch",
+    "capability": "web_extract",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "description": "Fetch one webpage through the authenticated DeepSeek API; this is not a direct host download.",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "format": "uri",
+          "pattern": "^https?://(?:\\[[^\\s\\[\\]/?#@]+\\]|[^\\s/:?#@]+)(?::[0-9]*)?(?:[/?#][^\\s]*)?$",
+          "description": "One absolute, credential-free HTTP or HTTPS webpage URL."
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
+    "output": {
+      "kind": "text",
+      "source_path": "/content",
+      "normalized_result_path": "text"
+    },
+    "execution": {
+      "endpoint_path": "/v1/tools/fetch",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.deepseek-fetch",
+    "operation": "web_extract",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [],
+    "tool_target_refs": [
+      "official-api.fixture-fetch"
+    ],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "required_upload_primitives": [],
+  "required_transformers": [],
+  "arguments": {
+    "url": "http://example.com/page"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/v1/tools/fetch",
+      "expected_json_body": {
+        "url": "http://example.com/page"
+      },
+      "expected_headers": {
+        "authorization": "Bearer fixture-secret",
+        "content-type": "application/json"
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "title": "Example page",
+        "content": "# Example page\n\nMarkdown body."
+      }
+    }
+  ],
+  "expected_output_kind": "text",
+  "expected_text_output": "# Example page\n\nMarkdown body."
+}

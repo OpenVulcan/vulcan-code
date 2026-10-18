@@ -2937,7 +2937,7 @@ fn decode_generic_json_value_output(
                         .ok_or_else(|| {
                             format!("Provider tool search result {index} has no non-empty url.")
                         })?;
-                    let parsed_url = validated_https_url(
+                    let parsed_url = validated_web_search_url(
                         url,
                         format!("Provider tool search result {index}").as_str(),
                     )?;
@@ -2951,7 +2951,7 @@ fn decode_generic_json_value_output(
                         url: parsed_url.to_string(),
                         source_domain: parsed_url
                             .host_str()
-                            .expect("validated HTTPS URL always has a host")
+                            .expect("validated web URL always has a host")
                             .to_ascii_lowercase(),
                         snippet: item
                             .get("content")
@@ -3525,6 +3525,28 @@ fn validate_generic_resource_mime(
         ));
     }
     Ok(())
+}
+
+/// Validates a search-result locator without fetching the linked page or forwarding credentials.
+/// 校验搜索结果定位符，不抓取链接页面或转发凭据。
+/// `value` is the provider-returned link and `label` is a secret-free error context.
+/// `value` 是供应商返回的链接，`label` 是不含秘密的错误上下文。
+/// Returns an absolute credential-free HTTP(S) URL or a controlled validation error.
+/// 返回不含凭据的绝对 HTTP(S) URL 或受控校验错误。
+fn validated_web_search_url(value: &str, label: &str) -> Result<reqwest::Url, String> {
+    // Search results are locators; HTTP links do not authorize a host-side download.
+    // 搜索结果仅是定位符；HTTP 链接不会授权宿主侧下载。
+    let url = reqwest::Url::parse(value).map_err(|_| format!("{label} is not a valid URL."))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(format!(
+            "{label} must be an absolute credential-free HTTP or HTTPS URL."
+        ));
+    }
+    Ok(url)
 }
 
 /// Validates an absolute HTTPS URL without accepting credentials or fragments as alternate sources.
@@ -4908,5 +4930,129 @@ mod tests {
             find_sse_frame_boundary(&bytes, resume_from).expect("boundary completed by next chunk");
         assert_eq!(&bytes[..frame_end], b"data: a\r\n");
         assert_eq!(boundary_end, bytes.len());
+    }
+
+    /// Verifies DeepSeek search arguments enforce the documented Unicode and result-count bounds.
+    /// 验证 DeepSeek 搜索参数执行文档规定的 Unicode 字符和结果条数边界。
+    /// Uses the compiled production target without network access and returns assertion results.
+    /// 使用已编译生产目标，不访问网络，仅返回断言结果。
+    #[test]
+    fn deepseek_search_arguments_enforce_documented_bounds() {
+        // target owns the production schema and its default result count.
+        // target 持有生产 Schema 及默认结果条数。
+        let target = bundled_manifest_tool_targets("deepseek")
+            .into_iter()
+            .find(|target| {
+                target.contract.capability == crate::ProviderToolCapabilityKind::WebSearch
+            })
+            .expect("the configured DeepSeek search capability must exist");
+        // Unicode characters, nullable intent and the endpoint's exact count boundaries are valid.
+        // Unicode 字符、可空搜索意图及端点准确条数边界均合法。
+        for arguments in [
+            serde_json::json!({"query": "检".repeat(128)}),
+            serde_json::json!({"query": "query", "max_results": 1}),
+            serde_json::json!({"query": "query", "max_results": 50, "ori_question": null}),
+            serde_json::json!({"query": "query", "ori_question": "问".repeat(128)}),
+        ] {
+            assert!(canonicalize_provider_tool_arguments(&target, arguments).is_ok());
+        }
+        // Rejected values must fail before any credential projection or HTTP dispatch.
+        // 拒绝的值必须在任何凭据投影或 HTTP 分派前失败。
+        for arguments in [
+            serde_json::json!({"query": ""}),
+            serde_json::json!({"query": " \t\n"}),
+            serde_json::json!({"query": "检".repeat(129)}),
+            serde_json::json!({"query": "query", "max_results": 0}),
+            serde_json::json!({"query": "query", "max_results": 51}),
+            serde_json::json!({"query": "query", "ori_question": ""}),
+            serde_json::json!({"query": "query", "ori_question": "问".repeat(129)}),
+        ] {
+            assert!(canonicalize_provider_tool_arguments(&target, arguments).is_err());
+        }
+    }
+
+    /// Verifies the Fetch target accepts one bounded HTTP(S) locator and rejects URL credentials.
+    /// 验证 Fetch 目标接受单个有界 HTTP(S) 定位符并拒绝 URL 凭据。
+    /// Uses only canonicalization; no supplied webpage URL is opened by the host.
+    /// 仅使用参数规范化；宿主不会打开任何提供的网页 URL。
+    #[test]
+    fn deepseek_fetch_arguments_enforce_documented_urls() {
+        // target is the exact compiled webpage-fetch schema advertised to the model.
+        // target 是暴露给模型的准确已编译网页抓取 Schema。
+        let target = bundled_manifest_tool_targets("deepseek")
+            .into_iter()
+            .find(|target| {
+                target.contract.capability == crate::ProviderToolCapabilityKind::WebExtract
+            })
+            .expect("the configured DeepSeek fetch capability must exist");
+        // maximum_url exercises the documented character ceiling independently of transport limits.
+        // maximum_url 独立于传输限制验证文档规定的字符上限。
+        let maximum_url = format!(
+            "https://example.com/{}",
+            "a".repeat(8192 - "https://example.com/".len())
+        );
+        for url in [
+            "http://example.com/page",
+            "https://example.com/page",
+            "https://[2001:db8::1]/page",
+            maximum_url.as_str(),
+        ] {
+            assert!(
+                canonicalize_provider_tool_arguments(&target, serde_json::json!({"url": url}))
+                    .is_ok()
+            );
+        }
+        // oversize_url and invalid locators cannot enter the provider request body.
+        // oversize_url 和非法定位符不能进入供应商请求正文。
+        let oversize_url = format!("{maximum_url}a");
+        for url in [
+            "https://",
+            "https://:443/page",
+            "https://user:password@example.com/page",
+            "https://user@example.com/page",
+            "file:///private/page",
+            "javascript:alert(1)",
+            "/relative/page",
+            oversize_url.as_str(),
+        ] {
+            assert!(
+                canonicalize_provider_tool_arguments(&target, serde_json::json!({"url": url}))
+                    .is_err()
+            );
+        }
+    }
+
+    /// Verifies web-search links accept both web schemes while resource downloads retain HTTPS-only rules.
+    /// 验证网页搜索链接接受两种网页方案，同时资源下载继续执行仅 HTTPS 规则。
+    /// Decodes synthetic results and returns assertions without making a network request.
+    /// 解码合成结果并返回断言，不发起网络请求。
+    #[test]
+    fn deepseek_search_locators_preserve_resource_policy() {
+        // contract comes from production so the normal result decoder is exercised.
+        // contract 来自生产声明，确保执行正常结果解码器。
+        let target = bundled_manifest_tool_targets("deepseek")
+            .into_iter()
+            .find(|target| {
+                target.contract.capability == crate::ProviderToolCapabilityKind::WebSearch
+            })
+            .expect("the DeepSeek search target must exist");
+        for url in ["http://example.com/page", "https://example.com/page"] {
+            // body is already normalized by the declared response profile.
+            // body 已按声明的响应 Profile 归一化。
+            let body = serde_json::json!({"results": [{"title": "Page", "url": url, "content": "Summary"}]}).to_string();
+            assert!(decode_generic_json_sync_output(&target.contract.output, &body).is_ok());
+        }
+        for url in [
+            "https://user:password@example.com",
+            "file:///page",
+            "javascript:alert(1)",
+            "/page",
+        ] {
+            // The same public result boundary rejects credentials and non-web schemes.
+            // 同一公开结果边界拒绝凭据及非网页方案。
+            let body = serde_json::json!({"results": [{"url": url}]}).to_string();
+            assert!(decode_generic_json_sync_output(&target.contract.output, &body).is_err());
+        }
+        assert!(validated_https_url("http://example.com/resource", "resource").is_err());
     }
 }

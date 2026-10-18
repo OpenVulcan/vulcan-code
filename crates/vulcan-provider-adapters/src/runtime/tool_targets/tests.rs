@@ -519,3 +519,91 @@ fn manifest_owned_tool_targets_drive_availability_and_resolution() {
         );
     }
 }
+
+/// Verifies both standalone DeepSeek tools follow the existing official connection lifecycle.
+/// 验证两个独立 DeepSeek 工具遵循既有官方连接生命周期。
+/// Uses bundled declarations and synthetic connection references without HTTP or stored secrets.
+/// 使用随包声明及合成连接引用，不访问 HTTP 或已存秘密。
+#[test]
+fn deepseek_official_connection_publishes_search_and_fetch() {
+    // runtime/configuration start without any configured account or tool default.
+    // runtime／configuration 初始不包含任何已配置账号或工具默认值。
+    let runtime = PublicAiRuntime::unavailable().expect("the manifest runtime must initialize");
+    let mut configuration = PersistedAiConfiguration::default();
+    assert!(
+        runtime
+            .available_provider_tool_targets(&configuration)
+            .expect("empty target catalog")
+            .is_empty()
+    );
+    // official reuses the same API-key credential profile as the existing conversation connection.
+    // official 复用与既有会话连接相同的 API Key 凭据档。
+    let mut official = connection("deepseek-official-account");
+    official.provider_id = String::from("deepseek");
+    official.service_entry_id = String::from("official-api");
+    configuration
+        .connection_graph
+        .add_connection(&runtime.providers().expect("provider registry"), official)
+        .expect("the official connection must register");
+    // available is derived from that configured account rather than a second search credential.
+    // available 来自已配置账号，而非第二份搜索凭据。
+    let available = runtime
+        .available_provider_tool_targets(&configuration)
+        .expect("configured targets");
+    for capability in [
+        ProviderToolCapabilityKind::WebSearch,
+        ProviderToolCapabilityKind::WebExtract,
+    ] {
+        // target is located by semantic capability, independently of manifest ordering.
+        // target 按语义能力定位，不依赖 Manifest 排序。
+        let target = available
+            .iter()
+            .find(|candidate| candidate.target.contract.capability == capability)
+            .expect("the official account must provide the requested web capability");
+        assert_eq!(target.connection_id, "deepseek-official-account");
+        assert_eq!(target.target.provider_id, "deepseek");
+        assert_eq!(target.target.service_entry_id, "official-api");
+        assert!(
+            target
+                .target
+                .credential_profile_ids
+                .iter()
+                .any(|profile| profile == "api-key")
+        );
+    }
+    assert!(configuration.provider_tool_selections.is_empty());
+    assert!(configuration.provider_tool_enabled_capabilities.is_empty());
+
+    configuration
+        .set_connection_enabled("deepseek-official-account", false)
+        .expect("disable account");
+    assert!(
+        runtime
+            .available_provider_tool_targets(&configuration)
+            .expect("disabled catalog")
+            .is_empty()
+    );
+    configuration
+        .set_connection_enabled("deepseek-official-account", true)
+        .expect("enable account");
+    configuration
+        .set_connection_pending_validation("deepseek-official-account", true)
+        .expect("require validation");
+    assert!(
+        runtime
+            .available_provider_tool_targets(&configuration)
+            .expect("pending catalog")
+            .is_empty()
+    );
+    configuration
+        .set_connection_pending_validation("deepseek-official-account", false)
+        .expect("complete validation");
+    assert!(
+        runtime
+            .available_provider_tool_targets(&configuration)
+            .expect("validated catalog")
+            .iter()
+            .any(|target| target.target.contract.capability
+                == ProviderToolCapabilityKind::WebExtract)
+    );
+}
