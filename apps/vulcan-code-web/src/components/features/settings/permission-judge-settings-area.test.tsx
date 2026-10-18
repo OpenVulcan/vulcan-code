@@ -26,6 +26,7 @@ const service = vi.hoisted(() => ({
   removePermissionJudgeModel: vi.fn(),
   rollbackPermissionJudgeModel: vi.fn(),
   installPermissionJudgeCuda: vi.fn(),
+  downloadPermissionJudgeModel: vi.fn(),
   loadProjectPermissionJudgePolicy: vi.fn(),
   saveProjectPermissionJudgePolicy: vi.fn(),
   loadPermissionJudgeRecords: vi.fn(),
@@ -90,7 +91,7 @@ function snapshot(phase: PermissionJudgeWorkerStatus["phase"]): PermissionJudgeS
       requiredLibraries: [], onnxruntimeDirectory: null, detectedDirectories: [], lockedDirectory: null,
       lockedDirectoryMissing: [], archives: [], links: [],
     },
-    status: { worker: worker(phase), cudaInstall: null, pollIntervalMs: 2000 },
+    status: { worker: worker(phase), cudaInstall: null, modelDownload: null, pollIntervalMs: 2000 },
   };
 }
 

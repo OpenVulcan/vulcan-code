@@ -168,6 +168,22 @@ pub fn install_permission_judge_cuda(component: &str) -> ServiceCall {
     )
 }
 
+/// Builds the request for `service_download_permission_judge_model`.
+/// 构建 `service_download_permission_judge_model` 的请求。
+/// `package_id` is an official package family and `format` one of its published formats, such as
+/// `fp32`; the download is verified and registered without being put in use.
+/// `package_id` 为官方模型包家族，`format` 为其已发布格式之一，例如 `fp32`；下载后验证并登记，但不投入使用。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn download_permission_judge_model(package_id: &str, format: &str) -> ServiceCall {
+    ServiceCall::mutate(
+        "download_permission_judge_model",
+        "service_download_permission_judge_model",
+        json!({ "request": { "packageId": package_id, "format": format } }),
+        &[Slot::PermissionJudgeStatus],
+    )
+}
+
 /// Builds the request for `service_permission_judge_records`, one page of the decision log.
 /// 构建 `service_permission_judge_records` 的请求，即判定记录的一页。
 /// `request` is the complete `PermissionJudgeRecordsRequest` with filters, cursor and limit.

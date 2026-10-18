@@ -245,6 +245,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `permission_judge::reload_permission_judge` | reloadPermissionJudge | `service_reload_permission_judge` |
 | `permission_judge::benchmark_permission_judge` | benchmarkPermissionJudge | `service_benchmark_permission_judge` |
 | `permission_judge::install_permission_judge_cuda` | installPermissionJudgeCuda | `service_install_permission_judge_cuda` |
+| `permission_judge::download_permission_judge_model` | downloadPermissionJudgeModel | `service_download_permission_judge_model` |
 | `permission_judge::load_permission_judge_records` | loadPermissionJudgeRecords | `service_permission_judge_records` |
 | `permission_judge::mark_permission_judge_record` | markPermissionJudgeRecord | `service_mark_permission_judge_record` |
 | `permission_judge::clear_permission_judge_records` | clearPermissionJudgeRecords | `service_clear_permission_judge_records` |

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use vulcan_permission_judge::JudgeLabel;
+pub use vulcan_permission_judge::ModelFormat;
 pub use vulcan_permission_judge::protocol::JudgeDevice;
 pub use vulcan_permission_judge::system::{JudgeBackend, ReviewRules};
 
@@ -46,8 +47,8 @@ pub struct PermissionJudgeSettingsSnapshot {
     /// Registration a rollback returns to.
     /// 回退将返回的登记。
     pub previous_model_id: Option<String>,
-    /// Official packages this build recognizes, without download locations.
-    /// 本构建识别的官方模型包，不含下载位置。
+    /// Official packages this build recognizes, with their published formats.
+    /// 本构建识别的官方模型包及其已发布格式。
     pub known_packages: Vec<PermissionJudgeKnownPackage>,
     /// Policy options of the model in use; empty when no verified model is in use.
     /// 使用中模型的策略选项；没有已验证的使用中模型时为空。
@@ -131,6 +132,31 @@ pub struct PermissionJudgeKnownPackage {
     /// Product name shown as is.
     /// 原样显示的产品名称。
     pub display_name: String,
+    /// Published formats of this family.
+    /// 该家族已发布的格式。
+    pub variants: Vec<PermissionJudgeKnownVariant>,
+}
+
+/// One published format of an official package family.
+/// 官方模型包家族的一个已发布格式。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeKnownVariant {
+    /// Weight format.
+    /// 权重格式。
+    pub format: ModelFormat,
+    /// Devices this format runs on.
+    /// 该格式可运行的设备。
+    pub devices: Vec<JudgeDevice>,
+    /// Download size; absent while no download address is published for this format.
+    /// 下载大小；该格式尚未发布下载地址时缺省。
+    pub download_bytes: Option<u64>,
+    /// Whether this is the format recommended for the effective device and GPU.
+    /// 是否为当前生效设备与显卡推荐的格式。
+    pub recommended: bool,
+    /// Registration of this format already on this machine, when present.
+    /// 本机已有的该格式登记（如有）。
+    pub installed_model_id: Option<String>,
 }
 
 /// One authorization option of the policy in use.
@@ -209,6 +235,9 @@ pub struct PermissionJudgeNvidiaDriver {
     /// GPU names.
     /// 显卡名称。
     pub gpus: Vec<String>,
+    /// Lowest CUDA compute capability of those GPUs, such as `8.9`; absent when not reported.
+    /// 这些显卡中最低的 CUDA 计算能力，例如 `8.9`；未报告时缺省。
+    pub compute_capability: Option<String>,
 }
 
 /// One complete CUDA library directory.
@@ -280,6 +309,9 @@ pub struct PermissionJudgeStatus {
     /// Latest CUDA installation, while running or until the next one starts.
     /// 最近一次 CUDA 安装，运行中或直到下次开始前保留。
     pub cuda_install: Option<PermissionJudgeCudaInstall>,
+    /// Latest official model download, while running or until the next one starts.
+    /// 最近一次官方模型下载，运行中或直到下次开始前保留。
+    pub model_download: Option<PermissionJudgeModelDownload>,
     /// How often clients re-read this status while the settings page is open, in milliseconds.
     /// 设置页打开期间客户端重新读取本状态的间隔（毫秒）。
     pub poll_interval_ms: u64,
@@ -384,6 +416,37 @@ pub struct PermissionJudgeCudaInstall {
     pub directory: Option<String>,
     /// Failure, when the installation failed.
     /// 安装失败时的原因。
+    pub error: Option<String>,
+}
+
+/// Progress of one official model download.
+/// 一次官方模型下载的进度。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeModelDownload {
+    /// Official package family.
+    /// 官方模型包家族。
+    pub package_id: String,
+    /// Weight format being downloaded.
+    /// 正在下载的权重格式。
+    pub format: ModelFormat,
+    /// Whether the download is still running.
+    /// 下载是否仍在运行。
+    pub running: bool,
+    /// Stable phase key of the latest progress event.
+    /// 最近进度事件的稳定阶段键。
+    pub phase: Option<String>,
+    /// Bytes downloaded and verified so far.
+    /// 目前已下载并验证的字节数。
+    pub completed_bytes: u64,
+    /// Total size of the package.
+    /// 模型包总大小。
+    pub total_bytes: u64,
+    /// Registration created after success; it is not put in use automatically.
+    /// 成功后创建的登记；不会自动投入使用。
+    pub model_id: Option<String>,
+    /// Failure, when the download failed.
+    /// 下载失败时的原因。
     pub error: Option<String>,
 }
 
@@ -549,6 +612,19 @@ pub struct PermissionJudgeCudaInstallRequest {
     /// Part to install.
     /// 要安装的部分。
     pub component: PermissionJudgeCudaComponent,
+}
+
+/// Starts downloading one published format of an official package and registering it.
+/// 开始下载官方模型包的一个已发布格式并登记。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionJudgeModelDownloadRequest {
+    /// Official package family.
+    /// 官方模型包家族。
+    pub package_id: String,
+    /// Weight format to download.
+    /// 要下载的权重格式。
+    pub format: ModelFormat,
 }
 
 /// A project's policy choices against the model in use.

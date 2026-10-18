@@ -1,11 +1,18 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "packages": [
     {
       "id": "risk-164m",
       "display_name": "Risk 164M",
       "checkpoints": [
         "7a46ab8306e720a88040fe01435500ed4d106942341c792ad5cb147e4c483851"
+      ],
+      "variants": [
+        {
+          "format": "fp16-mixed",
+          "devices": ["cuda", "webgpu", "cpu"],
+          "download": null
+        }
       ]
     }
   ]

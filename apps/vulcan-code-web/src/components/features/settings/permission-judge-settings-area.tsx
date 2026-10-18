@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
 import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
+import { PermissionJudgeDownloadsSection } from "@/components/features/settings/permission-judge-downloads-section";
 import {
   PermissionJudgeCudaPage, cudaMissingLabels, cudaReadiness,
 } from "@/components/features/settings/permission-judge-cuda-page";
@@ -29,6 +30,7 @@ import { PermissionReviewRouteSection } from "@/components/features/settings/per
 import {
   activatePermissionJudgeModel,
   benchmarkPermissionJudge,
+  downloadPermissionJudgeModel,
   installPermissionJudgeCuda,
   loadPermissionJudgeSettings,
   loadPermissionJudgeStatus,
@@ -42,6 +44,7 @@ import type {
   JudgeBackend,
   JudgeDevice,
   PermissionJudgeBenchmarkResult,
+  PermissionJudgeModelFormat,
   PermissionJudgeSettingsSnapshot,
   PermissionJudgeStatus,
   ProjectSummary,
@@ -183,6 +186,14 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     if (wasInstalling.current && !installRunning) void reload();
     wasInstalling.current = installRunning;
   }, [installRunning, reload]);
+  // A finished model download re-reads the registry it added to.
+  // 模型下载结束后重新读取其加入的登记表。
+  const downloadRunning = status?.modelDownload?.running ?? false;
+  const wasDownloading = React.useRef(false);
+  React.useEffect(() => {
+    if (wasDownloading.current && !downloadRunning) void reload();
+    wasDownloading.current = downloadRunning;
+  }, [downloadRunning, reload]);
 
   // run executes one action, keeping the failure visible until the next action.
   // run 执行一个操作，失败信息保持显示直到下一次操作。
@@ -262,7 +273,9 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
 
   if (view === "models") {
     return subPage(t("settings.permissionJudge.models"),
-      <ModelsPage applySnapshot={applySnapshot} busy={busy} run={run} snapshot={snapshot} t={t} />);
+      <ModelsPage applySnapshot={applySnapshot} busy={busy} run={run} snapshot={snapshot} status={status} t={t}
+        onDownload={(packageId, format) => void run(`download-${packageId}-${format}`, "settings.permissionJudge.downloads.failed",
+          async () => setStatus(await downloadPermissionJudgeModel(packageId, format)))} />);
   }
   if (view === "cuda") {
     return subPage(t("settings.permissionJudge.cuda"),
@@ -560,7 +573,9 @@ function ModelsPage(props: {
   busy: string | null;
   run: RunAction;
   snapshot: PermissionJudgeSettingsSnapshot;
+  status: PermissionJudgeStatus;
   t: Translate;
+  onDownload: (packageId: string, format: PermissionJudgeModelFormat) => void;
 }) {
   const { t, snapshot } = props;
   const packageName = (id: string | null) => snapshot.knownPackages.find((known) => known.id === id)?.displayName ?? id ?? "";
@@ -601,6 +616,8 @@ function ModelsPage(props: {
           </PageItem>;
         })}
     </PageSection>
+    <PermissionJudgeDownloadsSection busy={props.busy} download={props.status.modelDownload}
+      knownPackages={snapshot.knownPackages} t={t} onDownload={props.onDownload} />
     <PageSection title={t("settings.permissionJudge.register")} description={t("settings.permissionJudge.registerHint")}>
       <PermissionJudgeRegisterForm busy={props.busy} knownPackages={snapshot.knownPackages}
         onRegister={(request, reset) => props.run("register", "settings.permissionJudge.registerFailed", async () => {

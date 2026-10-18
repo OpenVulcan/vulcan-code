@@ -13,7 +13,7 @@ mod worker;
 use std::sync::{Arc, Mutex};
 
 use vulcan_permission_judge::MemoryDigestCache;
-use vulcan_service_api::PermissionJudgeCudaInstall;
+use vulcan_service_api::{PermissionJudgeCudaInstall, PermissionJudgeModelDownload};
 
 pub(crate) use cloud::PERMISSION_JUDGE_CONSUMER_PROFILE_ID;
 pub(crate) use review::{
@@ -39,6 +39,9 @@ pub(crate) struct PermissionJudgeRuntime {
     /// Latest CUDA installation.
     /// 最近一次 CUDA 安装。
     cuda_install: Mutex<Option<PermissionJudgeCudaInstall>>,
+    /// Latest official model download.
+    /// 最近一次官方模型下载。
+    model_download: Mutex<Option<PermissionJudgeModelDownload>>,
     /// Decision log of the judge and the reviewer.
     /// 判定器与复核器的判定记录。
     records: Arc<records::RecordStore>,

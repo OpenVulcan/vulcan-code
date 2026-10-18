@@ -15,7 +15,8 @@ use vulcan_agent_runtime::agent_runtime::tool_permission::{
 use vulcan_permission_judge::protocol::{JudgeDevice, JudgeInput, JudgeOutcome};
 use vulcan_permission_judge::system::MAX_APPROVAL_TIMEOUT_SECONDS;
 use vulcan_permission_judge::{
-    JudgePackage, JudgePolicy, cloud_policy, find_known_package, known_packages, render_call,
+    JudgePackage, JudgePolicy, KnownDownload, KnownPackage, ModelFormat, cloud_policy,
+    find_known_package, known_package, known_packages, render_call,
 };
 use vulcan_provider_config::provider_config::{
     JudgeBackend, PersistedPermissionJudgeConfiguration, RegisteredJudgeModel,
@@ -25,7 +26,8 @@ use vulcan_service_api::{
     PermissionJudgeBenchmarkRequest, PermissionJudgeBenchmarkResult, PermissionJudgeCudaArchive,
     PermissionJudgeCudaComponent, PermissionJudgeCudaDirectory, PermissionJudgeCudaInstall,
     PermissionJudgeCudaInstallRequest, PermissionJudgeCudaSnapshot, PermissionJudgeDeviceSummary,
-    PermissionJudgeIssue, PermissionJudgeKnownPackage, PermissionJudgeLink,
+    PermissionJudgeIssue, PermissionJudgeKnownPackage, PermissionJudgeKnownVariant,
+    PermissionJudgeLink, PermissionJudgeModelDownload, PermissionJudgeModelDownloadRequest,
     PermissionJudgeModelRegisterRequest, PermissionJudgeModelRequest, PermissionJudgeModelSummary,
     PermissionJudgeNvidiaDriver, PermissionJudgePackageFacts, PermissionJudgePackageInspectRequest,
     PermissionJudgePackageInspection, PermissionJudgePolicyOption, PermissionJudgeRecord,
@@ -38,6 +40,9 @@ use vulcan_service_api::{
 use vulcan_service_runtime::judge_cuda_runtime::{
     CudaComponent, CudaLibrarySource, host_platform, install_component, missing_cuda_libraries,
     official_links,
+};
+use vulcan_service_runtime::judge_model_download::{
+    ModelPackageSource, download_model_package, package_directory_name,
 };
 
 use super::PermissionJudgeRuntime;
@@ -235,6 +240,9 @@ fn cuda_snapshot(
                 version: driver.version.clone(),
                 major: driver.major,
                 gpus: driver.gpus.clone(),
+                compute_capability: driver
+                    .compute_capability
+                    .map(|(major, minor)| format!("{major}.{minor}")),
             }),
             None,
         ),
@@ -296,6 +304,11 @@ async fn status_of(runtime: &PermissionJudgeRuntime) -> PermissionJudgeStatus {
             .lock()
             .ok()
             .and_then(|install| install.clone()),
+        model_download: runtime
+            .model_download
+            .lock()
+            .ok()
+            .and_then(|download| download.clone()),
         poll_interval_ms: STATUS_POLL_INTERVAL_MS,
     }
 }
@@ -315,10 +328,17 @@ async fn snapshot(
         Err(issue) => (Vec::new(), Some(issue)),
     };
     let locked = settings.cuda_library_directory.as_deref().map(Path::new);
+    let recommended_device = environment.recommended_device(locked);
+    let cuda_capability = environment
+        .driver
+        .as_ref()
+        .ok()
+        .and_then(Option::as_ref)
+        .and_then(|driver| driver.compute_capability);
     Ok(PermissionJudgeSettingsSnapshot {
         backend: settings.backend,
         device: settings.device,
-        recommended_device: environment.recommended_device(locked),
+        recommended_device,
         devices: DEVICE_PREFERENCE
             .into_iter()
             .map(|device| PermissionJudgeDeviceSummary {
@@ -353,6 +373,12 @@ async fn snapshot(
             .map(|package| PermissionJudgeKnownPackage {
                 id: package.id.clone(),
                 display_name: package.display_name.clone(),
+                variants: known_variants(
+                    package,
+                    &settings,
+                    settings.device.or(recommended_device),
+                    cuda_capability,
+                ),
             })
             .collect(),
         policy_options,
@@ -360,6 +386,41 @@ async fn snapshot(
         cuda: cuda_snapshot(&environment, &settings),
         status: status_of(runtime).await,
     })
+}
+
+/// Published formats of `package`, marking the one recommended for `device` and the GPU and the
+/// registrations already on this machine.
+/// `package` 的已发布格式，标记为 `device` 与显卡推荐的格式及本机已有的登记。
+fn known_variants(
+    package: &KnownPackage,
+    settings: &PersistedPermissionJudgeConfiguration,
+    device: Option<JudgeDevice>,
+    cuda_capability: Option<(u32, u32)>,
+) -> Vec<PermissionJudgeKnownVariant> {
+    let recommended = device
+        .and_then(|device| package.recommended_variant(device, cuda_capability))
+        .map(|variant| variant.format);
+    package
+        .variants
+        .iter()
+        .map(|variant| PermissionJudgeKnownVariant {
+            format: variant.format,
+            devices: variant.devices.clone(),
+            download_bytes: variant
+                .download
+                .as_ref()
+                .map(|download| download.total_bytes),
+            recommended: recommended == Some(variant.format),
+            installed_model_id: settings
+                .models
+                .iter()
+                .find(|model| {
+                    model.known_package_id.as_deref() == Some(package.id.as_str())
+                        && ModelFormat::from_precision(&model.precision) == Some(variant.format)
+                })
+                .map(|model| model.id.clone()),
+        })
+        .collect()
 }
 
 /// Returns the settings page snapshot.
@@ -573,6 +634,19 @@ pub(crate) async fn service_register_permission_judge_model(
         "" => default_model_name(&path, &package),
         name => name.to_string(),
     };
+    let settings = register_package(&state, &path, &package, name).await?;
+    snapshot(&runtime, settings).await
+}
+
+/// Registers a verified package under `name` without putting it in use.
+/// 以 `name` 登记已验证的模型包，但不投入使用。
+async fn register_package(
+    state: &SharedServiceBridgeState,
+    path: &Path,
+    package: &JudgePackage,
+    name: String,
+) -> Result<PersistedPermissionJudgeConfiguration, String> {
+    let known = find_known_package(&package.summary.parent_sha256);
     let model = RegisteredJudgeModel {
         id: package.summary.manifest_sha256.clone(),
         name,
@@ -585,12 +659,11 @@ pub(crate) async fn service_register_permission_judge_model(
         registered_at_ms: u64::try_from(current_v1_unix_millis()?)
             .map_err(|_| String::from("The system clock is before 1970."))?,
     };
-    let settings = save_settings(&state, |settings| {
+    save_settings(state, |settings| {
         settings.register(model);
         Ok(())
     })
-    .await?;
-    snapshot(&runtime, settings).await
+    .await
 }
 
 /// Makes a registration the model in use after it verified and warmed up on the configured
@@ -787,6 +860,138 @@ pub(crate) async fn service_install_permission_judge_cuda(
         });
     });
     Ok(status_of(&runtime).await)
+}
+
+/// Starts downloading one published format of an official package in the background, then
+/// verifies and registers it without putting it in use; progress is read through status.
+/// 在后台开始下载官方模型包的一个已发布格式，随后验证并登记但不投入使用；进度通过状态读取。
+pub(crate) async fn service_download_permission_judge_model(
+    state: SharedServiceBridgeState,
+    request: PermissionJudgeModelDownloadRequest,
+) -> Result<PermissionJudgeStatus, String> {
+    let (runtime, _) = read_state(&state)?;
+    let known = known_package(&request.package_id).ok_or_else(|| {
+        format!(
+            "`{}` is not an official judge model package.",
+            request.package_id
+        )
+    })?;
+    let format = request.format;
+    let download = known
+        .variant(format)
+        .ok_or_else(|| {
+            format!(
+                "{} is not published in the {} format.",
+                known.display_name,
+                format.key()
+            )
+        })?
+        .download
+        .clone()
+        .ok_or_else(|| {
+            format!(
+                "No download address is published for the {} format of {} yet.",
+                format.key(),
+                known.display_name
+            )
+        })?;
+    let models_root = vulcan_runtime_assets::resolve_judge_models_root()
+        .ok_or_else(|| String::from("The user directory is unavailable."))?;
+    {
+        let mut current = runtime
+            .model_download
+            .lock()
+            .map_err(|error| format!("failed to lock the model download: {error}"))?;
+        if current.as_ref().is_some_and(|download| download.running) {
+            return Err(String::from("A judge model download is already running."));
+        }
+        *current = Some(PermissionJudgeModelDownload {
+            package_id: known.id.clone(),
+            format,
+            running: true,
+            phase: None,
+            completed_bytes: 0,
+            total_bytes: download.total_bytes,
+            model_id: None,
+            error: None,
+        });
+    }
+    let task_runtime = Arc::clone(&runtime);
+    tokio::spawn(async move {
+        let result =
+            download_and_register(&state, &task_runtime, known, format, download, models_root)
+                .await;
+        update_download(&task_runtime, |current| {
+            current.running = false;
+            match result {
+                Ok(model_id) => current.model_id = Some(model_id),
+                Err(error) => current.error = Some(error),
+            }
+        });
+    });
+    Ok(status_of(&runtime).await)
+}
+
+/// Applies `change` to the latest model download.
+/// 将 `change` 应用于最近一次模型下载。
+fn update_download(
+    runtime: &PermissionJudgeRuntime,
+    change: impl FnOnce(&mut PermissionJudgeModelDownload),
+) {
+    if let Ok(mut current) = runtime.model_download.lock()
+        && let Some(current) = current.as_mut()
+    {
+        change(current);
+    }
+}
+
+/// Downloads, verifies and registers one published format; returns the registration identity.
+/// 下载、验证并登记一个已发布格式；返回登记身份。
+async fn download_and_register(
+    state: &SharedServiceBridgeState,
+    runtime: &Arc<PermissionJudgeRuntime>,
+    known: &'static KnownPackage,
+    format: ModelFormat,
+    download: KnownDownload,
+    models_root: PathBuf,
+) -> Result<String, String> {
+    let progress_runtime = Arc::clone(runtime);
+    let directory = blocking(move || {
+        let name = package_directory_name(&known.id, format.key(), &download.manifest_sha256);
+        let source = ModelPackageSource {
+            base_url: &download.base_url,
+            manifest_sha256: &download.manifest_sha256,
+            total_bytes: download.total_bytes,
+        };
+        download_model_package(source, &models_root, &name, &mut |event| {
+            update_download(&progress_runtime, |current| {
+                current.phase = Some(event.phase.key().to_string());
+                current.completed_bytes = event.completed_bytes;
+            })
+        })
+    })
+    .await??;
+    let package = open_package(runtime, directory.clone())
+        .await
+        .map_err(|issue| format!("[{}] {}", issue.code, issue.detail))?;
+    let matches_request = find_known_package(&package.summary.parent_sha256)
+        .is_some_and(|found| found.id == known.id)
+        && ModelFormat::from_precision(&package.summary.precision) == Some(format);
+    if !matches_request {
+        return Err(String::from(
+            "The downloaded package is not the requested official model format.",
+        ));
+    }
+    let model_id = package.summary.manifest_sha256.clone();
+    let (_, settings) = read_state(state)?;
+    // A registration that already exists keeps the name the user gave it.
+    // 已存在的登记保留用户给出的名称。
+    let name = settings
+        .model(&model_id)
+        .map(|model| model.name.clone())
+        .unwrap_or_else(|| default_model_name(&directory, &package));
+    register_package(state, &directory, &package, name).await?;
+    Ok(model_id)
 }
 
 /// Resolves a project identity to its directory.
@@ -1176,5 +1381,61 @@ mod tests {
             snapshot.issue.map(|issue| issue.code).as_deref(),
             Some("unknown_mode")
         );
+    }
+
+    // The effective device picks the recommended format, and registrations are matched by format.
+    // 生效设备决定推荐格式，登记按格式匹配。
+    #[test]
+    fn variants_mark_the_recommended_format_and_installed_registrations() {
+        let package: KnownPackage = serde_json::from_value(serde_json::json!({
+            "id": "risk", "display_name": "Risk", "checkpoints": ["c"],
+            "variants": [
+                { "format": "fp16-mixed", "devices": ["cuda", "webgpu", "cpu"], "download": null },
+                { "format": "fp32", "devices": ["cuda", "cpu"], "download": {
+                    "base_url": "https://example.com/risk/", "manifest_sha256": "m", "total_bytes": 9
+                } }
+            ]
+        }))
+        .unwrap();
+        let mut settings = PersistedPermissionJudgeConfiguration::default();
+        settings.register(RegisteredJudgeModel {
+            id: String::from("installed"),
+            name: String::from("Risk"),
+            path: String::from("/models/risk"),
+            known_package_id: Some(String::from("risk")),
+            parent_sha256: String::from("c"),
+            policy_version: String::from("v2"),
+            precision: String::from("fp32"),
+            total_bytes: 9,
+            registered_at_ms: 0,
+        });
+        let recommended = |device, capability| {
+            known_variants(&package, &settings, device, capability)
+                .into_iter()
+                .find(|variant| variant.recommended)
+                .map(|variant| variant.format)
+        };
+        assert_eq!(
+            recommended(Some(JudgeDevice::Cuda), Some((8, 9))),
+            Some(ModelFormat::Fp16Mixed)
+        );
+        assert_eq!(
+            recommended(Some(JudgeDevice::Cuda), Some((5, 2))),
+            Some(ModelFormat::Fp32)
+        );
+        assert_eq!(
+            recommended(Some(JudgeDevice::Cpu), None),
+            Some(ModelFormat::Fp32)
+        );
+        assert_eq!(
+            recommended(Some(JudgeDevice::WebGpu), None),
+            Some(ModelFormat::Fp16Mixed)
+        );
+        assert_eq!(recommended(None, None), None);
+        let variants = known_variants(&package, &settings, None, None);
+        assert_eq!(variants[0].download_bytes, None);
+        assert_eq!(variants[0].installed_model_id, None);
+        assert_eq!(variants[1].download_bytes, Some(9));
+        assert_eq!(variants[1].installed_model_id.as_deref(), Some("installed"));
     }
 }

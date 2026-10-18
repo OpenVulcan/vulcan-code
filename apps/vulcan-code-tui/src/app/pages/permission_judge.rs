@@ -409,7 +409,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     approval_rows(&mut rows, snapshot, &base);
     benchmark_rows(&mut rows, app, snapshot, status, configured);
     if local {
-        model_rows(&mut rows, app, snapshot);
+        model_rows(&mut rows, app, snapshot, status);
         cuda_rows(&mut rows, snapshot, status, &base);
     }
     records_rows(&mut rows, app, &base);
@@ -790,7 +790,7 @@ fn benchmark_rows(
 
 /// Registered models with switch and remove actions, rollback, and registration forms.
 /// 已登记模型及其切换、移除操作、回退，以及登记表单。
-fn model_rows(rows: &mut Vec<Row>, app: &App, snapshot: &Value) {
+fn model_rows(rows: &mut Vec<Row>, app: &App, snapshot: &Value, status: &Value) {
     rows.push(section(tr!("settings.permissionJudge.models")));
     rows.push(note(
         tr!("settings.permissionJudge.modelsHint"),
@@ -862,7 +862,155 @@ fn model_rows(rows: &mut Vec<Row>, app: &App, snapshot: &Value) {
             Tone::Normal,
         ));
     }
+    download_rows(rows, snapshot, status);
     register_rows(rows, app, snapshot);
+}
+
+/// Labels a weight format; unknown formats render as themselves.
+/// 为权重格式生成标签；未知格式按原样显示。
+fn format_label(code: &str) -> String {
+    match code {
+        "fp16-mixed" => tr!("settings.permissionJudge.format.fp16Mixed"),
+        "fp32" => tr!("settings.permissionJudge.format.fp32"),
+        other => other.to_string(),
+    }
+}
+
+/// Labels a model download phase; unknown phases render as themselves.
+/// 为模型下载阶段生成标签；未知阶段按原样显示。
+fn download_phase_label(code: &str) -> String {
+    match code {
+        "manifest" => tr!("settings.permissionJudge.downloads.phase.manifest"),
+        "downloading" => tr!("settings.permissionJudge.downloads.phase.downloading"),
+        "verifying" => tr!("settings.permissionJudge.downloads.phase.verifying"),
+        "installing" => tr!("settings.permissionJudge.downloads.phase.installing"),
+        other => other.to_string(),
+    }
+}
+
+/// Official package name and format, such as `Risk 164M · FP32 full precision`.
+/// 官方模型包名称与格式，例如 `Risk 164M · FP32 全精度`。
+fn variant_name(snapshot: &Value, package: &str, format: &str) -> String {
+    let name = a(snapshot, "/knownPackages")
+        .iter()
+        .find(|known| s(known, "/id") == package)
+        .map_or_else(|| package.to_string(), |known| s(known, "/displayName"));
+    format!("{name} · {}", format_label(format))
+}
+
+/// Published formats of every official package with the recommended one marked, a download action
+/// for each published address, and the latest download's progress.
+/// 每个官方模型包的已发布格式（标记推荐格式）、每个已发布地址的下载操作，以及最近一次下载的进度。
+fn download_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value) {
+    let download = v(status, "/modelDownload");
+    let running = b(download, "/running");
+    let mut variants = Vec::new();
+    for known in a(snapshot, "/knownPackages") {
+        for variant in a(known, "/variants") {
+            variants.push((s(known, "/id"), variant));
+        }
+    }
+    if variants.is_empty() {
+        return;
+    }
+    rows.push(section(tr!("settings.permissionJudge.downloads.title")));
+    rows.push(note(
+        tr!("settings.permissionJudge.downloads.hint"),
+        Tone::Muted,
+    ));
+    for (package, variant) in variants {
+        let format = s(variant, "/format");
+        let devices = a(variant, "/devices")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(device_label)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let size = v(variant, "/downloadBytes").as_f64().map_or_else(
+            || tr!("settings.permissionJudge.downloads.unpublished"),
+            |bytes| {
+                tr!(
+                    "settings.permissionJudge.downloads.size",
+                    size = format_bytes(bytes)
+                )
+            },
+        );
+        let mut row = item(
+            &format!("download-{package}-{format}"),
+            variant_name(snapshot, &package, &format),
+            format!(
+                "{} · {size}",
+                tr!(
+                    "settings.permissionJudge.downloads.devices",
+                    devices = devices
+                )
+            ),
+        );
+        // A row holds one badge, so a recommended format already added names both.
+        // 一行只有一个徽标，因此已添加的推荐格式同时标出两者。
+        let installed = !v(variant, "/installedModelId").is_null();
+        let mut badges = Vec::new();
+        if b(variant, "/recommended") {
+            badges.push(tr!("settings.permissionJudge.downloads.recommended"));
+        }
+        if installed {
+            badges.push(tr!("settings.permissionJudge.downloads.installed"));
+        }
+        if !badges.is_empty() {
+            let tone = if b(variant, "/recommended") {
+                Tone::Good
+            } else {
+                Tone::Muted
+            };
+            row = row.badge(badges.join(" · "), tone);
+        }
+        if !installed && !running && !v(variant, "/downloadBytes").is_null() {
+            row = row.actions(vec![action(
+                tr!("settings.permissionJudge.downloads.download"),
+                call(judge::download_permission_judge_model(&package, &format)),
+                Tone::Accent,
+            )]);
+        }
+        rows.push(row);
+    }
+    if download.is_null() {
+        return;
+    }
+    let name = variant_name(
+        snapshot,
+        &s(download, "/packageId"),
+        &s(download, "/format"),
+    );
+    if running {
+        rows.push(note(
+            tr!(
+                "settings.permissionJudge.downloads.running",
+                name = name,
+                phase = v(download, "/phase")
+                    .as_str()
+                    .map_or_else(|| "…".into(), download_phase_label),
+                progress = format!(
+                    "{} / {}",
+                    format_bytes(v(download, "/completedBytes").as_f64().unwrap_or(0.0)),
+                    format_bytes(v(download, "/totalBytes").as_f64().unwrap_or(0.0))
+                ),
+            ),
+            Tone::Info,
+        ));
+    } else if let Some(error) = v(download, "/error").as_str() {
+        rows.push(note(
+            format!(
+                "{} {error}",
+                tr!("settings.permissionJudge.downloads.failed")
+            ),
+            Tone::Bad,
+        ));
+    } else if !v(download, "/modelId").is_null() {
+        rows.push(note(
+            tr!("settings.permissionJudge.downloads.done", name = name),
+            Tone::Good,
+        ));
+    }
 }
 
 /// Labels a package check failure code; unknown codes keep the code in a generic sentence.
@@ -1031,6 +1179,15 @@ fn cuda_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value, base: &Value
                 .join(", "),
         )
     };
+    if let Some(capability) = v(driver, "/computeCapability").as_str() {
+        driver_text = format!(
+            "{driver_text} · {}",
+            tr!(
+                "settings.permissionJudge.cuda.computeCapability",
+                value = capability
+            )
+        );
+    }
     if let (Some(major), Some(cuda_major)) = (
         v(cuda, "/minimumDriverMajor").as_u64(),
         v(cuda, "/cudaMajor").as_u64(),
@@ -1558,6 +1715,62 @@ fn record_row(record: &Value) -> Row {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Service calls offered by the download row `id`.
+    /// 下载行 `id` 提供的服务调用。
+    fn download_calls(rows: &[Row], id: &str) -> Vec<ServiceCall> {
+        rows.iter()
+            .filter_map(|row| match &row.kind {
+                RowKind::Item {
+                    id: row_id,
+                    actions,
+                    ..
+                } if row_id == id => Some(actions),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|action| match &action.action {
+                Some(UiAction::Send(Command::Call(call))) => Some(call.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // Only a published format that is not added yet downloads, and never while a download runs.
+    // 只有已发布且尚未添加的格式可以下载，下载运行期间一律不可下载。
+    #[test]
+    fn downloads_are_offered_for_published_formats_only() {
+        let snapshot = json!({ "knownPackages": [{
+            "id": "risk", "displayName": "Risk",
+            "variants": [
+                { "format": "fp16-mixed", "devices": ["cuda"], "downloadBytes": null,
+                  "recommended": true, "installedModelId": null },
+                { "format": "fp32", "devices": ["cpu"], "downloadBytes": 2048,
+                  "recommended": false, "installedModelId": null },
+                { "format": "int8", "devices": ["cpu"], "downloadBytes": 1024,
+                  "recommended": false, "installedModelId": "added" }
+            ]
+        }] });
+        let mut rows = Vec::new();
+        download_rows(&mut rows, &snapshot, &json!({ "modelDownload": null }));
+        assert!(download_calls(&rows, "download-risk-fp16-mixed").is_empty());
+        assert!(download_calls(&rows, "download-risk-int8").is_empty());
+        let calls = download_calls(&rows, "download-risk-fp32");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].method, "service_download_permission_judge_model");
+        assert_eq!(
+            calls[0].params,
+            json!({ "request": { "packageId": "risk", "format": "fp32" } })
+        );
+
+        let running = json!({ "modelDownload": {
+            "packageId": "risk", "format": "fp32", "running": true, "phase": "downloading",
+            "completedBytes": 1024, "totalBytes": 2048, "modelId": null, "error": null
+        } });
+        let mut rows = Vec::new();
+        download_rows(&mut rows, &snapshot, &running);
+        assert!(download_calls(&rows, "download-risk-fp32").is_empty());
+    }
 
     // Sizes render as the WebUI's `formatBytes` does.
     // 大小的渲染与 WebUI 的 `formatBytes` 一致。

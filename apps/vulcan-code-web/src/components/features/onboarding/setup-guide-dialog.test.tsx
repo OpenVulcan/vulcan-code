@@ -72,7 +72,7 @@ function snapshot(activeModelId: string | null, models = activeModelId ? [active
       verifyMs: null, loadMs: null, warmupMs: null, workingSetBytes: null, privateBytes: null,
       gpuDedicatedBytes: null, gpuSharedBytes: null, gpuUtilizationPercent: null,
       evaluations: 0, recentP50Ms: null, recentP95Ms: null,
-    }, cudaInstall: null, pollIntervalMs: 2000 },
+    }, cudaInstall: null, modelDownload: null, pollIntervalMs: 2000 },
   };
 }
 

@@ -120,8 +120,11 @@ export function PermissionJudgeCudaPage(props: {
         : formatMessage(t("settings.permissionJudge.cuda.downloadInstall"), { size: formatBytes(archive.size) })}
     </Button>;
   };
+  const capability = cuda.driver?.computeCapability
+    ? ` · ${formatMessage(t("settings.permissionJudge.cuda.computeCapability"), { value: cuda.driver.computeCapability })}`
+    : "";
   const driverValue = cuda.driver
-    ? formatMessage(t("settings.permissionJudge.cuda.driverValue"), { version: cuda.driver.version, gpus: cuda.driver.gpus.join(", ") })
+    ? formatMessage(t("settings.permissionJudge.cuda.driverValue"), { version: cuda.driver.version, gpus: cuda.driver.gpus.join(", ") }) + capability
     : t("settings.permissionJudge.cuda.driverMissing");
   const librariesDirectory = cuda.lockedDirectory ?? cuda.detectedDirectories[0]?.directory ?? null;
   const progress = install?.completedBytes != null && install.totalBytes

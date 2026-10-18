@@ -1113,7 +1113,23 @@
       "knownPackages": [
         {
           "id": "demo-judge",
-          "displayName": "Demo Judge"
+          "displayName": "Demo Judge",
+          "variants": [
+            {
+              "format": "fp16-mixed",
+              "devices": ["cuda", "webgpu", "cpu"],
+              "downloadBytes": null,
+              "recommended": true,
+              "installedModelId": "demo-judge-official"
+            },
+            {
+              "format": "fp32",
+              "devices": ["cuda", "cpu"],
+              "downloadBytes": 671088640,
+              "recommended": false,
+              "installedModelId": null
+            }
+          ]
         }
       ],
       "policyOptions": [],
@@ -1173,6 +1189,7 @@
           "recentP95Ms": 31.9
         },
         "cudaInstall": null,
+        "modelDownload": null,
         "pollIntervalMs": 2000
       }
     },
@@ -1249,7 +1266,8 @@
         "recentP50Ms": 18.4,
         "recentP95Ms": 31.9
       },
-      "cudaInstall": null
+      "cudaInstall": null,
+      "modelDownload": null
     },
     "service_benchmark_permission_judge": {
       "device": "webgpu",

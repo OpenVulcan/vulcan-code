@@ -62,11 +62,30 @@ export interface PermissionJudgeModelSummary {
   registeredAtMs: number;
 }
 
+// PermissionJudgeModelFormat is the weight format of a published package.
+// PermissionJudgeModelFormat 是已发布模型包的权重格式。
+export type PermissionJudgeModelFormat = "fp16-mixed" | "fp32";
+
+// PermissionJudgeKnownVariant is one published format of an official package family.
+// PermissionJudgeKnownVariant 是官方模型包家族的一个已发布格式。
+export interface PermissionJudgeKnownVariant {
+  format: PermissionJudgeModelFormat;
+  devices: JudgeDevice[];
+  // Download size; null while no download address is published for this format.
+  // 下载大小；该格式尚未发布下载地址时为 null。
+  downloadBytes: number | null;
+  // Whether this format is recommended for the effective device and graphics card.
+  // 是否为当前生效设备与显卡推荐的格式。
+  recommended: boolean;
+  installedModelId: string | null;
+}
+
 // PermissionJudgeKnownPackage is one official package family.
 // PermissionJudgeKnownPackage 是一个官方模型包家族。
 export interface PermissionJudgeKnownPackage {
   id: string;
   displayName: string;
+  variants: PermissionJudgeKnownVariant[];
 }
 
 // PermissionJudgePolicyOption is one authorization option of the policy in use.
@@ -88,7 +107,9 @@ export interface PermissionJudgeCudaSnapshot {
   supported: boolean;
   cudaMajor: number | null;
   minimumDriverMajor: number | null;
-  driver: { version: string; major: number; gpus: string[] } | null;
+  // computeCapability is the lowest CUDA compute capability of the GPUs, such as "8.9".
+  // computeCapability 是各显卡中最低的 CUDA 计算能力，例如 "8.9"。
+  driver: { version: string; major: number; gpus: string[]; computeCapability: string | null } | null;
   driverError: string | null;
   requiredLibraries: string[];
   onnxruntimeDirectory: string | null;
@@ -136,11 +157,27 @@ export interface PermissionJudgeCudaInstall {
   error: string | null;
 }
 
+// PermissionJudgeModelDownload is the progress of one official model download.
+// PermissionJudgeModelDownload 是一次官方模型下载的进度。
+export interface PermissionJudgeModelDownload {
+  packageId: string;
+  format: PermissionJudgeModelFormat;
+  running: boolean;
+  phase: string | null;
+  completedBytes: number;
+  totalBytes: number;
+  // Registration created after success; it is not put in use automatically.
+  // 成功后创建的登记；不会自动投入使用。
+  modelId: string | null;
+  error: string | null;
+}
+
 // PermissionJudgeStatus is the live status polled while the settings page is open.
 // PermissionJudgeStatus 是设置页打开期间轮询的实时状态。
 export interface PermissionJudgeStatus {
   worker: PermissionJudgeWorkerStatus;
   cudaInstall: PermissionJudgeCudaInstall | null;
+  modelDownload: PermissionJudgeModelDownload | null;
   // How often this status is re-read while the settings page is open, set by the service.
   // 设置页打开期间重新读取本状态的间隔，由服务设定。
   pollIntervalMs: number;

@@ -10457,6 +10457,7 @@ dependencies = [
  "vulcan-agent-runtime",
  "vulcan-host-tools",
  "vulcan-luaskills-config",
+ "vulcan-permission-judge",
  "vulcan-runtime-assets",
  "vulcan-vmm",
  "vulcan-workspace-store",

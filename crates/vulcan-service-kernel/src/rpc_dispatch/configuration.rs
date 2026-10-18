@@ -121,6 +121,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_reload_permission_judge",
     "service_benchmark_permission_judge",
     "service_install_permission_judge_cuda",
+    "service_download_permission_judge_model",
     "service_permission_judge_records",
     "service_mark_permission_judge_record",
     "service_export_permission_judge_records",
@@ -839,6 +840,13 @@ pub(super) async fn dispatch(
         ),
         "service_install_permission_judge_cuda" => rpc_json_result(
             permission_judge::service_install_permission_judge_cuda(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_download_permission_judge_model" => rpc_json_result(
+            permission_judge::service_download_permission_judge_model(
                 state,
                 rpc_required_param(params, "request")?,
             )

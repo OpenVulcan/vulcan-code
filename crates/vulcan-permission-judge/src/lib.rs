@@ -19,9 +19,13 @@ pub mod system;
 
 pub use cloud::{CLOUD_ALLOW_PROBABILITY, cloud_label, cloud_policy, cloud_state};
 pub use decision::{JudgeLabel, NonFiniteLogits, decide};
-pub use known::{KnownPackage, find_known_package, known_packages};
+pub use known::{
+    FP16_MIN_CUDA_COMPUTE_CAPABILITY, KnownDownload, KnownPackage, KnownVariant, ModelFormat,
+    find_known_package, known_package, known_packages,
+};
 pub use package::{
-    DigestCache, JudgePackage, MemoryDigestCache, PackageError, PackageSummary, RuntimeConfig,
+    DigestCache, JudgePackage, ManifestFile, MemoryDigestCache, PackageError, PackageSummary,
+    RuntimeConfig, manifest_files,
 };
 pub use policy::{JudgePolicy, JudgeSettings, PolicyOption, SettingsError};
 pub use render::render_call;

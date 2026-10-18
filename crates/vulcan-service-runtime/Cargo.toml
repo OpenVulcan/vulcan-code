@@ -24,6 +24,7 @@ tar.workspace = true
 vulcan-agent-runtime.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-luaskills-config.workspace = true
+vulcan-permission-judge.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-vmm.workspace = true
 vulcan-workspace-store.workspace = true

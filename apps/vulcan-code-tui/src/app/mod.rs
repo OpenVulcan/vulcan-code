@@ -1471,15 +1471,24 @@ impl App {
                         self.slots.at(slot, "/state").as_str(),
                         Some("queued" | "running")
                     );
-                // A finished CUDA installation changes detection, so the settings are re-read.
-                // CUDA 安装结束会改变探测结果，因此重新读取设置。
-                let was_installing = slot == crate::service_api::Slot::PermissionJudgeStatus
-                    && self.slots.at(slot, "/cudaInstall/running")
-                        == &serde_json::Value::Bool(true);
+                // A finished CUDA installation changes detection and a finished model download adds a
+                // registration, so the settings are re-read.
+                // CUDA 安装结束会改变探测结果，模型下载结束会新增登记，因此重新读取设置。
+                const JOBS: [&str; 2] = ["/cudaInstall/running", "/modelDownload/running"];
+                let running_jobs = |app: &Self| {
+                    JOBS.map(|job| {
+                        slot == crate::service_api::Slot::PermissionJudgeStatus
+                            && app.slots.at(slot, job) == &serde_json::Value::Bool(true)
+                    })
+                };
+                let was_running = running_jobs(self);
                 self.slot_errors.remove(&slot);
                 self.slots.set(slot, call, value);
-                if was_installing
-                    && self.slots.at(slot, "/cudaInstall/running") != &serde_json::Value::Bool(true)
+                let still_running = running_jobs(self);
+                if was_running
+                    .iter()
+                    .zip(still_running)
+                    .any(|(was, still)| *was && !still)
                 {
                     action::perform(
                         self,

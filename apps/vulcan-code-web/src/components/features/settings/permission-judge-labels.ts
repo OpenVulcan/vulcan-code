@@ -16,6 +16,10 @@ export const REASON_KEYS: Record<string, TranslationKey> = {
   onnxruntime_missing: "settings.permissionJudge.reason.onnxruntimeMissing",
   cuda_libraries_missing: "settings.permissionJudge.reason.cudaLibrariesMissing",
 };
+export const FORMAT_KEYS: Record<string, TranslationKey> = {
+  "fp16-mixed": "settings.permissionJudge.format.fp16Mixed",
+  fp32: "settings.permissionJudge.format.fp32",
+};
 export const PHASE_KEYS: Record<string, TranslationKey> = {
   not_loaded: "settings.permissionJudge.phase.notLoaded",
   warming: "settings.permissionJudge.phase.warming",

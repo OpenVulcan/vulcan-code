@@ -270,6 +270,47 @@ struct ManifestEntry {
     sha256: String,
 }
 
+/// One file `MANIFEST.json` lists, with the size and digest it must have.
+/// `MANIFEST.json` 列出的一个文件及其应有的大小与摘要。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestFile {
+    /// Plain relative path below the package root, with `/` separators.
+    /// 模型包根目录下以 `/` 分隔的普通相对路径。
+    pub path: String,
+    /// Exact size.
+    /// 精确大小。
+    pub bytes: u64,
+    /// Lowercase hex SHA-256.
+    /// 小写十六进制 SHA-256。
+    pub sha256: String,
+}
+
+/// Reads the files a `MANIFEST.json` lists, refusing an unsupported format or any entry that is
+/// not a plain relative path; used to fetch a package file by file before it is opened.
+/// 读取 `MANIFEST.json` 列出的文件，拒绝不支持的格式或任何不是普通相对路径的条目；用于在打开模型包
+/// 之前逐个获取其文件。
+pub fn manifest_files(manifest_bytes: &[u8]) -> Result<Vec<ManifestFile>, PackageError> {
+    let manifest: Manifest = parse_json(MANIFEST_FILE, manifest_bytes)?;
+    if manifest.format_version != MANIFEST_FORMAT_VERSION {
+        return Err(PackageError::Unsupported(format!(
+            "manifest format {} (supported: {MANIFEST_FORMAT_VERSION})",
+            manifest.format_version
+        )));
+    }
+    manifest
+        .files
+        .into_iter()
+        .map(|(path, entry)| {
+            check_entry_path(&path)?;
+            Ok(ManifestFile {
+                path,
+                bytes: entry.bytes,
+                sha256: entry.sha256.to_ascii_lowercase(),
+            })
+        })
+        .collect()
+}
+
 /// A package whose every listed file matched its manifest and whose contract this build supports.
 /// 每个列出文件都与清单一致、且契约受本构建支持的模型包。
 #[derive(Debug, Clone)]
@@ -410,6 +451,21 @@ fn check_config(config: &RuntimeConfig) -> Result<(), PackageError> {
     Ok(())
 }
 
+/// Accepts only a plain relative manifest path that stays inside the package directory.
+/// 只接受停留在模型包目录内的普通相对清单路径。
+fn check_entry_path(file: &str) -> Result<(), PackageError> {
+    let safe = !file.is_empty()
+        && !file.contains('\\')
+        && Path::new(file)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)));
+    if safe {
+        Ok(())
+    } else {
+        Err(PackageError::UnsafeEntry(file.to_string()))
+    }
+}
+
 /// Checks one listed file's path, size and digest.
 /// 检查一个列出文件的路径、大小与摘要。
 fn verify_entry(
@@ -418,15 +474,8 @@ fn verify_entry(
     entry: &ManifestEntry,
     cache: &dyn DigestCache,
 ) -> Result<(), PackageError> {
-    let relative = Path::new(file);
-    if file.contains('\\')
-        || !relative
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
-    {
-        return Err(PackageError::UnsafeEntry(file.to_string()));
-    }
-    let path = root.join(relative);
+    check_entry_path(file)?;
+    let path = root.join(Path::new(file));
     let unreadable = |source| PackageError::Unreadable {
         file: file.to_string(),
         source,
@@ -533,6 +582,37 @@ mod tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
+    }
+
+    // The manifest lists every file to fetch; an entry escaping the package refuses the whole list.
+    // 清单列出每个待获取文件；逃逸出模型包的条目使整份清单被拒绝。
+    #[test]
+    fn manifest_files_lists_plain_entries_and_refuses_escapes() {
+        let dir = tempfile::tempdir().unwrap();
+        write_package(dir.path());
+        let bytes = std::fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
+        let files = manifest_files(&bytes).unwrap();
+        assert_eq!(files.len(), 6);
+        let graph = files
+            .iter()
+            .find(|file| file.path == "models/graph.onnx")
+            .expect("the graph is listed");
+        assert_eq!(graph.bytes, 3000);
+        let escaping = json!({
+            "format_version": 1, "status": "candidate", "parent_sha256": "abc",
+            "files": { "../outside": { "bytes": 1, "sha256": "00" } }
+        });
+        assert!(matches!(
+            manifest_files(&serde_json::to_vec(&escaping).unwrap()),
+            Err(PackageError::UnsafeEntry(_))
+        ));
+        let future = json!({
+            "format_version": 2, "status": "candidate", "parent_sha256": "abc", "files": {}
+        });
+        assert!(matches!(
+            manifest_files(&serde_json::to_vec(&future).unwrap()),
+            Err(PackageError::Unsupported(_))
+        ));
     }
 
     #[test]

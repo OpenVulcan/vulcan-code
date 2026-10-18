@@ -450,15 +450,38 @@ pub struct NvidiaDriver {
     /// Names of the NVIDIA GPUs the driver sees.
     /// 驱动可见的 NVIDIA 显卡名称。
     pub gpus: Vec<String>,
+    /// Lowest CUDA compute capability among those GPUs, such as `(8, 9)`; `None` when the driver
+    /// does not report it.
+    /// 这些显卡中最低的 CUDA 计算能力，例如 `(8, 9)`；驱动不报告时为 `None`。
+    pub compute_capability: Option<(u32, u32)>,
 }
 
 /// Reads the NVIDIA driver through `nvidia-smi`, which every driver installs; `None` when it is
-/// absent, which means no usable NVIDIA driver.
+/// absent, which means no usable NVIDIA driver. Compute capability is queried separately because
+/// older drivers reject the field; its failure only leaves the capability unknown.
 /// 通过每个驱动都会安装的 `nvidia-smi` 读取 NVIDIA 驱动；不存在时返回 `None`，表示没有可用的 NVIDIA 驱动。
+/// 计算能力单独查询，因为旧驱动不认识该字段；查询失败只会让计算能力保持未知。
 pub fn detect_nvidia_driver() -> Result<Option<NvidiaDriver>, String> {
+    let Some(output) = query_nvidia_smi("driver_version,name")? else {
+        return Ok(None);
+    };
+    let mut driver = parse_nvidia_smi(&output)?;
+    driver.compute_capability = query_nvidia_smi("compute_cap")
+        .ok()
+        .flatten()
+        .and_then(|output| parse_compute_capabilities(&output));
+    Ok(Some(driver))
+}
+
+/// Runs one `nvidia-smi --query-gpu` CSV query; `None` when the tool is absent or fails.
+/// 运行一次 `nvidia-smi --query-gpu` CSV 查询；工具不存在或失败时返回 `None`。
+fn query_nvidia_smi(fields: &str) -> Result<Option<String>, String> {
     let mut command = Command::new("nvidia-smi");
     command
-        .args(["--query-gpu=driver_version,name", "--format=csv,noheader"])
+        .args([
+            format!("--query-gpu={fields}").as_str(),
+            "--format=csv,noheader",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -489,10 +512,7 @@ pub fn detect_nvidia_driver() -> Result<Option<NvidiaDriver>, String> {
             .read_to_string(&mut output)
             .map_err(|error| format!("Failed to read nvidia-smi output: {error}."))?;
     }
-    if !status.success() {
-        return Ok(None);
-    }
-    parse_nvidia_smi(&output).map(Some)
+    Ok(status.success().then_some(output))
 }
 
 /// Parses `driver_version,name` CSV rows; every GPU reports the same driver.
@@ -517,7 +537,25 @@ fn parse_nvidia_smi(output: &str) -> Result<NvidiaDriver, String> {
         version,
         major,
         gpus,
+        compute_capability: None,
     })
+}
+
+/// Parses `compute_cap` rows such as `8.9` into the lowest capability; `None` when any row is not
+/// a capability, so an unknown GPU never looks more capable than it is.
+/// 将 `8.9` 这类 `compute_cap` 行解析为最低计算能力；任一行不是计算能力时返回 `None`，避免未知显卡被
+/// 视为能力更强。
+fn parse_compute_capabilities(output: &str) -> Option<(u32, u32)> {
+    output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (major, minor) = line.trim().split_once('.')?;
+            Some((major.parse().ok()?, minor.parse().ok()?))
+        })
+        .collect::<Option<Vec<(u32, u32)>>>()?
+        .into_iter()
+        .min()
 }
 
 /// Where a CUDA library directory was found.
@@ -1070,6 +1108,9 @@ mod tests {
         assert_eq!(driver.major, 591);
         assert_eq!(driver.gpus.len(), 2);
         assert!(parse_nvidia_smi("").is_err());
+        assert_eq!(parse_compute_capabilities("12.0\n8.6\n"), Some((8, 6)));
+        assert_eq!(parse_compute_capabilities("8.9\n[N/A]\n"), None);
+        assert_eq!(parse_compute_capabilities(""), None);
         assert_eq!(parse_toolkit_version("13.2", 13), Some((13, 2)));
         assert_eq!(parse_toolkit_version("12.8", 13), None);
     }
