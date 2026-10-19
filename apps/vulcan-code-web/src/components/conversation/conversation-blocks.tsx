@@ -478,7 +478,7 @@ export function TurnStatsBlock(props: {
       </TooltipTrigger>
       <TooltipContent
         align="start"
-        className="context-usage-tooltip turn-stats-tooltip"
+        className="vk-stats"
         showArrow={false}
         side="top"
         sideOffset={8}

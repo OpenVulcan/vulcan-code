@@ -412,11 +412,11 @@ it("retains an invalid saved node and lets the user restore the exact model defa
   await render(<ContextUsageOrb snapshot={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: 0,
     maxTokens: 256_000, percent: 0, severity: "normal", tooltipRows: [], usageBasisPoints: 0, usedTokens: 0 }}
     contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selectedNodeId="compression-window-5" modelContextLimit={256_000} onNodeChange={change} />);
-  await act(async () => host.querySelector<HTMLButtonElement>('.context-usage-control')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('.vk-ctx-button')!.click());
   expect(change).not.toHaveBeenCalled();
   expect(document.querySelector<HTMLButtonElement>('[role="radio"][value="compression-window-5"]')?.disabled).toBe(true);
   expect(document.querySelector('[role="radio"][value="compression-window-2"]')).toBeNull();
-  expect(document.querySelector('.context-usage-cache-row strong')?.textContent).toBe("0.0%");
+  expect(document.querySelector('[data-ctx-cache] strong')?.textContent).toBe("0.0%");
   await act(async () => document.querySelector<HTMLButtonElement>('[role="radio"][value="default"]')!.click());
   expect(change).toHaveBeenCalledExactlyOnceWith(null);
 });

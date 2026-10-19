@@ -1,0 +1,165 @@
+/* Vulcan kit stats card: one read-only card for every usage readout — the context ring and its popover,
+ * the per-turn statistics, goal details and lifetime session totals. Each starts with a title row, then
+ * paired label/value rows, bars and hairline sections.
+ * Vulcan 套件统计卡片：所有用量读数共用的只读卡片——上下文圆环及其弹层、单轮统计、目标详情与会话累计。
+ * 均以标题行开头，随后是成对的标签/数值行、进度条与细线分区。 */
+
+/* ---------- Card surface ---------- */
+/* A stats card stays a light raised surface even when it is shown through a tooltip. */
+/* 统计卡片即使经由提示框显示，也保持浅色浮起表面。 */
+.vk-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(var(--vk-u) * 3);
+  width: min(340px, calc(100vw - 24px));
+  max-width: none;
+  padding: calc(var(--vk-u) * 3.5);
+  font-size: var(--vk-fs-md);
+  white-space: normal;
+}
+.vk-pop.vk-stats { max-height: min(calc(100dvh - 24px), var(--vk-available-height, calc(100dvh - 24px))); overflow-y: auto; overscroll-behavior: contain; }
+.vk-tooltip.vk-stats {
+  display: flex;
+  border: var(--vk-bw) solid var(--vk-line-strong);
+  background: var(--vk-raised);
+  color: var(--vk-ink);
+  box-shadow: var(--vk-shadow-2);
+  font-family: inherit;
+  line-height: normal;
+  pointer-events: auto;
+}
+.vk-stats[data-width="wide"] { width: min(380px, calc(100vw - 24px)); }
+.vk-stats-note { margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.5; }
+.vk-stats-note[data-tone] { color: var(--vk-tone); }
+.vk-stats-body { max-height: min(40vh, 300px); overflow-y: auto; padding-bottom: calc(var(--vk-u) * 2.5); border-bottom: var(--vk-bw) solid var(--vk-line-soft); font-size: var(--vk-fs-md); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- Metric rows ---------- */
+.vk-stats-grid { display: grid; gap: calc(var(--vk-u) * 2); margin: 0; }
+.vk-stats-grid[data-columns="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: calc(var(--vk-u) * 4.5); }
+.vk-stats-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--vk-u) * 4.5); }
+.vk-stat { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--vk-u) * 1.75); min-width: 0; }
+.vk-stat > :first-child { min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.vk-stat > :last-child { flex: none; margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; font-weight: 600; line-height: 1.25; white-space: nowrap; }
+
+/* A thin meter: signal for cache hits and other healthy ratios. */
+/* 细进度条：缓存命中等健康比例使用信号色。 */
+.vk-stats-bar { height: 6px; overflow: hidden; background: var(--vk-sunken); box-shadow: inset 0 0 0 1px var(--vk-line-soft); }
+.vk-stats-bar > span { display: block; height: 100%; background: var(--vk-signal); transition: width var(--vk-t-med) var(--vk-ease); }
+.vk-stats-section { display: grid; gap: calc(var(--vk-u) * 2); padding-top: calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-stats-section > h4 { margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-xs); font-weight: 600; line-height: 1.2; }
+.vk-stats-section > .vk-sum-title > span:last-child { white-space: normal; text-align: right; }
+
+/* ---------- Context ring ---------- */
+/* The ring fills clockwise with context use; past 90% it warms toward warn and bad. */
+/* 圆环随上下文占用顺时针填充；超过 90% 后逐渐转向警告与错误色。 */
+.vk-ctx-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--vk-u) * 1);
+  min-width: var(--vk-h-sm);
+  height: var(--vk-h-sm);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-3);
+  cursor: default;
+}
+.vk-ctx-button[data-locked] { padding: 0 calc(var(--vk-u) * 1.25) 0 calc(var(--vk-u) * 0.5); background: var(--vk-sunken); }
+.vk-ctx-button:not(:disabled):hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-ctx-button:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-ctx-ring {
+  --vk-ctx-color: var(--vk-chart-1);
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: conic-gradient(var(--vk-ctx-color) var(--vk-ctx-progress), color-mix(in srgb, var(--vk-ink-3) 26%, transparent) 0);
+  -webkit-mask: radial-gradient(circle at center, transparent 0 44%, #000 45%);
+  mask: radial-gradient(circle at center, transparent 0 44%, #000 45%);
+}
+.vk-ctx-ring[data-threshold="warning"] { --vk-ctx-color: var(--vk-warn); }
+.vk-ctx-ring[data-threshold="critical"] { --vk-ctx-color: color-mix(in srgb, var(--vk-bad) 70%, var(--vk-warn)); }
+.vk-ctx-ring[data-threshold="full"] { --vk-ctx-color: var(--vk-bad); }
+.vk-ctx-lock { display: inline-flex; align-items: center; gap: 2px; font-size: var(--vk-fs-2xs); font-weight: 650; line-height: 1; }
+
+/* Each context category has its own series color in the bar and the legend. */
+/* 每个上下文分类在进度条与图例中拥有各自的系列色。 */
+[data-ctx-kind="messages"] { --vk-ctx-kind: var(--vk-chart-1); }
+[data-ctx-kind="system-tools"] { --vk-ctx-kind: var(--vk-chart-2); }
+[data-ctx-kind="mcp-tools"] { --vk-ctx-kind: var(--vk-chart-3); }
+[data-ctx-kind="skills"] { --vk-ctx-kind: var(--vk-chart-4); }
+[data-ctx-kind="system-prompt"] { --vk-ctx-kind: var(--vk-chart-5); }
+[data-ctx-kind="other"] { --vk-ctx-kind: var(--vk-ink-3); }
+.vk-ctx-track { position: relative; height: 6px; overflow: hidden; background: var(--vk-sunken); box-shadow: inset 0 0 0 1px var(--vk-line-soft); }
+.vk-ctx-fill { position: relative; z-index: 2; display: flex; height: 100%; overflow: hidden; background: var(--vk-chart-1); transition: width var(--vk-t-med) var(--vk-ease); }
+.vk-ctx-fill > span { min-width: 1px; height: 100%; background: var(--vk-ctx-kind); }
+/* The last tenth is shaded and marked: compaction starts at 90% and the hard stop is 100%. */
+/* 最后十分之一以阴影与刻线标示：压缩从 90% 开始，100% 为硬上限。 */
+.vk-ctx-zone,
+.vk-ctx-mark { position: absolute; z-index: 3; top: 0; bottom: 0; pointer-events: none; }
+.vk-ctx-zone[data-at="90"] { left: 90%; width: 5%; background: color-mix(in srgb, var(--vk-warn) 14%, transparent); }
+.vk-ctx-zone[data-at="95"] { left: 95%; width: 5%; background: color-mix(in srgb, var(--vk-bad) 16%, transparent); }
+.vk-ctx-mark { width: 1px; background: var(--vk-line-strong); }
+.vk-ctx-mark[data-at="90"] { left: 90%; }
+.vk-ctx-mark[data-at="95"] { left: 95%; }
+.vk-ctx-mark[data-at="100"] { right: 0; background: color-mix(in srgb, var(--vk-bad) 45%, transparent); }
+.vk-ctx-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--vk-u) * 1.75) calc(var(--vk-u) * 4.5); }
+.vk-ctx-legend > .vk-stat > :first-child { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.75); }
+.vk-ctx-dot { flex: none; width: 8px; height: 8px; background: var(--vk-ctx-kind, var(--vk-ink-3)); }
+svg.vk-ctx-dot { background: none; color: var(--vk-ink-3); }
+.vk-ctx-window { display: grid; gap: calc(var(--vk-u) * 2); padding-top: calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-ctx-window > .vk-seg { display: flex; flex-wrap: wrap; width: 100%; }
+.vk-ctx-window > .vk-seg > .vk-seg-item { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vk-ctx-failure { display: grid; gap: calc(var(--vk-u) * 1); font-size: var(--vk-fs-xs); }
+.vk-ctx-failure > p { margin: 0; color: var(--vk-bad); }
+.vk-ctx-failure summary { color: var(--vk-ink-3); cursor: pointer; }
+.vk-ctx-failure pre { max-height: 6rem; margin: calc(var(--vk-u) * 1) 0 0; overflow: auto; font-family: var(--vk-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- Lifetime totals ---------- */
+/* Main-session and subagent totals: a heading row with the total that discloses three metric groups. */
+/* 主会话与子代理累计：带总量的标题行，展开后显示三组指标。 */
+.vk-lifetime { display: grid; gap: 2px; padding-top: calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-lifetime-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3);
+  margin: 0 calc(var(--vk-u) * -2);
+  padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2);
+  list-style: none;
+  cursor: pointer;
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-lifetime-head::-webkit-details-marker { display: none; }
+.vk-lifetime-head:is(:hover, :focus-visible) { background: var(--vk-hover); }
+.vk-lifetime-head:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-lifetime-head > strong { font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-lifetime-total { display: flex; flex: none; align-items: baseline; gap: calc(var(--vk-u) * 1); }
+.vk-lifetime-total > strong { font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; line-height: 1.2; }
+.vk-lifetime-total > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-lifetime-total > svg { align-self: center; margin-left: 2px; color: var(--vk-ink-3); transition: transform var(--vk-t-med) var(--vk-ease); }
+details[open] > .vk-lifetime-head .vk-lifetime-total > svg { transform: rotate(180deg); }
+/* Expanded details sit in a sunken well under their heading so it is clear which total they explain. */
+/* 展开的明细放在标题下方的内凹区域，清楚表明它解释的是哪一项累计。 */
+.vk-lifetime-body { display: grid; gap: calc(var(--vk-u) * 2); margin: calc(var(--vk-u) * 1) 0 calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 2.25) calc(var(--vk-u) * 2.5); background: var(--vk-sunken); }
+.vk-lifetime-group { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: start; gap: calc(var(--vk-u) * 2); }
+.vk-lifetime-group > strong { color: var(--vk-ink-3); font-size: var(--vk-fs-2xs); font-weight: 500; line-height: 16px; overflow-wrap: anywhere; }
+.vk-lifetime-group > dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--vk-u) * 1) calc(var(--vk-u) * 3); margin: 0; line-height: 16px; }
+.vk-lifetime-group > dl > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 calc(var(--vk-u) * 1); min-width: 0; }
+.vk-lifetime-group dt { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-lifetime-group dd { margin: 0; font-size: var(--vk-fs-xs); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* A subagent page shows its own total as a floating chip at the top right of the transcript. */
+/* 子代理页面在对话右上角以浮动胶囊显示其自身累计。 */
+.vk-lifetime-chip-slot { position: absolute; top: calc(var(--vk-u) * 2); right: calc(var(--vk-u) * 4); z-index: 20; pointer-events: none; }
+.vk-lifetime-chip { padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: color-mix(in srgb, var(--vk-raised) 94%, transparent); box-shadow: var(--vk-shadow-1); color: var(--vk-ink-2); font-size: var(--vk-fs-xs); pointer-events: auto; cursor: default; }
+.vk-lifetime-chip:hover { color: var(--vk-ink); }
+.vk-stats > .vk-lifetime:first-child { padding-top: 0; border-top: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .vk-ctx-fill,
+  .vk-stats-bar > span,
+  .vk-lifetime-total > svg { transition: none; }
+}

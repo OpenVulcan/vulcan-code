@@ -51,7 +51,6 @@ import {
 } from "@/components/composer/composer-capability-dialog-sections";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { formatTokenCount, tokenUnitLabel } from "@/lib/usage-format";
-import { cn } from "@/lib/utils";
 import {
   isDirectProviderToolCapability,
   isModelExtensionCapability,
@@ -174,17 +173,15 @@ export function ContextUsageOrb(props: {
       : percent >= 90
         ? "warning"
         : "normal";
-  const style = {
-    "--context-usage-progress": `${percent * 3.6}deg`,
-    "--context-usage-percent": `${percent}%`,
-  } as React.CSSProperties;
+  const style = { "--vk-ctx-progress": `${percent * 3.6}deg` } as React.CSSProperties;
 
   return (
     <Popover open={statisticsOpen} onOpenChange={(open) => { cancelHoverOpen(); setStatisticsOpen(open); }}>
       <PopoverTrigger asChild>
         <button
           aria-label={contextUsageAriaLabel}
-          className={cn("context-usage-control", selectedNode && "is-locked")}
+          className="vk-ctx-button"
+          data-locked={selectedNode ? "true" : undefined}
           type="button"
           onPointerEnter={(event) => {
             if (event.pointerType !== "mouse" || statisticsOpen) return;
@@ -200,12 +197,13 @@ export function ContextUsageOrb(props: {
         >
           <span
             aria-hidden="true"
-            className={cn("context-usage-orb", `severity-${snapshot.severity}`)}
-            data-threshold-state={thresholdState}
+            className="vk-ctx-ring"
+            data-severity={snapshot.severity}
+            data-threshold={thresholdState}
             style={style}
           />
           {selectedNode ? (
-            <span className="context-usage-lock-label">
+            <span className="vk-ctx-lock">
               <LockKeyhole aria-hidden="true" size={11} strokeWidth={2} />
               {formatContextWindowNodeTokens(selectedNode.tokens)}
             </span>
@@ -215,7 +213,7 @@ export function ContextUsageOrb(props: {
       <PopoverContent
         align="end"
         aria-label={title}
-        className="context-usage-tooltip context-usage-popover"
+        className="vk-stats"
         collisionPadding={12}
         ref={contentRef}
         onOpenAutoFocus={(event) => { event.preventDefault(); if (!openedByHover.current) contentRef.current?.focus(); }}
@@ -223,25 +221,25 @@ export function ContextUsageOrb(props: {
         side="top"
         sideOffset={8}
       >
-        <div className="context-usage-card-header">
+        <div className="vk-sum-title">
           <strong>{title}</strong>
           <span>{formatContextUsageTotal(snapshot, locale)}</span>
         </div>
         <ContextUsageProgressBar breakdown={breakdown} usageBasisPoints={usageBasisPoints} />
         {detailVisible || snapshot.cacheHitBasisPoints != null ? (
-          <div className="context-usage-breakdown">
+          <div className="vk-ctx-legend">
             {breakdown.map((item) => (
-              <div className="context-usage-breakdown-row" key={item.kind}>
-                <span className="context-usage-breakdown-label">
-                  <i className={`context-usage-dot kind-${item.kind}`} />
+              <div className="vk-stat" data-ctx-kind={item.kind} key={item.kind}>
+                <span>
+                  <i className="vk-ctx-dot" />
                   {contextUsageKindLabel(item, t)}
                 </span>
                 <span>{formatBasisPoints(item.basisPoints)}</span>
               </div>
             ))}
-            {snapshot.cacheHitBasisPoints != null ? <div className="context-usage-cache-row">
-              <span className="context-usage-breakdown-label">
-                <RotateCw className="context-usage-dot" aria-hidden="true" />
+            {snapshot.cacheHitBasisPoints != null ? <div className="vk-stat" data-ctx-cache>
+              <span>
+                <RotateCw className="vk-ctx-dot" aria-hidden="true" size={10} />
                 {t("composer.contextUsage.cacheHitRate")}
               </span>
               <strong>{formatBasisPoints(snapshot.cacheHitBasisPoints)}</strong>
@@ -249,14 +247,13 @@ export function ContextUsageOrb(props: {
           </div>
         ) : null}
         <SessionLifetimeUsagePanel usage={providerUsage?.lifetime} error={providerUsage?.lifetimeError} />
-        <div className="context-usage-window-section">
-          <div className="context-usage-window-title">
-            {t("composer.contextWindow.title")}
+        <div className="vk-ctx-window">
+          <div className="vk-sum-title">
+            <strong>{t("composer.contextWindow.title")}</strong>
             <span>{selectedNode ? t("composer.capabilities.lockedForThisSession") : t("composer.capabilities.followsTheModel")}</span>
           </div>
           <SegmentedControl
             aria-label={t("composer.contextWindow.title")}
-            className="context-usage-window-switch"
             disabled={nodeSaving}
             onValueChange={(value) => {
               const nextNodeId = contextWindowNodeIdFromSwitchValue(value, props.contextCompactionWindowNodes);
@@ -295,12 +292,12 @@ export function ContextUsageOrb(props: {
               {defaultContextWindowLabel}
             </SegmentedControlItem>
           </SegmentedControl>
-          {selectedNodeIsInvalid ? <p className="text-xs text-muted-foreground">{formatContextWindowNodeTokens(selectedNode.tokens)} · {t("composer.contextWindow.invalid")}</p> : null}
-          {nodeError !== null ? <div className="text-xs">
-            <p role="alert" className="text-destructive">{t("composer.contextWindow.saveFailed")}</p>
-            {nodeError ? <details className="mt-1">
-              <summary className="cursor-pointer text-muted-foreground">{t("composer.capability.errorDetails")}</summary>
-              <pre tabIndex={0} className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-xs">{nodeError}</pre>
+          {selectedNodeIsInvalid ? <p className="vk-stats-note">{formatContextWindowNodeTokens(selectedNode.tokens)} · {t("composer.contextWindow.invalid")}</p> : null}
+          {nodeError !== null ? <div className="vk-ctx-failure">
+            <p role="alert">{t("composer.contextWindow.saveFailed")}</p>
+            {nodeError ? <details>
+              <summary>{t("composer.capability.errorDetails")}</summary>
+              <pre tabIndex={0}>{nodeError}</pre>
             </details> : null}
           </div> : null}
         </div>
@@ -357,28 +354,28 @@ function ContextUsageProgressBar(props: {
   return (
     <div
       aria-label={t("composer.contextUsage.usedPercent").replace("{percent}", percent.toFixed(1))}
-      className="context-usage-progress-track"
+      className="vk-ctx-track"
       role="progressbar"
       aria-valuemax={100}
       aria-valuemin={0}
       aria-valuenow={percent}
     >
-      <div className="context-usage-threshold-zone threshold-90" />
-      <div className="context-usage-threshold-zone threshold-95" />
-      <div className="context-usage-progress-fill" style={{ width: `${percent}%` }}>
+      <i className="vk-ctx-zone" data-at="90" />
+      <i className="vk-ctx-zone" data-at="95" />
+      <div className="vk-ctx-fill" style={{ width: `${percent}%` }}>
         {props.breakdown.length > 0
           ? props.breakdown.map((item) => (
               <span
-                className={`context-usage-segment kind-${item.kind}`}
+                data-ctx-kind={item.kind}
                 key={item.kind}
                 style={{ width: `${item.basisPoints / 100}%` }}
               />
             ))
           : null}
       </div>
-      <i className="context-usage-threshold-marker marker-90" />
-      <i className="context-usage-threshold-marker marker-95" />
-      <i className="context-usage-threshold-marker marker-100" />
+      <i className="vk-ctx-mark" data-at="90" />
+      <i className="vk-ctx-mark" data-at="95" />
+      <i className="vk-ctx-mark" data-at="100" />
     </div>
   );
 }

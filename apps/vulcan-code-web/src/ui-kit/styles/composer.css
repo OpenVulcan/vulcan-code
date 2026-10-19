@@ -1,8 +1,8 @@
 /* Composer: the dock that floats over the transcript's bottom edge, the input card, its toolbar, the
  * strips docked on top of it (queued prompts, goal) and the staged attachments. Toolbar triggers and
- * their menus live in composer-controls.css. */
+ * their menus live in pickers.css, capabilities.css and stats.css. */
 /* 输入区：悬浮在转录底边上的停靠层、输入卡片、工具栏、停靠在其上方的条带（待发送队列、目标）以及已暂存附件。
- * 工具栏触发器及其菜单位于 composer-controls.css。 */
+ * 工具栏触发器及其菜单位于 pickers.css、capabilities.css 与 stats.css。 */
 
 /* ---------- Dock ---------- */
 /* The dock follows the conversation column and floats; the transcript pads by its measured height. */

@@ -809,57 +809,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-step[data-state="done"] .vk-step-text { color: var(--vk-ink-3); text-decoration: line-through; text-decoration-color: var(--vk-line-strong); }
 .vk-step small { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
 
-.vk-stats-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: calc(var(--vk-u) * 1) calc(var(--vk-u) * 4);
-  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3);
-  border: var(--vk-bw) solid var(--vk-line-soft);
-  background: var(--vk-sunken);
-  font-size: var(--vk-fs-xs);
-  color: var(--vk-ink-3);
-}
-.vk-stats-row > span { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); font-variant-numeric: tabular-nums; }
-.vk-stats-row b { color: var(--vk-ink-2); font-weight: 500; }
-.vk-stats-row > .vk-actions { margin-left: auto; display: flex; gap: 2px; }
-
-.vk-changes-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: calc(var(--vk-u) * 2.5); align-items: center; min-height: var(--vk-h-lg); padding: 0 calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line-soft); font-size: var(--vk-fs-sm); cursor: pointer; }
-.vk-changes-row:hover { background: var(--vk-hover); }
-.vk-changes-row:last-child { border-bottom: 0; }
-.vk-changes-row code { font-family: var(--vk-font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vk-file-kind { width: 1.15rem; height: 1.15rem; display: grid; place-items: center; font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs); font-weight: 700; border: var(--vk-bw) solid currentColor; }
-.vk-file-kind[data-k="M"] { color: var(--vk-warn); }
-.vk-file-kind[data-k="A"] { color: var(--vk-ok); }
-.vk-file-kind[data-k="D"] { color: var(--vk-bad); }
-.vk-file-kind[data-k="R"] { color: var(--vk-info); }
-
-.vk-gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 9rem), 1fr)); gap: calc(var(--vk-u) * 2); }
-.vk-art { position: relative; aspect-ratio: 1; max-width: 100%; border: var(--vk-bw) solid var(--vk-line); overflow: hidden; background: var(--vk-sunken); }
-.vk-art canvas { width: 100%; height: 100%; display: block; }
-.vk-art figcaption { position: absolute; left: 0; right: 0; bottom: 0; padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2); background: linear-gradient(transparent, rgba(0, 0, 0, 0.6)); color: #fff; font-size: var(--vk-fs-2xs); }
-
-/* ---------- Floating aids: prompt navigator and jump to latest ---------- */
-/* The prompt navigator is an edge-pinned comb of ticks beside the transcript; hovering one previews that turn. */
-/* 提示词导航是贴在转录边缘的刻度梳；悬停某个刻度预览该回合。 */
-.vk-prompt-nav {
-  /* Single height bound for the tick column; overflow scrolls inside the rail without a scrollbar. */
-  /* 刻度列唯一高度上限；超出部分在轨道内部无滚动条滚动。 */
-  --vk-pn-max-h: min(360px, 56vh);
-  --vk-pn-rest: calc(var(--vk-u) * 2);
-  --vk-pn-active: calc(var(--vk-u) * 3.5);
-  --vk-pn-comb: calc(var(--vk-u) * 4);
-  --vk-pn-focus: calc(var(--vk-u) * 5.5);
-  position: absolute;
-  top: 0;
-  bottom: var(--vk-dock-h);
-  left: 0;
-  z-index: 6;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  pointer-events: none;
-}
 .vk-prompt-nav-rail {
   max-height: min(var(--vk-pn-max-h), 100%);
   display: flex;

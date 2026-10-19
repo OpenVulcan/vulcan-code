@@ -47,7 +47,7 @@ export function ComposerGoalStrip(props: {
           <TooltipTrigger asChild>
             <span className="vk-goal-text" tabIndex={0}>{props.goal.objective}</span>
           </TooltipTrigger>
-          <TooltipContent className="context-usage-tooltip composer-goal-details-tooltip" side="top" sideOffset={6} showArrow={false}>
+          <TooltipContent className="vk-stats" side="top" sideOffset={6} showArrow={false}>
             <ComposerGoalDetails goal={props.goal} />
           </TooltipContent>
         </Tooltip>
