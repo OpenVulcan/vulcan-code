@@ -314,90 +314,6 @@
   font-size: inherit;
 }
 
-.context-compaction-block {
-  width: 100%;
-  display: block;
-}
-
-.context-compaction-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-md);
-  line-height: 1.35;
-  text-align: center;
-}
-
-.context-compaction-toggle::before,
-.context-compaction-toggle::after {
-  min-width: 18px;
-  height: 1px;
-  flex: 1 1 auto;
-  background: var(--border);
-  content: "";
-}
-
-.context-compaction-toggle:hover,
-.context-compaction-toggle:focus-visible {
-  color: var(--foreground);
-}
-
-.context-compaction-toggle-icon {
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.context-compaction-toggle:hover .context-compaction-toggle-icon,
-.context-compaction-toggle:focus-visible .context-compaction-toggle-icon,
-.context-compaction-block.expanded .context-compaction-toggle-icon {
-  opacity: 1;
-}
-
-.context-compaction-title {
-  max-width: min(100%, 520px);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.context-compaction-title strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: inherit;
-  font-size: var(--vcn-font-size-md);
-  font-weight: 600;
-}
-
-.context-compaction-body {
-  width: 100%;
-  max-width: none;
-  box-sizing: border-box;
-  margin: 6px auto 0;
-  padding: 0 18px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-md);
-}
-
-.context-compaction-body .markdown-message {
-  max-width: none;
-  color: inherit;
-  font-size: inherit;
-}
-
-.context-compaction-end-line {
-  height: 1px;
-  margin: 14px -18px 0;
-  background: var(--border);
-}
-
 .thinking-detail-modal .detail-title-icon {
   background: color-mix(in srgb, var(--accent) 82%, transparent);
 }
@@ -440,63 +356,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.turn-stats-row {
-  width: fit-content;
-  max-width: 100%;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-pill);
-  background: var(--muted);
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
-  line-height: 1.15;
-}
-
-.turn-stats-row.failed {
-  border-color: var(--destructive);
-  color: var(--destructive);
-}
-
-.turn-stats-row.stopped {
-  border-color: var(--border);
-  color: var(--muted-foreground);
-}
-
-.turn-stats-row.subagent {
-  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
-  background: color-mix(in srgb, var(--primary) 8%, var(--muted));
-  color: var(--foreground);
-}
-
-.turn-stats-row.subagent svg {
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
-}
-
-.turn-stats-row strong {
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A Turn that changed files shows its change chip beside the usage chip; the file list wraps below both. */
-/* 改动过文件的 Turn 在用量胶囊旁显示变更胶囊，文件列表换行显示在两者下方。 */
-.turn-stats-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.turn-changes-toggle:hover {
-  background: var(--accent);
 }
 
 .turn-stats-tooltip {
@@ -748,7 +607,6 @@
   padding: 5px 7px;
   border-radius: var(--vcn-radius-md);
 }
-
 
 /* Persistent terminal state shown on the session icon. */
 /* 持久终端状态显示在会话图标上。 */

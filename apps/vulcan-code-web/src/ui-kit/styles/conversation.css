@@ -122,6 +122,9 @@
 .vk-history-line::after { content: ""; flex: 1; height: 1px; background: var(--vk-line); }
 .vk-history-skeleton { display: grid; gap: calc(var(--vk-u) * 2); width: 100%; }
 
+/* A quiet centered note where the transcript has nothing to show yet. */
+.vk-transcript-note { justify-self: center; margin: 0; padding: calc(var(--vk-u) * 6) 0; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); text-align: center; }
+
 /* Dividers inside the transcript: model switch, compaction, date. */
 .vk-divider {
   display: flex;
@@ -136,6 +139,56 @@
 .vk-divider[data-tone] > span { color: var(--vk-tone); }
 
 .vk-turn { display: grid; gap: calc(var(--vk-u) * 3.5); min-width: 0; animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards; }
+
+/* Context compaction: a divider head like the process head, the summary folding open beneath it. */
+.vk-compaction { display: grid; gap: calc(var(--vk-u) * 1.5); width: 100%; --vk-tone: var(--vk-ink-3); }
+.vk-compaction[data-state="running"] { --vk-tone: var(--vk-ember); }
+.vk-compaction[data-state="failed"] { --vk-tone: var(--vk-bad); }
+.vk-compaction-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); width: 100%; padding: calc(var(--vk-u) * 1.5) 0; border: 0; background: none; color: var(--vk-ink-3); font: inherit; font-size: var(--vk-fs-sm); font-weight: 600; cursor: pointer; }
+.vk-compaction-head::before,
+.vk-compaction-head::after { content: ""; flex: 1 1 auto; min-width: calc(var(--vk-u) * 4.5); height: 1px; background: var(--vk-line); }
+.vk-compaction-head:hover,
+.vk-compaction-head:focus-visible { color: var(--vk-ink); }
+.vk-compaction-head > svg { flex: none; width: 0.9rem; height: 0.9rem; color: var(--vk-tone); }
+.vk-compaction-head > span { min-width: 0; max-width: min(100%, 32rem); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-compaction-chev { opacity: 0; transition: opacity var(--vk-t-fast), transform var(--vk-t-fast); }
+.vk-compaction-head:hover .vk-compaction-chev,
+.vk-compaction-head:focus-visible .vk-compaction-chev,
+.vk-compaction[data-open] .vk-compaction-chev { opacity: 1; }
+.vk-compaction[data-open] .vk-compaction-chev { transform: rotate(90deg); }
+.vk-compaction-body { display: grid; gap: calc(var(--vk-u) * 2); padding: 0 calc(var(--vk-u) * 4.5) calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line); color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+
+/* Turn foot: the usage chip and, when the turn changed files, a chip that opens the file list below both. */
+.vk-turn-foot { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
+.vk-turn-stat { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.75); max-width: 100%; min-height: calc(var(--vk-u) * 6.5); padding: 0 calc(var(--vk-u) * 2.25); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); color: var(--vk-ink-2); font: inherit; font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; line-height: 1.2; --vk-tone: var(--vk-ink-3); }
+.vk-turn-stat > svg { flex: none; color: var(--vk-tone); }
+.vk-turn-stat > strong { min-width: 0; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.vk-turn-stat:focus-visible { outline-offset: 1px; }
+.vk-turn-stat[data-state="failed"] { --vk-tone: var(--vk-bad); border-color: color-mix(in srgb, var(--vk-bad) 45%, var(--vk-line)); color: var(--vk-bad); }
+.vk-turn-stat[data-state="stopped"] { --vk-tone: var(--vk-warn); color: var(--vk-ink-3); }
+.vk-turn-stat[data-subagent] { --vk-tone: var(--vk-ember); border-color: color-mix(in srgb, var(--vk-ember) 30%, var(--vk-line)); background: color-mix(in srgb, var(--vk-ember) 6%, var(--vk-sunken)); }
+button.vk-turn-stat { cursor: pointer; }
+button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-turn-stat > .vk-add,
+.vk-turn-stat > .vk-del { font-family: var(--vk-font-mono); }
+.vk-turn-stat-chev { transition: transform var(--vk-t-fast); }
+.vk-turn-stat[aria-expanded="true"] > .vk-turn-stat-chev { transform: rotate(90deg); }
+.vk-turn-files { flex: 0 0 100%; max-width: 35rem; overflow: hidden; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); font-size: var(--vk-fs-sm); animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards; }
+.vk-turn-files-head { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); min-height: calc(var(--vk-u) * 8); padding: 0 calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 2.5); border-bottom: var(--vk-bw) solid var(--vk-line-soft); color: var(--vk-ink-3); font-family: var(--vk-label-font); font-size: var(--vk-fs-xs); font-weight: 600; letter-spacing: var(--vk-label-track); text-transform: var(--vk-label-case); }
+.vk-turn-files-head > .vk-btn { font-family: inherit; letter-spacing: 0; text-transform: none; }
+.vk-turn-files-list { margin: 0; padding: calc(var(--vk-u) * 1) 0; list-style: none; }
+.vk-turn-files-list > li { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; padding: calc(var(--vk-u) * 0.75) calc(var(--vk-u) * 2.5); }
+.vk-turn-files-list > li:hover { background: var(--vk-hover); }
+.vk-turn-files-list > li > :is(svg, .vk-file-glyph, .vk-add, .vk-del) { flex: none; }
+.vk-turn-files-list > li > :is(.vk-add, .vk-del) { font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+.vk-turn-file-path { flex: 1 1 auto; min-width: 0; overflow: hidden; font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-turn-file-path > span { color: var(--vk-ink-3); }
+.vk-turn-file-status { flex: none; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-turn-file-status[data-status="added"] { color: var(--vk-diff-add-ink); }
+.vk-turn-file-status[data-status="deleted"] { color: var(--vk-diff-del-ink); }
+.vk-turn-files-more { display: block; width: 100%; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5); border: 0; border-top: var(--vk-bw) solid var(--vk-line-soft); background: none; color: var(--vk-ink-3); font: inherit; font-size: var(--vk-fs-xs); text-align: left; cursor: pointer; }
+.vk-turn-files-more:hover,
+.vk-turn-files-more:focus-visible { background: var(--vk-hover); color: var(--vk-ink); }
 
 /* ---------- User prompt ---------- */
 .vk-prompt {

@@ -158,16 +158,6 @@
 
 }
 
-.message-card span {
-  display: inline-block;
-  margin-bottom: 8px;
-  color: var(--accent);
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.message-card p,
 .tool-card p {
   margin: 0;
   color: var(--foreground);
@@ -175,9 +165,4 @@
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-
-.message-card.user {
-  border-color: var(--primary);
-}
-
 

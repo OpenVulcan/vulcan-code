@@ -49,6 +49,8 @@ import type {
   ConversationSummary,
 } from "@/types";
 import { useI18n } from "@/i18n";
+import { Alert, AlertDescription } from "@/ui-kit/primitives/alert";
+import { Button } from "@/ui-kit/primitives/button";
 import { ConversationTextContextMenu } from "@/components/conversation/conversation-text-context-menu";
 import { isElectronRuntime } from "@/host-shell";
 import { ConversationTurnSeatList } from "@/components/conversation/conversation-turn-seat";
@@ -610,27 +612,29 @@ export function ConversationWorkspace(props: {
           <div className="vk-transcript-inner">
             <div className="vk-timeline" ref={timelineRef}>
               {props.error ? (
-                <article className="message-card system error-message">
-                  <span>system</span>
-                  <p>{t("conversation.bodyLoadFailed").replace("{error}", props.error)}</p>
-                </article>
+                <Alert variant="destructive">
+                  <AlertDescription>{t("conversation.bodyLoadFailed").replace("{error}", props.error)}</AlertDescription>
+                </Alert>
               ) : null}
               {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
-                <article className="message-card system">
-                  <span>system</span>
-                  <p>{props.conversation ? t("conversation.emptyLoaded") : t("conversation.emptyWaiting")}</p>
-                </article>
+                <p className="vk-transcript-note" role="status">
+                  {props.conversation ? t("conversation.emptyLoaded") : t("conversation.emptyWaiting")}
+                </p>
               ) : null}
               {props.hasMoreHistory ? (
-                <div className="conversation-history-load-row">
-                  <button
-                    className="conversation-history-load-button"
-                    disabled={props.historyLoading}
-                    onClick={handleLoadMoreHistory}
-                    type="button"
-                  >
-                    {props.historyLoading ? t("conversation.history.loading") : t("conversation.history.loadMore")}
-                  </button>
+                <div className="vk-history">
+                  <div className="vk-history-line">
+                    <Button
+                      data-history-load=""
+                      disabled={props.historyLoading}
+                      onClick={handleLoadMoreHistory}
+                      size="sm"
+                      type="button"
+                      variant="ghost"
+                    >
+                      {props.historyLoading ? t("conversation.history.loading") : t("conversation.history.loadMore")}
+                    </Button>
+                  </div>
                 </div>
               ) : null}
               <ConversationTurnSeatList

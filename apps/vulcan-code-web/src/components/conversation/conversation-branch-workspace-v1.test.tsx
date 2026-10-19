@@ -316,7 +316,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     // Markup goes through the production transcript grouping and collapsed card component.
     // markup 经过生产转录分组与默认折叠卡组件。
     const markup = renderWorkspace(events);
-    expect(markup.match(/class="context-compaction-block /g)).toHaveLength(1);
+    expect(markup.match(/class="vk-compaction"/g)).toHaveLength(1);
     expect(markup).toContain(status === "completed" ? "上下文已压缩" : "上下文压缩失败");
     expect(markup).not.toContain("压缩摘要正文");
     expect(markup).toContain("压缩之后的正常回答");
@@ -1124,7 +1124,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(markup.match(/class="vk-think-tag" data-compact=""/g)?.length ?? 0, mode).toBe(4);
       expect(markup, mode).toContain("已经完成核对。");
       expect(markup, mode).toContain("rg current-call-chain");
-      expect(markup, mode).toContain("turn-stats-row");
+      expect(markup, mode).toContain("vk-turn-stat");
     }
     expect(JSON.stringify(history)).toBe(original);
   });
@@ -1163,7 +1163,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(markup).toContain("已工作");
     expect(markup).toContain("rg current-call-chain");
     expect(markup).toContain("vk-tool-head");
-    expect(markup).toContain("turn-stats-row");
+    expect(markup).toContain("vk-turn-stat");
     expect(markup).not.toContain(">SYSTEM<");
     expect(markup).toContain('aria-label="分叉会话"');
     expect(markup).toContain('aria-label="复制最终输出原文"');

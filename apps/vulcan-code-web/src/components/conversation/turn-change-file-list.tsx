@@ -1,10 +1,10 @@
 import * as React from "react";
 import { GitCompareArrows } from "lucide-react";
+import { Button } from "@/ui-kit/primitives/button";
 
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import type { TurnChangeSummaryFileV1, TurnChangeSummaryV1 } from "@/diff/turn-change-summary-v1";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
-import "./turn-change-file-list.css";
 
 // TURN_CHANGE_INITIAL_FILES is how many files show before the list is expanded further.
 // TURN_CHANGE_INITIAL_FILES 是列表进一步展开前显示的文件数量。
@@ -37,28 +37,28 @@ export function TurnChangeFileList(props: {
   const files = showAll ? props.summary.files : props.summary.files.slice(0, TURN_CHANGE_INITIAL_FILES);
   const hiddenCount = props.summary.files.length - TURN_CHANGE_INITIAL_FILES;
   return (
-    <section className="turn-change-files" aria-label={t("conversation.turnChanges.title")}>
-      <header className="turn-change-files-header">
+    <section className="vk-turn-files" aria-label={t("conversation.turnChanges.title")}>
+      <header className="vk-turn-files-head">
         <span>{t("conversation.turnChanges.title")}</span>
         {props.onOpenInGit ? (
-          <button className="turn-change-files-action" onClick={props.onOpenInGit} type="button">
-            <GitCompareArrows aria-hidden="true" size={13} />
+          <Button data-turn-open-review="" onClick={props.onOpenInGit} size="xs" type="button" variant="ghost">
+            <GitCompareArrows aria-hidden="true" />
             {t("conversation.turnChanges.openInGit")}
-          </button>
+          </Button>
         ) : null}
       </header>
-      <ul>
+      <ul className="vk-turn-files-list">
         {files.map((file) => {
           const separator = file.path.lastIndexOf("/");
           const statusKey = STATUS_LABEL_KEYS[file.status];
           return (
             <li key={file.path} title={file.renamedFrom ? `${file.renamedFrom} → ${file.path}` : file.path}>
               <FileTypeIcon icon={resolveFileTypeIcon(file.path)} />
-              <span className="turn-change-file-path">
-                {separator >= 0 ? <span className="turn-change-file-dir">{file.path.slice(0, separator + 1)}</span> : null}
+              <span className="vk-turn-file-path">
+                {separator >= 0 ? <span>{file.path.slice(0, separator + 1)}</span> : null}
                 {file.path.slice(separator + 1)}
               </span>
-              {statusKey ? <span className={`turn-change-file-status ${file.status}`}>{t(statusKey)}</span> : null}
+              {statusKey ? <span className="vk-turn-file-status" data-status={file.status}>{t(statusKey)}</span> : null}
               <span className="vk-add">+{file.additions.toLocaleString(locale)}</span>
               <span className="vk-del">-{file.deletions.toLocaleString(locale)}</span>
             </li>
@@ -66,7 +66,7 @@ export function TurnChangeFileList(props: {
         })}
       </ul>
       {hiddenCount > 0 ? (
-        <button className="turn-change-files-more" onClick={() => setShowAll((current) => !current)} type="button">
+        <button className="vk-turn-files-more" onClick={() => setShowAll((current) => !current)} type="button">
           {showAll
             ? t("conversation.turnChanges.showLess")
             : formatMessage(t("conversation.turnChanges.showMore"), { count: String(hiddenCount) })}

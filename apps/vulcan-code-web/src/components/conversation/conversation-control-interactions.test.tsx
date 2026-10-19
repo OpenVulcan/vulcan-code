@@ -138,7 +138,7 @@ describe("conversation control rejection paths", () => {
     </ConversationLiveStreamProvider></TooltipProvider>);
     // loadButton is the real history control, which remains usable after a rejection.
     // loadButton 是真实历史控件，在拒绝后仍可使用。
-    const loadButton = container.querySelector<HTMLButtonElement>(".conversation-history-load-button")!;
+    const loadButton = container.querySelector<HTMLButtonElement>("[data-history-load]")!;
     await act(async () => loadButton.click());
     expect(toast.error).toHaveBeenCalledWith("操作失败", { description: "history unavailable" });
     expect(loadButton.disabled).toBe(false);
