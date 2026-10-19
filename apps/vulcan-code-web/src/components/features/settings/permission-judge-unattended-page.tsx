@@ -1,11 +1,11 @@
 import * as React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { PageEmptyState, PageHint, PageNotice, PageRow, PageSection } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/ui-kit/primitives/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Switch } from "@/ui-kit/primitives/switch";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { useI18n } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import {

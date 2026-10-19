@@ -1,10 +1,10 @@
 // Model extension, native semantic and generic Markdown tool cards.
 // 模型扩展、原生语义与通用 Markdown 工具卡。
 import * as React from "react";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { Braces, ChevronDown, ChevronRight, Code2, Hammer, ListChecks, Target } from "lucide-react";
 import type { ConversationDetailRef } from "@/components/conversation/conversation-detail";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";

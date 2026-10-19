@@ -6,9 +6,9 @@ import {
   type ProviderToolCapabilityGroupId,
 } from "@/components/shared/provider-tool-capability-groups";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
-import { Button } from "@/components/ui/button";
-import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/ui-kit/primitives/sheet";
 import { useI18n } from "@/i18n";
 import { isModelExtensionCapability } from "@/lib/provider-tool-capabilities";
 import { cn } from "@/lib/utils";

@@ -3,7 +3,7 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import { cn } from "@/lib/utils";
 
 // ConversationContinueControlProps defines the complete presentation contract for one problem-turn recovery entry.

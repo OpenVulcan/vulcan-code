@@ -18,7 +18,7 @@ vi.mock("@/state/conversation-event-window-react", () => ({
   useSelectedConversationEventWindowSelector: (selector: (snapshot: { owner: null }) => unknown) => selector({ owner: null }),
 }));
 vi.mock("@/service/workbench-snapshot-service", () => ({ loadWorkspaceGitCatalog: vi.fn() }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 // The transport-free parser uses the same production parsing function without requiring a browser Worker.
 // 无传输解析器使用同一生产解析函数，不依赖浏览器 Worker。
 vi.mock("@/diff/diff-parse-worker-client", async () => {

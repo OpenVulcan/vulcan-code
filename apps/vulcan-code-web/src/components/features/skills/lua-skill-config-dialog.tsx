@@ -1,13 +1,13 @@
 import * as React from "react";
 import { PageEmptyState } from "@/components/page";
 import { RefreshCw, Settings2, Trash2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Button, IconButton } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { Switch } from "@/ui-kit/primitives/switch";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +15,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import { useI18n } from "@/i18n";
 import type {
   LuaSkillConfigDescriptor,

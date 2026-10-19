@@ -1,5 +1,5 @@
-import { Button } from "@/components/ui/button"
-import { DisclosureSection } from "@/components/ui/disclosure"
+import { Button } from "@/ui-kit/primitives/button"
+import { DisclosureSection } from "@/ui-kit/primitives/disclosure"
 import { createMcpDraft, validateMcpDraft } from "./mcp-form-model"
 import { McpStringRows, McpKeyValueRows } from "./mcp-form-fields"
 import * as React from "react"
@@ -11,10 +11,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
+} from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
 import type { McpServerSummary } from "@/types"
 import { useI18n } from "@/i18n"
 

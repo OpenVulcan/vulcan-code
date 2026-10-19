@@ -8,19 +8,19 @@ import { agentSkillsCatalogSummary, type AgentSkillActionProps } from "@/compone
 import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "@/components/features/agent-skills/agent-skill-management-dialogs"
 import { hasLinkedGitHubSourceOrigin, SourceOriginLink } from "@/components/features/source-origin-link"
 import { PageEmptyState } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
-import { Button, IconButton } from "@/components/ui/button"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
-import { FilterChip, FilterChipGroup } from "@/components/ui/choice-controls"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button, IconButton } from "@/ui-kit/primitives/button"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog"
+import { FilterChip, FilterChipGroup } from "@/ui-kit/primitives/choice-controls"
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
+} from "@/ui-kit/primitives/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type {
   AgentSkillCategorySummary,

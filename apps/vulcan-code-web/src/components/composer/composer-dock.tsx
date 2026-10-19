@@ -17,12 +17,12 @@ import type {
   ComposerTraceCallback,
 } from "@/components/composer/composer-control-types";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {

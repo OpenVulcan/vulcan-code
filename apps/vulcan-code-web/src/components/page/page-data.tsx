@@ -1,8 +1,8 @@
 import * as React from "react"
 import { Activity, Bot, Calendar, CheckCircle2, Clock3, Database, MessageSquareText, Network, User } from "lucide-react"
 
-import { InlineDisclosure } from "@/components/ui/disclosure"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/ui-kit/primitives/table"
 import { cn } from "@/lib/utils"
 
 // PageFact is one labelled value of a facts list.

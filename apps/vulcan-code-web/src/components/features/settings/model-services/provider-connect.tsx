@@ -3,7 +3,7 @@ import { CheckCircle2, CircleAlert, CircleDashed, ExternalLink, LoaderCircle, X 
 
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context"
 import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui-kit/primitives/button"
 import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
 import { queryPublicAiConnectionUsage, syncPublicAiConnection } from "@/service/settings-actions-service"

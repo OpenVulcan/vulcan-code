@@ -1,10 +1,10 @@
 import * as React from "react";
-import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { ArrowUp, Check, ChevronRight, FileArchive, Folder, FolderOpen, HardDrive, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { Input } from "@/ui-kit/primitives/input";
+import { Spinner } from "@/ui-kit/primitives/spinner";
 import { useI18n } from "@/i18n";
 import { browseKnowledgePackages } from "@/service/knowledge-base-service";
 import type { KnowledgePackageFileListing, KnowledgePackageInspection } from "@/types/knowledge-base";

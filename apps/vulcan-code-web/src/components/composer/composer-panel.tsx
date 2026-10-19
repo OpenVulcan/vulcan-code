@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   enqueueComposerPersistence,
   flushLatestComposerPersistence,
@@ -23,8 +23,8 @@ import type { ConversationSessionReviewSummary } from "@/components/conversation
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { ComposerTextContextMenu } from "@/components/composer/composer-text-context-menu";
-import { Textarea } from "@/components/ui/textarea";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Textarea } from "@/ui-kit/primitives/textarea";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { useI18n } from "@/i18n";
 import { isElectronRuntime } from "@/host-shell";
 import { cn } from "@/lib/utils";

@@ -1,5 +1,5 @@
 import React from "react";
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@/ui-kit/primitives/switch";
 import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import { readConversationLinkPreference, saveConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import { useI18n } from "@/i18n";

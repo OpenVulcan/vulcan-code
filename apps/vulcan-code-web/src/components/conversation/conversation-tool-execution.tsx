@@ -13,7 +13,7 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import { useConversationToolRequestProgress } from "@/state/conversation-live-stream-context";
 import {
   mergeGeneratedMediaAttachments,

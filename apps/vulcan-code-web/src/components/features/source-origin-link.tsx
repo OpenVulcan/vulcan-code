@@ -1,6 +1,6 @@
 import * as React from "react"
 import { Bot, ExternalLink, Github } from "lucide-react"
-import { toast } from "sonner"
+import { toast } from "@/ui-kit/primitives/toast"
 
 import { openExternalUrl } from "@/service/project-actions-service"
 import { useI18n } from "@/i18n"

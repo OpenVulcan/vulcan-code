@@ -5,7 +5,7 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 
 /** Presentation contract shared by session and backend model-extension selectors.
  * 会话与后端模型扩展选择器共享的展示契约。 */

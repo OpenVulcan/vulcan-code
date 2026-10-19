@@ -34,7 +34,7 @@ import { useI18n, type Translate } from "@/i18n";
 import { selectConversationSessionTodolistV1 } from "@/service/conversation-session-tools-v1";
 import { projectForConversation } from "@/state/workbench-selectors";
 import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import { useChatAreaPlanActions } from "@/components/conversation/chat-area/plan-actions";
 import {

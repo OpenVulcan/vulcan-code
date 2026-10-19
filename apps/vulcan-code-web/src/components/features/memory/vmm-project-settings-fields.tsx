@@ -1,13 +1,13 @@
 import { useId } from "react"
 
-import { Field, FieldLabel } from "@/components/ui/field"
+import { Field, FieldLabel } from "@/ui-kit/primitives/field"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
+} from "@/ui-kit/primitives/select"
 import type { TranslationKey } from "@/i18n"
 
 // VmmSelectOption is one stable value and user-facing label.

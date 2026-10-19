@@ -8,7 +8,7 @@ import type {
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar-types";

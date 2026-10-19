@@ -9,9 +9,9 @@ import { WorkspaceContextPanel, type WorkspaceContextPanelProps } from "./worksp
 import { WorkspaceResizableBody } from "./workspace-resizable-body";
 import { WorkspaceFilesPanelHost } from "./workspace-files-panel-host";
 import { DEFAULT_WORKSPACE_FILE_FILTERS } from "@/service/workbench-snapshot-service";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { ConversationSessionTodolistPanel } from "@/components/conversation/session-todolist-panel";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 
 // Replace transcript IO and unrelated descendants, preserving the actual workspace controls and Radix dialogs.
 // 替换转录输入输出及无关后代，保留真实工作区控件和 Radix 弹窗。
@@ -21,7 +21,7 @@ vi.mock("@/state/conversation-session-event-window-owner-v1", () => ({ useConver
 vi.mock("@/components/conversation/chat-area/conversation-scroll-controller", () => ({ useConversationScrollController: () => ({ scheduleStoredRestore: () => undefined }) }));
 vi.mock("@/components/ui/sidebar", () => ({ SidebarTrigger: () => null }));
 vi.mock("@/components/plugins/dynamic-plugin-mount-panel", () => ({ DynamicPluginMountPanel: () => null }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
 // host/root own isolated DOM and never open native windows or execute service mutations.
 // host/root 持有隔离文档，不打开原生窗口或执行服务写入。
@@ -150,7 +150,7 @@ it.each(["stop", "close"] as const)("retains %s failure, prevents duplicate requ
   await render(<WorkspaceContextPanel {...props} />);
   const buttons = host.querySelectorAll<HTMLButtonElement>(".workspace-subagent-footer button");
   await act(async () => buttons[kind === "stop" ? 0 : 1].click());
-  const confirm = document.querySelector<HTMLButtonElement>('[role="dialog"] button[data-variant="destructive"]')!;
+  const confirm = document.querySelector<HTMLButtonElement>('[role="dialog"] button[data-variant="danger"]')!;
   expect(confirm).not.toBeNull();
   await act(async () => { confirm.click(); confirm.click(); });
   expect(action).toHaveBeenCalledExactlyOnceWith("parent", "task-a");

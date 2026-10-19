@@ -1,7 +1,7 @@
 import React from "react";
 import { Bot, Lock, LockOpen } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import { toast } from "@/ui-kit/primitives/toast";
+import { Button } from "@/ui-kit/primitives/button";
 import { useI18n } from "@/i18n";
 import { dedicatedMemoryLocked, type DedicatedMemorySelection } from "@/service/dedicated-memory";
 import { setDedicatedMemoryLock } from "@/service/dedicated-session-service";

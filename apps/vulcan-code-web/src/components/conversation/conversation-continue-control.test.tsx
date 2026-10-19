@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { ConversationContinueControl } from "./conversation-continue-control";
 
 // renderContinueControl renders one problem-turn recovery control with the shared Tooltip context.

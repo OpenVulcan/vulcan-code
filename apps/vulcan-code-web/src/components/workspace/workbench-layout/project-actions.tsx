@@ -66,7 +66,7 @@ import {
 import { saveVmmMemoryConfig } from "@/service/memory-actions-service";
 import { applyPreviewProjectIcon } from "@/state/workbench-preview-actions";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 
 // WorkbenchProjectActionSnapshotSource separates backend snapshots from local optimistic previews.
 // WorkbenchProjectActionSnapshotSource 区分后端快照与本地乐观预览。

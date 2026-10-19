@@ -1,9 +1,9 @@
 import * as React from "react";
 import { Coins, HardDrive } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Combobox } from "@/components/ui/combobox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { Combobox } from "@/ui-kit/primitives/combobox";
 import { useI18n } from "@/i18n";
 import { loadPublicAiSettings } from "@/service/settings-actions-service";
 import type { KnowledgeIndexMode, KnowledgeLibraryCreateRequest, KnowledgeLibrarySummary } from "@/types/knowledge-base";

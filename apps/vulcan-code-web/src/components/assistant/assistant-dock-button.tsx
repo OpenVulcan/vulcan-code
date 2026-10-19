@@ -1,7 +1,7 @@
 import React from "react";
 import { Bot, Check } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { Button } from "@/ui-kit/primitives/button";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { useAssistantDock } from "./assistant-dock-context";

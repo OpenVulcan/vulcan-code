@@ -10,7 +10,7 @@ vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 // toastInfo records barrier notices without mounting the global toaster.
 // toastInfo 记录屏障提示，不挂载全局通知组件。
 const toastInfo = vi.hoisted(() => vi.fn());
-vi.mock("sonner", () => ({ toast: { info: toastInfo } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { info: toastInfo } }));
 
 // host and root isolate one gate; send records the exact submissions it allows.
 // host 与 root 隔离单个闸门；send 记录其允许的精确提交。

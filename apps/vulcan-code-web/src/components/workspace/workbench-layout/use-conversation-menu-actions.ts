@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar";
 import { formatWorkbenchTranslation } from "@/components/workspace/workbench-layout/types";

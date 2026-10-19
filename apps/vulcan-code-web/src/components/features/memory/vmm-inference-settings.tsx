@@ -15,19 +15,19 @@ import {
 
 import { formatSkillText } from "@/components/features/featureText"
 import { PublicAiInternalOverridesDialog } from "@/components/features/settings/public-ai-internal-overrides-dialog"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Button } from "@/ui-kit/primitives/button"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
+} from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { ScrollArea } from "@/ui-kit/primitives/scroll-area"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip"
+} from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
 import { formatDurationSeconds } from "@/lib/usage-format"
 import { cn } from "@/lib/utils"

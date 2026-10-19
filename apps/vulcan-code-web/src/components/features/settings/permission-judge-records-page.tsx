@@ -1,17 +1,17 @@
 import * as React from "react";
 import { CircleSlash, Download, ShieldAlert, ShieldCheck, ShieldX, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { HIGH_RISK_KEYS } from "@/components/ask/tool-approval-bar";
 import { PageDetails, PageEmptyState, PageHint, PageItem, PageNotice, PageRow, PageSection, type PageFact } from "@/components/page";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { FilterChip, FilterChipGroup } from "@/components/ui/choice-controls";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+} from "@/ui-kit/primitives/alert-dialog";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { FilterChip, FilterChipGroup } from "@/ui-kit/primitives/choice-controls";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import { label } from "@/components/features/settings/permission-judge-labels";

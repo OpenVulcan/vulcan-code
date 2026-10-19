@@ -17,7 +17,7 @@ import {
   type ProviderModelModality,
 } from "@/components/features/settings/provider-model-modalities"
 import { modelBuiltinCapabilities } from "@/components/shared/model-builtin-capabilities"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
 import type { PublicAiModel, PublicAiProviderToolCapabilityKind } from "@/types"
 

@@ -1,7 +1,7 @@
 import * as React from "react"
 import { AudioLines, Image as ImageIcon, Search, Video } from "lucide-react"
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n, type TranslationKey } from "@/i18n"
 import { cn } from "@/lib/utils"
 import type { PublicAiNativeToolKind, PublicAiResourceKind } from "@/types"

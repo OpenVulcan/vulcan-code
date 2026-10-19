@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import type { ToolPresentation } from "@/components/conversation/conversation-tool-presentations";
 import { useI18n } from "@/i18n";
 import { ToolResultEventContext, type ToolRequestCardProgress, type ToolDetailLoader } from "./tool-presentations/tool-card-common";

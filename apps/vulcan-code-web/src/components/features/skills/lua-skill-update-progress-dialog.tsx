@@ -1,8 +1,8 @@
 import { CheckCircle2, CircleAlert, LoaderCircle } from "lucide-react";
 import { PageDetails } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Progress } from "@/components/ui/progress";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { Progress } from "@/ui-kit/primitives/progress";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { LuaSkillsOperationProgressSummary } from "@/types";
 import { formatBytes } from "@/lib/display-format";

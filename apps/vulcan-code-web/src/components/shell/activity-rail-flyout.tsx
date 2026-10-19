@@ -18,9 +18,9 @@ export type ActivityRailFlyoutAction = {
 // FLYOUT_CLOSE_DELAY_MS 让指针从触发器跨越间隙时浮层保持打开。
 const FLYOUT_CLOSE_DELAY_MS = 140;
 
-// FLYOUT_OVERLAY_SELECTOR matches menus, popovers and dialogs portaled out of the flyout content.
-// FLYOUT_OVERLAY_SELECTOR 匹配从浮层内容中传送出去的菜单、弹出层与对话框。
-const FLYOUT_OVERLAY_SELECTOR = "[data-radix-popper-content-wrapper], [role='dialog'], [role='alertdialog']";
+// FLYOUT_OVERLAY_SELECTOR matches the layer hosts of menus, popovers and dialogs portaled out of the flyout content.
+// FLYOUT_OVERLAY_SELECTOR 匹配从浮层内容中传送出去的菜单、弹出层与对话框的层宿主。
+const FLYOUT_OVERLAY_SELECTOR = "[data-vk-portal]";
 
 // hasOpenOverlayTrigger reports whether a menu or popover opened from inside the flyout is still open.
 // hasOpenOverlayTrigger 判断从浮层内部打开的菜单或弹出层是否仍处于打开状态。

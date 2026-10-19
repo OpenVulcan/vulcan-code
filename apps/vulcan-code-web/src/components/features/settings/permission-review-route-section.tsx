@@ -1,10 +1,10 @@
 import * as React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { PageNotice, PageRow, PageSection } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Combobox } from "@/components/ui/combobox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { Combobox } from "@/ui-kit/primitives/combobox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { inferenceRouteKey, inferenceRoutePickerOptions } from "@/components/features/inference-route-picker";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";

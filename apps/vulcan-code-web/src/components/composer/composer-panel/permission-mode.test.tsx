@@ -2,14 +2,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { PermissionMode } from "@/service/permission-mode";
 import { setSessionPermissionMode, setSessionUnattended, type SessionPermissionModeUpdateResponse } from "@/service/permission-mode-service";
 import { useComposerSessionSettings } from "./use-composer-answer-mode";
 import type { PermissionModeOwner } from "./use-composer-permission-mode";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
 vi.mock("@/service/permission-mode-service", () => ({ setSessionPermissionMode: vi.fn(), setSessionUnattended: vi.fn() }));
 
 // root/host isolate actual hook lifetimes; only RPC and text catalogs are synthetic.

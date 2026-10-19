@@ -2,14 +2,14 @@ import * as React from "react";
 import { Check, ChevronDown, Cpu } from "lucide-react";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
 import { ModelBuiltinCapabilityIcons } from "@/components/shared/model-builtin-capabilities";
-import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Button } from "@/ui-kit/primitives/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
+import { Command, CommandInput, CommandItem, CommandList } from "@/ui-kit/primitives/command";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {

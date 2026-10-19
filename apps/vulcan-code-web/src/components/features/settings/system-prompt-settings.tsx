@@ -1,10 +1,10 @@
 import * as React from "react"
 import { LoaderCircle } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Textarea } from "@/components/ui/textarea"
+import { Button } from "@/ui-kit/primitives/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import { formatMessage, useI18n } from "@/i18n"
 import {
   loadSystemPromptSettings,

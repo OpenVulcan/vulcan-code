@@ -85,10 +85,8 @@
   }
 }
 
-/* Custom Radix and terminal rails follow the same transparent-track contract. */
-/* Radix 和终端自绘轨道遵循同一透明背景约定。 */
-[data-slot="scroll-area-scrollbar"],
-[data-radix-scroll-area-corner],
+/* Terminal rails keep a transparent track. */
+/* 终端自绘轨道保持透明背景。 */
 .xterm .xterm-scrollable-element > .scrollbar {
   background: transparent;
   box-shadow: none;

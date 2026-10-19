@@ -1,14 +1,14 @@
 import * as React from "react";
 import { Activity, ArrowLeft, Cog, MessageSquare, RefreshCw } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { InlineDisclosure } from "@/components/ui/disclosure";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
 import type { PluginDiagnosticsSelection, PluginOperationPhase, PluginResourceDiagnostic, PluginResourceKind } from "@/types/plugin-resource-diagnostics";
 import { readPluginResourceDiagnostics, type PluginDiagnosticsObservation } from "@/service/plugin-resource-diagnostics-service";
 import { PageEmptyState, PageFacts, PageHint, PageItem, PageItemList, PageNotice, PageToolbar } from "@/components/page";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { TechnicalDetails } from "./plugin-maintenance-section";
 
 // PluginResourceDiagnosticsProps binds read-only selection to the existing workspace conversation action.

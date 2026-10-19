@@ -1,11 +1,11 @@
 import React from "react";
 import { Check, RefreshCw, Route, Search } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { toast } from "@/ui-kit/primitives/toast";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
+import { Input } from "@/ui-kit/primitives/input";
+import { ScrollArea } from "@/ui-kit/primitives/scroll-area";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary } from "@/types";

@@ -1,13 +1,13 @@
 import React from "react";
 import "@/styles/knowledge.css";
 import { BookMarked, LoaderCircle } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { useI18n } from "@/i18n";
 import { formatKnowledgeIndexStatus } from "@/lib/knowledge-index-status";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
+import { Switch } from "@/ui-kit/primitives/switch";
 import {
   listKnowledgeLibraries,
   listProjectKnowledgeBindings,

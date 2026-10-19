@@ -11,15 +11,15 @@ import {
 import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { PageEmptyState } from "@/components/page"
 import { credentialUsageIsNonPlanAccount, useCredentialUsageOverview } from "@/components/public-ai/credential-usage-overview"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui-kit/primitives/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Switch } from "@/components/ui/switch"
+} from "@/ui-kit/primitives/dropdown-menu"
+import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n } from "@/i18n"
 import {
   queryPublicAiConnectionUsage,

@@ -1,8 +1,8 @@
 import React from "react";
 import { Brain, RefreshCw, Sparkles } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/ui-kit/primitives/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
 import { reasoningLevelLabel } from "@/components/composer/model-reasoning-picker-control";
 import { formatMessage, pickBilingualText, useI18n } from "@/i18n";

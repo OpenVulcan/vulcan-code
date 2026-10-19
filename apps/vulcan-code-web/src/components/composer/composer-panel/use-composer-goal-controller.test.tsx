@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useComposerGoalController, type ComposerGoalController, type UseComposerGoalControllerOptions } from "./use-composer-goal-controller";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn() } }));
 
 // controller exposes the real mounted hook while all persistence callbacks remain synthetic.
 // controller 暴露实际挂载的钩子，所有持久化回调保持合成实现。

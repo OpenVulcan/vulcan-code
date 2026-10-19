@@ -1,8 +1,8 @@
 import React from "react";
 import { SessionLifetimeUsagePanel } from "@/components/conversation/session-lifetime-usage";
-import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { InlineStreamPlaceholder, StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
+import { InlineStreamPlaceholder, StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   AlertTriangle,
   LoaderCircle,
@@ -18,11 +18,11 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-} from "@/components/ui/select";
+} from "@/ui-kit/primitives/select";
 import {
   SegmentedControl,
   SegmentedControlItem,
-} from "@/components/ui/choice-controls";
+} from "@/ui-kit/primitives/choice-controls";
 import {
   Dialog,
   DialogContent,
@@ -31,13 +31,13 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+} from "@/ui-kit/primitives/tooltip";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
 import { groupProviderToolCapabilities } from "@/components/shared/provider-tool-capability-groups";
 import { PageTabs } from "@/components/workspace/workspace-directory-layout";
 import {

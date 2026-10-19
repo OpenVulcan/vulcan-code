@@ -1,10 +1,10 @@
 import React from "react";
 import { LoaderCircle, ShieldCheck } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { toast } from "@/ui-kit/primitives/toast";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { ConversationSummary, WorkbenchSnapshot } from "@/types";
 import {

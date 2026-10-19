@@ -1,8 +1,8 @@
 import React from "react";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { AskQuestionDialog } from "@/components/ask/ask-question-dialog";
-import { Button } from "@/components/ui/button";
-import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -10,7 +10,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import type { ProjectFolderPickerDialogProps } from "@/components/project/folder-picker-dialog";
 import {
   ArchiveProjectDialog,

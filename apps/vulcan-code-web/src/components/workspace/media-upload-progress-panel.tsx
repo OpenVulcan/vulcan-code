@@ -1,7 +1,7 @@
 import React from "react";
 import type { MediaUploadProgressChangedDelta } from "@/types";
 import { useI18n } from "@/i18n";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 
 // MediaUploadProgressPanel renders one pre-dispatch or post-dispatch media transfer lifecycle.
 // MediaUploadProgressPanel 渲染一条分派前或分派后的媒体传输生命周期。

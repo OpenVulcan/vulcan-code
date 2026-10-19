@@ -2,7 +2,7 @@ import * as React from "react";
 import { FileText, LogIn, LogOut } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui-kit/primitives/tabs";
 import { MarkdownMessage } from "./conversation-markdown";
 import { v1ModelResult } from "./tool-presentations/v1-tool-domain-presentation";
 import { ConversationModelParameters } from "./conversation-model-parameters";

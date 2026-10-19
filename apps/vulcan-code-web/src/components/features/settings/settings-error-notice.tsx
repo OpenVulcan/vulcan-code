@@ -1,8 +1,8 @@
 import * as React from "react"
 import { CircleAlert, Copy } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
-import { InlineDisclosure } from "@/components/ui/disclosure"
+import { Button } from "@/ui-kit/primitives/button"
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
 import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
 import "@/styles/settings-error-notice.css"

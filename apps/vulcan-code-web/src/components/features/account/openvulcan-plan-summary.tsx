@@ -1,6 +1,6 @@
 import * as React from "react";
 import { LoaderCircle, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import { PageEmptyState } from "@/components/page";

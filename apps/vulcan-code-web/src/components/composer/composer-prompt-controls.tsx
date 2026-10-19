@@ -21,12 +21,12 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import { cn } from "@/lib/utils";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { ComposerSlashCommandSummary, PendingPromptSummary } from "@/types";

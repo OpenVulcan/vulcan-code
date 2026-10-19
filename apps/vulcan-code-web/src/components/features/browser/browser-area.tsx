@@ -1,12 +1,12 @@
 import * as React from "react";
 import { ArrowRight, Download, Hand, Keyboard, MonitorSmartphone, MoreHorizontal, MousePointer2, RefreshCw, Settings2, X } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { CoreBrowserRuntimeControls } from "./core-browser-runtime-controls";
 import { BrowserFrameImage, BrowserFrameRateCounter, createBrowserFrameSource } from "./browser-frame-surface";
 import { maintainCoreBrowserStream } from "@/service/browser-stream-reconnect";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import { formatMessage, useI18n } from "@/i18n";
 import {
   requestCoreBrowser,

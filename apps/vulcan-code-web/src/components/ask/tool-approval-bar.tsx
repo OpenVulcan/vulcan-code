@@ -1,6 +1,6 @@
 import React from "react";
 import { CircleAlert, ShieldAlert } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { PendingApprovalSnapshot, PendingQuestionSnapshot, PermissionModeKey } from "@/types";

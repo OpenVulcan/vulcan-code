@@ -1,12 +1,12 @@
 import * as React from "react"
-import { toast } from "sonner"
+import { toast } from "@/ui-kit/primitives/toast"
 import {
   PackagePlus,
   RefreshCw,
 } from "lucide-react"
 
 import { FeatureContent as FeatureShellContent } from "@/components/features/feature-shell-content"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui-kit/primitives/button"
 import { FeatureSidebar, areaIconMap, pluginDetailMountIcon, primaryFeatureAreas } from "@/components/features/feature-shell-sidebar"
 import { activeAgentsHeaderSummary } from "@/components/features/agents/agent-area-header"
 import type { AgentActionProps } from "@/components/features/agents/agent-area-types"

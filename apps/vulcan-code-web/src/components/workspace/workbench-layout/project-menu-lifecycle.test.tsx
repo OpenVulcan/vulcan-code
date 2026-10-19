@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { I18nProvider } from "@/i18n";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import type { ProjectSummary, WorkbenchSnapshot } from "@/types";
@@ -13,7 +13,7 @@ import { useWorkbenchProjectActions } from "./project-actions";
 const services = vi.hoisted(() => ({ toggle: vi.fn(), open: vi.fn(), read: vi.fn(), reorder: vi.fn(), expand: vi.fn() }));
 vi.mock("@/service/project-actions-service", async (original) => ({ ...await original<object>(), toggleProjectPinned: services.toggle, openProjectDirectory: services.open, reorderProjects: services.reorder, setExpandedTaskProjects: services.expand }));
 vi.mock("@/service/workbench-snapshot-service", async (original) => ({ ...await original<object>(), loadWorkbenchSnapshot: services.read }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 
 // Verify unrelated failures, duplicate toggles and rejected stale reads never restore an old workbench.
 // 验证无关动作失败、重复切换和被拒绝的旧读取都不会恢复旧工作台。

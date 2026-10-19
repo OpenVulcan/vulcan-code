@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MermaidDiagram } from "./conversation-mermaid";
 import { I18nProvider } from "@/i18n";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 
 // renderSvg controls the upstream renderer while retaining the actual component and XML conversion.
 // renderSvg 控制上游渲染器，同时保留真实组件与 XML 转换。

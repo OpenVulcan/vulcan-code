@@ -39,7 +39,7 @@ describe("checkUiArchitecture", () => {
   // Verifies shared Select usage passes the architecture guard.
   // 验证共享 Select 用法可以通过架构守卫。
   it("accepts shared controls", async () => {
-    await withFixture('import { Select } from "@/components/ui/select"\nexport const value = <Select />\n', async (directory) => {
+    await withFixture('import { Select } from "@/ui-kit/primitives/select"\nexport const value = <Select />\n', async (directory) => {
       assert.deepEqual(await checkUiArchitecture(directory), [])
     })
   })

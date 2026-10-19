@@ -1,9 +1,9 @@
 import * as React from "react"
 import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-react"
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { InlineDisclosure } from "@/components/ui/disclosure"
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Alert, AlertDescription, AlertTitle } from "@/ui-kit/primitives/alert"
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty"
 import { cn } from "@/lib/utils"
 
 // PageNoticeTone is the closed semantic tone set shared by host pages and plugin pages.

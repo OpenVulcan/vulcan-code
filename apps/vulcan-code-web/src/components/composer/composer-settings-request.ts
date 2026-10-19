@@ -1,5 +1,5 @@
 import React from "react";
-import { DropdownMenuSub } from "@/components/ui/dropdown-menu";
+import { DropdownMenuSub } from "@/ui-kit/primitives/dropdown-menu";
 
 // ComposerSettingsSection names one conversation-settings submenu a slash command can open.
 // ComposerSettingsSection 命名 slash 指令可打开的一个对话设置子菜单。

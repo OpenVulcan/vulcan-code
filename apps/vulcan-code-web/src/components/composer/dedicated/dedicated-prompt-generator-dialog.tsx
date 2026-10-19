@@ -1,8 +1,8 @@
 import React from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { modelPickerChoicesFromProviders } from "@/components/composer/model-picker-control";
 import { useI18n } from "@/i18n";
 import { draftDedicatedPrompt, subscribeDedicatedPromptDraftProgress } from "@/service/dedicated-session-service";

@@ -1,8 +1,8 @@
 import React from "react";
 import "@/styles/context-injection.css";
 import { Brain, BrainCircuit, Database, Search, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -10,13 +10,13 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import {
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-} from "@/components/ui/tabs";
+} from "@/ui-kit/primitives/tabs";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type {
   ContextInjectionCardSummary,

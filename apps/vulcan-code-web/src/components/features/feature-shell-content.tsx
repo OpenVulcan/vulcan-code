@@ -4,8 +4,8 @@ import type { SkillActionProps, SkillSubAreaId } from "@/components/features/ski
 import type { AgentActionProps } from "@/components/features/agents/agent-area-types";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
-import { Spinner } from "@/components/ui/spinner";
-import { Button } from "@/components/ui/button";
+import { Spinner } from "@/ui-kit/primitives/spinner";
+import { Button } from "@/ui-kit/primitives/button";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { useI18n } from "@/i18n";
 import type {

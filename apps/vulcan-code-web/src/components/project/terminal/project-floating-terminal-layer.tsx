@@ -18,8 +18,8 @@ import {
 } from "lucide-react";
 
 import { TerminalViewport } from "@/components/terminal/terminal-viewport";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { formatBytes } from "@/lib/display-format";
 import { useI18n, type TranslationKey, formatMessage, translateActive } from "@/i18n";
 import { acquireVisibleTerminalDisplayListener } from "@/components/terminal/terminal-display-listener";
@@ -38,8 +38,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+} from "@/ui-kit/primitives/alert-dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import {
   ProjectFloatingLayer,
   type ProjectFloatingLayerControls,

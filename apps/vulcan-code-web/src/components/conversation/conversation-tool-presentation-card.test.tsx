@@ -15,7 +15,7 @@ import type {
   ProviderToolTextPresentation,
   SubagentOrchestrationPresentation,
 } from "@/components/conversation/conversation-tool-presentations";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { I18nProvider } from "@/i18n";
 import { ToolPresentationCard } from "./conversation-tool-presentation-card";
 import { ToolRawInvocationButton } from "./conversation-tool-execution";

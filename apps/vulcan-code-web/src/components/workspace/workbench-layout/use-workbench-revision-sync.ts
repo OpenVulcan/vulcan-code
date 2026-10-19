@@ -1,7 +1,7 @@
 // Service revision gates and the snapshot/delta synchronization that advances them for the workbench layout.
 // 工作台布局的服务版本闸门，以及推进这些闸门的快照/增量同步。
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { ProjectSettingsRevision } from "@/components/project/project-settings-types";
 import {
   isConversationUploadFailure,

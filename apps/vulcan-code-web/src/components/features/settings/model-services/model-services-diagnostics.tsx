@@ -11,8 +11,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Button } from "@/components/ui/button"
+} from "@/ui-kit/primitives/alert-dialog"
+import { Button } from "@/ui-kit/primitives/button"
 import { useI18n } from "@/i18n"
 import { removePublicAiCustomProvider } from "@/service/settings-actions-service"
 import type { PublicAiSettingsSnapshot } from "@/types"

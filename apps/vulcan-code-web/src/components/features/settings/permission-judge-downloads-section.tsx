@@ -1,8 +1,8 @@
 import { Download, PackageCheck } from "lucide-react";
 import { PageItem, PageNotice, PageSection } from "@/components/page";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { Progress } from "@/ui-kit/primitives/progress";
 import { formatMessage, type Translate, type TranslationKey } from "@/i18n";
 import { formatBytes } from "@/lib/display-format";
 import { DEVICE_KEYS, FORMAT_KEYS, label } from "@/components/features/settings/permission-judge-labels";

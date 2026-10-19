@@ -1,7 +1,7 @@
 import * as React from "react";
 import { ArrowUpRight, LoaderCircle, LogOut, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
 import { useI18n } from "@/i18n";

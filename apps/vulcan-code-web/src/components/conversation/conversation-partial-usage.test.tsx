@@ -9,7 +9,7 @@ import { averageTurnOutputSpeed, usageMetricDisplay } from "./conversation-usage
 
 // Render tooltip content in SSR so the real statistics-card body can be asserted.
 // 在 SSR 中渲染浮层内容，以断言真实统计卡的正文。
-vi.mock("@/components/ui/tooltip", () => {
+vi.mock("@/ui-kit/primitives/tooltip", () => {
   const Passthrough = (props: { children: React.ReactNode }) => <>{props.children}</>;
   return { Tooltip: Passthrough, TooltipContent: Passthrough, TooltipProvider: Passthrough, TooltipTrigger: Passthrough };
 });

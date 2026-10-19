@@ -5,7 +5,7 @@ import {
 } from "@/components/shell/app-chrome";
 import { shellClient } from "@/service/webui-service-runtime";
 import { useI18n, type LocaleCode } from "@/i18n";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { StartupSnapshot } from "@/types";
 import { resolvedDark, setAppearance, useAppearance } from "@/ui-kit/appearance";
 import type { ThemeMode } from "./types";

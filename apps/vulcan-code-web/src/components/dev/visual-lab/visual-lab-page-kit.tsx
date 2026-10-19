@@ -5,10 +5,10 @@ import {
   MetricCard, MetricGrid, PageActionBar, PageDetails, PageEmptyState, PageFacts, PageGuide, PageHint, PageItem, PageItemList,
   PageNotice, PageRow, PageSection, PageTable, PageToolbar, type PageFact, type PageTableColumn, type PageTableRow,
 } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
+import { Input } from "@/ui-kit/primitives/input"
+import { Switch } from "@/ui-kit/primitives/switch"
 
 import type { VisualLabDemoProps } from "./visual-lab-shared"
 

@@ -13,8 +13,8 @@ import {
   RefreshCw,
   Search,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -22,9 +22,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
+} from "@/ui-kit/primitives/dialog";
+import { Input } from "@/ui-kit/primitives/input";
+import { Spinner } from "@/ui-kit/primitives/spinner";
 import { formatMessage, useI18n } from "@/i18n";
 import type { ProjectDirectoryListing } from "@/types";
 import "@/styles/project-folder-picker.css";

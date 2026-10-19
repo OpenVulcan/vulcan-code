@@ -1,27 +1,27 @@
 import * as React from "react"
 import { BrainCircuit, Database, Eye, RefreshCw } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
 import { PageTabs } from "@/components/workspace/workspace-directory-layout"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from "@/components/ui/empty"
-import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+} from "@/ui-kit/primitives/empty"
+import { Label } from "@/ui-kit/primitives/label"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
-} from "@/components/ui/sheet"
+} from "@/ui-kit/primitives/sheet"
 import { useI18n, type TranslationKey } from "@/i18n"
 import { NativeSessionStatus, VmmNativeSessionArchive } from "./vmm-native-session-archive"
 import { VmmNativeRemoval } from "./vmm-native-removal"

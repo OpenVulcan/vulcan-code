@@ -1,6 +1,6 @@
 import * as React from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Button } from "@/ui-kit/primitives/button"
+import { Input } from "@/ui-kit/primitives/input"
 import { cancelMcpOAuth, finishMcpOAuth, loadMcpOAuthStatus, removeMcpOAuth, startMcpOAuth, type McpOAuthStatus } from "@/service/mcp-settings-service"
 import { openExternalUrl } from "@/service/project-actions-service"
 import { formatMessage, useI18n, type Translate } from "@/i18n"

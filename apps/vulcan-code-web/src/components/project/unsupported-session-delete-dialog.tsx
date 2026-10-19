@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Dialog,
   DialogContent,
@@ -6,8 +6,8 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Spinner } from "@/components/ui/spinner";
+} from "@/ui-kit/primitives/dialog";
+import { Spinner } from "@/ui-kit/primitives/spinner";
 import type { UnsupportedDeleteRequest } from "@/components/workspace/workbench-layout/use-conversation-menu-actions";
 import { formatMessage, useI18n } from "@/i18n";
 

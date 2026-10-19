@@ -1,6 +1,6 @@
 import React from "react";
 import { metadataValue } from "@/components/conversation/conversation-metadata";
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@/ui-kit/primitives/badge";
 import { useI18n } from "@/i18n";
 import { dedicatedTurnForgotten, type DedicatedMemorySelection } from "@/service/dedicated-memory";
 

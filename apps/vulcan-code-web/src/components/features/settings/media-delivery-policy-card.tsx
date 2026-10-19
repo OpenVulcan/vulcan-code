@@ -1,8 +1,8 @@
 import * as React from "react";
 import { LoaderCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { InlineDisclosure } from "@/components/ui/disclosure";
-import { Input } from "@/components/ui/input";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure";
+import { Input } from "@/ui-kit/primitives/input";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { loadPublicAiSettings, resetPublicAiMediaDeliveryPolicy, savePublicAiMediaDeliveryPolicy } from "@/service/settings-actions-service";
 import type { PublicAiMediaDeliverySettingsSnapshot, PublicAiSettingsSnapshot } from "@/types";

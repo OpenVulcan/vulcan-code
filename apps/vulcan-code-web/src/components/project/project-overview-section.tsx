@@ -1,8 +1,8 @@
 import * as React from "react";
 import { ArrowRight, Copy, FolderCog } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { InlineStreamPlaceholder, StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { InlineDisclosure } from "@/components/ui/disclosure";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineStreamPlaceholder, StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure";
 import { useI18n } from "@/i18n";
 import { listProjectKnowledgeBindings, subscribeKnowledgeProjectBindingsChanged } from "@/service/knowledge-base-service";
 import { runVmmMemoryAction } from "@/service/memory-actions-service";

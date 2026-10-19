@@ -2,10 +2,10 @@ import { useState, type CSSProperties } from "react"
 import { Play } from "lucide-react"
 
 import { PageSection } from "@/components/page"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
+import { Button } from "@/ui-kit/primitives/button"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
+import { Input } from "@/ui-kit/primitives/input"
+import { Switch } from "@/ui-kit/primitives/switch"
 
 import type { VisualLabDemoProps } from "./visual-lab-shared"
 

@@ -1,6 +1,6 @@
 import React from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
 import { composerSessionDraftKey } from "@/components/composer/composer-panel/helpers";
 import { useComposerModelSelection } from "@/components/composer/composer-panel/use-composer-model-selection";

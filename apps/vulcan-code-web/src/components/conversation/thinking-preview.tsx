@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Sparkles } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
 import { useI18n } from "@/i18n";
 import { useStreamingThinkingViewport } from "./use-streaming-thinking-viewport";
 

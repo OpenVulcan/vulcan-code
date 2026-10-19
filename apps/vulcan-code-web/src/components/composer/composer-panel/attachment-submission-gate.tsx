@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { composerAttachmentOverflowCount } from "@/components/composer/composer-image-compression-preference";
 import type { ComposerAttachmentPreparationController } from "@/components/composer/composer-panel/use-composer-attachment-preparation";
 import {
@@ -11,7 +11,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+} from "@/ui-kit/primitives/alert-dialog";
 import { useI18n } from "@/i18n";
 
 // useComposerAttachmentSubmissionGate decides whether the current attachments may go out with a user prompt.

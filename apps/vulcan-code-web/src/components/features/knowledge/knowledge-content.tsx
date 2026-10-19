@@ -1,9 +1,9 @@
 import * as React from "react";
 import { Bot, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, RefreshCw, Search } from "lucide-react";
 import { PageEmptyState } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { formatKnowledgeIndexStatus } from "@/lib/knowledge-index-status";
 import { listManagedKnowledgeDocuments, searchManagedKnowledgeLibrary } from "@/service/knowledge-base-service";

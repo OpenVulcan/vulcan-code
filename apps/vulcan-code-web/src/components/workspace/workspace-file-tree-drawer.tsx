@@ -1,5 +1,5 @@
 import React from "react";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { ChevronDown, ChevronRight, FileWarning, Folder, ListCollapse, ListTree, Search } from "lucide-react";
 import { useI18n } from "@/i18n";
 

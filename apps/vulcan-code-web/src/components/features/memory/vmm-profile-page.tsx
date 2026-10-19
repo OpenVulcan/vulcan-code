@@ -6,9 +6,9 @@ import {
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from "@/components/ui/accordion"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Button } from "@/components/ui/button"
+} from "@/ui-kit/primitives/accordion"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Button } from "@/ui-kit/primitives/button"
 import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import {
   Card,
@@ -16,18 +16,18 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
-import { Combobox } from "@/components/ui/combobox"
+} from "@/ui-kit/primitives/card"
+import { Combobox } from "@/ui-kit/primitives/combobox"
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from "@/components/ui/empty"
-import { Label } from "@/components/ui/label"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import { Textarea } from "@/components/ui/textarea"
+} from "@/ui-kit/primitives/empty"
+import { Label } from "@/ui-kit/primitives/label"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/ui-kit/primitives/dialog"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import { useI18n } from "@/i18n"
 import type {
   VmmMemoryActionResult,

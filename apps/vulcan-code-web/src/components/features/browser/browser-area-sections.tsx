@@ -1,8 +1,8 @@
 import * as React from "react";
 import { Globe2, X } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/ui-kit/primitives/alert-dialog";
 import { formatMessage, useI18n } from "@/i18n";
 import type {
   CoreBrowserDialog,

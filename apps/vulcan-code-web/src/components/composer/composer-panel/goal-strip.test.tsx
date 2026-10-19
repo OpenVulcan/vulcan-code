@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type { SessionGoalStatus, SessionGoalSummary, SessionGoalUserStatusUpdate } from "@/types";
 import { ComposerGoalStrip } from "./goal-strip";
 import { ComposerGoalDetails } from "./goal-details";

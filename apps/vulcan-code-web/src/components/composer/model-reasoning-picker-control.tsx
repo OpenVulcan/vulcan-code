@@ -17,11 +17,11 @@ import {
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
-import { Button } from "@/components/ui/button";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/ui-kit/primitives/button";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ProviderSummary } from "@/types";

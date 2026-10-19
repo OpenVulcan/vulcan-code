@@ -20,10 +20,10 @@ import type {
   ProviderManifestCandidatePreview,
   ProviderSyncReport,
 } from "@/types"
-import { Badge } from "@/components/ui/badge"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Button } from "@/components/ui/button"
-import { DisclosureSection } from "@/components/ui/disclosure"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Button } from "@/ui-kit/primitives/button"
+import { DisclosureSection } from "@/ui-kit/primitives/disclosure"
 import {
   Table,
   TableBody,
@@ -31,7 +31,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table"
+} from "@/ui-kit/primitives/table"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
 import { formatDateTime, errorMessage } from "@/lib/display-format"
 

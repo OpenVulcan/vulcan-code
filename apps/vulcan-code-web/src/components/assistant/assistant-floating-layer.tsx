@@ -1,8 +1,8 @@
 import React from "react";
 import { Combine, Minus, SquareArrowOutUpRight, Undo2, X } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { dedicatedErrorMessage } from "@/components/composer/dedicated/dedicated-errors";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { ProjectFloatingLayer, type FloatingLayerPreferredSize } from "@/components/workspace/project-floating-layer";
 import { useI18n } from "@/i18n";
 import { AssistantAvatar } from "./assistant-dock-button";

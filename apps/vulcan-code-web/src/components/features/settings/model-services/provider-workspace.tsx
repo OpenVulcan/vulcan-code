@@ -7,14 +7,14 @@ import { protocolDisplayName } from "@/components/features/settings/provider-man
 import { ProviderModelCatalog } from "@/components/features/settings/provider-model-settings"
 import { isFunctionalProvider } from "@/components/features/settings/provider-ordering"
 import { localizedProviderDescription, localizedProviderName } from "@/components/features/settings/provider-presentation"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui-kit/primitives/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+} from "@/ui-kit/primitives/dropdown-menu"
 import { useI18n } from "@/i18n"
 import type {
   PublicAiAccountUsage,

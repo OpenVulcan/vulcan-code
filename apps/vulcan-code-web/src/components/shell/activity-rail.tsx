@@ -1,6 +1,6 @@
 import React from "react";
 import { Ellipsis, MessagesSquare, PanelLeftOpen, Pin, Settings } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 
 import {
   DropdownMenu,
@@ -11,9 +11,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import { useSidebar, useSidebarNavigation } from "@/components/ui/sidebar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { SidebarUserMenu } from "@/components/sidebar/sidebar-profile-menus";
 import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
 import { formatMessage, useI18n } from "@/i18n";

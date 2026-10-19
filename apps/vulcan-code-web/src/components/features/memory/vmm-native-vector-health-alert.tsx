@@ -1,9 +1,9 @@
 import * as React from "react"
 import { AlertTriangle, RefreshCw } from "lucide-react"
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
-import { InlineDisclosure } from "@/components/ui/disclosure"
+import { Alert, AlertDescription, AlertTitle } from "@/ui-kit/primitives/alert"
+import { Button } from "@/ui-kit/primitives/button"
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
 import { useI18n } from "@/i18n"
 import { nativeVectorRouteCause } from "./vmm-native-vector-status"
 import type { VmmMemoryActionRequest, VmmMemoryActionResult, VmmNativeVectorStatusSummary } from "@/types"

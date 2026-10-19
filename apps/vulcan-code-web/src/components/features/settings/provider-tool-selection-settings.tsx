@@ -1,9 +1,9 @@
 import * as React from "react";
 import { FlaskConical } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Combobox } from "@/components/ui/combobox";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Combobox } from "@/ui-kit/primitives/combobox";
 import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
 import {
   Select,
@@ -11,8 +11,8 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+} from "@/ui-kit/primitives/select";
+import { Switch } from "@/ui-kit/primitives/switch";
 import { useI18n, translateActive } from "@/i18n";
 import {
   isModelExtensionCapability,

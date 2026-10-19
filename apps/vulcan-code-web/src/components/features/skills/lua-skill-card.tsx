@@ -8,23 +8,23 @@ import {
   Trash2,
   Wrench,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { IconButton } from "@/components/ui/button";
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls";
-import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { IconButton } from "@/ui-kit/primitives/button";
+import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
+import { Switch } from "@/ui-kit/primitives/switch";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import { formatSkillText } from "@/components/features/featureText";
 import { useI18n } from "@/i18n";
 import type { LuaSkillSummary, LuaSkillToolSummary } from "@/types";

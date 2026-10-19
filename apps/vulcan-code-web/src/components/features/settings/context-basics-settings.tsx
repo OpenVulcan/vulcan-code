@@ -1,16 +1,16 @@
 import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
 import { LoaderCircle } from "lucide-react"
-import { toast } from "sonner"
+import { toast } from "@/ui-kit/primitives/toast"
 
 import { ContextWindowPolicyEditor } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings"
 import { MediaDeliveryPolicyCard } from "@/components/features/settings/media-delivery-policy-card"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
-import { Button } from "@/components/ui/button"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Button } from "@/ui-kit/primitives/button"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { useI18n } from "@/i18n"
 import { formatTokenCount, tokenUnitLabel } from "@/lib/usage-format"
 import {

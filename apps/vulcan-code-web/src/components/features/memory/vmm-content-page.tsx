@@ -1,8 +1,8 @@
 import * as React from "react"
 import { CircleAlert, FileText, Plus, Search, Trash2 } from "lucide-react"
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
+import { Alert, AlertDescription, AlertTitle } from "@/ui-kit/primitives/alert"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -12,9 +12,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+} from "@/ui-kit/primitives/alert-dialog"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
 import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import {
   Card,
@@ -22,7 +22,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
+} from "@/ui-kit/primitives/card"
 import {
   Dialog,
   DialogContent,
@@ -30,17 +30,17 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/ui-kit/primitives/dialog"
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from "@/components/ui/empty"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
+} from "@/ui-kit/primitives/empty"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import { useI18n } from "@/i18n"
 import type {
   VmmGetTurnDetailsActionValue,

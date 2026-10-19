@@ -1,7 +1,7 @@
 import { WorkspaceDirectoryLayout } from "@/components/workspace/workspace-directory-layout";
 import { FeatureLoadBoundary } from "@/components/features/feature-shell-content";
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { ChatArea } from "@/components/conversation/chat-area";
 import {
   ConversationSessionCommitDialog,
@@ -16,8 +16,8 @@ import { agentSkillsCatalogSummary } from "@/components/features/agent-skills/ag
 import {
   ProjectSidebar,
 } from "@/components/project/project-sidebar";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   PluginWorkspaceMenu,
   skillSubAreaLabel,
@@ -35,7 +35,7 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import {
   WorkspaceResizableBody,
   selectConversationRightPluginMounts,

@@ -1,11 +1,11 @@
 import * as React from "react";
 import { BookMarked, BookOpen, Download, FileText, Gauge, History, Library, Link2, PencilLine, Plus, RefreshCw, Search, Settings2, Trash2, Upload } from "lucide-react";
 import { PageEmptyState, PageNotice } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui-kit/primitives/tabs";
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
 import { ProjectFolderPickerDialog } from "@/components/project/folder-picker-dialog";
 import { browseProjectDirectories } from "@/service/project-actions-service";
 import * as knowledge from "@/service/knowledge-base-service";

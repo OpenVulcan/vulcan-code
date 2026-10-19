@@ -4,10 +4,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+} from "@/ui-kit/primitives/dialog";
+import { Textarea } from "@/ui-kit/primitives/textarea";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
 import { useI18n } from "@/i18n";
 
 // ComposerGoalDialogProps carries the controlled goal editing dialog state.

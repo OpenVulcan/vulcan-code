@@ -1,8 +1,8 @@
 import React from "react";
 import "@/styles/session-git-branch.css";
 import { Check, GitBranch, GitGraph, LoaderCircle, Plus, RefreshCw, Search, X } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import { toast } from "@/ui-kit/primitives/toast";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Dialog,
   DialogContent,
@@ -10,11 +10,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+} from "@/ui-kit/primitives/dialog";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/ui-kit/primitives/field";
+import { Input } from "@/ui-kit/primitives/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import type {
   WorkspaceGitHistoryCommit,
   WorkspaceGitHistoryPage,
@@ -404,7 +404,7 @@ function ConversationSessionGitGraphDialog(props: {
     setCommits([]);
     setHasMore(false);
     setSelectedHash(null);
-    scrollRef.current?.scrollTo({ top: 0 });
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
     void loadPage(0);
   }, [loadPage]);
 

@@ -1,18 +1,18 @@
 import * as React from "react"
 import { Bot, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react"
-import { toast } from "sonner"
+import { toast } from "@/ui-kit/primitives/toast"
 
 import { ModelPickerControl, modelPickerGroupKey } from "@/components/composer/model-picker-control"
 import { SourceOriginLink } from "@/components/features/source-origin-link"
-import { Badge } from "@/components/ui/badge"
-import { Button, IconButton } from "@/components/ui/button"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
-import { Checkbox } from "@/components/ui/checkbox"
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button, IconButton } from "@/ui-kit/primitives/button"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
+import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import {
   Dialog,
   DialogContent,
@@ -20,7 +20,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/ui-kit/primitives/dialog"
 import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, WorkbenchSnapshot } from "@/types"

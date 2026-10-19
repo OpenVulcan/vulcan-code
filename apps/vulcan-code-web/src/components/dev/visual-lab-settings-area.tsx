@@ -3,7 +3,7 @@ import { Palette } from "lucide-react"
 import { useCallback, useState, type ComponentType } from "react"
 
 import { PageBody, PageHint, PageTabPanel, PageToolbar } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
+import { Badge } from "@/ui-kit/primitives/badge"
 import { useI18n } from "@/i18n"
 
 import { VisualLabContent, VisualLabNavigation } from "./visual-lab/visual-lab-content"

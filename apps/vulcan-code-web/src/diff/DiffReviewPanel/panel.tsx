@@ -1,6 +1,6 @@
 import React from "react";
 import { FileText, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 
 import { WorkspaceDefaultFileIcon, WorkspaceFileTreeDrawer, WorkspaceFileTreeStats } from "@/components/workspace/workspace-file-tree-drawer";
 import { useI18n } from "@/i18n";

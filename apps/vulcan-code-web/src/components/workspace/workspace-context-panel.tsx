@@ -1,7 +1,7 @@
 import React from "react";
 import { ChildLifetimeUsageChip } from "@/components/conversation/session-lifetime-usage";
 import { useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   ArrowDown,
   Bot,
@@ -17,8 +17,8 @@ import {
 } from "lucide-react";
 import type { ConversationScrollSnapshot } from "@/components/conversation/chat-area-scroll";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -26,7 +26,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import { ConversationBranchWorkspaceV1 } from "@/components/conversation/conversation-branch-workspace-v1";
 import { TransientReasoningStatusLine } from "@/components/conversation/conversation-live-reasoning";
 import type {
@@ -39,7 +39,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import type {
   DiffReviewSelection,
   WorkspaceGitFileActionRequest,

@@ -1,7 +1,7 @@
 import * as React from "react"
 import { CheckCircle2, CircleAlert, Clock3 } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
+import { Badge } from "@/ui-kit/primitives/badge"
 import { cn } from "@/lib/utils"
 import type { StartupStepStatus } from "@/types"
 

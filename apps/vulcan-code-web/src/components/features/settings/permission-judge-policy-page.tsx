@@ -1,8 +1,8 @@
 import * as React from "react";
 import { PageEmptyState, PageHint, PageNotice, PageRow, PageSection } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { MODE_KEYS, OPTION_HINT_KEYS, OPTION_KEYS, label } from "@/components/features/settings/permission-judge-labels";
 import { FOLLOW_DEFAULT, useProjectPermissionJudgePolicy } from "@/components/project/project-permission-judge-section";
 import { formatMessage, useI18n } from "@/i18n";

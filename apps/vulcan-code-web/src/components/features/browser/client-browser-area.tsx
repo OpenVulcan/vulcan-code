@@ -1,8 +1,8 @@
 import * as React from "react";
 import { ArrowLeft, ArrowRight, Bug, ExternalLink, Globe, MonitorSmartphone, MoreHorizontal, Plus, RotateCw, X } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Button } from "@/ui-kit/primitives/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
 import { useI18n, type Translate } from "@/i18n";
 import {
   readElectronLocalBrowserBridge,

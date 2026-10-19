@@ -1,8 +1,8 @@
 import * as React from "react";
 import { Flame, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { Button, IconButton } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import { formatMessage, useI18n } from "@/i18n";
 import type { PluginSummary } from "@/types";
 import type { PluginAutomaticPrewarmRule } from "@/types/plugin-prewarm-policy";

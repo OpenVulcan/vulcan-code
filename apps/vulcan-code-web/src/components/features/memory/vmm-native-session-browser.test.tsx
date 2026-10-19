@@ -306,11 +306,7 @@ it("clears a bulk selection as soon as a filter changes, before submitting the n
   try {
     await act(async () => view.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click())
     expect(view.container.textContent).toContain("已选 20 个会话")
-    await act(async () => {
-      const select = view.container.querySelector<HTMLSelectElement>('select[name="status"]')!
-      select.value = "archived"
-      select.dispatchEvent(new Event("change", { bubbles: true }))
-    })
+    await chooseMemoryOption(view.container.querySelector<HTMLButtonElement>('[aria-label="会话状态"]')!, "已归档")
     expect(view.container.textContent).toContain("已选 0 个会话")
     expect(view.onRunAction).toHaveBeenCalledTimes(2)
   } finally { await view.dispose() }

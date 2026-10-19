@@ -6,7 +6,7 @@ import {
   Folder,
   MoreHorizontal,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   activeWorkbenchSurfaceId,
   selectedConversationProjectId,
@@ -23,7 +23,7 @@ import {
   workspaceFilePreviewErrorMessage,
 } from "@/components/workspace/workspace-files-preview";
 import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -31,7 +31,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import { DEFAULT_WORKSPACE_FILE_FILTERS } from "@/service/workbench-snapshot-service";
 import type {
   WorkbenchSnapshot,

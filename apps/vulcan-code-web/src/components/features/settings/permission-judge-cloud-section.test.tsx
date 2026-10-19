@@ -11,7 +11,7 @@ vi.mock("@/i18n", async (importOriginal) => {
   const t = (key: string) => key;
   return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
 });
-vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { success: vi.fn() } }));
 
 // Every service call is synthetic; nothing reaches a running service.
 // 所有服务调用均为合成；不会访问运行中的服务。

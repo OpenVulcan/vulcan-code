@@ -1,7 +1,7 @@
 import React from "react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import { useI18n } from "@/i18n";
 

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { AlertCircle, Copy } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
 import { useI18n } from "@/i18n";
 
 // Keeps exact read errors separate from empty results and exposes only an explicit read retry.

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { LoaderCircle, Send, Square } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { ContextUsageOrb } from "@/components/composer/composer-controls";
 import { cn } from "@/lib/utils";
 import type {

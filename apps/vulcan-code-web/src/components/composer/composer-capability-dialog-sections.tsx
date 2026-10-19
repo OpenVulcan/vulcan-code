@@ -1,6 +1,6 @@
 import React from "react";
-import { Button } from "@/components/ui/button";
-import { Combobox } from "@/components/ui/combobox";
+import { Button } from "@/ui-kit/primitives/button";
+import { Combobox } from "@/ui-kit/primitives/combobox";
 import { AlertTriangle } from "lucide-react";
 import {
   Select,
@@ -8,8 +8,8 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls";
+} from "@/ui-kit/primitives/select";
+import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
 import { useI18n } from "@/i18n";

@@ -1,6 +1,6 @@
 import React from "react";
 import { dedicatedErrorMessage } from "@/components/composer/dedicated/dedicated-errors";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Dialog,
   DialogContent,
@@ -8,9 +8,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
+} from "@/ui-kit/primitives/dialog";
+import { Input } from "@/ui-kit/primitives/input";
+import { Spinner } from "@/ui-kit/primitives/spinner";
 import { useI18n } from "@/i18n";
 
 /** Names a memory-locked dedicated session and turns it into a floating assistant.

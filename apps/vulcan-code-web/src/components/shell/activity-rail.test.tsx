@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/i18n";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { ActivityRail, type ActivityRailEntry } from "./activity-rail";
 
 // host and root isolate the rail without mounting a service connection.

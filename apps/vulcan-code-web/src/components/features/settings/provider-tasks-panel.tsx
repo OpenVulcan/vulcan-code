@@ -2,8 +2,8 @@ import * as React from "react";
 import { ListTodo, XCircle } from "lucide-react";
 
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
-import { Button } from "@/components/ui/button";
-import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n } from "@/i18n";
 import { errorMessage, formatDateTime } from "@/lib/display-format";
 import { cancelProviderTask, listProviderTasks } from "@/service/settings-actions-service";

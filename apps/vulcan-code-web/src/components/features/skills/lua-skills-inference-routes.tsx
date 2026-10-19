@@ -1,7 +1,7 @@
 import * as React from "react";
 import { PageNotice } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
+import { Button } from "@/ui-kit/primitives/button";
+import { Combobox, type ComboboxOption } from "@/ui-kit/primitives/combobox";
 import {
   inferenceRouteKey,
   inferenceRoutePickerOptions,

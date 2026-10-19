@@ -9,9 +9,9 @@ import { ProviderIcon } from "@/components/features/settings/provider-icon";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
 import { usageCapabilitySupportsQuotaWindows } from "@/components/public-ai/credential-usage-capability";
 import type { CredentialUsageOverviewProps } from "@/components/public-ai/credential-usage-overview";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { useI18n } from "@/i18n";
 import {
   loadPublicAiSettings,

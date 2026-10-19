@@ -1,9 +1,9 @@
 import * as React from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
+import { Input } from "@/ui-kit/primitives/input";
+import { Switch } from "@/ui-kit/primitives/switch";
 import { HelpTooltip, SelectControl } from "@/components/plugins/plugin-host-components";
 import { PageRow } from "@/components/page";
 import { formatMessage, useI18n } from "@/i18n";

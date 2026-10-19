@@ -9,9 +9,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/alert-dialog";
+import { Toaster } from "@/ui-kit/primitives/toaster";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import {
   WorkbenchLayout,
   type WorkbenchDeltaSignal,
@@ -59,7 +59,7 @@ import type {
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import "../styles.css";
 
 // STREAMING_DELTA_FLUSH_MS batches hot transcript deltas so React and GC are not driven at display-frame cadence.

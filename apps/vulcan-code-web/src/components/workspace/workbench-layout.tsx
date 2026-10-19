@@ -153,7 +153,7 @@ import {
   visibleConversationId,
   workbenchWithSelectedConversationProjection,
 } from "@/state/workbench-state";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { AssistantDockContext } from "@/components/assistant/assistant-dock-context";
 import { useAssistantDockController } from "@/components/assistant/use-assistant-dock-controller";
 

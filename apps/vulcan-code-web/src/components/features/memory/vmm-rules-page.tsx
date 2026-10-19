@@ -1,17 +1,17 @@
 import * as React from "react"
 import { BrainCircuit, Save, Settings2 } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui-kit/primitives/button"
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
+} from "@/ui-kit/primitives/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
+import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n } from "@/i18n"
 import { isOptionalUnsignedDraft } from "./vmm-draft-number"
 import type { VmmConfigDraftSummary, VmmProjectScopeSummary } from "@/types"

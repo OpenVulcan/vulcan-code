@@ -1,5 +1,5 @@
 import React from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -8,13 +8,13 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import { StatusPill } from "@/components/shared/status";
 import { useI18n, type LocaleCode } from "@/i18n";
 import { SUPPORTED_LOCALES } from "@/i18n-locales";
 import { createShellClient } from "@/host-shell";
 import type { StartupSnapshot } from "@/types";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   Check,
   ChevronDown,

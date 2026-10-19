@@ -32,7 +32,7 @@ import {
   type ConversationSessionGitBranchActions,
 } from "@/components/conversation/session-todolist-panel/git-branch-controls";
 import { ConversationSessionTerminalSection } from "@/components/conversation/session-todolist-panel/terminal-section";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   generateGitCommitMessage,
   runGitCommitAction,
@@ -43,8 +43,8 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { CommandSessionSummary, SessionTodolistItemSummary, SessionTodolistSummary, WorkbenchSnapshot } from "@/types";

@@ -2,14 +2,14 @@ import { Folder } from "lucide-react";
 import {
   SegmentedControl,
   SegmentedControlItem,
-} from "@/components/ui/choice-controls";
+} from "@/ui-kit/primitives/choice-controls";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@/ui-kit/primitives/select";
 import { useI18n } from "@/i18n";
 import type { DedicatedToolAccess } from "@/service/conversation-event-window-client";
 import type { DraftComposerContextValue } from "./draft-composer-context";

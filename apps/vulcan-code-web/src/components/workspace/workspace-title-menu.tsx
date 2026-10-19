@@ -12,7 +12,7 @@ import {
   Pencil,
   Pin,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 
 import {
   DropdownMenu,
@@ -20,7 +20,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import { useI18n } from "@/i18n";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar-types";
 import type { ConversationSummary } from "@/types";

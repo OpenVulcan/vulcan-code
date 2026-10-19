@@ -21,7 +21,7 @@ import {
   Pin,
   SquarePen,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Sidebar,
   SidebarContent,

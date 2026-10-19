@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Spinner } from "@/components/ui/spinner"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { Spinner } from "@/ui-kit/primitives/spinner"
 import { cn } from "@/lib/utils"
 
 // UsagePanelState is the closed set of presentation states supported by a usage surface.

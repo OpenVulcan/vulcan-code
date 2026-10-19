@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
 import type { PublicAiSettingsSnapshot, ProviderSummary } from "@/types";
 import type { ComposerProviderToolSettingsSnapshot } from "./composer-model";

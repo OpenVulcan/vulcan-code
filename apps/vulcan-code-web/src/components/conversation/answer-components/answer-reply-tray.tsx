@@ -1,6 +1,6 @@
 import React from "react";
 import { MessageSquareReply, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { useI18n, type Translate } from "@/i18n";
 import "@/styles/answer-components.css";
 import type { AnswerReplyEntry, AnswerReplyStore } from "./answer-reply";

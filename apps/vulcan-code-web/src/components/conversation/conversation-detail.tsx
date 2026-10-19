@@ -9,14 +9,14 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import type { DiffPanelSnapshot } from "@/diff/types";
 import { cn } from "@/lib/utils";
 import {

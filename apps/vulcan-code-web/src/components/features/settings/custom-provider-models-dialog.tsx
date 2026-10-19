@@ -20,7 +20,7 @@ import {
   shouldShowCustomModelProtocolPreferenceCard,
   shouldShowCustomModelProtocolSelector,
 } from "@/components/features/settings/custom-provider-protocol-drafts"
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/ui-kit/primitives/accordion"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,16 +30,16 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+} from "@/ui-kit/primitives/alert-dialog"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { RadioGroup, RadioGroupItem } from "@/ui-kit/primitives/radio-group"
+import { ScrollArea } from "@/ui-kit/primitives/scroll-area"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui-kit/primitives/tabs"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
 import { loadPublicAiSettings, savePublicAiCustomModelProtocolPreferences, savePublicAiCustomModels, syncPublicAiConnection } from "@/service/settings-actions-service"
 import type { PublicAiCustomModelDefinition, PublicAiCustomModelProtocolPreference, PublicAiCustomProviderProtocol, PublicAiCustomModelTemplateDecisionBatchItem, PublicAiModelRouteRecord, PublicAiProviderDescriptor, PublicAiSettingsSnapshot } from "@/types"

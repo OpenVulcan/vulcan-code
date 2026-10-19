@@ -1,5 +1,5 @@
 import React from "react";
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@/ui-kit/primitives/switch";
 import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
 import { normalizeThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { useI18n } from "@/i18n";

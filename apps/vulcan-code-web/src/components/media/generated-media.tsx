@@ -3,7 +3,7 @@ import {
   FileText,
   Play,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import type { GeneratedMediaAttachment } from "./generated-media-types";
 import { GENERATED_MEDIA_ZOOM_STEP } from "./generated-media-types";
 import {

@@ -4,7 +4,7 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { ConversationSessionTodolistPanel, type ConversationSessionReviewRepository } from "./session-todolist-panel";
 
 // PanelProps uses the production callback and repository contract without invoking Git writes.

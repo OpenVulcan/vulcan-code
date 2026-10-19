@@ -1,12 +1,12 @@
 import * as React from "react";
 import { ExternalLink } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { StatusPill } from "@/components/shared/status";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { RadioGroup, RadioGroupItem } from "@/ui-kit/primitives/radio-group";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
 import { DEVICE_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
 import { PermissionJudgeRegisterForm, type PermissionJudgeRegisterRequest } from "@/components/features/settings/permission-judge-register-form";

@@ -12,8 +12,8 @@ import {
 
 import { VmmInferenceSettings } from "@/components/features/memory/vmm-inference-settings"
 import { formatSkillText } from "@/components/features/featureText"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription } from "@/ui-kit/primitives/alert"
+import { Button } from "@/ui-kit/primitives/button"
 import {
   Dialog,
   DialogContent,
@@ -21,18 +21,18 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Progress } from "@/components/ui/progress"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+} from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
+import { Progress } from "@/ui-kit/primitives/progress"
+import { RadioGroup, RadioGroupItem } from "@/ui-kit/primitives/radio-group"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
+} from "@/ui-kit/primitives/select"
 import { useI18n } from "@/i18n"
 import type {
   VmmNativeProjectCatalogSummary,

@@ -1,5 +1,5 @@
 import * as React from "react"
-import { UiTextProvider } from "@/components/ui/ui-text"
+import { UiTextProvider } from "@/ui-kit/primitives/ui-text"
 import {
   ensureLocaleCatalog, loadedLocaleCatalog, registerLocaleCatalog,
   localeCatalogRevision, subscribeLocaleCatalogs,

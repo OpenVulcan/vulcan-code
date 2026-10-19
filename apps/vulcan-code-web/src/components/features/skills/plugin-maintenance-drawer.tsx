@@ -1,6 +1,6 @@
 import * as React from "react";
 import { X } from "lucide-react";
-import { IconButton } from "@/components/ui/button";
+import { IconButton } from "@/ui-kit/primitives/button";
 import { formatMessage, useI18n } from "@/i18n";
 import type { PluginDiagnosticsSelection } from "@/types/plugin-resource-diagnostics";
 import {

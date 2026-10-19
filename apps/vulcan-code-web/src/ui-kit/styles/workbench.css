@@ -407,7 +407,6 @@ button.vk-stools-item { cursor: pointer; }
 .vk-model-cell > .vk-badge { grid-row: 1; grid-column: 2; }
 .vk-mods { display: inline-flex; gap: 3px; margin: 0 4px; color: var(--vk-ink-2); vertical-align: middle; }
 .vk-mods .lucide { width: 0.85rem; height: 0.85rem; }
-.vk-switch[data-size="sm"] { transform: scale(0.85); }
 .vk-pager { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-sm); }
 
 /* Git graph lanes */

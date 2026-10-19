@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type { TurnChangeSummaryV1 } from "@/diff/turn-change-summary-v1";
 import { TurnStatsBlock } from "./conversation-blocks";
 import { TurnChangeReviewActionsContext, TurnChangeReviewTargetContext } from "./turn-change-review-context";

@@ -19,7 +19,7 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+} from "@/ui-kit/primitives/context-menu";
 import { useI18n } from "@/i18n";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";

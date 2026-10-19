@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { Textarea } from "@/components/ui/textarea";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { ComposerTextContextMenu } from "./composer-text-context-menu";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));

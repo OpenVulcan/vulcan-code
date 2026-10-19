@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { SidebarBrandMenu, SidebarUserMenu } from "./sidebar-profile-menus";
 
 // host and root isolate sidebar navigation without mounting a service connection.

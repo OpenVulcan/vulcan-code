@@ -1,10 +1,10 @@
 import * as React from "react";
 import { ArrowUpCircle, CircleCheck, Flame, PackageMinus, SlidersHorizontal } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
 import { PageEmptyState, PageItem, PageItemList, PageNotice } from "@/components/page";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { PluginPendingActionOffer, PluginPendingKind, PluginPendingOperation } from "@/service/plugin-pending-operations-service";

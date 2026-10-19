@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AgentsArea } from "./agents-area";
 import type { AgentActionProps } from "./agent-area-types";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 
 vi.mock("@/i18n", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/i18n")>();

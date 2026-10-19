@@ -3,7 +3,7 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ComposerKnowledgeControl, type ComposerKnowledgeControlProps } from "./composer-knowledge-control";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
 import type { KnowledgeLibrarySummary, SessionKnowledgeLibrarySelectionSummary } from "@/types";
 
 // services isolate asynchronous selection ownership from real libraries and conversations.

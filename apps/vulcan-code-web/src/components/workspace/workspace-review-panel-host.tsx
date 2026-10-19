@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { DiffReviewPanel } from "@/diff/diff-review-panel";
 import {
   activeWorkbenchSurfaceId,

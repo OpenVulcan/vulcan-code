@@ -1,7 +1,7 @@
 import * as React from "react";
 import { ChevronDown } from "lucide-react";
 import { TodoListResult } from "./conversation-todo-result";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { ConversationToolResultTabs, toolResultMode } from "./conversation-tool-result-tabs";
 import { MarkdownMessage } from "./conversation-markdown";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";

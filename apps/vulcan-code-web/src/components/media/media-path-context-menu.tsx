@@ -1,13 +1,13 @@
 import React from "react";
 import { Copy, ImageIcon } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { runConversationControlAction } from "@/components/conversation/conversation-control-feedback";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+} from "@/ui-kit/primitives/context-menu";
 import { copyText } from "@/components/workspace/workbench-layout/types";
 import { useI18n } from "@/i18n";
 import { mediaFileLocator, resolveMediaFilePath, type MediaFileLocator } from "./media-file-path";

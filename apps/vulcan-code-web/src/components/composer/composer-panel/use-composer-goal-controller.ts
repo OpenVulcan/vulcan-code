@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { useI18n } from "@/i18n";
 import type { SessionGoalSummary, SessionGoalUserStatusUpdate } from "@/types";
 import { composerGoalToggleTarget } from "./goal-status-action";

@@ -1,9 +1,9 @@
 import * as React from "react";
 import { Send } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { StatusPill } from "@/components/shared/status";
-import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@/ui-kit/primitives/button";
+import { Switch } from "@/ui-kit/primitives/switch";
 import { useI18n } from "@/i18n";
 import { loadNotificationPreferences, saveNotificationPreferences } from "@/notifications/preferences";
 import type { NotificationPreferencesV1 } from "@/notifications/types";

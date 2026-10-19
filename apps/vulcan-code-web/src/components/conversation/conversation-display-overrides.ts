@@ -1,4 +1,4 @@
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 
 /** Creates one isolated boolean display-preference store; storageKey identifies its existing local document.
  * 创建一个隔离的布尔展示偏好存储；storageKey 标识其本地文档。

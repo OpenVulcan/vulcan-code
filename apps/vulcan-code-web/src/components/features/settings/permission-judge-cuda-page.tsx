@@ -1,12 +1,12 @@
 import * as React from "react";
 import { Cpu, Download, ExternalLink, FolderCheck, Library, MonitorCog } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { PageItem, PageNotice, PageRow, PageSection } from "@/components/page";
 import { StatusPill } from "@/components/shared/status";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { Progress } from "@/ui-kit/primitives/progress";
 import { formatMessage, type Translate, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
 import { label } from "@/components/features/settings/permission-judge-labels";

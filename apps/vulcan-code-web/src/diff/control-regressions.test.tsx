@@ -3,8 +3,8 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { toast } from "sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { toast } from "@/ui-kit/primitives/toast";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { DiffPanelToolbar } from "./diff-review-toolbar";
 import { DiffReviewFloatingGitActions } from "./DiffReviewPanel/floating-git-actions";
 import { DiffFileCard } from "./diff-file-card";
@@ -16,7 +16,7 @@ vi.mock("@/i18n", async (importOriginal) => {
   const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
   return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
 });
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn() } }));
 vi.mock("./diff-highlight", () => ({ diffLanguageForFile: () => null, useHighlightLanguage: () => false, useHighlightedDiffFileRevision: () => 0, useHighlightedDiffWindowRevision: () => 0 }));
 vi.mock("./diff-render-worker-client", async () => {
   const { hunkSeparatorControlsHtml, hunkSeparatorLabelHtml } = await import("./diff-render-hunk-controls");

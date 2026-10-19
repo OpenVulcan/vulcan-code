@@ -12,7 +12,7 @@ import { ProjectFolderPickerDialog } from "./folder-picker-dialog"
 const catalog = vi.hoisted(() => ({ load: vi.fn(async () => ({ PROJECT_ICON_OPTIONS: [] })) }))
 vi.mock("./project-icon-catalog-loader", () => ({ loadProjectIconCatalog: catalog.load }))
 vi.mock("./project-icons", () => ({ ProjectIcon: () => <svg /> }))
-vi.mock("@/components/ui/dialog", () => ({
+vi.mock("@/ui-kit/primitives/dialog", () => ({
   Dialog: (props: { open: boolean; children: ReactNode }) => props.open ? <div>{props.children}</div> : null,
   DialogContent: (props: { children: ReactNode }) => <div>{props.children}</div>,
   DialogDescription: (props: { children: ReactNode }) => <p>{props.children}</p>,

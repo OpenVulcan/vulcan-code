@@ -1,5 +1,5 @@
 import React from "react";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { BookMarked, RefreshCw, Settings2 } from "lucide-react";
 
 import {
@@ -8,7 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import { RequestedSettingsSub } from "./composer-settings-request";
 import {
   getSessionKnowledgeLibraries,

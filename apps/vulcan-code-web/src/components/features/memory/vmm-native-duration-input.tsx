@@ -1,6 +1,6 @@
 import * as React from "react"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { useI18n, type TranslationKey } from "@/i18n"
 
 // Units are presentation choices; persisted policy always has a single integer-millisecond owner.

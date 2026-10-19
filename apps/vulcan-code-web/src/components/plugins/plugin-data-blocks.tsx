@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { MetricCard, MetricGrid, PageEmptyState, PageTable } from "@/components/page";
 import { useI18n } from "@/i18n";
 import { BarChart } from "./plugin-bar-chart";

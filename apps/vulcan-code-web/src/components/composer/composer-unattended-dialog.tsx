@@ -7,9 +7,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+} from "@/ui-kit/primitives/alert-dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { UnattendedDefault } from "@/service/permission-mode-service";
 import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";

@@ -1,8 +1,8 @@
 import * as React from "react"
-import { Button } from "@/components/ui/button"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Button } from "@/ui-kit/primitives/button"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/ui-kit/primitives/dialog"
+import { Tabs, TabsList, TabsTrigger } from "@/ui-kit/primitives/tabs"
 import { useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeRecycleBatchSummary, VmmNativeRecycleRecord, VmmNativeRecycleRecordKind, VmmNativeRecycleRecordPage } from "@/types"
 

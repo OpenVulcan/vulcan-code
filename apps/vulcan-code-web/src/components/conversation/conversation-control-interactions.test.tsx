@@ -3,14 +3,14 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { I18nProvider } from "@/i18n";
 import { MarkdownMessage } from "./conversation-markdown";
 import { MarkdownDiagramFrame } from "./conversation-diagram-frame";
 import { PlanArtifactBlock } from "./conversation-plan-artifact";
 import { ToolPresentationCard } from "./conversation-tool-presentation-card";
 import type { GenericToolMarkdownPresentation } from "./conversation-tool-presentations";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { ConversationGenerationDialogV1 } from "./conversation-generation-dialog-v1";
 import { ConversationDetailModal } from "./conversation-detail";
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
@@ -20,7 +20,7 @@ import type { ConversationEventWindowControllerSnapshot } from "@/service/conver
 import { DEFAULT_THINKING_DISPLAY_MODE } from "./thinking-display";
 import { ConversationSessionTerminalSection } from "./session-todolist-panel/terminal-section";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn() } }));
 
 // container and root mount the real controls without a network or native clipboard.
 // container 和 root 挂载真实控件，不使用网络或原生剪贴板。

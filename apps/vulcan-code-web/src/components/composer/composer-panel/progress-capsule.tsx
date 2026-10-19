@@ -1,8 +1,8 @@
 import React from "react";
 import { CheckCircle2, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ProgressRing } from "@/components/ui/progress-ring";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ProgressRing } from "@/ui-kit/primitives/progress-ring";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type { SessionTodolistItemSummary, SessionTodolistSummary } from "@/types";

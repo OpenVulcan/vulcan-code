@@ -1,7 +1,7 @@
 import * as React from "react"
-import { Button } from "@/components/ui/button"
-import { Combobox } from "@/components/ui/combobox"
-import { Input } from "@/components/ui/input"
+import { Button } from "@/ui-kit/primitives/button"
+import { Combobox } from "@/ui-kit/primitives/combobox"
+import { Input } from "@/ui-kit/primitives/input"
 import { useI18n } from "@/i18n"
 
 // ProjectDirectoryEntry keeps host and memory identities explicit; descriptions disambiguate equal names.

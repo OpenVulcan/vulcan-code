@@ -1,13 +1,13 @@
 import { MoreHorizontal, Plus, RotateCcw, Undo2 } from "lucide-react";
 import * as React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import { useI18n } from "@/i18n";
 import type { DiffFile, DiffReviewSelection, WorkspaceGitFileActionKind } from "../types";
 // DiffReviewFloatingGitActionsProps describes the bottom floating Git action bar.

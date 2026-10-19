@@ -7,7 +7,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
+} from "@/ui-kit/primitives/alert-dialog"
 import { useI18n } from "@/i18n"
 import { removePublicAiCustomProvider } from "@/service/settings-actions-service"
 import type { PublicAiProviderDescriptor, PublicAiSettingsSnapshot } from "@/types"

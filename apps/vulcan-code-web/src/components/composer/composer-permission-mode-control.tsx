@@ -11,8 +11,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Checkbox } from "@/components/ui/checkbox";
+} from "@/ui-kit/primitives/alert-dialog";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -26,7 +26,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";
 import { ComposerUnattendedDialog } from "./composer-unattended-dialog";
 import { PermissionJudgeEntryContext } from "./permission-judge-entry-context";

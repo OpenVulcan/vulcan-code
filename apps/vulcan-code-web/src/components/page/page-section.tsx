@@ -1,7 +1,7 @@
 import * as React from "react"
 
-import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { InlineDisclosure } from "@/components/ui/disclosure"
+import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
 import { cn } from "@/lib/utils"
 
 // PageSectionProps describes one titled card section, the shared block of every Vulcan page.

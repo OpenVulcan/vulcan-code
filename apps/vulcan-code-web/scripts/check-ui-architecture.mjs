@@ -176,9 +176,11 @@ export async function checkUiArchitecture(
       failures.push(`${name}: tests must not read TypeScript source text; assert rendered behavior or exported contracts instead`)
     }
     if (name.endsWith(".tsx") && !name.includes(".test.")) {
-      // shells lists this file's bespoke feedback shell classes, reported once each.
-      // shells 列出本文件的自定义反馈外壳类名，每个只报告一次。
-      const shells = [...new Set(moduleClassNames(source).filter((token) => feedbackShellPattern.test(token)))]
+      // shells lists this file's bespoke feedback shell classes, reported once each. The ui-kit owns the base
+      // empty and notice primitives that the page kit builds on, so its own classes are not bespoke.
+      // shells 列出本文件的自定义反馈外壳类名，每个只报告一次。ui-kit 拥有页面套件所依赖的基础空状态与提示原语，
+      // 因此其自身类名不属于自定义外壳。
+      const shells = name.startsWith("ui-kit/") ? [] : [...new Set(moduleClassNames(source).filter((token) => feedbackShellPattern.test(token)))]
       for (const shell of shells) {
         if (feedbackShells.has(shell)) seenFeedbackShells.add(shell)
         else failures.push(`${name}: bespoke feedback shell "${shell}"; use PageEmptyState or PageNotice from @/components/page`)

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Activity, Gauge, Hammer, Pause, RotateCcw, ShieldCheck, Sparkles, Square, Wrench } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { getKnowledgeEmbeddingStatus, getKnowledgeIndexIntegrity, getKnowledgeOperation } from "@/service/knowledge-base-service";
 import type { KnowledgeLibrarySummary } from "@/types/knowledge-base";

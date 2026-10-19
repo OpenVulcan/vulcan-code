@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { useWorkbenchShellChrome } from "./shell-chrome";
 import { copyText, initialThemeMode } from "./types";
 
@@ -17,7 +17,7 @@ const nativeShell = vi.hoisted(() => ({
   subscribeWindowResize: vi.fn(async (_handler: () => void) => () => {}),
 }));
 vi.mock("@/service/webui-service-runtime", () => ({ shellClient: nativeShell }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn() } }));
 vi.mock("@/components/shell/app-chrome", () => ({
   // GlobalActions forwards only explicit theme activation from the test button.
   // GlobalActions 仅从测试按钮转发明确的主题切换操作。

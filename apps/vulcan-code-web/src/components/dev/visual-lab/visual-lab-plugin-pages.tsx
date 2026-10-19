@@ -5,8 +5,8 @@ import {
 } from "@/components/page"
 import { createPluginSettingsPage, type PluginSettingsHost } from "@/components/plugins/plugin-settings-page"
 import type { PluginCredentialStatus, PluginSettingsLayout } from "@/components/plugins/plugin-settings-layout"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
 
 import type { VisualLabDemoProps, VisualLabText } from "./visual-lab-shared"
 

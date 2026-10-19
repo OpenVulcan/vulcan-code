@@ -1,7 +1,7 @@
 import * as React from "react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { toast } from "@/ui-kit/primitives/toast";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { PLUGIN_UI_SDK_COMPONENTS, type PluginUiSdkComponents } from "./plugin-ui-sdk-components";
 import { useI18n } from "@/i18n";
 import { createPluginSettingsPage } from "./plugin-settings-page";

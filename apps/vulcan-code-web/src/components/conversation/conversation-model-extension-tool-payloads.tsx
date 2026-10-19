@@ -3,7 +3,7 @@ import { LogIn, LogOut } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { useConversationMeasuredExpansion } from "@/components/conversation/conversation-measured-collapse";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui-kit/primitives/tabs";
 import { useI18n } from "@/i18n";
 
 // ModelExtensionToolPayloadCardsProps describes the authoritative input and output retained for one tool call.

@@ -1,10 +1,10 @@
 import * as React from "react";
 import { Circle, GitCompare, History, Minus, MoveRight, PencilLine, Plus, RefreshCw, RotateCcw, type LucideIcon } from "lucide-react";
 import { PageEmptyState } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { formatDateTime } from "@/lib/display-format";
 import { getKnowledgeChange, listKnowledgeChanges } from "@/service/knowledge-base-service";

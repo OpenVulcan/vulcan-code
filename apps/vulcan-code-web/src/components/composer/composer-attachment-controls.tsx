@@ -26,9 +26,9 @@ import {
   X,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Button } from "@/ui-kit/primitives/button";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -40,12 +40,12 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import {
   THINKING_DISPLAY_MODE_OPTIONS,
   type ThinkingDisplayMode,

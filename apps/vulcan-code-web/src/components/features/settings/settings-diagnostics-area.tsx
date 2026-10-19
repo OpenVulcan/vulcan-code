@@ -5,10 +5,10 @@ import {
 import * as React from "react";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import { PanelTitle, StatusIcon } from "@/components/shared/status";
-import { Button } from "@/components/ui/button";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Switch } from "@/components/ui/switch";
-import { Input } from "@/components/ui/input";
+import { Button } from "@/ui-kit/primitives/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
+import { Switch } from "@/ui-kit/primitives/switch";
+import { Input } from "@/ui-kit/primitives/input";
 import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import { useI18n } from "@/i18n";
 import type {

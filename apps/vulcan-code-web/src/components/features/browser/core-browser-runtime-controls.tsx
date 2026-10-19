@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { useI18n } from "@/i18n";
 import { getCoreBrowserRuntimeStatus, installCoreBrowserRuntime, type CoreBrowserRuntimeStatus } from "@/service/core-browser-service";
 
