@@ -948,29 +948,34 @@ export function WorkbenchLayout(props: {
     applyLifecycleResponseSnapshot,
   });
 
+  // approvalRequestId names the pending tool approval; its outcome shows on the resumed tool card and the session
+  // state, so only ask answers are acknowledged with a toast.
+  // approvalRequestId 标识待处理的工具审批；其结果体现在恢复的工具卡与会话状态上，因此只有 ask 回答才以提示确认。
+  const approvalRequestId = workbenchState.pendingQuestion?.approval ? workbenchState.pendingQuestion.id : null;
+
   // handlePendingQuestionSubmit resumes a blocked ask tool call with validated modal answers.
   // handlePendingQuestionSubmit 使用弹窗校验后的答案恢复被阻塞的 ask 工具调用。
   const handlePendingQuestionSubmit = React.useCallback(async (requestId: string, answers: string[][]) => {
     try {
       await replyPendingQuestion(requestId, answers);
-      toast.success(i18n.t("workbenchAsk.submitted"));
+      if (requestId !== approvalRequestId) toast.success(i18n.t("workbenchAsk.submitted"));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       throw nextError;
     }
-  }, [i18n.t]);
+  }, [approvalRequestId, i18n.t]);
 
   // handlePendingQuestionReject cancels a blocked ask tool call after a second confirmation.
   // handlePendingQuestionReject 在二次确认后取消被阻塞的 ask 工具调用。
   const handlePendingQuestionReject = React.useCallback(async (requestId: string) => {
     try {
       await rejectPendingQuestion(requestId);
-      toast.info(i18n.t("workbenchAsk.cancelled"));
+      if (requestId !== approvalRequestId) toast.info(i18n.t("workbenchAsk.cancelled"));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       throw nextError;
     }
-  }, [i18n.t]);
+  }, [approvalRequestId, i18n.t]);
 
   React.useEffect(() => {
     draftConversationIdRef.current = draftConversation?.id ?? null;
