@@ -337,7 +337,7 @@ export function WorkspaceMemoryPanel(props: {
       }
       setActiveTab(value === "static" ? "static" : "dynamic");
     }}>
-      <TabsList className="context-injection-tabs-list">
+      <TabsList className="context-injection-tabs-list" variant="line">
         <TabsTrigger value="dynamic">
           <BrainCircuit className="context-injection-tab-icon left-brain" size={13} />
           <span>{t("contextPanel.dynamic")}</span>
@@ -496,12 +496,8 @@ function VmmStaticProfileView(props: {
               <div className="vmm-static-profile-node-list">
                 {date.nodes.map((node) => (
                   <article className="vmm-static-profile-node" key={node.id}>
-                    <div className="vmm-static-profile-node-meta">
-                      <ContextInjectionPill label={node.priority} />
-                      <ContextInjectionPill label={node.level} />
-                      <ContextInjectionPill label={node.refreshWeight} />
-                    </div>
                     <div className="vmm-static-profile-node-content">{node.content}</div>
+                    <div className="vmm-static-profile-node-meta">{[node.priority, node.level, node.refreshWeight].join(" · ")}</div>
                   </article>
                 ))}
               </div>
