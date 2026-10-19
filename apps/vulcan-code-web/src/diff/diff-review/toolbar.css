@@ -103,7 +103,7 @@
 }
 
 .diff-stat {
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--vk-font-mono);
   font-size: var(--vk-fs-2xs);
   font-weight: 600;
 }
@@ -192,8 +192,7 @@
   width: 150px;
 }
 
-.diff-style-menu,
-.diff-style-sub-menu {
+.diff-style-menu {
   min-width: min(246px, calc(100vw - 32px));
   width: max-content;
   max-width: calc(100vw - 32px);
@@ -201,7 +200,6 @@
 
 .diff-mode-menu [data-slot="dropdown-menu-item"],
 .diff-style-menu [data-slot="dropdown-menu-item"],
-.diff-style-sub-menu [data-slot="dropdown-menu-item"],
 .diff-mode-sub-trigger {
   display: flex;
   justify-content: space-between;
@@ -210,11 +208,6 @@
   white-space: nowrap;
 }
 
-.diff-menu-check-spacer {
-  display: inline-block;
-  width: 13px;
-  height: 13px;
-}
 
 .diff-style-toggle-item {
   justify-content: flex-start !important;
@@ -379,8 +372,7 @@
 .diff-mode-menu,
 .diff-commit-menu,
 .diff-branch-menu,
-.diff-style-menu,
-.diff-style-sub-menu {
+.diff-style-menu {
   z-index: 260;
 }
 
@@ -416,7 +408,7 @@
   width: 48px;
   overflow: hidden;
   color: var(--vk-ink-2);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--vk-font-mono);
   font-size: var(--vk-fs-xs);
   text-align: right;
   white-space: nowrap;

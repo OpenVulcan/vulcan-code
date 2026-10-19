@@ -38,7 +38,7 @@
   padding: 0 12px;
   background: color-mix(in oklab, var(--vk-sunken) 66%, var(--vk-ground));
   color: var(--vk-ink-2);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--vk-font-mono);
   font-size: var(--vk-fs-sm);
 }
 

@@ -34,7 +34,7 @@
 .settings-page-body > .vk-page { flex: none; }
 /* The frame owns the gutter, so page wrappers drop their historical padding. */
 /* 页面留白由框架负责，页面包装层移除历史内边距。 */
-.settings-page-body > :is(.settings-preferences-page, .settings-direct-content) { padding: 0; }
+.settings-page-body > .settings-preferences-page { padding: 0; }
 /* Master-detail directories read as one bordered panel inside the frame. */
 /* 主从目录在框架内呈现为一个带边框的面板。 */
 .settings-page-body > .vk-directory:has(> [data-navigation-mode="column"]) {

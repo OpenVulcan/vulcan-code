@@ -11,10 +11,6 @@
   box-shadow: none;
 }
 
-.vmm-memory-page [data-slot="card"].border-dashed {
-  border-style: dashed;
-}
-
 .vmm-memory-shell {
   display: grid;
   min-height: 100%;

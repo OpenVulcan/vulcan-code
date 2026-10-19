@@ -47,7 +47,6 @@
   max-width: 100%;
 }
 
-.diff-snapshot-policy-note,
 .diff-render-policy-note {
   display: flex;
   align-items: center;
@@ -61,14 +60,7 @@
   font-size: var(--vk-fs-sm);
 }
 
-.diff-snapshot-policy-note {
-  position: sticky;
-  top: 0;
-  z-index: 4;
-}
-
-.diff-render-policy-note span,
-.diff-snapshot-policy-note span {
+.diff-render-policy-note span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -201,7 +193,7 @@
 }
 
 .diff-file-paths strong {
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--vk-font-mono);
   font-size: var(--vk-fs-sm);
 }
 
@@ -261,7 +253,7 @@
 
 .diff-file-search-placeholder code {
   color: var(--vk-ink-2);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--vk-font-mono);
   font-size: var(--vk-fs-sm);
   line-height: 17px;
 }
@@ -285,50 +277,3 @@
 .diff-hunk:first-child {
   border-top: 0;
 }
-
-.diff-hunk-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-  padding: 6px 12px;
-  min-height: 29px;
-  background: color-mix(in oklab, var(--vk-sunken) 65%, var(--vk-ground));
-  color: var(--vk-ink-2);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--vk-fs-sm);
-  line-height: 17px;
-  white-space: pre;
-}
-
-.diff-hunk-header-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.diff-hunk-expand-controls {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-}
-
-.diff-hunk-expand-button {
-  flex: 0 0 auto;
-  height: 20px;
-  border: 1px solid color-mix(in oklab, var(--vk-line) 82%, transparent);
-  background: color-mix(in oklab, var(--vk-ground) 78%, var(--vk-sunken));
-  color: var(--vk-ink-2);
-  font-family: inherit;
-  font-size: var(--vk-fs-xs);
-  line-height: 18px;
-  padding: 0 6px;
-}
-
-.diff-hunk-expand-button:hover {
-  background: var(--vk-ground);
-  color: var(--vk-ink);
-}
-

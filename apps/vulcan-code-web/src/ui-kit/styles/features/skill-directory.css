@@ -189,7 +189,7 @@
   field-sizing: fixed;
   max-height: 320px;
   overflow-y: auto;
-  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+  font-family: var(--vk-font-mono);
 }
 
 .agent-prompt-field.primary textarea {
@@ -1199,7 +1199,7 @@
   background: color-mix(in srgb, var(--vk-ink) 3%, transparent);
   color: var(--vk-ink);
   padding: 10px;
-  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+  font-family: var(--vk-font-mono);
   font-size: var(--vk-fs-sm);
   white-space: pre-wrap;
 }

@@ -211,7 +211,7 @@
   flex: 0 0 auto;
   gap: 5px;
   align-items: center;
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--vk-font-mono);
   font-size: var(--vk-fs-xs);
   font-weight: 600;
   white-space: nowrap;
@@ -233,7 +233,7 @@
   height: 16px;
   background: color-mix(in oklab, var(--vk-sunken) 66%, var(--vk-ground));
   color: var(--vk-ink-2);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--vk-font-mono);
   font-size: 8px;
   font-weight: 700;
   line-height: 1;

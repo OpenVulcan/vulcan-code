@@ -1,11 +1,3 @@
-.diff-lines {
-  display: block;
-  width: 100%;
-  min-width: 100%;
-  max-width: none;
-  overflow: visible;
-}
-
 .diff-virtual-lines {
   display: block;
   width: 100%;
@@ -35,7 +27,7 @@
   --diffs-number-gutter-width: calc(var(--diffs-min-number-column-width, var(--diffs-min-number-column-width-default, 4ch)) + 3ch);
   background: var(--diffs-bg);
   color: var(--diffs-fg);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--vk-font-mono);
   font-size: var(--vk-fs-sm);
   line-height: 20px;
   tab-size: 2;
@@ -101,10 +93,6 @@
   min-width: 1px;
   contain: strict;
   pointer-events: none;
-}
-
-.diff-hunk-header.virtual {
-  border-top: 1px solid var(--vk-line);
 }
 
 .diff-binary-note {

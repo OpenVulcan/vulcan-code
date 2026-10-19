@@ -139,12 +139,12 @@
     min-width: 40px;
   }
 
-  :is([data-slot="dialog-content"], .settings-form-field) :is([data-slot="input"], [data-slot="select-trigger"]),
+  [data-slot="dialog-content"] :is([data-slot="input"], [data-slot="select-trigger"]),
   [data-slot="dialog-footer"] button {
     min-height: 40px;
   }
 
-  :is([data-slot="dialog-content"], .settings-form-field) input {
+  [data-slot="dialog-content"] input {
     font-size: var(--vk-fs-lg);
   }
 }
