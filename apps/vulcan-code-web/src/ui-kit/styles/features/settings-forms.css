@@ -38,6 +38,9 @@
 .vk-form-code { min-height: 8rem; font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
 .vk-form-code[data-size="lg"] { min-height: 13rem; }
 .vk-form-inline { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+/* A text input in an inline row grows into the free space instead of pushing its buttons onto the next line. */
+/* 行内行中的文本输入占据剩余空间，而不是把按钮挤到下一行。 */
+.vk-form-inline > .vk-input { flex: 1 1 5rem; width: auto; min-width: 0; }
 .vk-form-scroll { min-height: 0; overflow-y: auto; }
 .vk-form-choices { display: grid; gap: 1px; }
 .vk-form-choice { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 2); cursor: pointer; }
@@ -69,6 +72,7 @@
 .vk-form-fill { flex: 1; min-width: 0; }
 .vk-form-fit { justify-self: start; width: fit-content; }
 .vk-form-cols3 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: calc(var(--vk-u) * 2); }
+.vk-form-cols3 > .vk-select { width: 100%; }
 .vk-form-cols2 { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: calc(var(--vk-u) * 2); }
 .vk-form-tile { padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); font-size: var(--vk-fs-sm); }
 .vk-form-tile:has([aria-checked="true"]) { border-color: color-mix(in srgb, var(--vk-ember) 50%, var(--vk-line)); background: var(--vk-select); }

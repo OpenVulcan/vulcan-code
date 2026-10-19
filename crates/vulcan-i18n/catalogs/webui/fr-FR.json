@@ -2391,7 +2391,6 @@
   "memory.overview.title": "Vue d’ensemble de l’état",
   "memory.overview.description": "Consultez l’état du service de mémoire, terminez la configuration initiale et résolvez les problèmes bloquants.",
   "memory.project": "Projet",
-  "memory.vmm.action.running": "Exécution de l’action VMM : {action}",
   "memory.vmm.action.failed": "Échec de l’action VMM : {message}",
   "memory.vmm.project.loading": "Chargement de la configuration VMM du projet : {project}.",
   "memory.vmm.project.selected": "Projet en cours de modification : {project}.",

@@ -2391,7 +2391,6 @@
   "memory.overview.title": "Status overview",
   "memory.overview.description": "Review memory service status, complete initial setup, and resolve blocking issues.",
   "memory.project": "Project",
-  "memory.vmm.action.running": "Running VMM action: {action}",
   "memory.vmm.action.failed": "VMM action failed: {message}",
   "memory.vmm.project.loading": "Loading project VMM config: {project}.",
   "memory.vmm.project.selected": "Editing project: {project}.",

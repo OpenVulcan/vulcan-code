@@ -191,6 +191,9 @@
   cursor: pointer;
 }
 .vk-select[data-size="sm"] { height: var(--vk-h-sm); font-size: var(--vk-fs-sm); }
+/* Inside a stacked field the trigger spans the field like a text input does. */
+/* 在纵向字段中，触发器与文本输入一样占满字段宽度。 */
+.vk-field:not([data-orientation="horizontal"]) > .vk-select { width: 100%; }
 .vk-select[data-placeholder] > .vk-select-value { color: var(--vk-ink-3); }
 .vk-select[data-inline] { width: auto; background: transparent; border-color: transparent; padding: 0 calc(var(--vk-u) * 2); }
 .vk-select[data-inline]:hover { background: var(--vk-hover); }

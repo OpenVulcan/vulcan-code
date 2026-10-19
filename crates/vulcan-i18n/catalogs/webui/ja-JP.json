@@ -2391,7 +2391,6 @@
   "memory.overview.title": "ステータスの概要",
   "memory.overview.description": "メモリサービスの状態を確認し、初期設定を完了して、ブロックしている問題を解決します。",
   "memory.project": "プロジェクト",
-  "memory.vmm.action.running": "VMM アクションを実行中：{action}",
   "memory.vmm.action.failed": "VMM アクションに失敗しました：{message}",
   "memory.vmm.project.loading": "プロジェクトの VMM 設定を読み込み中：{project}。",
   "memory.vmm.project.selected": "編集中のプロジェクト：{project}。",

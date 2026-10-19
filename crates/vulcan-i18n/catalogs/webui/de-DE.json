@@ -2391,7 +2391,6 @@
   "memory.overview.title": "Statusübersicht",
   "memory.overview.description": "Status des Gedächtnisdienstes prüfen, Ersteinrichtung abschließen und blockierende Probleme beheben.",
   "memory.project": "Projekt",
-  "memory.vmm.action.running": "VMM-Aktion wird ausgeführt: {action}",
   "memory.vmm.action.failed": "VMM-Aktion fehlgeschlagen: {message}",
   "memory.vmm.project.loading": "Projekt-VMM-Konfiguration wird geladen: {project}.",
   "memory.vmm.project.selected": "Bearbeitetes Projekt: {project}.",

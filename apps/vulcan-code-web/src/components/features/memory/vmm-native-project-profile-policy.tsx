@@ -1,4 +1,5 @@
 import * as React from "react"
+import { RefreshCw } from "lucide-react"
 import { Button } from "@/ui-kit/primitives/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
 import { Label } from "@/ui-kit/primitives/label"
@@ -113,9 +114,11 @@ function ProjectProfileEditor({ projectId, busy, onRunAction }: Omit<Props, "pro
   const changed = parsed && policy && levels.some((level) => fields.some((field) => parsed[level][field] !== policy.effective[level][field]))
   return <div className="vk-form-loose">
     {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
-    <Button variant="outline" disabled={disabled} onClick={() => void execute("read")}>{t("memory.projectRetention.reload")}</Button>
+    <div className="vk-form-bar">
+      <p className="vk-form-text">{policy ? t(policy.overrides === null ? "memory.projectProfile.inherited" : "memory.projectRetention.overridden") : null}</p>
+      <Button size="sm" variant="ghost" disabled={disabled} onClick={() => void execute("read")}><RefreshCw aria-hidden="true" className={pending ? "vk-spin" : undefined} />{t("memory.projectRetention.reload")}</Button>
+    </div>
     {policy && draft ? <>
-      <p className="vk-form-text">{t(policy.overrides === null ? "memory.projectProfile.inherited" : "memory.projectRetention.overridden")}</p>
       {levels.map((level) => <fieldset key={level} disabled={disabled} className="vk-form-group vk-mem-three">
         <legend>{t(`memory.profilePolicy.${level}`)}</legend>
         {fields.map((field) => <div key={field} className="vk-form-tight">

@@ -60,6 +60,7 @@
 .vmm-session-row.selected { background: var(--vk-hover); box-shadow: inset 3px 0 var(--vk-ink); }
 .vmm-session-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .vmm-session-filters > label { flex: 1; min-width: 160px; }
+.vmm-session-filters > label > .vk-select, .vmm-filter-fields .vk-select { width: 100%; }
 /* Keep the project identity readable before placing secondary actions beside it. */
 /* 优先保证项目名称可读，再为次要操作分配同行空间。 */
 .vmm-session-scope > label { flex-basis: 220px; }
@@ -143,7 +144,7 @@
 .vmm-profile-node-ref { color: var(--vk-ink-2); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
 /* Target selection is a compact form section, with readable picker width independent of identity text. */
 /* 目标选择是紧凑表单分区，选择器的可读宽度独立于身份文本。 */
-.vmm-profile-target { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding-block: 12px; border-bottom: var(--vk-bw) solid var(--vk-line); }
+.vmm-profile-target { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 3) calc(var(--vk-u) * 5); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
 .vmm-profile-picker { flex: 1 1 280px; min-width: min(100%, 240px); max-width: 480px; }
 .vmm-profile-identity { flex: 1 1 240px; }
 .vmm-profile-target-description { flex-basis: 100%; }
@@ -155,6 +156,7 @@
 .vmm-project-directory { min-width: 0; }
 .vmm-project-directory-expanded { display: flex; flex-direction: column; gap: 10px; }
 .vmm-project-picker { display: none; }
+.vmm-project-picker > .vk-combobox { max-width: 24rem; }
 .vmm-project-directory .vmm-project-list { max-height: 520px; overflow-y: auto; }
 .vmm-project-directory .vmm-project-list button { display: flex; justify-content: space-between; gap: 8px; height: auto; white-space: normal; }
 /* The identity column absorbs long names and paths; the binding state keeps its own width so it never wraps per character. */

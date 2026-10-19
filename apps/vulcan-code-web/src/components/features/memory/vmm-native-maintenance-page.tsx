@@ -561,7 +561,7 @@ function RecycleBatchCard({ batch, busy, onConfirm, projectName, onRunAction }: 
     </div>
     <div className="vmm-recycle-batch-actions">
       <VmmNativeRecycleRecords batch={batch} busy={busy} onRunAction={onRunAction} />
-      <Button disabled={busy} onClick={(event) => onConfirm("restore", event.currentTarget)} size="sm" type="button" variant="outline"><ArchiveRestore className="vk-icon" aria-hidden="true" />{t("memory.maintenance.restore")}</Button>
+      <Button disabled={busy} onClick={(event) => onConfirm("restore", event.currentTarget)} size="sm" type="button" variant="ghost"><ArchiveRestore className="vk-icon" aria-hidden="true" />{t("memory.maintenance.restore")}</Button>
       <Button disabled={busy} onClick={(event) => onConfirm("purge", event.currentTarget)} size="sm" type="button" variant="destructive"><Trash2 className="vk-icon" aria-hidden="true" />{t("memory.maintenance.purge")}</Button>
     </div>
     {batch.manualSelection ? <details className="vmm-recycle-batch-sources">

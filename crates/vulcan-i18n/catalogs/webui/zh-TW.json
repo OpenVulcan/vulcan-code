@@ -2391,7 +2391,6 @@
   "memory.overview.title": "狀態總覽",
   "memory.overview.description": "檢視記憶服務狀態、完成首次設定並處理阻塞問題。",
   "memory.project": "專案",
-  "memory.vmm.action.running": "正在執行 VMM 動作：{action}",
   "memory.vmm.action.failed": "VMM 動作失敗：{message}",
   "memory.vmm.project.loading": "正在載入專案 VMM 設定：{project}。",
   "memory.vmm.project.selected": "目前編輯專案：{project}。",

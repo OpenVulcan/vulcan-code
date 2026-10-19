@@ -2391,7 +2391,6 @@
   "memory.overview.title": "상태 개요",
   "memory.overview.description": "메모리 서비스 상태를 검토하고, 초기 설정을 완료하고, 차단 문제를 해결합니다.",
   "memory.project": "프로젝트",
-  "memory.vmm.action.running": "VMM 작업 실행 중: {action}",
   "memory.vmm.action.failed": "VMM 작업 실패: {message}",
   "memory.vmm.project.loading": "프로젝트 VMM 구성을 불러오는 중: {project}.",
   "memory.vmm.project.selected": "편집 중인 프로젝트: {project}.",

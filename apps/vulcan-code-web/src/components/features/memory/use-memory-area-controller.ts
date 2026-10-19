@@ -486,7 +486,9 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     // requestProjectId fixes the project route only when project scope is active.
     // requestProjectId 仅在项目作用域激活时固定项目路由。
     const requestProjectId = requestScope === "project" ? projectIdRef.current : null;
-    setNotice(t("memory.vmm.action.running").replace("{action}", action));
+    // The busy state already shows progress; the notice only carries localized failures, never raw action ids or backend summaries.
+    // 忙碌状态已显示进度；提示只承载本地化失败，不显示原始动作标识或后端摘要。
+    setNotice("");
     try {
       // nextResult is the only response allowed to replace the visible action result.
       // nextResult 是唯一允许替换可见动作结果的响应。
@@ -505,7 +507,7 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
       }
       if (acceptsFeedback(operation)) {
         setResult((currentResult) => vmmResultAfterAction(currentResult, nextResult, action));
-        setNotice(nextResult.summary);
+        setNotice("");
       }
       return nextResult;
     } catch (error) {

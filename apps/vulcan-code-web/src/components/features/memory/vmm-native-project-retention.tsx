@@ -1,4 +1,5 @@
 import * as React from "react"
+import { RefreshCw } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { Button } from "@/ui-kit/primitives/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
@@ -111,9 +112,11 @@ function ProjectRetentionEditor({ projectId, busy, onRunAction }: Omit<Props, "p
   const edit = (next: Draft) => { setDraft(next); setSaved(false) }
   return <div className="vk-form-loose">
     {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
-    <Button variant="outline" disabled={disabled} onClick={() => void execute("read")}>{t("memory.projectRetention.reload")}</Button>
+    <div className="vk-form-bar">
+      <p className="vk-form-text">{policy ? t(policy.overrides === null ? "memory.projectRetention.inherited" : "memory.projectRetention.overridden") : null}</p>
+      <Button size="sm" variant="ghost" disabled={disabled} onClick={() => void execute("read")}><RefreshCw aria-hidden="true" className={pending ? "vk-spin" : undefined} />{t("memory.projectRetention.reload")}</Button>
+    </div>
     {policy && draft ? <>
-      <p className="vk-form-text">{t(policy.overrides === null ? "memory.projectRetention.inherited" : "memory.projectRetention.overridden")}</p>
       <div className="vk-form-grid">{fields.map((field) => <div key={field.key} className="vk-form-stack">
         <Label htmlFor={`project-retention-${field.key}`}>{t(field.label)}</Label>
         {field.key === "sessionIdleMs" || field.key === "trashRetentionMs"

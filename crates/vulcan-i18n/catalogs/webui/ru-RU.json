@@ -2391,7 +2391,6 @@
   "memory.overview.title": "Обзор состояния",
   "memory.overview.description": "Проверьте состояние службы памяти, завершите первоначальную настройку и устраните блокирующие проблемы.",
   "memory.project": "Проект",
-  "memory.vmm.action.running": "Выполняется действие VMM: {action}",
   "memory.vmm.action.failed": "Ошибка действия VMM: {message}",
   "memory.vmm.project.loading": "Загрузка конфигурации VMM проекта: {project}.",
   "memory.vmm.project.selected": "Редактируемый проект: {project}.",

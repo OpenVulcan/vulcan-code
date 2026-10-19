@@ -65,7 +65,7 @@ export function VmmNativeRecycleRecords({ batch, busy, onRunAction }: RecycleRec
   }
 
   return <Dialog open={open} onOpenChange={(visible) => { setOpen(visible); if (!visible) { generation.current += 1; setPage(null); setPending(false) } }}>
-    <DialogTrigger asChild><Button type="button" size="sm" variant="outline" disabled={busy || pending} onClick={() => void load("turn", 0, null)}>{t("memory.recycleRecords.inspect")}</Button></DialogTrigger>
+    <DialogTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={busy || pending} onClick={() => void load("turn", 0, null)}>{t("memory.recycleRecords.inspect")}</Button></DialogTrigger>
       <DialogContent size="xl" scrollMode="fixed-footer">
         <DialogHeader><DialogTitle>{t("memory.recycleRecords.inspect")}</DialogTitle><DialogDescription>{t("memory.recycleRecords.description")}</DialogDescription></DialogHeader>
         <div className="vk-form-stack vk-mem-scroll-body">
