@@ -21,6 +21,7 @@ import type { SkillActionProps } from "./skill-area-types";
 import { localizedPluginText, pluginDisplayName } from "./plugin-localized-text";
 import { usePluginEnvironmentTasks } from "./use-plugin-environment-tasks";
 import { InspectedPluginNotices } from "./plugin-permission-changes";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // VulcanPluginStatusFilter identifies the lifecycle subset shown in the Vulcan Plugin list.
 // VulcanPluginStatusFilter 标识 Vulcan 插件列表中显示的生命周期子集。
@@ -962,7 +963,7 @@ export function VulcanPluginsPanel(props: {
                 title={toggleLabel}
               />
               </div>
-              {installTask ? <div className="text-xs" role={installTask.state === "failed" ? "alert" : "status"}>
+              {installTask ? <div className="vk-form-note" role={installTask.state === "failed" ? "alert" : "status"}>
                 {installTask.state === "failed"
                   ? formatMessage(t("skills.plugins.runtimeInstallFailed"), { error: installTask.error ?? t("skills.plugins.unknownError") })
                   : installTask.state === "succeeded"
@@ -998,7 +999,7 @@ export function VulcanPluginsPanel(props: {
                 ? (formatMessage(t("skills.plugins.resetConfigurationRestoresDefaults"), { name: pendingDestructive.plugin.name }))
                 : pendingDestructive ? (formatMessage(t("skills.plugins.deleteCredentialEnabledServers"), { secretKey: pendingDestructive.secretKey })) : ""}</AlertDialogDescription>
           </AlertDialogHeader>
-          {(pendingDestructive?.kind === "secret" ? secretError : installError) ? <p role="alert" className="text-sm text-destructive">{pendingDestructive?.kind === "secret" ? secretError : installError}</p> : null}
+          {(pendingDestructive?.kind === "secret" ? secretError : installError) ? <p role="alert" className="vk-field-error">{pendingDestructive?.kind === "secret" ? secretError : installError}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={mutationBusy}>{t("skills.plugins.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={mutationBusy} onClick={(event) => {

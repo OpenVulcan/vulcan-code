@@ -149,7 +149,7 @@ export function PluginResourceDiagnostics(props: PluginResourceDiagnosticsProps)
         : formatMessage(t(selection.kind === "update" ? "pluginDiagnostics.subject.update" : "pluginDiagnostics.subject.uninstall"), { name })}</p>
     </PageToolbar>
     {busy && current === null && <StreamPlaceholder count={2} label={t("ui.loading")} shape="rows" />}
-    {current?.error && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{current.error}</span></PageNotice>}
+    {current?.error && <PageNotice tone="error"><span className="vk-wrap-pre">{current.error}</span></PageNotice>}
     {current !== null && !current.fresh && current.report !== null && !busy && <PageNotice tone="info">{t("pluginUpdates.stale")}</PageNotice>}
     {current?.report !== null && current?.report !== undefined && resources === null && <PageNotice tone="warning">{t("pluginDiagnostics.unavailable")}</PageNotice>}
     {resources && <>

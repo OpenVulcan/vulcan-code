@@ -271,7 +271,7 @@ export function LuaSkillToolsDialog(props: {
   }, []);
   return (
     <Dialog open={props.open && skill !== null} onOpenChange={(open) => { if (!writingRef.current) props.onOpenChange(open); }}>
-      <DialogContent className="lua-skill-tools-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
+      <DialogContent className="lua-skill-tools-dialog" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{skill ? `${skill.displayName} ${t("skills.action.tools")}` : t("skills.lua.toolsTitle")}</DialogTitle>
           <DialogDescription>{skill ? `${skill.skillId} · ${skill.tools.length} ${t("skills.label.runtimeTools")}` : t("skills.lua.toolsDescription")}</DialogDescription>

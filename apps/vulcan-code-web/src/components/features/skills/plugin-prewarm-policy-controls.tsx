@@ -104,7 +104,7 @@ export function PluginPrewarmPolicyControls(props: { plugins: PluginSummary[] })
   };
 
   return <div className="plugin-prewarm">
-    {error && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{error}</span></PageNotice>}
+    {error && <PageNotice tone="error"><span className="vk-wrap-pre">{error}</span></PageNotice>}
     {status === null && busy && <PageHint role="status">{t("ui.loading")}</PageHint>}
     {status !== null && !fresh && !busy && <PageNotice actions={<Button onClick={() => void management.refresh()} size="sm" type="button" variant="outline">
       {t("pluginRuntime.refresh")}</Button>} tone="info">{t("pluginPrewarmPolicy.stale")}</PageNotice>}
@@ -123,7 +123,7 @@ export function PluginPrewarmPolicyControls(props: { plugins: PluginSummary[] })
         size="sm" type="button" variant={variant}>{t(label)}</Button>;
     })} tone={receipt.phase === "committed" ? "success" : receipt.phase === "interrupted" ? "error" : receipt.phase === "cancelled" ? "info" : "warning"}>
       <p>{t(prewarmReceiptLabels[receipt.phase])}</p>
-      {(receipt.error || receipt.persistenceError) && <p className="whitespace-pre-wrap break-all">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
+      {(receipt.error || receipt.persistenceError) && <p className="vk-wrap-pre">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
       <TechnicalDetails entries={[["updateId", <code key="id">{receipt.request.updateId}</code>], ["phase", <code key="phase">{receipt.phase}</code>]]}
         extra={<pre>{JSON.stringify(receipt, null, 2)}</pre>} />
     </PageNotice>}
@@ -148,7 +148,7 @@ export function PluginPrewarmPolicyControls(props: { plugins: PluginSummary[] })
       {/* The fieldset locks only the rows; cancel stays reachable so a stale draft can always be discarded. */}
       {/* fieldset 仅锁定规则行；取消保持可用，使过期草稿始终可以丢弃。 */}
       <fieldset className="plugin-prewarm-editor-fields" disabled={!writable || !currentDraft}>
-        <legend className="sr-only">{t("pluginPrewarmPolicy.replacement")}</legend>
+        <legend className="vk-sr-only">{t("pluginPrewarmPolicy.replacement")}</legend>
         {draft.rows.length > 0 && <div className="plugin-prewarm-editor-head" aria-hidden="true">
           <span>{t("pluginPrewarmPolicy.plugin")}</span><span>{t("pluginPrewarmPolicy.tool")}</span><span>{t("pluginPrewarmPolicy.count")}</span><span />
         </div>}
@@ -159,16 +159,16 @@ export function PluginPrewarmPolicyControls(props: { plugins: PluginSummary[] })
           const options = luaPlugins.map((plugin) => ({ id: plugin.id, name: plugin.name }));
           if (owner === undefined && row.pluginId) options.push({ id: row.pluginId, name: row.pluginId });
           return <div className="plugin-prewarm-editor-row" key={row.id}>
-            <label className="sr-only" htmlFor={`${prefix}-${row.id}-plugin`}>{t("pluginPrewarmPolicy.plugin")}</label>
+            <label className="vk-sr-only" htmlFor={`${prefix}-${row.id}-plugin`}>{t("pluginPrewarmPolicy.plugin")}</label>
             <Select onValueChange={(value) => update(row.id, { pluginId: value, toolId: "" })} value={row.pluginId}>
               <SelectTrigger id={`${prefix}-${row.id}-plugin`}><SelectValue placeholder={t("pluginPrewarmPolicy.plugin")} /></SelectTrigger>
               <SelectContent>{options.map((plugin) => <SelectItem key={plugin.id} value={plugin.id}>{plugin.name}</SelectItem>)}</SelectContent>
             </Select>
-            <label className="sr-only" htmlFor={`${prefix}-${row.id}-tool`}>{t("pluginPrewarmPolicy.tool")}</label>
+            <label className="vk-sr-only" htmlFor={`${prefix}-${row.id}-tool`}>{t("pluginPrewarmPolicy.tool")}</label>
             <Input id={`${prefix}-${row.id}-tool`} list={`${prefix}-${row.id}-tools`} onChange={(event) => update(row.id, { toolId: event.target.value })}
               placeholder={t("pluginPrewarmPolicy.toolPlaceholder")} value={row.toolId} />
             <datalist id={`${prefix}-${row.id}-tools`}>{(owner?.tools ?? []).map((tool) => <option key={tool.id} value={tool.id} />)}</datalist>
-            <label className="sr-only" htmlFor={`${prefix}-${row.id}-target`}>{t("pluginPrewarmPolicy.count")}</label>
+            <label className="vk-sr-only" htmlFor={`${prefix}-${row.id}-target`}>{t("pluginPrewarmPolicy.count")}</label>
             <Input id={`${prefix}-${row.id}-target`} inputMode="numeric" onChange={(event) => update(row.id, { target: event.target.value })} value={row.target} />
             <IconButton aria-label={t("pluginPrewarmPolicy.remove")} onClick={() => setDraft({ ...draft, rows: draft.rows.filter((candidate) => candidate.id !== row.id) })} type="button">
               <Trash2 size={15} /></IconButton>

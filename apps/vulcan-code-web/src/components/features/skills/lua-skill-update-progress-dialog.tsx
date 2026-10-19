@@ -6,6 +6,7 @@ import { Progress } from "@/ui-kit/primitives/progress";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { LuaSkillsOperationProgressSummary } from "@/types";
 import { formatBytes } from "@/lib/display-format";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // LuaSkillUpdateRequest retains the clicked package and RPC result before progress arrives.
 // LuaSkillUpdateRequest 在进度到达前保留已点击的技能包与 RPC 结果。
@@ -104,34 +105,30 @@ export function LuaSkillUpdateProgressDialog(props: {
         onEscapeKeyDown={(event) => { if (running) event.preventDefault(); }}
         onInteractOutside={(event) => { if (running) event.preventDefault(); }}>
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            {running ? <LoaderCircle size={18} className="motion-safe:animate-spin" aria-hidden="true" />
-              : failed ? <CircleAlert size={18} className="text-destructive" aria-hidden="true" />
-                : succeeded ? <CheckCircle2 size={18} className="text-primary" aria-hidden="true" /> : null}
+          <DialogTitle className="vk-form-inline">
+            {running ? <LoaderCircle size={18} className="vk-spin" aria-hidden="true" />
+              : failed ? <CircleAlert size={18} className="vk-form-icon" data-tone="bad" aria-hidden="true" />
+                : succeeded ? <CheckCircle2 size={18} className="vk-form-icon" data-tone="ok" aria-hidden="true" /> : null}
             {title}
           </DialogTitle>
           <DialogDescription>{skillId ?? t("skills.update.luaskillsPackageUpdate")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3" role={failed ? "alert" : "status"}>
-          <div className="flex items-center justify-between gap-4">
-            <span className="text-muted-foreground">{succeeded ? t("skills.update.updateCompleted")
+        <div className="vk-form-stack" role={failed ? "alert" : "status"}>
+          <div className="vk-form-row">
+            <span className="vk-form-text">{succeeded ? t("skills.update.updateCompleted")
               : failed ? t("skills.update.updateIncomplete") : phaseLabel}</span>
-            <span className="shrink-0 font-medium tabular-nums">{percent === null
-              ? (running ? t("skills.update.waitingForProgress") : "—") : `${percent}%`}</span>
+            <strong className="vk-form-strong vk-num">{percent === null
+              ? (running ? t("skills.update.waitingForProgress") : "—") : `${percent}%`}</strong>
           </div>
-          {percent === null ? (
-            <div role="progressbar" aria-label={phaseLabel} className="h-2 overflow-hidden rounded-full bg-muted">
-              {running ? <div className="h-full w-1/3 rounded-full bg-primary/60 motion-safe:animate-pulse" /> : null}
-            </div>
-          ) : <Progress value={percent} aria-label={succeeded ? title : phaseLabel} className="h-2" />}
-          {!succeeded && props.progress?.bytesDone != null ? <p className="text-xs text-muted-foreground tabular-nums">
+          <Progress value={percent ?? (running ? null : 0)} aria-label={percent !== null && succeeded ? title : phaseLabel} />
+          {!succeeded && props.progress?.bytesDone != null ? <p className="vk-form-note vk-num">
             {t("skills.update.downloaded")}{formatBytes(props.progress.bytesDone)}
             {props.progress.bytesTotal != null ? ` / ${formatBytes(props.progress.bytesTotal)}` : ""}
           </p> : null}
-          {props.progress?.message ? <p className="text-sm text-muted-foreground">{props.progress.message}</p> : null}
-          {props.progress?.overflowed ? <p className="text-xs text-muted-foreground">{t("skills.update.somePhaseRecordsWere")}</p> : null}
+          {props.progress?.message ? <p className="vk-form-text">{props.progress.message}</p> : null}
+          {props.progress?.overflowed ? <p className="vk-form-note">{t("skills.update.somePhaseRecordsWere")}</p> : null}
           {props.request?.error ? <PageDetails label={t("skills.update.errorDetails")}><pre>{props.request.error}</pre></PageDetails> : null}
-          {running ? <p className="text-xs text-muted-foreground">{t("skills.update.otherSkillOperationsWait")}</p> : null}
+          {running ? <p className="vk-form-note">{t("skills.update.otherSkillOperationsWait")}</p> : null}
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" disabled={running} onClick={props.onClose}>{running

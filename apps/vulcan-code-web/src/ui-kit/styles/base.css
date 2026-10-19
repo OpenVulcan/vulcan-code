@@ -123,6 +123,12 @@
   white-space: nowrap;
 }
 
+/* Raw diagnostic text keeps its line breaks and wraps long tokens. */
+.vk-wrap-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* A control that takes its container's full width instead of fitting its content. */
+.vk-fill { width: 100%; min-width: 0; }
+
 /* Only icons placed by kit components are sized here; legacy components keep their size props. */
 .vk-icon,
 :where(.vk-root, .vk-layer) :where([class^="vk-"], [class*=" vk-"]) > svg.lucide {

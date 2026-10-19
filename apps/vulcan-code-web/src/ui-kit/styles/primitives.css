@@ -850,6 +850,7 @@ label.vk-field,
 .vk-dialog[data-scroll-mode="fixed-footer"] { overflow: hidden; }
 .vk-dialog[data-scroll-mode="content-scroll"] { grid-template-rows: auto minmax(0, 1fr); }
 .vk-dialog[data-scroll-mode="fixed-footer"] { grid-template-rows: auto minmax(0, 1fr) auto; }
+.vk-dialog-body { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .vk-dialog-x { position: absolute; top: calc(var(--vk-u) * 2); right: calc(var(--vk-u) * 2); }
 .vk-dialog-header { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 1.5); min-width: 0; padding-right: calc(var(--vk-u) * 7); }
 .vk-dialog-title { font-size: var(--vk-fs-lg); font-weight: 600; line-height: var(--vk-lh-tight); }

@@ -22,6 +22,7 @@ import type {
 
 import { LuaSkillsInferenceRoutes } from "./lua-skills-inference-routes"
 import type { SkillActionProps } from "./skill-area-types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // LuaVmPoolKey identifies one exact VM pool in the package settings document.
 // LuaVmPoolKey 标识包设置文档中的一个精确 VM 池。
@@ -507,8 +508,8 @@ export function LuaSkillsSettingsPanel(props: {
   // 页面标题、说明与重启状态位于功能页头部，主体直接从设置项开始。
   return (
     <section className="skill-page-body lua-settings-page-body">
-      <fieldset disabled={saving || retryingTarget !== null} className="lua-settings-content min-w-0 border-0 p-0">
-        {externalUpdate ? <div className="text-sm text-[var(--vcn-content-warning)]" role="status">
+      <fieldset disabled={saving || retryingTarget !== null} className="lua-settings-content vk-fieldset">
+        {externalUpdate ? <div className="vk-form-alert" data-tone="warn" role="status">
           <p>{t("skills.luaSettings.settingsChangedElsewhereYour")}</p>
           <Button variant="outline" size="sm" onClick={() => { setDraft(cloneLuaSkillsRuntimeSettings(committedSettings)); setExternalUpdate(false) }}>
             {t("skills.luaSettings.discardDraftAndLoad")}
@@ -672,7 +673,7 @@ export function LuaSkillsSettingsPanel(props: {
               onValueChange={(value) => updateDefaultEncoding(value === "auto" ? "" : value)}
               value={draft.capabilities.defaultTextEncoding ?? "auto"}
             >
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="vk-fill">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

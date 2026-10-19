@@ -167,6 +167,8 @@ fieldset.vk-form-stack, fieldset.vk-form-loose { min-width: 0; margin: 0; paddin
 .vk-form-steplog strong { display: block; font-size: var(--vk-fs-sm); font-weight: 500; }
 .vk-form-steplog span { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
 .vk-form-strong[data-tone] { color: var(--vk-tone); }
+.vk-form-icon { flex: none; }
+.vk-form-icon[data-tone] { color: var(--vk-tone); }
 
 /* ---------- Preference list: ruled rows with title and notes left, one control right ---------- */
 /* 偏好列表：带分隔线的行，左侧标题与说明，右侧单个控件。 */

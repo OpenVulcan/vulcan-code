@@ -508,16 +508,16 @@ export function LuaSkillInstallDialog(props: {
 
   return (
     <Dialog open={props.open} onOpenChange={(open) => !installingRef.current && props.onOpenChange(open)}>
-      <DialogContent size="md" scrollMode="fixed-footer" className="grid-rows-[auto_minmax(0,1fr)_auto]">
+      <DialogContent size="md" scrollMode="fixed-footer">
         <DialogHeader>
           <DialogTitle>{t("skills.lua.installTitle")}</DialogTitle>
           <DialogDescription>{t("skills.lua.installDescription")}</DialogDescription>
         </DialogHeader>
-        <form id={installFormId} className="lua-skill-install-form min-h-0 overflow-y-auto" onSubmit={submitInstall}>
+        <form id={installFormId} className="lua-skill-install-form vk-dialog-body" onSubmit={submitInstall}>
           <label className="lua-skill-install-field">
             <span>{t("skills.lua.sourceType")}</span>
             <Select disabled={installing} value={sourceType} onValueChange={(value) => setSourceType(value as "github")}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="vk-fill">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

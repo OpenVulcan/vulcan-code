@@ -119,7 +119,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
       <RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}>
       {state.busy && <PageHint role="status">{t("ui.loading")}</PageHint>}
     </PageToolbar>
-    {(state.error || formError) && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{state.error || formError}</span></PageNotice>}
+    {(state.error || formError) && <PageNotice tone="error"><span className="vk-wrap-pre">{state.error || formError}</span></PageNotice>}
     {!state.fresh && state.observation && !state.busy && <PageNotice tone="info">{t("pluginRuntime.staleRead")}</PageNotice>}
     {state.fresh && !runtime && <PageNotice tone="info">{t("pluginRuntime.noRuntime")}</PageNotice>}
     {state.pending && <PageNotice actions={<>
@@ -137,7 +137,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
         size="sm" type="button" variant={variant}>{t(label)}</Button>;
     })} tone={receipt.phase === "committed" ? "success" : receiptActive ? "warning" : "error"}>
       <p>{formatMessage(t(capacityReceiptLabels[receipt.phase]), { name: nameOf(receipt.request.pluginId), purpose: t(capacityPurposeLabels[receipt.request.purpose]) })}</p>
-      {(receipt.error || receipt.persistenceError) && <p className="whitespace-pre-wrap break-all">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
+      {(receipt.error || receipt.persistenceError) && <p className="vk-wrap-pre">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
       <TechnicalDetails entries={[["updateId", <code key="id">{receipt.request.updateId}</code>], ["phase", <code key="phase">{receipt.phase}</code>]]}
         extra={<pre>{JSON.stringify(receipt.request, null, 2)}</pre>} />
     </PageNotice>}
@@ -193,7 +193,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
         </DialogHeader>
         {draft && <div className="plugin-capacity-form">
           {!draftCurrent && <PageNotice tone="warning">{t("pluginRuntime.staleDraft")}</PageNotice>}
-          {formError && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{formError}</span></PageNotice>}
+          {formError && <PageNotice tone="error"><span className="vk-wrap-pre">{formError}</span></PageNotice>}
           <Field>
             <FieldLabel htmlFor={`${fieldPrefix}-kind`}>{t("pluginRuntime.kind")}</FieldLabel>
             <Select onValueChange={(kind) => setDraft({ ...draft, kind: kind as PluginCapacityDraft["kind"],

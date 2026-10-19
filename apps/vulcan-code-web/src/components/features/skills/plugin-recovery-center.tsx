@@ -14,6 +14,7 @@ import type { PluginMaintenanceGate } from "./plugin-maintenance-workspace";
 import { TechnicalDetails } from "./plugin-maintenance-section";
 import { capacityActionLabels, capacityPurposeLabels, capacityReceiptLabels, prewarmActionLabels, prewarmReceiptLabels } from "./plugin-policy-labels";
 import type { SkillActionProps } from "./skill-area-types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // RecoveryKind names one family of retained plugin operations shown by the recovery center.
 // RecoveryKind 命名恢复中心显示的一类保留插件操作。
@@ -277,7 +278,7 @@ export function PluginRecoveryCenter(props: PluginRecoveryCenterProps) {
         {formatMessage(t(gone ? "pluginRecovery.unconfirmedGone" : uncertain.kind === "uninstall" ? "pluginRecovery.uninstallUnknownNotice" : "pluginUpdates.unconfirmed"),
           { name: nameOf(uncertain.pluginId) })}
       </PageNotice>}
-      {error && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{t("pluginRecovery.failed")}{"\n"}{error}</span></PageNotice>}
+      {error && <PageNotice tone="error"><span className="vk-wrap-pre">{t("pluginRecovery.failed")}{"\n"}{error}</span></PageNotice>}
       {finished && <PageNotice tone="success">{formatMessage(t(finishedLabel(finished)), { name: nameOf(finished.operation.pluginId) })}</PageNotice>}
       <PageItemList>
         {visibleOperations.map((operation) => {
@@ -424,9 +425,9 @@ function ConfirmationBody(props: { confirmation: Confirmation; name: string; ack
       operation.kind === "update" ? formatMessage(t("pluginUpdates.itemTitle"), { name: props.name, version: operation.detail.candidate.version }) : props.name];
   return <>
     <AlertDialogHeader><AlertDialogTitle>{t(title)}</AlertDialogTitle><AlertDialogDescription>{t(warning)}</AlertDialogDescription></AlertDialogHeader>
-    <p className="text-sm">{item}</p>
+    <p className="vk-form-text">{item}</p>
     <TechnicalDetails entries={[[t("pluginUpdates.request"), <code key="id">{operation.operationId}</code>]]} />
-    {operation.kind === "uninstall" && offer.requiresAcknowledgement && <label className="flex items-start gap-2 text-sm">
+    {operation.kind === "uninstall" && offer.requiresAcknowledgement && <label className="vk-check-label">
       <Checkbox checked={props.acknowledgement} disabled={props.busy} onCheckedChange={(checked) => props.onAcknowledgement(checked === true)} />
       {t("pluginRecovery.uninstallAcknowledgement")}
     </label>}
