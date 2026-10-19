@@ -331,10 +331,33 @@
 [data-family="other"] { --vk-fam: var(--vk-ink-3); }
 .vk-tools { display: grid; min-width: 0; }
 .vk-tools > .vk-tool + .vk-tool { margin-top: -1px; }
-.vk-tools-head { display: flex; align-items: center; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); padding-bottom: calc(var(--vk-u) * 1.5); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
+.vk-tools-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5);
+  width: 100%;
+  min-height: var(--vk-h-sm);
+  padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2);
+  border: var(--vk-bw) solid transparent;
+  background: none;
+  color: var(--vk-ink-3);
+  font: inherit;
+  font-size: var(--vk-fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+.vk-tools-head:hover { background: var(--vk-hover); border-color: var(--vk-line-soft); }
+.vk-tools-head:focus-visible { outline-offset: -2px; }
 .vk-tools-head b { color: var(--vk-ink-2); font-weight: 600; }
+.vk-tools-head[data-active] b { color: var(--vk-ember); }
+.vk-tools-chev { width: 0.8rem; height: 0.8rem; flex: none; transition: transform var(--vk-t-fast); }
+.vk-tools-head[aria-expanded="true"] .vk-tools-chev { transform: rotate(90deg); }
+.vk-tools-families { display: inline-flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2.5); font-variant-numeric: tabular-nums; }
+.vk-tools-families > span { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1); }
+.vk-tools-families > span::before { content: ""; width: calc(var(--vk-u) * 1.5); height: calc(var(--vk-u) * 1.5); background: var(--vk-fam); }
 .vk-tools-strip { display: inline-flex; gap: 2px; }
-.vk-tools-strip > i { width: calc(var(--vk-u) * 3); height: calc(var(--vk-u) * 1.5); background: var(--vk-fam); opacity: 0.85; }
+.vk-tools-strip > i { width: calc(var(--vk-u) * 2); height: calc(var(--vk-u) * 1.5); background: var(--vk-fam); opacity: 0.85; }
 .vk-tools-strip > i[data-state="running"] { animation: vk-pulse 1.4s ease-in-out infinite; }
 .vk-tools-strip > i[data-state="failed"],
 .vk-tools-strip > i[data-state="denied"] { background: var(--vk-bad); }

@@ -27,6 +27,9 @@ import {
 } from "@/components/conversation/conversation-detail";
 import { ConversationBlocksView } from "@/components/conversation/conversation-block-renderer";
 import { isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
+import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
+import { fixedV1ToolEvent } from "@/components/conversation/tool-presentations/presentation-value-readers";
+import { ToolSequenceHead, toolSequenceEntry } from "@/conversation/tools/tool-sequence";
 import { toolExecutionDisplayState } from "@/components/conversation/conversation-tool-execution-model";
 import {
   ConversationMeasuredCollapse,
@@ -217,9 +220,6 @@ export function ConversationToolSequenceGroup(props: {
   // 仅用于计算摘要的运行中记录。
   runningItems: ConversationRenderItem[];
 }) {
-  // t resolves the count labels.
-  // t 解析数量标签。
-  const { t } = useI18n();
   // Active sequences force visibility below; closed groups start collapsed without an effect-driven intermediate frame.
   // 活动序列在下方强制展示；已结束分组直接默认收起，避免等待 effect 时出现中间帧。
   const [rememberedExpanded, setExpanded] = useConversationMeasuredExpansion(props.collapseId, false);
@@ -229,26 +229,17 @@ export function ConversationToolSequenceGroup(props: {
   // Single tools and disabled folding override any remembered collapsed state.
   // 单工具与关闭折叠均优先于任何已记忆的收起状态。
   const expanded = !grouped || rememberedExpanded;
-  // summary counts terminal and running tools without splitting their rendering.
-  // summary 统计终态与运行中工具，但不拆分它们的渲染位置。
-  const summary = props.runningItems.length > 0
-    ? t("conversation.toolSequence.runningSummary")
-      .replace("{completed}", String(props.completedItems.length))
-      .replace("{running}", String(props.runningItems.length))
-    : t("conversation.toolSequence.summary").replace("{count}", String(props.completedItems.length));
+  // entries counts each tool row by family and state for the sequence head; reasoning rows are skipped.
+  // entries 按家族与状态统计每个工具行供序列标题使用；跳过思考行。
+  const entries = React.useMemo(() => props.items.flatMap((item) => {
+    const toolBlocks = item.blocks.filter(isMergeableToolBlock);
+    if (toolBlocks.length === 0) return [];
+    return [toolSequenceEntry(fixedV1ToolEvent(toolBlocks as ToolExecutionConversationBlock[]), props.runningItems.includes(item))];
+  }), [props.items, props.runningItems]);
 
   return (
     <section className="conversation-tool-sequence" data-expanded={expanded ? "true" : "false"} data-grouped={grouped ? "true" : "false"}>
-      {grouped ? <button
-        aria-expanded={expanded}
-        className="conversation-tool-sequence-toggle"
-        onClick={() => setExpanded(!expanded)}
-        type="button"
-      >
-        <Workflow size={14} />
-        <span className={cn(props.runningItems.length > 0 && "shimmer")}>{summary}</span>
-        {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-      </button> : null}
+      {grouped ? <ToolSequenceHead entries={entries} expanded={expanded} onToggle={() => setExpanded(!expanded)} /> : null}
       <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={expanded}>
         <div className="conversation-tool-sequence-body">
           {props.items.map(props.renderItem)}

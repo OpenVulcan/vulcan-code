@@ -14,6 +14,7 @@ import { goalReport, todoItems } from "./cards/plan-cards";
 import { extractReport, searchReport, sourceParts, stripReportHeading } from "./cards/provider-card";
 import { formatToolDuration, readToolCall, toolCardState } from "./tool-call";
 import { toolCallFamily } from "./tool-call-card";
+import { summarizeToolSequence, toolSequenceEntry } from "./tool-sequence";
 import { fileDiffRows, fileLineCounts } from "./views/change-set";
 import { parseTerminalText } from "./views/terminal-view";
 
@@ -174,6 +175,19 @@ describe("provider results", () => {
     expect(toolCallFamily(toolEvent("web_search", { query: "q" }))).toBe("web");
     expect(toolCallFamily(toolEvent("image_understand", { prompt: "p" }))).toBe("read");
     expect(toolCallFamily(toolEvent("image_generate", { args: { prompt: "p" }, model: "m/x" }))).toBe("media");
+  });
+});
+
+describe("tool sequence summary", () => {
+  it("counts families in fixed order with unsuccessful and active calls", () => {
+    const summary = summarizeToolSequence([
+      toolSequenceEntry(toolEvent("file_edit", { path: "a.ts" }), false),
+      toolSequenceEntry(toolEvent("file_read", { path: "a.ts" }), false),
+      toolSequenceEntry({ ...toolEvent("shell_command", { command: "x" }), status: "interrupted" } as ToolCallEvent, false),
+      toolSequenceEntry({ ...toolEvent("shell_command", { command: "y" }), status: "running" } as ToolCallEvent, true),
+      toolSequenceEntry(undefined, false),
+    ]);
+    expect(summary).toEqual({ active: 1, families: [["read", 1], ["edit", 1], ["run", 2], ["other", 1]], unsuccessful: 1 });
   });
 });
 

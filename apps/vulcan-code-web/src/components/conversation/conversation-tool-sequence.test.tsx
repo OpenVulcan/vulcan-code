@@ -61,7 +61,7 @@ it.each([
   ["stopped", false],
 ] as const)("shows a single %s tool without a group toggle (active=%s)", async (status, active) => {
   await render([row("one", status)], active);
-  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+  expect(host.querySelector(".vk-tools-head")).toBeNull();
   expect(host.querySelector('[data-tool="one"]')).not.toBeNull();
   expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-expanded")).toBe("true");
   expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-grouped")).toBe("false");
@@ -69,21 +69,21 @@ it.each([
 
 it("keeps a single tool visible even when its group previously remembered a manual collapse", async () => {
   await render([row("one"), row("two")], false);
-  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-tool-sequence-toggle")!.click());
-  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-tool-sequence-toggle")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
   await render([row("one")], false);
-  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+  expect(host.querySelector(".vk-tools-head")).toBeNull();
   expect(host.querySelector('[data-tool="one"]')).not.toBeNull();
 });
 
 it("keeps the first tool in the same body through append, completion, and a long idle gap", async () => {
   await render([row("one", "running")]);
-  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+  expect(host.querySelector(".vk-tools-head")).toBeNull();
   // first preserves the DOM identity rather than remounting into a retirement layer.
   // first 保留 DOM 标识，而不是重新挂载到退场层。
   const first = host.querySelector('[data-tool="one"]');
   await render([row("one"), row("two", "running")]);
-  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+  expect(host.querySelector(".vk-tools-head")).toBeNull();
   expect(host.querySelector('[data-tool="one"]')).toBe(first);
   await render([row("one"), row("two")]);
   await act(async () => vi.advanceTimersByTime(60_000));
@@ -97,7 +97,7 @@ it("folds the entire stable group and preserves explicit manual expansion across
   await render([row("one"), row("two")], false);
   expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-expanded")).toBe("false");
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(0);
-  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-tool-sequence-toggle")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
   await render([row("one"), row("two"), row("three")], false);
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(3);
@@ -105,13 +105,12 @@ it("folds the entire stable group and preserves explicit manual expansion across
 
 it("keeps every row open with folding disabled, including a previously manually closed group", async () => {
   await render([row("one"), row("two")], false);
-  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-tool-sequence-toggle")!.click());
-  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-tool-sequence-toggle")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(0);
   await render([row("one"), row("two")], false, false);
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
-  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
-  expect(host.textContent).not.toContain("已执行");
+  expect(host.querySelector(".vk-tools-head")).toBeNull();
   expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-grouped")).toBe("false");
 });
 
@@ -121,16 +120,14 @@ it("hides running and completed summaries while folding is disabled without remo
   // first 验证切换设置不会重置工具卡片自身的状态。
   const first = host.querySelector('[data-tool="one"]');
   expect(first).not.toBeNull();
-  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
-  expect(host.textContent).not.toContain("已执行");
+  expect(host.querySelector(".vk-tools-head")).toBeNull();
   await render([row("one"), row("two")], true, true);
   expect(host.querySelector('[data-tool="one"]')).toBe(first);
-  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+  expect(host.querySelector(".vk-tools-head")).toBeNull();
   await render([row("one"), row("two")], false, false);
   expect(host.querySelector('[data-tool="one"]')).toBe(first);
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
-  expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
-  expect(host.textContent).not.toContain("已执行");
+  expect(host.querySelector(".vk-tools-head")).toBeNull();
 });
 
 it("keeps tools unbounded through repeated reasoning and folds once assistant text arrives", async () => {
@@ -151,13 +148,13 @@ it("keeps tools unbounded through repeated reasoning and folds once assistant te
   ]) {
     await render(items);
     expect(host.querySelector('[data-tool="one"]')).toBe(first);
-    expect(host.querySelector(".conversation-tool-sequence-toggle")).toBeNull();
+    expect(host.querySelector(".vk-tools-head")).toBeNull();
     expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-grouped")).toBe("false");
   }
   await render([row("one"), thinking, row("two"), answer]);
   expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-expanded")).toBe("false");
-  expect(host.querySelector(".conversation-tool-sequence-toggle")?.textContent).toContain("已执行 2 次工具调用");
-  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-tool-sequence-toggle")!.click());
+  expect(host.querySelectorAll(".vk-tools-strip > i")).toHaveLength(2);
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
   expect([...host.querySelectorAll("[data-tool]")].map((element) => element.getAttribute("data-tool")))
     .toEqual(["one", "thinking", "two"]);
   await render([row("one"), thinking, row("two"), answer, row("three")]);
