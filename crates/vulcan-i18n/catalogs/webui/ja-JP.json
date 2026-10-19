@@ -5791,8 +5791,6 @@
   "openvulcan.plan.remaining": "残りポイント",
   "openvulcan.plan.expires": "{date} に期限切れ",
   "openvulcan.plan.empty": "有効な利用枠はありません。",
-  "knowledge.title": "ナレッジライブラリ",
-  "knowledge.managedDescription": "アクセスと設定を管理します。文書とフォルダーの内容は AI が管理します。",
   "knowledge.filter": "ライブラリを絞り込み",
   "knowledge.empty": "ライブラリはまだありません。",
   "knowledge.documentCount": "文書 {count} 件",

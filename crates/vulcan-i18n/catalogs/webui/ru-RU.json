@@ -5791,8 +5791,6 @@
   "openvulcan.plan.remaining": "Осталось баллов",
   "openvulcan.plan.expires": "Истекает {date}",
   "openvulcan.plan.empty": "Нет активной квоты.",
-  "knowledge.title": "Библиотеки знаний",
-  "knowledge.managedDescription": "Управляйте доступом и настройками. Содержимое документов и папок ведёт ИИ.",
   "knowledge.filter": "Фильтр библиотек",
   "knowledge.empty": "Библиотек пока нет.",
   "knowledge.documentCount": "Документов: {count}",

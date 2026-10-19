@@ -1,5 +1,5 @@
 import * as React from "react";
-import { BookMarked, BookOpen, Download, FileText, Gauge, History, Library, Link2, PencilLine, Plus, RefreshCw, Search, Settings2, Trash2, Upload } from "lucide-react";
+import { BookMarked, Download, FileText, Gauge, History, Library, Link2, PencilLine, Plus, RefreshCw, Search, Settings2, Trash2, Upload } from "lucide-react";
 import { PageEmptyState, PageNotice } from "@/components/page";
 import { Button } from "@/ui-kit/primitives/button";
 import { Input } from "@/ui-kit/primitives/input";
@@ -130,20 +130,19 @@ export function KnowledgeBaseArea({ projects }: KnowledgeBaseAreaProps) {
     } catch (reason) { if (active.current) setDeleteError(reason instanceof Error ? reason.message : String(reason)); }
   }
 
-  return <div className="knowledge-page">
-    <header className="knowledge-page-header">
-      <div className="knowledge-page-title"><span className="knowledge-icon-tile"><BookOpen size={19} aria-hidden="true" /></span><div><h2>{t("knowledge.title")}</h2><p>{t("knowledge.managedDescription")}</p></div></div>
+  return <div className="knowledge-page vk-bleed">
+    <header className="knowledge-page-toolbar">
+      <div className="knowledge-search-field"><Search size={14} aria-hidden="true" /><Input aria-label={t("knowledge.filter")} placeholder={t("knowledge.filter")} value={filter} disabled={registry.value === null} onChange={(event) => setFilter(event.target.value)} /></div>
       <div className="knowledge-actions">
-        <Button variant="outline" disabled={busy || registry.loading} onClick={() => void registry.refresh(true)}><RefreshCw size={16} />{t("skills.action.refresh")}</Button>
-        <Button variant="outline" disabled={!writable} onClick={() => setPickingPackage(true)}><Upload size={16} />{t("knowledge.package.import")}</Button>
-        <Button disabled={!writable} onClick={() => setPolicy({ kind: "create" })}><Plus size={16} />{t("knowledge.create")}</Button>
+        <Button size="sm" variant="ghost" disabled={busy || registry.loading} onClick={() => void registry.refresh(true)}><RefreshCw className={registry.loading ? "vk-spin" : undefined} size={15} />{t("skills.action.refresh")}</Button>
+        <Button size="sm" variant="outline" disabled={!writable} onClick={() => setPickingPackage(true)}><Upload size={15} />{t("knowledge.package.import")}</Button>
+        <Button size="sm" disabled={!writable} onClick={() => setPolicy({ kind: "create" })}><Plus size={15} />{t("knowledge.create")}</Button>
       </div>
     </header>
     {registry.error !== null ? <KnowledgeReadFailure error={registry.error} busy={busy || registry.loading} onRetry={registry.refresh} /> : null}
     {registry.loading && registry.value === null ? <StreamPlaceholder label={t("knowledge.librariesLoading")} /> : null}
     {registry.value !== null ? <div className="knowledge-workspace">
       <aside className="knowledge-rail">
-        <div className="knowledge-search-field"><Search size={14} aria-hidden="true" /><Input aria-label={t("knowledge.filter")} placeholder={t("knowledge.filter")} value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
         {registry.value.length === 0 ? <PageEmptyState icon={<Library />} title={t("knowledge.empty")} /> : null}
         {registry.value.length > 0 && visible.length === 0 ? <p className="knowledge-rail-note">{t("knowledge.filterEmpty")}</p> : null}
         <ul className="knowledge-rail-list">{visible.map((library) => <li key={library.id}><KnowledgeLibraryCard library={library} t={t} selected={library.id === selectedId} disabled={busy} onSelect={() => setSelectedId(library.id)} /></li>)}</ul>

@@ -133,7 +133,7 @@ export function McpServerDialog(props: {
       </DialogHeader>
       <div className="mcp-dialog-body">
       <fieldset disabled={busy} className="mcp-form">
-        <div className="vk-form-grid">
+        <div className="mcp-identity-row">
           <label className="vk-field"><span>{t("settings.mcp.name")}</span><Input value={draft.name} onChange={e => change("name", e.target.value)} /></label>
           <div className="vk-field"><span>{t("settings.mcp.transport")}</span><Select value={draft.transport} disabled={busy} onValueChange={value => change("transport", value)}>
             <SelectTrigger aria-label={t("settings.mcp.transport")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="stdio">{t("settings.mcp.stdio")}</SelectItem><SelectItem value="http">Streamable HTTP</SelectItem><SelectItem value="sse">SSE</SelectItem></SelectContent>

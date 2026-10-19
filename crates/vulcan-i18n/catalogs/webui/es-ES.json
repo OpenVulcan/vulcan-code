@@ -5791,8 +5791,6 @@
   "openvulcan.plan.remaining": "Puntos restantes",
   "openvulcan.plan.expires": "Caduca el {date}",
   "openvulcan.plan.empty": "No hay cuota activa.",
-  "knowledge.title": "Bibliotecas de conocimiento",
-  "knowledge.managedDescription": "Gestiona acceso y ajustes. La IA mantiene documentos y carpetas.",
   "knowledge.filter": "Filtrar bibliotecas",
   "knowledge.empty": "Todavía no hay bibliotecas.",
   "knowledge.documentCount": "{count} documentos",

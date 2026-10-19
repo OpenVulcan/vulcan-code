@@ -5791,8 +5791,6 @@
   "openvulcan.plan.remaining": "剩余积分",
   "openvulcan.plan.expires": "{date} 到期",
   "openvulcan.plan.empty": "暂无生效额度。",
-  "knowledge.title": "知识库",
-  "knowledge.managedDescription": "管理知识库授权与设置，全部文档和目录内容由 AI 维护。",
   "knowledge.filter": "筛选知识库",
   "knowledge.empty": "尚无知识库。",
   "knowledge.documentCount": "{count} 篇文档",

@@ -5791,8 +5791,6 @@
   "openvulcan.plan.remaining": "剩餘點數",
   "openvulcan.plan.expires": "{date} 到期",
   "openvulcan.plan.empty": "目前沒有生效的額度。",
-  "knowledge.title": "知識庫",
-  "knowledge.managedDescription": "管理知識庫授權與設定，全部文件和目錄內容由 AI 維護。",
   "knowledge.filter": "篩選知識庫",
   "knowledge.empty": "尚無知識庫。",
   "knowledge.documentCount": "{count} 份文件",

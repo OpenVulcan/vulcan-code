@@ -5791,8 +5791,6 @@
   "openvulcan.plan.remaining": "Pontos restantes",
   "openvulcan.plan.expires": "Expira em {date}",
   "openvulcan.plan.empty": "Nenhuma cota ativa.",
-  "knowledge.title": "Bibliotecas de conhecimento",
-  "knowledge.managedDescription": "Gerencie acesso e configurações. A IA mantém documentos e pastas.",
   "knowledge.filter": "Filtrar bibliotecas",
   "knowledge.empty": "Ainda não há bibliotecas.",
   "knowledge.documentCount": "{count} documentos",

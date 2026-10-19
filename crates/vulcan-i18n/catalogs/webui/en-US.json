@@ -5791,8 +5791,6 @@
   "openvulcan.plan.remaining": "Points remaining",
   "openvulcan.plan.expires": "Expires {date}",
   "openvulcan.plan.empty": "No active quota.",
-  "knowledge.title": "Knowledge libraries",
-  "knowledge.managedDescription": "Manage library access and settings. AI maintains all document and folder content.",
   "knowledge.filter": "Filter libraries",
   "knowledge.empty": "No knowledge libraries yet.",
   "knowledge.documentCount": "{count} documents",

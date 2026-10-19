@@ -5791,8 +5791,6 @@
   "openvulcan.plan.remaining": "Verbleibende Punkte",
   "openvulcan.plan.expires": "Läuft ab am {date}",
   "openvulcan.plan.empty": "Kein aktives Kontingent.",
-  "knowledge.title": "Wissensbibliotheken",
-  "knowledge.managedDescription": "Zugriff und Einstellungen verwalten. KI pflegt Dokumente und Ordnerinhalte.",
   "knowledge.filter": "Bibliotheken filtern",
   "knowledge.empty": "Noch keine Wissensbibliotheken.",
   "knowledge.documentCount": "{count} Dokumente",

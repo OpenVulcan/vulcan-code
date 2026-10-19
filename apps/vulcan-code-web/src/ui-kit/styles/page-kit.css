@@ -310,6 +310,11 @@
 .vk-directory-grid[data-navigation-mode="tabs"] > .vk-directory-nav { padding: 0; border-right: 0; background: transparent; }
 .vk-directory-body { width: 100%; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 5.5) calc(var(--vk-u) * 6); }
 .vk-directory-grid[data-navigation-mode="tabs"] > .vk-directory-body { padding: calc(var(--vk-u) * 5) 0 0; }
+/* A full-bleed page (master-detail tools that own their toolbar and scroll regions) fills the body edge to edge;
+   wrappers between the body and the page pass the height through. */
+/* 满幅页面（自带工具栏与滚动区的主从工具）贴边填满正文；正文与页面之间的包装层向下传递高度。 */
+.vk-directory-body:has(.vk-bleed) { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.vk-directory-body:has(.vk-bleed) :has(> .vk-bleed) { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 
 /* Narrow panes keep categories in one horizontally scrollable row so navigation cannot consume the body. */
 /* 窄面板将分类放入单行横向滚动菜单，避免导航占据大半正文。 */
