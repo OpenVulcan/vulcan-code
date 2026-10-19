@@ -8,6 +8,7 @@ import { documentBody } from "./cards/document-card";
 import { listEntries, readLines } from "./cards/file-cards";
 import { toolNameParts } from "./cards/generic-card";
 import { goalReport, todoItems } from "./cards/plan-cards";
+import { extractReport, searchReport, sourceParts, stripReportHeading } from "./cards/provider-card";
 import { readToolCall, toolCardState } from "./tool-call";
 import { toolCallFamily, toolCallHasPurposeCard } from "./tool-call-card";
 import { fileDiffRows, fileLineCounts } from "./views/change-set";
@@ -130,3 +131,39 @@ describe("planning and document results", () => {
     expect(toolCallFamily(toolEvent("vulcan-codekit-rg", {}))).toBe("search");
   });
 });
+
+describe("provider results", () => {
+  it("reads ranked search hits with escaped titles and multi-line snippets", () => {
+    const report = searchReport("# Search: `rust async`\n\n1. [Async \\[book\\]](<https://rust-lang.github.io/async-book/>)\n\nFirst line\nsecond line\n\n2. [Tokio](<https://tokio.rs/a%20b>)\n\nRuntime\n");
+    expect(report?.query).toBe("rust async");
+    expect(report?.hits).toEqual([
+      { rank: 1, snippet: "First line\nsecond line", title: "Async [book]", url: "https://rust-lang.github.io/async-book/" },
+      { rank: 2, snippet: "Runtime", title: "Tokio", url: "https://tokio.rs/a%20b" },
+    ]);
+    expect(searchReport("# Search: `q`\n\nNo results.\n")?.hits).toEqual([]);
+    expect(searchReport("# Search: `a`\n\n# Search: `b`\n")).toBeNull();
+  });
+
+  it("separates extracted pages, their image lists and failed sources", () => {
+    const report = extractReport("# Extracted pages\n\n## [https://a.test/x](<https://a.test/x>)\n\n## Inner heading\n\nBody\n\nImages:\n- [https://a.test/i.png](<https://a.test/i.png>)\n\n## [https://b.test/](<https://b.test/>)\n\nSecond\n\n## Failed sources\n\n- [https://c.test/](<https://c.test/>): timeout\n");
+    expect(report?.pages).toEqual([
+      { content: "## Inner heading\n\nBody", imageCount: 1, url: "https://a.test/x" },
+      { content: "Second", imageCount: 0, url: "https://b.test/" },
+    ]);
+    expect(report?.failures).toEqual([{ error: "timeout", url: "https://c.test/" }]);
+  });
+
+  it("splits source addresses and drops headings the card already names", () => {
+    expect(sourceParts("https://www.example.test/docs?q=1")).toEqual({ host: "example.test", rest: "/docs?q=1" });
+    expect(sourceParts("not a url")).toEqual({ host: "not a url", rest: "" });
+    expect(stripReportHeading("# image understanding\n\nA cat")).toBe("A cat");
+    expect(stripReportHeading("# Result\n\nText")).toBe("Text");
+  });
+
+  it("routes model extensions by what they produce", () => {
+    expect(toolCallFamily(toolEvent("web_search", { query: "q" }))).toBe("web");
+    expect(toolCallFamily(toolEvent("image_understand", { prompt: "p" }))).toBe("read");
+    expect(toolCallFamily(toolEvent("image_generate", { args: { prompt: "p" }, model: "m/x" }))).toBe("media");
+  });
+});
+

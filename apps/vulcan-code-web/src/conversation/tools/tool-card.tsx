@@ -11,11 +11,11 @@ import type { ToolCall, ToolCardState } from "./tool-call";
 
 // ToolFamily groups tools by what they do; it tints the card edge and the sequence strip.
 // ToolFamily 按工具的作用分组；它为卡片边缘与序列色条着色。
-export type ToolFamily = "read" | "search" | "edit" | "run" | "web" | "agent" | "plan" | "other";
+export type ToolFamily = "read" | "search" | "edit" | "run" | "web" | "media" | "agent" | "plan" | "other";
 
 // TOOL_FAMILIES fixes the order families are counted in a sequence summary.
 // TOOL_FAMILIES 固定序列摘要中统计家族的顺序。
-export const TOOL_FAMILIES: readonly ToolFamily[] = ["read", "search", "edit", "run", "web", "agent", "plan", "other"];
+export const TOOL_FAMILIES: readonly ToolFamily[] = ["read", "search", "edit", "run", "web", "media", "agent", "plan", "other"];
 
 // ToolCardProps is what the dispatcher hands every card.
 // ToolCardProps 是分派器交给每张卡的属性。

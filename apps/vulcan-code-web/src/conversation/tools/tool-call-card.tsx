@@ -8,6 +8,7 @@ import { FileChangeCard, FileInspectCard, FileReadCard } from "./cards/file-card
 import { DocumentCard, documentToolSpec } from "./cards/document-card";
 import { GenericToolCard } from "./cards/generic-card";
 import { GoalCard, PlanCard, TodoCard } from "./cards/plan-cards";
+import { ProviderCard, providerToolSpec } from "./cards/provider-card";
 import type { ToolCardProps, ToolFamily } from "./tool-card";
 import { readToolCall, textOf, type ToolCall } from "./tool-call";
 
@@ -52,6 +53,8 @@ export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   if (GOAL_TOOLS.has(call.name)) return { Card: GoalCard, family: "plan" };
   if (call.name === "submit_plan") return { Card: PlanCard, family: "plan" };
   if (agentToolSpec(call)) return { Card: AgentCard, family: "agent" };
+  const provider = providerToolSpec(call);
+  if (provider) return { Card: ProviderCard, family: provider.family };
   const document = documentToolSpec(call);
   if (document) return { Card: DocumentCard, family: document.family };
   return null;
