@@ -109,13 +109,6 @@
     flex-wrap: wrap;
   }
 
-  .conversation-panel {
-    /* Preserve the external reasoning gutter on phones without indenting individual content rows. */
-    /* 手机端同样保留外置思考侧栏，不对单独内容行增加缩进。 */
-    padding: 20px 36px calc(var(--composer-dock-height, 160px) + 28px);
-    scrollbar-gutter: auto;
-  }
-
   .composer-dock {
     bottom: 10px;
     max-width: calc(100% - 20px);
@@ -163,11 +156,6 @@
   .composer-select-subtitle {
     font-size: var(--vcn-font-size-xs);
     line-height: 14px;
-  }
-
-  .empty-conversation-prompt h2 {
-    font-size: 22px;
-    max-width: 100%;
   }
 
   .settings-form-grid.two,
@@ -377,7 +365,7 @@
 /* Motion preferences apply to shell transitions as well as component animations. */
 /* 动效偏好同时作用于外壳过渡与组件动画。 */
 @media (prefers-reduced-motion: reduce) {
-  .composer-dock, .conversation-scroll-content {
+  .composer-dock {
     transition: none;
   }
 }

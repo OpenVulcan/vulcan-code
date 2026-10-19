@@ -12,7 +12,7 @@
 
 /* The centred wizard occupies the empty-state heading's place, so the heading leaves as it does on submit. */
 /* 居中的向导占据空状态标题的位置，因此标题与提交时一样淡出离场。 */
-.empty-conversation-grid:has(> .composer-dock.dedicated-wizard-mode) > .empty-conversation-prompt {
+.vk-chat[data-empty]:has(> .composer-dock.dedicated-wizard-mode) > .vk-empty-prompt {
   opacity: 0;
   transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))) translateY(-16px);
 }

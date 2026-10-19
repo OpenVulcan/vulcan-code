@@ -20,12 +20,3 @@
 .icon-button {
   flex: 0 0 auto;
 }
-
-.area-grid {
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  display: grid;
-  gap: 14px;
-  overflow: hidden;
-}

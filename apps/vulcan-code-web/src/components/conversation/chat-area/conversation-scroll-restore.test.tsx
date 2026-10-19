@@ -37,7 +37,7 @@ it("retains the reader position across loading and cached session remounts", asy
     return props.ready ? <div data-conversation-surface-id={props.id} onScroll={controller.handleScroll} ref={(element) => {
       scrollRef.current = element;
       if (element) Object.defineProperties(element, { scrollHeight: { configurable: true, value: 3000 }, clientHeight: { configurable: true, value: 500 } });
-    }}><div className="conversation-scroll-content" /></div> : <div>载入</div>;
+    }}><div className="vk-transcript-inner" /></div> : <div>载入</div>;
   }
   const host = document.createElement("div");
   document.body.append(host);
@@ -94,7 +94,7 @@ it("does not let the incoming composer overwrite a saved reader position before 
       <div key={id} data-conversation-surface-id={id} ref={(element) => {
         scrollRef.current = element;
         if (element) Object.defineProperties(element, { scrollHeight: { configurable: true, value: id === "long" ? 3340 : 1192 }, clientHeight: { configurable: true, value: 1192 } });
-      }}><div className="conversation-scroll-content" /></div>
+      }}><div className="vk-transcript-inner" /></div>
       <ComposerLayoutProbe onLayout={controller.captureAndScheduleLayoutRestore} />
     </>;
   }

@@ -50,7 +50,7 @@ it.each(["manual", "automatic", "announced layout"])("preserves bottom ownership
         scrollHeight: { configurable: true, value: 1500 },
         clientHeight: { configurable: true, value: 500 },
       });
-    }}><div className="conversation-scroll-content"><button type="button">Tool</button></div></div>;
+    }}><div className="vk-transcript-inner"><button type="button">Tool</button></div></div>;
   }
   // Host and root own this test's mounted lifecycle.
   // 宿主和根节点拥有本测试的挂载生命周期。

@@ -1159,7 +1159,7 @@ describe("ConversationBranchWorkspaceV1", () => {
   it("restores the complete branch transcript suite while retaining V1 as the only authority", () => {
     const markup = renderWorkspace(completeTurnEvents());
 
-    expect(markup).toContain('class="conversation-panel"');
+    expect(markup).toContain('class="vk-transcript"');
     expect(markup).not.toContain("conversation-v1-display");
     expect(markup).toContain("检查当前实现");
     expect(markup).toContain('aria-label="复制用户提示词"');

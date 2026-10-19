@@ -29,7 +29,6 @@ import type {
   ConversationBlock,
 } from "@/components/conversation/conversation-model";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
-import { cn } from "@/lib/utils";
 import { useI18n, type Translate } from "@/i18n";
 import { selectConversationSessionTodolistV1 } from "@/service/conversation-session-tools-v1";
 import { projectForConversation } from "@/state/workbench-selectors";
@@ -687,11 +686,9 @@ export function ChatArea(props: ChatAreaProps) {
   return (
     <AnswerReplyContext.Provider value={answerReplyStore}>
       <div
-        className={cn(
-          "area-grid chat-grid",
-          isEmptyConversation && "empty-conversation-grid",
-          showConversationLoadingOnly && "loading-conversation-grid",
-        )}
+        className="vk-chat"
+        data-empty={isEmptyConversation ? "" : undefined}
+        data-loading={showConversationLoadingOnly ? "" : undefined}
         style={{ "--composer-dock-height": `${composerDockHeight}px` } as React.CSSProperties}
       >
         {showConversationLoadingOnly ? (

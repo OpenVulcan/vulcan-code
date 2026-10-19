@@ -55,7 +55,7 @@ it.each([
         scrollHeight: { configurable: true, value: 1323 },
         clientHeight: { configurable: true, value: 500 },
       });
-    }}><div className="conversation-scroll-content" /></div>;
+    }}><div className="vk-transcript-inner" /></div>;
   }
   // Isolate this controller's lifecycle and pending frame queue.
   // 隔离此控制器的生命周期与待执行帧队列。
@@ -100,7 +100,7 @@ it.each([
       // 叶子工具订阅可以替换 DOM，而不提交 ChatArea，也不改变最终内容高度。
       // Deliver the real mutation microtask before the native scroll event; no resize callback is emitted.
       // 在原生滚动事件前派发真实修改微任务；此处不产生尺寸回调。
-      element.querySelector(".conversation-scroll-content")!.replaceChildren(document.createElement("div"));
+      element.querySelector(".vk-transcript-inner")!.replaceChildren(document.createElement("div"));
       await Promise.resolve();
     }
     element.dispatchEvent(new Event("scroll"));
@@ -123,7 +123,7 @@ it.each([
     controller.scheduleStoredRestore();
     // Tool replacement while reading history must not let the mutation observer reacquire the viewport.
     // 阅读历史时替换工具，不得让修改观察器重新取得视口所有权。
-    element.querySelector(".conversation-scroll-content")!.replaceChildren(document.createElement("div"));
+    element.querySelector(".vk-transcript-inner")!.replaceChildren(document.createElement("div"));
     await Promise.resolve();
     for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
     expect(element.scrollTop).toBe(nextBottom - 200);

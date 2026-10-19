@@ -270,8 +270,8 @@ export function useConversationScrollController(
   // Returns: nothing.
   // 返回值：无。
   const reconcileTailReserve = React.useCallback((element: HTMLElement): void => {
-    const reserve = element.querySelector<HTMLElement>(".conversation-tail-reserve");
-    const timeline = element.querySelector<HTMLElement>(".conversation-scroll-content > .timeline");
+    const reserve = element.querySelector<HTMLElement>(".vk-transcript-tail");
+    const timeline = element.querySelector<HTMLElement>(".vk-transcript-inner > .vk-timeline");
     if (!reserve || !timeline) {
       return;
     }
@@ -687,7 +687,7 @@ export function useConversationScrollController(
     renderedSurfaceIdRef.current = surfaceId;
     // A newly rendered surface starts without the previous surface's tail reserve.
     // 新渲染的界面不继承上一界面的尾部预留。
-    element.querySelector<HTMLElement>(".conversation-tail-reserve")?.style.setProperty("height", "0px");
+    element.querySelector<HTMLElement>(".vk-transcript-tail")?.style.setProperty("height", "0px");
     tailFloorRef.current = 0;
     observedScrollTopRef.current = element.scrollTop;
     programmaticTargetRef.current = null;
@@ -723,7 +723,7 @@ export function useConversationScrollController(
     const surfaceId = options.surfaceId;
     // content is the single transcript content root; individual Turn observers are deliberately absent.
     // content 是唯一转录内容根；刻意不设置逐 Turn 观察器。
-    const content = element.querySelector<HTMLElement>(".conversation-scroll-content");
+    const content = element.querySelector<HTMLElement>(".vk-transcript-inner");
     if (!content) {
       return;
     }
@@ -791,7 +791,7 @@ export function useConversationScrollController(
     }
     // content is the same aggregate root observed for persistent geometry changes.
     // content 是观察持久几何变化的同一个聚合根节点。
-    const content = element.querySelector<HTMLElement>(".conversation-scroll-content");
+    const content = element.querySelector<HTMLElement>(".vk-transcript-inner");
     if (!content) {
       return;
     }

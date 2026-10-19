@@ -10,25 +10,6 @@
   overflow: hidden;
 }
 
-.workspace-subagent-panel .conversation-panel {
-  position: relative;
-  inset: auto;
-  flex: 1 1 auto;
-  width: 100%;
-  min-height: 0;
-  padding: 14px 12px 72px;
-  overflow: hidden;
-  overflow-y: auto;
-  scroll-padding-bottom: 72px;
-}
-
-.workspace-subagent-panel .conversation-scroll-content {
-  width: 100%;
-  min-height: 100%;
-  padding-bottom: 72px;
-  transform: none;
-}
-
 .workspace-subagent-loading {
   position: absolute;
   inset: 0;

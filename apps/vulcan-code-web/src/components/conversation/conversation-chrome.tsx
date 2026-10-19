@@ -1,6 +1,6 @@
 import React from "react";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
+import { Progress } from "@/ui-kit/primitives/progress";
 import type { DraftConversationPendingSubmission } from "@/components/workspace/workspace-resizable-body";
 
 // ConversationScrollTail renders the end of the transcript scroll content: the tail reserve and the sticky footer.
@@ -14,9 +14,9 @@ export function ConversationScrollTail(props: {
 }) {
   return (
     <>
-      <div className="conversation-tail-reserve" aria-hidden="true" />
+      <div className="vk-transcript-tail" aria-hidden="true" />
       {props.footer ? (
-        <div className="conversation-footer" data-conversation-scroll-footer="true">
+        <div className="vk-transcript-foot" data-conversation-scroll-footer="true">
           {props.footer}
         </div>
       ) : null}
@@ -36,8 +36,8 @@ export function ConversationSubmissionStatus(props: {
     ? t("conversation.submission.creating")
     : t("conversation.submission.preparing");
   return (
-    <div className="conversation-submission-status" aria-live="polite" aria-busy="true">
-      <span className="conversation-submission-status-dot" aria-hidden="true" />
+    <div className="vk-submit-status" aria-live="polite" aria-busy="true">
+      <span className="vk-dot" data-tone="ember" data-live="" aria-hidden="true" />
       <span>{label}</span>
     </div>
   );
@@ -48,15 +48,11 @@ export function ConversationSubmissionStatus(props: {
 export function ConversationLoadingCenter() {
   const { t } = useI18n();
   return (
-    <section className="conversation-loading-center" aria-live="polite" aria-busy="true">
-      <div className="conversation-loading-card">
-        <div className="conversation-loading-heading">
-          <strong>{t("conversation.loading.title")}</strong>
-        </div>
-        <span className="shimmer">{t("conversation.loading.requesting")}</span>
-        <div className="conversation-loading-bar" aria-hidden="true">
-          <div className="conversation-loading-bar-value" />
-        </div>
+    <section className="vk-chat-loading" aria-live="polite" aria-busy="true">
+      <div className="vk-chat-loading-card">
+        <strong>{t("conversation.loading.title")}</strong>
+        <span className="vk-shimmer-text">{t("conversation.loading.requesting")}</span>
+        <Progress aria-hidden="true" />
       </div>
     </section>
   );
@@ -74,9 +70,9 @@ export function DraftSubmissionTranscript(props: {
   scrollRef: React.Ref<HTMLElement>;
 }) {
   return (
-    <section className="conversation-panel conversation-draft-submission" data-conversation-surface-id={props.surfaceId} ref={props.scrollRef}>
-      <div className="conversation-scroll-content">
-        <div className="timeline">
+    <section className="vk-transcript" data-draft="" data-conversation-surface-id={props.surfaceId} ref={props.scrollRef}>
+      <div className="vk-transcript-inner">
+        <div className="vk-timeline">
           <article className="message-row user" data-client-action-id={props.submission.clientSubmissionId}>
             {props.submission.attachments.length > 0 ? (
               <ul className="conversation-draft-attachment-names">
@@ -108,7 +104,7 @@ export function EmptyConversationPrompt(props: {
   const promptText = t("console.emptyPrompt").replace("{projectName}", props.projectName);
 
   return (
-    <section className={cn("empty-conversation-prompt", props.leaving && "leaving")} aria-hidden={props.leaving}>
+    <section className="vk-empty-prompt" data-leaving={props.leaving ? "" : undefined} aria-hidden={props.leaving}>
       <h2 title={promptText}>{promptText}</h2>
     </section>
   );

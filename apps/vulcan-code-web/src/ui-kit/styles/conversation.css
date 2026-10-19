@@ -8,39 +8,102 @@
 .vk-chat {
   container: vk-chat / inline-size;
   position: relative;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  height: 100%;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   --vk-col-pad: var(--vk-column-pad);
   --vk-col-max: var(--vk-column-w);
   --vk-float-w: min(24rem, 34%);
-  transition: padding var(--vk-t-med) var(--vk-ease);
+  /* The composer dock reports its measured height; the transcript keeps that much room below its last row. */
+  --vk-dock-h: var(--composer-dock-height, 132px);
+  --conversation-session-todolist-width: 320px;
 }
 :root[data-vk-think="popup"] .vk-chat { --vk-col-pad: calc(var(--vk-u) * 24); --vk-col-max: calc(var(--vk-read-w) + var(--vk-u) * 48); }
 :root[data-vk-think="popup"][data-vk-width="full"] .vk-chat { --vk-col-max: 100%; }
 /* Right-docked reasoning takes its own column; the conversation re-centers in what remains. */
 .vk-chat:has(> .vk-chat-side[data-float="right"]) { padding-right: calc(var(--vk-float-w) + var(--vk-u) * 3); }
 .vk-chat:has(> .vk-chat-side[data-float="right"]) > .vk-prompt-nav { right: calc(var(--vk-float-w) + var(--vk-u) * 5); }
+/* Output fades out under the floating composer instead of running into it; the scrollbar stays clear. */
+.vk-chat:not([data-empty], [data-loading])::after {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  left: 0;
+  right: var(--scrollbar-size, 6px);
+  bottom: 0;
+  height: min(var(--vk-dock-h), calc(var(--vk-u) * 27));
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--vk-ground) 28%, transparent) 20%, color-mix(in srgb, var(--vk-ground) 86%, transparent) 58%, var(--vk-ground) 100%);
+}
 
+/* The transcript scrolls under the composer dock, which floats over its bottom edge. */
 .vk-transcript {
-  grid-row: 1;
-  position: relative;
+  position: absolute;
+  inset: 0;
+  min-width: 0;
   min-height: 0;
-  scrollbar-gutter: stable both-edges;
+  padding: calc(var(--vk-u) * 12) 0 calc(var(--vk-dock-h) + var(--vk-u) * 12);
+  overflow-x: hidden;
   overflow-y: auto;
   overflow-anchor: none;
-  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+  scroll-padding-bottom: calc(var(--vk-dock-h) + var(--vk-u) * 8);
+  scrollbar-gutter: stable;
 }
 .vk-transcript-inner {
-  display: grid;
-  gap: calc(var(--vk-u) * 7);
-  width: 100%;
-  max-width: var(--vk-col-max);
+  display: flex;
+  flex-direction: column;
+  width: min(100%, var(--vk-col-max));
+  min-width: 0;
+  min-height: 100%;
   margin: 0 auto;
-  /* Floating approval and ask cards report their height, so the latest output can scroll above them. */
-  padding: calc(var(--vk-u) * 5) var(--vk-col-pad) calc(var(--vk-u) * 8 + var(--vk-dock-float-h, 0px));
+  /* The side padding holds the reasoning tags that sit left of each process group. */
+  padding: 0 var(--vk-col-pad);
+  /* A docked side panel shifts the column so it stays centered in the visible part of the stage. */
+  transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px)));
+  transition: transform var(--vk-t-med) var(--vk-ease);
+  will-change: transform;
 }
+.vk-timeline { display: grid; align-content: start; gap: calc(var(--vk-u) * 2.5); min-width: 0; min-height: 0; }
+/* Blank tail kept while the transcript follows its end; the scroll controller owns its height. */
+.vk-transcript-tail { flex: none; height: 0; }
+.vk-transcript-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  margin-top: auto;
+  padding-top: calc(var(--vk-u) * 6);
+  pointer-events: none;
+}
+.vk-transcript-foot > * { pointer-events: auto; }
+@media (max-width: 720px) {
+  .vk-transcript { padding-top: calc(var(--vk-u) * 5); scrollbar-gutter: auto; }
+}
+/* A subagent transcript embedded in the side panel scrolls in normal flow, with no composer floating over it. */
+.vk-subchat .vk-transcript { position: relative; inset: auto; flex: 1 1 auto; width: 100%; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 3) calc(var(--vk-u) * 18); scroll-padding-bottom: calc(var(--vk-u) * 18); }
+.vk-subchat .vk-transcript-inner { width: 100%; padding: 0 0 calc(var(--vk-u) * 18); transform: none; }
+@media (prefers-reduced-motion: reduce) { .vk-transcript-inner { transition: none; } }
+:root[data-vk-motion="reduce"] .vk-transcript-inner { transition: none; }
+
+/* Loading a conversation that has no cached window yet. */
+.vk-chat-loading { position: absolute; inset: 0; display: grid; place-items: center; min-width: 0; min-height: 0; padding: calc(var(--vk-u) * 6); }
+.vk-chat-loading-card { display: grid; gap: calc(var(--vk-u) * 3); width: min(26rem, 100%); padding: calc(var(--vk-u) * 4.5) calc(var(--vk-u) * 5); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-raised); box-shadow: var(--vk-shadow-2); }
+.vk-chat-loading-card > strong { color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 600; }
+.vk-chat-loading-card > span { font-size: var(--vk-fs-sm); }
+/* First submission while the session is being created: a quiet chip above the composer. */
+.vk-submit-status { position: absolute; z-index: 3; left: 50%; bottom: calc(var(--vk-dock-h) + var(--vk-u) * 4.5); display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); min-height: var(--vk-h-sm); padding: 0 calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-raised); box-shadow: var(--vk-shadow-1); color: var(--vk-ink-2); font-size: var(--vk-fs-sm); pointer-events: none; transform: translateX(-50%); }
+/* Blank conversation: the greeting sits just above the composer, which centers vertically. */
+.vk-empty-prompt { position: absolute; z-index: 4; top: calc(50% - 104px); left: calc(var(--vk-u) * 6); right: calc(var(--vk-u) * 6); display: grid; justify-items: center; pointer-events: none; transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))); transition: opacity 360ms var(--vk-ease), transform 360ms var(--vk-ease); }
+.vk-empty-prompt[data-leaving] { opacity: 0; transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))) translateY(calc(var(--vk-u) * -4)); }
+.vk-empty-prompt h2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; min-width: 0; max-width: min(56rem, calc(100% - var(--vk-u) * 12)); margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-2xl); font-weight: 500; letter-spacing: -0.01em; line-height: var(--vk-lh-tight); overflow-wrap: anywhere; text-align: center; }
+/* The full greeting shows on hover, while a leaving heading never intercepts the composer. */
+.vk-empty-prompt:not([data-leaving]) h2 { pointer-events: auto; }
+@media (max-width: 720px) { .vk-empty-prompt h2 { max-width: 100%; font-size: var(--vk-fs-xl); } }
 
 /* History loader: older turns load on demand when the reader scrolls to the top. */
 .vk-history {

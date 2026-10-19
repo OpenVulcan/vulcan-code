@@ -160,10 +160,6 @@
   padding: 20px 24px;
 }
 
-.settings-feature-content > .area-grid {
-  padding: 20px 24px;
-}
-
 .settings-diagnostics-page [data-slot="input"] {
   margin: 16px 0;
 }

@@ -602,13 +602,13 @@ export function ConversationWorkspace(props: {
       >
         <ConversationTextContextMenu enabled={isElectronRuntime()} timelineRef={timelineRef} onCopyText={props.onCopyText}>
         <section
-          className="conversation-panel"
+          className="vk-transcript"
           data-conversation-surface-id={props.conversation?.id ?? props.parentConversationId ?? undefined}
           onScroll={handleConversationScroll}
           ref={props.scrollRef}
         >
-          <div className="conversation-scroll-content">
-            <div className="timeline" ref={timelineRef}>
+          <div className="vk-transcript-inner">
+            <div className="vk-timeline" ref={timelineRef}>
               {props.error ? (
                 <article className="message-card system error-message">
                   <span>system</span>

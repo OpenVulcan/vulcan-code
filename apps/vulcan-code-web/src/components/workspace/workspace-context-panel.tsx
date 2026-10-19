@@ -1046,7 +1046,7 @@ function WorkspaceSubagentPanel(args: {
   }
 
   return (
-    <div className="workspace-subagent-panel relative pt-10">
+    <div className="workspace-subagent-panel vk-subchat relative pt-10">
       <ChildLifetimeUsageChip bucket={rootUsage?.rootSessionId === parentConversationId
         ? rootUsage.childrenBySessionId[taskId]?.usage : undefined} />
       {transcriptOwner.error && transcriptHasEvents ? (
