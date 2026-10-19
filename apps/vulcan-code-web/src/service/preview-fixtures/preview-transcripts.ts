@@ -384,6 +384,14 @@ function toolCardGallery(sessionId: string): ConversationEventHydrationV1Respons
     .api({
       tools: [
         { name: "knowledge_search", input: { queries: ["tool card layout", "diffstat"] }, output: toolOutput("knowledge_search", "## Hits\n\n1. **Tool card anatomy** · `design/tool-cards.md` · score 0.82\n   > One head row: family tile, verb, target, facts, state.\n2. **Diff colors** · `design/tokens.md` · score 0.64\n   > Additions use the ok tone; removals use the bad tone.") },
+        {
+          name: "spawn_agent",
+          input: { task_name: "provider-cards", message: "Rebuild the provider **search** and **extract** cards.\n\n- Read `provider-tool-presentation.ts` for the result shapes\n- Keep sources clickable" },
+          output: toolOutput("spawn_agent", "# Agent scheduled\n\nName: `provider-cards`\nSession ID: `child-1`\nExecution: `running`\n\nScheduling is not completion. Use `wait_agents_result` for subsequent results.", {
+            kind: "subagent_receipt_v1",
+            payload: { format: "markdown", task_id: "provider-cards", subagent_task_id: "child-1", display_title: "provider-cards", execution_id: "execution-1", execution_status: "running" },
+          }),
+        },
         { name: "file", input: { action: "list", path: "src/conversation/tools" }, output: toolOutput("file", "- `cards` · directory\n- `views` · directory\n- `tool-call.ts` · file · 4210 bytes\n- `tool-card.tsx` · file · 5032 bytes\n- `tool-call-card.tsx` · file · 3388 bytes") },
         {
           name: "terminal_session",

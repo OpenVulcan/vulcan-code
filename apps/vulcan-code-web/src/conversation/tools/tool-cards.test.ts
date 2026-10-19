@@ -52,8 +52,9 @@ describe("tool call reading", () => {
     expect(toolCallFamily(toolEvent("file_edit", { path: "a.ts" }))).toBe("edit");
     expect(toolCallFamily(toolEvent("anything", {}, { kind: "command_run", payload: {} }))).toBe("run");
     expect(toolCallFamily(toolEvent("terminal_session", { action: "read" }))).toBe("run");
-    expect(toolCallHasPurposeCard(toolEvent("spawn_agent", {}))).toBe(false);
-    expect(toolCallFamily(toolEvent("spawn_agent", {}))).toBe("other");
+    expect(toolCallFamily(toolEvent("spawn_agent", { message: "work" }))).toBe("agent");
+    expect(toolCallHasPurposeCard(toolEvent("mcp__github__create_issue", {}))).toBe(false);
+    expect(toolCallFamily(toolEvent("mcp__github__create_issue", {}))).toBe("other");
   });
 
   it("splits MCP tool names into server and tool", () => {

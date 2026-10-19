@@ -592,15 +592,17 @@ describe("ConversationBranchWorkspaceV1", () => {
     const tool = (seq: number, questionId: string): ConversationEventSummary => eventSummary(seq, {
       kind: "tool_call", api_call_id: 1, tool_call_id: seq, tool_name: "ask_question",
       input: { target: "same-agent", question: questionId }, request_stream_id: `ask-${seq}`, status: "completed",
-      output: { model_output: { question_id: questionId, status: "accepted" } },
+      output: { model_output: "Question recorded", host_result: { kind: "collaboration_receipt_v1", payload: { format: "markdown", question_id: questionId } } },
     });
-    const events = [tool(7, "question-1"), tool(8, "question-2"), created,
+    // The question card itself is outside this window, so both receipts stay as tool cards and own the progress.
+    // 问题卡本身不在此窗口内，因此两张回执都保留为工具卡并承载进度。
+    const events = [tool(7, "question-1"), tool(8, "question-2"),
       eventSummary(10, { kind: "collaboration", version: 1, operation_id: "delivery-progress", event_kind: "delivery_projected",
         after_state: { kind: "outbound_delivery", delivery: { ...created.event.after_state.delivery, state: "projected" } } }, "host_only")];
     const markup = renderWorkspace(events);
     const container = document.createElement("div");
     container.innerHTML = markup;
-    const cards = [...container.querySelectorAll(".tool-presentation-card:not(.conversation-v1-collaboration-card)")];
+    const cards = [...container.querySelectorAll(".vk-tool")];
     expect(cards).toHaveLength(2);
     expect(cards.find((card) => card.querySelector("[data-collaboration-attached-status]"))?.textContent).toContain("已投影");
     expect(cards.filter((card) => card.querySelector("[data-collaboration-attached-status]"))).toHaveLength(1);

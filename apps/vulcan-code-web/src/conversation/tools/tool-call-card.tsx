@@ -2,6 +2,7 @@
 // 按调用实际做的事选择工具卡，并让序列摘要使用同一家族。
 import * as React from "react";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
+import { AgentCard, agentToolSpec } from "./cards/agent-card";
 import { ShellCommandCard, TerminalSessionCard, toolCallIsShellCommand } from "./cards/command-card";
 import { FileChangeCard, FileInspectCard, FileReadCard } from "./cards/file-cards";
 import { DocumentCard, documentToolSpec } from "./cards/document-card";
@@ -50,6 +51,7 @@ export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   if (call.name === "todolist") return { Card: TodoCard, family: "plan" };
   if (GOAL_TOOLS.has(call.name)) return { Card: GoalCard, family: "plan" };
   if (call.name === "submit_plan") return { Card: PlanCard, family: "plan" };
+  if (agentToolSpec(call)) return { Card: AgentCard, family: "agent" };
   const document = documentToolSpec(call);
   if (document) return { Card: DocumentCard, family: document.family };
   return null;
