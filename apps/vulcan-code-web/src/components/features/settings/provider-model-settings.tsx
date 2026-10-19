@@ -471,7 +471,7 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                   <div className="settings-model-catalog-meta">
                     {props.showProvider ? (
                       <span className="model-services-row-provider">
-                        <ProviderIcon category={provider.category} className="size-3.5" providerId={provider.id} />
+                        <ProviderIcon category={provider.category} size={14} providerId={provider.id} />
                         {providerLabel(provider)}
                       </span>
                     ) : null}

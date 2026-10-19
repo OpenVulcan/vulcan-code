@@ -155,22 +155,22 @@ it("opens the model list directly from the slash signal and closes it with Escap
   await render(<MergedHarness modelSignal={1} options={["low", "high"]} />);
   const input = document.querySelector<HTMLInputElement>('input[aria-label="Find"]')!;
   expect(input).not.toBeNull();
-  expect(document.querySelector(".model-reasoning-back")).toBeNull();
+  expect(document.querySelector(".vk-mr-back")).toBeNull();
   await press(input, "Escape");
-  expect(document.querySelector(".model-reasoning-content")).toBeNull();
+  expect(document.querySelector(".vk-mr-pop")).toBeNull();
 });
 
 it("asks for an account instead of displaying the first account for a missing exact credential", async () => {
   const choose = vi.fn();
   vi.mocked(loadPublicAiSettings).mockResolvedValue(settings());
   await render(<MergedHarness accountValue="deleted" onAccountChange={choose} />);
-  expect(host.querySelector(".composer-model-reasoning-alert")).not.toBeNull();
+  expect(host.querySelector(".vk-pick-alert")).not.toBeNull();
   await click("Model");
   const row = document.querySelector<HTMLButtonElement>('[aria-label="Account"]')!;
   expect(row.textContent).not.toContain("Account A");
   expect(row.textContent).toContain("composer.modelPicker.selectAccount");
   await click("Account");
-  const option = document.querySelector<HTMLButtonElement>(".model-reasoning-account-option")!;
+  const option = document.querySelector<HTMLButtonElement>(".vk-mr-account")!;
   expect(option.textContent).toContain("Account A");
   await act(async () => option.click());
   expect(choose).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "a" }));
@@ -185,16 +185,16 @@ it("shows a read-only model, reasoning and plan usage summary until the popover 
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 500)); });
   // summary is the mounted hover card; it must not contain any interactive selection control.
   // summary 是已挂载的悬浮卡片；其中不得包含任何交互式选择控件。
-  const summary = document.querySelector(".model-reasoning-summary");
+  const summary = document.querySelector(".vk-mr-summary");
   expect(summary?.textContent).toContain("First");
   expect(summary?.textContent).toContain("composer.reasoning.level.low");
   expect(summary?.textContent).toContain("composer.modelReasoning.planUsage");
-  expect(summary?.querySelectorAll(".model-reasoning-summary-pips > span.on")).toHaveLength(2);
+  expect(summary?.querySelectorAll(".vk-mr-pips > span[data-on]")).toHaveLength(2);
   expect(summary?.querySelector('button, [role="slider"], input')).toBeNull();
   expect(loadPublicAiSettings).toHaveBeenCalledOnce();
   expect(queryPublicAiConnectionUsage).not.toHaveBeenCalled();
   await click("Model");
-  expect(document.querySelector(".model-reasoning-summary")).toBeNull();
+  expect(document.querySelector(".vk-mr-summary")).toBeNull();
   expect(document.querySelector('[role="slider"]')).not.toBeNull();
 });
 
@@ -213,7 +213,7 @@ it("does not offer usage refresh without the declared credential profile", async
   await click("Model");
   expect(loadPublicAiSettings).toHaveBeenCalledOnce();
   await click("Account");
-  expect(document.querySelector(".model-account-card")?.textContent).toContain("Account A");
+  expect(document.querySelector(".vk-account-card")?.textContent).toContain("Account A");
   expect(document.querySelector('[aria-label="composer.accountCard.refresh"]')).toBeNull();
 });
 
@@ -235,8 +235,8 @@ it("ignores an account detail failure after switching to another account", async
   expect(loadPublicAiSettings).toHaveBeenCalledOnce();
   await render(<MergedHarness accounts={accounts} accountValue="b" />);
   await act(async () => rejectRead(new Error("old account failure")));
-  expect(document.querySelector(".model-account-card")?.textContent).toContain("Account B");
-  expect(document.querySelector('.model-reasoning-account-option[aria-pressed="true"]')?.textContent).toContain("Account B");
+  expect(document.querySelector(".vk-account-card")?.textContent).toContain("Account B");
+  expect(document.querySelector('.vk-mr-account[aria-pressed="true"]')?.textContent).toContain("Account B");
   expect(document.body.textContent).not.toContain("old account failure");
 });
 
@@ -279,7 +279,7 @@ it("refreshes declared account usage once and recovers from an explicit failure"
   // Escape steps back to the reasoning pane, whose account row now summarizes the observed balance.
   // Escape 返回思考面板，其账号行此时概括已观测余额。
   await press(document.activeElement ?? document.body, "Escape");
-  expect(document.querySelector(".model-account-card")).toBeNull();
+  expect(document.querySelector(".vk-account-card")).toBeNull();
   expect(document.querySelector('[aria-label="Account"]')?.textContent).toContain("17.25");
 });
 

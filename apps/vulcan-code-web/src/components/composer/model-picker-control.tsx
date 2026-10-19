@@ -2,7 +2,6 @@ import * as React from "react";
 import { Check, ChevronDown, Cpu } from "lucide-react";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
 import { ModelBuiltinCapabilityIcons } from "@/components/shared/model-builtin-capabilities";
-import { Button } from "@/ui-kit/primitives/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
 import { Command, CommandInput, CommandItem, CommandList } from "@/ui-kit/primitives/command";
 import {
@@ -11,7 +10,6 @@ import {
   TooltipTrigger,
 } from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type {
   ProviderSummary,
   PublicAiNativeToolKind,
@@ -174,31 +172,29 @@ export function ModelPickerControl(props: {
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
-            <Button
+            <button
               aria-label={props.ariaLabel}
-              className="composer-select-trigger model"
+              className="vk-pick"
+              data-kind="model"
               disabled={props.disabled || choices.length === 0}
               type="button"
-              variant="outline"
             >
-              <span className="composer-select-icon"><Cpu size={15} /></span>
-              <span className="composer-select-copy">
-                <span className="composer-select-label">{selectedModelLabel}</span>
-              </span>
+              <span className="vk-pick-icon"><Cpu size={15} /></span>
+              <span className="vk-pick-label">{selectedModelLabel}</span>
               {/* The chevron marks the trigger as a dropdown, matching the reasoning and account selects. */}
               {/* 下拉箭头表明这是一个下拉选择，与推理强度、账号选择保持一致。 */}
-              <ChevronDown aria-hidden="true" className="composer-select-chevron" />
-            </Button>
+              <ChevronDown aria-hidden="true" className="vk-pick-chevron" />
+            </button>
           </PopoverTrigger>
         </TooltipTrigger>
-        <TooltipContent className="composer-control-tooltip" side="top">
+        <TooltipContent className="vk-pick-tip" side="top">
           <strong>{t("composer.modelPicker.tooltipTitle")}</strong>
           <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentModel", { model: selectedModelLabel })}</span>
           <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentProvider", { provider: selectedProviderLabel || "-" })}</span>
           {props.selectionScope !== "model" ? <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentAccount", { account: selectedAccountLabel })}</span> : null}
         </TooltipContent>
       </Tooltip>
-      <PopoverContent align="start" className="model-picker-content" sideOffset={8}>
+      <PopoverContent align="start" className="vk-model-pop" sideOffset={8}>
         <ModelPickerList
           choices={choices}
           filterPlaceholder={props.filterPlaceholder}
@@ -295,10 +291,10 @@ export function ModelPickerList(props: {
         placeholder={props.filterPlaceholder}
         value={filter}
       />
-      <CommandList className="model-picker-scroll">
-        <div className="model-picker-list">
+      <CommandList className="vk-model-list">
+        <div className="vk-model-rows">
           {filteredChoices.length === 0 ? (
-            <div className="model-picker-empty">{props.noMatchesLabel}</div>
+            <div className="vk-model-none">{props.noMatchesLabel}</div>
           ) : (
             filteredGroups.map((group) => {
               // exactGroupChoice is present only when this grouped model is currently selected.
@@ -323,11 +319,8 @@ export function ModelPickerList(props: {
                 : Boolean(exactGroupChoice);
               return (
                 <CommandItem
-                  className={cn(
-                    "model-picker-group-row",
-                    "[&>svg]:hidden",
-                    selected && "selected",
-                  )}
+                  className="vk-model-row"
+                  data-current={selected || undefined}
                   key={modelPickerGroupKey(group)}
                   value={modelPickerGroupKey(group)}
                   onSelect={() => props.onSelect(resolvedGroupChoice)}
@@ -335,21 +328,17 @@ export function ModelPickerList(props: {
                     selectedRowRef.current = element;
                   } : undefined}
                 >
-                  <span
-                    className="model-picker-group-main"
-                  >
-                    <span className="model-picker-selected-slot">
-                      {selected ? <Check size={15} /> : null}
-                    </span>
-                    <span className="model-picker-row-copy">
-                      <span className="model-picker-row-title" title={group.modelName}>{group.modelName}</span>
-                      <span className="model-picker-row-meta" title={group.providerName}>{group.providerName}</span>
-                    </span>
+                  <span className="vk-model-check">
+                    {selected ? <Check size={15} /> : null}
                   </span>
-                  <span className="model-picker-row-side">
-                    <span className="model-picker-row-id" title={group.modelId}>{group.modelId}</span>
+                  <span className="vk-model-copy">
+                    <span className="vk-model-title" title={group.modelName}>{group.modelName}</span>
+                    <span className="vk-model-meta" title={group.providerName}>{group.providerName}</span>
+                  </span>
+                  <span className="vk-model-side">
+                    <span className="vk-model-id" title={group.modelId}>{group.modelId}</span>
                     <ModelBuiltinCapabilityIcons
-                      className="model-picker-row-capabilities"
+                      className="vk-model-caps"
                       inputResources={resolvedGroupChoice.inputModalities}
                       providerNativeTools={resolvedGroupChoice.providerNativeTools}
                     />

@@ -191,36 +191,6 @@
     max-height: min(310px, 48dvh);
   }
 
-  .model-picker-group-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-    padding: 4px 8px 8px 0;
-  }
-
-  .model-picker-group-main {
-    min-height: 44px;
-    height: auto;
-    padding-block: 6px;
-  }
-
-  .model-picker-group-row .model-picker-row-title {
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
-  .model-picker-group-row .model-picker-row-side {
-    max-width: 100%;
-    padding-left: 40px;
-    justify-items: start;
-    text-align: left;
-  }
-
-  .model-picker-group-row .model-picker-row-id {
-    max-width: 100%;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
   .composer-capability-dialog {
     --composer-dialog-padding: 16px;
     width: calc(100vw - 24px);

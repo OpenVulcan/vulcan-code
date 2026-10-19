@@ -100,7 +100,7 @@ export function ProviderIntroCard(props: ProviderIntroCardProps) {
     <div className="model-services-intro">
       {props.compact ? null : (
         <div className="model-services-intro-head">
-          <ProviderIcon category={provider.category} className="size-8 shrink-0" providerId={provider.id} />
+          <ProviderIcon category={provider.category} size={32} providerId={provider.id} />
           <strong>{name}</strong>
           {category ? <span className="model-services-chip" data-variant="category">{category}</span> : null}
         </div>

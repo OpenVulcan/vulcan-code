@@ -20,33 +20,6 @@
   height: 13px;
 }
 
-.model-picker-row-side {
-  min-width: 0;
-  min-height: 29px;
-  display: grid;
-  grid-template-rows: 13px 14px;
-  justify-items: end;
-  align-content: center;
-  gap: 2px;
-}
-
-.model-picker-row-capabilities {
-  min-width: 14px;
-  flex: 0 0 auto;
-  justify-content: flex-end;
-}
-
-.model-picker-row-capabilities .model-builtin-capability-icon {
-  width: 14px;
-  height: 14px;
-  color: color-mix(in srgb, var(--foreground) 70%, var(--muted-foreground));
-}
-
-.model-picker-row-capabilities .model-builtin-capability-icon svg {
-  width: 12px;
-  height: 12px;
-}
-
 .settings-model-builtin-capabilities {
   flex: 0 0 auto;
 }

@@ -248,7 +248,7 @@ function RailRowButton(props: {
           onPointerLeave={() => { pressed.current = false }}
           type="button"
         >
-          <ProviderIcon category={props.provider.category} className="size-7 shrink-0" providerId={props.provider.id} />
+          <ProviderIcon category={props.provider.category} size={28} providerId={props.provider.id} />
           <span className="model-services-rail-copy">
             <span className="model-services-rail-name" title={props.name}>{props.name}</span>
             <span className="model-services-rail-sub">

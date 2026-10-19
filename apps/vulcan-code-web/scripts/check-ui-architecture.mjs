@@ -117,7 +117,7 @@ const feedbackShellPattern = /^(?!page-)[a-z0-9-]+-(?:empty-state|empty|notice)$
 const legacyFeedbackShells = new Set([
   "composer-capability-dialog-empty", "composer-capability-summary-empty", "context-injection-delete-notice",
   "conversation-session-commit-empty", "diff-empty-state", "diff-file-tree-empty", "knowledge-empty",
-  "model-account-card-empty", "model-picker-empty", "project-folder-picker-empty",
+  "model-picker-empty", "project-folder-picker-empty",
   "project-folder-picker-notice", "session-review-repository-notice", "settings-archive-empty",
   "settings-error-notice", "workspace-files-panel-notice",
 ])

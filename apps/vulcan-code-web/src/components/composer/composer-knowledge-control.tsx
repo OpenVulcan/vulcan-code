@@ -277,7 +277,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
             : t("knowledge.composer.label")}
         </span>
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="composer-knowledge-menu w-80">
+      <DropdownMenuSubContent className="vk-pick-menu" data-size="wider">
         <DropdownMenuItem onSelect={props.onOpenKnowledge}>
           <Settings2 size={15} />
           <span>{t("knowledge.composer.manage")}</span>
@@ -293,10 +293,10 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
           {t("knowledge.composer.inherit")}
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
-        {loading ? <StreamPlaceholder className="px-2 py-1.5" label={t("knowledge.composer.loading")} count={2} /> : null}
+        {loading ? <StreamPlaceholder className="vk-menu-note" label={t("knowledge.composer.loading")} count={2} /> : null}
         {error ? (
           <>
-            <p role="alert" className="px-2 py-1.5 text-xs text-destructive">{t(`knowledge.composer.${error.phase}Failed`)}</p>
+            <p role="alert" className="vk-menu-note" data-tone="bad">{t(`knowledge.composer.${error.phase}Failed`)}</p>
             <DropdownMenuItem ref={retryItem} disabled={loading} onSelect={(event) => {
               event.preventDefault(); retryFocusPending.current = true; void refresh();
             }}>
@@ -305,7 +305,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
             <DropdownMenuItem aria-expanded={errorExpanded} onSelect={(event) => { event.preventDefault(); setErrorExpanded(!errorExpanded); }}>
               {t("knowledge.composer.details")}
             </DropdownMenuItem>
-            {errorExpanded ? <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words px-2 py-1.5 text-xs text-muted-foreground">{error.message}</pre> : null}
+            {errorExpanded ? <pre className="vk-menu-note">{error.message}</pre> : null}
           </>
         ) : loading && !selection ? null : libraries.length === 0 ? (
           <DropdownMenuItem disabled>{t("knowledge.composer.noneAuthorized")}</DropdownMenuItem>
@@ -329,7 +329,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
                 }}
                 onSelect={(event) => event.preventDefault()}
               >
-                <span className="min-w-0 flex-1 truncate" title={library.name}>{library.name}</span>
+                <span className="vk-menu-text" title={library.name}>{library.name}</span>
               </DropdownMenuCheckboxItem>
             );
           })

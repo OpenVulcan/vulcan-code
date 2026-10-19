@@ -1,4 +1,4 @@
-import type { ReactElement } from "react"
+import type { CSSProperties, ReactElement } from "react"
 
 import antigravityIcon from "@/assets/provider-icons/provider-antigravity.svg"
 import agentSpaceIcon from "@/assets/provider-icons/provider-agentspace.png"
@@ -28,7 +28,7 @@ import tavilyIcon from "@/assets/provider-icons/provider-tavily.svg"
 import tokenRhythmIcon from "@/assets/provider-icons/provider-tokenrhythm.svg"
 import vertexIcon from "@/assets/provider-icons/provider-vertex.svg"
 import zhipuIcon from "@/assets/provider-icons/provider-zhipu.svg"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core"
 import type { PublicAiProviderCategory } from "@/types"
 
 // ProviderIconKey is the closed frontend-owned provider artwork set.
@@ -189,9 +189,12 @@ export function resolveProviderIconKey({
 // ProviderIconProps configures one decorative provider logo.
 // ProviderIconProps 配置一个装饰性供应商 Logo。
 interface ProviderIconProps extends ProviderIconIdentity {
-  // Caller-owned square display-box class.
-  // 调用方控制的方形展示框样式。
+  // Caller-owned extra class for the square display box.
+  // 调用方为方形展示框追加的样式类。
   className?: string
+  // Edge length of the square box in pixels; the artwork fills it.
+  // 方形展示框的边长（像素）；图标铺满该框。
+  size?: number
   // Provider category controls the independent relay marker overlay.
   // 供应商分类控制独立的中转站标识叠层。
   category?: PublicAiProviderCategory
@@ -203,6 +206,7 @@ export function ProviderIcon({
   providerId,
   serviceEntryId,
   className,
+  size,
   category,
 }: ProviderIconProps): ReactElement {
   // iconKey is resolved only from stable provider identities.
@@ -216,31 +220,27 @@ export function ProviderIcon({
     <span
       aria-hidden={category === "relay" ? undefined : "true"}
       aria-label={category === "relay" ? "Relay provider / 中转站" : undefined}
-      className={cn(
-        "relative inline-flex size-[26px] shrink-0 items-center justify-center rounded-md bg-muted p-0.5",
-        asset.transparent ? "bg-transparent" : "",
-        asset.themeSurface ? "box-border rounded-md bg-black p-[5px] dark:bg-white" : "",
-        className,
-      )}
+      className={cx("vk-provider-icon", className)}
       data-provider-category={category}
+      data-surface={asset.themeSurface ? "theme" : asset.transparent ? "none" : undefined}
       data-provider-icon={iconKey}
       role={category === "relay" ? "img" : undefined}
+      style={size === undefined ? undefined : { "--vk-provider-size": `${size}px` } as CSSProperties}
       title={category === "relay" ? "Relay provider / 中转站" : undefined}
     >
       <img
         alt=""
-        className={cn(
-          "size-full object-contain",
-          asset.dark ? "dark:hidden" : "",
-          asset.monochrome ? "dark:invert" : "",
-        )}
+        className="vk-provider-art"
+        data-mono={asset.monochrome || undefined}
+        data-scheme={asset.dark ? "light" : undefined}
         draggable={false}
         src={asset.light}
       />
       {asset.dark ? (
         <img
           alt=""
-          className="hidden size-full object-contain dark:block"
+          className="vk-provider-art"
+          data-scheme="dark"
           draggable={false}
           src={asset.dark}
         />
@@ -248,7 +248,7 @@ export function ProviderIcon({
       {category === "relay" ? (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute -bottom-1 -right-1 inline-flex size-3.5 items-center justify-center rounded-full border border-background bg-[var(--vcn-status-warning-background)] text-[8px] font-bold leading-none text-[var(--vcn-content-warning)] shadow-sm"
+          className="vk-provider-relay"
         >
           R
         </span>

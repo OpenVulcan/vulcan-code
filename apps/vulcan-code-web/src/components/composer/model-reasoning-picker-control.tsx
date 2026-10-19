@@ -23,7 +23,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/pop
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type { ProviderSummary } from "@/types";
 
 // REASONING_LEVEL_LABEL_KEYS localizes the backend wire values; unknown values keep the backend label.
@@ -344,23 +343,23 @@ export function ModelReasoningPickerControl(props: {
       >
         <HoverCardTrigger asChild>
           <PopoverTrigger asChild>
-            <Button
+            <button
               aria-label={props.ariaLabel}
-              className="composer-select-trigger model-reasoning"
+              className="vk-pick"
+              data-kind="model"
               disabled={unavailable}
               onPointerLeave={() => { summarySuppressedRef.current = false; }}
               type="button"
-              variant="outline"
             >
-              <span className="composer-select-icon"><Cpu size={15} /></span>
-              <span className="composer-model-reasoning-model">{modelLabel}</span>
-              {triggerLevel ? <span className="composer-model-reasoning-level">{triggerLevel}</span> : null}
-              {accountMissing ? <UserRound aria-hidden="true" className="composer-model-reasoning-alert" size={13} /> : null}
-              <ChevronDown aria-hidden="true" className="composer-select-chevron" />
-            </Button>
+              <span className="vk-pick-icon"><Cpu size={15} /></span>
+              <span className="vk-pick-label">{modelLabel}</span>
+              {triggerLevel ? <span className="vk-pick-level">{triggerLevel}</span> : null}
+              {accountMissing ? <UserRound aria-hidden="true" className="vk-pick-alert" size={13} /> : null}
+              <ChevronDown aria-hidden="true" className="vk-pick-chevron" />
+            </button>
           </PopoverTrigger>
         </HoverCardTrigger>
-        <HoverCardContent align="end" className="model-reasoning-summary" collisionPadding={12} side="top" sideOffset={8} width="content">
+        <HoverCardContent align="end" className="vk-mr-summary" collisionPadding={12} side="top" sideOffset={8} width="content">
           <ModelReasoningSummary
             account={account}
             accountMissing={accountMissing}
@@ -374,7 +373,8 @@ export function ModelReasoningPickerControl(props: {
       </HoverCard>
       <PopoverContent
         align="end"
-        className={cn("model-reasoning-content", view === "models" ? "model-picker-content models" : view)}
+        className={view === "models" ? "vk-mr-pop vk-model-pop" : "vk-mr-pop"}
+        data-view={view}
         collisionPadding={12}
         onEscapeKeyDown={(event) => {
           // Escape on the account pane steps back to the reasoning pane instead of closing.
@@ -395,10 +395,10 @@ export function ModelReasoningPickerControl(props: {
         sideOffset={8}
       >
         {view === "models" ? (
-          <div className="model-reasoning-models vcn-stream-reveal">
+          <div className="vk-mr-pane">
             {returnToReasoningRef.current ? (
               <button
-                className="model-reasoning-back"
+                className="vk-mr-back"
                 onClick={() => setView("reasoning")}
                 type="button"
               >
@@ -420,9 +420,9 @@ export function ModelReasoningPickerControl(props: {
             />
           </div>
         ) : view === "account" ? (
-          <div className="model-reasoning-account vcn-stream-reveal">
+          <div className="vk-mr-pane">
             <button
-              className="model-reasoning-back"
+              className="vk-mr-back"
               onClick={() => setView("reasoning")}
               ref={backButtonRef}
               type="button"
@@ -432,14 +432,14 @@ export function ModelReasoningPickerControl(props: {
             </button>
             <ModelAccountUsageCard details={account} />
             {props.accounts.length > 1 || !account.selectedAccount ? (
-              <div className="model-reasoning-account-list" role="group" aria-label={t("composer.modelReasoning.switchAccount")}>
-                <span className="model-reasoning-eyebrow">{t("composer.modelReasoning.switchAccount")}</span>
+              <div className="vk-mr-accounts" role="group" aria-label={t("composer.modelReasoning.switchAccount")}>
+                <span className="vk-mr-eyebrow">{t("composer.modelReasoning.switchAccount")}</span>
                 {props.accounts.map((choice) => {
                   const selected = choice.connectionId === props.accountValue;
                   return (
                     <button
                       aria-pressed={selected}
-                      className={cn("model-reasoning-account-option", selected && "selected")}
+                      className="vk-mr-account"
                       key={choice.connectionId}
                       onClick={() => {
                         if (!selected) {
@@ -458,43 +458,45 @@ export function ModelReasoningPickerControl(props: {
             ) : null}
           </div>
         ) : (
-          <div className="model-reasoning-pane vcn-stream-reveal">
+          <div className="vk-mr-pane">
             <button
               aria-label={t("composer.modelReasoning.switchModel").replace("{model}", modelLabel)}
-              className="model-reasoning-model-row"
+              className="vk-mr-row"
               disabled={choices.length === 0}
               onClick={() => openPane("models")}
               ref={reasoning.kind === "scale" ? undefined : (element) => { focusTargetRef.current = element; }}
               type="button"
             >
-              <span aria-hidden="true" className="model-reasoning-model-icon">
-                {selectedChoice ? <ProviderIcon className="size-6 shrink-0" providerId={selectedChoice.providerId} /> : <Cpu size={15} />}
+              <span aria-hidden="true" className="vk-mr-icon">
+                {selectedChoice ? <ProviderIcon size={24} providerId={selectedChoice.providerId} /> : <Cpu size={15} />}
               </span>
-              <span className="model-reasoning-model-copy">
+              <span className="vk-mr-copy">
                 <strong>{modelLabel}</strong>
                 {selectedChoice ? <small>{selectedChoice.providerName}</small> : null}
               </span>
-              <ChevronRight aria-hidden="true" className="model-reasoning-model-chevron" size={16} />
+              <ChevronRight aria-hidden="true" className="vk-mr-chevron" size={16} />
             </button>
             {props.accounts.length > 0 ? (
               <HoverCard closeDelay={150} openDelay={250}>
                 <HoverCardTrigger asChild>
                   <button
                     aria-label={props.accountAriaLabel}
-                    className={cn("model-reasoning-model-row account", accountMissing && "attention")}
+                    className="vk-mr-row"
+                    data-attention={accountMissing || undefined}
+                    data-kind="account"
                     onClick={() => openPane("account")}
                     type="button"
                   >
-                    <span aria-hidden="true" className="model-reasoning-model-icon"><UserRound size={15} /></span>
-                    <span className="model-reasoning-model-copy">
+                    <span aria-hidden="true" className="vk-mr-icon"><UserRound size={15} /></span>
+                    <span className="vk-mr-copy">
                       <strong>{account.selectedAccount?.accountName ?? t("composer.aria.account")}</strong>
                       <small>{accountSubtitle}</small>
                     </span>
-                    <ChevronRight aria-hidden="true" className="model-reasoning-model-chevron" size={16} />
+                    <ChevronRight aria-hidden="true" className="vk-mr-chevron" size={16} />
                   </button>
                 </HoverCardTrigger>
                 {account.selectedAccount ? (
-                  <HoverCardContent align="start" className="model-reasoning-usage-hover" collisionPadding={12} side="left" sideOffset={10} width="content">
+                  <HoverCardContent align="start" className="vk-mr-usage-pop" collisionPadding={12} side="left" sideOffset={10} width="content">
                     <ModelAccountUsageCard details={account} />
                   </HoverCardContent>
                 ) : null}
@@ -509,14 +511,14 @@ export function ModelReasoningPickerControl(props: {
                 value={props.reasoningEffort}
               />
             ) : (
-              <div className={cn("model-reasoning-fixed", reasoning.tone)}>
-                <div className="model-reasoning-heading">
-                  <span className="model-reasoning-eyebrow">{t("composer.reasoning.tooltip")}</span>
-                  <strong className="model-reasoning-title">
+              <div className="vk-mr-block" data-tone={reasoning.tone}>
+                <div className="vk-mr-heading">
+                  <span className="vk-mr-eyebrow">{t("composer.reasoning.tooltip")}</span>
+                  <strong className="vk-mr-title">
                     {reasoning.label ?? t("composer.reasoning.level.unavailable")}
                   </strong>
                 </div>
-                <p className="model-reasoning-hint">{t(FIXED_REASONING_HINT_KEYS[reasoning.tone])}</p>
+                <p className="vk-mr-hint">{t(FIXED_REASONING_HINT_KEYS[reasoning.tone])}</p>
               </div>
             )}
           </div>
@@ -585,14 +587,14 @@ function ReasoningScale(props: {
     : t("composer.reasoning.restoreDefault.unknown");
 
   return (
-    <div className="model-reasoning-scale-block">
-      <div className="model-reasoning-heading-row">
-        <div className="model-reasoning-heading">
-          <span className="model-reasoning-eyebrow">{t("composer.reasoning.tooltip")}</span>
-          <strong className="model-reasoning-title" aria-live="polite">
+    <div className="vk-mr-block">
+      <div className="vk-mr-head-row">
+        <div className="vk-mr-heading">
+          <span className="vk-mr-eyebrow">{t("composer.reasoning.tooltip")}</span>
+          <strong className="vk-mr-title" aria-live="polite">
             {title}
             {shownIndex >= 0 && shownIndex === defaultIndex ? (
-              <span className="model-reasoning-default-badge">{t("composer.reasoning.level.default")}</span>
+              <span className="vk-mr-default">{t("composer.reasoning.level.default")}</span>
             ) : null}
           </strong>
         </div>
@@ -600,7 +602,7 @@ function ReasoningScale(props: {
           <TooltipTrigger asChild>
             <Button
               aria-label={restoreLabel}
-              className="model-reasoning-reset"
+              className="vk-mr-reset"
               disabled={!defaultOption || defaultIndex === currentIndex}
               onClick={() => commit(defaultIndex)}
               size="icon"
@@ -619,7 +621,8 @@ function ReasoningScale(props: {
         aria-valuemin={0}
         aria-valuenow={Math.max(shownIndex, 0)}
         aria-valuetext={title}
-        className={cn("model-reasoning-slider", previewIndex !== null && "dragging")}
+        className="vk-mr-slider"
+        data-dragging={previewIndex !== null || undefined}
         onKeyDown={(event) => {
           const from = Math.max(currentIndex, 0);
           const next = event.key === "ArrowRight" || event.key === "ArrowUp"
@@ -660,33 +663,28 @@ function ReasoningScale(props: {
         role="slider"
         tabIndex={0}
       >
-        <div className="model-reasoning-rail" ref={railRef}>
-          <span className="model-reasoning-fill" style={{ width: `${fillPercent}%` }} />
+        <div className="vk-mr-rail" ref={railRef}>
+          <span className="vk-mr-fill" style={{ width: `${fillPercent}%` }} />
           {props.options.map((option, index) => (
             <span
               aria-hidden="true"
-              className={cn(
-                "model-reasoning-stop",
-                shownIndex >= 0 && index <= shownIndex && "reached",
-                index === defaultIndex && "default",
-              )}
+              className="vk-mr-stop"
+              data-reached={(shownIndex >= 0 && index <= shownIndex) || undefined}
               key={option.value}
               style={{ left: `${position(index)}%` }}
             />
           ))}
           {shownIndex >= 0 ? (
-            <span aria-hidden="true" className="model-reasoning-thumb" style={{ left: `${fillPercent}%` }} />
+            <span aria-hidden="true" className="vk-mr-thumb" style={{ left: `${fillPercent}%` }} />
           ) : null}
         </div>
       </div>
-      <div aria-hidden="true" className="model-reasoning-stop-labels">
+      <div aria-hidden="true" className="vk-mr-labels">
         {props.options.map((option, index) => (
           <span
-            className={cn(
-              "model-reasoning-stop-label",
-              index === shownIndex && "current",
-              index === defaultIndex && "default",
-            )}
+            className="vk-mr-label"
+            data-current={index === shownIndex || undefined}
+            data-default={index === defaultIndex || undefined}
             key={option.value}
             onClick={() => commit(index)}
             style={{ left: `${position(index)}%` }}
@@ -721,23 +719,23 @@ function ModelReasoningSummary(props: {
   const providerLine = [props.selectedChoice?.providerName, accountName].filter(Boolean).join(" · ");
   const scaleIndex = props.reasoning.kind === "scale" ? props.reasoning.index : -1;
   return (
-    <div className="model-reasoning-summary-body">
-      <div className="model-reasoning-summary-head">
-        <span aria-hidden="true" className="model-reasoning-model-icon">
-          {props.selectedChoice ? <ProviderIcon className="size-6 shrink-0" providerId={props.selectedChoice.providerId} /> : <Cpu size={15} />}
+    <div className="vk-mr-summary-body">
+      <div className="vk-mr-summary-head">
+        <span aria-hidden="true" className="vk-mr-icon">
+          {props.selectedChoice ? <ProviderIcon size={24} providerId={props.selectedChoice.providerId} /> : <Cpu size={15} />}
         </span>
-        <span className="model-reasoning-model-copy">
+        <span className="vk-mr-copy">
           <strong>{props.modelLabel}</strong>
-          {providerLine ? <small className={cn(props.accountMissing && "attention")}>{providerLine}</small> : null}
+          {providerLine ? <small data-attention={props.accountMissing || undefined}>{providerLine}</small> : null}
         </span>
       </div>
-      <div className="model-reasoning-summary-row">
-        <span className="model-reasoning-eyebrow">{t("composer.reasoning.tooltip")}</span>
-        <span className="model-reasoning-summary-level">
+      <div className="vk-mr-summary-row">
+        <span className="vk-mr-eyebrow">{t("composer.reasoning.tooltip")}</span>
+        <span className="vk-mr-summary-level">
           {props.reasoning.kind === "scale" ? (
-            <span aria-hidden="true" className="model-reasoning-summary-pips">
+            <span aria-hidden="true" className="vk-mr-pips">
               {props.options.map((option, index) => (
-                <span className={cn(index <= scaleIndex && "on")} key={option.value} />
+                <span data-on={index <= scaleIndex || undefined} key={option.value} />
               ))}
             </span>
           ) : null}
@@ -745,8 +743,8 @@ function ModelReasoningSummary(props: {
         </span>
       </div>
       {props.hasAccounts && account.selectedAccount ? (
-        <div className="model-reasoning-summary-usage">
-          <span className="model-reasoning-eyebrow">{t("composer.modelReasoning.planUsage")}</span>
+        <div className="vk-mr-summary-usage">
+          <span className="vk-mr-eyebrow">{t("composer.modelReasoning.planUsage")}</span>
           {account.connection && account.usageOverviewVisible ? (
             <ModelAccountUsageOverview
               connection={account.connection}
@@ -755,15 +753,15 @@ function ModelReasoningSummary(props: {
               usage={account.usage}
             />
           ) : !account.connection && account.loading ? (
-            <StreamPlaceholder className="py-1" label={t("composer.accountCard.loading")} shape="tiles" count={1} />
+            <StreamPlaceholder label={t("composer.accountCard.loading")} shape="tiles" count={1} />
           ) : (
-            <p className="model-reasoning-hint">
+            <p className="vk-mr-hint">
               {account.connection ? t("composer.accountCard.usageNotQueried") : t("composer.accountCard.metadataUnavailable")}
             </p>
           )}
         </div>
       ) : null}
-      <p className="model-reasoning-summary-foot">{t("composer.modelReasoning.clickHint")}</p>
+      <p className="vk-mr-summary-foot">{t("composer.modelReasoning.clickHint")}</p>
     </div>
   );
 }

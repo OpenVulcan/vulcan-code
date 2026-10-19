@@ -191,7 +191,7 @@ function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean;
   return (
     <>
       <header className="model-services-head">
-        <ProviderIcon category={provider.category} className="size-9 shrink-0" providerId={provider.id} />
+        <ProviderIcon category={provider.category} size={36} providerId={provider.id} />
         <div className="model-services-head-copy">
           <div className="model-services-head-title">
             <h2>{name}</h2>

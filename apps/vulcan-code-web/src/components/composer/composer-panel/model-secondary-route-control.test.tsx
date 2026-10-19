@@ -60,7 +60,7 @@ async function openMenu() { await key(trigger(), "Enter"); }
 // label 是精确标签；返回语义菜单项。
 function item(label: string) {
   return [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
-    .find((button) => button.querySelector(".model-picker-row-title")?.textContent?.startsWith(label))!;
+    .find((button) => button.querySelector(".vk-model-title")?.textContent?.startsWith(label))!;
 }
 
 it("ignores an old forced refresh after switching model and preserves the new loading state", async () => {

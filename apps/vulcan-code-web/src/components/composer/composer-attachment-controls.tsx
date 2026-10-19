@@ -26,7 +26,6 @@ import {
   X,
 } from "lucide-react";
 
-import { Button } from "@/ui-kit/primitives/button";
 import { Checkbox } from "@/ui-kit/primitives/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
 import {
@@ -167,22 +166,20 @@ export function ComposerAttachmentMenu(props: {
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button
+            <button
               aria-label={t("composer.attachment.add")}
-              className="composer-add-button"
-              size="icon"
+              className="vk-pick-add"
               type="button"
-              variant="secondary"
             >
               <Plus size={17} />
-            </Button>
+            </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent className="composer-control-tooltip" side="top">
+        <TooltipContent className="vk-pick-tip" side="top">
           <strong>{t("composer.attachment.extension")}</strong>
         </TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="start" className="composer-attachment-menu" side="top" sideOffset={8}>
+      <DropdownMenuContent align="start" className="vk-pick-menu" side="top" sideOffset={8}>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <Paperclip size={15} />
@@ -266,7 +263,7 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
       <button aria-label={t("composer.sessionSettings")} className="vk-status-item" data-action="session-settings" type="button"><Settings /><span>{t("composer.sessionSettings")}</span></button>
     </DropdownMenuTrigger>
     <ComposerSettingsRequestContext.Provider value={requestedSection}>
-    <DropdownMenuContent align="start" className="composer-settings-menu" side="top" sideOffset={8}>
+    <DropdownMenuContent align="start" className="vk-pick-menu" side="top" sideOffset={8}>
         {dedicated ? null : <>
         <OutputStyleSubMenu
           catalog={props.outputStyleCatalog}
@@ -286,7 +283,7 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
         </>}
         <RequestedSettingsSub section="tools">
           <DropdownMenuSubTrigger><Workflow size={15} /><span>{t("composer.collapseTools")}</span></DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="composer-thinking-menu">
+          <DropdownMenuSubContent className="vk-pick-menu">
             <DropdownMenuRadioGroup value={toolCollapse.override === undefined ? "inherit" : toolCollapse.override ? "enabled" : "disabled"}>
               <DropdownMenuRadioItem value="disabled" disabled={toolCollapse.scope === null} onSelect={() => {
                 if (toolCollapse.scope !== null) setConversationToolCollapseOverride(toolCollapse.scope, false);
@@ -307,11 +304,11 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
             <Sparkles size={15} />
             <span>{t("composer.thinkingProcess")}</span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="composer-thinking-menu">
+          <DropdownMenuSubContent className="vk-pick-menu">
             <DropdownMenuRadioGroup value={thinkingPreference.override === undefined ? "inherit" : thinkingPreference.override ? "popup_only" : "inline_output"}>
             {THINKING_DISPLAY_MODE_OPTIONS.map((option) => (
               <DropdownMenuRadioItem key={option.value} value={option.value} disabled={toolCollapse.scope === null} onSelect={() => props.onThinkingDisplayModeChange(option.value)}>
-                <span className="composer-thinking-mode-label">
+                <span className="vk-menu-label">
                   <span>{t(option.labelKey)}</span>
                 </span>
               </DropdownMenuRadioItem>
@@ -330,8 +327,8 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
               <MemoryBrainIcon size={15} />
               <span>{t("composer.vmmMemory")}</span>
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="composer-thinking-menu">
-              {props.vmmStatus ? <p className="px-2 py-1.5 text-xs text-muted-foreground">{t(`memory.workspace.${props.vmmStatus}`)}</p> : null}
+            <DropdownMenuSubContent className="vk-pick-menu">
+              {props.vmmStatus ? <p className="vk-menu-note">{t(`memory.workspace.${props.vmmStatus}`)}</p> : null}
               {props.vmmAvailable ? <>
               <VmmPolicySubMenu
                 label={t("composer.vmm.precheckInjection")}
@@ -378,10 +375,10 @@ function OutputStyleSubMenu(props: {
         <Palette size={15} />
         <span>{t("composer.outputStyle.menuTitle")}</span>
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="composer-thinking-menu">
+      <DropdownMenuSubContent className="vk-pick-menu">
         <DropdownMenuRadioGroup value={selectedId === null ? "inherit" : `style:${selectedId}`}>
         <DropdownMenuRadioItem value="inherit" onSelect={() => props.onChange(null)}>
-          <span className="composer-thinking-mode-label">
+          <span className="vk-menu-label">
             <span>{t("composer.outputStyle.inheritGlobal")}</span>
             <small>
               {formatMessage(t("composer.outputStyle.useSystemSetting"), { label: globalLabel })}
@@ -390,14 +387,14 @@ function OutputStyleSubMenu(props: {
         </DropdownMenuRadioItem>
         {props.catalog.entries.map((entry) => (
           <DropdownMenuRadioItem key={entry.id} value={`style:${entry.id}`} onSelect={() => props.onChange(entry.id)}>
-            <span className="composer-thinking-mode-label">
+            <span className="vk-menu-label">
               <span>{pickBilingualText(locale, entry.labelZh, entry.labelEn)}</span>
               <small>{formatMessage(t("composer.outputStyle.promptCharacters"), { count: entry.promptCharCount.toLocaleString(locale) })}</small>
             </span>
           </DropdownMenuRadioItem>
         ))}
         </DropdownMenuRadioGroup>
-        {props.conversationId && props.sessionOutputStyle?.pendingActivation ? <p role="status" className="px-2 py-1.5 text-xs text-muted-foreground">
+        {props.conversationId && props.sessionOutputStyle?.pendingActivation ? <p role="status" className="vk-menu-note">
           {t("composer.outputStyle.savedPending")}
         </p> : null}
       </DropdownMenuSubContent>
@@ -420,18 +417,18 @@ function AnswerModeSubMenu(props: { controller: ComposerAnswerModeController }) 
         <LayoutPanelTop size={15} />
         <span>{t("answerMode.label")}</span>
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="composer-thinking-menu" aria-busy={saving}>
+      <DropdownMenuSubContent className="vk-pick-menu" aria-busy={saving}>
         <DropdownMenuRadioGroup value={mode ?? ""}>
           {options.map((option) => (
             <DropdownMenuRadioItem key={option.value} value={option.value} disabled={saving} onSelect={() => select(option.value)}>
-              <span className="composer-thinking-mode-label">
+              <span className="vk-menu-label">
                 <span>{t(option.label)}</span>
                 <small>{t(option.hint)}</small>
               </span>
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
-        {awaitingRequest ? <p role="status" className="px-2 py-1.5 text-xs text-muted-foreground">
+        {awaitingRequest ? <p role="status" className="vk-menu-note">
           {t("answerMode.pending")}
         </p> : null}
       </DropdownMenuSubContent>
@@ -693,7 +690,7 @@ export function ComposerAttachmentStrip(props: {
               {t("composer.attachment.compressImages")}
             </label>
           </TooltipTrigger>
-          <TooltipContent className="composer-control-tooltip" side="top">{t("composer.attachment.compressImagesHint")}</TooltipContent>
+          <TooltipContent className="vk-pick-tip" side="top">{t("composer.attachment.compressImagesHint")}</TooltipContent>
         </Tooltip>
       ) : null}
     </div>

@@ -104,6 +104,7 @@ export function applyAppearance(preferences: AppearancePreferences): void {
   if (preferences.motion === "reduce") root.dataset.vkMotion = "reduce";
   else delete root.dataset.vkMotion;
   const dark = resolvedDark(preferences.theme);
+  root.dataset.vkScheme = dark ? "dark" : "light";
   root.classList.toggle("dark", dark);
   root.style.colorScheme = dark ? "dark" : "light";
 }

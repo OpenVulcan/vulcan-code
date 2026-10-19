@@ -39,7 +39,7 @@ const LazyCredentialUsageSummaryLine = React.lazy(() => loadCredentialUsageOverv
 // ModelAccountUsageOverview 在模块加载后渲染完整用量卡片。
 export function ModelAccountUsageOverview(props: CredentialUsageOverviewProps) {
   return (
-    <React.Suspense fallback={<StreamPlaceholder className="py-1" shape="tiles" count={1} />}>
+    <React.Suspense fallback={<StreamPlaceholder shape="tiles" count={1} />}>
       <LazyCredentialUsageOverview {...props} />
     </React.Suspense>
   );
@@ -205,15 +205,15 @@ export function ModelAccountUsageCard(props: { details: ModelAccountDetails }) {
     return null;
   }
   return (
-    <div className="model-account-card">
-      <div className="model-account-card-header">
+    <div className="vk-account-card">
+      <div className="vk-account-card-head">
         <ProviderIcon
           category={details.provider?.category}
-          className="size-8 shrink-0"
+          size={32}
           providerId={details.connection?.provider_id ?? account.providerId}
           serviceEntryId={details.connection?.service_entry_id}
         />
-        <div className="model-account-card-title">
+        <div className="vk-account-card-title">
           <strong>{account.accountName}</strong>
           <small>
             {details.provider
@@ -232,14 +232,14 @@ export function ModelAccountUsageCard(props: { details: ModelAccountDetails }) {
                 type="button"
                 variant="ghost"
               >
-                <RefreshCw className={details.refreshing ? "size-4 animate-spin" : "size-4"} />
+                <RefreshCw className={details.refreshing ? "vk-spin" : undefined} size={16} />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top">{t("composer.accountCard.refresh")}</TooltipContent>
           </Tooltip>
         ) : null}
       </div>
-      <div className="model-account-card-fact">
+      <div className="vk-account-card-fact">
         <span>{t("composer.accountCard.protocolType")}</span>
         <strong>{details.effectiveProtocolId ? modelAccountProtocolDisplayName(details.effectiveProtocolId) : "—"}</strong>
       </div>
@@ -251,11 +251,11 @@ export function ModelAccountUsageCard(props: { details: ModelAccountDetails }) {
           usage={details.usage}
         />
       ) : !details.connection && details.loading ? (
-        <StreamPlaceholder className="py-1" label={t("composer.accountCard.loading")} shape="tiles" count={2} />
+        <StreamPlaceholder label={t("composer.accountCard.loading")} shape="tiles" count={2} />
       ) : !details.connection ? (
-        <p className="model-account-card-empty">{t("composer.accountCard.metadataUnavailable")}</p>
+        <p className="vk-account-card-note">{t("composer.accountCard.metadataUnavailable")}</p>
       ) : null}
-      {details.error ? <p className="model-account-card-error" role="status">{details.error}</p> : null}
+      {details.error ? <p className="vk-account-card-error" role="status">{details.error}</p> : null}
     </div>
   );
 }
