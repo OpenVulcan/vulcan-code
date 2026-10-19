@@ -122,3 +122,14 @@ export function numberOf(value: unknown): number | null {
 export function listOf(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
+
+// formatToolDuration writes a call duration at the precision a reader needs: milliseconds under a second, tenths
+// under a minute, then minutes and seconds.
+// formatToolDuration 按读者所需精度书写调用耗时：一秒内用毫秒，一分钟内精确到十分之一秒，之后用分与秒。
+export function formatToolDuration(milliseconds: number): string {
+  const ms = Math.max(0, milliseconds);
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  const seconds = Math.round(ms / 1000);
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}

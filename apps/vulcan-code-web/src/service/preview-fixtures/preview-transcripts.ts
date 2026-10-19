@@ -394,6 +394,24 @@ function toolCardGallery(sessionId: string): ConversationEventHydrationV1Respons
         },
         { name: "web_search", input: { query: "accessible disclosure pattern" }, output: toolOutput("web_search", "# Search: `accessible disclosure pattern`\n\n1. [Disclosure (Show/Hide) Pattern \\| APG](<https://www.w3.org/WAI/ARIA/apg/patterns/disclosure/>)\n\nA disclosure is a widget that enables content to be either collapsed (hidden) or expanded (visible). It has two elements: a disclosure button and a section of content.\n\n2. [details: The Details disclosure element](<https://developer.mozilla.org/en-US/docs/Web/HTML/Element/details>)\n\nThe details HTML element creates a disclosure widget in which information is visible only when the widget is toggled into an open state.\n") },
         { name: "web_extract", input: { urls: ["https://www.w3.org/WAI/ARIA/apg/patterns/disclosure/", "https://example.test/missing"] }, output: toolOutput("web_extract", "# Extracted pages\n\n## [https://www.w3.org/WAI/ARIA/apg/patterns/disclosure/](<https://www.w3.org/WAI/ARIA/apg/patterns/disclosure/>)\n\n## About This Pattern\n\nA disclosure is a widget that enables content to be either collapsed or expanded.\n\n## Keyboard Interaction\n\n- **Enter**: activates the disclosure control.\n- **Space**: activates the disclosure control.\n\n## Failed sources\n\n- [https://example.test/missing](<https://example.test/missing>): HTTP 404 Not Found\n") },
+        {
+          name: "runlua",
+          input: { task: "count tool families", code: "local families = { \"read\", \"search\", \"edit\", \"run\" }\nprint(#families .. \" families\")\nreturn families" },
+          output: toolOutput("runlua", "4 families\n\n```json\n[\"read\", \"search\", \"edit\", \"run\"]\n```", { kind: "lua_execution", payload: { tool: "runlua", mode: "one_shot", action: "eval", status: "completed", task: "count tool families", elapsedMs: 38 } }),
+        },
+        {
+          name: "ask",
+          input: { questions: [
+            { header: "Density", question: "How dense should collapsed tool cards be?", options: [{ label: "One line", description: "" }, { label: "Two lines", description: "" }] },
+            { header: "Notes", question: "Anything else to keep from the old cards?" },
+          ] },
+          output: toolOutput("ask", "## User Answers\n\n- Density: One line\n- Notes: Unanswered\n\nContinue with these answers.", { kind: "ask", payload: { format: "markdown" } }),
+        },
+        {
+          name: "knowledge_write",
+          input: { libraryId: "lib-design", action: "edit", path: "design/tool-cards.md", edits: [{ oldText: "Cards keep the legacy header.", newText: "Cards use one head row:\nfamily tile, verb, target, facts, state." }] },
+          output: toolOutput("knowledge_write", "# Knowledge change\n\nLibrary ID: `lib-design`\nChange seq: 14\nPending embeddings: 1\n", { kind: "knowledge_write_v1", payload: { library_id: "lib-design", change_seq: 14, documents: [{ id: "doc-3", path: "design/tool-cards.md", revision: 7 }], pending_embeddings: 1 } }),
+        },
         { name: "file", input: { action: "list", path: "src/conversation/tools" }, output: toolOutput("file", "- `cards` · directory\n- `views` · directory\n- `tool-call.ts` · file · 4210 bytes\n- `tool-card.tsx` · file · 5032 bytes\n- `tool-call-card.tsx` · file · 3388 bytes") },
         {
           name: "terminal_session",

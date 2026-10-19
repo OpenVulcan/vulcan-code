@@ -3,9 +3,8 @@
 // 命令卡一眼回答三个问题：运行了什么、如何结束、耗时多久。正文是终端记录，末尾注明运行位置。
 import { SquareTerminal } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { formatDurationSeconds } from "@/lib/usage-format";
 import { ToolFrame, type ToolCardProps } from "../tool-card";
-import { listOf, numberOf, objectOf, textOf, type ToolCall } from "../tool-call";
+import { formatToolDuration, listOf, numberOf, objectOf, textOf, type ToolCall } from "../tool-call";
 import { TerminalView } from "../views/terminal-view";
 
 /** Renders one shell_command call.
@@ -32,7 +31,7 @@ export function ShellCommandCard(props: ToolCardProps) {
             <span className="vk-badge" key={index} title={`${textOf(badge?.label) ?? ""}: ${textOf(badge?.value) ?? ""}`}>{textOf(badge?.badge)}</span>
           ))}
           {exitCode !== null && exitCode !== 0 ? <span className="vk-del">{t("toolCard.exitCode").replace("{code}", String(exitCode))}</span> : null}
-          {durationMs !== null && call.state !== "running" ? <span>{formatDurationSeconds(durationMs)}</span> : null}
+          {durationMs !== null && call.state !== "running" ? <span>{formatToolDuration(durationMs)}</span> : null}
         </>
       )}
       state={call.state}

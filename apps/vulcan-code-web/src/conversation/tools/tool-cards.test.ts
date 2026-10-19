@@ -3,13 +3,16 @@
 import { describe, expect, it } from "vitest";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import type { PersistentChangeSetFile } from "@/service/conversation-event-window-store";
+import { askAnswers, askQuestions } from "./cards/ask-card";
 import { commandOutputFromText } from "./cards/command-card";
 import { documentBody } from "./cards/document-card";
 import { listEntries, readLines } from "./cards/file-cards";
 import { toolNameParts } from "./cards/generic-card";
+import { knowledgeEdits } from "./cards/knowledge-write-card";
+import { codeLines, luaSessionBody } from "./cards/lua-card";
 import { goalReport, todoItems } from "./cards/plan-cards";
 import { extractReport, searchReport, sourceParts, stripReportHeading } from "./cards/provider-card";
-import { readToolCall, toolCardState } from "./tool-call";
+import { formatToolDuration, readToolCall, toolCardState } from "./tool-call";
 import { toolCallFamily, toolCallHasPurposeCard } from "./tool-call-card";
 import { fileDiffRows, fileLineCounts } from "./views/change-set";
 import { parseTerminalText } from "./views/terminal-view";
@@ -30,6 +33,12 @@ function toolEvent(toolName: string, input: Record<string, unknown>, host: { kin
 }
 
 describe("tool call reading", () => {
+  it("writes durations at the precision a reader needs", () => {
+    expect(formatToolDuration(38)).toBe("38 ms");
+    expect(formatToolDuration(6_400)).toBe("6.4 s");
+    expect(formatToolDuration(125_000)).toBe("2m 05s");
+  });
+
   it("maps every durable lifecycle onto one card state", () => {
     expect(toolCardState("prepared", false)).toBe("running");
     expect(toolCardState("running", false)).toBe("running");
@@ -164,6 +173,40 @@ describe("provider results", () => {
     expect(toolCallFamily(toolEvent("web_search", { query: "q" }))).toBe("web");
     expect(toolCallFamily(toolEvent("image_understand", { prompt: "p" }))).toBe("read");
     expect(toolCallFamily(toolEvent("image_generate", { args: { prompt: "p" }, model: "m/x" }))).toBe("media");
+  });
+});
+
+describe("lua, questions and knowledge writes", () => {
+  it("numbers submitted Lua and drops the session heading", () => {
+    expect(codeLines("local a = 1\r\nreturn a\n")).toEqual([{ number: 1, text: "local a = 1" }, { number: 2, text: "return a" }]);
+    expect(luaSessionBody("# Lua session: eval\n\nSession ID: `l`\n")).toBe("Session ID: `l`\n");
+  });
+
+  it("matches answers to questions by header, including unanswered ones and headers with colons", () => {
+    const questions = askQuestions([
+      { header: "Scope: files", question: "Which files?", options: [{ label: "All", description: "" }] },
+      { header: "Mode", question: "Which mode?" },
+      { question: "missing header" },
+    ]);
+    expect(questions).toEqual([
+      { header: "Scope: files", options: ["All"], question: "Which files?" },
+      { header: "Mode", options: [], question: "Which mode?" },
+    ]);
+    expect(askAnswers("## User Answers\n\n- Scope: files: All\n- Mode: Unanswered\n\nContinue with these answers.", questions)).toEqual(["All", null]);
+    expect(askAnswers("Todolist updated", questions)).toBeNull();
+  });
+
+  it("keeps only complete passage edits", () => {
+    expect(knowledgeEdits([{ newText: "b", oldText: "a" }, { oldText: "c" }, "x"])).toEqual([{ newText: "b", oldText: "a" }]);
+  });
+
+  it("routes scripts, questions, knowledge writes, memory and configuration", () => {
+    expect(toolCallFamily(toolEvent("runlua", { code: "return 1", task: "t" }))).toBe("run");
+    expect(toolCallFamily(toolEvent("runlua_session", { action: "list" }))).toBe("run");
+    expect(toolCallFamily(toolEvent("ask", { questions: [] }))).toBe("agent");
+    expect(toolCallFamily(toolEvent("knowledge_write", { action: "create", libraryId: "l" }))).toBe("edit");
+    expect(toolCallFamily(toolEvent("vmm_memory_search", { queries: ["q"] }))).toBe("search");
+    expect(toolCallFamily(toolEvent("runtime_config", { action: "describe" }))).toBe("read");
   });
 });
 

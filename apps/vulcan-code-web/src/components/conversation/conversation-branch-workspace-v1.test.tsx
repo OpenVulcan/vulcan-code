@@ -1042,38 +1042,27 @@ describe("ConversationBranchWorkspaceV1", () => {
   });
   // The real runtime-config call revealed that branch rendering bypassed the direct V1 domain card.
   // 实际 runtime-config 调用暴露了分支渲染绕过直接 V1 领域卡的问题。
-  it("renders the runtime descriptor through the full branch projection without eager raw JSON", async () => {
-    // Payload follows the real describe result shape; the marker belongs only to raw diagnostics.
-    // 载荷遵循实际 describe 返回结构；标记仅属于原始诊断。
+  it("renders the runtime descriptor as a configuration card that opens to its declarations", async () => {
+    // Output follows the current describe Markdown; the card names the action and keeps the body closed until asked.
+    // 输出遵循当前 describe Markdown；卡片标明动作，并在请求前保持正文收起。
     const events = completeTurnEvents().map((summary): ConversationEventSummary => summary.event.kind === "tool_call" ? {
       ...summary,
-      event: { ...summary.event, tool_name: "runtime_config", input: { action: "describe" }, output: { model_output: JSON.stringify({ action: "describe", ok: true, error: null, result: [{ skill_id: "vulcan-codekit", skill_version: "0.1.11", complete: true, missing_count: 0, invalid_count: 0, business_issue_count: 0, orphaned_count: 0, items: [], revision: "raw-only-revision" }] }) } },
+      event: { ...summary.event, tool_name: "runtime_config", input: { action: "describe" }, output: { model_output: "# Configuration declarations\n\nRead-only. Configured values are not disclosed.\n\n## `vulcan-codekit` 0.1.11\n\nComplete.\n" } },
     } : summary);
-    // Card ownership is resolved by the same production adapter used by the live tool row.
-    // 卡片归属通过实际工具行使用的同一生产适配器解析。
-    const branch = projectConversationBranchPresentationV1("session-branch-v1", events, emptyResourceCatalog(), (key) => key);
-    // Only actual call/result blocks enter the same tool-card adapter as the production merger.
-    // 只有真实调用/结果块进入与生产合并器相同的工具卡适配器。
-    const blocks = branch.renderItems.flatMap((item) => item.blocks).flatMap((block) => block.toolName === "runtime_config" && (block.kind === "tool-call" || block.kind === "tool-result") ? [{ ...block, kind: block.kind as "tool-call" | "tool-result" }] : []);
-    const presentation = resolveToolPresentation(blocks, "completed");
-    // The mounted production tree must resolve its real deferred module, without mocking the result renderer.
-    // 挂载的生产组件树必须解析真实延迟模块，不模拟结果渲染器。
     const host = document.createElement("div");
     document.body.appendChild(host);
     const root = createRoot(host);
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     try {
-      await React.act(async () => { root.render(workspaceTree(events, "inline_output", [presentation.id])); });
-      await React.act(async () => { await vi.dynamicImportSettled(); });
-      const markup = host.innerHTML;
-      expect(markup).toContain("data-tool-domain-result");
-      expect(markup).toContain("运行配置");
-      expect(markup).toContain("配置完整");
-      expect(markup).toContain("vulcan-codekit");
-      expect(markup).not.toContain("原始详情");
-      expect(Array.from(host.querySelectorAll('[role="tab"]'), tab => tab.textContent)).toEqual(["配置详情", "输入", "输出"]);
-      expect(markup).not.toContain("raw-only-revision");
-      expect(markup).not.toContain("更新运行配置");
+      await React.act(async () => { root.render(workspaceTree(events, "inline_output")); });
+      const card = host.querySelector<HTMLElement>(".vk-tool");
+      const head = card?.querySelector<HTMLButtonElement>(".vk-tool-head");
+      expect(card?.dataset.family).toBe("read");
+      expect(head?.querySelector("code")?.textContent).toBe("describe");
+      expect(head?.getAttribute("aria-expanded")).toBe("false");
+      expect(card?.querySelector(".vk-tool-result")).toBeNull();
+      await React.act(async () => { head?.click(); });
+      expect(host.querySelector(".vk-tool-result")?.textContent).toContain("vulcan-codekit");
     } finally {
       await React.act(async () => root.unmount());
       host.remove();
