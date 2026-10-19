@@ -89,7 +89,7 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
   const { connectionAvailable, connectionEpoch } = useTerminalDisplayConnectionState();
   // workspaceHost keeps every AI terminal constrained below the conversation title bar like project terminals.
   // workspaceHost 使每个 AI 终端像项目终端一样限制在会话标题栏下方。
-  const workspaceHost = props.minimizeAnchorRef.current?.closest<HTMLElement>(".workspace") ?? null;
+  const workspaceHost = props.minimizeAnchorRef.current?.closest<HTMLElement>(".vk-workbench-main") ?? null;
 
   React.useEffect(() => {
     if (!props.open || !props.summary || !connectionAvailable || !workspaceHost) return;
