@@ -475,6 +475,11 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-plan-choices { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: calc(var(--vk-u) * 2); }
 .vk-plan-choice[aria-pressed="true"] { outline: 2px solid var(--vk-signal); outline-offset: 2px; }
 
+/* Detail viewer: one transcript item opened large. Reasoning reads at prose size in its own tone. */
+.vk-detail[data-kind="thinking"] .vk-viewer-mark { --vk-tone: var(--vk-signal); }
+.vk-detail[data-kind="diff"] .vk-viewer-body { padding: 0; }
+.vk-detail .vk-viewer-body > .markdown-message { max-width: none; font-size: var(--vk-fs-read); }
+
 /* ---------- Agent collaboration ---------- */
 /* A dispatch line naming the other agent and the delivery state; the message folds beneath it on a ruled lane.
  * Received messages read like a prompt bubble from the other agent, right-aligned with the head above them. */

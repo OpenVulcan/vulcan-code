@@ -188,9 +188,9 @@ export function ModalSurface({
   );
 }
 
-// DialogContentSize is the surface width; viewer and fullscreen also fix the height.
-// DialogContentSize 是表面宽度；viewer 与 fullscreen 同时固定高度。
-export type DialogContentSize = "compact" | "sm" | "md" | "lg" | "xl" | "viewer" | "fullscreen";
+// DialogContentSize is the surface width; wide reads long documents at content height, while viewer and fullscreen also fix the height.
+// DialogContentSize 是表面宽度；wide 以内容高度阅读长文档，viewer 与 fullscreen 同时固定高度。
+export type DialogContentSize = "compact" | "sm" | "md" | "lg" | "xl" | "wide" | "viewer" | "fullscreen";
 
 // DialogContentLayout sets the padding owned by the surface: forms are padded, documents and viewers are not.
 // DialogContentLayout 设置表面负责的内边距：表单有内边距，文档与查看器没有。

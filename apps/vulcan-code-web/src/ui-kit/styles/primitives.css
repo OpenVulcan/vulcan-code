@@ -831,6 +831,7 @@
 .vk-dialog[data-size="md"] { max-width: 36rem; }
 .vk-dialog[data-size="lg"] { max-width: 42rem; }
 .vk-dialog[data-size="xl"] { max-width: 56rem; }
+.vk-dialog[data-size="wide"] { max-width: min(1080px, 100%); }
 .vk-dialog[data-size="viewer"] { max-width: min(1180px, 100%); height: min(860px, 100%); }
 .vk-dialog[data-size="fullscreen"] { max-width: none; width: 100%; height: 100%; }
 .vk-dialog[data-layout="form"] { gap: calc(var(--vk-u) * 4); padding: calc(var(--vk-u) * 4); }
@@ -858,6 +859,18 @@
 .vk-dialog[data-layout="form"] > .vk-dialog-footer { margin: 0 calc(var(--vk-u) * -4) calc(var(--vk-u) * -4); }
 .vk-dialog-media { display: grid; place-items: center; width: calc(var(--vk-u) * 10); height: calc(var(--vk-u) * 10); margin-bottom: calc(var(--vk-u) * 1); background: var(--vk-sunken); border: var(--vk-bw) solid var(--vk-line); color: var(--vk-ink-2); }
 .vk-dialog-media > svg { width: calc(var(--vk-u) * 5); height: calc(var(--vk-u) * 5); }
+/* Viewer head: the bar of a document or viewer dialog — a kind mark, an eyebrow naming what is shown,
+ * the title with one line of context, and the dialog's own actions (which include closing it). */
+.vk-viewer-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 4); border-bottom: var(--vk-bw) solid var(--vk-line); }
+.vk-viewer-mark { display: grid; flex: none; place-items: center; width: calc(var(--vk-u) * 8); height: calc(var(--vk-u) * 8); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); color: var(--vk-tone, var(--vk-ink-2)); }
+.vk-viewer-mark > svg { width: 1rem; height: 1rem; }
+.vk-viewer-titles { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; }
+.vk-viewer-titles > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-viewer-eyebrow { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 600; line-height: var(--vk-lh-tight); }
+.vk-viewer-titles > .vk-dialog-title { font-size: var(--vk-fs-md); }
+.vk-viewer-titles > .vk-dialog-description { font-size: var(--vk-fs-xs); }
+.vk-viewer-head > .vk-actions { display: flex; flex: none; gap: 2px; }
+.vk-viewer-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 5); }
 
 .vk-drawer-scrim { display: block; padding: 0; }
 .vk-drawer {
