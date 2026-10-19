@@ -238,10 +238,10 @@ export function ConversationToolSequenceGroup(props: {
   }), [props.items, props.runningItems]);
 
   return (
-    <section className="conversation-tool-sequence" data-expanded={expanded ? "true" : "false"} data-grouped={grouped ? "true" : "false"}>
+    <section className="vk-tool-seq" data-expanded={expanded ? "true" : "false"} data-grouped={grouped ? "true" : "false"}>
       {grouped ? <ToolSequenceHead entries={entries} expanded={expanded} onToggle={() => setExpanded(!expanded)} /> : null}
       <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={expanded}>
-        <div className="conversation-tool-sequence-body">
+        <div className="vk-tool-seq-body">
           {props.items.map(props.renderItem)}
         </div>
       </ConversationMeasuredCollapse>
@@ -428,13 +428,15 @@ export function ConversationProcessGroup(props: {
   );
   return (
     <section
-      className={cn("work-process-group", props.process.running && "running", props.process.stopped && "stopped")}
+      className="vk-process"
+      data-running={props.process.running ? "" : undefined}
+      data-stopped={props.process.stopped ? "" : undefined}
       data-process-body-visible={bodyVisible ? "true" : "false"}
       data-process-collapsed={collapsed ? "true" : "false"}
     >
       <button
         aria-expanded={bodyVisible}
-        className="work-process-toggle"
+        className="vk-process-head"
         disabled={!props.process.collapsible || !toolCollapseEnabled}
         onClick={() => {
           if (!props.process.collapsible || !toolCollapseEnabled) {
@@ -445,11 +447,11 @@ export function ConversationProcessGroup(props: {
         }}
         type="button"
       >
-        <Clock3 className="work-process-icon" size={14} />
+        <Clock3 aria-hidden="true" />
         <span>{headerText}</span>
-        {props.process.collapsible && toolCollapseEnabled ? (collapsed ? <ChevronRight className="work-process-toggle-icon" size={13} /> : <ChevronDown className="work-process-toggle-icon" size={13} />) : null}
+        {props.process.collapsible && toolCollapseEnabled ? (collapsed ? <ChevronRight aria-hidden="true" className="vk-process-chev" /> : <ChevronDown aria-hidden="true" className="vk-process-chev" />) : null}
       </button>
-      <div className="work-process-guidance">
+      <div className="vk-process-guidance">
         {visibleGuidanceItems.map((item) => (
           <ConversationRenderItemView
             autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
@@ -518,7 +520,7 @@ export function ConversationProcessGroup(props: {
         ))}
       </div>
       <ConversationMeasuredCollapse collapseId={processBodyCollapseId} expanded={bodyVisible}>
-        <div className="work-process-body">
+        <div className="vk-process-body">
           {visibleProcessBodyEntries.map((entry) => (
             entry.kind === "item"
               ? renderProcessBodyItem(entry.item)
@@ -536,7 +538,7 @@ export function ConversationProcessGroup(props: {
               )
           ))}
           {props.process.stopped ? (
-            <div className="work-process-stopped-note">
+            <div className="vk-process-stopped">
               {stoppedText}
             </div>
           ) : null}
@@ -716,7 +718,7 @@ export function ConversationRenderItemView(props: {
   if (props.item.role === "user") {
     const attachments = props.item.userMessage?.attachments ?? [];
     return (
-      <article className="message-row user">
+      <article className="vk-prompt-row">
         {attachments.length ? (
           <ComposerAttachmentStrip
             attachments={attachments}
@@ -740,14 +742,14 @@ export function ConversationRenderItemView(props: {
         ) : null}
         {/* A resource-only input has no prompt text, so no empty bubble is drawn. */}
         {/* 仅资源的输入没有提示词文字，因此不绘制空气泡。 */}
-        {userBody ? <div className="user-bubble">
+        {userBody ? <div className="vk-prompt">
           {userBody ? (
             <ConversationMeasuredCollapse
               collapseId={`user-prompt-body:${userPromptKey}`}
               collapsedHeight={userPromptMeasuredCollapsedHeight}
               expanded={userPromptCollapseExpanded}
             >
-              <p className="user-prompt-text" ref={userPromptTextRef}>
+              <p className="vk-prompt-text" ref={userPromptTextRef}>
                 {userBody}
               </p>
             </ConversationMeasuredCollapse>
@@ -755,7 +757,7 @@ export function ConversationRenderItemView(props: {
           {userPromptOverflowing ? (
             <button
               aria-expanded={userPromptExpanded}
-              className="user-prompt-expand-toggle"
+              className="vk-prompt-more"
               onClick={() => {
                 setMeasuredUserPromptExpanded(!userPromptExpanded);
                 props.onUserPromptExpandedChange(userPromptKey, !userPromptExpanded);
@@ -764,14 +766,14 @@ export function ConversationRenderItemView(props: {
             >
               <span>{userPromptExpanded ? t("conversation.userPrompt.collapse") : t("conversation.userPrompt.expand")}</span>
               {userPromptExpanded ? (
-                <ChevronUp className="user-prompt-expand-icon" size={14} />
+                <ChevronUp aria-hidden="true" />
               ) : (
-                <ChevronDown className="user-prompt-expand-icon" size={14} />
+                <ChevronDown aria-hidden="true" />
               )}
             </button>
           ) : null}
         </div> : null}
-        <div className="user-message-meta">
+        <div className="vk-prompt-foot">
           <DedicatedUserMessageMarks body={userBody} metadata={props.item.userMessage?.metadata} />
           {userTimestamp && userTimestampMs ? (
             <time dateTime={new Date(userTimestampMs).toISOString()}>{userTimestamp}</time>
@@ -779,7 +781,7 @@ export function ConversationRenderItemView(props: {
           {userBody ? (
             <button
               aria-label={t("conversation.userPrompt.copy")}
-              className="user-message-copy"
+              className="vk-icon-btn" data-size="sm"
               onClick={() => void handleCopyUserPrompt()}
               onMouseLeave={() => setUserPromptCopied(false)}
               title={t("conversation.userPrompt.copy")}
@@ -791,7 +793,7 @@ export function ConversationRenderItemView(props: {
           {props.item.userMessage?.editableUserPrompt && props.onEditUserPrompt && !props.userPromptEditDisabled ? (
             <button
               aria-label={t("conversation.userPrompt.edit")}
-              className="user-message-copy"
+              className="vk-icon-btn" data-size="sm"
               onClick={() => void props.onEditUserPrompt?.(props.item.userMessage!, userBody)}
               title={t("conversation.userPrompt.edit")}
               type="button"
@@ -812,13 +814,13 @@ export function ConversationRenderItemView(props: {
   }
 
   return (
-    <article className={cn("message-row", props.item.role, props.finalAssistantOutput && "assistant-final-output")}>
-      <div className={cn("assistant-flow", props.item.reserveThinkingPrefix && "tool-thinking-aligned", props.item.leadingThinking && (props.item.blocks.some(isMergeableToolBlock) ? "tool-with-thinking" : "assistant-with-thinking"))}>
+    <article className="vk-answer-row" data-role={props.item.role} data-final={props.finalAssistantOutput ? "" : undefined}>
+      <div className="vk-flow" data-think={props.item.leadingThinking ? (props.item.blocks.some(isMergeableToolBlock) ? "tool" : "answer") : undefined}>
         {props.item.leadingThinking ? <ThinkingPreview compact>
           {props.item.leadingThinking.map((block) => <MarkdownMessage key={block.id} content={block.body} eager onOpenMedia={props.onOpenMedia} />)}
         </ThinkingPreview> : null}
-        {props.item.role === "system" && !props.item.sourceMessage?.agentInteraction ? <span className="message-role-label">SYSTEM</span> : null}
-        <div className="conversation-block-content">
+        {props.item.role === "system" && !props.item.sourceMessage?.agentInteraction ? <span className="vk-role-label">SYSTEM</span> : null}
+        <div className="vk-flow-body">
         <ConversationBlocksView
           autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
           blocks={visibleBlocks}
@@ -885,11 +887,11 @@ export function ConversationFinalAssistantMeta(props: {
     await props.onForkConversation?.(conversationId, forkAnchorMessageId);
   }, [conversationId, forkAnchorMessageId, props]);
   return (
-    <div className="assistant-final-meta">
+    <div className="vk-answer-meta">
       {finalAssistantRawText ? (
         <button
           aria-label={finalAssistantCopied ? t("conversation.action.copiedFinal") : t("conversation.action.copyFinal")}
-          className="assistant-final-meta-button"
+          className="vk-icon-btn"
           onClick={() => void handleCopyFinalAssistantOutput()}
           onMouseLeave={() => setFinalAssistantCopied(false)}
           title={finalAssistantCopied ? t("conversation.action.copiedFinal") : t("conversation.action.copyFinal")}
@@ -901,7 +903,7 @@ export function ConversationFinalAssistantMeta(props: {
       {conversationId && props.onForkConversation ? (
         <button
           aria-label={t("conversation.action.fork")}
-          className="assistant-final-meta-button"
+          className="vk-icon-btn"
           onClick={() => void handleForkConversation()}
           title={t("conversation.action.fork")}
           type="button"

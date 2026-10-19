@@ -457,7 +457,8 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
   return (
     <div
       aria-hidden={!props.expanded && collapsedHeight <= 0}
-      className={cn("conversation-collapsible-motion", visualOpen && "open", props.className)}
+      className={cn("vk-collapse", props.className)}
+      data-open={visualOpen ? "" : undefined}
       data-conversation-measured-collapse-id={props.collapseId}
       data-conversation-measured-target-height={targetHeight === null ? undefined : String(targetHeight)}
       onTransitionEnd={(event) => {
@@ -483,7 +484,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
       }}
       style={{ height }}
     >
-      <div className="conversation-collapsible-motion-inner" ref={innerRef}>
+      <div className="vk-collapse-inner" ref={innerRef}>
         {props.children}
       </div>
     </div>

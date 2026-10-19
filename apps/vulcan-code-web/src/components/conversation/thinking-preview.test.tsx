@@ -25,25 +25,25 @@ it("waits 500ms for hover while clicks bypass and cancel the pending delay", asy
     if (!trigger) throw new Error("Missing thinking trigger");
     await React.act(async () => trigger.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     await React.act(async () => vi.advanceTimersByTime(499));
-    expect(document.querySelector(".thinking-preview-surface")).toBeNull();
+    expect(document.querySelector(".vk-think-pop")).toBeNull();
     await React.act(async () => vi.advanceTimersByTime(1));
-    expect(document.querySelector(".thinking-preview-body")?.textContent).toBe("完整思考");
+    expect(document.querySelector(".vk-think-pop-body")?.textContent).toBe("完整思考");
     await React.act(async () => trigger.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })));
     await React.act(async () => vi.advanceTimersByTime(180));
-    expect(document.querySelector(".thinking-preview-surface")).toBeNull();
+    expect(document.querySelector(".vk-think-pop")).toBeNull();
 
     await React.act(async () => trigger.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     await React.act(async () => vi.advanceTimersByTime(200));
     await React.act(async () => trigger.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })));
     await React.act(async () => vi.advanceTimersByTime(500));
-    expect(document.querySelector(".thinking-preview-surface")).toBeNull();
+    expect(document.querySelector(".vk-think-pop")).toBeNull();
 
     await React.act(async () => trigger.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     await React.act(async () => trigger.click());
-    expect(document.querySelector(".thinking-preview-body")?.textContent).toBe("完整思考");
+    expect(document.querySelector(".vk-think-pop-body")?.textContent).toBe("完整思考");
     await React.act(async () => trigger.click());
     await React.act(async () => vi.advanceTimersByTime(600));
-    expect(document.querySelector(".thinking-preview-surface")).toBeNull();
+    expect(document.querySelector(".vk-think-pop")).toBeNull();
   } finally {
     await React.act(async () => root.unmount());
     host.remove();
@@ -88,11 +88,11 @@ it("does not open a second preview while the live thinking popup owns the stream
       </I18nProvider>,
     ));
     expect(document.querySelectorAll(".streaming-thinking-overlay")).toHaveLength(1);
-    expect(host.querySelector(".thinking-preview-indicator")).not.toBeNull();
-    expect(host.querySelector("button.thinking-preview-trigger")).toBeNull();
-    expect(document.querySelector(".thinking-preview-surface")).toBeNull();
+    expect(host.querySelector(".vk-think-tag[data-indicator]")).not.toBeNull();
+    expect(host.querySelector("button.vk-think-tag")).toBeNull();
+    expect(document.querySelector(".vk-think-pop")).toBeNull();
     await React.act(async () => vi.advanceTimersByTime(600));
-    expect(document.querySelector(".thinking-preview-surface")).toBeNull();
+    expect(document.querySelector(".vk-think-pop")).toBeNull();
 
     await React.act(async () => root.render(
       <I18nProvider initialLocale="zh-CN">
@@ -103,10 +103,10 @@ it("does not open a second preview while the live thinking popup owns the stream
         </TooltipProvider>
       </I18nProvider>,
     ));
-    const trigger = host.querySelector<HTMLButtonElement>("button.thinking-preview-trigger");
+    const trigger = host.querySelector<HTMLButtonElement>("button.vk-think-tag");
     if (!trigger) throw new Error("Missing completed thinking trigger");
     await React.act(async () => trigger.click());
-    expect(document.querySelector(".thinking-preview-body")?.textContent).toBe("已完成思考");
+    expect(document.querySelector(".vk-think-pop-body")?.textContent).toBe("已完成思考");
   } finally {
     await React.act(async () => root.unmount());
     host.remove();

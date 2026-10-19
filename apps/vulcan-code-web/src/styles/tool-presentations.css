@@ -151,7 +151,7 @@
 
 /* Every expanded tool surface keeps long results inside one bounded local viewport; provider results own theirs inside the tabs. */
 /* 所有展开后的工具界面都把长结果限制在一个有界的局部视口内；供应商结果在标签页内持有自己的视口。 */
-.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > *,
+.tool-presentation-card > .vk-collapse > .vk-collapse-inner > *,
 .provider-tool-result-scroll {
   max-height: min(var(--tool-presentation-expanded-height-unit), 56vh);
   overflow: auto;
@@ -255,8 +255,8 @@
   overflow: hidden;
 }
 
-.provider-search-tool .conversation-collapsible-motion,
-.provider-search-tool .conversation-collapsible-motion-inner {
+.provider-search-tool .vk-collapse,
+.provider-search-tool .vk-collapse-inner {
   width: 100%;
   max-width: 100%;
 }
@@ -783,7 +783,7 @@
 /* Received session messages align with user prompts while retaining collaboration semantics.
    收到的会话消息与用户提示词右对齐，同时保留协作语义。 */
 .tool-presentation-card.conversation-v1-collaboration-incoming {
-  max-width: var(--conversation-user-bubble-max-width);
+  max-width: var(--vk-prompt-w);
   margin-left: auto;
   gap: 4px;
 }
@@ -1079,8 +1079,8 @@
 
 /* Tab roots and panels must not wrap the content viewport in another scrollbar. */
 /* Tab 根节点和面板不得在内容视口之外再包一层滚动条。 */
-.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .model-extension-tool-payloads,
-.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .model-extension-payload-body {
+.tool-presentation-card > .vk-collapse > .vk-collapse-inner > .model-extension-tool-payloads,
+.tool-presentation-card > .vk-collapse > .vk-collapse-inner > .model-extension-payload-body {
   max-height: none; overflow: visible; scrollbar-gutter: auto;
 }
 .model-extension-payload-body > .markdown-tool-block,
@@ -1163,7 +1163,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .conversation-collapsible-motion {
+  .vk-collapse {
     transition: none;
   }
 }

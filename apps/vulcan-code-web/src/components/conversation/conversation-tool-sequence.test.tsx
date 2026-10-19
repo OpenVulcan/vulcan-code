@@ -63,8 +63,8 @@ it.each([
   await render([row("one", status)], active);
   expect(host.querySelector(".vk-tools-head")).toBeNull();
   expect(host.querySelector('[data-tool="one"]')).not.toBeNull();
-  expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-expanded")).toBe("true");
-  expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-grouped")).toBe("false");
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("true");
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-grouped")).toBe("false");
 });
 
 it("keeps a single tool visible even when its group previously remembered a manual collapse", async () => {
@@ -88,14 +88,14 @@ it("keeps the first tool in the same body through append, completion, and a long
   await render([row("one"), row("two")]);
   await act(async () => vi.advanceTimersByTime(60_000));
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
-  expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-expanded")).toBe("true");
-  expect(host.querySelector(".conversation-tool-sequence-running, [data-retirement-phase]")).toBeNull();
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("true");
+  expect(host.querySelector(".vk-tool-seq-running, [data-retirement-phase]")).toBeNull();
 });
 
 it("folds the entire stable group and preserves explicit manual expansion across updates", async () => {
   await render([row("one"), row("two")]);
   await render([row("one"), row("two")], false);
-  expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-expanded")).toBe("false");
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("false");
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(0);
   await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
@@ -111,7 +111,7 @@ it("keeps every row open with folding disabled, including a previously manually 
   await render([row("one"), row("two")], false, false);
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
   expect(host.querySelector(".vk-tools-head")).toBeNull();
-  expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-grouped")).toBe("false");
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-grouped")).toBe("false");
 });
 
 it("hides running and completed summaries while folding is disabled without remounting tool rows", async () => {
@@ -149,14 +149,14 @@ it("keeps tools unbounded through repeated reasoning and folds once assistant te
     await render(items);
     expect(host.querySelector('[data-tool="one"]')).toBe(first);
     expect(host.querySelector(".vk-tools-head")).toBeNull();
-    expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-grouped")).toBe("false");
+    expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-grouped")).toBe("false");
   }
   await render([row("one"), thinking, row("two"), answer]);
-  expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-expanded")).toBe("false");
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("false");
   expect(host.querySelectorAll(".vk-tools-strip > i")).toHaveLength(2);
   await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
   expect([...host.querySelectorAll("[data-tool]")].map((element) => element.getAttribute("data-tool")))
     .toEqual(["one", "thinking", "two"]);
   await render([row("one"), thinking, row("two"), answer, row("three")]);
-  expect(host.querySelector(".conversation-tool-sequence")?.getAttribute("data-expanded")).toBe("true");
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("true");
 });

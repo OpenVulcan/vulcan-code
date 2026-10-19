@@ -307,12 +307,12 @@ it("enables session navigation only for a routable participant", async () => {
 it.each([false, true])("shows incoming content immediately, folding only excess lines (long: %s)", async (long) => {
   contentHeight = long ? 20 * (USER_PROMPT_COLLAPSE_LINE_LIMIT + 1) : 40;
   await mount(inboundNotificationEvent());
-  const bubble = host.querySelector(".user-bubble")!;
+  const bubble = host.querySelector(".vk-prompt")!;
   expect(bubble.textContent).toContain("Phase one finished.");
   expect(bubble.querySelector("time")).toBeNull();
-  expect(host.querySelector("article > .user-message-meta > time")).not.toBeNull();
+  expect(host.querySelector("article > .vk-prompt-foot > time")).not.toBeNull();
   expect(host.querySelector(".tool-presentation-summary .conversation-v1-collaboration-fold")).toBeNull();
-  expect(host.querySelector(".user-message-copy")).toBeNull();
+  expect(host.querySelector(".vk-prompt-foot > .vk-icon-btn")).toBeNull();
   const toggle = bubble.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-overflow-toggle");
   expect(Boolean(toggle)).toBe(long);
   if (toggle) {
@@ -343,7 +343,7 @@ it.each([false, true])("renders received questions and answers as incoming bubbl
     input_source: "agent_message", text: '<vulcan_agent_message version="1" event_id="delivery-1" kind="question" source="session-source" target="session-target" question_id="question-1" scope="question">Question `&lt;literal&gt;` &amp; text</vulcan_agent_message>',
   } };
   await act(async () => root.render(<I18nProvider initialLocale="en-US"><ConversationAgentInteractionView interaction={incoming} /></I18nProvider>));
-  expect(host.querySelector(".user-bubble")?.textContent).toContain("Question <literal> & text");
+  expect(host.querySelector(".vk-prompt")?.textContent).toContain("Question <literal> & text");
   expect(host.querySelector(".conversation-v1-collaboration-row-toggle")).toBeNull();
   expect(Boolean(host.querySelector(".conversation-v1-collaboration-overflow-toggle"))).toBe(long);
   // The answer's source snapshot contains the original question, which must never appear in its bubble.
@@ -353,12 +353,12 @@ it.each([false, true])("renders received questions and answers as incoming bubbl
   replied.after_state.question.answer = { operation_id: "reply", responder: participant("target"), body: "Only the answer.", settled_at_ms: 110,
     delivery: { state: "undelivered", delivery_revision: 1, last_operation_id: "reply", updated_at_ms: 110 } };
   await mount(replied);
-  expect(host.querySelector(".user-bubble")?.textContent).toContain("Only the answer.");
+  expect(host.querySelector(".vk-prompt")?.textContent).toContain("Only the answer.");
   expect(host.textContent).not.toContain("Which file owns this behavior?");
   expect(host.querySelector(".conversation-v1-collaboration-row-toggle")).toBeNull();
   expect(Boolean(host.querySelector(".conversation-v1-collaboration-overflow-toggle"))).toBe(long);
   await mount({ ...replied, event_kind: "question_created" });
-  expect(host.querySelector(".user-bubble")).toBeNull();
+  expect(host.querySelector(".vk-prompt")).toBeNull();
   expect(host.textContent).toContain("Which file owns this behavior?");
   expect(host.textContent).not.toContain("Only the answer.");
 });
@@ -397,7 +397,7 @@ it("attaches exact answer receipts in place without duplicating or moving the re
   expect(host.querySelectorAll("article")).toHaveLength(1);
   expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toContain("Delivered");
   expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).not.toContain("Failed");
-  expect(host.querySelector(".user-bubble")?.textContent).toBe("Reply body");
+  expect(host.querySelector(".vk-prompt")?.textContent).toBe("Reply body");
   expect(host.querySelector("time")?.dateTime).toBe(timestamp);
 });
 
@@ -450,7 +450,7 @@ it("updates receiver execution in the question bubble and suppresses stale runni
   expect(host.querySelectorAll("article")).toHaveLength(1);
   expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toContain("Answered");
   expect(host.textContent).not.toContain("Running");
-  expect(host.querySelector(".user-bubble")?.textContent).toBe("Original question");
+  expect(host.querySelector(".vk-prompt")?.textContent).toBe("Original question");
   expect(host.querySelector("time")?.dateTime).toBe(timestamp);
 });
 

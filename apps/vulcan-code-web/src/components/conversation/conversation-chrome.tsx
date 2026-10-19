@@ -73,13 +73,13 @@ export function DraftSubmissionTranscript(props: {
     <section className="vk-transcript" data-draft="" data-conversation-surface-id={props.surfaceId} ref={props.scrollRef}>
       <div className="vk-transcript-inner">
         <div className="vk-timeline">
-          <article className="message-row user" data-client-action-id={props.submission.clientSubmissionId}>
+          <article className="vk-prompt-row" data-client-action-id={props.submission.clientSubmissionId}>
             {props.submission.attachments.length > 0 ? (
               <ul className="conversation-draft-attachment-names">
                 {props.submission.attachments.map((attachment) => <li key={attachment.fileName}>{attachment.fileName}</li>)}
               </ul>
             ) : null}
-            <div className="user-bubble"><p className="user-prompt-text">{props.submission.prompt}</p></div>
+            <div className="vk-prompt"><p className="vk-prompt-text">{props.submission.prompt}</p></div>
           </article>
         </div>
       </div>

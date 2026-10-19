@@ -274,13 +274,6 @@
   padding: 10px 12px 0;
 }
 
-.message-row.user .composer-attachment-strip {
-  max-width: min(800px, 78%);
-  justify-content: flex-end;
-  margin-left: auto;
-  padding: 0 0 6px;
-}
-
 .composer-attachment-tile {
   position: relative;
   width: 104px;

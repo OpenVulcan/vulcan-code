@@ -5,6 +5,9 @@
 /* One reading column shared by transcript, centered reasoning window and dock, so the conversation
  * never runs wider than the composer. Width mode: limited (reading measure) or full. In popup thinking
  * mode the column pads a left gutter that holds the reasoning tags. */
+/* User prompts and received collaboration bubbles share one width. */
+:root { --vk-prompt-w: min(72%, 47.5rem); }
+
 .vk-chat {
   container: vk-chat / inline-size;
   position: relative;
@@ -140,7 +143,7 @@
   justify-self: end;
   display: grid;
   gap: calc(var(--vk-u) * 2);
-  max-width: min(100%, 38rem);
+  max-width: var(--vk-prompt-w);
   padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3.5);
   border: var(--vk-bw) solid var(--vk-line);
   background: var(--vk-panel);
@@ -170,6 +173,90 @@
 .vk-answer-mark svg { width: 80%; height: 80%; transition: filter var(--vk-t-med); }
 .vk-answer[data-live] .vk-answer-mark svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--vk-ember) 70%, transparent)); }
 .vk-answer-head strong { color: var(--vk-ink-2); font-weight: 500; }
+
+/* ---------- Transcript rows ---------- */
+/* A user turn: attachments, the prompt card and a quiet foot with time and actions, all right-aligned. */
+.vk-prompt-row { display: flex; flex-direction: column; align-items: flex-end; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-prompt-row > .composer-attachment-strip { justify-content: flex-end; max-width: min(50rem, 78%); margin-left: auto; padding: 0 0 calc(var(--vk-u) * 1.5); }
+.vk-prompt-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-prompt-more { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1); width: fit-content; min-height: var(--vk-h-sm); margin-left: calc(var(--vk-u) * -1); padding: 0 calc(var(--vk-u) * 1); border: 0; background: none; color: var(--vk-ink-3); font: inherit; font-size: var(--vk-fs-sm); cursor: pointer; }
+.vk-prompt-more:hover,
+.vk-prompt-more:focus-visible { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-prompt-more > svg { width: 0.9rem; height: 0.9rem; opacity: 0; transition: opacity var(--vk-t-fast); }
+.vk-prompt-more:hover > svg,
+.vk-prompt-more:focus-visible > svg,
+.vk-prompt-more[aria-expanded="true"] > svg { opacity: 1; }
+.vk-prompt-foot { display: inline-flex; align-items: center; justify-content: flex-end; gap: calc(var(--vk-u) * 1.5); max-width: var(--vk-prompt-w); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+.vk-prompt-foot > .vk-icon-btn { color: var(--vk-ink-3); }
+.vk-prompt-foot > .vk-icon-btn:hover { color: var(--vk-ink); }
+
+/* An assistant, system or collaboration row: one flow of blocks at full column width. */
+.vk-answer-row { display: flex; justify-content: flex-start; min-width: 0; }
+.vk-flow { display: grid; gap: calc(var(--vk-u) * 2.5); width: 100%; min-width: 0; color: var(--vk-ink); }
+.vk-flow-body { min-width: 0; }
+.vk-role-label { color: var(--vk-ink-3); font-family: var(--vk-label-font); font-size: var(--vk-fs-xs); font-weight: 600; letter-spacing: var(--vk-label-track); }
+/* Reasoning tags live in the column's left gutter, so replies and tools keep their content alignment. */
+.vk-flow[data-think],
+.vk-gutter-anchor { position: relative; display: block; }
+.vk-flow[data-think="answer"] { display: grid; grid-template-columns: minmax(0, 1fr); }
+.vk-gutter-anchor { min-height: calc(var(--vk-u) * 5.5); }
+.vk-flow[data-think] > .vk-think-tag,
+.vk-gutter-anchor > .vk-think-tag { position: absolute; z-index: 1; top: 0; left: calc(var(--vk-u) * -8); }
+/* The final answer's actions: copy the source and fork, beside the answer time. */
+.vk-answer-meta { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; height: calc(var(--vk-u) * 5.5); margin-top: calc(var(--vk-u) * -1.5); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+.vk-answer-meta > .vk-icon-btn { width: calc(var(--vk-u) * 5); height: calc(var(--vk-u) * 5); color: inherit; }
+.vk-answer-meta > .vk-icon-btn:hover { color: var(--vk-ink); }
+.vk-answer-meta > .vk-icon-btn > svg { width: 0.85rem; height: 0.85rem; }
+.vk-answer-meta time { white-space: nowrap; }
+
+/* Reasoning tag: an icon in the gutter (compact) or a labelled chip; its content opens as a popover. */
+.vk-think-tag { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); width: fit-content; max-width: 100%; padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 1.5); border: 0; background: transparent; color: var(--vk-ink-3); font: inherit; font-size: var(--vk-fs-sm); cursor: pointer; }
+/* Stays inside the shortest tool row so nested height animations never see a 1px overflow. */
+.vk-think-tag[data-compact] { width: calc(var(--vk-u) * 5); height: calc(var(--vk-u) * 5); padding: calc(var(--vk-u) * 0.75); }
+.vk-think-tag > svg { width: 0.95rem; height: 0.95rem; flex: none; }
+.vk-think-tag:hover,
+.vk-think-tag[aria-expanded="true"] { background: var(--vk-hover); color: var(--vk-ink); }
+/* While the floating window owns live reasoning, the tag only marks the spot. */
+.vk-think-tag[data-indicator] { color: var(--vk-ember); cursor: default; pointer-events: none; }
+.vk-think-tag[data-indicator] > svg { animation: vk-pulse 1.6s var(--vk-ease) infinite; }
+.vk-pop.vk-think-pop { width: min(37.5rem, calc(100vw - 32px)); max-width: min(calc(100vw - 32px), var(--vk-available-width, 100vw)); max-height: min(26rem, 70dvh, var(--vk-available-height, 70dvh)); overflow: hidden; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4); background: color-mix(in srgb, var(--vk-raised) 88%, transparent); backdrop-filter: blur(16px) saturate(1.15); }
+.vk-think-pop-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; color: var(--vk-ink-2); font-size: var(--vk-fs-md); }
+.vk-think-pop-body .markdown-message { min-width: 0; max-width: none; font-size: var(--vk-fs-md); overflow-wrap: anywhere; }
+
+/* Measured collapse: height animates between the measured content height and the collapsed height. */
+.vk-collapse { min-width: 0; overflow: hidden; transition: height 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+.vk-collapse[data-open] { overflow: visible; }
+.vk-collapse-inner { min-width: 0; }
+
+/* One turn's working process: a divider head with the elapsed time, then guidance and the folded rows. */
+.vk-process { display: grid; gap: calc(var(--vk-u) * 2); width: 100%; contain: layout style; }
+.vk-process-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); width: 100%; padding: calc(var(--vk-u) * 1.5) 0; border: 0; background: none; color: var(--vk-ink-3); font: inherit; font-size: var(--vk-fs-sm); font-weight: 600; line-height: var(--vk-lh-tight); text-align: center; cursor: pointer; }
+.vk-process-head::before,
+.vk-process-head::after { content: ""; flex: 1 1 auto; min-width: calc(var(--vk-u) * 4.5); height: 1px; background: var(--vk-line); }
+.vk-process-head:disabled { cursor: default; }
+.vk-process-head:not(:disabled):hover,
+.vk-process-head:not(:disabled):focus-visible { color: var(--vk-ink); }
+.vk-process-head > span { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.vk-process-head > svg { flex: none; width: 0.9rem; height: 0.9rem; }
+.vk-process[data-running] .vk-process-head > svg:first-child { color: var(--vk-ember); }
+.vk-process-chev { opacity: 0; transition: opacity var(--vk-t-fast); }
+.vk-process-head:not(:disabled):hover .vk-process-chev,
+.vk-process-head:not(:disabled):focus-visible .vk-process-chev,
+.vk-process[data-process-body-visible="true"] .vk-process-chev { opacity: 1; }
+.vk-process-guidance,
+.vk-process-body { display: grid; gap: calc(var(--vk-u) * 3); }
+.vk-process-stopped { justify-self: end; padding: calc(var(--vk-u) * 1) 0; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+
+/* Consecutive tool rows, folded behind one summary head once the answer that closes them arrives. */
+.vk-tool-seq { display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-tool-seq-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(var(--vk-u) * 3); min-width: 0; }
+/* Only a folded multi-tool group gets a bounded viewport; tools scroll sideways themselves, and wheel
+ * deltas at the edges carry on into the transcript. */
+.vk-tool-seq[data-grouped="true"] > .vk-collapse > .vk-collapse-inner > .vk-tool-seq-body { max-height: min(52.5rem, 78vh); overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; scrollbar-gutter: stable; }
+/* Clipping surfaces reach into the gutter, then pad back, so gutter tags inside them stay visible. */
+.vk-process > .vk-collapse,
+.vk-tool-seq > .vk-collapse,
+.vk-tool-seq-body { margin-left: calc(var(--vk-u) * -8); padding-left: calc(var(--vk-u) * 8); }
 
 /* ---------- Thinking ---------- */
 .vk-think {

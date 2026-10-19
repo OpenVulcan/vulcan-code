@@ -583,10 +583,10 @@ describe("ConversationBranchWorkspaceV1", () => {
     baseline.innerHTML = renderWorkspace(events);
     const rendered = document.createElement("div");
     rendered.innerHTML = renderWorkspace([...events, ...changes]);
-    expect(rendered.querySelectorAll(".work-process-group").length).toBe(baseline.querySelectorAll(".work-process-group").length);
+    expect(rendered.querySelectorAll(".vk-process").length).toBe(baseline.querySelectorAll(".vk-process").length);
     expect(rendered.querySelectorAll('[data-event-kind="request_config_changed"]')).toHaveLength(changes.length);
     for (const notice of rendered.querySelectorAll('[data-event-kind="request_config_changed"]')) {
-      expect(notice.closest(".work-process-group")).toBeNull();
+      expect(notice.closest(".vk-process")).toBeNull();
       expect(notice.querySelector("button, [aria-expanded]")).toBeNull();
       expect(notice.textContent).toContain(current.model === "model-b" ? "model-b" : "high");
     }
@@ -708,8 +708,8 @@ describe("ConversationBranchWorkspaceV1", () => {
     const answerCard = container.querySelector('[data-collaboration-event-kind="question_answered"]');
     expect(questionCard?.textContent).toContain("请确认归属");
     expect(questionCard?.textContent).not.toContain("独立回答正文");
-    expect(questionCard?.querySelector(".user-bubble")).toBeNull();
-    expect(answerCard?.querySelector(".user-bubble")?.textContent).toContain("独立回答正文");
+    expect(questionCard?.querySelector(".vk-prompt")).toBeNull();
+    expect(answerCard?.querySelector(".vk-prompt")?.textContent).toContain("独立回答正文");
     expect(answerCard?.textContent).not.toContain("请确认归属");
     expect(answerCard?.textContent).toContain("已交付");
     expect(container.querySelector('[data-collaboration-event-kind="answer_delivered"]')).toBeNull();
@@ -739,8 +739,8 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(container.querySelectorAll("[data-collaboration-card-kind]")).toHaveLength(1);
     expect(container.querySelector(".conversation-v1-collaboration-badge")?.textContent).toContain("运行中");
     expect(container.querySelector('[data-collaboration-event-kind="question_execution_started"]')).toBeNull();
-    expect(container.querySelector(".user-bubble")?.textContent).toContain("收到的提问正文");
-    expect(container.querySelector(".user-message-copy")).toBeNull();
+    expect(container.querySelector(".vk-prompt")?.textContent).toContain("收到的提问正文");
+    expect(container.querySelector(".vk-prompt-foot > .vk-icon-btn")).toBeNull();
     expect(container.textContent).not.toContain("vulcan_agent_message");
     // Execution-only pagination does not invent a question body or an empty execution card.
     // 仅执行记录分页不伪造问题正文或生成空执行卡。
@@ -925,7 +925,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(markup).not.toContain("conversation-v1-collaboration-cancel-button");
     expect(markup.indexOf("父助手的结束回复")).toBeLessThan(markup.indexOf('data-seq="3"'));
     expect(markup.indexOf('data-seq="3"')).toBeLessThan(markup.indexOf('data-seq="5"'));
-    expect(markup).not.toContain('message-role-label">SYSTEM');
+    expect(markup).not.toContain('vk-role-label">SYSTEM');
     // Late notifications alone never invent an executing business process after completed history.
     // 完成历史之后的迟到通知不能凭空创建执行中的业务过程。
     const late = projectConversationBranchPresentationV1("session-branch-v1", [questionEvent()], emptyResourceCatalog(), (key) => key);
@@ -993,28 +993,28 @@ describe("ConversationBranchWorkspaceV1", () => {
     try {
       await React.act(async () => root.render(workspaceTree(streaming, mode, [], true)));
       expect(host.querySelector(".thinking-block")).toBeNull();
-      expect(host.querySelector(".thinking-gutter-anchor")).not.toBeNull();
+      expect(host.querySelector(".vk-gutter-anchor")).not.toBeNull();
       if (mode === "popup_only") {
-        expect(host.querySelector(".thinking-preview-indicator")).not.toBeNull();
+        expect(host.querySelector(".vk-think-tag[data-indicator]")).not.toBeNull();
         expect(host.querySelector(".thinking-body")).toBeNull();
       } else {
         expect(host.querySelector(".thinking-body")).toBeNull();
-        expect(document.querySelector(".thinking-preview-surface")).toBeNull();
+        expect(document.querySelector(".vk-think-pop")).toBeNull();
         // Reading the first segment uses the same gutter preview as later reasoning.
         // 阅读首段思考时使用与后续思考相同的左侧预览。
-        await React.act(async () => host.querySelector<HTMLButtonElement>(".thinking-preview-trigger")!.click());
-        expect(document.querySelector(".thinking-preview-body")?.textContent).toContain("末尾校验标记");
+        await React.act(async () => host.querySelector<HTMLButtonElement>("button.vk-think-tag")!.click());
+        expect(document.querySelector(".vk-think-pop-body")?.textContent).toContain("末尾校验标记");
       }
       await React.act(async () => root.render(workspaceTree(completed, mode, [], true)));
       expect(host.querySelector(".thinking-block")).toBeNull();
-      expect(host.querySelectorAll(".tool-with-thinking")).toHaveLength(1);
+      expect(host.querySelectorAll(".vk-flow[data-think=tool]")).toHaveLength(1);
       // The header selector must target the real card, without wrapping its expanded detail in a prefix column.
       // 标题选择器必须命中真实卡片，不能把展开详情包进思考入口所在分栏。
-      expect(host.querySelector(".tool-with-thinking > .conversation-block-content > .tool-execution-stack:first-child > .vk-tool > .vk-tool-head")).not.toBeNull();
-      expect(document.querySelector(".thinking-preview-surface")).toBeNull();
-      const trigger = host.querySelector<HTMLButtonElement>(".thinking-preview-trigger.compact")!;
+      expect(host.querySelector(".vk-flow[data-think=tool] > .vk-flow-body > .tool-execution-stack:first-child > .vk-tool > .vk-tool-head")).not.toBeNull();
+      expect(document.querySelector(".vk-think-pop")).toBeNull();
+      const trigger = host.querySelector<HTMLButtonElement>("button.vk-think-tag[data-compact]")!;
       await React.act(async () => trigger.click());
-      const surface = document.querySelector<HTMLElement>(".thinking-preview-surface")!;
+      const surface = document.querySelector<HTMLElement>(".vk-think-pop")!;
       expect(surface.textContent).toContain("末尾校验标记");
       expect(host.contains(surface)).toBe(false);
       // A final answer owns the complete preceding reasoning through the same gutter entry.
@@ -1022,11 +1022,11 @@ describe("ConversationBranchWorkspaceV1", () => {
       const final = [completed[0], completed[1], completeTurnEvents()[4]];
       await React.act(async () => root.render(workspaceTree(final, mode)));
       expect(host.querySelector(".thinking-toggle")).toBeNull();
-      expect(host.querySelector(".thinking-gutter-anchor")).toBeNull();
-      expect(host.querySelector(".assistant-final-output .assistant-with-thinking")).not.toBeNull();
-      await React.act(async () => host.querySelector<HTMLButtonElement>(".assistant-final-output .thinking-preview-trigger")!.click());
-      expect(document.querySelector(".thinking-preview-body")?.textContent).toContain("末尾校验标记");
-      expect(host.querySelector(".tool-with-thinking")).toBeNull();
+      expect(host.querySelector(".vk-gutter-anchor")).toBeNull();
+      expect(host.querySelector("[data-final] .vk-flow[data-think=answer]")).not.toBeNull();
+      await React.act(async () => host.querySelector<HTMLButtonElement>("[data-final] .vk-think-tag")!.click());
+      expect(document.querySelector(".vk-think-pop-body")?.textContent).toContain("末尾校验标记");
+      expect(host.querySelector(".vk-flow[data-think=tool]")).toBeNull();
       expect(host.textContent).toContain("已经完成核对。");
       // A later tool makes this assistant text intermediate; its prefix owns the full preceding reasoning.
       // 后续工具使这段助手正文成为中间输出；其前置入口拥有完整的上一段思考。
@@ -1036,12 +1036,12 @@ describe("ConversationBranchWorkspaceV1", () => {
         { ...completed[2], seq: 4 },
         { ...completeTurnEvents()[4], seq: 5 },
       ], mode)));
-      expect(host.querySelectorAll(".assistant-with-thinking")).toHaveLength(1);
-      expect(host.querySelector(".tool-with-thinking")).toBeNull();
+      expect(host.querySelectorAll(".vk-flow[data-think=answer]")).toHaveLength(1);
+      expect(host.querySelector(".vk-flow[data-think=tool]")).toBeNull();
       expect(host.querySelector(".thinking-block")).toBeNull();
-      const assistantTrigger = host.querySelector<HTMLButtonElement>(".assistant-with-thinking > .thinking-preview-trigger");
+      const assistantTrigger = host.querySelector<HTMLButtonElement>(".vk-flow[data-think=answer] > .vk-think-tag");
       await React.act(async () => assistantTrigger?.click());
-      expect(document.querySelector(".thinking-preview-body")?.textContent).toContain("末尾校验标记");
+      expect(document.querySelector(".vk-think-pop-body")?.textContent).toContain("末尾校验标记");
     } finally {
       await React.act(async () => root.unmount());
       host.remove();
@@ -1124,8 +1124,8 @@ describe("ConversationBranchWorkspaceV1", () => {
       // markup 使用生产分支外壳，包含其精确行过滤逻辑。
       const markup = renderWorkspace(history, mode);
       expect(markup).not.toContain("thinking-block");
-      expect(markup.match(/assistant-flow assistant-with-thinking/g)?.length ?? 0, mode).toBe(expectedCount);
-      expect(markup.match(/thinking-preview-trigger compact/g)?.length ?? 0, mode).toBe(4);
+      expect(markup.match(/class="vk-flow" data-think="answer"/g)?.length ?? 0, mode).toBe(expectedCount);
+      expect(markup.match(/class="vk-think-tag" data-compact=""/g)?.length ?? 0, mode).toBe(4);
       expect(markup, mode).toContain("已经完成核对。");
       expect(markup, mode).toContain("rg current-call-chain");
       expect(markup, mode).toContain("turn-stats-row");

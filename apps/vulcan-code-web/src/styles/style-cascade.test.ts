@@ -9,20 +9,6 @@ import { expect, it } from "vitest";
 const load = createRequire(import.meta.url);
 const postcss = createRequire(load.resolve("vite"))("postcss");
 
-// tokens maps each foundation custom property to its declared root value.
-// tokens 将每个基础自定义属性映射到其根声明取值。
-const tokens = new Map<string, string>();
-postcss.parse(readFileSync(resolve("src/styles/foundations/tokens.css"), "utf8")).walkDecls((decl: { prop: string; value: string; parent: { selector?: string } }) => {
-  if (decl.prop.startsWith("--") && decl.parent.selector === ":root") tokens.set(decl.prop, decl.value);
-});
-
-// resolveToken replaces a whole-value var(--token) with its foundation value; other values pass through.
-// resolveToken 将整值 var(--token) 替换为基础令牌取值；其他取值原样返回。
-function resolveToken(value: string): string {
-  const match = /^var\((--[\w-]+)\)$/.exec(value.trim());
-  return match ? tokens.get(match[1]) ?? value : value;
-}
-
 // desktopRules returns actual top-level rules in source order, excluding viewport-dependent branches.
 // desktopRules 按源码顺序返回实际顶层规则，排除依赖视口的分支。
 // Parameters: name selects a real stylesheet. Returns: desktop CSS for jsdom's limited cascade engine.
@@ -34,35 +20,30 @@ function desktopRules(name: string): string {
   return root.nodes.filter((node: { type: string }) => node.type === "rule").map((node: { toString(): string }) => node.toString()).join("\n");
 }
 
-it("keeps the absolute thinking trigger inside a tool row without increasing its line height", () => {
-  // style uses the actual card and gutter rules; no test-only dimensions hide overflow.
-  // style 使用真实卡片与侧栏规则，不用测试专属尺寸掩盖溢出。
-  const style = document.createElement("style");
-  style.textContent = desktopRules("tool-presentations") + desktopRules("special-blocks");
-  // row mirrors the last tool in a scrolling group, where the marker must not extend its scroll area.
-  // row 对应滚动组末行工具，思考入口不得扩大该组滚动范围。
-  const row = document.createElement("div");
-  row.className = "assistant-flow tool-with-thinking";
-  row.innerHTML = '<button class="thinking-preview-trigger compact"></button><div class="tool-presentation-card"><button class="tool-presentation-summary">command</button></div>';
-  document.head.appendChild(style); document.body.appendChild(row);
-  try {
-    // summaryHeight derives the unchanged one-line summary box from source rules, excluding layout mocks.
-    // summaryHeight 从源码规则计算未改变的单行摘要高度，不依赖布局模拟值。
-    const rules = postcss.parse(desktopRules("tool-presentations"));
-    // declaration avoids jsdom's incomplete inheritance handling for font: inherit.
-    // declaration 避开 jsdom 对 font: inherit 不完整的继承处理。
-    // Parameters select an exact source rule/member; returns its numeric value or fails if removed.
-    // 参数选定精确源码规则与字段；返回数值，规则被移除时直接失败。
-    const declaration = (selector: string, property: string): number => {
-      const rule = rules.nodes.find((node: { selector: string }) => node.selector === selector);
-      return Number.parseFloat(resolveToken(rule.nodes.find((node: { prop: string }) => node.prop === property).value));
-    };
-    const summaryHeight = declaration(".tool-presentation-card", "font-size") * declaration(".tool-presentation-summary", "line-height") + 2 * declaration(".tool-presentation-summary", "padding");
-    const trigger = getComputedStyle(row.querySelector(".thinking-preview-trigger")!);
-    expect(trigger.position).toBe("absolute");
-    expect(Number.parseFloat(trigger.height)).toBeLessThanOrEqual(summaryHeight);
-    expect(getComputedStyle(row).minHeight).not.toMatch(/^[1-9]/);
-  } finally { row.remove(); style.remove(); }
+it("keeps the gutter reasoning tag absolute and no taller than the shortest tool row", () => {
+  // rules are the kit's real top-level conversation rules; viewport and container branches are excluded.
+  // rules 是套件真实的会话顶层规则，排除视口与容器分支。
+  const rules = postcss.parse(readFileSync(resolve("src/ui-kit/styles/conversation.css"), "utf8")).nodes
+    .filter((node: { type: string }) => node.type === "rule");
+  // declaration returns the last value a rule listing the given selector declares for the property.
+  // declaration 返回列出给定选择器的规则为该属性声明的最后取值。
+  const declaration = (selector: string, property: string): string => {
+    const values = rules.filter((node: { selectors: string[] }) => node.selectors.includes(selector))
+      .flatMap((node: { nodes: { prop: string; value: string }[] }) => node.nodes.filter((decl) => decl.prop === property).map((decl) => decl.value));
+    expect(values.length, `${selector} declares no ${property}`).toBeGreaterThan(0);
+    return values[values.length - 1];
+  };
+  // units reads a kit length written as calc(var(--vk-u) * N), so both sides share one scale.
+  // units 读取写作 calc(var(--vk-u) * N) 的套件长度，使两侧使用同一刻度。
+  const units = (value: string): number => {
+    const match = /^calc\(var\(--vk-u\) \* ([\d.]+)\)$/.exec(value.trim());
+    expect(match, `expected a --vk-u multiple, got ${value}`).not.toBeNull();
+    return Number.parseFloat(match![1]);
+  };
+  expect(declaration(".vk-flow[data-think] > .vk-think-tag", "position")).toBe("absolute");
+  expect(declaration(".vk-gutter-anchor > .vk-think-tag", "position")).toBe("absolute");
+  expect(units(declaration(".vk-think-tag[data-compact]", "height"))).toBeLessThanOrEqual(units(declaration(".vk-tool-head", "min-height")));
+  expect(units(declaration(".vk-gutter-anchor", "min-height"))).toBeGreaterThanOrEqual(units(declaration(".vk-think-tag[data-compact]", "height")));
 });
 
 it.each(["known", "generic", "skill"])("keeps %s payload shells unbounded while the inner source remains the scrolling viewport", (kind) => {

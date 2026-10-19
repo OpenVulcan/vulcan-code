@@ -101,7 +101,7 @@ function ConversationReceivedQuestion(props: ConversationAgentInteractionActions
     eventKind="user_input" cardKind="question" incoming title={t("conversation.collaboration.timeline.question")}
     status={status}
     participant={<CollaborationSessionButton {...props} sessionId={props.question.source} title={t("conversation.collaboration.openSource")} />}
-    footer={<footer className="user-message-meta conversation-v1-collaboration-time">
+    footer={<footer className="vk-prompt-foot conversation-v1-collaboration-time">
       <time dateTime={new Date(props.createdAtMs).toISOString()}>{new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
     </footer>}>
     <div className="conversation-v1-collaboration-content"><MarkdownMessage content={props.question.body} eager /></div>
@@ -204,7 +204,7 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
           sessionId={participant.sessionId}
           title={isAnswer || participant.role === "source" ? t("conversation.collaboration.openSource") : t("conversation.collaboration.openTarget")} />
       ))}
-      footer={<footer className={incoming ? "user-message-meta conversation-v1-collaboration-time" : "conversation-v1-collaboration-footer"}>
+      footer={<footer className={incoming ? "vk-prompt-foot conversation-v1-collaboration-time" : "conversation-v1-collaboration-footer"}>
         <time dateTime={new Date(props.createdAtMs).toISOString()}>
           {new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
         </time>
@@ -614,7 +614,7 @@ function IncomingCollaborationBubble(props: React.PropsWithChildren<{ id: string
     observer.observe(element);
     return () => observer.disconnect();
   }, [props.children]);
-  return <><div className="user-bubble conversation-v1-collaboration-bubble">
+  return <><div className="vk-prompt conversation-v1-collaboration-bubble">
     <ConversationMeasuredCollapse collapseId={bodyId} expanded={!overflowing || expanded} collapsedHeight={previewHeight}>
       <div className="conversation-v1-collaboration-bubble-body" ref={contentRef}>{props.children}</div>
     </ConversationMeasuredCollapse>

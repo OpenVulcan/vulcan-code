@@ -60,7 +60,7 @@ export function ThinkingPreview(props: { children: React.ReactNode; streaming?: 
     closeTimer.current = setTimeout(() => { if (!pinned.current) setOpen(false); }, 180);
   };
   if (liveOverlayOwned) {
-    return <span aria-hidden="true" className={`thinking-preview-trigger thinking-preview-indicator${props.compact ? " compact" : ""}`}>
+    return <span aria-hidden="true" className="vk-think-tag" data-indicator="" data-compact={props.compact ? "" : undefined}>
       <Sparkles size={15} />
       {!props.compact ? <span>{t("contextCompaction.thinkingActive")}</span> : null}
     </span>;
@@ -68,18 +68,18 @@ export function ThinkingPreview(props: { children: React.ReactNode; streaming?: 
   return (
     <Popover open={open} onOpenChange={(next) => { cancelHoverTimers(); pinned.current = next; setOpen(next); }}>
       <PopoverTrigger asChild>
-        <button type="button" className={`thinking-preview-trigger${props.compact ? " compact" : ""}`}
+        <button type="button" className="vk-think-tag" data-compact={props.compact ? "" : undefined}
           aria-label={t("contextCompaction.thinkingLabel")} onMouseEnter={enter} onMouseLeave={leave}
           onClick={(event) => { event.preventDefault(); cancelHoverTimers(); pinned.current = !pinned.current; setOpen(pinned.current); }}>
           <Sparkles size={15} aria-hidden="true" />
           {!props.compact ? <span>{t(props.streaming ? "contextCompaction.thinkingActive" : "contextCompaction.thinkingLabel")}</span> : null}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="thinking-preview-surface" align="start" side="bottom" collisionPadding={16}
+      <PopoverContent className="vk-think-pop" align="start" side="bottom" collisionPadding={16}
         aria-label={t("contextCompaction.thinkingLabel")}
         onOpenAutoFocus={(event) => event.preventDefault()} onCloseAutoFocus={(event) => event.preventDefault()}
         onMouseEnter={enter} onMouseLeave={leave} onPointerDown={() => { pinned.current = true; }}>
-        <div className="thinking-preview-body" ref={viewport.bodyRef} onScroll={viewport.handleBodyScroll}
+        <div className="vk-think-pop-body" ref={viewport.bodyRef} onScroll={viewport.handleBodyScroll}
           onPointerDown={viewport.handleBodyPointerDown} onWheel={viewport.handleBodyWheel}>
           <div ref={viewport.contentRef}>{props.children}</div>
         </div>

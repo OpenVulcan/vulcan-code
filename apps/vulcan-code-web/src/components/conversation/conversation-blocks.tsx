@@ -334,7 +334,7 @@ export function ThinkingBlock(props: {
   // durationLabel 保留在预览内部，不再占据独立转录标题。
   const durationLabel = props.streaming ? t("contextCompaction.thinkingActive") : thinkingDurationLabel(props.block, locale, t);
   return (
-    <div className="thinking-gutter-anchor">
+    <div className="vk-gutter-anchor">
       <ThinkingPreview compact streaming={props.streaming}>
         {durationLabel ? <p>{durationLabel}</p> : null}
         {useStreamingMarkdown && props.conversationId && props.block.sourceMessageId ? (
