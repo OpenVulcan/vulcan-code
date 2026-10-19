@@ -206,3 +206,21 @@
   max-height: 100%;
   object-fit: contain;
 }
+
+/* Directory-only mode: no file is selected, so the tree fills the panel instead of floating over an empty preview. */
+/* 仅目录模式：未选中文件时目录树铺满面板，而不是悬浮在空白预览之上。 */
+.workspace-files-body.directory-only > .diff-file-tree-drawer {
+  position: relative;
+  inset: auto;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
+}
+
+.workspace-files-body.directory-only > .diff-file-tree-drawer .diff-file-tree-panel {
+  border-inline: 0;
+}
+
+.workspace-files-body.directory-only > .workspace-file-preview.empty {
+  display: none;
+}

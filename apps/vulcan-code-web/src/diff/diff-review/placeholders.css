@@ -43,7 +43,7 @@
 }
 
 .diff-summary-hunk-placeholder.active .diff-summary-hunk-header-placeholder {
-  background: color-mix(in oklab, #f2cc60 18%, var(--vk-sunken));
+  background: color-mix(in oklab, var(--vk-warn) 18%, var(--vk-sunken));
   color: var(--vk-ink);
 }
 
@@ -77,7 +77,7 @@
 
 .diff-summary-placeholder.failed .diff-summary-placeholder-note,
 .diff-summary-placeholder.timed-out .diff-summary-placeholder-note {
-  border-color: color-mix(in oklab, #da3633 45%, var(--vk-line));
+  border-color: color-mix(in oklab, var(--vk-bad) 45%, var(--vk-line));
 }
 
 .diff-summary-search-marker {
@@ -86,6 +86,6 @@
   left: 12px;
   z-index: 2;
   max-width: 760px;
-  box-shadow: 0 10px 24px color-mix(in oklab, #d29922 16%, transparent);
+  box-shadow: 0 10px 24px color-mix(in oklab, var(--vk-warn) 16%, transparent);
 }
 

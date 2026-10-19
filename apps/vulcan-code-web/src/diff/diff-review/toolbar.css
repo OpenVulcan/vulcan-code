@@ -114,11 +114,11 @@
 }
 
 .diff-stat.added {
-  color: #238636;
+  color: var(--vk-diff-add-ink);
 }
 
 .diff-stat.removed {
-  color: #da3633;
+  color: var(--vk-bad);
 }
 
 .diff-mode-trigger,

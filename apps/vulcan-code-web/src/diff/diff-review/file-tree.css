@@ -46,7 +46,7 @@
 }
 
 .diff-file-tree-handle {
-  --diff-file-tree-handle-color: #0ea5a8;
+  --diff-file-tree-handle-color: var(--vk-signal);
   order: 1;
   display: inline-flex;
   flex: 0 0 11px;
@@ -218,11 +218,11 @@
 }
 
 .diff-file-tree-stats .added {
-  color: #1f883d;
+  color: var(--vk-diff-add-ink);
 }
 
 .diff-file-tree-stats .removed {
-  color: #cf222e;
+  color: var(--vk-diff-del-ink);
 }
 
 .diff-file-tree-file-icon {
@@ -240,16 +240,16 @@
 }
 
 .diff-file-tree-file-icon.added {
-  color: #0969da;
+  color: var(--vk-info);
 }
 
 .diff-file-tree-file-icon.deleted {
-  color: #cf222e;
+  color: var(--vk-diff-del-ink);
 }
 
 .diff-file-tree-file-icon.modified,
 .diff-file-tree-file-icon.renamed,
 .diff-file-tree-file-icon.copied {
-  color: #0969da;
+  color: var(--vk-info);
 }
 

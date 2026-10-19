@@ -6,8 +6,8 @@
   --diffs-gap-block: 0px;
   --diffs-gap-inline: 0px;
   --diffs-gap-style: 2px solid var(--diffs-bg);
-  --diffs-addition-base: #1f883d;
-  --diffs-deletion-base: #cf222e;
+  --diffs-addition-base: var(--vk-diff-add-ink);
+  --diffs-deletion-base: var(--vk-diff-del-ink);
   --diffs-fg-number: var(--vk-ink-2);
   --diffs-bg-context: color-mix(in oklab, var(--vk-ink-2) 34%, transparent);
   --diffs-bg-separator: color-mix(in oklab, var(--vk-sunken) 54%, var(--vk-ground));

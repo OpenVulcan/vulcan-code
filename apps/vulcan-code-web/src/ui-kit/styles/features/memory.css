@@ -179,7 +179,7 @@
 .vmm-resource-files { display: flex; flex-direction: column; gap: 4px; }
 /* Let the editor determine the row height while the file list stretches and scrolls independently.
    由编辑器决定整行高度，文件列表等高拉伸并独立滚动。 */
-.vmm-resource-file-groups { contain: size; min-height: 0; overflow: auto; }
+.vmm-resource-file-groups { contain: size; min-height: 0; overflow: auto; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
 .vmm-resource-files button { padding: 10px 12px; text-align: left; font-size: var(--vk-fs-md); overflow-wrap: anywhere; }
 .vmm-resource-files button[aria-pressed="true"] { background: var(--vk-hover); font-weight: 600; }
 .vmm-resource-editor { min-width: 0; }

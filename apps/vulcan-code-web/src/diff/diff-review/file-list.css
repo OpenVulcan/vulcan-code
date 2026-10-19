@@ -217,16 +217,16 @@
 }
 
 .diff-file-status-dot.added {
-  background: #0969da;
+  background: var(--vk-info);
 }
 
 .diff-file-status-dot.deleted {
-  background: #cf222e;
+  background: var(--vk-diff-del-ink);
 }
 
 .diff-file-large-icon {
   flex: 0 0 auto;
-  color: #d29922;
+  color: var(--vk-warn);
 }
 
 .diff-file-search-placeholder {
@@ -234,8 +234,8 @@
   gap: 4px;
   width: min(100%, 760px);
   padding: 7px 9px;
-  border: 1px solid color-mix(in oklab, #d29922 42%, var(--vk-line));
-  background: color-mix(in oklab, #f2cc60 12%, var(--vk-ground));
+  border: 1px solid color-mix(in oklab, var(--vk-warn) 42%, var(--vk-line));
+  background: color-mix(in oklab, var(--vk-warn) 12%, var(--vk-ground));
   text-align: left;
 }
 

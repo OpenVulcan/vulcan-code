@@ -26,12 +26,12 @@
   --diffs-bg: var(--vk-ground);
   --diffs-fg: var(--vk-ink);
   --diffs-bg-buffer: color-mix(in oklab, var(--vk-ink-2) 22%, transparent);
-  --diffs-bg-addition: color-mix(in oklab, #2ea043 13%, var(--vk-ground));
-  --diffs-bg-addition-number: color-mix(in oklab, #2ea043 10%, var(--vk-ground));
-  --diffs-bg-addition-emphasis: color-mix(in oklab, #2ea043 24%, transparent);
-  --diffs-bg-deletion: color-mix(in oklab, #f85149 13%, var(--vk-ground));
-  --diffs-bg-deletion-number: color-mix(in oklab, #f85149 10%, var(--vk-ground));
-  --diffs-bg-deletion-emphasis: color-mix(in oklab, #f85149 24%, transparent);
+  --diffs-bg-addition: color-mix(in oklab, var(--vk-ok) 13%, var(--vk-ground));
+  --diffs-bg-addition-number: color-mix(in oklab, var(--vk-ok) 10%, var(--vk-ground));
+  --diffs-bg-addition-emphasis: color-mix(in oklab, var(--vk-ok) 24%, transparent);
+  --diffs-bg-deletion: color-mix(in oklab, var(--vk-bad) 13%, var(--vk-ground));
+  --diffs-bg-deletion-number: color-mix(in oklab, var(--vk-bad) 10%, var(--vk-ground));
+  --diffs-bg-deletion-emphasis: color-mix(in oklab, var(--vk-bad) 24%, transparent);
   --diffs-number-gutter-width: calc(var(--diffs-min-number-column-width, var(--diffs-min-number-column-width-default, 4ch)) + 3ch);
   background: var(--diffs-bg);
   color: var(--diffs-fg);
@@ -52,12 +52,12 @@
   position: absolute;
   inset: 1px;
   z-index: 2;
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, #f2cc60 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--vk-warn) 55%, transparent);
   pointer-events: none;
 }
 
 .diff-plain-rendered-window [data-search-active]::after {
-  box-shadow: inset 0 0 0 2px #d29922;
+  box-shadow: inset 0 0 0 2px var(--vk-warn);
 }
 
 .diff-render-placeholder {
@@ -129,7 +129,7 @@
 
 .diff-file-load-state.failed,
 .diff-file-load-state.timed-out {
-  border-color: color-mix(in oklab, #da3633 45%, var(--vk-line));
+  border-color: color-mix(in oklab, var(--vk-bad) 45%, var(--vk-line));
 }
 
 .diff-file-load-retry {
