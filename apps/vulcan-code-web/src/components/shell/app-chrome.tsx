@@ -54,9 +54,9 @@ const GITHUB_REPOSITORY_URL = "https://github.com/OpenVulcan/vulcan-code";
 // shellClient 是本地窗口控制使用的壳层 chrome 门面。
 const shellClient = createShellClient();
 
-// THEME_ICONS gives every theme the glyph shown in its menu row and trigger.
-// THEME_ICONS 为每个主题提供菜单行与触发器中显示的图形。
-const THEME_ICONS: Record<AppearanceTheme, typeof Sun> = { auto: SunMoon, light: Sun, dark: Moon, command: Rocket };
+// APPEARANCE_THEME_ICONS gives every theme the glyph shown in its menu row, trigger and settings choice.
+// APPEARANCE_THEME_ICONS 为每个主题提供菜单行、触发器与设置选项中显示的图形。
+export const APPEARANCE_THEME_ICONS: Record<AppearanceTheme, typeof Sun> = { auto: SunMoon, light: Sun, dark: Moon, command: Rocket };
 
 // useChooseAppearance applies one explicit appearance choice and reports a refused save once.
 // useChooseAppearance 应用一项明确的外观选择，存储被拒绝时提示一次。
@@ -104,7 +104,7 @@ export function GlobalActions(props: {
   // statusTone keeps preview visually distinct from a live ready service.
   // statusTone 让预览状态与真实在线服务在视觉上保持区分。
   const statusTone = isPreviewMode ? "warn" : props.startup.ready ? "ok" : "ember";
-  const ThemeIcon = THEME_ICONS[appearance.theme];
+  const ThemeIcon = APPEARANCE_THEME_ICONS[appearance.theme];
   // menuPointerInteractionRef records whether the current menu closure originated from a pointer action inside the menu.
   // menuPointerInteractionRef 记录当前菜单关闭是否源于菜单内部的鼠标操作。
   const menuPointerInteractionRef = React.useRef(false);
@@ -153,7 +153,7 @@ export function GlobalActions(props: {
           <DropdownMenuSubContent {...subProps}>
             <DropdownMenuRadioGroup value={appearance.theme} onValueChange={(value) => choose("theme", value as AppearanceTheme)}>
               {APPEARANCE_THEMES.map((theme) => {
-                const Icon = THEME_ICONS[theme];
+                const Icon = APPEARANCE_THEME_ICONS[theme];
                 return (
                   <DropdownMenuRadioItem key={theme} value={theme}>
                     <Icon />

@@ -32,6 +32,7 @@ export type SettingsSubAreaId =
   | "runtime-diagnostics"
   | "visual-lab"
   | "notifications"
+  | "appearance"
   | "git-commit"
   | "permission-judge"
   | "prompt-composer"

@@ -18,6 +18,7 @@ import { ModelServicesArea } from "@/components/features/settings/model-services
 import { ContextBasicsSettingsArea } from "@/components/features/settings/context-basics-settings";
 import { SettingsPage } from "@/components/features/settings/settings-layout";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
+import { AppearanceSettingsArea } from "@/components/features/settings/appearance-settings-area";
 import { PermissionJudgeSettingsArea } from "@/components/features/settings/permission-judge-settings-area";
 import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
@@ -107,6 +108,9 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
   }
   if (props.activeSettingsSubArea === "visual-lab") {
     return <VisualLabSettingsArea />;
+  }
+  if (props.activeSettingsSubArea === "appearance") {
+    return <AppearanceSettingsArea />;
   }
   if (props.activeSettingsSubArea === "notifications") {
     return <NotificationSettingsArea />;
