@@ -66,7 +66,7 @@ describe("context settings draft navigation", () => {
       await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="edit policy"]')?.click())
       // Directory actions change the visible category while keeping each editor mounted.
       // 目录操作切换可见分类，同时保持各编辑器挂载。
-      const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('.workspace-directory-navigation button'))
+      const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('.vk-directory-nav button'))
       const retryTab = tabs.find((tab) => tab.textContent === "出错重试")
       const contextTab = tabs.find((tab) => tab.textContent === "对话长度与压缩")
       expect(retryTab).toBeDefined()

@@ -3,7 +3,6 @@
 
 /* Generic toolbar rules must precede agent overrides on the same multi-class element. */
 /* 通用工具栏规则必须先于同一多类元素上的智能体专用覆盖。 */
-.skill-actions-row,
 .skill-toolbar {
   min-width: 0;
   display: flex;
@@ -12,57 +11,7 @@
   flex-wrap: wrap;
 }
 
-.skill-action-button {
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--card);
-  color: var(--foreground);
-  padding: 0 10px;
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 650;
-}
-
-.skill-action-button:not(.secondary) {
-  background: var(--primary);
-  color: var(--primary-foreground);
-  border-color: var(--primary);
-}
-
-.skill-action-button.secondary {
-  background: var(--secondary);
-  color: var(--secondary-foreground);
-}
-
-.skill-action-button.danger,
-.skill-action-button.secondary.danger {
-  color: var(--destructive);
-}
-
-.skill-action-button.danger.confirm,
-.skill-action-button.secondary.danger.confirm {
-  background: color-mix(in srgb, var(--destructive) 12%, var(--card));
-  border-color: color-mix(in srgb, var(--destructive) 30%, var(--border));
-  color: var(--destructive);
-}
-
-.skill-action-button:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
 /* A disabled primary action turns neutral instead of showing a washed-out brand colour. */
-/* 禁用的主操作回落为中性色，而不是显示褪色的品牌色。 */
-.skill-action-button:not(.secondary):disabled {
-  border-color: transparent;
-  background: var(--vcn-disabled-fill);
-  color: var(--vcn-disabled-foreground);
-  opacity: 1;
-}
 
 .skill-page-body {
   min-width: 0;
@@ -137,31 +86,6 @@
 
 .agent-catalog-filter-row {
   grid-template-columns: minmax(0, 1fr) 144px;
-}
-
-.agent-category-floating-row {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-}
-
-.agent-category-floating-row > span:nth-child(2) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-category-floating-row strong {
-  min-width: 22px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--vcn-radius-pill);
-  background: color-mix(in srgb, var(--muted) 82%, transparent);
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-  font-weight: 650;
 }
 
 /* The editor body owns scrolling so saving remains reachable at every scroll position. */
@@ -250,7 +174,7 @@
   overflow: hidden;
 }
 
-.agent-skill-card-list:has(> .page-empty-state) {
+.agent-skill-card-list:has(> .vk-page-empty) {
   min-height: max(240px, calc(100dvh - 300px));
   align-items: center;
   border: 0;
@@ -312,40 +236,6 @@
   outline: 0;
   background: transparent;
   color: inherit;
-}
-
-.agent-skill-category-floating-row {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 4px 0 0;
-}
-
-.agent-skill-category-floating-main {
-  min-width: 0;
-  min-height: 32px;
-  flex: 1;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  padding: 0 8px;
-  text-align: left;
-}
-
-.agent-skill-category-floating-main > span:nth-child(2) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-skill-category-floating-main > strong {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
 }
 
 .agent-definition-detail-grid {

@@ -1,4 +1,4 @@
-// The page kit is the single structural vocabulary of host pages and plugin pages; styles live in styles/page-kit.css.
+// The page kit is the single structural vocabulary of host pages and plugin pages; styles live in ui-kit/styles/page-kit.css.
 // 页面套件是宿主页面与插件页面唯一的结构词汇；样式位于 styles/page-kit.css。
 export { PageActionBar, PageBody, PageTabPanel, PageTabs, PageToolbar, type PageActionBarProps, type PageBodyProps, type PageTabOption, type PageTabPanelProps, type PageToolbarProps } from "./page-layout"
 export { PageGuide, PageHint, PageRow, PageSection, type PageGuideItem, type PageRowProps, type PageSectionProps } from "./page-section"

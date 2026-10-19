@@ -61,7 +61,7 @@ it("keeps unavailable groups visible but disabled until a failed initial load re
   document.body.append(container)
   try {
     await act(async () => { root.render(<I18nProvider initialLocale="zh-CN"><VmmNativeRuntimePolicy busy={false} onRunAction={onRunAction} /></I18nProvider>) })
-    expect(container.querySelectorAll(".page-tabs nav button")).toHaveLength(5)
+    expect(container.querySelectorAll(".vk-page-tabs nav button")).toHaveLength(5)
     for (const label of ["文本清洗", "画像期限", "检索排序", "定期清洗"]) expect(button(container, label).disabled).toBe(true)
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("未返回有效结果")
     expect(container.textContent).not.toContain("处理中")

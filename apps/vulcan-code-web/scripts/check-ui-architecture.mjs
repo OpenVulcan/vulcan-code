@@ -106,9 +106,9 @@ async function collectSourceFiles(directory) {
   return files.sort()
 }
 
-// feedbackShellPattern matches class names of hand-built empty-state and notice shells; page kit classes are exempt.
+// feedbackShellPattern matches class names of hand-built empty-state and notice shells; kit page classes (vk-page-*) are exempt.
 // feedbackShellPattern 匹配手写空状态与提示外壳的类名；页面套件类名不受限制。
-const feedbackShellPattern = /^(?!page-)[a-z0-9-]+-(?:empty-state|empty|notice)$/
+const feedbackShellPattern = /^(?!vk-page-)[a-z0-9-]+-(?:empty-state|empty|notice)$/
 
 // legacyFeedbackShells is the ratchet of bespoke feedback shells that predate the page kit; it may only shrink.
 // New pages use PageEmptyState and PageNotice; inline widgets that truly cannot must justify a new entry in review.

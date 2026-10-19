@@ -13,7 +13,7 @@
 | 设置版面渲染 | `apps/vulcan-code-web/src/components/plugins/plugin-settings-page.tsx` 及同目录 `plugin-settings-*`、`plugin-data-*`、`plugin-bar-chart.tsx` |
 | 模块 SDK | `apps/vulcan-code-web/src/components/plugins/dynamic-plugin-mount-panel.tsx`（`PluginUiSdk`） |
 | 模块可用组件 | `apps/vulcan-code-web/src/components/plugins/plugin-ui-sdk-components.ts`（`PLUGIN_UI_SDK_COMPONENTS`） |
-| 页面套件 | `apps/vulcan-code-web/src/components/page/`、`src/styles/page-kit.css` |
+| 页面套件 | `apps/vulcan-code-web/src/components/page/`、`src/ui-kit/styles/page-kit.css` |
 | 自定义样式词汇与限制 | `src/styles/plugin-host-components.css`、`scripts/check-ui-architecture.mjs`（`checkPluginUiStyle`） |
 
 以上任一来源变化（新增控件、条目类型、SDK 字段、组件或样式规则）时，须在同一任务中回读源码并同步本文件。

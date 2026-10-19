@@ -39,8 +39,8 @@ it("renders a labelled section with header actions and flush rows", () => {
   const heading = container.querySelector("h2")
   expect(heading?.textContent).toBe("Recovery")
   expect(region?.getAttribute("aria-labelledby")).toBe(heading?.id)
-  expect(container.querySelector(".page-section-actions button")?.textContent).toBe("Refresh")
-  expect(container.querySelector(".page-row-description")?.textContent).toBe("Explains the switch")
+  expect(container.querySelector(".vk-page-section-head > .vk-page-actions button")?.textContent).toBe("Refresh")
+  expect(container.querySelector(".vk-page-row-text > p")?.textContent).toBe("Explains the switch")
 })
 
 // Verifies a collapsed guide stays reachable behind its disclosure label.
@@ -58,12 +58,12 @@ it("maps notice tones to live-region roles", () => {
     <PageNotice details="stack trace" detailsLabel="Details" title="Failed" tone="error">Retry later.</PageNotice>
     <PageNotice tone="success">Saved.</PageNotice>
   </>)
-  const notices = container.querySelectorAll(".page-notice")
+  const notices = container.querySelectorAll(".vk-page-notice")
   expect(notices[0]?.getAttribute("role")).toBe("alert")
   expect(notices[1]?.getAttribute("role")).toBe("status")
   // Details stay mounted for search and copy, but their folded content is closed.
   // 详情保持挂载以便查找与复制，但收起的内容处于关闭状态。
-  const details = [...container.querySelectorAll<HTMLElement>(".page-notice-details [data-state]")].find((node) => node.textContent?.includes("stack trace"))
+  const details = [...container.querySelectorAll<HTMLElement>(".vk-page-notice-details [data-state]")].find((node) => node.textContent?.includes("stack trace"))
   expect(details?.getAttribute("data-state")).toBe("closed")
 })
 
@@ -75,9 +75,9 @@ it("renders empty states, facts and items", () => {
     <PageFacts items={[{ key: "id", label: "Request", value: "req-1" }]} />
     <PageItem aria-label="Interrupted update" description="Resume it" title="Update interrupted" tone="attention" />
   </>)
-  expect(container.querySelector(".page-empty-state")?.getAttribute("role")).toBe("status")
-  expect(container.querySelector(".page-facts dd")?.textContent).toBe("req-1")
-  expect(container.querySelector("[aria-label='Interrupted update']")?.getAttribute("data-tone")).toBe("attention")
+  expect(container.querySelector(".vk-page-empty")?.getAttribute("role")).toBe("status")
+  expect(container.querySelector(".vk-page-facts dd")?.textContent).toBe("req-1")
+  expect(container.querySelector("[aria-label='Interrupted update']")?.getAttribute("data-tone")).toBe("warn")
 })
 
 // Verifies tab panels mount on first activation and keep visited state while hidden.
@@ -94,5 +94,5 @@ it("mounts tab panels lazily and keeps visited panels alive", () => {
   render(view("b"))
   expect(container.textContent).toContain("second")
   expect(container.querySelector<HTMLInputElement>("input[aria-label='draft']")?.value).toBe("kept")
-  expect(container.querySelector<HTMLInputElement>("input[aria-label='draft']")?.closest(".page-tab-panel")?.hasAttribute("hidden")).toBe(true)
+  expect(container.querySelector<HTMLInputElement>("input[aria-label='draft']")?.closest(".vk-page-panel")?.hasAttribute("hidden")).toBe(true)
 })

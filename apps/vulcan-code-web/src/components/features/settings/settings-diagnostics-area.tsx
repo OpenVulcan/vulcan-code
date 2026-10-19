@@ -9,7 +9,7 @@ import { Button } from "@/ui-kit/primitives/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
 import { Switch } from "@/ui-kit/primitives/switch";
 import { Input } from "@/ui-kit/primitives/input";
-import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
+import { DirectoryRow, WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import { useI18n } from "@/i18n";
 import type {
   LogEntrySummary,
@@ -118,9 +118,7 @@ export function LogsArea(props: {
           ["startup", t("settings.diagnostics.startupStatus")],
           ["logs", t("settings.diagnostics.logs")],
           ["trace", t("settings.diagnostics.providerRequestTrace")],
-        ] as const).map(([id, label]) => <button key={id} type="button"
-          className={`workspace-tool-panel-menu-row ${category === id ? "active" : ""}`}
-          aria-current={category === id ? "page" : undefined} onClick={() => setCategory(id)}>{label}</button>)}
+        ] as const).map(([id, label]) => <DirectoryRow active={category === id} key={id} label={label} onSelect={() => setCategory(id)} />)}
       </WorkspaceDirectoryMenu>
     }>
       {category === "startup" ? <StartupPanel startup={props.startup} /> : null}

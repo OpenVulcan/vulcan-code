@@ -53,11 +53,11 @@ describe("runtime diagnostics provider request trace setting", () => {
     // The first view contains startup diagnostics without the unrelated trace form.
     // 初始视图仅展示启动诊断，不混入无关追踪表单。
     expect(host.textContent).not.toContain("打开记录文件夹");
-    const tab = Array.from(host.querySelectorAll<HTMLButtonElement>('.workspace-directory-navigation button')).find((entry) => entry.textContent === "模型请求记录");
+    const tab = Array.from(host.querySelectorAll<HTMLButtonElement>('.vk-directory-nav button')).find((entry) => entry.textContent === "模型请求记录");
     expect(tab).toBeDefined();
     await act(async () => tab!.click());
     expect(tab!.getAttribute("aria-current")).toBe("page");
-    expect(host.querySelector('.workspace-directory-content .provider-trace-settings')).not.toBeNull();
+    expect(host.querySelector('.vk-directory-body .provider-trace-settings')).not.toBeNull();
     const markup = host.innerHTML;
 
     expect(markup).toContain("模型请求记录");

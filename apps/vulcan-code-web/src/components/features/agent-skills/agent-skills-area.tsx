@@ -1,4 +1,4 @@
-import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
+import { DirectoryRow, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
 import { Copy, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Search, Tags, Trash2 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
@@ -448,19 +448,16 @@ export function AgentSkillCategoryMenu(props: {
 
   return (
     <WorkspaceDirectoryMenu ariaLabel={t("agentSkills.skillCategories")} heading={t("agentSkills.categories")}>
-      <button className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === "" ? "active" : ""}`} aria-current={props.selectedCategoryId === "" ? "page" : undefined} onClick={() => props.onSelectCategory("")} type="button">
-        <Tags size={15} />
-        <span>{t("agentSkills.all")}</span>
-        <strong>{effectiveRecords.length}</strong>
-      </button>
+      <DirectoryRow active={props.selectedCategoryId === ""} count={effectiveRecords.length} icon={<Tags />} label={t("agentSkills.all")} onSelect={() => props.onSelectCategory("")} />
       {props.workbench.agentSkills.categories.map((category) => (
-        <div className={`workspace-tool-panel-menu-row agent-skill-category-floating-row ${props.selectedCategoryId === category.categoryId ? "active" : ""}`} key={category.categoryId}>
-          <button className="agent-skill-category-floating-main" aria-current={props.selectedCategoryId === category.categoryId ? "page" : undefined} onClick={() => props.onSelectCategory(category.categoryId)} type="button">
-            <span className="agent-category-floating-icon" style={{ backgroundColor: category.color }}>{category.emoji}</span>
-            <span>{localizedAgentSkillCategory(category, locale, t)}</span>
-            <strong>{countByCategory.get(category.categoryId) ?? 0}</strong>
-          </button>
-        </div>
+        <DirectoryRow
+          active={props.selectedCategoryId === category.categoryId}
+          count={countByCategory.get(category.categoryId) ?? 0}
+          key={category.categoryId}
+          label={localizedAgentSkillCategory(category, locale, t)}
+          onSelect={() => props.onSelectCategory(category.categoryId)}
+          swatch={{ glyph: category.emoji, color: category.color }}
+        />
       ))}
     </WorkspaceDirectoryMenu>
   )

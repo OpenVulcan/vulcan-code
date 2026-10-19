@@ -21,7 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/ui-kit/primitives/dialog"
-import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
+import { DirectoryRow, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, WorkbenchSnapshot } from "@/types"
 import type { AgentActionProps } from "./agent-area-types"
@@ -459,27 +459,23 @@ export function AgentCategoryMenu(props: {
 
   return (
     <WorkspaceDirectoryMenu ariaLabel={t("agents.agentCategories")} heading={t("agents.categories")}>
-      <button
-        className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === "" ? "active" : ""}`}
-        aria-current={props.selectedCategoryId === "" ? "page" : undefined} onClick={() => props.onSelectCategory("")}
-        type="button"
-      >
-        <Bot size={15} />
-        <span>{t("agents.all")}</span>
-        <strong>{props.workbench.subagentCatalog.definitions.length}</strong>
-      </button>
+      <DirectoryRow
+        active={props.selectedCategoryId === ""}
+        count={props.workbench.subagentCatalog.definitions.length}
+        icon={<Bot />}
+        label={t("agents.all")}
+        onSelect={() => props.onSelectCategory("")}
+      />
       {categories.map((category) => (
-        <button
-          className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === category.categoryId ? "active" : ""}`}
+        <DirectoryRow
+          active={props.selectedCategoryId === category.categoryId}
+          count={countByCategory.get(category.categoryId) ?? 0}
           key={category.categoryId}
-          aria-current={props.selectedCategoryId === category.categoryId ? "page" : undefined} onClick={() => props.onSelectCategory(category.categoryId)}
+          label={localizedCategoryName(category, locale)}
+          onSelect={() => props.onSelectCategory(category.categoryId)}
+          swatch={{ glyph: category.emoji, color: colorSwatchValue(category.color) }}
           title={localizedCategoryDescription(category, locale) ?? category.categoryId}
-          type="button"
-        >
-          <span className="agent-category-floating-icon" style={{ backgroundColor: colorSwatchValue(category.color) }}>{category.emoji}</span>
-          <span>{localizedCategoryName(category, locale)}</span>
-          <strong>{countByCategory.get(category.categoryId) ?? 0}</strong>
-        </button>
+        />
       ))}
     </WorkspaceDirectoryMenu>
   )

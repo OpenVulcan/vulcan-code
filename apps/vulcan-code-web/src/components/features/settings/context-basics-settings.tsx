@@ -1,4 +1,4 @@
-import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
+import { DirectoryRow, WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
 import { LoaderCircle } from "lucide-react"
 import { toast } from "@/ui-kit/primitives/toast"
@@ -442,9 +442,7 @@ export function ContextBasicsSettingsArea(props: {
   return (
     <WorkspaceDirectoryLayout contentClassName="context-basics-surface space-y-4" navigationMode="tabs" navigation={
       <WorkspaceDirectoryMenu ariaLabel={t("settings.contextBasics.title")} heading={t("workspaceToolPanel.category")}>
-        {sections.map((section) => <button key={section.id} type="button"
-          className={`workspace-tool-panel-menu-row ${activeSection === section.id ? "active" : ""}`}
-          aria-current={activeSection === section.id ? "page" : undefined} onClick={() => setActiveSection(section.id)}>{section.label}</button>)}
+        {sections.map((section) => <DirectoryRow active={activeSection === section.id} key={section.id} label={section.label} onSelect={() => setActiveSection(section.id)} />)}
       </WorkspaceDirectoryMenu>
     }>
       {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}

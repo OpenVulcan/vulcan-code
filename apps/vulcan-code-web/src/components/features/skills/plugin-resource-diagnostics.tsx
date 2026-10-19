@@ -144,7 +144,7 @@ export function PluginResourceDiagnostics(props: PluginResourceDiagnosticsProps)
         ? <Button onClick={() => { version.current += 1; setBusy(false); }} size="sm" type="button" variant="outline">{t("skills.plugins.cancel")}</Button>
         : <Button onClick={() => void load(selection)} size="sm" type="button" variant="outline"><RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}
     </>}>
-      <p className="page-row-label">{selection.kind === "plugin"
+      <p className="vk-page-row-label">{selection.kind === "plugin"
         ? formatMessage(t("pluginDiagnostics.subject.plugin"), { name })
         : formatMessage(t(selection.kind === "update" ? "pluginDiagnostics.subject.update" : "pluginDiagnostics.subject.uninstall"), { name })}</p>
     </PageToolbar>

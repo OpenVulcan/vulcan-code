@@ -1,9 +1,9 @@
-import { useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
-import { cn } from "@/lib/utils";
+import { useLayoutEffect, useRef, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { cx } from "@/ui-kit/behavior/core";
 
-// ACTIVE_TAB_ROW_SELECTOR matches the feature-owned rows that mark the current tab.
-// ACTIVE_TAB_ROW_SELECTOR 匹配由功能持有、标记当前标签的菜单行。
-const ACTIVE_TAB_ROW_SELECTOR = '.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]';
+// ACTIVE_TAB_ROW_SELECTOR matches the directory row that marks the current tab.
+// ACTIVE_TAB_ROW_SELECTOR 匹配标记当前标签的目录行。
+const ACTIVE_TAB_ROW_SELECTOR = '.vk-dir-row[aria-current="page"]';
 
 // WorkspaceDirectoryLayoutProps separates persistent navigation from the flexible content pane.
 // WorkspaceDirectoryLayoutProps 将固定导航与弹性内容面板分离。
@@ -32,15 +32,15 @@ export function WorkspaceDirectoryLayout(props: WorkspaceDirectoryLayoutProps) {
   const navigationRef = useRef<HTMLDivElement>(null);
   const indicatorRef = useRef<HTMLSpanElement>(null);
   useSlidingTabIndicator(navigationRef, indicatorRef, navigationMode === "tabs");
-  return <div className="workspace-directory">
-    <div className="workspace-directory-layout" data-navigation-mode={navigationMode}>
+  return <div className="vk-directory">
+    <div className="vk-directory-grid" data-navigation-mode={navigationMode}>
       {navigationMode === "none" ? null : (
-        <div className={cn("workspace-directory-navigation", navigationMode === "tabs" && "workspace-tab-strip")} ref={navigationRef}>
+        <div className={cx("vk-directory-nav", navigationMode === "tabs" && "vk-tabstrip")} ref={navigationRef}>
           {props.navigation}
-          {navigationMode === "tabs" ? <span aria-hidden className="workspace-directory-tab-indicator" ref={indicatorRef} /> : null}
+          {navigationMode === "tabs" ? <span aria-hidden className="vk-tabstrip-ink" ref={indicatorRef} /> : null}
         </div>
       )}
-      <div className={cn("workspace-directory-content", props.contentClassName)}>{props.children}</div>
+      <div className={cx("vk-directory-body", props.contentClassName)}>{props.children}</div>
     </div>
   </div>;
 }
@@ -144,27 +144,21 @@ export function PageTabs<Value extends string>(props: {
   const stripRef = useRef<HTMLDivElement>(null);
   const indicatorRef = useRef<HTMLSpanElement>(null);
   useSlidingTabIndicator(stripRef, indicatorRef, true);
-  return <div className={cn("page-tabs", props.className)}>
-    <div className="workspace-tab-strip" ref={stripRef}>
-      <nav aria-label={props.ariaLabel} className="workspace-directory-menu-list">
-        {props.options.map((option) => {
-          const active = option.value === props.value;
-          return <button
-            aria-current={active ? "page" : undefined}
-            className={cn("workspace-tool-panel-menu-row", active && "active")}
-            disabled={option.disabled}
-            key={option.value}
-            onClick={() => props.onValueChange(option.value)}
-            type="button"
-          >
-            <span className="settings-directory-label">{option.label}</span>
-            {option.count === undefined || option.count === null ? null : <small>{option.count}</small>}
-          </button>;
-        })}
+  return <div className={cx("vk-page-tabs", props.className)}>
+    <div className="vk-tabstrip" ref={stripRef}>
+      <nav aria-label={props.ariaLabel} className="vk-dir-list">
+        {props.options.map((option) => <DirectoryRow
+          active={option.value === props.value}
+          count={option.count}
+          disabled={option.disabled}
+          key={option.value}
+          label={option.label}
+          onSelect={() => props.onValueChange(option.value)}
+        />)}
       </nav>
-      <span aria-hidden className="workspace-directory-tab-indicator" ref={indicatorRef} />
+      <span aria-hidden className="vk-tabstrip-ink" ref={indicatorRef} />
     </div>
-    {props.actions ? <div className="page-tabs-actions">{props.actions}</div> : null}
+    {props.actions ? <div className="vk-page-actions">{props.actions}</div> : null}
   </div>;
 }
 
@@ -183,8 +177,56 @@ export function WorkspaceDirectoryMenu(props: {
   // children 保留功能持有的菜单行。
   children: ReactNode;
 }) {
-  return <nav className="workspace-directory-menu" aria-label={props.ariaLabel}>
-    <p className="workspace-directory-heading">{props.heading}</p>
-    <div className="workspace-directory-menu-list">{props.children}</div>
+  return <nav className="vk-dir" aria-label={props.ariaLabel}>
+    <p className="vk-dir-head vk-label">{props.heading}</p>
+    <div className="vk-dir-list">{props.children}</div>
   </nav>;
+}
+
+// DirectoryRowProps describes one selectable entry of a directory menu or tab strip.
+// DirectoryRowProps 描述目录菜单或标签条中的一个可选条目。
+export interface DirectoryRowProps {
+  // active marks the entry whose page is shown; it drives the ember bar and the sliding tab indicator.
+  // active 标记当前显示其页面的条目；它驱动余烬色竖条与滑动标签指示条。
+  active: boolean;
+  // label is the visible entry name.
+  // label 是可见的条目名称。
+  label: ReactNode;
+  // icon is an optional leading glyph.
+  // icon 是可选的前置图标。
+  icon?: ReactNode;
+  // swatch is an optional emoji badge tinted with a category colour, replacing the icon.
+  // swatch 是可选的表情徽标，以分类颜色着色，替代图标。
+  swatch?: { glyph: ReactNode; color?: string };
+  // count is an optional trailing quantity.
+  // count 是可选的尾部数量。
+  count?: ReactNode;
+  // title is the optional hover description.
+  // title 是可选的悬停说明。
+  title?: string;
+  // disabled keeps the entry visible but not selectable.
+  // disabled 保留条目可见但不可选择。
+  disabled?: boolean;
+  // onSelect receives the click on this entry.
+  // onSelect 接收此条目的点击。
+  onSelect: () => void;
+}
+
+// DirectoryRow renders one directory entry; every feature menu and page tab strip shares this row.
+// DirectoryRow 渲染一个目录条目；所有功能菜单与页面标签条共用此行。
+export function DirectoryRow(props: DirectoryRowProps) {
+  return <button
+    aria-current={props.active ? "page" : undefined}
+    className="vk-dir-row"
+    disabled={props.disabled}
+    onClick={props.onSelect}
+    title={props.title}
+    type="button"
+  >
+    {props.swatch
+      ? <i aria-hidden className="vk-dir-swatch" style={{ "--vk-dir-swatch": props.swatch.color } as CSSProperties}>{props.swatch.glyph}</i>
+      : props.icon}
+    <span>{props.label}</span>
+    {props.count === undefined || props.count === null ? null : <small>{props.count}</small>}
+  </button>;
 }

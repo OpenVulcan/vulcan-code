@@ -35,14 +35,14 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 
 // tabLabels lists the visible maintenance tabs in their rendered order.
 // tabLabels 按渲染顺序列出可见维护分页。
-const tabs = () => [...host.querySelectorAll<HTMLButtonElement>(".page-tabs nav button")];
+const tabs = () => [...host.querySelectorAll<HTMLButtonElement>(".vk-page-tabs nav button")];
 const tabLabels = () => tabs().map((tab) => tab.textContent);
 // label resolves one maintenance tab title from the English catalog.
 // label 从英文目录解析单个维护分页标题。
 const label = (tab: "recovery" | "capacity" | "prewarm") => readLocaleMessage("en-US", `pluginMaintenance.tab.${tab}`);
 // headings lists the rendered maintenance block titles.
 // headings 列出已渲染的维护区块标题。
-const headings = () => [...host.querySelectorAll(".page-section h3")].map((heading) => heading.textContent);
+const headings = () => [...host.querySelectorAll(".vk-page-section h3")].map((heading) => heading.textContent);
 
 it("mounts each maintenance tab on first visit and keeps it alive afterwards", async () => {
   await act(async () => root.render(<PluginMaintenancePage actions={{} as SkillActionProps} conversations={[]} plugins={[plugin]} />));
@@ -59,7 +59,7 @@ it("mounts each maintenance tab on first visit and keeps it alive afterwards", a
   expect(host.textContent).toContain("recovery-probe");
   // The visited recovery panel stays mounted but hidden.
   // 已访问的恢复面板保持挂载但隐藏。
-  expect(host.querySelectorAll<HTMLElement>(".page-tab-panel[hidden]")).toHaveLength(1);
+  expect(host.querySelectorAll<HTMLElement>(".vk-page-panel[hidden]")).toHaveLength(1);
 });
 
 // DrawerHarness opens the drawer for one plugin scope on mount.
@@ -75,7 +75,7 @@ function DrawerHarness(props: { scope: string }) {
 it("shows recovery and usage but no runtime resources for a plugin without a Lua runtime", async () => {
   await act(async () => root.render(<DrawerHarness scope={plugin.id} />));
   const visible = host.querySelector<HTMLElement>('.plugin-maintenance-drawer-body > div:not([hidden])')!;
-  expect([...visible.querySelectorAll(".page-section h3")].map((heading) => heading.textContent)).toEqual([
+  expect([...visible.querySelectorAll(".vk-page-section h3")].map((heading) => heading.textContent)).toEqual([
     readLocaleMessage("en-US", "pluginMaintenance.recovery.title"),
     readLocaleMessage("en-US", "pluginMaintenance.usage.title"),
   ]);

@@ -1,51 +1,3 @@
-/* Forge selected state: the current row is an ember-tinted tile with a warm hairline, not a flat grey pill or an edge bar. */
-/* Forge 选中态：当前行是带暖色细描边的余烬色底块，而非扁平灰色胶囊或边缘竖条。 */
-/* Hover stays a neutral surface so "pointing at" and "currently here" never look alike. */
-/* 悬停保持中性表面色，使「指向」与「当前所在」始终可区分。 */
-:root {
-  --vcn-selected-foreground: var(--foreground);
-  --vcn-selected-icon: var(--primary);
-  --vcn-selected-fill: color-mix(in srgb, var(--primary) 7%, var(--sidebar));
-  --vcn-selected-surface-fill: color-mix(in srgb, var(--primary) 6%, var(--card));
-  --vcn-selected-wash: linear-gradient(90deg, color-mix(in srgb, var(--primary) 6%, transparent) 0%, transparent 80%);
-  --vcn-selected-ring: color-mix(in srgb, var(--primary) 22%, transparent);
-  --vcn-selected-lift: 0 1px 2px rgb(21 23 26 / 5%);
-  --vcn-selected-tile: color-mix(in srgb, var(--primary) 12%, var(--sidebar));
-  --vcn-selected-tile-glow: 0 2px 8px -4px color-mix(in srgb, var(--primary) 45%, transparent);
-}
-.dark {
-  --vcn-selected-fill: color-mix(in srgb, var(--primary) 14%, var(--sidebar-accent));
-  --vcn-selected-surface-fill: color-mix(in srgb, var(--primary) 13%, var(--card));
-  --vcn-selected-wash: linear-gradient(90deg, color-mix(in srgb, var(--primary) 12%, transparent) 0%, transparent 80%);
-  --vcn-selected-ring: color-mix(in srgb, var(--primary) 36%, transparent);
-  --vcn-selected-lift: inset 0 1px 0 rgb(255 255 255 / 4%);
-  --vcn-selected-tile: color-mix(in srgb, var(--primary) 22%, var(--sidebar));
-  --vcn-selected-tile-glow: 0 0 12px -3px color-mix(in srgb, var(--primary) 55%, transparent);
-}
-
-/* Feature panel rows: ember tile, warm hairline and flame icon. */
-/* 功能面板行：余烬色底块、暖色细描边与火焰色图标。 */
-.workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
-  background: var(--vcn-selected-wash), var(--vcn-selected-fill);
-  box-shadow: inset 0 0 0 1px var(--vcn-selected-ring), var(--vcn-selected-lift);
-  color: var(--vcn-selected-foreground);
-}
-.workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) > svg {
-  color: var(--vcn-selected-icon);
-}
-
-/* Flyouts and in-page menus reuse the same ember so every "current" row speaks one language. */
-/* 悬浮菜单与页内菜单复用同一余烬色，使所有「当前项」使用同一视觉语言。 */
-.workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
-  border-color: transparent;
-  background: var(--vcn-selected-wash), var(--vcn-selected-surface-fill);
-  box-shadow: inset 0 0 0 1px var(--vcn-selected-ring), var(--vcn-selected-lift);
-  color: var(--vcn-selected-foreground);
-}
-.workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]),
-.project-settings-nav-button.active {
-  font-weight: 600;
-}
 /* Inside a dialog the section nav is secondary chrome: a raised neutral tile plus the ember icon is enough. */
 /* 对话框内的分区导航属于次要界面：浮起的中性底块加余烬色图标即可。 */
 .project-settings-nav-button.active,
@@ -54,8 +6,6 @@
   background: var(--vcn-control-on);
   box-shadow: var(--vcn-shadow-control-on);
   color: var(--foreground);
+  font-weight: 600;
 }
-.workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation .workspace-tool-panel-menu-row.active > svg,
-.project-settings-nav-button.active svg {
-  color: var(--vcn-selected-icon);
-}
+.project-settings-nav-button.active svg { color: var(--primary); }

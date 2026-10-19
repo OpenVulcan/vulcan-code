@@ -154,7 +154,7 @@
 
 /* Narrow sections (the plugin drawer, small windows) stack the editor row. */
 /* 窄区块（插件抽屉、小窗口）堆叠编辑器行。 */
-@container page-section (max-width: 520px) {
+@container vk-page-section (max-width: 520px) {
   .plugin-prewarm-editor-head {
     display: none;
   }

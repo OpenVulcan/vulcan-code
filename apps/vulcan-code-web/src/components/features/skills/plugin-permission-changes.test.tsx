@@ -67,7 +67,7 @@ describe("PluginPermissionChanges", () => {
     await act(async () => root.render(<PluginPermissionChanges candidate={preview({ permissions: ["workspace_read", "network"] })} />))
 
     expect(service.loadInstalledPluginPermissionPreview).toHaveBeenCalledWith("fixture")
-    expect(container.querySelector("[data-tone='warning'] dd")?.textContent).toBe("network")
+    expect(container.querySelector("[data-tone='warn'] dd")?.textContent).toBe("network")
   })
 
   it("confirms when an update adds nothing", async () => {
@@ -82,7 +82,7 @@ describe("PluginPermissionChanges", () => {
     service.loadInstalledPluginPermissionPreview.mockRejectedValue(new Error("Vulcan plugin `fixture` is not installed."))
     await act(async () => root.render(<PluginPermissionChanges candidate={preview()} />))
 
-    expect(container.querySelector("[data-tone='warning']")?.textContent).toContain("is not installed")
+    expect(container.querySelector("[data-tone='warn']")?.textContent).toContain("is not installed")
     expect(container.querySelector("[data-tone='info']")).toBeNull()
   })
 })

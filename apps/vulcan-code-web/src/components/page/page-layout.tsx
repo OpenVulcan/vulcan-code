@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core"
 
 export { PageTabs, type PageTabOption } from "@/components/workspace/workspace-directory-layout"
 
@@ -15,7 +15,7 @@ export interface PageBodyProps extends React.ComponentProps<"div"> {
 // PageBody stacks page-level blocks with the shared vertical rhythm; the page header already names the page.
 // PageBody 以共享纵向节奏堆叠页面级区块；页面标题栏已经承担页面命名。
 export function PageBody({ className, width = "full", ...props }: PageBodyProps) {
-  return <div className={cn("page-body", className)} data-slot="page-body" data-width={width} {...props} />
+  return <div className={cx("vk-page", className)} data-slot="page-body" data-width={width} {...props} />
 }
 
 // PageToolbarProps describes one row of page filters on the start side and page actions on the end side.
@@ -30,9 +30,9 @@ export interface PageToolbarProps extends React.ComponentProps<"div"> {
 // PageToolbar 包裹筛选与操作，在窄容器中保持操作可见。
 export function PageToolbar({ actions, children, className, ...props }: PageToolbarProps) {
   return (
-    <div className={cn("page-toolbar", className)} data-slot="page-toolbar" {...props}>
-      {children ? <div className="page-toolbar-start">{children}</div> : null}
-      {actions ? <div className="page-toolbar-actions">{actions}</div> : null}
+    <div className={cx("vk-page-toolbar", className)} data-slot="page-toolbar" {...props}>
+      {children ? <div className="vk-page-toolbar-start">{children}</div> : null}
+      {actions ? <div className="vk-page-actions">{actions}</div> : null}
     </div>
   )
 }
@@ -56,7 +56,7 @@ export function PageTabPanel({ active, keepMounted = true, className, children, 
   const [visited, setVisited] = React.useState(active)
   if (active && !visited) setVisited(true)
   if (!active && (!keepMounted || !visited)) return null
-  return <div className={cn("page-tab-panel", className)} data-slot="page-tab-panel" hidden={!active} {...props}>{children}</div>
+  return <div className={cx("vk-page-panel", className)} data-slot="page-tab-panel" hidden={!active} {...props}>{children}</div>
 }
 
 // PageActionBarProps describes the commit bar of an editable page.
@@ -74,9 +74,9 @@ export interface PageActionBarProps extends React.ComponentProps<"div"> {
 // PageActionBar 吸附在滚动页面底部，使保存与放弃始终可及。
 export function PageActionBar({ actions, pending, className, children, ...props }: PageActionBarProps) {
   return (
-    <div className={cn("page-action-bar", className)} data-pending={pending ? "true" : undefined} data-slot="page-action-bar" {...props}>
-      <div className="page-action-bar-status">{children}</div>
-      <div className="page-action-bar-actions">{actions}</div>
+    <div className={cx("vk-page-actionbar", className)} data-pending={pending ? "" : undefined} data-slot="page-action-bar" {...props}>
+      <div className="vk-page-actionbar-status">{children}</div>
+      <div className="vk-page-actions">{actions}</div>
     </div>
   )
 }

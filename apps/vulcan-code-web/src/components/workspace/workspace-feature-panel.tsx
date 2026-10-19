@@ -34,7 +34,7 @@ export function WorkspaceFeaturePanel(props: {
         />
       </SidebarHeader>
       <SidebarContent>
-        <div className="workspace-feature-panel-nav">{props.navigation}</div>
+        <div className="vk-feature-nav">{props.navigation}</div>
       </SidebarContent>
     </Sidebar>
   );

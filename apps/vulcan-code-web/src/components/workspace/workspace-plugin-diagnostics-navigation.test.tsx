@@ -103,7 +103,7 @@ function drawer(): HTMLElement {
 // stat reads one usage summary tile's number by its label, independently from tile order.
 // stat 按标签读取单个使用情况汇总卡片的数字，独立于卡片顺序。
 function stat(container: ParentNode, key: TranslationKey): string | undefined {
-  return [...container.querySelectorAll(".page-facts[data-layout='tiles'] > div")].find((tile) => tile.querySelector("dt")?.textContent === en(key))
+  return [...container.querySelectorAll(".vk-page-facts[data-layout='tiles'] > div")].find((tile) => tile.querySelector("dt")?.textContent === en(key))
     ?.querySelector("dd")?.textContent ?? undefined;
 }
 // requestRow finds the recovery item whose technical details carry one original request UUID, never by list position.

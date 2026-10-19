@@ -1,8 +1,7 @@
 import * as React from "react"
 
-import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { cx } from "@/ui-kit/behavior/core"
 import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
-import { cn } from "@/lib/utils"
 
 // PageSectionProps describes one titled card section, the shared block of every Vulcan page.
 // PageSectionProps 描述一个带标题的卡片区块，即所有 Vulcan 页面的共享区块。
@@ -39,8 +38,8 @@ export interface PageSectionProps extends Omit<React.ComponentProps<"div">, "tit
   headingLevel?: 2 | 3 | 4
 }
 
-// PageSection renders a Card with a labelled header, optional guide, body and footer.
-// PageSection 渲染带标签标题栏、可选说明、正文与页脚的 Card。
+// PageSection renders one square panel with a labelled header, optional guide, body and footer.
+// PageSection 渲染一个方形面板，含带标签标题栏、可选说明、正文与页脚。
 export function PageSection({
   title, description, status, actions, guide, guideLabel, guideCollapsed, footer, layout = "padded", headingLevel = 3,
   className, children, ...props
@@ -50,24 +49,24 @@ export function PageSection({
   const headingId = React.useId()
   const Heading = `h${headingLevel}` as const
   return (
-    <Card aria-labelledby={headingId} className={cn("page-section", className)} data-layout={layout} role="region" {...props}>
-      <CardHeader className="page-section-header">
-        <CardTitle className="page-section-title">
+    <section aria-labelledby={headingId} className={cx("vk-page-section", className)} data-layout={layout} data-slot="page-section" role="region" {...props}>
+      <header className="vk-page-section-head">
+        <div className="vk-page-section-title">
           <Heading id={headingId}>{title}</Heading>
           {status}
-        </CardTitle>
-        {description ? <CardDescription className="page-section-description">{description}</CardDescription> : null}
-        {actions ? <CardAction className="page-section-actions">{actions}</CardAction> : null}
-      </CardHeader>
-      {guide && !guideCollapsed ? <div className="page-section-guide">{guide}</div> : null}
+        </div>
+        {description ? <p>{description}</p> : null}
+        {actions ? <div className="vk-page-actions">{actions}</div> : null}
+      </header>
+      {guide && !guideCollapsed ? <div className="vk-page-section-guide">{guide}</div> : null}
       {guide && guideCollapsed ? (
-        <InlineDisclosure className="page-section-guide" label={guideLabel}>{guide}</InlineDisclosure>
+        <InlineDisclosure className="vk-page-section-guide" label={guideLabel}>{guide}</InlineDisclosure>
       ) : null}
       {children === undefined || children === null || children === false ? null : (
-        <CardContent className="page-section-body">{children}</CardContent>
+        <div className="vk-page-section-body">{children}</div>
       )}
-      {footer ? <CardFooter className="page-section-footer">{footer}</CardFooter> : null}
-    </Card>
+      {footer ? <footer className="vk-page-section-foot">{footer}</footer> : null}
+    </section>
   )
 }
 
@@ -90,12 +89,12 @@ export interface PageRowProps extends Omit<React.ComponentProps<"div">, "title">
 // PageRow 将名称与说明放在起始侧、控件放在结束侧，窄布局时自动换行。
 export function PageRow({ label, htmlFor, description, stacked, className, children, ...props }: PageRowProps) {
   return (
-    <div className={cn("page-row", className)} data-slot="page-row" data-stacked={stacked ? "true" : undefined} {...props}>
-      <div className="page-row-text">
-        {htmlFor ? <label className="page-row-label" htmlFor={htmlFor}>{label}</label> : <span className="page-row-label">{label}</span>}
-        {description ? <p className="page-row-description">{description}</p> : null}
+    <div className={cx("vk-page-row", className)} data-slot="page-row" data-stacked={stacked ? "" : undefined} {...props}>
+      <div className="vk-page-row-text">
+        {htmlFor ? <label className="vk-page-row-label" htmlFor={htmlFor}>{label}</label> : <span className="vk-page-row-label">{label}</span>}
+        {description ? <p>{description}</p> : null}
       </div>
-      {children === undefined || children === null ? null : <div className="page-row-control">{children}</div>}
+      {children === undefined || children === null ? null : <div className="vk-page-actions">{children}</div>}
     </div>
   )
 }
@@ -111,7 +110,7 @@ export interface PageGuideItem {
 // PageGuide 以紧凑的定义列表渲染说明回答。
 export function PageGuide(props: { items: readonly PageGuideItem[]; className?: string }) {
   return (
-    <dl className={cn("page-guide", props.className)}>
+    <dl className={cx("vk-page-guide", props.className)}>
       {props.items.map((item, index) => <div key={index}><dt>{item.term}</dt><dd>{item.detail}</dd></div>)}
     </dl>
   )
@@ -120,5 +119,5 @@ export function PageGuide(props: { items: readonly PageGuideItem[]; className?: 
 // PageHint renders one muted explanatory sentence, such as a footnote or a bounds hint.
 // PageHint 渲染一句弱化的说明，例如脚注或边界提示。
 export function PageHint({ className, ...props }: React.ComponentProps<"p">) {
-  return <p className={cn("page-hint", className)} {...props} />
+  return <p className={cx("vk-page-hint", className)} {...props} />
 }

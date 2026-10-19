@@ -51,7 +51,6 @@
 /* A compact label-and-control pair placed inside a tab row's trailing actions. */
 /* 放在标签行尾部操作区内的紧凑标签与控件组合。 */
 .vmm-inline-field { display: flex; min-width: 0; align-items: center; gap: 8px; white-space: nowrap; }
-.vmm-nav-row:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 /* Let the selected session own the workspace while its hidden list retains browsing state. */
 /* 让选中会话独占工作区，同时隐藏的列表保留浏览状态。 */
