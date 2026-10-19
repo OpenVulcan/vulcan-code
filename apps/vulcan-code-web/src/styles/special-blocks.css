@@ -17,7 +17,7 @@
 /* provider-retry-card keeps retry lifecycle state visually separate from assistant Markdown. */
 /* provider-retry-card 让重试生命周期状态在视觉上与助手 Markdown 明确分离。 */
 .provider-retry-card {
-  --provider-retry-tone: var(--terminal-yellow);
+  --provider-retry-tone: var(--vk-warn);
   width: min(100%, 760px);
   min-width: 0;
   display: grid;
@@ -33,11 +33,11 @@
 }
 
 .provider-retry-card[data-state="succeeded"] {
-  --provider-retry-tone: var(--terminal-green);
+  --provider-retry-tone: var(--vk-ok);
 }
 
 .provider-retry-card[data-state="failed"] {
-  --provider-retry-tone: var(--terminal-red);
+  --provider-retry-tone: var(--vk-bad);
 }
 
 .provider-retry-icon {
@@ -291,57 +291,6 @@
   border-color: var(--border);
 }
 
-
-.thinking-block {
-  min-width: 0;
-  display: grid;
-  gap: 8px;
-}
-
-.thinking-toggle {
-  width: fit-content;
-  max-width: 100%;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  padding: 2px 0;
-  font-size: var(--vcn-font-size-md);
-  line-height: 1.35;
-  text-align: left;
-}
-
-.thinking-toggle-label {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.thinking-toggle-label strong {
-  color: inherit;
-  font-weight: 500;
-}
-
-.thinking-toggle:hover,
-.thinking-toggle:focus-visible {
-  color: var(--foreground);
-}
-
-.thinking-toggle-label span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thinking-toggle:hover .thinking-toggle-icon,
-.thinking-toggle:focus-visible .thinking-toggle-icon,
-.thinking-block.expanded .thinking-toggle-icon {
-  opacity: 1;
-}
-
 .thinking-body {
   width: min(100%, 760px);
   max-width: 100%;
@@ -478,22 +427,13 @@
   text-align: left;
 }
 
-.tool-execution-stack {
-  /* Tool cards share the transcript lane instead of shrinking to their summary text. */
-  /* 工具卡片统一占用会话内容栏，不再按折叠摘要文本收缩。 */
-  width: 100%;
-  max-width: 100%;
-  display: grid;
-  gap: 8px;
-}
-
 .tool-execution-row:hover {
   color: var(--foreground);
 }
 
 .tool-execution-row.running svg {
   color: var(--foreground);
-  animation: tool-running-pulse 1.15s ease-in-out infinite;
+  animation: vk-pulse 1.15s ease-in-out infinite;
 }
 
 .tool-execution-row span {
@@ -778,16 +718,6 @@
   padding: 16px;
 }
 
-.detail-empty-state {
-  min-height: 180px;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-md);
-  text-align: center;
-}
-
 .tool-card {
   display: grid;
   gap: 10px;
@@ -819,3 +749,13 @@
   border-radius: var(--vcn-radius-md);
 }
 
+
+/* Persistent terminal state shown on the session icon. */
+/* 持久终端状态显示在会话图标上。 */
+.terminal-session-icon.terminal-state-running { color: var(--vk-info); }
+.terminal-session-icon.terminal-state-waiting { color: var(--vk-warn); }
+.terminal-session-icon.terminal-state-success { color: var(--vk-ok); }
+.terminal-session-icon.terminal-state-failed { color: var(--vk-bad); }
+.terminal-session-icon.terminal-state-stopped { color: var(--vk-ink-3); }
+.terminal-session-icon.terminal-state-lost,
+.terminal-session-icon.terminal-state-unknown { color: color-mix(in srgb, var(--vk-ink-3) 72%, transparent); }

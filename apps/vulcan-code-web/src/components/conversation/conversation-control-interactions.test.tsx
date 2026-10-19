@@ -8,8 +8,6 @@ import { I18nProvider } from "@/i18n";
 import { MarkdownMessage } from "./conversation-markdown";
 import { MarkdownDiagramFrame } from "./conversation-diagram-frame";
 import { PlanArtifactBlock } from "./conversation-plan-artifact";
-import { ToolPresentationCard } from "./conversation-tool-presentation-card";
-import type { GenericToolMarkdownPresentation } from "./conversation-tool-presentations";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { ConversationGenerationDialogV1 } from "./conversation-generation-dialog-v1";
 import { ConversationDetailModal } from "./conversation-detail";
@@ -146,26 +144,6 @@ describe("conversation control rejection paths", () => {
     expect(loadButton.disabled).toBe(false);
     await act(async () => loadButton.click());
     expect(prependOlder).toHaveBeenCalledTimes(2);
-  });
-
-  it("retains an old tool card after detail failure and rereads the exact stable identity", async () => {
-    // presentation is a persisted legacy card with its original hidden-detail record identity.
-    // presentation 是保留原始隐藏详情记录身份的持久化旧卡片。
-    const presentation: GenericToolMarkdownPresentation = {
-      id: "control-audit-old-card", kind: "generic_tool_markdown", markdown: "Retained summary",
-      state: "completed", toolName: "custom_tool", detailRef: { sessionId: "audit-session", recordId: "audit-record" },
-    };
-    // loader rejects once without changing the tool result, then returns the complete original output.
-    // loader 首次拒绝且不改变工具结果，随后返回完整原始输出。
-    const loader = vi.fn().mockRejectedValueOnce(new Error("detail unavailable")).mockResolvedValue({ body: "Recovered full output" });
-    await render(<TooltipProvider><ToolPresentationCard presentation={presentation} expanded requestProgress={null} detailLoadEnabled expandedToolPresentationIds={new Set()} onExpandedChange={vi.fn()} onLoadToolDetail={loader} /></TooltipProvider>);
-    expect(container.textContent).toContain("Retained summary");
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("detail unavailable");
-    await act(async () => Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "重新读取")!.click());
-    expect(loader).toHaveBeenCalledTimes(2);
-    expect(loader).toHaveBeenNthCalledWith(2, presentation.detailRef);
-    expect(container.textContent).toContain("Recovered full output");
-    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
   it.each([false, "throw"])("does not report copied after a rejected legacy clipboard result %s", async (result) => {

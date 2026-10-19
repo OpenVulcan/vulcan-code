@@ -65,8 +65,8 @@ export function ConversationAgentInteractionView({ interaction }: { interaction:
     <CollaborationToolCard id={`subagent-return:${interaction.event.child_session_id}:${interaction.seq}`} seq={interaction.seq}
       eventKind="subagent_return" cardKind="task-result" title={t("conversation.collaboration.agentCompleted")}
       participant={<CollaborationSessionButton {...actions} sessionId={interaction.event.child_session_id} title={t("conversation.collaboration.openSource")} />}>
-      <div className="conversation-v1-collaboration-content"><MarkdownMessage content={interaction.event.content} eager /></div>
-      <footer className="conversation-v1-collaboration-footer">
+      <div className="vk-collab-content"><MarkdownMessage content={interaction.event.content} eager /></div>
+      <footer className="vk-collab-foot">
         <time dateTime={new Date(interaction.created_at_ms).toISOString()}>{new Date(interaction.created_at_ms).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
       </footer>
     </CollaborationToolCard>
@@ -101,10 +101,10 @@ function ConversationReceivedQuestion(props: ConversationAgentInteractionActions
     eventKind="user_input" cardKind="question" incoming title={t("conversation.collaboration.timeline.question")}
     status={status}
     participant={<CollaborationSessionButton {...props} sessionId={props.question.source} title={t("conversation.collaboration.openSource")} />}
-    footer={<footer className="vk-prompt-foot conversation-v1-collaboration-time">
+    footer={<footer className="vk-prompt-foot vk-collab-time">
       <time dateTime={new Date(props.createdAtMs).toISOString()}>{new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
     </footer>}>
-    <div className="conversation-v1-collaboration-content"><MarkdownMessage content={props.question.body} eager /></div>
+    <div className="vk-collab-content"><MarkdownMessage content={props.question.body} eager /></div>
   </CollaborationToolCard>;
 }
 
@@ -204,16 +204,16 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
           sessionId={participant.sessionId}
           title={isAnswer || participant.role === "source" ? t("conversation.collaboration.openSource") : t("conversation.collaboration.openTarget")} />
       ))}
-      footer={<footer className={incoming ? "vk-prompt-foot conversation-v1-collaboration-time" : "conversation-v1-collaboration-footer"}>
+      footer={<footer className={incoming ? "vk-prompt-foot vk-collab-time" : "vk-collab-foot"}>
         <time dateTime={new Date(props.createdAtMs).toISOString()}>
           {new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
         </time>
       </footer>}
     >
-      {body ? <div className="conversation-v1-collaboration-content"><MarkdownMessage content={body} eager /></div> : null}
+      {body ? <div className="vk-collab-content"><MarkdownMessage content={body} eager /></div> : null}
       {secondaryBody ? (
-        <section className="conversation-v1-collaboration-reply">
-          <span className="conversation-v1-collaboration-caption">{t(secondaryBody.label)}</span>
+        <section className="vk-collab-reply">
+          <span className="vk-collab-caption">{t(secondaryBody.label)}</span>
           <MarkdownMessage content={secondaryBody.body} eager />
         </section>
       ) : null}
@@ -236,7 +236,7 @@ export function ConversationCollaborationStatus(props: { questionId?: string | n
   const task = props.executionId ? state.tasks.get(props.executionId) : undefined;
   const labels = [delivery, question, task].flatMap((fact) => fact ? [collaborationStatus(fact, t)] : []).filter(Boolean);
   if (labels.length === 0) return null;
-  return <span className="conversation-v1-collaboration-status" data-collaboration-attached-status>{labels.join(" · ")}</span>;
+  return <span className="vk-collab-attached" data-collaboration-attached-status>{labels.join(" · ")}</span>;
 }
 
 /** Renders collaboration facts with the shared tool-card layout and measured folding.
@@ -267,25 +267,25 @@ function CollaborationToolCard(props: React.PropsWithChildren<{
   // 展开状态遵循与工具调用一致的会话记忆与视口测量。
   const [expanded, setExpanded] = useConversationMeasuredExpansion(props.id, false);
   return (
-    <article className={`tool-presentation-card subagent-orchestration conversation-v1-collaboration-card${expanded ? " expanded" : ""}${props.incoming ? " conversation-v1-collaboration-incoming" : ""}${props.cardKind === "notification" ? " conversation-v1-collaboration-notification-card" : ""}`}
+    <article className="vk-collab" data-open={expanded || undefined} data-incoming={props.incoming || undefined}
       data-event-kind={props.eventKind} data-collaboration-card-kind={props.cardKind}
       data-collaboration-event-kind={props.collaborationEventKind} data-seq={props.seq}>
-      <div className="tool-presentation-summary subagent-orchestration-summary">
-        <MessagesSquare size={14} className="subagent-orchestration-icon" aria-hidden="true" />
-        <span className="conversation-v1-collaboration-heading">
-          <span className="conversation-v1-collaboration-title">{props.titlePrefix ?? props.title}</span>
+      <div className="vk-collab-head">
+        <MessagesSquare size={14} className="vk-collab-icon" aria-hidden="true" />
+        <span className="vk-collab-heading">
+          <span className="vk-collab-title">{props.titlePrefix ?? props.title}</span>
           {props.participant}
-          {props.titleSuffix ? <span className="conversation-v1-collaboration-title">{props.titleSuffix}</span> : null}
+          {props.titleSuffix ? <span className="vk-collab-title">{props.titleSuffix}</span> : null}
         </span>
-        {props.status ? <span className="conversation-v1-collaboration-badge">{props.status}</span> : null}
-        {!props.incoming ? <button type="button" className="conversation-v1-collaboration-fold conversation-v1-collaboration-row-toggle" aria-label={props.title}
+        {props.status ? <span className="vk-collab-badge">{props.status}</span> : null}
+        {!props.incoming ? <button type="button" className="vk-collab-toggle" aria-label={props.title}
           aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
           <ChevronDown size={14} aria-hidden="true" />
         </button> : null}
       </div>
       {props.incoming ? <IncomingCollaborationBubble id={props.id} footer={props.footer}>{props.children}</IncomingCollaborationBubble> : (
         <ConversationMeasuredCollapse collapseId={props.id} expanded={expanded}>
-          <div className="subagent-orchestration-detail">{props.children}{props.footer}</div>
+          <div className="vk-collab-body">{props.children}{props.footer}</div>
         </ConversationMeasuredCollapse>
       )}
     </article>
@@ -314,13 +314,13 @@ function CollaborationSessionButton(props: {
   return (
     <button
       aria-label={props.title}
-      className="conversation-v1-collaboration-session-button"
+      className="vk-collab-who"
       disabled={!navigable}
       onClick={() => props.onOpenSession?.(props.sessionId)}
       type="button"
     >
       <span aria-hidden="true">[</span><ArrowUpRight size={12} aria-hidden="true" />
-      <span className="conversation-v1-collaboration-participant-name" title={name}>{name}</span>
+      <span className="vk-collab-name" title={name}>{name}</span>
       <span aria-hidden="true">]</span>
     </button>
   );
@@ -614,11 +614,11 @@ function IncomingCollaborationBubble(props: React.PropsWithChildren<{ id: string
     observer.observe(element);
     return () => observer.disconnect();
   }, [props.children]);
-  return <><div className="vk-prompt conversation-v1-collaboration-bubble">
+  return <><div className="vk-prompt vk-collab-bubble">
     <ConversationMeasuredCollapse collapseId={bodyId} expanded={!overflowing || expanded} collapsedHeight={previewHeight}>
-      <div className="conversation-v1-collaboration-bubble-body" ref={contentRef}>{props.children}</div>
+      <div className="vk-collab-bubble-body" ref={contentRef}>{props.children}</div>
     </ConversationMeasuredCollapse>
-    {overflowing ? <button type="button" className="conversation-v1-collaboration-fold conversation-v1-collaboration-overflow-toggle"
+    {overflowing ? <button type="button" className="vk-collab-more"
       aria-label={expanded ? t("conversation.userPrompt.collapse") : t("conversation.userPrompt.expand")}
       aria-expanded={expanded} onClick={() => setExpanded(!expanded)}><ChevronDown size={14} aria-hidden="true" /></button> : null}
   </div>{props.footer}</>;

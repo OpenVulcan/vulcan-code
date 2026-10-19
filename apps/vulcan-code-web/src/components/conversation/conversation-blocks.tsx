@@ -507,8 +507,8 @@ export function TurnStatsBlock(props: {
       >
         <FileDiff aria-hidden="true" size={13} />
         <strong>{formatStatsTemplate(t("conversation.turnChanges.files"), turnChanges.files.length)}</strong>
-        <span className="file-change-added">+{turnChanges.additions.toLocaleString(locale)}</span>
-        <span className="file-change-removed">-{turnChanges.deletions.toLocaleString(locale)}</span>
+        <span className="vk-add">+{turnChanges.additions.toLocaleString(locale)}</span>
+        <span className="vk-del">-{turnChanges.deletions.toLocaleString(locale)}</span>
         {changesOpen ? <ChevronDown aria-hidden="true" size={13} /> : <ChevronRight aria-hidden="true" size={13} />}
       </button>
       {changesOpen ? (

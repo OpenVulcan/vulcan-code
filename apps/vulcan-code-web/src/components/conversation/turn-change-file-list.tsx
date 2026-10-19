@@ -59,8 +59,8 @@ export function TurnChangeFileList(props: {
                 {file.path.slice(separator + 1)}
               </span>
               {statusKey ? <span className={`turn-change-file-status ${file.status}`}>{t(statusKey)}</span> : null}
-              <span className="file-change-added">+{file.additions.toLocaleString(locale)}</span>
-              <span className="file-change-removed">-{file.deletions.toLocaleString(locale)}</span>
+              <span className="vk-add">+{file.additions.toLocaleString(locale)}</span>
+              <span className="vk-del">-{file.deletions.toLocaleString(locale)}</span>
             </li>
           );
         })}

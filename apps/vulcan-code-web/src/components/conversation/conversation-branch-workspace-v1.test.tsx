@@ -35,7 +35,6 @@ import { appendToolRequestDraftMessages, createConversationBranchPresentationPro
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
 import type { ThinkingDisplayMode } from "./thinking-display";
 import { projectConversationTimelineItems } from "./conversation-timeline";
-import { resolveToolPresentation } from "./conversation-tool-presentations";
 import type { ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
 
 
@@ -377,7 +376,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       await React.act(async () => root.render(workspaceTree(events, "inline_output", [], true, undefined, store)));
       // Stable stack elements prove in-place updates rather than duplicate insertion followed by removal.
       // 稳定的栈元素证明原地更新，而非插入重复节点后再删除。
-      const rows = [...host.querySelectorAll(".tool-execution-stack")];
+      const rows = [...host.querySelectorAll(".vk-tool-stack")];
       expect(rows).toHaveLength(drafts.length);
       for (const status of ["running", "completed"] as const) {
         // Durable preparation carries the original request stream, not the provider-visible call ID.
@@ -388,8 +387,8 @@ describe("ConversationBranchWorkspaceV1", () => {
           input: { action: "read", path: `src/file-${index}.ts` },
         }));
         await React.act(async () => root.render(workspaceTree([...events, ...tools], "inline_output", [], true, undefined, store)));
-        expect(host.querySelectorAll(".tool-execution-stack")).toHaveLength(drafts.length);
-        [...host.querySelectorAll(".tool-execution-stack")].forEach((row, index) => {
+        expect(host.querySelectorAll(".vk-tool-stack")).toHaveLength(drafts.length);
+        [...host.querySelectorAll(".vk-tool-stack")].forEach((row, index) => {
           expect(row).toBe(rows[index]);
           expect(row.textContent).toContain(`file-${index}.ts`);
         });
@@ -398,7 +397,7 @@ describe("ConversationBranchWorkspaceV1", () => {
         drafts.forEach((draft) => store.settleToolRequestProgress("session-branch-v1", draft.requestStreamId));
         store.flushNotifications();
       });
-      expect([...host.querySelectorAll(".tool-execution-stack")]).toEqual(rows);
+      expect([...host.querySelectorAll(".vk-tool-stack")]).toEqual(rows);
     } finally {
       await React.act(async () => root.unmount());
       vi.unstubAllGlobals();
@@ -534,7 +533,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       await publish(1, 1);
       // Retain both the request row and the card element while the path is unknown.
       // 在路径未知时保留请求行和卡片元素。
-      const row = host.querySelector(".tool-execution-stack");
+      const row = host.querySelector(".vk-tool-stack");
       const card = host.querySelector(".vk-tool");
       const lines = () => card?.querySelector(".vk-tool-meta > span:first-child")?.textContent ?? "";
       expect(card?.getAttribute("data-family")).toBe("edit");
@@ -544,7 +543,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(host.querySelector(".vk-tool")).toBe(card);
       expect(lines()).toMatch(/\b51\b/);
       await publish(3, 803, "index.html");
-      expect(host.querySelector(".tool-execution-stack")).toBe(row);
+      expect(host.querySelector(".vk-tool-stack")).toBe(row);
       expect(host.querySelector(".vk-tool")).toBe(card);
       expect(card?.querySelector(".vk-tool-title code")?.textContent).toBe("index.html");
       expect(lines()).toMatch(/\b803\b/);
@@ -655,7 +654,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     const container = document.createElement("div");
     container.innerHTML = renderWorkspace([tool, question]);
     expect(container.querySelectorAll('[data-collaboration-event-kind="question_created"]')).toHaveLength(1);
-    expect(container.querySelectorAll(".tool-execution-stack")).toHaveLength(0);
+    expect(container.querySelectorAll(".vk-tool-stack")).toHaveLength(0);
     expect(container.textContent).toContain("请确认归属");
     // Reuse cached event objects as the question arrives and leaves a paged window.
     // 在问题进入及离开分页窗口时复用已缓存事件对象。
@@ -737,7 +736,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     container.innerHTML = renderWorkspace([started, incoming]);
     expect(container.querySelectorAll('[data-collaboration-card-kind="question"]')).toHaveLength(1);
     expect(container.querySelectorAll("[data-collaboration-card-kind]")).toHaveLength(1);
-    expect(container.querySelector(".conversation-v1-collaboration-badge")?.textContent).toContain("运行中");
+    expect(container.querySelector(".vk-collab-badge")?.textContent).toContain("运行中");
     expect(container.querySelector('[data-collaboration-event-kind="question_execution_started"]')).toBeNull();
     expect(container.querySelector(".vk-prompt")?.textContent).toContain("收到的提问正文");
     expect(container.querySelector(".vk-prompt-foot > .vk-icon-btn")).toBeNull();
@@ -768,10 +767,10 @@ describe("ConversationBranchWorkspaceV1", () => {
     container.innerHTML = markup;
     const cards = container.querySelectorAll('[data-collaboration-card-kind="task-message"]');
     expect(cards).toHaveLength(2);
-    expect(container.querySelector('[data-seq="1"] .conversation-v1-collaboration-badge')?.textContent).toBe("已接纳");
-    expect(container.querySelector('[data-seq="2"] .conversation-v1-collaboration-badge')?.textContent).toBe("已记录");
+    expect(container.querySelector('[data-seq="1"] .vk-collab-badge')?.textContent).toBe("已接纳");
+    expect(container.querySelector('[data-seq="2"] .vk-collab-badge')?.textContent).toBe("已记录");
     expect(container.querySelector('[data-seq="3"]')).toBeNull();
-    expect(container.querySelectorAll("details, .conversation-v1-collaboration-details")).toHaveLength(0);
+    expect(container.querySelectorAll("details")).toHaveLength(0);
     expect([...cards].every((card) => card.textContent?.includes("相同消息正文"))).toBe(true);
   });
 
@@ -814,10 +813,10 @@ describe("ConversationBranchWorkspaceV1", () => {
       const markup = renderWorkspace(history);
       const container = document.createElement("div");
       container.innerHTML = markup;
-      expect(container.querySelectorAll(".conversation-v1-collaboration-card")).toHaveLength(2);
-      expect(container.querySelector('[data-seq="1"] .conversation-v1-collaboration-badge')?.textContent)
+      expect(container.querySelectorAll(".vk-collab")).toHaveLength(2);
+      expect(container.querySelector('[data-seq="1"] .vk-collab-badge')?.textContent)
         .toBe(length === 2 ? "已完成" : length === 3 ? "已完成 · 已送达" : "已完成 · 已加入上下文");
-      expect(container.querySelector('[data-seq="2"] .conversation-v1-collaboration-badge')?.textContent).toBe("已完成");
+      expect(container.querySelector('[data-seq="2"] .vk-collab-badge')?.textContent).toBe("已完成");
       expect(container.querySelector('[data-seq="1"]')?.textContent).toContain("相同结果正文");
       expect(container.querySelector('[data-seq="2"]')?.textContent).toContain("相同结果正文");
       expect(markup).not.toContain("任务回执已");
@@ -848,7 +847,6 @@ describe("ConversationBranchWorkspaceV1", () => {
       question: { ...created.event.after_state.question, state: "cancelled", cancellation: { operation_id: "cancel-op", requester: created.event.after_state.question.source, reason: "user_cancelled", cancelled_at_ms: 1010 } },
     } }, "host_only");
     const markup = renderWorkspace([created, settled]);
-    expect(markup).not.toContain("conversation-v1-collaboration-cancel-button");
     expect(markup).not.toContain("等待处理");
     expect(markup).not.toContain("技术详情");
     expect(markup).toContain("user_cancelled");
@@ -922,7 +920,6 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(markup).toContain("子代理已经完成代码定位");
     expect(markup).toContain("子任务的结束结果");
     expect(markup).not.toContain("协议镜像不得显示");
-    expect(markup).not.toContain("conversation-v1-collaboration-cancel-button");
     expect(markup.indexOf("父助手的结束回复")).toBeLessThan(markup.indexOf('data-seq="3"'));
     expect(markup.indexOf('data-seq="3"')).toBeLessThan(markup.indexOf('data-seq="5"'));
     expect(markup).not.toContain('vk-role-label">SYSTEM');
@@ -947,7 +944,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(container.querySelector('[aria-label="打开来源会话"]')).toBeNull();
       const targetButton = container.querySelector<HTMLButtonElement>('[aria-label="打开目标会话"]')!;
       expect(targetButton.disabled).toBe(false);
-      const fold = container.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-fold")!;
+      const fold = container.querySelector<HTMLButtonElement>(".vk-collab-toggle")!;
       const expanded = fold.getAttribute("aria-expanded");
       await React.act(async () => { targetButton.click(); });
       expect(fold.getAttribute("aria-expanded")).toBe(expanded);
@@ -957,7 +954,6 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(fold.getAttribute("aria-expanded")).toBe(expanded);
       expect(onSelectConversation).toHaveBeenCalledExactlyOnceWith("session-target");
       expect(onOpenSubagentPanel).not.toHaveBeenCalled();
-      expect(container.querySelector(".conversation-v1-collaboration-cancel-button")).toBeNull();
     } finally {
       await React.act(async () => root.unmount());
       container.remove();
@@ -1010,7 +1006,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(host.querySelectorAll(".vk-flow[data-think=tool]")).toHaveLength(1);
       // The header selector must target the real card, without wrapping its expanded detail in a prefix column.
       // 标题选择器必须命中真实卡片，不能把展开详情包进思考入口所在分栏。
-      expect(host.querySelector(".vk-flow[data-think=tool] > .vk-flow-body > .tool-execution-stack:first-child > .vk-tool > .vk-tool-head")).not.toBeNull();
+      expect(host.querySelector(".vk-flow[data-think=tool] > .vk-flow-body > .vk-tool-stack:first-child > .vk-tool > .vk-tool-head")).not.toBeNull();
       expect(document.querySelector(".vk-think-pop")).toBeNull();
       const trigger = host.querySelector<HTMLButtonElement>("button.vk-think-tag[data-compact]")!;
       await React.act(async () => trigger.click());

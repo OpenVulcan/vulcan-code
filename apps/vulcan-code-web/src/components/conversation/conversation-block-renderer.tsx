@@ -131,16 +131,9 @@ export function ConversationBlocksView(props: {
         blocks={props.blocks}
         conversationId={props.conversationId}
         expandedToolPresentationIds={props.expandedToolPresentationIds}
-        workspacePath={props.workspacePath}
-        commandSessions={props.commandSessions}
-        parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
-        onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
         onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
-        onLoadToolDetail={props.onLoadToolDetail}
-        onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
-        onTrace={props.onTrace}
       />
     );
   }
@@ -351,16 +344,9 @@ function SpecialConversationBlock(props: {
         blocks={[props.block]}
         conversationId={props.conversationId}
         expandedToolPresentationIds={props.expandedToolPresentationIds}
-        workspacePath={props.workspacePath}
-        commandSessions={props.commandSessions}
-        parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
-        onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
         onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
-        onLoadToolDetail={props.onLoadToolDetail}
-        onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
-        onTrace={props.onTrace}
       />
     );
   }

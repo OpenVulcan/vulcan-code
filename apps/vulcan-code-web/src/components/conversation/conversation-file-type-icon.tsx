@@ -32,7 +32,7 @@ export function FileTypeIcon(props: {
   if (props.icon.iconName) {
     return <IconifyIcon aria-hidden="true" height={16} icon={props.icon.iconName} width={16} />;
   }
-  return <span aria-hidden="true" className="file-change-fallback-icon">{workspaceFileTreeExtensionLabel(props.icon.fallbackName)}</span>;
+  return <span aria-hidden="true" className="vk-file-glyph">{workspaceFileTreeExtensionLabel(props.icon.fallbackName)}</span>;
 }
 
 // resolveFileTypeIcon returns a stable file icon for common source and data extensions.

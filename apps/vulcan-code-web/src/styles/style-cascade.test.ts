@@ -46,33 +46,6 @@ it("keeps the gutter reasoning tag absolute and no taller than the shortest tool
   expect(units(declaration(".vk-gutter-anchor", "min-height"))).toBeGreaterThanOrEqual(units(declaration(".vk-think-tag[data-compact]", "height")));
 });
 
-it.each(["known", "generic", "skill"])("keeps %s payload shells unbounded while the inner source remains the scrolling viewport", (kind) => {
-  // style follows the production Markdown-before-tool cascade.
-  // style 遵循生产环境先 Markdown、后工具的层叠顺序。
-  const style = document.createElement("style");
-  style.textContent = desktopRules("markdown") + desktopRules("tool-presentations");
-  // source represents the common code viewer used by readable results and raw input/output alike.
-  // source 表示可读结果与原始输入输出共用的代码视图。
-  const source = '<div class="markdown-message"><div class="markdown-code-block"><div class="markdown-code-header">markdown</div><div class="markdown-code-scroll">content</div></div></div>';
-  const panel = `<div class="model-extension-payload-body"${kind === "skill" ? "" : ' role="tabpanel"'}>${kind === "known" ? `<div class="markdown-tool-block">${source}</div>` : source}</div>`;
-  const tabs = kind === "skill" ? panel : `<div class="model-extension-tool-payloads">${panel}</div>`;
-  const shell = document.createElement("div");
-  shell.className = "tool-presentation-card";
-  shell.innerHTML = `<div class="conversation-collapsible-motion open"><div class="conversation-collapsible-motion-inner">${tabs}</div></div>`;
-  document.head.appendChild(style); document.body.appendChild(shell);
-  try {
-    for (const element of shell.querySelectorAll(".model-extension-tool-payloads, .model-extension-payload-body")) {
-      const computed = getComputedStyle(element);
-      expect(["", "none"]).toContain(computed.maxHeight);
-      expect(["", "visible"]).toContain(computed.overflow);
-    }
-    const block = getComputedStyle(shell.querySelector(".markdown-code-block")!);
-    expect(block.maxHeight).toBe("420px");
-    expect(block.display).toBe("flex");
-    expect(getComputedStyle(shell.querySelector(".markdown-code-scroll")!).overflow).toBe("auto");
-  } finally { shell.remove(); style.remove(); }
-});
-
 it("keeps multi-class agent toolbar overrides after generic styles when the lazy directory first loads", () => {
   // style follows production order: global rules first, deferred directory rules after navigation.
   // style 遵循生产顺序：先全局规则，导航后再载入延迟目录规则。

@@ -12,6 +12,8 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/ui-kit/primitives/collapsible";
 import { ToolFrame, type ToolCardProps, type ToolFamily } from "../tool-card";
 import { listOf, objectOf, textOf, type ToolCall } from "../tool-call";
+import { MediaResultView } from "../views/media-result-view";
+import { ModelParametersView } from "../views/model-parameters-view";
 import { ErrorNote, MarkdownResult } from "../views/result-views";
 
 // ProviderToolSpec fixes how one model-extension tool is named and which arguments describe its request.
@@ -287,7 +289,13 @@ export function ProviderCard(props: ToolCardProps) {
       {call.isError ? <ErrorNote text={call.modelOutput} />
         : search ? <SearchHits hits={search.hits} />
           : extract ? <ExtractedPages failures={extract.failures} pages={extract.pages} />
-            : spec?.family === "media" ? (request ? <p className="vk-tool-note">{request}</p> : null)
+            : spec?.family === "media" ? (
+              <>
+                {request ? <p className="vk-tool-note">{request}</p> : null}
+                <MediaResultView event={call.event} />
+              </>
+            )
+              : call.name === "get_model_extension_parameters" ? <ModelParametersView event={call.event} />
               : output.trim() ? <MarkdownResult text={stripReportHeading(output)} /> : null}
     </ToolFrame>
   );

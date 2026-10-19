@@ -116,10 +116,10 @@ const feedbackShellPattern = /^(?!page-)[a-z0-9-]+-(?:empty-state|empty|notice)$
 // 新页面使用 PageEmptyState 与 PageNotice；确实无法使用的行内控件须在评审中说明理由后再新增条目。
 const legacyFeedbackShells = new Set([
   "composer-capability-dialog-empty", "composer-capability-summary-empty", "context-injection-delete-notice",
-  "conversation-session-commit-empty", "diff-empty-state", "diff-file-tree-empty", "file-change-empty", "knowledge-empty",
-  "markdown-tool-empty", "model-account-card-empty", "model-picker-empty", "project-folder-picker-empty",
+  "conversation-session-commit-empty", "diff-empty-state", "diff-file-tree-empty", "knowledge-empty",
+  "model-account-card-empty", "model-picker-empty", "project-folder-picker-empty",
   "project-folder-picker-notice", "session-review-repository-notice", "settings-archive-empty",
-  "settings-error-notice", "subagent-orchestration-empty", "system-error-reconciliation-notice", "workspace-files-panel-notice",
+  "settings-error-notice", "system-error-reconciliation-notice", "workspace-files-panel-notice",
 ])
 
 // checkUiArchitecture validates boundaries that must not regress through ordinary component work.
