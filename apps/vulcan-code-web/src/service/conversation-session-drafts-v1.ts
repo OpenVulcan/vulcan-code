@@ -6,7 +6,7 @@ import {
   type SessionResourceRpcV1,
   type SessionResourceSummaryV1,
 } from "@/service/conversation-session-resources-v1";
-import { serviceClient } from "@/service/webui-service-runtime";
+import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
 import type { ComposerAttachmentSummary } from "@/types";
 
 /** One authoritative materialized-session draft returned by the V1 service.
@@ -77,13 +77,50 @@ export class ServiceSessionDraftClientV1 implements SessionDraftRpcV1 {
   }
 }
 
-/** Shared production draft client over the process-wide service facade.
- * 基于进程级服务门面的共享生产草稿客户端。
+/** Page-local draft client for the browser preview, which has no service to own drafts.
+ * 浏览器预览使用的页面内草稿客户端；预览没有持有草稿的服务。
  */
-export const sessionDraftClientV1 = new ServiceSessionDraftClientV1(
-  serviceClient,
-  sessionResourceClientV1,
-);
+export class PreviewSessionDraftClientV1 implements SessionDraftRpcV1 {
+  private readonly drafts = new Map<string, SessionDraftV1>();
+
+  /** Returns the page-local draft, or an empty one before the first write.
+   * 返回页面内草稿；首次写入前返回空草稿。
+   */
+  async read(sessionId: string): Promise<SessionDraftV1> {
+    validateSessionId(sessionId);
+    const draft = this.drafts.get(sessionId);
+    return draft ? { ...draft, attachments: [...draft.attachments] } : { sessionId, text: "", attachments: [] };
+  }
+
+  /** Keeps the draft for the lifetime of the page.
+   * 在页面生命周期内保留草稿。
+   */
+  async write(
+    sessionId: string,
+    text: string,
+    attachments: readonly ComposerAttachmentSummary[],
+  ): Promise<SessionDraftV1> {
+    validateSessionId(sessionId);
+    const draft = { sessionId, text, attachments: [...attachments] };
+    this.drafts.set(sessionId, draft);
+    return { ...draft, attachments: [...attachments] };
+  }
+}
+
+/** Shared draft client: the process-wide service facade, or page-local drafts in the browser preview.
+ * 共享草稿客户端：使用进程级服务门面；浏览器预览中使用页面内草稿。
+ */
+export const sessionDraftClientV1: SessionDraftRpcV1 = (() => {
+  const service = new ServiceSessionDraftClientV1(serviceClient, sessionResourceClientV1);
+  const preview = new PreviewSessionDraftClientV1();
+  // The runtime is checked per call so importing this module needs no browser globals.
+  // 每次调用时检查运行时，使导入本模块无需浏览器全局对象。
+  const pick = (): SessionDraftRpcV1 => (hasServiceRuntime() ? service : preview);
+  return {
+    read: (sessionId) => pick().read(sessionId),
+    write: (sessionId, text, attachments) => pick().write(sessionId, text, attachments),
+  };
+})();
 
 /** Parses one strict response and rebuilds browser attachments from logical project resources.
  * 解析一份严格响应，并从逻辑项目资源重建浏览器附件。

@@ -1,4 +1,4 @@
-import { serviceClient } from "@/service/webui-service-runtime";
+import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
 import type { PluginUiInvalidatedEvent } from "@/types";
 import { invalidatePluginQueries } from "@/service/plugin-ui-query-runtime";
 import { BROWSER_SERVICE_CONNECTION_EVENT, type BrowserServiceConnectionDetail } from "@/service/browser-service-discovery";
@@ -66,7 +66,9 @@ function dispatchPluginUiInvalidation(event: PluginUiInvalidatedEvent): void {
 // Returns: no value; transport failures leave polling fallback active in plugin pages.
 // 返回值：无返回值；传输失败时插件页面继续使用轮询降级。
 function ensurePluginUiBackendSubscription(): void {
-  if (pluginUiBackendSubscription !== null) {
+  // The browser preview has no backend, so mounted pages keep polling their fixtures.
+  // 浏览器预览没有后端，已挂载页面继续轮询其示例数据。
+  if (pluginUiBackendSubscription !== null || !hasServiceRuntime()) {
     return;
   }
   pluginUiBackendSubscription = serviceClient
