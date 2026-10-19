@@ -4,7 +4,7 @@ import {
   Globe2,
   BookMarked,
   ChartNoAxesCombined,
-  ChevronDown,
+  ChevronRight,
   Hammer,
   PanelTopOpen,
   Plug,
@@ -220,8 +220,8 @@ function SettingsSidebarMenu(props: {
   const { t } = useI18n()
   const groups = settingsSubAreaGroups(t)
   return (
-    <SidebarGroup className="settings-tree-section">
-      <SidebarMenu className="settings-tree-list">
+    <SidebarGroup className="vk-settings-tree">
+      <SidebarMenu>
         {groups.map((group) => (
           <SettingsSidebarGroupRow
             activeSettingsSubArea={props.activeSettingsSubArea}
@@ -252,36 +252,32 @@ function SettingsSidebarGroupRow(props: {
   // 分类箭头控制展开收起，不再意外跳转到分类中的第一页。
   const [groupExpanded, setGroupExpanded] = React.useState(true)
   return (
-    <SidebarMenuItem className="project-tree-item settings-tree-item">
-      <div className="project-folder-row settings-folder-row">
-        <SidebarMenuButton
+    <SidebarMenuItem className="vk-tree-project">
+      <div className="vk-tree-item">
+        <button
           aria-expanded={groupExpanded}
-          className="project-folder-button settings-folder-button"
+          className="vk-tree-row"
           onClick={() => setGroupExpanded((expanded) => !expanded)}
-          tooltip={props.group.label}
+          title={props.group.label}
+          type="button"
         >
-          {props.group.icon}
-          <span className="vk-side-text project-folder-label">
-            <strong>{props.group.label}</strong>
-          </span>
-          <span className="project-folder-arrow" aria-hidden="true">
-            <ChevronDown className={groupExpanded ? undefined : "-rotate-90"} size={14} />
-          </span>
-        </SidebarMenuButton>
+          <ChevronRight aria-hidden="true" className="vk-tree-caret" />
+          <span className="vk-tree-icon">{props.group.icon}</span>
+          <strong>{props.group.label}</strong>
+        </button>
       </div>
-      {groupExpanded ? <SidebarMenu className="project-conversation-list settings-subarea-list">
+      {groupExpanded ? <SidebarMenu className="vk-tree-children">
         {props.group.items.map((area) => (
-          <SidebarMenuItem key={area.id}>
-            <SidebarMenuButton
-              active={normalizeSettingsSubArea(props.activeSettingsSubArea) === area.id}
-              className="conversation-tree-button settings-subarea-button"
+          <SidebarMenuItem className="vk-tree-item" key={area.id}>
+            <button
+              aria-current={normalizeSettingsSubArea(props.activeSettingsSubArea) === area.id ? "true" : undefined}
+              className="vk-tree-session"
               onClick={() => props.onSelectSettingsSubArea(area.id)}
-              tooltip={area.label}
+              title={area.label}
+              type="button"
             >
-              <span className="vk-side-text conversation-tree-label">
-                <strong>{area.label}</strong>
-              </span>
-            </SidebarMenuButton>
+              <span className="vk-tree-title"><span>{area.label}</span></span>
+            </button>
           </SidebarMenuItem>
         ))}
       </SidebarMenu> : null}

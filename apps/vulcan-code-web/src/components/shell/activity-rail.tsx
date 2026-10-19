@@ -64,6 +64,9 @@ export function ActivityRail(props: {
   // The session panel's own tree, shown in the flyout while the session area is open with its panel collapsed.
   // 会话面板自身的会话树；处于会话区域且面板已折叠时显示在浮层中。
   sessionTree: React.ReactNode;
+  // Controls shown in the session flyout heading, such as the panel flow switch.
+  // 显示在会话浮层标题中的控件，例如面板流切换。
+  sessionTreeActions?: React.ReactNode;
   // Selected conversation; choosing another one inside the flyout closes it.
   // 当前会话；在浮层中选择其他会话时浮层关闭。
   selectedConversationId: string | null;
@@ -147,6 +150,7 @@ export function ActivityRail(props: {
           <ActivityRailFlyout
             content={props.sessionTree}
             dismissKey={props.selectedConversationId}
+            headerActions={props.sessionTreeActions}
             footer={{ label: t("activityRail.showSessionPanel"), icon: <PanelLeftOpen size={15} />, onSelect: () => sidebar.setOpen(true) }}
             title={t("activityRail.conversations")}
           >

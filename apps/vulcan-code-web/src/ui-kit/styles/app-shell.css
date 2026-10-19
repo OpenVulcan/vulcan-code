@@ -80,8 +80,8 @@
   box-shadow: var(--vk-shadow-2);
   animation: vk-flyout-in var(--vk-t-fast) var(--vk-ease);
 }
-.vk-rail-flyout-head { flex: none; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4) calc(var(--vk-u) * 1); }
-.vk-rail-flyout-head > strong { display: block; overflow: hidden; font-size: var(--vk-fs-lg); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vk-rail-flyout-head { flex: none; display: flex; align-items: center; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3) calc(var(--vk-u) * 1) calc(var(--vk-u) * 4); }
+.vk-rail-flyout-head > strong { flex: 1; min-width: 0; overflow: hidden; font-size: var(--vk-fs-lg); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .vk-rail-flyout-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5); }
 .vk-rail-flyout-foot { flex: none; padding: calc(var(--vk-u) * 1.5); border-top: var(--vk-bw) solid var(--vk-line); }
 @keyframes vk-flyout-in { from { opacity: 0; transform: translateX(-4px); } }

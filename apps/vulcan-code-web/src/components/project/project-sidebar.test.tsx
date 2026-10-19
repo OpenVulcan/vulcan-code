@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import { SidebarProvider } from "@/ui-kit/shell/sidebar";
 import { ProjectSidebar } from "@/components/project/project-sidebar";
+import { setSidebarFlow } from "@/components/project/sidebar-flow";
 
 // noop provides a stable callback for server-rendering navigation-only test props.
 // noop 为仅验证导航的服务端渲染属性提供稳定回调。
@@ -65,6 +66,9 @@ describe("ProjectSidebar", () => {
   // StrictMode project expansion must notify the parent from the event boundary, not a state updater.
   // StrictMode 下项目展开必须在事件边界通知父组件，不能在状态 updater 中更新父组件。
   it("keeps rapid expansion toggles warning-free and persists each resulting state once", async () => {
+    // Folder expansion belongs to the code flow's project tree.
+    // 文件夹展开属于代码流的项目树。
+    setSidebarFlow("code");
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -137,7 +141,7 @@ describe("ProjectSidebar", () => {
 
     try {
       await act(async () => { root.render(render()); });
-      const button = container.querySelector<HTMLButtonElement>(".project-folder-button");
+      const button = container.querySelector<HTMLButtonElement>(".vk-tree-row");
       expect(button).not.toBeNull();
       await act(async () => { button?.click(); button?.click(); });
       expect(onExpandedProjectIdsChange).toHaveBeenNthCalledWith(1, ["project-a"]);

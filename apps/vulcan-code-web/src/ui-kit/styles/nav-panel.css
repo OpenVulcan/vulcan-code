@@ -1,0 +1,150 @@
+/* Navigation panel body as the application renders it: the tools strip (project switch, new-session
+ * actions, search) above one scrolling list, either the session flow (one project's sessions by time)
+ * or the code flow (the sortable project tree). The panel and the rail flyout host the same body.
+ * shell.css defines the row leaves for the prototype; this file adds the application's row frame,
+ * whose actions sit beside the row button instead of inside it. */
+
+/* ---------- Body frame ---------- */
+.vk-sidebar-body:has(> .vk-nav-flow),
+.vk-rail-flyout-body:has(> .vk-nav-flow) { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.vk-nav-flow { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.vk-nav-tools { flex: none; display: grid; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 3) calc(var(--vk-u) * 2); }
+.vk-nav-tools .vk-input-wrap > .lucide { width: 0.9rem; height: 0.9rem; }
+.vk-nav-tools .vk-input::-webkit-search-cancel-button { cursor: pointer; }
+.vk-nav-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3);
+}
+.vk-nav-start {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2.5);
+  width: 100%;
+  margin-top: calc(var(--vk-u) * 2);
+  padding: calc(var(--vk-u) * 3);
+  border: var(--vk-bw) dashed var(--vk-line-strong);
+  background: transparent;
+  color: var(--vk-ink-2);
+  text-align: left;
+  cursor: pointer;
+}
+.vk-nav-start:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-nav-start > .lucide { flex: none; width: 1.1rem; height: 1.1rem; color: var(--vk-ember); }
+.vk-nav-start > span { display: grid; gap: 2px; min-width: 0; }
+.vk-nav-start strong { font-weight: 600; }
+.vk-nav-start small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+
+/* ---------- Project switch (session flow) ---------- */
+.vk-project-switch { padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2); }
+.vk-project-switch > .lucide { width: 0.95rem; height: 0.95rem; }
+.vk-project-switch[data-state="open"] { border-color: var(--vk-line-strong); background: var(--vk-raised); }
+.vk-project-mark {
+  display: grid;
+  place-items: center;
+  width: calc(var(--vk-u) * 7);
+  height: calc(var(--vk-u) * 7);
+  background: var(--vk-ember-soft);
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-ember) 35%, var(--vk-line));
+  color: var(--vk-ember-ink);
+}
+.vk-project-switch-text { display: grid; min-width: 0; }
+.vk-project-switch-text > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-project-switch-menu { min-width: calc(var(--vk-sidebar-w) - var(--vk-u) * 6); }
+.vk-project-switch-menu [data-current] { color: var(--vk-ink); font-weight: 600; }
+.vk-project-switch-menu [data-current]::after { content: ""; width: 6px; height: 6px; margin-left: auto; background: var(--vk-ember); }
+
+/* ---------- Session flow ---------- */
+.vk-session-flow > section > .vk-session-group:first-child { padding-top: calc(var(--vk-u) * 2); }
+
+/* ---------- Tree sections ---------- */
+.vk-project-tree > section + section { margin-top: calc(var(--vk-u) * 1); }
+.vk-tree-head .vk-label .lucide { width: 0.85rem; height: 0.85rem; }
+
+/* ---------- Row frame: a row button with its actions beside it ---------- */
+.vk-tree-item { position: relative; display: block; min-width: 0; }
+.vk-tree-item > .vk-tree-actions {
+  position: absolute;
+  top: 0;
+  right: calc(var(--vk-u) * 0.5);
+  bottom: 0;
+  align-items: center;
+  gap: 1px;
+  padding-left: calc(var(--vk-u) * 3);
+  /* The actions cover the time label, so their backdrop fades in from the row tint. */
+  background: linear-gradient(to right, transparent, var(--vk-actions-bg, var(--vk-hover)) calc(var(--vk-u) * 3));
+}
+.vk-tree-item > .vk-tree-actions .lucide { width: 0.9rem; height: 0.9rem; }
+.vk-tree-item:hover > .vk-tree-actions,
+.vk-tree-item:focus-within > .vk-tree-actions,
+.vk-tree-item[data-confirming] > .vk-tree-actions { opacity: 1; }
+.vk-tree-item:has(> .vk-tree-session[aria-current="true"]),
+.vk-tree-item:has(> .vk-tree-row[data-active]) { --vk-actions-bg: var(--vk-panel); }
+.vk-tree-item > .vk-tree-actions > .vk-btn[data-size="sm"] { height: calc(var(--vk-h-sm) - 2px); }
+/* Touch screens have no hover, so the actions stay visible there. */
+@media (hover: none) { .vk-tree-item > .vk-tree-actions { opacity: 1; } }
+/* While a project is being sorted, hover-only actions stay out of the way. */
+.vk-project-tree[data-sorting] .vk-tree-item > .vk-tree-actions { opacity: 0; pointer-events: none; }
+.vk-project-tree[data-sorting] .vk-tree-row:hover,
+.vk-project-tree[data-sorting] .vk-tree-session:hover { background: transparent; }
+
+/* ---------- Project rows ---------- */
+.vk-tree-project { display: grid; }
+.vk-tree-project[data-dragging] { position: relative; z-index: 20; }
+.vk-tree-project[data-dragging] > .vk-tree-item { background: var(--vk-raised); box-shadow: var(--vk-shadow-2); }
+.vk-tree-row { grid-template-columns: auto auto minmax(0, 1fr); min-height: var(--vk-h-md); padding-right: calc(var(--vk-u) * 2); }
+.vk-tree-row > .vk-tree-caret { width: 0.85rem; height: 0.85rem; }
+.vk-tree-row strong { font-weight: 500; }
+.vk-tree-row strong > small { font-family: var(--vk-font-mono); }
+.vk-tree-icon { display: grid; place-items: center; width: 1rem; height: 1rem; color: var(--vk-ink-3); }
+.vk-tree-icon svg { width: 1rem; height: 1rem; }
+.vk-tree-row[data-active] { background: var(--vk-panel); border-color: var(--vk-line); }
+.vk-tree-row[data-active] .vk-tree-icon { color: var(--vk-ember); }
+.vk-tree-row[data-contains-selection]:not([aria-expanded="true"]) strong { color: var(--vk-ember-ink); }
+.vk-tree-grip { touch-action: none; }
+.vk-tree-grip:active { cursor: grabbing; }
+.vk-tree-children.vk-side-menu { gap: 0; }
+.vk-tree-more .lucide { width: 0.85rem; height: 0.85rem; }
+
+/* ---------- Session rows ---------- */
+.vk-tree-session { grid-template-columns: 1rem minmax(0, 1fr) auto; }
+.vk-tree-session > .vk-tree-lead > .lucide { width: 0.9rem; height: 0.9rem; }
+.vk-tree-session > .vk-tree-lead > .lucide[data-tone="warn"] { color: var(--vk-warn); }
+.vk-tree-session > .vk-tree-lead > .lucide[data-tone="signal"] { color: var(--vk-signal); }
+.vk-tree-session > .vk-tree-lead > .vk-dot { width: 6px; height: 6px; }
+.vk-tree-title { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
+.vk-tree-title > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-tree-kind { flex: none; width: 0.85rem; height: 0.85rem; color: var(--vk-ember); }
+.vk-tree-time { font-size: var(--vk-fs-xs); color: var(--vk-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vk-tree-session[data-state="running"] .vk-tree-title { color: var(--vk-ink); }
+.vk-tree-session[data-state="unread"] .vk-tree-title { color: var(--vk-ink); font-weight: 600; }
+.vk-tree-session[data-pinned] > .vk-tree-lead { color: var(--vk-ink-3); }
+
+/* The session flow uses a roomier two-line entry: title and time, then a meta line when there is one. */
+.vk-tree-session[data-variant="flow"] {
+  grid-template-columns: 1rem minmax(0, 1fr) auto;
+  grid-template-areas: "lead title time" ". meta meta";
+  row-gap: 1px;
+  min-height: var(--vk-h-lg);
+  padding-top: calc(var(--vk-u) * 1.5);
+  padding-bottom: calc(var(--vk-u) * 1.5);
+  font-size: var(--vk-fs-md);
+}
+.vk-tree-session[data-variant="flow"] > .vk-tree-lead { grid-area: lead; }
+.vk-tree-session[data-variant="flow"] > .vk-tree-title { grid-area: title; font-weight: 500; }
+.vk-tree-session[data-variant="flow"] > .vk-tree-time { grid-area: time; }
+.vk-tree-meta { grid-area: meta; min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-tree-session[data-state="ask"] > .vk-tree-meta,
+.vk-tree-session[data-state="plan"] > .vk-tree-meta { color: var(--vk-ink-2); }
+
+/* ---------- Settings navigation reuses the tree rows ---------- */
+.vk-settings-tree .vk-tree-children { margin-left: calc(var(--vk-u) * 3.5); }
+.vk-settings-tree .vk-tree-session { grid-template-columns: minmax(0, 1fr); }
+
+@media (prefers-reduced-motion: reduce) {
+  .vk-tree-item > .vk-tree-actions { transition: none; }
+}
+:root[data-vk-motion="reduce"] .vk-tree-item > .vk-tree-actions { transition: none; }

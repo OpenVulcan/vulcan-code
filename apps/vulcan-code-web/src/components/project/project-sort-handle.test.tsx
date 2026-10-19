@@ -6,14 +6,18 @@ import { expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import { SidebarProvider } from "@/ui-kit/shell/sidebar";
 import { ProjectSidebar } from "./project-sidebar";
+import { setSidebarFlow } from "./sidebar-flow";
 
 // Verifies actual dnd-kit keyboard sorting has a separate activator from both project actions.
 // 验证真实 dnd-kit 键盘排序入口与两个项目动作相互独立。
 it("sorts with the handle while expansion and new conversation remain independent", async () => {
   // Geometry supplies two vertically ordered rows, which jsdom does not lay out itself.
   // 几何数据提供两个垂直排序行，jsdom 本身不计算布局。
+  // Sorting belongs to the code flow's project tree.
+  // 排序属于代码流的项目树。
+  setSidebarFlow("code");
   const geometry = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    const row = this.closest(".project-tree-item");
+    const row = this.closest(".vk-tree-project");
     const top = row?.textContent?.includes("Project B") ? 60 : 0;
     return { x: 0, y: top, top, left: 0, bottom: top + 40, right: 240, width: 240, height: 40, toJSON: () => ({}) };
   });
@@ -37,10 +41,10 @@ it("sorts with the handle while expansion and new conversation remain independen
       onConversationMenuAction={noop} onCreateConversation={create} onCreateProject={noop} onExpandedProjectIdsChange={expand}
       onProjectMenuAction={noop} onReorderProjects={reorder} onSelectConversation={noop} onSelectProject={select}
     /></SidebarProvider></I18nProvider>));
-    const row = container.querySelector<HTMLDivElement>(".project-folder-row")!;
-    const folder = row.querySelector<HTMLButtonElement>(".project-folder-button")!;
-    const createButton = row.querySelector<HTMLButtonElement>(".project-create-conversation")!;
-    const handle = row.querySelector<HTMLButtonElement>(".project-reorder-handle")!;
+    const row = container.querySelector<HTMLDivElement>('.vk-tree-item[data-kind="project"]')!;
+    const folder = row.querySelector<HTMLButtonElement>(".vk-tree-row")!;
+    const createButton = row.querySelector<HTMLButtonElement>('[data-action="create"]')!;
+    const handle = row.querySelector<HTMLButtonElement>(".vk-tree-grip")!;
     expect(row.getAttribute("role")).toBeNull();
     expect(row.getAttribute("tabindex")).toBeNull();
     expect(row.querySelector("button button")).toBeNull();

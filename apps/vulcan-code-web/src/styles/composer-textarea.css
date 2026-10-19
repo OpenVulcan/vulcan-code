@@ -643,46 +643,6 @@
   line-height: 1.5;
 }
 
-.settings-tree-section {
-  padding-top: 4px;
-}
-
-.settings-tree-list {
-  gap: 7px;
-}
-
-.settings-tree-item {
-  gap: 1px;
-}
-
-.settings-folder-row {
-  cursor: default;
-}
-
-.settings-folder-button {
-  cursor: pointer;
-}
-
-.settings-folder-button .project-folder-label strong {
-  font-weight: 600;
-}
-
-.settings-subarea-list {
-  margin-top: 1px;
-}
-
-.settings-subarea-button {
-  grid-template-columns: minmax(0, 1fr);
-  padding-left: 32px;
-}
-
-.settings-subarea-button .vk-side-text strong {
-  -webkit-mask-image: none;
-  mask-image: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .settings-detail-panel {
   min-height: 0;
   overflow: auto;

@@ -992,6 +992,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         selectedConversationId={sidebarNavigationTargetId ?? props.selectedConversationId}
         onConversationMenuAction={props.onConversationMenuAction}
         onCreateConversation={props.onCreateConversation}
+        onCreateDedicatedConversation={props.onCreateDedicatedConversation}
         onCreateProject={props.onCreateProject}
         rail={props.rail}
         titlebarDragRegion={props.titlebarDragRegion}

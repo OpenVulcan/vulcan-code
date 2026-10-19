@@ -19,9 +19,9 @@ import { useI18n } from "@/i18n";
 // The brand mark and settings entry live on the activity rail.
 // SidebarBrandMenu 将面板标题条渲染为单行：字标与标志中线对齐，当前区域位于右侧。品牌标记与设置入口位于活动轨道上。
 export function SidebarBrandMenu(props: {
-  // Label shown as the compact current area subtitle.
-  // 作为紧凑当前区域副标题展示的文案。
-  currentLabel: string;
+  // Label shown as the compact current area subtitle; omitted where the actions already name the area.
+  // 作为紧凑当前区域副标题展示的文案；操作已表明区域时省略。
+  currentLabel?: string;
   // Whether the title should behave as a native window drag region.
   // 标题是否应作为原生窗口拖动区域。
   titlebarDragRegion?: boolean;
@@ -40,7 +40,7 @@ export function SidebarBrandMenu(props: {
         onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
       >
         <VulcanWordmark className="vk-wordmark" label="Vulcan Code" />
-        <small>{props.currentLabel}</small>
+        {props.currentLabel ? <small>{props.currentLabel}</small> : null}
       </div>
       {props.actions}
     </div>

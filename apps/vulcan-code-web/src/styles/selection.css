@@ -26,7 +26,6 @@
 /* Feature panel rows: ember tile, warm hairline and flame icon. */
 /* 功能面板行：余烬色底块、暖色细描边与火焰色图标。 */
 .workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
-  --conversation-tree-row-bg: var(--vcn-selected-fill);
   background: var(--vcn-selected-wash), var(--vcn-selected-fill);
   box-shadow: inset 0 0 0 1px var(--vcn-selected-ring), var(--vcn-selected-lift);
   color: var(--vcn-selected-foreground);

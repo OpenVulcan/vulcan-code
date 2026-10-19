@@ -67,6 +67,7 @@ import { saveVmmMemoryConfig } from "@/service/memory-actions-service";
 import { applyPreviewProjectIcon } from "@/state/workbench-preview-actions";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { toast } from "@/ui-kit/primitives/toast";
+import { INITIAL_DEDICATED_DRAFT, writeDedicatedDraft, type DraftSessionKind } from "@/components/composer/dedicated/dedicated-draft-store";
 
 // WorkbenchProjectActionSnapshotSource separates backend snapshots from local optimistic previews.
 // WorkbenchProjectActionSnapshotSource 区分后端快照与本地乐观预览。
@@ -412,11 +413,15 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     toast.success(formatProjectActionTranslation(t, "projectActions.iconReset", { project: project.name }));
   }, [setProjectIconTarget, setWorkbenchState, t]);
 
-  // handleCreateConversation creates and selects a new empty conversation for a project.
-  // handleCreateConversation 为项目创建并选中一个新的空白会话。
-  const handleCreateConversation = React.useCallback(async (project: ProjectSummary) => {
+  // handleCreateConversation creates and selects a new empty conversation for a project; a dedicated kind presets the
+  // draft's session kind so the composer opens on the dedicated assistant setup.
+  // handleCreateConversation 为项目创建并选中一个新的空白会话；专职种类会预设草稿的会话种类，使输入区直接进入专职助手设置。
+  const handleCreateConversation = React.useCallback(async (project: ProjectSummary, kind: DraftSessionKind = "work") => {
     handleOpenWorkspaceChat();
     const draftId = `draft-${project.id}-${Date.now()}`;
+    if (kind === "dedicated") {
+      writeDedicatedDraft(draftId, { ...INITIAL_DEDICATED_DRAFT, kind });
+    }
     setDraftConversation({
       id: draftId,
       projectId: project.id,

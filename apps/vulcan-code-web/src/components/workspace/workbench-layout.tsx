@@ -28,7 +28,7 @@ import {
 import {
   type ProjectSettingsDialogTarget,
 } from "@/components/project/project-settings-types";
-import { ProjectSessionTree } from "@/components/project/project-sidebar";
+import { NavigationPanelBody, SidebarFlowSwitch } from "@/components/project/project-sidebar";
 import {
   ProjectFloatingTerminalLayer,
   type ProjectTerminalVisibilityRequest,
@@ -715,6 +715,12 @@ export function WorkbenchLayout(props: {
     setActiveProjectId(project.id);
     handleCreateConversation(project);
   }, [handleCreateConversation]);
+  // handleCreateDedicatedConversationForProject opens a draft preset to a dedicated assistant in one project.
+  // handleCreateDedicatedConversationForProject 在单个项目中打开预设为专职助手的草稿。
+  const handleCreateDedicatedConversationForProject = React.useCallback((project: ProjectSummary) => {
+    setActiveProjectId(project.id);
+    handleCreateConversation(project, "dedicated");
+  }, [handleCreateConversation]);
   // handleLeaveConvertedConversation moves the main view off a session that just became an assistant,
   // onto a new draft in its project rather than an arbitrary sibling the user did not pick.
   // handleLeaveConvertedConversation 将主视图从刚转为助手的会话移到其项目的新草稿，而不是用户未选择的任意同级会话。
@@ -835,12 +841,13 @@ export function WorkbenchLayout(props: {
       // The flyout reuses the session panel's tree and persisted expansion so both surfaces stay identical.
       // 浮层复用会话面板的会话树与持久化展开状态，使两处界面保持一致。
       sessionTree={(
-        <ProjectSessionTree
+        <NavigationPanelBody
           activeProjectId={activeProjectId}
           conversations={consoleWorkbenchState.conversations}
           expandedProjectIds={consoleWorkbenchState.expandedProjectIds}
           onConversationMenuAction={handleConversationMenuAction}
           onCreateConversation={handleCreateConversationForProject}
+          onCreateDedicatedConversation={handleCreateDedicatedConversationForProject}
           onCreateProject={handleCreateProject}
           onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
           onProjectMenuAction={handleWorkbenchProjectMenuAction}
@@ -852,6 +859,7 @@ export function WorkbenchLayout(props: {
           selectedConversationId={selectedConversationId}
         />
       )}
+      sessionTreeActions={<SidebarFlowSwitch />}
       selectedConversationId={selectedConversationId}
       titlebarDragRegion={windowDragRegionEnabled}
       onTitlebarDoubleClick={handleTitlebarDoubleClick}
@@ -1135,6 +1143,7 @@ export function WorkbenchLayout(props: {
             pinnedConversationIds={pinnedConversationIds}
             onConversationMenuAction={handleConversationMenuAction}
             onCreateConversation={handleCreateConversationForProject}
+            onCreateDedicatedConversation={handleCreateDedicatedConversationForProject}
             onCreateProject={handleCreateProject}
             onOpenCredentialManagement={() => {
               setActiveSettingsSubArea("credential-management")

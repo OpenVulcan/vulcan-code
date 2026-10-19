@@ -47,6 +47,9 @@ export function ActivityRailFlyout(props: {
   // Accessible panel name and visible heading.
   // 面板的无障碍名称与可见标题。
   title: string;
+  // Optional controls shown at the end of the heading.
+  // 显示在标题末端的可选控件。
+  headerActions?: React.ReactNode;
   // Closes the flyout whenever this value changes, for example after a destination is chosen inside it.
   // 该值变化时关闭浮层，例如在其中选定目标之后。
   dismissKey?: unknown;
@@ -148,6 +151,7 @@ export function ActivityRailFlyout(props: {
         >
           <div className="vk-rail-flyout-head">
             <strong>{props.title}</strong>
+            {props.headerActions}
           </div>
           <div className="vk-rail-flyout-body">
             {props.content}

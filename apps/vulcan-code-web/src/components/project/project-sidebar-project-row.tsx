@@ -1,20 +1,14 @@
 import React from "react";
 import {
-  ChevronDown,
   ChevronRight,
-  SquarePen,
+  ChevronsDown,
+  ChevronsUp,
   GripVertical,
+  SquarePen,
 } from "lucide-react";
 
-import {
-  SidebarMenu,
-  SidebarMenuAction,
-  SidebarMenuButton,
-  SidebarMenuItem,
-} from "@/ui-kit/shell/sidebar";
+import { SidebarMenu, SidebarMenuItem } from "@/ui-kit/shell/sidebar";
 import { useI18n, formatMessage } from "@/i18n";
-import { Button } from "@/ui-kit/primitives/button";
-import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 
 import { ProjectIcon } from "./project-icons";
@@ -90,85 +84,81 @@ export function SortableProjectRow(props: {
     ? t("projectRow.collapseConversations")
     : t("projectRow.showMoreConversations");
   const projectFolderButton = (
-    <SidebarMenuButton
+    <button
       aria-expanded={props.isOpen}
-      className={cn(
-        "project-folder-button",
-        props.isActiveProject && "project-folder-active",
-      )}
+      className="vk-tree-row"
+      data-active={props.isActiveProject ? "" : undefined}
+      data-contains-selection={props.hasSelectedConversation ? "" : undefined}
       onClick={() => {
         props.onSelectProject(props.project.id);
         props.onToggleOpen(props.project.id);
       }}
-      tooltip={`${props.project.name}\n${props.project.path}`}
+      title={`${props.project.name}
+${props.project.path}`}
+      type="button"
     >
-      <ProjectIcon isOpen={props.isOpen} project={props.project} size={16} />
-      <span className="vk-side-text project-folder-label">
-        <strong>{props.project.name}</strong>
+      <ChevronRight aria-hidden="true" className="vk-tree-caret" />
+      <span className="vk-tree-icon"><ProjectIcon isOpen={props.isOpen} project={props.project} size={15} /></span>
+      <strong>
+        {props.project.name}
         {showOriginalFolderName ? <small>{folderName}</small> : null}
-      </span>
-      <span className="project-folder-arrow" aria-hidden="true">
-        {props.isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-      </span>
-    </SidebarMenuButton>
+      </strong>
+    </button>
   );
   return (
     <SidebarMenuItem
-      className={cn("project-tree-item", sortable.isDragging && "drag-source")}
+      className="vk-tree-project"
+      data-dragging={sortable.isDragging ? "" : undefined}
       ref={sortable.setNodeRef}
       style={sortable.sortableStyle}
     >
-      <div
-        className={cn("project-folder-row", sortable.isDragging && "drag-source-row")}
-      >
-        <Button
-          ref={sortable.setActivatorNodeRef}
-          {...sortable.attributes}
-          {...sortable.listeners}
-          aria-label={reorderLabel}
-          title={reorderLabel}
-          className="project-reorder-handle"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-        >
-          <GripVertical aria-hidden="true" />
-        </Button>
+      <div className="vk-tree-item" data-kind="project">
         <ProjectContextMenu project={props.project} onAction={props.onProjectMenuAction}>
           {projectFolderButton}
         </ProjectContextMenu>
-        <SidebarMenuAction
-          aria-label={t("projectRow.createConversationAria").replace("{project}", props.project.name)}
-          className="project-create-conversation"
-          onClick={(event) => {
-            event.stopPropagation();
-            props.onCreateConversation(props.project);
-          }}
-          data-project-row-action
-          showOnHover
-          title={t("projectMenu.newConversation")}
-          type="button"
-        >
-          <SquarePen size={13} />
-        </SidebarMenuAction>
+        <span className="vk-tree-actions">
+          <button
+            aria-label={t("projectRow.createConversationAria").replace("{project}", props.project.name)}
+            className="vk-icon-btn"
+            data-action="create"
+            data-size="sm"
+            onClick={() => props.onCreateConversation(props.project)}
+            title={t("projectMenu.newConversation")}
+            type="button"
+          >
+            <SquarePen />
+          </button>
+          <button
+            ref={sortable.setActivatorNodeRef}
+            {...sortable.attributes}
+            {...sortable.listeners}
+            aria-label={reorderLabel}
+            className="vk-icon-btn vk-tree-grip"
+            data-size="sm"
+            title={reorderLabel}
+            type="button"
+          >
+            <GripVertical aria-hidden="true" />
+          </button>
+        </span>
       </div>
       {/* Empty projects show the placeholder once, on the active project only, so long project lists stay quiet. */}
       {/* 空项目只在当前项目上显示一次占位行，避免长项目列表中重复出现。 */}
       {props.isOpen && (props.conversations.length > 0 || props.isActiveProject) ? (
-        <SidebarMenu className="project-conversation-list">
+        <SidebarMenu className="vk-tree-children">
           {props.conversations.length > 0 ? (
             <>
               {visibleConversations.map((conversation) => props.renderConversationRow(conversation))}
               {hasConversationOverflow ? (
                 <SidebarMenuItem>
                   <button
-                    className="conversation-list-toggle"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      props.onToggleConversationList(props.project.id);
-                    }}
+                    className="vk-btn vk-tree-more"
+                    data-size="sm"
+                    data-variant="ghost"
+                    onClick={() => props.onToggleConversationList(props.project.id)}
                     type="button"
                   >
+                    {props.isConversationListExpanded ? <ChevronsUp aria-hidden="true" /> : <ChevronsDown aria-hidden="true" />}
                     {conversationOverflowLabel}
                   </button>
                 </SidebarMenuItem>
@@ -176,7 +166,7 @@ export function SortableProjectRow(props: {
             </>
           ) : (
             <SidebarMenuItem>
-              <div className="conversation-empty-row">{t("projectRow.noConversations")}</div>
+              <div className="vk-tree-blank">{t("projectRow.noConversations")}</div>
             </SidebarMenuItem>
           )}
         </SidebarMenu>

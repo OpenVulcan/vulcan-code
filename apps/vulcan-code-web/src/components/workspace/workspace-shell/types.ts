@@ -124,6 +124,9 @@ export interface WorkspaceShellProps {
   // Creates a new conversation in one project.
   // 在单个项目中创建新会话。
   onCreateConversation: (project: ProjectSummary) => void;
+  // Opens a new draft preset to a dedicated assistant in one project.
+  // 在单个项目中打开预设为专职助手的新草稿。
+  onCreateDedicatedConversation: (project: ProjectSummary) => void;
   // Opens the create-project flow.
   // 打开创建项目流程。
   onCreateProject: () => void;
