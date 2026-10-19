@@ -462,12 +462,77 @@ function toolCardGallery(sessionId: string): ConversationEventHydrationV1Respons
     .window();
 }
 
+// fence wraps one answer component body in its fence, so the gallery text needs no escaped backticks.
+// fence 用围栏包裹一个回答组件正文，使展示文本无需转义反引号。
+function fence(info: string, ...lines: string[]): string {
+  return ["```" + info, ...lines, "```"].join("\n");
+}
+
+// ANSWER_GALLERY is a final answer that uses every answer component, in the order a review would.
+// ANSWER_GALLERY 是一条使用全部回答组件的最终回答，按评审回答的顺序排列。
+const ANSWER_GALLERY = [
+  "The rebuilt answer components are ready to ship; two small risks remain in the diagram layout.",
+  fence("ui-metrics", "Components | 24", "Tests passed | 41 | 41 | tests | ok", "Bundle | 612 | 560 | KB", "Coverage | 81 | 100 | % | warn"),
+  "### What changed",
+  fence("ui-files", "src/ui-kit/styles/answer.css | +312 -0 | Kit answer stylesheet", "src/styles/answer-components.css | +0 -1287 | Legacy stylesheet", "src/components/conversation/answer-components/answer-diagrams.tsx | +6 -6"),
+  "### Review",
+  fence("ui-findings", "high | Sequence labels show the panel colour over a tinted canvas | src/ui-kit/styles/answer.css:212", "medium | ER key badges overlap long field names | src/components/conversation/answer-components/answer-diagrams.tsx:334", "low | Chart legend wraps before the plot on narrow widths", "info | Gallery thumbnails crop portrait images"),
+  fence("ui-compare", "Criterion | Kit badge | Custom pill", "Matches the kit | ok | no Needs its own tones", "Severity tones | ok Mapped through data-tone | ok", "Extra CSS | ok None | warn 20 lines"),
+  fence("ui-checklist", "ok | Square marks everywhere | Status, steps and decisions", "ok | Tones use kit tokens", "warn | Dark theme contrast on PK badges | Check in the command skin", "todo | Snapshot the gallery in all three themes"),
+  fence("ui-steps", "done | Translate the stylesheet | One kit file, loaded with the renderer", "now | Check every component in the preview", "todo | Remove the legacy pill styles"),
+  fence("ui-timeline", "09:10 | Stylesheet translated", "09:40 | Tests updated | Selectors moved to vk-a-*", "10:05 | Preview gallery added"),
+  fence("ui-cards", "Keep fences lazy | The parser and styles load on the first closed fence. | ok Recommended", "Inline everything | Startup grows by about 40 KB. | no Rejected"),
+  fence("ui-kv", "Stylesheet | src/ui-kit/styles/answer.css", "Loaded | With the component renderer", "Tokens | Kit colours and spacing"),
+  fence("ui-chart bar Bundle size by chunk", "Chunk | Before | After", "Workbench | 420 | 396", "Answers | 88 | 64", "Diagrams | 104 | 98"),
+  fence("ui-chart donut Rules by area", "Area | Rules", "Lists | 18", "Diagrams | 46", "Decisions | 14", "Charts | 16"),
+  "### How a fence renders",
+  fence("ui-flow LR", "(Reply) -> {Fence closed?} -> Parse -> [(Reply store)]", "{Fence closed?} --> Show code : no", "+ Parse -> Lazy styles"),
+  fence("ui-sequence", "Reply -> Markdown: closed fence", "Markdown -> Renderer: parse", "note Renderer: lazy chunk", "== Paint ==", "Renderer --> Markdown: component", "~ Markdown -> Markdown: measure"),
+  fence("ui-er", "Session", "  id PK", "  title | shown in the sidebar", "Reply", "  id PK", "  session_id -> Session", "  + answer_mode"),
+  fence("ui-tree", "src", "  ui-kit", "    styles", "      + answer.css | lazy", "      prose.css", "  - styles/answer-components.css"),
+  fence("ui-math Meter fill", "w = \\min\\left(\\frac{v}{m}, 1\\right)", "", "w | fill width", "v | value", "m | maximum"),
+  "The meter fills to $`w = v / m`$ and turns red past the maximum.",
+  fence("ui-callout warning Check the dark themes", "PK and FK badges mix their tone with the panel; confirm the contrast in the command skin."),
+  "````ui-details Why the marks are square",
+  "The kit draws checkboxes and radios as squares, so status marks, step numbers and decision marks follow.",
+  "",
+  fence("ui-kv", "Checkbox | square with a check", "Radio | square with an inner square"),
+  "````",
+  "````ui-tabs",
+  "### Light",
+  "Panels are white on a grey ground.",
+  "### Dark",
+  "Panels lift one step above the ground.",
+  "````",
+  "````ui-columns",
+  "### Keep",
+  "- Lazy loading",
+  "- Kit tones",
+  "### Drop",
+  "- Rounded pills",
+  "- Legacy tokens",
+  "````",
+  fence("ui-code", "src/ui-kit/styles/answer.css:1-12 | 3-4 | Header comment"),
+  fence("ui-decision", "Ship the gallery fixture with the release?", "* Keep it | Useful for every later visual check", "- Remove it | Smaller preview data"),
+].join("\n\n");
+
+// answerGallery renders every answer component in one final reply.
+// answerGallery 在一条最终回答中渲染全部回答组件。
+function answerGallery(sessionId: string): ConversationEventHydrationV1Response {
+  return new TranscriptBuilder(sessionId, 20)
+    .user("Review the rebuilt answer components and tell me if they are ready.")
+    .api({ text: ANSWER_GALLERY })
+    .end()
+    .window();
+}
+
 // FIXTURES maps preview session ids to their transcript builders.
 // FIXTURES 将预览会话标识映射到其转录构建函数。
 const FIXTURES: Record<string, (sessionId: string) => ConversationEventHydrationV1Response> = {
   preview: migrationPreview,
   "preview-intro": introduction,
   "preview-cards": toolCardGallery,
+  "preview-answers": answerGallery,
 };
 
 // PREVIEW_TRANSCRIPT_SESSION_IDS lists the preview sessions that carry a transcript.

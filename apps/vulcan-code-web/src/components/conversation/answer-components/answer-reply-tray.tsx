@@ -2,7 +2,7 @@ import React from "react";
 import { MessageSquareReply, Trash2 } from "lucide-react";
 import { Button } from "@/ui-kit/primitives/button";
 import { useI18n, type Translate } from "@/i18n";
-import "@/styles/answer-components.css";
+import "@/ui-kit/styles/answer.css";
 import type { AnswerReplyEntry, AnswerReplyStore } from "./answer-reply";
 
 /** Summarize prepared replies as Markdown for the composer: decisions with their picks (a recommended pick is
@@ -34,13 +34,13 @@ export function AnswerReplyTray({ onInsert, store }: { onInsert: (text: string) 
   const decisions = entries.filter((entry) => entry.kind === "decision").length;
   const comments = entries.length - decisions;
   return (
-    <div className="answer-reply-tray">
+    <div className="vk-a-reply-tray">
       <MessageSquareReply aria-hidden="true" size={15} />
-      <span className="answer-reply-tray-counts">
+      <span className="vk-a-reply-tray-counts">
         {decisions > 0 ? <span>{t("answerComponents.reply.decisions")} <b>{decisions}</b></span> : null}
         {comments > 0 ? <span>{t("answerComponents.reply.comments")} <b>{comments}</b></span> : null}
       </span>
-      <Button className="answer-reply-tray-insert" onClick={() => {
+      <Button className="vk-a-reply-tray-insert" onClick={() => {
         // Read at click time: an edited note changes an entry without changing the counts this strip renders.
         // 在点击时读取：修改说明会改变条目，但不会改变本条带显示的计数。
         onInsert(formatAnswerReply(store.list(), t));
@@ -48,7 +48,7 @@ export function AnswerReplyTray({ onInsert, store }: { onInsert: (text: string) 
       }} size="sm" type="button" variant="ghost">
         {t("answerComponents.reply.insert")}
       </Button>
-      <Button aria-label={t("answerComponents.reply.discard")} className="answer-reply-tray-discard" onClick={() => store.clear()}
+      <Button aria-label={t("answerComponents.reply.discard")} className="vk-a-reply-tray-discard" onClick={() => store.clear()}
         size="icon-sm" title={t("answerComponents.reply.discard")} type="button" variant="ghost">
         <Trash2 size={14} />
       </Button>

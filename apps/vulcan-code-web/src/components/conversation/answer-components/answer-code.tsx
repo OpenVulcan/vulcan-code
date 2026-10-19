@@ -25,7 +25,7 @@ const REASON_KEYS = {
  * 渲染一个 `ui-code` 围栏的全部摘录。 */
 export function AnswerCodeView({ excerpts, host }: { excerpts: AnswerCodeExcerpt[]; host: AnswerComponentHost }) {
   return (
-    <div className="answer-code">
+    <div className="vk-a-code">
       {excerpts.map((excerpt, index) => <AnswerCodeExcerptView excerpt={excerpt} host={host} key={`${index}:${excerpt.location}`} />)}
     </div>
   );
@@ -45,11 +45,11 @@ function AnswerCodeExcerptView({ excerpt, host }: { excerpt: AnswerCodeExcerpt; 
   const name = excerpt.path.split(/[\\/]/u).filter(Boolean).pop() ?? excerpt.path;
   const range = lastLine === excerpt.startLine ? `${excerpt.startLine}` : `${excerpt.startLine}–${lastLine}`;
   const header = (
-    <span className="answer-code-title" title={text === null ? excerpt.path : `${excerpt.path} · ${t("answerComponents.code.snapshot")}`}>
+    <span className="vk-a-code-title" title={text === null ? excerpt.path : `${excerpt.path} · ${t("answerComponents.code.snapshot")}`}>
       <FileTypeIcon icon={icon} />
       {href ? <a href={href} rel="noreferrer" target="_blank">{name}</a> : <span>{name}</span>}
-      <span className="answer-code-range">{range}</span>
-      {excerpt.note ? <span className="answer-code-note">{excerpt.note}</span> : null}
+      <span className="vk-a-code-range">{range}</span>
+      {excerpt.note ? <span className="vk-a-code-note">{excerpt.note}</span> : null}
     </span>
   );
   if (text !== null) {
@@ -65,7 +65,7 @@ function AnswerCodeExcerptView({ excerpt, host }: { excerpt: AnswerCodeExcerpt; 
         ? formatMessage(t("answerComponents.code.limit"), { count: ANSWER_CODE_MAX_EXCERPTS })
         : t("answerComponents.code.notCaptured");
   return (
-    <figure className="vk-codeblock answer-code-missing" data-pending={state?.pending || undefined}>
+    <figure className="vk-codeblock vk-a-code-missing" data-pending={state?.pending || undefined}>
       <figcaption className="vk-codeblock-head">{header}</figcaption>
       <p>{message}</p>
     </figure>

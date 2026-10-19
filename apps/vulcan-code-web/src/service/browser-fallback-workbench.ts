@@ -66,6 +66,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "preview-picker", title: "Refactor the composer model picker", status: "Waiting", lastUpdatedLabel: "3 h ago", lastUpdatedAt: previewUpdatedAt(180), projectId: "preview", attention: { kind: "ask", priority: 1 } },
     { id: "preview-release", title: "Release notes assistant", status: "Completed", lastUpdatedLabel: "1 d ago", lastUpdatedAt: previewUpdatedAt(26 * 60), projectId: "preview", dedicated: true },
     { id: "preview-cards", title: "Audit the tool card layouts", status: "Completed", lastUpdatedLabel: "4 d ago", lastUpdatedAt: previewUpdatedAt(4 * 24 * 60), projectId: "preview", unread: true },
+    { id: "preview-answers", title: "Review the answer components", status: "Completed", lastUpdatedLabel: "5 d ago", lastUpdatedAt: previewUpdatedAt(5 * 24 * 60), projectId: "preview" },
     { id: "preview-tokens", title: "Draft the design token table", status: "Completed", lastUpdatedLabel: "2 w ago", lastUpdatedAt: previewUpdatedAt(14 * 24 * 60), projectId: "preview" },
     { id: "calc-curl", title: "Investigate missing lcurl.safe module", status: "Completed", lastUpdatedLabel: "3 days", lastUpdatedAt: previewUpdatedAt(3 * 24 * 60), projectId: "calc" },
     { id: "calc-iconv", title: "Check missing iconv support", status: "Completed", lastUpdatedLabel: "1 week", lastUpdatedAt: previewUpdatedAt(7 * 24 * 60), projectId: "calc" },

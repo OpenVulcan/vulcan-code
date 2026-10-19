@@ -10,7 +10,7 @@ const PAD = { top: 12, right: 10, bottom: 28, left: 46 };
 // Series fill for index `index`; the palette lives in the answer component stylesheet.
 // 第 `index` 个系列的填充色；色板定义在回答组件样式表中。
 function seriesColor(index: number): string {
-  return `var(--answer-series-${index + 1})`;
+  return `var(--vk-a-series-${index + 1})`;
 }
 
 // Compact display text for one number.
@@ -46,7 +46,7 @@ export function AnswerChartView({ chart }: { chart: AnswerChart }) {
   return (
     <>
       {chart.series.length > 1 ? (
-        <ul className="answer-chart-legend">
+        <ul className="vk-a-chart-legend">
           {chart.series.map((name, index) => (
             <li key={name + index}><i style={{ background: seriesColor(index) }} />{name}</li>
           ))}
@@ -71,10 +71,10 @@ function CategoryChart({ chart }: { chart: AnswerChart }) {
   const center = (index: number) => PAD.left + band * (index + 0.5);
   const labelEvery = Math.ceil(chart.rows.length / 12);
   return (
-    <svg className="answer-chart-svg" role="img" viewBox={`0 0 ${WIDTH} ${HEIGHT}`}>
+    <svg className="vk-a-chart-svg" role="img" viewBox={`0 0 ${WIDTH} ${HEIGHT}`}>
       {axis.map((tick) => (
         <g key={tick}>
-          <line className={tick === 0 ? "answer-chart-axis" : "answer-chart-grid"} x1={PAD.left} x2={WIDTH - PAD.right} y1={y(tick)} y2={y(tick)} />
+          <line className={tick === 0 ? "vk-a-chart-axis" : "vk-a-chart-grid"} x1={PAD.left} x2={WIDTH - PAD.right} y1={y(tick)} y2={y(tick)} />
           <text textAnchor="end" x={PAD.left - 8} y={y(tick) + 4}>{formatChartNumber(tick)}</text>
         </g>
       ))}
@@ -102,7 +102,7 @@ function CategoryChart({ chart }: { chart: AnswerChart }) {
             ) : null}
             <path d={`M${points.join(" L")}`} fill="none" stroke={seriesColor(series)} strokeLinejoin="round" strokeWidth={2.4} />
             {chart.rows.map((row, index) => (
-              <circle className="answer-chart-point" cx={center(index)} cy={y(row.values[series])} fill={seriesColor(series)} key={index} r={3.5}>
+              <circle className="vk-a-chart-point" cx={center(index)} cy={y(row.values[series])} fill={seriesColor(series)} key={index} r={3.5}>
                 <title>{hint(row.category, name, row.values[series])}</title>
               </circle>
             ))}
@@ -130,10 +130,10 @@ function HorizontalBars({ chart }: { chart: AnswerChart }) {
   const x = (value: number) => labelWidth + ((value - low) / (high - low)) * plotWidth;
   const bottom = height - 22;
   return (
-    <svg className="answer-chart-svg" role="img" viewBox={`0 0 ${WIDTH} ${height}`}>
+    <svg className="vk-a-chart-svg" role="img" viewBox={`0 0 ${WIDTH} ${height}`}>
       {axis.map((tick, index) => (
         <g key={tick}>
-          <line className={tick === 0 ? "answer-chart-axis" : "answer-chart-grid"} x1={x(tick)} x2={x(tick)} y1={PAD.top} y2={bottom} />
+          <line className={tick === 0 ? "vk-a-chart-axis" : "vk-a-chart-grid"} x1={x(tick)} x2={x(tick)} y1={PAD.top} y2={bottom} />
           {/* The last tick sits on the right edge, so it ends there instead of centering.
               最后一个刻度位于右边缘，因此右对齐而非居中。 */}
           <text textAnchor={index === axis.length - 1 ? "end" : "middle"} x={x(tick)} y={height - 6}>{formatChartNumber(tick)}</text>
@@ -172,7 +172,7 @@ function CircularChart({ chart }: { chart: AnswerChart }) {
   const circumference = 2 * Math.PI * radius;
   let offset = 0;
   return (
-    <div className="answer-chart-circular">
+    <div className="vk-a-chart-circular">
       <svg role="img" viewBox="0 0 120 120">
         {chart.rows.map((row, index) => {
           const length = (row.values[0] / total) * circumference;
@@ -185,9 +185,9 @@ function CircularChart({ chart }: { chart: AnswerChart }) {
           offset += length;
           return segment;
         })}
-        {donut ? <text className="answer-chart-total" textAnchor="middle" x={60} y={65}>{formatChartNumber(total)}</text> : null}
+        {donut ? <text className="vk-a-chart-total" textAnchor="middle" x={60} y={65}>{formatChartNumber(total)}</text> : null}
       </svg>
-      <ul className="answer-chart-legend" data-layout="column">
+      <ul className="vk-a-chart-legend" data-layout="column">
         {chart.rows.map((row, index) => (
           <li key={index}>
             <i style={{ background: seriesColor(index % ANSWER_CHART_MAX_SERIES) }} />{row.category}

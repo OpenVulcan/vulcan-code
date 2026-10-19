@@ -7,7 +7,7 @@
 .vk-transcript .vk-md { contain: layout paint style; }
 .vk-md > :first-child { margin-top: 0; }
 .vk-md > :last-child { margin-bottom: 0; }
-.vk-md :where(p, ul, ol, blockquote, figure, pre, section, details) { margin: 0 0 0.75em; }
+.vk-md :where(p, ul, ol, blockquote, figure, pre, section, details, .vk-figure) { margin: 0 0 0.75em; }
 .vk-md :where(ul, ol) { padding-left: 1.5em; }
 .vk-md ul { list-style: disc; }
 .vk-md ul ul { list-style: circle; }
@@ -56,12 +56,14 @@
 .vk-codeblock-scroll[data-wrap="true"] .vk-codeblock-pre { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .vk-codeblock-line { display: block; min-height: 1.6em; white-space: pre; }
 .vk-codeblock-scroll[data-wrap="true"] .vk-codeblock-line { white-space: pre-wrap; }
-/* Numbered excerpts: a muted gutter; highlighted lines carry a signal rule and tint across the row. */
+/* Numbered excerpts: an opaque gutter that stays put while the code scrolls sideways; highlighted lines
+ * carry a signal rule and tint across the row. */
 .vk-codeblock-pre[data-numbered] { padding-left: 0; }
-.vk-codeblock-pre[data-numbered] .vk-codeblock-line { display: grid; grid-template-columns: auto minmax(0, 1fr); }
-.vk-codeblock-num { min-width: 3.5em; padding: 0 calc(var(--vk-u) * 3) 0 calc(var(--vk-u) * 2); border-left: 2px solid transparent; color: var(--vk-ink-3); text-align: right; user-select: none; font-variant-numeric: tabular-nums; }
+.vk-codeblock-pre[data-numbered] .vk-codeblock-line { display: flex; }
+.vk-codeblock-pre[data-numbered] .vk-codeblock-line > span:last-child { min-width: 0; }
+.vk-codeblock-num { position: sticky; left: 0; flex: none; min-width: 3.5em; margin-right: calc(var(--vk-u) * 3); padding: 0 calc(var(--vk-u) * 2) 0 calc(var(--vk-u) * 2.5); background: var(--vk-code-bg); color: var(--vk-ink-3); text-align: right; user-select: none; font-variant-numeric: tabular-nums; }
 .vk-codeblock-line[data-highlighted] { background: var(--vk-signal-soft); }
-.vk-codeblock-line[data-highlighted] > .vk-codeblock-num { border-left-color: var(--vk-signal); color: var(--vk-signal); }
+.vk-codeblock-line[data-highlighted] > .vk-codeblock-num { background: var(--vk-signal-soft); box-shadow: inset 2px 0 0 var(--vk-signal); color: var(--vk-ink); }
 
 /* ---------- Diagram frame ---------- */
 /* Generated SVG renders as an isolated image; the head matches a code block and adds a diagram/source switch. */

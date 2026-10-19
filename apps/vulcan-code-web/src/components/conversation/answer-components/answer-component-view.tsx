@@ -3,7 +3,7 @@ import { Check, CircleAlert, CircleCheck, CircleX, Info, Play, TriangleAlert } f
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media-types";
 import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
 import { formatMessage, useI18n } from "@/i18n";
-import "@/styles/answer-components.css";
+import "@/ui-kit/styles/answer.css";
 import type { AnswerCodeSnapshotState } from "@/components/conversation/conversation-markdown";
 import { AnswerChartView, formatChartNumber } from "./answer-chart";
 import { AnswerCodeView } from "./answer-code";
@@ -101,7 +101,7 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
   switch (component.kind) {
     case "kv":
       return (
-        <dl className="answer-kv">
+        <dl className="vk-a-kv">
           {component.rows.map((row, index) => (
             <React.Fragment key={index}><dt>{row.label}</dt><dd>{row.value}</dd></React.Fragment>
           ))}
@@ -109,9 +109,9 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       );
     case "metrics":
       return (
-        <div className="answer-metrics">
+        <div className="vk-a-metrics">
           {component.rows.map((metric, index) => (
-            <div className="answer-metric" data-over={metric.over || undefined} data-tone={metric.tone} key={index}>
+            <div className="vk-a-metric" data-over={metric.over || undefined} data-tone={metric.tone} key={index}>
               <b>
                 {metric.value}
                 {metric.maximum !== undefined ? <small>/ {formatChartNumber(metric.maximum)}</small> : null}
@@ -137,7 +137,7 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
                 {component.rows.map((row, index) => (
                   <tr key={index}>
                     <td className="vk-table-index">{index + 1}</td>
-                    <td><span className="answer-pill" data-tone={row.severity}>{severity(row.severity)}</span></td>
+                    <td><span className="vk-badge" data-tone={row.severity}>{severity(row.severity)}</span></td>
                     <td>{row.text}</td>
                     {located ? <td>{row.location ? <FileLink host={host} location={row.location} /> : null}</td> : null}
                   </tr>
@@ -153,7 +153,7 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       return (
         <AnswerFrame copy={copy} host={host}>
           <div className="vk-table-wrap">
-            <table className="vk-table answer-compare">
+            <table className="vk-table vk-a-compare">
               <thead><tr>{component.header.map((cell, index) => <th key={index}>{cell}</th>)}</tr></thead>
               <tbody>
                 {component.rows.map((row, index) => (
@@ -170,10 +170,10 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
     }
     case "checklist":
       return (
-        <ul className="answer-checklist">
+        <ul className="vk-a-checklist">
           {component.items.map((item, index) => (
             <li data-status={item.status} key={index}>
-              <span aria-hidden="true" className="answer-status" data-status={item.status}>{STATUS_SYMBOLS[item.status]}</span>
+              <span aria-hidden="true" className="vk-a-status" data-status={item.status}>{STATUS_SYMBOLS[item.status]}</span>
               <span>{item.item}</span>
               {item.note ? <small>{item.note}</small> : null}
             </li>
@@ -182,10 +182,10 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       );
     case "steps":
       return (
-        <ol className="answer-steps">
+        <ol className="vk-a-steps">
           {component.steps.map((step, index) => (
             <li data-status={step.status} key={index}>
-              <span aria-hidden="true" className="answer-step-number">{step.status === "done" ? <Check size={13} strokeWidth={3} /> : index + 1}</span>
+              <span aria-hidden="true" className="vk-a-step-number">{step.status === "done" ? <Check size={13} strokeWidth={3} /> : index + 1}</span>
               <div><b>{step.title}</b>{step.text ? <p>{step.text}</p> : null}</div>
             </li>
           ))}
@@ -193,10 +193,10 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       );
     case "timeline":
       return (
-        <ul className="answer-timeline">
+        <ul className="vk-a-timeline">
           {component.rows.map((row, index) => (
             <li key={index}>
-              <time>{row.time}</time><span aria-hidden="true" className="answer-timeline-dot" />
+              <time>{row.time}</time><span aria-hidden="true" className="vk-a-timeline-dot" />
               <div><b>{row.title}</b>{row.text ? <p>{row.text}</p> : null}</div>
             </li>
           ))}
@@ -204,12 +204,12 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       );
     case "cards":
       return (
-        <div className="answer-cards">
+        <div className="vk-a-cards">
           {component.cards.map((card, index) => (
-            <article className="answer-card" key={index}>
+            <article className="vk-a-card" key={index}>
               <header>
                 <strong>{card.title}</strong>
-                {card.tag ? <span className="answer-pill" data-tone={card.tag.tone}><Toned value={card.tag} /></span> : null}
+                {card.tag ? <span className="vk-badge" data-tone={card.tag.tone}><Toned value={card.tag} /></span> : null}
               </header>
               <p>{card.text}</p>
             </article>
@@ -218,7 +218,7 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       );
     case "files":
       return (
-        <section className="vk-figure answer-files">
+        <section className="vk-figure vk-a-files">
           <header className="vk-figure-head">
             <span className="vk-figure-label">
               <strong>{formatMessage(t("answerComponents.fileCount"), { count: component.files.length })}</strong>
@@ -229,7 +229,7 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
           <ul>
             {component.files.map((file, index) => (
               <li key={index}>
-                <span className="answer-files-path"><FileLink host={host} location={file.path} />{file.note ? <small>{file.note}</small> : null}</span>
+                <span className="vk-a-files-path"><FileLink host={host} location={file.path} />{file.note ? <small>{file.note}</small> : null}</span>
                 {file.added !== undefined ? <LineDelta added={file.added} removed={file.removed!} /> : null}
               </li>
             ))}
@@ -240,12 +240,12 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       return <AnswerCodeView excerpts={component.excerpts} host={host} />;
     case "gallery":
       return (
-        <div className="answer-gallery">
+        <div className="vk-a-gallery">
           {component.items.map((item, index) => <GalleryItem caption={item.caption} host={host} key={index} path={item.path} />)}
         </div>
       );
     case "tree":
-      return <div className="vk-figure"><ul className="answer-tree"><TreeNodes nodes={component.nodes} /></ul></div>;
+      return <div className="vk-figure"><ul className="vk-a-tree"><TreeNodes nodes={component.nodes} /></ul></div>;
     case "chart":
       return <ChartFrame chart={component.chart} host={host} />;
     case "flow":
@@ -261,8 +261,8 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
     case "callout": {
       const Icon = CALLOUT_ICONS[component.tone];
       return (
-        <aside className="answer-callout" data-tone={component.tone}>
-          <Icon aria-hidden="true" className="answer-callout-icon" size={16} />
+        <aside className="vk-a-callout" data-tone={component.tone}>
+          <Icon aria-hidden="true" className="vk-a-callout-icon" size={16} />
           <div>
             {component.title ? <strong>{component.title}</strong> : null}
             {host.renderMarkdown(component.body)}
@@ -272,16 +272,16 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
     }
     case "details":
       return (
-        <details className="answer-details">
+        <details className="vk-a-details">
           <summary>{component.title}</summary>
-          <div className="answer-details-body">{host.renderMarkdown(component.body)}</div>
+          <div className="vk-a-details-body">{host.renderMarkdown(component.body)}</div>
         </details>
       );
     case "tabs":
       return <AnswerTabs host={host} sections={component.sections} />;
     case "columns":
       return (
-        <div className="answer-columns">
+        <div className="vk-a-columns">
           {component.sections.map((section, index) => (
             <section key={index}><h4>{section.title}</h4>{host.renderMarkdown(section.body)}</section>
           ))}
@@ -296,9 +296,9 @@ function MetricMeter({ maximum, value }: { maximum: number; value: number }) {
   const { t } = useI18n();
   const over = value > maximum;
   return (
-    <div className="answer-meter-row">
-      <div aria-hidden="true" className="answer-meter"><i style={{ width: `${Math.min(value / maximum, 1) * 100}%` }} /></div>
-      {over ? <small className="answer-meter-over">{formatMessage(t("answerComponents.overBy"), { percent: Math.round((value / maximum - 1) * 100) })}</small> : null}
+    <div className="vk-a-meter-row">
+      <div aria-hidden="true" className="vk-a-meter"><i style={{ width: `${Math.min(value / maximum, 1) * 100}%` }} /></div>
+      {over ? <small className="vk-a-meter-over">{formatMessage(t("answerComponents.overBy"), { percent: Math.round((value / maximum - 1) * 100) })}</small> : null}
     </div>
   );
 }
@@ -328,7 +328,7 @@ const TONE_ICONS = { ok: CircleCheck, warn: CircleAlert, no: CircleX } as const;
 // 带色调单元格：色调图标后接其余文字。
 function Toned({ value }: { value: AnswerTonedText }) {
   const Icon = value.tone ? TONE_ICONS[value.tone] : null;
-  return <>{Icon ? <Icon aria-label={value.tone} className="answer-tone-icon" size={14} /> : null}{value.text}</>;
+  return <>{Icon ? <Icon aria-label={value.tone} className="vk-a-tone-icon" size={14} /> : null}{value.text}</>;
 }
 
 // Markdown text of a toned cell for copying.
@@ -342,8 +342,8 @@ function tonedMarkdown(value: AnswerTonedText): string {
 // 新增与删除行数。
 function LineDelta({ added, removed }: { added: number; removed: number }) {
   return (
-    <span className="answer-delta">
-      <span data-kind="added">+{formatChartNumber(added)}</span><span data-kind="removed">−{formatChartNumber(removed)}</span>
+    <span className="vk-a-delta">
+      <span className="vk-add">+{formatChartNumber(added)}</span><span className="vk-del">−{formatChartNumber(removed)}</span>
     </span>
   );
 }
@@ -353,8 +353,8 @@ function LineDelta({ added, removed }: { added: number; removed: number }) {
 function FileLink({ host, location }: { host: AnswerComponentHost; location: string }) {
   const href = host.fileHref(location);
   return href
-    ? <a className="answer-path" href={href} rel="noreferrer" target="_blank">{location}</a>
-    : <code className="answer-path">{location}</code>;
+    ? <a className="vk-a-path" href={href} rel="noreferrer" target="_blank">{location}</a>
+    : <code className="vk-a-path">{location}</code>;
 }
 
 // Recursive tree rows with plan markers.
@@ -364,7 +364,7 @@ function TreeNodes({ nodes }: { nodes: AnswerTreeNode[] }) {
     <>
       {nodes.map((node, index) => (
         <li data-mark={node.mark} key={index}>
-          <span className="answer-tree-label">{node.label}</span>
+          <span className="vk-a-tree-label">{node.label}</span>
           {node.note ? <small>{node.note}</small> : null}
           {node.children.length > 0 ? <ul><TreeNodes nodes={node.children} /></ul> : null}
         </li>
@@ -380,9 +380,9 @@ function GalleryItem({ caption, host, path }: { caption?: string; host: AnswerCo
   const video = /\.(?:mp4|webm|mov|m4v)(?:[?#].*)?$/iu.test(path);
   const name = path.split(/[\\/]/u).filter(Boolean).pop() ?? path;
   const preview = source === null
-    ? <code className="answer-path">{path}</code>
+    ? <code className="vk-a-path">{path}</code>
     : video
-      ? <span className="answer-gallery-video"><video muted preload="metadata" src={source} /><Play aria-hidden="true" size={18} /></span>
+      ? <span className="vk-a-gallery-video"><video muted preload="metadata" src={source} /><Play aria-hidden="true" size={18} /></span>
       : <img alt={caption ?? name} decoding="async" loading="lazy" src={source} />;
   const open = source !== null && host.onOpenMedia
     ? () => host.onOpenMedia?.({ kind: video ? "video" : "image", fileName: caption ?? name, localPath: source })
@@ -390,7 +390,7 @@ function GalleryItem({ caption, host, path }: { caption?: string; host: AnswerCo
   return (
     <figure>
       <MediaPathContextMenu locator={source}>
-        {open ? <button className="answer-gallery-media" onClick={open} type="button">{preview}</button> : <div className="answer-gallery-media">{preview}</div>}
+        {open ? <button className="vk-a-gallery-media" onClick={open} type="button">{preview}</button> : <div className="vk-a-gallery-media">{preview}</div>}
       </MediaPathContextMenu>
       {caption ? <figcaption>{caption}</figcaption> : null}
     </figure>
@@ -403,14 +403,14 @@ function AnswerTabs({ host, sections }: { host: AnswerComponentHost; sections: {
   const [selected, setSelected] = React.useState(0);
   const id = React.useId();
   return (
-    <div className="answer-tabs">
-      <div className="answer-tablist" role="tablist">
+    <div className="vk-a-tabs">
+      <div className="vk-a-tablist" role="tablist">
         {sections.map((section, index) => (
           <button aria-controls={`${id}-panel`} aria-selected={index === selected} id={`${id}-tab-${index}`} key={index}
             onClick={() => setSelected(index)} role="tab" type="button">{section.title}</button>
         ))}
       </div>
-      <div aria-labelledby={`${id}-tab-${selected}`} className="answer-tabpanel" id={`${id}-panel`} role="tabpanel">
+      <div aria-labelledby={`${id}-tab-${selected}`} className="vk-a-tabpanel" id={`${id}-panel`} role="tabpanel">
         {host.renderMarkdown(sections[selected].body)}
       </div>
     </div>
@@ -426,11 +426,11 @@ function ChartFrame({ chart, host }: { chart: Extract<AnswerComponent, { kind: "
   const header = [chart.categoryLabel, ...chart.series];
   const rows = chart.rows.map((row) => [row.category, ...row.values.map(formatChartNumber)]);
   return (
-    <section className="vk-figure answer-chart">
+    <section className="vk-figure vk-a-chart">
       <header className="vk-figure-head">
         <span className="vk-figure-label">{chart.title ? <strong>{chart.title}</strong> : null}</span>
         <span className="vk-figure-actions">
-          <span className="answer-segmented">
+          <span className="vk-seg">
             <button aria-pressed={!data} onClick={() => setData(false)} type="button">{t("answerComponents.chartView")}</button>
             <button aria-pressed={data} onClick={() => setData(true)} type="button">{t("answerComponents.dataView")}</button>
           </span>
@@ -438,7 +438,7 @@ function ChartFrame({ chart, host }: { chart: Extract<AnswerComponent, { kind: "
           <CopyAction host={host} label={t("answerComponents.copyData")} text={markdownTable(header, rows)} />
         </span>
       </header>
-      <div className="answer-chart-body">
+      <div className="vk-a-chart-body">
         {data ? (
           <div className="vk-table-wrap">
             <table className="vk-table">

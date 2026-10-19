@@ -14,10 +14,14 @@ const LINE_HEIGHT = 17;
 const NODE_MAX_TEXT_WIDTH = 190;
 const LABEL_MAX_TEXT_WIDTH = 150;
 
-// Font family the diagrams inherit from the conversation.
-// 图形从会话继承的字体族。
-function diagramFont(size: number, weight = 400): string {
-  const family = typeof document === "undefined" ? "sans-serif" : getComputedStyle(document.body).fontFamily || "sans-serif";
+// Font the diagrams inherit from the conversation; mono measures text drawn in the kit's monospace face.
+// 图形从会话继承的字体；mono 用于测量以 kit 等宽字体绘制的文字。
+function diagramFont(size: number, weight = 400, mono = false): string {
+  const family = typeof document === "undefined"
+    ? (mono ? "monospace" : "sans-serif")
+    : mono
+      ? getComputedStyle(document.documentElement).getPropertyValue("--vk-font-mono").trim() || "monospace"
+      : getComputedStyle(document.body).fontFamily || "sans-serif";
   return `${weight} ${size}px ${family}`;
 }
 
@@ -28,20 +32,20 @@ export function AnswerFlowDiagram({ flow }: { flow: FlowComponent }) {
   const marks = new Set([...flow.nodes.map((node) => node.mark), ...flow.chains.map((chain) => chain.mark)].filter(Boolean) as AnswerMark[]);
   return (
     <DiagramFrame marks={marks} width={drawing.width}>
-      <svg className="answer-graph" height={drawing.height} role="img" viewBox={`0 0 ${drawing.width} ${drawing.height}`} width={drawing.width}>
+      <svg className="vk-a-graph" height={drawing.height} role="img" viewBox={`0 0 ${drawing.width} ${drawing.height}`} width={drawing.width}>
         <ArrowMarkers id={id} />
         {drawing.edges.map((edge, index) => (
-          <path className="answer-graph-edge" d={edge.path} data-dashed={edge.dashed || undefined} data-mark={edge.mark} key={index}
+          <path className="vk-a-graph-edge" d={edge.path} data-dashed={edge.dashed || undefined} data-mark={edge.mark} key={index}
             markerEnd={`url(#${id}-${edge.mark ?? "plain"})`} />
         ))}
         {drawing.edges.map((edge, index) => edge.label ? (
-          <g className="answer-graph-label" data-mark={edge.mark} key={index} transform={`translate(${edge.label.at.x} ${edge.label.at.y})`}>
-            <rect height={edge.label.height} rx={4} width={edge.label.width} x={-edge.label.width / 2} y={-edge.label.height / 2} />
+          <g className="vk-a-graph-label" data-mark={edge.mark} key={index} transform={`translate(${edge.label.at.x} ${edge.label.at.y})`}>
+            <rect height={edge.label.height} width={edge.label.width} x={-edge.label.width / 2} y={-edge.label.height / 2} />
             <TextLines lines={edge.label.lines} />
           </g>
         ) : null)}
         {drawing.nodes.map((node, index) => (
-          <g className="answer-graph-node" data-mark={node.mark} data-shape={node.shape} key={index} transform={`translate(${node.at.x} ${node.at.y})`}>
+          <g className="vk-a-graph-node" data-mark={node.mark} data-shape={node.shape} key={index} transform={`translate(${node.at.x} ${node.at.y})`}>
             <NodeShape height={node.height} shape={node.shape} width={node.width} />
             <TextLines lines={node.lines} />
           </g>
@@ -59,17 +63,17 @@ export function AnswerErDiagram({ er }: { er: ErComponent }) {
     .filter(Boolean) as AnswerMark[]);
   return (
     <DiagramFrame marks={marks} width={drawing.width}>
-      <svg className="answer-graph answer-er" height={drawing.height} role="img" viewBox={`0 0 ${drawing.width} ${drawing.height}`} width={drawing.width}>
+      <svg className="vk-a-graph vk-a-er" height={drawing.height} role="img" viewBox={`0 0 ${drawing.width} ${drawing.height}`} width={drawing.width}>
         <defs>
           <marker id={`${id}-many`} markerHeight={12} markerUnits="userSpaceOnUse" markerWidth={12} orient="auto-start-reverse" refX={12} refY={6} viewBox="0 0 12 12">
-            <path className="answer-er-foot" d="M0,6 L12,0 M0,6 L12,6 M0,6 L12,12" />
+            <path className="vk-a-er-foot" d="M0,6 L12,0 M0,6 L12,6 M0,6 L12,12" />
           </marker>
           <marker id={`${id}-one`} markerHeight={12} markerUnits="userSpaceOnUse" markerWidth={12} orient="auto-start-reverse" refX={12} refY={6} viewBox="0 0 12 12">
-            <path className="answer-er-foot" d="M6,0 L6,12 M0,6 L12,6" />
+            <path className="vk-a-er-foot" d="M6,0 L6,12 M0,6 L12,6" />
           </marker>
         </defs>
         {drawing.links.map((link, index) => (
-          <path className="answer-graph-edge" d={link.path} data-mark={link.mark} key={index}
+          <path className="vk-a-graph-edge" d={link.path} data-mark={link.mark} key={index}
             markerEnd={`url(#${id}-one)`} markerStart={`url(#${id}-many)`} />
         ))}
         {drawing.tables.map((table, index) => <ErTable key={index} table={table} />)}
@@ -83,15 +87,15 @@ export function AnswerErDiagram({ er }: { er: ErComponent }) {
 function DiagramFrame({ children, marks, width }: { children: React.ReactNode; marks: Set<AnswerMark>; width: number }) {
   const { t } = useI18n();
   return (
-    <figure className="vk-figure answer-diagram">
+    <figure className="vk-figure vk-a-diagram">
       {marks.size > 0 ? (
-        <figcaption className="answer-diagram-legend">
+        <figcaption className="vk-a-diagram-legend">
           {(["add", "chg", "del"] as const).filter((mark) => marks.has(mark)).map((mark) => (
             <span data-mark={mark} key={mark}><i aria-hidden="true" />{t(MARK_KEYS[mark])}</span>
           ))}
         </figcaption>
       ) : null}
-      <div className="answer-diagram-scroll" style={{ "--answer-diagram-width": `${width}px` } as React.CSSProperties}>{children}</div>
+      <div className="vk-a-diagram-scroll" style={{ "--vk-a-diagram-width": `${width}px` } as React.CSSProperties}>{children}</div>
     </figure>
   );
 }
@@ -112,7 +116,7 @@ function ArrowMarkers({ id }: { id: string }) {
       {(["plain", "add", "chg", "del"] as const).map((mark) => (
         <marker data-mark={mark} id={`${id}-${mark}`} key={mark} markerHeight={8} markerUnits="userSpaceOnUse" markerWidth={10}
           orient="auto-start-reverse" refX={10} refY={4} viewBox="0 0 10 8">
-          <path className="answer-graph-arrow" d="M0,0 L10,4 L0,8 z" />
+          <path className="vk-a-graph-arrow" d="M0,0 L10,4 L0,8 z" />
         </marker>
       ))}
     </defs>
@@ -139,7 +143,7 @@ function NodeShape({ height, shape, width }: { height: number; shape: AnswerFlow
     case "decision":
       return <polygon points={`0,${y} ${-x},0 0,${-y} ${x},0`} />;
     case "terminal":
-      return <rect height={height} rx={height / 2} width={width} x={x} y={y} />;
+      return <rect height={height} width={width} x={x} y={y} />;
     case "store": {
       const cap = 5;
       return (
@@ -150,7 +154,7 @@ function NodeShape({ height, shape, width }: { height: number; shape: AnswerFlow
       );
     }
     default:
-      return <rect height={height} rx={6} width={width} x={x} y={y} />;
+      return <rect height={height} width={width} x={x} y={y} />;
   }
 }
 
@@ -264,7 +268,7 @@ interface PlacedTable {
 // 测量、布局并连接实体卡片。
 function erDrawing(er: ErComponent) {
   const titleFont = diagramFont(NODE_FONT_SIZE, 600);
-  const rowFont = diagramFont(12.5);
+  const rowFont = diagramFont(12.5, 400, true);
   const smallFont = diagramFont(LABEL_FONT_SIZE);
   const sized = er.tables.map((table) => {
     const noteWidth = (note?: string) => note ? measureText(note, smallFont, LABEL_FONT_SIZE) + 8 : 0;
@@ -314,34 +318,34 @@ function ErTable({ table }: { table: PlacedTable }) {
   const x = table.at.x - table.width / 2;
   const y = table.at.y - table.height / 2;
   return (
-    <g className="answer-er-table" data-mark={table.table.mark} transform={`translate(${x} ${y})`}>
-      <rect className="answer-er-card" height={table.height} rx={7} width={table.width} />
-      <path className="answer-er-head" d={`M0,7 a7,7 0 0 1 7,-7 h${table.width - 14} a7,7 0 0 1 7,7 v${ER_HEADER_HEIGHT - 7} h${-table.width} z`} />
+    <g className="vk-a-er-table" data-mark={table.table.mark} transform={`translate(${x} ${y})`}>
+      <rect className="vk-a-er-card" height={table.height} width={table.width} />
+      <path className="vk-a-er-head" d={`M0,0 h${table.width} v${ER_HEADER_HEIGHT} h${-table.width} z`} />
       <text dominantBaseline="central" x={ER_PADDING} y={ER_HEADER_HEIGHT / 2}>
-        <tspan className="answer-er-title">{table.table.name}</tspan>
-        {table.table.note ? <tspan className="answer-er-note" dx={8}>{table.table.note}</tspan> : null}
+        <tspan className="vk-a-er-title">{table.table.name}</tspan>
+        {table.table.note ? <tspan className="vk-a-er-note" dx={8}>{table.table.note}</tspan> : null}
       </text>
       {table.table.fields.map((field, row) => {
         const rowY = ER_HEADER_HEIGHT + row * ER_ROW_HEIGHT;
         let keyX = ER_PADDING;
         return (
-          <g className="answer-er-row" data-mark={field.mark} key={row}>
-            {row > 0 ? <line className="answer-er-rule" x1={0} x2={table.width} y1={rowY} y2={rowY} /> : null}
+          <g className="vk-a-er-row" data-mark={field.mark} key={row}>
+            {row > 0 ? <line className="vk-a-er-rule" x1={0} x2={table.width} y1={rowY} y2={rowY} /> : null}
             {field.keys.map((key) => {
               const at = keyX;
               keyX += 26;
               return (
-                <g className="answer-er-key" data-key={key} key={key} transform={`translate(${at} ${rowY + ER_ROW_HEIGHT / 2})`}>
-                  <rect height={15} rx={3} width={22} y={-7.5} />
+                <g className="vk-a-er-key" data-key={key} key={key} transform={`translate(${at} ${rowY + ER_ROW_HEIGHT / 2})`}>
+                  <rect height={15} width={22} y={-7.5} />
                   <text dominantBaseline="central" textAnchor="middle" x={11}>{key}</text>
                 </g>
               );
             })}
             <text dominantBaseline="central" x={keyX} y={rowY + ER_ROW_HEIGHT / 2}>
-              <tspan className="answer-er-field">{field.name}</tspan>
-              {field.note ? <tspan className="answer-er-note" dx={8}>{field.note}</tspan> : null}
+              <tspan className="vk-a-er-field">{field.name}</tspan>
+              {field.note ? <tspan className="vk-a-er-note" dx={8}>{field.note}</tspan> : null}
             </text>
-            {field.type ? <text className="answer-er-type" dominantBaseline="central" textAnchor="end" x={table.width - ER_PADDING} y={rowY + ER_ROW_HEIGHT / 2}>{field.type}</text> : null}
+            {field.type ? <text className="vk-a-er-type" dominantBaseline="central" textAnchor="end" x={table.width - ER_PADDING} y={rowY + ER_ROW_HEIGHT / 2}>{field.type}</text> : null}
           </g>
         );
       })}

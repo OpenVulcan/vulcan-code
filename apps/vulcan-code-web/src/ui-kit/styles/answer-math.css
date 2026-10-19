@@ -1,0 +1,14 @@
+/* Formula rules, loaded with the KaTeX renderer for `ui-math` and inline math. A formula block is a framed
+ * figure: the caption names it, equations scroll sideways when wide, and a legend explains the symbols. */
+/* 公式规则，随 `ui-math` 与行内公式的 KaTeX 渲染器一起加载。公式块是带框图形：标题命名，宽公式横向滚动，
+ * 图例解释符号。 */
+.vk-md .vk-a-math { margin: 0 0 0.75em; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vk-md .vk-a-math figcaption { margin-bottom: var(--vk-u); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-a-math-equations { overflow-x: auto; overflow-y: hidden; }
+.vk-a-math-display .katex-display { margin: 0.55em 0; }
+.vk-a-math .katex { font-size: 1.12em; }
+.vk-a-math-inline .katex { font-size: 1.05em; }
+.vk-md .vk-a-math-legend { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: calc(var(--vk-u) * 1.25) calc(var(--vk-u) * 3.5); margin: calc(var(--vk-u) * 2) 0 0; padding-top: calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); font-size: var(--vk-fs-sm); }
+.vk-a-math-legend dt { text-align: end; }
+.vk-md .vk-a-math-legend dd { margin: 0; color: var(--vk-ink-2); }
+.vk-md code.vk-a-math-source[data-display] { display: block; margin: calc(var(--vk-u) * 1.5) 0; white-space: pre-wrap; }
