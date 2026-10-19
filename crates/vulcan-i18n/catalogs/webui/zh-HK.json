@@ -4257,7 +4257,6 @@
   "settings.contextCompactionNodes.defaultDescription": "新建工作階段時預設使用哪一檔，既有工作階段不受影響。",
   "settings.contextCompactionNodes.followModel": "跟隨模型",
   "settings.contextCompactionNodes.defaultLimitHint": "如果某一檔超過所選模型的實際上限，新工作階段會自動改為跟隨模型。",
-  "settings.contextCompactionNodes.defaultSave": "儲存",
   "settings.contextCompactionNodes.defaultSaved": "已儲存",
   "settings.contextWindowPolicy.effectivePercent": "可用視窗比例（%）",
   "settings.contextWindowPolicy.autoCompactPercent": "用到多少開始壓縮（%）",

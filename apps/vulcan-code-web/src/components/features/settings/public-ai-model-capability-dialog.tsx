@@ -28,7 +28,6 @@ import {
   savePublicAiProviderCapabilityOverrides,
 } from "@/service/settings-actions-service"
 import type {
-  PublicAiContextWindowPolicyOverrides,
   PublicAiCustomModelRequestProjection,
   PublicAiCustomRequestMutation,
   PublicAiModel,
@@ -38,131 +37,6 @@ import type {
   PublicAiStructuredOutputCapability,
 } from "@/types"
 import "@/ui-kit/styles/features/settings-forms.css"
-
-// ContextWindowPolicyEditor edits the global sparse window policy and uses built-in values for empty fields.
-// ContextWindowPolicyEditor 编辑全局稀疏窗口策略，空字段使用系统内置值。
-export function ContextWindowPolicyEditor(props: {
-  onChange: (value: PublicAiContextWindowPolicyOverrides | undefined) => void
-  value?: PublicAiContextWindowPolicyOverrides
-  // Optional source-specific inherited values; omitted outside contexts with a verified default layer.
-  // 可选的来源专属继承值；未核实默认层的场景不传入。
-  inheritanceHints?: Partial<Record<keyof PublicAiContextWindowPolicyOverrides, string>>
-  // Locks the complete editor while its owning section persists an immutable draft.
-  // 所属分区持久化不可变草稿时锁定完整编辑器。
-  disabled?: boolean
-}) {
-  const { t } = useI18n()
-  // updateNumber preserves the sparse shape while parsing only safe integer input.
-  // updateNumber 保持稀疏结构，并且只解析安全整数输入。
-  const updateNumber = React.useCallback((
-    field: "effective_context_window_percent" | "auto_compact_percent" | "auto_compact_token_limit" | "fallback_buffer_tokens",
-    rawValue: string,
-  ) => {
-    const next: PublicAiContextWindowPolicyOverrides = { ...(props.value ?? {}) }
-    const trimmed = rawValue.trim()
-    if (!trimmed) {
-      delete next[field]
-    } else {
-      const parsed = Number.parseInt(trimmed, 10)
-      if (Number.isSafeInteger(parsed)) {
-        next[field] = parsed
-      }
-    }
-    props.onChange(Object.keys(next).length > 0 ? next : undefined)
-  }, [props])
-  // updateScope changes only the optional usage-scope field.
-  // updateScope 只修改可选的用量范围字段。
-  const updateScope = React.useCallback((rawValue: string) => {
-    const next: PublicAiContextWindowPolicyOverrides = { ...(props.value ?? {}) }
-    if (rawValue === "") {
-      delete next.auto_compact_scope
-    } else {
-      next.auto_compact_scope = rawValue as PublicAiContextWindowPolicyOverrides["auto_compact_scope"]
-    }
-    props.onChange(Object.keys(next).length > 0 ? next : undefined)
-  }, [props])
-  return (
-    <fieldset disabled={props.disabled} className="vk-form-group">
-      <legend>{t("settings.contextWindowPolicy.title")}</legend>
-      <p className="vk-form-note">{t("settings.contextWindowPolicy.description")}</p>
-      <div className="vk-form-grid">
-        <label className="vk-field">
-          <span>{t("settings.contextWindowPolicy.effectivePercent")}</span>
-          <Input
-            inputMode="numeric"
-            max={100}
-            min={1}
-            onChange={(event) => updateNumber("effective_context_window_percent", event.target.value)}
-            type="number"
-            value={props.value?.effective_context_window_percent ?? ""}
-          />
-          {props.value?.effective_context_window_percent === undefined && props.inheritanceHints?.effective_context_window_percent ? <small className="vk-form-note">{props.inheritanceHints.effective_context_window_percent}</small> : null}
-        </label>
-        <label className="vk-field">
-          <span>{t("settings.contextWindowPolicy.autoCompactPercent")}</span>
-          <Input
-            inputMode="numeric"
-            max={100}
-            min={1}
-            onChange={(event) => updateNumber("auto_compact_percent", event.target.value)}
-            type="number"
-            value={props.value?.auto_compact_percent ?? ""}
-          />
-          {props.value?.auto_compact_percent === undefined && props.inheritanceHints?.auto_compact_percent ? <small className="vk-form-note">{props.inheritanceHints.auto_compact_percent}</small> : null}
-        </label>
-        <label className="vk-field">
-          <span>{t("settings.contextWindowPolicy.autoCompactTokenLimit")}</span>
-          <Input
-            inputMode="numeric"
-            min={1}
-            onChange={(event) => updateNumber("auto_compact_token_limit", event.target.value)}
-            type="number"
-            value={props.value?.auto_compact_token_limit ?? ""}
-          />
-          {props.value?.auto_compact_token_limit === undefined && props.inheritanceHints?.auto_compact_token_limit ? <small className="vk-form-note">{props.inheritanceHints.auto_compact_token_limit}</small> : null}
-        </label>
-        <label className="vk-field">
-          <span>{t("settings.contextWindowPolicy.scope")}</span>
-          <Select
-            disabled={props.disabled}
-            onValueChange={(value) => updateScope(value === "inherit" ? "" : value)}
-            value={props.value?.auto_compact_scope ?? "inherit"}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="inherit">{t("settings.contextWindowPolicy.scopeInherit")}</SelectItem>
-              <SelectItem value="total">{t("settings.contextWindowPolicy.scopeTotal")}</SelectItem>
-              <SelectItem value="body_after_prefix">{t("settings.contextWindowPolicy.scopeBodyAfterPrefix")}</SelectItem>
-            </SelectContent>
-          </Select>
-          {props.value?.auto_compact_scope === undefined && props.inheritanceHints?.auto_compact_scope ? <small className="vk-form-note">{props.inheritanceHints.auto_compact_scope}</small> : null}
-        </label>
-        <label className="vk-field">
-          <span>{t("settings.contextWindowPolicy.fallbackBuffer")}</span>
-          <Input
-            inputMode="numeric"
-            min={0}
-            onChange={(event) => updateNumber("fallback_buffer_tokens", event.target.value)}
-            type="number"
-            value={props.value?.fallback_buffer_tokens ?? ""}
-          />
-          {props.value?.fallback_buffer_tokens === undefined && props.inheritanceHints?.fallback_buffer_tokens ? <small className="vk-form-note">{props.inheritanceHints.fallback_buffer_tokens}</small> : null}
-        </label>
-      </div>
-      <Button
-        className="vk-form-fit"
-        disabled={!props.value || Object.keys(props.value).length === 0}
-        onClick={() => props.onChange(undefined)}
-        type="button"
-        variant="outline"
-      >
-        {t("settings.contextWindowPolicy.clear")}
-      </Button>
-    </fieldset>
-  )
-}
 
 // ModelCapabilityDialogProps identifies one model and its optional direct model-settings layer.
 // ModelCapabilityDialogProps 标识一个模型及其可选直接模型设置层。

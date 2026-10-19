@@ -4257,7 +4257,6 @@
   "settings.contextCompactionNodes.defaultDescription": "새 세션이 시작할 때 사용할 크기입니다. 기존 세션에는 영향이 없습니다.",
   "settings.contextCompactionNodes.followModel": "모델 따르기",
   "settings.contextCompactionNodes.defaultLimitHint": "크기가 선택한 모델의 실제 한도를 초과하면 새 세션은 대신 모델을 따릅니다.",
-  "settings.contextCompactionNodes.defaultSave": "저장",
   "settings.contextCompactionNodes.defaultSaved": "저장됨",
   "settings.contextWindowPolicy.effectivePercent": "사용 가능한 창 (%)",
   "settings.contextWindowPolicy.autoCompactPercent": "압축 시작 지점 (%)",

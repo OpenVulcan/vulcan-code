@@ -4257,7 +4257,6 @@
   "settings.contextCompactionNodes.defaultDescription": "新しいセッションが開始時に使用するサイズです。既存のセッションには影響しません。",
   "settings.contextCompactionNodes.followModel": "モデルに従う",
   "settings.contextCompactionNodes.defaultLimitHint": "サイズが選択したモデルの実際の上限を超える場合、新しいセッションは代わりにモデルに従います。",
-  "settings.contextCompactionNodes.defaultSave": "保存",
   "settings.contextCompactionNodes.defaultSaved": "保存しました",
   "settings.contextWindowPolicy.effectivePercent": "使用可能なウィンドウ（%）",
   "settings.contextWindowPolicy.autoCompactPercent": "圧縮を開始する使用率（%）",

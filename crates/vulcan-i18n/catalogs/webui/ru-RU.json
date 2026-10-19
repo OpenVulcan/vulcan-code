@@ -4257,7 +4257,6 @@
   "settings.contextCompactionNodes.defaultDescription": "Размер, с которым начинаются новые сеансы. Существующие сеансы не затрагиваются.",
   "settings.contextCompactionNodes.followModel": "Следовать модели",
   "settings.contextCompactionNodes.defaultLimitHint": "Если размер превышает реальный лимит выбранной модели, новые сеансы вместо этого следуют модели.",
-  "settings.contextCompactionNodes.defaultSave": "Сохранить",
   "settings.contextCompactionNodes.defaultSaved": "Сохранено",
   "settings.contextWindowPolicy.effectivePercent": "Доступное окно (%)",
   "settings.contextWindowPolicy.autoCompactPercent": "Начинать сжатие при (%)",

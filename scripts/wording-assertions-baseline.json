@@ -65,7 +65,6 @@
   "apps/vulcan-code-web/src/components/features/memory/vmm-profile-loading.test.tsx": 3,
   "apps/vulcan-code-web/src/components/features/memory/vmm-settings-draft-inputs.test.tsx": 1,
   "apps/vulcan-code-web/src/components/features/settings/archived-restore-settings-area.test.tsx": 8,
-  "apps/vulcan-code-web/src/components/features/settings/context-basics-settings.test.tsx": 2,
   "apps/vulcan-code-web/src/components/features/settings/direct-provider-model-settings.test.ts": 2,
   "apps/vulcan-code-web/src/components/features/settings/mcp-form-model.test.ts": 4,
   "apps/vulcan-code-web/src/components/features/settings/mcp-settings-area.test.tsx": 4,

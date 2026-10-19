@@ -4257,7 +4257,6 @@
   "settings.contextCompactionNodes.defaultDescription": "Tamaño con el que empiezan las sesiones nuevas. Las sesiones existentes no se ven afectadas.",
   "settings.contextCompactionNodes.followModel": "Seguir al modelo",
   "settings.contextCompactionNodes.defaultLimitHint": "Si un tamaño supera el límite real del modelo elegido, las sesiones nuevas siguen al modelo en su lugar.",
-  "settings.contextCompactionNodes.defaultSave": "Guardar",
   "settings.contextCompactionNodes.defaultSaved": "Guardado",
   "settings.contextWindowPolicy.effectivePercent": "Ventana utilizable (%)",
   "settings.contextWindowPolicy.autoCompactPercent": "Empezar a comprimir al (%)",

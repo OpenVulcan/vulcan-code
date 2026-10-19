@@ -4257,7 +4257,6 @@
   "settings.contextCompactionNodes.defaultDescription": "Which size new sessions start with. Existing sessions aren't affected.",
   "settings.contextCompactionNodes.followModel": "Follow model",
   "settings.contextCompactionNodes.defaultLimitHint": "If a size exceeds the chosen model's real limit, new sessions follow the model instead.",
-  "settings.contextCompactionNodes.defaultSave": "Save",
   "settings.contextCompactionNodes.defaultSaved": "Saved",
   "settings.contextWindowPolicy.effectivePercent": "Usable window (%)",
   "settings.contextWindowPolicy.autoCompactPercent": "Start compressing at (%)",

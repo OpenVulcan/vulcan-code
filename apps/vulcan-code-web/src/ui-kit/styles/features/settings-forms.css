@@ -156,14 +156,6 @@ fieldset.vk-form-stack, fieldset.vk-form-loose { min-width: 0; margin: 0; paddin
 .vk-form-switch > span { display: grid; gap: 2px; min-width: 0; }
 .vk-form-switch small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 400; }
 
-/* Threshold band: a ruled fieldset holding a kind-by-threshold input matrix. */
-/* 阈值分组：带分隔线的字段组，承载类型 × 阈值的输入矩阵。 */
-.vk-form-band { display: grid; gap: calc(var(--vk-u) * 3); min-width: 0; margin: 0; padding: calc(var(--vk-u) * 3) 0 0; border: 0; border-top: var(--vk-bw) solid var(--vk-line); }
-.vk-form-band > legend { float: left; width: 100%; padding: 0; font-size: var(--vk-fs-sm); font-weight: 600; }
-.vk-form-matrix { display: grid; grid-template-columns: minmax(3.5rem, 0.65fr) minmax(5rem, 1fr) minmax(5rem, 1fr); align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); }
-.vk-form-matrix > span:nth-child(-n + 3) { color: var(--vk-ink-3); }
-.vk-form-band > .vk-form-acts { font-size: var(--vk-fs-xs); }
-
 /* Startup step log: status glyph column beside label and message. */
 /* 启动步骤日志：状态图标列与标签、消息并排。 */
 .vk-form-steplog { display: grid; gap: calc(var(--vk-u) * 2.5); margin: 0; padding: 0; list-style: none; }

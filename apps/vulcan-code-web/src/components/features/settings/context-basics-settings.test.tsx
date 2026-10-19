@@ -35,7 +35,7 @@ vi.mock("@/service/settings-actions-service", () => ({
 }))
 vi.mock("./provider-retry-settings", () => ({ ProviderRetrySettingsArea: () => <span>retry editor</span> }))
 vi.mock("./media-delivery-policy-card", () => ({ MediaDeliveryPolicyCard: () => <span>media editor</span> }))
-vi.mock("./public-ai-model-capability-dialog", () => ({
+vi.mock("./context-window-policy-editor", () => ({
   // Editor makes one explicit policy edit while the page retains responsibility for draft ownership.
   // Editor 执行一次显式策略编辑，页面继续负责草稿归属。
   ContextWindowPolicyEditor: (props: { onChange: (policy: PublicAiContextWindowPolicyOverrides) => void; value?: PublicAiContextWindowPolicyOverrides }) => (
@@ -77,14 +77,17 @@ describe("context settings draft navigation", () => {
       await act(async () => contextTab!.click())
       expect(contextTab!.getAttribute("aria-current")).toBe("page")
       expect(container.querySelector('[aria-label="edit policy"]')?.textContent).toBe("80")
-      expect(container.textContent).toContain("有未保存的修改")
-      // saveButton is located within the active panel, not another independently mounted section.
-      // saveButton 在活动面板内定位，不命中其他独立挂载分区。
-      const saveButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.context-basics-tabs > section:not([hidden]) button')).find((button) => button.textContent?.includes("保存"))
-      expect(saveButton).toBeDefined()
-      await act(async () => saveButton?.click())
+      // The dirty draft raises the action bar inside the active panel only.
+      // 未保存草稿仅在活动面板内呼出操作栏。
+      const activeBar = () => container.querySelector('.context-basics-tabs > section:not([hidden]) [data-slot="page-action-bar"]')
+      expect(container.querySelectorAll('[data-slot="page-action-bar"]')).toHaveLength(1)
+      const saveButton = activeBar()?.querySelector<HTMLButtonElement>("button")
+      expect(saveButton).toBeTruthy()
+      await act(async () => saveButton!.click())
       expect(service.savePolicy).toHaveBeenCalledExactlyOnceWith({ effective_context_window_percent: 80 })
-      expect(container.textContent).toContain("已保存")
+      // Once the saved layer equals the draft, the action bar leaves.
+      // 已保存层与草稿一致后，操作栏消失。
+      expect(activeBar()).toBeNull()
     } finally {
       await act(async () => root.unmount())
       container.remove()

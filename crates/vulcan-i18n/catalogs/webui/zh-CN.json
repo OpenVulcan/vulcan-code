@@ -4257,7 +4257,6 @@
   "settings.contextCompactionNodes.defaultDescription": "新建会话时默认用哪一档，已有会话不受影响。",
   "settings.contextCompactionNodes.followModel": "跟随模型",
   "settings.contextCompactionNodes.defaultLimitHint": "如果某一档超过了所选模型的实际上限，新会话会自动改为跟随模型。",
-  "settings.contextCompactionNodes.defaultSave": "保存",
   "settings.contextCompactionNodes.defaultSaved": "已保存",
   "settings.contextWindowPolicy.effectivePercent": "可用窗口比例（%）",
   "settings.contextWindowPolicy.autoCompactPercent": "用到多少开始压缩（%）",

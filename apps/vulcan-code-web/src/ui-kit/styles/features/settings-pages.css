@@ -287,10 +287,6 @@
   display: none;
 }
 
-/* Retry toggles keep the label-left, switch-right row at body weight. */
-/* 重试开关保持标签在左、开关在右，使用正文字重。 */
-.settings-retry-section .vk-form-switch { padding: var(--vk-u) 0; font-weight: 400; }
-
 /* Blocked model rows: a framed record with its title line, reason and repair actions. */
 /* 被阻止的模型行：带边框的记录，包含标题行、原因与修复操作。 */
 .vk-mcat-row { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 2.5); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
@@ -298,64 +294,30 @@
 .vk-mcat-row .vk-mcat-title-line strong { display: inline; }
 .vk-mcat-row span { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); overflow-wrap: anywhere; }
 
-.context-basics-tabs > section > section:not(.vk-form-pref) {
-  border: 0;
-  padding: 0;
-  box-shadow: none;
-}
-
-/* Category headings lead the form; bounded groups separate settings from explanatory copy. */
-/* 子分类标题引导表单阅读，有边界的分组区分设置项与说明文字。 */
-.context-basics-tabs > section > section > div:first-child:has(h3),
-.context-basics-tabs .settings-retry-section > .panel-title {
-  padding-bottom: 16px;
-  margin-bottom: 20px;
-  border-bottom: var(--vk-bw) solid var(--vk-line);
-}
-
-.context-basics-tabs > section > section > div:first-child > h3,
-.context-basics-tabs .settings-retry-section > .panel-title > h2 {
-  font-size: 18px;
-  line-height: 1.5;
-  font-weight: 600;
-  color: var(--vk-ink);
-}
-
-.context-basics-tabs > section > section > div:first-child > h3 + p {
-  margin-top: 6px;
-  line-height: 1.6;
-}
-
-.context-basics-tabs > section > section > fieldset:not(.vk-form-stack),
-.context-basics-tabs .settings-retry-section > fieldset > article {
-  border: var(--vk-bw) solid var(--vk-line);
-  padding: 16px;
-  background: var(--vk-panel);
-}
-
-.context-basics-tabs > section > section > fieldset > legend,
-.context-basics-tabs .settings-retry-section > fieldset > article > strong {
-  font-size: var(--vk-fs-lg);
-  font-weight: 600;
-  color: var(--vk-ink);
-}
-
-.context-basics-node-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-  max-width: 480px;
-}
-
-/* Keep each fixed node on its own row, with the unit immediately after its editable value. */
-/* 每个固定节点独占一行，单位紧随可编辑数值。 */
-.context-basics-node-row {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  font-size: var(--vk-fs-md);
-}
+/* Context, window and usage tabs: a titled header over label-left, control-right rows, matching the
+   conversation-defaults tab; edits commit through the page action bar, which appears only while dirty. */
+/* 上下文、窗口与用量分页：标题栏下为标签在左、控件在右的行，与会话默认分页一致；编辑经由仅在有改动时出现的页面操作栏提交。 */
+.context-basics-section { display: grid; gap: calc(var(--vk-u) * 4); max-width: 52rem; }
+.context-basics-head { display: flex; align-items: flex-start; justify-content: space-between; gap: calc(var(--vk-u) * 4); padding-bottom: calc(var(--vk-u) * 4); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.context-basics-head > div { display: grid; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
+.context-basics-head h3 { margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-lg); font-weight: 600; line-height: var(--vk-lh-tight); }
+.context-basics-head p { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+.context-basics-head p.vk-form-note { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+fieldset.context-basics-rows { min-width: 0; margin: 0; padding: 0; border: 0; }
+.context-basics-rows { max-width: 52rem; }
+/* Groups inside a tab open with the shared settings legend; consecutive groups keep a clear gap. */
+/* 分页内的分组以共用设置 legend 开头；相邻分组保持明确间距。 */
+fieldset.context-basics-group { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; margin: 0; padding: 0; border: 0; }
+.context-basics-group + .context-basics-group { margin-top: calc(var(--vk-u) * 4); }
+/* Media thresholds read as a kind-by-case table with right-aligned numbers. */
+/* 媒体阈值以类型 × 情形表格呈现，数字右对齐。 */
+.media-delivery-matrix { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(6rem, 10rem) minmax(6rem, 10rem); align-items: center; gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); font-size: var(--vk-fs-sm); }
+.media-delivery-matrix > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-align: right; }
+.media-delivery-matrix > span:first-child { text-align: left; }
+.media-delivery-matrix > strong { color: var(--vk-ink); font-weight: 500; }
+/* A token field keeps its unit right after the value. */
+/* Token 字段的单位紧随数值。 */
+.context-basics-unit { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
 
 .vk-mcat-route-accounts {
   list-style: none;
