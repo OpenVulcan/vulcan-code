@@ -23,6 +23,7 @@ import type {
 } from "@/types"
 import { useI18n, formatMessage, type Translate } from "@/i18n"
 import { AGENT_SKILL_DEFAULT_COLOR, colorInputValue } from "@/lib/agent-color"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // AgentSkillEditorDraft stores structured package fields and the directly editable prompt body.
 // AgentSkillEditorDraft 保存结构化技能包字段与可直接编辑的提示词正文。
@@ -158,7 +159,7 @@ export function AgentSkillEditorDialog(props: {
               <label className="agent-skill-form-field">
                 <span>{t("agentSkills.skillCategory")}</span>
                 <Select disabled={saving} onValueChange={(value) => updateStructuredField("categoryId", value)} value={draft.categoryId}>
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="vk-fill">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -283,13 +284,13 @@ export function AgentSkillCategoryManagementDialog(props: {
           <DialogTitle>{t("agentSkills.categoryManagement")}</DialogTitle>
           <DialogDescription>{t("agentSkills.systemCategoriesAreImmutable")}</DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 overflow-y-auto">
+        <div className="vk-dialog-body">
         {editing === undefined ? (
-          <div className="grid gap-2">
+          <div className="vk-form-stack">
             <div className="agent-skill-category-management-actions">
               <Button disabled={saving} onClick={() => openForm(null)}><Plus size={15} />{t("agentSkills.addCategory")}</Button>
             </div>
-            <div className="grid gap-2">
+            <div className="vk-form-stack">
               {props.categories.map((category) => (
                 <div className="agent-skill-category-management-row" key={category.categoryId}>
                   <span className="agent-skill-category-management-marker" style={{ backgroundColor: category.color }}>{category.emoji}</span>
@@ -306,7 +307,7 @@ export function AgentSkillCategoryManagementDialog(props: {
             </div>
           </div>
         ) : (
-          <fieldset disabled={saving} className="agent-skill-form-grid min-w-0 border-0 p-0">
+          <fieldset disabled={saving} className="agent-skill-form-grid vk-fieldset">
             <AgentSkillTextField disabled={editing !== null} label="category-id" onChange={(value) => updateCategoryField("categoryId", value)} required value={draft.categoryId} />
             <AgentSkillTextField label={t("agentSkills.categoryName")} onChange={(value) => updateCategoryField("name", value)} required value={draft.name} />
             <AgentSkillTextField label={t("agentSkills.emoji")} onChange={(value) => updateCategoryField("emoji", value)} required value={draft.emoji} />
@@ -331,7 +332,7 @@ export function AgentSkillCategoryManagementDialog(props: {
               <AlertDialogTitle>{t("agentSkills.deleteCategory")}</AlertDialogTitle>
               <AlertDialogDescription>{pendingDelete ? (formatMessage(t("agentSkills.deleteCategory2"), { value: localizedCategoryName(pendingDelete, props.locale) })) : ""}</AlertDialogDescription>
             </AlertDialogHeader>
-            {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+            {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
             <AlertDialogFooter>
               <AlertDialogCancel disabled={saving}>{t("agentSkills.cancel")}</AlertDialogCancel>
               <AlertDialogAction disabled={saving} onClick={(event) => { event.preventDefault(); if (pendingDelete) void deleteCategory(pendingDelete) }}>{saving ? t("agentSkills.deleting") : t("agentSkills.delete")}</AlertDialogAction>

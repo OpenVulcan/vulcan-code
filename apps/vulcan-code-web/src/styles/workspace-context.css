@@ -6,6 +6,7 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
+  padding-top: 2.5rem;
   background: var(--background);
   overflow: hidden;
 }

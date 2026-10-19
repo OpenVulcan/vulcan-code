@@ -181,7 +181,7 @@ export interface TextDocumentDialogProps {
 export function TextDocumentDialog(props: TextDocumentDialogProps) {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="plugin-text-document-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
+      <DialogContent className="plugin-text-document-dialog" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{props.title}</DialogTitle>
           {props.description ? <DialogDescription>{props.description}</DialogDescription> : null}

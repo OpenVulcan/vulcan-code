@@ -398,7 +398,7 @@ export function AgentSkillsArea(props: {
               ? (formatMessage(t("agentSkills.removeTheUserOverride"), { value: localizedAgentSkillName(pendingMutation.record, locale) }))
               : (formatMessage(t("agentSkills.deleteUserSkillAnd"), { value: localizedAgentSkillName(pendingMutation.record, locale) }))) : ""}</AlertDialogDescription>
           </AlertDialogHeader>
-          {actionError ? <p role="alert" className="text-sm text-destructive">{actionError}</p> : null}
+          {actionError ? <p role="alert" className="vk-field-error">{actionError}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={pageBusy}>{t("agentSkills.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={pageBusy} onClick={(event) => {
@@ -486,7 +486,7 @@ function AgentSkillDetailDialog(props: {
   const category = record ? props.categories.find((item) => item.categoryId === record.categoryId) : undefined
   return (
     <Dialog onOpenChange={props.onOpenChange} open={record !== null}>
-      <DialogContent className="agent-skill-detail-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
+      <DialogContent className="agent-skill-detail-dialog" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{record ? localizedAgentSkillName(record, props.locale) : "Agent Skill"}</DialogTitle>
           <DialogDescription>{record ? localizedAgentSkillScope(record, t) : ""}</DialogDescription>

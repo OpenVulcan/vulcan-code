@@ -37,7 +37,7 @@ export function VisualLabPageKit({ text, onAction }: VisualLabDemoProps) {
     { key: "provider", label: text("供应商", "Provider"), width: "22%" },
     { key: "requests", label: text("调用", "Requests"), numeric: true, width: "16%" },
     { key: "note", label: text("备注", "Note"), wrap: true },
-    { key: "select", label: <span className="sr-only">{text("选择", "Select")}</span>, width: "88px" },
+    { key: "select", label: <span className="vk-sr-only">{text("选择", "Select")}</span>, width: "88px" },
   ]
   const rows: PageTableRow[] = [
     { key: "gpt", model: "GPT-5.6 Terra", provider: "OpenAI", requests: "8,920", note: text("长备注会在固定版式内换行，而不是撑破表格。", "Long notes wrap inside the fixed layout instead of stretching the table.") },

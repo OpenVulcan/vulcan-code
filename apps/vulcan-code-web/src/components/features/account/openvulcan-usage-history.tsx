@@ -49,7 +49,7 @@ export function OpenVulcanUsageHistory() {
       <h3>{t("openvulcan.usage.title")}</h3>
       {page ? <span>{formatMessage(t("openvulcan.usage.range"), { from: page.from_date, to: page.to_date })}</span> : null}
       <Button variant="ghost" size="sm" disabled={busy} data-openvulcan-usage-refresh="" onClick={() => void read("")}>
-        {busy ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : <RefreshCw aria-hidden="true" />}
+        {busy ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : <RefreshCw aria-hidden="true" />}
         {t("openvulcan.usage.refresh")}
       </Button>
     </header>

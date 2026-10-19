@@ -109,7 +109,7 @@ export function PluginWorkspaceMenu(props: {
   ];
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="vk-dir-groups">
     {[{ label: t("skills.navigation.builtins"), items: rows }, { label: t("skills.navigation.externalPlugins"), items: pluginRows }].map((group) => (
     <WorkspaceDirectoryMenu key={group.label} ariaLabel={group.label} heading={group.label}>
       {group.items.map((row) => (

@@ -143,7 +143,7 @@ function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSch
   // renderItems renders the rows of a settings section once the configuration and credential statuses are known.
   // renderItems 在配置与凭据状态就绪后渲染设置区块的各行。
   function renderItems(section: PluginSettingsSection): React.ReactNode {
-    if (settingsPending) return <StreamPlaceholder className="w-full min-w-0" label={t("skills.plugins.loadingPage")} shape="fields" count={sectionFields(section).length || 2} />;
+    if (settingsPending) return <StreamPlaceholder className="vk-fill" label={t("skills.plugins.loadingPage")} shape="fields" count={sectionFields(section).length || 2} />;
     if (settingsFailed) return null;
     if (section.layout === "inline") {
       return <div className="plugin-settings-inline">

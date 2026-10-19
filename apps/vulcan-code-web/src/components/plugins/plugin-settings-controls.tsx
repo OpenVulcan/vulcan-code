@@ -103,7 +103,7 @@ function SettingsChecklist(props: { field: PluginSettingsField; value: unknown; 
     {groups.map(({ group, visible }) => {
       if (visible.length === 0) return null;
       return <fieldset className="plugin-settings-checklist-group" disabled={props.disabled} key={group.id}>
-        <legend className="sr-only">{props.message(group.title_message_key)}</legend>
+        <legend className="vk-sr-only">{props.message(group.title_message_key)}</legend>
         <div aria-hidden className="plugin-settings-checklist-header">
           <strong>{props.message(group.title_message_key)}</strong>
         </div>

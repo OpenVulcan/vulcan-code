@@ -70,7 +70,7 @@ export function OpenVulcanPlanSummary(props: {
       <h3>{t("openvulcan.plan.title")}</h3>
       {tier ? <span className="openvulcan-plan-tier" data-tier={tier}>{TIER_LABELS[tier] ? t(TIER_LABELS[tier]) : tier}</span> : null}
       <Button variant="ghost" size="sm" disabled={busy} data-openvulcan-plan-refresh="" onClick={() => void read()}>
-        {busy ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : <RefreshCw aria-hidden="true" />}
+        {busy ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : <RefreshCw aria-hidden="true" />}
         {t("openvulcan.usage.refresh")}
       </Button>
     </header>

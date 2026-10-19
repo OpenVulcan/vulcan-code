@@ -115,7 +115,8 @@
 /* ---------- Feedback ---------- */
 .vk-page-notice .vk-alert-description { white-space: pre-line; }
 .vk-page-notice pre,
-.vk-page-details pre {
+.vk-page-details pre,
+.vk-diag {
   max-height: 200px;
   margin: calc(var(--vk-u) * 1.5) 0 0;
   padding: calc(var(--vk-u) * 2);
@@ -127,6 +128,9 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.vk-diag { margin: 0; color: var(--vk-bad); }
+.vk-region-fault { margin: calc(var(--vk-u) * 4); }
+.vk-region-wait { display: flex; min-height: 8rem; align-items: center; justify-content: center; }
 .vk-page-notice-details { margin-top: var(--vk-u); }
 .vk-page-notice > .vk-page-actions { margin-top: calc(var(--vk-u) * 1.5); }
 .vk-page-notice:has(> svg) > .vk-page-actions { grid-column: 2; }
@@ -255,6 +259,7 @@
 
 /* ---------- Directory menus: feature-owned section lists ---------- */
 .vk-dir { display: grid; gap: 1px; min-width: 0; }
+.vk-dir-groups { display: grid; align-content: start; gap: calc(var(--vk-u) * 5); min-width: 0; }
 .vk-dir + .vk-dir,
 .vk-dir-group + .vk-dir-group { margin-top: calc(var(--vk-u) * 4); }
 .vk-dir-group { display: grid; gap: 1px; min-width: 0; }

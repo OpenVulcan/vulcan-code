@@ -50,7 +50,7 @@ describe("knowledge reads and recovery", () => {
     await act(async () => root.render(<KnowledgeBaseArea projects={[]} />));
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("registry unavailable");
     expect(host.textContent).not.toContain("knowledge.empty");
-    await act(async () => host.querySelector<HTMLButtonElement>('[role="alert"] button')!.click());
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>('[role="alert"] button')].find((button) => button.textContent === "knowledge.refresh")!.click());
     expect(host.querySelector('[role="alert"]')).toBeNull();
     expect(host.textContent).toContain(knowledgeLibraryFixture.name);
     expect(reads.libraries).toHaveBeenCalledTimes(2);

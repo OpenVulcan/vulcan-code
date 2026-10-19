@@ -74,9 +74,9 @@ export default function OpenVulcanAccountDialog() {
         {issue && !pending ? (
           <SettingsErrorNotice
             key={issue.stage + issue.detail}
-            message={<span className="grid gap-1">
-              <strong className="font-medium">{t(failureCopy[issue.stage][0])}</strong>
-              <span className="text-xs leading-relaxed text-muted-foreground">{t(failureCopy[issue.stage][1])}</span>
+            message={<span className="vk-field-content">
+              <strong>{t(failureCopy[issue.stage][0])}</strong>
+              <span className="vk-field-hint">{t(failureCopy[issue.stage][1])}</span>
             </span>}
             detail={issue.detail}
             action={retryRegion ? (
@@ -114,7 +114,7 @@ export default function OpenVulcanAccountDialog() {
         ) : (
           <div className="openvulcan-account-body">
             <Button className="openvulcan-account-login" disabled={pending} data-openvulcan-login="" onClick={() => void account.login(site)}>
-              {pending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : null}
+              {pending ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : null}
               {t("openvulcan.account.login")}
               {pending ? null : <ArrowUpRight aria-hidden="true" />}
             </Button>

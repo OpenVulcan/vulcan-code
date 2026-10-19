@@ -4,6 +4,7 @@ import { Button } from "@/ui-kit/primitives/button";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { PLUGIN_UI_SDK_COMPONENTS, type PluginUiSdkComponents } from "./plugin-ui-sdk-components";
 import { useI18n } from "@/i18n";
+import { PageNotice } from "@/components/page";
 import { createPluginSettingsPage } from "./plugin-settings-page";
 import { parsePluginSettingsLayout } from "./plugin-settings-layout";
 import { invalidatePersistentPluginUiModules, loadPersistentPluginUiModule } from "@/service/plugin-ui-module-runtime";
@@ -263,19 +264,20 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
   }, [locale, props.mount.id, props.plugin.id, props.plugin.extension?.runtimeIdentity, props.workspacePath, props.conversationId, sdk, retryRevision]);
 
   if (error) {
-    return <div className="space-y-2 rounded-md border border-border bg-card p-4 text-sm text-foreground" role="alert">
-      <p>{t("plugins.mount.unableToLoadPlugin")}</p>
-      <Button size="sm" variant="outline" onClick={() => {
+    return <PageNotice
+      className="vk-region-fault"
+      tone="error"
+      title={t("plugins.mount.unableToLoadPlugin")}
+      details={error}
+      detailsLabel={t("plugins.mount.errorDetails")}
+      actions={<Button size="sm" variant="outline" onClick={() => {
         invalidatePersistentPluginUiModules(props.plugin.id);
         setRetryRevision((revision) => revision + 1);
-      }}>{t("plugins.mount.retry")}</Button>
-      <details><summary>{t("plugins.mount.errorDetails")}</summary>
-        <pre className="max-w-full whitespace-pre-wrap break-words text-xs text-muted-foreground">{error}</pre>
-      </details>
-    </div>;
+      }}>{t("plugins.mount.retry")}</Button>}
+    />;
   }
   if (Panel === null) {
-    return <StreamPlaceholder fill className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />;
+    return <StreamPlaceholder fill className="vk-stream-inset" shape="rows" label={t("skills.plugins.loadingPage")} />;
   }
   return <Panel />;
 }

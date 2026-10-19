@@ -1046,7 +1046,7 @@ function WorkspaceSubagentPanel(args: {
   }
 
   return (
-    <div className="workspace-subagent-panel vk-subchat relative pt-10">
+    <div className="workspace-subagent-panel vk-subchat">
       <ChildLifetimeUsageChip bucket={rootUsage?.rootSessionId === parentConversationId
         ? rootUsage.childrenBySessionId[taskId]?.usage : undefined} />
       {transcriptOwner.error && transcriptHasEvents ? (
@@ -1088,7 +1088,7 @@ function WorkspaceSubagentPanel(args: {
         onScrollStateChange={subagentScrollController.handleScroll}
       />
       {transcriptOwner.loading && transcriptOwner.snapshot.events.length === 0 ? (
-        <StreamPlaceholder className="pointer-events-none absolute inset-0 p-5" fill label={t("conversation.subagent.loadingTranscript")} />
+        <StreamPlaceholder className="vk-stream-overlay" fill label={t("conversation.subagent.loadingTranscript")} />
       ) : null}
       {transcriptOwner.error && !transcriptHasEvents ? (
         <div className="workspace-subagent-loading" role="alert">
@@ -1146,7 +1146,7 @@ function WorkspaceSubagentPanel(args: {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            {taskActionError ? <p role="alert" className="text-sm text-destructive">{taskActionError}</p> : null}
+            {taskActionError ? <p role="alert" className="vk-field-error">{taskActionError}</p> : null}
             <Button disabled={stopSubmitting} onClick={() => setStopConfirmOpen(false)} type="button" variant="outline">
               {t("conversation.action.cancel")}
             </Button>
@@ -1166,7 +1166,7 @@ function WorkspaceSubagentPanel(args: {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            {taskActionError ? <p role="alert" className="text-sm text-destructive">{taskActionError}</p> : null}
+            {taskActionError ? <p role="alert" className="vk-field-error">{taskActionError}</p> : null}
             <Button disabled={closeSubmitting} onClick={() => setCloseConfirmOpen(false)} type="button" variant="outline">
               {t("conversation.action.cancel")}
             </Button>
@@ -1255,7 +1255,7 @@ function subagentWorkspacePath(workbench: WorkbenchSnapshot, parentConversationI
 function WorkspaceReviewPanelLoading() {
   const { t } = useI18n();
   return (
-    <StreamPlaceholder className="w-full min-w-0 p-3" fill label={t("workspaceContext.loadingReviewPanel")} shape="rows" />
+    <StreamPlaceholder className="vk-stream-inset" fill label={t("workspaceContext.loadingReviewPanel")} shape="rows" />
   );
 }
 
@@ -1264,6 +1264,6 @@ function WorkspaceReviewPanelLoading() {
 function WorkspaceFilesPanelLoading() {
   const { t } = useI18n();
   return (
-    <StreamPlaceholder className="w-full min-w-0 p-3" fill label={t("workspaceContext.loadingFilesPanel")} shape="rows" />
+    <StreamPlaceholder className="vk-stream-inset" fill label={t("workspaceContext.loadingFilesPanel")} shape="rows" />
   );
 }

@@ -80,7 +80,7 @@ export function AssistantConversation(props: { assistant: AssistantEntry }) {
         {turn.steps.map((step) => <AssistantStep key={step.apiCallId} step={step} />)}
         {turn.error ? <p className="assistant-conversation-error">{turn.error}</p> : null}
         {(owner.loading && turn.prompt === null) || (running && turn.steps.length === 0) ? (
-          <Spinner className="size-4 text-muted-foreground" />
+          <Spinner />
         ) : null}
       </div>
       {turn.total ? (

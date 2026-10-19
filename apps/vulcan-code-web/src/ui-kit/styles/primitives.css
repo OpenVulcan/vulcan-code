@@ -227,6 +227,7 @@ label.vk-field,
 .vk-field-content { display: grid; gap: calc(var(--vk-u) * 1); min-width: 0; }
 .vk-field-hint { font-size: var(--vk-fs-sm); font-weight: 400; color: var(--vk-ink-3); line-height: var(--vk-lh-ui); }
 .vk-field-error { font-size: var(--vk-fs-sm); font-weight: 400; color: var(--vk-bad); }
+.vk-field-scroll { max-height: 6rem; overflow: auto; overflow-wrap: anywhere; }
 .vk-field-hint[data-tone] { color: var(--vk-tone); }
 /* A label and its trailing note, such as a source or a character counter, on one baseline. */
 .vk-field-row { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--vk-u) * 2); min-width: 0; }
@@ -868,6 +869,7 @@ label.vk-field,
   .vk-dialog-footer { flex-direction: row; justify-content: flex-end; align-items: center; }
 }
 .vk-dialog[data-layout="form"] > .vk-dialog-footer { margin: 0 calc(var(--vk-u) * -4) calc(var(--vk-u) * -4); }
+.vk-dialog[data-layout="document"] > .vk-dialog-header { padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 12) calc(var(--vk-u) * 4) calc(var(--vk-u) * 5); border-bottom: var(--vk-bw) solid var(--vk-line); }
 .vk-dialog-media { display: grid; place-items: center; width: calc(var(--vk-u) * 10); height: calc(var(--vk-u) * 10); margin-bottom: calc(var(--vk-u) * 1); background: var(--vk-sunken); border: var(--vk-bw) solid var(--vk-line); color: var(--vk-ink-2); }
 .vk-dialog-media > svg { width: calc(var(--vk-u) * 5); height: calc(var(--vk-u) * 5); }
 /* Viewer head: the bar of a document or viewer dialog — a kind mark, an eyebrow naming what is shown,
@@ -1024,6 +1026,8 @@ label.vk-field,
 .vk-stream-tile { display: grid; gap: calc(var(--vk-u) * 2.5); padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
 .vk-stream-card-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 3); }
 .vk-stream-inline { display: inline-block; width: 4em; height: 0.8em; vertical-align: middle; }
+.vk-stream-inset { width: 100%; padding: calc(var(--vk-u) * 4); }
+.vk-stream-overlay { position: absolute; inset: 0; padding: calc(var(--vk-u) * 5); pointer-events: none; }
 
 /* ---------- Table ---------- */
 .vk-table-wrap { position: relative; width: 100%; min-width: 0; overflow-x: auto; }

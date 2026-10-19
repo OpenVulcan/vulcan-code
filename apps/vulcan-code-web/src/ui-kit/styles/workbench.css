@@ -378,3 +378,9 @@
 .vk-page-toolbar > .vk-select { width: auto; flex: none; }
 .vk-entity-name { display: grid; min-width: 0; line-height: 1.3; }
 .vk-entity-name > code { font-size: var(--vk-fs-xs); }
+
+/* Running sub-agents listed in the stop-with-agents confirmation. */
+.vk-agent-list { display: grid; gap: 1px; margin: 0; padding: 0; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-line-soft); list-style: none; }
+.vk-agent-list > li { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); background: var(--vk-panel); font-size: var(--vk-fs-sm); }
+.vk-agent-list strong { min-width: 0; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.vk-agent-list code { flex: none; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs); }

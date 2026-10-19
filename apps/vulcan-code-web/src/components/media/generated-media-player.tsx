@@ -22,6 +22,7 @@ import {
   TooltipTrigger,
 } from "@/ui-kit/primitives/tooltip";
 import { useI18n } from "@/i18n";
+import { PageEmptyState } from "@/components/page";
 import { MediaPathContextMenu } from "./media-path-context-menu";
 import { cn } from "@/lib/utils";
 import type {
@@ -309,7 +310,7 @@ function GeneratedMediaPlayerContent(props: {
           <span className="generated-media-player-title">
             <MediaIcon size={18} />
             <DialogTitle title={props.attachment.fileName}>{props.attachment.fileName}</DialogTitle>
-            <DialogDescription className="sr-only">{t("media.player.viewGeneratedMediaAnd")}</DialogDescription>
+            <DialogDescription className="vk-sr-only">{t("media.player.viewGeneratedMediaAnd")}</DialogDescription>
           </span>
           {isImage ? (
             <GeneratedMediaImageZoomControl
@@ -343,15 +344,17 @@ function GeneratedMediaPlayerContent(props: {
         <MediaPathContextMenu locator={props.attachment.kind === "document" ? null : props.attachment.localPath}>
         <div className={cn("generated-media-player-body", isImage && "image")}>
           {loadFailed || !source ? (
-            <div className="flex min-h-40 flex-col items-center justify-center gap-3 p-4 text-center" role="alert">
-              <p className="text-sm text-muted-foreground">{t("media.player.thisMediaFileCould")}</p>
-              {source ? <Button variant="outline" onClick={() => { setLoadFailed(false); setLoadAttempt((attempt) => attempt + 1); }}>
+            <PageEmptyState
+              role="alert"
+              size="panel"
+              title={t("media.player.thisMediaFileCould")}
+              action={source ? <Button variant="outline" onClick={() => { setLoadFailed(false); setLoadAttempt((attempt) => attempt + 1); }}>
                 {t("media.player.retry")}
               </Button> : null}
-            </div>
+            />
           ) : isImage ? (
             <div
-              className={cn("generated-media-image-viewer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring", isImageDragging && "dragging")}
+              className={cn("generated-media-image-viewer", isImageDragging && "dragging")}
               aria-label={t("media.player.imageViewerArrowKeys")}
               tabIndex={0}
               role="region"

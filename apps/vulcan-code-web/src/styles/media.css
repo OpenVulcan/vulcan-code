@@ -357,6 +357,10 @@
   min-height: 0;
 }
 
+.generated-media-image-viewer:focus-visible {
+  outline-offset: -2px;
+}
+
 .generated-media-image-viewer.dragging {
   cursor: grabbing;
 }

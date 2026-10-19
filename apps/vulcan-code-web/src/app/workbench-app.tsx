@@ -868,7 +868,7 @@ export function WorkbenchApp(props: {
               </AlertDialogDescription>
             </AlertDialogHeader>
             {shutdownFailure ? (
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/50 p-3 text-xs text-destructive">
+              <pre className="vk-diag">
                 {shutdownFailure}
               </pre>
             ) : null}

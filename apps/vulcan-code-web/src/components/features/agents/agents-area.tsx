@@ -411,7 +411,7 @@ export function AgentsArea(props: {
                 ? formatMessage(t("agents.removeTheUserOverride"), { value: localizedDefinitionName(definitionConfirmation.definition, locale) })
                 : formatMessage(t("agents.deleteTheUserDefinition"), { value: localizedDefinitionName(definitionConfirmation.definition, locale) }) : ""}</AlertDialogDescription>
             </AlertDialogHeader>
-            {actionError ? <p role="alert" className="max-h-24 overflow-auto break-words text-sm text-destructive">{actionError}</p> : null}
+            {actionError ? <p role="alert" className="vk-field-error vk-field-scroll">{actionError}</p> : null}
             <AlertDialogFooter>
               <AlertDialogCancel disabled={catalogActionDisabled}>{t("agents.cancel")}</AlertDialogCancel>
               <AlertDialogAction disabled={catalogActionDisabled} onClick={async (event) => {
@@ -720,9 +720,9 @@ function AgentEditorForm(props: {
             </div>
             <DialogFooter>
               {props.error ? (
-                <div role="alert" className="min-w-0 flex-1 text-destructive">
+                <div role="alert" className="vk-field-error vk-form-fill">
                   <strong>{t("agents.saveFailedYourDraft")}</strong>
-                  <details><summary>{t("agents.viewDetails")}</summary><p className="max-h-24 overflow-auto break-words">{props.error}</p></details>
+                  <details><summary>{t("agents.viewDetails")}</summary><p className="vk-diag">{props.error}</p></details>
                 </div>
               ) : null}
               <Button disabled={props.busy} onClick={props.onCancel} type="button" variant="secondary">
@@ -1122,7 +1122,7 @@ function AgentDefinitionDetailDialog(props: {
   const scopeLabel = definition ? localizedAgentScopeLabel(definition.scopeKey, t) : null
   return (
     <Dialog open={props.open && definition !== null} onOpenChange={props.onOpenChange}>
-      <DialogContent className="agent-skill-detail-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
+      <DialogContent className="agent-skill-detail-dialog" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{displayName ?? t("agents.agentDetails")}</DialogTitle>
           <DialogDescription>{scopeLabel ?? t("agents.inspectTheAgentDefinition")}</DialogDescription>

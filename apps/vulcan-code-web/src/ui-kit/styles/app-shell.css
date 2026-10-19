@@ -382,3 +382,17 @@ html[data-vulcan-host="electron"] :is([data-no-drag], [data-tauri-drag-region] :
   .vk-panel-resizer,
   .vk-panel-host { transition: none; }
 }
+
+/* Dedicated-assistant dock: square initial avatars and the hover menu that shows or hides each assistant.
+ * 专职助手坞：方形首字头像，以及用于显示或隐藏各助手的悬停菜单。 */
+.vk-avatar { display: inline-grid; flex: none; place-items: center; width: 1.5rem; height: 1.5rem; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); color: var(--vk-ink-2); font-size: var(--vk-fs-xs); font-weight: 600; line-height: 1; }
+.vk-avatar[data-active] { border-color: var(--vk-ember); background: var(--vk-ember); color: var(--vk-ink-inverse); }
+.vk-assist-menu { display: grid; gap: 1px; }
+.vk-assist-item { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); width: 100%; min-width: 0; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2); border: 0; background: transparent; color: var(--vk-ink); font: inherit; font-size: var(--vk-fs-sm); text-align: left; cursor: pointer; outline: none; }
+.vk-assist-item:hover, .vk-assist-item:focus-visible { background: var(--vk-hover); }
+.vk-assist-item[aria-checked="true"] { box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-assist-item > span { display: grid; flex: 1; min-width: 0; }
+.vk-assist-item strong, .vk-assist-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-assist-item strong { font-weight: 500; }
+.vk-assist-item small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-assist-item > svg { color: var(--vk-ember); }

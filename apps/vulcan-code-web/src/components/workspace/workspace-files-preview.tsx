@@ -77,7 +77,7 @@ export function WorkspaceFilePreview(props: {
     );
   }
   if (props.loading) {
-    return <div className="workspace-file-preview"><StreamPlaceholder className="p-4" label={t("workspaceFilePreview.loading")} count={8} /></div>;
+    return <div className="workspace-file-preview"><StreamPlaceholder className="vk-stream-inset" label={t("workspaceFilePreview.loading")} count={8} /></div>;
   }
   if (props.error) {
     return <div className="workspace-file-preview empty error" role="alert">

@@ -69,13 +69,13 @@ export function AssistantConvertDialog(props: {
             placeholder={t("assistantDock.nameLabel")}
             value={name}
           />
-          {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+          {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
           <DialogFooter>
             <Button disabled={busy} onClick={() => props.onOpenChange(false)} type="button" variant="ghost">
               {t("conversation.action.cancel")}
             </Button>
             <Button disabled={busy || !name.trim()} type="submit">
-              {busy ? <Spinner className="size-4" /> : null}
+              {busy ? <Spinner /> : null}
               {t("assistantDock.convert")}
             </Button>
           </DialogFooter>
