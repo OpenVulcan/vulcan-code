@@ -5,7 +5,6 @@
 /* 生产工具类来自当前源码树，不受仓库脚本及外部夹具影响。 */
 @import "@fontsource-variable/geist";
 @import "./styles/shell.css";
-@import "./styles/workspace-layout.css";
 @import "./styles/workspace-context.css";
 @import "./styles/features.css";
 @import "./styles/page-kit.css";

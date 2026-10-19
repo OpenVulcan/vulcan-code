@@ -933,7 +933,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   };
 
   return (
-    <div className={`workspace-panel-shell${props.mainView === "memory" ? " vmm-workspace-host" : ""}`} ref={shellRef}>
+    <div className="vk-shell-frame" ref={shellRef}>
       {featureArea ? (
         <WorkspaceFeaturePanel
           navigation={featureNavigation}
@@ -962,7 +962,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onSelectProject={props.onSelectProject}
         onSelectConversation={props.onSelectConversation}
       />}
-      <SidebarInset className="workspace-inset">
+      <SidebarInset>
         <TurnChangeReviewActionsContext.Provider value={reviewFocus.turnChangeReviewActions}>
         <WorkspaceResizableBody
           aiBrowserAvailable={aiBrowserAvailable}

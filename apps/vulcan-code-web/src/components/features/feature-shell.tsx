@@ -282,7 +282,7 @@ function FeatureShell(props: {
         workbench={props.workbench}
       />
       <SidebarInset>
-        <div className="feature-main-shell">
+        <div className="vk-stage-page">
           <FeatureHeader
             chromeActions={props.chromeActions}
             descriptor={pageDescriptor}

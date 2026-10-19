@@ -155,8 +155,8 @@
     height 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.workspace-resizable-body-shell.has-floating-context .conversation-session-tool-adaptive-panel.is-forced-overlay .adaptive-tool-panel-slot {
-  right: calc(var(--workspace-floating-context-panel-width) + 12px);
+.vk-stage[data-floating-context] .conversation-session-tool-adaptive-panel.is-forced-overlay .adaptive-tool-panel-slot {
+  right: calc(var(--vk-context-float-w) + 12px);
 }
 
 .conversation-session-tool-adaptive-panel:has(.conversation-session-tool-transitioning) .adaptive-tool-panel-slot {

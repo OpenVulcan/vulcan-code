@@ -48,8 +48,8 @@ export function VulcanSymbolShapes(props: {
 
 // VulcanSymbol renders the brand symbol inline so its body follows the current theme text color.
 // VulcanSymbol 以内联方式渲染品牌图标，使主体跟随当前主题文字颜色。
-// Parameters: className sizes the symbol through existing brand-logo rules; returns a decorative SVG.
-// 参数：className 通过现有 brand-logo 规则控制尺寸；返回装饰性 SVG。
+// Parameters: className sizes the symbol; returns a decorative SVG.
+// 参数：className 控制图标尺寸；返回装饰性 SVG。
 export function VulcanSymbol(props: {
   // CSS classes that decide the rendered box; the symbol keeps its aspect ratio inside it.
   // 决定渲染盒尺寸的 CSS 类；图标在盒内保持原始比例。

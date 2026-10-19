@@ -26,7 +26,7 @@ export function StartupOverlay(props: {
     downloadProgress: t("startup.downloadProgress"),
   };
   return (
-    <div className="startup-overlay" role="status" aria-live="polite">
+    <div className="vk-startup-overlay" role="status" aria-live="polite">
       <StartupProgressPanel startup={props.startup} labels={labels} />
     </div>
   );

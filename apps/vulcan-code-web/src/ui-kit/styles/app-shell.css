@@ -269,3 +269,116 @@
 :root[data-vk-motion="reduce"] .vk-shell .vk-sidebar { transition: none; }
 :root[data-vk-motion="reduce"] .vk-rail-flyout { animation: none; }
 :root[data-vk-motion="reduce"] .vk-win-btn { transition: none; }
+
+/* ---------- Workbench root ----------
+ * The application root fills the window; the main region stacks the active shell, the floating windows and
+ * the startup blocker. */
+.vk-workbench {
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  width: 100%;
+  height: 100dvh;
+  min-width: 0;
+  min-height: 0;
+  background: var(--vk-ground);
+}
+.vk-workbench-main { position: relative; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; }
+/* The measured frame beside the sidebar; its width drives automatic panel collapse. */
+.vk-shell-frame { position: relative; display: flex; align-items: stretch; width: 100%; height: 100%; min-width: 0; min-height: 0; isolation: isolate; }
+/* Startup blocker shown when the service restarts under a mounted shell; its panel, logo and progress come from
+ * boot-styles.css, which loads first. */
+.vk-startup-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: calc(var(--vk-u) * 6);
+  overflow: auto;
+  background: color-mix(in srgb, var(--vk-ground) 78%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+/* Native window dragging for the Electron host. Tauri reads data-tauri-drag-region directly; Electron renders
+ * without a native frame and needs Chromium's app-region on the same elements. Interactive controls never drag. */
+html[data-vulcan-host="electron"] [data-tauri-drag-region] { -webkit-app-region: drag; }
+html[data-vulcan-host="electron"] :is([data-no-drag], [data-tauri-drag-region] :is(button, a, input, textarea, select, [role="button"], [role="menuitem"])) { -webkit-app-region: no-drag; }
+
+/* ---------- Stage ----------
+ * The main column of the conversation workbench: the stage head over a body holding the page and the context
+ * panel. Panel widths, the resizer width and the slide duration arrive as custom properties from the layout
+ * code, which owns those values. */
+.vk-stage {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.vk-stage-body { position: relative; display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.vk-stage-main { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+/* One page column: the conversation, or a feature page. Forms and grids query its width. */
+.vk-stage-page { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; container: workspace-page / inline-size; }
+.vk-stage-page > :not(.vk-stage-progress) { transition: opacity var(--vk-t-med) var(--vk-ease); }
+.vk-stage:is([data-nav-phase="exiting"], [data-nav-phase="loading"], [data-nav-phase="waiting-owner"]) .vk-stage-page > :not(.vk-stage-progress) { opacity: 0; pointer-events: none; }
+.vk-stage-progress { position: absolute; inset: 0; z-index: 5; }
+
+/* Context panel host: docked it takes its share of the body; floating it slides over the page from the right. */
+.vk-panel-resizer {
+  flex: 0 0 var(--vk-context-resizer-w);
+  display: flex;
+  justify-content: center;
+  width: var(--vk-context-resizer-w);
+  cursor: col-resize;
+  transition: opacity var(--vk-t-med), width var(--vk-context-slide) var(--vk-ease), flex-basis var(--vk-context-slide) var(--vk-ease);
+}
+.vk-panel-resizer::before { content: ""; width: var(--vk-bw); height: 100%; background: var(--vk-line); transition: background var(--vk-t-fast); }
+.vk-panel-resizer:hover::before,
+.vk-panel-resizer:focus-visible::before { width: 2px; background: var(--vk-ember); }
+.vk-panel-resizer:focus-visible { outline: none; }
+.vk-panel-resizer[data-state="closed"] { flex-basis: 0; width: 0; opacity: 0; pointer-events: none; }
+.vk-panel-host {
+  display: flex;
+  flex: 0 0 var(--vk-context-w);
+  flex-direction: column;
+  width: var(--vk-context-w);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--vk-ground-2);
+  transition: flex-basis var(--vk-context-slide) var(--vk-ease), width var(--vk-context-slide) var(--vk-ease), opacity var(--vk-t-med);
+}
+.vk-panel-host[data-state="closed"] { opacity: 0; pointer-events: none; }
+.vk-panel-host[data-floating] {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 12;
+  flex: none;
+  width: var(--vk-context-float-w);
+  height: auto;
+  overflow: visible;
+  box-shadow: var(--vk-shadow-2);
+  transform: translateX(0);
+  transition: transform var(--vk-context-slide) var(--vk-ease), opacity var(--vk-t-med);
+}
+.vk-panel-host[data-floating][data-state="closed"] { transform: translateX(calc(100% + var(--vk-u) * 3)); }
+/* Manifest-declared plugin mounts share the workspace layout instead of opening external pages. */
+.vk-plugin-mounts { display: grid; gap: calc(var(--vk-u) * 2.5); min-width: 0; min-height: 0; padding: calc(var(--vk-u) * 2.5); overflow: auto; border-top: var(--vk-bw) solid var(--vk-line); background: var(--vk-ground); }
+.vk-plugin-mounts[data-slot="main"] { flex: 0 1 45%; }
+/* The right slot leaves room for a plugin browser's controls and its native view at 150% renderer zoom. */
+.vk-plugin-mounts[data-slot="right"] { flex: 0 1 65%; }
+@media (max-height: 700px) {
+  .vk-plugin-mounts[data-slot="right"] { flex-basis: 80%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vk-stage-page > :not(.vk-stage-progress),
+  .vk-panel-resizer,
+  .vk-panel-host { transition: none; }
+}

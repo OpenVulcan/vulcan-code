@@ -1118,7 +1118,7 @@ export function WorkbenchLayout(props: {
     <ComposerSettingsHostContext.Provider value={settingsHost}>
     <DraftComposerContext.Provider value={draftComposerContext}>
     <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
-    <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
+    <div className="vk-workbench" data-window={showWindowControls ? "native" : "browser"}>
       {floatingMediaUploadProgresses.length > 0 ? (
         <div className="media-upload-progress-stack">
           <React.Suspense fallback={<div role="status">{i18n.t("composer.attachment.processing")}</div>}>
@@ -1134,7 +1134,7 @@ export function WorkbenchLayout(props: {
       ) : null}
       <PermissionJudgeEntryContext.Provider value={permissionJudgeEntry}>
       <AssistantDockContext.Provider value={assistantDock}>
-      <main className="workspace">
+      <main className="vk-workbench-main">
         {showConsoleSidebar ? (
           <WorkspaceShell
             activeProjectId={activeProjectId}

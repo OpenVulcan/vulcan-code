@@ -46,7 +46,7 @@ export function useAskAnchorStyle(requestId: string | null): React.CSSProperties
     if (anchorElement && typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver(scheduleMeasure);
       resizeObserver.observe(anchorElement);
-      const shellElement = anchorElement.closest(".workspace-resizable-body-shell");
+      const shellElement = anchorElement.closest(".vk-stage");
       if (shellElement instanceof HTMLElement) {
         resizeObserver.observe(shellElement);
       }
@@ -72,7 +72,7 @@ function askAnchorElement(): HTMLElement | null {
   if (typeof document === "undefined") {
     return null;
   }
-  return document.querySelector<HTMLElement>(".workspace-main-panel");
+  return document.querySelector<HTMLElement>(".vk-stage-main");
 }
 
 // readAskAnchorBounds reads viewport offsets for the current conversation panel.
