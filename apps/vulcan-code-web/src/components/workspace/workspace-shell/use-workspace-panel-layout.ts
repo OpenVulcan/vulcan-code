@@ -1,6 +1,6 @@
 import React from "react";
 import { navigationColumnWidth } from "@/components/shell/navigation-layout";
-import type { useSidebar } from "@/components/ui/sidebar";
+import type { useSidebar } from "@/ui-kit/shell/sidebar";
 import {
   WORKSPACE_CONVERSATION_RESERVED_WIDTH,
   WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH,

@@ -3,7 +3,7 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarProvider } from "@/ui-kit/shell/sidebar";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { SidebarBrandMenu, SidebarUserMenu } from "./sidebar-profile-menus";
 
@@ -26,9 +26,9 @@ it("keeps the panel header a plain title and the rail user menu's settings actio
   </SidebarProvider></TooltipProvider></I18nProvider>));
   // Area switching now lives on the activity rail, so the panel header carries no buttons.
   // 区域切换已移至活动轨道，面板标题不再包含按钮。
-  expect(host.querySelector(".sidebar-brand-static")?.textContent).toContain("设置");
-  expect(host.querySelector(".sidebar-brand-static button")).toBeNull();
-  const trigger = host.querySelector<HTMLButtonElement>(".sidebar-user-button")!;
+  expect(host.querySelector(".vk-brand")?.textContent).toContain("设置");
+  expect(host.querySelector(".vk-brand button")).toBeNull();
+  const trigger = host.querySelector<HTMLButtonElement>(".vk-rail-btn")!;
   await act(async () => { trigger.focus(); trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
   const menu = document.querySelector('[role="menu"]')!;
   expect(menu).not.toBeNull();

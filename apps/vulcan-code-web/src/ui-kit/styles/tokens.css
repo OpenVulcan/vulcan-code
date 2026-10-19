@@ -13,6 +13,10 @@
  */
 
 /* ---------- Size system: every length derives from the root text tier ---------- */
+/* The navigation widths are registered lengths so script reads them back as resolved pixels for
+ * width-based layout decisions (components/shell/navigation-layout.ts); these tokens stay their only source. */
+@property --vk-rail-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --vk-sidebar-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
 :root {
   /* UI body size; the five tiers below only change this value. */
   font-size: 13px;
@@ -44,6 +48,7 @@
   --vk-panel-w: calc(var(--vk-u) * 94);
   --vk-read-w: 46rem;
   --vk-statusbar-h: calc(var(--vk-u) * 6);
+  --vk-titlebar-h: calc(var(--vk-u) * 12);
 
   /* Borders never scale. Corners are square by decision D2. */
   --vk-bw: 1px;

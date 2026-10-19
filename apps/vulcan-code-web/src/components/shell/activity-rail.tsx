@@ -12,15 +12,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/ui-kit/primitives/dropdown-menu";
-import { useSidebar, useSidebarNavigation } from "@/components/ui/sidebar";
+import { useSidebar, useSidebarNavigation } from "@/ui-kit/shell/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { SidebarUserMenu } from "@/components/sidebar/sidebar-profile-menus";
 import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
 import { formatMessage, useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
 import { readActivityRailPins, saveActivityRailPins } from "./activity-rail-preferences";
 import { ActivityRailFlyout } from "./activity-rail-flyout";
-import { activityRailStyle } from "./navigation-layout";
 
 // ActivityRailEntry describes one dynamic destination that the user may pin to the rail.
 // ActivityRailEntry 描述一个可由用户固定到轨道的动态目标。
@@ -136,15 +134,15 @@ export function ActivityRail(props: {
   );
 
   return (
-    <nav aria-label={t("activityRail.label")} className="activity-rail" style={activityRailStyle()}>
+    <nav aria-label={t("activityRail.label")} className="vk-rail">
       <div
-        className="activity-rail-brand"
+        className="vk-rail-brand"
         data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
         onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
       >
-        <VulcanSymbol className="brand-logo activity-rail-logo" />
+        <VulcanSymbol className="vk-rail-logo" />
       </div>
-      <div className="activity-rail-section">
+      <div className="vk-rail-group" data-scroll="">
         {sessionFlyoutEnabled ? (
           <ActivityRailFlyout
             content={props.sessionTree}
@@ -155,7 +153,7 @@ export function ActivityRail(props: {
             {sessionsButton}
           </ActivityRailFlyout>
         ) : sessionsButton}
-        <span aria-hidden="true" className="activity-rail-divider" />
+        <span aria-hidden="true" className="vk-rail-divider" />
         {pinnedEntries.map((entry) => (
           <ActivityRailButton
             active={entry.id === highlightedId}
@@ -171,7 +169,8 @@ export function ActivityRail(props: {
               <DropdownMenuTrigger asChild>
                 <button
                   aria-label={t("activityRail.more")}
-                  className={cn("activity-rail-button", overflowActive && "active")}
+                  aria-current={overflowActive ? "page" : undefined}
+                  className="vk-rail-btn"
                   data-active={overflowActive ? "true" : "false"}
                   type="button"
                 >
@@ -181,13 +180,13 @@ export function ActivityRail(props: {
             </TooltipTrigger>
             <TooltipContent side="right">{t("activityRail.more")}</TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="start" className="activity-rail-menu" side="right" sideOffset={8}>
+          <DropdownMenuContent align="start" side="right" sideOffset={8}>
             {overflowEntries.length > 0 ? (
               <>
                 <DropdownMenuGroup>
                   {overflowEntries.map((entry) => (
                     <DropdownMenuItem
-                      className={cn("activity-rail-menu-item", entry.active && "active")}
+                      data-current={entry.active ? "" : undefined}
                       key={entry.id}
                       onSelect={navigate(entry.onSelect)}
                     >
@@ -199,7 +198,7 @@ export function ActivityRail(props: {
                 <DropdownMenuSeparator />
               </>
             ) : null}
-            <DropdownMenuLabel className="activity-rail-menu-label">
+            <DropdownMenuLabel>
               <Pin size={13} />
               <span>{t("activityRail.customize")}</span>
             </DropdownMenuLabel>
@@ -207,7 +206,6 @@ export function ActivityRail(props: {
               {props.entries.map((entry) => (
                 <DropdownMenuCheckboxItem
                   checked={pinnedIds.has(entry.id)}
-                  className="activity-rail-menu-item"
                   key={entry.id}
                   // Keep the menu open so several entries can be checked in one visit.
                   // 保持菜单打开，便于一次勾选多个入口。
@@ -222,7 +220,7 @@ export function ActivityRail(props: {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <div className="activity-rail-footer">
+      <div className="vk-rail-group" data-end="">
         <ActivityRailButton
           active={props.settingsActive}
           icon={<Settings size={18} />}
@@ -258,7 +256,7 @@ function ActivityRailButton({ active, icon, label, onClick, tooltip = true }: {
     <button
       aria-current={active ? "page" : undefined}
       aria-label={label}
-      className={cn("activity-rail-button", active && "active")}
+      className="vk-rail-btn"
       data-active={active ? "true" : "false"}
       onClick={onClick}
       type="button"

@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarProvider } from "@/ui-kit/shell/sidebar";
 import { ProjectSidebar } from "./project-sidebar";
 
 // Verifies actual dnd-kit keyboard sorting has a separate activator from both project actions.

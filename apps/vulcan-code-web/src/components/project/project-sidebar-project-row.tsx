@@ -11,7 +11,7 @@ import {
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
-} from "@/components/ui/sidebar";
+} from "@/ui-kit/shell/sidebar";
 import { useI18n, formatMessage } from "@/i18n";
 import { Button } from "@/ui-kit/primitives/button";
 import { cn } from "@/lib/utils";
@@ -103,7 +103,7 @@ export function SortableProjectRow(props: {
       tooltip={`${props.project.name}\n${props.project.path}`}
     >
       <ProjectIcon isOpen={props.isOpen} project={props.project} size={16} />
-      <span className="vcn-sidebar-label project-folder-label">
+      <span className="vk-side-text project-folder-label">
         <strong>{props.project.name}</strong>
         {showOriginalFolderName ? <small>{folderName}</small> : null}
       </span>

@@ -32,50 +32,6 @@
   overflow-wrap: anywhere;
 }
 
-.vcn-mobile-navigation[data-slot="sheet-content"] {
-  --vcn-mobile-panel-width: 320px;
-  width: min(var(--vcn-mobile-panel-width), calc(100vw - 40px));
-  max-width: none;
-  gap: 0;
-  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
-  background: var(--sidebar);
-}
-
-.vcn-mobile-navigation > .vcn-sidebar {
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-}
-
-.vcn-mobile-navigation .vcn-sidebar-header {
-  padding-top: 48px;
-}
-
-/* The phone drawer shows the rail and its panel side by side; the rail adds its own width to the panel width. */
-/* 手机抽屉并排显示轨道与面板；轨道在面板宽度之外加上自身宽度。 */
-.vcn-mobile-navigation.with-activity-rail[data-slot="sheet-content"] {
-  width: auto;
-  max-width: calc(100vw - 40px);
-  flex-direction: row;
-}
-
-.vcn-mobile-navigation.with-activity-rail > .vcn-sidebar {
-  width: var(--vcn-mobile-panel-width);
-  min-width: 0;
-  flex: 0 1 auto;
-}
-
-.vcn-mobile-navigation.with-activity-rail > .activity-rail {
-  height: 100%;
-  border-right: 1px solid var(--sidebar-border, var(--border));
-}
-
-.vcn-mobile-navigation.with-activity-rail .activity-rail-brand {
-  height: auto;
-  padding-top: 48px;
-  padding-bottom: 10px;
-}
-
 /* Form layouts respond to available content width, including a resized desktop side pane. */
 /* 表单根据内容可用宽度变化，同时兼顾桌面侧栏挤占空间的情况。 */
 @container workspace-page (max-width: 640px) {
@@ -98,18 +54,9 @@
     min-height: 0;
   }
 
-  .console-shell,
   .workspace-panel-shell {
     min-height: 0;
     height: 100%;
-  }
-
-  .vcn-sidebar-inset {
-    margin: 0;
-    border: 0;
-    border-radius: 0;
-    min-height: 0;
-    width: 100%;
   }
 
   .workspace {
@@ -443,7 +390,7 @@
     min-width: 40px;
   }
 
-  :is(.composer-toolbar, .console-header, .vcn-mobile-navigation) button,
+  :is(.composer-toolbar, .console-header, .vk-shell-drawer) button,
   .composer-toolbar [role="combobox"] {
     min-height: 40px;
     min-width: 40px;
@@ -493,7 +440,7 @@
 /* Motion preferences apply to shell transitions as well as component animations. */
 /* 动效偏好同时作用于外壳过渡与组件动画。 */
 @media (prefers-reduced-motion: reduce) {
-  .vcn-sidebar, .vcn-sidebar-inset, .composer-dock, .conversation-scroll-content {
+  .composer-dock, .conversation-scroll-content {
     transition: none;
   }
 }

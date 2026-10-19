@@ -121,12 +121,6 @@
 .vcn-stream-reveal-children > :nth-child(5) { animation-delay: calc(var(--vcn-stagger) * 4); }
 .vcn-stream-reveal-children > :nth-child(n + 6) { animation-delay: calc(var(--vcn-stagger) * 5); }
 
-/* Sidebar rows: hover tint and the selected tile ease in instead of snapping. */
-/* 侧栏行：悬停底色与选中底块平滑出现，而不是突变。 */
-.vcn-sidebar-menu-button {
-  transition: background-color var(--vcn-duration-fast) var(--vcn-ease-out), color var(--vcn-duration-fast) var(--vcn-ease-out);
-}
-
 /* Buttons acknowledge presses with a slight sink. */
 /* 按钮按下时轻微下沉以确认操作。 */
 [data-slot="button"] { transition-property: color, background-color, border-color, box-shadow, opacity, filter, transform; }

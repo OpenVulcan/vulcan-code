@@ -23,33 +23,20 @@
   --vcn-selected-tile-glow: 0 0 12px -3px color-mix(in srgb, var(--primary) 55%, transparent);
 }
 
-/* Expanded sidebar rows: ember tile, warm hairline and flame icon. */
-/* 展开侧栏行：余烬色底块、暖色细描边与火焰色图标。 */
-:is(.vcn-sidebar, .activity-rail-flyout) .vcn-sidebar-menu-button.active,
-:is(.vcn-sidebar, .activity-rail-flyout) .vcn-sidebar-menu-button.active:hover,
-:is(.vcn-sidebar, .activity-rail-flyout) .vcn-sidebar-menu-button.active:focus-visible,
-:is(.vcn-sidebar, .activity-rail-flyout) .conversation-tree-button.active,
-:is(.vcn-sidebar, .activity-rail-flyout) .conversation-tree-button.active:hover,
-:is(.vcn-sidebar, .activity-rail-flyout) .conversation-tree-button.active:focus-visible,
+/* Feature panel rows: ember tile, warm hairline and flame icon. */
+/* 功能面板行：余烬色底块、暖色细描边与火焰色图标。 */
 .workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
   --conversation-tree-row-bg: var(--vcn-selected-fill);
   background: var(--vcn-selected-wash), var(--vcn-selected-fill);
   box-shadow: inset 0 0 0 1px var(--vcn-selected-ring), var(--vcn-selected-lift);
   color: var(--vcn-selected-foreground);
 }
-:is(.vcn-sidebar, .activity-rail-flyout) .vcn-sidebar-menu-button.active > svg,
 .workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) > svg {
   color: var(--vcn-selected-icon);
-}
-:is(.vcn-sidebar, .activity-rail-flyout) .vcn-sidebar-menu-button.active .conversation-tree-label {
-  font-weight: 500;
 }
 
 /* Flyouts and in-page menus reuse the same ember so every "current" row speaks one language. */
 /* 悬浮菜单与页内菜单复用同一余烬色，使所有「当前项」使用同一视觉语言。 */
-.activity-rail-flyout-item.active,
-.activity-rail-flyout-item.active:hover,
-.activity-rail-flyout-item.active:focus-visible,
 .context-dynamic-tabs-menu-item.active,
 .workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
   border-color: transparent;
@@ -70,7 +57,6 @@
   box-shadow: var(--vcn-shadow-control-on);
   color: var(--foreground);
 }
-.activity-rail-flyout-item.active svg,
 .context-dynamic-tabs-menu-item.active svg,
 .workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation .workspace-tool-panel-menu-row.active > svg,
 .project-settings-nav-button.active svg {

@@ -39,7 +39,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebarNavigation,
-} from "@/components/ui/sidebar"
+} from "@/ui-kit/shell/sidebar"
 import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus"
 import { useI18n } from "@/i18n"
 import type {
@@ -173,7 +173,7 @@ function FeatureOverviewMenu(props: {
                 tooltip={row.label}
               >
                 {row.icon}
-                <span className="vcn-sidebar-label">
+                <span className="vk-side-text">
                   <strong>{row.label}</strong>
                   <small>{row.detail}</small>
                 </span>
@@ -186,15 +186,15 @@ function FeatureOverviewMenu(props: {
                 tooltip={row.label}
               >
                 {row.icon}
-                <span className="vcn-sidebar-label">
+                <span className="vk-side-text">
                   <strong>{row.label}</strong>
                   <small>{row.detail}</small>
                 </span>
               </SidebarMenuButton>
             ) : (
-              <div className="vcn-sidebar-static-item feature-sidebar-row">
+              <div className="vk-nav-item vk-side-button feature-sidebar-row" data-static="">
                 {row.icon}
-                <span className="vcn-sidebar-label">
+                <span className="vk-side-text">
                   <strong>{row.label}</strong>
                   <small>{row.detail}</small>
                 </span>
@@ -261,7 +261,7 @@ function SettingsSidebarGroupRow(props: {
           tooltip={props.group.label}
         >
           {props.group.icon}
-          <span className="vcn-sidebar-label project-folder-label">
+          <span className="vk-side-text project-folder-label">
             <strong>{props.group.label}</strong>
           </span>
           <span className="project-folder-arrow" aria-hidden="true">
@@ -278,7 +278,7 @@ function SettingsSidebarGroupRow(props: {
               onClick={() => props.onSelectSettingsSubArea(area.id)}
               tooltip={area.label}
             >
-              <span className="vcn-sidebar-label conversation-tree-label">
+              <span className="vk-side-text conversation-tree-label">
                 <strong>{area.label}</strong>
               </span>
             </SidebarMenuButton>

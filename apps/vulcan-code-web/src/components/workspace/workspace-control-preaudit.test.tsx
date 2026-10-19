@@ -19,7 +19,7 @@ vi.mock("@/components/conversation/conversation-branch-workspace-v1", () => ({ C
 vi.mock("@/state/conversation-live-stream-context", () => ({ useConversationTransientReasoningStatus: () => null }));
 vi.mock("@/state/conversation-session-event-window-owner-v1", () => ({ useConversationSessionEventWindowOwnerV1: () => ({ snapshot: { events: [] }, loading: false, error: null }) }));
 vi.mock("@/components/conversation/chat-area/conversation-scroll-controller", () => ({ useConversationScrollController: () => ({ scheduleStoredRestore: () => undefined }) }));
-vi.mock("@/components/ui/sidebar", () => ({ SidebarTrigger: () => null }));
+vi.mock("@/ui-kit/shell/sidebar", () => ({ SidebarTrigger: () => null }));
 vi.mock("@/components/plugins/dynamic-plugin-mount-panel", () => ({ DynamicPluginMountPanel: () => null }));
 vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 

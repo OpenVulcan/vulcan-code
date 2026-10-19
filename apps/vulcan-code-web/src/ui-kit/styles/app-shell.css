@@ -1,0 +1,197 @@
+/* Workbench shell frame as the application renders it: the activity rail, the collapsible navigation
+ * panel and the main column (title strip, page body, status bar). The prototype grid in shell.css lays
+ * the same leaf classes out for the static mock-up; the application keeps a flex frame because the title
+ * strip spans the context panel to reach the window controls, and the context panel is resizable. */
+
+.vk-shell {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--vk-ground);
+}
+
+/* ---------- Activity rail ---------- */
+.vk-shell .vk-rail,
+.vk-shell-drawer > .vk-rail {
+  flex: 0 0 var(--vk-rail-w);
+  width: var(--vk-rail-w);
+  padding: 0 0 calc(var(--vk-u) * 2.5);
+  user-select: none;
+}
+/* The rail is a stacking context (blurred backdrop), so it sits above the main column for the flyout it hosts. */
+.vk-shell .vk-rail { z-index: 40; }
+/* While the panel is open the rail and the panel read as one surface; the panel draws the divider. */
+.vk-shell[data-sidebar="open"] .vk-rail { border-right-color: transparent; }
+.vk-rail-brand {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: var(--vk-titlebar-h);
+}
+.vk-rail-brand[data-tauri-drag-region] > * { pointer-events: none; }
+.vk-rail-brand > .vk-rail-logo { width: calc(var(--vk-u) * 6.5); height: calc(var(--vk-u) * 6.5); margin: 0; color: var(--vk-ink); }
+.vk-rail-group[data-scroll] {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 0 calc(var(--vk-u) * 1.5);
+}
+.vk-rail-divider { flex: none; width: calc(var(--vk-u) * 5); height: 1px; margin: calc(var(--vk-u) * 1) 0; background: var(--vk-line); }
+.vk-rail-btn { flex: none; }
+.vk-rail-btn[data-state="open"] { color: var(--vk-ink); background: var(--vk-hover); }
+.vk-rail-avatar {
+  display: grid;
+  place-items: center;
+  width: calc(var(--vk-u) * 6.5);
+  height: calc(var(--vk-u) * 6.5);
+  background: var(--vk-panel);
+  border: var(--vk-bw) solid var(--vk-line);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  font-weight: 600;
+}
+.vk-rail-avatar[data-signed-in] { background: var(--vk-ember-soft); border-color: color-mix(in srgb, var(--vk-ember) 45%, var(--vk-line)); color: var(--vk-ember-ink); }
+.vk-account-label { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-account-label > span:last-child { display: grid; gap: 1px; min-width: 0; }
+.vk-account-label strong,
+.vk-account-label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-account-label small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+
+/* The session flyout floats beside the rail while the panel is collapsed; it starts below the title strip. */
+.vk-rail-flyout-anchor { display: inline-flex; }
+.vk-rail-flyout {
+  position: fixed;
+  top: var(--vk-titlebar-h);
+  bottom: calc(var(--vk-u) * 2);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: var(--vk-sidebar-w);
+  margin-left: calc(var(--vk-u) * 2);
+  overflow: hidden;
+  background: var(--vk-raised);
+  border: var(--vk-bw) solid var(--vk-line-strong);
+  box-shadow: var(--vk-shadow-2);
+  animation: vk-flyout-in var(--vk-t-fast) var(--vk-ease);
+}
+.vk-rail-flyout-head { flex: none; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4) calc(var(--vk-u) * 1); }
+.vk-rail-flyout-head > strong { display: block; overflow: hidden; font-size: var(--vk-fs-lg); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vk-rail-flyout-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5); }
+.vk-rail-flyout-foot { flex: none; padding: calc(var(--vk-u) * 1.5); border-top: var(--vk-bw) solid var(--vk-line); }
+@keyframes vk-flyout-in { from { opacity: 0; transform: translateX(-4px); } }
+
+/* ---------- Navigation panel ---------- */
+.vk-shell .vk-sidebar {
+  position: relative;
+  flex: 0 0 var(--vk-sidebar-w);
+  display: flex;
+  flex-direction: column;
+  width: var(--vk-sidebar-w);
+  transition: flex-basis var(--vk-t-med) var(--vk-ease), width var(--vk-t-med) var(--vk-ease);
+  user-select: none;
+}
+/* A collapsed panel leaves layout, the accessibility tree and the desktop drag hit area. */
+.vk-shell .vk-sidebar[data-collapsible="offcanvas"] { flex-basis: 0; width: 0; border-right-width: 0; visibility: hidden; }
+.vk-sidebar > .vk-sidebar-head { flex: none; }
+.vk-sidebar-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3); }
+.vk-sidebar > .vk-sidebar-foot { flex: none; }
+/* The brand row lines up with the title strip so the wordmark continues the rail logo's line. */
+.vk-sidebar-head { padding-top: 0; }
+.vk-sidebar-head > .vk-brand { height: var(--vk-titlebar-h); }
+.vk-brand-drag { flex: 1; min-width: 0; display: flex; align-items: center; align-self: stretch; color: var(--vk-ink); }
+.vk-brand-drag[data-tauri-drag-region] > * { pointer-events: none; }
+.vk-brand-drag > small { margin-left: auto; padding-left: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); white-space: nowrap; }
+
+/* Navigation groups used by the feature areas (settings, plugins, memory) beside the rail. */
+.vk-side-group { display: grid; gap: calc(var(--vk-u) * 0.5); padding: calc(var(--vk-u) * 1) 0; }
+.vk-side-label {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+  min-height: var(--vk-h-sm);
+  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 1);
+  color: var(--vk-ink-3);
+  font-family: var(--vk-label-font);
+  font-size: var(--vk-fs-2xs);
+  font-weight: 600;
+  letter-spacing: var(--vk-label-track);
+  text-transform: var(--vk-label-case);
+}
+.vk-side-label > :first-child { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); }
+.vk-side-label .lucide { width: 0.9rem; height: 0.9rem; }
+.vk-side-menu { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+.vk-side-item { position: relative; min-width: 0; }
+.vk-side-button { position: relative; border: var(--vk-bw) solid transparent; }
+.vk-side-button[data-selected="true"] { border-color: var(--vk-line); }
+.vk-side-button > .lucide { flex: none; width: 1rem; height: 1rem; color: var(--vk-ink-3); }
+.vk-side-button[data-selected="true"] > .lucide { color: var(--vk-ember); }
+.vk-side-text { display: grid; flex: 1; min-width: 0; gap: 1px; }
+.vk-side-text > strong { overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.vk-side-text > small { overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-side-action {
+  position: absolute;
+  top: 50%;
+  right: calc(var(--vk-u) * 1);
+  display: grid;
+  place-items: center;
+  width: var(--vk-h-sm);
+  height: var(--vk-h-sm);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-3);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+.vk-side-action:hover,
+.vk-side-action:focus-visible { background: var(--vk-hover); color: var(--vk-ink); }
+/* Hover-only actions stay keyboard reachable: focus reveals them as well. */
+.vk-side-action[data-sidebar-action-hover="true"] { opacity: 0; transition: opacity var(--vk-t-fast) var(--vk-ease); }
+.vk-side-item:hover > .vk-side-action[data-sidebar-action-hover="true"],
+.vk-side-item:hover > * > .vk-side-action[data-sidebar-action-hover="true"],
+.vk-side-action[data-sidebar-action-hover="true"]:focus-visible { opacity: 1; }
+/* A static row reads like a navigation row but does not respond to pointing. */
+.vk-side-button[data-static] { cursor: default; }
+.vk-side-button[data-static]:hover { background: transparent; color: inherit; }
+.vk-side-button.muted { opacity: 0.68; }
+
+/* ---------- Main column ---------- */
+.vk-shell-main {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--vk-ground);
+}
+
+/* ---------- Phone drawer: rail and panel side by side ---------- */
+.vk-shell-drawer[data-slot="sheet-content"] {
+  width: min(var(--vk-sidebar-w), calc(100vw - 40px));
+  max-width: none;
+  gap: 0;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+}
+.vk-shell-drawer.vk-shell-drawer-rail[data-slot="sheet-content"] { width: auto; max-width: calc(100vw - 40px); flex-direction: row; }
+.vk-shell-drawer > .vk-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: min(var(--vk-sidebar-w), calc(100vw - 40px - var(--vk-rail-w)));
+  min-width: 0;
+  height: 100%;
+  border-right: 0;
+}
+.vk-shell-drawer > .vk-rail { height: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .vk-shell .vk-sidebar { transition: none; }
+  .vk-rail-flyout { animation: none; }
+}
+:root[data-vk-motion="reduce"] .vk-shell .vk-sidebar { transition: none; }
+:root[data-vk-motion="reduce"] .vk-rail-flyout { animation: none; }

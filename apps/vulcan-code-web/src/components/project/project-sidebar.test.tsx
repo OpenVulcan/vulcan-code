@@ -6,7 +6,7 @@ import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/i18n";
-import { SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarProvider } from "@/ui-kit/shell/sidebar";
 import { ProjectSidebar } from "@/components/project/project-sidebar";
 
 // noop provides a stable callback for server-rendering navigation-only test props.

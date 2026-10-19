@@ -7,7 +7,7 @@ import type {
 } from "@/components/workspace/workspace-context-panel";
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import { SidebarTrigger } from "@/ui-kit/shell/sidebar";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";

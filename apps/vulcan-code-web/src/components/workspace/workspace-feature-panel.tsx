@@ -1,6 +1,6 @@
 import type * as React from "react";
 
-import { Sidebar, SidebarContent, SidebarHeader } from "@/components/ui/sidebar";
+import { Sidebar, SidebarContent, SidebarHeader } from "@/ui-kit/shell/sidebar";
 import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus";
 
 // WorkspaceFeaturePanel replaces the session panel while a feature page owns the workbench.

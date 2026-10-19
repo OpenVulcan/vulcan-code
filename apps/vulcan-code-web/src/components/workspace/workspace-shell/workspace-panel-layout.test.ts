@@ -3,7 +3,7 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { navigationColumnWidth } from "@/components/shell/navigation-layout";
-import type { useSidebar } from "@/components/ui/sidebar";
+import type { useSidebar } from "@/ui-kit/shell/sidebar";
 import {
   WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH,
   WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,

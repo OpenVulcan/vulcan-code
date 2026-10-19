@@ -66,7 +66,7 @@ export function ActivityRailFlyout(props: {
   // open 将浮层放在轨道右边缘（不在轨道内时为锚点右边缘）；间距由 CSS 添加。
   const open = React.useCallback(() => {
     clearCloseTimer();
-    const edge = anchorRef.current?.closest(".activity-rail") ?? anchorRef.current;
+    const edge = anchorRef.current?.closest(".vk-rail") ?? anchorRef.current;
     const rect = edge?.getBoundingClientRect();
     if (rect) {
       setLeft(rect.right);
@@ -119,8 +119,8 @@ export function ActivityRailFlyout(props: {
   return (
     <>
       <div
-        className="activity-rail-flyout-anchor"
-        onBlur={(event) => { if (!(event.relatedTarget instanceof Element) || !event.relatedTarget.closest(".activity-rail-flyout")) scheduleClose(); }}
+        className="vk-rail-flyout-anchor"
+        onBlur={(event) => { if (!(event.relatedTarget instanceof Element) || !event.relatedTarget.closest(".vk-rail-flyout")) scheduleClose(); }}
         onFocus={open}
         onKeyDown={(event) => { if (event.key === "Escape") { close(); event.stopPropagation(); } }}
         onMouseEnter={open}
@@ -132,7 +132,7 @@ export function ActivityRailFlyout(props: {
       {isOpen ? (
         <div
           aria-label={props.title}
-          className="activity-rail-flyout"
+          className="vk-rail-flyout"
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget) && !(event.relatedTarget instanceof Element && event.relatedTarget.closest(FLYOUT_OVERLAY_SELECTOR))) scheduleClose();
           }}
@@ -146,21 +146,22 @@ export function ActivityRailFlyout(props: {
           role="region"
           style={{ left }}
         >
-          <div className="activity-rail-flyout-header">
-            <span className="activity-rail-flyout-title">{props.title}</span>
+          <div className="vk-rail-flyout-head">
+            <strong>{props.title}</strong>
           </div>
-          <div className="activity-rail-flyout-body">
+          <div className="vk-rail-flyout-body">
             {props.content}
           </div>
           {props.footer ? (
-            <div className="activity-rail-flyout-footer">
+            <div className="vk-rail-flyout-foot">
               <button
-                className="activity-rail-flyout-item"
+                className="vk-nav-item"
+                data-density="compact"
                 onClick={() => { close(); props.footer?.onSelect(); }}
                 type="button"
               >
-                <span className="activity-rail-flyout-icon">{props.footer.icon}</span>
-                <span className="activity-rail-flyout-label">{props.footer.label}</span>
+                {props.footer.icon}
+                <span>{props.footer.label}</span>
               </button>
             </div>
           ) : null}

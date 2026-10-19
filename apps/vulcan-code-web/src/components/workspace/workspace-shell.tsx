@@ -29,8 +29,7 @@ import {
   WorkspaceMemorySettings,
 } from "@/components/workspace/workspace-memory-settings";
 import { WorkspaceFeaturePanel } from "@/components/workspace/workspace-feature-panel";
-import { SidebarInset, SidebarProvider, useSidebar, useSidebarNavigation } from "@/components/ui/sidebar";
-import { navigationShellStyle } from "@/components/shell/navigation-layout";
+import { SidebarInset, SidebarProvider, useSidebar, useSidebarNavigation } from "@/ui-kit/shell/sidebar";
 import {
   Tooltip,
   TooltipContent,
@@ -119,9 +118,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
   const collapsible = props.mainView === "chat";
   return (
     <SidebarProvider
-      className="console-shell"
       collapsible={collapsible}
-      style={navigationShellStyle()}
       open={!collapsible || props.sidebarOpen}
       onOpenChange={props.onSidebarOpenChange}
     >

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/i18n";
-import { SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarProvider } from "@/ui-kit/shell/sidebar";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { ActivityRail, type ActivityRailEntry } from "./activity-rail";
 
@@ -61,7 +61,7 @@ it("keeps dynamic plugin pages in the overflow menu until the user pins them", a
       { id: "plugin:demo:stats", label: "统计", icon: null, active: false, parentId: "skills", onSelect: openPlugin },
     ],
   });
-  const railLabels = () => [...host.querySelectorAll<HTMLButtonElement>(".activity-rail-button")].map((button) => button.getAttribute("aria-label"));
+  const railLabels = () => [...host.querySelectorAll<HTMLButtonElement>(".vk-rail-btn")].map((button) => button.getAttribute("aria-label"));
   expect(railLabels()).toContain("插件");
   expect(railLabels()).not.toContain("统计");
 
@@ -75,7 +75,7 @@ it("keeps dynamic plugin pages in the overflow menu until the user pins them", a
   // 固定是用户的明确操作，因此只有此时才写入布局。
   expect(JSON.parse(store.get("vulcan.gui.activity-rail-pins.v1") ?? "[]")).toContain("plugin:demo:stats");
   expect(railLabels()).toContain("统计");
-  await act(async () => host.querySelector<HTMLButtonElement>('.activity-rail-button[aria-label="统计"]')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('.vk-rail-btn[aria-label="统计"]')!.click());
   expect(openPlugin).toHaveBeenCalledTimes(1);
 });
 
@@ -90,15 +90,15 @@ it("shows the session panel's own tree in the collapsed session area and reopens
   });
   // The session area is open with its panel collapsed, so focusing the sessions button opens the flyout.
   // 处于会话区域且面板已折叠，因此聚焦会话按钮即打开浮层。
-  await act(async () => host.querySelector<HTMLButtonElement>('.activity-rail-button[aria-label="工作台"]')!.focus());
-  const flyout = () => host.querySelector<HTMLElement>(".activity-rail-flyout");
+  await act(async () => host.querySelector<HTMLButtonElement>('.vk-rail-btn[aria-label="工作台"]')!.focus());
+  const flyout = () => host.querySelector<HTMLElement>(".vk-rail-flyout");
   expect(flyout()!.querySelector('[data-testid="session-tree"]')).not.toBeNull();
-  const footer = flyout()!.querySelector<HTMLButtonElement>(".activity-rail-flyout-footer button")!;
+  const footer = flyout()!.querySelector<HTMLButtonElement>(".vk-rail-flyout-foot button")!;
   await act(async () => footer.click());
   expect(flyout()).toBeNull();
   // Reopening the panel ends the collapsed state, so the button no longer offers the flyout.
   // 重新展开面板后不再处于折叠状态，按钮也不再提供浮层。
-  await act(async () => host.querySelector<HTMLButtonElement>('.activity-rail-button[aria-label="工作台"]')!.focus());
+  await act(async () => host.querySelector<HTMLButtonElement>('.vk-rail-btn[aria-label="工作台"]')!.focus());
   expect(flyout()).toBeNull();
 });
 
@@ -113,9 +113,9 @@ it("navigates without a flyout from a feature page", async () => {
   });
   // Outside the session area the sessions button only navigates; the flyout waits until the user is there.
   // 在会话区域之外，会话按钮只负责导航；浮层要等用户进入会话区域后才出现。
-  const button = host.querySelector<HTMLButtonElement>('.activity-rail-button[aria-label="工作台"]')!;
+  const button = host.querySelector<HTMLButtonElement>('.vk-rail-btn[aria-label="工作台"]')!;
   await act(async () => button.focus());
-  expect(host.querySelector(".activity-rail-flyout")).toBeNull();
+  expect(host.querySelector(".vk-rail-flyout")).toBeNull();
   await act(async () => button.click());
   expect(selectSessions).toHaveBeenCalledTimes(1);
 });
@@ -126,6 +126,6 @@ it("does not open the flyout while the session panel itself is visible", async (
     entries: [{ id: "skills", label: "插件", icon: null, active: false, onSelect: vi.fn() }],
     sessionTree: <div data-testid="session-tree">Alpha</div>,
   });
-  await act(async () => host.querySelector<HTMLButtonElement>('.activity-rail-button[aria-label="工作台"]')!.focus());
-  expect(host.querySelector(".activity-rail-flyout")).toBeNull();
+  await act(async () => host.querySelector<HTMLButtonElement>('.vk-rail-btn[aria-label="工作台"]')!.focus());
+  expect(host.querySelector(".vk-rail-flyout")).toBeNull();
 });

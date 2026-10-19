@@ -5,6 +5,7 @@
 @import "./primitives.css";
 @import "./cards.css";
 @import "./shell.css";
+@import "./app-shell.css";
 @import "./conversation.css";
 @import "./answer.css";
 @import "./page-kit.css";

@@ -4,10 +4,9 @@ import { PanelLeftIcon } from "lucide-react"
 
 import { Button } from "@/ui-kit/primitives/button"
 import { Sheet, SheetContent, SheetTitle } from "@/ui-kit/primitives/sheet"
-import { navigationItemVariants } from "@/ui-kit/primitives/navigation-item"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core"
 
 // subscribeSidebarViewport observes window resizing and returns its cleanup callback.
 // subscribeSidebarViewport 监听窗口尺寸变化，返回取消监听的回调。
@@ -54,7 +53,7 @@ function SidebarProvider({
   const wrapperRef = React.useRef<HTMLDivElement>(null)
   // focusTrigger tolerates providers that intentionally render without a trigger.
   // focusTrigger 允许调用方有意省略导航触发器。
-  const focusTrigger = React.useCallback(() => wrapperRef.current?.querySelector<HTMLButtonElement>(".vcn-sidebar-trigger")?.focus(), [])
+  const focusTrigger = React.useCallback(() => wrapperRef.current?.querySelector<HTMLButtonElement>('[data-slot="sidebar-trigger"]')?.focus(), [])
   // Mobile visibility is transient; resizing must never persist a desktop preference.
   // 手机可见状态是临时状态，改变窗口尺寸不能回写桌面偏好。
   const isMobile = React.useSyncExternalStore(subscribeSidebarViewport, readMobileSidebarViewport, () => false)
@@ -99,7 +98,8 @@ function SidebarProvider({
   return (
     <SidebarContext.Provider value={value}>
       <div
-        className={cn("vcn-sidebar-wrapper group/sidebar-wrapper", className)}
+        className={cx("vk-shell", className)}
+        data-sidebar={isMobile || !currentOpen ? "closed" : "open"}
         data-state={state}
         data-mobile={isMobile}
         data-panel-collapsible={collapsible}
@@ -145,11 +145,11 @@ function Sidebar({
   if (isMobile && collapsible !== "none") {
     return (
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="left" className={cn("vcn-mobile-navigation", rail ? "with-activity-rail" : undefined)} aria-describedby={undefined} onCloseAutoFocus={(event) => { event.preventDefault(); focusTrigger() }}>
-          <SheetTitle className="sr-only">{t("sidebar.console")}</SheetTitle>
+        <SheetContent side="left" className={cx("vk-shell-drawer", rail ? "vk-shell-drawer-rail" : undefined)} aria-describedby={undefined} onCloseAutoFocus={(event) => { event.preventDefault(); focusTrigger() }}>
+          <SheetTitle className="vk-sr-only">{t("sidebar.console")}</SheetTitle>
           {rail}
           {panel ? (
-            <aside className={cn("vcn-sidebar", className)} data-slot="sidebar" data-state="expanded" data-side="left" data-variant={variant} {...props}>
+            <aside className={cx("vk-sidebar", className)} data-slot="sidebar" data-state="expanded" data-side="left" data-variant={variant} {...props}>
               {children}
             </aside>
           ) : null}
@@ -169,7 +169,7 @@ function Sidebar({
       {rail}
       <aside
         aria-hidden={hidden || undefined}
-        className={cn("vcn-sidebar", className)}
+        className={cx("vk-sidebar", className)}
         data-collapsible={state === "collapsed" ? collapsible : ""}
         data-side="left"
         data-slot="sidebar"
@@ -184,10 +184,10 @@ function Sidebar({
   )
 }
 
-// SidebarInset renders the right content pane with shadcn dashboard-like framing.
-// SidebarInset 渲染具有 shadcn dashboard 风格边框的右侧内容面板。
+// SidebarInset renders the main column beside the navigation: title strip, page body and status bar.
+// SidebarInset 渲染导航旁的主列：标题条、页面主体与状态栏。
 function SidebarInset({ className, ...props }: React.ComponentProps<"section">) {
-  return <section className={cn("vcn-sidebar-inset", className)} data-slot="sidebar-inset" {...props} />
+  return <section className={cx("vk-shell-main", className)} data-slot="sidebar-inset" {...props} />
 }
 
 // SidebarTrigger renders the button that toggles the sidebar state.
@@ -200,7 +200,8 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
     <Button
       aria-label={t("sidebar.toggle")}
       aria-expanded={open}
-      className={cn("vcn-sidebar-trigger", className)}
+      className={cx("vk-sidebar-trigger", className)}
+      data-slot="sidebar-trigger"
       onClick={(event) => {
         onClick?.(event)
         toggleSidebar()
@@ -218,43 +219,43 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
 // SidebarHeader renders the sidebar header strip.
 // SidebarHeader 渲染侧栏顶部区域。
 function SidebarHeader({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("vcn-sidebar-header", className)} data-slot="sidebar-header" {...props} />
+  return <div className={cx("vk-sidebar-head", className)} data-slot="sidebar-header" {...props} />
 }
 
 // SidebarContent renders the scrollable sidebar body.
 // SidebarContent 渲染可滚动的侧栏主体。
 function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("vcn-sidebar-content", className)} data-slot="sidebar-content" {...props} />
+  return <div className={cx("vk-sidebar-body", className)} data-slot="sidebar-content" {...props} />
 }
 
 // SidebarFooter renders fixed controls below the scrollable sidebar body.
 // SidebarFooter 渲染位于可滚动侧栏主体下方的固定控制区。
 function SidebarFooter({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("vcn-sidebar-footer", className)} data-slot="sidebar-footer" {...props} />
+  return <div className={cx("vk-sidebar-foot", className)} data-slot="sidebar-footer" {...props} />
 }
 
 // SidebarGroup renders one sidebar navigation group.
 // SidebarGroup 渲染一个侧栏导航分组。
 function SidebarGroup({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("vcn-sidebar-group", className)} data-slot="sidebar-group" {...props} />
+  return <div className={cx("vk-side-group", className)} data-slot="sidebar-group" {...props} />
 }
 
 // SidebarGroupLabel renders one sidebar group label.
 // SidebarGroupLabel 渲染单个侧栏分组标签。
 function SidebarGroupLabel({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("vcn-sidebar-group-label", className)} data-slot="sidebar-group-label" {...props} />
+  return <div className={cx("vk-side-label", className)} data-slot="sidebar-group-label" {...props} />
 }
 
 // SidebarMenu renders a vertical menu list.
 // SidebarMenu 渲染垂直菜单列表。
 function SidebarMenu({ className, ...props }: React.ComponentProps<"ul">) {
-  return <ul className={cn("vcn-sidebar-menu", className)} data-slot="sidebar-menu" {...props} />
+  return <ul className={cx("vk-side-menu", className)} data-slot="sidebar-menu" {...props} />
 }
 
 // SidebarMenuItem renders one menu item container.
 // SidebarMenuItem 渲染单个菜单项容器。
 function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
-  return <li className={cn("vcn-sidebar-menu-item", className)} data-slot="sidebar-menu-item" {...props} />
+  return <li className={cx("vk-side-item", className)} data-slot="sidebar-menu-item" {...props} />
 }
 
 // SidebarMenuButton renders a selectable sidebar menu button with collapsed tooltip support.
@@ -278,13 +279,9 @@ function SidebarMenuButton({
     <button
       aria-label={state === "collapsed" && tooltip ? tooltip : props["aria-label"]}
       aria-current={active ? "page" : undefined}
-      className={cn(
-        navigationItemVariants({ density: "default", selected: active }),
-        "vcn-sidebar-menu-button",
-        active && "active",
-        className,
-      )}
+      className={cx("vk-nav-item vk-side-button", className)}
       data-active={active ? "true" : "false"}
+      data-selected={active ? "true" : "false"}
       data-slot="sidebar-menu-button"
       type="button"
       {...props}
@@ -318,7 +315,7 @@ function SidebarMenuAction({
 }) {
   return (
     <button
-      className={cn("vcn-sidebar-menu-action", showOnHover && "show-on-hover", className)}
+      className={cx("vk-side-action", className)}
       data-sidebar-action-hover={showOnHover ? "true" : "false"}
       data-slot="sidebar-menu-action"
       type="button"

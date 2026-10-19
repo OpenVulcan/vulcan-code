@@ -28,8 +28,7 @@ import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
-} from "@/components/ui/sidebar"
-import { navigationShellStyle } from "@/components/shell/navigation-layout"
+} from "@/ui-kit/shell/sidebar"
 import { useI18n } from "@/i18n"
 import type {
   FeatureAreaSummary,
@@ -263,9 +262,8 @@ function FeatureShell(props: {
 
   return (
     <SidebarProvider
-      className="console-shell feature-shell"
+      className="feature-shell"
       collapsible={false}
-      style={navigationShellStyle()}
     >
       <FeatureSidebar
         activeArea={props.activeArea}

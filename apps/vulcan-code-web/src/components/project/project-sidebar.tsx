@@ -32,7 +32,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebarNavigation,
-} from "@/components/ui/sidebar";
+} from "@/ui-kit/shell/sidebar";
 import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -361,7 +361,7 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
                   {/* WorkbenchApp 仅在权威快照存在后挂载此侧栏。 */}
                   <SidebarMenuButton className="muted" tooltip={t("sidebar.addProject")} onClick={navigate(props.onCreateProject)}>
                     <FolderPlus size={16} />
-                    <span className="vcn-sidebar-label">
+                    <span className="vk-side-text">
                       <strong>{t("sidebar.noProjects")}</strong>
                       <small>{t("project.sidebar.addAFolderTo")}</small>
                     </span>

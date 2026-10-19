@@ -13,7 +13,7 @@ import {
 import {
   SidebarMenuButton,
   SidebarMenuItem,
-} from "@/components/ui/sidebar";
+} from "@/ui-kit/shell/sidebar";
 import { useI18n, type LocaleCode } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
@@ -91,7 +91,7 @@ export function ConversationTreeRow(props: {
             isSelected={props.isSelected}
             onAction={props.onAction}
           />
-          <span className={cn("vcn-sidebar-label conversation-tree-label", dedicated && "dedicated")}>
+          <span className={cn("vk-side-text conversation-tree-label", dedicated && "dedicated")}>
             {kindLabel ? (
               <Bot aria-label={kindLabel} className="shrink-0 text-primary" role="img" size={13} />
             ) : null}

@@ -168,7 +168,7 @@
   color: color-mix(in srgb, var(--sidebar-foreground) 78%, transparent);
 }
 
-.conversation-tree-button:not(:hover):not(.active):not(:focus-visible) {
+.conversation-tree-button:not(:hover):not([data-selected="true"]):not(:focus-visible) {
   background: transparent;
   color: inherit;
 }
@@ -180,7 +180,7 @@
   color: var(--sidebar-accent-foreground);
 }
 
-.conversation-tree-button.active {
+.conversation-tree-button[data-selected="true"] {
   --conversation-tree-row-bg: var(--conversation-tree-active-bg);
   background: var(--conversation-tree-active-bg);
   color: var(--sidebar-accent-foreground);
@@ -236,7 +236,7 @@
   outline: none;
 }
 
-.conversation-tree-button .vcn-sidebar-label strong {
+.conversation-tree-button .vk-side-text strong {
   display: block;
   font-weight: 400;
   font-size: var(--vcn-font-size-md);
@@ -453,17 +453,34 @@
   outline: none;
 }
 
-.vcn-sidebar-inset {
+.project-group-label {
+  justify-content: space-between;
+}
+
+.project-group-label-main {
   min-width: 0;
-  min-height: 0;
-  flex: 1;
-  display: flex;
-  align-items: stretch;
-  margin: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg) 0 0 var(--vcn-radius-lg);
-  background: var(--background);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--foreground) 7%, transparent);
-  overflow: hidden;
-  transition: margin 180ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-add-button {
+  width: 24px;
+  height: 24px;
+  color: var(--muted-foreground);
+}
+
+.project-add-button:hover {
+  color: var(--foreground);
+}
+
+.project-session-tree.project-drag-active .vk-side-button:hover,
+.project-session-tree.project-drag-active .vk-side-button:focus-visible {
+  background: transparent;
+  color: inherit;
+}
+
+.project-session-tree.project-drag-active .vk-side-action[data-sidebar-action-hover="true"] {
+  opacity: 0;
+  pointer-events: none;
 }
