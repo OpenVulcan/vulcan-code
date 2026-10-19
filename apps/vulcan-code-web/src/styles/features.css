@@ -6,9 +6,15 @@
 
 .project-icon-dialog {
   width: min(720px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .project-icon-layout {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   min-width: 0;
   display: grid;
   gap: 14px;

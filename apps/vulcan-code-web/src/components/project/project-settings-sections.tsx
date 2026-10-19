@@ -34,6 +34,7 @@ import {
   projectAgentSkillStateLabel,
   projectAttachmentKindLabel,
 } from "./project-settings-utils";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Preserve the public section import while the overview owns its independent layout.
 // 保留公开分区导入，同时由概览持有独立布局。
@@ -366,14 +367,14 @@ export function ProjectVmmSection(props: {
                           ? current.filter((value) => value !== project.projectId)
                           : [...current, project.projectId])}
                       />
-                      <span className="truncate" title={project.name}>{project.name}</span>
+                      <span className="vk-truncate" title={project.name}>{project.name}</span>
                     </label>
                   ))}
                   </div>
                 </div>
               ) : null}
               <Button disabled={nativeBindingBusy || !nativeCatalog} onClick={() => void saveNativeBinding()} type="button" variant="outline">
-                {nativeBindingBusy ? <LoaderCircle className="size-4 animate-spin" /> : <Save size={15} />}
+                {nativeBindingBusy ? <LoaderCircle className="vk-spin" /> : <Save size={15} />}
                 {t("projectSettings.vmmNativeSaveBinding")}
               </Button>
             </div>
@@ -417,7 +418,7 @@ export function ProjectVmmSection(props: {
               type="button"
               variant="outline"
             >
-              {nativeBindingBusy ? <LoaderCircle className="size-4 animate-spin" /> : <FolderPlus size={15} />}
+              {nativeBindingBusy ? <LoaderCircle className="vk-spin" /> : <FolderPlus size={15} />}
               {t("projectSettings.vmmCreateAndBind")}
             </Button>
             </div>
@@ -510,12 +511,12 @@ export function ProjectAgentSkillsSection(props: {
         <span>{props.agentLoaded && overrideCount > 0 ? t("projectSettings.agentOverrideCount").replace("{count}", String(overrideCount)) : t("projectSettings.agentInheritsGlobal")}</span>
         {issueCount > 0 ? <span className="project-settings-skill-summary-issue">{formatMessage(t(issueCount === 1 ? "projectSettings.skillFoldersUnreadableOne" : "projectSettings.skillFoldersUnreadable"), { count: issueCount })}</span> : null}
       </p>
-      {props.agentError ? <div role="alert" className="space-y-2 text-sm text-destructive">
+      {props.agentError ? <div role="alert" className="vk-field-error vk-form-stack">
         <p>{props.agentError}</p>
         <Button type="button" variant="outline" disabled={props.agentLoading || props.agentBusySkill !== null} onClick={props.onRetry}>{t("project.settings.reloadProjectSettings")}</Button>
       </div> : null}
       {props.agentLoading ? (
-        <StreamPlaceholder className="project-settings-skill-list py-1.5" label={t("projectSettings.agentLoading")} shape="rows" count={4} />
+        <StreamPlaceholder className="project-settings-skill-list" label={t("projectSettings.agentLoading")} shape="rows" count={4} />
         ) : !props.agentLoaded || props.agentError ? (
         <p className="project-settings-muted">{t("project.settings.projectSkillSettingsHave")}</p>
         ) : props.workbench.agentSkills.records.filter((skill) => skill.effective).length === 0 ? (

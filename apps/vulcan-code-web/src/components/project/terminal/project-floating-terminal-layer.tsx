@@ -576,7 +576,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
           </div> : null}
           {!catalog ? (
             <div className="vk-term-loading" role="status">
-              {catalogLoading ? <StreamPlaceholder className="w-full max-w-sm" label={t("workspaceAudit.terminalLoading")} shape="rows" count={3} /> : (
+              {catalogLoading ? <StreamPlaceholder label={t("workspaceAudit.terminalLoading")} shape="rows" count={3} /> : (
                 <Button size="sm" variant="outline" onClick={() => setCatalogReload((current) => current + 1)}>
                   {t("workspaceAudit.retry")}
                 </Button>
@@ -806,7 +806,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
           if (!open && !projectStates.current.get(project.id)?.busyAction) setTerminalConfirmation(null);
         }}
       >
-        <AlertDialogContent layerClassName="z-[1000]">
+        <AlertDialogContent layerClassName="vk-term-confirm">
           <AlertDialogHeader>
             <AlertDialogTitle>
               {t(terminalConfirmation?.action === "close" ? "workspaceAudit.closeConfirm" : "workspaceAudit.stopConfirm")}
@@ -817,7 +817,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                 : t("workspaceAudit.stopDescription").replace("{name}", confirmationTerminal?.name ?? t("workspaceAudit.terminal"))}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {error ? <p className="text-destructive break-words" role="alert">{error}</p> : null}
+          {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busyAction !== null}>{t("workspaceAudit.cancel")}</AlertDialogCancel>
             <AlertDialogAction

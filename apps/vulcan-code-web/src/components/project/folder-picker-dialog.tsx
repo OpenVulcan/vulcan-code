@@ -28,6 +28,7 @@ import { Spinner } from "@/ui-kit/primitives/spinner";
 import { formatMessage, useI18n } from "@/i18n";
 import type { ProjectDirectoryListing } from "@/types";
 import "@/styles/project-folder-picker.css";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // PLACE_LIMIT caps how many project parent folders the sidebar offers as quick places.
 // PLACE_LIMIT 限制侧栏作为常用位置提供的项目上级目录数量。
@@ -490,7 +491,7 @@ export function ProjectFolderPickerDialog({
               />
               <Button aria-label={t("projectFolderPicker.openPath")} title={t("projectFolderPicker.openPath")} disabled={busy}
                 size="icon-sm" type="submit" variant="ghost">
-                {loading ? <Spinner className="size-4" /> : <ArrowRight size={15} />}
+                {loading ? <Spinner /> : <ArrowRight size={15} />}
               </Button>
             </form>
           ) : (
@@ -526,7 +527,7 @@ export function ProjectFolderPickerDialog({
           )}
           <Button aria-label={t("skills.action.refresh")} title={t("skills.action.refresh")} disabled={!listing || busy}
             onClick={() => void loadDirectory(listing?.path ?? null)} size="icon-sm" type="button" variant="ghost">
-            {loading ? <Spinner className="size-4" /> : <RefreshCw size={14} />}
+            {loading ? <Spinner /> : <RefreshCw size={14} />}
           </Button>
         </div>
         <div className="project-folder-picker-browser">
@@ -616,7 +617,7 @@ export function ProjectFolderPickerDialog({
             </div>
           </section>
         </div>
-        {pathEdited ? <p role="status" className="text-sm text-muted-foreground" data-folder-picker-unbrowsed="">{t("project.folderPicker.openTheEnteredPath")}</p> : null}
+        {pathEdited ? <p role="status" className="vk-form-text" data-folder-picker-unbrowsed="">{t("project.folderPicker.openTheEnteredPath")}</p> : null}
         {error ? <div role="alert" className="project-folder-picker-error">{error}</div> : null}
         {listing?.notice ? <div className="project-folder-picker-notice">{listing.notice}</div> : null}
         <DialogFooter className="project-folder-picker-footer">
@@ -630,7 +631,7 @@ export function ProjectFolderPickerDialog({
             {t("conversation.action.cancel")}
           </Button>
           <Button disabled={!selectedPath || busy} onClick={handleConfirm} type="button" data-folder-picker-confirm="">
-            {submitting ? <Spinner className="size-4" /> : <Check size={16} />}
+            {submitting ? <Spinner /> : <Check size={16} />}
             {submitting ? t("projectFolderPicker.adding") : (confirmLabel ?? t("sidebar.addProject"))}
           </Button>
         </DialogFooter>

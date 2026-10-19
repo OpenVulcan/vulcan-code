@@ -31,7 +31,7 @@ export function UnsupportedSessionDeleteDialog(props: UnsupportedDeleteRequest) 
             {t("conversation.action.cancel")}
           </Button>
           <Button disabled={props.deleting} onClick={props.onConfirm} type="button" variant="destructive">
-            {props.deleting ? <Spinner className="size-4" /> : null}
+            {props.deleting ? <Spinner /> : null}
             {t("workbenchConversation.unsupportedDelete.confirm")}
           </Button>
         </DialogFooter>

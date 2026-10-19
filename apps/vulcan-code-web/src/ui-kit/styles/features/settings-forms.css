@@ -130,6 +130,7 @@
 .vk-form-w-sm { width: 9rem; }
 .vk-form-w-md { width: 11rem; }
 .vk-form-w-lg { width: 14rem; }
+.vk-form-w-xl { width: min(100%, 26rem); }
 .vk-form-w-auto { width: auto; max-width: 18rem; }
 .vk-form-num { text-align: right; font-variant-numeric: tabular-nums; }
 .vk-form-break { overflow-wrap: anywhere; }

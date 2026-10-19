@@ -92,6 +92,8 @@
 .vk-term-stage > .vk-empty .vk-empty-media { background: transparent; border-color: color-mix(in srgb, var(--vk-term-ink) 25%, transparent); color: var(--vk-term-ink); }
 .vk-term-stage > .vk-empty .vk-empty-title { color: color-mix(in srgb, var(--vk-term-ink) 75%, transparent); font-weight: 400; font-size: var(--vk-fs-sm); }
 .vk-term-loading { position: absolute; inset: 0; display: grid; place-items: center; padding: calc(var(--vk-u) * 4); }
+.vk-term-loading > [data-slot="stream-placeholder"] { width: 100%; max-width: 24rem; }
+.vk-term-confirm { z-index: 1000; }
 .vk-term-status {
   position: absolute;
   right: calc(var(--vk-u) * 3);

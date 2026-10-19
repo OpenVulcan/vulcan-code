@@ -15,6 +15,7 @@ import {
   setKnowledgeProjectBinding,
 } from "@/service/knowledge-base-service";
 import type { KnowledgeLibrarySummary, KnowledgeProjectBinding } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ProjectKnowledgeBasesSection renders durable library authorization and inheritance defaults for one project.
 // ProjectKnowledgeBasesSection 渲染单个项目的持久化知识库授权与继承默认值。
@@ -175,8 +176,8 @@ export function ProjectKnowledgeBasesSection(props: {
       {loading || loadedProjectId !== props.projectId && !loadError ? (
         <StreamPlaceholder label={t("projectSettings.knowledgeBasesLoading")} shape="rows" count={3} />
       ) : loadError ? (
-        <div role="alert" className="space-y-2">
-          <p className="break-words text-destructive">{loadError}</p>
+        <div role="alert" className="vk-form-stack">
+          <p className="vk-field-error vk-form-break">{loadError}</p>
           <Button type="button" variant="outline" disabled={Boolean(savingLibraryId)} onClick={() => void loadBindings()}>{t("composer.capability.retry")}</Button>
         </div>
       ) : libraries.length === 0 ? (

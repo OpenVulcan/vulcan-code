@@ -95,10 +95,10 @@ export function RenameDialog(props: {
             onChange={(event) => setValue(event.target.value)}
             placeholder={t("projectDialog.renamePlaceholder")}
           />
-          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+          {error && <p role="alert" className="vk-field-error">{error}</p>}
           <DialogFooter>
             <Button disabled={busy} type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
-            <Button disabled={busy || (props.target?.kind === "conversation" && !value.trim())} type="submit">{busy && <Spinner className="size-4" />}{t("projectDialog.confirm")}</Button>
+            <Button disabled={busy || (props.target?.kind === "conversation" && !value.trim())} type="submit">{busy && <Spinner />}{t("projectDialog.confirm")}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -164,7 +164,7 @@ export function ArchiveProjectDialog(props: {
         <DialogFooter>
           <Button disabled={props.busy} type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
           <Button disabled={props.busy} type="button" variant="destructive" onClick={props.onConfirm}>
-            {props.busy ? <Spinner className="size-4" /> : null}
+            {props.busy ? <Spinner /> : null}
             {props.busy ? busyLabel : confirmLabel}
           </Button>
         </DialogFooter>
