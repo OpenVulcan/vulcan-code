@@ -1,8 +1,9 @@
 import type { ReactNode } from "react"
 
+import { Badge } from "@/ui-kit/primitives/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
 import { Spinner } from "@/ui-kit/primitives/spinner"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core"
 
 // UsagePanelState is the closed set of presentation states supported by a usage surface.
 // UsagePanelState 是用量表面支持的封闭展示状态集合。
@@ -161,6 +162,52 @@ export interface ModelUsageListProps {
   title: string
 }
 
+// USAGE_METER_CELLS is the number of discrete cells in one usage gauge.
+// USAGE_METER_CELLS 是单个用量仪表的离散格数。
+const USAGE_METER_CELLS = 20
+
+// UsageMeterTone is the urgency band of a remaining-quota share.
+// UsageMeterTone 是剩余额度比例的紧迫程度分档。
+export type UsageMeterTone = "ok" | "warn" | "bad"
+
+// UsageMeterProps configures one segmented remaining-quota gauge.
+// UsageMeterProps 配置一个分段式剩余额度仪表。
+export interface UsageMeterProps {
+  // label is the accessible name, normally "window: value".
+  // label 是无障碍名称，通常为“周期: 数值”。
+  label: string
+  // percentage is the remaining share from zero to one hundred.
+  // percentage 是零至一百的剩余比例。
+  percentage: number
+  // tone selects the urgency color; the caller owns its thresholds.
+  // tone 选择紧迫程度颜色；阈值由调用方持有。
+  tone: UsageMeterTone
+}
+
+// UsageMeter renders a remaining share as discrete instrument cells with synchronized ARIA values.
+// UsageMeter 以离散仪表格渲染剩余比例，并同步 ARIA 数值。
+export function UsageMeter(props: UsageMeterProps) {
+  // percentage prevents invalid geometry while the caller keeps the exact text value.
+  // percentage 防止无效几何，精确文本值由调用方保留。
+  const percentage = Math.max(0, Math.min(100, props.percentage))
+  // lit is the count of filled cells; any non-zero share keeps at least one cell visible.
+  // lit 是点亮格数；任何非零比例至少保留一格可见。
+  const lit = percentage > 0 ? Math.max(1, Math.round((percentage / 100) * USAGE_METER_CELLS)) : 0
+  return (
+    <div
+      aria-label={props.label}
+      aria-valuemax={100}
+      aria-valuemin={0}
+      aria-valuenow={Math.round(percentage)}
+      className="vk-meter"
+      data-tone={props.tone}
+      role="progressbar"
+    >
+      {Array.from({ length: USAGE_METER_CELLS }, (_, index) => <i data-on={index < lit ? "" : undefined} key={index} />)}
+    </div>
+  )
+}
+
 // UsageMetric renders one stable KPI treatment for both standalone and embedded contexts.
 // UsageMetric 为独立与嵌入场景渲染统一的 KPI 样式。
 export function UsageMetric(props: UsageMetricProps) {
@@ -168,38 +215,27 @@ export function UsageMetric(props: UsageMetricProps) {
   // content 包含两种密度模式共享的指标层级。
   const content = (
     <>
-      <p className={cn(props.compact ? "text-[11px]" : "text-xs", "text-muted-foreground")}>{props.label}</p>
-      <p className={cn("mt-1 min-w-0 break-words font-semibold tabular-nums tracking-tight", props.compact ? "text-sm" : "text-xl")}>{props.value}</p>
-      {props.description ? <p className="mt-1 text-xs text-muted-foreground">{props.description}</p> : null}
+      <span>{props.label}</span>
+      <strong>{props.value}</strong>
+      {props.description ? <small>{props.description}</small> : null}
     </>
   )
   return props.compact
-    ? <div className="min-w-0 rounded-md bg-muted/35 px-2.5 py-1.5">{content}</div>
-    : <Card className="min-w-0"><CardContent className="p-3">{content}</CardContent></Card>
+    ? <div className="vk-usage-metric">{content}</div>
+    : <Card><CardContent className="vk-usage-metric" data-size="lg">{content}</CardContent></Card>
 }
 
-// UsageQuotaMetric renders one exact quota value with a normalized semantic progress bar.
-// UsageQuotaMetric 使用规范化语义进度条渲染一个精确额度值。
+// UsageQuotaMetric renders one exact quota value with a normalized semantic gauge.
+// UsageQuotaMetric 使用规范化语义仪表渲染一个精确额度值。
 export function UsageQuotaMetric(props: UsageQuotaMetricViewModel) {
-  // percentage prevents invalid visual geometry while preserving the adapter-owned text value.
-  // percentage 防止无效视觉几何，同时保留适配层拥有的文本值。
-  const percentage = Math.max(0, Math.min(100, props.percentage))
-  // indicatorClassName communicates remaining-quota urgency without changing the exact value.
-  // indicatorClassName 在不改变精确数值的前提下表达剩余额度紧迫程度。
-  const indicatorClassName = percentage <= 10
-    ? "bg-destructive"
-    : percentage <= 30
-      ? "bg-amber-500"
-      : "bg-emerald-500"
+  // tone communicates remaining-quota urgency without changing the exact value.
+  // tone 在不改变精确数值的前提下表达剩余额度紧迫程度。
+  const tone: UsageMeterTone = props.percentage <= 10 ? "bad" : props.percentage <= 30 ? "warn" : "ok"
   return (
-    <div className="min-w-0 space-y-1">
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="truncate text-muted-foreground">{props.label}</span>
-        <span className="shrink-0 tabular-nums">{props.value}</span>
-      </div>
-      <div aria-label={`${props.label}: ${props.value}`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={Math.round(percentage)} className="h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar">
-        <div className={cn("h-full rounded-full", indicatorClassName)} style={{ width: `${percentage}%` }} />
-      </div>
+    <div className="vk-usage-row" data-tone={tone}>
+      <span className="vk-usage-name vk-truncate">{props.label}</span>
+      <span className="vk-usage-value">{props.value}</span>
+      <UsageMeter label={`${props.label}: ${props.value}`} percentage={props.percentage} tone={tone} />
     </div>
   )
 }
@@ -208,9 +244,9 @@ export function UsageQuotaMetric(props: UsageQuotaMetricViewModel) {
 // TokenUsageBreakdown 渲染精确 Token 分类且不自行推导合计。
 export function TokenUsageBreakdown(props: TokenUsageBreakdownViewModel) {
   return (
-    <section className="space-y-2">
-      <h4 className="text-xs font-medium text-muted-foreground">{props.title}</h4>
-      <div className="grid gap-2 sm:grid-cols-2">
+    <section className="vk-usage-group">
+      <h4 className="vk-label">{props.title}</h4>
+      <div className="vk-usage-metrics">
         {props.items.map((item) => <UsageMetric compact key={item.id} {...item} />)}
       </div>
     </section>
@@ -221,13 +257,13 @@ export function TokenUsageBreakdown(props: TokenUsageBreakdownViewModel) {
 // CostSummary 渲染精确费用字符串与明确来源。
 export function CostSummary(props: CostSummaryViewModel) {
   return (
-    <section className="rounded-lg border bg-muted/20 p-3">
-      <div className="flex min-w-0 items-baseline justify-between gap-3">
-        <h4 className="text-xs text-muted-foreground">{props.label}</h4>
-        <strong className="min-w-0 break-all text-lg tabular-nums">{props.amount}</strong>
+    <section className="vk-usage-cost">
+      <div>
+        <h4 className="vk-label">{props.label}</h4>
+        <strong>{props.amount}</strong>
       </div>
-      {props.source ? <p className="mt-1 text-xs font-medium">{props.source}</p> : null}
-      {props.description ? <p className="mt-1 text-xs text-muted-foreground">{props.description}</p> : null}
+      {props.source ? <p>{props.source}</p> : null}
+      {props.description ? <small>{props.description}</small> : null}
     </section>
   )
 }
@@ -236,23 +272,23 @@ export function CostSummary(props: CostSummaryViewModel) {
 // ModelUsageList 渲染已聚合模型用量且不重新计算计量事实。
 export function ModelUsageList(props: ModelUsageListProps) {
   return (
-    <section className="space-y-2">
-      <h4 className="text-xs font-medium text-muted-foreground">{props.title}</h4>
-      <div className="divide-y rounded-lg border">
+    <section className="vk-usage-group">
+      <h4 className="vk-label">{props.title}</h4>
+      <ul className="vk-usage-models">
         {props.models.map((model) => (
-          <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2" key={model.id}>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{model.label}</p>
-              {model.provider ? <p className="truncate text-xs text-muted-foreground">{model.provider}</p> : null}
-            </div>
-            <div className="shrink-0 text-right text-xs tabular-nums">
-              {model.tokens ? <p>{model.tokens}</p> : null}
-              {model.requests ? <p className="text-muted-foreground">{model.requests}</p> : null}
-              {model.cost ? <p className="text-muted-foreground">{model.cost}</p> : null}
-            </div>
-          </div>
+          <li key={model.id}>
+            <span>
+              <strong className="vk-truncate">{model.label}</strong>
+              {model.provider ? <small className="vk-truncate">{model.provider}</small> : null}
+            </span>
+            <span>
+              {model.tokens ? <b>{model.tokens}</b> : null}
+              {model.requests ? <small>{model.requests}</small> : null}
+              {model.cost ? <small>{model.cost}</small> : null}
+            </span>
+          </li>
         ))}
-      </div>
+      </ul>
     </section>
   )
 }
@@ -264,29 +300,29 @@ export function UsagePanel(props: UsagePanelProps) {
   // showBody 在明确展示空、加载与错误状态时仍保留部分可用事实。
   const showBody = props.model.state === "ready" || props.model.state === "partial"
   return (
-    <Card className={cn("min-w-0", props.className)} data-state={props.model.state} data-slot="usage-panel">
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <CardTitle className="text-sm">{props.model.title}</CardTitle>
-            {props.model.description ? <CardDescription className="mt-1">{props.model.description}</CardDescription> : null}
-          </div>
-          {props.model.state === "partial" && props.model.stateLabel ? <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">{props.model.stateLabel}</span> : null}
+    <Card className={cx("vk-usage-panel", props.className)} data-state={props.model.state} data-slot="usage-panel">
+      <CardHeader>
+        <div className="vk-usage-head">
+          <span>
+            <CardTitle>{props.model.title}</CardTitle>
+            {props.model.description ? <CardDescription>{props.model.description}</CardDescription> : null}
+          </span>
+          {props.model.state === "partial" && props.model.stateLabel ? <Badge variant="outline">{props.model.stateLabel}</Badge> : null}
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="vk-usage">
         {props.model.state === "loading" ? (
-          <div className="flex min-h-20 items-center justify-center gap-2 text-sm text-muted-foreground"><Spinner />{props.model.stateMessage}</div>
+          <p className="vk-usage-state"><Spinner />{props.model.stateMessage}</p>
         ) : null}
         {props.model.state === "empty" || props.model.state === "error" ? (
-          <div className={cn("flex min-h-20 items-center justify-center rounded-lg border border-dashed px-4 text-center text-sm", props.model.state === "error" ? "border-destructive/35 text-destructive" : "text-muted-foreground")}>{props.model.stateMessage}</div>
+          <p className="vk-usage-state" data-tone={props.model.state === "error" ? "bad" : undefined}>{props.model.stateMessage}</p>
         ) : null}
         {showBody ? (
           <>
-            {props.model.stateMessage ? <p className="rounded-md bg-muted/35 px-3 py-2 text-xs text-muted-foreground">{props.model.stateMessage}</p> : null}
+            {props.model.stateMessage ? <p className="vk-usage-note">{props.model.stateMessage}</p> : null}
             {/* Fit metrics to their actual panel width instead of the application's viewport. */}
             {/* 根据实际面板宽度排列指标，避免依据整个应用视口挤压嵌入面板。 */}
-            {props.model.metrics?.length ? <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-2">{props.model.metrics.map((metric) => <UsageMetric compact key={metric.id} {...metric} />)}</div> : null}
+            {props.model.metrics?.length ? <div className="vk-usage-metrics">{props.model.metrics.map((metric) => <UsageMetric compact key={metric.id} {...metric} />)}</div> : null}
             {props.model.tokenBreakdown ? <TokenUsageBreakdown {...props.model.tokenBreakdown} /> : null}
             {props.model.cost ? <CostSummary {...props.model.cost} /> : null}
             {props.model.models?.length && props.model.modelsTitle ? <ModelUsageList models={props.model.models} title={props.model.modelsTitle} /> : null}

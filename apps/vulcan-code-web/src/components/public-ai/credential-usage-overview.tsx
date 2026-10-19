@@ -1,5 +1,6 @@
 import * as React from "react"
 
+import { UsageMeter, type UsageMeterTone } from "@/components/product/usage"
 import { useI18n, type TranslationKey } from "@/i18n"
 import type {
   PublicAiAccountUsage,
@@ -112,7 +113,7 @@ export function useCredentialUsageOverview(props: CredentialUsageOverviewProps):
   // quotaContent adapts the declared provider capability before entering the pure display layer.
   // quotaContent 在进入纯展示层前适配已声明的供应商能力。
   const quotaContent = nonPlanAccount ? (
-    <span className="text-center text-xs text-muted-foreground">
+    <span className="vk-usage-hint">
       {t("composer.accountCard.noQuotaWindows")}
     </span>
   ) : (
@@ -154,14 +155,14 @@ export function CredentialUsageOverviewView(props: CredentialUsageOverviewViewPr
 // 参数：props.model 提供已格式化事实；返回紧凑的描述列表。
 export function CredentialUsageInlineFacts(props: { model: CredentialUsageOverviewViewModel }) {
   return (
-    <dl className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs" data-slot="credential-usage-facts">
-      <div className="flex min-w-0 items-baseline gap-1.5">
-        <dt className="shrink-0 text-muted-foreground">{props.model.planLabel}</dt>
-        <dd className="min-w-0 break-words font-medium">{props.model.planValue}</dd>
+    <dl className="vk-usage-facts" data-slot="credential-usage-facts">
+      <div>
+        <dt>{props.model.planLabel}</dt>
+        <dd>{props.model.planValue}</dd>
       </div>
-      <div className="flex min-w-0 items-baseline gap-1.5">
-        <dt className="shrink-0 text-muted-foreground">{props.model.balanceLabel}</dt>
-        <dd className="min-w-0 break-words font-medium tabular-nums">{props.model.balanceValue}</dd>
+      <div>
+        <dt>{props.model.balanceLabel}</dt>
+        <dd>{props.model.balanceValue}</dd>
       </div>
     </dl>
   )
@@ -177,20 +178,14 @@ export function CredentialUsageQuotaPanel(props: { children?: React.ReactNode; h
   // hasContent 区分仅余额账号，其面板只有事实行。
   const hasContent = props.children !== null && props.children !== undefined && props.children !== false
   return (
-    <div className="flex min-h-0 flex-1 flex-col rounded-md bg-(--vcn-fill-subtle) px-2.5 py-2" data-slot="credential-usage">
+    <div className="vk-usage-quota" data-slot="credential-usage">
       {props.header ? (
-        <div
-          className={hasContent ? "mb-2 border-b border-border/60 pb-1.5" : undefined}
-          data-slot="credential-usage-header"
-        >
+        <div data-ruled={hasContent ? "" : undefined} data-slot="credential-usage-header">
           {props.header}
         </div>
       ) : null}
       {hasContent ? (
-        <div
-          className={`flex flex-1 items-center justify-center ${props.header ? "min-h-8" : "min-h-12"}`}
-          data-slot="credential-usage-content"
-        >
+        <div data-slot="credential-usage-content">
           {props.children}
         </div>
       ) : null}
@@ -218,23 +213,23 @@ function CredentialUsageSummary(props: {
   // t 使用当前语言解析供应商感知的用量状态。
   const { t } = useI18n()
   if (props.credentialProfile?.account_usage_query === "unsupported") {
-    return <span className="text-center text-xs text-muted-foreground">{t("composer.accountCard.usageUnsupported")}</span>
+    return <span className="vk-usage-hint">{t("composer.accountCard.usageUnsupported")}</span>
   }
   if (props.usageRequiresManagementKey && !props.hasManagementKey) {
-    return <span className="text-center text-xs text-muted-foreground">{t("composer.accountCard.managementKeyRequired")}</span>
+    return <span className="vk-usage-hint">{t("composer.accountCard.managementKeyRequired")}</span>
   }
   if (!props.usage) {
-    return <span className="text-center text-xs text-muted-foreground">{t("composer.accountCard.usageNotQueried")}</span>
+    return <span className="vk-usage-hint">{t("composer.accountCard.usageNotQueried")}</span>
   }
   if (props.usage.availability === "temporarily_unavailable") {
     return (
-      <span className="text-center text-xs text-muted-foreground">
+      <span className="vk-usage-hint">
         {props.usage.refresh_message ?? t("composer.accountCard.usageUnavailable")}
       </span>
     )
   }
   if (!Array.isArray(props.usage.quota_windows)) {
-    return <span className="text-center text-xs text-destructive">{t("composer.accountCard.usageInvalid")}</span>
+    return <span className="vk-usage-hint" data-tone="bad">{t("composer.accountCard.usageInvalid")}</span>
   }
   // rows joins MiniMax rolling and weekly windows into resource buckets.
   // rows 将 MiniMax 滚动周期与周周期组合为资源桶。
@@ -261,7 +256,7 @@ function CredentialUsageSummary(props: {
     return <TavilyUsageSummary window={tavilyPlanWindow} />
   }
   if (props.usage.quota_windows.length === 0) {
-    return <span className="text-center text-xs text-muted-foreground">{t(
+    return <span className="vk-usage-hint">{t(
       props.credentialProfile?.account_usage_query === "opencode_go"
         ? "composer.accountCard.opencodeNoActiveQuota"
         : "composer.accountCard.noQuotaWindows",
@@ -271,7 +266,7 @@ function CredentialUsageSummary(props: {
     return <OpenDesignUsageSummary windows={props.usage.quota_windows} />
   }
   return (
-    <div className="w-full space-y-1.5">
+    <div className="vk-usage-windows">
       {props.usage.quota_windows.slice(0, 3).map((window) => (
         <UsageWindowMetric
           key={window.id}
@@ -349,7 +344,7 @@ function OpenDesignUsageSummary(props: { windows: PublicAiAccountUsageWindow[] }
     return () => window.clearInterval(interval)
   }, [])
   return (
-    <div className="w-full space-y-2" data-slot="open-design-plan-usage">
+    <div className="vk-usage-windows" data-slot="open-design-plan-usage">
       {props.windows.map((window) => (
         <UsageWindowMetric
           key={window.id}
@@ -458,7 +453,7 @@ function CommandCodeUsageSummary(props: { rows: CommandCodeUsageRows }) {
   // t 使用当前语言解析稳定的 CommandCode 额度标签。
   const { t } = useI18n()
   return (
-    <div className="w-full space-y-1.5 text-[11px]">
+    <div className="vk-usage-windows">
       {props.rows.monthly ? (
         <UsageWindowMetric
           label={commandCodeUsageWindowLabel(props.rows.monthly, t)}
@@ -466,7 +461,7 @@ function CommandCodeUsageSummary(props: { rows: CommandCodeUsageRows }) {
         />
       ) : null}
       {props.rows.purchased || props.rows.free ? (
-        <div className="grid grid-cols-2 gap-1" data-slot="credential-credit-balances">
+        <div className="vk-usage-pair" data-slot="credential-credit-balances">
           {props.rows.purchased ? (
             <UsageWindowMetric
               label={commandCodeUsageWindowLabel(props.rows.purchased, t)}
@@ -514,28 +509,20 @@ function TavilyUsageSummary(props: {
   // percentage 是进度条使用的规范化套餐剩余百分比。
   const percentage = usageWindowPercentage(props.window)
   return (
-    <div className="w-full space-y-1 text-[11px]">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-medium">{t("composer.accountCard.tavilyPlanQuota")}</span>
-        <span className="tabular-nums">
+    <div className="vk-usage-windows">
+      <div className="vk-usage-row" data-tone={percentage === null ? undefined : usageMeterTone(percentage)}>
+        <strong className="vk-usage-name">{t("composer.accountCard.tavilyPlanQuota")}</strong>
+        <span className="vk-usage-value">
           {t("composer.accountCard.used")} {value}
         </span>
-      </div>
-      {hasFiniteLimit && percentage !== null ? (
-        <div
-          aria-label={`${t("composer.accountCard.tavilyPlanQuota")}: ${Math.round(percentage)}%`}
-          aria-valuemax={100}
-          aria-valuemin={0}
-          aria-valuenow={Math.round(percentage)}
-          className="h-1.5 overflow-hidden rounded-full bg-(--vcn-fill-active)"
-          role="progressbar"
-        >
-          <div
-            className={`h-full rounded-full ${usageBarTone(percentage)}`}
-            style={{ width: `${percentage}%` }}
+        {hasFiniteLimit && percentage !== null ? (
+          <UsageMeter
+            label={`${t("composer.accountCard.tavilyPlanQuota")}: ${Math.round(percentage)}%`}
+            percentage={percentage}
+            tone={usageMeterTone(percentage)}
           />
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -592,17 +579,17 @@ function MiniMaxUsageSummary(props: { rows: MiniMaxUsageRow[] }) {
   // t 使用当前语言解析成对窗口标签。
   const { t } = useI18n()
   return (
-    <div className="w-full space-y-1.5">
+    <div className="vk-usage-windows">
       {props.rows.map((row) => (
         <div
-          className="grid grid-cols-[1.75rem_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-1 text-[11px]"
+          className="vk-usage-bucket"
           data-slot="credential-usage-bucket-row"
           key={row.name}
         >
-          <span className="font-medium">{miniMaxBucketLabel(row.name, t)}</span>
+          <span>{miniMaxBucketLabel(row.name, t)}</span>
           <UsageWindowMetric label={t("composer.accountCard.remaining")} window={row.current} />
           <UsageWindowMetric label={t("composer.accountCard.weeklyRemaining")} window={row.weekly} />
-          <span className="whitespace-nowrap tabular-nums text-muted-foreground">
+          <span>
             {t("composer.accountCard.reset")} {usageResetDuration(row.current?.resets_at)}
           </span>
         </div>
@@ -641,28 +628,16 @@ function UsageWindowMetric(props: {
     ? `${t("composer.accountCard.remaining")} ${percentage}%`
     : usageWindowValue(props.window, t)
   return (
-    <div className="min-w-0 space-y-0.5">
-      <div className="flex flex-wrap items-center justify-between gap-1">
-        <span className="break-words text-muted-foreground">{props.label}</span>
-        <span className="break-words tabular-nums">{value}</span>
-      </div>
-      {percentage !== null ? <div
-        aria-label={`${props.label}: ${value}`}
-        aria-valuemax={100}
-        aria-valuemin={0}
-        aria-valuenow={percentage}
-        className="h-1.5 overflow-hidden rounded-full bg-(--vcn-fill-active)"
-        role="progressbar"
-      >
-        <div
-          className={`h-full rounded-full ${usageBarTone(percentage)}`}
-          style={{ width: `${percentage}%` }}
-        />
-      </div> : null}
+    <div className="vk-usage-row" data-tone={percentage === null ? undefined : usageMeterTone(percentage)}>
+      <span className="vk-usage-name">{props.label}</span>
+      <span className="vk-usage-value">{value}</span>
+      {percentage !== null ? (
+        <UsageMeter label={`${props.label}: ${value}`} percentage={percentage} tone={usageMeterTone(percentage)} />
+      ) : null}
       {props.showReset && props.window?.resets_at ? (
-        <div className="text-right text-[10px] tabular-nums text-muted-foreground" data-slot="quota-window-reset">
+        <span className="vk-usage-reset" data-slot="quota-window-reset">
           {t("composer.accountCard.reset")} {usageResetDuration(props.window.resets_at)}
-        </div>
+        </span>
       ) : null}
     </div>
   )
@@ -675,12 +650,12 @@ export const USAGE_CRITICAL_PERCENT = 10
 // USAGE_WARNING_PERCENT 是额度显示为偏低的剩余比例上限（含）。
 const USAGE_WARNING_PERCENT = 30
 
-// usageBarTone colors a remaining-quota bar by the shared thresholds.
-// usageBarTone 按共享阈值为剩余额度条着色。
-function usageBarTone(percentage: number): string {
-  if (percentage <= USAGE_CRITICAL_PERCENT) return "bg-destructive"
-  if (percentage <= USAGE_WARNING_PERCENT) return "bg-[var(--vcn-content-warning)]"
-  return "bg-[var(--vcn-content-success)]"
+// usageMeterTone grades a remaining-quota share by the shared thresholds.
+// usageMeterTone 按共享阈值为剩余额度比例分档。
+function usageMeterTone(percentage: number): UsageMeterTone {
+  if (percentage <= USAGE_CRITICAL_PERCENT) return "bad"
+  if (percentage <= USAGE_WARNING_PERCENT) return "warn"
+  return "ok"
 }
 
 // usageWindowPercentage returns the normalized visual percentage without inventing quota.
