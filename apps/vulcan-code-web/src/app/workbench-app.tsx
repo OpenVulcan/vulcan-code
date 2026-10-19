@@ -25,7 +25,7 @@ import {
   BROWSER_SERVICE_CONNECTION_EVENT,
   type BrowserServiceConnectionDetail,
 } from "@/service";
-import { createConversationEventWindowClient } from "@/service/conversation-event-window-client";
+import { createWorkbenchConversationEventWindowClient } from "@/service/preview-conversation-event-window-client";
 import { ConversationEventWindowController } from "@/service/conversation-event-window-controller";
 import {
   activateSelectedConversationRegistryDisposalLease,
@@ -143,7 +143,7 @@ export function WorkbenchApp(props: {
   const [conversationEventWindowRegistry] = React.useState(() =>
     new SelectedConversationEventWindowRegistry(
       () => new ConversationEventWindowController(
-        createConversationEventWindowClient(serviceClient),
+        createWorkbenchConversationEventWindowClient(),
         undefined,
         liveStreamStore,
       ),
