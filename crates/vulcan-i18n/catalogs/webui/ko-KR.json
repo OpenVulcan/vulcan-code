@@ -5303,7 +5303,6 @@
   "workspace.lifecycle.outputStyleUnsupported": "이 미리 보기 런타임에서는 세션 출력 스타일을 저장할 수 없습니다.",
   "workspace.terminalToggle.withRunning": "{name} 프로젝트 터미널 펼치기 또는 접기, 백그라운드 터미널 {count}개 실행 중",
   "workspace.terminalToggle.named": "{name} 프로젝트 터미널 펼치기 또는 접기",
-  "workspace.terminalToggle.generic": "프로젝트 터미널 펼치기 또는 접기",
   "project.folderPicker.openTheEnteredPath": "디렉터리를 확인하기 전에 입력한 경로를 여세요.",
   "project.sidebar.addAFolderTo": "폴더를 추가해 프로젝트 시작하기",
   "project.sidebar.reorderProject": "프로젝트 {name} 순서 변경 (Space로 시작, 화살표로 이동, Space로 완료)",

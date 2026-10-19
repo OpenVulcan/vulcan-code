@@ -5303,7 +5303,6 @@
   "workspace.lifecycle.outputStyleUnsupported": "This preview runtime cannot save a session output style.",
   "workspace.terminalToggle.withRunning": "Expand or collapse the {name} project terminal; {count} background terminals running",
   "workspace.terminalToggle.named": "Expand or collapse the {name} project terminal",
-  "workspace.terminalToggle.generic": "Expand or collapse the project terminal",
   "project.folderPicker.openTheEnteredPath": "Open the entered path before confirming the directory.",
   "project.sidebar.addAFolderTo": "Add a folder to start a project",
   "project.sidebar.reorderProject": "Reorder project {name} (Space to start, arrows to move, Space to finish)",

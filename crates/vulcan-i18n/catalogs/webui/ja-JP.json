@@ -5303,7 +5303,6 @@
   "workspace.lifecycle.outputStyleUnsupported": "このプレビューランタイムではセッションの出力スタイルを保存できません。",
   "workspace.terminalToggle.withRunning": "{name} プロジェクトのターミナルを展開または折りたたむ（バックグラウンドのターミナル {count} 個が実行中）",
   "workspace.terminalToggle.named": "{name} プロジェクトのターミナルを展開または折りたたむ",
-  "workspace.terminalToggle.generic": "プロジェクトのターミナルを展開または折りたたむ",
   "project.folderPicker.openTheEnteredPath": "ディレクトリを確定する前に、入力したパスを開いてください。",
   "project.sidebar.addAFolderTo": "フォルダーを追加してプロジェクトを開始",
   "project.sidebar.reorderProject": "プロジェクト {name} を並べ替え（Space で開始、矢印キーで移動、Space で完了）",

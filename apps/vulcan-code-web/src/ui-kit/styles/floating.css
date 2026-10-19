@@ -1,0 +1,161 @@
+/* ---------- Floating windows ----------
+ * Movable, resizable windows above the workspace: the project terminal, read-only AI terminals and
+ * dedicated assistants. The layer spans the area between the title strip and the status bar so a window
+ * never covers either; minimizing collapses the window into its status-bar entry. */
+.vk-float-layer {
+  position: absolute;
+  top: var(--vk-titlebar-h);
+  right: 0;
+  bottom: var(--vk-statusbar-h);
+  left: 0;
+  z-index: 42;
+  overflow: hidden;
+  pointer-events: none;
+}
+.vk-float-win {
+  container-type: inline-size;
+  position: absolute;
+  right: calc(var(--vk-u) * 4);
+  bottom: calc(var(--vk-u) * 4);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(48rem, calc(100% - var(--vk-u) * 10));
+  height: min(58vh, 40rem);
+  min-width: min(20rem, 100%);
+  min-height: min(15rem, 100%);
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  resize: both;
+  border: var(--vk-bw) solid var(--vk-line-strong);
+  background: var(--vk-panel);
+  box-shadow: var(--vk-shadow-2);
+  pointer-events: auto;
+}
+.vk-float-win[data-animation-state="opening"],
+.vk-float-win[data-animation-state="closing"] { will-change: transform, clip-path, opacity; contain: paint; }
+.vk-float-win[data-animation-state="closing"] { pointer-events: none; }
+.vk-float-win[data-maximized="true"] { min-width: 0; min-height: 0; max-width: none; max-height: none; resize: none; border-width: 0 0 var(--vk-bw); box-shadow: none; }
+.vk-float-win-head { min-width: 0; border-bottom: var(--vk-bw) solid var(--vk-line); background: var(--vk-ground-2); cursor: move; user-select: none; }
+.vk-float-win[data-maximized="true"] .vk-float-win-head { cursor: default; }
+.vk-float-win-body { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+
+/* Window title row: glyph, name over a quiet detail line, then the window commands. */
+.vk-win-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; min-height: calc(var(--vk-u) * 10); padding: 0 calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 3); }
+.vk-win-title { display: flex; flex: 1 1 auto; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; color: var(--vk-ink); }
+.vk-win-title > .lucide { flex: none; width: 1rem; height: 1rem; color: var(--vk-ember); }
+.vk-win-title > span { display: grid; min-width: 0; }
+.vk-win-title strong,
+.vk-win-title small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-win-title strong { font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-win-title small { color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs); }
+.vk-win-actions { display: flex; flex: none; align-items: center; gap: 0; }
+
+/* ---------- Project terminal ---------- */
+.vk-term-win { position: absolute; inset: 0; display: grid; grid-template-columns: calc(var(--vk-u) * 56) minmax(0, 1fr); min-width: 0; min-height: 0; }
+.vk-term-win[data-list="collapsed"] { grid-template-columns: calc(var(--vk-u) * 10.5) minmax(0, 1fr); }
+.vk-term-list { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; border-right: var(--vk-bw) solid var(--vk-line); background: var(--vk-ground); }
+.vk-term-win[data-list="collapsed"] .vk-term-list { grid-template-rows: minmax(0, 1fr); }
+.vk-term-create { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 2); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-term-rows { display: grid; align-content: start; gap: 1px; min-height: 0; padding: calc(var(--vk-u) * 1.5); overflow-x: hidden; overflow-y: auto; }
+/* One terminal row: status dot and name select the session; edit, stop and close sit at the end. */
+.vk-term-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 0.5); min-height: var(--vk-h-md); border: var(--vk-bw) solid transparent; color: var(--vk-ink-2); }
+.vk-term-row:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-term-row[data-active="true"] { background: var(--vk-panel); border-color: var(--vk-line); color: var(--vk-ink); }
+.vk-term-row[data-active="true"]::before { content: ""; position: absolute; left: -1px; top: -1px; bottom: -1px; width: 2px; background: var(--vk-ember); }
+.vk-term-select { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; height: 100%; padding: 0 calc(var(--vk-u) * 2); border: 0; background: none; color: inherit; font: inherit; font-size: var(--vk-fs-sm); text-align: left; cursor: pointer; }
+.vk-term-select > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-term-select:disabled { opacity: 0.5; cursor: default; }
+.vk-term-dot { flex: none; width: 0.45rem; height: 0.45rem; background: var(--vk-ink-3); }
+[data-status="running"] > .vk-term-select > .vk-term-dot,
+.vk-term-num[data-status="running"]::after { background: var(--vk-ok); box-shadow: 0 0 6px color-mix(in srgb, var(--vk-ok) 60%, transparent); }
+[data-status="failed"] > .vk-term-select > .vk-term-dot,
+.vk-term-num[data-status="failed"]::after { background: var(--vk-bad); }
+.vk-term-rename { width: 100%; min-width: 0; height: calc(var(--vk-h-md) - 2px); }
+.vk-term-actions { display: flex; align-items: center; padding-right: calc(var(--vk-u) * 0.5); opacity: 0; transition: opacity var(--vk-t-fast); }
+.vk-term-row:hover > .vk-term-actions,
+.vk-term-row:focus-within > .vk-term-actions,
+.vk-term-row[data-active="true"] > .vk-term-actions { opacity: 1; }
+.vk-term-actions > .vk-icon-btn[data-action="stop"] .lucide { width: 0.6rem; height: 0.6rem; }
+/* Collapsed list: numbered squares that keep the status as a corner mark. */
+.vk-term-nums { display: grid; align-content: start; justify-items: center; gap: calc(var(--vk-u) * 1.5); min-height: 0; padding: calc(var(--vk-u) * 2) 0; overflow-y: auto; }
+.vk-term-num { position: relative; display: grid; place-items: center; width: var(--vk-h-md); height: var(--vk-h-md); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); color: var(--vk-ink-3); font: 600 var(--vk-fs-2xs)/1 var(--vk-font-mono); cursor: pointer; }
+.vk-term-num::after { content: ""; position: absolute; top: -1px; right: -1px; width: 0.35rem; height: 0.35rem; background: transparent; }
+.vk-term-num:hover { color: var(--vk-ink); border-color: var(--vk-line-strong); }
+.vk-term-num[data-active="true"] { color: var(--vk-ember); border-color: var(--vk-ember); }
+.vk-term-num:disabled { opacity: 0.5; cursor: default; }
+/* The stage holds one live terminal on the terminal palette. */
+.vk-term-stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--vk-term-bg); }
+.vk-term-pane { position: absolute; inset: 0; }
+.vk-term-pane[hidden] { display: none; }
+.vk-term-stage > .vk-empty { position: absolute; inset: 0; color: var(--vk-term-ink); }
+.vk-term-stage > .vk-empty .vk-empty-media { background: transparent; border-color: color-mix(in srgb, var(--vk-term-ink) 25%, transparent); color: var(--vk-term-ink); }
+.vk-term-stage > .vk-empty .vk-empty-title { color: color-mix(in srgb, var(--vk-term-ink) 75%, transparent); font-weight: 400; font-size: var(--vk-fs-sm); }
+.vk-term-loading { position: absolute; inset: 0; display: grid; place-items: center; padding: calc(var(--vk-u) * 4); }
+.vk-term-status {
+  position: absolute;
+  right: calc(var(--vk-u) * 3);
+  bottom: calc(var(--vk-u) * 3);
+  z-index: 2;
+  max-width: calc(100% - var(--vk-u) * 6);
+  padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2);
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-term-ink) 22%, transparent);
+  background: color-mix(in srgb, var(--vk-term-bg) 88%, transparent);
+  color: var(--vk-term-ink);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-2xs);
+  overflow-wrap: anywhere;
+}
+.vk-term-error {
+  position: absolute;
+  top: calc(var(--vk-u) * 2);
+  right: calc(var(--vk-u) * 3);
+  left: calc(var(--vk-u) * 3);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  max-height: calc(var(--vk-u) * 20);
+  padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5);
+  overflow: auto;
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-bad) 50%, var(--vk-line));
+  box-shadow: inset 2px 0 0 var(--vk-bad);
+  background: var(--vk-panel);
+  color: var(--vk-bad);
+  font-size: var(--vk-fs-xs);
+  overflow-wrap: anywhere;
+}
+.vk-term-error > span { flex: 1; min-width: 0; }
+
+/* Read-only AI terminal: an optional error disclosure above a fixed-size screen. */
+.vk-term-readonly { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; background: var(--vk-term-bg); }
+.vk-term-readonly > details { flex: 0 0 auto; max-height: 30%; overflow: auto; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); background: var(--vk-panel); color: var(--vk-bad); }
+.vk-term-readonly > .vk-term-pane { position: relative; flex: 1 1 auto; inset: auto; }
+
+/* A narrow window stacks the list above the terminal. */
+@container (max-width: 520px) {
+  .vk-term-win:not([data-list="collapsed"]) { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(4.5rem, 40%) minmax(0, 1fr); }
+  .vk-term-win:not([data-list="collapsed"]) .vk-term-list { border-right: 0; border-bottom: var(--vk-bw) solid var(--vk-line); }
+  .vk-win-title small { display: none; }
+}
+@media (max-width: 760px) {
+  .vk-float-win { right: calc(var(--vk-u) * 2); bottom: calc(var(--vk-u) * 2); width: calc(100% - var(--vk-u) * 4); min-width: 0; height: min(62vh, 35rem); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vk-term-actions { transition: none; }
+}
+
+/* ---------- Terminal viewport ----------
+ * The xterm host shared by the project terminal, read-only AI terminals and terminal tool results. */
+.vk-term-viewport { position: absolute; inset: 0; min-width: 0; min-height: 0; overflow: hidden; background: var(--vk-term-bg); }
+.vk-term-viewport[data-loading]::after {
+  content: attr(data-loading-label);
+  position: absolute;
+  top: calc(var(--vk-u) * 3);
+  left: calc(var(--vk-u) * 3);
+  color: color-mix(in srgb, var(--vk-term-ink) 60%, transparent);
+  font: var(--vk-fs-2xs) / 1.4 var(--vk-font-mono);
+}
+/* The emulator palette also fills the padding and any unused cells. */
+.vk-term-viewport .xterm { height: 100%; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5); background: var(--vk-term-bg); }
+.vk-term-viewport .xterm-screen canvas { image-rendering: auto; }

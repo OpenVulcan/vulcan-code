@@ -101,15 +101,6 @@ export interface WorkspaceShellProps {
   // Explicit project that owns project-level floating tools.
   // 持有项目级浮动工具的明确项目。
   activeProjectId: string | null;
-  // Ref attached to the top-bar button used as the terminal Genie animation anchor.
-  // 附加到顶部栏按钮的引用，用作终端精灵动画锚点。
-  projectTerminalButtonRef: React.Ref<HTMLButtonElement>;
-  // Count of running background terminals owned by the active project.
-  // 当前活动项目持有的运行中后台终端数量。
-  projectTerminalRunningCount: number;
-  // Toggles the terminal container owned by the active project.
-  // 切换当前活动项目持有的终端容器。
-  onToggleProjectTerminal: () => void;
   // Publishes the exact persisted transcript currently visible in this workspace shell.
   // 发布当前工作区壳中真实可见的持久化转录。
   onNotificationPresentationContextChange: (context: NotificationPresentationContext) => void;

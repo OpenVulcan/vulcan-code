@@ -5303,7 +5303,6 @@
   "workspace.lifecycle.outputStyleUnsupported": "Эта среда выполнения предпросмотра не может сохранить стиль вывода сеанса.",
   "workspace.terminalToggle.withRunning": "Развернуть или свернуть терминал проекта {name}; фоновых терминалов запущено: {count}",
   "workspace.terminalToggle.named": "Развернуть или свернуть терминал проекта {name}",
-  "workspace.terminalToggle.generic": "Развернуть или свернуть терминал проекта",
   "project.folderPicker.openTheEnteredPath": "Откройте введённый путь, прежде чем подтверждать каталог.",
   "project.sidebar.addAFolderTo": "Добавьте папку, чтобы начать проект",
   "project.sidebar.reorderProject": "Изменить порядок проекта {name} (Пробел — начать, стрелки — переместить, Пробел — завершить)",

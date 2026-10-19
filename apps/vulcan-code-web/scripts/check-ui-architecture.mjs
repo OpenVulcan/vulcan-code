@@ -118,7 +118,7 @@ const legacyFeedbackShells = new Set([
   "composer-capability-dialog-empty", "composer-capability-summary-empty", "context-injection-delete-notice",
   "conversation-session-commit-empty", "diff-empty-state", "diff-file-tree-empty", "file-change-empty", "knowledge-empty",
   "markdown-tool-empty", "model-account-card-empty", "model-picker-empty", "project-folder-picker-empty",
-  "project-folder-picker-notice", "project-terminal-empty", "session-review-repository-notice", "settings-archive-empty",
+  "project-folder-picker-notice", "session-review-repository-notice", "settings-archive-empty",
   "settings-error-notice", "subagent-orchestration-empty", "system-error-reconciliation-notice", "workspace-files-panel-notice",
 ])
 

@@ -5303,7 +5303,6 @@
   "workspace.lifecycle.outputStyleUnsupported": "当前预览运行时不支持保存会话输出风格。",
   "workspace.terminalToggle.withRunning": "展开或收起 {name} 项目终端，{count} 个后台终端正在运行",
   "workspace.terminalToggle.named": "展开或收起 {name} 项目终端",
-  "workspace.terminalToggle.generic": "展开或收起项目终端",
   "project.folderPicker.openTheEnteredPath": "请先打开输入的路径，再确认目录。",
   "project.sidebar.addAFolderTo": "添加文件夹，开始一个项目",
   "project.sidebar.reorderProject": "调整项目 {name} 顺序（空格开始，上下键移动，空格完成）",

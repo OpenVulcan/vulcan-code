@@ -5303,7 +5303,6 @@
   "workspace.lifecycle.outputStyleUnsupported": "目前預覽執行階段不支援儲存工作階段輸出風格。",
   "workspace.terminalToggle.withRunning": "展開或收起 {name} 項目終端機，{count} 個背景終端機正在執行",
   "workspace.terminalToggle.named": "展開或收起 {name} 項目終端機",
-  "workspace.terminalToggle.generic": "展開或收起項目終端機",
   "project.folderPicker.openTheEnteredPath": "請先開啟輸入的路徑，再確認目錄。",
   "project.sidebar.addAFolderTo": "新增資料夾，開始一個項目",
   "project.sidebar.reorderProject": "調整項目 {name} 順序（空白鍵開始，方向鍵移動，空白鍵完成）",

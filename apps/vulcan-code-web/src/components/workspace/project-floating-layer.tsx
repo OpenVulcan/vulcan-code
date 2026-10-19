@@ -181,36 +181,28 @@ export function createProjectFloatingGenieKeyframes(
   const transformOrigin = `${originXPercent}% ${originYPercent}%`;
   // fullFrame is the undeformed terminal window endpoint.
   // fullFrame 是未形变终端窗口端点。
-  const fullFrame: Keyframe = {
-    borderRadius: "12px",
-    clipPath: "polygon(0 0, 100% 0, 100% 24%, 100% 56%, 100% 100%, 0 100%, 0 56%, 0 24%)",
+  const fullFrame: Keyframe = {    clipPath: "polygon(0 0, 100% 0, 100% 24%, 100% 56%, 100% 100%, 0 100%, 0 56%, 0 24%)",
     opacity: 1,
     transform: "translate3d(0px, 0px, 0) scale3d(1, 1, 1)",
     transformOrigin,
   };
   // shoulderFrame narrows the button-facing edge while the opposite edge remains broad.
   // shoulderFrame 收窄朝向按钮的边缘，同时保持另一侧边缘较宽。
-  const shoulderFrame: Keyframe = {
-    borderRadius: "11px",
-    clipPath: genieFunnelClipPath(originXPercent, 20, 3, anchorAbove),
+  const shoulderFrame: Keyframe = {    clipPath: genieFunnelClipPath(originXPercent, 20, 3, anchorAbove),
     opacity: 1,
     transform: `translate3d(${translateX * 0.18}px, ${translateY * 0.3}px, 0) scale3d(0.96, 0.82, 1)`,
     transformOrigin,
   };
   // funnelFrame creates the characteristic macOS-style stretched neck before final absorption.
   // funnelFrame 在最终吸入前形成 macOS 风格的拉伸细颈。
-  const funnelFrame: Keyframe = {
-    borderRadius: "9px",
-    clipPath: genieFunnelClipPath(originXPercent, 6, 22, anchorAbove),
+  const funnelFrame: Keyframe = {    clipPath: genieFunnelClipPath(originXPercent, 6, 22, anchorAbove),
     opacity: 0.9,
     transform: `translate3d(${translateX * 0.68}px, ${translateY * 0.78}px, 0) scale3d(0.44, 0.34, 1)`,
     transformOrigin,
   };
   // anchorFrame collapses the remaining neck into the exact toolbar button center.
   // anchorFrame 将剩余细颈折叠到精确的工具栏按钮中心。
-  const anchorFrame: Keyframe = {
-    borderRadius: "8px",
-    clipPath: genieFunnelClipPath(originXPercent, 2.5, 44, anchorAbove),
+  const anchorFrame: Keyframe = {    clipPath: genieFunnelClipPath(originXPercent, 2.5, 44, anchorAbove),
     opacity: 0.18,
     transform: `translate3d(${translateX}px, ${translateY}px, 0) scale3d(${targetScaleX}, ${targetScaleY}, 1)`,
     transformOrigin,
@@ -722,7 +714,7 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
   return (
     <div
       ref={layerRef}
-      className="project-floating-layer"
+      className="vk-float-layer"
       data-project-id={props.projectId}
       data-stack-order={stackOrder}
       style={{ zIndex: stackOrder }}
@@ -732,7 +724,7 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
           ref={surfaceRef}
           aria-hidden={!props.expanded}
           inert={!props.expanded}
-          className="project-floating-surface"
+          className="vk-float-win"
           data-animation-state={animationState}
           data-maximized={windowState.maximized ? "true" : "false"}
           data-workspace-input-preserve-owner="true"
@@ -747,13 +739,13 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
           } : undefined}
         >
           <div
-            className="project-floating-surface-header"
+            className="vk-float-win-head"
             onDoubleClick={handleHeaderDoubleClick}
             onPointerDown={handleHeaderPointerDown}
           >
             {renderedHeader}
           </div>
-          <div className="project-floating-surface-body">{props.children}</div>
+          <div className="vk-float-win-body">{props.children}</div>
         </section>
       ) : null}
     </div>

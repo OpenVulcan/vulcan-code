@@ -16,7 +16,6 @@ import { agentSkillsCatalogSummary } from "@/components/features/agent-skills/ag
 import {
   ProjectSidebar,
 } from "@/components/project/project-sidebar";
-import { Badge } from "@/ui-kit/primitives/badge";
 import { Button } from "@/ui-kit/primitives/button";
 import {
   PluginWorkspaceMenu,
@@ -58,13 +57,12 @@ import { hasServiceRuntime } from "@/service/webui-service-runtime";
 import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
-import { useI18n, formatMessage } from "@/i18n";
+import { useI18n } from "@/i18n";
 import {
   PanelRightClose,
   PanelRightOpen,
   PackagePlus,
   RefreshCw,
-  TerminalSquare,
 } from "lucide-react";
 
 import {
@@ -651,44 +649,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     || visibleSessionSubagentTaskCount > 0
   ));
 
-  // activeTerminalProject is the project-level terminal owner selected by the workbench.
-  // activeTerminalProject 是工作台选中的项目级终端归属项目。
-  const activeTerminalProject = props.workbench.projects.find(
-    (project) => project.id === props.activeProjectId,
-  ) ?? null;
-  // projectTerminalLabel describes the active project's top-bar terminal toggle action.
-  // projectTerminalLabel 描述当前活动项目的顶部栏终端切换操作。
-  const projectTerminalLabel = activeTerminalProject
-    ? props.projectTerminalRunningCount > 0
-      ? formatMessage(t("workspace.terminalToggle.withRunning"), { name: activeTerminalProject.name, count: props.projectTerminalRunningCount })
-      : formatMessage(t("workspace.terminalToggle.named"), { name: activeTerminalProject.name })
-    : t("workspace.terminalToggle.generic");
-  // projectTerminalAction anchors the floating terminal immediately left of the context-panel toggle.
-  // projectTerminalAction 将浮动终端入口锚定在上下文面板切换按钮左侧。
-  const projectTerminalAction = activeTerminalProject ? (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          ref={props.projectTerminalButtonRef}
-          aria-haspopup="dialog"
-          aria-label={projectTerminalLabel}
-          className="icon-button project-terminal-launch-button"
-          onClick={props.onToggleProjectTerminal}
-          size={props.projectTerminalRunningCount > 0 ? "sm" : "icon-sm"}
-          type="button"
-          variant="ghost"
-        >
-          <TerminalSquare size={16} />
-          {props.projectTerminalRunningCount > 0 ? (
-            <Badge aria-hidden="true" variant="secondary">
-              {props.projectTerminalRunningCount}
-            </Badge>
-          ) : null}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{projectTerminalLabel}</TooltipContent>
-    </Tooltip>
-  ) : null;
   // rightPanelLabel describes the page-registered context panel toggle action.
   // rightPanelLabel 描述页面注册的上下文面板切换动作。
   const rightPanelLabel = effectiveRightPanelOpen ? t("contextPanel.close") : t("contextPanel.open");
@@ -916,7 +876,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     ),
     headerRightActions: <>
       <AssistantDockButton />
-      {projectTerminalAction}
       {hasSelectedChatConversation ? contextPanelToggleAction : null}
     </>,
     toolPanels: [{

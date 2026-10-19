@@ -5303,7 +5303,6 @@
   "workspace.lifecycle.outputStyleUnsupported": "Diese Vorschau-Laufzeit kann keinen Sitzungs-Ausgabestil speichern.",
   "workspace.terminalToggle.withRunning": "Terminal des Projekts {name} ein- oder ausklappen; {count} Hintergrundterminals laufen",
   "workspace.terminalToggle.named": "Terminal des Projekts {name} ein- oder ausklappen",
-  "workspace.terminalToggle.generic": "Projektterminal ein- oder ausklappen",
   "project.folderPicker.openTheEnteredPath": "Öffnen Sie den eingegebenen Pfad, bevor Sie das Verzeichnis bestätigen.",
   "project.sidebar.addAFolderTo": "Ordner hinzufügen, um ein Projekt zu starten",
   "project.sidebar.reorderProject": "Projekt {name} neu anordnen (Leertaste zum Starten, Pfeiltasten zum Verschieben, Leertaste zum Beenden)",

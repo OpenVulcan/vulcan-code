@@ -45,9 +45,19 @@ export function WorkbenchStatusBar(props: {
   // Startup snapshot used for the core connection item.
   // 内核连接项使用的启动快照。
   startup: StartupSnapshot;
-  // Running terminals in the active project, or null when no project is active.
-  // 当前项目中运行的终端数量；没有活动项目时为 null。
-  terminalRunningCount: number | null;
+  // The active project terminal, or null when no project is active.
+  // 当前项目终端；没有活动项目时为 null。
+  terminal: {
+    // Name of the project that owns the terminal window.
+    // 持有终端窗口的项目名称。
+    projectName: string;
+    // Running terminals in that project.
+    // 该项目中运行的终端数量。
+    runningCount: number;
+  } | null;
+  // Receives the terminal item, which the terminal window minimizes into.
+  // 接收终端项；终端窗口最小化时收入此处。
+  terminalAnchorRef: React.Ref<HTMLButtonElement>;
   // Memory snapshot used for the memory item.
   // 记忆项使用的记忆快照。
   vmmMemory: VmmMemorySnapshot;
@@ -93,6 +103,10 @@ export function WorkbenchStatusBar(props: {
   const textLabel = t(`appChrome.text.${appearance.text}` as TranslationKey);
   const themeLabel = t(`appChrome.theme.${appearance.theme}` as TranslationKey);
   const ThemeIcon = THEME_ICONS[appearance.theme];
+  const terminal = props.terminal;
+  const terminalLabel = terminal === null ? "" : terminal.runningCount > 0
+    ? formatMessage(t("workspace.terminalToggle.withRunning"), { name: terminal.projectName, count: terminal.runningCount })
+    : formatMessage(t("workspace.terminalToggle.named"), { name: terminal.projectName });
   // next returns the value after current in a fixed cycle.
   // next 返回固定循环中 current 之后的值。
   const next = <T,>(values: readonly T[], current: T): T => values[(values.indexOf(current) + 1) % values.length];
@@ -105,16 +119,20 @@ export function WorkbenchStatusBar(props: {
       </button>
       <div className="vk-status-host" ref={props.hosts.settings} />
       <div className="vk-status-host" ref={props.hosts.todolist} />
-      {props.terminalRunningCount !== null ? (
+      {terminal !== null ? (
         <button
+          aria-haspopup="dialog"
+          aria-label={terminalLabel}
           className="vk-status-item"
-          data-tone={props.terminalRunningCount > 0 ? "ember" : undefined}
+          data-tone={terminal.runningCount > 0 ? "ember" : undefined}
           onClick={props.onToggleTerminal}
+          ref={props.terminalAnchorRef}
+          title={terminalLabel}
           type="button"
         >
           <SquareTerminal />
           <span>{t("status.terminal")}</span>
-          {props.terminalRunningCount > 0 ? <span className="vk-count">{props.terminalRunningCount}</span> : null}
+          {terminal.runningCount > 0 ? <span aria-hidden className="vk-count">{terminal.runningCount}</span> : null}
         </button>
       ) : null}
       <div className="vk-status-host" data-grow="" ref={props.hosts.runtime} />

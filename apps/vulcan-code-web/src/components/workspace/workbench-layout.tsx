@@ -332,8 +332,8 @@ export function WorkbenchLayout(props: {
   // projectTerminalOpenRequest carries explicit open or toggle commands to the project floating terminal.
   // projectTerminalOpenRequest 向项目浮动终端传递明确的展开或切换命令。
   const [projectTerminalOpenRequest, setProjectTerminalOpenRequest] = React.useState<ProjectTerminalVisibilityRequest | null>(null);
-  // projectTerminalButtonRef exposes the exact top-bar target for the macOS-style Genie animation.
-  // projectTerminalButtonRef 暴露 macOS 风格精灵动画使用的精确顶部栏目标。
+  // projectTerminalButtonRef exposes the status-bar terminal item the window minimizes into.
+  // projectTerminalButtonRef 暴露终端窗口最小化时收入的状态栏终端项。
   const projectTerminalButtonRef = React.useRef<HTMLButtonElement | null>(null);
   // mediaUploadProgresses keeps every active pre-dispatch or tool-triggered transfer keyed by its exact identity.
   // mediaUploadProgresses 按精确身份保存所有活跃的分派前或工具触发传输，避免并发上传互相覆盖。
@@ -608,7 +608,11 @@ export function WorkbenchLayout(props: {
       hosts={{ settings: setSettingsHost, todolist: setTodolistStatusHost, runtime: setRuntimeStatusHost }}
       plugins={workbenchState.plugins}
       startup={props.startup}
-      terminalRunningCount={activeProjectId ? projectTerminalRunningCounts[activeProjectId]?.runningCount ?? 0 : null}
+      terminal={activeProject ? {
+        projectName: activeProject.name,
+        runningCount: projectTerminalRunningCounts[activeProject.id]?.runningCount ?? 0,
+      } : null}
+      terminalAnchorRef={projectTerminalButtonRef}
       vmmMemory={workbenchState.vmmMemory}
       onOpenDiagnostics={handleOpenRuntimeDiagnostics}
       onOpenExternalUrl={openExternalUrl}
@@ -1134,11 +1138,6 @@ export function WorkbenchLayout(props: {
         {showConsoleSidebar ? (
           <WorkspaceShell
             activeProjectId={activeProjectId}
-            projectTerminalButtonRef={projectTerminalButtonRef}
-            projectTerminalRunningCount={activeProjectId
-              ? projectTerminalRunningCounts[activeProjectId]?.runningCount ?? 0
-              : 0}
-            onToggleProjectTerminal={handleToggleActiveProjectTerminal}
             startup={props.startup}
             workbench={consoleWorkbenchState}
             activeSkillSubArea={activeWorkbenchSkillSubArea}

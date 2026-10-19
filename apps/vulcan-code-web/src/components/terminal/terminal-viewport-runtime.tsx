@@ -185,7 +185,7 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
     <div
       ref={hostRef}
       aria-label={props.ariaLabel}
-      className="terminal-viewport"
+      className="vk-term-viewport"
       data-terminal-input-scope={props.readOnly ? undefined : "true"}
       data-workspace-input-terminal-id={props.readOnly ? undefined : props.inputOwnerId}
       onKeyDown={props.readOnly ? undefined : stopTerminalUiPropagation}

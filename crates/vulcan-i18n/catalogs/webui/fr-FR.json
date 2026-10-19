@@ -5303,7 +5303,6 @@
   "workspace.lifecycle.outputStyleUnsupported": "Cet environnement d’exécution d’aperçu ne peut pas enregistrer le style de sortie d’une session.",
   "workspace.terminalToggle.withRunning": "Développer ou réduire le terminal du projet {name} ; {count} terminaux en arrière-plan en cours d’exécution",
   "workspace.terminalToggle.named": "Développer ou réduire le terminal du projet {name}",
-  "workspace.terminalToggle.generic": "Développer ou réduire le terminal du projet",
   "project.folderPicker.openTheEnteredPath": "Ouvrez le chemin saisi avant de confirmer le répertoire.",
   "project.sidebar.addAFolderTo": "Ajoutez un dossier pour démarrer un projet",
   "project.sidebar.reorderProject": "Réorganiser le projet {name} (Espace pour commencer, flèches pour déplacer, Espace pour terminer)",

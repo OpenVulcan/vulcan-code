@@ -63,7 +63,7 @@ const LazyTerminalViewportRuntime = React.lazy(() => import("./terminal-viewport
 export function TerminalViewport(props: TerminalViewportProps) {
   const { t } = useI18n();
   return (
-    <React.Suspense fallback={<div className="terminal-viewport terminal-viewport-loading" role="status"
+    <React.Suspense fallback={<div className="vk-term-viewport" data-loading="" role="status"
       aria-label={t("workspaceAudit.viewportLoading")} data-loading-label={t("workspaceAudit.viewportLoading")} />}>
       <LazyTerminalViewportRuntime {...props} />
     </React.Suspense>

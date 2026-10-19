@@ -5303,7 +5303,6 @@
   "workspace.lifecycle.outputStyleUnsupported": "Este runtime de pré-visualização não pode salvar o estilo de saída de uma sessão.",
   "workspace.terminalToggle.withRunning": "Expandir ou recolher o terminal do projeto {name}; {count} terminais em segundo plano em execução",
   "workspace.terminalToggle.named": "Expandir ou recolher o terminal do projeto {name}",
-  "workspace.terminalToggle.generic": "Expandir ou recolher o terminal do projeto",
   "project.folderPicker.openTheEnteredPath": "Abra o caminho informado antes de confirmar o diretório.",
   "project.sidebar.addAFolderTo": "Adicione uma pasta para começar um projeto",
   "project.sidebar.reorderProject": "Reordenar o projeto {name} (Espaço para começar, setas para mover, Espaço para concluir)",
