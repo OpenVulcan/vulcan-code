@@ -34,13 +34,6 @@
   min-height: 36px;
   font-size: var(--vk-fs-lg);
 }
-.notification-settings-page .settings-muted-line {
-  margin: 0;
-  line-height: 1.7;
-}
-.notification-settings-page .settings-preference-row > div > .settings-muted-line {
-  margin-top: 6px;
-}
 .notification-permission-row {
   display: flex;
   align-items: center;
@@ -74,18 +67,6 @@
   gap: 8px;
   padding-bottom: 12px;
   border-bottom: var(--vk-bw) solid var(--vk-line);
-}
-.git-commit-settings-page .settings-form-field {
-  font-size: var(--vk-fs-md);
-  font-weight: 400;
-}
-.git-commit-settings-page .settings-form-field > span {
-  font-weight: 500;
-}
-.git-commit-settings-page .settings-muted-line {
-  font-size: var(--vk-fs-sm);
-  font-weight: 400;
-  line-height: 1.7;
 }
 .git-commit-settings-page :is(input, textarea) {
   font-size: var(--vk-fs-md);
@@ -154,9 +135,6 @@
 
 /* Page padding belongs inside the scroll owner, never between the title bar and the page. */
 /* 页面留白归属于滚动容器内部，不在标题栏与页面之间留下空带。 */
-.settings-feature-content > .settings-direct-content {
-  padding: 20px 24px;
-}
 
 .settings-diagnostics-page [data-slot="input"] {
   margin: 16px 0;

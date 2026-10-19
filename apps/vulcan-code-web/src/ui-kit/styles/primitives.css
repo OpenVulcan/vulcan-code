@@ -313,8 +313,6 @@ label.vk-field,
 .vk-radio-group { display: grid; gap: calc(var(--vk-u) * 2); }
 .vk-radio-group[aria-orientation="horizontal"] { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 4); }
 
-.vk-choice { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); cursor: pointer; }
-
 /* ---------- Segmented control and filter chips ---------- */
 .vk-seg {
   display: inline-flex;
@@ -365,7 +363,6 @@ label.vk-field,
 .vk-chip:hover { border-color: var(--vk-line-strong); color: var(--vk-ink); }
 .vk-chip[aria-pressed="true"] { border-color: var(--vk-signal); color: var(--vk-signal); background: var(--vk-signal-soft); }
 .vk-chip:disabled { opacity: 0.45; cursor: not-allowed; }
-.vk-chip > .vk-chip-x { margin-right: calc(var(--vk-u) * -1); color: var(--vk-ink-3); }
 
 /* ---------- Tabs ---------- */
 .vk-tabs-root { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 3); min-width: 0; }
@@ -567,26 +564,6 @@ label.vk-field,
 .vk-indent-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; min-height: var(--vk-h-sm); padding-right: calc(var(--vk-u) * 2); }
 
 /* ---------- Disclosure, collapsible, accordion ---------- */
-.vk-disclosure > summary {
-  display: flex;
-  align-items: center;
-  gap: calc(var(--vk-u) * 2);
-  min-height: var(--vk-h-md);
-  cursor: pointer;
-  list-style: none;
-  color: var(--vk-ink-2);
-}
-.vk-disclosure > summary::-webkit-details-marker { display: none; }
-.vk-disclosure > summary::before {
-  content: "";
-  width: 0.38rem;
-  height: 0.38rem;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(-45deg);
-  transition: transform var(--vk-t-fast);
-}
-.vk-disclosure[open] > summary::before { transform: rotate(45deg); }
 
 .vk-disclosure-chevron { width: var(--vk-icon); height: var(--vk-icon); flex: none; color: var(--vk-ink-3); transition: transform var(--vk-t-fast) var(--vk-ease); }
 [data-state="open"] > .vk-disclosure-chevron,
@@ -1057,27 +1034,6 @@ label.vk-field,
 .vk-table [data-numeric] { text-align: right; font-variant-numeric: tabular-nums; }
 .vk-table-foot td { border-top: var(--vk-bw) solid var(--vk-line-strong); background: var(--vk-sunken); font-weight: 500; }
 .vk-table-caption { margin-top: calc(var(--vk-u) * 3); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
-
-/* ---------- Command palette (shell) ---------- */
-.vk-palette {
-  width: min(40rem, 100%);
-  align-self: start;
-  margin-top: 10vh;
-  border: var(--vk-bw) solid var(--vk-line-strong);
-  background: var(--vk-raised);
-  box-shadow: var(--vk-shadow-2);
-  animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
-}
-.vk-palette-input {
-  display: flex;
-  align-items: center;
-  gap: calc(var(--vk-u) * 2.5);
-  padding: 0 calc(var(--vk-u) * 4);
-  height: calc(var(--vk-u) * 12);
-  border-bottom: var(--vk-bw) solid var(--vk-line);
-}
-.vk-palette-input input { flex: 1; min-width: 0; border: 0; background: none; font-size: var(--vk-fs-lg); outline: none; }
-.vk-palette-list { max-height: 22rem; overflow: auto; padding: calc(var(--vk-u) * 1.5); }
 
 }
 

@@ -19,15 +19,3 @@
   width: 13px;
   height: 13px;
 }
-
-.vk-mcat-builtin-capabilities {
-  flex: 0 0 auto;
-}
-
-.vk-mcat-builtin-capabilities .model-builtin-capability-icon {
-  width: 21px;
-  height: 21px;
-  border: 1px solid var(--vk-line);
-  background: var(--vk-ground);
-  color: var(--vk-ink);
-}

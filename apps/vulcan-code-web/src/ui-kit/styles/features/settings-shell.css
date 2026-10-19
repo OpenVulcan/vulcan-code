@@ -104,7 +104,6 @@
 }
 .ai-capabilities-message { display: grid; justify-items: start; gap: 10px; padding: 16px 0; }
 .ai-capability-sheet-body { min-height: 0; overflow: auto; padding: 0 16px 24px; }
-.ai-capability-sheet-body > .settings-direct-content { padding: 0; }
 
 /* Narrow panes tighten the frame gutter and fold capability rows onto two lines. */
 /* 窄面板收紧框架留白，并将能力行折为两行。 */

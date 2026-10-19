@@ -363,7 +363,7 @@ button.vk-attach-warn { right: 6px; bottom: 6px; color: var(--vk-warn); }
 .vk-attach-cooldown { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .vk-attach-cooldown > svg { width: 100%; height: 100%; }
 .vk-attach-compress { flex: none; align-self: flex-end; display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); padding-bottom: calc(var(--vk-u) * 1); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); white-space: nowrap; cursor: pointer; }
-.vk-attach-detail { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 2); width: min(360px, calc(100vw - 24px)); max-height: min(320px, var(--radix-popover-content-available-height)); overflow: auto; overscroll-behavior: contain; }
+.vk-attach-detail { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 2); width: min(360px, calc(100vw - 24px)); max-height: min(320px, var(--vk-available-height)); overflow: auto; overscroll-behavior: contain; }
 .vk-attach-detail > * { flex: none; }
 .vk-attach-detail > strong { font-size: var(--vk-fs-sm); overflow-wrap: anywhere; }
 .vk-attach-detail > p { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
@@ -377,7 +377,7 @@ button.vk-attach-warn { right: 6px; bottom: 6px; color: var(--vk-warn); }
 
 /* ---------- Session progress (status bar popover) ---------- */
 .vk-progress-delta { display: inline-flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; }
-.vk-progress-pop { width: max-content; max-width: min(420px, calc(100vw - 24px)); max-height: min(400px, var(--radix-popover-content-available-height)); overflow-y: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 2); }
+.vk-progress-pop { width: max-content; max-width: min(420px, calc(100vw - 24px)); max-height: min(400px, var(--vk-available-height)); overflow-y: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 2); }
 .vk-progress-list { display: grid; gap: 2px; width: max-content; max-width: 100%; }
 .vk-progress-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 7px; min-width: 0; min-height: 24px; padding: 3px 5px; color: var(--vk-ink); font-size: var(--vk-fs-md); line-height: 1.25; }
 .vk-progress-row > svg { margin-top: 1px; flex: none; color: var(--vk-ink-3); }

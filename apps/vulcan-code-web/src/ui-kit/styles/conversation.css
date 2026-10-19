@@ -117,7 +117,6 @@
 .vk-history-line { display: flex; align-items: center; gap: calc(var(--vk-u) * 3); width: 100%; }
 .vk-history-line::before,
 .vk-history-line::after { content: ""; flex: 1; height: 1px; background: var(--vk-line); }
-.vk-history-skeleton { display: grid; gap: calc(var(--vk-u) * 2); width: 100%; }
 
 /* A quiet centered note where the transcript has nothing to show yet. */
 .vk-transcript-note { justify-self: center; margin: 0; padding: calc(var(--vk-u) * 6) 0; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); text-align: center; }
@@ -253,10 +252,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
   overflow-wrap: anywhere;
 }
 .vk-prompt::after { content: ""; position: absolute; right: -1px; top: -1px; bottom: -1px; width: 2px; background: var(--vk-ink-3); }
-.vk-prompt-meta { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); white-space: normal; }
-.vk-prompt-meta > .vk-actions { margin-left: auto; display: flex; gap: 2px; opacity: 0; transition: opacity var(--vk-t-fast); }
-.vk-prompt:hover .vk-prompt-meta > .vk-actions,
-.vk-prompt:focus-within .vk-prompt-meta > .vk-actions { opacity: 1; }
 /* File names a pending submission carries, listed above its prompt until the reply arrives. */
 /* 待发送提交携带的文件名，在回复到达前列在提示词上方。 */
 .vk-prompt-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: calc(var(--vk-u) * 1.5); max-width: min(50rem, 78%); margin: 0; padding: 0; list-style: none; white-space: normal; }
@@ -269,19 +264,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-stop-target { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; }
 .vk-stop-target > span { min-width: 0; overflow: hidden; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); text-overflow: ellipsis; white-space: nowrap; }
 .vk-stop-target > code { display: block; max-height: 120px; overflow: auto; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-code-bg); color: var(--vk-ink); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-
-/* ---------- Assistant answer ---------- */
-.vk-answer-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
-.vk-answer-mark {
-  display: grid;
-  place-items: center;
-  width: calc(var(--vk-u) * 5.5);
-  height: calc(var(--vk-u) * 5.5);
-  color: var(--vk-ink);
-}
-/* The brand symbol is shown as-is (ink body, ember flame); it is never placed on a colored tile. */
-.vk-answer-mark svg { width: 80%; height: 80%; transition: filter var(--vk-t-med); }
-.vk-answer-head strong { color: var(--vk-ink-2); font-weight: 500; }
 
 /* ---------- Transcript rows ---------- */
 /* A user turn: attachments, the prompt card and a quiet foot with time and actions, all right-aligned. */
@@ -486,8 +468,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 [data-family="agent"] { --vk-fam: var(--vk-ember); }
 [data-family="plan"] { --vk-fam: var(--vk-chart-5); }
 [data-family="other"] { --vk-fam: var(--vk-ink-3); }
-.vk-tools { display: grid; min-width: 0; }
-.vk-tools > .vk-tool + .vk-tool { margin-top: -1px; }
 .vk-tools-head {
   display: flex;
   align-items: center;
@@ -587,10 +567,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tool-body .vk-step-mark > .lucide { width: 0.8rem; height: 0.8rem; }
 .vk-tool-note { margin: 0; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); font-size: var(--vk-fs-sm); color: var(--vk-ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .vk-tool-note[data-tone] { color: var(--vk-tone); }
-.vk-tool-tabs { display: flex; gap: calc(var(--vk-u) * 3); padding: 0 calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
-.vk-tool-tabs > button { height: var(--vk-h-md); border: 0; background: none; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); cursor: pointer; position: relative; }
-.vk-tool-tabs > button[aria-selected="true"] { color: var(--vk-ink); }
-.vk-tool-tabs > button[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--vk-ink); }
 .vk-tool-foot { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3); border-top: var(--vk-bw) solid var(--vk-line-soft); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
 .vk-tool-foot > :last-child { margin-left: auto; }
 .vk-tool-foot > :only-child { margin-left: 0; }
@@ -709,42 +685,13 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-diffstat > i[data-k="d"] { background: var(--vk-bad); }
 
 /* Search hits and file trees. */
-.vk-hits { font-size: var(--vk-fs-sm); }
-.vk-hit-file { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3); background: var(--vk-sunken); font-family: var(--vk-font-mono); }
-.vk-hit-file > span:last-child { margin-left: auto; color: var(--vk-ink-3); font-family: var(--vk-font-ui); font-size: var(--vk-fs-xs); }
-.vk-hit { display: grid; grid-template-columns: 3em minmax(0, 1fr); padding: 1px calc(var(--vk-u) * 3); font-family: var(--vk-font-mono); }
-.vk-hit > span:first-child { color: var(--vk-ink-3); text-align: right; padding-right: calc(var(--vk-u) * 2); }
-.vk-hit > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vk-hit mark { background: color-mix(in srgb, var(--vk-ember) 22%, transparent); color: inherit; box-shadow: inset 0 -1px 0 var(--vk-ember); }
 .vk-tree { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); line-height: 1.75; }
 .vk-tree div { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); white-space: nowrap; }
 .vk-tree .lucide { width: 0.95rem; height: 0.95rem; color: var(--vk-ink-3); }
 .vk-tree [data-dir] .lucide { color: var(--vk-chart-4); }
 .vk-tree small { color: var(--vk-ink-3); margin-left: auto; padding-left: calc(var(--vk-u) * 3); }
 
-/* Web results (provider search / extract). */
-.vk-web { display: grid; }
-.vk-web-item { display: grid; gap: 2px; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
-.vk-web-item:last-child { border-bottom: 0; }
-.vk-web-item a { color: var(--vk-signal); font-weight: 500; text-decoration: none; }
-.vk-web-item a:hover { text-decoration: underline; }
-.vk-web-item small { color: var(--vk-ok); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
-.vk-web-item p { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
-
 /* Subagent orchestration. */
-.vk-agents { display: grid; }
-.vk-agent {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(4rem, 8rem) auto;
-  gap: calc(var(--vk-u) * 3);
-  align-items: center;
-  padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3);
-  border-bottom: var(--vk-bw) solid var(--vk-line-soft);
-}
-.vk-agent:last-child { border-bottom: 0; }
-.vk-agent strong { display: block; font-weight: 500; }
-.vk-agent small { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
 .vk-json { margin: 0; padding: calc(var(--vk-u) * 3); background: var(--vk-code-bg); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); line-height: 1.6; overflow-x: auto; white-space: pre; }
 .vk-json .j-k { color: var(--vk-chart-1); }
 .vk-json .j-s { color: var(--vk-chart-2); }
@@ -792,13 +739,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-media-result > .vk-tool-note + .vk-media-list { border-top: var(--vk-bw) solid var(--vk-line-soft); }
 
 /* ---------- Conversation function cards ---------- */
-.vk-card { border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); min-width: 0; backdrop-filter: blur(var(--vk-panel-blur)); }
-.vk-card-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2.5); min-height: calc(var(--vk-u) * 10); padding: 0 calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
-.vk-card-head > strong { font-weight: 600; }
-.vk-card-head > .vk-actions { margin-left: auto; display: flex; gap: calc(var(--vk-u) * 1.5); align-items: center; }
-.vk-card-body { padding: calc(var(--vk-u) * 3); }
-.vk-card[data-tone] { border-color: color-mix(in srgb, var(--vk-tone) 40%, var(--vk-line)); box-shadow: inset 2px 0 0 var(--vk-tone); }
-.vk-card[data-tone] .vk-card-head > .lucide { color: var(--vk-tone); }
 
 .vk-steps-list { display: grid; gap: 0; counter-reset: step; }
 .vk-step { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: calc(var(--vk-u) * 3); align-items: start; padding: calc(var(--vk-u) * 2) 0; border-bottom: var(--vk-bw) dashed var(--vk-line-soft); }
@@ -809,6 +749,26 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-step[data-state="done"] .vk-step-text { color: var(--vk-ink-3); text-decoration: line-through; text-decoration-color: var(--vk-line-strong); }
 .vk-step small { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
 
+/* The prompt navigator is an edge-pinned comb of ticks beside the transcript; hovering one previews that turn. */
+/* 提示词导航是贴在转录边缘的刻度梳；悬停某个刻度预览该回合。 */
+.vk-prompt-nav {
+  /* Single height bound for the tick column; overflow scrolls inside the rail without a scrollbar. */
+  /* 刻度列唯一高度上限；超出部分在轨道内部无滚动条滚动。 */
+  --vk-pn-max-h: min(360px, 56vh);
+  --vk-pn-rest: calc(var(--vk-u) * 2);
+  --vk-pn-active: calc(var(--vk-u) * 3.5);
+  --vk-pn-comb: calc(var(--vk-u) * 4);
+  --vk-pn-focus: calc(var(--vk-u) * 5.5);
+  position: absolute;
+  top: 0;
+  bottom: var(--vk-dock-h);
+  left: 0;
+  z-index: 6;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
 .vk-prompt-nav-rail {
   max-height: min(var(--vk-pn-max-h), 100%);
   display: flex;
@@ -891,74 +851,16 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 @media (prefers-reduced-motion: reduce) {
   .vk-prompt-nav-line { transition: none; }
 }
-.vk-todo { border: var(--vk-bw) solid var(--vk-line); background: var(--vk-raised); }
-.vk-todo > summary { display: flex; align-items: center; gap: calc(var(--vk-u) * 2.5); min-height: calc(var(--vk-u) * 9); padding: 0 calc(var(--vk-u) * 3); cursor: pointer; list-style: none; font-size: var(--vk-fs-sm); }
-.vk-todo > summary::-webkit-details-marker { display: none; }
-.vk-todo > summary > .vk-meter { width: 6rem; margin-left: auto; }
-.vk-todo ol { list-style: none; padding: 0 calc(var(--vk-u) * 3) calc(var(--vk-u) * 2); margin: 0; max-height: 9rem; overflow: auto; }
-
-.vk-strip {
-  display: flex;
-  align-items: center;
-  gap: calc(var(--vk-u) * 2);
-  min-height: var(--vk-h-lg);
-  padding: 0 calc(var(--vk-u) * 3);
-  border: var(--vk-bw) solid var(--vk-line);
-  background: var(--vk-raised);
-  font-size: var(--vk-fs-sm);
-}
-.vk-strip > .vk-actions { margin-left: auto; display: flex; gap: calc(var(--vk-u) * 1); }
-.vk-strip[data-tone] { border-color: color-mix(in srgb, var(--vk-tone) 40%, var(--vk-line)); }
-.vk-strip[data-tone] > .lucide { color: var(--vk-tone); }
 
 /* ---------- New session start page ---------- */
-.vk-start {
-  display: grid;
-  align-content: center;
-  gap: calc(var(--vk-u) * 6);
-  width: 100%;
-  max-width: calc(var(--vk-read-w) + var(--vk-u) * 16);
-  min-height: 100%;
-  margin: 0 auto;
-  padding: calc(var(--vk-u) * 8) calc(var(--vk-u) * 8);
-}
-.vk-start-hero { display: grid; gap: calc(var(--vk-u) * 2); }
-.vk-start-hero h1 { font-size: var(--vk-fs-2xl); font-weight: 600; letter-spacing: -0.02em; }
-.vk-start-hero h1 em { font-style: normal; background: linear-gradient(90deg, var(--vk-ember), var(--vk-ember-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.vk-start-hero p { color: var(--vk-ink-2); font-size: var(--vk-fs-read); }
-.vk-start-context { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); }
-.vk-start-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: calc(var(--vk-u) * 2); }
-.vk-start-card {
-  position: relative;
-  display: grid;
-  gap: calc(var(--vk-u) * 1.5);
-  align-content: start;
-  padding: calc(var(--vk-u) * 3.5);
-  border: var(--vk-bw) solid var(--vk-line);
-  background: var(--vk-panel);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color var(--vk-t-fast), transform var(--vk-t-fast);
-}
-.vk-start-card:hover { border-color: var(--vk-line-strong); transform: translateY(-1px); }
-.vk-start-card > .lucide { width: 1.25rem; height: 1.25rem; color: var(--vk-ember); }
-.vk-start-card strong { font-weight: 600; }
-.vk-start-card small { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
-.vk-start-recent { display: grid; gap: 0; }
 
 @container vk-chat (max-width: 50em) {
   .vk-chat > * { --vk-col-pad: calc(var(--vk-u) * 5); }
 }
 @container vk-app (max-width: 72em) {
-  .vk-start { padding-left: calc(var(--vk-u) * 5); padding-right: calc(var(--vk-u) * 5); }
   .vk-prompt-nav { display: none; }
 }
 @container vk-app (max-width: 46em) {
   .vk-chat > * { --vk-col-pad: 16px; }
-  .vk-start { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
   .vk-tool-meta > :not(:last-child) { display: none; }
-  /* The dock must leave the transcript most of a phone screen. */
-  .vk-todo ol { max-height: 4.5rem; }
-  .vk-agent { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .vk-agent > .vk-progress { display: none; }
 }

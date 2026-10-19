@@ -142,7 +142,6 @@ export function PopoverContent({
       sideOffset={sideOffset}
       alignOffset={alignOffset}
       collisionPadding={collisionPadding}
-      cssVarPrefix="popover"
       id={popover.contentId}
       role="dialog"
       data-slot="popover-content"

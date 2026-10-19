@@ -26,22 +26,6 @@
   height: 100%;
 }
 
-/* The composer progress capsule draws its ring from the current text color. */
-/* 输入区进度胶囊以当前文字颜色绘制圆环。 */
-.progress-ring {
-  display: inline-block;
-  flex: none;
-  overflow: visible;
-}
-
-.progress-ring-track {
-  stroke: color-mix(in srgb, currentColor 18%, transparent);
-}
-
-.progress-ring-value {
-  stroke: currentColor;
-  transition: stroke-dashoffset var(--vk-t-med) ease;
-}
 
 /* Terminal rails keep a transparent track under the kit scrollbar thumb. */
 /* 终端自绘轨道在套件滚动条滑块下保持透明。 */

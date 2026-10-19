@@ -122,7 +122,6 @@ export function HoverCardContent({
       sideOffset={sideOffset}
       alignOffset={alignOffset}
       collisionPadding={collisionPadding}
-      cssVarPrefix="hover-card"
       data-slot="hover-card-content"
       data-width={width}
       className={cx("vk-pop vk-hover-card", className)}

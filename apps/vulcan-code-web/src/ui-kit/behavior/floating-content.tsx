@@ -56,7 +56,6 @@ export function FloatingContent({
   alignOffset,
   collisionPadding,
   avoidCollisions,
-  cssVarPrefix,
   onEscapeKeyDown,
   onPointerDownOutside,
   onFocusOutside,
@@ -68,7 +67,7 @@ export function FloatingContent({
 }: FloatingContentProps) {
   const element = React.useRef<HTMLDivElement | null>(null);
   const composed = useComposedRefs(element, ref);
-  const placement = useFloating(open, anchor, element, { side, align, sideOffset, alignOffset, collisionPadding, avoidCollisions, cssVarPrefix });
+  const placement = useFloating(open, anchor, element, { side, align, sideOffset, alignOffset, collisionPadding, avoidCollisions });
   const dismissLayer = useDismissable(open && dismissable, element, onDismiss, {
     blocking,
     branches,

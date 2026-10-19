@@ -20,9 +20,6 @@ export interface FloatingOptions {
   // avoidCollisions false keeps the requested side even when the opposite side has more room.
   // avoidCollisions 为 false 时即使对侧空间更大也保持请求的一侧。
   avoidCollisions?: boolean;
-  // cssVarPrefix also publishes the legacy `--radix-<prefix>-*` variables older styles still read.
-  // cssVarPrefix 同时发布旧样式仍在读取的 `--radix-<prefix>-*` 变量。
-  cssVarPrefix?: string;
 }
 
 // AnchorLike is an element or a fixed point (context menus open at the pointer).
@@ -120,12 +117,6 @@ export function useFloating(
       element.style.setProperty("--vk-anchor-width", `${rect.width}px`);
       element.style.setProperty("--vk-available-height", `${result.availableHeight}px`);
       element.style.setProperty("--vk-available-width", `${result.availableWidth}px`);
-      if (opts.cssVarPrefix) {
-        const p = `--radix-${opts.cssVarPrefix}`;
-        element.style.setProperty(`${p}-trigger-width`, `${rect.width}px`);
-        element.style.setProperty(`${p}-content-available-height`, `${result.availableHeight}px`);
-        element.style.setProperty(`${p}-content-available-width`, `${result.availableWidth}px`);
-      }
       setPlacement((previous) => (previous.side === result.side && previous.align === (opts.align ?? "center")
         ? previous
         : { side: result.side, align: opts.align ?? "center" }));

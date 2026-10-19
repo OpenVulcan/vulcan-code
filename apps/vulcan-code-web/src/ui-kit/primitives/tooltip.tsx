@@ -241,7 +241,6 @@ export function TooltipContent({
       sideOffset={sideOffset}
       alignOffset={alignOffset}
       collisionPadding={collisionPadding}
-      cssVarPrefix="tooltip"
       id={tooltip.contentId}
       role="tooltip"
       data-slot="tooltip-content"

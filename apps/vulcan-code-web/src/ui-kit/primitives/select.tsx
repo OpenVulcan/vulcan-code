@@ -223,7 +223,6 @@ function SelectContent({ className, children, placement = "auto", position: _pos
       sideOffset={4}
       collisionPadding={8}
       avoidCollisions={placement === "auto"}
-      cssVarPrefix="select"
       id={select.contentId}
       role="listbox"
       data-slot="select-content"

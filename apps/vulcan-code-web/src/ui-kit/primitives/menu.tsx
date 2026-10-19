@@ -264,7 +264,6 @@ export function MenuContent({
         sideOffset={sideOffset}
         alignOffset={alignOffset}
         collisionPadding={collisionPadding}
-        cssVarPrefix={menu.slot}
         id={menu.contentId}
         role="menu"
         aria-orientation="vertical"
@@ -683,7 +682,6 @@ export function MenuSubContent({
         sideOffset={sideOffset}
         alignOffset={alignOffset}
         collisionPadding={collisionPadding}
-        cssVarPrefix={menu.slot}
         role="menu"
         aria-orientation="vertical"
         data-slot={`${menu.slot}-sub-content`}
