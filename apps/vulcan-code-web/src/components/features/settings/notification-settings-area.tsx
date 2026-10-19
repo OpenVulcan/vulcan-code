@@ -2,6 +2,7 @@ import * as React from "react";
 import { Send } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { StatusPill } from "@/components/shared/status";
+import { PageBody, PageRow, PageSection } from "@/components/page";
 import { Button } from "@/ui-kit/primitives/button";
 import { Switch } from "@/ui-kit/primitives/switch";
 import { useI18n } from "@/i18n";
@@ -215,62 +216,53 @@ export function NotificationSettingsArea() {
   // Keep the actionable permission failure visible even when an unrelated preference was saved successfully.
   // 即使无关偏好保存成功，也继续展示可操作的权限失败。
   const displayedError = permissionError || error;
-  return <section className="settings-preferences-page settings-detail-panel notification-settings-page">
-    <section className="settings-preferences-section">
-      <div className="settings-preference-row">
-        <div><h2>{t("settings.notifications.localChannel")}</h2><p className="vk-form-note">{t("settings.notifications.showASystemNotification")}</p></div>
-        <Switch aria-label={t("settings.notifications.localChannel")} checked={enabled}
-          disabled={!capability.supported || busy} onCheckedChange={(checked) => void changeEnabled(checked)} />
-      </div>
-      {/* Keep permission feedback and its test action together without adding another settings row.
-          将权限反馈与测试操作放在一起，避免额外堆叠设置行。 */}
-      <div className="notification-permission-row">
-        <div className="vk-form-inline">
-        <StatusPill status={effective ? "ready" : enabled ? "warning" : "pending"}
-          label={effective ? t("settings.notifications.enabled") : enabled ? permissionError ? t("settings.notifications.checkFailed") : permission === "denied" ? t("settings.notifications.blockedBySystem") : t("settings.notifications.waitingForPermission") : t("settings.notifications.off")} />
-        <span className="vk-form-note">{t("settings.notifications.permission")}：{permissionLabel}</span>
-        </div>
-        <Button type="button" size="sm" variant="outline" disabled={busy || !effective} onClick={() => void testNotification()}><Send size={14} />{t("settings.notifications.sendATest")}</Button>
-      </div>
-      {/* One action per state: ask when never asked, otherwise recheck, since re-asking after a denial is silently ignored.
-          每种状态只给一个操作：从未询问时申请，否则重新检查；被拒绝后再次申请会被系统静默忽略。 */}
-      {enabled && (permission === "default" || permission === "denied" || permissionError) && capability.supported ? <div className="vk-form-inline">
-        <Button type="button" variant="outline" disabled={busy} onClick={() => void (permission === "default" && !permissionError ? requestPermission() : recheckPermission())}>
+  // needsPermissionAction offers one recovery action: ask when never asked, otherwise recheck, since re-asking after a denial is silently ignored.
+  // needsPermissionAction 只提供一个恢复操作：从未询问时申请，否则重新检查；被拒绝后再次申请会被系统静默忽略。
+  const needsPermissionAction = enabled && (permission === "default" || permission === "denied" || Boolean(permissionError)) && capability.supported;
+  return <PageBody>
+    <PageSection
+      layout="rows"
+      title={t("settings.notifications.localChannel")}
+      description={t("settings.notifications.showASystemNotification")}
+      status={<StatusPill status={effective ? "ready" : enabled ? "warning" : "pending"}
+        label={effective ? t("settings.notifications.enabled") : enabled ? permissionError ? t("settings.notifications.checkFailed") : permission === "denied" ? t("settings.notifications.blockedBySystem") : t("settings.notifications.waitingForPermission") : t("settings.notifications.off")} />}
+      actions={<Switch aria-label={t("settings.notifications.localChannel")} checked={enabled}
+        disabled={!capability.supported || busy} onCheckedChange={(checked) => void changeEnabled(checked)} />}
+    >
+      {/* Keep permission feedback, its recovery action and the test action on one row. */}
+      {/* 将权限反馈、恢复操作与测试操作放在同一行。 */}
+      <PageRow label={t("settings.notifications.permission")} description={<>
+        {permissionLabel}
+        {permission === "denied" && enabled ? <><br />{t("settings.notifications.notificationsAreBlockedAllow")}</> : null}
+      </>}>
+        {needsPermissionAction ? <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void (permission === "default" && !permissionError ? requestPermission() : recheckPermission())}>
           {permission === "default" && !permissionError ? t("settings.notifications.allowNotifications") : t("settings.notifications.checkAgain")}
-        </Button>
-        {permission === "denied" ? <span className="vk-form-note">{t("settings.notifications.notificationsAreBlockedAllow")}</span> : null}
-      </div> : null}
-    </section>
-    <section className="settings-preferences-section">
-      <h2>{t("settings.notifications.categories")}</h2>
-      {(["conversationCompleted", "conversationFailed"] as const).map((category) => (
-        <label className="settings-preference-row" key={category}>
-          <span>{t(category === "conversationCompleted" ? "settings.notifications.completed" : "settings.notifications.failed")}</span>
-          <Switch checked={preferences.categories[category]} onCheckedChange={(checked) => replacePreferences({
+        </Button> : null}
+        <Button type="button" size="sm" variant="ghost" disabled={busy || !effective} onClick={() => void testNotification()}><Send aria-hidden="true" />{t("settings.notifications.sendATest")}</Button>
+      </PageRow>
+    </PageSection>
+    <PageSection layout="rows" title={t("settings.notifications.categories")} description={t("settings.notifications.noNotificationForThe")}>
+      {(["conversationCompleted", "conversationFailed"] as const).map((category) => {
+        // label names the category for both the row and its switch.
+        // label 同时为该行及其开关命名。
+        const label = t(category === "conversationCompleted" ? "settings.notifications.completed" : "settings.notifications.failed");
+        return <PageRow key={category} label={label}>
+          <Switch aria-label={label} checked={preferences.categories[category]} onCheckedChange={(checked) => replacePreferences({
             ...preferencesRef.current, categories: { ...preferencesRef.current.categories, [category]: checked },
           })} />
-        </label>
-      ))}
-      <p className="vk-form-note">{t("settings.notifications.noNotificationForThe")}</p>
-    </section>
-    <section className="settings-preferences-section">
-      <h2>{t("settings.notifications.privacy")}</h2>
-      <label className="settings-preference-row">
-        <div>
-          <span>{t("settings.notifications.showTitle")}</span>
-          <p className="vk-form-note">{t("settings.notifications.privacy.description")}</p>
-        </div>
-        <Switch checked={preferences.privacy.showConversationTitle} onCheckedChange={(checked) => replacePreferences({
+        </PageRow>;
+      })}
+    </PageSection>
+    <PageSection layout="rows" title={t("settings.notifications.privacy")}>
+      <PageRow label={t("settings.notifications.showTitle")} description={t("settings.notifications.privacy.description")}>
+        <Switch aria-label={t("settings.notifications.showTitle")} checked={preferences.privacy.showConversationTitle} onCheckedChange={(checked) => replacePreferences({
           ...preferencesRef.current, privacy: { showConversationTitle: checked },
         })} />
-      </label>
-    </section>
-    {displayedError ? <SettingsErrorNotice className="settings-save-error" detail={displayedError} message={permissionError ? t("settings.notifications.couldnTReadThe") : t("settings.notifications.thatDidnTFinish")} /> : null}
-    {/* Platform limits stay visible as a regular information section, with no disclosure control.
-        平台能力边界作为普通说明区常显，不使用折叠控件。 */}
-    <section className="settings-preferences-section notification-capability-note">
-      <h2>{t("settings.notifications.limitations")}</h2>
-      <p className="vk-form-note">{capability.shellKind === "browser" ? t("settings.notifications.browserLimitation") : t("settings.notifications.desktopLimitation")}</p>
-    </section>
-  </section>;
+      </PageRow>
+    </PageSection>
+    {displayedError ? <SettingsErrorNotice detail={displayedError} message={permissionError ? t("settings.notifications.couldnTReadThe") : t("settings.notifications.thatDidnTFinish")} /> : null}
+    {/* Platform limits stay visible as a regular information section, with no disclosure control. */}
+    {/* 平台能力边界作为普通说明区常显，不使用折叠控件。 */}
+    <PageSection title={t("settings.notifications.limitations")} description={capability.shellKind === "browser" ? t("settings.notifications.browserLimitation") : t("settings.notifications.desktopLimitation")} />
+  </PageBody>;
 }

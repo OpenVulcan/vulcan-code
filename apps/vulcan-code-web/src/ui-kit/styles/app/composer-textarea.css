@@ -51,8 +51,4 @@
   background: var(--vk-panel);
 }
 
-.settings-detail-panel {
-  min-height: 0;
-  overflow: auto;
-}
 

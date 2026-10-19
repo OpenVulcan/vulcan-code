@@ -2,13 +2,13 @@ import * as React from "react"
 import {
   ChevronLeft,
   ChevronRight,
-  GitCommitHorizontal,
+  LoaderCircle,
   RotateCcw,
-  Save,
   Trash2,
 } from "lucide-react"
 
 import { ModelPickerControl, modelPickerGroupKey } from "@/components/composer/model-picker-control"
+import { PageActionBar, PageBody, PageRow, PageSection } from "@/components/page"
 import { Button } from "@/ui-kit/primitives/button"
 import { Checkbox } from "@/ui-kit/primitives/checkbox"
 import {
@@ -130,67 +130,64 @@ export function GitCommitSettingsArea(props: {
       savingRef.current = false
     }
   }
+  // saving locks the form while one immutable payload is persisted.
+  // saving 在持久化一个不可变载荷期间锁定表单。
+  const saving = saveState === "saving"
   return (
-    <section className="vk-form-scroll settings-preferences-page git-commit-settings-page">
-      <fieldset className="settings-preferences-fields" disabled={saveState === "saving"}>
-        <section className="settings-preferences-section">
-          <h2><GitCommitHorizontal size={16} />{t("settings.misc.whoWritesCommitMessages")}</h2>
-          <div className="vk-field">
-            <span>{t("settings.gitCommit.summaryModel")}</span>
-            <div className="vk-form-inline">
-              <ModelPickerControl
-                selectionScope="model"
-                ariaLabel={t("settings.gitCommit.chooseSummaryModel")}
-                fallbackLabel={t("settings.gitCommit.followSessionModel")}
-                unavailableValueLabel={fixedModelLabel}
-                filterPlaceholder={t("composer.modelPicker.filter")}
-                noMatchesLabel={t("composer.modelPicker.noMatches")}
-                providers={props.workbench.providers}
-                value={fixedModelValue}
-                disabled={saveState === "saving"}
-                onValueChange={(choice) => setDraft({ ...draft, summaryModel: { mode: "fixed", providerId: choice.providerId, modelId: choice.modelId } })}
-              />
-              {draft.summaryModel.mode === "fixed" ? <Button
-                variant="ghost"
-                onClick={() => setDraft({ ...draft, summaryModel: { mode: "session" } })}
-                type="button"
-              ><RotateCcw size={14} />{t("settings.gitCommit.followSessionModel")}</Button> : null}
-            </div>
-            <small className="vk-form-note">{draft.summaryModel.mode === "session" ? t("settings.gitCommit.followSessionModelHelp") : t("settings.gitCommit.fixedSummaryModelHelp")}</small>
-            {fixedModelValue && !modelPickerChoiceExists(props.workbench.providers, fixedModelValue) ? (
-              <p role="status" className="vk-form-note">{t("settings.gitCommit.fixedSummaryModelUnavailable")}</p>
-            ) : null}
-          </div>
-        </section>
-        <section className="settings-preferences-section">
-          <h2>{t("settings.misc.howCommitMessagesAre")}</h2>
-          <label className="vk-field">
-            <span>{t("settings.gitCommit.summaryExtraPrompt")}</span>
-            <Textarea rows={4} value={draft.summaryExtraPrompt}
+    <PageBody>
+      <fieldset className="vk-fieldset" disabled={saving}>
+        <PageSection layout="rows" title={t("settings.misc.whoWritesCommitMessages")}>
+          <PageRow label={t("settings.gitCommit.summaryModel")} description={<>
+            {draft.summaryModel.mode === "session" ? t("settings.gitCommit.followSessionModelHelp") : t("settings.gitCommit.fixedSummaryModelHelp")}
+            {fixedModelValue && !modelPickerChoiceExists(props.workbench.providers, fixedModelValue) ? <><br /><span className="vk-field-error" role="status">{t("settings.gitCommit.fixedSummaryModelUnavailable")}</span></> : null}
+          </>}>
+            {draft.summaryModel.mode === "fixed" ? <Button
+              onClick={() => setDraft({ ...draft, summaryModel: { mode: "session" } })}
+              size="sm"
+              type="button"
+              variant="ghost"
+            ><RotateCcw aria-hidden="true" />{t("settings.gitCommit.followSessionModel")}</Button> : null}
+            <ModelPickerControl
+              selectionScope="model"
+              ariaLabel={t("settings.gitCommit.chooseSummaryModel")}
+              fallbackLabel={t("settings.gitCommit.followSessionModel")}
+              unavailableValueLabel={fixedModelLabel}
+              filterPlaceholder={t("composer.modelPicker.filter")}
+              noMatchesLabel={t("composer.modelPicker.noMatches")}
+              providers={props.workbench.providers}
+              value={fixedModelValue}
+              disabled={saving}
+              onValueChange={(choice) => setDraft({ ...draft, summaryModel: { mode: "fixed", providerId: choice.providerId, modelId: choice.modelId } })}
+            />
+          </PageRow>
+        </PageSection>
+        <PageSection layout="rows" title={t("settings.misc.howCommitMessagesAre")}>
+          <PageRow htmlFor="git-commit-extra-prompt" label={t("settings.gitCommit.summaryExtraPrompt")} description={t("settings.gitCommit.summaryExtraPromptHelp")} stacked>
+            <Textarea id="git-commit-extra-prompt" rows={4} value={draft.summaryExtraPrompt}
               placeholder={t("settings.gitCommit.summaryExtraPromptPlaceholder")}
               onChange={(event) => setDraft({ ...draft, summaryExtraPrompt: event.currentTarget.value })} />
-            <small className="vk-form-note">{t("settings.gitCommit.summaryExtraPromptHelp")}</small>
-          </label>
-        </section>
-        <section className="settings-preferences-section">
-          <h2>{t("settings.misc.branchNaming")}</h2>
-          <label className="vk-field">
-            <span>{t("settings.misc.newBranchNamePrefix")}</span>
-            <Input value={draft.newBranchPrefix} placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
+          </PageRow>
+        </PageSection>
+        <PageSection layout="rows" title={t("settings.misc.branchNaming")}>
+          <PageRow htmlFor="git-commit-branch-prefix" label={t("settings.misc.newBranchNamePrefix")} description={<>
+            {t("settings.misc.onlyAffectsNewBranches")}
+            <br />{t("settings.misc.example")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code>
+          </>}>
+            <Input className="vk-form-w-lg" id="git-commit-branch-prefix" value={draft.newBranchPrefix} placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
               onChange={(event) => setDraft({ ...draft, newBranchPrefix: event.currentTarget.value })} />
-            <small className="vk-form-note">{t("settings.misc.example")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code></small>
-            <small className="vk-form-note">{t("settings.misc.onlyAffectsNewBranches")}</small>
-          </label>
-        </section>
+          </PageRow>
+        </PageSection>
       </fieldset>
-      <div className="settings-preferences-footer">
-        <span role="status" className="vk-form-note">{dirty ? t("settings.misc.unsavedChanges") : saveState === "saved" ? t("settings.misc.saved") : ""}</span>
-        <Button disabled={saveState === "saving" || !dirty} onClick={() => void saveDraft()} type="button">
-          <Save size={14} />{saveState === "saving" ? t("settings.misc.saving") : t("settings.misc.save")}
-        </Button>
-      </div>
-      {saveError ? <SettingsErrorNotice className="settings-save-error" detail={saveError} message={t("settings.misc.couldnTSaveYour")} /> : null}
-    </section>
+      {saveError ? <SettingsErrorNotice detail={saveError} message={t("settings.misc.couldnTSaveYour")} /> : null}
+      {dirty || saving ? (
+        <PageActionBar pending={dirty} actions={
+          <Button disabled={saving || !dirty} onClick={() => void saveDraft()} size="sm" type="button">
+            {saving ? <LoaderCircle className="vk-spin" aria-hidden="true" /> : null}
+            {t(saving ? "settings.misc.saving" : "settings.misc.save")}
+          </Button>
+        }>{t("settings.misc.unsavedChanges")}</PageActionBar>
+      ) : null}
+    </PageBody>
   )
 }
 

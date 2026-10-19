@@ -8,6 +8,9 @@
 .vk-page { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 4); min-width: 0; }
 .vk-page[data-width="readable"] { max-width: 880px; }
 .vk-page > .vk-page-tabs { margin-bottom: calc(var(--vk-u) * -1); }
+/* A fieldset that locks a whole editable page while it saves keeps the page rhythm between its sections. */
+/* 保存期间锁定整个可编辑页面的字段组，在其区块之间保持页面节奏。 */
+.vk-page > .vk-fieldset { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 4); }
 
 .vk-page-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); min-width: 0; }
 .vk-page-toolbar-start { display: flex; flex: 1 1 280px; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; }

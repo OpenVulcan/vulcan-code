@@ -365,7 +365,6 @@
 
 /* LuaSkills settings: kit page sections over a fieldset, runtime status rows and a sticky save bar. */
 /* LuaSkills 设置：字段集内的套件页面分区、运行时状态行与吸底保存栏。 */
-.lua-settings-content { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 4); min-width: 0; }
 .lua-settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: calc(var(--vk-u) * 3); min-width: 0; }
 .lua-settings-encoding { width: min(100%, 20rem); }
 .lua-inference-route-row > .vk-page-row-text { flex: 0 1 16rem; }
