@@ -6,16 +6,15 @@
   gap: 10px;
   min-width: 0;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border));
-  border-radius: var(--vcn-radius-md);
-  background: color-mix(in srgb, var(--destructive) 6%, var(--card));
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-bad) 28%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-bad) 6%, var(--vk-panel));
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
   font-weight: 400;
 }
-.settings-error-notice-icon { flex-shrink: 0; margin-top: 2px; color: var(--destructive); }
+.settings-error-notice-icon { flex-shrink: 0; margin-top: 2px; color: var(--vk-bad); }
 .settings-error-notice-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; flex: 1 1 auto; }
-.settings-error-notice-body > p { margin: 0; color: var(--foreground); line-height: 20px; }
+.settings-error-notice-body > p { margin: 0; color: var(--vk-ink); line-height: 20px; }
 .settings-error-notice pre {
   min-width: 0;
   max-width: 100%;
@@ -23,11 +22,10 @@
   margin: 0 0 6px;
   padding: 8px 10px;
   overflow: auto;
-  border-radius: var(--vcn-radius-sm);
-  background: var(--muted);
-  color: var(--muted-foreground);
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: var(--vcn-font-size-sm);
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+  font-family: var(--vk-font-mono, ui-monospace, monospace);
+  font-size: var(--vk-fs-sm);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

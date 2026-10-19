@@ -33,20 +33,20 @@ export function ProviderConnectPanel(props: {
   React.useEffect(() => setEntryId(provider.service_entries[0]?.id ?? ""), [provider.id, provider.service_entries])
   const core = provider.credential_directory_visibility === "core_account"
   return (
-    <div className="model-services-connect-panel">
-      <section className="model-services-panel">
+    <div className="vk-ms-connect-panel">
+      <section className="vk-ms-panel">
         <ProviderIntroCard compact provider={provider} />
       </section>
-      <section className="model-services-panel">
+      <section className="vk-ms-panel">
         <h3>{t("settings.modelServices.connectPanel.entries")}</h3>
-        <div className="model-services-entries" role="radiogroup" aria-label={t("settings.modelServices.connectPanel.entries")}>
+        <div className="vk-ms-entries" role="radiogroup" aria-label={t("settings.modelServices.connectPanel.entries")}>
           {provider.service_entries.map((entry) => {
             const presentation = localizedServiceEntryPresentation(provider.id, entry, t)
             const billing = Array.from(new Set(entry.credential_profiles.map((profile) => profile.billing_kind)))
             return (
               <button
                 aria-checked={entry.id === entryId}
-                className="model-services-entry"
+                className="vk-ms-entry"
                 key={entry.id}
                 onClick={() => setEntryId(entry.id)}
                 role="radio"
@@ -58,7 +58,7 @@ export function ProviderConnectPanel(props: {
             )
           })}
         </div>
-        <p className="model-services-panel-hint">{t("settings.modelServices.connectPanel.hint")}</p>
+        <p className="vk-ms-panel-hint">{t("settings.modelServices.connectPanel.hint")}</p>
         <Button
           className="self-end"
           disabled={props.busy || (!core && !entryId)}
@@ -159,7 +159,7 @@ export function ConnectProgress(props: ConnectProgressProps) {
         : connection.usage_capability !== "unsupported" ? t("settings.modelServices.connect.usageNeedsKey")
           : t("settings.modelServices.connect.usageUnsupported"),
       action: connection.usage_capability === "unsupported" && props.signupUrl ? (
-        <a className="model-services-official-link" href={props.signupUrl} rel="noreferrer" target="_blank">
+        <a className="vk-ms-official-link" href={props.signupUrl} rel="noreferrer" target="_blank">
           <ExternalLink aria-hidden="true" className="size-3.5" />
           {t("settings.modelServices.usage.officialSite")}
         </a>
@@ -168,16 +168,16 @@ export function ConnectProgress(props: ConnectProgressProps) {
   ]
 
   return (
-    <section aria-live="polite" className="model-services-connect">
-      <div className="model-services-connect-head">
+    <section aria-live="polite" className="vk-ms-connect">
+      <div className="vk-ms-connect-head">
         <strong>{t("settings.modelServices.connect.title").replace("{account}", connection.display_name)}</strong>
         <Button aria-label={t("settings.modelServices.connect.dismiss")} onClick={props.onDismiss} size="icon-xs" type="button" variant="ghost"><X /></Button>
       </div>
       <ol>
         {steps.map((step) => (
-          <li className={cn("model-services-connect-step")} data-state={step.state} key={step.key}>
+          <li className={cn("vk-ms-connect-step")} data-state={step.state} key={step.key}>
             <ConnectStepIcon state={step.state} />
-            <span className="model-services-connect-copy">
+            <span className="vk-ms-connect-copy">
               <span>{step.title}</span>
               {step.detail ? <small>{step.detail}</small> : null}
             </span>

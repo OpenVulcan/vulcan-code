@@ -1,5 +1,5 @@
 import * as React from "react"
-import "@/styles/licenses-settings.css"
+import "@/ui-kit/styles/features/licenses-settings.css"
 import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react"
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/ui-kit/primitives/dialog"

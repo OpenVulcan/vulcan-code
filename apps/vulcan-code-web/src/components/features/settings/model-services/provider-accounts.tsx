@@ -71,7 +71,7 @@ export function ProviderAccounts(props: ProviderAccountsProps) {
   return (
     <>
       {connections.length > 0 ? (
-        <div className="model-services-accounts">
+        <div className="vk-ms-accounts">
           {connections.map((connection) => (
             <AccountCard
               alerts={props.alerts.filter((alert) => alert.connectionId === connection.id)}
@@ -177,29 +177,29 @@ function AccountCard(props: AccountCardProps) {
   const catalogError = props.alerts.find((alert) => alert.kind === "catalog_error")?.detail
   const modelCount = snapshot.catalogs[connection.id]?.models.length ?? 0
   return (
-    <article className="model-services-account" data-state={health}>
-      <header className="model-services-account-top">
-        <span className="model-services-account-name">
-          {isDefault ? <Star aria-label={t("settings.credentials.currentDefault")} className="model-services-account-default" role="img" /> : null}
+    <article className="vk-ms-account" data-state={health}>
+      <header className="vk-ms-account-top">
+        <span className="vk-ms-account-name">
+          {isDefault ? <Star aria-label={t("settings.credentials.currentDefault")} className="vk-ms-account-default" role="img" /> : null}
           <strong title={connection.display_name}>{connection.display_name}</strong>
         </span>
         <AccountMenu {...props} isDefault={isDefault} profile={profile} toolsOnly={toolsOnly} />
       </header>
-      <div className="model-services-chip-row">
-        <span className="model-services-chip">{presentation.title}</span>
-        {presentation.tags.map((tag) => <span className="model-services-chip" key={tag}>{tag}</span>)}
+      <div className="vk-ms-chip-row">
+        <span className="vk-ms-chip">{presentation.title}</span>
+        {presentation.tags.map((tag) => <span className="vk-ms-chip" key={tag}>{tag}</span>)}
       </div>
       <AccountUsage connection={connection} profile={profile} signupUrl={providerSignupUrl(provider)} usage={props.usage} />
-      {catalogError ? <p className="model-services-account-error" title={catalogError}>{catalogError}</p> : null}
-      <footer className="model-services-account-foot">
-        <span className="model-services-status" data-state={health}>
+      {catalogError ? <p className="vk-ms-account-error" title={catalogError}>{catalogError}</p> : null}
+      <footer className="vk-ms-account-foot">
+        <span className="vk-ms-status" data-state={health}>
           <i aria-hidden="true" />
           {healthLabel(health, props.alerts, t)}
           {!toolsOnly && connection.enabled ? ` · ${t("settings.modelServices.connect.enabled").replace("{count}", String(modelCount))}` : null}
         </span>
-        <span className="model-services-account-controls">
+        <span className="vk-ms-account-controls">
           {!toolsOnly ? (
-            <Button aria-pressed={props.scoped} className="model-services-scope-button" onClick={props.onScope} size="xs" type="button" variant="ghost">
+            <Button aria-pressed={props.scoped} className="vk-ms-scope-button" onClick={props.onScope} size="xs" type="button" variant="ghost">
               {t("settings.modelServices.account.onlyThis")}
             </Button>
           ) : null}
@@ -295,13 +295,13 @@ function AccountUsage(props: {
   const balanceOnly = credentialUsageIsNonPlanAccount(props.profile)
   const { model } = overview
   return (
-    <div className="model-services-usage">
-      <div className="model-services-usage-facts">
+    <div className="vk-ms-usage">
+      <div className="vk-ms-usage-facts">
         <span>{model.planLabel}<b>{model.planValue}</b></span>
         {!unsupported ? <span>{model.balanceLabel}<b>{model.balanceValue}</b></span> : null}
       </div>
       {unsupported ? (
-        <p className="model-services-usage-note">
+        <p className="vk-ms-usage-note">
           {t("composer.accountCard.usageUnsupported")}
           {props.signupUrl ? (
             <a href={props.signupUrl} rel="noreferrer" target="_blank">
@@ -311,7 +311,7 @@ function AccountUsage(props: {
           ) : null}
         </p>
       ) : balanceOnly ? null : (
-        <div className="model-services-usage-quota">{overview.quotaContent}</div>
+        <div className="vk-ms-usage-quota">{overview.quotaContent}</div>
       )}
     </div>
   )

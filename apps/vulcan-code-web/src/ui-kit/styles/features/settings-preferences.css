@@ -6,14 +6,14 @@
 /* Only rows scroll; headers, batch actions and pagination remain available. */
 /* 仅表格行滚动，标题、批量操作和分页保持可用。 */
 .settings-archive-table-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
-.settings-archive-table { width: 100%; border-collapse: collapse; text-align: left; font-size: var(--vcn-font-size-md); }
-.settings-archive-table th { position: sticky; top: 0; z-index: 1; background: var(--background); color: var(--muted-foreground); font-weight: 500; }
-.settings-archive-table :is(th, td) { padding: 12px 10px; border-bottom: 1px solid var(--border); }
-.settings-archive-table tr[data-selected="true"] { background: var(--accent); }
+.settings-archive-table { width: 100%; border-collapse: collapse; text-align: left; font-size: var(--vk-fs-md); }
+.settings-archive-table th { position: sticky; top: 0; z-index: 1; background: var(--vk-ground); color: var(--vk-ink-2); font-weight: 500; }
+.settings-archive-table :is(th, td) { padding: 12px 10px; border-bottom: var(--vk-bw) solid var(--vk-line); }
+.settings-archive-table tr[data-selected="true"] { background: var(--vk-hover); }
 .settings-archive-selection { width: 90px; }
 .settings-archive-title { min-width: 180px; overflow-wrap: anywhere; }
 .settings-archive-actions { width: 180px; text-align: right; }
-.settings-archive-table .settings-archive-empty { text-align: center; padding: 40px 16px; color: var(--muted-foreground); }
+.settings-archive-table .settings-archive-empty { text-align: center; padding: 40px 16px; color: var(--vk-ink-2); }
 .settings-preferences-page {
   display: flex;
   flex-direction: column;
@@ -32,7 +32,7 @@
 }
 .notification-settings-page .settings-preference-row {
   min-height: 36px;
-  font-size: var(--vcn-font-size-lg);
+  font-size: var(--vk-fs-lg);
 }
 .notification-settings-page .settings-muted-line {
   margin: 0;
@@ -50,7 +50,7 @@
 }
 .notification-capability-note {
   padding-top: 20px;
-  border-top: 1px solid var(--border);
+  border-top: var(--vk-bw) solid var(--vk-line);
 }
 
 /* Separate Git preferences into three explicit groups while keeping one shared save action. */
@@ -64,9 +64,8 @@
 }
 .git-commit-settings-page .settings-preferences-section {
   padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--card);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
   gap: 16px;
 }
 .git-commit-settings-page h2 {
@@ -74,22 +73,22 @@
   align-items: center;
   gap: 8px;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--vk-bw) solid var(--vk-line);
 }
 .git-commit-settings-page .settings-form-field {
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   font-weight: 400;
 }
 .git-commit-settings-page .settings-form-field > span {
   font-weight: 500;
 }
 .git-commit-settings-page .settings-muted-line {
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   font-weight: 400;
   line-height: 1.7;
 }
 .git-commit-settings-page :is(input, textarea) {
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   font-weight: 400;
 }
 
@@ -109,11 +108,11 @@
 }
 .settings-preferences-section + .settings-preferences-section {
   padding-top: 20px;
-  border-top: 1px solid var(--border);
+  border-top: var(--vk-bw) solid var(--vk-line);
 }
 .settings-preferences-section h2 {
   margin: 0;
-  font-size: var(--vcn-font-size-lg);
+  font-size: var(--vk-fs-lg);
   font-weight: 600;
 }
 .settings-preference-row {
@@ -132,15 +131,14 @@
   flex-wrap: wrap;
   gap: 12px;
   padding-top: 16px;
-  border-top: 1px solid var(--border);
+  border-top: var(--vk-bw) solid var(--vk-line);
 }
 .settings-save-error {
   padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--destructive) 35%, var(--border));
-  border-radius: var(--vcn-radius-md);
-  color: var(--foreground);
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-bad) 35%, var(--vk-line));
+  color: var(--vk-ink);
 }
-.settings-save-error > p { color: var(--destructive); }
+.settings-save-error > p { color: var(--vk-bad); }
 .settings-save-error pre {
   max-height: 160px;
   overflow: auto;
@@ -177,19 +175,19 @@
   justify-content: space-between;
   gap: 24px;
   padding: 8px 0 20px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--vk-bw) solid var(--vk-line);
 }
 
 .provider-trace-header h2 {
   margin: 0;
-  font-size: var(--vcn-font-size-lg);
+  font-size: var(--vk-fs-lg);
   font-weight: 600;
 }
 
 .provider-trace-header p {
   margin: 6px 0 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .provider-trace-toggle {
@@ -197,8 +195,8 @@
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .provider-trace-information {
@@ -212,7 +210,7 @@
   display: grid;
   grid-template-columns: 88px minmax(0, 1fr);
   gap: 16px;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   line-height: 1.7;
 }
 
@@ -222,21 +220,21 @@
 
 .provider-trace-information dd {
   margin: 0;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   overflow-wrap: anywhere;
 }
 
 .provider-trace-information code {
   display: block;
   margin-top: 6px;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
 }
 
 .provider-trace-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  border-top: 1px solid var(--border);
+  border-top: var(--vk-bw) solid var(--vk-line);
   padding-top: 16px;
 }
 
@@ -256,8 +254,8 @@
   align-items: baseline;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-  font-size: var(--vcn-font-size-sm);
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  font-size: var(--vk-fs-sm);
   overflow-wrap: anywhere;
 }
 
@@ -267,11 +265,11 @@
 }
 
 .diagnostic-log-level {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .diagnostic-log-level[data-level="error"] {
-  color: var(--destructive);
+  color: var(--vk-bad);
 }
 
 @container workspace-page (max-width: 640px) {

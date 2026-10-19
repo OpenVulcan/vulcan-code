@@ -89,7 +89,7 @@ export function ProviderWorkspace(props: ProviderWorkspaceProps) {
     : null
 
   return (
-    <div className="model-services-workspace">
+    <div className="vk-ms-workspace">
       <WorkspaceHeader {...props} onToggleDetails={() => setShowDetails((current) => !current)} showDetails={showDetails} />
 
       {accountCount === 0 ? (
@@ -109,14 +109,14 @@ export function ProviderWorkspace(props: ProviderWorkspaceProps) {
             />
           ) : null}
           {functional || (provider.service_tags ?? []).some((tag) => tag !== "model") ? (
-            <p className="model-services-note">
+            <p className="vk-ms-note">
               <WandSparkles aria-hidden="true" className="size-4 shrink-0" />
               <span>{t(functional ? "settings.modelServices.functional.only" : "settings.modelServices.functional.also")}</span>
               <Button onClick={props.onOpenFunctions} size="xs" type="button" variant="link">{t("settings.modelServices.functional.open")}</Button>
             </p>
           ) : null}
-          <section className="model-services-section">
-            <h3 className="model-services-section-title">
+          <section className="vk-ms-section">
+            <h3 className="vk-ms-section-title">
               {t("settings.modelServices.section.accounts")}<small>{accountCount}</small>
             </h3>
             <ProviderAccounts
@@ -132,23 +132,23 @@ export function ProviderWorkspace(props: ProviderWorkspaceProps) {
             />
           </section>
           {!functional ? (
-            <section className="model-services-section model-services-models">
-              <div className="model-services-section-bar">
-                <h3 className="model-services-section-title">{t("settings.modelServices.section.models")}</h3>
+            <section className="vk-ms-section vk-ms-models">
+              <div className="vk-ms-section-bar">
+                <h3 className="vk-ms-section-title">{t("settings.modelServices.section.models")}</h3>
                 <Button disabled={busy} onClick={() => props.onManageDirectory(provider)} size="xs" type="button" variant="outline">
                   <ListTree aria-hidden="true" />{t("settings.customProviders.manageModels")}
                 </Button>
               </div>
               {accounts.length > 0 ? (
-                <div aria-label={t("settings.modelServices.scope.label")} className="model-services-scope" role="group">
+                <div aria-label={t("settings.modelServices.scope.label")} className="vk-ms-scope" role="group">
                   <span>{t("settings.modelServices.scope.label")}</span>
-                  <button aria-pressed={scope === null} className="model-services-tag-chip" onClick={() => setScopeId(null)} type="button">
+                  <button aria-pressed={scope === null} className="vk-ms-tag-chip" onClick={() => setScopeId(null)} type="button">
                     {t("settings.modelServices.scope.all")}
                   </button>
                   {accounts.map((connection) => (
                     <button
                       aria-pressed={scope?.id === connection.id}
-                      className="model-services-tag-chip"
+                      className="vk-ms-tag-chip"
                       key={connection.id}
                       onClick={() => setScopeId(connection.id)}
                       title={t("settings.modelServices.scope.hint")}
@@ -190,14 +190,14 @@ function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean;
   )))
   return (
     <>
-      <header className="model-services-head">
+      <header className="vk-ms-head">
         <ProviderIcon category={provider.category} size={36} providerId={provider.id} />
-        <div className="model-services-head-copy">
-          <div className="model-services-head-title">
+        <div className="vk-ms-head-copy">
+          <div className="vk-ms-head-title">
             <h2>{name}</h2>
             <ProviderTagChips provider={provider} />
-            {category ? <span className="model-services-chip" data-variant="category">{category}</span> : null}
-            {provider.kind === "custom" ? <span className="model-services-chip" data-variant="category">{t("settings.modelServices.category.custom")}</span> : null}
+            {category ? <span className="vk-ms-chip" data-variant="category">{category}</span> : null}
+            {provider.kind === "custom" ? <span className="vk-ms-chip" data-variant="category">{t("settings.modelServices.category.custom")}</span> : null}
             <AffiliateChip provider={provider} />
           </div>
           <p>
@@ -209,7 +209,7 @@ function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean;
             ) : null}
           </p>
         </div>
-        <div className="model-services-head-actions">
+        <div className="vk-ms-head-actions">
           {props.viewSwitch}
           <Button
             disabled={busy}
@@ -243,7 +243,7 @@ function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean;
         </div>
       </header>
       {props.showDetails ? (
-        <dl className="model-services-head-facts">
+        <dl className="vk-ms-head-facts">
           <div><dt>{t("settings.modelServices.head.id")}</dt><dd className="font-mono">{provider.id}</dd></div>
           {protocols.length > 0 ? <div><dt>{t("settings.modelServices.head.protocols")}</dt><dd>{protocols.join(" · ")}</dd></div> : null}
           {provider.service_entries.length > 0 ? (

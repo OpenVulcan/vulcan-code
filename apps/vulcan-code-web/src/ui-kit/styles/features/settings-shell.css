@@ -15,7 +15,7 @@
   width: 100%;
   min-height: 0;
   margin: 0 auto;
-  animation: vcn-page-enter var(--vcn-duration-slow) var(--vcn-ease-out);
+  animation: vcn-page-enter 240ms var(--vk-ease);
 }
 .settings-page-body {
   display: flex;
@@ -38,20 +38,18 @@
 /* Master-detail directories read as one bordered panel inside the frame. */
 /* 主从目录在框架内呈现为一个带边框的面板。 */
 .settings-page-body > .vk-directory:has(> [data-navigation-mode="column"]) {
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
+  border: var(--vk-bw) solid var(--vk-line);
 }
 /* AI capabilities: one row per capability, editing happens in the drawer. */
 /* AI 能力：每项能力一行，编辑在抽屉中完成。 */
 .ai-capabilities-page { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
 .ai-capabilities-page > .vk-page-tabs { flex-shrink: 0; }
-.ai-capabilities-panel { animation: vcn-fade-in var(--vcn-duration-base) var(--vcn-ease-out); }
+.ai-capabilities-panel { animation: vcn-fade-in var(--vk-t-med) var(--vk-ease); }
 .ai-capability-list {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
+  border: var(--vk-bw) solid var(--vk-line);
   list-style: none;
 }
 .ai-capability-row {
@@ -61,50 +59,48 @@
   gap: 14px;
   min-height: 64px;
   padding: 12px 16px;
-  transition: background-color var(--vcn-duration-fast) var(--vcn-ease-out);
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
 }
-.ai-capability-row + .ai-capability-row { border-top: 1px solid var(--border); }
-.ai-capability-row:hover { background: color-mix(in srgb, var(--muted) 45%, transparent); }
+.ai-capability-row + .ai-capability-row { border-top: var(--vk-bw) solid var(--vk-line); }
+.ai-capability-row:hover { background: color-mix(in srgb, var(--vk-sunken) 45%, transparent); }
 .ai-capability-icon {
   display: grid;
   place-items: center;
   width: 32px;
   height: 32px;
-  border-radius: var(--vcn-radius-md);
-  background: var(--muted);
-  color: var(--foreground);
+  background: var(--vk-sunken);
+  color: var(--vk-ink);
 }
 .ai-capability-copy { display: grid; gap: 2px; min-width: 0; }
-.ai-capability-copy strong { font-size: var(--vcn-font-size-md); font-weight: 600; line-height: 20px; }
+.ai-capability-copy strong { font-size: var(--vk-fs-md); font-weight: 600; line-height: 20px; }
 .ai-capability-copy small {
   overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ai-capability-target {
   overflow: hidden;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ai-capability-target.empty { color: var(--muted-foreground); }
+.ai-capability-target.empty { color: var(--vk-ink-2); }
 .ai-capability-status {
   padding: 2px 8px;
-  border-radius: var(--vcn-radius-pill);
-  background: var(--muted);
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   font-weight: 500;
   line-height: 18px;
   white-space: nowrap;
 }
 .ai-capability-status[data-enabled="true"] {
-  background: var(--vcn-status-success-background, color-mix(in srgb, var(--primary) 12%, transparent));
-  color: var(--vcn-content-success, var(--primary));
+  background: color-mix(in srgb, var(--vk-ok) 12%, transparent);
+  color: var(--vk-ok, var(--vk-ink));
 }
 .ai-capabilities-message { display: grid; justify-items: start; gap: 10px; padding: 16px 0; }
 .ai-capability-sheet-body { min-height: 0; overflow: auto; padding: 0 16px 24px; }
@@ -127,8 +123,8 @@
   width: 100%;
   margin: 0 0 10px;
   padding: 0;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
   font-weight: 600;
   line-height: 20px;
 }
@@ -142,9 +138,9 @@
   gap: 6px;
   width: fit-content;
   padding: 2px 0;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   cursor: pointer;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   font-weight: 500;
   list-style: none;
 }
@@ -157,7 +153,7 @@
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   transform: rotate(45deg);
-  transition: transform var(--vcn-duration-fast) var(--vcn-ease-out);
+  transition: transform var(--vk-t-fast) var(--vk-ease);
 }
 :is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class])[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
-:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary:hover { color: var(--foreground); }
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary:hover { color: var(--vk-ink); }

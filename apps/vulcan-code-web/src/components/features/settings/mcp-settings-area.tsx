@@ -9,7 +9,7 @@ import { loadMcpRuntimeSnapshot, loadMcpServerCapabilities, type McpServerInspec
 import { McpServerDialog, type McpSettingsActionProps } from "./mcp-server-dialog"
 import { McpSchemaDetail } from "./mcp-schema-detail"
 import { McpOAuthPanel } from "./mcp-oauth-panel"
-import "@/styles/mcp.css"
+import "@/ui-kit/styles/features/mcp.css"
 import { useI18n, formatMessage, type Translate } from "@/i18n"
 
 // connectionLabels distinguishes configured enablement from observed connectivity.

@@ -1,11 +1,11 @@
 import { LogsArea } from "@/components/features/settings/settings-diagnostics-area";
 // Settings-only styles follow this lazy route instead of inflating the initial workbench stylesheet.
 // 仅属于设置的样式随此懒加载路由载入，避免膨胀初始工作台样式表。
-import "@/styles/settings-pages.css";
-import "@/styles/settings-preferences.css";
-import "@/styles/settings-shell.css";
-import "@/styles/model-services.css";
-import "@/styles/visual-lab.css";
+import "@/ui-kit/styles/features/settings-pages.css";
+import "@/ui-kit/styles/features/settings-preferences.css";
+import "@/ui-kit/styles/features/settings-shell.css";
+import "@/ui-kit/styles/features/model-services.css";
+import "@/ui-kit/styles/features/visual-lab.css";
 import { VisualLabSettingsArea } from "@/components/dev/visual-lab-settings-area";
 import {
   ArchivedRestoreSettingsArea,

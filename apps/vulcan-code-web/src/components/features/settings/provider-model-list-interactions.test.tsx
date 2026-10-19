@@ -34,22 +34,22 @@ describe("model list access and usage interactions", () => {
     document.body.append(container)
     try {
       await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ModelServicesArea /></TooltipProvider></I18nProvider>))
-      expect(container.querySelectorAll(".settings-model-catalog-row")).toHaveLength(3)
+      expect(container.querySelectorAll(".vk-mcat-catalog-row")).toHaveLength(3)
       expect(container.querySelector("details")).toBeNull()
       expect(container.textContent).not.toContain("custom_user")
       // trigger is the first model's explicit access action, not its capability editor.
       // trigger 是首个模型明确的接入操作，不是其能力编辑器。
-      const trigger = container.querySelector<HTMLButtonElement>('.settings-model-catalog-actions button[aria-label^="接入 "]')!
+      const trigger = container.querySelector<HTMLButtonElement>('.vk-mcat-catalog-actions button[aria-label^="接入 "]')!
       trigger.focus()
       await act(async () => trigger.click())
       expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1)
-      expect(document.querySelector(".settings-model-access-routes")?.textContent).toContain("custom_user")
-      expect(document.querySelector(".settings-model-access-routes")?.textContent).toContain("模型 1 停用账号")
-      expect(document.querySelector(".settings-model-access-routes")?.textContent).toContain("账号未准入此模型")
-      expect(document.querySelectorAll(".settings-model-access-route")).toHaveLength(2)
+      expect(document.querySelector(".vk-mcat-access-routes")?.textContent).toContain("custom_user")
+      expect(document.querySelector(".vk-mcat-access-routes")?.textContent).toContain("模型 1 停用账号")
+      expect(document.querySelector(".vk-mcat-access-routes")?.textContent).toContain("账号未准入此模型")
+      expect(document.querySelectorAll(".vk-mcat-access-route")).toHaveLength(2)
       // conditions enters the existing editor while preserving its parent route context.
       // conditions 进入现有编辑器，同时保留父级路由上下文。
-      const conditions = document.querySelector<HTMLButtonElement>(".settings-model-access-route-heading button")!
+      const conditions = document.querySelector<HTMLButtonElement>(".vk-mcat-access-route-heading button")!
       conditions.focus()
       await act(async () => conditions.click())
       expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2)
@@ -58,7 +58,7 @@ describe("model list access and usage interactions", () => {
       // Radix restores focus from its deferred unmount callback; observe completion, not the render tick.
       // Radix 在延迟卸载回调中恢复焦点；等待该行为完成，不假设与渲染同一时刻发生。
       await vi.waitFor(() => expect(document.activeElement).toBe(conditions))
-      await act(async () => document.querySelector<HTMLButtonElement>('.settings-model-access-dialog > [data-slot="dialog-close"]')!.click())
+      await act(async () => document.querySelector<HTMLButtonElement>('.vk-mcat-access-dialog > [data-slot="dialog-close"]')!.click())
       expect(document.querySelector('[role="dialog"]')).toBeNull()
       await vi.waitFor(() => expect(document.activeElement).toBe(trigger))
       expect(service.conversation).not.toHaveBeenCalled()
@@ -92,11 +92,11 @@ describe("model list access and usage interactions", () => {
       await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ModelServicesArea /></TooltipProvider></I18nProvider>))
       // rows and cells identify visible controls without relying on protocol or account ordering.
       // rows 与 cells 标识可见控件，不依赖协议或账号排序。
-      const rows = container.querySelectorAll(".settings-model-catalog-row")
-      const cells = rows[0].querySelectorAll(".settings-model-purpose-cell")
+      const rows = container.querySelectorAll(".vk-mcat-catalog-row")
+      const cells = rows[0].querySelectorAll(".vk-mcat-purpose-cell")
       expect(cells).toHaveLength(3)
-      expect(rows[1].querySelectorAll(".settings-model-purpose-cell")).toHaveLength(3)
-      expect(rows[1].querySelectorAll(".settings-model-purpose-cell")[2].textContent).toContain("—")
+      expect(rows[1].querySelectorAll(".vk-mcat-purpose-cell")).toHaveLength(3)
+      expect(rows[1].querySelectorAll(".vk-mcat-purpose-cell")[2].textContent).toContain("—")
       // Tooltip state must not replace the checked state used to color either eligible switch.
       // 提示层状态不得覆盖两种可用开关用于着色的选中状态。
       for (const cell of [cells[1], cells[2]]) {
@@ -123,10 +123,10 @@ describe("model list access and usage interactions", () => {
       // rows holds every configured provider's catalog rows; same-named models are never merged.
       // rows 包含每个已配置供应商的目录行；同名模型不会合并。
       const providerIds = new Set(snapshot.connections.map((connection) => connection.provider_id))
-      const rows = container.querySelectorAll(".settings-model-catalog-row")
+      const rows = container.querySelectorAll(".vk-mcat-catalog-row")
       expect(providerIds.size).toBeGreaterThan(1)
       expect(rows.length).toBeGreaterThan(3)
-      expect([...rows].every((row) => row.querySelector(".model-services-row-provider"))).toBe(true)
+      expect([...rows].every((row) => row.querySelector(".vk-ms-row-provider"))).toBe(true)
     } finally { await act(async () => root.unmount()); container.remove() }
   })
 })

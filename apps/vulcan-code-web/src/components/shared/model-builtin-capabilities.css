@@ -20,11 +20,11 @@
   height: 13px;
 }
 
-.settings-model-builtin-capabilities {
+.vk-mcat-builtin-capabilities {
   flex: 0 0 auto;
 }
 
-.settings-model-builtin-capabilities .model-builtin-capability-icon {
+.vk-mcat-builtin-capabilities .model-builtin-capability-icon {
   width: 21px;
   height: 21px;
   border: 1px solid var(--border);

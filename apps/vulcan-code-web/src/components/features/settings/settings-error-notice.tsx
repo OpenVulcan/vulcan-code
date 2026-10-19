@@ -5,7 +5,7 @@ import { Button } from "@/ui-kit/primitives/button"
 import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
 import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
-import "@/styles/settings-error-notice.css"
+import "@/ui-kit/styles/features/settings-error-notice.css"
 
 // SettingsErrorNoticeProps describes one failed settings action: a plain-language outcome plus the raw error.
 // SettingsErrorNoticeProps 描述一次失败的设置操作：通俗的结果说明加原始错误。

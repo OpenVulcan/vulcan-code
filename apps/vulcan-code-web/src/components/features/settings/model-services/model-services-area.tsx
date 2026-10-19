@@ -196,7 +196,7 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
     { value: "diagnostics", label: t("settings.modelServices.tabs.diagnostics"), icon: <Stethoscope aria-hidden="true" />, count: snapshot?.customProviderManifestFailureTotalCount || undefined },
   ]
   const viewSwitch = (
-    <div className="model-services-view-switch" role="group" aria-label={t("settings.modelServices.view.label")}>
+    <div className="vk-ms-view-switch" role="group" aria-label={t("settings.modelServices.view.label")}>
       <button aria-pressed={view === "provider"} onClick={() => setView("provider")} type="button">
         <Boxes aria-hidden="true" />{t("settings.modelServices.view.provider")}
       </button>
@@ -207,12 +207,12 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
   )
 
   return (
-    <div className="model-services-page">
-      <div className="model-services-tabs" role="tablist" aria-label={t("settings.modelProviders")}>
+    <div className="vk-ms-page">
+      <div className="vk-ms-tabs" role="tablist" aria-label={t("settings.modelProviders")}>
         {tabs.map((option) => (
           <button
             aria-selected={tab === option.value}
-            className="model-services-tab"
+            className="vk-ms-tab"
             key={option.value}
             onClick={() => selectTab(option.value)}
             role="tab"
@@ -241,9 +241,9 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
       ) : null}
 
       {tab === "providers" ? (
-        <div className="model-services-shell">
+        <div className="vk-ms-shell">
           {snapshot ? <AlertStrip alerts={alerts} onSelect={showProvider} providerName={providerName} /> : null}
-          <div className="model-services-body">
+          <div className="vk-ms-body">
             <ProviderRail
               accountCounts={accountCounts}
               directory={directory}
@@ -260,7 +260,7 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
               selectedId={view === "provider" ? selected?.id ?? null : null}
               tag={tag}
             />
-            <div className="model-services-main">
+            <div className="vk-ms-main">
               {!snapshot ? (
                 <StreamPlaceholder decorative shape="rows" count={6} />
               ) : view === "model" ? (
@@ -378,9 +378,9 @@ function AlertStrip(props: {
     }
   }
   return (
-    <section aria-label={t("settings.modelServices.alerts.title")} className="model-services-alerts">
+    <section aria-label={t("settings.modelServices.alerts.title")} className="vk-ms-alerts">
       {props.alerts.length === 0 ? (
-        <span className="model-services-alert" data-severity="ok">
+        <span className="vk-ms-alert" data-severity="ok">
           <CircleCheck aria-hidden="true" />{t("settings.modelServices.alerts.allOk")}
         </span>
       ) : (
@@ -389,13 +389,13 @@ function AlertStrip(props: {
             {props.alerts.map((alert) => (
               <li key={`${alert.connectionId}:${alert.kind}`}>
                 <button
-                  className="model-services-alert"
+                  className="vk-ms-alert"
                   data-severity={alertSeverity(alert.kind)}
                   onClick={() => props.onSelect(alert.providerId)}
                   title={alert.detail}
                   type="button"
                 >
-                  <i aria-hidden="true" className="model-services-dot" data-state={alertSeverity(alert.kind)} />
+                  <i aria-hidden="true" className="vk-ms-dot" data-state={alertSeverity(alert.kind)} />
                   <strong>{props.providerName(alert.providerId)}</strong>
                   <span>{alert.connectionName}</span>
                   <span>{label(alert)}</span>
@@ -432,13 +432,13 @@ function ModelLedView(props: {
     props.onFilter(next)
   }
   return (
-    <div className="model-services-workspace">
-      <header className="model-services-head">
-        <div className="model-services-head-copy">
-          <div className="model-services-head-title"><h2>{t("settings.modelServices.view.allModels")}</h2></div>
+    <div className="vk-ms-workspace">
+      <header className="vk-ms-head">
+        <div className="vk-ms-head-copy">
+          <div className="vk-ms-head-title"><h2>{t("settings.modelServices.view.allModels")}</h2></div>
           <p>{t("settings.modelServices.view.allModelsHint")}</p>
         </div>
-        <div className="model-services-head-actions">{props.viewSwitch}</div>
+        <div className="vk-ms-head-actions">{props.viewSwitch}</div>
       </header>
       {props.providerIds.length === 0 ? (
         <PageEmptyState
@@ -448,12 +448,12 @@ function ModelLedView(props: {
         />
       ) : (
         <>
-          <div aria-label={t("settings.modelServices.view.providerFilter")} className="model-services-scope" role="group">
+          <div aria-label={t("settings.modelServices.view.providerFilter")} className="vk-ms-scope" role="group">
             <span>{t("settings.modelServices.view.providerFilter")}</span>
             {props.providerIds.map((providerId) => (
               <button
                 aria-pressed={props.filter.has(providerId)}
-                className="model-services-tag-chip"
+                className="vk-ms-tag-chip"
                 key={providerId}
                 onClick={() => toggle(providerId)}
                 type="button"

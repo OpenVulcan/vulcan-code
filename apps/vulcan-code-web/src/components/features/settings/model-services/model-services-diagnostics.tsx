@@ -37,9 +37,9 @@ export function ModelServicesDiagnostics(props: {
   const busy = mutations.pendingKey !== null
 
   return (
-    <div className="model-services-diagnostics">
+    <div className="vk-ms-diagnostics">
       {failureTotal > 0 ? (
-        <section className="model-services-isolated" role="alert">
+        <section className="vk-ms-isolated" role="alert">
           <p className="font-semibold text-destructive">
             {t("settings.providers.isolatedCount").replace("{count}", String(failureTotal))}
           </p>

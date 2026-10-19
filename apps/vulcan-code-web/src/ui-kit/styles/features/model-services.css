@@ -1,0 +1,832 @@
+/* Model services: one page for providers, accounts, models and function routing. */
+/* 模型服务：供应商、账号、模型与功能分配合并为一个页面。 */
+
+.vk-ms-page {
+  container: model-services / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* Top-level sections are a raised segmented control, so they never read like the in-page filters below them. */
+/* 顶层分区使用凸起的分段控件，避免与下方页内筛选混淆。 */
+.vk-ms-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-sunken);
+}
+
+.vk-ms-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
+}
+
+.vk-ms-tab > svg { width: 16px; height: 16px; }
+.vk-ms-tab:hover { color: var(--vk-ink); }
+.vk-ms-tab:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
+
+.vk-ms-tab[aria-selected="true"] {
+  background: var(--vk-panel);
+  color: var(--vk-ink);
+  box-shadow: var(--vk-shadow-1), 0 0 0 1px var(--vk-line);
+}
+
+.vk-ms-tab[aria-selected="true"] > svg { color: var(--vk-ember-2); }
+
+.vk-ms-tab > small {
+  min-width: 18px;
+  padding: 0 5px;
+  background: var(--vk-bad);
+  color: var(--vk-ink-inverse);
+  font-size: var(--vk-fs-2xs);
+  line-height: 18px;
+  text-align: center;
+}
+
+/* Shell: one bordered card; alerts on top, the provider rail and the working panel side by side. */
+/* 外壳：一张带边框的卡片；顶部为提醒，下方左侧目录与右侧工作区并排。 */
+.vk-ms-shell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: clip;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+}
+
+.vk-ms-body {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 560px;
+}
+
+.vk-ms-main { min-width: 0; padding: 16px 18px 18px; }
+
+/* Health dots shared by alerts and rail rows. */
+/* 健康圆点，由提醒与目录行共用。 */
+.vk-ms-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--vk-ok);
+}
+
+.vk-ms-dot[data-state="warn"] { background: var(--vk-warn); }
+.vk-ms-dot[data-state="bad"] { background: var(--vk-bad); }
+.vk-ms-dot[data-state="off"] { background: color-mix(in srgb, var(--vk-ink-2) 60%, transparent); }
+
+/* Alerts: severity pills that open the provider; with none, one calm "all healthy" pill. */
+/* 提醒：可打开对应供应商的严重程度胶囊；没有提醒时显示一个“全部正常”胶囊。 */
+.vk-ms-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 14px;
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-ground);
+}
+
+.vk-ms-alerts > ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vk-ms-alerts > small { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+
+.vk-ms-alert {
+  --vk-tone: var(--vk-warn);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 11px;
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-tone) 22%, transparent);
+  background: color-mix(in srgb, var(--vk-tone) 12%, var(--vk-panel));
+  color: var(--vk-tone);
+  font-size: var(--vk-fs-sm);
+  white-space: nowrap;
+}
+
+.vk-ms-alert[data-severity="bad"] { --vk-tone: var(--vk-bad); }
+.vk-ms-alert[data-severity="ok"] { --vk-tone: var(--vk-ok); }
+.vk-ms-alert > svg { width: 14px; height: 14px; }
+.vk-ms-alert > strong { font-weight: 600; }
+.vk-ms-alert > span { opacity: 0.85; }
+button.vk-ms-alert { cursor: pointer; }
+button.vk-ms-alert:hover { border-color: var(--vk-tone); }
+button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
+
+/* View switch: provider-led or model-led, placed in the working panel's header. */
+/* 视图切换：以供应商为主或以模型为主，位于工作区标头。 */
+.vk-ms-view-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-ground);
+}
+
+.vk-ms-view-switch > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.vk-ms-view-switch > button > svg { width: 14px; height: 14px; }
+.vk-ms-view-switch > button:hover { color: var(--vk-ink); }
+
+.vk-ms-view-switch > button[aria-pressed="true"] {
+  background: var(--vk-panel);
+  color: var(--vk-ink);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--vk-line);
+}
+
+/* Rail: search, tag filter, configured list (reorderable), recommendations and a footer. */
+/* 左侧目录：搜索、标签筛选、已配置列表（可排序）、推荐列表与底部操作。 */
+.vk-ms-rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  max-height: calc(100dvh - 140px);
+  min-width: 0;
+  border-right: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-ground);
+}
+
+.vk-ms-rail-search { position: relative; padding: 10px 10px 6px; }
+
+.vk-ms-rail-search > svg {
+  position: absolute;
+  z-index: 1;
+  top: calc(50% + 2px);
+  left: 20px;
+  color: var(--vk-ink-2);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.vk-ms-rail-search input { height: 32px; padding-left: 30px; background: var(--vk-panel); }
+
+.vk-ms-tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 10px 6px;
+}
+
+/* Filter chips: quiet pills that turn primary-soft when pressed. */
+/* 筛选胶囊：安静的胶囊，按下时变为主色浅底。 */
+.vk-ms-tag-chip {
+  height: 24px;
+  max-width: 220px;
+  overflow: hidden;
+  padding: 0 9px;
+  border: var(--vk-bw) solid transparent;
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.vk-ms-tag-chip:hover { color: var(--vk-ink); }
+.vk-ms-tag-chip:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
+
+.vk-ms-tag-chip[aria-pressed="true"] {
+  border-color: var(--vk-signal);
+  background: var(--vk-signal-soft);
+  color: var(--vk-signal);
+  font-weight: 600;
+}
+
+.vk-ms-rail-sections {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 6px 8px;
+}
+
+.vk-ms-rail-sections ul { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+
+.vk-ms-rail-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding: 0 6px;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.vk-ms-rail-heading > small { font-size: var(--vk-fs-2xs); font-weight: 400; opacity: 0.8; }
+
+.vk-ms-rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.vk-ms-rail-item.dragging { opacity: 0.45; }
+
+.vk-ms-rail-grip {
+  position: absolute;
+  z-index: 1;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  color: var(--vk-ink-2);
+  opacity: 0.35;
+  cursor: grab;
+  pointer-events: none;
+}
+
+.vk-ms-rail-grip[data-hidden="true"] { display: none; }
+.vk-ms-rail-item:hover .vk-ms-rail-grip { opacity: 0.8; }
+
+/* Two-line row: logo, name over chips, and a meta column with health and counts. */
+/* 两行目录项：图标、名称与标签两行，以及显示健康状态与数量的信息列。 */
+.vk-ms-rail-row {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 7px 8px 7px 16px;
+  border: var(--vk-bw) solid transparent;
+  background: transparent;
+  color: var(--vk-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.vk-ms-rail-row:hover { background: var(--vk-hover); }
+.vk-ms-rail-row:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -2px; }
+
+.vk-ms-rail-row.active {
+  border-color: var(--vk-line);
+  background: var(--vk-panel);
+  box-shadow: inset 2px 0 0 var(--vk-ember), var(--vk-shadow-1);
+}
+
+.vk-ms-rail-copy { display: grid; gap: 3px; min-width: 0; }
+
+.vk-ms-rail-name {
+  overflow: hidden;
+  font-size: var(--vk-fs-md);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vk-ms-rail-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; }
+.vk-ms-rail-sub:empty { display: none; }
+
+.vk-ms-rail-meta {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  white-space: nowrap;
+}
+
+.vk-ms-rail-meta > span { display: inline-flex; align-items: center; gap: 5px; }
+
+/* Move buttons appear on hover or keyboard focus only, so the list stays calm. */
+/* 移动按钮仅在悬停或键盘聚焦时出现，保持列表安静。 */
+.vk-ms-rail-move {
+  position: absolute;
+  right: 4px;
+  display: none;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+}
+
+.vk-ms-rail-item:hover .vk-ms-rail-move,
+.vk-ms-rail-item:focus-within .vk-ms-rail-move { display: inline-flex; }
+
+.vk-ms-rail-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  margin-top: auto;
+  padding: 8px 10px;
+  border-top: var(--vk-bw) solid var(--vk-line);
+}
+
+.vk-ms-rail-foot > button:last-child { align-self: flex-start; color: var(--vk-ink-2); }
+
+/* Chips: service tags in their own colors, category, entry and the affiliate mark. */
+/* 标签胶囊：服务标签使用各自颜色，另有类别、入口与邀请标记。 */
+.vk-ms-chip-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.vk-ms-chip-row[data-size="small"] { gap: 3px; }
+
+.vk-ms-chip {
+  --vk-tone: var(--vk-ink-2);
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  background: var(--vk-sunken);
+  color: var(--vk-tone);
+  font-size: var(--vk-fs-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+[data-size="small"] > .vk-ms-chip,
+.vk-ms-rail-sub > .vk-ms-chip { height: 17px; padding: 0 6px; font-size: var(--vk-fs-2xs); }
+
+.vk-ms-chip:is([data-tag], [data-variant="affiliate"]) { background: color-mix(in srgb, var(--vk-tone) 13%, var(--vk-panel)); }
+.vk-ms-chip[data-tag="model"] { --vk-tone: var(--vk-info); }
+.vk-ms-chip[data-tag="search"] { --vk-tone: var(--vk-ok); }
+.vk-ms-chip[data-tag="analysis"] { --vk-tone: var(--vk-warn); }
+.vk-ms-chip[data-variant="category"] { border: var(--vk-bw) solid var(--vk-line); background: transparent; }
+.vk-ms-chip[data-variant="affiliate"] { --vk-tone: var(--vk-ember); font-weight: 700; }
+
+/* Hover intro card. */
+/* 悬停介绍卡。 */
+.vk-ms-intro { display: grid; gap: 10px; font-size: var(--vk-fs-sm); }
+.vk-ms-intro-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.vk-ms-intro-head strong { font-size: var(--vk-fs-lg); }
+.vk-ms-intro-description { margin: 0; color: var(--vk-ink); line-height: 1.55; }
+.vk-ms-intro-section { display: grid; gap: 4px; }
+
+.vk-ms-intro-section > span {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.vk-ms-intro-section ul { display: grid; gap: 2px; margin: 0; padding-left: 16px; color: var(--vk-ink); }
+
+.vk-ms-intro-note {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  line-height: 1.5;
+}
+
+.vk-ms-intro-affiliate {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 8px 10px;
+  border: var(--vk-bw) dashed color-mix(in srgb, var(--vk-ember) 45%, transparent);
+  font-size: var(--vk-fs-xs);
+  line-height: 1.5;
+}
+
+.vk-ms-intro-affiliate > strong { color: var(--vk-ember-ink); }
+.vk-ms-intro-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 2px; }
+
+.vk-ms-intro-foot > a,
+.vk-ms-head-copy > p > a,
+.vk-ms-usage-note > a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--vk-signal);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+:is(.vk-ms-intro-foot, .vk-ms-head-copy > p, .vk-ms-usage-note) > a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Workspace: provider header, accounts, models. */
+/* 工作区：供应商标头、账号、模型。 */
+.vk-ms-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  animation: vcn-fade-in var(--vk-t-med) var(--vk-ease);
+}
+
+.vk-ms-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 12px;
+}
+
+.vk-ms-head-copy { display: grid; flex: 1 1 320px; gap: 4px; min-width: 0; }
+
+.vk-ms-head-copy > p {
+  margin: 0;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  line-height: 1.55;
+}
+
+.vk-ms-head-copy > p > a { margin-left: 8px; }
+.vk-ms-head-title { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 6px; }
+.vk-ms-head-title h2 { margin: 0 4px 0 0; font-size: var(--vk-fs-xl); font-weight: 650; }
+.vk-ms-head-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; }
+
+.vk-ms-head-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: -6px 0 0;
+  padding: 8px 12px;
+  background: var(--vk-ground);
+  font-size: var(--vk-fs-xs);
+}
+
+.vk-ms-head-facts > div { display: flex; gap: 6px; min-width: 0; }
+.vk-ms-head-facts dt { color: var(--vk-ink-2); }
+.vk-ms-head-facts dd { margin: 0; color: var(--vk-ink); overflow-wrap: anywhere; }
+
+.vk-ms-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0;
+  padding: 8px 12px;
+  border: var(--vk-bw) dashed var(--vk-line);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-ms-note > button { height: auto; padding: 0; }
+.vk-ms-section { display: grid; gap: 10px; min-width: 0; }
+
+.vk-ms-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--vk-fs-md);
+  font-weight: 650;
+}
+
+.vk-ms-section-title > small { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); font-weight: 400; }
+.vk-ms-section-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.vk-ms-models { padding-top: 14px; border-top: var(--vk-bw) solid var(--vk-line); }
+
+/* Account cards: compact grid; name and menu, entry chips, usage slot, status footer. */
+/* 账号卡片：紧凑网格；名称与菜单、入口标签、用量区与状态栏。 */
+.vk-ms-accounts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.vk-ms-account {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+}
+
+.vk-ms-account[data-state="off"] { opacity: 0.62; }
+.vk-ms-account-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.vk-ms-account-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--vk-fs-md); }
+.vk-ms-account-name > strong { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vk-ms-account-default { flex: none; width: 14px; height: 14px; color: var(--vk-warn); fill: currentColor; }
+
+.vk-ms-account-error {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--vk-bad);
+  font-size: var(--vk-fs-xs);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.vk-ms-usage {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-height: 52px;
+  padding: 8px 10px;
+  background: var(--vk-ground);
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-ms-usage-facts { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; }
+.vk-ms-usage-facts > span { display: inline-flex; gap: 6px; color: var(--vk-ink-2); }
+.vk-ms-usage-facts b { color: var(--vk-ink); font-weight: 600; }
+
+.vk-ms-usage-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+}
+
+.vk-ms-usage-quota { min-width: 0; font-size: var(--vk-fs-xs); }
+.vk-ms-usage-quota [data-slot="credential-credit-balances"] { column-gap: 12px; }
+
+.vk-ms-account-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+  margin-top: auto;
+}
+
+.vk-ms-status {
+  --vk-tone: var(--vk-ok);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+}
+
+.vk-ms-status > i { flex: none; width: 7px; height: 7px; background: var(--vk-tone); }
+.vk-ms-status[data-state="warn"] { --vk-tone: var(--vk-warn); }
+.vk-ms-status[data-state="bad"] { --vk-tone: var(--vk-bad); color: var(--vk-bad); }
+.vk-ms-status[data-state="off"] { --vk-tone: color-mix(in srgb, var(--vk-ink-2) 60%, transparent); }
+.vk-ms-account-controls { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.vk-ms-scope-button { color: var(--vk-ink-2); }
+
+.vk-ms-scope-button[aria-pressed="true"] {
+  background: var(--vk-signal-soft);
+  color: var(--vk-signal);
+}
+
+/* Scope row: which account's view of the models is shown. */
+/* 范围行：显示哪个账号视角下的模型。 */
+.vk-ms-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.vk-ms-scope > span { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); font-weight: 600; }
+.vk-ms-scope > small { flex-basis: 100%; color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+
+/* Connect panel for a provider without accounts: introduction beside entry choice. */
+/* 无账号供应商的接入面板：介绍与入口选择并排。 */
+.vk-ms-connect-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.vk-ms-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+}
+
+.vk-ms-panel > h3 { margin: 0; font-size: var(--vk-fs-md); font-weight: 650; }
+.vk-ms-panel > button { align-self: flex-start; }
+.vk-ms-panel-hint { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+
+.vk-ms-entries {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.vk-ms-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.vk-ms-entry:hover { background: var(--vk-hover); }
+.vk-ms-entry:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
+.vk-ms-entry[aria-checked="true"] { border-color: color-mix(in srgb, var(--vk-ember) 55%, var(--vk-line)); background: var(--vk-select); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-ms-entry > small { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+
+/* Connect progress after a new account is saved. */
+/* 新账号保存后的接入进度。 */
+.vk-ms-connect {
+  padding: 12px 14px;
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-ok) 40%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-ok) 6%, var(--vk-panel));
+}
+
+.vk-ms-connect-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.vk-ms-connect ol { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+
+.vk-ms-connect-step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-ms-connect-step[data-state="done"] > svg { color: var(--vk-ok); }
+.vk-ms-connect-step[data-state="warning"] > svg { color: var(--vk-warn); }
+.vk-ms-connect-step[data-state="failed"] > svg { color: var(--vk-bad); }
+.vk-ms-connect-step[data-state="skipped"] { color: var(--vk-ink-2); }
+.vk-ms-connect-copy { display: grid; gap: 1px; min-width: 0; }
+.vk-ms-connect-copy small { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
+
+/* Model catalog: a compact table with a leading selection column, plus the account column when one account is in scope. */
+/* 模型目录：紧凑表格，首列为选择列；限定到单个账号时增加账号列。 */
+.vk-ms-catalog :is(.vk-mcat-catalog-heading, .vk-mcat-catalog-row) {
+  grid-template-columns: 20px minmax(0, 1fr) 78px 96px 78px 104px;
+  gap: 10px;
+  padding-inline: 12px;
+}
+
+.vk-ms-catalog[data-account-scope="true"] :is(.vk-mcat-catalog-heading, .vk-mcat-catalog-row) {
+  grid-template-columns: 20px minmax(0, 1fr) 78px 78px 96px 78px 104px;
+}
+
+.vk-ms-catalog .vk-mcat-catalog-heading {
+  padding-block: 7px;
+  background: var(--vk-ground);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.vk-ms-catalog .vk-mcat-catalog-heading > :nth-child(2) { text-align: left; }
+.vk-ms-catalog .vk-mcat-catalog-row { padding-block: 7px; }
+.vk-ms-catalog .vk-mcat-catalog-row .vk-mcat-title-line strong { font-size: var(--vk-fs-md); }
+.vk-ms-select-cell { display: flex; align-items: center; justify-content: center; }
+.vk-ms-catalog .vk-mcat-catalog-row[data-selected="true"] { background: var(--vk-select); box-shadow: inset 2px 0 0 var(--vk-ember); }
+
+.vk-ms-catalog-pane .vk-mcat-toolbar { grid-template-columns: minmax(0, 1fr) 132px 120px; }
+.vk-ms-catalog-pane .vk-mcat-toolbar > [data-slot="select-trigger"] { width: 100%; min-width: 0; }
+.vk-ms-catalog-pane .vk-mcat-row-main { gap: 3px; }
+
+.vk-ms-row-provider {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+  color: var(--vk-ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* The summary line and the bulk bar share one reserved slot so selecting a row never shifts the list below. */
+/* 摘要行与批量操作栏共用一个预留位置，选中行时下方列表不会移动。 */
+.vk-ms-catalog-status,
+.vk-ms-bulk-bar { min-height: 42px; }
+.vk-ms-catalog-status { display: flex; align-items: center; padding: 0 11px; }
+
+/* The bulk bar inverts the theme so a pending selection is unmistakable. */
+/* 批量操作栏反转配色，让待处理的选择一目了然。 */
+.vk-ms-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 6px 10px;
+  background: var(--vk-ink);
+  color: var(--vk-ground);
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-ms-bulk-bar button {
+  border-color: color-mix(in srgb, var(--vk-ground) 35%, transparent);
+  background: transparent;
+  color: var(--vk-ground);
+  box-shadow: none;
+}
+
+.vk-ms-bulk-bar button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--vk-ground) 14%, transparent);
+  color: var(--vk-ground);
+}
+
+.vk-ms-bulk-group { display: inline-flex; align-items: center; gap: 4px; }
+.vk-ms-bulk-group > span { margin-right: 2px; opacity: 0.7; }
+
+/* Diagnostics tab. */
+/* 诊断标签页。 */
+.vk-ms-diagnostics { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+.vk-ms-isolated {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-bad) 40%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-bad) 5%, var(--vk-panel));
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-ms-isolated p { margin: 0; }
+.vk-ms-isolated ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+
+.vk-ms-isolated li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-bad) 20%, var(--vk-line));
+  color: var(--vk-bad);
+  font-size: var(--vk-fs-xs);
+}
+
+.vk-ms-official-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--vk-signal);
+  font-size: var(--vk-fs-sm);
+  font-weight: 600;
+}
+
+@container model-services (max-width: 980px) {
+  .vk-ms-body { grid-template-columns: 236px minmax(0, 1fr); }
+  .vk-ms-connect-panel { grid-template-columns: minmax(0, 1fr); }
+}
+
+@container model-services (max-width: 700px) {
+  .vk-ms-body { grid-template-columns: minmax(0, 1fr); }
+  .vk-ms-rail { position: static; max-height: 460px; border-right: 0; border-bottom: var(--vk-bw) solid var(--vk-line); }
+  .vk-ms-main { padding: 14px; }
+  .vk-ms-head-actions { justify-content: flex-start; margin-left: 0; }
+  /* Short filters share one row below search so narrow lists keep reading space. */
+  /* 短筛选项在搜索框下并排，窄窗列表保留阅读空间。 */
+  .vk-ms-catalog-pane .vk-mcat-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vk-ms-catalog-pane .vk-mcat-search { grid-column: 1 / -1; }
+}
+
+@container model-catalog (max-width: 660px) {
+  .vk-ms-catalog .vk-mcat-catalog-row,
+  .vk-ms-catalog[data-account-scope="true"] .vk-mcat-catalog-row {
+    grid-template-columns: 20px repeat(3, minmax(0, 1fr));
+  }
+
+  .vk-ms-catalog .vk-mcat-catalog-row > .vk-ms-select-cell { grid-row: span 2; align-self: start; }
+  .vk-ms-catalog[data-account-scope="true"] .vk-mcat-catalog-row > .vk-ms-select-cell { grid-row: span 3; }
+  .vk-ms-catalog .vk-mcat-catalog-row .vk-mcat-row-main { grid-column: 2 / -1; }
+  .vk-ms-catalog .vk-mcat-catalog-row .vk-mcat-catalog-actions { grid-column: 2 / -1; }
+}
