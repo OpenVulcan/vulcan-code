@@ -461,7 +461,7 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
           />
         </div>
         {reconciliationPending ? (
-          <p className="vk-error-notice">
+          <p className="vk-error-pending">
             {t("conversation.systemError.pendingNotice")}
           </p>
         ) : null}
