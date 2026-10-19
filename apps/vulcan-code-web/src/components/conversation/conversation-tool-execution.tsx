@@ -46,6 +46,7 @@ import { ToolPresentationCard } from "./conversation-tool-presentation-card";
 import { terminalSummaryById } from "./conversation-terminal-model";
 import { resolveToolPresentation } from "./conversation-tool-presentations";
 import { fixedV1ToolEvent } from "./tool-presentations/presentation-value-readers";
+import { ToolCallCard, toolCallHasPurposeCard } from "@/conversation/tools/tool-call-card";
 
 export type {
   ToolExecutionConversationBlock,
@@ -297,9 +298,22 @@ export function ToolExecutionBlock(props: {
       mediaAttachments: displayedMediaAttachments,
     });
   };
+  // v1CardKey keys the new card's expansion memory by the durable call identity; tools still awaiting a new card keep
+  // the legacy card until their family moves.
+  // v1CardKey 以可靠调用身份作为新卡片展开记忆的键；尚未拥有新卡的工具在其家族迁移前保留旧卡。
+  const v1CardKey = v1ToolEvent && toolCallHasPurposeCard(v1ToolEvent) ? `tool:${v1ToolEvent.api_call_id}:${v1ToolEvent.tool_call_id}` : null;
+  const handleV1CardOpenChange = React.useCallback((open: boolean) => {
+    if (v1CardKey) handleToolPresentationExpandedChange(v1CardKey, open);
+  }, [handleToolPresentationExpandedChange, v1CardKey]);
   return (
     <div className="tool-execution-stack">
-      <ToolPresentationCard
+      {v1ToolEvent && v1CardKey ? (
+        <ToolCallCard
+          event={v1ToolEvent}
+          onOpenChange={handleV1CardOpenChange}
+          open={effectiveExpandedToolPresentationIds.has(v1CardKey)}
+        />
+      ) : <ToolPresentationCard
         v1ToolEvent={v1ToolEvent}
         expanded={effectiveExpandedToolPresentationIds.has(presentation.id)}
         expandedFooter={rawInvocationAllowed && detailRef ? (
@@ -311,7 +325,7 @@ export function ToolExecutionBlock(props: {
         detailLoadEnabled={detailLoadEnabled}
         onExpandedChange={handleToolPresentationExpandedChange}
         onLoadToolDetail={props.onLoadToolDetail}
-      />
+      />}
       {displayedMediaAttachments.length > 0 ? (
         <GeneratedMediaStrip
           attachments={displayedMediaAttachments}

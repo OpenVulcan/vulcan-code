@@ -1000,7 +1000,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(host.querySelectorAll(".tool-with-thinking")).toHaveLength(1);
       // The header selector must target the real card, without wrapping its expanded detail in a prefix column.
       // 标题选择器必须命中真实卡片，不能把展开详情包进思考入口所在分栏。
-      expect(host.querySelector(".tool-with-thinking > .conversation-block-content > .tool-execution-stack:first-child > .tool-presentation-card > .tool-presentation-summary")).not.toBeNull();
+      expect(host.querySelector(".tool-with-thinking > .conversation-block-content > .tool-execution-stack:first-child > .vk-tool > .vk-tool-head")).not.toBeNull();
       expect(document.querySelector(".thinking-preview-surface")).toBeNull();
       const trigger = host.querySelector<HTMLButtonElement>(".thinking-preview-trigger.compact")!;
       await React.act(async () => trigger.click());
@@ -1167,7 +1167,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(markup).toContain('aria-label="编辑用户提示词"');
     expect(markup).toContain("已工作");
     expect(markup).toContain("rg current-call-chain");
-    expect(markup).toContain("tool-presentation-card");
+    expect(markup).toContain("vk-tool-head");
     expect(markup).toContain("turn-stats-row");
     expect(markup).not.toContain(">SYSTEM<");
     expect(markup).toContain('aria-label="分叉会话"');
@@ -1177,22 +1177,16 @@ describe("ConversationBranchWorkspaceV1", () => {
   // Durable tool envelopes must recover branch-native summaries and bodies without exposing wrapper JSON.
   // 可靠工具封装必须恢复分支原生摘要与正文，且不得暴露封装 JSON。
   it("adapts prompt-skill Markdown and file-read ranges from exact V1 tool envelopes", () => {
-    // filePayload mirrors the strongly typed vulcan.file_access.v2 host result persisted by the runtime.
-    // filePayload 镜像运行时持久化的强类型 vulcan.file_access.v2 宿主结果。
+    // filePayload mirrors the coordinate-only vulcan.file_read.v3 host metadata persisted by the runtime.
+    // filePayload 镜像运行时持久化的仅含定位信息的 vulcan.file_read.v3 宿主元数据。
     const filePayload = {
       action: "read",
-      actual_range: { start_line: 10, end_line: 24 },
-      content: "line ten\nline eleven",
-      end_line: 24,
-      lines: [
-        { content: "line ten", line_number: 10 },
-        { content: "line eleven", line_number: 11 },
-      ],
-      ok: true,
       path: "D:/openvulcan/tui_test.py",
-      request_path: "tui_test.py",
-      schema: "vulcan.file_access.v2",
-      start_line: 10,
+      range: { line_count: 2, source_start_line: 10 },
+      read_status: "content",
+      render: { output_start_line: 6 },
+      schema: "vulcan.file_read.v3",
+      total_line_count: 40,
     };
     const markup = renderWorkspace([
       eventSummary(1, {
@@ -1221,7 +1215,7 @@ describe("ConversationBranchWorkspaceV1", () => {
         output: {
           host_result: { kind: "file_access", payload: filePayload },
           is_error: false,
-          model_output: JSON.stringify(filePayload),
+          model_output: "# File: tui_test.py\n\nLines: 40 | Showing: 10-11 | Encoding: utf-8 (detected)\n\n```python\nL10: line ten\nL11: line eleven\n```\n",
           tool_call_id: "branch-file-1",
           tool_name: "file",
         },
@@ -1230,9 +1224,10 @@ describe("ConversationBranchWorkspaceV1", () => {
     ]);
 
     expect(markup).toContain("查看技能 · terminal-session");
-    expect(markup).toContain("读取");
-    expect(markup).toContain("tui_test.py · 第 10-24 行");
-    expect(markup).toContain("file-access-operation-icon");
+    // The read card names the exact returned source range and stays collapsed until opened.
+    // 读取卡标出实际返回的源码范围，并在打开前保持折叠。
+    expect(markup).toContain("D:/openvulcan/tui_test.py<small>L10–11</small>");
+    expect(markup).toContain('data-family="read"');
     expect(markup).toContain('aria-expanded="false"');
     expect(markup).not.toContain("model_output");
     expect(markup).not.toContain("host_result");
