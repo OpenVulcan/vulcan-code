@@ -891,64 +891,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 @media (prefers-reduced-motion: reduce) {
   .vk-prompt-nav-line { transition: none; }
 }
-/* ---------- Dock extras: approval and ask over the composer ---------- */
-.vk-dock-extras { display: grid; gap: calc(var(--vk-u) * 2); max-height: min(52svh, 30rem); overflow-y: auto; overscroll-behavior: contain; }
-.vk-dock-extras:empty { display: none; }
-.vk-dock-extras > .vk-approval,
-.vk-dock-extras > .vk-ask { background: color-mix(in srgb, var(--vk-raised) 90%, transparent); backdrop-filter: blur(12px) saturate(1.1); box-shadow: var(--vk-shadow-2); animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards; }
-.vk-dock-chip {
-  justify-self: start;
-  display: inline-flex;
-  align-items: center;
-  gap: calc(var(--vk-u) * 2);
-  max-width: 100%;
-  height: var(--vk-h-md);
-  padding: 0 calc(var(--vk-u) * 2.5);
-  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-tone, var(--vk-signal)) 50%, var(--vk-line));
-  background: color-mix(in srgb, var(--vk-raised) 90%, transparent);
-  backdrop-filter: blur(12px);
-  box-shadow: var(--vk-shadow-2);
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-  cursor: pointer;
-}
-.vk-dock-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vk-dock-chip > .lucide { color: var(--vk-signal); }
-.vk-dock-chip > b { color: var(--vk-signal); font-weight: 500; }
-
-.vk-approval { display: grid; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid color-mix(in srgb, var(--vk-warn) 45%, var(--vk-line)); background: color-mix(in srgb, var(--vk-warn) 7%, var(--vk-raised)); box-shadow: var(--vk-shadow-2); animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards; }
-.vk-approval-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); }
-.vk-approval-head > .lucide { color: var(--vk-warn); }
-.vk-approval-head strong { font-weight: 600; }
-.vk-approval pre { margin: 0; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); background: var(--vk-term-bg); color: var(--vk-term-ink); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); overflow-x: auto; }
-.vk-approval-judge { display: flex; gap: calc(var(--vk-u) * 2); align-items: flex-start; font-size: var(--vk-fs-sm); color: var(--vk-ink-2); }
-.vk-approval-actions { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); align-items: center; }
-.vk-approval-actions > .vk-faint { margin-left: auto; font-size: var(--vk-fs-xs); }
-
-.vk-ask { display: grid; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3.5); border: var(--vk-bw) solid var(--vk-signal); background: var(--vk-raised); box-shadow: var(--vk-shadow-2), 0 0 0 3px var(--vk-signal-soft); animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards; }
-.vk-ask-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); }
-.vk-ask-head > .vk-label { color: var(--vk-signal); }
-.vk-ask-head > .vk-actions { margin-left: auto; display: flex; gap: 2px; }
-.vk-ask h3 { font-size: var(--vk-fs-read); font-weight: 600; line-height: var(--vk-lh-ui); }
-.vk-ask-options { display: grid; gap: calc(var(--vk-u) * 1.5); }
-.vk-ask-option {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: calc(var(--vk-u) * 3);
-  align-items: center;
-  padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3);
-  border: var(--vk-bw) solid var(--vk-line);
-  background: var(--vk-panel);
-  text-align: left;
-  cursor: pointer;
-}
-.vk-ask-option:hover { border-color: var(--vk-line-strong); background: var(--vk-hover); }
-.vk-ask-option[aria-checked="true"] { border-color: var(--vk-signal); background: var(--vk-signal-soft); }
-.vk-ask-option strong { display: block; font-weight: 500; }
-.vk-ask-option small { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
-.vk-ask-foot { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); }
-.vk-ask-foot > .vk-input { flex: 1; }
-
 .vk-todo { border: var(--vk-bw) solid var(--vk-line); background: var(--vk-raised); }
 .vk-todo > summary { display: flex; align-items: center; gap: calc(var(--vk-u) * 2.5); min-height: calc(var(--vk-u) * 9); padding: 0 calc(var(--vk-u) * 3); cursor: pointer; list-style: none; font-size: var(--vk-fs-sm); }
 .vk-todo > summary::-webkit-details-marker { display: none; }

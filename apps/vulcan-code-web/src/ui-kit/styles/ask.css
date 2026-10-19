@@ -1,0 +1,103 @@
+/* Vulcan kit Ask layer: the non-modal panel that floats over the composer while the session waits on the
+ * user, either for answers to an `ask` question or for a tool-call approval. Both share one panel; the
+ * tone says what is waiting: signal for a question, warn for an approval, bad for a high-risk call.
+ * Vulcan 套件 Ask 层：会话等待用户时浮在输入区上方的非模态面板，用于回答 `ask` 问题或审批工具调用。
+ * 两者共用同一面板，色调说明等待的内容：问题为信号色，审批为警告色，高风险调用为错误色。 */
+
+/* The layer spans the conversation column (its inline offsets come from the anchor hook) and only the
+ * panel takes pointer events, so the transcript beside it stays usable. */
+/* 层横跨会话栏（左右偏移由锚定钩子提供），只有面板接收指针事件，旁边的对话仍可使用。 */
+.vk-ask-layer {
+  position: fixed;
+  bottom: calc(var(--vk-u) * 4);
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  padding: 0 calc(var(--vk-u) * 4);
+  pointer-events: none;
+}
+
+.vk-ask {
+  --vk-ask-tone: var(--vk-signal);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--vk-u) * 2.5);
+  width: 100%;
+  max-width: 760px;
+  max-height: min(420px, calc(100vh - 2rem));
+  min-height: 0;
+  overflow: hidden;
+  padding: calc(var(--vk-u) * 3.5);
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-ask-tone) 55%, var(--vk-line));
+  background: var(--vk-raised);
+  box-shadow: inset 0 2px 0 var(--vk-ask-tone), var(--vk-shadow-2), 0 0 0 3px color-mix(in srgb, var(--vk-ask-tone) 12%, transparent);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
+  outline: none;
+  pointer-events: auto;
+  animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
+}
+.vk-ask[data-kind="approval"] { --vk-ask-tone: var(--vk-warn); }
+.vk-ask[data-kind="approval"][data-risk] { --vk-ask-tone: var(--vk-bad); }
+
+.vk-ask-head { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 2.5); }
+.vk-ask-head > svg { flex: none; margin-top: 2px; color: var(--vk-ask-tone); }
+.vk-ask-title { flex: 1; min-width: 0; font-size: var(--vk-fs-md); font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.vk-ask-progress { display: flex; flex: none; align-items: center; gap: 2px; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+
+/* ---------- Question options ---------- */
+/* Numbered rows; the keyboard-highlighted or chosen row gets a sunken fill and a tone bar. */
+/* 编号选项行；键盘高亮或已选的行带有内凹底色与色调竖条。 */
+.vk-ask-options { display: grid; gap: 2px; flex: 1; min-height: 0; overflow-y: auto; padding-right: calc(var(--vk-u) * 1); overscroll-behavior: contain; }
+.vk-ask-option {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  width: 100%;
+  min-height: var(--vk-h-lg);
+  padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--vk-t-fast) var(--vk-ease), box-shadow var(--vk-t-fast) var(--vk-ease);
+}
+.vk-ask-option[data-editor] { align-items: start; cursor: text; }
+.vk-ask-option:hover:not(:disabled) { background: var(--vk-hover); }
+.vk-ask-option:is([aria-pressed="true"], [data-active]) { background: var(--vk-sunken); box-shadow: inset 2px 0 0 var(--vk-ask-tone); }
+.vk-ask-option:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-ask-option:disabled { cursor: default; }
+.vk-ask-index { color: var(--vk-ink-3); font-variant-numeric: tabular-nums; line-height: 1.45; }
+.vk-ask-label-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-ask-label { font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
+.vk-ask-info { display: inline-grid; flex: none; place-items: center; width: 14px; height: 14px; border: var(--vk-bw) solid var(--vk-line-strong); color: var(--vk-ink-3); }
+.vk-ask-tail { display: inline-flex; align-items: center; gap: 2px; min-width: 1.75rem; color: var(--vk-ink-3); }
+.vk-ask-tail > svg[data-selected] { margin-right: calc(var(--vk-u) * 1); color: var(--vk-ask-tone); }
+/* The custom answer edits inline: a bare textarea that grows with its rows. */
+/* 自定义回答在行内编辑：随行数增长的无边框文本框。 */
+.vk-ask-option > .vk-textarea.vk-ask-editor { min-height: 20px; padding: 0; border: 0; background: transparent; box-shadow: none; font-size: var(--vk-fs-md); line-height: 1.45; resize: none; }
+.vk-tooltip.vk-ask-tip { display: flex; flex-direction: column; align-items: flex-start; max-width: 20rem; white-space: normal; overflow-wrap: anywhere; text-align: left; line-height: 1.5; }
+.vk-ask-tip > span:first-child { font-weight: 600; }
+.vk-ask-tip > span + span { opacity: 0.8; }
+
+/* ---------- Approval facts ---------- */
+/* The command or file list reads as a terminal snippet; the chips state mode, risk and the judges' findings. */
+/* 命令或文件列表以终端片段呈现；标签说明模式、风险与判定结论。 */
+pre.vk-ask-subject { flex: none; max-height: 10rem; min-height: 0; margin: 0; overflow: auto; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); background: var(--vk-term-bg); color: var(--vk-term-ink); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); line-height: 1.55; white-space: pre-wrap; word-break: break-all; }
+.vk-ask-chips { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 1.5); }
+.vk-ask-chips > .vk-badge[data-approval-countdown] { font-variant-numeric: tabular-nums; }
+.vk-ask-reason { margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.5; }
+
+/* ---------- Feedback and actions ---------- */
+.vk-ask-error { flex: none; max-height: 6rem; overflow-y: auto; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5); border: var(--vk-bw) solid color-mix(in srgb, var(--vk-bad) 30%, transparent); background: color-mix(in srgb, var(--vk-bad) 8%, transparent); color: var(--vk-bad); font-size: var(--vk-fs-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.vk-ask-confirm { display: flex; flex: none; align-items: center; gap: calc(var(--vk-u) * 2.5); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); }
+.vk-ask-confirm > svg { flex: none; color: var(--vk-ink-3); }
+.vk-ask-confirm[data-tone] > svg { color: var(--vk-tone); }
+.vk-ask-confirm > div { min-width: 0; }
+.vk-ask-confirm strong { display: block; font-weight: 500; line-height: 1.45; }
+.vk-ask-confirm small { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.4; }
+.vk-ask-actions { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: calc(var(--vk-u) * 1.5); }
+.vk-ask-actions .vk-kbd { height: 1.15rem; font-size: var(--vk-fs-2xs); }
