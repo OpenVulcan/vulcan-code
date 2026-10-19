@@ -57,10 +57,10 @@ export function CapabilityAccountSelector(props: {
 }) {
   const { t } = useI18n()
   if (props.row.accounts.length === 0) {
-    return <Alert><CircleAlert className="size-4" /><AlertTitle>{t("settings.customModels.noAccounts")}</AlertTitle><AlertDescription>{t("settings.customModels.noAccountsDescription")}</AlertDescription></Alert>
+    return <Alert><CircleAlert aria-hidden="true" /><AlertTitle>{t("settings.customModels.noAccounts")}</AlertTitle><AlertDescription>{t("settings.customModels.noAccountsDescription")}</AlertDescription></Alert>
   }
   return (
-    <label className="grid gap-2 text-sm font-medium">
+    <label className="vk-field">
       {t("settings.customModels.capabilityAccount")}
       <Select onValueChange={props.onConnectionChange} value={props.connectionId}>
         <SelectTrigger><SelectValue /></SelectTrigger>
@@ -92,7 +92,7 @@ export function ResolvedCapabilitySummary(props: {
   const output = capabilities?.output_limit ?? props.defaults?.output_limit
   const inputHasText = resolvedInputTextSupport(props.row, props.account)
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="vk-pm-facts">
       <CapabilityFact label={t("settings.customModels.contextLimit")} source={capabilitySource(props.row, props.account, "context_limit", t)} value={context != null ? formatTokenCount(context) : "—"} />
       <CapabilityFact label={t("settings.customModels.outputLimit")} source={capabilitySource(props.row, props.account, "output_limit", t)} value={output != null ? formatTokenCount(output) : "—"} />
       <CapabilityFact label={t("settings.customModels.input")} source={capabilitySource(props.row, props.account, "input_resources", t)} value={resourceSummary(capabilities?.input_resources ?? [], inputHasText, t)} />
@@ -104,7 +104,7 @@ export function ResolvedCapabilitySummary(props: {
 // CapabilityFact renders one resolved value together with a provenance badge.
 // CapabilityFact 渲染一个解析值及其来源徽标。
 function CapabilityFact(props: { label: string; source: string; value: string }) {
-  return <div className="rounded-lg border p-3"><div className="flex items-center justify-between gap-2"><span className="text-xs text-muted-foreground">{props.label}</span><Badge variant="outline">{props.source}</Badge></div><p className="mt-2 font-medium">{props.value}</p></div>
+  return <div className="vk-pm-fact"><div><span>{props.label}</span><Badge variant="outline">{props.source}</Badge></div><strong>{props.value}</strong></div>
 }
 
 // AccountAvailabilityEditor renders exact source/effective states and explicit manual overrides.
@@ -191,19 +191,19 @@ export function AccountAvailabilityEditor(props: {
   }, [mutationBoundary, props, t, validationTarget])
 
   return (
-    <div className="space-y-3">
+    <div className="vk-pm-review">
       {props.row.accounts.map((account) => (
-        <div className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[minmax(0,1fr)_auto]" key={account.connection.id}>
-          <div className="min-w-0">
-            <p className="truncate font-medium">{account.connection.display_name}</p>
-            <div className="mt-1 flex flex-wrap gap-1">
+        <div className="vk-pm-account-row" data-selected={props.selectedConnectionId === account.connection.id ? "" : undefined} key={account.connection.id}>
+          <div>
+            <strong>{account.connection.display_name}</strong>
+            <div className="vk-pm-chips">
               <Badge variant="outline">{t(DISCOVERY_STATE_LABEL_KEYS[account.status?.state ?? "not_checked"])}</Badge>
               {account.connection.pending_validation ? <Badge variant="destructive">{t("settings.customModels.pendingValidation")}</Badge> : null}
               <Badge variant={accountActuallyDiscoveredModel(account) ? "secondary" : "outline"}>{accountActuallyDiscoveredModel(account) ? t("settings.customModels.accountReturned") : t("settings.customModels.accountNotReturned")}</Badge>
               <Badge variant={accountExposesModel(account) ? "secondary" : "outline"}>{accountExposesModel(account) ? t("settings.customModels.accountAvailable") : t("settings.customModels.accountUnavailable")}</Badge>
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="vk-pm-acts">
             <Button
               onClick={() => props.onAccountSelected(account.connection.id)}
               size="sm"
@@ -223,26 +223,26 @@ export function AccountAvailabilityEditor(props: {
               type="button"
               variant={account.connection.pending_validation ? "default" : "outline"}
             >
-              {validatingConnectionId === account.connection.id ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+              {validatingConnectionId === account.connection.id ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : null}
               {t("settings.customModels.validateModel")}
             </Button>
             {props.row.manualDefinition ? (
-              <div className="flex items-center gap-2">
+              <div className="vk-pm-inline">
                 {account.availabilityOverride !== undefined ? (
                   <Button
                     aria-label={t("settings.modelCapabilities.restore")}
                     disabled={savingConnectionId !== null || validatingConnectionId !== null}
                     onClick={() => void saveAvailability(account.connection.id, undefined)}
-                    size="icon"
+                    size="icon-sm"
                     title={t("settings.modelCapabilities.restore")}
                     type="button"
                     variant="ghost"
                   >
-                    <RotateCcw className="size-4" />
+                    <RotateCcw aria-hidden="true" />
                   </Button>
                 ) : null}
                 {savingConnectionId === account.connection.id ? (
-                  <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
+                  <LoaderCircle aria-hidden="true" className="vk-spin vk-faint" />
                 ) : null}
                 <Switch
                   aria-label={`${account.connection.display_name} · ${t("settings.customModels.accountAvailable")}`}
@@ -256,7 +256,7 @@ export function AccountAvailabilityEditor(props: {
         </div>
       ))}
       {validationResult ? <Alert><AlertTitle>{t("settings.customModels.validationComplete")}</AlertTitle><AlertDescription>{validationResult}</AlertDescription></Alert> : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
       <AlertDialog
         onOpenChange={(open) => {
           if (!open && !mutationBusy.current) {
@@ -274,11 +274,11 @@ export function AccountAvailabilityEditor(props: {
                 .replace("{account}", validationTarget?.connection.display_name ?? "")}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {error ? <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</p> : null}
+          {error ? <p className="vk-pm-fault" role="alert">{error}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={validatingConnectionId !== null}>{t("memory.common.cancel")}</AlertDialogCancel>
             <Button disabled={validatingConnectionId !== null} onClick={() => void validateAccount()} type="button">
-              {validatingConnectionId !== null ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+              {validatingConnectionId !== null ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : null}
               {t("settings.customModels.confirmValidation")}
             </Button>
           </AlertDialogFooter>
@@ -423,36 +423,40 @@ export function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiS
   // reasoningEnabled 将配对的支持与控制契约投影为一个清晰开关。
   const reasoningEnabled = draft.reasoning !== "unsupported" && draft.reasoning_control !== "fixed_off"
   return (
-    <fieldset disabled={saving} className="min-w-0 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">{t("settings.modelCapabilities.overlayHint")}</p>
+    <fieldset disabled={saving} className="vk-fieldset">
+      <div className="vk-pm-box-head">
+        <div><p>{t("settings.modelCapabilities.overlayHint")}</p></div>
         <Badge variant={props.row.capabilityOverrides ? "default" : "outline"}>{t(props.row.capabilityOverrides ? "settings.modelCapabilities.modelSource" : "settings.modelCapabilities.inheritedSource")}</Badge>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.contextLimit")}<Input type="number" min={1} step={1} inputMode="numeric" onChange={(event) => { const value = event.target.value; updateDraft("context_limit", (current) => ({ ...current, context_limit: value === "" ? undefined : Number(value) })) }} value={draft.context_limit ?? ""} /></label>
-        <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.outputLimit")}<Input type="number" min={1} step={1} inputMode="numeric" onChange={(event) => { const value = event.target.value; updateDraft("output_limit", (current) => ({ ...current, output_limit: value === "" ? undefined : Number(value) })) }} value={draft.output_limit ?? ""} /></label>
+      <div className="vk-pm-grid2">
+        <label className="vk-field">{t("settings.customModels.contextLimit")}<Input type="number" min={1} step={1} inputMode="numeric" onChange={(event) => { const value = event.target.value; updateDraft("context_limit", (current) => ({ ...current, context_limit: value === "" ? undefined : Number(value) })) }} value={draft.context_limit ?? ""} /></label>
+        <label className="vk-field">{t("settings.customModels.outputLimit")}<Input type="number" min={1} step={1} inputMode="numeric" onChange={(event) => { const value = event.target.value; updateDraft("output_limit", (current) => ({ ...current, output_limit: value === "" ? undefined : Number(value) })) }} value={draft.output_limit ?? ""} /></label>
       </div>
-      <fieldset className="rounded-lg border p-3">
-        <legend className="px-1 text-sm font-medium">{t("settings.customModels.input")}</legend>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {RESOURCE_KINDS.map((resource) => <label className="flex items-center gap-2 text-sm" key={resource}><Checkbox checked={(draft.input_resources ?? []).includes(resource)} onCheckedChange={(checked) => updateDraft("input_resources", (current) => ({ ...current, input_resources: checked ? [...(current.input_resources ?? []), resource] : (current.input_resources ?? []).filter((item) => item !== resource) }))} />{t(RESOURCE_LABEL_KEYS[resource])}</label>)}
+      <fieldset className="vk-pm-group">
+        <legend>{t("settings.customModels.input")}</legend>
+        <div className="vk-pm-checks">
+          {RESOURCE_KINDS.map((resource) => <label className="vk-check-label" key={resource}><Checkbox checked={(draft.input_resources ?? []).includes(resource)} onCheckedChange={(checked) => updateDraft("input_resources", (current) => ({ ...current, input_resources: checked ? [...(current.input_resources ?? []), resource] : (current.input_resources ?? []).filter((item) => item !== resource) }))} />{t(RESOURCE_LABEL_KEYS[resource])}</label>)}
         </div>
       </fieldset>
-      <div className="rounded-lg border bg-muted/30 p-3">
-        <p className="text-sm font-medium">{t("settings.customModels.output")}: {t("settings.models.modality.text")}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{t("settings.customModels.fixedTextOutputDescription")}</p>
+      <div className="vk-pm-box" data-tone="muted">
+        <div className="vk-pm-box-head">
+          <div>
+            <strong>{t("settings.customModels.output")}: {t("settings.models.modality.text")}</strong>
+            <small>{t("settings.customModels.fixedTextOutputDescription")}</small>
+          </div>
+        </div>
       </div>
-      <div className="space-y-3 rounded-lg border p-3">
-        <label className="flex items-center justify-between gap-3 text-sm font-medium"><span>{t("settings.customModels.reasoning")}</span><Switch checked={reasoningEnabled} onCheckedChange={(checked) => updateDraft(["reasoning", "reasoning_control", "reasoning_efforts"], (current) => ({ ...current, reasoning: checked ? "native" : "unsupported", reasoning_control: checked ? "effort_selection" : "fixed_off", reasoning_efforts: checked ? [...OPENAI_DIRECT_REASONING_EFFORTS] : ["none"] }))} /></label>
-        {reasoningEnabled ? <div className="flex flex-wrap gap-2">{OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => <label className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm" key={effort}><Checkbox checked={(draft.reasoning_efforts ?? []).includes(effort)} disabled={effort !== "none" && (draft.reasoning_efforts ?? []).includes(effort) && (draft.reasoning_efforts ?? []).filter((item) => item !== "none").length === 1} onCheckedChange={(checked) => updateDraft("reasoning_efforts", (current) => ({ ...current, reasoning_efforts: checked ? [...(current.reasoning_efforts ?? []), effort] : (current.reasoning_efforts ?? []).filter((item) => item !== effort) }))} />{t(REASONING_EFFORT_LABEL_KEYS[effort])}</label>)}</div> : null}
+      <div className="vk-pm-group">
+        <label className="vk-pm-switch"><span>{t("settings.customModels.reasoning")}</span><Switch checked={reasoningEnabled} onCheckedChange={(checked) => updateDraft(["reasoning", "reasoning_control", "reasoning_efforts"], (current) => ({ ...current, reasoning: checked ? "native" : "unsupported", reasoning_control: checked ? "effort_selection" : "fixed_off", reasoning_efforts: checked ? [...OPENAI_DIRECT_REASONING_EFFORTS] : ["none"] }))} /></label>
+        {reasoningEnabled ? <div className="vk-pm-efforts">{OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => <label className="vk-check-label" key={effort}><Checkbox checked={(draft.reasoning_efforts ?? []).includes(effort)} disabled={effort !== "none" && (draft.reasoning_efforts ?? []).includes(effort) && (draft.reasoning_efforts ?? []).filter((item) => item !== "none").length === 1} onCheckedChange={(checked) => updateDraft("reasoning_efforts", (current) => ({ ...current, reasoning_efforts: checked ? [...(current.reasoning_efforts ?? []), effort] : (current.reasoning_efforts ?? []).filter((item) => item !== effort) }))} />{t(REASONING_EFFORT_LABEL_KEYS[effort])}</label>)}</div> : null}
       </div>
       <ReasoningProjectionEditor
         efforts={draft.reasoning_efforts?.length ? draft.reasoning_efforts : ["none"]}
         onChange={(request_projection) => updateDraft("request_projection", (current) => ({ ...current, request_projection }))}
         projection={draft.request_projection ?? EMPTY_PROJECTION}
       />
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <div className="flex justify-end gap-2"><Button disabled={saving || (!props.row.capabilityOverrides && !dirty && !edited)} onClick={restore} type="button" variant="outline">{t("settings.modelCapabilities.restore")}</Button><Button disabled={saving || (!dirty && !edited)} onClick={() => void persist(false)} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("settings.customModels.saveCapabilityOverrides")}</Button></div>
+      {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
+      <div className="vk-pm-acts"><Button disabled={saving || (!props.row.capabilityOverrides && !dirty && !edited)} onClick={restore} type="button" variant="outline">{t("settings.modelCapabilities.restore")}</Button><Button disabled={saving || (!dirty && !edited)} onClick={() => void persist(false)} type="button">{saving ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : null}{t("settings.customModels.saveCapabilityOverrides")}</Button></div>
     </fieldset>
   )
 }
@@ -479,13 +483,13 @@ export function AdvancedModelEditor(props: {
   // model 始终是可见的继承或显式定义，并且可以立即编辑。
   const model = props.manualDefinition
   return (
-    <fieldset disabled={props.saving} className="min-w-0 space-y-4">
-      <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.displayName")}<Input onChange={(event) => props.onUpdate((current) => ({ ...current, display_name: event.target.value }))} value={model.display_name} /></label>
+    <fieldset disabled={props.saving} className="vk-fieldset">
+      <label className="vk-field">{t("settings.customModels.displayName")}<Input onChange={(event) => props.onUpdate((current) => ({ ...current, display_name: event.target.value }))} value={model.display_name} /></label>
       <Accordion collapsible type="single">
         <AccordionItem value="json">
           <AccordionTrigger>{t("settings.customModels.advanced")}</AccordionTrigger>
-          <AccordionContent className="space-y-4">
-            <label className="grid gap-2 text-sm font-medium">
+          <AccordionContent className="vk-fieldset">
+            <label className="vk-field">
               {t("settings.customModels.toolSchemaProjection")}
               <Select
                 onValueChange={(value) => props.onUpdate((current) => ({
@@ -501,14 +505,14 @@ export function AdvancedModelEditor(props: {
                   <SelectItem value="strict">{t("settings.customModels.toolSchemaProjectionStrict")}</SelectItem>
                 </SelectContent>
               </Select>
-              <span className="text-xs font-normal text-muted-foreground">{t("settings.customModels.toolSchemaProjectionHint")}</span>
+              <span className="vk-field-hint">{t("settings.customModels.toolSchemaProjectionHint")}</span>
             </label>
-            <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.parameters")}<Textarea className="min-h-32 font-mono text-xs" onChange={(event) => props.setParameterText(event.target.value)} spellCheck={false} value={props.parameterText} /></label>
-            <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.projection")}<Textarea className="min-h-52 font-mono text-xs" onChange={(event) => props.setProjectionText(event.target.value)} spellCheck={false} value={props.projectionText} /></label>
+            <label className="vk-field">{t("settings.customModels.parameters")}<Textarea className="vk-pm-code" onChange={(event) => props.setParameterText(event.target.value)} spellCheck={false} value={props.parameterText} /></label>
+            <label className="vk-field">{t("settings.customModels.projection")}<Textarea className="vk-pm-code" data-size="lg" onChange={(event) => props.setProjectionText(event.target.value)} spellCheck={false} value={props.projectionText} /></label>
           </AccordionContent>
         </AccordionItem>
       </Accordion>
-      <div className="flex flex-wrap justify-end gap-2">{props.customized ? <Button disabled={props.saving} onClick={props.onRestore} type="button" variant="outline"><Trash2 className="mr-2 size-4" />{t("settings.modelCapabilities.restore")}</Button> : null}<Button disabled={props.saving || !props.dirty} onClick={props.onSave} type="button">{t("settings.customModels.saveAdvanced")}</Button></div>
+      <div className="vk-pm-acts">{props.customized ? <Button disabled={props.saving} onClick={props.onRestore} type="button" variant="outline"><Trash2 aria-hidden="true" />{t("settings.modelCapabilities.restore")}</Button> : null}<Button disabled={props.saving || !props.dirty} onClick={props.onSave} type="button">{t("settings.customModels.saveAdvanced")}</Button></div>
     </fieldset>
   )
 }

@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ArrowLeft, Cloud, FilePlus2, Plus, RefreshCw, Search, Sparkles, Users } from "lucide-react"
+import { ArrowLeft, Boxes, Cloud, FilePlus2, Plus, RefreshCw, Search, Sparkles, Users, X } from "lucide-react"
 
 import { CustomModelTemplateCard } from "@/components/features/settings/custom-model-template-card"
 import { CustomProviderChangeSummaryDialog } from "@/components/features/settings/custom-provider-change-summary-dialog"
@@ -32,18 +32,20 @@ import {
   AlertDialogTitle,
 } from "@/ui-kit/primitives/alert-dialog"
 import { Badge } from "@/ui-kit/primitives/badge"
-import { Button } from "@/ui-kit/primitives/button"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog"
-import { Input } from "@/ui-kit/primitives/input"
+import { Button, IconButton } from "@/ui-kit/primitives/button"
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/ui-kit/primitives/dialog"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group"
 import { RadioGroup, RadioGroupItem } from "@/ui-kit/primitives/radio-group"
 import { ScrollArea } from "@/ui-kit/primitives/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui-kit/primitives/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
+import { PageEmptyState } from "@/components/page"
 import { useI18n } from "@/i18n"
 import { loadPublicAiSettings, savePublicAiCustomModelProtocolPreferences, savePublicAiCustomModels, syncPublicAiConnection } from "@/service/settings-actions-service"
 import type { PublicAiCustomModelDefinition, PublicAiCustomModelProtocolPreference, PublicAiCustomProviderProtocol, PublicAiCustomModelTemplateDecisionBatchItem, PublicAiModelRouteRecord, PublicAiProviderDescriptor, PublicAiSettingsSnapshot } from "@/types"
 import { formatDateTime, errorMessage } from "@/lib/display-format"
+import "@/ui-kit/styles/features/provider-models.css"
 import { EMPTY_PROJECTION, DISCOVERY_STATE_LABEL_KEYS } from "./custom-provider-models-dialog/model-dialog-constants"
 import { TemplateReviewDialog } from "./custom-provider-models-dialog/template-review-dialog"
 import { CapabilityAccountSelector, ResolvedCapabilitySummary, AccountAvailabilityEditor, CapabilityOverridesEditor, AdvancedModelEditor } from "./custom-provider-models-dialog/model-capability-editors"
@@ -125,23 +127,22 @@ function ProtocolPreferenceCard(props: {
       && props.preference.mode === "explicit"
       && selectedPreference.protocol !== props.preference.protocol))
   return (
-    <div className="space-y-3 rounded-lg border p-4">
-      <div className="flex items-center justify-between gap-3">
+    <section className="vk-pm-box">
+      <div className="vk-pm-box-head">
         <div>
-          <p className="text-sm font-medium">{t("settings.customModels.protocolPreference")}</p>
-          <p className="text-xs text-muted-foreground">{t("settings.customModels.protocolPreferenceHint")}</p>
+          <strong>{t("settings.customModels.protocolPreference")}</strong>
+          <p>{t("settings.customModels.protocolPreferenceHint")}</p>
         </div>
         <RadioGroup
+          className="vk-pm-radios"
           disabled={props.saving}
           onValueChange={(value) => setMode(value as "auto" | "explicit")}
           value={mode}
         >
-          <div className="flex items-center gap-4">
-            <label className="flex items-center gap-2 text-sm"><RadioGroupItem value="auto" />{t("settings.customModels.protocolAuto")}</label>
-            {multiProtocolOnly ? (
-              <label className="flex items-center gap-2 text-sm"><RadioGroupItem value="explicit" />{t("settings.customModels.protocolExplicit")}</label>
-            ) : null}
-          </div>
+          <label className="vk-check-label"><RadioGroupItem value="auto" />{t("settings.customModels.protocolAuto")}</label>
+          {multiProtocolOnly ? (
+            <label className="vk-check-label"><RadioGroupItem value="explicit" />{t("settings.customModels.protocolExplicit")}</label>
+          ) : null}
         </RadioGroup>
       </div>
       {mode === "explicit" && multiProtocolOnly ? (
@@ -150,7 +151,7 @@ function ProtocolPreferenceCard(props: {
           onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)}
           value={protocol}
         >
-          <SelectTrigger className="w-64"><SelectValue placeholder={t("settings.customModels.protocolSelect")} /></SelectTrigger>
+          <SelectTrigger className="vk-pm-select"><SelectValue placeholder={t("settings.customModels.protocolSelect")} /></SelectTrigger>
           <SelectContent>
             {selectableProtocols.map((enabledProtocol) => (
               <SelectItem key={enabledProtocol} value={enabledProtocol}>
@@ -161,51 +162,48 @@ function ProtocolPreferenceCard(props: {
         </Select>
       ) : null}
       {props.routeRecord ? (
-        <dl className="grid gap-2 rounded-md bg-muted/45 p-3 text-xs sm:grid-cols-2">
-          <div className="min-w-0">
-            <dt className="text-muted-foreground">{t("settings.models.routeEffectiveProtocol")}</dt>
-            <dd className="truncate font-mono" title={props.routeRecord.protocolId}>
+        <dl className="vk-pm-route">
+          <div>
+            <dt>{t("settings.models.routeEffectiveProtocol")}</dt>
+            <dd title={props.routeRecord.protocolId}>
               {props.routeRecord.protocolId ?? "—"}
             </dd>
           </div>
-          <div className="min-w-0">
-            <dt className="text-muted-foreground">{t("settings.models.routeAvailableProtocols")}</dt>
-            <dd
-              className="truncate font-mono"
-              title={props.routeRecord.availableProtocols.join(", ")}
-            >
+          <div>
+            <dt>{t("settings.models.routeAvailableProtocols")}</dt>
+            <dd title={props.routeRecord.availableProtocols.join(", ")}>
               {props.routeRecord.availableProtocols.join(", ") || "—"}
             </dd>
           </div>
-          <div className="min-w-0">
-            <dt className="text-muted-foreground">{t("settings.models.routeBindingSource")}</dt>
-            <dd className="truncate font-mono" title={props.routeRecord.bindingSource}>
+          <div>
+            <dt>{t("settings.models.routeBindingSource")}</dt>
+            <dd title={props.routeRecord.bindingSource}>
               {props.routeRecord.bindingSource ?? "—"}
             </dd>
           </div>
-          <div className="min-w-0">
-            <dt className="text-muted-foreground">{t("settings.models.routeBindingRule")}</dt>
-            <dd className="truncate font-mono" title={props.routeRecord.bindingRuleId}>
+          <div>
+            <dt>{t("settings.models.routeBindingRule")}</dt>
+            <dd title={props.routeRecord.bindingRuleId}>
               {props.routeRecord.bindingRuleId ?? t("settings.models.routeNoRule")}
             </dd>
           </div>
-          <div className="min-w-0">
-            <dt className="text-muted-foreground">{t("settings.models.routeManifestRevision")}</dt>
-            <dd className="font-mono">{props.routeRecord.manifestRevision}</dd>
+          <div>
+            <dt>{t("settings.models.routeManifestRevision")}</dt>
+            <dd>{props.routeRecord.manifestRevision}</dd>
           </div>
         </dl>
       ) : (
-        <p className="rounded-md border border-destructive/35 bg-destructive/5 p-3 text-xs text-destructive">
+        <p className="vk-pm-fault">
           {t("settings.models.routeUnresolved")}
         </p>
       )}
       {props.routeRecord && !props.routeRecord.executable ? (
-        <p className="rounded-md border border-destructive/35 bg-destructive/5 p-3 text-xs text-destructive">
-          <span className="font-medium">{t("settings.models.routeUnavailableReason")}: </span>
+        <p className="vk-pm-fault">
+          <b>{t("settings.models.routeUnavailableReason")}: </b>
           {props.routeRecord.unavailableReason ?? t("settings.models.routeUnresolved")}
         </p>
       ) : null}
-      <div className="flex justify-end">
+      <div className="vk-pm-acts">
         <Button
           disabled={props.saving || !dirty || !selectionValid}
           onClick={() => {
@@ -219,7 +217,7 @@ function ProtocolPreferenceCard(props: {
           {t("settings.customModels.saveProtocolPreference")}
         </Button>
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -611,146 +609,117 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   return (
     <CustomProviderMutationContext.Provider value={mutationBoundary}>
     <Dialog onOpenChange={requestDialogOpenChange} open={props.open}>
-      <DialogContent className="flex h-[min(860px,94vh)] w-[min(1180px,96vw)] max-w-[min(1180px,96vw)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(1180px,96vw)]">
-        <DialogHeader className="border-b px-5 py-4">
-          <DialogTitle>{t("settings.customModels.title").replace("{provider}", props.provider?.display_name ?? "")}</DialogTitle>
-          <DialogDescription>{t("settings.customModels.description")}</DialogDescription>
-        </DialogHeader>
-        <fieldset disabled={saving} className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <Tabs className="min-h-0 flex-1 gap-0" defaultValue="models">
-          <div className="shrink-0 border-b px-4 py-2">
-            <TabsList variant="line">
-              <TabsTrigger className="px-4" value="models">{t("settings.customModels.pageModels")}</TabsTrigger>
-              <TabsTrigger className="px-4" value="provider-settings">{t("settings.customModels.pageProviderSettings")}</TabsTrigger>
-            </TabsList>
+      <DialogContent className="vk-pm" layout="document" showCloseButton={false} size="viewer">
+        <header className="vk-viewer-head">
+          <span className="vk-viewer-mark"><Boxes aria-hidden="true" /></span>
+          <div className="vk-viewer-titles">
+            <span className="vk-viewer-eyebrow">{props.provider?.display_name}</span>
+            <DialogTitle>{t("settings.customModels.title").replace("{provider}", props.provider?.display_name ?? "")}</DialogTitle>
+            <DialogDescription>{t("settings.customModels.description")}</DialogDescription>
           </div>
-          <TabsContent className="m-0 min-h-0 overflow-hidden data-[state=inactive]:hidden" forceMount value="models">
-            <div className="grid h-full min-h-0 md:grid-cols-[320px_minmax(0,1fr)]">
-          <section className={`${mobileDetailOpen ? "max-md:hidden" : ""} flex min-h-0 flex-col border-r`}>
-            <div className="space-y-3 border-b p-3">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input className="pl-9" onChange={(event) => setQuery(event.target.value)} placeholder={t("settings.customModels.search")} value={query} />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Tooltip delayDuration={500}>
-                  <TooltipTrigger asChild>
-                    <Button aria-label={t("settings.customModels.addManual")} onClick={() => setManualDialogOpen(true)} size="icon" type="button">
-                      <Plus className="size-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{t("settings.customModels.addManual")}</TooltipContent>
-                </Tooltip>
-              </div>
-            </div>
-            <ScrollArea className="min-h-0 flex-1">
-              <div className="space-y-1 p-2">
-                {visibleRows.map((row) => (
-                  <div
-                    className={`flex w-full items-start gap-3 rounded-lg pr-3 ${selectedModelId === row.id ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
-                    key={row.id}
-                    style={{ containIntrinsicSize: "64px", contentVisibility: "auto" }}
-                  >
-                    <button
-                      className="min-w-0 flex-1 px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                      onClick={() => { setSelectedModelId(row.id); setMobileDetailOpen(true) }}
-                      type="button"
-                    >
-                      <span className="block whitespace-normal break-words text-sm font-medium">{row.displayName}</span>
-                      <span className="block break-all font-mono text-xs text-muted-foreground">{row.id}</span>
-                      <span className="mt-1 flex flex-wrap gap-1">
-                        {row.accounts.some(accountActuallyDiscoveredModel) ? <Badge variant="outline"><Cloud className="mr-1 size-3" />{t("settings.customModels.sourceApi")}</Badge> : null}
-                        {row.manualDefinition ? <Badge variant="outline"><FilePlus2 className="mr-1 size-3" />{t("settings.customModels.sourceManual")}</Badge> : null}
-                        <Badge variant="secondary"><Users className="mr-1 size-3" />{row.accounts.filter(accountExposesModel).length}</Badge>
-                      </span>
-                    </button>
-                  </div>
-                ))}
-                {visibleRows.length === 0 ? <p className="px-3 py-10 text-center text-sm text-muted-foreground">{t("settings.customModels.empty")}</p> : null}
-              </div>
-            </ScrollArea>
-          </section>
-          <section className={`${mobileDetailOpen ? "" : "max-md:hidden"} min-h-0`}>
-            {selectedRow && props.provider && props.snapshot ? (
-              <ScrollArea className="h-full">
-                <div className="space-y-4 p-5">
-                  <Button className="md:hidden" onClick={() => setMobileDetailOpen(false)} size="sm" type="button" variant="ghost"><ArrowLeft className="mr-2 size-4" />{t("settings.customModels.backToList")}</Button>
-                  <ModelDetailHeader row={selectedRow} />
-                  <CustomModelTemplateCard decision={selectedRow.templateDecision} modelId={selectedRow.id} onSaved={acceptSnapshot} providerId={props.provider.id} />
-                  <Tabs defaultValue="overview">
-                    <TabsList className="grid w-full grid-cols-4">
-                      <TabsTrigger value="overview">{t("settings.customModels.tabOverview")}</TabsTrigger>
-                      <TabsTrigger value="accounts">{t("settings.customModels.tabAccounts")}</TabsTrigger>
-                      <TabsTrigger value="capabilities">{t("settings.customModels.tabCapabilities")}</TabsTrigger>
-                      <TabsTrigger value="advanced">{t("settings.customModels.tabAdvanced")}</TabsTrigger>
-                    </TabsList>
-                    <TabsContent className="space-y-4" value="overview">
-                      <CapabilityAccountSelector
-                        connectionId={selectedAccount?.connection.id ?? ""}
-                        onConnectionChange={setSelectedConnectionId}
-                        row={selectedRow}
-                      />
-                      <ResolvedCapabilitySummary account={selectedAccount} defaults={providerDefaults} row={selectedRow} />
-                      <ProtocolPreferenceCard
-                        enabledProtocols={enabledProtocols}
-                        key={`${selectedRow.id}:${selectedAccount?.connection.id ?? "no-account"}`}
-                        modelId={selectedRow.id}
-                        onSaved={persistProtocolPreferences}
-                        preference={protocolPreferences.get(selectedRow.id) ?? { mode: "auto" }}
-                        routeRecord={selectedRouteRecord}
-                        saving={saving}
-                      />
-                    </TabsContent>
-                    <TabsContent className="space-y-3" value="accounts">
-                      <AccountAvailabilityEditor
-                        onAccountSelected={setSelectedConnectionId}
-                        onSaved={acceptSnapshot}
-                        providerId={props.provider.id}
-                        row={selectedRow}
-                        selectedConnectionId={selectedAccount?.connection.id ?? null}
-                      />
-                    </TabsContent>
-                    <TabsContent className="data-[state=inactive]:hidden" forceMount value="capabilities">
-                      <CapabilityOverridesEditor onSaved={acceptSnapshot} providerId={props.provider.id} row={selectedRow} />
-                    </TabsContent>
-                    <TabsContent className="space-y-4" value="advanced">
-                      {selectedAdvancedDefinition ? <AdvancedModelEditor
-                        customized={Boolean(selectedRow.manualDefinition) || dirtyManualModelIds.has(selectedRow.id)}
-                        dirty={dirtyManualModelIds.has(selectedRow.id)}
-                        manualDefinition={selectedAdvancedDefinition}
-                        onRestore={() => {
-                          if (selectedRow.manualDefinition) {
-                            if (selectedRow.accounts.some(accountActuallyDiscoveredModel)) {
-                              stageDiscoveredAdvancedRestore(selectedRow.id)
-                            } else {
-                              setRemoveConfirmationOpen(true)
-                            }
-                          } else {
-                            discardInheritedAdvancedDraft(selectedRow.id)
-                          }
-                        }}
-                        onSave={() => setAdvancedSaveConfirmationOpen(true)}
-                        onUpdate={(update) => updateManualDefinition(selectedAdvancedDefinition, update)}
-                        parameterText={selectedAdvancedDraft.parameterText}
-                        projectionText={selectedAdvancedDraft.projectionText}
-                        setParameterText={(value) => updateAdvancedTextDraft(selectedAdvancedDefinition, "parameterText", value)}
-                        setProjectionText={(value) => updateAdvancedTextDraft(selectedAdvancedDefinition, "projectionText", value)}
-                        saving={saving}
-                      /> : null}
-                    </TabsContent>
-                  </Tabs>
-                </div>
-              </ScrollArea>
-            ) : (
-              <div className="grid h-full place-items-center p-8 text-center text-sm text-muted-foreground">{t("settings.customModels.selectHint")}</div>
-            )}
-          </section>
+          <div className="vk-actions">
+            <IconButton aria-label={t("ui.close")} disabled={saving} onClick={() => requestDialogOpenChange(false)} title={t("ui.close")} type="button">
+              <X aria-hidden="true" />
+            </IconButton>
+          </div>
+        </header>
+        <fieldset disabled={saving}>
+        <Tabs className="vk-pm-tabs" defaultValue="models">
+          <TabsList variant="line">
+            <TabsTrigger value="models">{t("settings.customModels.pageModels")}</TabsTrigger>
+            <TabsTrigger value="provider-settings">{t("settings.customModels.pageProviderSettings")}</TabsTrigger>
+          </TabsList>
+          <TabsContent forceMount value="models">
+            <div className="vk-pm-split" data-detail={mobileDetailOpen ? "" : undefined}>
+              <ModelListPane
+                onAdd={() => setManualDialogOpen(true)}
+                onQueryChange={setQuery}
+                onSelect={(modelId) => { setSelectedModelId(modelId); setMobileDetailOpen(true) }}
+                query={query}
+                rows={visibleRows}
+                selectedModelId={selectedModelId}
+              />
+              <section className="vk-pm-detail">
+                {selectedRow && props.provider && props.snapshot ? (
+                  <ScrollArea>
+                    <div className="vk-pm-detail-body">
+                      <Button className="vk-pm-back" onClick={() => setMobileDetailOpen(false)} size="sm" type="button" variant="ghost"><ArrowLeft aria-hidden="true" />{t("settings.customModels.backToList")}</Button>
+                      <ModelDetailHeader row={selectedRow} />
+                      <CustomModelTemplateCard decision={selectedRow.templateDecision} modelId={selectedRow.id} onSaved={acceptSnapshot} providerId={props.provider.id} />
+                      <Tabs className="vk-pm-pages" defaultValue="overview">
+                        <TabsList variant="line">
+                          <TabsTrigger value="overview">{t("settings.customModels.tabOverview")}</TabsTrigger>
+                          <TabsTrigger value="accounts">{t("settings.customModels.tabAccounts")}</TabsTrigger>
+                          <TabsTrigger value="capabilities">{t("settings.customModels.tabCapabilities")}</TabsTrigger>
+                          <TabsTrigger value="advanced">{t("settings.customModels.tabAdvanced")}</TabsTrigger>
+                        </TabsList>
+                        <TabsContent value="overview">
+                          <CapabilityAccountSelector
+                            connectionId={selectedAccount?.connection.id ?? ""}
+                            onConnectionChange={setSelectedConnectionId}
+                            row={selectedRow}
+                          />
+                          <ResolvedCapabilitySummary account={selectedAccount} defaults={providerDefaults} row={selectedRow} />
+                          <ProtocolPreferenceCard
+                            enabledProtocols={enabledProtocols}
+                            key={`${selectedRow.id}:${selectedAccount?.connection.id ?? "no-account"}`}
+                            modelId={selectedRow.id}
+                            onSaved={persistProtocolPreferences}
+                            preference={protocolPreferences.get(selectedRow.id) ?? { mode: "auto" }}
+                            routeRecord={selectedRouteRecord}
+                            saving={saving}
+                          />
+                        </TabsContent>
+                        <TabsContent value="accounts">
+                          <AccountAvailabilityEditor
+                            onAccountSelected={setSelectedConnectionId}
+                            onSaved={acceptSnapshot}
+                            providerId={props.provider.id}
+                            row={selectedRow}
+                            selectedConnectionId={selectedAccount?.connection.id ?? null}
+                          />
+                        </TabsContent>
+                        <TabsContent forceMount value="capabilities">
+                          <CapabilityOverridesEditor onSaved={acceptSnapshot} providerId={props.provider.id} row={selectedRow} />
+                        </TabsContent>
+                        <TabsContent value="advanced">
+                          {selectedAdvancedDefinition ? <AdvancedModelEditor
+                            customized={Boolean(selectedRow.manualDefinition) || dirtyManualModelIds.has(selectedRow.id)}
+                            dirty={dirtyManualModelIds.has(selectedRow.id)}
+                            manualDefinition={selectedAdvancedDefinition}
+                            onRestore={() => {
+                              if (selectedRow.manualDefinition) {
+                                if (selectedRow.accounts.some(accountActuallyDiscoveredModel)) {
+                                  stageDiscoveredAdvancedRestore(selectedRow.id)
+                                } else {
+                                  setRemoveConfirmationOpen(true)
+                                }
+                              } else {
+                                discardInheritedAdvancedDraft(selectedRow.id)
+                              }
+                            }}
+                            onSave={() => setAdvancedSaveConfirmationOpen(true)}
+                            onUpdate={(update) => updateManualDefinition(selectedAdvancedDefinition, update)}
+                            parameterText={selectedAdvancedDraft.parameterText}
+                            projectionText={selectedAdvancedDraft.projectionText}
+                            setParameterText={(value) => updateAdvancedTextDraft(selectedAdvancedDefinition, "parameterText", value)}
+                            setProjectionText={(value) => updateAdvancedTextDraft(selectedAdvancedDefinition, "projectionText", value)}
+                            saving={saving}
+                          /> : null}
+                        </TabsContent>
+                      </Tabs>
+                    </div>
+                  </ScrollArea>
+                ) : (
+                  <p className="vk-pm-select-hint">{t("settings.customModels.selectHint")}</p>
+                )}
+              </section>
             </div>
           </TabsContent>
-          <TabsContent className="m-0 min-h-0 overflow-hidden data-[state=inactive]:hidden" forceMount value="provider-settings">
+          <TabsContent forceMount value="provider-settings">
             {props.provider && props.snapshot && providerDefaults ? (
-              <ScrollArea className="h-full">
-                <div className="mx-auto grid w-full max-w-[1120px] items-start gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)]">
+              <ScrollArea>
+                <div className="vk-pm-provider">
                   <DiscoverySummary
                     onRefresh={() => void synchronizeAll()}
                     onRefreshConnection={(connectionId) => void synchronizeConnection(connectionId)}
@@ -771,7 +740,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
           </TabsContent>
         </Tabs>
         </fieldset>
-        {error ? <p className="whitespace-pre-wrap border-t bg-destructive/5 px-5 py-3 text-sm text-destructive">{error}</p> : null}
+        {error ? <p className="vk-pm-error" role="alert">{error}</p> : null}
       </DialogContent>
       {providerDefaults ? <ManualModelDialog
         defaults={providerDefaults}
@@ -887,52 +856,52 @@ function DiscoverySummary(props: {
     Math.max(latest, props.snapshot?.catalogStatuses[connection.id]?.observed_at_ms ?? 0)
   ), 0)
   return (
-    <div className="rounded-xl border p-4">
-      <div className="flex items-start justify-between gap-3">
+    <section className="vk-pm-box">
+      <div className="vk-pm-box-head">
         <div>
-          <h3 className="text-sm font-semibold">{t("settings.customModels.discoveryTitle")}</h3>
-          <p className="text-sm text-muted-foreground">{t("settings.customModels.discoverySummary").replace("{accounts}", String(connections.length)).replace("{models}", String(modelIds.size)).replace("{failed}", String(failed))}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{t("settings.customModels.lastSynchronized").replace("{time}", formatObservationTime(latestObservation, t("settings.customModels.notSynchronized"), locale))}</p>
+          <h3>{t("settings.customModels.discoveryTitle")}</h3>
+          <p>{t("settings.customModels.discoverySummary").replace("{accounts}", String(connections.length)).replace("{models}", String(modelIds.size)).replace("{failed}", String(failed))}</p>
+          <small>{t("settings.customModels.lastSynchronized").replace("{time}", formatObservationTime(latestObservation, t("settings.customModels.notSynchronized"), locale))}</small>
         </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button onClick={props.onReviewTemplates} size="sm" type="button" variant="outline"><Sparkles className="mr-2 size-4" />{t("settings.customModels.reviewTemplates")}</Button>
-          <Button onClick={props.onRefresh} size="sm" type="button" variant="outline"><RefreshCw className="mr-2 size-4" />{t("settings.customModels.refreshAll")}</Button>
+        <div className="vk-pm-acts">
+          <Button onClick={props.onReviewTemplates} size="sm" type="button" variant="outline"><Sparkles aria-hidden="true" />{t("settings.customModels.reviewTemplates")}</Button>
+          <Button onClick={props.onRefresh} size="sm" type="button" variant="outline"><RefreshCw aria-hidden="true" />{t("settings.customModels.refreshAll")}</Button>
         </div>
       </div>
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="vk-pm-chips">
         {connections.map((connection) => {
           const state = props.snapshot?.catalogStatuses[connection.id]?.state ?? "not_checked"
           return <Badge key={connection.id} variant={state === "ready" ? "secondary" : "outline"}>{connection.display_name} · {t(DISCOVERY_STATE_LABEL_KEYS[state])}</Badge>
         })}
       </div>
       {connections.length > 0 ? (
-        <Accordion className="mt-3" collapsible type="single">
-          <AccordionItem className="border-b-0" value="accounts">
-            <AccordionTrigger className="py-2 text-sm">{t("settings.customModels.discoveryDetails")}</AccordionTrigger>
-            <AccordionContent className="space-y-2">
+        <Accordion collapsible type="single">
+          <AccordionItem value="accounts">
+            <AccordionTrigger>{t("settings.customModels.discoveryDetails")}</AccordionTrigger>
+            <AccordionContent className="vk-pm-accounts">
               {connections.map((connection) => {
                 const status = props.snapshot?.catalogStatuses[connection.id]
                 // sourceCatalog is the exact memory-only discovery evidence for this credential.
                 // sourceCatalog 是此凭据对应的精确内存发现证据。
                 const sourceCatalog = props.snapshot?.sourceCatalogs[connection.id]
                 return (
-                  <div className="rounded-lg border p-3" key={connection.id}>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{connection.display_name}</p>
-                        <p className="text-xs text-muted-foreground">
+                  <div className="vk-pm-account" key={connection.id}>
+                    <div className="vk-pm-account-head">
+                      <div>
+                        <strong>{connection.display_name}</strong>
+                        <small>
                           {t(DISCOVERY_STATE_LABEL_KEYS[status?.state ?? "not_checked"])}
                           {" · "}{t("settings.customModels.discoveryModelCount").replace("{count}", String(status?.model_count ?? 0))}
                           {sourceCatalog ? <>{" · "}{t("settings.customModels.discoveryPageCount").replace("{count}", String(sourceCatalog.page_count))}</> : null}
                           {" · "}{formatObservationTime(status?.observed_at_ms ?? 0, t("settings.customModels.notSynchronized"), locale)}
-                        </p>
-                        {sourceCatalog ? <p className="truncate font-mono text-[11px] text-muted-foreground">{t("settings.customModels.discoverySchema").replace("{revision}", sourceCatalog.discovery_schema_revision)}</p> : null}
+                        </small>
+                        {sourceCatalog ? <code>{t("settings.customModels.discoverySchema").replace("{revision}", sourceCatalog.discovery_schema_revision)}</code> : null}
                       </div>
                       <Button onClick={() => props.onRefreshConnection(connection.id)} size="sm" type="button" variant="outline">
-                        <RefreshCw className="mr-2 size-3.5" />{t("settings.customModels.refreshAccount")}
+                        <RefreshCw aria-hidden="true" />{t("settings.customModels.refreshAccount")}
                       </Button>
                     </div>
-                    {status?.message ? <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-xs text-muted-foreground">{status.message}</pre> : null}
+                    {status?.message ? <pre className="vk-pm-log">{status.message}</pre> : null}
                   </div>
                 )
               })}
@@ -940,7 +909,62 @@ function DiscoverySummary(props: {
           </AccordionItem>
         </Accordion>
       ) : null}
-    </div>
+    </section>
+  )
+}
+
+// ModelListPane renders the searchable model union with source badges and the manual-add entry.
+// ModelListPane 渲染可搜索的模型并集、来源徽标及手工添加入口。
+// Parameters: props supplies the filtered rows, the selection, the query and their callbacks. Returns the list column.
+// 参数：props 提供过滤后的行、当前选择、查询词及其回调。返回列表栏。
+function ModelListPane(props: {
+  onAdd: () => void
+  onQueryChange: (query: string) => void
+  onSelect: (modelId: string) => void
+  query: string
+  rows: CustomProviderModelRow[]
+  selectedModelId: string | null
+}) {
+  const { t } = useI18n()
+  return (
+    <section className="vk-pm-list">
+      <div className="vk-pm-list-tools">
+        <InputGroup>
+          <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+          <InputGroupInput onChange={(event) => props.onQueryChange(event.target.value)} placeholder={t("settings.customModels.search")} value={props.query} />
+        </InputGroup>
+        <Tooltip delayDuration={500}>
+          <TooltipTrigger asChild>
+            <IconButton aria-label={t("settings.customModels.addManual")} onClick={props.onAdd} size="md" type="button" variant="default">
+              <Plus aria-hidden="true" />
+            </IconButton>
+          </TooltipTrigger>
+          <TooltipContent>{t("settings.customModels.addManual")}</TooltipContent>
+        </Tooltip>
+      </div>
+      <ScrollArea>
+        <div className="vk-pm-rows">
+          {props.rows.map((row) => (
+            <button
+              aria-current={props.selectedModelId === row.id ? "true" : undefined}
+              className="vk-pm-row"
+              key={row.id}
+              onClick={() => props.onSelect(row.id)}
+              type="button"
+            >
+              <strong>{row.displayName}</strong>
+              <code>{row.id}</code>
+              <span>
+                {row.accounts.some(accountActuallyDiscoveredModel) ? <Badge variant="outline"><Cloud />{t("settings.customModels.sourceApi")}</Badge> : null}
+                {row.manualDefinition ? <Badge variant="outline"><FilePlus2 />{t("settings.customModels.sourceManual")}</Badge> : null}
+                <Badge variant="secondary"><Users />{row.accounts.filter(accountExposesModel).length}</Badge>
+              </span>
+            </button>
+          ))}
+          {props.rows.length === 0 ? <PageEmptyState title={t("settings.customModels.empty")} /> : null}
+        </div>
+      </ScrollArea>
+    </section>
   )
 }
 
@@ -948,11 +972,9 @@ function DiscoverySummary(props: {
 // ModelDetailHeader 渲染不可变模型身份；可用状态由模型列表管理。
 function ModelDetailHeader(props: { row: CustomProviderModelRow }) {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
-        <h3 className="truncate text-lg font-semibold">{props.row.displayName}</h3>
-        <p className="truncate font-mono text-xs text-muted-foreground">{props.row.id}</p>
-      </div>
+    <div className="vk-pm-detail-head">
+      <h3>{props.row.displayName}</h3>
+      <code>{props.row.id}</code>
     </div>
   )
 }

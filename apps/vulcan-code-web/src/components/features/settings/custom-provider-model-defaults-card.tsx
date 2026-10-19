@@ -9,7 +9,6 @@ import {
 
 import { Badge } from "@/ui-kit/primitives/badge"
 import { Button } from "@/ui-kit/primitives/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
 import { Checkbox } from "@/ui-kit/primitives/checkbox"
 import { Input } from "@/ui-kit/primitives/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
@@ -22,6 +21,7 @@ import {
 } from "@/components/features/settings/direct-provider-model-settings"
 import { useI18n } from "@/i18n"
 import { CustomProviderMutationContext } from "./custom-provider-mutation-context"
+import "@/ui-kit/styles/features/provider-models.css"
 import { savePublicAiCustomProviderModelDefaults } from "@/service/settings-actions-service"
 import type {
   PublicAiCustomProviderModelDefaults,
@@ -198,23 +198,20 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
   }, [mutationBoundary, props, resetDraft])
 
   return (
-    <Card>
-      <CardHeader className="gap-2 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <CardTitle className="text-sm">{t("settings.customModels.defaultsTitle")}</CardTitle>
-            <CardDescription>{t("settings.customModels.defaultsDescription")}</CardDescription>
-          </div>
-          <Badge variant={props.customized ? "secondary" : "outline"}>
-            {t(props.customized
-              ? "settings.customModels.defaultsCustomSource"
-              : "settings.customModels.defaultsSystemSource")}
-          </Badge>
+    <section className="vk-pm-box">
+      <div className="vk-pm-box-head">
+        <div>
+          <h3>{t("settings.customModels.defaultsTitle")}</h3>
+          <p>{t("settings.customModels.defaultsDescription")}</p>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4 border-t p-4">
-        <fieldset disabled={saving} className="min-w-0 space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2">
+        <Badge variant={props.customized ? "secondary" : "outline"}>
+          {t(props.customized
+            ? "settings.customModels.defaultsCustomSource"
+            : "settings.customModels.defaultsSystemSource")}
+        </Badge>
+      </div>
+      <fieldset disabled={saving} className="vk-fieldset">
+        <div className="vk-pm-grid2">
           <DirectNumberInput
             label={t("settings.customModels.contextLimit")}
             onChange={setContextLimit}
@@ -226,8 +223,8 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
             value={outputLimit}
           />
         </div>
-        <fieldset className="space-y-2 rounded-lg border p-3">
-          <legend className="px-1 text-xs font-medium">{t("settings.modelDefaults.structuredOutput")}</legend>
+        <fieldset className="vk-pm-group">
+          <legend>{t("settings.modelDefaults.structuredOutput")}</legend>
           <Select
             onValueChange={(value) => setStructuredOutput(value as PublicAiStructuredOutputCapability)}
             value={structuredOutput}
@@ -240,30 +237,29 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
             </SelectContent>
           </Select>
         </fieldset>
-        <p className="text-xs text-muted-foreground">
+        <p className="vk-field-hint">
           {t("settings.customModels.outputRecommendation").replace(
             "{count}",
             Number.isSafeInteger(Number(contextLimit)) && Number(contextLimit) > 0 ? Math.min(props.defaults.output_limit, Math.floor(Number(contextLimit) / 4)).toLocaleString() : "-",
           )}
         </p>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="vk-pm-grid2">
           <InputResourceEditor
             label={t("settings.customModels.input")}
             onChange={setInputResources}
             value={inputResources}
           />
-          <fieldset className="rounded-lg border p-3">
-            <legend className="px-1 text-xs font-medium">{t("settings.customModels.output")}</legend>
-            <p className="text-sm font-medium">{t("settings.customModels.fixedTextOutput")}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
+          <fieldset className="vk-pm-group">
+            <legend>{t("settings.customModels.output")}</legend>
+            <strong className="vk-pm-fixed">{t("settings.customModels.fixedTextOutput")}</strong>
+            <p className="vk-field-hint">
               {t("settings.customModels.fixedTextOutputDescription")}
             </p>
           </fieldset>
         </div>
-        <div className="grid gap-3">
-          <fieldset className="space-y-3 rounded-lg border p-3">
-            <legend className="px-1 text-xs font-medium">{t("settings.customModels.reasoning")}</legend>
-            <label className="flex items-center justify-between gap-3 text-sm">
+        <fieldset className="vk-pm-group">
+            <legend>{t("settings.customModels.reasoning")}</legend>
+            <label className="vk-pm-switch">
               <span>{t(reasoningEnabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}</span>
               <Switch
                 checked={reasoningEnabled}
@@ -275,9 +271,9 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
                 }}
               />
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="vk-pm-efforts">
               {OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => (
-                <label className="flex items-center gap-2 text-xs" key={effort}>
+                <label className="vk-check-label" key={effort}>
                   <Checkbox
                     checked={reasoningEfforts.includes(effort)}
                     disabled={!reasoningEnabled || (
@@ -295,32 +291,30 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
                 </label>
               ))}
             </div>
-          </fieldset>
-        </div>
+        </fieldset>
         <ReasoningProjectionEditor
           efforts={reasoningEfforts.length > 0 ? reasoningEfforts : ["none"]}
           onChange={setRequestProjection}
           projection={requestProjection}
         />
-        {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-        <div className="flex flex-wrap justify-between gap-2">
+        {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
+        <div className="vk-pm-acts" data-spread="">
           <Button
             disabled={saving || (!props.customized && !dirty)}
             onClick={() => void restore()}
             type="button"
             variant="outline"
           >
-            <RotateCcw className="mr-2 size-4" />
+            <RotateCcw aria-hidden="true" />
             {t("settings.modelCapabilities.restore")}
           </Button>
           <Button disabled={saving || !dirty} onClick={() => void save()} type="button">
-            {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
+            {saving ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : <Save aria-hidden="true" />}
             {t("settings.customModels.defaultsSave")}
           </Button>
         </div>
-        </fieldset>
-      </CardContent>
-    </Card>
+      </fieldset>
+    </section>
   )
 }
 
@@ -330,7 +324,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
 // 参数：props 提供原始数值草稿、标签及变更处理器；返回保留非法输入的文本型整数控件。
 function DirectNumberInput(props: { label: string; onChange: (value: string) => void; value: string }) {
   return (
-    <label className="grid gap-2 text-sm font-medium">
+    <label className="vk-field">
       {props.label}
       <Input
         inputMode="numeric"
@@ -351,11 +345,11 @@ function InputResourceEditor(props: {
 }) {
   const { t } = useI18n()
   return (
-    <fieldset className="rounded-lg border p-3">
-      <legend className="px-1 text-xs font-medium">{props.label}</legend>
-      <div className="grid grid-cols-2 gap-2">
+    <fieldset className="vk-pm-group">
+      <legend>{props.label}</legend>
+      <div className="vk-pm-checks">
         {CUSTOM_INPUT_RESOURCES.map((resource) => (
-          <label className="flex items-center gap-2 text-xs" key={resource}>
+          <label className="vk-check-label" key={resource}>
             <Checkbox
               checked={props.value.includes(resource)}
               onCheckedChange={(checked) => props.onChange(
