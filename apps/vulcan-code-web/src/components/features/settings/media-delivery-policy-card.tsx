@@ -7,6 +7,7 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import { loadPublicAiSettings, resetPublicAiMediaDeliveryPolicy, savePublicAiMediaDeliveryPolicy } from "@/service/settings-actions-service";
 import type { PublicAiMediaDeliverySettingsSnapshot, PublicAiSettingsSnapshot } from "@/types";
 import { createMediaDeliveryDraft, MEDIA_DELIVERY_KINDS, MEDIA_DELIVERY_PURPOSES, MediaDeliveryDraftError, parseMediaDeliveryDraft, type MediaDeliveryKind, type MediaDeliveryPurpose, type MediaDeliveryThresholdField } from "./media-delivery-draft";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // PURPOSE_LABELS keeps main conversations and independent AI extensions visibly separate.
 // PURPOSE_LABELS 在界面上明确分离主会话与独立 AI 扩展。
@@ -140,10 +141,10 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
   }
 
   return (
-    <section className="min-w-0 space-y-4" aria-label={t("settings.mediaDelivery.title")}>
-      <div className="space-y-1">
-        <h3 className="text-sm font-semibold">{t("settings.mediaDelivery.title")}</h3>
-        <p className="text-xs text-muted-foreground">{t("settings.mediaDelivery.description")}</p>
+    <section className="vk-form-loose" aria-label={t("settings.mediaDelivery.title")}>
+      <div className="vk-form-tight">
+        <h3 className="vk-form-title">{t("settings.mediaDelivery.title")}</h3>
+        <p className="vk-form-note">{t("settings.mediaDelivery.description")}</p>
       </div>
       {/* Keep detailed delivery rules available without pushing the editable thresholds below a wall of text. */}
       {/* 保留完整投递规则，避免长篇说明将可编辑阈值推到首屏之外。 */}
@@ -157,7 +158,7 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
       </InlineDisclosure>
       {MEDIA_DELIVERY_PURPOSES.map((purpose) => (
         <fieldset className="min-w-0 space-y-3 border-t pt-3" disabled={pending} key={purpose}>
-          <legend className="px-1 text-sm font-medium">{t(PURPOSE_LABELS[purpose])}</legend>
+          <legend>{t(PURPOSE_LABELS[purpose])}</legend>
           <div className="grid grid-cols-[minmax(3.5rem,0.65fr)_minmax(5rem,1fr)_minmax(5rem,1fr)] items-center gap-2 text-xs">
             <span>{t("settings.mediaDelivery.kind")}</span>
             <span>{t(THRESHOLD_LABELS.with_upload_max_bytes)} (KiB)</span>
@@ -192,11 +193,11 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
           </label>
         </fieldset>
       ))}
-      {validation.error ? <p role="alert" className="text-sm text-destructive">{t(validationKeys[validation.error.code])}</p> : null}
-      {conflict || error ? <p role="alert" className="text-sm text-destructive">{error ?? t("settings.mediaDelivery.conflict")}</p> : null}
-      <div className="flex flex-wrap gap-2">
+      {validation.error ? <p role="alert" className="vk-field-error">{t(validationKeys[validation.error.code])}</p> : null}
+      {conflict || error ? <p role="alert" className="vk-field-error">{error ?? t("settings.mediaDelivery.conflict")}</p> : null}
+      <div className="vk-form-chips">
         <Button type="button" disabled={pending || conflict || !dirty || validation.policy === null} onClick={() => void applyAction("save")}>
-          {pending ? <LoaderCircle className="mr-2 size-4 animate-spin" aria-hidden="true" /> : null}{t("settings.mediaDelivery.save")}
+          {pending ? <LoaderCircle className="vk-spin" aria-hidden="true" /> : null}{t("settings.mediaDelivery.save")}
         </Button>
         <Button type="button" variant="outline" disabled={pending || conflict} onClick={() => void applyAction("reset")}>{t("settings.mediaDelivery.reset")}</Button>
         <Button type="button" variant="ghost" disabled={pending} onClick={() => void applyAction("reload")}>{t("settings.mediaDelivery.reload")}</Button>

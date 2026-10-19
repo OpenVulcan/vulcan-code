@@ -8,7 +8,6 @@ import {
   DialogContent,
   DialogDescription,
   DialogFooter,
-  DialogHeader,
   DialogTitle,
 } from "@/ui-kit/primitives/dialog"
 import { Input } from "@/ui-kit/primitives/input"
@@ -29,6 +28,7 @@ import type {
   PublicAiModelOverrides,
   PublicAiSettingsSnapshot,
 } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ProtocolModelOverrideDraft is the complete directly editable protocol-settings view.
 // ProtocolModelOverrideDraft 是完整的可直接编辑协议设置视图。
@@ -243,41 +243,35 @@ export function PublicAiModelOverridesDialog(props: {
         props.onOpenChange(open)
       }}
     >
-      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl" onCloseAutoFocus={props.onCloseAutoFocus}>
-        <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
-          <div className="flex items-start gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border bg-background shadow-xs">
-              <SlidersHorizontal className="size-4 text-muted-foreground" />
-            </div>
-            <div className="min-w-0 space-y-2">
-              <div className="space-y-1">
-                <DialogTitle>{t("settings.modelOverrides.title")}</DialogTitle>
-                <DialogDescription>{t("settings.modelOverrides.description")}</DialogDescription>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
+      <DialogContent className="vk-form-sheet" layout="document" size="md" onCloseAutoFocus={props.onCloseAutoFocus}>
+        <header className="vk-viewer-head">
+          <span className="vk-viewer-mark"><SlidersHorizontal aria-hidden="true" /></span>
+          <div className="vk-viewer-titles">
+            <DialogTitle>{t("settings.modelOverrides.title")}</DialogTitle>
+            <DialogDescription>{t("settings.modelOverrides.description")}</DialogDescription>
+          </div>
+        </header>
+        <div className="vk-form-subbar">
                 <Badge variant="outline">{props.providerDisplayName}</Badge>
                 <Badge variant="secondary">{props.model?.display_name}</Badge>
                 <Badge variant="outline">{protocolDisplayName(props.protocolId)}</Badge>
               </div>
-            </div>
-          </div>
-        </DialogHeader>
-        <ScrollArea className="min-h-0 flex-1">
-          <fieldset disabled={saving} className="min-w-0 space-y-4 p-5">
-            <section className="space-y-4">
-              <div className="flex items-start gap-2.5">
-                <Database className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                <div className="space-y-1">
-                  <h3 className="text-sm font-semibold">{t("settings.modelOverrides.cache")}</h3>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
+        <ScrollArea>
+          <fieldset disabled={saving} className="vk-form-sheet-body">
+            <section className="vk-form-loose">
+              <div className="vk-form-section-head">
+                <Database aria-hidden="true" />
+                <div className="vk-form-tight">
+                  <h3 className="vk-form-title">{t("settings.modelOverrides.cache")}</h3>
+                  <p className="vk-form-note">
                     {t("settings.modelOverrides.cacheDescription")}
                   </p>
                 </div>
               </div>
-              <div className="space-y-2">
+              <div className="vk-form-stack">
                 <Label htmlFor="model-override-cache-mode">{t("settings.modelOverrides.cacheMode")}</Label>
                 <Select onValueChange={setCacheMode} value={cacheMode}>
-                  <SelectTrigger className="w-full" id="model-override-cache-mode">
+                  <SelectTrigger id="model-override-cache-mode">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -293,16 +287,16 @@ export function PublicAiModelOverridesDialog(props: {
                   </SelectContent>
                 </Select>
                 {promptCache?.provider_default_behavior ? (
-                  <p className="rounded-lg bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                  <p className="vk-form-callout">
                     {promptCache.provider_default_behavior}
                   </p>
                 ) : null}
               </div>
               {cacheMode === "managed_explicit" ? (
-                <div className="space-y-2">
+                <div className="vk-form-stack">
                   <Label htmlFor="model-override-cache-ttl">{t("settings.modelOverrides.cacheTtl")}</Label>
                   <Select onValueChange={setCacheTtl} value={cacheTtl}>
-                    <SelectTrigger className="w-full" id="model-override-cache-ttl">
+                    <SelectTrigger id="model-override-cache-ttl">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -316,16 +310,16 @@ export function PublicAiModelOverridesDialog(props: {
               ) : null}
             </section>
 
-            <section className="space-y-4 border-t pt-4">
-              <div className="space-y-1">
-                <h3 className="text-sm font-semibold">{t("settings.modelOverrides.parameters")}</h3>
-                <p className="text-xs leading-relaxed text-muted-foreground">
+            <section className="vk-form-section">
+              <div className="vk-form-tight">
+                <h3 className="vk-form-title">{t("settings.modelOverrides.parameters")}</h3>
+                <p className="vk-form-note">
                   {t("settings.modelOverrides.parametersDescription")}
                 </p>
               </div>
               {modelParameters.length > 0 ? <Separator /> : null}
               {modelParameters.length > 0 ? (
-                <div className="space-y-4">
+                <div className="vk-form-loose">
                   {modelParameters.map((definition) => (
                     <ModelParameterField
                       definition={definition}
@@ -339,23 +333,23 @@ export function PublicAiModelOverridesDialog(props: {
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-muted-foreground">{t("settings.modelOverrides.noParameters")}</p>
+                <p className="vk-form-note">{t("settings.modelOverrides.noParameters")}</p>
               )}
             </section>
 
             {error ? (
-              <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">
+              <div className="vk-form-fault" role="alert">
                 {error}
               </div>
             ) : null}
           </fieldset>
         </ScrollArea>
-        <DialogFooter className="m-0 shrink-0 rounded-none px-5 py-3 sm:justify-between">
+        <DialogFooter className="vk-form-spread">
           <Button disabled={saving || (!props.overrides && !dirty)} onClick={restore} type="button" variant="ghost">
-            <RotateCcw className="mr-2 size-4" />
+            <RotateCcw className="vk-icon" />
             {t("settings.modelCapabilities.restore")}
           </Button>
-          <div className="flex justify-end gap-2">
+          <div className="vk-form-acts">
             <Button disabled={saving} variant="outline" onClick={() => props.onOpenChange(false)} type="button">
               {t("settings.modelOverrides.cancel")}
             </Button>
@@ -488,7 +482,7 @@ function ModelParameterField(props: {
         ? "disabled"
         : props.value ? "unavailable" : "provider-default"
     return (
-      <div className="space-y-2">
+      <div className="vk-form-stack">
         <Label htmlFor={fieldId}>{props.definition.display_name}</Label>
         <Select
           onValueChange={(value) => {
@@ -496,7 +490,7 @@ function ModelParameterField(props: {
           }}
           value={selectedValue}
         >
-          <SelectTrigger className="w-full" id={fieldId}>
+          <SelectTrigger id={fieldId}>
             <SelectValue placeholder={t("settings.modelOverrides.providerDefault")} />
           </SelectTrigger>
           <SelectContent>
@@ -506,7 +500,7 @@ function ModelParameterField(props: {
             <SelectItem value="disabled">{t("settings.modelOverrides.disabled")}</SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-xs leading-relaxed text-muted-foreground">{props.definition.description}</p>
+        <p className="vk-form-note">{props.definition.description}</p>
       </div>
     )
   }
@@ -514,7 +508,7 @@ function ModelParameterField(props: {
     const values = schema.values as string[]
     const selectedIndex = values.indexOf(props.value)
     return (
-      <div className="space-y-2">
+      <div className="vk-form-stack">
         <Label htmlFor={fieldId}>{props.definition.display_name}</Label>
         <Select
           onValueChange={(value) => {
@@ -527,7 +521,7 @@ function ModelParameterField(props: {
           }}
           value={selectedIndex >= 0 ? `option-${selectedIndex}` : props.value ? "unavailable" : "provider-default"}
         >
-          <SelectTrigger className="w-full" id={fieldId}>
+          <SelectTrigger id={fieldId}>
             <SelectValue placeholder={t("settings.modelOverrides.providerDefault")} />
           </SelectTrigger>
           <SelectContent>
@@ -538,13 +532,13 @@ function ModelParameterField(props: {
             ))}
           </SelectContent>
         </Select>
-        <p className="text-xs leading-relaxed text-muted-foreground">{props.definition.description}</p>
+        <p className="vk-form-note">{props.definition.description}</p>
       </div>
     )
   }
   const supported = ["integer", "decimal", "string"].includes(schema.type)
   return (
-    <div className="space-y-2">
+    <div className="vk-form-stack">
       <Label htmlFor={fieldId}>{props.definition.display_name}</Label>
       <Input
         disabled={!supported}
@@ -557,7 +551,7 @@ function ModelParameterField(props: {
         type="text"
         value={props.value}
       />
-      <p className="text-xs leading-relaxed text-muted-foreground">{props.definition.description}</p>
+      <p className="vk-form-note">{props.definition.description}</p>
     </div>
   )
 }

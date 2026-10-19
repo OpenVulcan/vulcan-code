@@ -105,6 +105,7 @@
   background: var(--vk-sunken);
   color: var(--vk-ink);
   font-size: var(--vk-fs-md);
+  font-weight: 400;
   transition: border-color var(--vk-t-fast), background var(--vk-t-fast), box-shadow var(--vk-t-fast);
 }
 .vk-input::placeholder,
@@ -220,10 +221,12 @@
 }
 .vk-field[data-invalid="true"] .vk-field-label { color: var(--vk-bad); }
 .vk-field > label,
-.vk-field-label { font-size: var(--vk-fs-sm); font-weight: 500; color: var(--vk-ink-2); }
+label.vk-field,
+.vk-field-label,
+.vk-field > span:first-child:not(:only-child) { font-size: var(--vk-fs-sm); font-weight: 500; color: var(--vk-ink-2); }
 .vk-field-content { display: grid; gap: calc(var(--vk-u) * 1); min-width: 0; }
-.vk-field-hint { font-size: var(--vk-fs-sm); color: var(--vk-ink-3); line-height: var(--vk-lh-ui); }
-.vk-field-error { font-size: var(--vk-fs-sm); color: var(--vk-bad); }
+.vk-field-hint { font-size: var(--vk-fs-sm); font-weight: 400; color: var(--vk-ink-3); line-height: var(--vk-lh-ui); }
+.vk-field-error { font-size: var(--vk-fs-sm); font-weight: 400; color: var(--vk-bad); }
 .vk-field-hint[data-tone] { color: var(--vk-tone); }
 /* A label and its trailing note, such as a source or a character counter, on one baseline. */
 .vk-field-row { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--vk-u) * 2); min-width: 0; }

@@ -23,6 +23,7 @@ import { PageTabs } from "@/components/workspace/workspace-directory-layout";
 
 import { ProviderTasksPanel } from "./provider-tasks-panel";
 import { ProviderToolSelectionSettingsArea } from "./provider-tool-selection-settings";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // AiCapabilityDefinition binds one capability to its existing localized label and description keys.
 // AiCapabilityDefinition 将单项能力绑定到既有的本地化名称与说明键。
@@ -185,7 +186,7 @@ export function AiCapabilitiesSettingsArea(props: {
                     type="button"
                     variant="outline"
                   >
-                    <Settings2 className="size-3.5" />
+                    <Settings2 className="vk-icon" />
                     {t("settings.aiCapabilities.configure")}
                   </Button>
                 </li>
@@ -207,7 +208,7 @@ export function AiCapabilitiesSettingsArea(props: {
           {editing ? (
             <>
               <SheetHeader>
-                <SheetTitle className="flex items-center gap-2">
+                <SheetTitle className="vk-form-inline">
                   <ProviderToolCapabilityIcon capability={editing.capability} size={16} />
                   {t(editing.labelKey)}
                 </SheetTitle>

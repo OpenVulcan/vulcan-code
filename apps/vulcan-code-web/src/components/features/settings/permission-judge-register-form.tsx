@@ -12,6 +12,7 @@ import { errorMessage, formatBytes } from "@/lib/display-format";
 import { inspectPermissionJudgePackage } from "@/service/permission-judge-service";
 import { browseProjectDirectories } from "@/service/project-actions-service";
 import type { PermissionJudgeKnownPackage, PermissionJudgePackageInspection } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Labels of package check failure codes; unknown codes keep the code in a generic sentence.
 // 模型包检查失败代码的标签；未知代码放入通用句子中保留。
@@ -115,9 +116,9 @@ export function PermissionJudgeRegisterForm(props: {
     setCheckError(null);
   };
 
-  return <div className="grid gap-2" data-judge-register="">
-    <div className="flex items-center gap-2">
-      <Input className="min-w-0 flex-1" aria-label={t("settings.permissionJudge.registerPath")}
+  return <div className="vk-form-stack" data-judge-register="">
+    <div className="vk-form-inline">
+      <Input className="vk-form-fill" aria-label={t("settings.permissionJudge.registerPath")}
         placeholder={t("settings.permissionJudge.registerPath")} value={path}
         onBlur={inspectTyped}
         onChange={(event) => setPath(event.target.value)}
@@ -132,8 +133,8 @@ export function PermissionJudgeRegisterForm(props: {
         <FolderOpen size={14} />{t("settings.permissionJudge.registerBrowse")}
       </Button>
     </div>
-    {checking !== null ? <PageHint className="flex items-center gap-2" data-judge-package-state="checking">
-      <Spinner className="size-3.5" />{t("settings.permissionJudge.packageChecking")}
+    {checking !== null ? <PageHint className="vk-form-inline" data-judge-package-state="checking">
+      <Spinner className="vk-icon" />{t("settings.permissionJudge.packageChecking")}
     </PageHint> : checkError !== null ? <PageNotice tone="error" data-judge-package-state="failed"
       details={checkError} detailsLabel={t("settings.errors.showErrorDetails")}>
       {t("settings.permissionJudge.packageCheckFailed")}
@@ -161,7 +162,7 @@ export function PermissionJudgeRegisterForm(props: {
     <Input aria-label={t("settings.permissionJudge.registerName")}
       placeholder={facts ? `${t("settings.permissionJudge.registerName")} · ${facts.defaultName}` : t("settings.permissionJudge.registerName")}
       value={name} onChange={(event) => setName(event.target.value)} />
-    {facts && official === null && !facts.registered ? <label className="flex items-center gap-2 text-sm">
+    {facts && official === null && !facts.registered ? <label className="vk-check-label">
       <Checkbox checked={custom} data-judge-register-custom="" onCheckedChange={(next) => setCustom(next === true)} />
       {t("settings.permissionJudge.registerCustom")}
     </label> : null}

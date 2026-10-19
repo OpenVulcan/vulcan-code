@@ -306,7 +306,7 @@ function AccountUsage(props: {
           {props.signupUrl ? (
             <a href={props.signupUrl} rel="noreferrer" target="_blank">
               {t("settings.modelServices.usage.officialSite")}
-              <ExternalLink aria-hidden="true" className="size-3" />
+              <ExternalLink aria-hidden="true" className="vk-icon" />
             </a>
           ) : null}
         </p>

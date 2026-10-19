@@ -126,7 +126,7 @@ export function McpServerDialog(props: {
     finally { saving.current = false; setBusy(false) }
   }
   return <Dialog open={props.open} onOpenChange={open => { if (!saving.current) props.onOpenChange(open) }}>
-    <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="xl">
+    <DialogContent scrollMode="fixed-footer" size="xl">
       <DialogHeader className="shrink-0"><DialogTitle>{draft.serverId ? t("settings.mcp.editMcpServer") : t("settings.mcp.addMcpServer")}</DialogTitle>
         <DialogDescription>{t("settings.mcp.itConnectsAutomaticallyAfter")}</DialogDescription>
       </DialogHeader>

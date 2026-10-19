@@ -10,6 +10,7 @@ import { Input } from "@/ui-kit/primitives/input"
 import { Switch } from "@/ui-kit/primitives/switch"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type { ProviderRetrySettingsSummary } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // DEFAULT_PROVIDER_RETRY_SETTINGS mirrors the service API compatibility default.
 // DEFAULT_PROVIDER_RETRY_SETTINGS 对齐 Service API 的兼容默认值。
@@ -196,7 +197,7 @@ export function ProviderRetrySettingsArea(props: {
     <section className={props.embedded ? "settings-retry-section min-w-0 space-y-4" : "panel full-height settings-detail-panel"}>
       <PanelTitle icon={<RefreshCw size={17} />} title={t("settings.retry.retries")} />
       <fieldset disabled={saveState === "saving"} className="settings-form-grid min-w-0">
-        <article className="space-y-3">
+        <article className="vk-form-stack">
           <strong>{t("settings.retry.networkOrServerErrors")}</strong>
           <label className="settings-check-row settings-retry-toggle">
             <span><span className="block">{t("settings.retry.retryAutomatically")}</span>
@@ -222,7 +223,7 @@ export function ProviderRetrySettingsArea(props: {
           </DisclosureSection>
         </article>
 
-        <article className="space-y-3">
+        <article className="vk-form-stack">
           <strong>{t("settings.retry.tooManyRequestsRate")}</strong>
           <label className="settings-check-row settings-retry-toggle">
             <span><span className="block">{t("settings.retry.waitAndRetryWhen")}</span>
@@ -243,7 +244,7 @@ export function ProviderRetrySettingsArea(props: {
         </article>
 
         {validationError || saveError ? <p className="settings-validation-error" role="alert">{validationError ?? saveError}</p> : null}
-        {sourceChanged && <div className="space-y-2" role="status"><p>{t("settings.retry.theseSettingsWereJust")}</p>
+        {sourceChanged && <div className="vk-form-stack" role="status"><p>{t("settings.retry.theseSettingsWereJust")}</p>
           <Button type="button" variant="outline" onClick={() => { setDraft(sourceDraft); setBaselineDraft(sourceDraft); setSaveState("idle"); setSaveError(null) }}>{t("settings.retry.reload")}</Button></div>}
         <div className="settings-card-actions">
           <Button disabled={!dirty || sourceChanged || Boolean(validationError) || saveState === "saving"} onClick={() => void saveDraft()} type="button">

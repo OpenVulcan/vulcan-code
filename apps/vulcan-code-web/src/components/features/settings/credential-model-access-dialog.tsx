@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ListChecks, RefreshCw, Search } from "lucide-react"
+import { ListChecks, RefreshCw, Search, X } from "lucide-react"
 
 import { ProviderModelModalitySummary } from "@/components/features/settings/provider-model-modality-summary"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
@@ -14,15 +14,14 @@ import {
   AlertDialogTitle,
 } from "@/ui-kit/primitives/alert-dialog"
 import { Badge } from "@/ui-kit/primitives/badge"
-import { Button } from "@/ui-kit/primitives/button"
+import { Button, IconButton } from "@/ui-kit/primitives/button"
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogHeader,
   DialogTitle,
 } from "@/ui-kit/primitives/dialog"
-import { Input } from "@/ui-kit/primitives/input"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group"
 import {
   Select,
   SelectContent,
@@ -31,6 +30,7 @@ import {
   SelectValue,
 } from "@/ui-kit/primitives/select"
 import { Switch } from "@/ui-kit/primitives/switch"
+import { PageEmptyState } from "@/components/page"
 import { useI18n } from "@/i18n"
 import {
   savePublicAiConnectionModelEnabled,
@@ -46,6 +46,7 @@ import type {
   PublicAiSettingsSnapshot,
 } from "@/types"
 import { errorMessage } from "@/lib/display-format"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // CredentialModelFilter selects the human-facing subset displayed in the dialog.
 // CredentialModelFilter 选择弹窗中面向用户展示的模型子集。
@@ -243,36 +244,37 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
   return (
     <>
       <Dialog onOpenChange={(open) => { if (!mutationBusy.current) props.onOpenChange(open) }} open={props.open}>
-        <DialogContent className="flex max-h-[min(46rem,calc(100vh-3rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
-          <DialogHeader className="border-b px-6 py-5 text-left">
-            <div className="flex min-w-0 items-start gap-3 pr-8">
-              <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-                <ListChecks className="size-4" aria-hidden="true" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <DialogTitle className="break-words">
-                  {t("settings.credentialModels.title")} · {connection?.display_name ?? ""}
-                </DialogTitle>
-                <DialogDescription className="mt-1">
-                  {t("settings.credentialModels.description")}
-                </DialogDescription>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                  <Badge variant="outline">{providerName}</Badge>
-                  {props.entry ? <Badge variant="outline">{props.entry.display_name}</Badge> : null}
-                  <Badge variant="secondary">{directoryLabel}</Badge>
-                </div>
-              </div>
+        <DialogContent className="vk-form-dialog" layout="document" showCloseButton={false} size="xl">
+          <header className="vk-viewer-head">
+            <span className="vk-viewer-mark"><ListChecks aria-hidden="true" /></span>
+            <div className="vk-viewer-titles">
+              <DialogTitle>
+                {t("settings.credentialModels.title")} · {connection?.display_name ?? ""}
+              </DialogTitle>
+              <DialogDescription>
+                {t("settings.credentialModels.description")}
+              </DialogDescription>
             </div>
-          </DialogHeader>
+            <div className="vk-form-chips">
+              <Badge variant="outline">{providerName}</Badge>
+              {props.entry ? <Badge variant="outline">{props.entry.display_name}</Badge> : null}
+              <Badge variant="secondary">{directoryLabel}</Badge>
+            </div>
+            <div className="vk-actions">
+              <IconButton aria-label={t("ui.close")} onClick={() => { if (!mutationBusy.current) props.onOpenChange(false) }} title={t("ui.close")} type="button">
+                <X aria-hidden="true" />
+              </IconButton>
+            </div>
+          </header>
 
-          <div className="grid shrink-0 gap-3 border-b px-6 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-sm font-medium">
+          <div className="vk-form-toolbar">
+            <div className="vk-form-row">
+              <div className="vk-form-strong">
                 {t("settings.credentialModels.count")
                   .replace("{enabled}", String(enabledCount))
                   .replace("{total}", String(supportModels.length))}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="vk-form-inline">
                 {directoryKind === "dynamic" ? (
                   <Button
                     disabled={!connection?.enabled || syncBusy || bulkBusy || busyModelId !== null}
@@ -281,7 +283,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                     type="button"
                     variant="outline"
                   >
-                    <RefreshCw className={`size-3.5 ${syncBusy ? "animate-spin" : ""}`} />
+                    <RefreshCw aria-hidden="true" className={syncBusy ? "vk-spin" : undefined} />
                     {t(syncBusy ? "settings.credentialModels.syncing" : "settings.credentialModels.sync")}
                   </Button>
                 ) : null}
@@ -305,20 +307,19 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                 </Button>
               </div>
             </div>
-            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem]">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
+            <div className="vk-form-search">
+              <InputGroup>
+                <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+                <InputGroupInput
                   autoFocus
                   aria-label={t("settings.credentialModels.search")}
-                  className="pl-9"
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder={t("settings.credentialModels.search")}
                   value={query}
                 />
-              </div>
+              </InputGroup>
               <Select onValueChange={(value) => setFilter(value as CredentialModelFilter)} value={filter}>
-                <SelectTrigger aria-label={t("settings.modelExperience.usageFilter")} className="w-full">
+                <SelectTrigger aria-label={t("settings.modelExperience.usageFilter")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -328,40 +329,39 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
                 </SelectContent>
               </Select>
             </div>
-            {policy ? <p className="text-xs text-muted-foreground">
+            {policy ? <p className="vk-form-note">
               {t(policy.inheritModelDefaults
                 ? "settings.credentialModels.futureSignedDefaults"
                 : policy.defaultEnabled
                   ? "settings.credentialModels.futureEnabled"
                   : "settings.credentialModels.futureDisabled")}
             </p> : null}
-            {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+            {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
           </div>
 
-          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-4">
+          <div className="vk-form-list">
             {supportModels.length === 0 ? (
               <EmptyState message={t("settings.credentialModels.empty")} />
             ) : visibleModels.length === 0 ? (
               <EmptyState message={t("settings.credentialModels.noResults")} />
             ) : (
-              <div className="grid gap-2">
+              <div className="vk-form-stack">
                 {visibleModels.map((model) => {
                   const enabled = modelIsEnabled(model.id)
                   const blockedReason = blockedModels.get(model.id)
                   return (
                     <div
-                      className="flex min-h-16 items-center gap-3 rounded-lg border bg-card px-3 py-2.5"
+                      className="vk-form-item"
+                      data-on={enabled ? "" : undefined}
                       key={model.id}
                     >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                          <strong className="break-all text-sm">{model.display_name}</strong>
-                          <span className="max-w-full break-all text-xs text-muted-foreground">({model.id})</span>
+                      <div className="vk-form-fill vk-form-tight">
+                        <div className="vk-form-item-title">
+                          <strong>{model.display_name}</strong>
+                          <code>{model.id}</code>
                         </div>
-                        <div className="mt-1.5">
-                          <ProviderModelModalitySummary model={model} />
-                        </div>
-                        {blockedReason ? <p className="mt-1 text-xs text-destructive" role="status">
+                        <ProviderModelModalitySummary model={model} />
+                        {blockedReason ? <p className="vk-field-error" role="status">
                           {t("settings.models.routeUnavailableReason")}: {blockedReason}
                         </p> : null}
                       </div>
@@ -390,7 +390,7 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
               {t("settings.credentialModels.disableConfirmDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+          {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={bulkBusy}>{t("settings.credentialModels.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={bulkBusy} onClick={(event) => { event.preventDefault(); void saveAll(false) }}>
@@ -414,11 +414,7 @@ interface EmptyStateProps {
 // EmptyState renders a calm, centered empty-list explanation.
 // EmptyState 渲染平静且居中的空列表说明。
 function EmptyState(props: EmptyStateProps) {
-  return (
-    <div className="flex min-h-44 items-center justify-center rounded-lg border border-dashed px-6 text-center text-sm text-muted-foreground">
-      {props.message}
-    </div>
-  )
+  return <PageEmptyState size="panel" title={props.message} />
 }
 
 // directoryKindLabel maps backend-owned directory semantics to localized human language.

@@ -160,7 +160,7 @@ export function ConnectProgress(props: ConnectProgressProps) {
           : t("settings.modelServices.connect.usageUnsupported"),
       action: connection.usage_capability === "unsupported" && props.signupUrl ? (
         <a className="vk-ms-official-link" href={props.signupUrl} rel="noreferrer" target="_blank">
-          <ExternalLink aria-hidden="true" className="size-3.5" />
+          <ExternalLink aria-hidden="true" className="vk-icon" />
           {t("settings.modelServices.usage.officialSite")}
         </a>
       ) : undefined,
@@ -193,10 +193,10 @@ export function ConnectProgress(props: ConnectProgressProps) {
 // ConnectStepIcon 渲染一个接入步骤的状态图标。
 function ConnectStepIcon(props: { state: ConnectStepState }) {
   switch (props.state) {
-    case "done": return <CheckCircle2 aria-hidden="true" className="size-4" />
-    case "running": return <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+    case "done": return <CheckCircle2 aria-hidden="true" className="vk-icon" />
+    case "running": return <LoaderCircle aria-hidden="true" className="vk-spin" />
     case "warning":
-    case "failed": return <CircleAlert aria-hidden="true" className="size-4" />
-    case "skipped": return <CircleDashed aria-hidden="true" className="size-4" />
+    case "failed": return <CircleAlert aria-hidden="true" className="vk-icon" />
+    case "skipped": return <CircleDashed aria-hidden="true" className="vk-icon" />
   }
 }

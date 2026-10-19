@@ -16,6 +16,7 @@ import type {
   PermissionJudgeCudaInstall,
   PermissionJudgeCudaSnapshot,
 } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Labels of stable codes sent by the service; unknown codes render as themselves.
 // 服务发送的稳定代码对应的标签；未知代码按原样显示。
@@ -184,7 +185,7 @@ export function PermissionJudgeCudaPage(props: {
       })}
       <PageRow stacked label={t("settings.permissionJudge.cuda.customFolder")}>
         <div className="flex w-full items-center gap-2">
-          <Input aria-label={t("settings.permissionJudge.cuda.customFolder")} className="min-w-0 flex-1"
+          <Input aria-label={t("settings.permissionJudge.cuda.customFolder")} className="vk-form-fill"
             placeholder={props.selectedDirectory ?? ""} value={custom} onChange={(event) => setCustom(event.target.value)} />
           <Button type="button" size="sm" variant="outline" disabled={props.busy !== null || custom.trim() === ""}
             onClick={() => props.onSelectDirectory(custom.trim())}>

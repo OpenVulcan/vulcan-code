@@ -2,6 +2,7 @@ import React from "react";
 import { Switch } from "@/ui-kit/primitives/switch";
 import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-collapse-preferences";
 import { useI18n } from "@/i18n";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 /** Renders the shared default independently of per-session choices; takes no props and returns a save-aware switch.
  * 独立于会话选择渲染共享默认值；无参数，返回具有保存状态的开关。
@@ -40,7 +41,7 @@ export function ToolCollapseSettingsSection() {
     }
   };
   return <section className="settings-form-grid mt-6">
-    <label className="flex items-center justify-between gap-4">
+    <label className="vk-form-switch">
       <span>{t("settings.toolCollapse.collapseToolCallsBy")}</span>
       <Switch
         checked={pending ?? preferences.defaultEnabled}
@@ -50,6 +51,6 @@ export function ToolCollapseSettingsSection() {
     </label>
     <p className="settings-muted-line">{t("settings.toolCollapse.whenOnToolCalls")}</p>
     {pending !== null ? <p role="status" className="settings-muted-line">{t("settings.toolCollapse.saving")}</p> : null}
-    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
   </section>;
 }

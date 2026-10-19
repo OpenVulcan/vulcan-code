@@ -110,7 +110,7 @@ export function ProviderWorkspace(props: ProviderWorkspaceProps) {
           ) : null}
           {functional || (provider.service_tags ?? []).some((tag) => tag !== "model") ? (
             <p className="vk-ms-note">
-              <WandSparkles aria-hidden="true" className="size-4 shrink-0" />
+              <WandSparkles aria-hidden="true" className="vk-icon" />
               <span>{t(functional ? "settings.modelServices.functional.only" : "settings.modelServices.functional.also")}</span>
               <Button onClick={props.onOpenFunctions} size="xs" type="button" variant="link">{t("settings.modelServices.functional.open")}</Button>
             </p>
@@ -204,7 +204,7 @@ function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean;
             {localizedProviderDescription(provider.id, t)}
             {signupUrl ? (
               <a href={signupUrl} rel="noreferrer" target="_blank" title={provider.promotion ? t(provider.promotion.disclosure_key) : undefined}>
-                {t("settings.modelServices.signup")}<ExternalLink aria-hidden="true" className="size-3" />
+                {t("settings.modelServices.signup")}<ExternalLink aria-hidden="true" className="vk-icon" />
               </a>
             ) : null}
           </p>
@@ -244,7 +244,7 @@ function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean;
       </header>
       {props.showDetails ? (
         <dl className="vk-ms-head-facts">
-          <div><dt>{t("settings.modelServices.head.id")}</dt><dd className="font-mono">{provider.id}</dd></div>
+          <div><dt>{t("settings.modelServices.head.id")}</dt><dd className="vk-mono">{provider.id}</dd></div>
           {protocols.length > 0 ? <div><dt>{t("settings.modelServices.head.protocols")}</dt><dd>{protocols.join(" · ")}</dd></div> : null}
           {provider.service_entries.length > 0 ? (
             <div><dt>{t("settings.modelServices.head.entries")}</dt><dd>{provider.service_entries.map((entry) => entry.display_name).join(" · ")}</dd></div>

@@ -3,6 +3,7 @@ import { Switch } from "@/ui-kit/primitives/switch";
 import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
 import { normalizeThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { useI18n } from "@/i18n";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 /** Renders the global popup default without changing session overrides.
  * 渲染全局弹窗默认值，不改变会话覆盖值。
@@ -45,7 +46,7 @@ export function ThinkingPopupSettingsSection() {
     }
   };
   return <section className="settings-form-grid mt-6">
-    <label className="flex items-center justify-between gap-4">
+    <label className="vk-form-switch">
       <span>{t("settings.thinkingPopup.showThinkingInA")}</span>
       <Switch
         checked={pending ?? normalizeThinkingDisplayMode(preference.mode) === "popup_only"}
@@ -55,6 +56,6 @@ export function ThinkingPopupSettingsSection() {
     </label>
     <p className="settings-muted-line">{t("settings.thinkingPopup.whenOnAiThinking")}</p>
     {pending !== null ? <p role="status" className="settings-muted-line">{t("settings.thinkingPopup.saving")}</p> : null}
-    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
   </section>;
 }

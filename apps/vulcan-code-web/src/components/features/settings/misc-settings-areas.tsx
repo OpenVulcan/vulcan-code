@@ -34,6 +34,7 @@ import type {
   WorkbenchSnapshot,
 } from "@/types"
 import type { GitCommitSummaryModelSelectionSaveRequest } from "@/components/features/settings/settings-action-types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // DEFAULT_COMMIT_BRANCH_PREFIX mirrors the service default for empty Git commit settings.
 // DEFAULT_COMMIT_BRANCH_PREFIX 对齐服务端空 Git 提交设置的默认值。
@@ -285,7 +286,7 @@ export function OutputStyleSettingsSection(props: {
     <label className="settings-form-field">
       <span>{t("settings.misc.answerStyleForNew")}</span>
       <Select disabled={saving} onValueChange={selectStyle} value={outputStyleId}>
-        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+        <SelectTrigger><SelectValue /></SelectTrigger>
         <SelectContent>{props.outputStyleCatalog.entries.map((entry) => (
           <SelectItem key={entry.id} value={entry.id}>{pickBilingualText(locale, entry.labelZh, entry.labelEn)}</SelectItem>
         ))}</SelectContent>
@@ -339,7 +340,7 @@ export function AnswerModeSettingsSection(props: {
     <label className="settings-form-field">
       <span>{t("answerMode.globalDefault")}</span>
       <Select disabled={saving} onValueChange={(next) => void selectMode(next)} value={mode}>
-        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+        <SelectTrigger><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="standard">{t("answerMode.standard")}</SelectItem>
           <SelectItem value="interactive">{t("answerMode.interactive")}</SelectItem>
@@ -450,7 +451,7 @@ export function ArchivedRestoreSettingsArea(props: {
     <section className="settings-preferences-page settings-detail-panel settings-archive-page">
       <div className="settings-archive-toolbar">
         <span className="settings-muted-line">{formatMessage(t("settings.misc.selected"), { selectedCount })}</span>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="vk-form-inline">
           <Button
             disabled={selectedCount === 0 || operation !== "idle"}
             onClick={() => void runArchivedConversationAction("restore", Array.from(selectedConversationIds))}
@@ -513,10 +514,10 @@ export function ArchivedRestoreSettingsArea(props: {
               <td className="settings-archive-title">{conversation.title}</td>
               <td>{conversation.projectId ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? t("settings.misc.originalProjectUnavailable") : t("settings.misc.standaloneConversation")}</td>
               <td className="whitespace-nowrap text-muted-foreground">{conversation.lastUpdatedLabel}</td>
-              <td><div className="flex justify-end gap-2">
+              <td><div className="vk-form-acts">
                 <Button size="sm" variant="outline" aria-label={formatMessage(t("settings.misc.restoreConversation"), { title: conversation.title })} disabled={operation !== "idle"}
                   onClick={() => void runArchivedConversationAction("restore", [conversation.id])}><RotateCcw size={14} />{t("settings.misc.restore")}</Button>
-                <Button size="sm" variant="ghost" className="text-destructive" aria-label={formatMessage(t("settings.misc.deleteConversation"), { title: conversation.title })} disabled={operation !== "idle"}
+                <Button size="sm" variant="ghost" className="vk-field-error" aria-label={formatMessage(t("settings.misc.deleteConversation"), { title: conversation.title })} disabled={operation !== "idle"}
                   onClick={() => setDeleteTargetIds([conversation.id])}><Trash2 size={14} />{t("settings.misc.delete")}</Button>
               </div></td>
             </tr>)}

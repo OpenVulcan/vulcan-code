@@ -18,6 +18,7 @@ import { removePublicAiCustomProvider } from "@/service/settings-actions-service
 import type { PublicAiSettingsSnapshot } from "@/types"
 
 import type { SnapshotMutations } from "./use-snapshot-mutations"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ModelServicesDiagnostics holds the maintenance views: manifest status and isolated custom providers.
 // ModelServicesDiagnostics 承载维护视图：清单状态与被隔离的自定义供应商。
@@ -56,7 +57,7 @@ export function ModelServicesDiagnostics(props: {
             ))}
           </ul>
           {snapshot?.customProviderManifestFailuresTruncated ? (
-            <p className="text-xs text-muted-foreground">{t("settings.providers.diagnosticsOmitted")}</p>
+            <p className="vk-form-note">{t("settings.providers.diagnosticsOmitted")}</p>
           ) : null}
         </section>
       ) : null}

@@ -128,7 +128,7 @@ export function PublicAiDeleteConnectionDialog(props: {
           <div className="settings-field">
             <span>{t("settings.credentials.replacementDefault")}</span>
             <Select disabled={saving} onValueChange={setReplacementId} value={replacementId}>
-              <SelectTrigger aria-label={t("settings.credentials.replacementDefault")} className="w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label={t("settings.credentials.replacementDefault")}><SelectValue /></SelectTrigger>
               <SelectContent>
               {replacements.map((connection) => (
                 <SelectItem key={connection.id} value={connection.id}>{connection.display_name}</SelectItem>
@@ -483,7 +483,7 @@ export function PublicAiConnectionDialog(props: {
         props.onOpenChange(open)
       }}
     >
-      <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="lg">
+      <DialogContent scrollMode="fixed-footer" size="lg">
         <DialogHeader>
           <DialogTitle>
             {props.connection
@@ -509,7 +509,7 @@ export function PublicAiConnectionDialog(props: {
                 }}
                 value={provider?.id ?? ""}
               >
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {props.providers.map((item) => (
                     <SelectItem key={item.id} value={item.id}>
@@ -535,7 +535,7 @@ export function PublicAiConnectionDialog(props: {
                 }}
                 value={entry?.id ?? ""}
               >
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {(provider?.service_entries ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{item.display_name}</SelectItem>)}
                 </SelectContent>
@@ -552,7 +552,7 @@ export function PublicAiConnectionDialog(props: {
               }}
               value={credentialProfile?.id ?? ""}
             >
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
               {(entry?.credential_profiles ?? []).map((profile) => (
                 <SelectItem key={profile.id} value={profile.id}>{profile.display_name}</SelectItem>

@@ -137,7 +137,7 @@ export function ProviderIntroCard(props: ProviderIntroCardProps) {
           {signupUrl ? (
             <a href={signupUrl} rel="noreferrer" target="_blank">
               {t("settings.modelServices.signup")}
-              <ExternalLink aria-hidden="true" className="size-3.5" />
+              <ExternalLink aria-hidden="true" className="vk-icon" />
             </a>
           ) : <span />}
           {props.action ?? null}

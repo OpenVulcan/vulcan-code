@@ -23,6 +23,7 @@ import { probePublicAiCustomProvider, savePublicAiCustomProvider } from "@/servi
 import type { PublicAiCustomProviderModelDiscoveryMode, PublicAiCustomProviderProbeResult, PublicAiCustomProviderProtocol, PublicAiCustomProviderSaveRequest, PublicAiResponsesRemoteCompactionPolicy, PublicAiResponsesWebsocketPolicy, PublicAiConnection, PublicAiModelCapabilityEvidence, PublicAiModelOverrideRecord, PublicAiProviderDescriptor, PublicAiServiceEntry, PublicAiSettingsSnapshot } from "@/types"
 import { formatDateTime, errorMessage } from "@/lib/display-format"
 import { protocolDisplayName } from "./protocol-display-name"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // CustomProtocolRouteDraftCard edits one enabled protocol's route overrides: base URL
 // override, endpoint path, authentication, discovery, and fixed headers. Empty values
@@ -53,8 +54,8 @@ function CustomProtocolRouteDraftCard(props: {
         protocolDisplayName(customProtocolProfileId(protocol)),
       )}
     >
-      <div className="grid gap-3 text-sm">
-        <label className="settings-form-field">
+      <div className="vk-form-stack">
+        <label className="vk-field">
           <span>{t("settings.customProviders.routeBaseUrl")}</span>
           <Input
             onChange={(event) => onChange({ ...draft, baseUrlOverride: event.target.value })}
@@ -62,7 +63,7 @@ function CustomProtocolRouteDraftCard(props: {
             value={draft.baseUrlOverride}
           />
         </label>
-        <label className="settings-form-field">
+        <label className="vk-field">
           <span>{t("settings.customProviders.routeEndpointPath")}</span>
           <Input
             onChange={(event) => onChange({ ...draft, endpointPath: event.target.value })}
@@ -70,8 +71,8 @@ function CustomProtocolRouteDraftCard(props: {
             value={draft.endpointPath}
           />
         </label>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="settings-form-field">
+        <div className="vk-form-grid">
+          <label className="vk-field">
             <span>{t("settings.customProviders.routeAuthentication")}</span>
             <Select
               onValueChange={(value) => onChange({
@@ -91,7 +92,7 @@ function CustomProtocolRouteDraftCard(props: {
               </SelectContent>
             </Select>
           </label>
-          <label className="settings-form-field">
+          <label className="vk-field">
             <span>{t("settings.customProviders.routeDiscoveryMode")}</span>
             <Select
               onValueChange={(value) => onChange({
@@ -113,7 +114,7 @@ function CustomProtocolRouteDraftCard(props: {
           </label>
         </div>
         {draft.modelDiscoveryMode === "custom_path" ? (
-          <label className="settings-form-field">
+          <label className="vk-field">
             <span>{t("settings.customProviders.routeDiscoveryPath")}</span>
             <Input
               onChange={(event) => onChange({ ...draft, modelDiscoveryPath: event.target.value })}
@@ -122,10 +123,10 @@ function CustomProtocolRouteDraftCard(props: {
             />
           </label>
         ) : null}
-        <label className="settings-form-field">
+        <label className="vk-field">
           <span>{t("settings.customProviders.routeHeaders")}</span>
           <textarea
-            className="min-h-[72px] w-full rounded-md border bg-background px-3 py-2 text-xs"
+            className="vk-textarea vk-form-code"
             onChange={(event) => {
               const rawText = event.target.value
               setHeadersText(rawText)
@@ -137,7 +138,7 @@ function CustomProtocolRouteDraftCard(props: {
             aria-invalid={!headersValid}
             value={headersText}
           />
-          {!headersValid ? <span role="alert" className="text-destructive">{t("settings.providers.completeEachRowAs")}</span> : null}
+          {!headersValid ? <span role="alert" className="vk-field-error">{t("settings.providers.completeEachRowAs")}</span> : null}
         </label>
       </div>
     </DisclosureSection>
@@ -457,42 +458,42 @@ export function CustomProviderDialog(props: {
       }}
       open={props.open}
     >
-      <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="lg">
+      <DialogContent scrollMode="fixed-footer" size="lg">
         <DialogHeader>
           <DialogTitle>{t(props.provider ? "settings.customProviders.editTitle" : "settings.customProviders.addTitle")}</DialogTitle>
           <DialogDescription>
             {t("settings.customProviders.dialogDescription")}
           </DialogDescription>
         </DialogHeader>
-        <fieldset className="min-h-0 flex-1 space-y-4 overflow-y-auto" disabled={probing || saving}>
-        <div className="grid grid-cols-3 gap-2" aria-label={t("settings.customProviders.progressLabel")}>
+        <fieldset className="vk-fieldset vk-form-scroll" disabled={probing || saving}>
+        <ol className="vk-form-steps" aria-label={t("settings.customProviders.progressLabel")}>
           {(["connection", "credential", "result"] as const).map((candidate, index) => (
-            <div className={`rounded-lg border px-3 py-2 text-xs ${candidate === step ? "border-foreground bg-muted font-medium" : "text-muted-foreground"}`} key={candidate}>
-              {index + 1}. {t(customProviderStepLabelKeys[candidate])}
-            </div>
+            <li aria-current={candidate === step ? "step" : undefined} key={candidate}>
+              <b className="vk-num">{index + 1}</b>{t(customProviderStepLabelKeys[candidate])}
+            </li>
           ))}
-        </div>
+        </ol>
 
         {step === "connection" ? (
-          <div className="grid gap-4">
-            <label className="settings-form-field">
+          <div className="vk-form-loose">
+            <label className="vk-field">
               <span>{t("settings.customProviders.displayName")}</span>
               <Input onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
             </label>
-            <label className="settings-form-field">
+            <label className="vk-field">
               <span>{t("settings.customProviders.baseUrl")}</span>
               <Input onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://example.com/v1" value={baseUrl} />
             </label>
-            <div className="grid gap-4">
-              <fieldset className="settings-form-field">
-                <legend className="text-sm font-medium">{t("settings.customProviders.protocols")}</legend>
-                <p className="text-xs text-muted-foreground">{t("settings.customProviders.protocolsHint")}</p>
-                <div className="mt-2 flex flex-wrap gap-2">
+            <div className="vk-form-loose">
+              <fieldset className="vk-fieldset">
+                <legend className="vk-field-legend" data-variant="label">{t("settings.customProviders.protocols")}</legend>
+                <p className="vk-form-note">{t("settings.customProviders.protocolsHint")}</p>
+                <div className="vk-form-chips">
                   {customProtocolOptions.map((option) => {
                     const enabled = protocols.includes(option.id)
                     return (
                       <label
-                        className={`inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${enabled ? "border-foreground bg-muted font-medium" : "text-muted-foreground"}`}
+                        className="vk-check-label vk-form-tile"
                         key={option.id}
                       >
                         <Checkbox
@@ -530,7 +531,7 @@ export function CustomProviderDialog(props: {
                   })}
                 </div>
               </fieldset>
-              <label className="settings-form-field">
+              <label className="vk-field">
                 <span>{t("settings.customProviders.authentication")}</span>
                 <Select onValueChange={(value) => setAuthentication(value as "bearer_authorization" | "google_api_key" | "x_api_key")} value={authentication}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -543,10 +544,10 @@ export function CustomProviderDialog(props: {
               </label>
             </div>
             {protocols.length > 1 || !headersValid ? (
-              <fieldset className="settings-form-field">
-                <legend className="text-sm font-medium">{t("settings.customProviders.routeDrafts")}</legend>
-                <p className="text-xs text-muted-foreground">{t("settings.customProviders.routeDraftsHint")}</p>
-                <div className="mt-2 grid gap-2">
+              <fieldset className="vk-fieldset">
+                <legend className="vk-field-legend" data-variant="label">{t("settings.customProviders.routeDrafts")}</legend>
+                <p className="vk-form-note">{t("settings.customProviders.routeDraftsHint")}</p>
+                <div className="vk-form-stack">
                   {protocols.map((protocolId) => (
                     <CustomProtocolRouteDraftCard
                       draft={routeDrafts[protocolId] ?? emptyProtocolRouteDraft()}
@@ -565,7 +566,7 @@ export function CustomProviderDialog(props: {
                 </div>
               </fieldset>
             ) : null}
-            <label className="settings-form-field">
+            <label className="vk-field">
               <span>{t("settings.customProviders.discoveryMode")}</span>
               <Select onValueChange={(value) => setModelDiscoveryMode(value as PublicAiCustomProviderModelDiscoveryMode)} value={modelDiscoveryMode}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -577,60 +578,60 @@ export function CustomProviderDialog(props: {
               </Select>
             </label>
             {modelDiscoveryMode === "custom_path" ? (
-              <label className="settings-form-field">
+              <label className="vk-field">
                 <span>{t("settings.customProviders.discoveryPath")}</span>
                 <Input onChange={(event) => setModelDiscoveryPath(event.target.value)} placeholder="/models" value={modelDiscoveryPath} />
               </label>
             ) : null}
             <DisclosureSection description={t("settings.customProviders.advancedOptionsHint")} title={t("settings.customProviders.advancedOptions")}>
-              <div className="grid gap-3 text-sm">
-                <label className="settings-form-field">
+              <div className="vk-form-stack">
+                <label className="vk-field">
                   <span>{t("settings.customProviders.sessionHeader")}</span>
                   <Input
                     onChange={(event) => setSessionHeader(event.target.value)}
                     placeholder="x-opencode-session"
                     value={sessionHeader}
                   />
-                  <span className="text-xs text-muted-foreground">
+                  <span className="vk-form-note">
                     {t("settings.customProviders.sessionHeaderHint")}
                   </span>
                 </label>
               </div>
             </DisclosureSection>
             {protocols.includes("open_ai_codex_responses") ? (
-              <div className="grid gap-3 rounded-xl border bg-muted/30 p-3 text-sm">
-                <p className="font-medium text-foreground">{t("settings.customProviders.codexCapabilities")}</p>
-                <label className="flex items-start gap-2">
+              <div className="vk-form-box" data-tone="muted">
+                <strong className="vk-form-strong">{t("settings.customProviders.codexCapabilities")}</strong>
+                <label className="vk-form-option">
                   <Switch
                     checked={remoteCompactionPolicy === "enabled_with_local_fallback"}
-                    className="mt-1"
                     onCheckedChange={(checked) => setRemoteCompactionPolicy(checked ? "enabled_with_local_fallback" : "disabled")}
                   />
                   <span>
-                    <span className="block font-medium">{t("settings.customProviders.codexRemoteCompaction")}</span>
-                    <span className="block text-xs text-muted-foreground">{t("settings.customProviders.codexRemoteCompactionHint")}</span>
+                    <b>{t("settings.customProviders.codexRemoteCompaction")}</b>
+                    <span className="vk-form-note">{t("settings.customProviders.codexRemoteCompactionHint")}</span>
                   </span>
                 </label>
-                <label className="flex items-start gap-2">
+                <label className="vk-form-option">
                   <Switch
                     checked={websocketPolicy !== "disabled"}
-                    className="mt-1"
                     onCheckedChange={(checked) => setWebsocketPolicy(checked ? "unverified_override" : "disabled")}
                   />
                   <span>
-                    <span className="block font-medium">{t("settings.customProviders.codexWebsocket")}</span>
-                    <span className="block text-xs text-muted-foreground">{t("settings.customProviders.codexWebsocketHint")}</span>
+                    <b>{t("settings.customProviders.codexWebsocket")}</b>
+                    <span className="vk-form-note">{t("settings.customProviders.codexWebsocketHint")}</span>
                   </span>
                 </label>
               </div>
             ) : null}
-            <div className="rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground">
-              <p><span className="font-medium text-foreground">{t("settings.customProviders.protocolEndpoint")}</span> {protocolEndpoint || "—"}</p>
-              <p className="mt-1"><span className="font-medium text-foreground">{t("settings.customProviders.modelsEndpoint")}</span> {discoveryEndpoint || t("settings.customProviders.manualOnly")}</p>
-            </div>
+            <dl className="vk-facts vk-form-summary">
+              <dt>{t("settings.customProviders.protocolEndpoint")}</dt>
+              <dd className="vk-mono">{protocolEndpoint || "—"}</dd>
+              <dt>{t("settings.customProviders.modelsEndpoint")}</dt>
+              <dd className="vk-mono">{discoveryEndpoint || t("settings.customProviders.manualOnly")}</dd>
+            </dl>
             {credentialFreeEdit ? (
               <Alert>
-                <CircleAlert className="size-4" />
+                <CircleAlert className="vk-icon" />
                 <AlertTitle>{t("settings.customProviders.credentialFreeEditTitle")}</AlertTitle>
                 <AlertDescription>{t("settings.customProviders.credentialFreeEditDescription")}</AlertDescription>
               </Alert>
@@ -639,14 +640,14 @@ export function CustomProviderDialog(props: {
         ) : null}
 
         {step === "credential" ? (
-          <div className="grid gap-4">
+          <div className="vk-form-loose">
             <Alert>
-              <CircleAlert className="size-4" />
+              <CircleAlert className="vk-icon" />
               <AlertTitle>{t("settings.customProviders.validationTitle")}</AlertTitle>
               <AlertDescription>{t(props.provider ? "settings.customProviders.validationEditDescription" : "settings.customProviders.validationCreateDescription")}</AlertDescription>
             </Alert>
             {props.provider ? (
-              <label className="settings-form-field">
+              <label className="vk-field">
                 <span>{t("settings.customProviders.validationCredential")}</span>
                 <Select onValueChange={setValidationConnectionId} value={validationConnectionId}>
                   <SelectTrigger><SelectValue placeholder={t("settings.customProviders.validationCredentialRequired")} /></SelectTrigger>
@@ -661,11 +662,11 @@ export function CustomProviderDialog(props: {
               </label>
             ) : (
               <>
-                <label className="settings-form-field">
+                <label className="vk-field">
                   <span>{t("settings.customProviders.firstCredentialName")}</span>
                   <Input onChange={(event) => setCredentialDisplayName(event.target.value)} value={credentialDisplayName} />
                 </label>
-                <label className="settings-form-field">
+                <label className="vk-field">
                   <span>{t("settings.customProviders.apiKey")}</span>
                   <Input autoComplete="off" onChange={(event) => setSecret(event.target.value)} placeholder={t("settings.customProviders.apiKeyCreatePlaceholder")} type="password" value={secret} />
                 </label>
@@ -675,34 +676,34 @@ export function CustomProviderDialog(props: {
         ) : null}
 
         {step === "result" && probeResult ? (
-          <div className="grid gap-4">
+          <div className="vk-form-loose">
             <Alert variant={probeResult.status.state === "authentication_failed" ? "destructive" : "default"}>
-              {acceptedWithoutOverride ? <CircleCheckBig className="size-4" /> : <CircleAlert className="size-4" />}
+              {acceptedWithoutOverride ? <CircleCheckBig className="vk-icon" /> : <CircleAlert className="vk-icon" />}
               <AlertTitle>{t(`settings.customModels.discovery.${discoveryStateTranslationSegment(probeResult.status.state)}`)}</AlertTitle>
               <AlertDescription>{probeResult.status.message || t("settings.customProviders.validationResultDescription")}</AlertDescription>
             </Alert>
-            <div className="grid gap-3 rounded-xl border p-4 sm:grid-cols-2">
-              <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationModelCount")}</p><p className="font-medium">{probeResult.status.model_count}</p></div>
-              <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationPageCount")}</p><p className="font-medium">{probeResult.catalog?.page_count ?? 0}</p></div>
-              <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationCredential")}</p><p className="truncate font-medium">{validationConnection?.display_name ?? credentialDisplayName.trim()}</p></div>
-              <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationObservedAt")}</p><p className="font-medium">{formatCustomProviderObservationTime(probeResult.status.observed_at_ms, locale)}</p></div>
-            </div>
+            <dl className="vk-form-stats">
+              <div><dt>{t("settings.customProviders.validationModelCount")}</dt><dd className="vk-num">{probeResult.status.model_count}</dd></div>
+              <div><dt>{t("settings.customProviders.validationPageCount")}</dt><dd className="vk-num">{probeResult.catalog?.page_count ?? 0}</dd></div>
+              <div><dt>{t("settings.customProviders.validationCredential")}</dt><dd className="vk-truncate">{validationConnection?.display_name ?? credentialDisplayName.trim()}</dd></div>
+              <div><dt>{t("settings.customProviders.validationObservedAt")}</dt><dd>{formatCustomProviderObservationTime(probeResult.status.observed_at_ms, locale)}</dd></div>
+            </dl>
             {probeResult.catalog && probeResult.catalog.models.length > 0 ? (
               <CustomProviderProbeCatalogPreview result={probeResult} />
             ) : null}
-            {probeResult.manualFallbackAvailable ? <p className="text-sm text-muted-foreground">{t("settings.customProviders.manualFallbackHint")}</p> : null}
-            {probeResult.pendingSaveAvailable ? <p className="text-sm text-muted-foreground">{t("settings.customProviders.pendingSaveHint")}</p> : null}
+            {probeResult.manualFallbackAvailable ? <p className="vk-form-text">{t("settings.customProviders.manualFallbackHint")}</p> : null}
+            {probeResult.pendingSaveAvailable ? <p className="vk-form-text">{t("settings.customProviders.pendingSaveHint")}</p> : null}
           </div>
         ) : null}
 
-        {error ? <p className="settings-muted-line settings-error-text" role="alert">{error}</p> : null}
+        {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
         </fieldset>
         <DialogFooter>
           {step === "connection" ? <Button disabled={probing || saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.cancel")}</Button> : <Button disabled={probing || saving} onClick={() => setStep(step === "result" ? "credential" : "connection")} type="button" variant="outline">{t("settings.customProviders.back")}</Button>}
           {step === "connection" && props.provider && !providerChanged ? <Button disabled type="button">{t("memory.common.save")}</Button> : null}
-          {step === "connection" && providerChanged && (directSaveOnly || credentialFreeEdit) ? <Button disabled={saving || !headersValid} onClick={credentialFreeEdit ? saveCredentialFreeEdit : () => void save()} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("memory.common.save")}</Button> : null}
+          {step === "connection" && providerChanged && (directSaveOnly || credentialFreeEdit) ? <Button disabled={saving || !headersValid} onClick={credentialFreeEdit ? saveCredentialFreeEdit : () => void save()} type="button">{saving ? <LoaderCircle className="vk-spin" /> : null}{t("memory.common.save")}</Button> : null}
           {step === "connection" && (!props.provider || (providerChanged && !directSaveOnly && !credentialFreeEdit)) ? <Button disabled={!headersValid} onClick={continueToCredential} type="button">{t("settings.customProviders.next")}</Button> : null}
-          {step === "credential" ? <Button disabled={probing} onClick={() => void probe()} type="button">{probing ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t(probing ? "settings.customProviders.probing" : "settings.customProviders.probe")}</Button> : null}
+          {step === "credential" ? <Button disabled={probing} onClick={() => void probe()} type="button">{probing ? <LoaderCircle className="vk-spin" /> : null}{t(probing ? "settings.customProviders.probing" : "settings.customProviders.probe")}</Button> : null}
           {step === "result" && acceptedWithoutOverride ? <Button disabled={saving} onClick={() => void save()} type="button">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.saveVerified")}</Button> : null}
           {step === "result" && probeResult?.manualFallbackAvailable ? <Button disabled={saving} onClick={() => setPendingConfirmation("manual")} type="button">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.saveManual")}</Button> : null}
           {step === "result" && probeResult?.pendingSaveAvailable ? <Button disabled={saving} onClick={() => setPendingConfirmation("pending")} type="button" variant="secondary">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.savePending")}</Button> : null}
@@ -726,7 +727,7 @@ export function CustomProviderDialog(props: {
                   if (pendingConfirmation) void save(pendingConfirmation)
                 }}
               >
-                {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+                {saving ? <LoaderCircle className="vk-spin" /> : null}
                 {t("settings.customProviders.confirmPending")}
               </AlertDialogAction>
             </AlertDialogFooter>
@@ -760,7 +761,7 @@ export function CustomProviderDialog(props: {
                   void save(acceptance, true)
                 }}
               >
-                {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+                {saving ? <LoaderCircle className="vk-spin" /> : null}
                 {t("settings.customProviders.protocolOverridesConfirmAction")}
               </AlertDialogAction>
             </AlertDialogFooter>
@@ -779,23 +780,23 @@ function CustomProviderProbeCatalogPreview(props: { result: PublicAiCustomProvid
   // models 是精确凭据作用域探测目录，绝不是持久化的本地副本。
   const models = props.result.catalog?.models ?? []
   return (
-    <section className="overflow-hidden rounded-xl border">
-      <div className="flex items-center justify-between gap-3 border-b bg-muted/30 px-4 py-2.5">
-        <div className="min-w-0">
-          <h3 className="text-sm font-medium">{t("settings.customProviders.validationModelsTitle")}</h3>
-          <p className="truncate font-mono text-[11px] text-muted-foreground">
+    <section className="vk-form-catalog">
+      <header>
+        <div className="vk-form-cell">
+          <h3 className="vk-form-strong">{t("settings.customProviders.validationModelsTitle")}</h3>
+          <p className="vk-form-id">
             {props.result.catalog?.discovery_schema_revision}
           </p>
         </div>
         <Badge variant="secondary">{models.length}</Badge>
-      </div>
-      <ScrollArea className="h-52">
-        <div className="divide-y">
+      </header>
+      <ScrollArea>
+        <div className="vk-form-catalog-rows">
           {models.map((model) => (
-            <div className="flex items-center justify-between gap-3 px-4 py-2.5" key={model.id}>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{model.display_name}</p>
-                <p className="truncate font-mono text-xs text-muted-foreground">{model.id}</p>
+            <div className="vk-form-row" key={model.id}>
+              <div className="vk-form-cell">
+                <p className="vk-form-name">{model.display_name}</p>
+                <p className="vk-form-id">{model.id}</p>
               </div>
               <Badge variant={modelEvidenceCompleteness(model.capability_evidence) === 4 ? "secondary" : "outline"}>
                 {t("settings.customProviders.validationEvidence")
@@ -806,7 +807,7 @@ function CustomProviderProbeCatalogPreview(props: { result: PublicAiCustomProvid
           ))}
         </div>
       </ScrollArea>
-      <p className="border-t bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
+      <p className="vk-form-note">
         {t("settings.customProviders.validationModelsHint")}
       </p>
     </section>

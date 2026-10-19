@@ -49,6 +49,7 @@ import type {
   PermissionJudgeStatus,
   ProjectSummary,
 } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Labels of stable codes sent by the service; unknown codes render as themselves.
 // 服务发送的稳定代码对应的标签；未知代码按原样显示。
@@ -264,7 +265,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
           <ChevronLeft size={14} />{t("settings.permissionJudge")}
         </Button>
         <span aria-hidden="true" className="text-muted-foreground">/</span>
-        <h2 className="text-sm font-semibold">{title}</h2>
+        <h2 className="vk-form-title">{title}</h2>
       </PageToolbar>
     </div>
     {failureNotice}
@@ -423,7 +424,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
       {snapshot.cuda.supported ? <PageRow label={t("settings.permissionJudge.cuda")} description={cudaMissing.length === 0
         ? t("settings.permissionJudge.cuda.summaryReady")
         : formatMessage(t("settings.permissionJudge.cuda.summaryMissing"), { items: new Intl.ListFormat(locale, { type: "conjunction" }).format(cudaMissing) })}>
-        <div className="flex items-center gap-2">
+        <div className="vk-form-inline">
           <StatusPill status={cudaMissing.length === 0 ? "ready" : "warning"}
             label={t(cudaMissing.length === 0 ? "settings.permissionJudge.cuda.ready" : "settings.permissionJudge.cuda.missing")} />
           <Button type="button" size="sm" variant="outline" data-judge-open="cuda" onClick={() => setView("cuda")}>
@@ -436,7 +437,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
           p50: formatMs(t, worker.recentP50Ms), p95: formatMs(t, worker.recentP95Ms), count: worker.evaluations,
         })
         : undefined}>
-        <div className="flex items-center gap-2">
+        <div className="vk-form-inline">
           <StatusPill label={label(t, PHASE_KEYS, worker.phase)} status={phaseTone} />
           {worker.phase === "failed" ? <Button type="button" size="sm" variant="outline" disabled={busy !== null}
             onClick={() => void run("reload", "settings.permissionJudge.reloadFailed", async () => setStatus(await reloadPermissionJudge()))}>
@@ -458,7 +459,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
       {snapshot.policyOptions.map((option) => (
         <PageRow key={option.key} label={label(t, OPTION_KEYS, option.key)}
           description={Object.hasOwn(OPTION_HINT_KEYS, option.key) ? t(OPTION_HINT_KEYS[option.key]) : undefined}>
-          <span className="text-sm text-muted-foreground">
+          <span className="vk-form-text">
             {formatMessage(t("settings.permissionJudge.policy.default"), { mode: label(t, MODE_KEYS, option.defaultMode) })}
           </span>
         </PageRow>

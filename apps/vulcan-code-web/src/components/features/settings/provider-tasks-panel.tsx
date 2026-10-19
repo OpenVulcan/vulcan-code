@@ -112,7 +112,7 @@ export function ProviderTasksPanel(props: {
           return (
             <li className="ai-capability-row" key={task.executionId}>
               <span className="ai-capability-icon" aria-hidden="true">
-                {task.capability ? <ProviderToolCapabilityIcon capability={task.capability} size={16} /> : <ListTodo className="size-4" />}
+                {task.capability ? <ProviderToolCapabilityIcon capability={task.capability} size={16} /> : <ListTodo className="vk-icon" />}
               </span>
               <span className="ai-capability-copy">
                 <strong>{title}</strong>
@@ -135,7 +135,7 @@ export function ProviderTasksPanel(props: {
                   type="button"
                   variant="outline"
                 >
-                  <XCircle className="size-3.5" />
+                  <XCircle className="vk-icon" />
                   {t("settings.providerTasks.cancel")}
                 </Button>
               ) : <span />}

@@ -27,6 +27,7 @@ import type {
   PublicAiSettingsSnapshot,
   ProviderRetrySettingsSummary,
 } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // CONTEXT_COMPACTION_NODE_LABEL_KEYS binds every fixed node identity to one localized label.
 // CONTEXT_COMPACTION_NODE_LABEL_KEYS 将每个固定节点身份绑定到一个本地化标签。
@@ -95,10 +96,10 @@ function SystemContextWindowPolicyCard(props: {
   }, [draft, props.onSaved])
 
   return (
-    <section className="space-y-3 rounded-xl border p-4">
+    <section className="vk-form-box">
       <div>
-        <h3 className="text-sm font-semibold">{t("settings.modelExperience.context")}</h3>
-        <p className="text-xs text-muted-foreground">{t("settings.modelExperience.scopeHint")}</p>
+        <h3 className="vk-form-title">{t("settings.modelExperience.context")}</h3>
+        <p className="vk-form-note">{t("settings.modelExperience.scopeHint")}</p>
       </div>
       {/* These display-only defaults match ContextWindowPolicyOverrides::resolve in vulcan-context. */}
       {/* 这些仅展示的默认值对应 vulcan-context 中的 ContextWindowPolicyOverrides::resolve。 */}
@@ -109,10 +110,10 @@ function SystemContextWindowPolicyCard(props: {
         auto_compact_scope: t("settings.modelExperience.inheritScope"),
         fallback_buffer_tokens: t("settings.modelExperience.inheritBuffer"),
       }} />
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <p className="text-xs text-muted-foreground" role="status">{t(saving ? "settings.modelExperience.savingSystem" : dirty ? "settings.modelExperience.dirtySystem" : "settings.modelExperience.savedSystem")}</p>
+      {error ? <p className="vk-field-error">{error}</p> : null}
+      <p className="vk-form-note" role="status">{t(saving ? "settings.modelExperience.savingSystem" : dirty ? "settings.modelExperience.dirtySystem" : "settings.modelExperience.savedSystem")}</p>
       <Button disabled={saving || !dirty} onClick={() => void save()} type="button">
-        {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+        {saving ? <LoaderCircle className="vk-spin" /> : null}
         {t("settings.contextBasics.saveSystemDefault")}
       </Button>
     </section>
@@ -216,15 +217,15 @@ function ContextCompactionWindowNodesCard(props: {
   }, [draft, props, validationError, t])
 
   return (
-    <section className="space-y-4 rounded-xl border p-4">
+    <section className="vk-form-box">
       <div>
-        <h3 className="text-sm font-semibold">{t("settings.contextCompactionNodes.title")}</h3>
-        <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.description")}</p>
+        <h3 className="vk-form-title">{t("settings.contextCompactionNodes.title")}</h3>
+        <p className="vk-form-note">{t("settings.contextCompactionNodes.description")}</p>
       </div>
       <div className="context-basics-node-grid">
         {draft.nodes.map((node, index) => (
           <label className="context-basics-node-row" key={node.id}>
-            <span className="font-medium">{t(CONTEXT_COMPACTION_NODE_LABEL_KEYS[node.id])}</span>
+            <span className="vk-form-em">{t(CONTEXT_COMPACTION_NODE_LABEL_KEYS[node.id])}</span>
             <Input
               disabled={saving}
               inputMode="numeric"
@@ -234,15 +235,15 @@ function ContextCompactionWindowNodesCard(props: {
               type="number"
               value={node.tokens}
             />
-            <span className="text-xs text-muted-foreground">{tokenUnitLabel(locale)}</span>
+            <span className="vk-form-note">{tokenUnitLabel(locale)}</span>
           </label>
         ))}
       </div>
-      <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.warning")}</p>
-      {validationError || error ? <p className="text-sm text-destructive">{error ?? validationError}</p> : null}
-      {dirty && !saving ? <p className="text-xs text-muted-foreground" role="status">{t("settings.modelExperience.dirtyNodes")}</p> : null}
+      <p className="vk-form-note">{t("settings.contextCompactionNodes.warning")}</p>
+      {validationError || error ? <p className="vk-field-error">{error ?? validationError}</p> : null}
+      {dirty && !saving ? <p className="vk-form-note" role="status">{t("settings.modelExperience.dirtyNodes")}</p> : null}
       <Button disabled={saving || !dirty || validationError !== null} onClick={() => void save()} type="button">
-        {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+        {saving ? <LoaderCircle className="vk-spin" /> : null}
         {t(saving ? "settings.modelExperience.savingNodes" : "settings.contextCompactionNodes.save")}
       </Button>
     </section>
@@ -291,10 +292,10 @@ function NewSessionContextWindowDefaultCard(props: {
   }, [draft, props, t])
 
   return (
-    <section className="space-y-4 rounded-xl border p-4">
+    <section className="vk-form-box">
       <div>
-        <h3 className="text-sm font-semibold">{t("settings.contextCompactionNodes.defaultTitle")}</h3>
-        <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.defaultDescription")}</p>
+        <h3 className="vk-form-title">{t("settings.contextCompactionNodes.defaultTitle")}</h3>
+        <p className="vk-form-note">{t("settings.contextCompactionNodes.defaultDescription")}</p>
       </div>
       <Select disabled={saving} onValueChange={(value) => setDraft(value === "follow-model" ? null : value as ContextCompactionWindowNodeId)} value={draft ?? "follow-model"}>
         <SelectTrigger aria-label={t("settings.contextCompactionNodes.defaultTitle")}><SelectValue /></SelectTrigger>
@@ -307,10 +308,10 @@ function NewSessionContextWindowDefaultCard(props: {
           ))}
         </SelectContent>
       </Select>
-      <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.defaultLimitHint")}</p>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      <p className="vk-form-note">{t("settings.contextCompactionNodes.defaultLimitHint")}</p>
+      {error ? <p className="vk-field-error">{error}</p> : null}
       <Button disabled={saving || draft === props.nodeId} onClick={() => void save()} type="button">
-        {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+        {saving ? <LoaderCircle className="vk-spin" /> : null}
         {t("settings.contextCompactionNodes.defaultSave")}
       </Button>
     </section>
@@ -356,10 +357,10 @@ function AccountUsageRefreshCard(props: {
     }
   }, [props])
   return (
-    <section className="space-y-3 rounded-xl border p-4">
+    <section className="vk-form-box">
       <div>
-        <h3 className="text-sm font-semibold">{t("settings.usageRefresh.title")}</h3>
-        <p className="text-xs text-muted-foreground">
+        <h3 className="vk-form-title">{t("settings.usageRefresh.title")}</h3>
+        <p className="vk-form-note">
           {t("settings.usageRefresh.description")}
         </p>
       </div>
@@ -377,7 +378,7 @@ function AccountUsageRefreshCard(props: {
           <SelectItem value="3600">{t("settings.usageRefresh.hour").replace("{count}", "1")}</SelectItem>
         </SelectContent>
       </Select>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <p className="vk-field-error">{error}</p> : null}
     </section>
   )
 }
@@ -445,7 +446,7 @@ export function ContextBasicsSettingsArea(props: {
         {sections.map((section) => <DirectoryRow active={activeSection === section.id} key={section.id} label={section.label} onSelect={() => setActiveSection(section.id)} />)}
       </WorkspaceDirectoryMenu>
     }>
-      {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+      {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
       <div className="context-basics-tabs">
         {props.outputStyleSettings ? <section hidden={activeSection !== "conversation"}>{props.outputStyleSettings}</section> : null}
         {props.systemPromptSettings ? <section hidden={activeSection !== "system-prompt"}>{props.systemPromptSettings}</section> : null}

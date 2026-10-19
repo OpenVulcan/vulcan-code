@@ -3,6 +3,7 @@ import { Switch } from "@/ui-kit/primitives/switch";
 import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import { readConversationLinkPreference, saveConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import { useI18n } from "@/i18n";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ConversationLinkSettingsSection exposes the GUI-only preference in system basics.
 // ConversationLinkSettingsSection 在系统基础设置中提供仅 GUI 生效的偏好。
@@ -20,7 +21,7 @@ export function ConversationLinkSettingsSection() {
   const [error, setError] = React.useState("");
   if (!readElectronLocalBrowserBridge()) return null;
   return <section className="settings-form-grid mt-6">
-    <label className="flex items-center justify-between gap-4">
+    <label className="vk-form-switch">
       <span>{t("settings.conversationLinks.openLinksInThe")}</span>
       <Switch checked={enabled} onCheckedChange={(checked) => {
         try {
@@ -33,6 +34,6 @@ export function ConversationLinkSettingsSection() {
       }} />
     </label>
     <p className="settings-muted-line">{t("settings.conversationLinks.whenOnWebLinks")}</p>
-    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+    {error && <p role="alert" className="vk-field-error">{error}</p>}
   </section>;
 }
