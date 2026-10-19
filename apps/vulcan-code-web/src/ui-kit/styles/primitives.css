@@ -264,10 +264,10 @@ label.vk-field,
 }
 .vk-check:hover,
 .vk-radio:hover { border-color: var(--vk-ink-3); }
-.vk-check[data-state="checked"],
-.vk-check[data-state="indeterminate"],
-.vk-radio[data-state="checked"] { background: var(--vk-signal); border-color: var(--vk-signal); }
-.vk-check[data-state="checked"]::after {
+.vk-check[data-state="checked"], .vk-check:checked,
+.vk-check[data-state="indeterminate"], .vk-check:indeterminate,
+.vk-radio[data-state="checked"], .vk-radio:checked { background: var(--vk-signal); border-color: var(--vk-signal); }
+.vk-check[data-state="checked"]::after, .vk-check:checked:not(:indeterminate)::after {
   content: "";
   width: 0.3rem;
   height: 0.58rem;
@@ -275,8 +275,8 @@ label.vk-field,
   border-width: 0 2px 2px 0;
   transform: translateY(-12%) rotate(45deg);
 }
-.vk-check[data-state="indeterminate"]::after { content: ""; width: 0.55rem; height: 2px; background: var(--vk-ink-inverse); }
-.vk-radio[data-state="checked"]::after { content: ""; width: 0.4rem; height: 0.4rem; background: var(--vk-ink-inverse); }
+.vk-check[data-state="indeterminate"]::after, .vk-check:indeterminate::after { content: ""; width: 0.55rem; height: 2px; background: var(--vk-ink-inverse); }
+.vk-radio[data-state="checked"]::after, .vk-radio:checked::after { content: ""; width: 0.4rem; height: 0.4rem; background: var(--vk-ink-inverse); }
 .vk-check[aria-invalid="true"],
 .vk-radio[aria-invalid="true"] { border-color: var(--vk-bad); }
 

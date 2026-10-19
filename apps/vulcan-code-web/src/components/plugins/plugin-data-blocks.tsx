@@ -85,7 +85,7 @@ function ChartBlock(props: { block: Extract<PluginDataBlock, { type: "chart" }>;
     </div> : null}
     {block.web?.variant === "line"
       ? <TimeSeriesLineChart ariaLabel={valueLabel} emptyLabel={empty} formatValue={(value: number) => formatDataValue(value, valueFormat, locale)}
-        series={[{ id: block.value_path, label: valueLabel, color: "var(--primary)", points: points.map((point) => ({ key: point.label, value: point.value })) }]} />
+        series={[{ id: block.value_path, label: valueLabel, color: "var(--vk-chart-1)", points: points.map((point) => ({ key: point.label, value: point.value })) }]} />
       : <BarChart ariaLabel={valueLabel} emptyLabel={empty} points={points} />}
   </section>;
 }

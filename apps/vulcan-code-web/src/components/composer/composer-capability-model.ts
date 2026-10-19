@@ -391,28 +391,28 @@ export function selectionForTarget(
 // 参数：capability 是封闭工具能力；返回现有 CSS 完整颜色令牌表达式。
 export function providerToolCapabilityColor(capability: PublicAiProviderToolCapabilityKind): string {
   if (capability === "web_search" || capability === "web_extract") {
-    return "var(--chart-1)";
+    return "var(--vk-chart-1)";
   }
   if (
     capability === "image_understand"
     || capability === "video_understand"
     || capability === "audio_understand"
   ) {
-    return "var(--chart-3)";
+    return "var(--vk-chart-3)";
   }
   if (capability === "image_generate" || capability === "image_edit") {
-    return "var(--chart-5)";
+    return "var(--vk-chart-5)";
   }
   if (capability === "video_generate" || capability === "video_edit" || capability === "video_extend") {
-    return "var(--chart-4)";
+    return "var(--vk-chart-4)";
   }
   if (capability === "speech_synthesize" || capability === "speech_transcribe") {
-    return "var(--chart-2)";
+    return "var(--vk-chart-2)";
   }
   if (capability === "music_cover") {
-    return "var(--chart-2)";
+    return "var(--vk-chart-2)";
   }
-  return "var(--chart-3)";
+  return "var(--vk-chart-3)";
 }
 
 // composerCapabilitySummaryDetail names the session's selected target for one capability, or its selected-model count.

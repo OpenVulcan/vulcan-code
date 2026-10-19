@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { cx } from "../behavior/core";
 import { Button } from "./button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "./command";
@@ -58,7 +58,7 @@ function Combobox({ value, options, placeholder, searchPlaceholder, emptyText, a
           className={cx("vk-combobox", className)}
         >
           <span className="vk-combobox-value">{selectedOption?.label ?? placeholder}</span>
-          <ChevronsUpDown className="vk-select-chevron" aria-hidden="true" />
+          <ChevronDown className="vk-select-chevron" aria-hidden="true" />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" width="content" className={cx("vk-combobox-pop", contentClassName)}>
