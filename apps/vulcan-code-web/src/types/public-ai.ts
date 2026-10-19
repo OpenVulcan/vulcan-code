@@ -178,6 +178,10 @@ export interface PublicAiProviderPromotion {
   disclosure_key: PublicAiProviderPromotionDisclosureKey;
 }
 
+// PublicAiProviderServiceTag names one service family: conversation models, search, or standalone analysis.
+// PublicAiProviderServiceTag 命名一个服务类别：对话模型、搜索或独立分析。
+export type PublicAiProviderServiceTag = "model" | "search" | "analysis";
+
 // PublicAiProviderDescriptor describes one registered provider adapter.
 // PublicAiProviderDescriptor 描述一个已注册供应商适配器。
 export interface PublicAiProviderDescriptor {
@@ -190,6 +194,12 @@ export interface PublicAiProviderDescriptor {
   // 由供应商清单选择的封闭凭据接入原语。
   credential_registration: "direct" | "mini_max_regional_api_key";
   promotion?: PublicAiProviderPromotion;
+  // Recommended position in the provider directory; smaller sorts first, absent sorts last.
+  // 供应商目录中的推荐位置；数字小者在前，缺省者排在最后。
+  directory_rank?: number;
+  // Manifest-derived service families this provider offers.
+  // 由清单推导的供应商服务类别。
+  service_tags?: PublicAiProviderServiceTag[];
   service_entries: PublicAiServiceEntry[];
 }
 

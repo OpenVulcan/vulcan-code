@@ -531,7 +531,7 @@ function TavilyUsageSummary(props: {
           role="progressbar"
         >
           <div
-            className={`h-full rounded-full ${percentage <= 10 ? "bg-destructive" : percentage <= 30 ? "bg-[var(--vcn-content-warning)]" : "bg-[var(--vcn-content-success)]"}`}
+            className={`h-full rounded-full ${usageBarTone(percentage)}`}
             style={{ width: `${percentage}%` }}
           />
         </div>
@@ -655,7 +655,7 @@ function UsageWindowMetric(props: {
         role="progressbar"
       >
         <div
-          className={`h-full rounded-full ${percentage <= 10 ? "bg-destructive" : percentage <= 30 ? "bg-[var(--vcn-content-warning)]" : "bg-[var(--vcn-content-success)]"}`}
+          className={`h-full rounded-full ${usageBarTone(percentage)}`}
           style={{ width: `${percentage}%` }}
         />
       </div> : null}
@@ -666,6 +666,21 @@ function UsageWindowMetric(props: {
       ) : null}
     </div>
   )
+}
+
+// USAGE_CRITICAL_PERCENT is the remaining share at or below which a quota counts as nearly exhausted.
+// USAGE_CRITICAL_PERCENT 是额度视为即将耗尽的剩余比例上限（含）。
+export const USAGE_CRITICAL_PERCENT = 10
+// USAGE_WARNING_PERCENT is the remaining share at or below which a quota is shown as running low.
+// USAGE_WARNING_PERCENT 是额度显示为偏低的剩余比例上限（含）。
+const USAGE_WARNING_PERCENT = 30
+
+// usageBarTone colors a remaining-quota bar by the shared thresholds.
+// usageBarTone 按共享阈值为剩余额度条着色。
+function usageBarTone(percentage: number): string {
+  if (percentage <= USAGE_CRITICAL_PERCENT) return "bg-destructive"
+  if (percentage <= USAGE_WARNING_PERCENT) return "bg-[var(--vcn-content-warning)]"
+  return "bg-[var(--vcn-content-success)]"
 }
 
 // usageWindowPercentage returns the normalized visual percentage without inventing quota.

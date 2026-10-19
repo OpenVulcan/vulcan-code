@@ -4,6 +4,7 @@ import { LogsArea } from "@/components/features/settings/settings-diagnostics-ar
 import "@/styles/settings-pages.css";
 import "@/styles/settings-preferences.css";
 import "@/styles/settings-shell.css";
+import "@/styles/model-services.css";
 import "@/styles/visual-lab.css";
 import { VisualLabSettingsArea } from "@/components/dev/visual-lab-settings-area";
 import {
@@ -13,15 +14,8 @@ import {
   OutputStyleSettingsSection,
 } from "@/components/features/settings/misc-settings-areas";
 import { AboutLicensesSettingsArea } from "@/components/features/settings/about-licenses-settings-area";
-import {
-  ModelListSettingsArea,
-} from "@/components/features/settings/provider-model-settings";
-import {
-  CredentialManagementArea,
-} from "@/components/features/settings/provider-list-settings";
-import { ProviderManagementArea } from "@/components/features/settings/provider-management-settings";
+import { ModelServicesArea } from "@/components/features/settings/model-services/model-services-area";
 import { ContextBasicsSettingsArea } from "@/components/features/settings/context-basics-settings";
-import { AiCapabilitiesSettingsArea } from "@/components/features/settings/ai-capabilities-settings";
 import { SettingsPage } from "@/components/features/settings/settings-layout";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
 import { PermissionJudgeSettingsArea } from "@/components/features/settings/permission-judge-settings-area";
@@ -86,22 +80,19 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
 // SettingsRoutedPage routes settings sub pages to their specialized modules.
 // SettingsRoutedPage 将设置子页面路由到专用模块。
 function SettingsRoutedPage(props: SettingsFeatureContentProps) {
-  // Retired per-capability ids open the merged page on the tab that owns them.
-  // 已退役的单项能力标识打开合并页面中对应的标签页。
+  // Retired provider, account, model and capability ids open the merged model services page on their tab.
+  // 已退役的供应商、账号、模型与能力标识打开合并后的模型服务页对应标签。
   const providerToolCapability = settingsSubAreaProviderToolCapability(
     props.activeSettingsSubArea,
   );
   if (providerToolCapability || props.activeSettingsSubArea === "ai-capabilities") {
-    return <AiCapabilitiesSettingsArea initialCapability={providerToolCapability} />;
-  }
-  if (props.activeSettingsSubArea === "model-providers") {
-    return <ProviderManagementArea />;
-  }
-  if (props.activeSettingsSubArea === "credential-management") {
-    return <CredentialManagementArea />;
+    return <ModelServicesArea initialCapability={providerToolCapability} initialTab="functions" />;
   }
   if (props.activeSettingsSubArea === "model-list") {
-    return <ModelListSettingsArea />;
+    return <ModelServicesArea initialView="model" />;
+  }
+  if (props.activeSettingsSubArea === "model-providers" || props.activeSettingsSubArea === "credential-management") {
+    return <ModelServicesArea />;
   }
   if (props.activeSettingsSubArea === "runtime-diagnostics") {
     return (
@@ -152,6 +143,6 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
     return <ArchivedRestoreSettingsArea actions={props.actions} conversations={props.workbench.archivedConversations ?? []} projects={props.workbench.projects} />;
   }
   return (
-    <ProviderManagementArea />
+    <ModelServicesArea />
   );
 }

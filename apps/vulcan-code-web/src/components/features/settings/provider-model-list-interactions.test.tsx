@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "@/i18n"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { publicAiSettingsWithInvalidDefaultFixture } from "@/test-fixtures/public-ai-settings"
-import { ModelListSettingsArea } from "@/components/features/settings/provider-model-settings"
+import { ModelServicesArea } from "@/components/features/settings/model-services/model-services-area"
 
 // service replaces only catalog I/O; dialogs, route grouping and focus behavior stay real.
 // service 仅替换目录读写；弹窗、路由分组及焦点行为保持真实组件实现。
@@ -33,7 +33,7 @@ describe("model list access and usage interactions", () => {
     const root = createRoot(container)
     document.body.append(container)
     try {
-      await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ModelListSettingsArea /></TooltipProvider></I18nProvider>))
+      await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ModelServicesArea /></TooltipProvider></I18nProvider>))
       expect(container.querySelectorAll(".settings-model-catalog-row")).toHaveLength(3)
       expect(container.querySelector("details")).toBeNull()
       expect(container.textContent).not.toContain("custom_user")
@@ -89,7 +89,7 @@ describe("model list access and usage interactions", () => {
     const root = createRoot(container)
     document.body.append(container)
     try {
-      await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ModelListSettingsArea /></TooltipProvider></I18nProvider>))
+      await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ModelServicesArea /></TooltipProvider></I18nProvider>))
       // rows and cells identify visible controls without relying on protocol or account ordering.
       // rows 与 cells 标识可见控件，不依赖协议或账号排序。
       const rows = container.querySelectorAll(".settings-model-catalog-row")
@@ -108,6 +108,25 @@ describe("model list access and usage interactions", () => {
       expect(service.internal).not.toHaveBeenCalled()
       expect(service.candidate).not.toHaveBeenCalled()
       expect(cells[0].querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false")
+    } finally { await act(async () => root.unmount()); container.remove() }
+  })
+
+  it("lists every configured provider in the model-led view and names the owning provider on each row", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true)
+    const snapshot = publicAiSettingsWithInvalidDefaultFixture()
+    service.load.mockResolvedValue(snapshot)
+    const container = document.createElement("div")
+    const root = createRoot(container)
+    document.body.append(container)
+    try {
+      await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ModelServicesArea initialView="model" /></TooltipProvider></I18nProvider>))
+      // rows holds every configured provider's catalog rows; same-named models are never merged.
+      // rows 包含每个已配置供应商的目录行；同名模型不会合并。
+      const providerIds = new Set(snapshot.connections.map((connection) => connection.provider_id))
+      const rows = container.querySelectorAll(".settings-model-catalog-row")
+      expect(providerIds.size).toBeGreaterThan(1)
+      expect(rows.length).toBeGreaterThan(3)
+      expect([...rows].every((row) => row.querySelector(".model-services-row-provider"))).toBe(true)
     } finally { await act(async () => root.unmount()); container.remove() }
   })
 })

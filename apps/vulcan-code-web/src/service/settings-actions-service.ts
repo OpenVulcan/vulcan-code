@@ -515,6 +515,45 @@ export async function savePublicAiModelEnabled(request: {
   );
 }
 
+// savePublicAiModelSetEnabled saves one conversation choice for several models of one provider atomically.
+// savePublicAiModelSetEnabled 原子地为同一供应商的多个模型保存一项会话选择。
+export async function savePublicAiModelSetEnabled(request: {
+  providerId: string;
+  modelIds: string[];
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_model_set_enabled",
+    { request },
+  );
+}
+
+// savePublicAiInternalModelSetEnabled saves one internal-use choice for several models of one provider atomically.
+// savePublicAiInternalModelSetEnabled 原子地为同一供应商的多个模型保存一项内部使用选择。
+export async function savePublicAiInternalModelSetEnabled(request: {
+  providerId: string;
+  modelIds: string[];
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_internal_model_set_enabled",
+    { request },
+  );
+}
+
+// savePublicAiConnectionModelSetEnabled saves one access choice for several models of one account atomically.
+// savePublicAiConnectionModelSetEnabled 原子地为一个账号的多个模型保存一项访问选择。
+export async function savePublicAiConnectionModelSetEnabled(request: {
+  connectionId: string;
+  modelIds: string[];
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_connection_model_set_enabled",
+    { request },
+  );
+}
+
 // savePublicAiInternalModelEnabled persists one model-level non-conversation internal-use switch.
 // savePublicAiInternalModelEnabled 持久化一个模型级非会话内部使用开关。
 export async function savePublicAiInternalModelEnabled(request: {

@@ -1,4 +1,3 @@
-import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
 import {
   Search,
@@ -9,9 +8,9 @@ import {
   filterProviderModels,
   type FilterableProviderModel,
 } from "@/components/features/settings/provider-model-filter"
+import type { SnapshotMutations } from "@/components/features/settings/model-services/use-snapshot-mutations"
 import { modelModalityLabel, ProviderModelModalitySummary } from "@/components/features/settings/provider-model-modality-summary"
 import { providerExtensionOutputModalities, providerModelModalities } from "@/components/features/settings/provider-model-modalities"
-import { providerPriority } from "@/components/features/settings/provider-ordering"
 import {
   buildProviderModelInventoryGroups,
   filterProviderModelInventoryGroupsWithAvailableAccounts,
@@ -25,34 +24,44 @@ import { PublicAiModelOverridesDialog } from "@/components/features/settings/pub
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
 import {
-  loadPublicAiSettings,
+  savePublicAiConnectionModelEnabled,
+  savePublicAiConnectionModelSetEnabled,
   savePublicAiInternalModelEnabled,
+  savePublicAiInternalModelSetEnabled,
   savePublicAiMultimodalUnderstandingCandidate,
   savePublicAiModelEnabled,
+  savePublicAiModelSetEnabled,
   savePublicAiProviderExtensionTargetSet,
   savePublicAiProviderToolCapabilityEnabled,
 } from "@/service/settings-actions-service"
 import type {
   PublicAiCodexModelBehavior,
+  PublicAiConnection,
   PublicAiModel,
   PublicAiOperation,
+  PublicAiProviderDescriptor,
   PublicAiProviderToolCapabilityKind,
   PublicAiProviderToolTargetSnapshot,
   PublicAiSettingsSnapshot,
 } from "@/types"
-import { errorMessage } from "@/lib/display-format";
 
 // PublicProviderModelRow binds one rendered provider model to its routes and effective enabled state.
 // PublicProviderModelRow 将一个渲染中的供应商模型绑定到其路由与有效启用状态。
 interface PublicProviderModelRow extends FilterableProviderModel {
+  // Provider that owns this model; the same model of another provider is a separate row.
+  // 持有该模型的供应商；其他供应商的同名模型是独立的行。
+  provider: PublicAiProviderDescriptor
+  // Stable row identity across providers.
+  // 跨供应商的稳定行标识。
+  key: string
   // Complete account and signed-template facts backing this provider model.
   // 该供应商模型背后的完整账号与签名模板事实。
   inventory: PublicProviderModelInventoryEntry
@@ -101,17 +110,54 @@ function extensionCapabilityLabel(
   }
 }
 
-// ModelListSettingsArea renders the process-local public AI model catalog.
-// ModelListSettingsArea 渲染进程内公共 AI 模型目录。
-export function ModelListSettingsArea() {
+// rowConversationEligible follows declared operations, independently from the access preference.
+// rowConversationEligible 遵循声明操作，与访问偏好相互独立。
+function rowConversationEligible(row: PublicProviderModelRow): boolean {
+  return row.routes.some((route) => route.model.capabilities.operations?.includes("conversation_respond"))
+}
+
+// groupByProvider splits selected rows into per-provider model id lists, keeping first-seen order.
+// groupByProvider 将选中行按供应商拆成模型标识列表，保持首次出现顺序。
+function groupByProvider(rows: readonly PublicProviderModelRow[]): Array<{ providerId: string; modelIds: string[] }> {
+  const groups = new Map<string, string[]>()
+  for (const row of rows) {
+    const modelIds = groups.get(row.provider.id) ?? []
+    modelIds.push(row.modelId)
+    groups.set(row.provider.id, modelIds)
+  }
+  return Array.from(groups, ([providerId, modelIds]) => ({ providerId, modelIds }))
+}
+
+// ProviderModelCatalogProps selects which providers' models the catalog lists and how.
+// ProviderModelCatalogProps 选择目录列出哪些供应商的模型以及展示方式。
+export interface ProviderModelCatalogProps {
+  // snapshot is the page-owned authoritative settings state.
+  // snapshot 是页面持有的权威设置状态。
+  snapshot: PublicAiSettingsSnapshot
+  // providerIds lists the providers whose models appear, in display order.
+  // providerIds 按显示顺序列出要展示其模型的供应商。
+  providerIds: readonly string[]
+  // showProvider adds the owning provider to each row (model-led view).
+  // showProvider 在每行显示所属供应商（以模型为主的视图）。
+  showProvider: boolean
+  // accountScope narrows the list to one account and adds its access column.
+  // accountScope 将列表收窄到一个账号并增加该账号的访问列。
+  accountScope: PublicAiConnection | null
+  // mutations is the page's single serialized write lane.
+  // mutations 是页面唯一的串行写入通道。
+  mutations: SnapshotMutations
+  // onSnapshot applies snapshots saved by nested dialogs.
+  // onSnapshot 应用嵌套弹窗保存后返回的快照。
+  onSnapshot: (next: PublicAiSettingsSnapshot) => void
+}
+
+// ProviderModelCatalog lists provider models with per-model switches, filters, selection and bulk actions.
+// ProviderModelCatalog 列出供应商模型，提供逐个开关、筛选、多选与批量操作。
+export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
   const { t } = useI18n()
-  const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
-  const [error, setError] = React.useState<string | null>(null)
-  // loadAttempt retries a failed catalog load only on explicit user action.
-  // loadAttempt 仅在用户显式操作时重试失败的目录加载。
-  const [loadAttempt, setLoadAttempt] = React.useState(0)
-  const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null)
-  const [editingRoute, setEditingRoute] = React.useState<PublicModelProtocolRoute | null>(null)
+  const { snapshot, mutations } = props
+  const pendingMutationKey = mutations.pendingKey
+  const [editingRoute, setEditingRoute] = React.useState<{ providerId: string; route: PublicModelProtocolRoute } | null>(null)
   // inspectingModel identifies a read-only access window by exact provider and model, never row position.
   // inspectingModel 使用准确供应商和模型标识接入详情窗口，不使用行位置。
   const [inspectingModel, setInspectingModel] = React.useState<{ providerId: string; modelId: string } | null>(null)
@@ -121,8 +167,7 @@ export function ModelListSettingsArea() {
   // routeConditionsTrigger restores focus within the parent access dialog after nested editing.
   // routeConditionsTrigger 在嵌套编辑结束后将焦点恢复到父级接入窗口内。
   const routeConditionsTrigger = React.useRef<HTMLButtonElement | null>(null)
-  const [editingCapabilityModel, setEditingCapabilityModel] = React.useState<PublicAiModel | null>(null)
-  const [pendingMutationKey, setPendingMutationKey] = React.useState<string | null>(null)
+  const [editingCapability, setEditingCapability] = React.useState<{ provider: PublicAiProviderDescriptor; model: PublicAiModel } | null>(null)
   const [searchQuery, setSearchQuery] = React.useState("")
   // usageFilter narrows visible rows using independent backend-owned admission dimensions.
   // usageFilter 使用相互独立的后端准入维度收窄可见模型。
@@ -133,115 +178,44 @@ export function ModelListSettingsArea() {
   // currentPage bounds rendered model controls when a provider publishes a large catalog.
   // currentPage 在供应商发布大目录时限制一次渲染的模型控件数量。
   const [currentPage, setCurrentPage] = React.useState(1)
-  const mutationInFlightRef = React.useRef(false)
+  // selected holds row keys chosen for a bulk action.
+  // selected 保存为批量操作选中的行标识。
+  const [selected, setSelected] = React.useState<ReadonlySet<string>>(() => new Set())
 
-  // runSnapshotMutation serializes full-snapshot writes so late responses cannot regress the UI.
-  // runSnapshotMutation 串行化完整快照写入，避免迟到响应使界面状态倒退。
-  const runSnapshotMutation = React.useCallback((
-    key: string,
-    mutation: () => Promise<PublicAiSettingsSnapshot>,
-  ) => {
-    if (mutationInFlightRef.current) {
-      return
-    }
-    mutationInFlightRef.current = true
-    setPendingMutationKey(key)
-    void mutation()
-      .then((next) => {
-        setSnapshot(next)
-        setError(null)
-      })
-      .catch(async (reason) => {
-        setError(errorMessage(reason))
-        // A two-step extension write may have saved its selection before global enablement fails.
-        // 两步扩展写入可能在全局启用失败前已保存选择，因此重新读取权威状态。
-        try {
-          setSnapshot(await loadPublicAiSettings())
-        } catch {
-          // The original mutation error remains visible when reconciliation cannot load.
-          // 对账读取失败时保留原写入错误供用户查看。
+  // groups keeps credential-backed providers in the caller's order.
+  // groups 按调用方顺序保留有凭据支持的供应商。
+  const groups = React.useMemo(() => {
+    const available = filterProviderModelInventoryGroupsWithAvailableAccounts(buildProviderModelInventoryGroups(snapshot))
+    return props.providerIds.flatMap((providerId) => available.filter((group) => group.provider.id === providerId))
+  }, [props.providerIds, snapshot])
+  // accountSupported and accountEnabled are the scoped account's full and admitted model sets.
+  // accountSupported 与 accountEnabled 是所选账号的完整模型集与已准入模型集。
+  const accountSupported = React.useMemo(() => props.accountScope
+    ? new Set((snapshot.modelSupportCatalogs[props.accountScope.id]?.models ?? []).map((model) => model.id))
+    : null, [props.accountScope, snapshot])
+  const accountEnabled = React.useMemo(() => props.accountScope
+    ? new Set((snapshot.catalogs[props.accountScope.id]?.models ?? []).map((model) => model.id))
+    : null, [props.accountScope, snapshot])
+  // providerModelRows materializes effective model access state once per snapshot.
+  // providerModelRows 为每次快照集中生成有效模型访问状态。
+  const providerModelRows = React.useMemo<PublicProviderModelRow[]>(() => groups.flatMap((group) => (
+    Array.from(group.models.values())
+      .filter((inventory) => !accountSupported || accountSupported.has(inventory.modelId))
+      .map((inventory) => {
+        const access = snapshot.modelAccessRecords.find((record) => (
+          record.providerId === group.provider.id && record.modelId === inventory.modelId
+        ))
+        return {
+          provider: group.provider,
+          key: `${group.provider.id}/${inventory.modelId}`,
+          modelId: inventory.modelId,
+          displayName: inventory.displayName,
+          enabled: access?.enabled ?? true,
+          routes: inventory.protocolRoutes,
+          inventory,
         }
       })
-      .finally(() => {
-        mutationInFlightRef.current = false
-        setPendingMutationKey(null)
-      })
-  }, [])
-
-  React.useEffect(() => {
-    let active = true
-    setError(null)
-    void loadPublicAiSettings()
-      .then((next) => {
-        if (active) {
-          setSnapshot(next)
-          setError(null)
-        }
-      })
-      .catch((reason) => {
-        if (active) {
-          setError(errorMessage(reason))
-        }
-      })
-    return () => {
-      active = false
-    }
-  }, [loadAttempt])
-
-  // groupedProviders keeps credential-backed model providers ordered by persisted priority.
-  // groupedProviders 按持久化优先级排列由凭据支持的模型供应商。
-  const groupedProviders = React.useMemo(() => {
-    if (!snapshot) {
-      return []
-    }
-    // indexedGroups preserves current registry order when priorities are equal.
-    // indexedGroups 在优先级相同时保留当前注册表顺序。
-    const indexedGroups = filterProviderModelInventoryGroupsWithAvailableAccounts(
-      buildProviderModelInventoryGroups(snapshot),
-    )
-      .map((group, index) => ({ group, index }))
-    return indexedGroups
-      .sort((left, right) => (
-        providerPriority(snapshot.providerPriorities, right.group.provider.id)
-        - providerPriority(snapshot.providerPriorities, left.group.provider.id)
-        || left.index - right.index
-      ))
-      .map(({ group }) => group)
-  }, [snapshot])
-  React.useEffect(() => {
-    if (groupedProviders.length === 0) {
-      setSelectedProviderId(null)
-      return
-    }
-    if (!selectedProviderId || !groupedProviders.some((group) => group.provider.id === selectedProviderId)) {
-      setSelectedProviderId(groupedProviders[0]?.provider.id ?? null)
-    }
-  }, [groupedProviders, selectedProviderId])
-
-  const selectedGroup = groupedProviders.find((group) => group.provider.id === selectedProviderId)
-    ?? groupedProviders[0]
-    ?? null
-  // providerModelRows materializes the selected provider's effective model access state once per snapshot.
-  // providerModelRows 为每次快照集中生成当前供应商的有效模型访问状态。
-  const providerModelRows = React.useMemo<PublicProviderModelRow[]>(() => {
-    if (!snapshot || !selectedGroup) {
-      return []
-    }
-    return Array.from(selectedGroup.models.values()).map((inventory) => {
-      const { modelId, protocolRoutes: routes } = inventory
-      const access = snapshot.modelAccessRecords.find((record) => (
-        record.providerId === selectedGroup.provider.id
-        && record.modelId === modelId
-      ))
-      return {
-        modelId,
-        displayName: inventory.displayName,
-        enabled: access?.enabled ?? true,
-        routes,
-        inventory,
-      }
-    })
-  }, [selectedGroup, snapshot])
+  )), [accountSupported, groups, snapshot])
   // visibleModelRows applies page-local filters without changing catalog or persisted access state.
   // visibleModelRows 应用页面内筛选，不改变目录或持久化访问状态。
   const visibleModelRows = React.useMemo(
@@ -251,45 +225,48 @@ export function ModelListSettingsArea() {
         ...providerExtensionOutputModalities(row.inventory.extensionCapabilities),
       ].includes(capabilityFilter as ReturnType<typeof providerModelModalities>["output"][number])) return false
       if (usageFilter === "all") return true
-      if (usageFilter === "conversation") return row.enabled && row.routes.some((route) => route.model.capabilities.operations?.includes("conversation_respond"))
-      if (!snapshot || !selectedGroup) return false
-      if (usageFilter === "internal") return internalStateForModel(snapshot, selectedGroup.provider.id, row.modelId)?.enabled === true
+      if (usageFilter === "conversation") return row.enabled && rowConversationEligible(row)
+      if (usageFilter === "account") return accountEnabled?.has(row.modelId) === true
+      if (usageFilter === "internal") return internalStateForModel(snapshot, row.provider.id, row.modelId)?.enabled === true
         || row.inventory.extensionCapabilities.some((capability) => snapshot.providerToolEnabledCapabilities.includes(capability) && snapshot.providerExtensionTargetSets[capability]?.some((selection) => (
-          snapshot.providerToolTargets.some((target) => target.connectionId === selection.connection_id && target.target.target_id === selection.target_id && target.target.provider_id === selectedGroup.provider.id && target.target.upstream_target_id === row.modelId)
+          snapshot.providerToolTargets.some((target) => target.connectionId === selection.connection_id && target.target.target_id === selection.target_id && target.target.provider_id === row.provider.id && target.target.upstream_target_id === row.modelId)
         )) === true)
-      return snapshot.multimodalUnderstandingCandidateModels?.some((record) => record.providerId === selectedGroup.provider.id && record.modelId === row.modelId) === true
+      return snapshot.multimodalUnderstandingCandidateModels?.some((record) => record.providerId === row.provider.id && record.modelId === row.modelId) === true
     }),
-    [providerModelRows, searchQuery, usageFilter, capabilityFilter, snapshot, selectedGroup],
+    [accountEnabled, providerModelRows, searchQuery, usageFilter, capabilityFilter, snapshot],
   )
-  // Changing any directory dimension begins at the first page of the new result set.
-  // 更换任意目录维度后从新结果集第一页开始。
-  React.useEffect(() => setCurrentPage(1), [selectedProviderId, searchQuery, usageFilter, capabilityFilter])
+  // Changing any directory dimension begins at the first page and clears the selection.
+  // 更换任意目录维度后从第一页开始并清空选择。
+  const scopeKey = `${props.providerIds.join("\u0000")}|${props.accountScope?.id ?? ""}`
+  React.useEffect(() => {
+    setCurrentPage(1)
+    setSelected(new Set())
+  }, [scopeKey, searchQuery, usageFilter, capabilityFilter])
+  React.useEffect(() => {
+    if (!props.accountScope && usageFilter === "account") setUsageFilter("all")
+  }, [props.accountScope, usageFilter])
   // pageSize limits simultaneous switches and tooltips for very large provider catalogs.
   // pageSize 限制超大供应商目录同时挂载的开关和提示组件数量。
   const pageSize = 50
-  // pageCount retains at least one logical page for an empty filtered set.
-  // pageCount 为筛选结果为空的情况保留至少一个逻辑页。
   const pageCount = Math.max(1, Math.ceil(visibleModelRows.length / pageSize))
-  // effectivePage clamps a stale page index after a catalog refresh.
-  // effectivePage 在目录刷新后约束过期页码。
   const effectivePage = Math.min(currentPage, pageCount)
   // pageRows is the sole slice whose interactive controls are mounted.
   // pageRows 是唯一挂载交互控件的模型切片。
   const pageRows = visibleModelRows.slice((effectivePage - 1) * pageSize, effectivePage * pageSize)
+  // selectedRows keeps only selections that are still visible after filtering.
+  // selectedRows 只保留筛选后仍可见的选择。
+  const selectedRows = visibleModelRows.filter((row) => selected.has(row.key))
+  const pageSelection = pageRows.filter((row) => selected.has(row.key)).length
   // blockedModelRoutes keeps backend diagnostics visible without admitting blocked routes to controls.
   // blockedModelRoutes 保持后端诊断可见，同时不把受阻路由放入可操作控件。
-  const blockedModelRoutes = React.useMemo(() => {
-    if (!snapshot || !selectedGroup) {
-      return []
-    }
-    return (snapshot.modelRouteRecords ?? []).filter((record) => (
-      record.providerId === selectedGroup.provider.id && !record.executable
-    ))
-  }, [selectedGroup, snapshot])
-  // inspectedRow reads current route metadata only while the selected provider still owns the window.
-  // inspectedRow 仅在当前供应商仍拥有窗口时读取最新路由元数据。
-  const inspectedRow = inspectingModel?.providerId === selectedGroup?.provider.id
-    ? providerModelRows.find((row) => row.modelId === inspectingModel?.modelId)
+  const blockedModelRoutes = React.useMemo(() => (snapshot.modelRouteRecords ?? []).filter((record) => (
+    props.providerIds.includes(record.providerId) && !record.executable
+    && (!props.accountScope || record.connectionId === props.accountScope.id)
+  )), [props.accountScope, props.providerIds, snapshot])
+  // inspectedRow reads current route metadata only while the listed providers still own the window.
+  // inspectedRow 仅在所列供应商仍拥有窗口时读取最新路由元数据。
+  const inspectedRow = inspectingModel
+    ? providerModelRows.find((row) => row.provider.id === inspectingModel.providerId && row.modelId === inspectingModel.modelId)
     : undefined
   React.useEffect(() => {
     if (inspectingModel && !inspectedRow) {
@@ -297,355 +274,374 @@ export function ModelListSettingsArea() {
       setEditingRoute(null)
     }
   }, [inspectedRow, inspectingModel])
-  // selectedProviderLabel supplies the shared collapsed-menu pill label.
-  // selectedProviderLabel 为共享收起菜单胶囊提供标签。
-  const selectedProviderLabel = selectedGroup
-    ? localizedProviderName(selectedGroup.provider.id, selectedGroup.provider.display_name, t)
-    : t("settings.models.noProviderSelected")
   // unavailableAdmissions retain a cleanup path even when every route of an admitted model disappears.
   // unavailableAdmissions 在已准入模型的全部路由消失后仍保留清理入口。
-  const unavailableAdmissions = snapshot?.multimodalUnderstandingCandidateModels?.filter((record) => (
-    !groupedProviders.some((group) => group.provider.id === record.providerId && group.models.has(record.modelId))
+  const unavailableAdmissions = snapshot.multimodalUnderstandingCandidateModels?.filter((record) => (
+    props.providerIds.includes(record.providerId)
+    && !groups.some((group) => group.provider.id === record.providerId && group.models.has(record.modelId))
   )) ?? []
+  const providerLabel = (provider: PublicAiProviderDescriptor) => localizedProviderName(provider.id, provider.display_name, t)
+  const run = mutations.run
+
+  const toggleRow = (key: string, checked: boolean) => setSelected((current) => {
+    const next = new Set(current)
+    if (checked) next.add(key)
+    else next.delete(key)
+    return next
+  })
+  const selectRows = (rows: readonly PublicProviderModelRow[], checked: boolean) => setSelected((current) => {
+    const next = new Set(current)
+    for (const row of rows) {
+      if (checked) next.add(row.key)
+      else next.delete(row.key)
+    }
+    return next
+  })
+
   return (
-    <WorkspaceDirectoryLayout contentClassName="model-list-layout model-list-surface" navigation={<WorkspaceDirectoryMenu ariaLabel={t("settings.models.provider")} heading={t("settings.models.provider")}>
-          {groupedProviders.map((group) => (
-            <button
-              className={`workspace-tool-panel-menu-row ${selectedGroup?.provider.id === group.provider.id ? "active" : ""}`}
-              key={group.provider.id}
-              onClick={() => setSelectedProviderId(group.provider.id)}
-              aria-current={selectedGroup?.provider.id === group.provider.id ? "page" : undefined}
-              type="button"
-            >
-              <ProviderIcon
-                category={group.provider.category}
-                className="size-5"
-                providerId={group.provider.id}
+    <section className="settings-model-list-pane model-services-catalog-pane" aria-label={t("settings.models.liveModels")}>
+      {unavailableAdmissions.length > 0 ? <section className="settings-model-unavailable-admissions" aria-label={t("settings.modelExperience.unavailableCandidates")}>
+        <strong>{t("settings.modelExperience.unavailableCandidates")}</strong>
+        {unavailableAdmissions.map((record) => <div className="settings-model-route-accounts" key={JSON.stringify([record.providerId, record.modelId])}>
+          <span>{record.providerId} · {record.modelId}</span>
+          <Button type="button" variant="outline" size="sm" disabled={pendingMutationKey !== null} onClick={() => void run(`multimodal-candidate/${record.providerId}/${record.modelId}`, () => savePublicAiMultimodalUnderstandingCandidate({ providerId: record.providerId, modelId: record.modelId, enabled: false }), { reconcile: true })}>{t("settings.modelExperience.disableCandidate")}</Button>
+        </div>)}
+      </section> : null}
+      {blockedModelRoutes.length > 0 ? (
+        <section aria-label={t("settings.models.blockedRouteDiagnostics")}>
+          <div className="settings-split-column-title">
+            {t("settings.models.blockedRouteDiagnostics")}
+          </div>
+          <div className="settings-model-row-list">
+            {blockedModelRoutes.map((record) => {
+              // blockedModel keeps the capability editor reachable while execution stays blocked.
+              // blockedModel 让能力编辑入口保持可达，同时继续阻止模型执行。
+              const blockedModel = snapshot.modelSupportCatalogs[record.connectionId]?.models.find(
+                (model) => model.id === record.modelId,
+              )
+              const blockedProvider = snapshot.providers.find((provider) => provider.id === record.providerId)
+              return (
+                <article
+                  className="settings-model-row"
+                  key={JSON.stringify([record.connectionId, record.modelId])}
+                >
+                  <div className="settings-model-row-main">
+                    <div className="settings-model-title-line">
+                      <strong>{record.modelId}</strong>
+                      <Badge variant="outline">{record.protocolId ?? "—"}</Badge>
+                    </div>
+                    {record.codexBehavior ? (
+                      <span className="settings-model-route-binding">
+                        {t("settings.models.codexBehavior")}: {codexBehaviorSummary(record.codexBehavior)}
+                      </span>
+                    ) : null}
+                    {record.requiredRuntimePrimitive ? (
+                      <span className="settings-model-route-binding">
+                        {t("settings.models.requiredRuntimePrimitive")}: {record.requiredRuntimePrimitive}
+                      </span>
+                    ) : null}
+                    <span className="settings-validation-error">
+                      {t("settings.models.routeUnavailableReason")}: {record.unavailableReason ?? t("settings.models.routeUnresolved")}
+                    </span>
+                    {blockedProvider?.kind === "custom" && blockedModel ? <Button
+                      aria-label={`${t("settings.modelCapabilities.title")} ${record.modelId}`}
+                      disabled={pendingMutationKey !== null}
+                      onClick={() => setEditingCapability({ provider: blockedProvider, model: blockedModel })}
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >{t("settings.modelCapabilities.shortLabel")}</Button> : null}
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        </section>
+      ) : null}
+      <div className="settings-model-row-list">
+        <div className="settings-model-sticky-controls">
+          <div className="settings-model-toolbar">
+            <div className="settings-model-search">
+              <Search aria-hidden="true" size={15} />
+              <Input
+                aria-label={t("settings.models.searchLabel")}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder={t("settings.models.searchPlaceholder")}
+                value={searchQuery}
               />
-              <span className="settings-directory-label" title={localizedProviderName(group.provider.id, group.provider.display_name, t)}>{localizedProviderName(group.provider.id, group.provider.display_name, t)}</span>
-              <small>{group.models.size}</small>
-            </button>
-          ))}
-          {/* Provider groups stream in with the live model catalog. / 供应商分组随实时模型目录流式载入。 */}
-          {!snapshot && !error ? <StreamPlaceholder decorative shape="rows" count={6} /> : null}
-        </WorkspaceDirectoryMenu>}>
-        {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
-        {!snapshot && error ? <Button onClick={() => setLoadAttempt((value) => value + 1)} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : !snapshot ? (
-          <StreamPlaceholder className="rounded-xl border p-1.5" fill label={t("settings.models.loadingCatalog")} shape="rows" />
-        ) : (
-          <section className="settings-model-list-pane" aria-label={t("settings.models.liveModels")}>
-            <div className="settings-model-pane-header">
-              <div>
-                <div className="settings-split-column-title">{t("settings.models.liveModels")}</div>
-                <small>
-                  {t("settings.models.catalogSummary")
-                    .replace("{provider}", selectedProviderLabel)
-                    .replace("{count}", String(providerModelRows.length))}
-                </small>
-              </div>
-              <span className="settings-muted-line">{t("settings.models.memoryOnly")}</span>
             </div>
-            {unavailableAdmissions.length > 0 ? <section className="settings-model-unavailable-admissions" aria-label={t("settings.modelExperience.unavailableCandidates")}>
-              <strong>{t("settings.modelExperience.unavailableCandidates")}</strong>
-              {unavailableAdmissions.map((record) => <div className="settings-model-route-accounts" key={JSON.stringify([record.providerId, record.modelId])}>
-                <span>{record.providerId} · {record.modelId}</span>
-                <Button type="button" variant="outline" size="sm" disabled={pendingMutationKey !== null} onClick={() => runSnapshotMutation(`multimodal-candidate/${record.providerId}/${record.modelId}`, () => savePublicAiMultimodalUnderstandingCandidate({ providerId: record.providerId, modelId: record.modelId, enabled: false }))}>{t("settings.modelExperience.disableCandidate")}</Button>
-              </div>)}
-            </section> : null}
-            {blockedModelRoutes.length > 0 ? (
-              <section aria-label={t("settings.models.blockedRouteDiagnostics")}>
-                <div className="settings-split-column-title">
-                  {t("settings.models.blockedRouteDiagnostics")}
+            <Select value={usageFilter} onValueChange={setUsageFilter}>
+              <SelectTrigger aria-label={t("settings.modelExperience.usageFilter")}><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t("settings.modelExperience.allUsages")}</SelectItem>
+                <SelectItem value="conversation">{t("settings.modelExperience.conversationEnabled")}</SelectItem>
+                {props.accountScope ? <SelectItem value="account">{t("settings.modelServices.catalog.accountEnabled")}</SelectItem> : null}
+                <SelectItem value="internal">{t("settings.modelExperience.internalEnabled")}</SelectItem>
+                <SelectItem value="multimodal">{t("settings.modelExperience.multimodalEnabled")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={capabilityFilter} onValueChange={setCapabilityFilter}>
+              <SelectTrigger aria-label={t("settings.modelExperience.capabilityFilter")}><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t("settings.modelExperience.allCapabilities")}</SelectItem>
+                {(["text", "image", "video", "audio", "file", "embedding", "rerank"] as const).map((modality) => <SelectItem key={modality} value={modality}>{modelModalityLabel(modality, t)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          {selectedRows.length > 0 ? (
+            <ModelCatalogBulkBar
+              accountScope={props.accountScope}
+              accountSupported={accountSupported}
+              mutations={mutations}
+              onClear={() => setSelected(new Set())}
+              onSelectFiltered={() => selectRows(visibleModelRows, true)}
+              selectedRows={selectedRows}
+              snapshot={snapshot}
+              visibleCount={visibleModelRows.length}
+            />
+          ) : (
+            <div className="settings-model-filter-summary model-services-catalog-status">
+              {t("settings.models.filteredSummary")
+                .replace("{visible}", String(visibleModelRows.length))
+                .replace("{total}", String(providerModelRows.length))}
+            </div>
+          )}
+        </div>
+        <div className="settings-model-catalog model-services-catalog" data-account-scope={props.accountScope ? "true" : "false"}>
+          {visibleModelRows.length > 0 ? <div className="settings-model-catalog-heading">
+            <span className="model-services-select-cell">
+              <Checkbox
+                aria-label={t("settings.modelServices.bulk.selectPage")}
+                checked={pageSelection === 0 ? false : pageSelection === pageRows.length ? true : "indeterminate"}
+                onCheckedChange={(checked) => selectRows(pageRows, checked === true)}
+              />
+            </span>
+            <span aria-hidden="true">{t("settings.modelExperience.modelColumn")}</span>
+            <span aria-hidden="true">{t("settings.models.conversationUse")}</span>
+            {props.accountScope ? <span aria-hidden="true">{t("settings.modelServices.catalog.accountColumn")}</span> : null}
+            <span aria-hidden="true">{t("settings.modelExperience.understandingUse")}</span>
+            <span aria-hidden="true">{t("settings.models.internalUse")}</span>
+            <span />
+          </div> : null}
+          {providerModelRows.length === 0 ? (
+            <p className="settings-muted-line">{t("settings.models.emptyCatalog")}</p>
+          ) : visibleModelRows.length === 0 ? (
+            <p className="settings-muted-line">{t("settings.models.emptyFilter")}</p>
+          ) : pageRows.map((row) => {
+            const { modelId, enabled, displayName, inventory, provider } = row
+            // representative supplies editable normalized capability facts when a catalog model exists.
+            // representative 在目录模型存在时提供可编辑的归一化能力事实。
+            const representative = inventory.catalogModels[0]
+            const modelKey = row.key
+            const conversationEligible = rowConversationEligible(row)
+            const internalState = internalStateForModel(snapshot, provider.id, modelId)
+            // multimodalCandidateEligible is backend-resolved across all executable account routes.
+            // multimodalCandidateEligible 由后端跨全部可执行账号路由解析。
+            const multimodalCandidateEligible = snapshot.mediaUnderstandingModelCandidates?.some(
+              (candidate) => (
+                candidate.selection.provider_id === provider.id
+                && candidate.selection.model_id === modelId
+              ),
+            ) ?? false
+            // multimodalCandidateEnabled is one shared provider-model switch, independent from conversation use.
+            // multimodalCandidateEnabled 是与会话使用相互独立的共享供应商模型开关。
+            const multimodalCandidateEnabled = snapshot.multimodalUnderstandingCandidateModels?.some(
+              (record) => (
+                record.providerId === provider.id
+                && record.modelId === modelId
+              ),
+            ) ?? false
+            const accountScope = props.accountScope
+            const accountChecked = accountEnabled?.has(modelId) === true
+            return (
+              <article className="settings-model-catalog-row" data-selected={selected.has(modelKey) ? "true" : undefined} key={modelKey}>
+                <span className="model-services-select-cell">
+                  <Checkbox
+                    aria-label={t("settings.modelServices.bulk.selectModel").replace("{model}", displayName)}
+                    checked={selected.has(modelKey)}
+                    onCheckedChange={(checked) => toggleRow(modelKey, checked === true)}
+                  />
+                </span>
+                <div className="settings-model-row-main">
+                  <div className="settings-model-title-line">
+                    <strong title={displayName}>{displayName}</strong>
+                  </div>
+                  {/* Keep identity and capability metadata together on the second line.
+                      将模型标识和能力摘要放在同一条第二行内。 */}
+                  <div className="settings-model-catalog-meta">
+                    {props.showProvider ? (
+                      <span className="model-services-row-provider">
+                        <ProviderIcon category={provider.category} className="size-3.5" providerId={provider.id} />
+                        {providerLabel(provider)}
+                      </span>
+                    ) : null}
+                    <span className="settings-model-id" title={modelId}>{modelId}</span>
+                    <ProviderModelModalitySummary model={representative} additionalModels={inventory.catalogModels.slice(1)} extensionCapabilities={inventory.extensionCapabilities} />
+                    <span>
+                      {t("settings.models.availableCredentials")
+                        .replace("{count}", String(inventory.availableAccountCount))}
+                    </span>
+                  </div>
                 </div>
-                <div className="settings-model-row-list">
-                  {blockedModelRoutes.map((record) => {
-                    // blockedModel keeps the capability editor reachable while execution stays blocked.
-                    // blockedModel 让能力编辑入口保持可达，同时继续阻止模型执行。
-                    const blockedModel = snapshot.modelSupportCatalogs[record.connectionId]?.models.find(
-                      (model) => model.id === record.modelId,
-                    )
-                    return (
-                      <article
-                        className="settings-model-row"
-                        key={JSON.stringify([record.connectionId, record.modelId])}
-                      >
-                        <div className="settings-model-row-main">
-                          <div className="settings-model-title-line">
-                            <strong>{record.modelId}</strong>
-                            <Badge variant="outline">{record.protocolId ?? "—"}</Badge>
-                          </div>
-                          {record.codexBehavior ? (
-                            <span className="settings-model-route-binding">
-                              {t("settings.models.codexBehavior")}: {codexBehaviorSummary(record.codexBehavior)}
-                            </span>
-                          ) : null}
-                          {record.requiredRuntimePrimitive ? (
-                            <span className="settings-model-route-binding">
-                              {t("settings.models.requiredRuntimePrimitive")}: {record.requiredRuntimePrimitive}
-                            </span>
-                          ) : null}
-                          <span className="settings-validation-error">
-                            {t("settings.models.routeUnavailableReason")}: {record.unavailableReason ?? t("settings.models.routeUnresolved")}
-                          </span>
-                          {selectedGroup?.provider.kind === "custom" && blockedModel ? <Button
-                            aria-label={`${t("settings.modelCapabilities.title")} ${record.modelId}`}
-                            disabled={pendingMutationKey !== null}
-                            onClick={() => setEditingCapabilityModel(blockedModel)}
-                            size="sm"
-                            type="button"
-                            variant="outline"
-                          >{t("settings.modelCapabilities.shortLabel")}</Button> : null}
-                        </div>
-                      </article>
-                    )
-                  })}
+                <div className="settings-model-purpose-cell">
+                  <span className="settings-model-purpose-label">{t("settings.models.conversationUse")}</span>
+                  {conversationEligible ? (
+                    <Switch
+                      aria-label={`${t("settings.models.conversationUse")} ${displayName}`}
+                      checked={enabled}
+                      disabled={pendingMutationKey !== null}
+                      onCheckedChange={(checked) => {
+                        void run(`conversation/${modelKey}`, () => (
+                          savePublicAiModelEnabled({
+                            providerId: provider.id,
+                            modelId,
+                            enabled: checked,
+                          })
+                        ), { reconcile: true })
+                      }}
+                    />
+                  ) : <span title={t("settings.modelExperience.noConversation")} aria-label={t("settings.modelExperience.noConversation")}>—</span>}
                 </div>
-              </section>
-            ) : null}
-            <div className="settings-model-row-list">
-              <div className="settings-model-sticky-controls">
-                <div className="settings-model-toolbar">
-                  <div className="settings-model-search">
-                    <Search aria-hidden="true" size={15} />
-                    <Input
-                      aria-label={t("settings.models.searchLabel")}
-                      onChange={(event) => setSearchQuery(event.target.value)}
-                      placeholder={t("settings.models.searchPlaceholder")}
-                      value={searchQuery}
+                {accountScope ? (
+                  <div className="settings-model-purpose-cell">
+                    <span className="settings-model-purpose-label">{t("settings.modelServices.catalog.accountColumn")}</span>
+                    <Switch
+                      aria-label={`${t("settings.modelServices.catalog.accountColumn")} ${displayName}`}
+                      checked={accountChecked}
+                      disabled={pendingMutationKey !== null || (!accountChecked && conversationEligible && !enabled)}
+                      onCheckedChange={(checked) => {
+                        void run(`account/${accountScope.id}/${modelId}`, () => (
+                          savePublicAiConnectionModelEnabled({ connectionId: accountScope.id, modelId, enabled: checked })
+                        ), { reconcile: true })
+                      }}
                     />
                   </div>
-                  <Select value={usageFilter} onValueChange={setUsageFilter}>
-                    <SelectTrigger aria-label={t("settings.modelExperience.usageFilter")}><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">{t("settings.modelExperience.allUsages")}</SelectItem>
-                      <SelectItem value="conversation">{t("settings.modelExperience.conversationEnabled")}</SelectItem>
-                      <SelectItem value="internal">{t("settings.modelExperience.internalEnabled")}</SelectItem>
-                      <SelectItem value="multimodal">{t("settings.modelExperience.multimodalEnabled")}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={capabilityFilter} onValueChange={setCapabilityFilter}>
-                    <SelectTrigger aria-label={t("settings.modelExperience.capabilityFilter")}><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">{t("settings.modelExperience.allCapabilities")}</SelectItem>
-                      {(["text", "image", "video", "audio", "file", "embedding", "rerank"] as const).map((modality) => <SelectItem key={modality} value={modality}>{modelModalityLabel(modality, t)}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="settings-model-filter-summary">
-                  {t("settings.models.filteredSummary")
-                    .replace("{visible}", String(visibleModelRows.length))
-                    .replace("{total}", String(providerModelRows.length))}
-                </div>
-              </div>
-              <div className="settings-model-catalog">
-              {visibleModelRows.length > 0 ? <div className="settings-model-catalog-heading" aria-hidden="true">
-                <span>{t("settings.modelExperience.modelColumn")}</span>
-                <span>{t("settings.models.conversationUse")}</span>
-                <span>{t("settings.modelExperience.understandingUse")}</span>
-                <span>{t("settings.models.internalUse")}</span>
-                <span />
-              </div> : null}
-              {!selectedGroup || providerModelRows.length === 0 ? (
-                <p className="settings-muted-line">{t("settings.models.emptyCatalog")}</p>
-              ) : visibleModelRows.length === 0 ? (
-                <p className="settings-muted-line">{t("settings.models.emptyFilter")}</p>
-              ) : pageRows.map(({ modelId, routes, enabled, displayName, inventory }) => {
-                // representative supplies editable normalized capability facts when a catalog model exists.
-                // representative 在目录模型存在时提供可编辑的归一化能力事实。
-                const representative = inventory.catalogModels[0]
-                // availableAccountCount has already deduplicated catalog and extension accounts.
-                // availableAccountCount 已经对目录与扩展账号去重。
-                const availableAccountCount = inventory.availableAccountCount
-                const modelKey = `${selectedGroup.provider.id}/${modelId}`
-                // conversationEligible follows declared operations, independently from its access preference.
-                // conversationEligible 遵循声明操作，与访问偏好相互独立。
-                const conversationEligible = routes.some((route) => route.model.capabilities.operations?.includes("conversation_respond"))
-                const internalState = internalStateForModel(
-                  snapshot,
-                  selectedGroup.provider.id,
-                  modelId,
-                )
-                // multimodalCandidateEligible is backend-resolved across all executable account routes.
-                // multimodalCandidateEligible 由后端跨全部可执行账号路由解析。
-                const multimodalCandidateEligible = snapshot.mediaUnderstandingModelCandidates?.some(
-                  (candidate) => (
-                    candidate.selection.provider_id === selectedGroup.provider.id
-                    && candidate.selection.model_id === modelId
-                  ),
-                ) ?? false
-                // multimodalCandidateEnabled is one shared provider-model switch, independent from conversation use.
-                // multimodalCandidateEnabled 是与会话使用相互独立的共享供应商模型开关。
-                const multimodalCandidateEnabled = snapshot.multimodalUnderstandingCandidateModels?.some(
-                  (record) => (
-                    record.providerId === selectedGroup.provider.id
-                    && record.modelId === modelId
-                  ),
-                ) ?? false
-                return (
-                  <article className="settings-model-catalog-row" key={`${selectedGroup.provider.id}/${modelId}`}>
-                    <div className="settings-model-row-main">
-                      <div className="settings-model-title-line">
-                        <strong title={displayName}>{displayName}</strong>
-                      </div>
-                      {/* Keep identity and capability metadata together on the second line.
-                          将模型标识和能力摘要放在同一条第二行内。 */}
-                      <div className="settings-model-catalog-meta">
-                        <span className="settings-model-id" title={modelId}>{modelId}</span>
-                        <ProviderModelModalitySummary model={representative} additionalModels={inventory.catalogModels.slice(1)} extensionCapabilities={inventory.extensionCapabilities} />
-                        <span>
-                          {t("settings.models.availableCredentials")
-                            .replace("{count}", String(availableAccountCount))}
-                        </span>
-                      </div>
-                    </div>
-                      <div className="settings-model-purpose-cell">
-                      <span className="settings-model-purpose-label">{t("settings.models.conversationUse")}</span>
-                      {conversationEligible ? (
-                        <Switch
-                          aria-label={`${t("settings.models.conversationUse")} ${displayName}`}
-                          checked={enabled}
-                          disabled={pendingMutationKey !== null}
-                          onCheckedChange={(checked) => {
-                            runSnapshotMutation(`conversation/${modelKey}`, () => (
-                              savePublicAiModelEnabled({
-                                providerId: selectedGroup.provider.id,
-                                modelId,
-                                enabled: checked,
-                              })
-                            ))
-                          }}
-                        />
-                      ) : <span title={t("settings.modelExperience.noConversation")} aria-label={t("settings.modelExperience.noConversation")}>—</span>}
-                      </div>
-                      <div className="settings-model-purpose-cell">
-                      <span className="settings-model-purpose-label">{t("settings.modelExperience.understandingUse")}</span>
-                      {/* Tooltip disclosure state belongs to its wrapper, preserving the switch's checked state.
-                          提示层的展开状态由外层元素承担，保留开关自身的选中状态。 */}
-                      {multimodalCandidateEligible || multimodalCandidateEnabled ? (
-                        <Tooltip><TooltipTrigger asChild><span className="inline-flex">
-                          <Switch
-                            aria-label={`${t("settings.models.multimodalUnderstandingCandidate")} ${displayName}`}
-                            aria-description={t("settings.modelExperience.candidateExplanation")}
-                            checked={multimodalCandidateEnabled}
-                            disabled={multimodalCandidateToggleDisabled(
-                              pendingMutationKey !== null,
-                              multimodalCandidateEligible,
-                              multimodalCandidateEnabled,
-                            )}
-                            onCheckedChange={(checked) => {
-                              runSnapshotMutation(`multimodal-candidate/${modelKey}`, () => (
-                                savePublicAiMultimodalUnderstandingCandidate({
-                                  providerId: selectedGroup.provider.id,
-                                  modelId,
-                                  enabled: checked,
-                                })
-                              ))
-                            }}
-                          />
-                        </span></TooltipTrigger><TooltipContent>{t("settings.modelExperience.candidateExplanation")}</TooltipContent></Tooltip>
-                      ) : <span>—</span>}
-                      </div>
-                      <div className="settings-model-purpose-cell settings-model-extension-cell">
-                      <span className="settings-model-purpose-label">{t("settings.models.internalUse")}</span>
-                      {internalState ? (
-                        <Tooltip><TooltipTrigger asChild><span className="inline-flex">
-                          <Switch
-                            aria-label={`${t("settings.models.internalUse")} ${displayName}`}
-                            aria-description={internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter"))}
-                            checked={internalState.enabled}
-                            disabled={pendingMutationKey !== null}
-                            onCheckedChange={(checked) => {
-                              runSnapshotMutation(`internal/${modelKey}`, () => (
-                                savePublicAiInternalModelEnabled({
-                                  providerId: selectedGroup.provider.id,
-                                  modelId,
-                                  enabled: checked,
-                                })
-                              ))
-                            }}
-                          />
-                        </span></TooltipTrigger><TooltipContent>{t("settings.modelExperience.internalPurposes").replace("{purposes}", internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter")))}</TooltipContent></Tooltip>
-                      ) : null}
-                      {inventory.extensionCapabilities.filter(isModelExtensionCapability).map((capability) => {
-                        // Matching exact targets preserves the extension's persisted account choice.
-                        // 匹配精确目标以保留扩展已持久化的账号选择。
-                        const targets = extensionModelTargets(snapshot, selectedGroup.provider.id, modelId, capability)
-                        // selections contains the complete saved model set for this extension capability.
-                        // selections 包含此扩展能力已保存的完整模型集合。
-                        const selections = snapshot.providerExtensionTargetSets[capability] ?? []
-                        // selected identifies this model's exact account selection, if present.
-                        // selected 标识此模型已选中的精确账号，如有。
-                        const selected = selections.find((selection) => targets.some((target) => (
-                          target.connectionId === selection.connection_id && target.target.target_id === selection.target_id
-                        )))
-                        // available is a signed target with the reviewed extension profile required by the backend.
-                        // available 是包含后端所需审核扩展资料的签名目标。
-                        const available = targets.find((target) => target.target.contract.extension_profile !== undefined)
-                        // label names this operation independently from its output resource.
-                        // label 独立于输出资源命名此项操作。
-                        const label = extensionCapabilityLabel(capability, t)
-                        return <Tooltip key={capability}><TooltipTrigger asChild><span className="settings-model-extension-toggle">
-                          <Switch
-                            aria-label={`${label} ${displayName}`}
-                            checked={selected !== undefined}
-                            disabled={pendingMutationKey !== null || (!available && !selected)}
-                            onCheckedChange={(checked) => {
-                              // retained preserves every other model in the capability's complete target set.
-                              // retained 保留此能力完整目标集合中的所有其他模型。
-                              const retained = selections.filter((selection) => !targets.some((target) => (
-                                target.connectionId === selection.connection_id && target.target.target_id === selection.target_id
-                              )))
-                              if (checked && available) retained.push({ connection_id: available.connectionId, target_id: available.target.target_id })
-                              runSnapshotMutation(`extension/${capability}/${modelKey}`, async () => {
-                                // next reflects the persisted selection before global capability admission.
-                                // next 反映全局能力准入前已经持久化的模型选择。
-                                const next = await savePublicAiProviderExtensionTargetSet({ capability, selections: retained })
-                                if (checked && !next.providerToolEnabledCapabilities.includes(capability)) {
-                                  return savePublicAiProviderToolCapabilityEnabled({ capability, enabled: true })
-                                }
-                                return next
-                              })
-                            }}
-                          />
-                          <small>{label}</small>
-                        </span></TooltipTrigger><TooltipContent>{label}</TooltipContent></Tooltip>
-                      })}
-                      {!internalState && !inventory.extensionCapabilities.some(isModelExtensionCapability) ? <span>—</span> : null}
-                      </div>
-                    <div className="settings-model-catalog-actions">
-                      {selectedGroup?.provider.kind === "custom" && representative ? <Button
-                        aria-label={`${t("settings.modelCapabilities.title")} ${displayName}`}
-                        disabled={pendingMutationKey !== null}
-                        onClick={() => setEditingCapabilityModel(representative)}
-                        size="sm"
-                        type="button"
-                        variant="ghost"
-                      >
-                        {t("settings.modelCapabilities.shortLabel")}
-                      </Button> : null}
-                      <Button
-                        aria-label={`${t("settings.modelExperience.accessButton")} ${displayName}`}
-                        onClick={(event) => {
-                          accessTrigger.current = event.currentTarget
-                          setInspectingModel({ providerId: selectedGroup.provider.id, modelId })
+                ) : null}
+                <div className="settings-model-purpose-cell">
+                  <span className="settings-model-purpose-label">{t("settings.modelExperience.understandingUse")}</span>
+                  {/* Tooltip disclosure state belongs to its wrapper, preserving the switch's checked state.
+                      提示层的展开状态由外层元素承担，保留开关自身的选中状态。 */}
+                  {multimodalCandidateEligible || multimodalCandidateEnabled ? (
+                    <Tooltip><TooltipTrigger asChild><span className="inline-flex">
+                      <Switch
+                        aria-label={`${t("settings.models.multimodalUnderstandingCandidate")} ${displayName}`}
+                        aria-description={t("settings.modelExperience.candidateExplanation")}
+                        checked={multimodalCandidateEnabled}
+                        disabled={multimodalCandidateToggleDisabled(
+                          pendingMutationKey !== null,
+                          multimodalCandidateEligible,
+                          multimodalCandidateEnabled,
+                        )}
+                        onCheckedChange={(checked) => {
+                          void run(`multimodal-candidate/${modelKey}`, () => (
+                            savePublicAiMultimodalUnderstandingCandidate({
+                              providerId: provider.id,
+                              modelId,
+                              enabled: checked,
+                            })
+                          ), { reconcile: true })
                         }}
-                        size="sm"
-                        type="button"
-                        variant="ghost"
-                      >{t("settings.modelExperience.accessButton")}</Button>
-                    </div>
-                  </article>
-                )
-              })}
-              </div>
-              {pageCount > 1 ? <div className="settings-pagination settings-model-pagination">
-                <Button disabled={effectivePage <= 1} onClick={() => setCurrentPage(effectivePage - 1)} size="sm" type="button" variant="outline">{t("settings.modelExperience.previousPage")}</Button>
-                <span>{t("settings.modelExperience.pageStatus").replace("{page}", String(effectivePage)).replace("{count}", String(pageCount))}</span>
-                <Button disabled={effectivePage >= pageCount} onClick={() => setCurrentPage(effectivePage + 1)} size="sm" type="button" variant="outline">{t("settings.modelExperience.nextPage")}</Button>
-              </div> : null}
-            </div>
-          </section>
-        )}
+                      />
+                    </span></TooltipTrigger><TooltipContent>{t("settings.modelExperience.candidateExplanation")}</TooltipContent></Tooltip>
+                  ) : <span>—</span>}
+                </div>
+                <div className="settings-model-purpose-cell settings-model-extension-cell">
+                  <span className="settings-model-purpose-label">{t("settings.models.internalUse")}</span>
+                  {internalState ? (
+                    <Tooltip><TooltipTrigger asChild><span className="inline-flex">
+                      <Switch
+                        aria-label={`${t("settings.models.internalUse")} ${displayName}`}
+                        aria-description={internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter"))}
+                        checked={internalState.enabled}
+                        disabled={pendingMutationKey !== null}
+                        onCheckedChange={(checked) => {
+                          void run(`internal/${modelKey}`, () => (
+                            savePublicAiInternalModelEnabled({
+                              providerId: provider.id,
+                              modelId,
+                              enabled: checked,
+                            })
+                          ), { reconcile: true })
+                        }}
+                      />
+                    </span></TooltipTrigger><TooltipContent>{t("settings.modelExperience.internalPurposes").replace("{purposes}", internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter")))}</TooltipContent></Tooltip>
+                  ) : null}
+                  {inventory.extensionCapabilities.filter(isModelExtensionCapability).map((capability) => {
+                    // Matching exact targets preserves the extension's persisted account choice.
+                    // 匹配精确目标以保留扩展已持久化的账号选择。
+                    const targets = extensionModelTargets(snapshot, provider.id, modelId, capability)
+                    // selections contains the complete saved model set for this extension capability.
+                    // selections 包含此扩展能力已保存的完整模型集合。
+                    const selections = snapshot.providerExtensionTargetSets[capability] ?? []
+                    // selectedTarget identifies this model's exact account selection, if present.
+                    // selectedTarget 标识此模型已选中的精确账号，如有。
+                    const selectedTarget = selections.find((selection) => targets.some((target) => (
+                      target.connectionId === selection.connection_id && target.target.target_id === selection.target_id
+                    )))
+                    // available is a signed target with the reviewed extension profile required by the backend.
+                    // available 是包含后端所需审核扩展资料的签名目标。
+                    const available = targets.find((target) => target.target.contract.extension_profile !== undefined)
+                    const label = extensionCapabilityLabel(capability, t)
+                    return <Tooltip key={capability}><TooltipTrigger asChild><span className="settings-model-extension-toggle">
+                      <Switch
+                        aria-label={`${label} ${displayName}`}
+                        checked={selectedTarget !== undefined}
+                        disabled={pendingMutationKey !== null || (!available && !selectedTarget)}
+                        onCheckedChange={(checked) => {
+                          // retained preserves every other model in the capability's complete target set.
+                          // retained 保留此能力完整目标集合中的所有其他模型。
+                          const retained = selections.filter((selection) => !targets.some((target) => (
+                            target.connectionId === selection.connection_id && target.target.target_id === selection.target_id
+                          )))
+                          if (checked && available) retained.push({ connection_id: available.connectionId, target_id: available.target.target_id })
+                          void run(`extension/${capability}/${modelKey}`, async () => {
+                            // next reflects the persisted selection before global capability admission.
+                            // next 反映全局能力准入前已经持久化的模型选择。
+                            const next = await savePublicAiProviderExtensionTargetSet({ capability, selections: retained })
+                            if (checked && !next.providerToolEnabledCapabilities.includes(capability)) {
+                              return savePublicAiProviderToolCapabilityEnabled({ capability, enabled: true })
+                            }
+                            return next
+                          }, { reconcile: true })
+                        }}
+                      />
+                      <small>{label}</small>
+                    </span></TooltipTrigger><TooltipContent>{label}</TooltipContent></Tooltip>
+                  })}
+                  {!internalState && !inventory.extensionCapabilities.some(isModelExtensionCapability) ? <span>—</span> : null}
+                </div>
+                <div className="settings-model-catalog-actions">
+                  {provider.kind === "custom" && representative ? <Button
+                    aria-label={`${t("settings.modelCapabilities.title")} ${displayName}`}
+                    disabled={pendingMutationKey !== null}
+                    onClick={() => setEditingCapability({ provider, model: representative })}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >
+                    {t("settings.modelCapabilities.shortLabel")}
+                  </Button> : null}
+                  <Button
+                    aria-label={`${t("settings.modelExperience.accessButton")} ${displayName}`}
+                    onClick={(event) => {
+                      accessTrigger.current = event.currentTarget
+                      setInspectingModel({ providerId: provider.id, modelId })
+                    }}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >{t("settings.modelExperience.accessButton")}</Button>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+        {pageCount > 1 ? <div className="settings-pagination settings-model-pagination">
+          <Button disabled={effectivePage <= 1} onClick={() => setCurrentPage(effectivePage - 1)} size="sm" type="button" variant="outline">{t("settings.modelExperience.previousPage")}</Button>
+          <span>{t("settings.modelExperience.pageStatus").replace("{page}", String(effectivePage)).replace("{count}", String(pageCount))}</span>
+          <Button disabled={effectivePage >= pageCount} onClick={() => setCurrentPage(effectivePage + 1)} size="sm" type="button" variant="outline">{t("settings.modelExperience.nextPage")}</Button>
+        </div> : null}
+      </div>
       <Dialog open={inspectedRow !== undefined} onOpenChange={(open) => {
         if (!open) {
           setInspectingModel(null)
@@ -676,7 +672,7 @@ export function ModelListSettingsArea() {
                   disabled={pendingMutationKey !== null}
                   onClick={(event) => {
                     routeConditionsTrigger.current = event.currentTarget
-                    setEditingRoute(route)
+                    setEditingRoute({ providerId: inspectedRow.provider.id, route })
                   }}
                   size="sm"
                   type="button"
@@ -699,7 +695,7 @@ export function ModelListSettingsArea() {
             </section>)}
           </div>
           <PublicAiModelOverridesDialog
-            model={editingRoute?.model ?? null}
+            model={editingRoute?.route.model ?? null}
             onCloseAutoFocus={(event) => {
               if (routeConditionsTrigger.current?.isConnected) {
                 event.preventDefault()
@@ -712,45 +708,127 @@ export function ModelListSettingsArea() {
               }
             }}
             onSaved={(next) => {
-              setSnapshot(next)
+              props.onSnapshot(next)
               setEditingRoute(null)
             }}
             open={editingRoute !== null}
-            overrides={snapshot?.modelOverrideRecords.find((record) => (
-              record.providerId === selectedGroup?.provider.id
-              && record.modelId === editingRoute?.model.id
-              && record.protocolId === editingRoute?.protocolId
+            overrides={snapshot.modelOverrideRecords.find((record) => (
+              record.providerId === editingRoute?.providerId
+              && record.modelId === editingRoute?.route.model.id
+              && record.protocolId === editingRoute?.route.protocolId
             ))?.overrides}
-            protocolId={editingRoute?.protocolId ?? null}
-            providerDisplayName={selectedGroup
-              ? localizedProviderName(selectedGroup.provider.id, selectedGroup.provider.display_name, t)
-              : null}
-            providerId={selectedGroup?.provider.id ?? null}
+            protocolId={editingRoute?.route.protocolId ?? null}
+            providerDisplayName={inspectedRow ? providerLabel(inspectedRow.provider) : null}
+            providerId={editingRoute?.providerId ?? null}
           />
         </DialogContent>
       </Dialog>
-      {selectedGroup?.provider.kind === "custom" ? <PublicAiModelCapabilityDialog
-        model={editingCapabilityModel}
+      <PublicAiModelCapabilityDialog
+        model={editingCapability?.model ?? null}
         onOpenChange={(open) => {
           if (!open) {
-            setEditingCapabilityModel(null)
+            setEditingCapability(null)
           }
         }}
         onSaved={(next) => {
-          setSnapshot(next)
-          setEditingCapabilityModel(null)
+          props.onSnapshot(next)
+          setEditingCapability(null)
         }}
-        open={editingCapabilityModel !== null}
-        overrides={snapshot?.modelCapabilityOverrideRecords?.find((record) => (
-          record.providerId === selectedGroup?.provider.id
-          && record.modelId === editingCapabilityModel?.id
+        open={editingCapability !== null}
+        overrides={snapshot.modelCapabilityOverrideRecords?.find((record) => (
+          record.providerId === editingCapability?.provider.id
+          && record.modelId === editingCapability?.model.id
         ))?.overrides}
-        providerDisplayName={selectedGroup
-          ? localizedProviderName(selectedGroup.provider.id, selectedGroup.provider.display_name, t)
-          : null}
-        providerId={selectedGroup?.provider.id ?? null}
-      /> : null}
-    </WorkspaceDirectoryLayout>
+        providerDisplayName={editingCapability ? providerLabel(editingCapability.provider) : null}
+        providerId={editingCapability?.provider.id ?? null}
+      />
+    </section>
+  )
+}
+
+// ModelCatalogBulkBarProps carries the selection and the scope a bulk action writes to.
+// ModelCatalogBulkBarProps 承载批量操作写入的选择与范围。
+interface ModelCatalogBulkBarProps {
+  snapshot: PublicAiSettingsSnapshot
+  selectedRows: PublicProviderModelRow[]
+  visibleCount: number
+  accountScope: PublicAiConnection | null
+  accountSupported: ReadonlySet<string> | null
+  mutations: SnapshotMutations
+  onSelectFiltered: () => void
+  onClear: () => void
+}
+
+// ModelCatalogBulkBar applies one change to every eligible selected model and reports the skipped ones.
+// ModelCatalogBulkBar 将一项变更应用到每个符合条件的选中模型，并报告跳过的数量。
+function ModelCatalogBulkBar(props: ModelCatalogBulkBarProps) {
+  const { t } = useI18n()
+  const { snapshot, selectedRows, mutations } = props
+  // notice reports models a bulk action skipped because they lack the capability.
+  // notice 报告批量操作因模型不支持而跳过的数量。
+  const [notice, setNotice] = React.useState<string | null>(null)
+  const busy = mutations.pendingKey !== null
+  const runBulk = (
+    key: string,
+    eligible: (row: PublicProviderModelRow) => boolean,
+    write: (rows: PublicProviderModelRow[]) => Promise<PublicAiSettingsSnapshot | void>,
+  ) => {
+    const rows = selectedRows.filter(eligible)
+    const skipped = selectedRows.length - rows.length
+    setNotice(skipped > 0 ? t("settings.modelServices.bulk.skipped").replace("{count}", String(skipped)) : null)
+    if (rows.length === 0) return
+    void mutations.run(key, () => write(rows), { reconcile: true })
+  }
+  // Session availability and internal use are saved per provider, one call each.
+  // 会话可用性与内部使用按供应商保存，每个供应商一次调用。
+  const bulkConversation = (enabled: boolean) => runBulk(`bulk/conversation/${enabled}`, rowConversationEligible, async (rows) => {
+    let next: PublicAiSettingsSnapshot | undefined
+    for (const group of groupByProvider(rows)) next = await savePublicAiModelSetEnabled({ ...group, enabled })
+    return next
+  })
+  const bulkInternal = (enabled: boolean) => runBulk(
+    `bulk/internal/${enabled}`,
+    (row) => internalStateForModel(snapshot, row.provider.id, row.modelId) !== null,
+    async (rows) => {
+      let next: PublicAiSettingsSnapshot | undefined
+      for (const group of groupByProvider(rows)) next = await savePublicAiInternalModelSetEnabled({ ...group, enabled })
+      return next
+    },
+  )
+  // bulkAccount saves the scoped account's access for every selected model it supports.
+  // bulkAccount 为所选账号支持的每个选中模型保存访问状态。
+  const bulkAccount = (enabled: boolean) => {
+    const account = props.accountScope
+    if (!account) return
+    runBulk(
+      `bulk/account/${enabled}`,
+      (row) => props.accountSupported?.has(row.modelId) === true && (!enabled || row.enabled || !rowConversationEligible(row)),
+      (rows) => savePublicAiConnectionModelSetEnabled({ connectionId: account.id, modelIds: rows.map((row) => row.modelId), enabled }),
+    )
+  }
+  const group = (label: string, apply: (enabled: boolean) => void) => (
+    <span className="model-services-bulk-group">
+      <span>{label}</span>
+      <Button disabled={busy} onClick={() => apply(true)} size="sm" type="button" variant="outline">{t("settings.modelServices.bulk.enable")}</Button>
+      <Button disabled={busy} onClick={() => apply(false)} size="sm" type="button" variant="outline">{t("settings.modelServices.bulk.disable")}</Button>
+    </span>
+  )
+  return (
+    <>
+      <div className="model-services-bulk-bar" role="toolbar" aria-label={t("settings.modelServices.bulk.title")}>
+        <strong>{t("settings.modelServices.bulk.selected").replace("{count}", String(selectedRows.length))}</strong>
+        {selectedRows.length < props.visibleCount ? (
+          <Button onClick={props.onSelectFiltered} size="sm" type="button" variant="link">
+            {t("settings.modelServices.bulk.selectFiltered").replace("{count}", String(props.visibleCount))}
+          </Button>
+        ) : null}
+        {group(t("settings.models.conversationUse"), bulkConversation)}
+        {group(t("settings.models.internalUse"), bulkInternal)}
+        {props.accountScope ? group(t("settings.modelServices.catalog.accountColumn"), bulkAccount) : null}
+        <Button onClick={props.onClear} size="sm" type="button" variant="ghost">{t("settings.modelServices.bulk.clear")}</Button>
+      </div>
+      {notice ? <p className="settings-model-filter-summary" role="status">{notice}</p> : null}
+    </>
   )
 }
 

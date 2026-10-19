@@ -6,8 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog";
-import { CredentialManagementArea, PublicAiConnectionDialog } from "@/components/features/settings/provider-list-settings";
-import { ProviderManagementArea } from "@/components/features/settings/provider-management-settings";
+import { PublicAiConnectionDialog } from "@/components/features/settings/provider-list-settings";
+import { ModelServicesArea } from "@/components/features/settings/model-services/model-services-area";
 import { ProviderManifestStatusPanel } from "@/components/features/settings/provider-manifest-status";
 import { publicAiSettingsWithInvalidDefaultFixture } from "@/test-fixtures/public-ai-settings";
 
@@ -126,10 +126,7 @@ it("allows typing unfinished custom header rows without silently persisting the 
     { protocol_profile_id: "openai-chat-completions.v1", endpoint_path: "/chat/completions", verified: true },
   ];
   service.load.mockResolvedValue(snapshot);
-  await render(<ProviderManagementArea />);
-  const category = [...document.querySelectorAll<HTMLButtonElement>("nav button")].find((entry) => entry.textContent?.startsWith("Custom"))!;
-  expect(category).toBeTruthy();
-  await act(async () => category.click());
+  await render(<ModelServicesArea />);
   const edit = [...document.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.getAttribute("aria-label")?.startsWith("Edit "))!;
   expect(edit).toBeTruthy();
   await act(async () => edit.click());
@@ -184,7 +181,7 @@ it("keeps a deleting account dialog open and editable after a rejected deletion"
   service.load.mockResolvedValue(snapshot);
   let reject!: (error: Error) => void;
   service.connectionDelete.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
-  await render(<CredentialManagementArea />);
+  await render(<ModelServicesArea />);
   const remove = document.querySelector<HTMLButtonElement>('button[aria-label="Delete credential"]')!;
   expect(remove).toBeTruthy();
   await act(async () => remove.click());
@@ -220,24 +217,26 @@ it("does not close an OAuth dialog until cancellation is acknowledged", async ()
   expect(close).toHaveBeenCalledExactlyOnceWith(false);
 });
 
-it("locks all provider rows and account creation during a priority write", async () => {
+it("locks reordering and account creation during a priority write and reloads after a failure", async () => {
   const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   service.load.mockResolvedValue(snapshot);
   let reject!: (error: Error) => void;
   service.prioritySave.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
-  await render(<ProviderManagementArea />);
-  const category = [...document.querySelectorAll<HTMLButtonElement>("nav button")].find((entry) => entry.textContent?.startsWith("Custom"))!;
-  await act(async () => category.click());
-  const priorities = [...document.querySelectorAll<HTMLInputElement>('input[type="number"]')];
-  expect(priorities).toHaveLength(2);
-  await type(priorities[0], "5");
-  const save = priorities[0].parentElement!.querySelector<HTMLButtonElement>("button")!;
-  await act(async () => { save.click(); save.click(); });
-  expect(service.prioritySave).toHaveBeenCalledExactlyOnceWith("custom:audit-1", 5);
-  expect(priorities.every((input) => input.disabled)).toBe(true);
-  const add = document.querySelector<HTMLButtonElement>('button[aria-label^="Add credential"]')!;
-  expect(add).toBeTruthy(); expect(add.disabled).toBe(true);
+  await render(<ModelServicesArea />);
+  const moves = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label^="Move "]')];
+  expect(moves.length).toBeGreaterThan(1);
+  const down = moves.find((entry) => entry.getAttribute("aria-label")?.endsWith(" down") && !entry.disabled)!;
+  expect(down).toBeTruthy();
+  await act(async () => { down.click(); down.click(); });
+  // Moving the first configured provider down writes the new top provider first; the second write waits.
+  // 将第一个已配置供应商下移时先写入新的首位供应商；第二次写入等待前一次完成。
+  expect(service.prioritySave).toHaveBeenCalledExactlyOnceWith("custom:audit-2", 2);
+  expect(moves.every((entry) => entry.disabled)).toBe(true);
+  const add = button("Add credential");
+  expect(add.disabled).toBe(true);
+  const loads = service.load.mock.calls.length;
   await act(async () => reject(new Error("Synthetic priority write failed")));
-  expect(priorities.every((input) => !input.disabled)).toBe(true);
+  expect(service.load.mock.calls.length).toBe(loads + 1);
   expect(add.disabled).toBe(false);
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("Synthetic priority write failed");
 });

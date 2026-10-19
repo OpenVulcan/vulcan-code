@@ -83,53 +83,6 @@
   .settings-form-grid.three {
     grid-template-columns: minmax(0, 1fr);
   }
-
-  /* Provider records retain all controls while changing from comparison columns to labeled rows. */
-  /* 供应商记录保留全部控件，从对比列切换为带标签的记录行。 */
-  .provider-responsive-table,
-  .provider-responsive-table tbody {
-    display: block;
-    width: 100%;
-  }
-
-  .provider-responsive-table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-
-  .provider-responsive-table tbody tr {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    padding: 12px;
-    gap: 10px;
-    background: var(--card);
-  }
-
-  .provider-responsive-table td {
-    display: block;
-    min-width: 0;
-    width: 100%;
-    padding: 0;
-    text-align: left;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
-  .provider-responsive-table td:nth-child(n+3)::before {
-    content: attr(data-label);
-    display: block;
-    margin-bottom: 6px;
-    color: var(--muted-foreground);
-    font-size: var(--vcn-font-size-sm);
-  }
-
-  .provider-responsive-table td:last-child > div {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  }
 }
 
 /* Phones use one bounded application viewport and an accessible navigation drawer. */

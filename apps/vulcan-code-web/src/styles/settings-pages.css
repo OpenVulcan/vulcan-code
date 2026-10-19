@@ -1,13 +1,6 @@
 /* Feature-only rules load with exact lazy owners; shared overrides stay global. */
 /* 功能专有规则随准确懒加载归属载入；共用覆盖保留全局。 */
 
-.provider-management-surface {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: none;
-  margin-inline: auto;
-}
-
 .provider-protocol-fieldset {
   border: 1px solid var(--border);
   border-radius: var(--vcn-radius-md);
@@ -21,30 +14,6 @@
   color: var(--foreground);
   font-size: var(--vcn-font-size-md);
   font-weight: 500;
-}
-
-.credential-management-layout {
-  --workspace-tool-panel-menu-width: 176px;
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-}
-
-.credential-management-menu .workspace-tool-panel-menu-row {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
-
-.credential-management-menu .workspace-tool-panel-menu-row small {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-}
-
-.credential-management-content {
-  display: grid;
-  align-content: start;
-  gap: 10px;
 }
 
 .settings-inline-checkbox {
@@ -269,18 +238,11 @@
   overflow-wrap: anywhere;
 }
 
-.settings-provider-nav,
 .settings-model-list-pane {
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.settings-provider-nav {
-  gap: 4px;
-  overflow: auto;
-  padding-right: 4px;
 }
 
 .settings-split-column-title {
@@ -289,78 +251,9 @@
   font-weight: 700;
 }
 
-.settings-provider-nav-row {
-  width: 100%;
-  min-width: 0;
-  height: 32px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  padding: 0 10px;
-  text-align: left;
-}
-
-.settings-provider-nav-row:hover,
-.settings-provider-nav-row.active {
-  background: var(--accent);
-  color: var(--foreground);
-}
-
-.settings-provider-nav-row span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-provider-nav-row small {
-  color: inherit;
-  opacity: 0.72;
-}
-
 .settings-model-list-pane {
   gap: 10px;
   overflow: visible;
-}
-
-.model-list-surface {
-  box-sizing: border-box;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  /* This bounded pane owns scrolling; visible overflow is clipped by the workspace shell. */
-  /* 此限高正文负责滚动；可见溢出会被工作区外壳裁切。 */
-  overflow: auto;
-}
-
-.model-list-content {
-  min-height: 0;
-}
-
-.model-list-layout .adaptive-tool-panel-content-shell {
-  overflow-x: hidden;
-}
-
-.settings-model-pane-header {
-  min-width: 0;
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.settings-model-pane-header small {
-  display: block;
-  margin-top: 2px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
 }
 
 .settings-model-toolbar {
@@ -761,8 +654,7 @@
   width: 100%;
   min-width: 0;
 }
-.context-basics-tabs > section[hidden],
-.provider-management-categories > section[hidden] {
+.context-basics-tabs > section[hidden] {
   display: none;
 }
 
@@ -849,38 +741,6 @@
   font-size: var(--vcn-font-size-md);
 }
 
-.provider-management-directory-content,
-.provider-management-categories {
-  min-width: 0;
-}
-.provider-management-surface,
-.model-list-layout {
-  container-type: inline-size;
-  min-width: 0;
-}
-
-.model-list-layout .settings-model-sticky-controls {
-  position: static;
-  top: auto;
-  padding-top: 0;
-}
-
-.model-list-layout .settings-model-toolbar {
-  grid-template-columns: minmax(0, 1fr) 132px 120px;
-}
-
-.model-list-layout .settings-model-toolbar > [data-slot="select-trigger"] {
-  width: 100%;
-}
-
-@container (max-width: 720px) {
-  /* Short filters share one row below search so narrow lists retain useful reading space. */
-  /* 短筛选项在搜索框下并排，给窄窗列表保留有效阅读空间。 */
-  .model-list-surface .settings-model-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .model-list-surface .settings-model-search { grid-column: 1 / -1; }
-  .model-list-surface .settings-model-toolbar > [data-slot="select-trigger"] { width: 100%; min-width: 0; }
-}
-
 .settings-model-route-accounts {
   list-style: none;
   display: grid;
@@ -905,10 +765,6 @@
 
 .settings-model-purpose-summary {
   margin: 3px 0 0;
-}
-
-.model-list-layout .settings-model-row-main {
-  gap: 3px;
 }
 
 /* Align independent usage controls without repeating labels or expanding technical details in rows. */
@@ -1009,10 +865,6 @@
   padding: 10px;
   border-radius: var(--radius-md);
   font-size: var(--vcn-font-size-sm);
-}
-
-@container (max-width: 560px) {
-  .model-list-surface .settings-model-row { flex-direction: column; }
 }
 
 .model-capability-form {

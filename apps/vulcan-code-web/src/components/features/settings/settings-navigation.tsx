@@ -6,8 +6,6 @@ import {
   Database,
   GitCommitHorizontal,
   Info,
-  KeyRound,
-  ListTree,
   Palette,
   ScrollText,
   ServerCog,
@@ -15,7 +13,6 @@ import {
   Settings,
   SlidersHorizontal,
   Stethoscope,
-  WandSparkles,
 } from "lucide-react";
 import { useI18n } from "@/i18n";
 import type { SettingsSubAreaId } from "@/types";
@@ -100,8 +97,10 @@ export interface SettingsSubAreaGroup {
 // 参数：area 为任意已保存或深链接的页面标识；返回在导航中显示为当前页的标识。
 export function normalizeSettingsSubArea(area: SettingsSubAreaId): SettingsSubAreaId {
   if (area === "prompt-composer") return "context-basics";
-  if (area === "ai-vendors") return "model-providers";
-  if (settingsSubAreaProviderToolCapability(area)) return "ai-capabilities";
+  // Providers, accounts, models and capability routing share the merged model services page.
+  // 供应商、账号、模型与能力分配共用合并后的模型服务页。
+  if (area === "ai-vendors" || area === "credential-management" || area === "model-list" || area === "ai-capabilities") return "model-providers";
+  if (settingsSubAreaProviderToolCapability(area)) return "model-providers";
   return area;
 }
 
@@ -145,11 +144,6 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
       icon: <Cpu size={16} />,
       items: [
         { id: "model-providers", label: t("settings.modelProviders"), icon: <ServerCog size={16} />, description: t("settings.modelProviders.description") },
-        { id: "credential-management", label: t("settings.credentialManagement"), icon: <KeyRound size={16} />, description: t("settings.credentialManagement.description") },
-        { id: "model-list", label: t("settings.modelList"), icon: <ListTree size={16} />, description: t("settings.modelList.description") },
-        // Multimodal extensions bind search, vision, generation and voice to models, so they live with the models.
-        // 多模态能力扩展把搜索、看图、生成与语音绑定到模型，因此与模型放在同一分组。
-        { id: "ai-capabilities", label: t("settings.aiCapabilities"), icon: <WandSparkles size={16} />, description: t("settings.aiCapabilities.description") },
       ],
     },
     {

@@ -38,7 +38,7 @@ const oversizedComponentCeilings = new Map([
   ["components/features/settings/provider-list-settings.tsx#PublicAiConnectionDialog", 494],
   ["components/features/settings/provider-management-settings/custom-provider-dialog.tsx#CustomProviderDialog", 543],
   ["components/features/settings/provider-manifest-status.tsx#ProviderManifestStatusPanel", 498],
-  ["components/features/settings/provider-model-settings.tsx#ModelListSettingsArea", 573],
+  ["components/features/settings/provider-model-settings.tsx#ProviderModelCatalog", 533],
   ["components/features/skills/lua-skill-config-dialog.tsx#LuaSkillConfigDialog", 507],
   ["components/features/skills/vulcan-plugins-panel.tsx#VulcanPluginsPanel", 699],
   ["components/project/project-settings-dialog.tsx#ProjectSettingsDialog", 613],

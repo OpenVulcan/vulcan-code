@@ -24,18 +24,13 @@ describe("settingsSubAreaGroups", () => {
     }
   });
 
-  // Keeps providers, credentials, models and the merged multimodal extension page together under one group.
-  // 将供应商、凭据、模型与合并后的多模态能力扩展页统一归入同一分组。
-  it("groups providers, credentials, models and multimodal extensions", () => {
+  // Providers, accounts, models and function routing share one merged model services page.
+  // 供应商、账号、模型与功能分配共用一个合并后的模型服务页。
+  it("shows one model services page in the models group", () => {
     const groups = settingsSubAreaGroups(testTranslator);
     const models = groups.find((group) => group.id === "models");
 
-    expect(models?.items.map((item) => item.id)).toEqual([
-      "model-providers",
-      "credential-management",
-      "model-list",
-      "ai-capabilities",
-    ]);
+    expect(models?.items.map((item) => item.id)).toEqual(["model-providers"]);
   });
 
   // Exposes the visible acceptance surface from the about group.
@@ -52,8 +47,11 @@ describe("normalizeSettingsSubArea", () => {
   // Retired ids keep working as deep links by resolving to their replacement page.
   // 已退役的标识通过解析到替代页面继续作为深链接使用。
   it("resolves retired page ids", () => {
-    expect(normalizeSettingsSubArea("ai-web-search")).toBe("ai-capabilities");
-    expect(normalizeSettingsSubArea("ai-music-cover")).toBe("ai-capabilities");
+    expect(normalizeSettingsSubArea("ai-web-search")).toBe("model-providers");
+    expect(normalizeSettingsSubArea("ai-music-cover")).toBe("model-providers");
+    expect(normalizeSettingsSubArea("ai-capabilities")).toBe("model-providers");
+    expect(normalizeSettingsSubArea("credential-management")).toBe("model-providers");
+    expect(normalizeSettingsSubArea("model-list")).toBe("model-providers");
     expect(normalizeSettingsSubArea("prompt-composer")).toBe("context-basics");
     expect(normalizeSettingsSubArea("notifications")).toBe("notifications");
   });
