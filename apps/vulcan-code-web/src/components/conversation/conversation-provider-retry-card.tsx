@@ -68,12 +68,13 @@ export function ProviderRetryCard(props: ProviderRetryCardProps) {
   return (
     <section
       aria-label={label}
-      className="provider-retry-card"
-      data-state={props.state}
+      className="vk-note"
+      data-retry-state={props.state}
+      data-tone={props.state === "retrying" ? "warn" : props.state === "succeeded" ? "ok" : "bad"}
       role="status"
     >
-      <Icon aria-hidden="true" className="provider-retry-icon" size={16} />
-      <div className="provider-retry-content">
+      <Icon aria-hidden="true" />
+      <div className="vk-note-text">
         <strong>{label}</strong>
         <span>{props.block.body}</span>
       </div>

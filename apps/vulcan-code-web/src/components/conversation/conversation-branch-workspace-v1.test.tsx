@@ -1256,7 +1256,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     ]);
 
     expect(markup).toContain(">SYSTEM<");
-    expect(markup).toContain("system-error-card");
+    expect(markup).toContain("vk-error-card");
     expect(markup).toContain("request failed");
   });
 

@@ -119,7 +119,7 @@ const legacyFeedbackShells = new Set([
   "conversation-session-commit-empty", "diff-empty-state", "diff-file-tree-empty", "knowledge-empty",
   "model-account-card-empty", "model-picker-empty", "project-folder-picker-empty",
   "project-folder-picker-notice", "session-review-repository-notice", "settings-archive-empty",
-  "settings-error-notice", "system-error-reconciliation-notice", "workspace-files-panel-notice",
+  "settings-error-notice", "workspace-files-panel-notice",
 ])
 
 // checkUiArchitecture validates boundaries that must not regress through ordinary component work.

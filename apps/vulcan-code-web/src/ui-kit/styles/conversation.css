@@ -138,6 +138,54 @@
 .vk-divider > span { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); font-family: var(--vk-label-font); letter-spacing: var(--vk-label-track); text-transform: var(--vk-label-case); }
 .vk-divider[data-tone] > span { color: var(--vk-tone); }
 
+/* Transcript notice: one quiet row for host events (goal state, memory lock, provider retry, legacy blocks). */
+.vk-note { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: calc(var(--vk-u) * 2.5); align-items: center; width: 100%; min-width: 0; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line-soft); border-left: 2px solid var(--vk-tone); background: color-mix(in srgb, var(--vk-tone) 5%, var(--vk-panel)); color: var(--vk-ink-2); font: inherit; font-size: var(--vk-fs-sm); text-align: left; }
+.vk-note:not([data-tone]) { --vk-tone: var(--vk-ink-3); }
+.vk-note > svg { flex: none; width: 1rem; height: 1rem; color: var(--vk-tone); }
+.vk-note-text { display: grid; gap: 2px; min-width: 0; }
+.vk-note-text > strong { color: var(--vk-ink); font-weight: 600; }
+.vk-note-text > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
+.vk-note[data-retry-state="retrying"] > svg { animation: vk-spin 1.1s linear infinite; }
+button.vk-note { cursor: pointer; }
+button.vk-note:disabled { cursor: default; opacity: 1; }
+button.vk-note:not(:disabled):hover { background: var(--vk-hover); }
+.vk-note-open { width: 0.9rem; height: 0.9rem; color: var(--vk-ink-3); }
+
+/* Plain dividers keep their sentence casing, such as a model switch naming two models. */
+.vk-divider[data-plain] > span { min-width: 0; max-width: min(100%, 40rem); font-family: inherit; letter-spacing: 0; text-transform: none; overflow-wrap: anywhere; }
+.vk-divider > span > svg { flex: none; width: 0.85rem; height: 0.85rem; }
+
+/* Provider error: the message folds the request facts and the raw payload beneath it. */
+.vk-error-card { width: 100%; min-width: 0; border: var(--vk-bw) solid color-mix(in srgb, var(--vk-tone) 35%, var(--vk-line)); border-left: 2px solid var(--vk-tone); background: color-mix(in srgb, var(--vk-tone) 5%, var(--vk-panel)); --vk-tone: var(--vk-bad); }
+.vk-error-card[data-pending] { --vk-tone: var(--vk-warn); }
+.vk-error-summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: calc(var(--vk-u) * 2.5); align-items: start; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); cursor: pointer; list-style: none; }
+.vk-error-summary::-webkit-details-marker { display: none; }
+.vk-error-summary:hover { background: var(--vk-hover); }
+.vk-error-summary:focus-visible { outline-offset: -2px; }
+.vk-error-icon { width: 1rem; height: 1rem; margin-top: 2px; color: var(--vk-tone); }
+.vk-error-message { display: grid; gap: 2px; min-width: 0; }
+.vk-error-message > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-error-message > p { display: -webkit-box; margin: 0; overflow: hidden; color: var(--vk-ink); font-size: var(--vk-fs-sm); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.vk-error-card[open] .vk-error-message > p { display: block; }
+.vk-error-chev { width: 0.9rem; height: 0.9rem; margin-top: 3px; color: var(--vk-ink-3); transition: transform var(--vk-t-fast); }
+.vk-error-card[open] .vk-error-chev { transform: rotate(90deg); }
+.vk-error-details { display: grid; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-error-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); }
+.vk-error-head > strong { font-weight: 600; }
+.vk-error-notice { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.vk-error-details > .vk-facts { font-size: var(--vk-fs-sm); }
+.vk-error-raw { display: grid; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
+.vk-error-raw > span { color: var(--vk-ink-3); font-family: var(--vk-label-font); font-size: var(--vk-fs-xs); letter-spacing: var(--vk-label-track); text-transform: var(--vk-label-case); }
+.vk-error-raw > pre { max-height: 18rem; margin: 0; overflow: auto; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-code-bg); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Continue a problem turn: the action, why it is unavailable, and the claim feedback. */
+.vk-continue { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-continue-reason { display: inline-grid; place-items: center; width: var(--vk-h-sm); height: var(--vk-h-sm); color: var(--vk-warn); cursor: help; }
+.vk-continue-reason > svg { width: 1rem; height: 1rem; }
+.vk-continue-reason:focus-visible { outline-offset: -2px; }
+.vk-continue-status { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-continue-status[data-failed] { color: var(--vk-bad); }
+
 .vk-turn { display: grid; gap: calc(var(--vk-u) * 3.5); min-width: 0; animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards; }
 
 /* Context compaction: a divider head like the process head, the summary folding open beneath it. */

@@ -26,18 +26,17 @@ describe("ConversationContinueControl", () => {
   it("renders an enabled action without an unavailable reason when recovery is eligible", () => {
     const markup = renderContinueControl(true);
 
-    expect(markup).toContain("conversation-continue-button");
-    expect(markup).not.toContain("conversation-continue-button-blocked");
+    expect(markup).toContain('data-continue=""');
+    expect(markup).not.toContain('data-continue="blocked"');
     expect(markup).not.toContain("恢复快照校验失败");
   });
 
   it("renders a disabled action and focusable localized warning for an ineligible problem turn", () => {
     const markup = renderContinueControl(false);
 
-    expect(markup).toContain("conversation-continue-button-blocked");
+    expect(markup).toContain('data-continue="blocked"');
     expect(markup).toContain("disabled=\"\"");
     expect(markup).toContain("tabindex=\"0\"");
     expect(markup).toContain("无法继续: 恢复快照校验失败");
-    expect(markup).not.toContain("conversation-continue-status-blocked");
   });
 });

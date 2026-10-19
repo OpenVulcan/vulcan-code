@@ -42,8 +42,8 @@ describe("Provider retry card", () => {
         </I18nProvider>,
       );
 
-      expect(markup).toContain("provider-retry-card");
-      expect(markup).toContain(`data-state="${state}"`);
+      expect(markup).toContain("data-retry-state");
+      expect(markup).toContain(`data-retry-state="${state}"`);
       expect(markup).toContain(label);
       expect(markup).toContain("Provider unavailable");
     },

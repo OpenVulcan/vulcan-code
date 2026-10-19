@@ -196,7 +196,7 @@ describe("system provider error card", () => {
     expect(markup).toContain("上游错误载荷");
     expect(markup).toContain("结果状态");
     expect(markup).toContain("费用状态");
-    expect(markup).toContain("system-error-card-pending");
+    expect(markup).toContain("data-pending");
   });
 
   // Verifies a pending AgentSpace result keeps a missing upstream identifier explicit.
@@ -232,11 +232,11 @@ describe("system provider error card", () => {
       </I18nProvider>,
     );
 
-    expect(markup).toContain("system-error-card");
+    expect(markup).toContain("vk-error-card");
     expect(markup).toContain("系统错误");
     expect(markup).toContain("server_is_overloaded");
     expect(markup).toContain("查看原始错误");
-    expect(markup).toContain("system-error-chevron");
+    expect(markup).toContain("vk-error-chev");
     expect(markup).toContain("language-json");
     expect(markup).toContain("Our servers are currently overloaded. Please try again later.");
   });

@@ -1,13 +1,6 @@
 /* Dedicated sessions (专职助手): memory markers, the draft chip row and the memory lock bar above the composer. */
 /* 专职会话（专职助手）：记忆标记、输入框上方的草稿选项行与记忆锁定条。 */
 /* The creation wizard styles load with its lazy chunk. */
-/* 创建向导样式随其懒加载分块载入。 */
-
-.dedicated-memory-marker-hint {
-  display: block;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-}
 
 /* The draft chips float as a free row above the card instead of a tab glued to its edge. */
 /* 草稿选项作为卡片上方的独立一行悬浮，而不是粘在卡片边缘的标签页。 */
