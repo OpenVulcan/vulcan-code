@@ -24,6 +24,7 @@ import {
 } from "@/components/workspace/workspace-files-preview";
 import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
 import { Button } from "@/ui-kit/primitives/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -556,11 +557,13 @@ export function WorkspaceFilesPanelHost(props: {
   if (!workspacePath) {
     return (
       <section className="workspace-files-panel empty">
-        <div className="context-empty-state">
-          <Folder size={24} />
-          <strong>{t("contextPanel.files")}</strong>
-          <span>{t("workspaceFiles.noProjectDirectory")}</span>
-        </div>
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon"><Folder /></EmptyMedia>
+            <EmptyTitle>{t("contextPanel.files")}</EmptyTitle>
+            <EmptyDescription>{t("workspaceFiles.noProjectDirectory")}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       </section>
     );
   }

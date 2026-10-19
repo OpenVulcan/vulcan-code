@@ -99,7 +99,6 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--border);
   background: var(--background);
   overflow: hidden;
   opacity: 1;
@@ -142,11 +141,6 @@
   }
 }
 
-.workspace-context-panel > .context-panel-shell {
-  flex: 1 1 auto;
-  height: auto;
-}
-
 .workspace-context-panel.is-closed {
   opacity: 0;
   pointer-events: none;
@@ -161,7 +155,6 @@
   flex: none;
   width: var(--workspace-floating-context-panel-width);
   height: auto;
-  border-left: 1px solid var(--border);
   background: var(--background);
   overflow: visible;
   opacity: 1;

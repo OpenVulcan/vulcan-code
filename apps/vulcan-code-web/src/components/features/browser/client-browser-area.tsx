@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowLeft, ArrowRight, Bug, ExternalLink, Globe, MonitorSmartphone, MoreHorizontal, Plus, RotateCw, X } from "lucide-react";
 
 import { Button } from "@/ui-kit/primitives/button";
+import { PanelTab } from "@/ui-kit/primitives/panel-tab";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
 import { useI18n, type Translate } from "@/i18n";
 import {
@@ -271,10 +272,18 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
   return <div className="flex h-full min-h-0 min-w-0 w-full flex-col gap-2 p-2">
     {/* Keep the whole strip hidden until a real destination has been opened. */}
     {/* 打开实际网址前隐藏整行标签栏。 */}
-    {bridge && snapshot.tabs.some((tab) => tab.url !== "about:blank") && <div className="flex min-h-6 shrink-0 items-center gap-1 overflow-x-auto" role="tablist" onKeyDown={tabKeyDown}
+    {bridge && snapshot.tabs.some((tab) => tab.url !== "about:blank") && <div className="vk-tab-strip" role="tablist" onKeyDown={tabKeyDown}
       aria-label={t("browser.localBrowserTabs")}>
-      {snapshot.tabs.map((tab) => <div key={tab.id} draggable={ownerReady}
-        className={`context-dynamic-tab ${tab.id === snapshot.activeId ? "active" : ""} ${dropId === tab.id ? "local-browser-tab-drop" : ""}`}
+      {snapshot.tabs.map((tab) => <PanelTab key={tab.id} draggable={ownerReady}
+        active={tab.id === snapshot.activeId}
+        closeLabel={t("browser.closeLocalTab")}
+        disabled={!ownerReady}
+        dropTarget={dropId === tab.id}
+        icon={<LocalBrowserTabIcon key={tab.faviconUrl} faviconUrl={tab.faviconUrl} />}
+        label={<>{tab.loading ? "… " : ""}{localBrowserTabLabel(tab.title || tab.url, t)}</>}
+        title={tab.title || tab.url}
+        onClose={() => void bridge.close(tab.id).catch((reason: unknown) => setError(String(reason)))}
+        onSelect={() => void bridge.select(tab.id).catch((reason: unknown) => setError(String(reason)))}
         onDragStart={(event) => {
           draggedId.current = tab.id;
           event.dataTransfer.effectAllowed = "move";
@@ -294,26 +303,11 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
           draggedId.current = null;
           setDropId(null);
         }}
-        onDragEnd={() => { draggedId.current = null; setDropId(null); }}>
-        <span className="context-dynamic-tab-icon">
-          <LocalBrowserTabIcon key={tab.faviconUrl} faviconUrl={tab.faviconUrl} />
-        </span>
-        <button type="button"
-          role="tab" aria-selected={tab.id === snapshot.activeId} tabIndex={tab.id === snapshot.activeId ? 0 : -1}
-          className="context-dynamic-tab-label" title={tab.title || tab.url}
-          disabled={!ownerReady}
-          onClick={() => void bridge.select(tab.id).catch((reason: unknown) => setError(String(reason)))}>
-          <span className="max-w-28 truncate">{tab.loading ? "… " : ""}{localBrowserTabLabel(tab.title || tab.url, t)}</span>
-        </button>
-        <button type="button" className="context-dynamic-tab-close"
-          aria-label={t("browser.closeLocalTab")}
-          disabled={!ownerReady}
-          onClick={() => void bridge.close(tab.id).catch((reason: unknown) => setError(String(reason)))}><X size={12} /></button>
-      </div>)}
-      <button type="button" className="context-dynamic-icon-button"
+        onDragEnd={() => { draggedId.current = null; setDropId(null); }} />)}
+      <button type="button" className="vk-icon-btn" data-size="sm"
         aria-label={t("browser.newLocalTab")}
         disabled={!ownerReady}
-        onClick={() => void bridge.open("about:blank").catch((reason: unknown) => setError(String(reason)))}><Plus size={15} /></button>
+        onClick={() => void bridge.open("about:blank").catch((reason: unknown) => setError(String(reason)))}><Plus /></button>
     </div>}
     <form onSubmit={(event) => void submit(event)} className="flex shrink-0 items-center gap-1">
       {bridge && <>

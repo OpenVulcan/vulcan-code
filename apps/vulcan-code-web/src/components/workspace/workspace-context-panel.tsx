@@ -19,6 +19,8 @@ import type { ConversationScrollSnapshot } from "@/components/conversation/chat-
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
 import { Button } from "@/ui-kit/primitives/button";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
+import { PanelTab } from "@/ui-kit/primitives/panel-tab";
 import {
   Dialog,
   DialogContent,
@@ -359,9 +361,9 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
   }, [activeTab]);
 
   return (
-    <aside className={cn("context-panel-shell", props.floating && "floating")}>
+    <aside className="vk-panel vk-context-panel" data-floating={props.floating ? "" : undefined}>
       {activeTab ? (
-        <div className="context-dynamic-workspace">
+        <>
           <WorkspaceContextTabBar
             activeTabId={activeTab.id}
             tabs={visibleTabs}
@@ -389,7 +391,7 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
             subagentExpandedStates={subagentExpandedStates}
             subagentScrollSnapshots={subagentScrollSnapshots}
           />
-        </div>
+        </>
       ) : (
         <WorkspaceContextLauncher
           aiBrowserAvailable={props.aiBrowserAvailable === true}
@@ -450,7 +452,7 @@ function WorkspaceContextTabBar(props: {
     buttons[nextIndex].focus();
   };
   return (
-    <div className="context-dynamic-tabbar">
+    <div className="vk-panel-tabs">
       {props.tabs.length > 1 ? (
         <WorkspaceContextTabSwitcher
           activeTabId={props.activeTabId}
@@ -464,7 +466,7 @@ function WorkspaceContextTabBar(props: {
         localBrowserAvailable={props.localBrowserAvailable}
         onOpenTab={props.onOpenTab}
       />
-      <div className="context-dynamic-tab-strip" role="tablist" onKeyDown={handleTabKeyDown}>
+      <div className="vk-panel-tabs-scroll" role="tablist" onKeyDown={handleTabKeyDown}>
         {props.tabs.map((tab) => (
           <WorkspaceContextTabButton
             active={tab.id === props.activeTabId}
@@ -512,35 +514,16 @@ function WorkspaceContextTabButton(props: {
   // displayTitle 在渲染时按当前语言解析单例页签标题。
   const displayTitle = workspaceContextTabDisplayTitle(props.tab, t);
   return (
-    <div
-      className={cn("context-dynamic-tab", props.active && "active")}
+    <PanelTab
+      active={props.active}
+      closeLabel={t("workspaceContext.closeTab").replace("{title}", displayTitle)}
+      icon={workspaceContextTabIcon(props.tab.kind, 14)}
+      label={displayTitle}
       ref={props.tabRef}
-      role="presentation"
-    >
-      <span className="context-dynamic-tab-icon">{workspaceContextTabIcon(props.tab.kind, 14)}</span>
-      <button
-        aria-label={t("workspaceContext.closeTab").replace("{title}", displayTitle)}
-        className="context-dynamic-tab-close"
-        onClick={(event) => {
-          event.stopPropagation();
-          props.onCloseTab(props.tab);
-        }}
-        type="button"
-      >
-        <X size={13} />
-      </button>
-      <button
-        aria-selected={props.active}
-        className="context-dynamic-tab-label"
-        onClick={() => props.onActivateTab(props.tab.id)}
-        role="tab"
-        tabIndex={props.active ? 0 : -1}
-        title={displayTitle}
-        type="button"
-      >
-        <span>{displayTitle}</span>
-      </button>
-    </div>
+      title={displayTitle}
+      onClose={() => props.onCloseTab(props.tab)}
+      onSelect={() => props.onActivateTab(props.tab.id)}
+    />
   );
 }
 
@@ -573,15 +556,16 @@ function WorkspaceContextTabSwitcher(props: {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button aria-label={t("workspaceContext.switchTabs")} className="context-dynamic-icon-button" type="button">
-          <ChevronsDown size={15} />
+        <button aria-label={t("workspaceContext.switchTabs")} className="vk-icon-btn" data-size="sm" type="button">
+          <ChevronsDown />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="context-dynamic-tabs-menu">
-        <label className="context-dynamic-tabs-menu-search">
-          <Search size={13} />
+      <DropdownMenuContent align="start" className="vk-context-menu">
+        <label className="vk-menu-filter">
+          <Search />
           <input
             aria-label={t("workspaceContext.searchTabs")}
+            className="vk-input"
             onChange={(event) => setQuery(event.currentTarget.value)}
             onKeyDown={(event) => event.stopPropagation()}
             placeholder={t("workspaceContext.searchTabsPlaceholder")}
@@ -590,11 +574,12 @@ function WorkspaceContextTabSwitcher(props: {
           {query ? (
             <button
               aria-label={t("workspaceContext.clearTabSearch")}
-              className="context-dynamic-tabs-menu-search-clear"
+              className="vk-icon-btn"
+              data-size="sm"
               onClick={() => setQuery("")}
               type="button"
             >
-              <X size={12} />
+              <X />
             </button>
           ) : null}
         </label>
@@ -603,7 +588,7 @@ function WorkspaceContextTabSwitcher(props: {
           const displayTitle = workspaceContextTabDisplayTitle(tab, t);
           return (
             <DropdownMenuItem
-              className={cn("context-dynamic-tabs-menu-item", tab.id === props.activeTabId && "active")}
+              data-active={tab.id === props.activeTabId ? "" : undefined}
               key={tab.id}
               onClick={() => props.onActivateTab(tab.id)}
             >
@@ -643,11 +628,11 @@ function WorkspaceContextAddMenu(props: {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button aria-label={t("workspaceContext.openRightPage")} className="context-dynamic-icon-button add" type="button">
-          <Plus size={15} />
+        <button aria-label={t("workspaceContext.openRightPage")} className="vk-icon-btn" data-size="sm" type="button">
+          <Plus />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="context-dynamic-add-menu">
+      <DropdownMenuContent align="start" className="vk-context-menu">
         <DropdownMenuLabel>{t("workspaceContext.openPage")}</DropdownMenuLabel>
         <WorkspaceContextOpenMenuItem kind="files" onOpenTab={props.onOpenTab} />
         {availableKinds.length > 0 && <DropdownMenuSeparator />}
@@ -691,7 +676,7 @@ function WorkspaceContextLauncher(props: {
 }) {
   const { t } = useI18n();
   return (
-    <div className="context-launcher">
+    <div className="vk-panel-launch">
       <WorkspaceContextLauncherCard
         description={t("workspaceContext.launcher.filesDescription")}
         kind="files"
@@ -745,8 +730,8 @@ function WorkspaceContextLauncherCard(props: {
   onOpenTab: (kind: WorkspaceContextTabKind) => void;
 }) {
   return (
-    <button className="context-launcher-card" onClick={() => props.onOpenTab(props.kind)} type="button">
-      {workspaceContextTabIcon(props.kind, 22)}
+    <button className="vk-panel-launch-card" data-kind={props.kind} onClick={() => props.onOpenTab(props.kind)} type="button">
+      <span aria-hidden className="vk-panel-launch-glyph">{workspaceContextTabIcon(props.kind, 18)}</span>
       <strong>{props.title}</strong>
       <span>{props.description}</span>
     </button>
@@ -782,11 +767,11 @@ function WorkspaceContextTabContent(args: {
   }, [activeTabId, onFileTabTitleChange]);
 
   if (args.activeTab.kind === "browser") {
-    return <div className="context-tab-content browser-tab-content">{args.props.aiBrowserPanel}</div>;
+    return <div className="vk-panel-body" data-fill="">{args.props.aiBrowserPanel}</div>;
   }
 
   if (args.activeTab.kind === "local-browser") {
-    return <div className="context-tab-content browser-tab-content">
+    return <div className="vk-panel-body" data-fill="">
       {args.props.selectedConversationId ? <React.Suspense fallback={null}>
         <LazyClientBrowserArea key={args.props.selectedConversationId} ownerSessionId={args.props.selectedConversationId} />
       </React.Suspense> : null}
@@ -795,7 +780,7 @@ function WorkspaceContextTabContent(args: {
 
   if (args.activeTab.kind === "review") {
     return (
-      <div className="context-tab-content review-tab-content">
+      <div className="vk-panel-body" data-fill="">
         <React.Suspense fallback={<WorkspaceReviewPanelLoading />}>
           <LazyWorkspaceReviewPanelHost
             loadWorkspaceDiffFileDetail={args.props.loadWorkspaceDiffFileDetail}
@@ -821,7 +806,7 @@ function WorkspaceContextTabContent(args: {
   }
   if (args.activeTab.kind === "memory") {
     return (
-      <div className="context-tab-content memory-tab-content">
+      <div className="vk-panel-body" data-pad="">
         <WorkspaceMemoryPanel
           selectedConversationId={args.props.selectedConversationId}
           selectedProjectId={selectedContextProjectId(args.props)}
@@ -833,7 +818,7 @@ function WorkspaceContextTabContent(args: {
   }
   if (args.activeTab.kind === "subagent") {
     return (
-      <div className="context-tab-content subagent-tab-content">
+      <div className="vk-panel-body" data-fill="">
         <WorkspaceSubagentPanel
           key={args.activeTab.id}
           tab={args.activeTab}
@@ -845,7 +830,7 @@ function WorkspaceContextTabContent(args: {
     );
   }
   return (
-    <div className="context-tab-content files-tab-content">
+    <div className="vk-panel-body" data-fill="">
       <React.Suspense fallback={<WorkspaceFilesPanelLoading />}>
         <LazyWorkspaceFilesPanelHost
           instanceId={args.activeTab.id}
@@ -1204,10 +1189,12 @@ function WorkspaceSubagentEmptyState(props: {
   title: string;
 }) {
   return (
-    <div className="workspace-subagent-empty">
-      <Bot size={22} />
-      <span>{props.title}</span>
-    </div>
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon"><Bot /></EmptyMedia>
+        <EmptyTitle>{props.title}</EmptyTitle>
+      </EmptyHeader>
+    </Empty>
   );
 }
 

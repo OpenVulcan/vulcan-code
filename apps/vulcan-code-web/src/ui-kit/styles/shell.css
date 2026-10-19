@@ -306,30 +306,58 @@
   border-bottom: var(--vk-bw) solid var(--vk-line);
 }
 .vk-panel-tabs-scroll { display: flex; align-items: stretch; align-self: stretch; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.vk-panel-tab-x { display: grid; place-items: center; width: 1.1rem; height: 1.1rem; margin-right: calc(var(--vk-u) * -1); padding: 0; border: 0; background: none; color: var(--vk-ink-3); opacity: 0; cursor: pointer; }
-.vk-panel-tab-x .lucide { width: 0.8rem; height: 0.8rem; }
-.vk-panel-tab:hover > .vk-panel-tab-x,
-.vk-panel-tab[aria-selected="true"] > .vk-panel-tab-x { opacity: 1; }
-.vk-panel-tab-x:hover { color: var(--vk-ink); background: var(--vk-hover); }
+.vk-panel-tabs > .vk-icon-btn { flex: 0 0 auto; }
+.vk-panel-tabs > .vk-icon-btn:first-child { margin-left: calc(var(--vk-u) * 1); }
+/* A closable tab is a frame holding a select button and a sibling close button; the label's hit area covers the frame. */
 .vk-panel-tab {
   position: relative;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: calc(var(--vk-u) * 1.5);
-  padding: 0 calc(var(--vk-u) * 3);
-  border: 0;
+  max-width: calc(var(--vk-u) * 48);
+  min-width: 0;
+  padding: 0 calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 3);
   border-right: var(--vk-bw) solid var(--vk-line-soft);
-  background: transparent;
   color: var(--vk-ink-3);
   font-size: var(--vk-fs-sm);
   font-weight: 500;
+}
+.vk-panel-tab:hover { color: var(--vk-ink); background: var(--vk-hover); }
+.vk-panel-tab[data-active] { color: var(--vk-ink); background: var(--vk-panel); }
+.vk-panel-tab[data-active]::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--vk-ember); }
+.vk-panel-tab[data-drop] { box-shadow: inset 0 0 0 var(--vk-focus-w) var(--vk-ember); }
+.vk-panel-tab-glyph { display: inline-grid; place-items: center; flex: 0 0 auto; }
+.vk-panel-tab-glyph > :is(svg, img) { width: 0.9rem; height: 0.9rem; }
+.vk-panel-tab-label {
+  position: static;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
 }
-.vk-panel-tab:hover { color: var(--vk-ink); background: var(--vk-hover); }
-.vk-panel-tab[aria-selected="true"] { color: var(--vk-ink); background: var(--vk-panel); }
-.vk-panel-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--vk-ember); }
+.vk-panel-tab-label::before { content: ""; position: absolute; inset: 0; }
+.vk-panel-tab-label:focus-visible { outline: none; }
+.vk-panel-tab:has(> .vk-panel-tab-label:focus-visible) { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
+.vk-panel-tab-x { position: relative; display: grid; place-items: center; flex: 0 0 auto; width: 1.1rem; height: 1.1rem; padding: 0; border: 0; background: none; color: var(--vk-ink-3); opacity: 0; cursor: pointer; }
+.vk-panel-tab-x .lucide { width: 0.8rem; height: 0.8rem; }
+.vk-panel-tab:hover > .vk-panel-tab-x,
+.vk-panel-tab[data-active] > .vk-panel-tab-x,
+.vk-panel-tab-x:focus-visible { opacity: 1; }
+.vk-panel-tab-x:hover { color: var(--vk-ink); background: var(--vk-hover); }
 .vk-panel-tab .vk-count { color: var(--vk-ink-3); font-size: var(--vk-fs-2xs); }
+/* A tab strip outside the panel header: the same tabs on a thin rule, sized by their content. */
+.vk-tab-strip { display: flex; align-items: stretch; min-height: calc(var(--vk-u) * 8.5); min-width: 0; flex: 0 0 auto; overflow-x: auto; scrollbar-width: none; border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-tab-strip[hidden] { display: none; }
+.vk-tab-strip > .vk-icon-btn { align-self: center; flex: 0 0 auto; margin-left: calc(var(--vk-u) * 1); }
 .vk-panel-body { min-height: 0; overflow: auto; }
 .vk-panel-toolbar {
   position: sticky;
@@ -344,6 +372,61 @@
   background: var(--vk-ground-2);
 }
 .vk-panel-toolbar > strong { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-panel-body[data-fill] { display: flex; overflow: hidden; }
+.vk-panel-body[data-fill] > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
+.vk-panel-body[data-pad] { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5); }
+/* The context panel fills the workbench's right-hand host; the host owns width, the floating slide and the shadow. */
+.vk-context-panel { flex: 1 1 auto; height: 100%; }
+/* Launcher: the panel with no open page offers each page as a row card. */
+.vk-panel-launch {
+  grid-row: 1 / -1;
+  display: grid;
+  align-content: center;
+  gap: calc(var(--vk-u) * 2);
+  min-height: 0;
+  padding: calc(var(--vk-u) * 6) calc(var(--vk-u) * 5);
+  overflow: auto;
+}
+.vk-panel-launch-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: calc(var(--vk-u) * 3);
+  row-gap: calc(var(--vk-u) * 0.5);
+  align-items: center;
+  width: 100%;
+  max-width: 24rem;
+  justify-self: center;
+  padding: calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  color: var(--vk-ink-2);
+  text-align: left;
+  cursor: pointer;
+}
+.vk-panel-launch-card:hover { border-color: var(--vk-line-strong); color: var(--vk-ink); }
+.vk-panel-launch-card:hover .vk-panel-launch-glyph { color: var(--vk-ember); border-color: color-mix(in srgb, var(--vk-ember) 55%, var(--vk-line)); }
+.vk-panel-launch-glyph {
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: calc(var(--vk-u) * 10);
+  height: calc(var(--vk-u) * 10);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+  transition: color var(--vk-t-fast), border-color var(--vk-t-fast);
+}
+.vk-panel-launch-card > strong { color: var(--vk-ink); font-weight: 600; }
+.vk-panel-launch-card > span:last-child { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: var(--vk-lh-ui); }
+/* Context-panel menus: the tab switcher with its filter field, and the add-page menu. */
+.vk-context-menu { min-width: 15rem; }
+.vk-context-menu .vk-menu-item[data-active] { color: var(--vk-ink); font-weight: 500; }
+.vk-context-menu .vk-menu-item[data-active] > svg { color: var(--vk-ember); }
+.vk-menu-filter { position: relative; display: flex; align-items: center; margin: calc(var(--vk-u) * 0.5) 0 calc(var(--vk-u) * 1); }
+.vk-menu-filter > .lucide { position: absolute; left: calc(var(--vk-u) * 2.5); width: 0.85rem; height: 0.85rem; color: var(--vk-ink-3); pointer-events: none; }
+.vk-menu-filter > .vk-input { flex: 1; padding-left: calc(var(--vk-u) * 8); padding-right: calc(var(--vk-u) * 8); }
+.vk-menu-filter > .vk-icon-btn { position: absolute; right: calc(var(--vk-u) * 1); }
 
 /* ---------- Status bar ---------- */
 .vk-status {

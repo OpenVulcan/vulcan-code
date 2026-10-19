@@ -130,7 +130,7 @@ it("shows the built-in browser entry only for a capable GUI without requiring th
   // 空插件目录证明本地浏览器卡片是 GUI 内置入口。
   expect(props.workbench.plugins).toEqual([]);
   await render(<WorkspaceContextPanel {...props} localBrowserAvailable tabs={[]} activeTabId={null} />);
-  const localBrowserCard = Array.from(host.querySelectorAll<HTMLButtonElement>(".context-launcher-card"))
+  const localBrowserCard = Array.from(host.querySelectorAll<HTMLButtonElement>(".vk-panel-launch-card"))
     .find(button => button.textContent?.includes("内置浏览器"));
   expect(localBrowserCard).toBeDefined();
   expect(host.textContent).not.toContain("AI 浏览器");

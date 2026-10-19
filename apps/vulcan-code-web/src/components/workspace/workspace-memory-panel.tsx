@@ -2,6 +2,7 @@ import React from "react";
 import "@/styles/context-injection.css";
 import { Brain, BrainCircuit, Database, Search, Trash2 } from "lucide-react";
 import { Button } from "@/ui-kit/primitives/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   Dialog,
@@ -566,11 +567,13 @@ function ContextInjectionCardList(props: {
       return null;
     }
     return (
-      <div className="context-empty-state">
-        {props.emptyIcon}
-        <strong>{props.title}</strong>
-        <span>{props.emptyText}</span>
-      </div>
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">{props.emptyIcon}</EmptyMedia>
+          <EmptyTitle>{props.title}</EmptyTitle>
+          <EmptyDescription>{props.emptyText}</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
 

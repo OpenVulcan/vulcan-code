@@ -36,7 +36,6 @@
 
 /* Flyouts and in-page menus reuse the same ember so every "current" row speaks one language. */
 /* 悬浮菜单与页内菜单复用同一余烬色，使所有「当前项」使用同一视觉语言。 */
-.context-dynamic-tabs-menu-item.active,
 .workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
   border-color: transparent;
   background: var(--vcn-selected-wash), var(--vcn-selected-surface-fill);
@@ -56,7 +55,6 @@
   box-shadow: var(--vcn-shadow-control-on);
   color: var(--foreground);
 }
-.context-dynamic-tabs-menu-item.active svg,
 .workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation .workspace-tool-panel-menu-row.active > svg,
 .project-settings-nav-button.active svg {
   color: var(--vcn-selected-icon);
