@@ -1,8 +1,8 @@
 import React from "react";
 
-// Appearance preferences are local display choices: theme, text tier, motion and conversation width.
+// Appearance preferences are local display choices: theme, text tier, motion, conversation width and ambience.
 // Each one is a single attribute on the document root that the kit stylesheets read.
-// 外观偏好是本地显示选择：主题、字号档位、动效与会话宽度。每项都是文档根节点上的一个属性，由 kit 样式读取。
+// 外观偏好是本地显示选择：主题、字号档位、动效、会话宽度与氛围。每项都是文档根节点上的一个属性，由 kit 样式读取。
 
 // AppearanceTheme is the chosen theme; "auto" follows the operating system.
 // AppearanceTheme 是所选主题；"auto" 跟随操作系统。
@@ -20,6 +20,10 @@ export type AppearanceMotion = "system" | "reduce";
 // AppearanceWidth 是会话阅读宽度：四档限宽或占满舞台宽度。
 export type AppearanceWidth = "compact" | "standard" | "wide" | "xwide" | "full";
 
+// AppearanceAmbience sets the ember atmosphere: none, the still ground glow, or the glow plus live AI-activity effects.
+// AppearanceAmbience 设置余烬氛围：无、静态底色光晕，或光晕加 AI 运行时的动态效果。
+export type AppearanceAmbience = "off" | "calm" | "live";
+
 // AppearancePreferences is the complete local appearance state.
 // AppearancePreferences 是完整的本地外观状态。
 export interface AppearancePreferences {
@@ -27,6 +31,7 @@ export interface AppearancePreferences {
   text: AppearanceText;
   motion: AppearanceMotion;
   width: AppearanceWidth;
+  ambience: AppearanceAmbience;
 }
 
 // APPEARANCE_THEMES, APPEARANCE_TEXT_TIERS and APPEARANCE_WIDTHS list the accepted values in display order.
@@ -34,6 +39,7 @@ export interface AppearancePreferences {
 export const APPEARANCE_THEMES: readonly AppearanceTheme[] = ["auto", "light", "dark", "command"];
 export const APPEARANCE_TEXT_TIERS: readonly AppearanceText[] = ["xs", "s", "m", "l", "xl"];
 export const APPEARANCE_WIDTHS: readonly AppearanceWidth[] = ["compact", "standard", "wide", "xwide", "full"];
+export const APPEARANCE_AMBIENCES: readonly AppearanceAmbience[] = ["off", "calm", "live"];
 
 // THEME_STORAGE_KEY keeps the key the earlier light/dark toggle used, so an existing choice still applies.
 // THEME_STORAGE_KEY 沿用早期明暗切换的键名，使已有选择继续生效。
@@ -45,6 +51,7 @@ const APPEARANCE_STORAGE_KEYS = {
   text: "vulcan-webui-text-tier",
   motion: "vulcan-webui-motion",
   width: "vulcan-webui-conversation-width",
+  ambience: "vulcan-webui-ambience",
 } as const;
 
 // DEFAULT_APPEARANCE is used for any preference that was never chosen.
@@ -54,6 +61,7 @@ export const DEFAULT_APPEARANCE: AppearancePreferences = {
   text: "s",
   motion: "system",
   width: "standard",
+  ambience: "live",
 };
 
 // readStored returns one stored value when it is one of the accepted values.
@@ -75,6 +83,7 @@ function readAppearance(): AppearancePreferences {
     text: readStored(APPEARANCE_STORAGE_KEYS.text, APPEARANCE_TEXT_TIERS, DEFAULT_APPEARANCE.text),
     motion: readStored(APPEARANCE_STORAGE_KEYS.motion, ["system", "reduce"] as const, DEFAULT_APPEARANCE.motion),
     width: readStored(APPEARANCE_STORAGE_KEYS.width, APPEARANCE_WIDTHS, DEFAULT_APPEARANCE.width),
+    ambience: readStored(APPEARANCE_STORAGE_KEYS.ambience, APPEARANCE_AMBIENCES, DEFAULT_APPEARANCE.ambience),
   };
 }
 
@@ -101,6 +110,7 @@ export function applyAppearance(preferences: AppearancePreferences): void {
   else root.dataset.vkTheme = preferences.theme;
   root.dataset.vkText = preferences.text;
   root.dataset.vkWidth = preferences.width;
+  root.dataset.vkAmbience = preferences.ambience;
   if (preferences.motion === "reduce") root.dataset.vkMotion = "reduce";
   else delete root.dataset.vkMotion;
   const dark = resolvedDark(preferences.theme);

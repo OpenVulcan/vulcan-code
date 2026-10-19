@@ -329,6 +329,42 @@ html[data-vulcan-host="electron"] :is([data-no-drag], [data-tauri-drag-region] :
 .vk-stage:is([data-nav-phase="exiting"], [data-nav-phase="loading"], [data-nav-phase="waiting-owner"]) .vk-stage-page > :not(.vk-stage-progress) { opacity: 0; pointer-events: none; }
 .vk-stage-progress { position: absolute; inset: 0; z-index: 5; }
 
+/* ---------- Ambience ----------
+ * Ember is the colour of AI activity. With live ambience, a running conversation sweeps a thin ember line along
+ * the stage head, breathes a low aura up from behind the composer and warms the composer edge. Only opacity and a
+ * 2px background move, and reduced motion leaves the still aura. Calm keeps the static ground glow; off drops both.
+ * 余烬色代表 AI 活动。灵动氛围下，运行中的会话在舞台标题栏底边扫过一道细余烬线，从输入区背后升起缓慢呼吸的
+ * 光晕，并使输入框边缘变暖。只有透明度与 2px 背景在动，减少动效时仅保留静止光晕。静谧只保留静态底色光晕；关闭则两者皆无。 */
+:root[data-vk-ambience="off"] .vk-root { background-image: none; }
+.vk-stage { isolation: isolate; }
+:root[data-vk-ambience="live"] .vk-stage[data-activity]::before {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: -1;
+  height: min(46vh, 380px);
+  background: radial-gradient(60% 100% at 50% 100%, color-mix(in srgb, var(--vk-ember) 22%, transparent), transparent 74%);
+  pointer-events: none;
+  animation: vk-ambience-breathe 3.6s var(--vk-ease) infinite alternate;
+}
+:root[data-vk-ambience="live"] .vk-stage[data-activity] > .vk-stage-head { position: relative; }
+:root[data-vk-ambience="live"] .vk-stage[data-activity] > .vk-stage-head::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 calc(var(--vk-bw) * -1) 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--vk-ember), transparent) no-repeat;
+  background-size: 36% 100%;
+  pointer-events: none;
+  animation: vk-ambience-sweep 2.6s var(--vk-ease) infinite;
+}
+:root[data-vk-ambience="live"] .vk-stage[data-activity] .vk-composer:not(:focus-within) {
+  border-color: color-mix(in srgb, var(--vk-ember) 45%, var(--vk-line-strong));
+  box-shadow: var(--vk-shadow-1), 0 10px 34px color-mix(in srgb, var(--vk-ember) 12%, transparent);
+}
+@keyframes vk-ambience-breathe { from { opacity: 0.45; } to { opacity: 1; } }
+@keyframes vk-ambience-sweep { from { background-position: -60% 0; } to { background-position: 160% 0; } }
+
 /* Context panel host: docked it takes its share of the body; floating it slides over the page from the right. */
 .vk-panel-resizer {
   flex: 0 0 var(--vk-context-resizer-w);

@@ -3,9 +3,11 @@ import { PageBody, PageRow, PageSection } from "@/components/page";
 import { APPEARANCE_THEME_ICONS, useChooseAppearance } from "@/components/shell/app-chrome";
 import { type TranslationKey, useI18n } from "@/i18n";
 import {
+  APPEARANCE_AMBIENCES,
   APPEARANCE_TEXT_TIERS,
   APPEARANCE_THEMES,
   APPEARANCE_WIDTHS,
+  type AppearanceAmbience,
   type AppearanceText,
   type AppearanceTheme,
   type AppearanceWidth,
@@ -14,9 +16,9 @@ import {
 import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
 import { Switch } from "@/ui-kit/primitives/switch";
 
-// AppearanceSettingsArea gathers the device-local display choices that the app menu also offers: theme, text tier,
-// reading width and motion. Every change applies at once and is kept only on this device.
-// AppearanceSettingsArea 汇集应用菜单同样提供的本机显示选择：主题、字号、阅读宽度与动效。
+// AppearanceSettingsArea gathers the device-local display choices: theme, text tier, reading width, ambience
+// and motion. Every change applies at once and is kept only on this device.
+// AppearanceSettingsArea 汇集本机显示选择：主题、字号、阅读宽度、氛围与动效。
 // 每次修改立即生效，且只保存在此设备上。
 // Parameters: none. Returns the settings sections.
 // 参数：无。返回设置分区。
@@ -67,6 +69,17 @@ export function AppearanceSettingsArea() {
           >
             {APPEARANCE_WIDTHS.map((width) => (
               <SegmentedControlItem key={width} value={width}>{t(`appChrome.width.${width}` as TranslationKey)}</SegmentedControlItem>
+            ))}
+          </SegmentedControl>
+        </PageRow>
+        <PageRow label={t("settings.appearance.ambience")} description={t("settings.appearance.ambience.description")}>
+          <SegmentedControl
+            aria-label={t("settings.appearance.ambience")}
+            value={appearance.ambience}
+            onValueChange={(value) => choose("ambience", value as AppearanceAmbience)}
+          >
+            {APPEARANCE_AMBIENCES.map((ambience) => (
+              <SegmentedControlItem key={ambience} value={ambience}>{t(`settings.appearance.ambience.${ambience}` as TranslationKey)}</SegmentedControlItem>
             ))}
           </SegmentedControl>
         </PageRow>

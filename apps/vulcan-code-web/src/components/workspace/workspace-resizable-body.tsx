@@ -11,6 +11,7 @@ import { StageHead } from "@/components/shell/stage-head";
 import { ReadingWidthMenu } from "@/components/shell/app-chrome";
 import { conversationReservedWidth } from "@/components/shell/navigation-layout";
 import { useAppearance } from "@/ui-kit/appearance";
+import { conversationIsRunning } from "@/components/conversation/conversation-runtime";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n } from "@/i18n";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar-types";
@@ -544,6 +545,7 @@ export function WorkspaceResizableBody(props: {
     <div
       ref={dockedLayoutRef}
       className="vk-stage"
+      data-activity={conversationIsRunning(props.selectedConversation) ? "" : undefined}
       data-floating-context={floatingContextLayoutActive ? "" : undefined}
       data-nav-phase={props.conversationNavigationPhase ?? undefined}
       style={STAGE_LAYOUT_STYLE}
