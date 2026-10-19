@@ -714,6 +714,8 @@
   "diff.branch.label": "ブランチ",
   "diff.branch.noMatches": "一致するブランチはありません",
   "diff.emptyBody": "表示できる Git Diff はありません。",
+  "diff.notRepositoryTitle": "Git リポジトリではありません",
+  "diff.notRepositoryBody": "このワークスペースは Git 管理下にないため、レビューする変更はありません。リポジトリを初期化してから更新してください。",
   "diff.noMatchingFiles": "一致するファイルはありません",
   "diff.file.tooLarge": "サイズが大きすぎるファイルは表示されません",
   "diff.file.added": "追加されたファイル",

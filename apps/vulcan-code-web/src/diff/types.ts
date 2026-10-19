@@ -601,6 +601,9 @@ export interface DiffPanelSnapshot {
   // Optional notice displayed when parsing is partial or empty.
   // 解析结果不完整或为空时显示的可选提示。
   notice?: string;
+  // False when the workspace snapshot came from a directory outside any Git repository.
+  // 工作区快照来自不在任何 Git 仓库内的目录时为 false。
+  gitRepository?: boolean;
   // Raw unified diff kept for copy and loaded-detail reconstruction.
   // 为复制和已加载详情重组保留的原始 unified diff。
   rawDiff: string;
@@ -633,6 +636,9 @@ export interface DiffPanelSnapshot {
 // WorkspaceDiffSnapshotResponse mirrors the Tauri service Git diff snapshot.
 // WorkspaceDiffSnapshotResponse 对应 Tauri 服务返回的 Git diff 快照。
 export interface WorkspaceDiffSnapshotResponse {
+  // Whether the workspace resolved to a Git repository; false means every Git field is empty.
+  // 工作区是否解析到 Git 仓库；为 false 时所有 Git 字段均为空。
+  gitRepository: boolean;
   // Repository root used by the backend Git command.
   // 后端 Git 命令使用的仓库根目录。
   repositoryRoot: string;

@@ -714,6 +714,8 @@
   "diff.branch.label": "Branch",
   "diff.branch.noMatches": "No matching branches",
   "diff.emptyBody": "No Git Diff is available.",
+  "diff.notRepositoryTitle": "Not a Git repository",
+  "diff.notRepositoryBody": "This workspace is not under Git, so there is no change review. Refresh after initialising a repository.",
   "diff.noMatchingFiles": "No matching files",
   "diff.file.tooLarge": "Oversized file not shown",
   "diff.file.added": "Added file",

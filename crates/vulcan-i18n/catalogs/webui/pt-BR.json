@@ -714,6 +714,8 @@
   "diff.branch.label": "Branch",
   "diff.branch.noMatches": "Nenhuma branch correspondente",
   "diff.emptyBody": "Nenhum Git Diff disponível.",
+  "diff.notRepositoryTitle": "Não é um repositório Git",
+  "diff.notRepositoryBody": "Este espaço de trabalho não está no Git, então não há alterações para revisar. Atualize depois de inicializar um repositório.",
   "diff.noMatchingFiles": "Nenhum arquivo correspondente",
   "diff.file.tooLarge": "Arquivo grande demais não exibido",
   "diff.file.added": "Arquivo adicionado",

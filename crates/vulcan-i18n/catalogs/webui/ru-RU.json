@@ -714,6 +714,8 @@
   "diff.branch.label": "Ветка",
   "diff.branch.noMatches": "Подходящих веток нет",
   "diff.emptyBody": "Нет доступного Git Diff.",
+  "diff.notRepositoryTitle": "Не репозиторий Git",
+  "diff.notRepositoryBody": "Эта рабочая область не находится под Git, поэтому изменений для проверки нет. Обновите после инициализации репозитория.",
   "diff.noMatchingFiles": "Подходящих файлов нет",
   "diff.file.tooLarge": "Слишком большой файл не показан",
   "diff.file.added": "Добавленный файл",

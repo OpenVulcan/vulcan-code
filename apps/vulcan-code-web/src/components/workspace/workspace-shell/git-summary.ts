@@ -127,15 +127,7 @@ export function workspaceDiffSnapshotHasGitRepository(
   // 工作区 diff 后端返回的快照。
   snapshot: WorkspaceDiffSnapshotResponse,
 ): boolean {
-  return Boolean(
-    snapshot.currentBranch
-    || snapshot.defaultBranch
-    || snapshot.selectedBaseBranch
-    || snapshot.selectedCompareBranch
-    || snapshot.selectedCommitHash
-    || snapshot.branches?.length
-    || snapshot.recentCommits?.length
-  );
+  return snapshot.gitRepository;
 }
 
 // mergeWorkspaceDiffSnapshotIntoProjectGitState merges a panel-loaded worktree snapshot into a repository the backend

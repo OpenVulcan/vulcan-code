@@ -500,21 +500,12 @@ export function DiffReviewPanel(props: {
   }, [backendSearchHydrationRequests, onLoadFileDetail]);
 
   if (!snapshot) {
-    return (
-      <section className="diff-review-panel empty">
-        <div className="diff-empty-state">
-          <FileText size={22} />
-          <strong>{props.emptyTitle ?? "Git Diff"}</strong>
-          <span>{props.emptyBody ?? t("diff.emptyBody")}</span>
-          {props.onRefresh ? (
-            <button className="diff-action-button" disabled={refreshBusy} onClick={handleRefreshClick} type="button">
-              <RefreshCw className={refreshBusy ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={14} />
-              <span>{refreshBusy ? t("diff.loading") : t("diff.refresh")}</span>
-            </button>
-          ) : null}
-        </div>
-      </section>
-    );
+    return <DiffReviewEmptyPanel body={props.emptyBody ?? t("diff.emptyBody")} refreshBusy={refreshBusy} title={props.emptyTitle ?? "Git Diff"} onRefresh={props.onRefresh ? handleRefreshClick : undefined} />;
+  }
+  if (snapshot.gitRepository === false) {
+    // A directory outside Git has no review modes or Git actions; offer only a refresh for after `git init`.
+    // 不在 Git 中的目录没有审核模式与 Git 操作；只提供刷新，便于 `git init` 之后重新加载。
+    return <DiffReviewEmptyPanel body={t("diff.notRepositoryBody")} refreshBusy={refreshBusy} title={t("diff.notRepositoryTitle")} onRefresh={props.onRefresh ? handleRefreshClick : undefined} />;
   }
 
   return (
@@ -652,3 +643,23 @@ export function DiffReviewPanel(props: {
   );
 }
 
+// DiffReviewEmptyPanel renders the whole-panel empty state with an optional refresh.
+// DiffReviewEmptyPanel 渲染整面板空状态，并可选提供刷新。
+function DiffReviewEmptyPanel(props: { title: string; body: string; refreshBusy: boolean; onRefresh?: () => void }) {
+  const { t } = useI18n();
+  return (
+    <section className="diff-review-panel empty">
+      <div className="diff-empty-state">
+        <FileText size={22} />
+        <strong>{props.title}</strong>
+        <span>{props.body}</span>
+        {props.onRefresh ? (
+          <button className="diff-action-button" disabled={props.refreshBusy} onClick={props.onRefresh} type="button">
+            <RefreshCw className={props.refreshBusy ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={14} />
+            <span>{props.refreshBusy ? t("diff.loading") : t("diff.refresh")}</span>
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}

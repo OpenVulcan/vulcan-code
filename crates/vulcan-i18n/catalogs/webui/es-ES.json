@@ -714,6 +714,8 @@
   "diff.branch.label": "Rama",
   "diff.branch.noMatches": "No hay ramas que coincidan",
   "diff.emptyBody": "No hay ningún Git Diff disponible.",
+  "diff.notRepositoryTitle": "No es un repositorio Git",
+  "diff.notRepositoryBody": "Este espacio de trabajo no está bajo Git, así que no hay cambios que revisar. Actualiza tras inicializar un repositorio.",
   "diff.noMatchingFiles": "No hay archivos que coincidan",
   "diff.file.tooLarge": "No se muestra el archivo por ser demasiado grande",
   "diff.file.added": "Archivo añadido",

@@ -92,6 +92,7 @@ pub(crate) fn load_webui_workspace_diff_snapshot(
     };
 
     Ok(WebuiWorkspaceDiffSnapshot {
+        git_repository: true,
         repository_root: normalized_workspace_path_text_from_path(&repository_root),
         unified_diff,
         changed_files: stats.files,
@@ -120,6 +121,7 @@ fn empty_webui_diff_snapshot(
     notice: String,
 ) -> WebuiWorkspaceDiffSnapshot {
     WebuiWorkspaceDiffSnapshot {
+        git_repository: false,
         repository_root,
         unified_diff: String::new(),
         changed_files: 0,

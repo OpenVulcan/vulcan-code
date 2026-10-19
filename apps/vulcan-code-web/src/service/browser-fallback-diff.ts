@@ -161,6 +161,7 @@ export async function loadBrowserFallbackWorkspaceDiffSnapshot(
   const profile = browserFallbackDiffProfileForSelection(request);
   const store = browserFallbackDiffStoreForPreview(profile);
   return {
+    gitRepository: true,
     repositoryRoot: workspacePath,
     unifiedDiff: store.previewUnifiedDiff,
     changedFiles: store.records.length,

@@ -714,6 +714,8 @@
   "diff.branch.label": "分支",
   "diff.branch.noMatches": "没有匹配分支",
   "diff.emptyBody": "当前没有可展示的 Git Diff。",
+  "diff.notRepositoryTitle": "不是 Git 仓库",
+  "diff.notRepositoryBody": "当前工作区未纳入 Git，没有可审核的变更。初始化仓库后刷新即可。",
   "diff.noMatchingFiles": "没有匹配的文件",
   "diff.file.tooLarge": "超大文件未展示",
   "diff.file.added": "新增文件",

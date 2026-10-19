@@ -49,7 +49,7 @@ function fixture(): React.ComponentProps<typeof WorkspaceReviewPanelHost> {
   vi.mocked(loadWorkspaceGitCatalog).mockResolvedValue(catalog);
   const rejectUnused = async (): Promise<never> => { throw new Error("Unexpected audit IO"); };
   return { workbench, selectedConversationId: path, selectedDraftConversation: null, reviewFocusRequest: { sequence: 0, repositoryKey: null }, onCopyRawDiff: rejectUnused,
-    loadWorkspaceDiffSnapshot: vi.fn(async () => ({ repositoryRoot: path, unifiedDiff: "", changedFiles: 0, additions: 0, deletions: 0 })),
+    loadWorkspaceDiffSnapshot: vi.fn(async () => ({ gitRepository: true, repositoryRoot: path, unifiedDiff: "", changedFiles: 0, additions: 0, deletions: 0 })),
     loadWorkspaceDiffFileDetail: rejectUnused, loadWorkspaceDiffSearch: rejectUnused, runWorkspaceGitFileAction: rejectUnused };
 }
 

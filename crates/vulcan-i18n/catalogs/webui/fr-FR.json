@@ -714,6 +714,8 @@
   "diff.branch.label": "Branche",
   "diff.branch.noMatches": "Aucune branche correspondante",
   "diff.emptyBody": "Aucun Git Diff disponible.",
+  "diff.notRepositoryTitle": "Pas un dépôt Git",
+  "diff.notRepositoryBody": "Cet espace de travail n'est pas suivi par Git ; il n'y a aucune modification à examiner. Actualisez après avoir initialisé un dépôt.",
   "diff.noMatchingFiles": "Aucun fichier correspondant",
   "diff.file.tooLarge": "Fichier trop volumineux non affiché",
   "diff.file.added": "Fichier ajouté",

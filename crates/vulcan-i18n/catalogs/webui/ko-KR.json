@@ -714,6 +714,8 @@
   "diff.branch.label": "브랜치",
   "diff.branch.noMatches": "일치하는 브랜치가 없습니다",
   "diff.emptyBody": "표시할 Git Diff가 없습니다.",
+  "diff.notRepositoryTitle": "Git 저장소가 아닙니다",
+  "diff.notRepositoryBody": "이 작업 공간은 Git으로 관리되지 않아 검토할 변경이 없습니다. 저장소를 초기화한 뒤 새로 고치세요.",
   "diff.noMatchingFiles": "일치하는 파일이 없습니다",
   "diff.file.tooLarge": "너무 큰 파일은 표시되지 않습니다",
   "diff.file.added": "추가된 파일",
