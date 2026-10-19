@@ -2,6 +2,7 @@ import { LogsArea } from "@/components/features/settings/settings-diagnostics-ar
 // Settings-only styles follow this lazy route instead of inflating the initial workbench stylesheet.
 // 仅属于设置的样式随此懒加载路由载入，避免膨胀初始工作台样式表。
 import "@/ui-kit/styles/features/settings-pages.css";
+import "@/ui-kit/styles/features/settings-forms.css";
 import "@/ui-kit/styles/features/settings-preferences.css";
 import "@/ui-kit/styles/features/settings-shell.css";
 import "@/ui-kit/styles/features/model-services.css";

@@ -8,6 +8,7 @@ import { useI18n } from "@/i18n"
 import { formatTokenCount } from "@/lib/usage-format"
 import { CustomProviderMutationContext } from "./custom-provider-mutation-context"
 import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 import {
   getPublicAiCustomModelTemplateSuggestions,
   savePublicAiCustomModelTemplateDecision,
@@ -106,7 +107,7 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
     ? suggestions.find((suggestion) => suggestion.template_key === appliedSelection.template_key)
     : undefined
   if (loading) {
-    return <p className="vk-pm-status"><LoaderCircle aria-hidden="true" className="vk-spin" />{t("settings.customModels.templateSearching")}</p>
+    return <p className="vk-form-status"><LoaderCircle aria-hidden="true" className="vk-spin" />{t("settings.customModels.templateSearching")}</p>
   }
   if (
     appliedSelection
@@ -117,13 +118,13 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
       <Alert variant="info">
         <Sparkles aria-hidden="true" />
         <AlertTitle>{t("settings.customModels.templateUpdateAvailable")}</AlertTitle>
-        <AlertDescription className="vk-pm-stack">
+        <AlertDescription className="vk-form-stack">
           <p>{t("settings.customModels.templateUpdateDescription")}</p>
-          <div className="vk-pm-route">
+          <div className="vk-form-codes">
             <p>{t("settings.customModels.templateCurrent")}: {formatTokenCount(appliedSelection.context_limit)} Token · {(appliedSelection.input_resources ?? []).join(", ") || t("settings.models.modality.text")}</p>
             <p>{t("settings.customModels.templateLatest")}: {formatTokenCount(appliedSuggestion.context_limit)} Token · {appliedSuggestion.input_resources.join(", ") || t("settings.models.modality.text")}</p>
           </div>
-          <div className="vk-pm-inline">
+          <div className="vk-form-inline">
             <Button disabled={saving} onClick={() => void saveDecision(appliedDecision(appliedSuggestion))} size="sm" type="button">
               <Check aria-hidden="true" />{t("settings.customModels.templateApplyUpdate")}
             </Button>
@@ -138,7 +139,7 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
       <Alert variant="success">
         <Sparkles aria-hidden="true" />
         <AlertTitle>{t("settings.customModels.templateApplied")}</AlertTitle>
-        <AlertDescription className="vk-pm-stack">
+        <AlertDescription className="vk-form-stack">
           <p>{props.decision.selection.template_key} · {formatTokenCount(props.decision.selection.context_limit)} Token</p>
           <Button disabled={saving} onClick={() => void saveDecision(undefined)} size="sm" type="button" variant="outline">
             <RotateCcw aria-hidden="true" />{t("settings.customModels.templateRestore")}
@@ -166,7 +167,7 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
       <Alert>
         <X aria-hidden="true" />
         <AlertTitle>{t("settings.customModels.templateRejected")}</AlertTitle>
-        <AlertDescription className="vk-pm-stack">
+        <AlertDescription className="vk-form-stack">
           <p>{t("settings.customModels.templateDefaultFallback")}</p>
           <Button disabled={saving} onClick={() => void saveDecision(undefined)} size="sm" type="button" variant="outline">
             <RotateCcw aria-hidden="true" />{t("settings.customModels.templateReviewAgain")}
@@ -178,15 +179,15 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
   return (
     <Alert>
       <Sparkles aria-hidden="true" />
-      <AlertTitle className="vk-pm-inline">
+      <AlertTitle className="vk-form-inline">
         {t("settings.customModels.templateSuggested")}
         <Badge variant="secondary">
           {t(`settings.customModels.templateMatch.${firstSuggestion.match_kind}`)}
         </Badge>
       </AlertTitle>
-      <AlertDescription className="vk-pm-stack">
+      <AlertDescription className="vk-form-stack">
         <p>{firstSuggestion.template_key} · {formatTokenCount(firstSuggestion.context_limit)} Token</p>
-        <div className="vk-pm-inline">
+        <div className="vk-form-inline">
           <Button disabled={saving} onClick={() => void saveDecision(appliedDecision(firstSuggestion))} size="sm" type="button">
             <Check aria-hidden="true" />{t("settings.customModels.templateApply")}
           </Button>

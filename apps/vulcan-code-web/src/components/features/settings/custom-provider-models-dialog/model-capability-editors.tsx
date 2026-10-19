@@ -22,6 +22,8 @@ import { loadPublicAiSettings, savePublicAiCustomModelConnectionAvailability, sa
 import type { PublicAiCustomModelDefinition, PublicAiModelCapabilityOverrides, PublicAiResourceKind, PublicAiSettingsSnapshot, PublicAiToolSchemaProjectionMode } from "@/types"
 import { errorMessage } from "@/lib/display-format"
 import { EMPTY_PROJECTION, DISCOVERY_STATE_LABEL_KEYS } from "./model-dialog-constants"
+import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // RESOURCE_KINDS excludes video until custom routes can declare provider-specific video input.
 // RESOURCE_KINDS 在自定义路由能够声明供应商专属视频输入前排除视频。
@@ -92,7 +94,7 @@ export function ResolvedCapabilitySummary(props: {
   const output = capabilities?.output_limit ?? props.defaults?.output_limit
   const inputHasText = resolvedInputTextSupport(props.row, props.account)
   return (
-    <div className="vk-pm-facts">
+    <div className="vk-form-facts">
       <CapabilityFact label={t("settings.customModels.contextLimit")} source={capabilitySource(props.row, props.account, "context_limit", t)} value={context != null ? formatTokenCount(context) : "—"} />
       <CapabilityFact label={t("settings.customModels.outputLimit")} source={capabilitySource(props.row, props.account, "output_limit", t)} value={output != null ? formatTokenCount(output) : "—"} />
       <CapabilityFact label={t("settings.customModels.input")} source={capabilitySource(props.row, props.account, "input_resources", t)} value={resourceSummary(capabilities?.input_resources ?? [], inputHasText, t)} />
@@ -104,7 +106,7 @@ export function ResolvedCapabilitySummary(props: {
 // CapabilityFact renders one resolved value together with a provenance badge.
 // CapabilityFact 渲染一个解析值及其来源徽标。
 function CapabilityFact(props: { label: string; source: string; value: string }) {
-  return <div className="vk-pm-fact"><div><span>{props.label}</span><Badge variant="outline">{props.source}</Badge></div><strong>{props.value}</strong></div>
+  return <div className="vk-form-fact"><div><span>{props.label}</span><Badge variant="outline">{props.source}</Badge></div><strong>{props.value}</strong></div>
 }
 
 // AccountAvailabilityEditor renders exact source/effective states and explicit manual overrides.
@@ -196,14 +198,14 @@ export function AccountAvailabilityEditor(props: {
         <div className="vk-pm-account-row" data-selected={props.selectedConnectionId === account.connection.id ? "" : undefined} key={account.connection.id}>
           <div>
             <strong>{account.connection.display_name}</strong>
-            <div className="vk-pm-chips">
+            <div className="vk-form-chips">
               <Badge variant="outline">{t(DISCOVERY_STATE_LABEL_KEYS[account.status?.state ?? "not_checked"])}</Badge>
               {account.connection.pending_validation ? <Badge variant="destructive">{t("settings.customModels.pendingValidation")}</Badge> : null}
               <Badge variant={accountActuallyDiscoveredModel(account) ? "secondary" : "outline"}>{accountActuallyDiscoveredModel(account) ? t("settings.customModels.accountReturned") : t("settings.customModels.accountNotReturned")}</Badge>
               <Badge variant={accountExposesModel(account) ? "secondary" : "outline"}>{accountExposesModel(account) ? t("settings.customModels.accountAvailable") : t("settings.customModels.accountUnavailable")}</Badge>
             </div>
           </div>
-          <div className="vk-pm-acts">
+          <div className="vk-form-acts">
             <Button
               onClick={() => props.onAccountSelected(account.connection.id)}
               size="sm"
@@ -227,7 +229,7 @@ export function AccountAvailabilityEditor(props: {
               {t("settings.customModels.validateModel")}
             </Button>
             {props.row.manualDefinition ? (
-              <div className="vk-pm-inline">
+              <div className="vk-form-inline">
                 {account.availabilityOverride !== undefined ? (
                   <Button
                     aria-label={t("settings.modelCapabilities.restore")}
@@ -274,7 +276,7 @@ export function AccountAvailabilityEditor(props: {
                 .replace("{account}", validationTarget?.connection.display_name ?? "")}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {error ? <p className="vk-pm-fault" role="alert">{error}</p> : null}
+          {error ? <p className="vk-form-fault" role="alert">{error}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={validatingConnectionId !== null}>{t("memory.common.cancel")}</AlertDialogCancel>
             <Button disabled={validatingConnectionId !== null} onClick={() => void validateAccount()} type="button">
@@ -424,31 +426,31 @@ export function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiS
   const reasoningEnabled = draft.reasoning !== "unsupported" && draft.reasoning_control !== "fixed_off"
   return (
     <fieldset disabled={saving} className="vk-fieldset">
-      <div className="vk-pm-box-head">
+      <div className="vk-form-head">
         <div><p>{t("settings.modelCapabilities.overlayHint")}</p></div>
         <Badge variant={props.row.capabilityOverrides ? "default" : "outline"}>{t(props.row.capabilityOverrides ? "settings.modelCapabilities.modelSource" : "settings.modelCapabilities.inheritedSource")}</Badge>
       </div>
-      <div className="vk-pm-grid2">
+      <div className="vk-form-grid">
         <label className="vk-field">{t("settings.customModels.contextLimit")}<Input type="number" min={1} step={1} inputMode="numeric" onChange={(event) => { const value = event.target.value; updateDraft("context_limit", (current) => ({ ...current, context_limit: value === "" ? undefined : Number(value) })) }} value={draft.context_limit ?? ""} /></label>
         <label className="vk-field">{t("settings.customModels.outputLimit")}<Input type="number" min={1} step={1} inputMode="numeric" onChange={(event) => { const value = event.target.value; updateDraft("output_limit", (current) => ({ ...current, output_limit: value === "" ? undefined : Number(value) })) }} value={draft.output_limit ?? ""} /></label>
       </div>
-      <fieldset className="vk-pm-group">
+      <fieldset className="vk-form-group">
         <legend>{t("settings.customModels.input")}</legend>
-        <div className="vk-pm-checks">
+        <div className="vk-form-checks">
           {RESOURCE_KINDS.map((resource) => <label className="vk-check-label" key={resource}><Checkbox checked={(draft.input_resources ?? []).includes(resource)} onCheckedChange={(checked) => updateDraft("input_resources", (current) => ({ ...current, input_resources: checked ? [...(current.input_resources ?? []), resource] : (current.input_resources ?? []).filter((item) => item !== resource) }))} />{t(RESOURCE_LABEL_KEYS[resource])}</label>)}
         </div>
       </fieldset>
-      <div className="vk-pm-box" data-tone="muted">
-        <div className="vk-pm-box-head">
+      <div className="vk-form-box" data-tone="muted">
+        <div className="vk-form-head">
           <div>
             <strong>{t("settings.customModels.output")}: {t("settings.models.modality.text")}</strong>
             <small>{t("settings.customModels.fixedTextOutputDescription")}</small>
           </div>
         </div>
       </div>
-      <div className="vk-pm-group">
-        <label className="vk-pm-switch"><span>{t("settings.customModels.reasoning")}</span><Switch checked={reasoningEnabled} onCheckedChange={(checked) => updateDraft(["reasoning", "reasoning_control", "reasoning_efforts"], (current) => ({ ...current, reasoning: checked ? "native" : "unsupported", reasoning_control: checked ? "effort_selection" : "fixed_off", reasoning_efforts: checked ? [...OPENAI_DIRECT_REASONING_EFFORTS] : ["none"] }))} /></label>
-        {reasoningEnabled ? <div className="vk-pm-efforts">{OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => <label className="vk-check-label" key={effort}><Checkbox checked={(draft.reasoning_efforts ?? []).includes(effort)} disabled={effort !== "none" && (draft.reasoning_efforts ?? []).includes(effort) && (draft.reasoning_efforts ?? []).filter((item) => item !== "none").length === 1} onCheckedChange={(checked) => updateDraft("reasoning_efforts", (current) => ({ ...current, reasoning_efforts: checked ? [...(current.reasoning_efforts ?? []), effort] : (current.reasoning_efforts ?? []).filter((item) => item !== effort) }))} />{t(REASONING_EFFORT_LABEL_KEYS[effort])}</label>)}</div> : null}
+      <div className="vk-form-group">
+        <label className="vk-form-switch"><span>{t("settings.customModels.reasoning")}</span><Switch checked={reasoningEnabled} onCheckedChange={(checked) => updateDraft(["reasoning", "reasoning_control", "reasoning_efforts"], (current) => ({ ...current, reasoning: checked ? "native" : "unsupported", reasoning_control: checked ? "effort_selection" : "fixed_off", reasoning_efforts: checked ? [...OPENAI_DIRECT_REASONING_EFFORTS] : ["none"] }))} /></label>
+        {reasoningEnabled ? <div className="vk-form-efforts">{OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => <label className="vk-check-label" key={effort}><Checkbox checked={(draft.reasoning_efforts ?? []).includes(effort)} disabled={effort !== "none" && (draft.reasoning_efforts ?? []).includes(effort) && (draft.reasoning_efforts ?? []).filter((item) => item !== "none").length === 1} onCheckedChange={(checked) => updateDraft("reasoning_efforts", (current) => ({ ...current, reasoning_efforts: checked ? [...(current.reasoning_efforts ?? []), effort] : (current.reasoning_efforts ?? []).filter((item) => item !== effort) }))} />{t(REASONING_EFFORT_LABEL_KEYS[effort])}</label>)}</div> : null}
       </div>
       <ReasoningProjectionEditor
         efforts={draft.reasoning_efforts?.length ? draft.reasoning_efforts : ["none"]}
@@ -456,7 +458,7 @@ export function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiS
         projection={draft.request_projection ?? EMPTY_PROJECTION}
       />
       {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
-      <div className="vk-pm-acts"><Button disabled={saving || (!props.row.capabilityOverrides && !dirty && !edited)} onClick={restore} type="button" variant="outline">{t("settings.modelCapabilities.restore")}</Button><Button disabled={saving || (!dirty && !edited)} onClick={() => void persist(false)} type="button">{saving ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : null}{t("settings.customModels.saveCapabilityOverrides")}</Button></div>
+      <div className="vk-form-acts"><Button disabled={saving || (!props.row.capabilityOverrides && !dirty && !edited)} onClick={restore} type="button" variant="outline">{t("settings.modelCapabilities.restore")}</Button><Button disabled={saving || (!dirty && !edited)} onClick={() => void persist(false)} type="button">{saving ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : null}{t("settings.customModels.saveCapabilityOverrides")}</Button></div>
     </fieldset>
   )
 }
@@ -507,12 +509,12 @@ export function AdvancedModelEditor(props: {
               </Select>
               <span className="vk-field-hint">{t("settings.customModels.toolSchemaProjectionHint")}</span>
             </label>
-            <label className="vk-field">{t("settings.customModels.parameters")}<Textarea className="vk-pm-code" onChange={(event) => props.setParameterText(event.target.value)} spellCheck={false} value={props.parameterText} /></label>
-            <label className="vk-field">{t("settings.customModels.projection")}<Textarea className="vk-pm-code" data-size="lg" onChange={(event) => props.setProjectionText(event.target.value)} spellCheck={false} value={props.projectionText} /></label>
+            <label className="vk-field">{t("settings.customModels.parameters")}<Textarea className="vk-form-code" onChange={(event) => props.setParameterText(event.target.value)} spellCheck={false} value={props.parameterText} /></label>
+            <label className="vk-field">{t("settings.customModels.projection")}<Textarea className="vk-form-code" data-size="lg" onChange={(event) => props.setProjectionText(event.target.value)} spellCheck={false} value={props.projectionText} /></label>
           </AccordionContent>
         </AccordionItem>
       </Accordion>
-      <div className="vk-pm-acts">{props.customized ? <Button disabled={props.saving} onClick={props.onRestore} type="button" variant="outline"><Trash2 aria-hidden="true" />{t("settings.modelCapabilities.restore")}</Button> : null}<Button disabled={props.saving || !props.dirty} onClick={props.onSave} type="button">{t("settings.customModels.saveAdvanced")}</Button></div>
+      <div className="vk-form-acts">{props.customized ? <Button disabled={props.saving} onClick={props.onRestore} type="button" variant="outline"><Trash2 aria-hidden="true" />{t("settings.modelCapabilities.restore")}</Button> : null}<Button disabled={props.saving || !props.dirty} onClick={props.onSave} type="button">{t("settings.customModels.saveAdvanced")}</Button></div>
     </fieldset>
   )
 }

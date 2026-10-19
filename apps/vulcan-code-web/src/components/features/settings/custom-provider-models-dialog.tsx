@@ -46,6 +46,7 @@ import { loadPublicAiSettings, savePublicAiCustomModelProtocolPreferences, saveP
 import type { PublicAiCustomModelDefinition, PublicAiCustomModelProtocolPreference, PublicAiCustomProviderProtocol, PublicAiCustomModelTemplateDecisionBatchItem, PublicAiModelRouteRecord, PublicAiProviderDescriptor, PublicAiSettingsSnapshot } from "@/types"
 import { formatDateTime, errorMessage } from "@/lib/display-format"
 import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 import { EMPTY_PROJECTION, DISCOVERY_STATE_LABEL_KEYS } from "./custom-provider-models-dialog/model-dialog-constants"
 import { TemplateReviewDialog } from "./custom-provider-models-dialog/template-review-dialog"
 import { CapabilityAccountSelector, ResolvedCapabilitySummary, AccountAvailabilityEditor, CapabilityOverridesEditor, AdvancedModelEditor } from "./custom-provider-models-dialog/model-capability-editors"
@@ -127,14 +128,14 @@ function ProtocolPreferenceCard(props: {
       && props.preference.mode === "explicit"
       && selectedPreference.protocol !== props.preference.protocol))
   return (
-    <section className="vk-pm-box">
-      <div className="vk-pm-box-head">
+    <section className="vk-form-box">
+      <div className="vk-form-head">
         <div>
           <strong>{t("settings.customModels.protocolPreference")}</strong>
           <p>{t("settings.customModels.protocolPreferenceHint")}</p>
         </div>
         <RadioGroup
-          className="vk-pm-radios"
+          className="vk-form-radios"
           disabled={props.saving}
           onValueChange={(value) => setMode(value as "auto" | "explicit")}
           value={mode}
@@ -151,7 +152,7 @@ function ProtocolPreferenceCard(props: {
           onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)}
           value={protocol}
         >
-          <SelectTrigger className="vk-pm-select"><SelectValue placeholder={t("settings.customModels.protocolSelect")} /></SelectTrigger>
+          <SelectTrigger className="vk-form-select"><SelectValue placeholder={t("settings.customModels.protocolSelect")} /></SelectTrigger>
           <SelectContent>
             {selectableProtocols.map((enabledProtocol) => (
               <SelectItem key={enabledProtocol} value={enabledProtocol}>
@@ -162,7 +163,7 @@ function ProtocolPreferenceCard(props: {
         </Select>
       ) : null}
       {props.routeRecord ? (
-        <dl className="vk-pm-route">
+        <dl className="vk-form-codes">
           <div>
             <dt>{t("settings.models.routeEffectiveProtocol")}</dt>
             <dd title={props.routeRecord.protocolId}>
@@ -193,17 +194,17 @@ function ProtocolPreferenceCard(props: {
           </div>
         </dl>
       ) : (
-        <p className="vk-pm-fault">
+        <p className="vk-form-fault">
           {t("settings.models.routeUnresolved")}
         </p>
       )}
       {props.routeRecord && !props.routeRecord.executable ? (
-        <p className="vk-pm-fault">
+        <p className="vk-form-fault">
           <b>{t("settings.models.routeUnavailableReason")}: </b>
           {props.routeRecord.unavailableReason ?? t("settings.models.routeUnresolved")}
         </p>
       ) : null}
-      <div className="vk-pm-acts">
+      <div className="vk-form-acts">
         <Button
           disabled={props.saving || !dirty || !selectionValid}
           onClick={() => {
@@ -856,19 +857,19 @@ function DiscoverySummary(props: {
     Math.max(latest, props.snapshot?.catalogStatuses[connection.id]?.observed_at_ms ?? 0)
   ), 0)
   return (
-    <section className="vk-pm-box">
-      <div className="vk-pm-box-head">
+    <section className="vk-form-box">
+      <div className="vk-form-head">
         <div>
           <h3>{t("settings.customModels.discoveryTitle")}</h3>
           <p>{t("settings.customModels.discoverySummary").replace("{accounts}", String(connections.length)).replace("{models}", String(modelIds.size)).replace("{failed}", String(failed))}</p>
           <small>{t("settings.customModels.lastSynchronized").replace("{time}", formatObservationTime(latestObservation, t("settings.customModels.notSynchronized"), locale))}</small>
         </div>
-        <div className="vk-pm-acts">
+        <div className="vk-form-acts">
           <Button onClick={props.onReviewTemplates} size="sm" type="button" variant="outline"><Sparkles aria-hidden="true" />{t("settings.customModels.reviewTemplates")}</Button>
           <Button onClick={props.onRefresh} size="sm" type="button" variant="outline"><RefreshCw aria-hidden="true" />{t("settings.customModels.refreshAll")}</Button>
         </div>
       </div>
-      <div className="vk-pm-chips">
+      <div className="vk-form-chips">
         {connections.map((connection) => {
           const state = props.snapshot?.catalogStatuses[connection.id]?.state ?? "not_checked"
           return <Badge key={connection.id} variant={state === "ready" ? "secondary" : "outline"}>{connection.display_name} · {t(DISCOVERY_STATE_LABEL_KEYS[state])}</Badge>

@@ -14,6 +14,7 @@ import { getPublicAiCustomModelTemplateSuggestionsBatch, savePublicAiCustomModel
 import type { PublicAiCommonModelTemplateSuggestion, PublicAiCustomModelTemplateDecision, PublicAiCustomModelTemplateDecisionBatchItem, PublicAiCustomModelTemplateSuggestionsRecord, PublicAiSettingsSnapshot } from "@/types"
 import { errorMessage } from "@/lib/display-format"
 import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // TemplateReviewDialog groups deterministic matches and unmatched offline capability records.
 // TemplateReviewDialog 对确定性命中与无命中的离线能力记录进行分组。
@@ -133,7 +134,7 @@ export function TemplateReviewDialog(props: {
         </header>
         <ScrollArea>
           <div className="vk-pm-detail-body">
-            {loading ? <p className="vk-pm-status"><LoaderCircle aria-hidden="true" className="vk-spin" />{t("settings.customModels.templateSearching")}</p> : null}
+            {loading ? <p className="vk-form-status"><LoaderCircle aria-hidden="true" className="vk-spin" />{t("settings.customModels.templateSearching")}</p> : null}
             {!loading && exactRecords.length > 0 ? (
               <TemplateReviewSection title={t("settings.customModels.reviewExactDescription")}>
                 {exactRecords.map((record) => <TemplateReviewRow key={record.modelId} record={record} />)}
@@ -145,7 +146,7 @@ export function TemplateReviewDialog(props: {
               </TemplateReviewSection>
             ) : null}
             {!loading && undecidedRecords.length === 0 ? <PageEmptyState title={t("settings.customModels.reviewComplete")} /> : null}
-            {error ? <p className="vk-pm-fault" role="alert">{error}</p> : null}
+            {error ? <p className="vk-form-fault" role="alert">{error}</p> : null}
           </div>
         </ScrollArea>
         <DialogFooter>

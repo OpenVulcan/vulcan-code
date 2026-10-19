@@ -1,0 +1,56 @@
+/* Settings form vocabulary: bordered concern boxes, field grids, check groups, code facts and choice rows
+ * shared by settings dialogs and cards. Loaded lazily with the settings feature. */
+/* 设置表单词汇：带边框的关注块、字段网格、勾选组、代码事实与选择行，供设置对话框与卡片共用。随设置功能懒加载。 */
+/* ---------- Boxes: one bordered block per concern ---------- */
+.vk-form-box { display: grid; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vk-form-box[data-tone="muted"] { background: var(--vk-sunken); }
+.vk-form-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: calc(var(--vk-u) * 3); min-width: 0; }
+.vk-form-head > div:first-child { display: grid; gap: 2px; min-width: 0; }
+.vk-form-head h3,
+.vk-form-head strong { margin: 0; font-size: var(--vk-fs-md); font-weight: 600; }
+.vk-form-head p { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+.vk-form-head small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-form-acts { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: calc(var(--vk-u) * 2); }
+.vk-form-radios { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 4); }
+.vk-form-select { width: min(16rem, 100%); }
+.vk-form-chips { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); }
+/* Route facts: identifiers in mono on a sunken plate. */
+/* 路由事实：等宽标识位于下沉底板上。 */
+.vk-form-codes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4); margin: 0; padding: calc(var(--vk-u) * 3); background: var(--vk-sunken); font-size: var(--vk-fs-xs); }
+.vk-form-codes > div { min-width: 0; }
+.vk-form-codes dt { color: var(--vk-ink-3); }
+.vk-form-codes dd { margin: 0; overflow: hidden; font-family: var(--vk-font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.vk-form-fault { margin: 0; padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid color-mix(in srgb, var(--vk-bad) 35%, var(--vk-line)); background: color-mix(in srgb, var(--vk-bad) 5%, var(--vk-panel)); color: var(--vk-bad); font-size: var(--vk-fs-xs); }
+.vk-form-fault > b { font-weight: 600; }
+/* ---------- Capability editors ---------- */
+.vk-form-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: calc(var(--vk-u) * 3); }
+.vk-form-fact { display: grid; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vk-form-fact > div { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-form-fact > strong { font-weight: 500; overflow-wrap: anywhere; }
+.vk-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: calc(var(--vk-u) * 3); }
+.vk-form-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); gap: calc(var(--vk-u) * 2); }
+.vk-form-group { display: grid; gap: calc(var(--vk-u) * 2.5); margin: 0; padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); }
+.vk-form-group > legend { padding: 0 var(--vk-u); font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-form-switch { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 3); font-size: var(--vk-fs-sm); font-weight: 500; }
+.vk-form-efforts { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); }
+.vk-form-efforts > .vk-check-label { padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); font-size: var(--vk-fs-sm); }
+.vk-form-efforts > .vk-check-label:has([aria-checked="true"]) { border-color: color-mix(in srgb, var(--vk-ember) 50%, var(--vk-line)); background: var(--vk-select); }
+.vk-form-code { min-height: 8rem; font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
+.vk-form-code[data-size="lg"] { min-height: 13rem; }
+.vk-form-inline { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-form-scroll { min-height: 0; overflow-y: auto; }
+.vk-form-choices { display: grid; gap: 1px; }
+.vk-form-choice { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 2); cursor: pointer; }
+.vk-form-choice:hover { background: var(--vk-hover); }
+.vk-form-choice:has([aria-checked="true"]) { background: var(--vk-select); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-form-choice > span { display: grid; gap: 2px; min-width: 0; }
+.vk-form-choice strong { font-size: var(--vk-fs-sm); font-weight: 500; overflow-wrap: anywhere; }
+.vk-form-choice small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-form-status { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-form-summary { display: grid; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); font-size: var(--vk-fs-sm); }
+.vk-form-summary > .vk-facts { font-size: var(--vk-fs-sm); }
+.vk-facts.vk-form-summary { display: grid; }
+.vk-form-stack { display: grid; gap: calc(var(--vk-u) * 2.5); }
+.vk-form-stack > p { margin: 0; }
+.vk-form-fixed { font-size: var(--vk-fs-sm); font-weight: 500; }
+.vk-form-acts[data-spread] { justify-content: space-between; }

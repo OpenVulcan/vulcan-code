@@ -22,6 +22,7 @@ import {
 import { useI18n } from "@/i18n"
 import { CustomProviderMutationContext } from "./custom-provider-mutation-context"
 import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 import { savePublicAiCustomProviderModelDefaults } from "@/service/settings-actions-service"
 import type {
   PublicAiCustomProviderModelDefaults,
@@ -198,8 +199,8 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
   }, [mutationBoundary, props, resetDraft])
 
   return (
-    <section className="vk-pm-box">
-      <div className="vk-pm-box-head">
+    <section className="vk-form-box">
+      <div className="vk-form-head">
         <div>
           <h3>{t("settings.customModels.defaultsTitle")}</h3>
           <p>{t("settings.customModels.defaultsDescription")}</p>
@@ -211,7 +212,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
         </Badge>
       </div>
       <fieldset disabled={saving} className="vk-fieldset">
-        <div className="vk-pm-grid2">
+        <div className="vk-form-grid">
           <DirectNumberInput
             label={t("settings.customModels.contextLimit")}
             onChange={setContextLimit}
@@ -223,7 +224,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
             value={outputLimit}
           />
         </div>
-        <fieldset className="vk-pm-group">
+        <fieldset className="vk-form-group">
           <legend>{t("settings.modelDefaults.structuredOutput")}</legend>
           <Select
             onValueChange={(value) => setStructuredOutput(value as PublicAiStructuredOutputCapability)}
@@ -243,23 +244,23 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
             Number.isSafeInteger(Number(contextLimit)) && Number(contextLimit) > 0 ? Math.min(props.defaults.output_limit, Math.floor(Number(contextLimit) / 4)).toLocaleString() : "-",
           )}
         </p>
-        <div className="vk-pm-grid2">
+        <div className="vk-form-grid">
           <InputResourceEditor
             label={t("settings.customModels.input")}
             onChange={setInputResources}
             value={inputResources}
           />
-          <fieldset className="vk-pm-group">
+          <fieldset className="vk-form-group">
             <legend>{t("settings.customModels.output")}</legend>
-            <strong className="vk-pm-fixed">{t("settings.customModels.fixedTextOutput")}</strong>
+            <strong className="vk-form-fixed">{t("settings.customModels.fixedTextOutput")}</strong>
             <p className="vk-field-hint">
               {t("settings.customModels.fixedTextOutputDescription")}
             </p>
           </fieldset>
         </div>
-        <fieldset className="vk-pm-group">
+        <fieldset className="vk-form-group">
             <legend>{t("settings.customModels.reasoning")}</legend>
-            <label className="vk-pm-switch">
+            <label className="vk-form-switch">
               <span>{t(reasoningEnabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}</span>
               <Switch
                 checked={reasoningEnabled}
@@ -271,7 +272,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
                 }}
               />
             </label>
-            <div className="vk-pm-efforts">
+            <div className="vk-form-efforts">
               {OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => (
                 <label className="vk-check-label" key={effort}>
                   <Checkbox
@@ -298,7 +299,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
           projection={requestProjection}
         />
         {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
-        <div className="vk-pm-acts" data-spread="">
+        <div className="vk-form-acts" data-spread="">
           <Button
             disabled={saving || (!props.customized && !dirty)}
             onClick={() => void restore()}
@@ -345,9 +346,9 @@ function InputResourceEditor(props: {
 }) {
   const { t } = useI18n()
   return (
-    <fieldset className="vk-pm-group">
+    <fieldset className="vk-form-group">
       <legend>{props.label}</legend>
-      <div className="vk-pm-checks">
+      <div className="vk-form-checks">
         {CUSTOM_INPUT_RESOURCES.map((resource) => (
           <label className="vk-check-label" key={resource}>
             <Checkbox

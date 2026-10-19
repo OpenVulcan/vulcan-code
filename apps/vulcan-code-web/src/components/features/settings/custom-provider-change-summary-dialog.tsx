@@ -1,5 +1,6 @@
 import * as React from "react"
 import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 import { LoaderCircle } from "lucide-react"
 
 import {
@@ -48,7 +49,7 @@ export function CustomProviderChangeSummaryDialog(props: {
           <AlertDialogTitle>{t("settings.customModels.changeSummaryTitle")}</AlertDialogTitle>
           <AlertDialogDescription>{props.description}</AlertDialogDescription>
         </AlertDialogHeader>
-        <dl className="vk-facts vk-pm-summary">
+        <dl className="vk-facts vk-form-summary">
           {props.items.map((item) => (
             <React.Fragment key={`${item.label}:${item.value}`}>
               <dt>{item.label}</dt>
@@ -59,7 +60,7 @@ export function CustomProviderChangeSummaryDialog(props: {
           ))}
         </dl>
         {props.error ? (
-          <p className="vk-pm-fault" role="alert">
+          <p className="vk-form-fault" role="alert">
             {props.error}
           </p>
         ) : null}

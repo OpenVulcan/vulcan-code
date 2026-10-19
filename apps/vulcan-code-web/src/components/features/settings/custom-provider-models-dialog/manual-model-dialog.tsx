@@ -15,6 +15,7 @@ import type { PublicAiCommonModelTemplateSuggestion, PublicAiCustomModelDefiniti
 import { errorMessage } from "@/lib/display-format"
 import { EMPTY_PROJECTION } from "./model-dialog-constants"
 import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ManualModelDialog asks for a real model ID before any model object is created.
 // ManualModelDialog 在创建任何模型对象前要求输入真实模型 ID。
@@ -105,7 +106,7 @@ export function ManualModelDialog(props: {
           <DialogTitle>{t("settings.customModels.addManual")}</DialogTitle>
           <DialogDescription>{t("settings.customModels.manualDescription")}</DialogDescription>
         </DialogHeader>
-        <fieldset disabled={saving} className="vk-fieldset vk-pm-form">
+        <fieldset disabled={saving} className="vk-fieldset vk-form-scroll">
           <label className="vk-field">
             {t("settings.customModels.modelId")}
             <Input autoFocus onChange={(event) => setModelId(event.target.value)} value={modelId} />
@@ -114,16 +115,16 @@ export function ManualModelDialog(props: {
             {t("settings.customModels.displayName")}
             <Input onChange={(event) => setDisplayName(event.target.value)} placeholder={modelId.trim()} value={displayName} />
           </label>
-          <fieldset className="vk-pm-group">
+          <fieldset className="vk-form-group">
             <legend>{t("settings.customModels.templateChoice")}</legend>
             {suggestionLoading ? (
-              <p className="vk-pm-status">
+              <p className="vk-form-status">
                 <LoaderCircle aria-hidden="true" className="vk-spin" />
                 {t("settings.customModels.templateSearching")}
               </p>
             ) : null}
-            <RadioGroup className="vk-pm-choices" onValueChange={setChoice} value={choice}>
-              <label className="vk-pm-choice">
+            <RadioGroup className="vk-form-choices" onValueChange={setChoice} value={choice}>
+              <label className="vk-form-choice">
                 <RadioGroupItem value="defaults" />
                 <span>
                   <strong>{t("settings.customModels.templateKeepDefaults")}</strong>
@@ -131,7 +132,7 @@ export function ManualModelDialog(props: {
                 </span>
               </label>
               {suggestions.map((suggestion) => (
-                <label className="vk-pm-choice" key={suggestion.template_key}>
+                <label className="vk-form-choice" key={suggestion.template_key}>
                   <RadioGroupItem value={suggestion.template_key} />
                   <span>
                     <strong>{suggestion.template_key}</strong>
@@ -143,7 +144,7 @@ export function ManualModelDialog(props: {
               ))}
             </RadioGroup>
           </fieldset>
-          <section className="vk-pm-summary">
+          <section className="vk-form-summary">
             <span className="vk-label">{t("settings.customModels.changeSummaryTitle")}</span>
             <dl className="vk-facts">
               <dt>{t("settings.customModels.summaryModel")}</dt>
