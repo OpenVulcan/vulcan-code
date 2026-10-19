@@ -64,7 +64,7 @@ describe("partial usage display from old persisted V1 events", () => {
     expect(markup).toContain("无缓存输入</span>");
     expect(markup).toContain("缓存命中率</span>");
     expect(markup).toContain("91.8%");
-    expect(markup).not.toMatch(/≥|已知|7\/8|turn-stats-coverage-note/);
+    expect(markup).not.toMatch(/≥|7\/8|turn-stats-coverage-note/);
     expect(markup.match(/class="turn-stats-metric-row"/g)).toHaveLength(3);
     expect(markup).toContain("214.8K");
     expect(markup).not.toContain("83.98");

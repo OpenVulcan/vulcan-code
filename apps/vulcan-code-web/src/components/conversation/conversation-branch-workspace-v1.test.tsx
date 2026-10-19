@@ -317,7 +317,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     // Markup goes through the production transcript grouping and collapsed card component.
     // markup 经过生产转录分组与默认折叠卡组件。
     const markup = renderWorkspace(events);
-    expect(markup.match(/class=.context-compaction-block /g)).toHaveLength(1);
+    expect(markup.match(/class="context-compaction-block /g)).toHaveLength(1);
     expect(markup).toContain(status === "completed" ? "上下文已压缩" : "上下文压缩失败");
     expect(markup).not.toContain("压缩摘要正文");
     expect(markup).toContain("压缩之后的正常回答");
