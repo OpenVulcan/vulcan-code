@@ -199,7 +199,8 @@
 /* Queued prompts and the session goal sit on the composer's top edge, slightly narrower than it. */
 /* 待发送提示词与会话目标贴在输入区上边缘，比输入区略窄。 */
 .vk-queue,
-.vk-goal {
+.vk-goal,
+.vk-memory {
   width: 92%;
   align-self: center;
   margin-bottom: calc(var(--vk-u) * -2.5);
@@ -208,7 +209,8 @@
   background: var(--vk-panel);
   pointer-events: auto;
 }
-.vk-queue + .vk-goal { border-top-color: var(--vk-line-soft); }
+.vk-queue + .vk-goal,
+:is(.vk-queue, .vk-goal) + .vk-memory { border-top-color: var(--vk-line-soft); }
 .vk-queue { padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2) 0; }
 .vk-queue-list { display: grid; overflow: hidden; }
 .vk-queue-row {
@@ -260,6 +262,25 @@
 .vk-goal-time { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .vk-goal-form { display: grid; gap: calc(var(--vk-u) * 2.5); min-height: 0; overflow-y: auto; }
 .vk-goal-form > .vk-textarea { min-height: 160px; resize: vertical; }
+
+/* Dedicated sessions: the memory lock strip of a created assistant tints ember while memory is locked. */
+/* 专职会话：已创建助手的记忆锁定条在记忆锁定时染上余烬色。 */
+.vk-memory {
+  min-height: calc(var(--vk-u) * 7.5);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1);
+  padding: 2px calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 1) calc(var(--vk-u) * 3);
+  color: var(--vk-ink-3);
+  font-size: var(--vk-fs-sm);
+}
+.vk-memory[data-locked] { border-color: color-mix(in srgb, var(--vk-ember) 40%, var(--vk-line)); background: color-mix(in srgb, var(--vk-ember) 6%, var(--vk-panel)); box-shadow: inset 0 2px 0 var(--vk-ember); }
+.vk-memory-status { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-memory[data-locked] .vk-memory-status { color: var(--vk-ember-ink); font-weight: 500; }
+/* An unsent draft carries a free row of choices above the card: project, session kind, tool access. */
+/* 未发送的草稿在卡片上方带有一行独立选项：项目、会话种类、工具开放方式。 */
+.vk-draft-strip { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 1.5); padding: 0 calc(var(--vk-u) * 1); pointer-events: auto; }
+.vk-draft-strip > .vk-select { max-width: 16rem; background: var(--vk-raised); }
 
 /* ---------- Staged attachments ---------- */
 /* Each file is a tile: images fill it, other files show their kind icon over the name. */

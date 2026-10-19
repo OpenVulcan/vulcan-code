@@ -226,6 +226,12 @@
   animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
 }
 
+/* Busy icons (refresh, loader) turn in place while their work runs. */
+/* 忙碌图标（刷新、加载）在工作进行时原地旋转。 */
+.vk-spin {
+  animation: vk-spin 1s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   :is(.vk-root, .vk-layer) *,
   :is(.vk-root, .vk-layer) *::before,

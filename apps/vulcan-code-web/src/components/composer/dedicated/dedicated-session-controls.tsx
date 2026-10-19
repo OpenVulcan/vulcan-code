@@ -48,14 +48,13 @@ export function DedicatedMemoryLockBar(props: { memory: DedicatedMemorySelection
   const dock = useAssistantDock();
   const [convertOpen, setConvertOpen] = React.useState(false);
   return (
-    <div className="dedicated-memory-bar" data-locked={locked}>
-      <span className="dedicated-memory-bar-status" role="status">
+    <div className="vk-memory" data-locked={locked ? "true" : undefined}>
+      <span className="vk-memory-status" role="status">
         <Icon size={14} aria-hidden="true" />
         {locked ? t("composer.dedicated.lockedStatus") : t("composer.dedicated.unlockedStatus")}
       </span>
       {locked && dock ? (
         <Button
-          className="ml-auto"
           disabled={pending || props.running}
           onClick={() => setConvertOpen(true)}
           size="xs"
@@ -68,7 +67,6 @@ export function DedicatedMemoryLockBar(props: { memory: DedicatedMemorySelection
         </Button>
       ) : null}
       <Button
-        className={locked && dock ? undefined : "ml-auto"}
         disabled={pending || props.running}
         onClick={() => void toggle()}
         size="xs"

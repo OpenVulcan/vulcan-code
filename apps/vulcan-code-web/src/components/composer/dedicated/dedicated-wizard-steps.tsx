@@ -43,25 +43,25 @@ export function DedicatedWizardOptions<T>(props: {
   multiple?: boolean;
 }) {
   return (
-    <div className="dedicated-wizard-options" data-columns={props.columns} data-multiple={props.multiple || undefined}>
+    <div className="vk-wiz-options" data-columns={props.columns} data-multiple={props.multiple || undefined}>
       {props.options.map((option) => (
         <button
           aria-pressed={props.isSelected(option.value)}
-          className="dedicated-wizard-option"
+          className="vk-wiz-option"
           disabled={props.disabled}
           key={String(option.value)}
           onClick={() => props.onSelect(option.value)}
           type="button"
         >
           {option.preview}
-          <span className="dedicated-wizard-option-title">
+          <span className="vk-wiz-option-title">
             {option.label}
-            {option.badge ? <em className="dedicated-wizard-option-badge">{option.badge}</em> : null}
-            <span aria-hidden="true" className="dedicated-wizard-option-mark" />
+            {option.badge ? <em className="vk-badge" data-tone="ember">{option.badge}</em> : null}
+            <span aria-hidden="true" className="vk-wiz-mark" />
           </span>
           {option.hint ? <small>{option.hint}</small> : null}
           {option.meter === undefined ? null : (
-            <span aria-hidden="true" className="dedicated-wizard-option-meter">
+            <span aria-hidden="true" className="vk-wiz-meter">
               <span style={{ inlineSize: `${Math.round(Math.min(Math.max(option.meter, 0), 1) * 100)}%` }} />
             </span>
           )}
@@ -75,18 +75,18 @@ export function DedicatedWizardOptions<T>(props: {
  * 回答缩略示意：标准回答为纯 Markdown 文本行，交互回答在标题下方显示图表与卡片。 */
 function AnswerModePreview(props: { mode: AnswerMode }) {
   return (
-    <span aria-hidden="true" className="dedicated-answer-preview" data-mode={props.mode}>
-      <span className="dedicated-answer-preview-line" data-variant="heading" />
+    <span aria-hidden="true" className="vk-wiz-sketch" data-mode={props.mode}>
+      <span className="vk-wiz-sketch-line" data-variant="heading" />
       {props.mode === "standard" ? (
         <>
-          <span className="dedicated-answer-preview-line" />
-          <span className="dedicated-answer-preview-line" />
-          <span className="dedicated-answer-preview-line" data-variant="short" />
+          <span className="vk-wiz-sketch-line" />
+          <span className="vk-wiz-sketch-line" />
+          <span className="vk-wiz-sketch-line" data-variant="short" />
         </>
       ) : (
-        <span className="dedicated-answer-preview-widgets">
-          <span className="dedicated-answer-preview-chart"><i /><i /><i /><i /></span>
-          <span className="dedicated-answer-preview-card"><i /><i /></span>
+        <span className="vk-wiz-sketch-widgets">
+          <span className="vk-wiz-sketch-chart"><i /><i /><i /><i /></span>
+          <span className="vk-wiz-sketch-card"><i /><i /></span>
         </span>
       )}
     </span>
@@ -143,8 +143,8 @@ export function DedicatedKnowledgeStep(props: {
 }) {
   const { t } = useI18n();
   const { libraries, error } = props.knowledge;
-  if (error) return <p className="dedicated-wizard-error" role="alert">{error}</p>;
-  if (libraries === null) return <p className="dedicated-wizard-hint" role="status">{t("composer.dedicated.knowledgeLoading")}</p>;
+  if (error) return <p className="vk-wiz-error" role="alert">{error}</p>;
+  if (libraries === null) return <p className="vk-wiz-hint" role="status">{t("composer.dedicated.knowledgeLoading")}</p>;
   const options: DedicatedWizardOption<string | null>[] = [
     { value: null, label: t("composer.dedicated.knowledgeNone"), hint: t("composer.dedicated.knowledgeNoneHint") },
     ...libraries.map((library) => ({ value: library.id, label: library.name, hint: library.description || undefined })),
@@ -206,12 +206,12 @@ export function DedicatedSettingsStep(props: {
       {/* The section appears once libraries exist (or loading failed), so an empty project never flashes it. */}
       {/* 分区在确认存在知识库（或加载失败）后才出现，没有知识库的项目不会闪现该分区。 */}
       {!props.knowledge.libraries?.length && !props.knowledge.error ? null : (
-        <section className="dedicated-wizard-section">
+        <section className="vk-wiz-section">
           <h3>{t("composer.dedicated.step.knowledge")}</h3>
           <DedicatedKnowledgeStep knowledge={props.knowledge} libraryIds={props.libraryIds} onChange={props.onKnowledgeChange} />
         </section>
       )}
-      <section className="dedicated-wizard-section">
+      <section className="vk-wiz-section">
         <h3>{t("composer.dedicated.step.answerMode")}</h3>
         <DedicatedWizardOptions
           columns={2}
@@ -220,7 +220,7 @@ export function DedicatedSettingsStep(props: {
           options={answerModeOptions}
         />
       </section>
-      <section className="dedicated-wizard-section">
+      <section className="vk-wiz-section">
         <h3>{t("composer.dedicated.step.outputStyle")}</h3>
         <DedicatedWizardOptions
           columns={styleColumns}
@@ -250,31 +250,33 @@ export function DedicatedPromptStep(props: {
   const { t } = useI18n();
   return (
     <>
-      <div className="dedicated-wizard-model">
-        <span className="dedicated-wizard-hint">{t("composer.dedicated.sessionModel")}</span>
+      <div className="vk-wiz-bar">
+        <span className="vk-wiz-hint">{t("composer.dedicated.sessionModel")}</span>
         {props.modelControl}
       </div>
       <Textarea
         aria-label={t("composer.dedicated.prompt")}
-        className="dedicated-wizard-prompt"
+        className="vk-wiz-prompt"
         density="large"
         disabled={props.disabled}
         onChange={(event) => props.onPromptChange(event.target.value)}
         placeholder={t("composer.dedicated.promptPlaceholder")}
         value={props.prompt}
       />
-      <div className="dedicated-wizard-actions">
-        <span className="dedicated-wizard-hint">{t("composer.dedicated.promptImmutableHint")}</span>
-        <Button
-          disabled={props.disabled || !props.canGenerate}
-          onClick={props.onOpenGenerator}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          <Sparkles size={14} />
-          {t("composer.dedicated.generate")}
-        </Button>
+      <div className="vk-wiz-bar">
+        <span className="vk-wiz-hint">{t("composer.dedicated.promptImmutableHint")}</span>
+        <span className="vk-wiz-end">
+          <Button
+            disabled={props.disabled || !props.canGenerate}
+            onClick={props.onOpenGenerator}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <Sparkles size={14} />
+            {t("composer.dedicated.generate")}
+          </Button>
+        </span>
       </div>
     </>
   );
@@ -319,12 +321,12 @@ export function DedicatedThinkingPanel(props: { reasoning: string; output: strin
   if (!props.streaming && props.reasoning.length === 0) return null;
   const waiting = props.reasoning.length === 0 && props.output.length === 0;
   return (
-    <details className="dedicated-wizard-thinking" open={props.streaming || undefined}>
+    <details className="vk-gen-thinking" open={props.streaming || undefined}>
       <summary>
-        {props.streaming ? <RefreshCw className="animate-spin" size={13} /> : <Brain size={13} />}
+        {props.streaming ? <RefreshCw className="vk-spin" size={13} /> : <Brain size={13} />}
         {t(props.streaming ? "composer.dedicated.thinkingLive" : "composer.dedicated.thinking")}
       </summary>
-      <div className="dedicated-wizard-thinking-body" ref={bodyRef}>
+      <div className="vk-gen-thinking-body" ref={bodyRef}>
         {waiting ? <p>{t("composer.dedicated.thinkingWaiting")}</p> : null}
         {props.reasoning ? <p>{props.reasoning}</p> : null}
         {props.streaming && props.output ? (
