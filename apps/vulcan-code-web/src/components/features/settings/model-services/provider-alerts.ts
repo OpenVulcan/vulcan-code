@@ -51,3 +51,34 @@ export function collectProviderAlerts(
   }
   return alerts
 }
+
+// HealthState summarizes an account or provider for status dots: failing, needing attention, healthy or switched off.
+// HealthState 为状态圆点概括账号或供应商：失败、需关注、正常或已停用。
+export type HealthState = "bad" | "warn" | "ok" | "off"
+
+// alertSeverity ranks one alert kind; a failed catalog blocks the account, the others only need attention.
+// alertSeverity 为一种提醒分级；目录失败会阻断账号，其余只需关注。
+export function alertSeverity(kind: ProviderAlertKind): "bad" | "warn" {
+  return kind === "catalog_error" ? "bad" : "warn"
+}
+
+// healthOf folds alerts into one state; enabled reports whether any covered account is switched on.
+// healthOf 将提醒合并为一个状态；enabled 表示所覆盖的账号中是否有已启用的。
+export function healthOf(alerts: readonly ProviderAlert[], enabled: boolean): HealthState {
+  if (!enabled) return "off"
+  if (alerts.some((alert) => alertSeverity(alert.kind) === "bad")) return "bad"
+  return alerts.length > 0 ? "warn" : "ok"
+}
+
+// providerHealth maps every provider with accounts to its folded health.
+// providerHealth 将每个有账号的供应商映射到合并后的健康状态。
+export function providerHealth(snapshot: PublicAiSettingsSnapshot, alerts: readonly ProviderAlert[]): Record<string, HealthState> {
+  const health: Record<string, HealthState> = {}
+  for (const connection of snapshot.connections) {
+    const providerId = connection.provider_id
+    if (providerId in health) continue
+    const enabled = snapshot.connections.some((candidate) => candidate.provider_id === providerId && candidate.enabled)
+    health[providerId] = healthOf(alerts.filter((alert) => alert.providerId === providerId), enabled)
+  }
+  return health
+}

@@ -1,7 +1,12 @@
+import type * as React from "react"
 import { ExternalLink } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
-import { localizedProviderDescription, localizedProviderName } from "@/components/features/settings/provider-presentation"
+import {
+  localizedProviderDescription,
+  localizedProviderName,
+  localizedServiceEntryPresentation,
+} from "@/components/features/settings/provider-presentation"
 import { useI18n } from "@/i18n"
 import type {
   CredentialBillingKind,
@@ -35,7 +40,7 @@ export function providerCategoryLabel(category: PublicAiProviderCategory, t: Tra
 
 // billingLabel names one credential billing model with the account-card wording.
 // billingLabel 使用账号卡片的措辞命名一种凭据计费方式。
-function billingLabel(kind: CredentialBillingKind, t: Translate): string {
+export function billingLabel(kind: CredentialBillingKind, t: Translate): string {
   switch (kind) {
     case "pay_as_you_go": return t("composer.accountCard.billingPayAsYouGo")
     case "token_plan": return t("composer.accountCard.billingTokenPlan")
@@ -72,9 +77,19 @@ export function providerIntroFacts(provider: PublicAiProviderDescriptor, t: Tran
   return facts
 }
 
-// ProviderIntroCard is the hover introduction: what the provider offers, disclaimers and signup.
-// ProviderIntroCard 是悬停介绍：供应商提供什么、免责声明与注册入口。
-export function ProviderIntroCard(props: { provider: PublicAiProviderDescriptor }) {
+// ProviderIntroCardProps names the provider and an optional footer action, such as connect or view accounts.
+// ProviderIntroCardProps 指定供应商与可选的底部操作，例如连接或查看账号。
+export interface ProviderIntroCardProps {
+  provider: PublicAiProviderDescriptor
+  action?: React.ReactNode
+  // compact drops the heading when the card sits under a page header that already names the provider.
+  // compact 在卡片位于已显示供应商名称的页头下方时省略标题。
+  compact?: boolean
+}
+
+// ProviderIntroCard is the provider introduction: what it offers, how to connect, disclaimers and signup.
+// ProviderIntroCard 是供应商介绍：提供什么、如何接入、免责声明与注册入口。
+export function ProviderIntroCard(props: ProviderIntroCardProps) {
   const { t } = useI18n()
   const { provider } = props
   const name = localizedProviderName(provider.id, provider.display_name, t)
@@ -83,36 +98,73 @@ export function ProviderIntroCard(props: { provider: PublicAiProviderDescriptor 
   const signupUrl = providerSignupUrl(provider)
   return (
     <div className="model-services-intro">
-      <div className="model-services-intro-head">
-        <ProviderIcon category={provider.category} className="size-8 shrink-0" providerId={provider.id} />
-        <div className="min-w-0">
+      {props.compact ? null : (
+        <div className="model-services-intro-head">
+          <ProviderIcon category={provider.category} className="size-8 shrink-0" providerId={provider.id} />
           <strong>{name}</strong>
-          <span className="model-services-intro-tags">
-            {category ? <span className="model-services-chip" data-variant="category">{category}</span> : null}
-            {(provider.service_tags ?? []).map((tag) => (
-              <span className="model-services-chip" data-tag={tag} key={tag}>{serviceTagLabel(tag, t)}</span>
-            ))}
-          </span>
+          {category ? <span className="model-services-chip" data-variant="category">{category}</span> : null}
         </div>
-      </div>
+      )}
+      <ProviderTagChips provider={provider} />
       <p className="model-services-intro-description">{localizedProviderDescription(provider.id, t)}</p>
       {facts.length > 0 ? (
-        <ul className="model-services-intro-facts">
-          {facts.map((fact) => <li key={fact}>{fact}</li>)}
-        </ul>
+        <div className="model-services-intro-section">
+          <span>{t("settings.modelServices.intro.features")}</span>
+          <ul>{facts.map((fact) => <li key={fact}>{fact}</li>)}</ul>
+        </div>
+      ) : null}
+      {provider.service_entries.length > 0 ? (
+        <div className="model-services-intro-section">
+          <span>{t("settings.modelServices.intro.entryList")}</span>
+          <div className="model-services-chip-row">
+            {provider.service_entries.map((entry) => (
+              <span className="model-services-chip" key={entry.id}>{localizedServiceEntryPresentation(provider.id, entry, t).title}</span>
+            ))}
+          </div>
+        </div>
       ) : null}
       <p className="model-services-intro-note">
         {t(provider.category === "relay" ? "settings.modelServices.intro.relayDisclaimer" : "settings.modelServices.intro.disclaimer")}
       </p>
-      {signupUrl ? (
-        <div className="model-services-intro-signup">
-          <a href={signupUrl} rel="noreferrer" target="_blank">
-            <ExternalLink aria-hidden="true" className="size-3.5" />
-            {t("settings.modelServices.signup")}
-          </a>
-          {provider.promotion ? <small>{t(provider.promotion.disclosure_key)}</small> : null}
+      {provider.promotion?.referral_url ? (
+        <p className="model-services-intro-affiliate">
+          <strong>{t("settings.modelServices.affiliate")}</strong>
+          <span>{t(provider.promotion.disclosure_key)}</span>
+        </p>
+      ) : null}
+      {signupUrl || props.action ? (
+        <div className="model-services-intro-foot">
+          {signupUrl ? (
+            <a href={signupUrl} rel="noreferrer" target="_blank">
+              {t("settings.modelServices.signup")}
+              <ExternalLink aria-hidden="true" className="size-3.5" />
+            </a>
+          ) : <span />}
+          {props.action ?? null}
         </div>
       ) : null}
     </div>
   )
+}
+
+// ProviderTagChips renders the service tags in their tag colors.
+// ProviderTagChips 以各自的标签颜色渲染服务标签。
+export function ProviderTagChips(props: { provider: Pick<PublicAiProviderDescriptor, "service_tags">; small?: boolean }) {
+  const { t } = useI18n()
+  const tags = props.provider.service_tags ?? []
+  if (tags.length === 0) return null
+  return (
+    <span className="model-services-chip-row" data-size={props.small ? "small" : undefined}>
+      {tags.map((tag) => <span className="model-services-chip" data-tag={tag} key={tag}>{serviceTagLabel(tag, t)}</span>)}
+    </span>
+  )
+}
+
+// AffiliateChip marks a provider whose signup link is a disclosed referral link.
+// AffiliateChip 标记注册链接为已披露邀请链接的供应商。
+export function AffiliateChip(props: { provider: Pick<PublicAiProviderDescriptor, "promotion"> }) {
+  const { t } = useI18n()
+  const promotion = props.provider.promotion
+  if (!promotion?.referral_url) return null
+  return <span className="model-services-chip" data-variant="affiliate" title={t(promotion.disclosure_key)}>{t("settings.modelServices.affiliate")}</span>
 }

@@ -5,12 +5,12 @@
   container: model-services / inline-size;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   min-width: 0;
 }
 
-/* Top-level sections are a raised segmented control, so they never read like the in-page tab strips below them. */
-/* 顶层分区使用凸起的分段控件，避免与下方页内标签条混淆。 */
+/* Top-level sections are a raised segmented control, so they never read like the in-page filters below them. */
+/* 顶层分区使用凸起的分段控件，避免与下方页内筛选混淆。 */
 .model-services-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -62,17 +62,52 @@
   text-align: center;
 }
 
-/* Alerts list only accounts that need attention. */
-/* 提醒只列出需要关注的账号。 */
+/* Shell: one bordered card; alerts on top, the provider rail and the working panel side by side. */
+/* 外壳：一张带边框的卡片；顶部为提醒，下方左侧目录与右侧工作区并排。 */
+.model-services-shell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: clip;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-xl);
+  background: var(--card);
+}
+
+.model-services-body {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 560px;
+}
+
+.model-services-main { min-width: 0; padding: 16px 18px 18px; }
+
+/* Health dots shared by alerts and rail rows. */
+/* 健康圆点，由提醒与目录行共用。 */
+.model-services-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--vcn-radius-pill);
+  background: var(--vcn-content-success);
+}
+
+.model-services-dot[data-state="warn"] { background: var(--vcn-content-warning); }
+.model-services-dot[data-state="bad"] { background: var(--destructive); }
+.model-services-dot[data-state="off"] { background: color-mix(in srgb, var(--muted-foreground) 60%, transparent); }
+
+/* Alerts: severity pills that open the provider; with none, one calm "all healthy" pill. */
+/* 提醒：可打开对应供应商的严重程度胶囊；没有提醒时显示一个“全部正常”胶囊。 */
 .model-services-alerts {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--vcn-content-warning) 45%, var(--border));
-  border-radius: var(--vcn-radius-lg);
-  background: color-mix(in srgb, var(--vcn-content-warning) 8%, var(--card));
-  color: var(--vcn-content-warning);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
 }
 
 .model-services-alerts > ul {
@@ -85,108 +120,114 @@
   list-style: none;
 }
 
+.model-services-alerts > small { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
+
 .model-services-alert {
+  --ms-tone: var(--vcn-content-warning);
   display: inline-flex;
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--ms-tone) 22%, transparent);
   border-radius: var(--vcn-radius-pill);
-  background: var(--card);
-  color: var(--foreground);
+  background: color-mix(in srgb, var(--ms-tone) 12%, var(--card));
+  color: var(--ms-tone);
   font-size: var(--vcn-font-size-sm);
-  cursor: pointer;
+  white-space: nowrap;
 }
 
-.model-services-alert:hover { border-color: var(--vcn-content-warning); }
-.model-services-alert > span { color: var(--muted-foreground); white-space: nowrap; }
-.model-services-alert > span:last-child { color: var(--vcn-content-warning); }
-.model-services-alert[data-kind="catalog_error"] > span:last-child { color: var(--destructive); }
+.model-services-alert[data-severity="bad"] { --ms-tone: var(--destructive); }
+.model-services-alert[data-severity="ok"] { --ms-tone: var(--vcn-content-success); }
+.model-services-alert > svg { width: 14px; height: 14px; }
+.model-services-alert > strong { font-weight: 600; }
+.model-services-alert > span { opacity: 0.85; }
+button.model-services-alert { cursor: pointer; }
+button.model-services-alert:hover { border-color: var(--ms-tone); }
+button.model-services-alert:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 
-/* View switch: provider-led or model-led. */
-/* 视图切换：以供应商为主或以模型为主。 */
+/* View switch: provider-led or model-led, placed in the working panel's header. */
+/* 视图切换：以供应商为主或以模型为主，位于工作区标头。 */
 .model-services-view-switch {
   display: inline-flex;
-  align-self: flex-start;
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--border);
   border-radius: var(--vcn-radius-md);
+  background: var(--background);
 }
 
 .model-services-view-switch > button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 12px;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
   border: 0;
   border-radius: calc(var(--vcn-radius-md) - 2px);
   background: transparent;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .model-services-view-switch > button > svg { width: 14px; height: 14px; }
-.model-services-view-switch > button[aria-pressed="true"] { background: var(--accent); color: var(--foreground); font-weight: 600; }
+.model-services-view-switch > button:hover { color: var(--foreground); }
 
-.model-services-split {
-  display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
-  align-items: start;
-  gap: 20px;
-  min-width: 0;
+.model-services-view-switch > button[aria-pressed="true"] {
+  background: var(--card);
+  color: var(--foreground);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--border);
 }
 
-.model-services-main { min-width: 0; }
-
-/* Rail: search, tag chips, configured list (reorderable) and recommendations. */
-/* 左侧目录：搜索、标签筛选、已配置列表（可排序）与推荐列表。 */
+/* Rail: search, tag filter, configured list (reorderable), recommendations and a footer. */
+/* 左侧目录：搜索、标签筛选、已配置列表（可排序）、推荐列表与底部操作。 */
 .model-services-rail {
   position: sticky;
   top: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-height: calc(100dvh - 180px);
-  min-height: 240px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--card);
+  align-self: stretch;
+  max-height: calc(100dvh - 140px);
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  background: var(--background);
 }
 
-.model-services-rail-search { position: relative; }
+.model-services-rail-search { position: relative; padding: 10px 10px 6px; }
 
 .model-services-rail-search > svg {
   position: absolute;
   z-index: 1;
-  top: 50%;
-  left: 10px;
+  top: calc(50% + 2px);
+  left: 20px;
   color: var(--muted-foreground);
   pointer-events: none;
   transform: translateY(-50%);
 }
 
-.model-services-rail-search input { height: 32px; padding-left: 30px; }
+.model-services-rail-search input { height: 32px; padding-left: 30px; background: var(--card); }
 
-.model-services-tag-chips,
-.model-services-scope-chips {
+.model-services-tag-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+  padding: 0 10px 6px;
 }
 
+/* Filter chips: quiet pills that turn primary-soft when pressed. */
+/* 筛选胶囊：安静的胶囊，按下时变为主色浅底。 */
 .model-services-tag-chip {
   height: 24px;
   max-width: 220px;
   overflow: hidden;
-  padding: 0 10px;
-  border: 1px solid var(--border);
+  padding: 0 9px;
+  border: 1px solid transparent;
   border-radius: var(--vcn-radius-pill);
-  background: transparent;
+  background: var(--muted);
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-xs);
   text-overflow: ellipsis;
@@ -195,68 +236,79 @@
 }
 
 .model-services-tag-chip:hover { color: var(--foreground); }
+.model-services-tag-chip:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 
 .model-services-tag-chip[aria-pressed="true"] {
-  border-color: var(--foreground);
-  background: var(--foreground);
-  color: var(--background);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, var(--card));
+  color: var(--primary);
+  font-weight: 600;
 }
 
 .model-services-rail-sections {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
   min-height: 0;
-  margin-inline: -4px;
   overflow: auto;
-  padding-inline: 4px;
+  padding: 0 6px 8px;
 }
 
-.model-services-rail-sections ul { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+.model-services-rail-sections ul { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
 
 .model-services-rail-heading {
-  margin: 0 0 4px;
-  padding-inline: 6px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding: 0 6px;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-xs);
   font-weight: 600;
+  letter-spacing: 0.03em;
 }
+
+.model-services-rail-heading > small { font-size: var(--vcn-font-size-2xs); font-weight: 400; opacity: 0.8; }
 
 .model-services-rail-item {
   position: relative;
   display: flex;
   align-items: center;
-  border-radius: var(--vcn-radius-md);
 }
 
-.model-services-rail-item.dragging { opacity: 0.5; }
+.model-services-rail-item.dragging { opacity: 0.45; }
 
 .model-services-rail-grip {
   position: absolute;
-  left: -2px;
+  z-index: 1;
+  left: 3px;
   width: 12px;
   height: 12px;
   color: var(--muted-foreground);
-  opacity: 0;
+  opacity: 0.35;
   cursor: grab;
+  pointer-events: none;
 }
 
-.model-services-rail-item:hover .model-services-rail-grip { opacity: 0.7; }
+.model-services-rail-grip[data-hidden="true"] { display: none; }
+.model-services-rail-item:hover .model-services-rail-grip { opacity: 0.8; }
 
+/* Two-line row: logo, name over chips, and a meta column with health and counts. */
+/* 两行目录项：图标、名称与标签两行，以及显示健康状态与数量的信息列。 */
 .model-services-rail-row {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   min-width: 0;
-  height: 34px;
-  padding: 0 8px 0 10px;
-  border: 0;
+  padding: 7px 8px 7px 16px;
+  border: 1px solid transparent;
   border-radius: var(--vcn-radius-md);
   background: transparent;
   color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
   text-align: left;
   cursor: pointer;
 }
@@ -265,52 +317,107 @@
 .model-services-rail-row:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 
 .model-services-rail-row.active {
-  background: var(--accent);
+  border-color: var(--border);
+  background: var(--card);
+  box-shadow: var(--vcn-shadow-raised);
+}
+
+.model-services-rail-copy { display: grid; gap: 3px; min-width: 0; }
+
+.model-services-rail-name {
+  overflow: hidden;
+  font-size: var(--vcn-font-size-md);
   font-weight: 600;
-  box-shadow: inset 2px 0 0 var(--vcn-brand-flame-start);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.model-services-rail-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-services-rail-row > small { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); font-weight: 400; }
+.model-services-rail-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; }
+.model-services-rail-sub:empty { display: none; }
 
-.model-services-rail-alert {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--vcn-radius-pill);
-  background: var(--vcn-content-warning);
+.model-services-rail-meta {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  white-space: nowrap;
 }
+
+.model-services-rail-meta > span { display: inline-flex; align-items: center; gap: 5px; }
 
 /* Move buttons appear on hover or keyboard focus only, so the list stays calm. */
 /* 移动按钮仅在悬停或键盘聚焦时出现，保持列表安静。 */
 .model-services-rail-move {
   position: absolute;
-  right: 2px;
+  right: 4px;
   display: none;
+  border: 1px solid var(--border);
   border-radius: var(--vcn-radius-md);
-  background: var(--accent);
+  background: var(--card);
 }
 
 .model-services-rail-item:hover .model-services-rail-move,
 .model-services-rail-item:focus-within .model-services-rail-move { display: inline-flex; }
 
-.model-services-rail-add { flex: none; width: 100%; }
+.model-services-rail-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  margin-top: auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.model-services-rail-foot > button:last-child { align-self: flex-start; color: var(--muted-foreground); }
+
+/* Chips: service tags in their own colors, category, entry and the affiliate mark. */
+/* 标签胶囊：服务标签使用各自颜色，另有类别、入口与邀请标记。 */
+.model-services-chip-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.model-services-chip-row[data-size="small"] { gap: 3px; }
+
+.model-services-chip {
+  --ms-tone: var(--muted-foreground);
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--vcn-radius-pill);
+  background: var(--muted);
+  color: var(--ms-tone);
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+[data-size="small"] > .model-services-chip,
+.model-services-rail-sub > .model-services-chip { height: 17px; padding: 0 6px; font-size: var(--vcn-font-size-2xs); }
+
+.model-services-chip:is([data-tag], [data-variant="affiliate"]) { background: color-mix(in srgb, var(--ms-tone) 13%, var(--card)); }
+.model-services-chip[data-tag="model"] { --ms-tone: var(--vcn-content-info); }
+.model-services-chip[data-tag="search"] { --ms-tone: var(--vcn-content-success); }
+.model-services-chip[data-tag="analysis"] { --ms-tone: var(--vcn-content-warning); }
+.model-services-chip[data-variant="category"] { border: 1px solid var(--border); background: transparent; }
+.model-services-chip[data-variant="affiliate"] { --ms-tone: var(--primary); font-weight: 700; }
 
 /* Hover intro card. */
 /* 悬停介绍卡。 */
-.model-services-intro { display: grid; gap: 10px; }
-.model-services-intro-head { display: flex; align-items: center; gap: 10px; }
-.model-services-intro-head strong { display: block; font-size: var(--vcn-font-size-lg); }
-.model-services-intro-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-.model-services-intro-description { margin: 0; color: var(--foreground); font-size: var(--vcn-font-size-sm); line-height: 1.55; }
+.model-services-intro { display: grid; gap: 10px; font-size: var(--vcn-font-size-sm); }
+.model-services-intro-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.model-services-intro-head strong { font-size: var(--vcn-font-size-lg); }
+.model-services-intro-description { margin: 0; color: var(--foreground); line-height: 1.55; }
+.model-services-intro-section { display: grid; gap: 4px; }
 
-.model-services-intro-facts {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding-left: 16px;
+.model-services-intro-section > span {
   color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vcn-font-size-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
+
+.model-services-intro-section ul { display: grid; gap: 2px; margin: 0; padding-left: 16px; color: var(--foreground); }
 
 .model-services-intro-note {
   margin: 0;
@@ -322,91 +429,90 @@
   line-height: 1.5;
 }
 
-.model-services-intro-signup,
-.model-services-head-signup {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
+.model-services-intro-affiliate {
+  display: grid;
+  gap: 2px;
   margin: 0;
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in srgb, var(--primary) 45%, transparent);
+  border-radius: var(--vcn-radius-md);
+  font-size: var(--vcn-font-size-xs);
+  line-height: 1.5;
 }
 
-.model-services-intro-signup a,
-.model-services-head-signup a,
-.model-services-official-link {
+.model-services-intro-affiliate > strong { color: var(--primary); }
+.model-services-intro-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 2px; }
+
+.model-services-intro-foot > a,
+.model-services-head-copy > p > a,
+.model-services-usage-note > a {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  gap: 3px;
+  color: var(--primary);
   font-weight: 600;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.model-services-intro-signup small,
-.model-services-head-signup small { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
-
-.model-services-chip {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-pill);
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-2xs);
-  font-weight: 600;
+  text-decoration: none;
   white-space: nowrap;
 }
 
-.model-services-chip[data-variant="category"] { background: var(--muted); color: var(--foreground); }
+:is(.model-services-intro-foot, .model-services-head-copy > p, .model-services-usage-note) > a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 
 /* Workspace: provider header, accounts, models. */
 /* 工作区：供应商标头、账号、模型。 */
 .model-services-workspace {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   min-width: 0;
   animation: vcn-fade-in var(--vcn-duration-base) var(--vcn-ease-out);
 }
 
 .model-services-head {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--card);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 12px;
 }
 
-.model-services-head-copy { display: grid; gap: 8px; min-width: 0; }
-.model-services-head-copy > p { margin: 0; color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); line-height: 1.55; }
-.model-services-head-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
-.model-services-head-title h2 { margin: 0 4px 0 0; font-size: var(--vcn-font-size-xl, 18px); font-weight: 650; }
+.model-services-head-copy { display: grid; flex: 1 1 320px; gap: 4px; min-width: 0; }
+
+.model-services-head-copy > p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+  line-height: 1.55;
+}
+
+.model-services-head-copy > p > a { margin-left: 8px; }
+.model-services-head-title { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 6px; }
+.model-services-head-title h2 { margin: 0 4px 0 0; font-size: var(--vcn-font-size-xl); font-weight: 650; }
+.model-services-head-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; }
 
 .model-services-head-facts {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 18px;
-  margin: 0;
+  margin: -6px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--vcn-radius-md);
+  background: var(--background);
   font-size: var(--vcn-font-size-xs);
 }
 
 .model-services-head-facts > div { display: flex; gap: 6px; min-width: 0; }
 .model-services-head-facts dt { color: var(--muted-foreground); }
 .model-services-head-facts dd { margin: 0; color: var(--foreground); overflow-wrap: anywhere; }
-.model-services-head-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 
 .model-services-note {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 10px;
-  padding: 10px 12px;
+  margin: 0;
+  padding: 8px 12px;
   border: 1px dashed var(--border);
   border-radius: var(--vcn-radius-lg);
   color: var(--muted-foreground);
@@ -416,16 +522,169 @@
 .model-services-note > button { height: auto; padding: 0; }
 .model-services-section { display: grid; gap: 10px; min-width: 0; }
 
-.model-services-section-head {
+.model-services-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--vcn-font-size-md);
+  font-weight: 650;
+}
+
+.model-services-section-title > small { color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); font-weight: 400; }
+.model-services-section-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.model-services-models { padding-top: 14px; border-top: 1px solid var(--border); }
+
+/* Account cards: compact grid; name and menu, entry chips, usage slot, status footer. */
+/* 账号卡片：紧凑网格；名称与菜单、入口标签、用量区与状态栏。 */
+.model-services-accounts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.model-services-account {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-lg);
+  background: var(--card);
+}
+
+.model-services-account[data-state="off"] { opacity: 0.62; }
+.model-services-account-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.model-services-account-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--vcn-font-size-md); }
+.model-services-account-name > strong { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.model-services-account-default { flex: none; width: 14px; height: 14px; color: var(--vcn-content-warning); fill: currentColor; }
+
+.model-services-account-error {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--destructive);
+  font-size: var(--vcn-font-size-xs);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.model-services-usage {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-height: 52px;
+  padding: 8px 10px;
+  border-radius: var(--vcn-radius-md);
+  background: var(--background);
+  font-size: var(--vcn-font-size-sm);
+}
+
+.model-services-usage-facts { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; }
+.model-services-usage-facts > span { display: inline-flex; gap: 6px; color: var(--muted-foreground); }
+.model-services-usage-facts b { color: var(--foreground); font-weight: 600; }
+
+.model-services-usage-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+}
+
+.model-services-usage-quota { min-width: 0; font-size: var(--vcn-font-size-xs); }
+.model-services-usage-quota [data-slot="credential-credit-balances"] { column-gap: 12px; }
+
+.model-services-account-foot {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
+  justify-content: space-between;
+  gap: 6px 10px;
+  margin-top: auto;
 }
 
-.model-services-section-head h3 { margin: 0; font-size: var(--vcn-font-size-lg); font-weight: 650; }
-.model-services-section-head > small { color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
-.model-services-section-head > .model-services-scope-chips { margin-left: auto; }
+.model-services-status {
+  --ms-tone: var(--vcn-content-success);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+}
+
+.model-services-status > i { flex: none; width: 7px; height: 7px; border-radius: var(--vcn-radius-pill); background: var(--ms-tone); }
+.model-services-status[data-state="warn"] { --ms-tone: var(--vcn-content-warning); }
+.model-services-status[data-state="bad"] { --ms-tone: var(--destructive); color: var(--destructive); }
+.model-services-status[data-state="off"] { --ms-tone: color-mix(in srgb, var(--muted-foreground) 60%, transparent); }
+.model-services-account-controls { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.model-services-scope-button { color: var(--muted-foreground); }
+
+.model-services-scope-button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--primary) 12%, var(--card));
+  color: var(--primary);
+}
+
+/* Scope row: which account's view of the models is shown. */
+/* 范围行：显示哪个账号视角下的模型。 */
+.model-services-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.model-services-scope > span { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); font-weight: 600; }
+.model-services-scope > small { flex-basis: 100%; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
+
+/* Connect panel for a provider without accounts: introduction beside entry choice. */
+/* 无账号供应商的接入面板：介绍与入口选择并排。 */
+.model-services-connect-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.model-services-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-lg);
+  background: var(--card);
+}
+
+.model-services-panel > h3 { margin: 0; font-size: var(--vcn-font-size-md); font-weight: 650; }
+.model-services-panel > button { align-self: flex-start; }
+.model-services-panel-hint { margin: 0; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
+
+.model-services-entries {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.model-services-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-md);
+  background: var(--card);
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-services-entry:hover { background: var(--accent); }
+.model-services-entry:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.model-services-entry[aria-checked="true"] { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.model-services-entry > small { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
 
 /* Connect progress after a new account is saved. */
 /* 新账号保存后的接入进度。 */
@@ -455,19 +714,30 @@
 .model-services-connect-copy { display: grid; gap: 1px; min-width: 0; }
 .model-services-connect-copy small { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); overflow-wrap: anywhere; }
 
-/* Model catalog: a leading selection column, plus the account column when one account is in scope. */
-/* 模型目录：首列为选择列；限定到单个账号时增加账号列。 */
+/* Model catalog: a compact table with a leading selection column, plus the account column when one account is in scope. */
+/* 模型目录：紧凑表格，首列为选择列；限定到单个账号时增加账号列。 */
 .model-services-catalog :is(.settings-model-catalog-heading, .settings-model-catalog-row) {
   grid-template-columns: 20px minmax(0, 1fr) 78px 96px 78px 104px;
+  gap: 10px;
+  padding-inline: 12px;
 }
 
 .model-services-catalog[data-account-scope="true"] :is(.settings-model-catalog-heading, .settings-model-catalog-row) {
   grid-template-columns: 20px minmax(0, 1fr) 78px 78px 96px 78px 104px;
 }
 
+.model-services-catalog .settings-model-catalog-heading {
+  padding-block: 7px;
+  background: var(--background);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
 .model-services-catalog .settings-model-catalog-heading > :nth-child(2) { text-align: left; }
+.model-services-catalog .settings-model-catalog-row { padding-block: 7px; }
+.model-services-catalog .settings-model-catalog-row .settings-model-title-line strong { font-size: var(--vcn-font-size-md); }
 .model-services-select-cell { display: flex; align-items: center; justify-content: center; }
-.model-services-catalog .settings-model-catalog-row[data-selected="true"] { background: color-mix(in srgb, var(--accent) 70%, transparent); }
+.model-services-catalog .settings-model-catalog-row[data-selected="true"] { background: color-mix(in srgb, var(--primary) 8%, var(--card)); }
 
 .model-services-catalog-pane .settings-model-toolbar { grid-template-columns: minmax(0, 1fr) 132px 120px; }
 .model-services-catalog-pane .settings-model-toolbar > [data-slot="select-trigger"] { width: 100%; min-width: 0; }
@@ -476,31 +746,47 @@
 .model-services-row-provider {
   display: inline-flex;
   align-items: center;
+  flex: none;
   gap: 4px;
   color: var(--foreground);
   font-weight: 600;
+  white-space: nowrap;
 }
 
-
 /* The summary line and the bulk bar share one reserved slot so selecting a row never shifts the list below. */
+/* 摘要行与批量操作栏共用一个预留位置，选中行时下方列表不会移动。 */
 .model-services-catalog-status,
 .model-services-bulk-bar { min-height: 42px; }
 .model-services-catalog-status { display: flex; align-items: center; padding: 0 11px; }
 
+/* The bulk bar inverts the theme so a pending selection is unmistakable. */
+/* 批量操作栏反转配色，让待处理的选择一目了然。 */
 .model-services-bulk-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 12px;
   padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--muted);
+  border-radius: var(--vcn-radius-lg);
+  background: var(--foreground);
+  color: var(--background);
   font-size: var(--vcn-font-size-sm);
 }
 
+.model-services-bulk-bar button {
+  border-color: color-mix(in srgb, var(--background) 35%, transparent);
+  background: transparent;
+  color: var(--background);
+  box-shadow: none;
+}
+
+.model-services-bulk-bar button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--background) 14%, transparent);
+  color: var(--background);
+}
+
 .model-services-bulk-group { display: inline-flex; align-items: center; gap: 4px; }
-.model-services-bulk-group > span { margin-right: 2px; color: var(--muted-foreground); }
+.model-services-bulk-group > span { margin-right: 2px; opacity: 0.7; }
 
 /* Diagnostics tab. */
 /* 诊断标签页。 */
@@ -532,11 +818,25 @@
   font-size: var(--vcn-font-size-xs);
 }
 
-@container model-services (max-width: 760px) {
-  .model-services-split { grid-template-columns: minmax(0, 1fr); }
-  .model-services-rail { position: static; max-height: 320px; }
-  .model-services-head { grid-template-columns: auto minmax(0, 1fr); }
-  .model-services-head-actions { grid-column: 1 / -1; justify-content: flex-start; }
+.model-services-official-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--primary);
+  font-size: var(--vcn-font-size-sm);
+  font-weight: 600;
+}
+
+@container model-services (max-width: 980px) {
+  .model-services-body { grid-template-columns: 236px minmax(0, 1fr); }
+  .model-services-connect-panel { grid-template-columns: minmax(0, 1fr); }
+}
+
+@container model-services (max-width: 700px) {
+  .model-services-body { grid-template-columns: minmax(0, 1fr); }
+  .model-services-rail { position: static; max-height: 460px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .model-services-main { padding: 14px; }
+  .model-services-head-actions { justify-content: flex-start; margin-left: 0; }
   /* Short filters share one row below search so narrow lists keep reading space. */
   /* 短筛选项在搜索框下并排，窄窗列表保留阅读空间。 */
   .model-services-catalog-pane .settings-model-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }

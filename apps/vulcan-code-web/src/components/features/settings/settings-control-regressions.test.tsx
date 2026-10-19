@@ -55,6 +55,14 @@ function button(label: string): HTMLButtonElement {
   const result = [...document.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent === label);
   expect(result, label).toBeTruthy(); return result!;
 }
+// Open a menu from its trigger by keyboard, as Radix does, and return the item whose text starts with the label.
+// 像 Radix 一样通过键盘从触发按钮打开菜单，并返回文本以该标签开头的菜单项。
+async function menuItem(trigger: HTMLElement | null, label: string): Promise<HTMLElement> {
+  expect(trigger, "menu trigger").toBeTruthy();
+  await act(async () => { trigger!.focus(); trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  const item = [...document.querySelectorAll<HTMLElement>("[role=\"menuitem\"]")].find((entry) => entry.textContent?.startsWith(label));
+  expect(item, label).toBeTruthy(); return item!;
+}
 
 it("locks the model draft and close action until a rejected save restores editing", async () => {
   const snapshot = publicAiSettingsWithInvalidDefaultFixture();
@@ -127,8 +135,7 @@ it("allows typing unfinished custom header rows without silently persisting the 
   ];
   service.load.mockResolvedValue(snapshot);
   await render(<ModelServicesArea />);
-  const edit = [...document.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.getAttribute("aria-label")?.startsWith("Edit "))!;
-  expect(edit).toBeTruthy();
+  const edit = await menuItem(document.querySelector<HTMLElement>('button[aria-label="More actions"]'), "Edit ");
   await act(async () => edit.click());
   const textarea = document.querySelector<HTMLTextAreaElement>("textarea")!;
   expect(textarea).toBeTruthy();
@@ -182,8 +189,7 @@ it("keeps a deleting account dialog open and editable after a rejected deletion"
   let reject!: (error: Error) => void;
   service.connectionDelete.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
   await render(<ModelServicesArea />);
-  const remove = document.querySelector<HTMLButtonElement>('button[aria-label="Delete credential"]')!;
-  expect(remove).toBeTruthy();
+  const remove = await menuItem(document.querySelector<HTMLElement>('button[aria-label^="Actions for "]'), "Delete credential");
   await act(async () => remove.click());
   const confirm = document.querySelector<HTMLButtonElement>('[data-slot="dialog-footer"] button:last-child')!;
   await act(async () => { confirm.click(); confirm.click(); });

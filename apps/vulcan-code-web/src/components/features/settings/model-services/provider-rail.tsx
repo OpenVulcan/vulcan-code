@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ChevronDown, ChevronUp, GripVertical, Plus, Search } from "lucide-react"
+import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Stethoscope } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
@@ -12,6 +12,7 @@ import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
 import type { PublicAiProviderDescriptor } from "@/types"
 
+import type { HealthState } from "./provider-alerts"
 import {
   moveItem,
   PROVIDER_SERVICE_TAGS,
@@ -19,7 +20,7 @@ import {
   type ProviderDirectory,
   type ProviderTagFilter,
 } from "./provider-directory"
-import { ProviderIntroCard, serviceTagLabel } from "./provider-intro"
+import { AffiliateChip, providerCategoryLabel, ProviderIntroCard, ProviderTagChips, serviceTagLabel } from "./provider-intro"
 
 // ProviderRailProps feeds the directory and reports selection, filters and reorders.
 // ProviderRailProps 提供目录，并回报选择、筛选与重新排序。
@@ -27,12 +28,13 @@ export interface ProviderRailProps {
   // directory is null while the snapshot loads.
   // directory 在快照加载期间为 null。
   directory: ProviderDirectory | null
-  // accountCounts maps provider id to its account count.
-  // accountCounts 将供应商标识映射到其账号数量。
+  // accountCounts maps provider id to its account count; modelCounts to its models enabled in conversations.
+  // accountCounts 将供应商标识映射到账号数量；modelCounts 映射到会话中启用的模型数量。
   accountCounts: Readonly<Record<string, number>>
-  // attention marks providers with an alert.
-  // attention 标记有提醒的供应商。
-  attention: ReadonlySet<string>
+  modelCounts: Readonly<Record<string, number>>
+  // health is the folded account state of each configured provider.
+  // health 是每个已配置供应商合并后的账号状态。
+  health: Readonly<Record<string, HealthState>>
   selectedId: string | null
   onSelect: (providerId: string) => void
   tag: ProviderTagFilter
@@ -46,6 +48,7 @@ export interface ProviderRailProps {
   // onReorder 接收完整的新已配置顺序。
   onReorder: (order: string[]) => void
   onAddCustom: () => void
+  onOpenDiagnostics: () => void
 }
 
 // ProviderRail is the left directory: configured providers first (user order), then recommendations.
@@ -75,7 +78,6 @@ export function ProviderRail(props: ProviderRailProps) {
   const row = (provider: PublicAiProviderDescriptor, reorderable: boolean) => {
     const above = reorderable ? neighbour(provider.id, -1) : undefined
     const below = reorderable ? neighbour(provider.id, 1) : undefined
-    const count = props.accountCounts[provider.id] ?? 0
     return (
       <li
         className={cn("model-services-rail-item", dragId === provider.id && "dragging")}
@@ -95,11 +97,10 @@ export function ProviderRail(props: ProviderRailProps) {
           setDragId(null)
         }}
       >
-        {reorderable ? <GripVertical aria-hidden="true" className="model-services-rail-grip" /> : null}
+        <GripVertical aria-hidden="true" className="model-services-rail-grip" data-hidden={reorderable ? undefined : "true"} />
         <RailRowButton
           active={props.selectedId === provider.id}
-          attentionLabel={props.attention.has(provider.id) ? t("settings.modelServices.alerts.title") : null}
-          count={count}
+          configured={reorderable}
           name={name(provider)}
           onKeyDown={(event) => {
             if (!reorderable || props.reorderDisabled || !event.altKey) return
@@ -110,7 +111,17 @@ export function ProviderRail(props: ProviderRailProps) {
           }}
           onSelect={() => props.onSelect(provider.id)}
           provider={provider}
-        />
+        >
+          {reorderable ? (
+            <span className="model-services-rail-meta">
+              <span><i aria-hidden="true" className="model-services-dot" data-state={props.health[provider.id] ?? "ok"} />
+                {t("settings.modelServices.rail.accounts").replace("{count}", String(props.accountCounts[provider.id] ?? 0))}</span>
+              {props.modelCounts[provider.id] ? (
+                <span>{t("settings.modelServices.rail.modelsInUse").replace("{count}", String(props.modelCounts[provider.id]))}</span>
+              ) : null}
+            </span>
+          ) : null}
+        </RailRowButton>
         {reorderable ? (
           <span className="model-services-rail-move">
             <Button
@@ -164,13 +175,19 @@ export function ProviderRail(props: ProviderRailProps) {
         <div className="model-services-rail-sections">
           {configured.length > 0 ? (
             <section>
-              <p className="model-services-rail-heading" title={t("settings.modelServices.rail.reorderHint")}>{t("settings.modelServices.rail.configured")}</p>
+              <p className="model-services-rail-heading" title={t("settings.modelServices.rail.reorderHint")}>
+                <span>{t("settings.modelServices.rail.configured")} · {configured.length}</span>
+                <small>{t("settings.modelServices.rail.dragHint")}</small>
+              </p>
               <ul>{configured.map((provider) => row(provider, true))}</ul>
             </section>
           ) : null}
           {available.length > 0 ? (
             <section>
-              <p className="model-services-rail-heading">{t("settings.modelServices.rail.available")}</p>
+              <p className="model-services-rail-heading">
+                <span>{t("settings.modelServices.rail.available")} · {available.length}</span>
+                <small>{t("settings.modelServices.rail.recommended")}</small>
+              </p>
               <ul>{available.map((provider) => row(provider, false))}</ul>
             </section>
           ) : null}
@@ -179,10 +196,16 @@ export function ProviderRail(props: ProviderRailProps) {
           ) : null}
         </div>
       )}
-      <Button className="model-services-rail-add" onClick={props.onAddCustom} size="sm" type="button" variant="outline">
-        <Plus aria-hidden="true" />
-        {t("settings.modelServices.rail.addCustom")}
-      </Button>
+      <div className="model-services-rail-foot">
+        <Button onClick={props.onAddCustom} size="sm" type="button" variant="outline">
+          <Plus aria-hidden="true" />
+          {t("settings.modelServices.rail.addCustom")}
+        </Button>
+        <Button onClick={props.onOpenDiagnostics} size="xs" type="button" variant="ghost">
+          <Stethoscope aria-hidden="true" />
+          {t("settings.modelServices.rail.diagnostics")}
+        </Button>
+      </div>
     </nav>
   )
 }
@@ -194,16 +217,22 @@ export function ProviderRail(props: ProviderRailProps) {
 function RailRowButton(props: {
   provider: PublicAiProviderDescriptor
   name: string
-  count: number
   active: boolean
-  attentionLabel: string | null
+  configured: boolean
+  children?: React.ReactNode
   onSelect: () => void
   onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void
 }) {
+  const { t } = useI18n()
   const [open, setOpen] = React.useState(false)
   // pressed suppresses the focus-driven reopen that a pointer click would otherwise schedule until the pointer leaves.
   // pressed 抑制指针点击引发的聚焦重新打开，直到指针离开该行；键盘聚焦仍会显示介绍。
   const pressed = React.useRef(false)
+  const category = providerCategoryLabel(props.provider.category, t)
+  const select = () => {
+    setOpen(false)
+    props.onSelect()
+  }
   return (
     <HoverCard closeDelay={80} onOpenChange={(next) => { if (!next || !pressed.current) setOpen(next) }} open={open} openDelay={450}>
       <HoverCardTrigger asChild>
@@ -219,14 +248,27 @@ function RailRowButton(props: {
           onPointerLeave={() => { pressed.current = false }}
           type="button"
         >
-          <ProviderIcon category={props.provider.category} className="size-5 shrink-0" providerId={props.provider.id} />
-          <span className="model-services-rail-name" title={props.name}>{props.name}</span>
-          {props.attentionLabel ? <span aria-label={props.attentionLabel} className="model-services-rail-alert" role="img" /> : null}
-          {props.count > 0 ? <small>{props.count}</small> : null}
+          <ProviderIcon category={props.provider.category} className="size-7 shrink-0" providerId={props.provider.id} />
+          <span className="model-services-rail-copy">
+            <span className="model-services-rail-name" title={props.name}>{props.name}</span>
+            <span className="model-services-rail-sub">
+              <ProviderTagChips provider={props.provider} small />
+              {!props.configured && category ? <span className="model-services-chip" data-variant="category">{category}</span> : null}
+              {!props.configured ? <AffiliateChip provider={props.provider} /> : null}
+            </span>
+          </span>
+          {props.children}
         </button>
       </HoverCardTrigger>
-      <HoverCardContent align="start" side="right" sideOffset={10} width="lg">
-        <ProviderIntroCard provider={props.provider} />
+      <HoverCardContent align="start" side="right" sideOffset={12} width="lg">
+        <ProviderIntroCard
+          action={(
+            <Button onClick={select} size="xs" type="button" variant={props.configured ? "outline" : "default"}>
+              {t(props.configured ? "settings.modelServices.intro.view" : "settings.modelServices.intro.connect")}
+            </Button>
+          )}
+          provider={props.provider}
+        />
       </HoverCardContent>
     </HoverCard>
   )

@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Boxes, CircleAlert, Rows3, Stethoscope, WandSparkles } from "lucide-react"
+import { Boxes, CircleCheck, Rows3, Stethoscope, WandSparkles } from "lucide-react"
 
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context"
 import { AiCapabilitiesSettingsArea } from "@/components/features/settings/ai-capabilities-settings"
@@ -16,7 +16,6 @@ import { Button } from "@/components/ui/button"
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { useI18n } from "@/i18n"
 import { errorMessage } from "@/lib/display-format"
-import { cn } from "@/lib/utils"
 import { loadPublicAiSettings, savePublicAiProviderPriority } from "@/service/settings-actions-service"
 import type {
   PublicAiAccountUsage,
@@ -26,7 +25,7 @@ import type {
 } from "@/types"
 
 import { ModelServicesDiagnostics } from "./model-services-diagnostics"
-import { collectProviderAlerts, type ProviderAlert } from "./provider-alerts"
+import { alertSeverity, collectProviderAlerts, providerHealth, type ProviderAlert } from "./provider-alerts"
 import { buildProviderDirectory, priorityWritesForOrder, type ProviderTagFilter } from "./provider-directory"
 import { ProviderRail } from "./provider-rail"
 import { ProviderRemovalDialog } from "./provider-removal-dialog"
@@ -66,9 +65,12 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
   const [tag, setTag] = React.useState<ProviderTagFilter>("all")
   const [query, setQuery] = React.useState("")
   const [usageByConnection, setUsageByConnection] = React.useState<Record<string, PublicAiAccountUsage>>({})
+  // modelFilter narrows the model-led view to the chosen providers; empty means all.
+  // modelFilter 将以模型为主的视图收窄到所选供应商；为空表示全部。
+  const [modelFilter, setModelFilter] = React.useState<ReadonlySet<string>>(() => new Set())
   // Dialog state: add account, custom provider editor, model directory, provider removal.
   // 弹窗状态：添加账号、自定义供应商编辑器、模型目录、供应商移除。
-  const [addAccountProviderId, setAddAccountProviderId] = React.useState("")
+  const [addAccount, setAddAccount] = React.useState<{ providerId: string; entryId?: string } | null>(null)
   const [customEditor, setCustomEditor] = React.useState<{ provider: PublicAiProviderDescriptor | null } | null>(null)
   const [directoryProvider, setDirectoryProvider] = React.useState<PublicAiProviderDescriptor | null>(null)
   const [removingProvider, setRemovingProvider] = React.useState<PublicAiProviderDescriptor | null>(null)
@@ -103,11 +105,20 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
     () => snapshot ? collectProviderAlerts(snapshot, usageByConnection) : [],
     [snapshot, usageByConnection],
   )
-  const attention = React.useMemo(() => new Set(alerts.map((alert) => alert.providerId)), [alerts])
+  const health = React.useMemo(() => snapshot ? providerHealth(snapshot, alerts) : {}, [snapshot, alerts])
   const accountCounts = React.useMemo(() => {
     const counts: Record<string, number> = {}
     for (const connection of snapshot?.connections ?? []) {
       counts[connection.provider_id] = (counts[connection.provider_id] ?? 0) + 1
+    }
+    return counts
+  }, [snapshot])
+  // modelCounts counts each provider's models enabled in conversations.
+  // modelCounts 统计每个供应商在会话中启用的模型数量。
+  const modelCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const record of snapshot?.modelAccessRecords ?? []) {
+      if (record.enabled) counts[record.providerId] = (counts[record.providerId] ?? 0) + 1
     }
     return counts
   }, [snapshot])
@@ -149,7 +160,7 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
     const known = new Set(snapshot?.connections.map((connection) => connection.id) ?? [])
     const added = next.connections.find((connection) => !known.has(connection.id))
     setSnapshot(next)
-    setAddAccountProviderId("")
+    setAddAccount(null)
     if (added) {
       setSelectedId(added.provider_id)
       setConnectingId(added.id)
@@ -168,11 +179,32 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
     }
   }
 
+  // showProvider leads with the provider view on that provider; rail rows and alerts use it.
+  // showProvider 切换到以供应商为主的视图并选中该供应商；目录行与提醒使用它。
+  const showProvider = (providerId: string) => {
+    setView("provider")
+    setSelectedId(providerId)
+  }
+  const providerName = (providerId: string) => {
+    const provider = snapshot?.providers.find((candidate) => candidate.id === providerId)
+    return provider ? localizedProviderName(provider.id, provider.display_name, t) : providerId
+  }
+
   const tabs: { value: ModelServicesTab; label: string; icon: React.ReactNode; count?: number }[] = [
     { value: "providers", label: t("settings.modelServices.tabs.providers"), icon: <Boxes aria-hidden="true" /> },
     { value: "functions", label: t("settings.modelServices.tabs.functions"), icon: <WandSparkles aria-hidden="true" /> },
     { value: "diagnostics", label: t("settings.modelServices.tabs.diagnostics"), icon: <Stethoscope aria-hidden="true" />, count: snapshot?.customProviderManifestFailureTotalCount || undefined },
   ]
+  const viewSwitch = (
+    <div className="model-services-view-switch" role="group" aria-label={t("settings.modelServices.view.label")}>
+      <button aria-pressed={view === "provider"} onClick={() => setView("provider")} type="button">
+        <Boxes aria-hidden="true" />{t("settings.modelServices.view.provider")}
+      </button>
+      <button aria-pressed={view === "model"} onClick={() => setView("model")} type="button">
+        <Rows3 aria-hidden="true" />{t("settings.modelServices.view.model")}
+      </button>
+    </div>
+  )
 
   return (
     <div className="model-services-page">
@@ -209,87 +241,64 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
       ) : null}
 
       {tab === "providers" ? (
-        <>
-          {alerts.length > 0 ? (
-            <AlertStrip
-              alerts={alerts}
-              onSelect={(providerId) => {
-                setView("provider")
-                setSelectedId(providerId)
-              }}
-              providerName={(providerId) => {
-                const provider = snapshot?.providers.find((candidate) => candidate.id === providerId)
-                return provider ? localizedProviderName(provider.id, provider.display_name, t) : providerId
-              }}
+        <div className="model-services-shell">
+          {snapshot ? <AlertStrip alerts={alerts} onSelect={showProvider} providerName={providerName} /> : null}
+          <div className="model-services-body">
+            <ProviderRail
+              accountCounts={accountCounts}
+              directory={directory}
+              health={health}
+              modelCounts={modelCounts}
+              onAddCustom={() => setCustomEditor({ provider: null })}
+              onOpenDiagnostics={() => selectTab("diagnostics")}
+              onQuery={setQuery}
+              onReorder={reorder}
+              onSelect={showProvider}
+              onTag={setTag}
+              query={query}
+              reorderDisabled={mutations.pendingKey !== null}
+              selectedId={view === "provider" ? selected?.id ?? null : null}
+              tag={tag}
             />
-          ) : null}
-          <div className="model-services-view-switch" role="group" aria-label={t("settings.modelServices.view.label")}>
-            <button aria-pressed={view === "provider"} onClick={() => setView("provider")} type="button">
-              <Boxes aria-hidden="true" />{t("settings.modelServices.view.provider")}
-            </button>
-            <button aria-pressed={view === "model"} onClick={() => setView("model")} type="button">
-              <Rows3 aria-hidden="true" />{t("settings.modelServices.view.model")}
-            </button>
-          </div>
-          {view === "provider" ? (
-            <div className="model-services-split">
-              <ProviderRail
-                accountCounts={accountCounts}
-                attention={attention}
-                directory={directory}
-                onAddCustom={() => setCustomEditor({ provider: null })}
-                onQuery={setQuery}
-                onReorder={reorder}
-                onSelect={setSelectedId}
-                onTag={setTag}
-                query={query}
-                reorderDisabled={mutations.pendingKey !== null}
-                selectedId={selected?.id ?? null}
-                tag={tag}
-              />
-              <div className="model-services-main">
-                {!snapshot ? (
-                  <StreamPlaceholder decorative shape="rows" count={6} />
-                ) : selected ? (
-                  <ProviderWorkspace
-                    connectingId={connectingId}
-                    mutations={mutations}
-                    onAddAccount={setAddAccountProviderId}
-                    onDismissConnecting={() => setConnectingId(null)}
-                    onEditCustom={(provider) => setCustomEditor({ provider })}
-                    onManageDirectory={setDirectoryProvider}
-                    onOpenFunctions={() => selectTab("functions")}
-                    onRemoveCustom={setRemovingProvider}
-                    onSnapshot={setSnapshot}
-                    onUsage={onUsage}
-                    provider={selected}
-                    snapshot={snapshot}
-                    usageByConnection={usageByConnection}
-                  />
-                ) : (
-                  <PageEmptyState icon={<Boxes />} title={t("settings.modelExperience.noProviders")} />
-                )}
-              </div>
+            <div className="model-services-main">
+              {!snapshot ? (
+                <StreamPlaceholder decorative shape="rows" count={6} />
+              ) : view === "model" ? (
+                <ModelLedView
+                  filter={modelFilter}
+                  mutations={mutations}
+                  onFilter={setModelFilter}
+                  onSnapshot={setSnapshot}
+                  providerIds={modelProviderIds}
+                  providerName={providerName}
+                  snapshot={snapshot}
+                  viewSwitch={viewSwitch}
+                />
+              ) : selected ? (
+                <ProviderWorkspace
+                  alerts={alerts.filter((alert) => alert.providerId === selected.id)}
+                  connectingId={connectingId}
+                  mutations={mutations}
+                  onAddAccount={(providerId, entryId) => setAddAccount({ providerId, entryId })}
+                  onDismissConnecting={() => setConnectingId(null)}
+                  onEditCustom={(provider) => setCustomEditor({ provider })}
+                  onManageDirectory={setDirectoryProvider}
+                  onOpenDiagnostics={() => selectTab("diagnostics")}
+                  onOpenFunctions={() => selectTab("functions")}
+                  onRemoveCustom={setRemovingProvider}
+                  onSnapshot={setSnapshot}
+                  onUsage={onUsage}
+                  provider={selected}
+                  snapshot={snapshot}
+                  usageByConnection={usageByConnection}
+                  viewSwitch={viewSwitch}
+                />
+              ) : (
+                <PageEmptyState icon={<Boxes />} title={t("settings.modelExperience.noProviders")} />
+              )}
             </div>
-          ) : !snapshot ? (
-            <StreamPlaceholder decorative shape="rows" count={8} />
-          ) : modelProviderIds.length === 0 ? (
-            <PageEmptyState
-              description={t("settings.modelServices.view.emptyDescription")}
-              icon={<Rows3 />}
-              title={t("settings.modelServices.view.empty")}
-            />
-          ) : (
-            <ProviderModelCatalog
-              accountScope={null}
-              mutations={mutations}
-              onSnapshot={setSnapshot}
-              providerIds={modelProviderIds}
-              showProvider
-              snapshot={snapshot}
-            />
-          )}
-        </>
+          </div>
+        </div>
       ) : null}
 
       {tab === "functions" ? <AiCapabilitiesSettingsArea initialCapability={props.initialCapability} /> : null}
@@ -297,13 +306,14 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
 
       <PublicAiConnectionDialog
         connection={null}
-        initialProviderId={addAccountProviderId}
-        lockedProviderId={addAccountProviderId}
+        initialEntryId={addAccount?.entryId}
+        initialProviderId={addAccount?.providerId ?? ""}
+        lockedProviderId={addAccount?.providerId ?? ""}
         onOpenChange={(open) => {
-          if (!open) setAddAccountProviderId("")
+          if (!open) setAddAccount(null)
         }}
         onSaved={onAccountSaved}
-        open={addAccountProviderId !== ""}
+        open={addAccount !== null}
         providers={snapshot?.providers ?? []}
       />
       <CustomProviderDialog
@@ -352,8 +362,8 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
   )
 }
 
-// AlertStrip lists only the accounts that need attention; healthy accounts never appear here.
-// AlertStrip 只列出需要关注的账号；正常账号不会出现在这里。
+// AlertStrip lists only the accounts that need attention; with none it says every account is healthy.
+// AlertStrip 只列出需要关注的账号；没有时显示所有账号正常。
 function AlertStrip(props: {
   alerts: ProviderAlert[]
   providerName: (providerId: string) => string
@@ -369,24 +379,99 @@ function AlertStrip(props: {
   }
   return (
     <section aria-label={t("settings.modelServices.alerts.title")} className="model-services-alerts">
-      <CircleAlert aria-hidden="true" className="size-4 shrink-0" />
-      <ul>
-        {props.alerts.map((alert) => (
-          <li key={`${alert.connectionId}:${alert.kind}`}>
-            <button
-              className={cn("model-services-alert")}
-              data-kind={alert.kind}
-              onClick={() => props.onSelect(alert.providerId)}
-              title={alert.detail}
-              type="button"
-            >
-              <strong>{props.providerName(alert.providerId)}</strong>
-              <span>{alert.connectionName}</span>
-              <span>{label(alert)}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      {props.alerts.length === 0 ? (
+        <span className="model-services-alert" data-severity="ok">
+          <CircleCheck aria-hidden="true" />{t("settings.modelServices.alerts.allOk")}
+        </span>
+      ) : (
+        <>
+          <ul>
+            {props.alerts.map((alert) => (
+              <li key={`${alert.connectionId}:${alert.kind}`}>
+                <button
+                  className="model-services-alert"
+                  data-severity={alertSeverity(alert.kind)}
+                  onClick={() => props.onSelect(alert.providerId)}
+                  title={alert.detail}
+                  type="button"
+                >
+                  <i aria-hidden="true" className="model-services-dot" data-state={alertSeverity(alert.kind)} />
+                  <strong>{props.providerName(alert.providerId)}</strong>
+                  <span>{alert.connectionName}</span>
+                  <span>{label(alert)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <small>{t("settings.modelServices.alerts.note")}</small>
+        </>
+      )}
     </section>
+  )
+}
+
+// ModelLedView lists every configured provider's models, optionally narrowed to some providers.
+// Same-named models from different providers stay separate rows.
+// ModelLedView 列出所有已配置供应商的模型，可收窄到部分供应商；不同供应商的同名模型保持为独立行。
+function ModelLedView(props: {
+  snapshot: PublicAiSettingsSnapshot
+  providerIds: string[]
+  filter: ReadonlySet<string>
+  onFilter: (next: ReadonlySet<string>) => void
+  providerName: (providerId: string) => string
+  mutations: ReturnType<typeof useSnapshotMutations>
+  onSnapshot: (next: PublicAiSettingsSnapshot) => void
+  viewSwitch: React.ReactNode
+}) {
+  const { t } = useI18n()
+  const shown = props.filter.size > 0 ? props.providerIds.filter((id) => props.filter.has(id)) : props.providerIds
+  const toggle = (providerId: string) => {
+    const next = new Set(props.filter)
+    if (next.has(providerId)) next.delete(providerId)
+    else next.add(providerId)
+    props.onFilter(next)
+  }
+  return (
+    <div className="model-services-workspace">
+      <header className="model-services-head">
+        <div className="model-services-head-copy">
+          <div className="model-services-head-title"><h2>{t("settings.modelServices.view.allModels")}</h2></div>
+          <p>{t("settings.modelServices.view.allModelsHint")}</p>
+        </div>
+        <div className="model-services-head-actions">{props.viewSwitch}</div>
+      </header>
+      {props.providerIds.length === 0 ? (
+        <PageEmptyState
+          description={t("settings.modelServices.view.emptyDescription")}
+          icon={<Rows3 />}
+          title={t("settings.modelServices.view.empty")}
+        />
+      ) : (
+        <>
+          <div aria-label={t("settings.modelServices.view.providerFilter")} className="model-services-scope" role="group">
+            <span>{t("settings.modelServices.view.providerFilter")}</span>
+            {props.providerIds.map((providerId) => (
+              <button
+                aria-pressed={props.filter.has(providerId)}
+                className="model-services-tag-chip"
+                key={providerId}
+                onClick={() => toggle(providerId)}
+                type="button"
+              >
+                {props.providerName(providerId)}
+              </button>
+            ))}
+          </div>
+          <ProviderModelCatalog
+            accountScope={null}
+            mutations={props.mutations}
+            onSnapshot={props.onSnapshot}
+            providerIds={shown}
+            showProvider
+            snapshot={props.snapshot}
+          />
+        </>
+      )}
+    </div>
   )
 }

@@ -1,34 +1,12 @@
-import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 import * as React from "react"
-import { Boxes, ExternalLink, KeyRound, ListChecks, Pencil, RefreshCw, Star, Trash2 } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
-import { PageEmptyState } from "@/components/page"
-import { CredentialModelAccessDialog } from "@/components/features/settings/credential-model-access-dialog"
-import {
-  localizedProviderName,
-  localizedServiceEntryPresentation,
-} from "@/components/features/settings/provider-presentation"
-import type { SnapshotMutations } from "@/components/features/settings/model-services/use-snapshot-mutations"
-import {
-  CredentialUsageInlineFacts,
-  CredentialUsageQuotaPanel,
-  useCredentialUsageOverview,
-} from "@/components/public-ai/credential-usage-overview"
+import { localizedProviderName } from "@/components/features/settings/provider-presentation"
 import { usageCapabilityRequiresManagementKey } from "@/components/public-ai/credential-usage-capability"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -37,431 +15,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
 import {
   addPublicAiConnection,
   cancelPublicAiOAuth,
   commitPublicAiOAuthConnection,
   getPublicAiOAuthStatus,
-  queryPublicAiConnectionUsage,
   removePublicAiConnection,
-  savePublicAiConnectionEnabled,
-  savePublicAiDefaultConnection,
   startPublicAiOAuth,
-  syncPublicAiConnection,
   updatePublicAiConnection,
 } from "@/service/settings-actions-service"
 import type {
   CredentialMode,
-  PublicAiAccountUsage,
   PublicAiConnection,
-  PublicAiCredentialProfile,
   PublicAiModelDirectoryKind,
   PublicAiOAuthTransaction,
   PublicAiProviderDescriptor,
-  PublicAiServiceEntry,
   PublicAiSettingsSnapshot,
 } from "@/types"
 import { errorMessage } from "@/lib/display-format";
-
-// ProviderAccountsSectionProps binds the account list of one provider to the page-owned state.
-// ProviderAccountsSectionProps 将单个供应商的账号列表绑定到页面持有的状态。
-export interface ProviderAccountsSectionProps {
-  // snapshot is the authoritative settings state.
-  // snapshot 是权威设置状态。
-  snapshot: PublicAiSettingsSnapshot
-  // provider owns the listed accounts.
-  // provider 持有所列账号。
-  provider: PublicAiProviderDescriptor
-  // mutations is the page's single serialized write lane.
-  // mutations 是页面唯一的串行写入通道。
-  mutations: SnapshotMutations
-  // onSnapshot applies snapshots saved by nested dialogs.
-  // onSnapshot 应用嵌套弹窗保存后返回的快照。
-  onSnapshot: (next: PublicAiSettingsSnapshot) => void
-  // usageByConnection holds the latest usage observations, newer than the snapshot cache.
-  // usageByConnection 保存最新用量观测，比快照缓存更新。
-  usageByConnection: Readonly<Record<string, PublicAiAccountUsage>>
-  // onUsage records one refreshed usage observation.
-  // onUsage 记录一次刷新后的用量观测。
-  onUsage: (connectionId: string, usage: PublicAiAccountUsage) => void
-}
-
-// ProviderAccountsSection lists one provider's accounts with usage, defaults and management actions.
-// ProviderAccountsSection 列出单个供应商的账号，含用量、默认账号与管理操作。
-export function ProviderAccountsSection(props: ProviderAccountsSectionProps) {
-  const { snapshot, provider, mutations } = props
-  const [editingConnection, setEditingConnection] = React.useState<PublicAiConnection | null>(null)
-  const [deletingConnection, setDeletingConnection] = React.useState<PublicAiConnection | null>(null)
-  const [modelAccessConnection, setModelAccessConnection] = React.useState<PublicAiConnection | null>(null)
-  const { t } = useI18n()
-  const busy = mutations.pendingKey !== null
-  const connections = snapshot.connections.filter((connection) => connection.provider_id === provider.id)
-  const modelAccessEntry = modelAccessConnection
-    ? entryForConnection(provider, modelAccessConnection)
-    : undefined
-
-  return (
-    <>
-      {connections.length > 0 ? (
-        <div className="credential-management-list">
-          {connections.map((connection) => {
-            const entry = entryForConnection(provider, connection)
-            const credentialProfile = credentialProfileForConnection(entry, connection)
-            const usage = props.usageByConnection[connection.id] ?? snapshot.usageCache[connection.id]
-            // modelDirectoryKind is the backend-resolved source policy for this exact credential.
-            // modelDirectoryKind 是后端为此精确凭据解析的来源策略。
-            const modelDirectoryKind = snapshot.connectionModelAccessPolicyRecords
-              .find((record) => record.connectionId === connection.id)
-              ?.directoryKind
-            // Provider-tool entries do not own a model catalog, so historical model-sync errors are irrelevant.
-            // 供应商工具入口不拥有模型目录，因此历史模型同步错误与其无关。
-            const catalogError = !connection.enabled || entry?.kind === "provider_tools"
-              ? undefined
-              : snapshot.catalogErrors[connection.id]
-            const isDefault = snapshot.providerDefaults[connection.provider_id] === connection.id
-            return (
-              <CredentialAccountCard
-                busy={busy}
-                catalogError={catalogError}
-                connection={connection}
-                credentialProfile={credentialProfile}
-                entry={entry}
-                isDefault={isDefault}
-                key={connection.id}
-                modelDirectoryKind={modelDirectoryKind}
-                onDelete={() => setDeletingConnection(connection)}
-                onEdit={() => setEditingConnection(connection)}
-                onEnabledChange={(enabled) => void mutations.run(
-                  `account/${connection.id}`,
-                  () => savePublicAiConnectionEnabled({ connectionId: connection.id, enabled }),
-                )}
-                onManageModels={() => setModelAccessConnection(connection)}
-                onRefreshUsage={() => void mutations.run(`usage/${connection.id}`, async () => {
-                  props.onUsage(connection.id, await queryPublicAiConnectionUsage(connection.id))
-                })}
-                onSetDefault={() => void mutations.run(
-                  `account/${connection.id}`,
-                  () => savePublicAiDefaultConnection({
-                    providerId: connection.provider_id,
-                    connectionId: connection.id,
-                  }),
-                )}
-                onSync={() => void mutations.run(
-                  `account/${connection.id}`,
-                  () => syncPublicAiConnection(connection.id),
-                )}
-                provider={provider}
-                signupUrl={provider.promotion?.referral_url ?? provider.promotion?.signup_url}
-                usage={usage}
-              />
-            )
-          })}
-        </div>
-      ) : (
-        <PageEmptyState
-          description={t("settings.credentials.emptyProviderDescription")}
-          icon={<KeyRound />}
-          title={t("settings.credentials.emptyProvider")}
-        />
-      )}
-      <CredentialModelAccessDialog
-        connection={modelAccessConnection}
-        entry={modelAccessEntry}
-        onOpenChange={(open) => {
-          if (!open) {
-            setModelAccessConnection(null)
-          }
-        }}
-        onSnapshotChange={props.onSnapshot}
-        open={modelAccessConnection !== null}
-        provider={provider}
-        snapshot={snapshot}
-      />
-      <PublicAiConnectionDialog
-        connection={editingConnection}
-        initialProviderId=""
-        lockedProviderId={editingConnection?.provider_id ?? ""}
-        onOpenChange={(open) => {
-          if (!open) {
-            setEditingConnection(null)
-          }
-        }}
-        onSaved={(next) => {
-          props.onSnapshot(next)
-          setEditingConnection(null)
-        }}
-        open={editingConnection !== null}
-        providers={snapshot.providers}
-      />
-      <PublicAiDeleteConnectionDialog
-        connection={deletingConnection}
-        connections={snapshot.connections}
-        isProviderDefault={Boolean(
-          deletingConnection
-          && snapshot.providerDefaults[deletingConnection.provider_id] === deletingConnection.id
-        )}
-        onOpenChange={(open) => {
-          if (!open) {
-            setDeletingConnection(null)
-          }
-        }}
-        onSaved={(next) => {
-          props.onSnapshot(next)
-          setDeletingConnection(null)
-        }}
-        open={deletingConnection !== null}
-      />
-    </>
-  )
-}
-
-// CredentialAccountCardProps defines one compact account card backed by exact runtime state.
-// CredentialAccountCardProps 定义一个由精确运行时状态支持的紧凑账号卡片。
-interface CredentialAccountCardProps {
-  // busy prevents duplicate account operations.
-  // busy 防止重复账号操作。
-  busy: boolean
-  // catalogError reports the latest exact catalog failure.
-  // catalogError 报告最新精确目录失败。
-  catalogError?: string
-  // connection identifies the credential account.
-  // connection 标识凭据账号。
-  connection: PublicAiConnection
-  // credentialProfile describes acquisition and usage capabilities.
-  // credentialProfile 描述获取方式与用量能力。
-  credentialProfile?: PublicAiCredentialProfile
-  // entry describes the selected provider endpoint.
-  // entry 描述已选供应商入口。
-  entry?: PublicAiServiceEntry
-  // isDefault identifies the provider's default account.
-  // isDefault 标识供应商默认账号。
-  isDefault: boolean
-  // modelDirectoryKind is the backend-resolved fixed, dynamic, manual, or unavailable catalog policy.
-  // modelDirectoryKind 是后端解析的固定、动态、手工或不可用目录策略。
-  modelDirectoryKind?: PublicAiModelDirectoryKind
-  // onDelete opens the destructive confirmation.
-  // onDelete 打开破坏性确认。
-  onDelete: () => void
-  // onEdit opens exact credential editing.
-  // onEdit 打开精确凭据编辑。
-  onEdit: () => void
-  // onEnabledChange persists whether this credential participates in runtime work.
-  // onEnabledChange 持久化此凭据是否参与运行时工作。
-  onEnabledChange: (enabled: boolean) => void
-  // onRefreshUsage queries current account usage.
-  // onRefreshUsage 查询当前账号用量。
-  onRefreshUsage: () => void
-  // onManageModels opens account-scoped model access management.
-  // onManageModels 打开账号作用域模型访问管理。
-  onManageModels: () => void
-  // onSetDefault selects this account as provider default.
-  // onSetDefault 将此账号设为供应商默认账号。
-  onSetDefault: () => void
-  // onSync refreshes the model catalog.
-  // onSync 刷新模型目录。
-  onSync: () => void
-  // provider is the exact registered owner.
-  // provider 是精确注册所有者。
-  provider?: PublicAiProviderDescriptor
-  // usage is the latest memory-only observation.
-  // usage 是最新的仅内存观测。
-  usage?: PublicAiAccountUsage
-  // signupUrl is the provider's console, shown when usage cannot be queried in Vulcan.
-  // signupUrl 是供应商控制台地址，在 Vulcan 无法查询用量时显示。
-  signupUrl?: string
-}
-
-// CredentialAccountCard separates account identity, authoritative usage, and management actions in one row.
-// CredentialAccountCard 在单行卡片中分离账号身份、权威用量和管理操作。
-// Parameters: props supplies one credential and its guarded callbacks; returns its account card without changing admission rules.
-// 参数：props 提供一个凭据及受保护回调；返回账号卡片，不改变准入规则。
-function CredentialAccountCard(props: CredentialAccountCardProps) {
-  const { t } = useI18n()
-  // core accounts expose sign-out through the account lifecycle instead of generic credential edits.
-  // 核心账户通过账户生命周期提供退出操作，而非通用凭据编辑。
-  const core = props.provider?.credential_directory_visibility === "core_account"
-  const account = React.useContext(OpenVulcanAccountContext)
-  // usageSupported preserves the provider capability and management-key prerequisites for refreshing usage.
-  // usageSupported 保留刷新用量所需的供应商能力和管理密钥前置条件。
-  const usageSupported = props.credentialProfile?.account_usage_query !== "unsupported"
-    && (!props.connection.usage_requires_management_key || props.connection.has_management_key)
-  // providerName localizes registered built-in names while retaining unknown provider identities.
-  // providerName 本地化已注册内置名称，同时保留未知供应商身份。
-  const providerName = localizedProviderName(
-    props.connection.provider_id,
-    props.provider?.display_name ?? props.connection.provider_id,
-    t,
-  )
-  // serviceEntryPresentation separates Alibaba product names from composable scope and region tags.
-  // serviceEntryPresentation 将阿里云产品名称与可组合的账号范围、区域标签分离。
-  const serviceEntryPresentation = props.entry
-    ? localizedServiceEntryPresentation(props.connection.provider_id, props.entry, t)
-    : { title: providerName, tags: [] }
-  // usageOverview splits plan and balance into the identity column and quota into the usage column.
-  // usageOverview 将套餐与余额放入身份列，额度放入用量列。
-  const usageOverview = useCredentialUsageOverview({
-    connection: props.connection,
-    credentialProfile: props.credentialProfile,
-    usage: props.usage,
-  })
-  return (
-    <Card
-      className="credential-account-card w-full gap-0 border border-border py-0 ring-0"
-      size="sm"
-    >
-      <div className="credential-account-body">
-        <CardHeader className="credential-account-identity">
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="relative shrink-0">
-              <ProviderIcon
-                category={props.provider?.category}
-                className="size-9"
-                providerId={props.connection.provider_id}
-                serviceEntryId={props.connection.service_entry_id}
-              />
-              {props.isDefault ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      aria-label={t("settings.credentials.currentDefault")}
-                      className="credential-account-default-mark"
-                      role="img"
-                      tabIndex={0}
-                    >
-                      <Star aria-hidden="true" className="size-2.5 fill-current" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">{t("settings.credentials.currentDefault")}</TooltipContent>
-                </Tooltip>
-              ) : null}
-            </span>
-            <div className="min-w-0 flex-1">
-              <CardTitle className="truncate" title={props.connection.display_name}>{props.connection.display_name}</CardTitle>
-              <CardDescription className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
-                <span className="min-w-0 truncate" title={serviceEntryPresentation.title}>
-                  {serviceEntryPresentation.title}
-                </span>
-                {serviceEntryPresentation.tags.map((tag) => (
-                  <Badge className="h-4 px-1.5 text-[10px]" key={tag} variant="outline">
-                    {tag}
-                  </Badge>
-                ))}
-                {props.connection.pending_validation ? (
-                  <Badge className="h-4 px-1.5 text-[10px]" variant="destructive">
-                    {t("settings.customModels.pendingValidation")}
-                  </Badge>
-                ) : null}
-                {!props.connection.enabled ? (
-                  <Badge className="h-4 px-1.5 text-[10px]" variant="secondary">
-                    {t("settings.credentials.disabledStatus")}
-                  </Badge>
-                ) : null}
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-
-        <CardContent className="credential-account-usage">
-          <CredentialUsageQuotaPanel header={<CredentialUsageInlineFacts model={usageOverview.model} />}>
-            {usageOverview.quotaContent}
-          </CredentialUsageQuotaPanel>
-          {props.credentialProfile?.account_usage_query === "unsupported" && props.signupUrl ? (
-            <a className="model-services-official-link" href={props.signupUrl} rel="noreferrer" target="_blank">
-              <ExternalLink aria-hidden="true" className="size-3" />
-              {t("settings.modelServices.usage.officialSite")}
-            </a>
-          ) : null}
-        </CardContent>
-      </div>
-      {props.catalogError ? (
-        <p className="credential-account-error text-xs text-destructive" role="status">
-          {props.catalogError}
-        </p>
-      ) : null}
-
-      <CardFooter className="credential-account-footer">
-        <div className="credential-account-actions">
-          {!core ? <label className="credential-account-enabled">
-            <Switch
-              aria-label={props.connection.enabled
-                ? t("settings.credentials.disable")
-                : t("settings.credentials.enable")}
-              checked={props.connection.enabled}
-              disabled={props.busy}
-              onCheckedChange={props.onEnabledChange}
-            />
-            <span>{t("settings.credentials.enable")}</span>
-          </label> : <Badge variant="secondary">{t("openvulcan.account.core")}</Badge>}
-          {props.entry?.kind !== "provider_tools" ? (
-            <Button
-              disabled={props.busy || !props.connection.enabled || props.connection.pending_validation}
-              onClick={props.onManageModels}
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              <ListChecks aria-hidden="true" className="size-4" />
-              {t("settings.credentialModels.manage")}
-            </Button>
-          ) : null}
-          {credentialSupportsModelSynchronization(props.modelDirectoryKind) ? (
-            <CredentialIconAction
-              disabled={props.busy || !props.connection.enabled || props.connection.pending_validation}
-              label={t("settings.credentials.syncModels")}
-              onClick={props.onSync}
-            >
-              <Boxes className="size-4" />
-            </CredentialIconAction>
-          ) : null}
-        </div>
-        <div className="credential-account-actions">
-          {usageSupported ? (
-            <CredentialIconAction
-              disabled={props.busy || !props.connection.enabled}
-              label={t("settings.credentials.refreshUsage")}
-              onClick={props.onRefreshUsage}
-            >
-              <RefreshCw className={`size-4 ${props.busy ? "animate-spin" : ""}`} />
-            </CredentialIconAction>
-          ) : null}
-          <CredentialIconAction
-            disabled={props.busy || !props.connection.enabled || props.connection.pending_validation || props.isDefault}
-            label={props.connection.pending_validation
-              ? t("settings.customModels.pendingCannotDefault")
-              : props.isDefault
-                 ? t("settings.credentials.currentDefault")
-                 : t("settings.credentials.setDefault")}
-            onClick={props.onSetDefault}
-          >
-            <Star
-              className={props.isDefault
-                ? "size-4 fill-current text-[var(--vcn-content-warning)]"
-                : "size-4"}
-            />
-          </CredentialIconAction>
-          {core ? <Button variant="ghost" size="sm" onClick={() => account?.setOpen(true)}>{t("openvulcan.account.manage")}</Button> : <>
-          <CredentialIconAction disabled={props.busy} label={t("settings.credentials.edit")} onClick={props.onEdit}>
-            <Pencil aria-hidden="true" className="size-4" />
-          </CredentialIconAction>
-          <CredentialIconAction
-            disabled={props.busy}
-            label={t("settings.credentials.remove")}
-            onClick={props.onDelete}
-          >
-            <Trash2 className="size-4 text-destructive" />
-          </CredentialIconAction>
-          </>}
-        </div>
-      </CardFooter>
-    </Card>
-  )
-}
 
 // credentialSupportsModelSynchronization identifies directories whose model membership can change remotely.
 // credentialSupportsModelSynchronization 标识模型成员可由远端变化的目录。
@@ -471,50 +43,9 @@ export function credentialSupportsModelSynchronization(
   return directoryKind === "dynamic"
 }
 
-// CredentialIconActionProps defines one compact card action whose text is delegated to a tooltip.
-// CredentialIconActionProps 定义一个将文字交给提示框的紧凑卡片操作。
-interface CredentialIconActionProps {
-  // children contains the sole visible icon.
-  // children 包含唯一可见图标。
-  children: React.ReactNode
-  // disabled prevents duplicate operations.
-  // disabled 防止重复操作。
-  disabled?: boolean
-  // label is shared by the accessible name and tooltip.
-  // label 同时用于可访问名称与提示框。
-  label: string
-  // onClick executes the page-owned operation.
-  // onClick 执行页面拥有的操作。
-  onClick: () => void
-}
-
-// CredentialIconAction renders the shared icon-only account action.
-// CredentialIconAction 渲染共享的纯图标账号操作。
-function CredentialIconAction(props: CredentialIconActionProps) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex">
-          <Button
-            aria-label={props.label}
-            disabled={props.disabled}
-            onClick={props.onClick}
-            size="icon-sm"
-            type="button"
-            variant="outline"
-          >
-            {props.children}
-          </Button>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top">{props.label}</TooltipContent>
-    </Tooltip>
-  )
-}
-
 // PublicAiDeleteConnectionDialog confirms destructive removal and requires an explicit replacement default.
 // PublicAiDeleteConnectionDialog 确认破坏性移除，并要求显式选择替代默认账号。
-function PublicAiDeleteConnectionDialog(props: {
+export function PublicAiDeleteConnectionDialog(props: {
   // Connection selected for removal.
   // 选中待移除的连接。
   connection: PublicAiConnection | null
@@ -629,6 +160,9 @@ export function PublicAiConnectionDialog(props: {
   // Initial provider used only when creating a new connection from a pinned entry.
   // 仅在从固定入口创建新连接时使用的初始供应商。
   initialProviderId: string
+  // Service entry preselected when creating; ignored while editing or when the provider lacks it.
+  // 创建时预选的服务入口；编辑时或供应商没有该入口时忽略。
+  initialEntryId?: string
   // Exact provider locked by the owning provider section.
   // 由所属供应商区域锁定的精确供应商。
   lockedProviderId: string
@@ -695,7 +229,7 @@ export function PublicAiConnectionDialog(props: {
       initializedConnectionKey.current = null
       return
     }
-    const connectionKey = JSON.stringify([props.connection?.id ?? null, props.lockedProviderId, props.initialProviderId])
+    const connectionKey = JSON.stringify([props.connection?.id ?? null, props.lockedProviderId, props.initialProviderId, props.initialEntryId ?? null])
     if (initializedConnectionKey.current === connectionKey) return
     initializedConnectionKey.current = connectionKey
     const existingProvider = props.connection
@@ -705,7 +239,8 @@ export function PublicAiConnectionDialog(props: {
         ?? (props.lockedProviderId ? undefined : props.providers[0])
     const existingEntry = props.connection
       ? existingProvider?.service_entries.find((item) => item.id === props.connection?.service_entry_id)
-      : existingProvider?.service_entries[0]
+      : existingProvider?.service_entries.find((item) => item.id === props.initialEntryId)
+        ?? existingProvider?.service_entries[0]
     setProviderId(existingProvider?.id ?? "")
     setEntryId(existingEntry?.id ?? "")
     const existingProfile = props.connection
@@ -725,13 +260,7 @@ export function PublicAiConnectionDialog(props: {
     setOauthUserCode(null)
     setPendingAuthorization(null)
     setError(null)
-  }, [
-    props.connection,
-    props.initialProviderId,
-    props.lockedProviderId,
-    props.open,
-    props.providers,
-  ])
+  }, [props.connection, props.initialEntryId, props.initialProviderId, props.lockedProviderId, props.open, props.providers])
 
   React.useEffect(() => {
     if (!provider) {
@@ -1143,24 +672,6 @@ export function PublicAiConnectionDialog(props: {
       </DialogContent>
     </Dialog>
   )
-}
-
-// entryForConnection resolves the exact service entry.
-// entryForConnection 解析精确服务入口。
-function entryForConnection(
-  provider: PublicAiProviderDescriptor | undefined,
-  connection: PublicAiConnection,
-): PublicAiServiceEntry | undefined {
-  return provider?.service_entries.find((entry) => entry.id === connection.service_entry_id)
-}
-
-// credentialProfileForConnection resolves the exact acquisition and billing profile.
-// credentialProfileForConnection 解析精确的凭据获取及计费配置档。
-function credentialProfileForConnection(
-  entry: PublicAiServiceEntry | undefined,
-  connection: PublicAiConnection,
-): PublicAiCredentialProfile | undefined {
-  return entry?.credential_profiles.find((profile) => profile.id === connection.credential_profile_id)
 }
 
 // oauthPhaseDisplayName maps exact OAuth phases to user-facing progress labels.
