@@ -1,43 +1,43 @@
 /* Formula rules, loaded with the KaTeX renderer for `ui-math` and inline math. */
 /* 公式规则，随 `ui-math` 与行内公式的 KaTeX 渲染器一起加载。 */
-.markdown-message .answer-math {
+.vk-md .answer-math {
   margin: 0 0 13px;
   padding: 12px 16px;
-  border: 1px solid var(--answer-frame-border);
+  border: 1px solid var(--vk-line);
   border-radius: var(--vcn-radius-md);
   background: color-mix(in srgb, var(--card) 94%, var(--muted));
 }
 
-.markdown-message .answer-math figcaption {
+.vk-md .answer-math figcaption {
   margin-bottom: 4px;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
-.markdown-message .answer-math-equations {
+.vk-md .answer-math-equations {
   overflow-x: auto;
   overflow-y: hidden;
 }
 
-.markdown-message .answer-math-display .katex-display { margin: 0.55em 0; }
-.markdown-message .answer-math .katex { font-size: 1.12em; }
-.markdown-message .answer-math-inline .katex { font-size: 1.05em; }
+.vk-md .answer-math-display .katex-display { margin: 0.55em 0; }
+.vk-md .answer-math .katex { font-size: 1.12em; }
+.vk-md .answer-math-inline .katex { font-size: 1.05em; }
 
-.markdown-message .answer-math-legend {
+.vk-md .answer-math-legend {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 5px 14px;
   margin: 8px 0 0;
   padding-top: 10px;
-  border-top: 1px solid var(--answer-hairline);
+  border-top: 1px solid var(--vk-line-soft);
   font-size: var(--vcn-font-size-sm);
 }
 
-.markdown-message .answer-math-legend dt { text-align: end; }
-.markdown-message .answer-math-legend dd { margin: 0; color: var(--muted-foreground); }
+.vk-md .answer-math-legend dt { text-align: end; }
+.vk-md .answer-math-legend dd { margin: 0; color: var(--muted-foreground); }
 
-.markdown-message code.answer-math-source[data-display] {
+.vk-md code.answer-math-source[data-display] {
   display: block;
   margin: 6px 0;
   white-space: pre-wrap;

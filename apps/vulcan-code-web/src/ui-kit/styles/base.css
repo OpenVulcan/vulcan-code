@@ -222,10 +222,6 @@
   to { transform: rotate(360deg); }
 }
 
-@keyframes vk-caret {
-  50% { opacity: 0.35; }
-}
-
 .vk-rise {
   animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
 }

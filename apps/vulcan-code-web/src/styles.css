@@ -20,8 +20,6 @@
 @import "./styles/composer-selectors.css";
 @import "./styles/composer-textarea.css";
 @import "./styles/settings.css";
-@import "./styles/markdown.css";
-@import "./styles/answer-frame.css";
 @import "./styles/special-blocks.css";
 @import "./styles/dedicated-session.css";
 @import "./styles/media.css";

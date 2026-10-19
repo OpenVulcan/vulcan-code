@@ -102,8 +102,8 @@ describe("answer replies", () => {
 
   it("comments on a framed component and closes the editor once the reply is taken", async () => {
     const store = new AnswerReplyStore();
-    await mount(FINDINGS, store, ".answer-findings, .answer-frame");
-    const button = host.querySelector<HTMLButtonElement>(".answer-hover-actions [aria-label='answerComponents.comment']");
+    await mount(FINDINGS, store, ".answer-findings, .vk-figure");
+    const button = host.querySelector<HTMLButtonElement>(".vk-figure-hover [aria-label='answerComponents.comment']");
     expect(button).not.toBeNull();
     await act(async () => button!.click());
     await type(host.querySelector<HTMLTextAreaElement>(".answer-note textarea")!, "Cap it first");

@@ -1,8 +1,33 @@
+/* Answer tokens on kit colours; they load with the component renderer. */
+/* 基于 kit 色票的回答令牌，随组件渲染器加载。 */
+.vk-md {
+  --answer-frame-border: var(--vk-line);
+  --answer-hairline: var(--vk-line-soft);
+  --answer-ok: var(--vk-ok);
+  --answer-warn: var(--vk-warn);
+  --answer-err: var(--vk-bad);
+  --answer-info: var(--vk-info);
+  --answer-tint-ok: color-mix(in srgb, var(--answer-ok) 11%, transparent);
+  --answer-tint-warn: color-mix(in srgb, var(--answer-warn) 12%, transparent);
+  --answer-tint-err: color-mix(in srgb, var(--answer-err) 11%, transparent);
+  --answer-tint-info: color-mix(in srgb, var(--answer-info) 11%, transparent);
+  /* Chart series palette; its length matches ANSWER_CHART_MAX_SERIES. */
+  /* 图表系列色板；数量与 ANSWER_CHART_MAX_SERIES 一致。 */
+  --answer-series-1: var(--vk-chart-1);
+  --answer-series-2: var(--vk-chart-2);
+  --answer-series-3: var(--vk-chart-3);
+  --answer-series-4: var(--vk-chart-4);
+  --answer-series-5: var(--vk-chart-5);
+  --answer-series-6: color-mix(in srgb, var(--vk-chart-2) 55%, var(--vk-chart-1));
+  --answer-series-7: color-mix(in srgb, var(--vk-chart-3) 60%, var(--vk-chart-5));
+  --answer-series-8: var(--vk-ink-3);
+}
+
 /* Answer component rules, loaded with the deferred component renderer. Framed blocks carry reusable data
-   (charts, files, trees); embedded blocks read as prose. Tokens, the frame and tables live in answer-frame.css. */
+   (charts, files, trees); embedded blocks read as prose. Tokens, the frame and tables live in vk-figure.css. */
 /* 回答组件规则，随延迟加载的组件渲染器一起加载。框架型区块承载可复用数据（图表、文件、树）；
-   融入型区块随正文阅读。令牌、外框与表格位于 answer-frame.css。 */
-.markdown-message .answer-segmented {
+   融入型区块随正文阅读。令牌、外框与表格位于 vk-figure.css。 */
+.vk-md .answer-segmented {
   display: inline-flex;
   gap: 2px;
   padding: 2px;
@@ -10,7 +35,7 @@
   background: var(--muted);
 }
 
-.markdown-message .answer-segmented button {
+.vk-md .answer-segmented button {
   padding: 1px 8px;
   border: 0;
   border-radius: var(--vcn-radius-xs);
@@ -20,22 +45,22 @@
   cursor: pointer;
 }
 
-.markdown-message .answer-segmented button[aria-pressed="true"] {
+.vk-md .answer-segmented button[aria-pressed="true"] {
   background: var(--card);
   color: var(--foreground);
   box-shadow: var(--vcn-shadow-raised);
 }
 
 
-.markdown-message .answer-compare td:first-child {
+.vk-md .answer-compare td:first-child {
   font-weight: 600;
 }
 
-.markdown-message .answer-compare td[data-tone="ok"] .answer-tone-icon { color: var(--answer-ok); }
-.markdown-message .answer-compare td[data-tone="warn"] .answer-tone-icon { color: var(--answer-warn); }
-.markdown-message .answer-compare td[data-tone="no"] .answer-tone-icon { color: var(--answer-err); }
+.vk-md .answer-compare td[data-tone="ok"] .answer-tone-icon { color: var(--answer-ok); }
+.vk-md .answer-compare td[data-tone="warn"] .answer-tone-icon { color: var(--answer-warn); }
+.vk-md .answer-compare td[data-tone="no"] .answer-tone-icon { color: var(--answer-err); }
 
-.markdown-message .answer-tone-icon {
+.vk-md .answer-tone-icon {
   display: inline-block;
   margin-inline-end: 6px;
   vertical-align: -0.15em;
@@ -43,7 +68,7 @@
 
 /* Pills carry severities and card tags. */
 /* 胶囊标签承载严重度与卡片标签。 */
-.markdown-message .answer-pill {
+.vk-md .answer-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -57,15 +82,15 @@
   white-space: nowrap;
 }
 
-.markdown-message .answer-pill .answer-tone-icon { margin-inline-end: 0; }
-.markdown-message .answer-pill:is([data-tone="high"], [data-tone="no"]) { background: var(--answer-tint-err); color: var(--answer-err); }
-.markdown-message .answer-pill:is([data-tone="medium"], [data-tone="warn"]) { background: var(--answer-tint-warn); color: var(--answer-warn); }
-.markdown-message .answer-pill[data-tone="ok"] { background: var(--answer-tint-ok); color: var(--answer-ok); }
-.markdown-message .answer-pill[data-tone="info"] { background: var(--answer-tint-info); color: var(--answer-info); }
+.vk-md .answer-pill .answer-tone-icon { margin-inline-end: 0; }
+.vk-md .answer-pill:is([data-tone="high"], [data-tone="no"]) { background: var(--answer-tint-err); color: var(--answer-err); }
+.vk-md .answer-pill:is([data-tone="medium"], [data-tone="warn"]) { background: var(--answer-tint-warn); color: var(--answer-warn); }
+.vk-md .answer-pill[data-tone="ok"] { background: var(--answer-tint-ok); color: var(--answer-ok); }
+.vk-md .answer-pill[data-tone="info"] { background: var(--answer-tint-info); color: var(--answer-info); }
 
 /* File references. */
 /* 文件引用。 */
-.markdown-message .answer-path {
+.vk-md .answer-path {
   padding: 1px 6px;
   border: 1px solid transparent;
   border-radius: var(--vcn-radius-sm);
@@ -77,32 +102,32 @@
   overflow-wrap: anywhere;
 }
 
-.markdown-message a.answer-path[href] {
+.vk-md a.answer-path[href] {
   text-decoration: none;
 }
 
-.markdown-message a.answer-path:hover {
+.vk-md a.answer-path:hover {
   border-color: var(--border);
   color: var(--primary);
 }
 
 /* Metrics. */
 /* 指标。 */
-.markdown-message .answer-metrics {
+.vk-md .answer-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
   gap: 8px;
   margin: 0 0 11px;
 }
 
-.markdown-message .answer-metric {
+.vk-md .answer-metric {
   padding: 10px 12px;
   border: 1px solid var(--answer-frame-border);
   border-radius: var(--vcn-radius-md);
   background: var(--card);
 }
 
-.markdown-message .answer-metric b {
+.vk-md .answer-metric b {
   display: block;
   font-size: 22px;
   font-weight: 650;
@@ -110,23 +135,23 @@
   font-variant-numeric: tabular-nums;
 }
 
-.markdown-message .answer-metric b small {
+.vk-md .answer-metric b small {
   margin-inline-start: 4px;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
   font-weight: 500;
 }
 
-.markdown-message .answer-metric > span {
+.vk-md .answer-metric > span {
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
 }
 
-.markdown-message .answer-metric[data-tone="ok"] b { color: var(--answer-ok); }
-.markdown-message .answer-metric[data-tone="warn"] b { color: var(--answer-warn); }
-.markdown-message .answer-metric[data-tone="no"] b { color: var(--answer-err); }
+.vk-md .answer-metric[data-tone="ok"] b { color: var(--answer-ok); }
+.vk-md .answer-metric[data-tone="warn"] b { color: var(--answer-warn); }
+.vk-md .answer-metric[data-tone="no"] b { color: var(--answer-err); }
 
-.markdown-message .answer-meter {
+.vk-md .answer-meter {
   height: 4px;
   margin-top: 8px;
   overflow: hidden;
@@ -134,7 +159,7 @@
   background: var(--muted);
 }
 
-.markdown-message .answer-meter i {
+.vk-md .answer-meter i {
   display: block;
   height: 100%;
   border-radius: inherit;
@@ -143,19 +168,19 @@
 
 /* An overrun fills the meter in the danger tone and states how far past the maximum it went. */
 /* 超限时进度条以危险色填满，并标出超出幅度。 */
-.markdown-message .answer-meter-row {
+.vk-md .answer-meter-row {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 8px;
 }
 
-.markdown-message .answer-meter-row .answer-meter { flex: 1; margin-top: 0; }
-.markdown-message .answer-metric[data-tone="ok"] .answer-meter i { background: var(--answer-ok); }
-.markdown-message .answer-metric[data-tone="warn"] .answer-meter i { background: var(--answer-warn); }
-.markdown-message .answer-metric[data-tone="no"] .answer-meter i { background: var(--answer-err); }
+.vk-md .answer-meter-row .answer-meter { flex: 1; margin-top: 0; }
+.vk-md .answer-metric[data-tone="ok"] .answer-meter i { background: var(--answer-ok); }
+.vk-md .answer-metric[data-tone="warn"] .answer-meter i { background: var(--answer-warn); }
+.vk-md .answer-metric[data-tone="no"] .answer-meter i { background: var(--answer-err); }
 
-.markdown-message .answer-meter-over {
+.vk-md .answer-meter-over {
   color: var(--answer-err);
   font-size: var(--vcn-font-size-xs);
   font-weight: 600;
@@ -164,7 +189,7 @@
 
 /* Callout. */
 /* 提示框。 */
-.markdown-message .answer-callout {
+.vk-md .answer-callout {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 2px 10px;
@@ -175,26 +200,26 @@
   background: var(--answer-tint-info);
 }
 
-.markdown-message .answer-callout-icon {
+.vk-md .answer-callout-icon {
   margin-top: 4px;
   color: var(--answer-info);
 }
 
-.markdown-message .answer-callout strong:first-child {
+.vk-md .answer-callout strong:first-child {
   display: block;
 }
 
-.markdown-message .answer-callout > div > :last-child { margin-bottom: 0; }
-.markdown-message .answer-callout[data-tone="success"] { border-color: var(--answer-ok); background: var(--answer-tint-ok); }
-.markdown-message .answer-callout[data-tone="success"] .answer-callout-icon { color: var(--answer-ok); }
-.markdown-message .answer-callout[data-tone="warning"] { border-color: var(--answer-warn); background: var(--answer-tint-warn); }
-.markdown-message .answer-callout[data-tone="warning"] .answer-callout-icon { color: var(--answer-warn); }
-.markdown-message .answer-callout[data-tone="danger"] { border-color: var(--answer-err); background: var(--answer-tint-err); }
-.markdown-message .answer-callout[data-tone="danger"] .answer-callout-icon { color: var(--answer-err); }
+.vk-md .answer-callout > div > :last-child { margin-bottom: 0; }
+.vk-md .answer-callout[data-tone="success"] { border-color: var(--answer-ok); background: var(--answer-tint-ok); }
+.vk-md .answer-callout[data-tone="success"] .answer-callout-icon { color: var(--answer-ok); }
+.vk-md .answer-callout[data-tone="warning"] { border-color: var(--answer-warn); background: var(--answer-tint-warn); }
+.vk-md .answer-callout[data-tone="warning"] .answer-callout-icon { color: var(--answer-warn); }
+.vk-md .answer-callout[data-tone="danger"] { border-color: var(--answer-err); background: var(--answer-tint-err); }
+.vk-md .answer-callout[data-tone="danger"] .answer-callout-icon { color: var(--answer-err); }
 
 /* Key-value. */
 /* 键值。 */
-.markdown-message .answer-kv {
+.vk-md .answer-kv {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 0 18px;
@@ -202,39 +227,39 @@
   font-size: var(--vcn-font-size-md);
 }
 
-.markdown-message .answer-kv dt,
-.markdown-message .answer-kv dd {
+.vk-md .answer-kv dt,
+.vk-md .answer-kv dd {
   margin: 0;
   padding: 5px 0;
   border-bottom: 1px solid var(--answer-hairline);
 }
 
-.markdown-message .answer-kv dt {
+.vk-md .answer-kv dt {
   color: var(--muted-foreground);
 }
 
 /* Lists rendered as components drop the Markdown list markers. */
 /* 以组件渲染的列表去除 Markdown 列表标记。 */
-.markdown-message :is(.answer-checklist, .answer-steps, .answer-timeline, .answer-tree, .answer-files ul) {
+.vk-md :is(.answer-checklist, .answer-steps, .answer-timeline, .answer-tree, .answer-files ul) {
   margin: 0 0 11px;
   padding: 0;
   list-style: none;
 }
 
-.markdown-message :is(.answer-checklist, .answer-steps, .answer-timeline, .answer-tree, .answer-files ul) li + li {
+.vk-md :is(.answer-checklist, .answer-steps, .answer-timeline, .answer-tree, .answer-files ul) li + li {
   margin-top: 0;
 }
 
 /* Checklist. */
 /* 清单。 */
-.markdown-message .answer-checklist li {
+.vk-md .answer-checklist li {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   gap: 0 8px;
   padding: 4px 0;
 }
 
-.markdown-message .answer-status {
+.vk-md .answer-status {
   width: 18px;
   height: 18px;
   margin-top: 3px;
@@ -245,13 +270,13 @@
   font-weight: 700;
 }
 
-.markdown-message .answer-status[data-status="ok"] { background: var(--answer-tint-ok); color: var(--answer-ok); }
-.markdown-message .answer-status[data-status="no"] { background: var(--answer-tint-err); color: var(--answer-err); }
-.markdown-message .answer-status[data-status="warn"] { background: var(--answer-tint-warn); color: var(--answer-warn); }
-.markdown-message .answer-status[data-status="todo"] { border: 1.5px solid var(--border); }
-.markdown-message .answer-checklist li[data-status="todo"] > span:nth-child(2) { color: var(--muted-foreground); }
+.vk-md .answer-status[data-status="ok"] { background: var(--answer-tint-ok); color: var(--answer-ok); }
+.vk-md .answer-status[data-status="no"] { background: var(--answer-tint-err); color: var(--answer-err); }
+.vk-md .answer-status[data-status="warn"] { background: var(--answer-tint-warn); color: var(--answer-warn); }
+.vk-md .answer-status[data-status="todo"] { border: 1.5px solid var(--border); }
+.vk-md .answer-checklist li[data-status="todo"] > span:nth-child(2) { color: var(--muted-foreground); }
 
-.markdown-message .answer-checklist small {
+.vk-md .answer-checklist small {
   grid-column: 2;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-md);
@@ -259,7 +284,7 @@
 
 /* Steps. */
 /* 步骤。 */
-.markdown-message .answer-steps li {
+.vk-md .answer-steps li {
   position: relative;
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
@@ -267,11 +292,11 @@
   padding-bottom: 14px;
 }
 
-.markdown-message .answer-steps li:last-child {
+.vk-md .answer-steps li:last-child {
   padding-bottom: 0;
 }
 
-.markdown-message .answer-steps li:not(:last-child)::before {
+.vk-md .answer-steps li:not(:last-child)::before {
   content: "";
   position: absolute;
   left: 11px;
@@ -281,11 +306,11 @@
   background: var(--border);
 }
 
-.markdown-message .answer-steps li[data-status="done"]:not(:last-child)::before {
+.vk-md .answer-steps li[data-status="done"]:not(:last-child)::before {
   background: color-mix(in srgb, var(--answer-ok) 50%, var(--border));
 }
 
-.markdown-message .answer-step-number {
+.vk-md .answer-step-number {
   width: 24px;
   height: 24px;
   display: grid;
@@ -298,25 +323,25 @@
   font-weight: 650;
 }
 
-.markdown-message .answer-steps li[data-status="done"] .answer-step-number {
+.vk-md .answer-steps li[data-status="done"] .answer-step-number {
   border-color: var(--answer-ok);
   background: var(--answer-ok);
   color: var(--background);
 }
 
-.markdown-message .answer-steps li[data-status="now"] .answer-step-number {
+.vk-md .answer-steps li[data-status="now"] .answer-step-number {
   border-color: var(--primary);
   color: var(--primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
 }
 
-.markdown-message .answer-steps b {
+.vk-md .answer-steps b {
   display: block;
   line-height: 24px;
 }
 
-.markdown-message .answer-steps p,
-.markdown-message .answer-timeline p {
+.vk-md .answer-steps p,
+.vk-md .answer-timeline p {
   margin: 0;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-md);
@@ -324,14 +349,14 @@
 
 /* Timeline. */
 /* 时间轴。 */
-.markdown-message .answer-timeline li {
+.vk-md .answer-timeline li {
   display: grid;
   grid-template-columns: minmax(56px, max-content) 12px minmax(0, 1fr);
   gap: 0 10px;
   padding-bottom: 10px;
 }
 
-.markdown-message .answer-timeline time {
+.vk-md .answer-timeline time {
   color: var(--muted-foreground);
   font-family: var(--font-mono);
   font-size: var(--vcn-font-size-sm);
@@ -340,11 +365,11 @@
   text-align: end;
 }
 
-.markdown-message .answer-timeline-dot {
+.vk-md .answer-timeline-dot {
   position: relative;
 }
 
-.markdown-message .answer-timeline-dot::before {
+.vk-md .answer-timeline-dot::before {
   content: "";
   position: absolute;
   left: 3px;
@@ -355,7 +380,7 @@
   background: var(--primary);
 }
 
-.markdown-message .answer-timeline li:not(:last-child) .answer-timeline-dot::after {
+.vk-md .answer-timeline li:not(:last-child) .answer-timeline-dot::after {
   content: "";
   position: absolute;
   left: 6px;
@@ -367,11 +392,11 @@
 
 /* Files. */
 /* 文件变更。 */
-.markdown-message .answer-files ul {
+.vk-md .answer-files ul {
   margin: 0;
 }
 
-.markdown-message .answer-files li {
+.vk-md .answer-files li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -381,48 +406,48 @@
   font-size: var(--vcn-font-size-md);
 }
 
-.markdown-message .answer-files-path {
+.vk-md .answer-files-path {
   min-width: 0;
   overflow: hidden;
 }
 
-.markdown-message .answer-files-path .answer-path {
+.vk-md .answer-files-path .answer-path {
   padding: 0;
   background: transparent;
 }
 
-.markdown-message .answer-files-path small {
+.vk-md .answer-files-path small {
   margin-inline-start: 10px;
   color: var(--muted-foreground);
 }
 
-.markdown-message .answer-delta {
+.vk-md .answer-delta {
   font-family: var(--font-mono);
   font-size: var(--vcn-font-size-sm);
   font-weight: 600;
   white-space: nowrap;
 }
 
-.markdown-message .answer-delta [data-kind="added"] { color: var(--diff-addition-base); }
-.markdown-message .answer-delta [data-kind="removed"] { margin-inline-start: 6px; color: var(--diff-deletion-base); }
+.vk-md .answer-delta [data-kind="added"] { color: var(--diff-addition-base); }
+.vk-md .answer-delta [data-kind="removed"] { margin-inline-start: 6px; color: var(--diff-deletion-base); }
 
 /* Cards. */
 /* 卡片。 */
-.markdown-message .answer-cards {
+.vk-md .answer-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 8px;
   margin: 0 0 11px;
 }
 
-.markdown-message .answer-card {
+.vk-md .answer-card {
   padding: 12px 14px;
   border: 1px solid var(--answer-frame-border);
   border-radius: var(--vcn-radius-md);
   background: var(--card);
 }
 
-.markdown-message .answer-card header {
+.vk-md .answer-card header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -430,7 +455,7 @@
   margin-bottom: 4px;
 }
 
-.markdown-message .answer-card p {
+.vk-md .answer-card p {
   margin: 0;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-md);
@@ -438,49 +463,49 @@
 
 /* Tree. */
 /* 树。 */
-.markdown-message ul.answer-tree {
+.vk-md ul.answer-tree {
   margin: 0;
   padding: 8px 14px 10px;
   font-size: var(--vcn-font-size-md);
 }
 
-.markdown-message .answer-tree ul {
+.vk-md .answer-tree ul {
   margin: 0 0 0 6px;
   padding: 0 0 0 18px;
   border-inline-start: 1px solid var(--border);
   list-style: none;
 }
 
-.markdown-message .answer-tree li {
+.vk-md .answer-tree li {
   padding: 2px 0;
 }
 
-.markdown-message .answer-tree-label {
+.vk-md .answer-tree-label {
   font-family: var(--font-mono);
   font-size: var(--vcn-font-size-sm);
 }
 
-.markdown-message .answer-tree small {
+.vk-md .answer-tree small {
   margin-inline-start: 8px;
   color: var(--muted-foreground);
 }
 
-.markdown-message .answer-tree li[data-mark="add"] > .answer-tree-label { color: var(--answer-ok); }
-.markdown-message .answer-tree li[data-mark="add"] > .answer-tree-label::before { content: "+ "; font-weight: 700; }
-.markdown-message .answer-tree li[data-mark="del"] > .answer-tree-label { color: var(--answer-err); text-decoration: line-through; }
-.markdown-message .answer-tree li[data-mark="chg"] > .answer-tree-label { color: var(--answer-warn); }
-.markdown-message .answer-tree li[data-mark="chg"] > .answer-tree-label::before { content: "~ "; font-weight: 700; }
+.vk-md .answer-tree li[data-mark="add"] > .answer-tree-label { color: var(--answer-ok); }
+.vk-md .answer-tree li[data-mark="add"] > .answer-tree-label::before { content: "+ "; font-weight: 700; }
+.vk-md .answer-tree li[data-mark="del"] > .answer-tree-label { color: var(--answer-err); text-decoration: line-through; }
+.vk-md .answer-tree li[data-mark="chg"] > .answer-tree-label { color: var(--answer-warn); }
+.vk-md .answer-tree li[data-mark="chg"] > .answer-tree-label::before { content: "~ "; font-weight: 700; }
 
 /* Details, tabs and columns. */
 /* 折叠、页签与分栏。 */
-.markdown-message .answer-details {
+.vk-md .answer-details {
   margin: 0 0 11px;
   border: 1px solid var(--answer-frame-border);
   border-radius: var(--vcn-radius-md);
   background: var(--card);
 }
 
-.markdown-message .answer-details summary {
+.vk-md .answer-details summary {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -491,11 +516,11 @@
   cursor: pointer;
 }
 
-.markdown-message .answer-details summary::-webkit-details-marker {
+.vk-md .answer-details summary::-webkit-details-marker {
   display: none;
 }
 
-.markdown-message .answer-details summary::before {
+.vk-md .answer-details summary::before {
   content: "›";
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-xl);
@@ -503,32 +528,32 @@
   transition: transform var(--vcn-duration-instant) ease;
 }
 
-.markdown-message .answer-details[open] summary::before {
+.vk-md .answer-details[open] summary::before {
   transform: rotate(90deg);
 }
 
-.markdown-message .answer-details-body {
+.vk-md .answer-details-body {
   padding: 0 12px 10px 30px;
 }
 
-.markdown-message .answer-details-body > :last-child,
-.markdown-message .answer-tabpanel > :last-child,
-.markdown-message .answer-columns section > :last-child {
+.vk-md .answer-details-body > :last-child,
+.vk-md .answer-tabpanel > :last-child,
+.vk-md .answer-columns section > :last-child {
   margin-bottom: 0;
 }
 
-.markdown-message .answer-tabs {
+.vk-md .answer-tabs {
   margin: 0 0 11px;
 }
 
-.markdown-message .answer-tablist {
+.vk-md .answer-tablist {
   display: flex;
   flex-wrap: wrap;
   gap: 2px;
   border-bottom: 1px solid var(--border);
 }
 
-.markdown-message .answer-tablist button {
+.vk-md .answer-tablist button {
   margin-bottom: -1px;
   padding: 6px 12px;
   border: 0;
@@ -540,74 +565,74 @@
   cursor: pointer;
 }
 
-.markdown-message .answer-tablist button[aria-selected="true"] {
+.vk-md .answer-tablist button[aria-selected="true"] {
   border-bottom-color: var(--primary);
   color: var(--foreground);
   font-weight: 600;
 }
 
-.markdown-message .answer-tabpanel {
+.vk-md .answer-tabpanel {
   padding-top: 10px;
 }
 
-.markdown-message .answer-columns {
+.vk-md .answer-columns {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: 16px;
   margin: 0 0 11px;
 }
 
-.markdown-message .answer-columns section {
+.vk-md .answer-columns section {
   padding-top: 8px;
   border-top: 2px solid var(--border);
 }
 
-.markdown-message .answer-columns h4 {
+.vk-md .answer-columns h4 {
   margin: 0 0 4px;
 }
 
 /* Chart. */
 /* 图表。 */
-.markdown-message .answer-chart-body {
+.vk-md .answer-chart-body {
   padding: 2px 14px 12px;
 }
 
-.markdown-message .answer-chart-body .answer-table-scroll {
+.vk-md .answer-chart-body .vk-table-wrap {
   margin: 0 -14px -12px;
 }
 
-.markdown-message .answer-chart-svg {
+.vk-md .answer-chart-svg {
   display: block;
   width: 100%;
   height: auto;
 }
 
-.markdown-message .answer-chart-body text {
+.vk-md .answer-chart-body text {
   fill: var(--muted-foreground);
   font-size: var(--vcn-font-size-xs);
 }
 
-.markdown-message .answer-chart-grid {
+.vk-md .answer-chart-grid {
   stroke: var(--border);
   stroke-dasharray: 3 3;
 }
 
-.markdown-message .answer-chart-axis {
+.vk-md .answer-chart-axis {
   stroke: color-mix(in srgb, var(--foreground) 30%, var(--border));
 }
 
-.markdown-message .answer-chart-point {
+.vk-md .answer-chart-point {
   stroke: var(--card);
   stroke-width: 1.5;
 }
 
-.markdown-message .answer-chart-body .answer-chart-total {
+.vk-md .answer-chart-body .answer-chart-total {
   fill: var(--foreground);
   font-size: var(--vcn-font-size-lg);
   font-weight: 650;
 }
 
-.markdown-message .answer-chart-legend {
+.vk-md .answer-chart-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 14px;
@@ -618,11 +643,11 @@
   list-style: none;
 }
 
-.markdown-message .answer-chart-legend li + li {
+.vk-md .answer-chart-legend li + li {
   margin-top: 0;
 }
 
-.markdown-message .answer-chart-legend i {
+.vk-md .answer-chart-legend i {
   display: inline-block;
   width: 9px;
   height: 9px;
@@ -630,43 +655,43 @@
   border-radius: 2px;
 }
 
-.markdown-message .answer-chart-legend[data-layout="column"] {
+.vk-md .answer-chart-legend[data-layout="column"] {
   flex-direction: column;
   gap: 6px;
 }
 
-.markdown-message .answer-chart-legend b {
+.vk-md .answer-chart-legend b {
   margin-inline-start: 6px;
   color: var(--foreground);
   font-weight: 600;
 }
 
-.markdown-message .answer-chart-circular {
+.vk-md .answer-chart-circular {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12px 28px;
 }
 
-.markdown-message .answer-chart-circular svg {
+.vk-md .answer-chart-circular svg {
   width: 150px;
   flex: none;
 }
 
 /* Gallery. */
 /* 图库。 */
-.markdown-message .answer-gallery {
+.vk-md .answer-gallery {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
   gap: 8px;
   margin: 0 0 11px;
 }
 
-.markdown-message .answer-gallery figure {
+.vk-md .answer-gallery figure {
   margin: 0;
 }
 
-.markdown-message .answer-gallery-media {
+.vk-md .answer-gallery-media {
   position: relative;
   width: 100%;
   aspect-ratio: 4 / 3;
@@ -679,19 +704,19 @@
   background: var(--muted);
 }
 
-.markdown-message button.answer-gallery-media {
+.vk-md button.answer-gallery-media {
   cursor: zoom-in;
 }
 
-.markdown-message .answer-gallery-media img,
-.markdown-message .answer-gallery-media video {
+.vk-md .answer-gallery-media img,
+.vk-md .answer-gallery-media video {
   width: 100%;
   height: 100%;
   max-width: none;
   object-fit: cover;
 }
 
-.markdown-message .answer-gallery-video {
+.vk-md .answer-gallery-video {
   position: relative;
   width: 100%;
   height: 100%;
@@ -699,7 +724,7 @@
   place-items: center;
 }
 
-.markdown-message .answer-gallery-video svg {
+.vk-md .answer-gallery-video svg {
   position: absolute;
   padding: 8px;
   border-radius: 50%;
@@ -708,7 +733,7 @@
   box-sizing: content-box;
 }
 
-.markdown-message .answer-gallery figcaption {
+.vk-md .answer-gallery figcaption {
   margin-top: 4px;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
@@ -717,19 +742,19 @@
 /* Layered diagrams (flow and entity): an SVG drawn at its natural size, shrinking to the reply width down
    to a floor and scrolling beyond it. */
 /* 分层图（流程与实体）：按自然尺寸绘制的 SVG，随回答宽度缩小至下限，超出后横向滚动。 */
-.markdown-message .answer-diagram {
+.vk-md .answer-diagram {
   --answer-diagram-surface: color-mix(in srgb, var(--card) 94%, var(--muted));
   --answer-diagram-stroke: color-mix(in srgb, var(--foreground) 52%, var(--border));
   --answer-edge: color-mix(in srgb, var(--muted-foreground) 85%, transparent);
   margin: 0 0 13px;
 }
 
-.markdown-message .answer-diagram-scroll {
+.vk-md .answer-diagram-scroll {
   overflow-x: auto;
   padding: 14px 12px;
 }
 
-.markdown-message .answer-diagram svg {
+.vk-md .answer-diagram svg {
   display: block;
   width: var(--answer-diagram-width);
   min-width: min(var(--answer-diagram-width), 520px);
@@ -740,7 +765,7 @@
   font-family: inherit;
 }
 
-.markdown-message .answer-diagram-legend {
+.vk-md .answer-diagram-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 14px;
@@ -749,13 +774,13 @@
   font-size: var(--vcn-font-size-xs);
 }
 
-.markdown-message .answer-diagram-legend span {
+.vk-md .answer-diagram-legend span {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
-.markdown-message .answer-diagram-legend i {
+.vk-md .answer-diagram-legend i {
   width: 14px;
   height: 9px;
   border: 1.5px solid var(--answer-mark);
@@ -763,114 +788,114 @@
   background: var(--answer-mark-tint);
 }
 
-.markdown-message .answer-diagram-legend [data-mark="del"] i { border-style: dashed; }
+.vk-md .answer-diagram-legend [data-mark="del"] i { border-style: dashed; }
 
-.markdown-message .answer-diagram [data-mark="add"] { --answer-mark: var(--answer-ok); --answer-mark-tint: var(--answer-tint-ok); }
-.markdown-message .answer-diagram [data-mark="chg"] { --answer-mark: var(--answer-warn); --answer-mark-tint: var(--answer-tint-warn); }
-.markdown-message .answer-diagram [data-mark="del"] { --answer-mark: var(--answer-err); --answer-mark-tint: var(--answer-tint-err); }
+.vk-md .answer-diagram [data-mark="add"] { --answer-mark: var(--answer-ok); --answer-mark-tint: var(--answer-tint-ok); }
+.vk-md .answer-diagram [data-mark="chg"] { --answer-mark: var(--answer-warn); --answer-mark-tint: var(--answer-tint-warn); }
+.vk-md .answer-diagram [data-mark="del"] { --answer-mark: var(--answer-err); --answer-mark-tint: var(--answer-tint-err); }
 
-.markdown-message .answer-graph-edge {
+.vk-md .answer-graph-edge {
   fill: none;
   stroke: var(--answer-edge);
   stroke-width: 1.4;
 }
 
-.markdown-message .answer-graph-edge[data-dashed] { stroke-dasharray: 5 4; }
-.markdown-message .answer-graph-edge[data-mark] { stroke: var(--answer-mark); stroke-width: 1.8; }
-.markdown-message .answer-graph-edge[data-mark="del"] { stroke-dasharray: 5 4; }
+.vk-md .answer-graph-edge[data-dashed] { stroke-dasharray: 5 4; }
+.vk-md .answer-graph-edge[data-mark] { stroke: var(--answer-mark); stroke-width: 1.8; }
+.vk-md .answer-graph-edge[data-mark="del"] { stroke-dasharray: 5 4; }
 
-.markdown-message .answer-graph-arrow { fill: var(--answer-edge); }
-.markdown-message .answer-graph marker[data-mark="add"] .answer-graph-arrow { fill: var(--answer-ok); }
-.markdown-message .answer-graph marker[data-mark="chg"] .answer-graph-arrow { fill: var(--answer-warn); }
-.markdown-message .answer-graph marker[data-mark="del"] .answer-graph-arrow { fill: var(--answer-err); }
+.vk-md .answer-graph-arrow { fill: var(--answer-edge); }
+.vk-md .answer-graph marker[data-mark="add"] .answer-graph-arrow { fill: var(--answer-ok); }
+.vk-md .answer-graph marker[data-mark="chg"] .answer-graph-arrow { fill: var(--answer-warn); }
+.vk-md .answer-graph marker[data-mark="del"] .answer-graph-arrow { fill: var(--answer-err); }
 
-.markdown-message .answer-graph-label rect { fill: var(--answer-diagram-surface); }
+.vk-md .answer-graph-label rect { fill: var(--answer-diagram-surface); }
 
-.markdown-message .answer-graph-label text {
+.vk-md .answer-graph-label text {
   fill: var(--muted-foreground);
   font-size: 11.5px;
 }
 
-.markdown-message .answer-graph-label[data-mark] text { fill: var(--answer-mark); }
+.vk-md .answer-graph-label[data-mark] text { fill: var(--answer-mark); }
 
-.markdown-message .answer-graph-node :is(rect, polygon, path, ellipse) {
+.vk-md .answer-graph-node :is(rect, polygon, path, ellipse) {
   fill: var(--card);
   stroke: var(--answer-diagram-stroke);
   stroke-width: 1.3;
 }
 
-.markdown-message .answer-graph-node text {
+.vk-md .answer-graph-node text {
   fill: var(--foreground);
   font-size: 13px;
   font-weight: 500;
 }
 
-.markdown-message .answer-graph-node[data-shape="terminal"] rect { fill: var(--muted); }
-.markdown-message .answer-graph-node[data-shape="decision"] polygon { fill: color-mix(in srgb, var(--answer-warn) 9%, var(--card)); }
-.markdown-message .answer-graph-node[data-shape="store"] :is(path, ellipse) { fill: color-mix(in srgb, var(--answer-info) 9%, var(--card)); }
+.vk-md .answer-graph-node[data-shape="terminal"] rect { fill: var(--muted); }
+.vk-md .answer-graph-node[data-shape="decision"] polygon { fill: color-mix(in srgb, var(--answer-warn) 9%, var(--card)); }
+.vk-md .answer-graph-node[data-shape="store"] :is(path, ellipse) { fill: color-mix(in srgb, var(--answer-info) 9%, var(--card)); }
 
-.markdown-message .answer-graph-node[data-mark] :is(rect, polygon, path, ellipse) {
+.vk-md .answer-graph-node[data-mark] :is(rect, polygon, path, ellipse) {
   fill: var(--answer-mark-tint);
   stroke: var(--answer-mark);
   stroke-width: 1.8;
 }
 
-.markdown-message .answer-graph-node[data-mark="del"] :is(rect, polygon, path, ellipse) { stroke-dasharray: 5 3; }
-.markdown-message .answer-graph-node[data-mark="del"] text { opacity: 0.7; text-decoration: line-through; }
+.vk-md .answer-graph-node[data-mark="del"] :is(rect, polygon, path, ellipse) { stroke-dasharray: 5 3; }
+.vk-md .answer-graph-node[data-mark="del"] text { opacity: 0.7; text-decoration: line-through; }
 
 /* Entity cards: a tinted header, one row per field, key badges and right-aligned types. */
 /* 实体卡片：着色标题、每字段一行、键徽标与右对齐的类型。 */
-.markdown-message .answer-er-card {
+.vk-md .answer-er-card {
   fill: var(--card);
   stroke: var(--answer-diagram-stroke);
   stroke-width: 1.2;
 }
 
-.markdown-message .answer-er-head { fill: color-mix(in srgb, var(--foreground) 7%, var(--card)); }
-.markdown-message .answer-er-table[data-mark] .answer-er-card { fill: var(--answer-mark-tint); stroke: var(--answer-mark); stroke-width: 1.8; }
-.markdown-message .answer-er-table[data-mark="del"] .answer-er-card { stroke-dasharray: 5 3; }
-.markdown-message .answer-er-table[data-mark] .answer-er-head { fill: color-mix(in srgb, var(--answer-mark) 16%, var(--card)); }
-.markdown-message .answer-er-rule { stroke: var(--answer-hairline); stroke-width: 1; }
-.markdown-message .answer-er-foot { fill: none; stroke: var(--answer-edge); stroke-width: 1.4; }
+.vk-md .answer-er-head { fill: color-mix(in srgb, var(--foreground) 7%, var(--card)); }
+.vk-md .answer-er-table[data-mark] .answer-er-card { fill: var(--answer-mark-tint); stroke: var(--answer-mark); stroke-width: 1.8; }
+.vk-md .answer-er-table[data-mark="del"] .answer-er-card { stroke-dasharray: 5 3; }
+.vk-md .answer-er-table[data-mark] .answer-er-head { fill: color-mix(in srgb, var(--answer-mark) 16%, var(--card)); }
+.vk-md .answer-er-rule { stroke: var(--answer-hairline); stroke-width: 1; }
+.vk-md .answer-er-foot { fill: none; stroke: var(--answer-edge); stroke-width: 1.4; }
 
-.markdown-message .answer-er-title {
+.vk-md .answer-er-title {
   fill: var(--foreground);
   font-size: 13px;
   font-weight: 650;
 }
 
-.markdown-message .answer-er-field {
+.vk-md .answer-er-field {
   fill: var(--foreground);
   font-family: var(--font-mono);
   font-size: 12.5px;
 }
 
-.markdown-message .answer-er-type,
-.markdown-message .answer-er-note {
+.vk-md .answer-er-type,
+.vk-md .answer-er-note {
   fill: var(--muted-foreground);
   font-size: 11.5px;
 }
 
-.markdown-message .answer-er-row[data-mark] .answer-er-field { fill: var(--answer-mark); font-weight: 600; }
-.markdown-message .answer-er-row[data-mark="del"] text { text-decoration: line-through; }
+.vk-md .answer-er-row[data-mark] .answer-er-field { fill: var(--answer-mark); font-weight: 600; }
+.vk-md .answer-er-row[data-mark="del"] text { text-decoration: line-through; }
 
-.markdown-message .answer-er-key rect { fill: var(--muted); }
+.vk-md .answer-er-key rect { fill: var(--muted); }
 
-.markdown-message .answer-er-key text {
+.vk-md .answer-er-key text {
   fill: var(--muted-foreground);
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
 
-.markdown-message .answer-er-key[data-key="PK"] rect { fill: color-mix(in srgb, var(--answer-warn) 20%, var(--card)); }
-.markdown-message .answer-er-key[data-key="PK"] text { fill: var(--answer-warn); }
-.markdown-message .answer-er-key[data-key="FK"] rect { fill: color-mix(in srgb, var(--answer-info) 18%, var(--card)); }
-.markdown-message .answer-er-key[data-key="FK"] text { fill: var(--answer-info); }
+.vk-md .answer-er-key[data-key="PK"] rect { fill: color-mix(in srgb, var(--answer-warn) 20%, var(--card)); }
+.vk-md .answer-er-key[data-key="PK"] text { fill: var(--answer-warn); }
+.vk-md .answer-er-key[data-key="FK"] rect { fill: color-mix(in srgb, var(--answer-info) 18%, var(--card)); }
+.vk-md .answer-er-key[data-key="FK"] text { fill: var(--answer-info); }
 
 /* Sequence: one column per actor with a lifeline down its center. */
 /* 时序：每个参与者一列，生命线沿列中心向下。 */
-.markdown-message .answer-sequence {
+.vk-md .answer-sequence {
   display: grid;
   grid-template-columns: repeat(var(--answer-actors), minmax(0, 1fr));
   row-gap: 8px;
@@ -882,7 +907,7 @@
   font-size: var(--vcn-font-size-md);
 }
 
-.markdown-message .answer-sequence-actor {
+.vk-md .answer-sequence-actor {
   justify-self: center;
   max-width: 100%;
   padding: 4px 12px;
@@ -893,7 +918,7 @@
   text-align: center;
 }
 
-.markdown-message .answer-sequence-message {
+.vk-md .answer-sequence-message {
   --answer-arrow: var(--muted-foreground);
   position: relative;
   min-height: 1.9em;
@@ -902,13 +927,13 @@
   text-align: center;
 }
 
-.markdown-message .answer-sequence-message > span {
+.vk-md .answer-sequence-message > span {
   display: inline-block;
   padding: 0 6px;
   background: var(--background);
 }
 
-.markdown-message .answer-sequence-message::after {
+.vk-md .answer-sequence-message::after {
   content: "";
   position: absolute;
   bottom: -5.5px;
@@ -918,14 +943,14 @@
   border-left: 8px solid var(--answer-arrow);
 }
 
-.markdown-message .answer-sequence-message[data-direction="left"]::after {
+.vk-md .answer-sequence-message[data-direction="left"]::after {
   right: auto;
   left: -1px;
   border-left: 0;
   border-right: 8px solid var(--answer-arrow);
 }
 
-.markdown-message .answer-sequence-message[data-direction="self"] {
+.vk-md .answer-sequence-message[data-direction="self"] {
   margin: 0 0 0 50%;
   border: 1.5px solid var(--answer-arrow);
   border-left: 0;
@@ -933,21 +958,21 @@
   text-align: start;
 }
 
-.markdown-message .answer-sequence-message[data-direction="self"]::after {
+.vk-md .answer-sequence-message[data-direction="self"]::after {
   right: auto;
   left: -1px;
   border-left: 0;
   border-right: 8px solid var(--answer-arrow);
 }
 
-.markdown-message .answer-sequence-message[data-dashed] { border-bottom-style: dashed; }
-.markdown-message .answer-sequence-message[data-mark="add"] { --answer-arrow: var(--answer-ok); }
-.markdown-message .answer-sequence-message[data-mark="del"] { --answer-arrow: var(--answer-err); text-decoration: line-through; }
-.markdown-message .answer-sequence-message[data-mark="chg"] { --answer-arrow: var(--answer-warn); }
+.vk-md .answer-sequence-message[data-dashed] { border-bottom-style: dashed; }
+.vk-md .answer-sequence-message[data-mark="add"] { --answer-arrow: var(--answer-ok); }
+.vk-md .answer-sequence-message[data-mark="del"] { --answer-arrow: var(--answer-err); text-decoration: line-through; }
+.vk-md .answer-sequence-message[data-mark="chg"] { --answer-arrow: var(--answer-warn); }
 
 /* A note spans just past the lifelines it covers; a single-actor note is a compact box on its lifeline. */
 /* 注释覆盖其所跨生命线并略微外延；单参与者注释是生命线上的紧凑方框。 */
-.markdown-message .answer-sequence-note {
+.vk-md .answer-sequence-note {
   position: relative;
   justify-self: stretch;
   margin: 0 max(4px, calc(50% / var(--answer-span) - 28px));
@@ -959,13 +984,13 @@
   text-align: center;
 }
 
-.markdown-message .answer-sequence-note[data-single] {
+.vk-md .answer-sequence-note[data-single] {
   justify-self: center;
   max-width: calc(100% - 8px);
   margin: 0 4px;
 }
 
-.markdown-message .answer-sequence-phase {
+.vk-md .answer-sequence-phase {
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
@@ -975,48 +1000,48 @@
   font-weight: 600;
 }
 
-.markdown-message .answer-sequence-phase::before,
-.markdown-message .answer-sequence-phase::after {
+.vk-md .answer-sequence-phase::before,
+.vk-md .answer-sequence-phase::after {
   content: "";
   flex: 1;
   height: 1px;
   background: var(--border);
 }
 
-.markdown-message .answer-sequence-phase span {
+.vk-md .answer-sequence-phase span {
   padding: 0 4px;
   background: var(--background);
 }
 
 /* Decisions: each option is a full-width row; a pick fills its mark, the recommended option carries a badge. */
 /* 决策：每个选项是一整行；选中时标记填满，建议选项带徽标。 */
-.markdown-message .answer-decision-head {
+.vk-md .answer-decision-head {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 9px 8px 7px 12px;
 }
 
-.markdown-message .answer-decision-head strong {
+.vk-md .answer-decision-head strong {
   flex: 1 1 auto;
   min-width: 0;
   color: var(--foreground);
   font-weight: 600;
 }
 
-.markdown-message .answer-decision-head small {
+.vk-md .answer-decision-head small {
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
   white-space: nowrap;
 }
 
-.markdown-message .answer-decision-options {
+.vk-md .answer-decision-options {
   display: grid;
   gap: 6px;
   padding: 0 10px 10px;
 }
 
-.markdown-message .answer-decision-option {
+.vk-md .answer-decision-option {
   width: 100%;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -1033,25 +1058,25 @@
   transition: border-color var(--vcn-duration-fast) ease, background var(--vcn-duration-fast) ease;
 }
 
-.markdown-message .answer-decision-option:disabled {
+.vk-md .answer-decision-option:disabled {
   cursor: default;
 }
 
-.markdown-message .answer-decision-option:hover:not(:disabled) {
+.vk-md .answer-decision-option:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
 }
 
-.markdown-message .answer-decision-option:focus-visible {
+.vk-md .answer-decision-option:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 1px;
 }
 
-.markdown-message .answer-decision-option[aria-checked="true"] {
+.vk-md .answer-decision-option[aria-checked="true"] {
   border-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 7%, var(--card));
 }
 
-.markdown-message .answer-decision-mark {
+.vk-md .answer-decision-mark {
   width: 16px;
   height: 16px;
   display: inline-flex;
@@ -1062,31 +1087,31 @@
   color: var(--primary-foreground);
 }
 
-.markdown-message .answer-decision-option[data-multiple] .answer-decision-mark {
+.vk-md .answer-decision-option[data-multiple] .answer-decision-mark {
   border-radius: var(--vcn-radius-xs);
 }
 
-.markdown-message .answer-decision-option[aria-checked="true"] .answer-decision-mark {
+.vk-md .answer-decision-option[aria-checked="true"] .answer-decision-mark {
   border-color: var(--primary);
   background: var(--primary);
 }
 
-.markdown-message .answer-decision-text {
+.vk-md .answer-decision-text {
   min-width: 0;
   display: grid;
   gap: 1px;
 }
 
-.markdown-message .answer-decision-text > span {
+.vk-md .answer-decision-text > span {
   font-weight: 500;
 }
 
-.markdown-message .answer-decision-text small {
+.vk-md .answer-decision-text small {
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
 }
 
-.markdown-message .answer-decision-badge {
+.vk-md .answer-decision-badge {
   padding: 1px 8px;
   border-radius: var(--vcn-radius-pill);
   background: var(--answer-tint-ok);
@@ -1098,19 +1123,19 @@
 
 /* Reader comments: the button joins a frame's actions or shows in a hover corner; the note sits under the block. */
 /* 读者批注：按钮并入外框操作或显示在悬停角落；说明框位于区块下方。 */
-.markdown-message .answer-fence {
+.vk-md .answer-fence {
   position: relative;
 }
 
-.markdown-message .answer-fence:hover > .answer-hover-actions {
+.vk-md .answer-fence:hover > .vk-figure-hover {
   opacity: 1;
 }
 
-.markdown-message .markdown-code-action[data-active] {
+.vk-md .vk-codeblock-action[data-active] {
   color: var(--primary);
 }
 
-.markdown-message .answer-note {
+.vk-md .answer-note {
   display: flex;
   align-items: flex-start;
   gap: 6px;
@@ -1122,15 +1147,15 @@
   background: color-mix(in srgb, var(--primary) 4%, var(--card));
 }
 
-.markdown-message .answer-fence > .answer-frame + .answer-note {
+.vk-md .answer-fence > .vk-figure + .answer-note {
   margin-top: -4px;
 }
 
-.markdown-message .answer-decision > .answer-note {
+.vk-md .answer-decision > .answer-note {
   margin: 0 10px 10px;
 }
 
-.markdown-message .answer-note textarea {
+.vk-md .answer-note textarea {
   flex: 1 1 auto;
   min-height: 2.6em;
   padding: 2px 0;
@@ -1206,7 +1231,7 @@
   margin: 0 0 11px;
 }
 
-.markdown-message .answer-code .markdown-code-block {
+.vk-md .answer-code .vk-codeblock {
   margin: 0;
 }
 
@@ -1241,15 +1266,15 @@
   font-family: var(--font-sans);
 }
 
-.answer-code .markdown-code-pre[data-numbered="true"] {
+.answer-code .vk-codeblock-pre[data-numbered="true"] {
   padding: 0 14px 0 0;
 }
 
-.answer-code .markdown-code-pre[data-numbered="true"] .markdown-code-line {
+.answer-code .vk-codeblock-pre[data-numbered="true"] .vk-codeblock-line {
   display: flex;
 }
 
-.answer-code .markdown-code-number {
+.answer-code .vk-codeblock-num {
   position: sticky;
   left: 0;
   flex: 0 0 auto;
@@ -1263,17 +1288,17 @@
   font-variant-numeric: tabular-nums;
 }
 
-.answer-code .markdown-code-line > span:last-child {
+.answer-code .vk-codeblock-line > span:last-child {
   min-width: 0;
 }
 
-.answer-code .markdown-code-line[data-highlighted="true"] {
+.answer-code .vk-codeblock-line[data-highlighted="true"] {
   background: var(--answer-tint-info);
 }
 
 /* The sticky gutter stays opaque so scrolled code never shows through it. */
 /* 固定行号栏保持不透明，滚动的代码不会透出。 */
-.answer-code .markdown-code-line[data-highlighted="true"] .markdown-code-number {
+.answer-code .vk-codeblock-line[data-highlighted="true"] .vk-codeblock-num {
   background: color-mix(in srgb, var(--answer-info) 14%, color-mix(in srgb, var(--card) 94%, var(--muted)));
   box-shadow: inset 2px 0 0 var(--answer-info);
   color: var(--foreground);

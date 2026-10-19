@@ -8,7 +8,7 @@
 - [`tooling/bridge.rs`](../../crates/vulcan-agent-runtime/src/tooling/bridge.rs)；
 - [`ask-question-dialog.tsx`](../../apps/vulcan-code-web/src/components/ask/ask-question-dialog.tsx)；
 - [`conversation-markdown.tsx`](../../apps/vulcan-code-web/src/components/conversation/conversation-markdown.tsx)；
-- [`markdown.css`](../../apps/vulcan-code-web/src/styles/markdown.css)。
+- [`prose.css`](../../apps/vulcan-code-web/src/ui-kit/styles/prose.css)。
 
 ## 一、Ask 工具边界
 

@@ -4,6 +4,7 @@ import { useI18n } from "@/i18n";
 import type { AnswerComponent } from "./answer-component-model";
 import { AnswerFrameActionContext } from "./answer-frame";
 import { AnswerReplyContext, type AnswerReplyStore } from "./answer-reply";
+import { IconButton } from "@/ui-kit/primitives/button";
 
 // noStore keeps read-only surfaces on the same hook path as a live reply store.
 // noStore 让只读界面与可用的回复存储走同一条 Hook 路径。
@@ -22,10 +23,10 @@ function useReplyEntry(replyKey: string | undefined) {
 function CommentButton({ active, onClick }: { active: boolean; onClick: () => void }) {
   const { t } = useI18n();
   return (
-    <button aria-label={t("answerComponents.comment")} className="markdown-code-action" data-active={active || undefined}
+    <IconButton aria-label={t("answerComponents.comment")} className="vk-codeblock-action" size="xs" data-active={active || undefined}
       onClick={onClick} title={t("answerComponents.comment")} type="button">
-      <MessageSquarePlus size={14} />
-    </button>
+      <MessageSquarePlus aria-hidden="true" />
+    </IconButton>
   );
 }
 
@@ -46,12 +47,12 @@ function AnswerNote({ focus, onChange, onClose, value }: { focus: number; onChan
           }
         }}
         placeholder={t("answerComponents.commentPlaceholder")} ref={input} rows={2} value={value} />
-      <button aria-label={t("answerComponents.removeComment")} className="markdown-code-action" onClick={() => {
+      <IconButton aria-label={t("answerComponents.removeComment")} className="vk-codeblock-action" size="xs" onClick={() => {
         onChange("");
         onClose();
       }} title={t("answerComponents.removeComment")} type="button">
-        <X size={14} />
-      </button>
+        <X aria-hidden="true" />
+      </IconButton>
     </div>
   );
 }
@@ -93,7 +94,7 @@ export function CommentableFence({ children, framed, replyKey, store, subject }:
     <div className="answer-fence" data-hover-actions={framed ? undefined : "true"}>
       {framed ? <AnswerFrameActionContext.Provider value={button}>{children}</AnswerFrameActionContext.Provider> : (
         <>
-          <span className="answer-hover-actions">{button}</span>
+          <span className="vk-figure-hover">{button}</span>
           {children}
         </>
       )}
@@ -128,7 +129,7 @@ export function AnswerDecisionView({ decision, replyKey }: { decision: Extract<A
     else save(decision.options.map((option) => option.label).filter((item) => item === label ? !picked : picks.includes(item)), note);
   };
   return (
-    <section className="answer-frame answer-decision">
+    <section className="vk-figure answer-decision">
       <header className="answer-decision-head">
         <strong>{decision.question}</strong>
         {decision.multiple ? <small>{t("answerComponents.decision.multiple")}</small> : null}

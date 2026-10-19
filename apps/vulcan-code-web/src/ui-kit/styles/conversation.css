@@ -317,7 +317,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-think-tag[data-indicator] > svg { animation: vk-pulse 1.6s var(--vk-ease) infinite; }
 .vk-pop.vk-think-pop { width: min(37.5rem, calc(100vw - 32px)); max-width: min(calc(100vw - 32px), var(--vk-available-width, 100vw)); max-height: min(26rem, 70dvh, var(--vk-available-height, 70dvh)); overflow: hidden; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4); background: color-mix(in srgb, var(--vk-raised) 88%, transparent); backdrop-filter: blur(16px) saturate(1.15); }
 .vk-think-pop-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; color: var(--vk-ink-2); font-size: var(--vk-fs-md); }
-.vk-think-pop-body .markdown-message { min-width: 0; max-width: none; font-size: var(--vk-fs-md); overflow-wrap: anywhere; }
+.vk-think-pop-body .vk-md { min-width: 0; max-width: none; font-size: var(--vk-fs-md); overflow-wrap: anywhere; }
 
 /* Measured collapse: height animates between the measured content height and the collapsed height. */
 .vk-collapse { min-width: 0; overflow: hidden; transition: height 180ms cubic-bezier(0.22, 1, 0.36, 1); }
@@ -376,7 +376,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-think-float[data-dock="right"] { right: calc(var(--vk-u) * 4); width: min(28.5rem, calc(60% - 2.375rem)); max-height: min(27rem, calc(100% - var(--vk-dock-h) - 6rem)); }
 .vk-think-float[data-leaving] { opacity: 0; transform: translateY(8px); pointer-events: none; }
 .vk-think-float-content { min-width: 0; }
-.vk-think-float-content .markdown-message { max-width: none; color: inherit; font-size: inherit; }
+.vk-think-float-content .vk-md { max-width: none; color: inherit; font-size: inherit; }
 
 /* Request-local reasoning progress: summary lines shimmering where the next row will appear. */
 .vk-reason-status { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 1); width: min(100%, var(--vk-column-w)); min-width: 0; pointer-events: none; }
@@ -391,61 +391,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-think-md { font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs); font-weight: 600; }
 .vk-think-float-body { overflow: auto; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3.5); color: var(--vk-ink-2); font-size: var(--vk-fs-md); line-height: var(--vk-lh-read); overscroll-behavior: contain; }
 .vk-think-float-body[data-plain] { white-space: pre-wrap; }
-
-/* ---------- Markdown ---------- */
-.vk-md { font-size: var(--vk-fs-read); line-height: var(--vk-lh-read); min-width: 0; overflow-wrap: anywhere; }
-.vk-md > * + * { margin-top: 0.75em; }
-.vk-md h2 { font-size: 1.18em; font-weight: 600; margin-top: 1.3em; }
-.vk-md h3 { font-size: 1.05em; font-weight: 600; margin-top: 1.1em; }
-.vk-md ul,
-.vk-md ol { padding-left: 1.4em; }
-.vk-md li + li { margin-top: 0.25em; }
-.vk-md li::marker { color: var(--vk-ink-3); }
-.vk-md a { color: var(--vk-signal); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--vk-signal) 40%, transparent); text-underline-offset: 2px; }
-.vk-md code { padding: 0.08em 0.36em; background: var(--vk-code-bg); border: var(--vk-bw) solid var(--vk-line-soft); font-family: var(--vk-font-mono); font-size: 0.88em; }
-.vk-md blockquote { padding-left: calc(var(--vk-u) * 3); border-left: 2px solid var(--vk-line-strong); color: var(--vk-ink-2); }
-.vk-md hr { border: 0; height: 1px; background: var(--vk-line); }
-.vk-md strong { font-weight: 600; }
-.vk-md table { border-collapse: collapse; font-size: var(--vk-fs-md); }
-.vk-md th,
-.vk-md td { padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); text-align: left; }
-.vk-md th { background: var(--vk-sunken); font-weight: 600; }
-.vk-caret {
-  display: inline-block;
-  width: 0.55em;
-  height: 1.05em;
-  margin-left: 2px;
-  vertical-align: -0.15em;
-  background: var(--vk-ember);
-  animation: vk-caret 1.2s ease-in-out infinite;
-}
-
-.vk-codeblock { border: var(--vk-bw) solid var(--vk-line); background: var(--vk-code-bg); min-width: 0; }
-.vk-codeblock-head {
-  display: flex;
-  align-items: center;
-  gap: calc(var(--vk-u) * 2);
-  height: var(--vk-h-md);
-  padding: 0 calc(var(--vk-u) * 1) 0 calc(var(--vk-u) * 3);
-  border-bottom: var(--vk-bw) solid var(--vk-line-soft);
-  font-size: var(--vk-fs-xs);
-  color: var(--vk-ink-3);
-}
-.vk-codeblock-head > :last-child { margin-left: auto; }
-.vk-codeblock pre {
-  margin: 0;
-  padding: calc(var(--vk-u) * 3);
-  overflow-x: auto;
-  font-family: var(--vk-font-mono);
-  font-size: var(--vk-fs-sm);
-  line-height: 1.6;
-}
-.vk-codeblock code { padding: 0; border: 0; background: none; font-size: inherit; }
-.tok-k { color: var(--vk-chart-3); }
-.tok-s { color: var(--vk-chart-2); }
-.tok-n { color: var(--vk-chart-4); }
-.tok-c { color: var(--vk-ink-3); font-style: italic; }
-.tok-f { color: var(--vk-chart-1); }
 
 /* One tool row: the call's card, then any media it generated. */
 .vk-tool-stack { display: grid; gap: calc(var(--vk-u) * 2); width: 100%; min-width: 0; }
@@ -466,8 +411,8 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-plan-toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
 .vk-plan-body { padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4.5) calc(var(--vk-u) * 4); }
 .vk-plan-doc { position: relative; min-width: 0; }
-.vk-plan-doc .markdown-message { font-size: var(--vk-fs-read); line-height: var(--vk-lh-read); }
-.vk-plan[data-plan-artifact-expanded="false"] .vk-plan-doc > .markdown-message { mask-image: linear-gradient(to bottom, #000 55%, transparent); }
+.vk-plan-doc .vk-md { font-size: var(--vk-fs-read); line-height: var(--vk-lh-read); }
+.vk-plan[data-plan-artifact-expanded="false"] .vk-plan-doc > .vk-md { mask-image: linear-gradient(to bottom, #000 55%, transparent); }
 .vk-plan-reveal { position: absolute; left: 50%; bottom: calc(var(--vk-u) * 2); z-index: 1; translate: -50% 0; box-shadow: var(--vk-shadow-1); }
 .vk-plan-confirm { display: grid; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4.5) calc(var(--vk-u) * 3.5); border-top: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-sunken); outline: none; }
 .vk-plan-confirm:focus-visible { box-shadow: inset 0 0 0 2px var(--vk-signal-soft); }
@@ -478,7 +423,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 /* Detail viewer: one transcript item opened large. Reasoning reads at prose size in its own tone. */
 .vk-detail[data-kind="thinking"] .vk-viewer-mark { --vk-tone: var(--vk-signal); }
 .vk-detail[data-kind="diff"] .vk-viewer-body { padding: 0; }
-.vk-detail .vk-viewer-body > .markdown-message { max-width: none; font-size: var(--vk-fs-read); }
+.vk-detail .vk-viewer-body > .vk-md { max-width: none; font-size: var(--vk-fs-read); }
 
 /* ---------- Agent collaboration ---------- */
 /* A dispatch line naming the other agent and the delivery state; the message folds beneath it on a ruled lane.

@@ -65,8 +65,8 @@ function AnswerCodeExcerptView({ excerpt, host }: { excerpt: AnswerCodeExcerpt; 
         ? formatMessage(t("answerComponents.code.limit"), { count: ANSWER_CODE_MAX_EXCERPTS })
         : t("answerComponents.code.notCaptured");
   return (
-    <figure className="markdown-code-block answer-code-missing" data-pending={state?.pending || undefined}>
-      <figcaption className="markdown-code-header">{header}</figcaption>
+    <figure className="vk-codeblock answer-code-missing" data-pending={state?.pending || undefined}>
+      <figcaption className="vk-codeblock-head">{header}</figcaption>
       <p>{message}</p>
     </figure>
   );

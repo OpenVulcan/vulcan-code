@@ -83,7 +83,7 @@ export function AnswerErDiagram({ er }: { er: ErComponent }) {
 function DiagramFrame({ children, marks, width }: { children: React.ReactNode; marks: Set<AnswerMark>; width: number }) {
   const { t } = useI18n();
   return (
-    <figure className="answer-frame answer-diagram">
+    <figure className="vk-figure answer-diagram">
       {marks.size > 0 ? (
         <figcaption className="answer-diagram-legend">
           {(["add", "chg", "del"] as const).filter((mark) => marks.has(mark)).map((mark) => (

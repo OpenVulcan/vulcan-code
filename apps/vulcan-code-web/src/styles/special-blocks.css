@@ -1,56 +1,3 @@
-.thinking-body {
-  width: min(100%, 760px);
-  max-width: 100%;
-  height: auto;
-  max-height: min(300px, 70dvh);
-  min-height: 0;
-  overflow: auto;
-  /* Resize stays within the transcript; boundary scrolling preserves normal transcript navigation. */
-  /* 调整尺寸不超出转录区域，边界滚动保持正常的转录导航。 */
-  resize: both;
-  overscroll-behavior: auto;
-  border-left: 2px solid var(--border);
-  padding-left: 12px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-md);
-}
-
-.thinking-body .markdown-message {
-  max-width: none;
-  color: inherit;
-  font-size: inherit;
-}
-
-.tool-execution-row {
-  width: fit-content;
-  max-width: 100%;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-md);
-  line-height: 1.35;
-  text-align: left;
-}
-
-.tool-execution-row:hover {
-  color: var(--foreground);
-}
-
-.tool-execution-row.running svg {
-  color: var(--foreground);
-  animation: vk-pulse 1.15s ease-in-out infinite;
-}
-
-.tool-execution-row span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .turn-stats-tooltip {
   width: min(320px, calc(100vw - 24px));
   max-width: none;
@@ -106,8 +53,6 @@
   gap: 7px;
   padding-top: 1px;
 }
-
-.thinking-body .markdown-message { overflow-wrap: anywhere; }
 
 /* Reconciliation notice explains why automatic replay is intentionally unavailable. */
 

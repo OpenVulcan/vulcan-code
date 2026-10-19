@@ -80,18 +80,18 @@ it("switches to literal source and back without rerendering, while retaining cop
   await renderDiagram(source, copySource);
   // modes contains the two keyboard-focusable controls in their visible display order.
   // modes 按显示顺序保存两个可由键盘聚焦的控件。
-  const modes = host.querySelectorAll<HTMLButtonElement>('.markdown-diagram-modes button');
+  const modes = host.querySelectorAll<HTMLButtonElement>('.vk-diagram-modes button');
   expect(modes[0].getAttribute("aria-pressed")).toBe("true");
   await act(async () => modes[1].click());
   expect(modes[1].getAttribute("aria-pressed")).toBe("true");
-  expect(host.querySelector(".markdown-diagram-source code")!.textContent).toBe(source);
+  expect(host.querySelector(".vk-diagram-source code")!.textContent).toBe(source);
   expect(host.querySelector("script")).toBeNull();
   expect(host.querySelector("img")).toBeNull();
   expect(host.querySelector('[aria-label="展开图表"]')).toBeNull();
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="复制代码"]')!.click());
   expect(copySource).toHaveBeenCalledTimes(1);
   await act(async () => modes[0].click());
-  expect(host.querySelector(".markdown-diagram-source")).toBeNull();
+  expect(host.querySelector(".vk-diagram-source")).toBeNull();
   expect(host.querySelector("img")!.getAttribute("src")).toBe("blob:mermaid-test");
   expect(host.querySelectorAll('[aria-label="展开图表"]')).toHaveLength(2);
   expect(renderSvg).toHaveBeenCalledTimes(1);
@@ -122,7 +122,7 @@ it("explains image decoding failure instead of silently falling back", async () 
   expect(host.textContent).toContain("original source");
 });
 
-it.each([".markdown-diagram-preview", ".markdown-code-action[aria-label='展开图表']"])("opens the shared zoomable viewer from %s and retains the Blob on close", async (selector) => {
+it.each([".vk-diagram-preview", ".vk-codeblock-action[aria-label='展开图表']"])("opens the shared zoomable viewer from %s and retains the Blob on close", async (selector) => {
   renderSvg.mockResolvedValue({ svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 800" />' });
   await renderDiagram();
   // trigger exercises both actual user entry points without changing internal component state.

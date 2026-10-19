@@ -26,7 +26,7 @@ export function StreamingMarkdownDocument(props: {
 }) {
   return (
     <div
-      className="streaming-markdown-document"
+      className="vk-md-stream"
       data-conversation-id={props.conversationId}
       data-message-id={props.messageId}
       data-stream-lifecycle={props.fallbackStreaming ? "active" : "sealed"}

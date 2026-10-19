@@ -33,19 +33,19 @@ describe("answer components in conversation Markdown", () => {
   it.each([false, true])("renders a closed component fence natively (streaming=%s)", async (streaming) => {
     const host = await render("Intro\n\n```ui-checklist\nok | Builds\nno | Tests | flaky\n```\n\nAfter", { streaming });
     expect(host.querySelectorAll(".answer-checklist li")).toHaveLength(2);
-    expect(host.querySelector(".markdown-code-block")).toBeNull();
+    expect(host.querySelector(".vk-codeblock")).toBeNull();
   });
 
   it("keeps an unclosed fence as code while it streams", async () => {
     const host = await render("```ui-checklist\nok | Builds\n", { streaming: true });
     expect(host.querySelector(".answer-checklist")).toBeNull();
-    expect(host.querySelector(".markdown-code-block")).not.toBeNull();
+    expect(host.querySelector(".vk-codeblock")).not.toBeNull();
   });
 
   it("keeps invalid component syntax as code", async () => {
     const host = await render("```ui-checklist\nmaybe | Builds\n```");
     expect(host.querySelector(".answer-checklist")).toBeNull();
-    expect(host.querySelector(".markdown-code-block")).not.toBeNull();
+    expect(host.querySelector(".vk-codeblock")).not.toBeNull();
   });
 
   it("renders components nested in a container with a longer outer fence", async () => {
@@ -69,7 +69,7 @@ describe("answer components in conversation Markdown", () => {
 
   it("frames Markdown tables and right-aligns numeric columns only", async () => {
     const host = await render("| Stage | ms | Note |\n| --- | --- | --- |\n| Acquire | 12.4 | lock |\n| Execute | 1,204 | — |");
-    expect(host.querySelector(".answer-frame table.answer-table")).not.toBeNull();
+    expect(host.querySelector(".vk-figure table.vk-table")).not.toBeNull();
     const numeric = Array.from(host.querySelectorAll("tbody tr:first-child td"), (cell) => cell.hasAttribute("data-numeric"));
     expect(numeric).toEqual([false, true, false]);
   });
@@ -92,7 +92,7 @@ describe("answer components in conversation Markdown", () => {
     const host = await render("Rate $`\\lambda < \\mu`$ holds; costs $5 and $10, and `$HOME` stays code.");
     expect(host.querySelectorAll(".answer-math-inline .katex")).toHaveLength(1);
     expect(host.textContent).toContain("costs $5 and $10");
-    expect(host.querySelector("code.inline-code")?.textContent).toBe("$HOME");
+    expect(host.querySelector("code.vk-md-code")?.textContent).toBe("$HOME");
   });
 
   it("keeps a formula KaTeX cannot parse visible as source", async () => {
@@ -127,8 +127,8 @@ describe("ui-code excerpts", () => {
       ],
     });
     const [captured, missing] = Array.from(host.querySelectorAll(".answer-code > figure"));
-    expect(Array.from(captured.querySelectorAll(".markdown-code-number"), (cell) => cell.textContent)).toEqual(["10", "11", "12"]);
-    expect(captured.querySelector(".markdown-code-line[data-highlighted='true'] .markdown-code-number")?.textContent).toBe("11");
+    expect(Array.from(captured.querySelectorAll(".vk-codeblock-num"), (cell) => cell.textContent)).toEqual(["10", "11", "12"]);
+    expect(captured.querySelector(".vk-codeblock-line[data-highlighted='true'] .vk-codeblock-num")?.textContent).toBe("11");
     expect(captured.textContent).toContain("lock();");
     expect(missing.querySelector("p")?.textContent).toBe("answerComponents.code.reason.not_found");
   });

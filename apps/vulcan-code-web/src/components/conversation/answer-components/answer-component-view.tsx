@@ -130,13 +130,13 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       const located = component.rows.some((row) => row.location);
       return (
         <AnswerFrame copy={copy} host={host}>
-          <div className="answer-table-scroll">
-            <table className="answer-table">
+          <div className="vk-table-wrap">
+            <table className="vk-table">
               <thead><tr>{header.slice(0, located ? 4 : 3).map((cell) => <th key={cell}>{cell}</th>)}</tr></thead>
               <tbody>
                 {component.rows.map((row, index) => (
                   <tr key={index}>
-                    <td className="answer-table-index">{index + 1}</td>
+                    <td className="vk-table-index">{index + 1}</td>
                     <td><span className="answer-pill" data-tone={row.severity}>{severity(row.severity)}</span></td>
                     <td>{row.text}</td>
                     {located ? <td>{row.location ? <FileLink host={host} location={row.location} /> : null}</td> : null}
@@ -152,8 +152,8 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       const copy = markdownTable(component.header, component.rows.map((row) => [row.criterion, ...row.cells.map(tonedMarkdown)]));
       return (
         <AnswerFrame copy={copy} host={host}>
-          <div className="answer-table-scroll">
-            <table className="answer-table answer-compare">
+          <div className="vk-table-wrap">
+            <table className="vk-table answer-compare">
               <thead><tr>{component.header.map((cell, index) => <th key={index}>{cell}</th>)}</tr></thead>
               <tbody>
                 {component.rows.map((row, index) => (
@@ -218,13 +218,13 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       );
     case "files":
       return (
-        <section className="answer-frame answer-files">
-          <header className="answer-frame-head">
-            <span className="answer-frame-label">
+        <section className="vk-figure answer-files">
+          <header className="vk-figure-head">
+            <span className="vk-figure-label">
               <strong>{formatMessage(t("answerComponents.fileCount"), { count: component.files.length })}</strong>
               <LineDelta added={component.added} removed={component.removed} />
             </span>
-            {frameAction ? <span className="answer-frame-actions">{frameAction}</span> : null}
+            {frameAction ? <span className="vk-figure-actions">{frameAction}</span> : null}
           </header>
           <ul>
             {component.files.map((file, index) => (
@@ -245,7 +245,7 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
         </div>
       );
     case "tree":
-      return <div className="answer-frame"><ul className="answer-tree"><TreeNodes nodes={component.nodes} /></ul></div>;
+      return <div className="vk-figure"><ul className="answer-tree"><TreeNodes nodes={component.nodes} /></ul></div>;
     case "chart":
       return <ChartFrame chart={component.chart} host={host} />;
     case "flow":
@@ -426,10 +426,10 @@ function ChartFrame({ chart, host }: { chart: Extract<AnswerComponent, { kind: "
   const header = [chart.categoryLabel, ...chart.series];
   const rows = chart.rows.map((row) => [row.category, ...row.values.map(formatChartNumber)]);
   return (
-    <section className="answer-frame answer-chart">
-      <header className="answer-frame-head">
-        <span className="answer-frame-label">{chart.title ? <strong>{chart.title}</strong> : null}</span>
-        <span className="answer-frame-actions">
+    <section className="vk-figure answer-chart">
+      <header className="vk-figure-head">
+        <span className="vk-figure-label">{chart.title ? <strong>{chart.title}</strong> : null}</span>
+        <span className="vk-figure-actions">
           <span className="answer-segmented">
             <button aria-pressed={!data} onClick={() => setData(false)} type="button">{t("answerComponents.chartView")}</button>
             <button aria-pressed={data} onClick={() => setData(true)} type="button">{t("answerComponents.dataView")}</button>
@@ -440,8 +440,8 @@ function ChartFrame({ chart, host }: { chart: Extract<AnswerComponent, { kind: "
       </header>
       <div className="answer-chart-body">
         {data ? (
-          <div className="answer-table-scroll">
-            <table className="answer-table">
+          <div className="vk-table-wrap">
+            <table className="vk-table">
               <thead><tr>{header.map((cell, index) => <th data-numeric={index > 0 || undefined} key={index}>{cell}</th>)}</tr></thead>
               <tbody>
                 {rows.map((row, index) => (
