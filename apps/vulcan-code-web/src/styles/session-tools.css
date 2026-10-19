@@ -672,37 +672,6 @@
   white-space: pre;
 }
 
-.terminal-stop-confirm-body {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.terminal-stop-confirm-body span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.terminal-stop-confirm-body code {
-  background: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  color: var(--foreground);
-  display: block;
-  font-family: var(--font-mono);
-  font-size: var(--vcn-font-size-sm);
-  line-height: 1.5;
-  max-height: 120px;
-  overflow: auto;
-  padding: 10px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .conversation-session-todolist-explanation {
   margin: 2px 3px 1px;
   color: var(--muted-foreground);

@@ -183,7 +183,9 @@ button.vk-note:not(:disabled):hover { background: var(--vk-hover); }
 .vk-continue-status { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
 .vk-continue-status[data-failed] { color: var(--vk-bad); }
 
-.vk-turn { display: grid; gap: calc(var(--vk-u) * 3.5); min-width: 0; animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards; }
+/* One Turn seat: its rows stack without an entry animation, so a long history paints at once. */
+/* 单个回合座位：各行直接堆叠、不带入场动画，长历史一次绘制完成。 */
+.vk-turn { display: grid; align-content: start; gap: calc(var(--vk-u) * 2.5); min-width: 0; }
 
 /* Context compaction: a divider head like the process head, the summary folding open beneath it. */
 .vk-compaction { display: grid; gap: calc(var(--vk-u) * 1.5); width: 100%; --vk-tone: var(--vk-ink-3); }
@@ -255,7 +257,18 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-prompt-meta > .vk-actions { margin-left: auto; display: flex; gap: 2px; opacity: 0; transition: opacity var(--vk-t-fast); }
 .vk-prompt:hover .vk-prompt-meta > .vk-actions,
 .vk-prompt:focus-within .vk-prompt-meta > .vk-actions { opacity: 1; }
-.vk-prompt-files { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); white-space: normal; }
+/* File names a pending submission carries, listed above its prompt until the reply arrives. */
+/* 待发送提交携带的文件名，在回复到达前列在提示词上方。 */
+.vk-prompt-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: calc(var(--vk-u) * 1.5); max-width: min(50rem, 78%); margin: 0; padding: 0; list-style: none; white-space: normal; }
+.vk-prompt-files > li { max-width: 100%; padding: calc(var(--vk-u) * 0.5) calc(var(--vk-u) * 2); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); color: var(--vk-ink-2); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
+/* Dedicated-session marks (base prompt, forgotten) sit before the prompt time. */
+/* 专职会话标记（基础提示词、已遗忘）位于提示词时间之前。 */
+.vk-prompt-marks { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1); }
+/* The terminal a stop confirmation names: its session label above the running command. */
+/* 终止确认所指的终端：会话标签在上，正在运行的命令在下。 */
+.vk-stop-target { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-stop-target > span { min-width: 0; overflow: hidden; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+.vk-stop-target > code { display: block; max-height: 120px; overflow: auto; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-code-bg); color: var(--vk-ink); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* ---------- Assistant answer ---------- */
 .vk-answer-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
@@ -827,28 +840,108 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-art figcaption { position: absolute; left: 0; right: 0; bottom: 0; padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2); background: linear-gradient(transparent, rgba(0, 0, 0, 0.6)); color: #fff; font-size: var(--vk-fs-2xs); }
 
 /* ---------- Floating aids: prompt navigator and jump to latest ---------- */
+/* The prompt navigator is an edge-pinned comb of ticks beside the transcript; hovering one previews that turn. */
+/* 提示词导航是贴在转录边缘的刻度梳；悬停某个刻度预览该回合。 */
 .vk-prompt-nav {
+  /* Single height bound for the tick column; overflow scrolls inside the rail without a scrollbar. */
+  /* 刻度列唯一高度上限；超出部分在轨道内部无滚动条滚动。 */
+  --vk-pn-max-h: min(360px, 56vh);
+  --vk-pn-rest: calc(var(--vk-u) * 2);
+  --vk-pn-active: calc(var(--vk-u) * 3.5);
+  --vk-pn-comb: calc(var(--vk-u) * 4);
+  --vk-pn-focus: calc(var(--vk-u) * 5.5);
   position: absolute;
-  top: calc(var(--vk-u) * 8);
-  right: calc(var(--vk-u) * 2);
-  bottom: calc(var(--vk-u) * 8);
+  top: 0;
+  bottom: var(--vk-dock-h);
+  left: 0;
+  z-index: 6;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+.vk-prompt-nav-rail {
+  max-height: min(var(--vk-pn-max-h), 100%);
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: calc(var(--vk-u) * 1.5);
-  z-index: 3;
+  padding: calc(var(--vk-u) * 1.5) 0;
+  pointer-events: auto;
 }
-.vk-prompt-nav > button {
-  width: calc(var(--vk-u) * 4);
-  height: 3px;
+.vk-prompt-nav-list {
+  position: relative;
+  min-height: 0;
+  margin: 0;
   padding: 0;
-  border: 0;
-  background: var(--vk-line-strong);
-  cursor: pointer;
-  transition: width var(--vk-t-fast), background var(--vk-t-fast);
+  list-style: none;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
 }
-.vk-prompt-nav > button:hover { width: calc(var(--vk-u) * 6); background: var(--vk-ink-2); }
-.vk-prompt-nav > button[aria-current="true"] { background: var(--vk-ember); width: calc(var(--vk-u) * 6); }
+.vk-prompt-nav-list::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.vk-prompt-nav-tick {
+  width: calc(var(--vk-pn-focus) + var(--vk-u) * 3.5);
+  height: 10px;
+  display: flex;
+  align-items: center;
+  padding: 0 0 0 calc(var(--vk-u) * 2.5);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.vk-prompt-nav-tick:focus-visible { outline: none; }
+.vk-prompt-nav-line {
+  width: var(--vk-pn-rest);
+  height: 2px;
+  background: var(--vk-line-strong);
+  transition: width var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-prompt-nav-tick[aria-current="true"] .vk-prompt-nav-line { width: var(--vk-pn-active); background: var(--vk-ink); }
+/* Hovering the rail spreads every tick into a comb; the pointed tick extends furthest in the ember accent. */
+/* 悬停轨道时所有刻度展开成梳齿；指向的刻度以余烬强调色伸得最长。 */
+.vk-prompt-nav-rail:hover .vk-prompt-nav-line { width: var(--vk-pn-comb); }
+.vk-prompt-nav-rail:hover .vk-prompt-nav-tick[aria-current="true"] .vk-prompt-nav-line { width: calc(var(--vk-pn-comb) + var(--vk-u)); }
+.vk-prompt-nav-tick:hover .vk-prompt-nav-line,
+.vk-prompt-nav-tick:focus-visible .vk-prompt-nav-line,
+.vk-prompt-nav-rail:hover .vk-prompt-nav-tick:hover .vk-prompt-nav-line { width: var(--vk-pn-focus); background: var(--vk-ember); }
+.vk-prompt-nav-card {
+  position: absolute;
+  left: calc(var(--vk-pn-focus) + var(--vk-u) * 5.5);
+  width: min(320px, calc(100% - 48px));
+  display: grid;
+  gap: calc(var(--vk-u) * 1.5);
+  padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid var(--vk-line-strong);
+  border-left: 2px solid var(--vk-ember);
+  background: var(--vk-raised);
+  box-shadow: var(--vk-shadow-2);
+  color: var(--vk-ink);
+  pointer-events: none;
+}
+.vk-prompt-nav-title {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--vk-fs-sm);
+  font-weight: 600;
+  line-height: var(--vk-lh-ui);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.vk-prompt-nav-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  line-height: var(--vk-lh-ui);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+}
+.vk-prompt-nav-preview[data-empty="true"] { color: var(--vk-ink-3); font-style: italic; }
+@media (prefers-reduced-motion: reduce) {
+  .vk-prompt-nav-line { transition: none; }
+}
 .vk-jump {
   display: inline-flex;
   align-items: center;

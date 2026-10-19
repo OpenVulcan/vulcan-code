@@ -43,7 +43,7 @@ export function TerminalStopConfirmDialog(props: {
             {t("terminalStop.description")}
           </DialogDescription>
         </DialogHeader>
-        <div className="terminal-stop-confirm-body">
+        <div className="vk-stop-target">
           <span>{props.sessionName}</span>
           <code>{props.command}</code>
         </div>

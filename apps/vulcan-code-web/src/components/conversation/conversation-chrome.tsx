@@ -75,7 +75,7 @@ export function DraftSubmissionTranscript(props: {
         <div className="vk-timeline">
           <article className="vk-prompt-row" data-client-action-id={props.submission.clientSubmissionId}>
             {props.submission.attachments.length > 0 ? (
-              <ul className="conversation-draft-attachment-names">
+              <ul className="vk-prompt-files">
                 {props.submission.attachments.map((attachment) => <li key={attachment.fileName}>{attachment.fileName}</li>)}
               </ul>
             ) : null}

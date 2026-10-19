@@ -65,7 +65,7 @@ export const ConversationTurnSeat = React.memo(function ConversationTurnSeat(
 
   return (
     <section
-      className="conversation-turn-shell"
+      className="vk-turn"
       data-conversation-row-key={props.rowKey}
       data-conversation-turn-shell={props.rowKey}
     >

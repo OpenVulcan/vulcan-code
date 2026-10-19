@@ -357,6 +357,14 @@ function introduction(sessionId: string): ConversationEventHydrationV1Response {
       text: "I'm the coding agent for this workspace. I can read and edit files, run commands in the project terminal, search the knowledge base and hand longer tasks to subagents.\n\nTell me what you want changed and I'll show my work as I go — every edit appears as a diff you can review before you commit.",
     })
     .end()
+    // Follow-up turns give the prompt navigator enough entries to appear.
+    // 后续回合让提示词导航有足够条目而出现。
+    .user("What can't you do?")
+    .api({ text: "I can't reach services outside the permissions you grant, and I won't push or publish without asking first." })
+    .end()
+    .user("How do I hand you a long task?")
+    .api({ text: "Describe the goal and the finish line. I'll plan it, split the parts that can run in parallel across subagents and report back when each part lands." })
+    .end()
     .window();
 }
 

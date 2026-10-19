@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/ui-kit/primitives/dialog";
 import { Input } from "@/ui-kit/primitives/input";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { useI18n } from "@/i18n";
 import { runConversationControlAction } from "./conversation-control-feedback";
 
@@ -138,9 +139,8 @@ export function ConversationGenerationDialogV1(
             value={value}
           />
         ) : (
-          <textarea
+          <Textarea
             aria-label={t("conversation.userPrompt.edit")}
-            className="conversation-generation-dialog-v1-textarea"
             disabled={submitting}
             onChange={(event) => setValue(event.target.value)}
             rows={8}

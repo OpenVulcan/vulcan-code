@@ -73,6 +73,11 @@
 .vk-diagram-stage[data-loading] { display: grid; place-items: center; min-height: 7.5rem; }
 .vk-diagram-bar { width: min(11rem, 45%); height: 3px; background: linear-gradient(90deg, var(--vk-line) 0%, var(--vk-ember) 50%, var(--vk-line) 100%); background-size: 220% 100%; animation: vk-shimmer 1.6s linear infinite; }
 .vk-md pre.vk-diagram-source,
+/* A diagram that failed to draw names the failure above the source fallback; the detail stays folded. */
+/* 绘制失败的图表在源码回退上方说明失败；细节保持折叠。 */
+.vk-diagram-failure { margin: 0 0 calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3); border-left: 2px solid var(--vk-bad); background: color-mix(in srgb, var(--vk-bad) 6%, transparent); color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.vk-diagram-failure > summary { color: var(--vk-bad); font-weight: 600; cursor: pointer; }
+.vk-diagram-failure > pre { margin: calc(var(--vk-u) * 1.5) 0 0; font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
 .vk-diagram-source { max-height: 60vh; margin: 0; padding: calc(var(--vk-u) * 3.5); overflow: auto; background: var(--vk-code-bg); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); line-height: 1.6; white-space: pre; user-select: text; }
 .vk-diagram-preview { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
 .vk-diagram-preview:focus-visible { outline: 2px solid var(--vk-signal); outline-offset: 2px; }

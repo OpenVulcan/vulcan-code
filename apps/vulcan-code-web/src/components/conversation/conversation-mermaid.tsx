@@ -113,9 +113,9 @@ export function MermaidDiagram(props: MermaidDiagramProps) {
   if (state.status === "failed") {
     return (
       <>
-        <details className="text-sm text-destructive">
+        <details className="vk-diagram-failure">
           <summary>{t("markdown.mermaidFailed")}</summary>
-          <pre className="whitespace-pre-wrap">{state.message ?? t("markdown.diagramImageFailed")}</pre>
+          <pre>{state.message ?? t("markdown.diagramImageFailed")}</pre>
         </details>
         {props.fallback}
       </>

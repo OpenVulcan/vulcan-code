@@ -5,7 +5,6 @@ import {
   type ConversationPromptNavigatorEntry,
 } from "@/components/conversation/conversation-prompt-navigator-model";
 import { useI18n } from "@/i18n";
-import "./conversation-prompt-navigator.css";
 
 // CONVERSATION_PROMPT_NAVIGATOR_CARD_MARGIN_PX keeps the hover card inside the navigator overlay bounds.
 // CONVERSATION_PROMPT_NAVIGATOR_CARD_MARGIN_PX 使悬停卡片保持在导航覆盖层边界内。
@@ -210,13 +209,13 @@ export const ConversationPromptNavigator = React.memo(function ConversationPromp
     || (hoveredEntry?.running ? t("conversation.promptNavigator.replyPending") : t("conversation.promptNavigator.replyEmpty"));
 
   return (
-    <div className="conversation-prompt-navigator" ref={rootRef}>
+    <div className="vk-prompt-nav" ref={rootRef}>
       <nav
         aria-label={t("conversation.promptNavigator.label")}
-        className="conversation-prompt-navigator-rail"
+        className="vk-prompt-nav-rail"
         onMouseLeave={hideCard}
       >
-        <ol className="conversation-prompt-navigator-list" onScroll={hideCard} ref={listRef}>
+        <ol className="vk-prompt-nav-list" onScroll={hideCard} ref={listRef}>
           {entries.map((entry) => {
             const label = entry.prompt || t("conversation.promptNavigator.untitled");
             return (
@@ -224,7 +223,7 @@ export const ConversationPromptNavigator = React.memo(function ConversationPromp
                 <button
                   aria-current={entry.rowKey === activeKey ? "true" : undefined}
                   aria-label={label}
-                  className="conversation-prompt-navigator-tick"
+                  className="vk-prompt-nav-tick"
                   onBlur={hideCard}
                   onClick={() => navigate(entry.rowKey)}
                   onFocus={(event) => showCard(entry.rowKey, event.currentTarget)}
@@ -233,7 +232,7 @@ export const ConversationPromptNavigator = React.memo(function ConversationPromp
                   tabIndex={entry.rowKey === focusableKey ? 0 : -1}
                   type="button"
                 >
-                  <span aria-hidden="true" className="conversation-prompt-navigator-tick-line" />
+                  <span aria-hidden="true" className="vk-prompt-nav-line" />
                 </button>
               </li>
             );
@@ -241,11 +240,11 @@ export const ConversationPromptNavigator = React.memo(function ConversationPromp
         </ol>
       </nav>
       {hoveredEntry ? (
-        <div aria-hidden="true" className="conversation-prompt-navigator-card" ref={cardRef}>
-          <div className="conversation-prompt-navigator-card-title">
+        <div aria-hidden="true" className="vk-prompt-nav-card" ref={cardRef}>
+          <div className="vk-prompt-nav-title">
             {hoveredEntry.prompt || t("conversation.promptNavigator.untitled")}
           </div>
-          <div className="conversation-prompt-navigator-card-preview" data-empty={hoveredEntry.replyPreview ? undefined : "true"}>
+          <div className="vk-prompt-nav-preview" data-empty={hoveredEntry.replyPreview ? undefined : "true"}>
             {hoveredPreview}
           </div>
         </div>
