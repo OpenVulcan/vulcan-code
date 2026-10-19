@@ -7,6 +7,7 @@ import {
 import { useI18n, type TranslationKey } from "@/i18n";
 import { ToolFrame, type ToolCardProps } from "../tool-card";
 import { listOf, numberOf, objectOf, textOf } from "../tool-call";
+import { PlainDiffView } from "../views/diff-view";
 import { ErrorNote, MarkdownResult } from "../views/result-views";
 
 // KNOWLEDGE_ACTIONS names each knowledge_write action.
@@ -89,17 +90,9 @@ export function KnowledgeWriteCard(props: ToolCardProps) {
 /** Shows each replaced passage as removed and added rows.
  * 将每个被替换的段落展示为删除行与新增行。 */
 function PassageEdits(props: { edits: readonly KnowledgeEdit[] }) {
-  return (
-    <div className="vk-diff" data-plain="" role="table">
-      {props.edits.map((edit, index) => [
-        index > 0 ? <div className="vk-diff-row" data-kind="omit" key={`s${index}`} role="row"><span>⋯</span><span /></div> : null,
-        ...edit.oldText.split("\n").map((line, row) => (
-          <div className="vk-diff-row" data-kind="delete" key={`d${index}:${row}`} role="row"><span>−</span><span>{line || " "}</span></div>
-        )),
-        ...edit.newText.split("\n").map((line, row) => (
-          <div className="vk-diff-row" data-kind="insert" key={`i${index}:${row}`} role="row"><span>+</span><span>{line || " "}</span></div>
-        )),
-      ])}
-    </div>
-  );
+  const groups = props.edits.map((edit) => [
+    ...edit.oldText.split("\n").map((text) => ({ kind: "delete" as const, text })),
+    ...edit.newText.split("\n").map((text) => ({ kind: "insert" as const, text })),
+  ]);
+  return <PlainDiffView groups={groups} />;
 }

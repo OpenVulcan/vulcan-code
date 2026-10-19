@@ -3,6 +3,7 @@
 // 将一条可靠 V1 工具调用事件读取为每张工具卡所需的事实：谁运行、输入是什么、如何结束、宿主报告了什么。
 // 卡片只读取这些事实，从不自行解析传输结构。
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
+import type { ToolRequest } from "./tool-request";
 
 // ToolCardState is the visual lifecycle of one card; absent means nothing worth flagging.
 // ToolCardState 是单张卡的视觉生命周期；缺省表示无需提示。
@@ -49,6 +50,9 @@ export interface ToolCall {
   // Wall-clock time between start and finish, when both are known.
   // 开始与结束之间的实际耗时（两者均已知时）。
   durationMs: number | null;
+  // The request while the model is still writing it; null once the call exists.
+  // 模型仍在书写时的请求；调用存在后为 null。
+  request: ToolRequest | null;
 }
 
 // readToolCall reads one event; it never throws on unexpected payloads.
@@ -69,6 +73,7 @@ export function readToolCall(event: ToolCallEvent): ToolCall {
     key: `${event.api_call_id}:${event.tool_call_id}`,
     modelOutput: typeof output?.model_output === "string" ? output.model_output : null,
     name: canonicalToolName(event.tool_name),
+    request: null,
     state: toolCardState(event.status, isError),
   };
 }

@@ -5,9 +5,11 @@
 import * as React from "react";
 import { Check, ChevronRight, CircleSlash, Hourglass, X, type LucideIcon } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { formatBytes } from "@/lib/display-format";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/ui-kit/primitives/collapsible";
 import { Spinner } from "@/ui-kit/primitives/spinner";
 import type { ToolCall, ToolCardState } from "./tool-call";
+import type { ToolRequest } from "./tool-request";
 
 // ToolFamily groups tools by what they do; it tints the card edge and the sequence strip.
 // ToolFamily 按工具的作用分组；它为卡片边缘与序列色条着色。
@@ -66,6 +68,9 @@ function ToolStateMark(props: { state: ToolCardState }) {
 // ToolFrameProps describes one head row and its optional body.
 // ToolFrameProps 描述一个标题行及其可选正文。
 export interface ToolFrameProps extends Pick<ToolCardProps, "family" | "open" | "onOpenChange"> {
+  // The call, when the card passes it on; a request still being written adds its progress to the facts.
+  // 卡片传入的调用；仍在书写的请求会把进度加入事实。
+  call?: ToolCall;
   // Visual lifecycle.
   // 视觉生命周期。
   state: ToolCardState;
@@ -89,6 +94,18 @@ export interface ToolFrameProps extends Pick<ToolCardProps, "family" | "open" | 
   children?: React.ReactNode;
 }
 
+// ToolRequestMark shows how much of a request the model has written so far.
+// ToolRequestMark 展示模型目前已书写的请求量。
+// A request that stopped before its call existed keeps only the size it reached.
+// 在调用产生前停止的请求只保留其达到的大小。
+function ToolRequestMark(props: { request: ToolRequest; state: ToolCardState }) {
+  const { t } = useI18n();
+  const size = formatBytes(props.request.bytes);
+  if (props.state !== "running") return <span className="vk-tool-request">{size}</span>;
+  const key = props.request.phase === "receiving" ? "toolCard.request.receiving" : "toolCard.request.ready";
+  return <span className="vk-tool-request" data-phase={props.request.phase}>{t(key).replace("{size}", size)}</span>;
+}
+
 /** Renders the shared tool card frame.
  * 渲染共享工具卡框架。 */
 export function ToolFrame(props: ToolFrameProps) {
@@ -100,6 +117,7 @@ export function ToolFrame(props: ToolFrameProps) {
       className="vk-tool"
       data-family={props.family}
       data-open={open ? "" : undefined}
+      data-request={props.call?.request ? "" : undefined}
       data-state={props.state}
       disabled={!expandable}
       onOpenChange={props.onOpenChange}
@@ -111,7 +129,10 @@ export function ToolFrame(props: ToolFrameProps) {
           <b>{props.verb}</b>
           {props.target ? <code>{props.target}</code> : null}
         </span>
-        <span className="vk-tool-meta">{props.meta}</span>
+        <span className="vk-tool-meta">
+          {props.meta}
+          {props.call?.request ? <ToolRequestMark request={props.call.request} state={props.state} /> : null}
+        </span>
         <ToolStateMark state={props.state} />
         {expandable ? <ChevronRight aria-hidden="true" className="vk-tool-chev" /> : <span />}
       </CollapsibleTrigger>

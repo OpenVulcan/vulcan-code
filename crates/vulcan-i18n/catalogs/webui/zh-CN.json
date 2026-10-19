@@ -2267,6 +2267,8 @@
   "toolCard.doc.browserSelect": "切换浏览器",
   "toolCard.doc.browserClose": "关闭浏览器",
   "toolCard.doc.declareIntent": "声明意图",
+  "toolCard.request.receiving": "正在书写 · {size}",
+  "toolCard.request.ready": "参数就绪 · {size}",
   "toolCard.media.read": "读取媒体",
   "toolPresentation.command.terminalTitle": "终端命令",
   "toolPresentation.command.shellTitle": "Shell 命令",

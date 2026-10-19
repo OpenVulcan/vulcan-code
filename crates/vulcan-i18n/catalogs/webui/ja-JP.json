@@ -2267,6 +2267,8 @@
   "toolCard.doc.browserSelect": "ブラウザーを切り替え",
   "toolCard.doc.browserClose": "ブラウザーを閉じる",
   "toolCard.doc.declareIntent": "意図を宣言",
+  "toolCard.request.receiving": "作成中 · {size}",
+  "toolCard.request.ready": "引数の準備完了 · {size}",
   "toolCard.media.read": "メディアを読む",
   "toolPresentation.command.terminalTitle": "ターミナルコマンド",
   "toolPresentation.command.shellTitle": "シェルコマンド",

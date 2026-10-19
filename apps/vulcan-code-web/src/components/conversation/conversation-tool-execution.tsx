@@ -46,7 +46,7 @@ import { ToolPresentationCard } from "./conversation-tool-presentation-card";
 import { terminalSummaryById } from "./conversation-terminal-model";
 import { resolveToolPresentation } from "./conversation-tool-presentations";
 import { fixedV1ToolEvent } from "./tool-presentations/presentation-value-readers";
-import { ToolCallCard } from "@/conversation/tools/tool-call-card";
+import { ToolCallCard, ToolRequestCard } from "@/conversation/tools/tool-call-card";
 
 export type {
   ToolExecutionConversationBlock,
@@ -298,20 +298,36 @@ export function ToolExecutionBlock(props: {
       mediaAttachments: displayedMediaAttachments,
     });
   };
-  // v1CardKey keys the new card's expansion memory by the durable call identity; every durable call uses the new
-  // cards, and only blocks without one keep the legacy card.
-  // v1CardKey 以可靠调用身份作为新卡片展开记忆的键；所有可靠调用都使用新卡，只有缺少可靠调用的块保留旧卡。
-  const v1CardKey = v1ToolEvent ? `tool:${v1ToolEvent.api_call_id}:${v1ToolEvent.tool_call_id}` : null;
-  const handleV1CardOpenChange = React.useCallback((open: boolean) => {
-    if (v1CardKey) handleToolPresentationExpandedChange(v1CardKey, open);
-  }, [handleToolPresentationExpandedChange, v1CardKey]);
+  // cardKey keys the new card's expansion memory by the request stream, which a request keeps when it becomes a
+  // durable call, so a card opened while the model writes stays open. Every durable call and every request still
+  // being written uses the new cards; only blocks with neither keep the legacy card.
+  // cardKey 以请求流作为新卡片展开记忆的键；请求成为可靠调用后仍保留该标识，因此模型书写时展开的卡片会保持展开。
+  // 所有可靠调用与仍在书写的请求都使用新卡，两者皆无的块才保留旧卡。
+  const requestToolName = primaryBlock.toolName ?? toolName;
+  const cardKey = v1ToolEvent
+    ? `tool:${v1ToolEvent.request_stream_id}`
+    : resolvedRequestProgress && requestToolName ? `tool:${resolvedRequestProgress.requestStreamId}` : null;
+  const handleCardOpenChange = React.useCallback((open: boolean) => {
+    if (cardKey) handleToolPresentationExpandedChange(cardKey, open);
+  }, [handleToolPresentationExpandedChange, cardKey]);
   return (
     <div className="tool-execution-stack">
-      {v1ToolEvent && v1CardKey ? (
+      {v1ToolEvent && cardKey ? (
         <ToolCallCard
           event={v1ToolEvent}
-          onOpenChange={handleV1CardOpenChange}
-          open={effectiveExpandedToolPresentationIds.has(v1CardKey)}
+          onOpenChange={handleCardOpenChange}
+          open={effectiveExpandedToolPresentationIds.has(cardKey)}
+        />
+      ) : resolvedRequestProgress && requestToolName && cardKey ? (
+        <ToolRequestCard
+          onOpenChange={handleCardOpenChange}
+          open={effectiveExpandedToolPresentationIds.has(cardKey)}
+          phase={resolvedRequestProgress.state}
+          preview={resolvedRequestProgress.preview}
+          receivedBytes={resolvedRequestProgress.receivedBytes}
+          requestStreamId={resolvedRequestProgress.requestStreamId}
+          state={displayState === "completed" ? "done" : displayState}
+          toolName={requestToolName}
         />
       ) : <ToolPresentationCard
         v1ToolEvent={v1ToolEvent}

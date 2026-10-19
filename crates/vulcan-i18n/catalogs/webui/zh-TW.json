@@ -2267,6 +2267,8 @@
   "toolCard.doc.browserSelect": "切換瀏覽器",
   "toolCard.doc.browserClose": "關閉瀏覽器",
   "toolCard.doc.declareIntent": "聲明意圖",
+  "toolCard.request.receiving": "正在撰寫 · {size}",
+  "toolCard.request.ready": "參數就緒 · {size}",
   "toolCard.media.read": "讀取媒體",
   "toolPresentation.command.terminalTitle": "終端機命令",
   "toolPresentation.command.shellTitle": "Shell 命令",

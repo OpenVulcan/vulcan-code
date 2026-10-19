@@ -13,7 +13,8 @@ import { LUA_TOOLS, LuaCard } from "./cards/lua-card";
 import { GoalCard, PlanCard, TodoCard } from "./cards/plan-cards";
 import { ProviderCard, providerToolSpec } from "./cards/provider-card";
 import type { ToolCardProps, ToolFamily } from "./tool-card";
-import { readToolCall, textOf, type ToolCall } from "./tool-call";
+import { readToolCall, textOf, type ToolCall, type ToolCardState } from "./tool-call";
+import { readRequestPreview, requestToolCall, type ToolRequestPhase } from "./tool-request";
 
 // ToolCardDefinition pairs a call's family with the card that draws it.
 // ToolCardDefinition 将调用的家族与绘制它的卡片配对。
@@ -97,6 +98,45 @@ export const ToolCallCard = React.memo(function ToolCallCard(props: {
   onOpenChange: (open: boolean) => void;
 }) {
   const call = React.useMemo(() => readToolCall(props.event), [props.event]);
+  const { Card, family } = resolveToolCard(call);
+  return <Card call={call} family={family} onOpenChange={props.onOpenChange} open={props.open} />;
+});
+
+/** Renders the card for a tool request the model is still writing, or one the turn ended before it became a call;
+ * it is the same card the finished call will use, so the row keeps its shape when the call arrives.
+ * 渲染模型仍在书写的工具请求（或回合在其成为调用前就结束的请求）的卡片；它与最终调用使用同一张卡，
+ * 使调用到达时该行保持原样。 */
+export const ToolRequestCard = React.memo(function ToolRequestCard(props: {
+  // Public tool name frozen for the request.
+  // 请求冻结的公开工具名。
+  toolName: string;
+  // Stable request stream identity, used as the call key.
+  // 稳定的请求流标识，用作调用键。
+  requestStreamId: string;
+  // Writing phase.
+  // 书写阶段。
+  phase: ToolRequestPhase;
+  // UTF-8 bytes received so far.
+  // 目前已接收的 UTF-8 字节数。
+  receivedBytes: number;
+  // Host preview object, when the tool produces one.
+  // 宿主预览对象（仅产生预览的工具）。
+  preview: Record<string, unknown> | null;
+  // Visual lifecycle of the row.
+  // 该行的视觉生命周期。
+  state: ToolCardState;
+  // Whether the card body is open.
+  // 卡片正文是否展开。
+  open: boolean;
+  // Requests the next open state.
+  // 请求下一个展开状态。
+  onOpenChange: (open: boolean) => void;
+}) {
+  const preview = React.useMemo(() => readRequestPreview(props.preview), [props.preview]);
+  const call = React.useMemo(
+    () => requestToolCall(props.toolName, { bytes: props.receivedBytes, phase: props.phase, preview }, props.requestStreamId, props.state),
+    [preview, props.phase, props.receivedBytes, props.requestStreamId, props.state, props.toolName],
+  );
   const { Card, family } = resolveToolCard(call);
   return <Card call={call} family={family} onOpenChange={props.onOpenChange} open={props.open} />;
 });

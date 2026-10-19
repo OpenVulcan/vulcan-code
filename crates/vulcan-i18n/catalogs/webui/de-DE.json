@@ -2267,6 +2267,8 @@
   "toolCard.doc.browserSelect": "Browser wechseln",
   "toolCard.doc.browserClose": "Browser schließen",
   "toolCard.doc.declareIntent": "Absicht erklären",
+  "toolCard.request.receiving": "Wird geschrieben · {size}",
+  "toolCard.request.ready": "Argumente bereit · {size}",
   "toolCard.media.read": "Medien lesen",
   "toolPresentation.command.terminalTitle": "Terminalbefehl",
   "toolPresentation.command.shellTitle": "Shell-Befehl",

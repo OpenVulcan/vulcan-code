@@ -6,10 +6,11 @@ import { File, FileDiff, FileImage, FileMinus, FilePlus, FileSearch, FileText, F
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { PersistentChangeSetFile } from "@/service/conversation-event-window-store";
 import { ToolFrame, type ToolCardProps } from "../tool-card";
+import type { RequestPreview } from "../tool-request";
 import { numberOf, objectOf, textOf } from "../tool-call";
 import { fileDisplayPath, fileLineCounts } from "../views/change-set";
 import { CodeView, type CodeLine } from "../views/code-view";
-import { DiffStat, DiffView } from "../views/diff-view";
+import { DiffStat, DiffView, PlainDiffView } from "../views/diff-view";
 import { ErrorNote } from "../views/result-views";
 
 // mediaReadFileName reads the resource name from the host-marked media envelope read_media returns.
@@ -159,6 +160,8 @@ export function FileChangeCard(props: ToolCardProps) {
     return counts ? { added: sum.added + counts.added, removed: sum.removed + counts.removed, known: true } : sum;
   }, { added: 0, removed: 0, known: false });
   const single = files.length === 1 ? files[0] : null;
+  const preview = files.length === 0 ? call.request?.preview ?? null : null;
+  const previewPaths = preview?.files.map((file) => file.path) ?? [];
   const verb = single
     ? t(CHANGE_VERBS[single.change].verb)
     : files.length > 1
@@ -166,19 +169,24 @@ export function FileChangeCard(props: ToolCardProps) {
       : t(ATTEMPT_VERBS[call.name] ?? "toolCard.file.modify");
   const target = single
     ? single.change === "rename" && single.old_path ? `${single.old_path} → ${fileDisplayPath(single)}` : fileDisplayPath(single)
-    : files.length > 1 ? files.map(fileDisplayPath).join(", ") : textOf(call.input.path) ?? "";
+    : files.length > 1 ? files.map(fileDisplayPath).join(", ") : textOf(call.input.path) ?? previewPaths.join(", ");
+  const previewStat = preview ? requestPreviewStat(preview) : null;
   return (
     <ToolFrame
       {...props}
       icon={single ? CHANGE_VERBS[single.change].icon : FileDiff}
-      meta={totals.known ? <DiffStat added={totals.added} removed={totals.removed} /> : null}
+      meta={totals.known ? <DiffStat added={totals.added} removed={totals.removed} />
+        : !previewStat ? null
+          : previewStat.removed === null ? <span>{t("toolCard.lines").replace("{count}", String(previewStat.added))}</span>
+            : <DiffStat added={previewStat.added} removed={previewStat.removed} />}
       state={call.state}
       target={target}
       targetTitle={target}
       verb={verb}
     >
       {files.length === 0
-        ? call.isError || call.state === "failed" ? <ErrorNote text={call.modelOutput} /> : null
+        ? call.isError || call.state === "failed" ? <ErrorNote text={call.modelOutput} />
+          : preview?.files.some((file) => file.rows.length > 0) ? <RequestPreviewDiff preview={preview} /> : null
         : files.map((file, index) => (
             <section key={`${fileDisplayPath(file)}:${index}`}>
               {files.length > 1 ? (
@@ -193,6 +201,34 @@ export function FileChangeCard(props: ToolCardProps) {
           ))}
     </ToolFrame>
   );
+}
+
+// requestPreviewStat reads the line counts a mutation request has written so far; removed is null for a request
+// that only writes, such as a whole-file write. Without host counters it counts the preview rows.
+// requestPreviewStat 读取修改请求目前已书写的行数；只写入的请求（例如整文件写入）的 removed 为 null。
+// 宿主未给出计数时统计预览行。
+export function requestPreviewStat(preview: RequestPreview): { added: number; removed: number | null } | null {
+  const added = numberOf(preview.progress.new_line_count);
+  const removed = numberOf(preview.progress.old_line_count);
+  if (added !== null || removed !== null) return { added: added ?? 0, removed };
+  const rows = preview.files.flatMap((file) => file.rows);
+  if (rows.length === 0) return null;
+  return { added: rows.filter((row) => row.kind === "insert").length, removed: rows.filter((row) => row.kind === "delete").length };
+}
+
+/** Shows the lines a mutation request has written so far, per file.
+ * 按文件展示修改请求目前已书写的行。 */
+function RequestPreviewDiff(props: { preview: RequestPreview }) {
+  const files = props.preview.files.filter((file) => file.rows.length > 0);
+  if (files.length === 0) return null;
+  return files.map((file, index) => (
+    <section key={`${file.path}:${index}`}>
+      {files.length > 1 ? (
+        <div className="vk-diff-file"><code className="vk-mono vk-truncate">{file.path}</code></div>
+      ) : null}
+      <PlainDiffView groups={[file.rows]} truncated={props.preview.truncated && index === files.length - 1} />
+    </section>
+  ));
 }
 
 // readLines extracts the numbered "L<n>: text" lines a file read returns inside its fence.

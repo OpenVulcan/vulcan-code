@@ -6,14 +6,15 @@ import type { PersistentChangeSetFile } from "@/service/conversation-event-windo
 import { askAnswers, askQuestions } from "./cards/ask-card";
 import { commandOutputFromText } from "./cards/command-card";
 import { documentBody } from "./cards/document-card";
-import { listEntries, readLines } from "./cards/file-cards";
+import { listEntries, readLines, requestPreviewStat } from "./cards/file-cards";
 import { toolNameParts } from "./cards/generic-card";
 import { knowledgeEdits } from "./cards/knowledge-write-card";
 import { codeLines, luaSessionBody } from "./cards/lua-card";
 import { goalReport, todoItems } from "./cards/plan-cards";
 import { extractReport, searchReport, sourceParts, stripReportHeading } from "./cards/provider-card";
 import { formatToolDuration, readToolCall, toolCardState } from "./tool-call";
-import { toolCallFamily } from "./tool-call-card";
+import { resolveToolCard, toolCallFamily } from "./tool-call-card";
+import { readRequestPreview, requestToolCall } from "./tool-request";
 import { summarizeToolSequence, toolSequenceEntry } from "./tool-sequence";
 import { fileDiffRows, fileLineCounts } from "./views/change-set";
 import { parseTerminalText } from "./views/terminal-view";
@@ -222,6 +223,57 @@ describe("lua, questions and knowledge writes", () => {
     expect(toolCallFamily(toolEvent("knowledge_write", { action: "create", libraryId: "l" }))).toBe("edit");
     expect(toolCallFamily(toolEvent("vmm_memory_search", { queries: ["q"] }))).toBe("search");
     expect(toolCallFamily(toolEvent("runtime_config", { action: "describe" }))).toBe("read");
+  });
+});
+
+describe("tool requests still being written", () => {
+  it("groups structured preview lines by the file they belong to", () => {
+    const preview = readRequestPreview({
+      affected_resources: ["a.ts", "b.ts"],
+      kind: "apply_patch",
+      progress_fields: { new_line_count: 1, old_line_count: 1 },
+      redaction_flags: ["structured_preview_truncated"],
+      structured_lines: [
+        { content: "old", line_index: 0, operation_index: 0, resource_index: 0, side: "old" },
+        { content: "new", line_index: 0, operation_index: 1, resource_index: 1, side: "new" },
+        { content: "bad", resource_index: 5, side: "new" },
+        { content: "bad", resource_index: 0, side: "sideways" },
+      ],
+      title_fields: { operation_count: 2 },
+    });
+    expect(preview?.files).toEqual([
+      { path: "a.ts", rows: [{ kind: "delete", text: "old" }] },
+      { path: "b.ts", rows: [{ kind: "insert", text: "new" }] },
+    ]);
+    expect(preview?.truncated).toBe(true);
+    expect(preview && requestPreviewStat(preview)).toEqual({ added: 1, removed: 1 });
+  });
+
+  it("falls back to the text body when no structured lines arrived", () => {
+    const edit = readRequestPreview({ affected_resources: ["a.ts"], body_preview: "- x\n+ y\n", kind: "file_edit" });
+    expect(edit?.files[0]?.rows).toEqual([{ kind: "delete", text: "x" }, { kind: "insert", text: "y" }]);
+    expect(edit && requestPreviewStat(edit)).toEqual({ added: 1, removed: 1 });
+    expect(requestPreviewStat(readRequestPreview({ kind: "file_write", progress_fields: { new_line_count: 3 } })!)).toEqual({ added: 3, removed: null });
+    const patch = readRequestPreview({
+      affected_resources: ["b.ts"],
+      body_preview: "*** Begin Patch\n*** Update File: b.ts\n@@\n ctx\n-x\n+y",
+      kind: "apply_patch",
+    });
+    expect(patch?.files[0]?.rows.map((row) => row.kind)).toEqual(["context", "delete", "insert"]);
+    expect(readRequestPreview({ kind: "file_write" })?.files).toEqual([]);
+    expect(readRequestPreview(null)).toBeNull();
+    expect(readRequestPreview({ title_fields: {} })).toBeNull();
+  });
+
+  it("builds a call that the finished call's card can show", () => {
+    const edit = requestToolCall("file_edit", { bytes: 10, phase: "receiving", preview: readRequestPreview({ kind: "file_edit", title_fields: { path: "a.ts" } }) }, "s1", "running");
+    expect(edit.input.path).toBe("a.ts");
+    expect(resolveToolCard(edit).family).toBe("edit");
+    const plan = requestToolCall("submit_plan", { bytes: 4, phase: "receiving", preview: readRequestPreview({ body_preview: "# Plan", kind: "submit_plan", title_fields: { name: "p" } }) }, "s2", "stopped");
+    expect(plan.input.content).toBe("# Plan");
+    expect(plan.state).toBe("stopped");
+    expect(resolveToolCard(plan).family).toBe("plan");
+    expect(resolveToolCard(requestToolCall("mcp_x_y", { bytes: 1, phase: "ready", preview: null }, "s3", "running")).family).toBe("other");
   });
 });
 

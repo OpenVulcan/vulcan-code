@@ -2267,6 +2267,8 @@
   "toolCard.doc.browserSelect": "Переключить браузер",
   "toolCard.doc.browserClose": "Закрыть браузер",
   "toolCard.doc.declareIntent": "Объявить намерение",
+  "toolCard.request.receiving": "Пишется · {size}",
+  "toolCard.request.ready": "Аргументы готовы · {size}",
   "toolCard.media.read": "Прочитать медиа",
   "toolPresentation.command.terminalTitle": "Команда терминала",
   "toolPresentation.command.shellTitle": "Команда оболочки",

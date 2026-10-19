@@ -52,3 +52,36 @@ export function DiffStat(props: { added: number; removed: number }) {
     </>
   );
 }
+
+// PlainDiffRow is one line of a diff without line numbers.
+// PlainDiffRow 是不带行号的一行差异。
+export interface PlainDiffRow {
+  // Line role.
+  // 行角色。
+  kind: "insert" | "delete" | "context";
+  // Line text without its marker.
+  // 不含标记的行文本。
+  text: string;
+}
+
+/** Renders diff rows that have no line numbers: groups are split by an omit row, and a cut-short diff ends with one.
+ * 渲染没有行号的差异行：分组之间以省略行分隔，被截断的差异以省略行结尾。 */
+export function PlainDiffView(props: { groups: readonly (readonly PlainDiffRow[])[]; truncated?: boolean }) {
+  const omit = (key: string) => (
+    <div className="vk-diff-row" data-kind="omit" key={key} role="row"><span>{DIFF_MARKS.omit}</span><span /></div>
+  );
+  return (
+    <div className="vk-diff" data-plain="" role="table">
+      {props.groups.map((rows, group) => [
+        group > 0 ? omit(`s${group}`) : null,
+        ...rows.map((row, index) => (
+          <div className="vk-diff-row" data-kind={row.kind} key={`${group}:${index}`} role="row">
+            <span>{DIFF_MARKS[row.kind]}</span>
+            <span>{row.text || " "}</span>
+          </div>
+        )),
+      ])}
+      {props.truncated ? omit("end") : null}
+    </div>
+  );
+}

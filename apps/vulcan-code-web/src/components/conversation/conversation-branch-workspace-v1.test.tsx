@@ -317,7 +317,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     // Markup goes through the production transcript grouping and collapsed card component.
     // markup 经过生产转录分组与默认折叠卡组件。
     const markup = renderWorkspace(events);
-    expect(markup.match(/class="context-compaction-block /g)).toHaveLength(1);
+    expect(markup.match(/class=.context-compaction-block /g)).toHaveLength(1);
     expect(markup).toContain(status === "completed" ? "上下文已压缩" : "上下文压缩失败");
     expect(markup).not.toContain("压缩摘要正文");
     expect(markup).toContain("压缩之后的正常回答");
@@ -434,9 +434,17 @@ describe("ConversationBranchWorkspaceV1", () => {
     try {
       await React.act(async () => root.render(workspaceTree(events, "inline_output", [], true, undefined, store)));
       await publish(seed);
-      expect(host.querySelector(".tool-presentation-summary")).not.toBeNull();
-      expect(host.textContent).toContain(toolName === "file_write" ? "写入" : toolName === "file_edit" ? "编辑" : toolName === "apply_patch" ? "应用补丁" : toolName);
-      if (toolName === "file_write") expect(host.textContent).toContain("正在接收内容");
+      // The request already uses the card its call will use, marked as still being written.
+      // 请求已使用其调用将使用的卡片，并标记为仍在书写。
+      const card = host.querySelector(".vk-tool");
+      expect(card?.getAttribute("data-family")).toBe("edit");
+      expect(card?.hasAttribute("data-request")).toBe(true);
+      expect(card?.querySelector(".vk-tool-request")?.getAttribute("data-phase")).toBe("receiving");
+      const writes = toolName === "file" || toolName === "file_write";
+      const target = () => card?.querySelector(".vk-tool-title code")?.textContent ?? "";
+      const stat = () => writes
+        ? card?.querySelector(".vk-tool-meta > span:first-child")?.textContent ?? ""
+        : [".vk-add", ".vk-del"].map((selector) => card?.querySelector(".vk-tool-meta " + selector)?.textContent ?? "").join("");
       await publish({ ...seed, requestRevision: 2, receivedBytes: 100, receivedCharacters: 100,
         preview: (toolName === "file" || toolName === "file_write") ? { kind: "file_write", revision: 1,
           title_fields: { path: "src/example.ts" }, progress_fields: { new_line_count: 1 } }
@@ -446,18 +454,16 @@ describe("ConversationBranchWorkspaceV1", () => {
             { operation_index: 0, resource_index: 0, side: "old", line_index: 0, content: "old" },
             { operation_index: 0, resource_index: 0, side: "new", line_index: 0, content: "new" },
           ] } });
-      expect(host.textContent).toContain("example.ts");
-      expect(host.textContent).toContain((toolName === "file" || toolName === "file_write") ? "已生成 1 行" : "+1");
-      if ((toolName !== "file" && toolName !== "file_write")) expect(host.textContent).toContain("-1");
-      // Byte-only events must not erase semantic headers between independently delivered previews.
-      // 独立预览之间的纯字节进度事件不能清空语义卡头。
-      const summary = host.querySelector(".tool-presentation-summary");
-      // Preserve the exact recognized header, including its path, operation and current counts.
-      // 保留完整已识别卡头，包括路径、操作及当前行数。
-      const firstHeader = summary?.textContent;
+      expect(host.querySelector(".vk-tool")).toBe(card);
+      expect(target()).toContain("example.ts");
+      expect(stat()).toMatch(writes ? /\b1\b/ : /^\+1−1$/);
+      // Byte-only events must not erase the target or counts between independently delivered previews.
+      // 独立预览之间的纯字节进度事件不能清空目标或行数。
+      const firstStat = stat();
       await publish({ ...seed, requestRevision: 3, receivedBytes: 105, receivedCharacters: 105 });
-      expect(host.querySelector(".tool-presentation-summary")).toBe(summary);
-      expect(summary?.textContent).toBe(firstHeader);
+      expect(host.querySelector(".vk-tool")).toBe(card);
+      expect(target()).toContain("example.ts");
+      expect(stat()).toBe(firstStat);
       await publish({ ...seed, requestRevision: 4, receivedBytes: 110, receivedCharacters: 110,
         preview: (toolName === "file" || toolName === "file_write") ? { kind: "file_write", revision: 2,
           title_fields: { path: "src/example.ts" }, progress_fields: { new_line_count: 2 } }
@@ -468,22 +474,24 @@ describe("ConversationBranchWorkspaceV1", () => {
             { operation_index: 0, resource_index: 0, side: "new", line_index: 0, content: "new" },
             { operation_index: 0, resource_index: 0, side: "new", line_index: 1, content: "next" },
           ] } });
-      expect(host.textContent).toContain((toolName === "file" || toolName === "file_write") ? "已生成 2 行" : "+2");
-      if ((toolName !== "file" && toolName !== "file_write")) expect(host.textContent).toContain("-1");
-      expect(host.querySelectorAll(".tool-presentation-summary")).toHaveLength(1);
-      expect(host.querySelector(".tool-presentation-state")).toBeNull();
-      expect(host.textContent).not.toContain("110B");
+      expect(stat()).toMatch(writes ? /\b2\b/ : /^\+2−1$/);
+      expect(host.querySelectorAll(".vk-tool")).toHaveLength(1);
+      // Opening the card shows the lines written so far; a write previews counts only.
+      // 展开卡片会展示目前已书写的行；写入只预览行数。
+      await React.act(async () => (card?.querySelector(".vk-tool-head") as HTMLElement | null)?.click());
+      expect(card?.querySelectorAll(".vk-diff-row[data-kind=\"insert\"]").length).toBe(writes ? 0 : 2);
       // Assembly and readiness carry no preview; only the durable tool handoff ends this draft.
       // 组装完成与就绪事件不携带预览；仅持久工具交接结束当前草稿。
-      const latestHeader = summary?.textContent;
+      const latestStat = stat();
       for (const [index, state] of (["receiving", "arguments_assembled", "ready"] as const).entries()) {
         await publish({ ...seed, state, requestRevision: 5 + index,
           receivedBytes: 120 + index, receivedCharacters: 120 + index, preview: null });
-        expect(host.querySelector(".tool-presentation-summary")).toBe(summary);
-        expect(summary?.textContent).toBe(latestHeader);
+        expect(host.querySelector(".vk-tool")).toBe(card);
+        expect(stat()).toBe(latestStat);
+        expect(card?.querySelector(".vk-tool-request")?.getAttribute("data-phase")).toBe(state);
       }
       await publish(null);
-      expect(host.querySelector(".tool-presentation-summary")).toBeNull();
+      expect(host.querySelector(".vk-tool")).toBeNull();
     } finally {
       await React.act(async () => root.unmount());
     }
@@ -527,21 +535,21 @@ describe("ConversationBranchWorkspaceV1", () => {
       // Retain both the request row and the card element while the path is unknown.
       // 在路径未知时保留请求行和卡片元素。
       const row = host.querySelector(".tool-execution-stack");
-      const card = host.querySelector(".tool-presentation-card.file-change");
-      expect(card?.textContent).toContain("写入");
-      expect(card?.textContent).toContain("已生成 1 行");
-      expect(card?.textContent).not.toContain("file");
+      const card = host.querySelector(".vk-tool");
+      const lines = () => card?.querySelector(".vk-tool-meta > span:first-child")?.textContent ?? "";
+      expect(card?.getAttribute("data-family")).toBe("edit");
+      expect(card?.querySelector(".vk-tool-title code")).toBeNull();
+      expect(lines()).toMatch(/\b1\b/);
       await publish(2, 51);
-      expect(host.querySelector(".tool-presentation-card.file-change")).toBe(card);
-      expect(card?.textContent).toContain("已生成 51 行");
+      expect(host.querySelector(".vk-tool")).toBe(card);
+      expect(lines()).toMatch(/\b51\b/);
       await publish(3, 803, "index.html");
       expect(host.querySelector(".tool-execution-stack")).toBe(row);
-      expect(host.querySelector(".tool-presentation-card.file-change")).toBe(card);
-      expect(card?.textContent).toContain("index.html");
-      expect(card?.textContent).toContain("已生成 803 行");
-      expect(card?.textContent).not.toContain("+803");
-      expect(host.querySelectorAll(".tool-presentation-summary")).toHaveLength(1);
-      expect(host.querySelector(".tool-presentation-state")).toBeNull();
+      expect(host.querySelector(".vk-tool")).toBe(card);
+      expect(card?.querySelector(".vk-tool-title code")?.textContent).toBe("index.html");
+      expect(lines()).toMatch(/\b803\b/);
+      expect(card?.querySelector(".vk-tool-meta .vk-add")).toBeNull();
+      expect(host.querySelectorAll(".vk-tool")).toHaveLength(1);
     } finally {
       await React.act(async () => root.unmount());
     }
