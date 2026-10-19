@@ -94,7 +94,7 @@ it("renders the layout through the page kit and saves the complete draft", async
   // The checklist stays hidden until its controlling field selects "all".
   // 在控制字段选择 all 之前，清单保持隐藏。
   expect(host.textContent).not.toContain("msg:routes");
-  expect(button(en("plugins.settings.save")).disabled).toBe(true);
+  expect(host.querySelector('[data-slot="page-action-bar"]')).toBeNull();
   await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
   expect(host.textContent).toContain(en("plugins.settings.unsaved"));
   await act(async () => button(en("plugins.settings.save")).click());
