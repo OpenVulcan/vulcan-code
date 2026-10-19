@@ -29,12 +29,3 @@
   border-radius: var(--vcn-radius-md);
 }
 
-/* Persistent terminal state shown on the session icon. */
-/* 持久终端状态显示在会话图标上。 */
-.terminal-session-icon.terminal-state-running { color: var(--vk-info); }
-.terminal-session-icon.terminal-state-waiting { color: var(--vk-warn); }
-.terminal-session-icon.terminal-state-success { color: var(--vk-ok); }
-.terminal-session-icon.terminal-state-failed { color: var(--vk-bad); }
-.terminal-session-icon.terminal-state-stopped { color: var(--vk-ink-3); }
-.terminal-session-icon.terminal-state-lost,
-.terminal-session-icon.terminal-state-unknown { color: color-mix(in srgb, var(--vk-ink-3) 72%, transparent); }

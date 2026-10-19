@@ -1,5 +1,4 @@
 import React from "react";
-import "@/styles/session-git-branch.css";
 import { Check, GitBranch, GitGraph, LoaderCircle, Plus, RefreshCw, Search, X } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { Button } from "@/ui-kit/primitives/button";
@@ -21,7 +20,6 @@ import type {
   WorkspaceGitLocalBranchList,
 } from "@/diff/types";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
 
 // GIT_GRAPH_LANE_WIDTH is the horizontal distance between two graph lanes in pixels.
 // GIT_GRAPH_LANE_WIDTH 是两条图谱泳道之间的水平像素距离。
@@ -35,8 +33,8 @@ const GIT_GRAPH_ROW_HEIGHT = 30;
 // GIT_GRAPH_MAX_VISIBLE_LANES 限制图谱列宽，避免宽历史挤压描述列。
 const GIT_GRAPH_MAX_VISIBLE_LANES = 8;
 
-// GIT_GRAPH_LANE_COLOR_COUNT matches the number of lane color tokens in session-git-branch.css.
-// GIT_GRAPH_LANE_COLOR_COUNT 与 session-git-branch.css 中泳道颜色令牌数量一致。
+// GIT_GRAPH_LANE_COLOR_COUNT matches the number of lane color tokens in the kit session-tools stylesheet.
+// GIT_GRAPH_LANE_COLOR_COUNT 与 kit 会话工具样式表中泳道颜色令牌数量一致。
 const GIT_GRAPH_LANE_COLOR_COUNT = 6;
 
 // GIT_GRAPH_LOAD_MORE_THRESHOLD is how close to the bottom, in pixels, scrolling starts the next page.
@@ -109,8 +107,8 @@ export function ConversationSessionBranchMenu(props: {
 
   if (!actions) {
     return (
-      <div className="workspace-tool-panel-menu-row conversation-session-review-row">
-        <GitBranch size={15} />
+      <div className="vk-stools-item" data-row="branch">
+        <GitBranch size={14} />
         <span>{displayName}</span>
       </div>
     );
@@ -148,40 +146,39 @@ export function ConversationSessionBranchMenu(props: {
         <PopoverTrigger asChild>
           <button
             aria-label={t("gitBranchMenu.label")}
-            className={cn(
-              "workspace-tool-panel-menu-row conversation-session-review-row conversation-session-branch-trigger",
-              menuOpen && "active",
-            )}
+            className="vk-stools-item"
+            data-row="branch"
             title={t("gitBranchMenu.label")}
             type="button"
           >
-            <GitBranch size={15} />
+            <GitBranch size={14} />
             <span>{displayName}</span>
           </button>
         </PopoverTrigger>
-        <PopoverContent align="start" className="session-git-branch-menu" side="left" sideOffset={8}>
-          <label className="session-git-branch-search">
+        <PopoverContent align="start" className="vk-branch-pop" side="left" sideOffset={8}>
+          <div className="vk-menu-search vk-input-wrap">
             <Search size={14} />
-            <input
+            <Input
               aria-label={t("gitBranchMenu.search")}
               autoFocus
+              data-size="sm"
               onChange={(event) => setQuery(event.target.value)}
               placeholder={t("gitBranchMenu.search")}
               value={query}
             />
-          </label>
-          <div className="session-git-branch-list" role="listbox" aria-label={t("gitBranchMenu.label")}>
-            {loadError ? <p className="session-git-branch-message is-error" role="alert">{t("gitBranchMenu.loadFailed")}：{loadError}</p> : null}
+          </div>
+          <div className="vk-menu" role="listbox" aria-label={t("gitBranchMenu.label")}>
+            {loadError ? <p className="vk-menu-note" data-tone="bad" role="alert">{t("gitBranchMenu.loadFailed")}：{loadError}</p> : null}
             {!loadError && !branchList ? (
-              <StreamPlaceholder className="p-1" label={t("gitBranchMenu.loading")} shape="rows" count={4} />
+              <StreamPlaceholder label={t("gitBranchMenu.loading")} shape="rows" count={4} />
             ) : null}
-            {branchList && visibleBranches.length === 0 ? <p className="session-git-branch-message">{t("gitBranchMenu.empty")}</p> : null}
+            {branchList && visibleBranches.length === 0 ? <p className="vk-menu-note">{t("gitBranchMenu.empty")}</p> : null}
             {visibleBranches.map((name) => {
               const current = name === currentBranch;
               return (
                 <button
                   aria-selected={current}
-                  className={cn("session-git-branch-item", current && "is-current")}
+                  className="vk-menu-item"
                   disabled={Boolean(switchingBranch) || (props.busy && !current)}
                   key={name}
                   onClick={() => void switchTo(name)}
@@ -189,36 +186,38 @@ export function ConversationSessionBranchMenu(props: {
                   title={name}
                   type="button"
                 >
-                  <GitBranch className="session-git-branch-item-icon" size={14} />
-                  <span className="session-git-branch-item-text">
-                    <span className="session-git-branch-item-name">{name}</span>
+                  <GitBranch size={14} />
+                  <span className="vk-menu-label">
+                    <span>{name}</span>
                     {current && props.changedFiles > 0 ? (
                       <small>{t("gitBranchMenu.uncommitted").replace("{count}", String(props.changedFiles))}</small>
                     ) : null}
                   </span>
-                  {switchingBranch === name ? <LoaderCircle className="spin" size={14} /> : null}
-                  {current ? <Check className="session-git-branch-item-check" size={14} /> : null}
+                  {switchingBranch === name ? <LoaderCircle className="vk-spin" size={14} /> : null}
+                  {current ? <Check size={14} /> : null}
                 </button>
               );
             })}
           </div>
-          <div className="session-git-branch-footer">
+          <div className="vk-menu">
             <button
-              className="session-git-branch-item"
+              className="vk-menu-item"
+              data-action="create-branch"
               disabled={props.busy || Boolean(switchingBranch)}
               onClick={() => { setMenuOpen(false); setCreateOpen(true); }}
               type="button"
             >
-              <Plus className="session-git-branch-item-icon" size={14} />
-              <span className="session-git-branch-item-name">{t("gitBranchMenu.create")}</span>
+              <Plus size={14} />
+              <span className="vk-menu-text">{t("gitBranchMenu.create")}</span>
             </button>
             <button
-              className="session-git-branch-item"
+              className="vk-menu-item"
+              data-action="git-graph"
               onClick={() => { setMenuOpen(false); setGraphOpen(true); }}
               type="button"
             >
-              <GitGraph className="session-git-branch-item-icon" size={14} />
-              <span className="session-git-branch-item-name">{t("gitBranchMenu.graph")}</span>
+              <GitGraph size={14} />
+              <span className="vk-menu-text">{t("gitBranchMenu.graph")}</span>
             </button>
           </div>
         </PopoverContent>
@@ -306,7 +305,7 @@ function ConversationSessionCreateBranchDialog(props: {
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!submitting) props.onOpenChange(next); }}>
       <DialogContent size="sm">
-        <form className="session-git-create-branch-form" onSubmit={(event) => void submit(event)}>
+        <form className="vk-dialog-form" data-form="create-branch" onSubmit={(event) => void submit(event)}>
           <DialogHeader>
             <DialogTitle>{t("gitBranchCreate.title")}</DialogTitle>
             <DialogDescription>{t("gitBranchCreate.description")}</DialogDescription>
@@ -330,7 +329,7 @@ function ConversationSessionCreateBranchDialog(props: {
               {t("gitBranchCreate.cancel")}
             </Button>
             <Button disabled={submitting || !branchName.trim()} type="submit">
-              {submitting ? <LoaderCircle className="spin" /> : null}
+              {submitting ? <LoaderCircle className="vk-spin" /> : null}
               {t(submitting ? "gitBranchCreate.submitting" : "gitBranchCreate.submit")}
             </Button>
           </DialogFooter>
@@ -448,20 +447,20 @@ function ConversationSessionGitGraphDialog(props: {
   return (
     <Dialog open={open} onOpenChange={props.onOpenChange}>
       <DialogContent
-        className="session-git-graph-dialog"
+        className="vk-graph"
         layout="viewer"
         onOpenAutoFocus={(event) => event.preventDefault()}
         showCloseButton={false}
         size="xl"
       >
-        <header className="session-git-graph-header">
+        <header className="vk-graph-head">
           <div>
             <DialogTitle>{t("gitGraph.title")}</DialogTitle>
             <DialogDescription>{t("gitGraph.description")}</DialogDescription>
           </div>
-          <div className="session-git-graph-header-actions">
+          <div>
             <Button aria-label={t("gitGraph.refresh")} disabled={loading} onClick={reload} size="icon-sm" title={t("gitGraph.refresh")} variant="ghost">
-              <RefreshCw className={cn(loading && commits.length === 0 && "spin")} />
+              <RefreshCw className={loading && commits.length === 0 ? "vk-spin" : undefined} />
             </Button>
             <Button aria-label={t("gitGraph.close")} onClick={() => props.onOpenChange(false)} size="icon-sm" title={t("gitGraph.close")} variant="ghost">
               <X />
@@ -469,74 +468,80 @@ function ConversationSessionGitGraphDialog(props: {
           </div>
         </header>
         <div
-          className="session-git-graph-table"
+          className="vk-graph-table"
           style={{
-            "--session-git-graph-width": `${graphWidth}px`,
-            "--session-git-graph-row-height": `${GIT_GRAPH_ROW_HEIGHT}px`,
+            "--vk-graph-w": `${graphWidth}px`,
+            "--vk-graph-row-h": `${GIT_GRAPH_ROW_HEIGHT}px`,
           } as React.CSSProperties}
         >
-          <div className="session-git-graph-row is-head" role="row">
+          <div className="vk-graph-row" data-head="" role="row">
             <span role="columnheader">{t("gitGraph.columnGraph")}</span>
             <span role="columnheader">{t("gitGraph.columnDescription")}</span>
             <span role="columnheader">{t("gitGraph.columnDate")}</span>
             <span role="columnheader">{t("gitGraph.columnAuthor")}</span>
             <span role="columnheader">{t("gitGraph.columnCommit")}</span>
           </div>
-          <div className="session-git-graph-body" onScroll={loadMoreWhenNearBottom} ref={scrollRef} role="rowgroup">
+          <div className="vk-graph-body" onScroll={loadMoreWhenNearBottom} ref={scrollRef} role="rowgroup">
             {commits.map((commit, index) => {
               const selected = commit.hash === selectedHash;
               const isHead = commit.refs.some((ref) => ref.head);
               return (
                 <button
                   aria-pressed={selected}
-                  className={cn("session-git-graph-row", selected && "is-selected")}
+                  className="vk-graph-row"
                   key={commit.hash}
                   onClick={() => setSelectedHash(selected ? null : commit.hash)}
                   role="row"
                   type="button"
                 >
                   <GitGraphCell row={graph.rows[index]} width={graphWidth} isHead={isHead} />
-                  <span className="session-git-graph-description">
+                  <span className="vk-graph-desc">
                     {commit.refs.map((ref) => (
-                      <span className={cn("session-git-graph-ref", `is-${ref.kind}`, ref.head && "is-head")} key={`${ref.kind}:${ref.name}`}>
+                      <span
+                        className="vk-badge"
+                        data-ref-kind={ref.kind}
+                        data-solid={ref.head ? "" : undefined}
+                        data-tone={gitGraphRefTone(ref.kind, ref.head)}
+                        key={`${ref.kind}:${ref.name}`}
+                      >
                         {ref.head && ref.kind !== "head" ? <strong>HEAD</strong> : null}
                         {ref.name}
                       </span>
                     ))}
-                    <span className="session-git-graph-subject">{commit.subject}</span>
+                    <span className="vk-graph-subject">{commit.subject}</span>
                   </span>
-                  <span className="session-git-graph-muted">{formatGitGraphShortDate(commit.authorDate)}</span>
-                  <span className="session-git-graph-muted session-git-graph-author" title={commit.authorEmail}>{commit.authorName}</span>
-                  <span className="session-git-graph-hash">{commit.shortHash}</span>
+                  <span className="vk-graph-muted">{formatGitGraphShortDate(commit.authorDate)}</span>
+                  <span className="vk-graph-muted" title={commit.authorEmail}>{commit.authorName}</span>
+                  <span className="vk-graph-hash">{commit.shortHash}</span>
                 </button>
               );
             })}
-            {error ? <p className="session-git-graph-message is-error" role="alert">{t("gitGraph.loadFailed")}：{error}</p> : null}
+            {error ? <p className="vk-graph-note" data-tone="bad" role="alert">{t("gitGraph.loadFailed")}：{error}</p> : null}
             {!error && loading ? (
-              <p className="session-git-graph-message">
-                <LoaderCircle className="spin" size={13} />
+              <p className="vk-graph-note">
+                <LoaderCircle className="vk-spin" size={13} />
                 {t(commits.length ? "gitGraph.loadingMore" : "gitGraph.loading")}
               </p>
             ) : null}
-            {!error && !loading && commits.length === 0 ? <p className="session-git-graph-message">{t("gitGraph.empty")}</p> : null}
-            {!error && !loading && commits.length > 0 && !hasMore ? <p className="session-git-graph-message">{t("gitGraph.end")}</p> : null}
+            {!error && !loading && commits.length === 0 ? <p className="vk-graph-note">{t("gitGraph.empty")}</p> : null}
+            {!error && !loading && commits.length > 0 && !hasMore ? <p className="vk-graph-note">{t("gitGraph.end")}</p> : null}
           </div>
         </div>
         {selectedCommit ? (
-          <dl className="session-git-graph-detail">
+          <dl className="vk-graph-detail">
             <dt>{t("gitGraph.subject")}</dt>
             <dd>
               <strong>{selectedCommit.subject}</strong>
               {selectedCommit.body ? <pre>{selectedCommit.body}</pre> : null}
             </dd>
             <dt>{t("gitGraph.columnCommit")}</dt>
-            <dd className="session-git-graph-hash">{selectedCommit.hash}</dd>
+            <dd className="vk-graph-hash">{selectedCommit.hash}</dd>
             <dt>{t("gitGraph.columnAuthor")}</dt>
             <dd>{selectedCommit.authorName}{selectedCommit.authorEmail ? ` <${selectedCommit.authorEmail}>` : ""}</dd>
             <dt>{t("gitGraph.columnDate")}</dt>
             <dd>{formatGitGraphFullDate(selectedCommit.authorDate)}</dd>
             <dt>{t("gitGraph.parents")}</dt>
-            <dd className="session-git-graph-parents">
+            <dd className="vk-graph-parents">
               {selectedCommit.parents.length === 0 ? t("gitGraph.noParents") : selectedCommit.parents.map((parent) => (
                 <button key={parent} onClick={() => setSelectedHash(parent)} title={parent} type="button">
                   {shortHashByHash.get(parent) ?? parent.slice(0, 8)}
@@ -556,21 +561,22 @@ function GitGraphCell(props: { row: GitGraphRowLayout; width: number; isHead: bo
   const height = GIT_GRAPH_ROW_HEIGHT;
   const middle = height / 2;
   const x = (lane: number) => lane * GIT_GRAPH_LANE_WIDTH + GIT_GRAPH_LANE_WIDTH / 2;
-  const laneClass = (lane: number) => `lane-${lane % GIT_GRAPH_LANE_COLOR_COUNT}`;
+  const laneIndex = (lane: number) => String(lane % GIT_GRAPH_LANE_COLOR_COUNT);
   const { row } = props;
   return (
-    <svg aria-hidden className="session-git-graph-cell" height={height} width={props.width}>
+    <svg aria-hidden className="vk-graph-cell" height={height} width={props.width}>
       {row.passThrough.map((edge) => (
-        <path className={laneClass(edge.to)} d={gitGraphEdgePath(x(edge.from), 0, x(edge.to), height)} key={`p${edge.from}`} />
+        <path data-lane={laneIndex(edge.to)} d={gitGraphEdgePath(x(edge.from), 0, x(edge.to), height)} key={`p${edge.from}`} />
       ))}
       {row.incoming.map((lane) => (
-        <path className={laneClass(lane)} d={gitGraphEdgePath(x(lane), 0, x(row.lane), middle)} key={`i${lane}`} />
+        <path data-lane={laneIndex(lane)} d={gitGraphEdgePath(x(lane), 0, x(row.lane), middle)} key={`i${lane}`} />
       ))}
       {row.outgoing.map((lane) => (
-        <path className={laneClass(lane)} d={gitGraphEdgePath(x(row.lane), middle, x(lane), height)} key={`o${lane}`} />
+        <path data-lane={laneIndex(lane)} d={gitGraphEdgePath(x(row.lane), middle, x(lane), height)} key={`o${lane}`} />
       ))}
       <circle
-        className={cn(laneClass(row.lane), "node", props.isHead && "is-head")}
+        data-head={props.isHead ? "" : undefined}
+        data-lane={laneIndex(row.lane)}
         cx={x(row.lane)}
         cy={middle}
         r={props.isHead ? 4.5 : 3.5}
@@ -674,6 +680,14 @@ function formatGitGraphShortDate(isoDate: string): string {
     return isoDate;
   }
   return `${padGitGraphDatePart(date.getMonth() + 1)}/${padGitGraphDatePart(date.getDate())} ${padGitGraphDatePart(date.getHours())}:${padGitGraphDatePart(date.getMinutes())}`;
+}
+
+// gitGraphRefTone gives each ref kind its badge tone: branches signal, remotes info, tags ember.
+// gitGraphRefTone 为各引用类型指定徽标色调：分支为信号色，远程为信息色，标签为余烬色。
+function gitGraphRefTone(kind: WorkspaceGitHistoryCommit["refs"][number]["kind"], head: boolean): "signal" | "info" | "ember" {
+  if (kind === "tag") return "ember";
+  if (kind === "remote" && !head) return "info";
+  return "signal";
 }
 
 // formatGitGraphFullDate renders an ISO date as local `YYYY-MM-DD HH:mm:ss`.

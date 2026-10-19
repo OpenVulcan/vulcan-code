@@ -96,9 +96,9 @@ describe("ConversationSessionBranchMenu", () => {
   it("lists branches, marks the current one, and switches to another branch", async () => {
     const actions = fakeActions();
     await renderMenu(actions);
-    await click(host.querySelector(".conversation-session-branch-trigger"));
+    await click(host.querySelector("[data-row=branch]"));
     expect(actions.loadBranches).toHaveBeenCalledWith("repo");
-    const current = document.querySelector(".session-git-branch-item.is-current");
+    const current = document.querySelector(".vk-branch-pop [aria-selected=true]");
     expect(current?.textContent).toContain("main");
     expect(current?.textContent).toContain("未提交的更改：3 个文件");
     await click(buttonByText("feature/login"));
@@ -108,9 +108,9 @@ describe("ConversationSessionBranchMenu", () => {
   it("recommends a prefixed branch name and creates it from HEAD", async () => {
     const actions = fakeActions();
     await renderMenu(actions);
-    await click(host.querySelector(".conversation-session-branch-trigger"));
+    await click(host.querySelector("[data-row=branch]"));
     await click(buttonByText("创建并检出新分支"));
-    const input = document.querySelector<HTMLInputElement>(".session-git-create-branch-form input");
+    const input = document.querySelector<HTMLInputElement>("[data-form=create-branch] input");
     expect(input?.value).toBe("vulcan/main");
     await click(buttonByText("创建并切换"));
     expect(actions.switchBranch).toHaveBeenCalledWith("repo", "vulcan/main", true);
@@ -128,26 +128,26 @@ describe("ConversationSessionBranchMenu", () => {
     vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1000);
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
     await renderMenu(actions);
-    await click(host.querySelector(".conversation-session-branch-trigger"));
+    await click(host.querySelector("[data-row=branch]"));
     await click(buttonByText("Git 图谱"));
     expect(actions.loadHistory).toHaveBeenCalledTimes(1);
     expect(actions.loadHistory).toHaveBeenLastCalledWith("repo", 0);
-    const rows = () => document.querySelectorAll(".session-git-graph-body .session-git-graph-row");
+    const rows = () => document.querySelectorAll(".vk-graph-body .vk-graph-row");
     expect(rows()).toHaveLength(30);
     expect(rows()[0].textContent).toContain("HEAD");
 
     await click(rows()[1]);
-    expect(document.querySelector(".session-git-graph-detail")?.textContent).toContain("h01");
+    expect(document.querySelector(".vk-graph-detail")?.textContent).toContain("h01");
     await click(rows()[1]);
-    expect(document.querySelector(".session-git-graph-detail")).toBeNull();
+    expect(document.querySelector(".vk-graph-detail")).toBeNull();
 
-    const body = document.querySelector<HTMLDivElement>(".session-git-graph-body")!;
+    const body = document.querySelector<HTMLDivElement>(".vk-graph-body")!;
     await act(async () => {
       body.scrollTop = 600;
       body.dispatchEvent(new Event("scroll"));
     });
     expect(actions.loadHistory).toHaveBeenLastCalledWith("repo", 30);
     expect(rows()).toHaveLength(31);
-    expect(document.querySelector(".session-git-graph-body")?.textContent).toContain("已显示全部提交");
+    expect(document.querySelector(".vk-graph-body")?.textContent).toContain("已显示全部提交");
   });
 });

@@ -851,6 +851,7 @@
 .vk-dialog-header { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 1.5); min-width: 0; padding-right: calc(var(--vk-u) * 7); }
 .vk-dialog-title { font-size: var(--vk-fs-lg); font-weight: 600; line-height: var(--vk-lh-tight); }
 .vk-dialog-description { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+.vk-dialog-form { display: grid; gap: calc(var(--vk-u) * 4); min-width: 0; }
 .vk-dialog-footer {
   display: flex;
   flex-direction: column-reverse;

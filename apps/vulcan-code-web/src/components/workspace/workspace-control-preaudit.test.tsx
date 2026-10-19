@@ -86,9 +86,9 @@ it("locks monitoring synchronously and keeps a new project visit locked when an 
   const content = (project: string) => <TooltipProvider><ConversationSessionTodolistPanel {...props} reviewRepositoryOrderStorageKey={project} /></TooltipProvider>;
   // checkbox reads the first repository's monitoring switch from the Git settings dialog, the only monitoring control.
   // checkbox 从 Git 设置弹窗读取首个仓库的监听开关，该弹窗是唯一的监听控件。
-  const checkbox = () => document.querySelector<HTMLInputElement>(".conversation-session-review-manager-check input")!;
+  const checkbox = () => document.querySelector<HTMLButtonElement>(".vk-repo-row [role=checkbox]")!;
   await render(content("project-a"));
-  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-session-review-manager-trigger")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-stools-manage")!.click());
   expect(checkbox()).not.toBeNull();
   await act(async () => { checkbox().click(); checkbox().click(); });
   expect(toggle).toHaveBeenCalledTimes(1);

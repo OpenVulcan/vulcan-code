@@ -2,15 +2,15 @@ import React from "react";
 import { runConversationControlAction } from "../conversation-control-feedback";
 import { Maximize2, Square, TerminalSquare } from "lucide-react";
 import {
-  terminalStateClass,
+  terminalStateTone,
   type TerminalSessionViewModel,
   type TerminalVisualState,
 } from "@/components/conversation/conversation-terminal-model";
 import { TerminalStopConfirmDialog } from "@/components/conversation/terminal-stop-confirm-dialog";
 import { ConversationReadOnlyTerminalSurface } from "@/components/conversation/terminal/conversation-read-only-terminal-surface";
+import { IconButton } from "@/ui-kit/primitives/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type { CommandSessionSummary } from "@/types";
 
 // ConversationSessionTerminalSection renders AI-owned terminal sessions in the session tool panel.
@@ -30,14 +30,13 @@ export function ConversationSessionTerminalSection(props: {
   // t 解析当前语言的界面文案。
   const { t } = useI18n();
   return (
-    <section className="conversation-session-tool-section conversation-session-terminal-section">
-      <div className="conversation-session-tool-section-title">
-        <span className="conversation-session-tool-section-title-main">
-          <span>{t("sessionTools.terminal")}</span>
-          <strong>{props.terminalSessions.length}</strong>
-        </span>
+    <section className="vk-stools-sec" data-kind="terminal">
+      <div className="vk-stools-title">
+        <TerminalSquare size={13} />
+        <span>{t("sessionTools.terminal")}</span>
+        <b>{props.terminalSessions.length}</b>
       </div>
-      <div className="workspace-tool-panel-menu-list conversation-session-terminal-list">
+      <div className="vk-stools-list">
         {props.terminalSessions.map((session) => (
           <ConversationSessionTerminalRow
             key={session.id}
@@ -102,39 +101,44 @@ function ConversationSessionTerminalRow(props: {
   const tooltipText = terminalSessionTooltipText(props.session, props.summary, t);
   const stateLabel = localizedTerminalStateLabel(props.session.state, t);
   return (
-    <div className="workspace-tool-panel-menu-row conversation-session-terminal-row">
+    <div className="vk-stools-item" data-row="terminal" data-terminal-session={props.session.id}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="conversation-session-terminal-summary" tabIndex={0}>
-            <TerminalSquare className={cn("terminal-session-icon", terminalStateClass(props.session.state))} size={15} />
-            <span className="conversation-session-terminal-name">{props.session.name}</span>
+          <div className="vk-stools-term" tabIndex={0}>
+            <TerminalSquare
+              className="vk-term-mark"
+              data-state={props.session.state}
+              data-tone={terminalStateTone(props.session.state)}
+              size={14}
+            />
+            <span>{props.session.name}</span>
           </div>
         </TooltipTrigger>
-        <TooltipContent className="conversation-session-terminal-tooltip" side="left" sideOffset={8}>
+        <TooltipContent className="vk-stools-tip" side="left" sideOffset={8}>
           <pre>{tooltipText}</pre>
         </TooltipContent>
       </Tooltip>
-      <button
+      <IconButton
         ref={screenButtonRef}
         aria-label={t("terminalSession.openScreen")}
-        className="conversation-session-terminal-action conversation-session-terminal-screen-button"
+        data-action="screen"
         disabled={!props.summary}
         onClick={() => setScreenOpen(true)}
+        size="xs"
         title={props.summary ? t("terminalSession.openScreen") : t("terminalSession.noScreen")}
-        type="button"
       >
         <Maximize2 size={12} />
-      </button>
-      <button
+      </IconButton>
+      <IconButton
         aria-label={t("terminalSession.forceStopSession")}
-        className="conversation-session-terminal-action conversation-session-terminal-stop-button"
+        data-action="stop"
         disabled={!props.session.canStop || stopping}
         onClick={handleStopRequest}
+        size="xs"
         title={props.session.canStop ? t("terminalSession.forceStop") : stateLabel}
-        type="button"
       >
-        <Square fill="currentColor" size={11} strokeWidth={0} />
-      </button>
+        <Square fill="currentColor" size={10} strokeWidth={0} />
+      </IconButton>
       <TerminalStopConfirmDialog
         command={props.session.command}
         open={confirmOpen}

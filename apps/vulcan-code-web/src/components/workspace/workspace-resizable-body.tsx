@@ -526,9 +526,6 @@ export function WorkspaceResizableBody(props: {
   const renderedMainContent = (props.toolPanels ?? [])
     .reduceRight<React.ReactNode>((content, panel) => (
       <AdaptiveToolPanel
-        className={panel.className}
-        contentClassName={panel.contentClassName}
-        contentShellClassName={panel.contentShellClassName}
         expanded={panel.expanded}
         forceOverlay={panel.forceOverlay}
         inlineGap={panel.inlineGap}

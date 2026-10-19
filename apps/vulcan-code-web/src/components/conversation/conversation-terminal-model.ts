@@ -118,8 +118,12 @@ export function terminalStateCanStop(state: TerminalVisualState): boolean {
   return state === "running" || state === "waiting";
 }
 
-// terminalStateClass returns the CSS suffix used by terminal rows.
-// terminalStateClass 返回终端行使用的 CSS 状态后缀。
-export function terminalStateClass(state: TerminalVisualState): string {
-  return `terminal-state-${state}`;
+// terminalStateTone maps a terminal state onto the kit tone of its mark; settled or unknown states stay neutral.
+// terminalStateTone 将终端状态映射为其标记的 kit 色调；已停止或未知状态保持中性。
+export function terminalStateTone(state: TerminalVisualState): "info" | "warn" | "ok" | "bad" | undefined {
+  if (state === "running") return "info";
+  if (state === "waiting") return "warn";
+  if (state === "success") return "ok";
+  if (state === "failed") return "bad";
+  return undefined;
 }

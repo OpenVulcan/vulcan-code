@@ -42,39 +42,6 @@
     overflow: hidden;
   }
 
-  /* Feature filters occupy their own bounded row instead of covering records and actions. */
-  /* 功能筛选占据独立且受限的一行，避免遮盖记录和操作。 */
-  .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) > .adaptive-tool-panel-slot {
-    position: relative;
-    inset: auto;
-    width: 100% !important;
-    height: auto !important;
-    max-height: 140px;
-    padding: 10px 12px 0;
-    overflow: auto;
-    transition: none;
-  }
-
-  .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) .adaptive-tool-panel-slot-inner {
-    width: 100%;
-    max-width: 100%;
-  }
-
-  .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) .workspace-tool-panel-menu {
-    width: 100%;
-    border-radius: var(--vcn-radius-lg);
-    background: var(--card);
-  }
-
-  .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) .workspace-tool-panel-menu-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .agent-catalog-toolbar-actions {
     flex-wrap: wrap;
     gap: 6px;

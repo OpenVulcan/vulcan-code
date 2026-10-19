@@ -46,19 +46,19 @@ describe("session tool panel header layout", () => {
     // markup must retain a single collapse control without reserving the Git settings row.
     // markup 必须保留唯一收起控件，不预留 Git 设置行。
     const markup = renderPanel(resources);
-    expect(markup).toContain("conversation-session-tool-panel-header-inline");
+    expect(markup).toMatch(/class="vk-stools-head" data-inline=""/);
     expect(markup.match(/aria-label="折叠会话工具"/g)).toHaveLength(1);
-    expect(markup).not.toContain("conversation-session-review-section");
+    expect(markup).not.toContain('data-kind="review"');
   });
 
   it("lets a single Git summary share its title row with the collapse control", () => {
     // markup retains Git layout when zero changes still constitutes a present repository, without an empty top row.
     // markup 在零变更仍代表仓库存在时保留 Git 布局，且不留空白顶部行。
     const markup = renderPanel({ reviewSummary, subagentNavigation });
-    expect(markup).toContain("conversation-session-tool-panel-header-inline");
-    expect(markup).not.toContain("conversation-session-review-manager-trigger");
+    expect(markup).toMatch(/class="vk-stools-head" data-inline=""/);
+    expect(markup).not.toContain("vk-stools-manage");
     expect(markup.match(/aria-label="折叠会话工具"/g)).toHaveLength(1);
-    expect(markup).toContain("conversation-session-review-section");
+    expect(markup).toContain('data-kind="review"');
     expect(markup).toContain("main");
   });
 
@@ -69,8 +69,8 @@ describe("session tool panel header layout", () => {
       repositoryKey: ".", repositoryName: "repo", relativePath: ".", isPrimary: true,
       summary: null, monitoringEnabled: false, loading: false, error: null,
     }] });
-    expect(markup).not.toContain("conversation-session-tool-panel-header-inline");
-    expect(markup).toContain("conversation-session-review-manager-trigger");
+    expect(markup).not.toMatch(/data-inline=""/);
+    expect(markup).toContain("vk-stools-manage");
   });
 
   it("renders no panel when every resource is absent", () => {

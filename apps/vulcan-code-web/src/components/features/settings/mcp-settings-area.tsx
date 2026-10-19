@@ -95,7 +95,7 @@ export function McpSettingsArea(props: {
   }, [props.servers, catalog, selectedId])
   React.useEffect(() => { setTab("overview"); setConfirmDelete(false); setActionError("") }, [selectedId])
   return <div className="mcp-workspace">
-    <aside className="panel mcp-directory">
+    <aside className="mcp-directory">
       <div className="settings-panel-title-row"><h3>{t("settings.mcp.servers")}</h3><Button size="sm" onClick={() => setCreating(true)}>{t("settings.mcp.add")}</Button></div>
       <Input aria-label={t("settings.mcp.searchMcp")} placeholder={t("settings.mcp.searchNameOrId")} value={search} onChange={e => setSearch(e.target.value)} />
       <div className="mcp-filter-row">
@@ -113,7 +113,7 @@ export function McpSettingsArea(props: {
       <Button disabled={refreshing} size="sm" variant="outline" onClick={() => setRefreshKey(key => key + 1)}>{refreshing ? t("settings.mcp.refreshing") : t("settings.mcp.refreshStatus")}</Button>
       {error && <p role="alert" className="mcp-error">{error}<br />{t("settings.mcp.previousSnapshotRetainedCurrent")}</p>}
     </aside>
-    <section className="panel mcp-detail">
+    <section className="mcp-detail">
       {selected ? <>
         <header className="settings-panel-title-row"><div><h3>{selected.name}</h3><small>{selected.id}</small></div>{selected.config && <div className="mcp-filter-row">
           <Button size="sm" variant="outline" onClick={() => setEditing(selected.config ?? null)}>{t("settings.mcp.edit")}</Button>

@@ -1,0 +1,375 @@
+/* Vulcan kit session tools: the panel at the top right of the conversation that tracks what this session
+ * changed and still runs (Git review per repository, persistent terminals, subagents, progress), plus the
+ * commit dialog, branch switcher and Git graph it opens. The panel rests as a compact pill and expands
+ * into a square card; when the stage is wide enough the conversation column shifts aside for it.
+ * Vulcan 套件会话工具：位于会话右上角的面板，跟踪本会话改动与仍在运行的内容（各仓库 Git 审查、持久终端、
+ * 子代理、进度），以及由它打开的提交弹窗、分支切换器与 Git 图谱。面板静置为紧凑胶囊，展开为方形卡片；
+ * 舞台足够宽时会话栏会为其让位。 */
+
+/* ---------- Adaptive slot ---------- */
+/* The slot floats over the conversation; inline mode only shifts the conversation by half the panel width
+ * (through --conversation-inline-offset, read by the transcript and composer), so the panel never reflows it. */
+/* 槽位浮在会话之上；并列模式只通过 --conversation-inline-offset 让会话平移半个面板宽度（由对话与输入区读取），
+ * 因此面板不会触发会话重排。 */
+.vk-tpanel {
+  --conversation-inline-offset: 0px;
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.vk-tpanel[data-side="right"][data-expanded][data-mode="inline"] { --conversation-inline-offset: var(--vk-tpanel-offset); }
+.vk-tpanel-content { position: relative; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.vk-tpanel-slot {
+  position: absolute;
+  top: calc(var(--vk-u) * 3.5);
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
+  transition:
+    right 220ms var(--vk-ease),
+    left 220ms var(--vk-ease),
+    width 320ms var(--vk-ease),
+    height 320ms var(--vk-ease);
+}
+.vk-tpanel[data-side="right"] > .vk-tpanel-slot { right: calc(var(--vk-u) * 3.5); justify-content: flex-end; }
+.vk-tpanel[data-side="left"] > .vk-tpanel-slot { left: calc(var(--vk-u) * 3.5); justify-content: flex-start; }
+/* While the surface morphs, the slot clips it so the size tween reads as one shape. */
+/* 表面形变期间槽位裁剪内容，使尺寸过渡呈现为同一形状。 */
+.vk-tpanel-slot:has([data-morph]) { overflow: hidden; }
+.vk-tpanel-inner { flex: none; width: max-content; max-width: calc(100vw - 40px); }
+.vk-tpanel[data-expanded] .vk-tpanel-inner { max-width: min(var(--vk-tpanel-w), calc(100vw - 40px)); }
+/* A floating context panel covers the right edge, so the forced overlay steps left of it. */
+/* 浮动上下文面板覆盖右缘，强制浮层因此移到其左侧。 */
+.vk-stage[data-floating-context] .vk-tpanel[data-forced] > .vk-tpanel-slot { right: calc(var(--vk-context-float-w) + 12px); }
+
+/* ---------- Surface: pill and card ---------- */
+.vk-stools {
+  border: var(--vk-bw) solid var(--vk-line);
+  background: color-mix(in srgb, var(--vk-raised) 90%, transparent);
+  backdrop-filter: blur(12px) saturate(1.1);
+  box-shadow: var(--vk-shadow-1);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
+}
+.vk-stools[data-morph] { animation: vk-stools-morph 320ms var(--vk-ease) both; }
+@keyframes vk-stools-morph {
+  from { opacity: 0.3; }
+  62% { opacity: 1; }
+  to { opacity: 1; }
+}
+
+/* The pill lists one row per live source; the expand mark slides in under the pointer. */
+/* 胶囊为每个活跃来源列出一行；展开标记在指针悬停时滑入。 */
+.vk-stools[data-collapsed] {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  width: fit-content;
+  max-width: min(260px, calc(100vw - 40px));
+  min-height: var(--vk-h-lg);
+  padding: calc(var(--vk-u) * 1.25) calc(var(--vk-u) * 2.5);
+  color: var(--vk-ink-2);
+  font: inherit;
+  font-size: var(--vk-fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--vk-t-fast) var(--vk-ease), padding-right var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-stools[data-collapsed]:hover,
+.vk-stools[data-collapsed]:focus-visible { padding-right: calc(var(--vk-u) * 7); border-color: var(--vk-line-strong); color: var(--vk-ink); }
+.vk-stools[data-collapsed]:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
+.vk-stools-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-height: 18px; white-space: nowrap; }
+.vk-stools-row > svg { flex: none; color: var(--vk-ink-3); }
+.vk-stools-row > b { font-weight: 500; color: var(--vk-ink); font-variant-numeric: tabular-nums; }
+.vk-stools-hint {
+  position: absolute;
+  top: 50%;
+  right: calc(var(--vk-u) * 2.5);
+  color: var(--vk-ink-3);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) scale(0.9);
+  transition: opacity var(--vk-t-fast) var(--vk-ease), transform var(--vk-t-fast) var(--vk-ease);
+}
+.vk-stools[data-collapsed]:is(:hover, :focus-visible) > .vk-stools-hint { opacity: 1; transform: translateY(-50%) scale(1); transition-delay: 45ms; }
+
+/* The card keeps its natural width up to the panel width and scrolls its sections below a fixed head. */
+/* 卡片在面板宽度内保持自然宽度，固定头部下方的分区可滚动。 */
+.vk-stools:not([data-collapsed]) {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  min-width: min(260px, calc(100vw - 40px));
+  max-width: min(var(--vk-tpanel-w, 320px), calc(100vw - 40px));
+  max-height: min(460px, calc(100dvh - 240px));
+  box-shadow: var(--vk-shadow-2);
+}
+.vk-stools-head { display: flex; flex: none; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 1) calc(var(--vk-u) * 2); }
+/* Without a repository manager the collapse control sits in the first section's title row. */
+/* 没有仓库管理器时，折叠控件位于首个分区的标题行。 */
+.vk-stools-head[data-inline] { position: absolute; top: calc(var(--vk-u) * 1.5); right: calc(var(--vk-u) * 1.5); z-index: 1; padding: 0; }
+.vk-stools-head[data-inline] + .vk-stools-scroll > .vk-stools-sec:first-child > .vk-stools-title { padding-right: calc(var(--vk-u) * 8); }
+.vk-stools-manage {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+  min-height: var(--vk-h-sm);
+  padding: 0 calc(var(--vk-u) * 1.5);
+  margin-left: calc(var(--vk-u) * -0.5);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-3);
+  font: inherit;
+  font-size: var(--vk-fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.vk-stools-manage:hover,
+.vk-stools-manage:focus-visible { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-stools-manage:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-stools-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; white-space: nowrap; }
+
+/* ---------- Sections ---------- */
+.vk-stools-sec { display: grid; gap: 2px; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2) calc(var(--vk-u) * 2); }
+.vk-stools-sec + .vk-stools-sec { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+/* Repository groups read as one block: no divider between them. */
+/* 各仓库分组视为同一区块：彼此之间不画分隔线。 */
+.vk-stools-sec[data-kind="review"] + .vk-stools-sec[data-kind="review"] { border-top: 0; padding-top: 0; }
+.vk-stools-title {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+  width: 100%;
+  min-height: var(--vk-h-sm);
+  padding: 0 calc(var(--vk-u) * 1);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-3);
+  font: inherit;
+  font-size: var(--vk-fs-sm);
+  font-weight: 600;
+  text-align: left;
+  user-select: none;
+}
+.vk-stools-title > svg { flex: none; }
+.vk-stools-title > b { font-weight: 500; font-variant-numeric: tabular-nums; }
+button.vk-stools-title { cursor: pointer; transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease); }
+button.vk-stools-title:hover,
+button.vk-stools-title:focus-visible { background: var(--vk-hover); color: var(--vk-ink); }
+button.vk-stools-title:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-stools-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-stools-chev { opacity: 0.7; transition: transform var(--vk-t-med) var(--vk-ease); }
+.vk-stools-title[aria-expanded="true"] > .vk-stools-chev { transform: rotate(90deg); }
+.vk-stools-status { display: inline-flex; flex: none; align-items: center; gap: calc(var(--vk-u) * 1.5); margin-left: auto; font-weight: 400; }
+.vk-stools-status:empty { display: none; }
+.vk-stools-error { display: inline-grid; place-items: center; width: 14px; height: 14px; background: color-mix(in srgb, var(--vk-bad) 14%, transparent); color: var(--vk-bad); font-size: var(--vk-fs-2xs); font-weight: 700; }
+.vk-stools-note { margin: calc(var(--vk-u) * 1) calc(var(--vk-u) * 1); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
+.vk-stools-note[data-tone] { color: var(--vk-tone); }
+
+/* ---------- Rows ---------- */
+.vk-stools-list { display: grid; gap: 1px; }
+.vk-stools-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  width: 100%;
+  min-width: 0;
+  min-height: var(--vk-h-sm);
+  padding: 0 calc(var(--vk-u) * 1);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink);
+  font: inherit;
+  font-size: var(--vk-fs-sm);
+  text-align: left;
+}
+button.vk-stools-item { cursor: pointer; transition: background-color var(--vk-t-fast) var(--vk-ease); }
+button.vk-stools-item:hover:not(:disabled) { background: var(--vk-hover); }
+button.vk-stools-item:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+button.vk-stools-item:disabled { cursor: not-allowed; opacity: 0.5; }
+.vk-stools-item[aria-expanded="true"] { background: var(--vk-sunken); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-stools-item > svg { flex: none; color: var(--vk-ink-3); }
+.vk-stools-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-stools-item > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 600; white-space: nowrap; }
+.vk-stools-item > small[data-tone] { color: var(--vk-tone); }
+.vk-stools-delta { display: inline-flex; flex: none; gap: calc(var(--vk-u) * 1.5); font-size: var(--vk-fs-xs); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Terminal rows: the name carries the state colour and the details live in a tooltip; screen and stop sit at the end. */
+/* 终端行：名称带状态色，细节放入提示；查看屏幕与停止位于末端。 */
+.vk-stools-item[data-row="terminal"] { grid-template-columns: minmax(0, 1fr) auto auto; gap: calc(var(--vk-u) * 0.5); padding-right: 0; }
+.vk-stools-term { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; height: 100%; overflow: hidden; outline: none; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); }
+.vk-stools-term > span { min-width: 0; overflow: hidden; white-space: nowrap; }
+.vk-stools-term:focus-visible { box-shadow: inset 0 -1px 0 var(--vk-signal); }
+.vk-stools-item .vk-btn[data-action="stop"]:hover:not(:disabled) { color: var(--vk-bad); }
+/* A live terminal's mark breathes; settled ones hold their tone. */
+/* 运行中的终端标记缓慢呼吸；已结束的保持其色调。 */
+.vk-term-mark { flex: none; color: var(--vk-tone, var(--vk-ink-3)); }
+.vk-term-mark[data-state="running"] { animation: vk-pulse 2s var(--vk-ease) infinite; }
+.vk-term-mark:is([data-state="lost"], [data-state="unknown"]) { opacity: 0.7; }
+
+/* Subagent rows: a running agent's mark takes one of the chart hues, stable per task. */
+/* 子代理行：运行中的代理标记取一种图表色，按任务稳定。 */
+.vk-stools-item[data-accent="1"] { --vk-stools-accent: var(--vk-chart-1); }
+.vk-stools-item[data-accent="2"] { --vk-stools-accent: var(--vk-chart-2); }
+.vk-stools-item[data-accent="3"] { --vk-stools-accent: var(--vk-chart-3); }
+.vk-stools-item[data-accent="4"] { --vk-stools-accent: var(--vk-chart-4); }
+.vk-stools-item[data-accent="5"] { --vk-stools-accent: var(--vk-chart-5); }
+.vk-stools-item[data-accent] > svg { color: var(--vk-stools-accent); animation: vk-pulse 2s var(--vk-ease) infinite; }
+
+.vk-tooltip.vk-stools-tip { max-width: min(560px, calc(100vw - 48px)); }
+.vk-stools-tip > pre { margin: 0; font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Progress steps: a square mark per step, filled once done, ember-edged while active. */
+/* 进度步骤：每步一个方形标记，完成后填充，进行中带余烬色边框。 */
+.vk-stools-steps { display: grid; gap: 2px; margin: 0; padding: 0 calc(var(--vk-u) * 1); list-style: none; white-space: normal; }
+.vk-stools-steps > li { display: grid; grid-template-columns: 0.95rem minmax(0, 1fr); align-items: start; gap: calc(var(--vk-u) * 2); min-height: 20px; color: var(--vk-ink-2); line-height: 1.4; overflow-wrap: anywhere; }
+.vk-stools-steps > li > i { display: grid; place-items: center; width: 0.85rem; height: 0.85rem; margin-top: 2px; border: var(--vk-bw) solid var(--vk-line-strong); }
+.vk-stools-steps > li > i > svg { width: 0.6rem; height: 0.6rem; }
+.vk-stools-steps > li[data-state="done"] { color: var(--vk-ink-3); text-decoration: line-through; text-decoration-color: var(--vk-line-strong); }
+.vk-stools-steps > li[data-state="done"] > i { border-color: var(--vk-ok); background: var(--vk-ok); color: var(--vk-ink-inverse); }
+.vk-stools-steps > li[data-state="active"] { color: var(--vk-ink); }
+.vk-stools-steps > li[data-state="active"] > i { border-color: var(--vk-ember); color: var(--vk-ember); }
+
+/* ---------- Repository manager dialog ---------- */
+.vk-repo-list { display: grid; }
+.vk-repo-row { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5); border: var(--vk-bw) solid var(--vk-line); }
+.vk-repo-row + .vk-repo-row { margin-top: -1px; }
+.vk-repo-row > label { display: flex; align-items: center; gap: calc(var(--vk-u) * 2.5); min-width: 0; cursor: pointer; }
+.vk-repo-row > label > span { display: grid; gap: 1px; min-width: 0; }
+.vk-repo-row strong,
+.vk-repo-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-repo-row strong { font-size: var(--vk-fs-sm); font-weight: 500; }
+.vk-repo-row small { color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs); }
+.vk-repo-row > div { display: inline-flex; flex: none; gap: 2px; }
+
+/* ---------- Commit dialog ---------- */
+/* Target branch and the included delta on top, the message in the middle, and the three actions as a list
+ * whose keyboard-locked row carries the ember bar and the Ctrl+Enter hint. */
+/* 顶部为目标分支与纳入的增减，中间为提交信息，三个动作呈列表，键盘锁定的行带余烬竖条与 Ctrl+Enter 提示。 */
+.vk-dialog.vk-commit { width: min(420px, calc(100vw - 40px)); max-width: min(420px, calc(100vw - 40px)); }
+.vk-commit-panel { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 3); min-height: 270px; padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 4.5) calc(var(--vk-u) * 3.5); }
+.vk-commit-head { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 3); padding-right: calc(var(--vk-u) * 8); }
+.vk-commit-target { position: relative; min-width: 0; }
+.vk-commit-target > .vk-branch-btn { max-width: 15rem; }
+.vk-commit-target > .vk-branch-btn > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-commit-target > .vk-branch-btn[aria-expanded="true"] { border-color: var(--vk-line-strong); color: var(--vk-ink); }
+.vk-pop.vk-commit-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 2; width: 14rem; }
+.vk-commit-head > strong { flex: none; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); font-weight: 500; }
+.vk-commit-panel > .vk-textarea { min-height: 4.5rem; resize: vertical; }
+.vk-commit-panel > .vk-check-label { font-size: var(--vk-fs-sm); }
+.vk-commit-panel > .vk-check-label[data-disabled] { color: var(--vk-ink-3); cursor: not-allowed; }
+.vk-commit-acts { display: grid; gap: 1px; margin-top: auto; }
+.vk-commit-act {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2.5);
+  min-height: var(--vk-h-lg);
+  padding: 0 calc(var(--vk-u) * 2.5);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink);
+  font: inherit;
+  font-size: var(--vk-fs-md);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.vk-commit-act > svg { color: var(--vk-ink-3); }
+.vk-commit-act:hover:not(:disabled) { background: var(--vk-hover); }
+.vk-commit-act[aria-pressed="true"]:not(:disabled) { background: var(--vk-sunken); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-commit-act[aria-pressed="true"]:not(:disabled) > svg { color: var(--vk-ember); }
+.vk-commit-act:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-commit-act:disabled { color: var(--vk-ink-3); opacity: 0.6; cursor: not-allowed; }
+
+/* ---------- Branch switcher ---------- */
+.vk-pop.vk-branch-pop { display: flex; flex-direction: column; width: 17rem; padding: calc(var(--vk-u) * 1); }
+.vk-branch-pop > .vk-menu { max-height: min(320px, 50vh); }
+.vk-branch-pop > .vk-menu + .vk-menu { padding-top: calc(var(--vk-u) * 1); border-top: var(--vk-bw) solid var(--vk-line); }
+.vk-branch-pop .vk-menu-item { cursor: pointer; }
+.vk-branch-pop .vk-menu-item:hover:not(:disabled) { background: var(--vk-hover); }
+.vk-branch-pop .vk-menu-item:disabled { opacity: 0.5; cursor: default; }
+.vk-branch-pop .vk-menu-item[aria-selected="true"] { box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-branch-pop .vk-menu-item[aria-selected="true"] .vk-menu-label > span:first-child { font-weight: 600; }
+.vk-branch-pop .vk-menu-label > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- Git graph ---------- */
+/* Commit rows with a lane graph drawn per row; lanes take the chart hues and the head node a ring. */
+/* 每行绘制泳道图的提交列表；泳道取图表色，HEAD 节点带描边环。 */
+.vk-graph {
+  --vk-graph-lane-0: var(--vk-chart-1);
+  --vk-graph-lane-1: var(--vk-chart-2);
+  --vk-graph-lane-2: var(--vk-chart-3);
+  --vk-graph-lane-3: var(--vk-chart-4);
+  --vk-graph-lane-4: var(--vk-chart-5);
+  --vk-graph-lane-5: var(--vk-ink-3);
+  display: flex;
+  flex-direction: column;
+  height: min(720px, calc(100dvh - 2rem));
+  overflow: hidden;
+}
+.vk-graph-head { display: flex; flex: none; align-items: flex-start; justify-content: space-between; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 4); }
+.vk-graph-head > div:first-child { display: grid; gap: calc(var(--vk-u) * 1); }
+.vk-graph-head > div:last-child { display: flex; gap: 2px; }
+.vk-graph-table { display: flex; flex: 1; flex-direction: column; min-height: 0; border-top: var(--vk-bw) solid var(--vk-line); }
+.vk-graph-body { flex: 1; min-height: 0; overflow-y: auto; }
+.vk-graph-row {
+  display: grid;
+  grid-template-columns: var(--vk-graph-w) minmax(0, 1fr) 92px 120px 76px;
+  align-items: center;
+  column-gap: calc(var(--vk-u) * 3);
+  width: 100%;
+  min-width: 0;
+  height: var(--vk-graph-row-h);
+  padding: 0 calc(var(--vk-u) * 4) 0 calc(var(--vk-u) * 2.5);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink);
+  font: inherit;
+  font-size: var(--vk-fs-md);
+  text-align: left;
+}
+.vk-graph-row[data-head] { height: var(--vk-h-lg); border-bottom: var(--vk-bw) solid var(--vk-line); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.vk-graph-body > .vk-graph-row { cursor: pointer; }
+.vk-graph-body > .vk-graph-row:hover { background: var(--vk-hover); }
+.vk-graph-body > .vk-graph-row[aria-pressed="true"] { background: var(--vk-sunken); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-graph-body > .vk-graph-row:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-graph-cell { display: block; overflow: hidden; }
+.vk-graph-cell path { fill: none; stroke-width: 1.6; }
+.vk-graph-cell circle { stroke: var(--vk-raised); stroke-width: 1.5; }
+.vk-graph-cell circle[data-head] { stroke: var(--vk-ink); }
+.vk-graph-cell [data-lane="0"] { stroke: var(--vk-graph-lane-0); }
+.vk-graph-cell [data-lane="1"] { stroke: var(--vk-graph-lane-1); }
+.vk-graph-cell [data-lane="2"] { stroke: var(--vk-graph-lane-2); }
+.vk-graph-cell [data-lane="3"] { stroke: var(--vk-graph-lane-3); }
+.vk-graph-cell [data-lane="4"] { stroke: var(--vk-graph-lane-4); }
+.vk-graph-cell [data-lane="5"] { stroke: var(--vk-graph-lane-5); }
+.vk-graph-cell circle[data-lane="0"] { fill: var(--vk-graph-lane-0); }
+.vk-graph-cell circle[data-lane="1"] { fill: var(--vk-graph-lane-1); }
+.vk-graph-cell circle[data-lane="2"] { fill: var(--vk-graph-lane-2); }
+.vk-graph-cell circle[data-lane="3"] { fill: var(--vk-graph-lane-3); }
+.vk-graph-cell circle[data-lane="4"] { fill: var(--vk-graph-lane-4); }
+.vk-graph-cell circle[data-lane="5"] { fill: var(--vk-graph-lane-5); }
+.vk-graph-desc { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
+.vk-graph-desc > .vk-badge { flex: none; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-graph-desc > .vk-badge > strong { margin-right: 4px; font-size: var(--vk-fs-2xs); }
+.vk-graph-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-graph-muted { overflow: hidden; color: var(--vk-ink-3); text-overflow: ellipsis; white-space: nowrap; }
+.vk-graph-hash { color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); }
+.vk-graph-note { display: flex; align-items: center; justify-content: center; gap: calc(var(--vk-u) * 1.5); margin: 0; padding: calc(var(--vk-u) * 3); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); overflow-wrap: anywhere; }
+.vk-graph-note[data-tone] { color: var(--vk-tone); }
+.vk-graph-detail { display: grid; flex: none; grid-template-columns: max-content minmax(0, 1fr); gap: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 4); max-height: 38%; margin: 0; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4) calc(var(--vk-u) * 3.5); overflow-y: auto; border-top: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); font-size: var(--vk-fs-md); }
+.vk-graph-detail dt { color: var(--vk-ink-3); }
+.vk-graph-detail dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.vk-graph-detail pre { margin: calc(var(--vk-u) * 1.5) 0 0; color: var(--vk-ink-2); font-family: inherit; white-space: pre-wrap; }
+.vk-graph-parents { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); }
+.vk-graph-parents > button { padding: 0; border: 0; background: transparent; color: var(--vk-signal); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); cursor: pointer; }
+.vk-graph-parents > button:hover { text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 640px) {
+  .vk-graph-row { grid-template-columns: var(--vk-graph-w) minmax(0, 1fr) 84px 64px; }
+  .vk-graph-row > :nth-child(4) { display: none; }
+}

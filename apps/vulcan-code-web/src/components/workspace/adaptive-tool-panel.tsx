@@ -1,5 +1,4 @@
 import * as React from "react";
-import { cn } from "@/lib/utils";
 
 // AdaptiveToolPanelSide describes which edge owns the adaptive panel.
 // AdaptiveToolPanelSide 描述自适应面板归属的边缘。
@@ -29,15 +28,6 @@ export interface AdaptiveToolPanelProps {
   // Additional padding inserted between an inline panel and content.
   // 内联面板与内容之间插入的额外间距。
   inlineGap?: number;
-  // Additional root class name.
-  // 附加根节点类名。
-  className?: string;
-  // Additional content shell class name.
-  // 附加内容外壳类名。
-  contentShellClassName?: string;
-  // Additional content class name.
-  // 附加内容类名。
-  contentClassName?: string;
   // Panel content rendered when expanded or collapsed.
   // 展开或折叠时渲染的面板内容。
   panel: React.ReactNode;
@@ -140,36 +130,30 @@ export function AdaptiveToolPanel(props: AdaptiveToolPanelProps) {
 
   return (
     <section
-      className={cn(
-        "adaptive-tool-panel",
-        props.side === "right" ? "side-right" : "side-left",
-        props.expanded ? "is-expanded" : "is-collapsed",
-        panelReservesContent ? "is-inline" : "is-overlay",
-        props.forceOverlay && "is-forced-overlay",
-        props.className,
-      )}
+      className="vk-tpanel"
+      data-expanded={props.expanded ? "" : undefined}
+      data-forced={props.forceOverlay ? "" : undefined}
+      data-mode={panelReservesContent ? "inline" : "overlay"}
+      data-side={props.side}
       ref={rootRef}
       style={{
-        "--adaptive-tool-panel-inline-offset": `${inlineOffset}px`,
-        "--adaptive-tool-panel-inline-gap": `${inlineGap}px`,
-        "--adaptive-tool-panel-width": `${panelWidth}px`,
+        "--vk-tpanel-offset": `${inlineOffset}px`,
+        "--vk-tpanel-w": `${panelWidth}px`,
       } as React.CSSProperties}
     >
       <div
-        className="adaptive-tool-panel-slot"
+        className="vk-tpanel-slot"
         style={panelSize ? {
           height: `${panelSize.height}px`,
           width: `${panelSize.width}px`,
         } : undefined}
       >
-        <div className="adaptive-tool-panel-slot-inner" ref={panelMeasureRef}>
+        <div className="vk-tpanel-inner" ref={panelMeasureRef}>
           {props.panel}
         </div>
       </div>
-      <div className={cn("adaptive-tool-panel-content-shell", props.contentShellClassName)}>
-        <div className={cn("adaptive-tool-panel-content", props.contentClassName)}>
-          {props.children}
-        </div>
+      <div className="vk-tpanel-content">
+        {props.children}
       </div>
     </section>
   );

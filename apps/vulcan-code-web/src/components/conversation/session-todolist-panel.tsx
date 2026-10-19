@@ -1,15 +1,12 @@
 import React from "react";
-import "@/styles/session-review-repositories.css";
 import {
   ArrowDown,
   ArrowUp,
   Bot,
   Boxes,
   Check,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Circle,
   ClipboardList,
   CloudUpload,
   FileDiff,
@@ -18,12 +15,13 @@ import {
   LoaderCircle,
   Maximize2,
   Minimize2,
+  Plus,
   Settings2,
   TerminalSquare,
 } from "lucide-react";
 import {
   terminalSessionViewModel,
-  terminalStateClass,
+  terminalStateTone,
 } from "@/components/conversation/conversation-terminal-model";
 import {
   ConversationSessionBranchMenu,
@@ -38,15 +36,19 @@ import {
   runGitCommitAction,
   type GitCommitActionResponse,
 } from "@/service/conversation-actions-service";
+import { IconButton } from "@/ui-kit/primitives/button";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from "@/ui-kit/primitives/dialog";
+import { Input } from "@/ui-kit/primitives/input";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type { CommandSessionSummary, SessionTodolistItemSummary, SessionTodolistSummary, WorkbenchSnapshot } from "@/types";
 
 // Conversation session tool morph animation duration in milliseconds.
@@ -405,14 +407,6 @@ export function ConversationSessionTodolistPanel(props: {
   // showReviewRepositoryManager 让已关闭仓库仍可从设置进入，同时不把它们渲染为面板节点。
   const showReviewRepositoryManager = orderedReviewRepositories.length > 1
     || (orderedReviewRepositories.length > 0 && visibleReviewRepositories.length === 0);
-  // collapsedRowCount controls compact panel height for multi-source summaries.
-  // collapsedRowCount 控制多来源摘要下的紧凑面板高度。
-  const collapsedRowCount = [
-    props.reviewRepositories?.length || props.reviewSummary,
-    props.todolist,
-    hasTerminalSessions,
-    hasSubagentTasks,
-  ].filter(Boolean).length;
   // renderExpanded follows the requested target state while transitionPhase keeps a short animation marker.
   // renderExpanded 跟随请求的目标状态，transitionPhase 则短暂保留动画标记。
   const [renderExpanded, setRenderExpanded] = React.useState(props.expanded);
@@ -458,9 +452,9 @@ export function ConversationSessionTodolistPanel(props: {
     finishTransitionLater();
   }, [finishTransitionLater, props]);
 
-  const transitionClassName = transitionPhase
-    ? `conversation-session-tool-transitioning is-${transitionPhase}`
-    : null;
+  // morph marks the surface while it plays the short expand or collapse fade.
+  // morph 在表面播放短暂的展开或折叠淡入时进行标记。
+  const morph = transitionPhase ?? undefined;
 
   if (!hasReviewSummary && !hasTodolist && !hasTerminalSessions && !hasSubagentTasks) {
     return null;
@@ -470,69 +464,63 @@ export function ConversationSessionTodolistPanel(props: {
     return (
       <button
         aria-label={t("sessionTools.expand")}
-        className={cn(
-          "workspace-tool-panel-menu-collapsed conversation-session-todolist-collapsed conversation-session-tool-collapsed conversation-session-tool-surface",
-          collapsedRowCount > 1 && "has-multiple-rows",
-          transitionClassName,
-        )}
+        className="vk-stools"
+        data-collapsed=""
+        data-morph={morph}
         onClick={() => requestExpandedChange(true)}
         title={t("sessionTools.expand")}
         type="button"
       >
         {props.reviewSummary ? (
-          <span className="conversation-session-tool-collapsed-row">
-            <FileDiff size={15} />
+          <span className="vk-stools-row">
+            <FileDiff size={14} />
             <span>{t("sessionTools.changes")}</span>
             {conversationSessionReviewDelta(props.reviewSummary)}
           </span>
         ) : null}
         {!props.reviewSummary && props.reviewRepositories?.length ? (
-          <span className="conversation-session-tool-collapsed-row">
-            <GitBranch size={15} />
+          <span className="vk-stools-row">
+            <GitBranch size={14} />
             <span>{t("gitCommitDialog.monitoringManager")}</span>
-            <strong>{visibleReviewRepositories.length}</strong>
+            <b>{visibleReviewRepositories.length}</b>
           </span>
         ) : null}
         {props.todolist ? (
-          <span className="conversation-session-tool-collapsed-row">
-            <ClipboardList size={15} />
+          <span className="vk-stools-row">
+            <ClipboardList size={14} />
             <span>{t("sessionTools.progress")}</span>
-            <strong>{props.todolist.completedCount}/{props.todolist.totalCount}</strong>
+            <b>{props.todolist.completedCount}/{props.todolist.totalCount}</b>
           </span>
         ) : null}
         {hasTerminalSessions ? (
-          <span className="conversation-session-tool-collapsed-row">
-            <TerminalSquare className={cn("terminal-session-icon", terminalStateClass(terminalSessions[0].state))} size={15} />
+          <span className="vk-stools-row">
+            <TerminalSquare
+              className="vk-term-mark"
+              data-state={terminalSessions[0].state}
+              data-tone={terminalStateTone(terminalSessions[0].state)}
+              size={14}
+            />
             <span>{t("sessionTools.terminal")}</span>
-            <strong>{terminalSessions.length}</strong>
+            <b>{terminalSessions.length}</b>
           </span>
         ) : null}
         {hasSubagentTasks ? (
-          <span className="conversation-session-tool-collapsed-row">
-            <Bot size={15} />
+          <span className="vk-stools-row">
+            <Bot size={14} />
             <span>{t("conversation.subagent.schedule")}</span>
-            <strong>{subagentTasks.length}</strong>
+            <b>{subagentTasks.length}</b>
           </span>
         ) : null}
-        <Maximize2 className="conversation-session-tool-expand-hint" size={12} />
+        <Maximize2 className="vk-stools-hint" size={12} />
       </button>
     );
   }
 
   return (
-    <aside
-      className={cn(
-        "workspace-tool-panel-menu conversation-session-todolist-menu conversation-session-tool-surface",
-        transitionClassName,
-      )}
-      aria-label={t("sessionTools.menu")}
-    >
+    <aside className="vk-stools" data-morph={morph} aria-label={t("sessionTools.menu")}>
       {/* Only the repository manager earns its own top row; otherwise the collapse control shares the first title row. */}
       {/* 仅仓库管理器占用独立顶部行；否则折叠控件与首个标题共用一行。 */}
-      <div className={cn(
-        "conversation-session-tool-panel-header",
-        !showReviewRepositoryManager && "conversation-session-tool-panel-header-inline",
-      )}>
+      <div className="vk-stools-head" data-inline={showReviewRepositoryManager ? undefined : ""}>
         {showReviewRepositoryManager ? (
           <ConversationSessionReviewMonitoringManager
             repositories={orderedReviewRepositories}
@@ -543,16 +531,16 @@ export function ConversationSessionTodolistPanel(props: {
             onToggleMonitoring={toggleReviewMonitoring}
           />
         ) : null}
-        <button
+        <IconButton
           aria-label={t("sessionTools.collapse")}
-          className="workspace-tool-panel-menu-icon-button"
           onClick={() => requestExpandedChange(false)}
+          size="xs"
           title={t("sessionTools.collapse")}
-          type="button"
         >
           <Minimize2 size={13} />
-        </button>
+        </IconButton>
       </div>
+      <div className="vk-stools-scroll">
       {visibleReviewRepositories.map((repository) => (
         <ConversationSessionReviewSection
           key={repository.repositoryKey}
@@ -607,6 +595,7 @@ export function ConversationSessionTodolistPanel(props: {
           onOpenSubagentPanel={props.onOpenSubagentPanel}
         />
       ) : null}
+      </div>
     </aside>
   );
 }
@@ -633,7 +622,7 @@ function ConversationSessionReviewMonitoringManager(props: {
     <>
       <button
         aria-label={t("gitCommitDialog.monitoringManager")}
-        className="conversation-session-review-manager-trigger"
+        className="vk-stools-manage"
         onClick={() => setOpen(true)}
         title={t("gitCommitDialog.monitoringManager")}
         type="button"
@@ -642,20 +631,21 @@ function ConversationSessionReviewMonitoringManager(props: {
         <span>{t("gitCommitDialog.monitoringManager")}</span>
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="conversation-session-review-manager-dialog">
-          <DialogTitle>{t("gitCommitDialog.monitoringManager")}</DialogTitle>
-          <DialogDescription>{t("gitCommitDialog.monitoringManagerDescription")}</DialogDescription>
-          <div className="conversation-session-review-manager-list">
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>{t("gitCommitDialog.monitoringManager")}</DialogTitle>
+            <DialogDescription>{t("gitCommitDialog.monitoringManagerDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="vk-repo-list">
             {props.repositories.map((repository, index) => {
               const pending = props.pendingRepositoryKeys.has(repository.repositoryKey);
               return (
-                <div className="conversation-session-review-manager-row" key={repository.repositoryKey}>
-                  <label className="conversation-session-review-manager-check">
-                    <input
+                <div className="vk-repo-row" data-repository-key={repository.repositoryKey} key={repository.repositoryKey}>
+                  <label>
+                    <Checkbox
                       checked={repository.monitoringEnabled}
                       disabled={pending}
-                      onChange={(event) => void props.onToggleMonitoring(repository.repositoryKey, event.target.checked)}
-                      type="checkbox"
+                      onCheckedChange={(checked) => void props.onToggleMonitoring(repository.repositoryKey, checked === true)}
                     />
                     <span>
                       <strong>{repository.repositoryName}</strong>
@@ -664,27 +654,25 @@ function ConversationSessionReviewMonitoringManager(props: {
                       ) : null}
                     </span>
                   </label>
-                  <div className="conversation-session-review-manager-order">
-                    <button
+                  <div>
+                    <IconButton
                       aria-label={t("gitCommitDialog.moveRepositoryUp")}
-                      className="workspace-tool-panel-menu-icon-button"
                       disabled={index === 0}
                       onClick={() => props.onMoveRepository(repository.repositoryKey, -1)}
+                      size="xs"
                       title={t("gitCommitDialog.moveRepositoryUp")}
-                      type="button"
                     >
                       <ArrowUp size={13} />
-                    </button>
-                    <button
+                    </IconButton>
+                    <IconButton
                       aria-label={t("gitCommitDialog.moveRepositoryDown")}
-                      className="workspace-tool-panel-menu-icon-button"
                       disabled={index === props.repositories.length - 1}
                       onClick={() => props.onMoveRepository(repository.repositoryKey, 1)}
+                      size="xs"
                       title={t("gitCommitDialog.moveRepositoryDown")}
-                      type="button"
                     >
                       <ArrowDown size={13} />
-                    </button>
+                    </IconButton>
                   </div>
                 </div>
               );
@@ -764,18 +752,20 @@ function ConversationSessionReviewSection(props: {
   // 折叠的分组仍在标题行显示刷新与 Git 动作进度。
   const titleBusy = props.loading || (!reviewSectionExpanded && Boolean(props.commitBusyState));
   const titleStatus = (
-    <span className="conversation-session-review-title-status">
+    <span className="vk-stools-status">
       {titleBusy ? (
-        <LoaderCircle aria-label={props.commitBusyState?.label ?? t("gitCommitDialog.running")} className="spin" size={13} />
+        <LoaderCircle aria-label={props.commitBusyState?.label ?? t("gitCommitDialog.running")} className="vk-spin" size={13} />
       ) : null}
-      {props.error ? <span aria-label={props.error} className="conversation-session-review-error" title={props.error}>!</span> : null}
+      {props.error ? <span aria-label={props.error} className="vk-stools-error" title={props.error}>!</span> : null}
       {!reviewSectionExpanded && props.reviewSummary !== null ? conversationSessionReviewDelta(props.reviewSummary) : null}
     </span>
   );
 
   return (
     <section
-      className={cn("conversation-session-tool-section conversation-session-review-section", foldable && "is-foldable")}
+      className="vk-stools-sec"
+      data-foldable={foldable ? "" : undefined}
+      data-kind="review"
       data-repository-key={props.repositoryKey}
     >
       {foldable ? (
@@ -783,38 +773,38 @@ function ConversationSessionReviewSection(props: {
         // 整个标题行负责折叠分组，名称、箭头与增减数共享同一悬停与点击区域。
         <button
           aria-expanded={reviewSectionExpanded}
-          className="conversation-session-tool-section-title with-action conversation-session-review-group-toggle"
+          className="vk-stools-title"
+          data-action="fold"
           onClick={() => props.onExpandedChange?.(!reviewSectionExpanded)}
           title={repositoryTitle}
           type="button"
         >
-          <span className="conversation-session-review-group-heading">
-            <span className="conversation-session-review-group-name">{repositoryName}</span>
-            <ChevronRight className="conversation-session-review-group-chevron" size={13} />
-          </span>
+          <span className="vk-stools-name">{repositoryName}</span>
+          <ChevronRight className="vk-stools-chev" size={13} />
           {titleStatus}
         </button>
       ) : (
-        <div className="conversation-session-tool-section-title with-action">
-          <span className="conversation-session-review-group-name" title={repositoryTitle}>{repositoryName}</span>
+        <div className="vk-stools-title">
+          <span className="vk-stools-name" title={repositoryTitle}>{repositoryName}</span>
           {titleStatus}
         </div>
       )}
-      {reviewSectionExpanded && props.error ? <p className="session-review-repository-diagnostic" role="alert">{props.error}</p> : null}
-      {reviewSectionExpanded && props.error ? <button className="workspace-tool-panel-menu-row conversation-session-review-row"
+      {reviewSectionExpanded && props.error ? <p className="vk-stools-note" data-tone="bad" role="alert">{props.error}</p> : null}
+      {reviewSectionExpanded && props.error ? <button className="vk-stools-item" data-row="changes"
         disabled={props.loading} onClick={props.onOpenReviewChanges} type="button">
-        <FileDiff size={15} /><span>{t("gitRepository.retryReview")}</span>
+        <FileDiff size={14} /><span>{t("gitRepository.retryReview")}</span>
       </button> : null}
-      {reviewSectionExpanded && props.reviewSummary === null ? <p className="session-review-repository-notice">{t(props.loading ? "gitRepository.loading" : "gitRepository.unavailable")}</p> : null}
+      {reviewSectionExpanded && props.reviewSummary === null ? <p className="vk-stools-note">{t(props.loading ? "gitRepository.loading" : "gitRepository.unavailable")}</p> : null}
       {reviewSectionExpanded && props.reviewSummary !== null ? (
-        <div className="workspace-tool-panel-menu-list conversation-session-review-list">
+        <div className="vk-stools-list">
           <button
-            className="workspace-tool-panel-menu-row conversation-session-review-row"
+            className="vk-stools-item"
+            data-row="changes"
             disabled={props.loading || Boolean(props.error)}
             onClick={props.onOpenReviewChanges}
             type="button"
           >
-            <FileDiff size={15} />
+            <FileDiff size={14} />
             <span>{t("gitCommitDialog.changes")}</span>
             {conversationSessionReviewDelta(props.reviewSummary)}
           </button>
@@ -829,17 +819,15 @@ function ConversationSessionReviewSection(props: {
           ) : null}
           <button
             aria-expanded={props.commitDialogOpen}
-            className={cn(
-              "workspace-tool-panel-menu-row conversation-session-review-row conversation-session-commit-trigger",
-              props.commitDialogOpen && "active",
-            )}
+            className="vk-stools-item"
+            data-row="commit"
             disabled={commitTriggerDisabled}
             onClick={() => props.onCommitDialogOpenChange(true)}
             type="button"
           >
-            <GitCommitHorizontal size={15} />
+            <GitCommitHorizontal size={14} />
             <span>{props.commitBusyState?.label ?? t("gitCommitDialog.open")}</span>
-            {props.commitBusyState ? <LoaderCircle className="spin" size={14} /> : null}
+            {props.commitBusyState ? <LoaderCircle className="vk-spin" size={13} /> : null}
           </button>
         </div>
       ) : null}
@@ -887,9 +875,9 @@ export function ConversationSessionCommitDialog(props: {
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="conversation-session-commit-dialog">
-        <DialogTitle className="sr-only">{t("gitCommitDialog.title")}</DialogTitle>
-        <DialogDescription className="sr-only">
+      <DialogContent className="vk-commit" layout="document">
+        <DialogTitle className="vk-sr-only">{t("gitCommitDialog.title")}</DialogTitle>
+        <DialogDescription className="vk-sr-only">
           {t("gitCommitDialog.description")}
         </DialogDescription>
         <ConversationSessionCommitPanel
@@ -1182,24 +1170,24 @@ function ConversationSessionCommitPanel(props: {
   }, [executeLockedCommitAction, moveLockedCommitAction]);
 
   return (
-    <div className="conversation-session-commit-panel" onKeyDown={handleCommitPanelKeyDown}>
-      <div className="conversation-session-commit-header">
-        <div className="conversation-session-commit-target">
+    <div className="vk-commit-panel" onKeyDown={handleCommitPanelKeyDown}>
+      <div className="vk-commit-head">
+        <div className="vk-commit-target">
           <button
             aria-expanded={branchMenuOpen}
-            className="conversation-session-commit-target-button"
+            className="vk-branch-btn"
             onClick={() => setBranchMenuOpen((current) => !current)}
             type="button"
           >
-            <GitBranch size={14} />
+            <GitBranch size={13} />
             <span>{effectiveTargetLabel}</span>
-            <ChevronDown size={13} />
+            <ChevronDown size={12} />
           </button>
           {branchMenuOpen ? (
-            <div className="conversation-session-commit-branch-menu">
-              <span className="conversation-session-commit-branch-menu-title">{t("gitCommitDialog.commitTo")}</span>
+            <div className="vk-pop vk-commit-menu vk-menu" role="menu">
+              <p className="vk-menu-note">{t("gitCommitDialog.commitTo")}</p>
               <button
-                className="conversation-session-commit-branch-option"
+                className="vk-menu-item"
                 onClick={() => {
                   setTarget("current");
                   setBranchMenuOpen(false);
@@ -1207,11 +1195,11 @@ function ConversationSessionCommitPanel(props: {
                 type="button"
               >
                 <GitBranch size={14} />
-                <span>{currentBranchName}</span>
+                <span className="vk-menu-text">{currentBranchName}</span>
                 {target === "current" ? <Check size={14} /> : null}
               </button>
               <button
-                className="conversation-session-commit-branch-option"
+                className="vk-menu-item"
                 onClick={() => {
                   setTarget("new");
                   setBranchName(defaultNewBranchName);
@@ -1220,26 +1208,25 @@ function ConversationSessionCommitPanel(props: {
                 }}
                 type="button"
               >
-                <PlusIcon />
-                <span>{t("gitCommitDialog.newBranch")}</span>
+                <Plus size={14} />
+                <span className="vk-menu-text">{t("gitCommitDialog.newBranch")}</span>
                 {target === "new" ? <Check size={14} /> : null}
               </button>
             </div>
           ) : null}
         </div>
         {hasIncludedChanges ? (
-          <strong className="conversation-session-commit-delta">
-            <span className="added">+{includedAdditions}</span>
-            <span className="removed">-{includedDeletions}</span>
+          <strong className="vk-stools-delta">
+            <span className="vk-add">+{includedAdditions}</span>
+            <span className="vk-del">-{includedDeletions}</span>
           </strong>
         ) : (
-          <strong className="conversation-session-commit-empty">{t("gitCommitDialog.noChanges")}</strong>
+          <strong>{t("gitCommitDialog.noChanges")}</strong>
         )}
       </div>
       {target === "new" ? (
-        <input
+        <Input
           aria-label={t("gitCommitDialog.branchName")}
-          className="conversation-session-commit-branch-input"
           onChange={(event) => {
             setBranchNameEdited(true);
             setBranchName(event.currentTarget.value);
@@ -1248,9 +1235,8 @@ function ConversationSessionCommitPanel(props: {
           value={branchName}
         />
       ) : null}
-      <textarea
+      <Textarea
         aria-label={t("gitCommitDialog.message")}
-        className="conversation-session-commit-message"
         disabled={controlsDisabled || !hasIncludedChanges}
         onChange={(event) => {
           setCommitMessage(event.currentTarget.value);
@@ -1259,19 +1245,19 @@ function ConversationSessionCommitPanel(props: {
         rows={2}
         value={commitMessage}
       />
-      <label className={cn("conversation-session-commit-checkbox", includeUnstagedDisabled && "disabled")}>
-        <input
+      <label className="vk-check-label" data-disabled={includeUnstagedDisabled ? "" : undefined}>
+        <Checkbox
           checked={includeUnstaged}
           disabled={includeUnstagedDisabled}
-          onChange={(event) => setIncludeUnstaged(event.currentTarget.checked)}
-          type="checkbox"
+          onCheckedChange={(checked) => setIncludeUnstaged(checked === true)}
         />
         <span>{t("gitCommitDialog.includeUnstaged")}</span>
       </label>
-      <div className="conversation-session-commit-actions">
+      <div className="vk-commit-acts">
         <button
           aria-pressed={lockedAction === "commit"}
-          className={cn("conversation-session-commit-action", lockedAction === "commit" && "locked")}
+          className="vk-commit-act"
+          data-action="commit"
           disabled={commitActionDisabled}
           onClick={() => void runCommitAction(false)}
           onFocus={() => setLockedAction("commit")}
@@ -1282,11 +1268,12 @@ function ConversationSessionCommitPanel(props: {
         >
           <GitCommitHorizontal size={15} />
           <span>{t("gitCommitDialog.commit")}</span>
-          {lockedAction === "commit" ? <kbd>Ctrl+↵</kbd> : null}
+          {lockedAction === "commit" ? <kbd className="vk-kbd">Ctrl+↵</kbd> : null}
         </button>
         <button
           aria-pressed={lockedAction === "commitPush"}
-          className={cn("conversation-session-commit-action", lockedAction === "commitPush" && "locked")}
+          className="vk-commit-act"
+          data-action="commitPush"
           disabled={commitActionDisabled}
           onClick={() => void runCommitAction(true)}
           onFocus={() => setLockedAction("commitPush")}
@@ -1297,11 +1284,12 @@ function ConversationSessionCommitPanel(props: {
         >
           <CloudUpload size={15} />
           <span>{t("gitCommitDialog.commitAndPush")}</span>
-          {lockedAction === "commitPush" ? <kbd>Ctrl+↵</kbd> : null}
+          {lockedAction === "commitPush" ? <kbd className="vk-kbd">Ctrl+↵</kbd> : null}
         </button>
         <button
           aria-pressed={lockedAction === "push"}
-          className={cn("conversation-session-commit-action", lockedAction === "push" && "locked")}
+          className="vk-commit-act"
+          data-action="push"
           disabled={pushOnlyActionDisabled}
           onClick={() => void runPushAction()}
           onFocus={() => setLockedAction("push")}
@@ -1312,7 +1300,7 @@ function ConversationSessionCommitPanel(props: {
         >
           <CloudUpload size={15} />
           <span>{t("gitCommitDialog.push")}</span>
-          {lockedAction === "push" ? <kbd>Ctrl+↵</kbd> : null}
+          {lockedAction === "push" ? <kbd className="vk-kbd">Ctrl+↵</kbd> : null}
         </button>
       </div>
     </div>
@@ -1358,32 +1346,31 @@ function ConversationSessionSubagentSection(props: {
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   return (
-    <section className="conversation-session-tool-section conversation-session-subagent-section">
-      <div className="conversation-session-tool-section-title">
-        <span className="conversation-session-tool-section-title-main">
-          <Bot size={13} />
-          <span>{t("conversation.subagent.schedule")}</span>
-          <strong>{props.tasks.length}</strong>
-        </span>
+    <section className="vk-stools-sec" data-kind="subagent">
+      <div className="vk-stools-title">
+        <Bot size={13} />
+        <span>{t("conversation.subagent.schedule")}</span>
+        <b>{props.tasks.length}</b>
       </div>
-      <div className="workspace-tool-panel-menu-list conversation-session-subagent-list">
+      <div className="vk-stools-list">
         {props.tasks.map((task) => (
           <Tooltip key={task.taskId}>
             <TooltipTrigger asChild>
               <button
-                className={cn("workspace-tool-panel-menu-row conversation-session-subagent-row", task.isRunning && "running")}
+                className="vk-stools-item"
+                data-accent={task.isRunning ? conversationSessionSubagentAccent(task.taskId) : undefined}
+                data-row="subagent"
                 onClick={() => void props.onOpenSubagentPanel(props.parentConversationId, task.taskId)}
-                style={conversationSessionSubagentAccentStyle(task)}
                 type="button"
               >
-                <Boxes size={15} />
-                <span className="conversation-session-subagent-label">{task.label}</span>
-                <span className={cn("conversation-session-subagent-state", task.runState)}>
+                <Boxes size={14} />
+                <span>{task.label}</span>
+                <small data-state={task.runState} data-tone={conversationSessionSubagentRunStateTone(task.runState)}>
                   {conversationSessionSubagentRunStateLabel(task.runState, t)}
-                </span>
+                </small>
               </button>
             </TooltipTrigger>
-            <TooltipContent className="conversation-session-subagent-tooltip" side="left" sideOffset={8}>
+            <TooltipContent className="vk-stools-tip" side="left" sideOffset={8}>
               <pre>{conversationSessionSubagentTooltip(task, t)}</pre>
             </TooltipContent>
           </Tooltip>
@@ -1410,41 +1397,34 @@ function conversationSessionSubagentTooltip(
   ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
-// conversationSessionSubagentAccentStyle returns a stable colorful accent for active subagent rows.
-// conversationSessionSubagentAccentStyle 为活跃子代理行返回稳定的彩色强调样式。
-function conversationSessionSubagentAccentStyle(
-  // Task row used to derive active-state color.
-  // 用于推导活跃状态颜色的任务行。
-  task: ConversationSessionSubagentTask,
-): React.CSSProperties | undefined {
-  if (!task.isRunning) {
-    return undefined;
-  }
-  return {
-    "--conversation-session-subagent-accent": conversationSessionSubagentAccentColor(task.taskId),
-  } as React.CSSProperties;
-}
+// SUBAGENT_ACCENT_COUNT is the number of kit chart hues a running subagent row can take.
+// SUBAGENT_ACCENT_COUNT 是运行中子代理行可取的 kit 图表色数量。
+const SUBAGENT_ACCENT_COUNT = 5;
 
-// conversationSessionSubagentAccentColor maps a task id to one stable lively color.
-// conversationSessionSubagentAccentColor 将任务标识映射为一个稳定的活跃颜色。
-function conversationSessionSubagentAccentColor(
+// conversationSessionSubagentAccent maps a task id to one stable chart hue index (1-based) for its running mark.
+// conversationSessionSubagentAccent 将任务标识映射为运行标记使用的稳定图表色序号（从 1 开始）。
+function conversationSessionSubagentAccent(
   // Stable task id from the backend projection.
   // 后端投影中的稳定任务标识。
   taskId: string,
 ): string {
-  const palette = [
-    "hsl(199 89% 48%)",
-    "hsl(262 83% 58%)",
-    "hsl(330 81% 55%)",
-    "hsl(18 88% 54%)",
-    "hsl(142 66% 39%)",
-    "hsl(45 93% 47%)",
-  ];
   let hash = 0;
   for (const char of taskId) {
     hash = ((hash * 31) + char.charCodeAt(0)) >>> 0;
   }
-  return palette[hash % palette.length] ?? palette[0];
+  return String((hash % SUBAGENT_ACCENT_COUNT) + 1);
+}
+
+// conversationSessionSubagentRunStateTone colours a running agent ok and an interrupted one bad.
+// conversationSessionSubagentRunStateTone 将运行中的代理标为成功色，被中断的标为错误色。
+function conversationSessionSubagentRunStateTone(
+  // Backend run-state key.
+  // 后端运行状态键。
+  runState: ConversationSessionSubagentTask["runState"],
+): "ok" | "bad" | undefined {
+  if (runState === "running") return "ok";
+  if (runState === "failed" || runState === "stopped" || runState === "closed") return "bad";
+  return undefined;
 }
 
 // conversationSessionSubagentRunStateLabel maps backend run-state keys onto compact localized labels.
@@ -1472,16 +1452,6 @@ function conversationSessionSubagentRunStateLabel(
   }
 }
 
-// PlusIcon renders the compact plus mark used by the branch target menu.
-// PlusIcon 渲染分支目标菜单中使用的紧凑加号。
-function PlusIcon() {
-  return (
-    <svg aria-hidden="true" className="conversation-session-commit-plus-icon" viewBox="0 0 16 16">
-      <path d="M8 3.5v9M3.5 8h9" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
-    </svg>
-  );
-}
-
 // ConversationSessionProgressSection renders the model-authored session progress plan.
 // ConversationSessionProgressSection 渲染模型写入的会话进程计划。
 function ConversationSessionProgressSection(props: {
@@ -1495,18 +1465,17 @@ function ConversationSessionProgressSection(props: {
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   return (
-    <section className="conversation-session-tool-section conversation-session-progress-section">
-      <div className="conversation-session-tool-section-title">
-        <span className="conversation-session-tool-section-title-main">
-          <span>{t("sessionTools.progress")}</span>
-          <strong>{props.todolist.completedCount}/{props.todolist.totalCount}</strong>
-        </span>
+    <section className="vk-stools-sec" data-kind="progress">
+      <div className="vk-stools-title">
+        <ClipboardList size={13} />
+        <span>{t("sessionTools.progress")}</span>
+        <b>{props.todolist.completedCount}/{props.todolist.totalCount}</b>
       </div>
-      <div className="workspace-tool-panel-menu-list conversation-session-todolist-list">
+      <ol className="vk-stools-steps">
         {props.todolist.items.map((item, index) => (
           <ConversationSessionTodolistRow item={item} key={`${index}-${item.status}-${item.step}`} />
         ))}
-      </div>
+      </ol>
     </section>
   );
 }
@@ -1519,10 +1488,10 @@ function ConversationSessionTodolistRow(props: {
   item: SessionTodolistItemSummary;
 }) {
   return (
-    <div className={cn("conversation-session-todolist-row", `status-${props.item.status}`)}>
-      {conversationSessionTodolistStatusIcon(props.item.status)}
+    <li data-state={props.item.status === "completed" ? "done" : props.item.status === "in_progress" ? "active" : undefined}>
+      <i>{conversationSessionTodolistStatusIcon(props.item.status)}</i>
       <span>{props.item.step}</span>
-    </div>
+    </li>
   );
 }
 
@@ -1530,21 +1499,21 @@ function ConversationSessionTodolistRow(props: {
 // conversationSessionTodolistStatusIcon 返回单个 todolist 状态对应的紧凑图标。
 function conversationSessionTodolistStatusIcon(status: SessionTodolistItemSummary["status"]): React.ReactNode {
   if (status === "completed") {
-    return <CheckCircle2 size={15} />;
+    return <Check strokeWidth={3} />;
   }
   if (status === "in_progress") {
-    return <LoaderCircle className="spin" size={15} />;
+    return <LoaderCircle className="vk-spin" />;
   }
-  return <Circle size={15} />;
+  return null;
 }
 
 // conversationSessionReviewDelta renders colored added and deleted line counters.
 // conversationSessionReviewDelta 渲染带颜色的新增与删除行数。
 function conversationSessionReviewDelta(reviewSummary: ConversationSessionReviewSummary): React.ReactNode {
   return (
-    <strong className="conversation-session-review-delta">
-      <span className="added">+{REVIEW_LINE_COUNT_FORMAT.format(reviewSummary.additions)}</span>
-      <span className="removed">-{REVIEW_LINE_COUNT_FORMAT.format(reviewSummary.deletions)}</span>
-    </strong>
+    <b className="vk-stools-delta">
+      <span className="vk-add">+{REVIEW_LINE_COUNT_FORMAT.format(reviewSummary.additions)}</span>
+      <span className="vk-del">-{REVIEW_LINE_COUNT_FORMAT.format(reviewSummary.deletions)}</span>
+    </b>
   );
 }

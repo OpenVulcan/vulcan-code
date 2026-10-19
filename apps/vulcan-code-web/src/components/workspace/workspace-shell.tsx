@@ -879,9 +879,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       {hasSelectedChatConversation ? contextPanelToggleAction : null}
     </>,
     toolPanels: [{
-      className: "conversation-session-tool-adaptive-panel",
-      contentClassName: "conversation-session-tool-content",
-      contentShellClassName: "conversation-session-tool-content-shell",
       expanded: sessionToolPanelVisible && sessionToolExpanded,
       forceOverlay: effectiveRightPanelOpen && rightPanelFloating,
       inlineGap: 52,

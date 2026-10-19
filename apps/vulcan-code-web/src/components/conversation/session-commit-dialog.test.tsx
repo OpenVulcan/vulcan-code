@@ -30,7 +30,7 @@ async function renderDialog(summary: Partial<ConversationSessionReviewSummary>) 
       busyState={null} reviewSummary={reviewSummary} workspacePath="D:/repo"
       onBusyStateChange={() => undefined} onRefreshReviewSummary={async () => undefined} />
   </I18nProvider>));
-  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".conversation-session-commit-action"));
+  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".vk-commit-act"));
   const byLabel = (label: string) => buttons.find((button) => button.textContent?.replace("Ctrl+↵", "").trim() === label);
   return { push: byLabel("推送"), commit: byLabel("提交") };
 }

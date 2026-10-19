@@ -1,7 +1,7 @@
 /* Scope MCP layout and schema inspection to the existing theme tokens. */
 /* 将 MCP 布局与 Schema 检查限定在现有主题令牌内。 */
 .mcp-workspace { display: grid; grid-template-columns: minmax(15rem, .8fr) minmax(0, 2fr); gap: 1rem; min-width: 0; }
-.mcp-directory, .mcp-detail { display: flex; flex-direction: column; gap: .85rem; min-width: 0; padding: 1rem; }
+.mcp-directory, .mcp-detail { display: flex; flex-direction: column; gap: .85rem; min-width: 0; padding: 1rem; min-height: 0; overflow: auto; border: 1px solid var(--border); background: var(--card); }
 .mcp-filter-row, .mcp-tabs { display: flex; gap: .4rem; flex-wrap: wrap; }
 .mcp-filter-row > * { min-width: 0; }
 .mcp-server-list { display: flex; flex-direction: column; gap: .35rem; max-height: 65vh; overflow: auto; }

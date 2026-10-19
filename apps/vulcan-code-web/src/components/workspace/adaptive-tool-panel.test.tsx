@@ -110,6 +110,6 @@ it("does not recommit when ResizeObserver repeats an unchanged panel size", asyn
 
   expect(settledCommitCount).toBeGreaterThan(1);
   expect(commitCount).toBe(settledCommitCount);
-  expect(host.querySelector<HTMLElement>(".adaptive-tool-panel-slot")?.style.width).toBe("320px");
-  expect(host.querySelector<HTMLElement>(".adaptive-tool-panel-slot")?.style.height).toBe("40px");
+  expect(host.querySelector<HTMLElement>(".vk-tpanel-slot")?.style.width).toBe("320px");
+  expect(host.querySelector<HTMLElement>(".vk-tpanel-slot")?.style.height).toBe("40px");
 });
