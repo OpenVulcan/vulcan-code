@@ -1,0 +1,379 @@
+/* Composer: the dock that floats over the transcript's bottom edge, the input card, its toolbar, the
+ * strips docked on top of it (queued prompts, goal) and the staged attachments. Toolbar triggers and
+ * their menus live in composer-controls.css. */
+/* 输入区：悬浮在转录底边上的停靠层、输入卡片、工具栏、停靠在其上方的条带（待发送队列、目标）以及已暂存附件。
+ * 工具栏触发器及其菜单位于 composer-controls.css。 */
+
+/* ---------- Dock ---------- */
+/* The dock follows the conversation column and floats; the transcript pads by its measured height. */
+/* 停靠层跟随会话列宽度并悬浮；转录按其测得的高度留出底部空间。 */
+.vk-dock {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--vk-u) * 4);
+  z-index: 5;
+  width: var(--vk-column-w);
+  max-width: calc(100% - var(--vk-u) * 8);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2.5);
+  pointer-events: none;
+  transform: translateX(calc(-50% - var(--conversation-inline-offset, 0px)));
+  transition: bottom 360ms var(--vk-ease), transform 260ms var(--vk-ease);
+  will-change: bottom, transform;
+}
+/* An empty conversation lifts the composer to the middle, under the start heading. */
+/* 空会话把输入区抬到中部，位于起始标题下方。 */
+.vk-dock[data-mode="empty"] { bottom: calc(50% - 94px); }
+/* The dedicated wizard spans the conversation height so a tall step scrolls inside it. */
+/* 专职向导占满会话高度，较高的步骤在其内部滚动。 */
+.vk-dock[data-mode="wizard"] { top: calc(var(--vk-u) * 4); justify-content: center; }
+.vk-chat[data-empty]:has(> .vk-dock[data-mode="wizard"]) > .vk-empty-prompt {
+  opacity: 0;
+  transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))) translateY(-16px);
+}
+
+/* Floating aids above the dock: jump to the latest output. */
+/* 停靠层上方的浮动辅助：跳到最新输出。 */
+.vk-dock-float {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + var(--vk-u) * 2.5);
+  z-index: 6;
+  width: max-content;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.vk-dock-float > * { pointer-events: auto; }
+.vk-jump {
+  display: grid;
+  place-items: center;
+  width: calc(var(--vk-u) * 9);
+  height: calc(var(--vk-u) * 9);
+  padding: 0;
+  border: var(--vk-bw) solid var(--vk-line-strong);
+  background: var(--vk-raised);
+  box-shadow: var(--vk-shadow-2);
+  color: var(--vk-ink-2);
+  cursor: pointer;
+  animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
+  transition: color var(--vk-t-fast), border-color var(--vk-t-fast);
+}
+.vk-jump:hover { border-color: var(--vk-ink-3); color: var(--vk-ink); }
+.vk-jump:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 2px; }
+
+/* ---------- Input card ---------- */
+/* One quiet floating card; typing deepens its edge and lift, a file drag marks it in the signal tone. */
+/* 一张安静的悬浮卡片；输入时加深边缘与浮起感，拖入文件时以信号色标记。 */
+.vk-composer {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  border: var(--vk-bw) solid var(--vk-line-strong);
+  background: var(--vk-raised);
+  box-shadow: var(--vk-shadow-1);
+  overflow: hidden;
+  pointer-events: auto;
+  transition: border-color var(--vk-t-med) var(--vk-ease), box-shadow var(--vk-t-med) var(--vk-ease);
+}
+.vk-composer:focus-within { border-color: var(--vk-ink-3); box-shadow: var(--vk-shadow-2); }
+.vk-composer[data-drag-over] { border-color: var(--vk-signal); box-shadow: var(--vk-shadow-2), 0 0 0 3px var(--vk-signal-soft); }
+.vk-composer > .vk-textarea {
+  height: auto;
+  min-height: 60px;
+  max-height: 300px;
+  padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4.5) calc(var(--vk-u) * 1.5);
+  overflow-y: auto;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--vk-fs-read);
+  line-height: var(--vk-lh-ui);
+  resize: none;
+}
+.vk-composer > .vk-textarea:hover,
+.vk-composer > .vk-textarea:focus { border: 0; background: transparent; box-shadow: none; }
+.vk-composer > .vk-textarea::placeholder { user-select: none; }
+.vk-composer-note { margin: 0; padding: 0 calc(var(--vk-u) * 4.5); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+
+/* The toolbar shares the card surface: no band or divider, so text and controls read as one object. */
+/* 工具栏与卡片同一表面：没有底色带或分隔线，文字与控件成为一个整体。 */
+.vk-composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--vk-u) * 2);
+  min-width: 0;
+  padding: 2px calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 2.5);
+}
+.vk-composer-tools { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 1.5); }
+.vk-composer-end { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: calc(var(--vk-u) * 1.5); }
+
+/* Send is the one ember control in the composer; an empty or blocked draft recesses it. */
+/* 发送是输入区唯一的余烬色控件；空草稿或受阻草稿使其内凹。 */
+.vk-send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--vk-h-lg);
+  height: var(--vk-h-lg);
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  background: var(--vk-ember);
+  color: #fff;
+  cursor: pointer;
+  transition: background var(--vk-t-fast), box-shadow var(--vk-t-fast), color var(--vk-t-fast);
+}
+.vk-send > svg { width: 15px; height: 15px; }
+.vk-send:hover { box-shadow: var(--vk-glow); }
+.vk-send:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 2px; }
+.vk-send[data-state="stop"] { background: var(--vk-ink); color: var(--vk-ink-inverse); }
+.vk-send[data-state="empty"],
+.vk-send:disabled:not([data-state="stop"]) { background: var(--vk-sunken); color: var(--vk-ink-3); box-shadow: none; cursor: default; }
+.vk-send:disabled { cursor: not-allowed; }
+
+/* Plan mode shows as a closable chip among the toolbar triggers. */
+/* 计划模式显示为工具栏触发器之间可关闭的标签。 */
+.vk-composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.25);
+  height: var(--vk-h-md);
+  padding: 0 calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 2.25);
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-signal) 40%, var(--vk-line));
+  background: var(--vk-signal-soft);
+  color: var(--vk-signal);
+  font: inherit;
+  font-size: var(--vk-fs-sm);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--vk-t-fast), border-color var(--vk-t-fast);
+}
+.vk-composer-chip:hover,
+.vk-composer-chip:focus-visible { border-color: var(--vk-signal); outline: none; }
+.vk-composer-chip > .vk-composer-chip-close { display: inline-grid; place-items: center; width: 16px; height: 16px; background: color-mix(in srgb, var(--vk-signal) 14%, transparent); }
+
+/* ---------- Slash commands ---------- */
+.vk-slash {
+  max-height: 270px;
+  display: grid;
+  gap: 2px;
+  overflow-y: auto;
+  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5);
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-sunken);
+}
+.vk-slash-row {
+  width: 100%;
+  height: calc(var(--vk-u) * 8.5);
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  align-items: center;
+  gap: calc(var(--vk-u) * 2.5);
+  padding: 0 calc(var(--vk-u) * 2);
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--vk-ink);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+.vk-slash-row:hover,
+.vk-slash-row[aria-selected="true"] { background: var(--vk-hover); }
+.vk-slash-row[aria-selected="true"] { border-left-color: var(--vk-ember); }
+.vk-slash-cmd { overflow: hidden; font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vk-slash-desc { overflow: hidden; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- Strips docked on the composer ---------- */
+/* Queued prompts and the session goal sit on the composer's top edge, slightly narrower than it. */
+/* 待发送提示词与会话目标贴在输入区上边缘，比输入区略窄。 */
+.vk-queue,
+.vk-goal {
+  width: 92%;
+  align-self: center;
+  margin-bottom: calc(var(--vk-u) * -2.5);
+  border: var(--vk-bw) solid var(--vk-line);
+  border-bottom: 0;
+  background: var(--vk-panel);
+  pointer-events: auto;
+}
+.vk-queue + .vk-goal { border-top-color: var(--vk-line-soft); }
+.vk-queue { padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2) 0; }
+.vk-queue-list { display: grid; overflow: hidden; }
+.vk-queue-row {
+  min-height: calc(var(--vk-u) * 7.5);
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+  padding: 2px calc(var(--vk-u) * 2) 2px calc(var(--vk-u) * 1.5);
+  background: var(--vk-panel);
+  transition: background var(--vk-t-fast);
+}
+.vk-queue-row + .vk-queue-row { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-queue-row:hover,
+.vk-queue-row:focus-within { background: var(--vk-hover); }
+.vk-queue-row[data-dragging] { z-index: 20; box-shadow: var(--vk-shadow-2); transition: none; will-change: transform; }
+.vk-queue-row[data-inserted] { color: var(--vk-ink-3); }
+.vk-queue-handle { display: grid; place-items: center; width: 22px; height: 26px; color: var(--vk-ink-3); cursor: grab; touch-action: none; user-select: none; }
+.vk-queue-handle:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-queue-handle:active { cursor: grabbing; }
+.vk-queue-row[data-inserted] .vk-queue-handle { opacity: 0.5; cursor: default; }
+.vk-queue-text {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-md);
+  line-height: 1.35;
+  user-select: text;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.vk-queue-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.vk-queue-insert[data-inserted] { color: var(--vk-ink-3); opacity: 1; }
+
+.vk-goal {
+  min-height: calc(var(--vk-u) * 7.5);
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  padding: 2px calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 1);
+  color: var(--vk-ink-3);
+}
+.vk-goal > svg { color: var(--vk-ember); }
+.vk-goal-status { color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 600; white-space: nowrap; }
+.vk-goal-text { min-width: 0; overflow: hidden; color: var(--vk-ink); font-size: var(--vk-fs-md); text-overflow: ellipsis; white-space: nowrap; }
+.vk-goal-text:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 2px; }
+.vk-goal-time { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vk-goal-form { display: grid; gap: calc(var(--vk-u) * 2.5); min-height: 0; overflow-y: auto; }
+.vk-goal-form > .vk-textarea { min-height: 160px; resize: vertical; }
+
+/* ---------- Staged attachments ---------- */
+/* Each file is a tile: images fill it, other files show their kind icon over the name. */
+/* 每个文件是一块：图片铺满，其他文件在名称上方显示类型图标。 */
+.vk-attach { display: flex; gap: calc(var(--vk-u) * 2); overflow-x: auto; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3) 0; }
+.vk-attach-tile {
+  position: relative;
+  flex: none;
+  width: 104px;
+  height: 82px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: calc(var(--vk-u) * 1);
+  align-items: center;
+  justify-items: center;
+  padding: calc(var(--vk-u) * 2);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+}
+.vk-attach-tile[data-kind="image"] { grid-template-rows: minmax(0, 1fr); gap: 0; padding: 0; overflow: hidden; }
+.vk-attach-tile:hover { border-color: var(--vk-line-strong); }
+.vk-attach-tile > img { width: 100%; height: 42px; object-fit: cover; }
+.vk-attach-tile[data-kind="image"] > img { height: 100%; }
+.vk-attach-open { position: absolute; inset: 0; z-index: 1; border: 0; background: transparent; cursor: pointer; }
+.vk-attach-open:disabled { cursor: default; }
+.vk-attach-open:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -3px; }
+.vk-attach-name { width: 100%; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 14px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+/* Tile actions: remove (top right, on hover), retry (bottom left) and the delivery notice (bottom right). */
+/* 块内操作：移除（右上，悬停显示）、重试（左下）与交付说明（右下）。 */
+.vk-attach-remove,
+.vk-attach-retry,
+button.vk-attach-warn {
+  position: absolute;
+  z-index: 4;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: var(--vk-bw) solid var(--vk-line-strong);
+  background: var(--vk-raised);
+  cursor: pointer;
+}
+.vk-attach-remove { top: 5px; right: 5px; color: var(--vk-bad); opacity: 0; pointer-events: none; }
+.vk-attach-tile:hover .vk-attach-remove,
+.vk-attach-tile:focus-within .vk-attach-remove,
+.vk-attach-remove:focus-visible { opacity: 1; pointer-events: auto; }
+.vk-attach-retry { left: 6px; bottom: 6px; z-index: 3; color: var(--vk-ink); }
+.vk-attach-retry:hover { background: var(--vk-hover); }
+.vk-attach-warn { position: absolute; right: 6px; bottom: 6px; z-index: 4; display: inline-flex; color: var(--vk-warn); cursor: help; }
+button.vk-attach-warn { right: 6px; bottom: 6px; color: var(--vk-warn); }
+.vk-attach-remove:focus-visible,
+.vk-attach-retry:focus-visible,
+.vk-attach-warn:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 2px; }
+/* Upload progress: a square ring centred on the tile; an unknown total spins a quarter arc. */
+/* 上传进度：块中央的环；总量未知时旋转四分之一弧。 */
+.vk-attach-progress {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  z-index: 2;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--vk-raised) 86%, transparent);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-2xs);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+.vk-attach-progress > svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.vk-attach-progress > svg[data-spin] { animation: vk-spin 1s linear infinite; }
+.vk-attach-progress circle { fill: none; stroke-width: 3; }
+.vk-attach-progress-track { stroke: var(--vk-line); }
+.vk-attach-progress-value { stroke: var(--vk-signal); }
+/* The compression sweep dims the image and reveals it in one turn. */
+/* 压缩扫描使图片变暗，转一圈后完全露出。 */
+.vk-attach-cooldown { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.vk-attach-cooldown > svg { width: 100%; height: 100%; }
+.vk-attach-compress { flex: none; align-self: flex-end; display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); padding-bottom: calc(var(--vk-u) * 1); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); white-space: nowrap; cursor: pointer; }
+.vk-attach-detail { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 2); width: min(360px, calc(100vw - 24px)); max-height: min(320px, var(--radix-popover-content-available-height)); overflow: auto; overscroll-behavior: contain; }
+.vk-attach-detail > * { flex: none; }
+.vk-attach-detail > strong { font-size: var(--vk-fs-sm); overflow-wrap: anywhere; }
+.vk-attach-detail > p { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+.vk-attach-detail-text { margin: 0; font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-attach-detail-text:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 2px; }
+/* Touch pointers cannot hover, so removal stays visible. */
+/* 触控指针无法悬停，因此移除操作保持可见。 */
+@media (hover: none) {
+  .vk-attach-remove { opacity: 1; pointer-events: auto; }
+}
+
+/* ---------- Session progress (status bar popover) ---------- */
+.vk-progress-delta { display: inline-flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; }
+.vk-progress-pop { width: max-content; max-width: min(420px, calc(100vw - 24px)); max-height: min(400px, var(--radix-popover-content-available-height)); overflow-y: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 2); }
+.vk-progress-list { display: grid; gap: 2px; width: max-content; max-width: 100%; }
+.vk-progress-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 7px; min-width: 0; min-height: 24px; padding: 3px 5px; color: var(--vk-ink); font-size: var(--vk-fs-md); line-height: 1.25; }
+.vk-progress-row > svg { margin-top: 1px; flex: none; color: var(--vk-ink-3); }
+.vk-progress-row > span { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.vk-progress-row[data-status="in_progress"] > svg,
+.vk-progress-row[data-status="completed"] > svg { color: var(--vk-ok); }
+.vk-progress-row[data-status="completed"] > span { color: var(--vk-ink-3); text-decoration: line-through; }
+
+/* ---------- Narrow stages ---------- */
+@container vk-app (max-width: 46em) {
+  .vk-dock { bottom: calc(var(--vk-u) * 2.5); max-width: calc(100% - var(--vk-u) * 5); }
+  .vk-composer-bar { flex-wrap: wrap; gap: 4px; padding: 6px; }
+  .vk-composer-tools { display: contents; }
+  .vk-composer-end { margin-left: auto; max-width: 100%; }
+  .vk-composer > .vk-textarea { max-height: min(240px, 30dvh); font-size: var(--vk-fs-lg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vk-dock { transition: none; }
+  .vk-attach-progress > svg[data-spin] { animation: none; }
+}

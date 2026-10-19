@@ -53,7 +53,7 @@ it("keeps the open list synchronized with task updates and permits trigger dismi
   await act(async () => trigger.click());
   await render({ ...plan, completedCount: 2, items: plan.items.map((item) => ({ ...item, status: "completed" })) });
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
-  expect(document.querySelectorAll(".composer-session-progress-row.status-completed")).toHaveLength(2);
+  expect(document.querySelectorAll(".vk-progress-row[data-status='completed']")).toHaveLength(2);
   await act(async () => trigger.click());
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
 });

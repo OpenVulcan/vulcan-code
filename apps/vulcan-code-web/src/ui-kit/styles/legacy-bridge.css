@@ -104,4 +104,3 @@
 
 /* The legacy conversation column follows the reading-width preset until the conversation moves to
  * .vk-chat: transcript, composer dock and the streaming reasoning windows share one width. */
-:root:root .composer-dock { width: var(--vk-column-w); }

@@ -1,6 +1,5 @@
 import React from "react";
 import { CheckCircle2, Circle } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { ProgressRing } from "@/ui-kit/primitives/progress-ring";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -42,18 +41,18 @@ export function ComposerSessionProgressCapsule(props: {
           <ProgressRing aria-label={formatProgressTranslation(t, "composer.progress.progressLabel", { current: String(currentStepNumber), total: String(props.todolist.totalCount) })} size={14} value={progressValue} />
           <span>{formatProgressTranslation(t, "composer.progress.step", { current: String(currentStepNumber), total: String(props.todolist.totalCount) })}</span>
           {reviewSummary ? (
-            <span className="composer-session-progress-review-summary">
+            <span className="vk-progress-delta">
               <span>· {formatProgressTranslation(t, "composer.progress.changedFiles", { count: String(reviewSummary.changedFiles) })}</span>
-              <span className="added">+{reviewSummary.additions}</span>
-              <span className="removed">-{reviewSummary.deletions}</span>
+              <span className="vk-add">+{reviewSummary.additions}</span>
+              <span className="vk-del">-{reviewSummary.deletions}</span>
             </span>
           ) : null}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="composer-session-progress-popover" side="top" align="start" sideOffset={8} collisionPadding={12} aria-label={t("composer.progress.open")}>
-        <div className="composer-session-progress-list">
+      <PopoverContent className="vk-progress-pop" side="top" align="start" sideOffset={8} collisionPadding={12} aria-label={t("composer.progress.open")}>
+        <div className="vk-progress-list">
           {props.todolist.items.map((item, index) => (
-            <div className={cn("composer-session-progress-row", `status-${item.status}`)} key={`${index}-${item.status}-${item.step}`}>
+            <div className="vk-progress-row" data-status={item.status} key={`${index}-${item.status}-${item.step}`}>
               {composerSessionProgressStatusIcon(item.status, t)}
               <span>{item.step}</span>
             </div>

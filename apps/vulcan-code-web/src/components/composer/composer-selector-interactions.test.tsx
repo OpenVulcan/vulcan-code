@@ -349,13 +349,13 @@ it("reserves Shift+Tab for the draft instead of intercepting selector keyboard n
 it("reorders pending entries with Space, ArrowDown and Space using the real keyboard sensor", async () => {
   const reorder = vi.fn();
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    const rows = [...document.querySelectorAll(".pending-prompt-row")];
+    const rows = [...document.querySelectorAll(".vk-queue-row")];
     const index = Math.max(0, rows.indexOf(this));
     return new DOMRect(0, index * 50, 300, 40);
   });
   await render(<PendingPromptQueueStrip entries={["first", "second"].map((id) => ({ id, prompt: id, preview: id, attachments: [], state: "ready", createdAt: "0" }))}
     onEdit={vi.fn()} onInsert={vi.fn()} onRemove={vi.fn()} onReorder={reorder} />);
-  const handle = document.querySelector<HTMLElement>(".pending-prompt-row-handle")!;
+  const handle = document.querySelector<HTMLElement>(".vk-queue-handle")!;
   handle.focus(); await press(handle, " "); await press(handle, "ArrowDown"); await press(handle, " ");
   expect(reorder).toHaveBeenCalledExactlyOnceWith(["second", "first"], "first", null);
 });

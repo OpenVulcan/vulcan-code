@@ -51,7 +51,6 @@ import {
   type ThinkingDisplayMode,
 } from "@/components/conversation/thinking-display";
 import { formatMessage, pickBilingualText, useI18n, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentPreparationSummary,
@@ -565,13 +564,13 @@ export function ComposerAttachmentStrip(props: {
     if (request.trigger.isConnected || document.activeElement !== document.body) return;
     // buttons belong only to this exact strip; removal shifts the next item into the removed item's former position.
     // buttons 仅属于此精确附件条；移除会让下一项进入被移除项原先的位置。
-    const buttons = strip.current?.querySelectorAll<HTMLButtonElement>(".composer-attachment-remove");
+    const buttons = strip.current?.querySelectorAll<HTMLButtonElement>(".vk-attach-remove");
     if (buttons && buttons.length > 0) buttons[Math.min(request.index, buttons.length - 1)].focus({ preventScroll: true });
     else if (props.attachments.length === 0) props.onEmptyAfterRemoval?.();
   }, [props.attachments, props.onEmptyAfterRemoval]);
   if (props.attachments.length === 0) return null;
   return (
-    <div className="composer-attachment-strip" ref={strip}>
+    <div className="vk-attach" ref={strip}>
       {props.attachments.map((attachment, index) => {
         const attachmentId = composerAttachmentIdentity(attachment, index);
         const preparation = attachmentId ? props.preparations?.[attachmentId] : undefined;
@@ -599,15 +598,14 @@ export function ComposerAttachmentStrip(props: {
           locator={attachment.kind === "image" || attachment.kind === "video" || attachment.kind === "audio" ? attachment.localPath : null}
         >
         <div
-          className={cn("composer-attachment-tile", {
-            "image-attachment": attachment.kind === "image",
-            "attachment-preparing": preparation?.blocksSubmission,
-            "attachment-degraded": degraded,
-          })}
+          className="vk-attach-tile"
+          data-kind={attachment.kind}
+          data-preparing={preparation?.blocksSubmission ? "" : undefined}
+          data-degraded={degraded ? "" : undefined}
         >
           <button
             aria-label={previewAvailable ? attachment.fileName : `${attachment.fileName} · ${t("composer.attachment.previewUnavailable")}`}
-            className="composer-attachment-open"
+            className="vk-attach-open"
             disabled={!previewAvailable}
             title={previewAvailable ? attachment.fileName : t("composer.attachment.previewUnavailable")}
             onClick={() => props.onOpenMedia(attachment)}
@@ -615,12 +613,12 @@ export function ComposerAttachmentStrip(props: {
           />
           <ComposerAttachmentPreview attachment={attachment} resolvePreview={props.resolvePreview} />
           {attachment.kind === "image" ? null : (
-            <span className="composer-attachment-name">{attachment.fileName}</span>
+            <span className="vk-attach-name">{attachment.fileName}</span>
           )}
           {props.onRemove ? (
             <button
               aria-label={`${t("composer.attachment.remove")} · ${attachment.fileName}`}
-              className="composer-attachment-remove"
+              className="vk-attach-remove"
               onClick={(event) => {
                 event.stopPropagation();
                 if (document.activeElement === event.currentTarget) removalFocus.current = { attachment, index, trigger: event.currentTarget };
@@ -637,13 +635,13 @@ export function ComposerAttachmentStrip(props: {
           {typeof progressPercent === "number" || pendingProgress ? (
             <span
               aria-label={typeof progressPercent === "number" ? `${progressPercent}%` : t("composer.attachment.processing")}
-              className="composer-attachment-progress"
+              className="vk-attach-progress"
               role="status"
             >
-              <svg aria-hidden="true" className={progressPercent === null ? "motion-safe:animate-spin" : undefined} viewBox="0 0 36 36">
-                <circle className="composer-attachment-progress-track" cx="18" cy="18" r="15" />
+              <svg aria-hidden="true" data-spin={progressPercent === null ? "" : undefined} viewBox="0 0 36 36">
+                <circle className="vk-attach-progress-track" cx="18" cy="18" r="15" />
                 <circle
-                  className="composer-attachment-progress-value"
+                  className="vk-attach-progress-value"
                   cx="18"
                   cy="18"
                   pathLength="100"
@@ -651,7 +649,7 @@ export function ComposerAttachmentStrip(props: {
                   style={{ strokeDasharray: `${progressPercent ?? 25} 100` }}
                 />
               </svg>
-              <span className={progressPercent === null ? "sr-only" : undefined}>{typeof progressPercent === "number" ? `${progressPercent}%` : t("composer.attachment.processing")}</span>
+              <span className={progressPercent === null ? "vk-sr-only" : undefined}>{typeof progressPercent === "number" ? `${progressPercent}%` : t("composer.attachment.processing")}</span>
             </span>
           ) : null}
           {degraded ? (
@@ -665,7 +663,7 @@ export function ComposerAttachmentStrip(props: {
                   <TooltipTrigger asChild>
                     <button
                       aria-label={`${t("composer.attachment.retry")} · ${attachment.fileName}`}
-                      className="composer-attachment-retry"
+                      className="vk-attach-retry"
                       onClick={(event) => {
                         event.stopPropagation();
                         props.onRetry?.(attachmentId);
@@ -687,7 +685,7 @@ export function ComposerAttachmentStrip(props: {
       {props.imageCompression && props.attachments.some((attachment) => attachment.kind === "image") ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <label className="flex shrink-0 cursor-pointer items-center gap-1.5 self-end pb-1 text-xs whitespace-nowrap text-muted-foreground">
+            <label className="vk-attach-compress">
               <Checkbox
                 checked={props.imageCompression.enabled}
                 onCheckedChange={(checked) => props.imageCompression?.onChange(checked === true)}
@@ -726,8 +724,8 @@ function ComposerAttachmentCooldown(props: { label: string }) {
     return () => animation.cancel();
   }, []);
   return (
-    <span aria-label={props.label} className="pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]" role="status">
-      <svg aria-hidden="true" className="size-full" preserveAspectRatio="xMidYMid slice" viewBox="0 0 100 100">
+    <span aria-label={props.label} className="vk-attach-cooldown" role="status">
+      <svg aria-hidden="true" preserveAspectRatio="xMidYMid slice" viewBox="0 0 100 100">
         {/* A radius-40 circle with stroke width 80 paints a disc that also covers the corners, so its dash is the remaining sector. */}
         {/* 半径 40、描边宽 80 的圆会画出覆盖四角的圆盘，因此虚线就是剩余扇区。 */}
         <circle
@@ -737,14 +735,14 @@ function ComposerAttachmentCooldown(props: { label: string }) {
           pathLength="100"
           r="40"
           ref={wedge}
-          stroke="var(--foreground)"
+          stroke="var(--vk-ink)"
           strokeDasharray="100 100"
           strokeOpacity="0.45"
           strokeWidth="80"
           transform="rotate(-90 50 50)"
         />
       </svg>
-      <span className="sr-only">{props.label}</span>
+      <span className="vk-sr-only">{props.label}</span>
     </span>
   );
 }
@@ -760,21 +758,21 @@ function ComposerAttachmentNotice(props: { fileName: string; failed: boolean; er
   const { t } = useI18n();
   if (!props.failed && props.error === null) {
     return <Tooltip>
-      <TooltipTrigger asChild><span aria-label={t("composer.attachment.metadataOnly")} className="composer-attachment-warning" role="status" tabIndex={0}><CircleAlert size={16} /></span></TooltipTrigger>
-      <TooltipContent className="composer-control-tooltip composer-attachment-notice-tooltip" side="top">{t("composer.attachment.metadataOnly")}</TooltipContent>
+      <TooltipTrigger asChild><span aria-label={t("composer.attachment.metadataOnly")} className="vk-attach-warn" role="status" tabIndex={0}><CircleAlert size={16} /></span></TooltipTrigger>
+      <TooltipContent side="top">{t("composer.attachment.metadataOnly")}</TooltipContent>
     </Tooltip>;
   }
   return <Popover>
     <Tooltip>
       <TooltipTrigger asChild><PopoverTrigger asChild>
-        <button aria-label={`${t("composer.attachment.details")} · ${props.fileName}`} className="composer-attachment-warning" type="button"><CircleAlert size={16} /></button>
+        <button aria-label={`${t("composer.attachment.details")} · ${props.fileName}`} className="vk-attach-warn" type="button"><CircleAlert size={16} /></button>
       </PopoverTrigger></TooltipTrigger>
       <TooltipContent side="top">{t("composer.attachment.details")}</TooltipContent>
     </Tooltip>
-    <PopoverContent aria-label={`${t("composer.attachment.details")} · ${props.fileName}`} className="composer-attachment-detail" collisionPadding={12} side="top">
-      <strong className="text-sm [overflow-wrap:anywhere]">{props.fileName}</strong>
-      <p className="text-xs text-muted-foreground">{t(props.failed ? "composer.attachment.failed" : "composer.attachment.metadataOnly")}</p>
-      {props.error !== null ? <pre className="composer-attachment-detail-text" tabIndex={0}>{props.error}</pre> : null}
+    <PopoverContent aria-label={`${t("composer.attachment.details")} · ${props.fileName}`} className="vk-attach-detail" collisionPadding={12} side="top">
+      <strong>{props.fileName}</strong>
+      <p>{t(props.failed ? "composer.attachment.failed" : "composer.attachment.metadataOnly")}</p>
+      {props.error !== null ? <pre className="vk-attach-detail-text" tabIndex={0}>{props.error}</pre> : null}
     </PopoverContent>
   </Popover>;
 }

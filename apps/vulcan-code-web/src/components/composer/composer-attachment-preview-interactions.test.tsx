@@ -58,7 +58,7 @@ it("loads the declared lightweight preview while opening the unchanged canonical
   expect(resolve).toHaveBeenCalledWith("previews/original.jpg");
   expect(resolve).not.toHaveBeenCalledWith("canonical/original.png");
   expect(host.querySelector("img")?.getAttribute("src")).toBe("https://synthetic.invalid/previews/original.jpg");
-  await act(async () => host.querySelector<HTMLButtonElement>(".composer-attachment-open")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-attach-open")!.click());
   expect(open).toHaveBeenCalledWith({ kind: "image", fileName: "original.png", localPath: "canonical/original.png", previewLocalPath: "previews/original.jpg", mimeType: "image/png" });
 });
 
@@ -97,16 +97,16 @@ it("names removal and retry actions by their exact file and does not open unsupp
     attachmentId: "preview-archive", blocksSubmission: true, deliveryPlan: "upload_reference", error: "Synthetic upload refusal",
     generation: 1, phase: "failed", reason: "upload", transferId: "synthetic-transfer",
   } });
-  expect(Array.from(host.querySelectorAll(".composer-attachment-remove"), (button) => button.getAttribute("aria-label"))).toEqual([
+  expect(Array.from(host.querySelectorAll(".vk-attach-remove"), (button) => button.getAttribute("aria-label"))).toEqual([
     "composer.attachment.remove · original.png", "composer.attachment.remove · archive.zip",
   ]);
-  expect(host.querySelector(".composer-attachment-retry")?.getAttribute("aria-label")).toBe("composer.attachment.retry · archive.zip");
-  expect(host.querySelectorAll<HTMLButtonElement>(".composer-attachment-open")[1].disabled).toBe(true);
-  await act(async () => host.querySelectorAll<HTMLButtonElement>(".composer-attachment-open")[1].click());
+  expect(host.querySelector(".vk-attach-retry")?.getAttribute("aria-label")).toBe("composer.attachment.retry · archive.zip");
+  expect(host.querySelectorAll<HTMLButtonElement>(".vk-attach-open")[1].disabled).toBe(true);
+  await act(async () => host.querySelectorAll<HTMLButtonElement>(".vk-attach-open")[1].click());
   expect(open).not.toHaveBeenCalled();
-  await act(async () => host.querySelector<HTMLButtonElement>(".composer-attachment-retry")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-attach-retry")!.click());
   expect(retry).toHaveBeenCalledWith("preview-archive");
-  await act(async () => host.querySelectorAll<HTMLButtonElement>(".composer-attachment-remove")[1].click());
+  await act(async () => host.querySelectorAll<HTMLButtonElement>(".vk-attach-remove")[1].click());
   expect(remove).toHaveBeenCalledWith(1);
   expect(open).not.toHaveBeenCalled();
 });
@@ -122,7 +122,7 @@ it("keeps raw failures out of the closed strip and restores focus after inspecti
   expect(document.body.textContent).not.toContain(failureText);
   // details is the real Radix trigger; opening it must not activate media preview or retry.
   // details 是真实 Radix 触发器；打开时不得触发媒体预览或重试。
-  const details = host.querySelector<HTMLButtonElement>("button.composer-attachment-warning")!;
+  const details = host.querySelector<HTMLButtonElement>("button.vk-attach-warn")!;
   await act(async () => { details.focus(); details.click(); });
   // dialog exposes a filename-specific accessible name and keyboard-scrollable original diagnostics.
   // dialog 提供带文件名的无障碍名称，以及可用键盘滚动的原始诊断。
@@ -147,18 +147,18 @@ it("keeps focus during cancellation, moves to the next remaining file, and hands
   await render([image, second]);
   // firstTrigger remains mounted until the confirmed removal reaches the canonical attachment list.
   // firstTrigger 在确认移除到达规范附件列表前持续挂载。
-  const firstTrigger = host.querySelector<HTMLButtonElement>(".composer-attachment-remove")!;
+  const firstTrigger = host.querySelector<HTMLButtonElement>(".vk-attach-remove")!;
   await act(async () => { firstTrigger.focus(); firstTrigger.click(); });
   await render([image, second]);
   expect(document.activeElement).toBe(firstTrigger);
   expect(emptyFocus).not.toHaveBeenCalled();
   await render([second]);
-  expect(document.activeElement).toBe(host.querySelector(".composer-attachment-remove"));
+  expect(document.activeElement).toBe(host.querySelector(".vk-attach-remove"));
   expect(document.activeElement?.getAttribute("aria-label")).toBe("composer.attachment.remove · second.png");
   await act(async () => (document.activeElement as HTMLButtonElement).click());
   await render([]);
   expect(emptyFocus).toHaveBeenCalledTimes(1);
-  expect(host.querySelector(".composer-attachment-strip")).toBeNull();
+  expect(host.querySelector(".vk-attach")).toBeNull();
 });
 
 it("does not take focus back from another control during delayed removal", async () => {
@@ -169,7 +169,7 @@ it("does not take focus back from another control during delayed removal", async
   try {
     // trigger is the exact removal origin captured before the owner confirms cancellation.
     // trigger 是所属组件确认取消前捕获的精确移除来源。
-    const trigger = host.querySelector<HTMLButtonElement>(".composer-attachment-remove")!;
+    const trigger = host.querySelector<HTMLButtonElement>(".vk-attach-remove")!;
     await act(async () => { trigger.focus(); trigger.click(); outside.focus(); });
     await render([]);
     expect(document.activeElement).toBe(outside);
@@ -181,7 +181,7 @@ it("does not restore focus into a different draft owner", async () => {
   await render([image]);
   // trigger belongs to owner-a and must not move focus after owner-b replaces the entire strip.
   // trigger 属于 owner-a，owner-b 替换整个附件条后不得再移动焦点。
-  const trigger = host.querySelector<HTMLButtonElement>(".composer-attachment-remove")!;
+  const trigger = host.querySelector<HTMLButtonElement>(".vk-attach-remove")!;
   await act(async () => { trigger.focus(); trigger.click(); });
   await render([], {}, "owner-b");
   expect(emptyFocus).not.toHaveBeenCalled();

@@ -17,14 +17,12 @@ import type {
   ComposerTraceCallback,
 } from "@/components/composer/composer-control-types";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
-import { Button } from "@/ui-kit/primitives/button";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/ui-kit/primitives/tooltip";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
@@ -305,33 +303,27 @@ export function ComposerDock(props: {
 
   return (
     <div
-      className={cn(
-        "composer-dock",
-        // The wizard spans the conversation height instead of floating like the composer.
-        // 向导占满会话高度，而不像输入区那样悬浮。
-        dedicatedWizardShown ? "dedicated-wizard-mode" : props.emptyMode && "empty-mode",
-      )}
+      className="vk-dock"
+      // The wizard spans the conversation height instead of floating like the composer.
+      // 向导占满会话高度，而不像输入区那样悬浮。
+      data-mode={dedicatedWizardShown ? "wizard" : props.emptyMode ? "empty" : undefined}
       ref={dockRef}
     >
       {props.showScrollToBottom ? (
-        <div className="composer-floating-status-stack">
-          <div className="scroll-to-bottom-layer">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label={t("composer.scrollToBottom")}
-                  className="scroll-to-bottom-button"
-                  onClick={props.onScrollToBottom}
-                  size="icon"
-                  type="button"
-                  variant="outline"
-                >
-                  <ArrowDown size={18} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">{t("composer.scrollToBottom")}</TooltipContent>
-            </Tooltip>
-          </div>
+        <div className="vk-dock-float">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                aria-label={t("composer.scrollToBottom")}
+                className="vk-jump"
+                onClick={props.onScrollToBottom}
+                type="button"
+              >
+                <ArrowDown size={18} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{t("composer.scrollToBottom")}</TooltipContent>
+          </Tooltip>
         </div>
       ) : null}
       {draftOwner ? (

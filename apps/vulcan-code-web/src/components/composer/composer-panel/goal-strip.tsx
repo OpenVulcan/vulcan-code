@@ -39,34 +39,34 @@ export function ComposerGoalStrip(props: {
   // duration 仅更新展示时钟；持久化由后端生命周期事件负责。
   const duration = useGoalWorkDuration(props.goal);
   return (
-    <div className="composer-goal-strip">
+    <div className="vk-goal">
       <Target size={15} />
-      <span className="composer-goal-strip-status">{composerGoalStatusLabel(props.goal.status, t)}</span>
+      <span className="vk-goal-status">{composerGoalStatusLabel(props.goal.status, t)}</span>
       <TooltipProvider delayDuration={500} skipDelayDuration={0}>
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="composer-goal-strip-objective" tabIndex={0}>{props.goal.objective}</span>
+            <span className="vk-goal-text" tabIndex={0}>{props.goal.objective}</span>
           </TooltipTrigger>
           <TooltipContent className="context-usage-tooltip composer-goal-details-tooltip" side="top" sideOffset={6} showArrow={false}>
             <ComposerGoalDetails goal={props.goal} />
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
-      <span className="composer-goal-strip-duration" aria-label={`${t("composer.goal.duration")}: ${duration}`}>{duration}</span>
-      <Button aria-label={t("composer.goal.action.edit")} className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onEdit} size="icon-sm" type="button" variant="ghost">
+      <span className="vk-goal-time" aria-label={`${t("composer.goal.duration")}: ${duration}`}>{duration}</span>
+      <Button aria-label={t("composer.goal.action.edit")} disabled={props.disabled} onClick={props.onEdit} size="icon-sm" type="button" variant="ghost">
         <Edit3 size={14} />
       </Button>
       {props.goal.status === "budget_limited" ? (
-        <Button aria-label={t("composer.goal.action.resumeTask")} className="composer-goal-strip-button text" disabled={props.disabled} onClick={props.onResume} type="button" variant="ghost">
+        <Button aria-label={t("composer.goal.action.resumeTask")} disabled={props.disabled} onClick={props.onResume} type="button" variant="ghost">
           <PlayCircle size={14} />
           <span>{t("composer.goal.action.resumeTask")}</span>
         </Button>
       ) : toggleTarget !== null ? (
-        <Button aria-label={toggleTarget === "active" ? t("composer.goal.action.resume") : t("composer.goal.action.pause")} className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onToggleStatus} size="icon-sm" type="button" variant="ghost">
+        <Button aria-label={toggleTarget === "active" ? t("composer.goal.action.resume") : t("composer.goal.action.pause")} disabled={props.disabled} onClick={props.onToggleStatus} size="icon-sm" type="button" variant="ghost">
           {toggleTarget === "active" ? <PlayCircle size={14} /> : <PauseCircle size={14} />}
         </Button>
       ) : null}
-      <Button aria-label={t("composer.goal.action.clear")} className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onClear} size="icon-sm" type="button" variant="ghost">
+      <Button aria-label={t("composer.goal.action.clear")} disabled={props.disabled} onClick={props.onClear} size="icon-sm" type="button" variant="ghost">
         <Trash2 size={14} />
       </Button>
     </div>
@@ -87,12 +87,10 @@ export function ComposerPlanModeChip(props: {
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   return (
-    <button className="composer-plan-mode-chip" onClick={props.onClose} title={props.artifactName ?? t("composer.planMode")} type="button">
-      <span className="composer-plan-mode-icon">
-        <ListChecks size={14} />
-      </span>
+    <button className="vk-composer-chip" onClick={props.onClose} title={props.artifactName ?? t("composer.planMode")} type="button">
+      <ListChecks aria-hidden="true" size={14} />
       <span>{t("composer.planMode.label")}</span>
-      <span className="composer-plan-mode-close">
+      <span className="vk-composer-chip-close">
         <X size={12} />
       </span>
     </button>

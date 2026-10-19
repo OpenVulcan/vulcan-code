@@ -1,8 +1,6 @@
 import type { ReactNode } from "react";
 import { LoaderCircle, Send, Square } from "lucide-react";
-import { Button } from "@/ui-kit/primitives/button";
 import { ContextUsageOrb } from "@/components/composer/composer-controls";
-import { cn } from "@/lib/utils";
 import type {
   ContextCompactionWindowNodeId,
   ContextUsageSnapshot,
@@ -70,7 +68,7 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
   const hasAttachments = props.attachmentCount > 0;
   const stopOnly = props.isConversationRunning && !draftHasContent && !hasAttachments;
   return (
-    <div className="composer-toolbar-right">
+    <div className="vk-composer-end">
       <ContextUsageOrb
         key={`context:${props.draftSlotKey}`}
         contextCompactionWindowNodes={props.contextCompactionWindowNodes}
@@ -81,19 +79,19 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
         sessionProviderUsage={props.sessionProviderUsage}
       />
       {props.modelControls}
-      <Button
+      <button
         aria-label={stopOnly ? props.stopAriaLabel : props.sendAriaLabel}
-        className={cn("send-button", stopOnly && "running", !stopOnly && !draftHasContent && !hasAttachments && "is-empty")}
+        className="vk-send"
+        data-state={stopOnly ? "stop" : !draftHasContent && !hasAttachments ? "empty" : undefined}
         aria-busy={stopOnly && props.stopPending}
         disabled={stopOnly ? props.stopPending : props.sendBlocked}
         onClick={props.onSend}
-        size="icon"
         type="button"
       >
         {stopOnly ? (props.stopPending
-          ? <LoaderCircle aria-hidden="true" className="animate-spin" size={18} />
+          ? <LoaderCircle aria-hidden="true" className="vk-spin" size={18} />
           : <Square fill="currentColor" size={15} strokeWidth={0} />) : <Send size={18} />}
-      </Button>
+      </button>
     </div>
   );
 }

@@ -275,7 +275,7 @@ button.vk-a-gallery-media:focus-visible { outline: 2px solid var(--vk-signal); o
 /* ---------- Reply tray ---------- */
 /* A strip on top of the composer, like the goal strip, holding the reader's pending picks and comments. */
 .vk-a-reply-tray { display: flex; align-self: center; align-items: center; gap: calc(var(--vk-u) * 2.5); width: 90%; min-height: calc(var(--vk-u) * 8.5); margin-bottom: calc(var(--vk-u) * -2.5); padding: 2px calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); border: var(--vk-bw) solid color-mix(in srgb, var(--vk-signal) 35%, var(--vk-line)); border-bottom: 0; background: color-mix(in srgb, var(--vk-signal) 6%, var(--vk-panel)); color: var(--vk-signal); pointer-events: auto; }
-.composer-goal-strip:has(+ .vk-a-reply-tray) { margin-bottom: 0; }
+.vk-goal:has(+ .vk-a-reply-tray) { margin-bottom: 0; }
 .vk-a-reply-tray-counts { display: inline-flex; flex: 1 1 auto; gap: calc(var(--vk-u) * 3); min-width: 0; color: var(--vk-ink); font-size: var(--vk-fs-md); white-space: nowrap; }
 .vk-a-reply-tray-counts b { margin-left: 2px; color: var(--vk-signal); font-weight: 600; font-variant-numeric: tabular-nums; }
 .vk-a-reply-tray .vk-a-reply-tray-insert { color: var(--vk-signal); font-weight: 600; }

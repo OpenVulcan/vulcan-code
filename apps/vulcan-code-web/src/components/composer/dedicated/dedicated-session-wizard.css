@@ -1,22 +1,6 @@
 /* Dedicated assistant creation wizard; loaded only with the lazy wizard chunk. */
 /* 专职助手创建向导；只随懒加载向导分块载入。 */
 
-/* While the wizard is shown the dock spans the conversation height instead of floating above an
-   offset, so a tall step scrolls inside the wizard rather than overflowing the page. */
-/* 向导显示期间输入区停靠层占满会话高度而不是按偏移悬浮，较高的步骤在向导内滚动而不越出页面。 */
-.composer-dock.dedicated-wizard-mode {
-  top: 16px;
-  bottom: 16px;
-  justify-content: center;
-}
-
-/* The centred wizard occupies the empty-state heading's place, so the heading leaves as it does on submit. */
-/* 居中的向导占据空状态标题的位置，因此标题与提交时一样淡出离场。 */
-.vk-chat[data-empty]:has(> .composer-dock.dedicated-wizard-mode) > .vk-empty-prompt {
-  opacity: 0;
-  transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))) translateY(-16px);
-}
-
 .dedicated-wizard {
   width: 100%;
   min-height: 0;

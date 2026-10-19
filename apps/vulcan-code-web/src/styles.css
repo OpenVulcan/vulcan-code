@@ -103,12 +103,6 @@ button {
   transition: stroke-dashoffset 180ms ease;
 }
 
-@media (max-width: 1040px) {
-  .composer-panel {
-    grid-column: 1;
-  }
-}
-
 @media (max-width: 720px) {
   .project-settings-grid,
   .project-settings-form-grid,

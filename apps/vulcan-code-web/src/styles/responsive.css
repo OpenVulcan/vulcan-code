@@ -109,38 +109,10 @@
     flex-wrap: wrap;
   }
 
-  .composer-dock {
-    bottom: 10px;
-    max-width: calc(100% - 20px);
-  }
-
-  .composer-toolbar {
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 6px;
-  }
-
-  .composer-toolbar-left {
-    display: contents;
-  }
-
   .composer-select-trigger.model {
     flex: 1 1 calc(100% - 144px);
     width: auto;
     max-width: none;
-  }
-
-  /* The right group now carries the model trigger, so it may shrink and let the model name ellipsize. */
-  /* 右侧分组现在包含模型触发器，因此允许收缩，让模型名称以省略号截断。 */
-  .composer-toolbar-right {
-    margin-left: auto;
-    flex: 0 1 auto;
-    max-width: 100%;
-  }
-
-  .composer-panel textarea {
-    font-size: var(--vcn-font-size-xl);
-    max-height: min(240px, 30dvh);
   }
 
   .composer-select-label {
@@ -315,8 +287,8 @@
     min-width: 40px;
   }
 
-  :is(.composer-toolbar, .vk-stage-head, .vk-shell-drawer) button,
-  .composer-toolbar [role="combobox"] {
+  :is(.vk-composer-bar, .vk-stage-head, .vk-shell-drawer) button,
+  .vk-composer-bar [role="combobox"] {
     min-height: 40px;
     min-width: 40px;
   }
@@ -362,10 +334,3 @@
   }
 }
 
-/* Motion preferences apply to shell transitions as well as component animations. */
-/* 动效偏好同时作用于外壳过渡与组件动画。 */
-@media (prefers-reduced-motion: reduce) {
-  .composer-dock {
-    transition: none;
-  }
-}
