@@ -24,7 +24,7 @@ use vulcan_session_core::v1::event::{
     RedactedApiError,
 };
 use vulcan_session_core::v1::stats::UsageSnapshot;
-use vulcan_subagent_core::{SPAWN_AGENT_TOOL, SUBAGENT_TASK_ID_KEY, SUBAGENT_TASK_KIND};
+use vulcan_subagent_core::{SPAWN_AGENT_TOOL, SUBAGENT_RECEIPT_KIND, SUBAGENT_TASK_ID_KEY};
 
 /// Stable public tool name for the host-owned persistent terminal.
 /// 宿主持有的持久化终端稳定公开工具名。
@@ -433,12 +433,13 @@ fn lua_session_external_refs(
     }
 }
 
-/// Extracts the stable child-session identity from the exact spawn-agent result schema.
-/// 从精确 spawn-agent 结果 schema 提取稳定子会话身份。
+/// Extracts the stable child-session identity from the conversation receipt that every registered spawn-agent
+/// result is projected into before it reaches the provider sink.
+/// 从会话回执中提取稳定子会话身份；每个已注册的 spawn-agent 结果在到达 Provider 接收端前都会投影为该回执。
 fn subagent_external_refs(
     result: &ToolInvocationResult,
 ) -> Result<Vec<ExternalResourceRef>, ProviderV1ExternalResourceError> {
-    let payload = typed_resource_payload::<SubagentResourcePayload>(result, SUBAGENT_TASK_KIND)?;
+    let payload = typed_resource_payload::<SubagentResourcePayload>(result, SUBAGENT_RECEIPT_KIND)?;
     Ok(vec![required_external_ref(
         result,
         ExternalResourceKind::Subagent,
@@ -1302,7 +1303,7 @@ mod tests {
         let subagent = resource_tool_result(
             SPAWN_AGENT_TOOL,
             serde_json::json!({
-                "kind": SUBAGENT_TASK_KIND,
+                "kind": SUBAGENT_RECEIPT_KIND,
                 "payload": {(SUBAGENT_TASK_ID_KEY): "subagent-1"}
             }),
         );

@@ -39,6 +39,10 @@ pub const CLOSE_AGENT_TOOL: &str = "close_agent";
 /// Vulcan 子代理任务的规范宿主结果类型。
 pub const SUBAGENT_TASK_KIND: &str = "subagent_task";
 
+/// Host-result kind of the conversation reading projection that replaces a completed spawn, message or list result.
+/// 会话阅读投影替换已完成的启动、消息或列表结果后使用的宿主结果类型。
+pub const SUBAGENT_RECEIPT_KIND: &str = "subagent_receipt_v1";
+
 /// Canonical payload key for the internal child-agent task identifier.
 /// 内部子代理任务标识的规范载荷字段。
 pub const SUBAGENT_TASK_ID_KEY: &str = "subagent_task_id";
