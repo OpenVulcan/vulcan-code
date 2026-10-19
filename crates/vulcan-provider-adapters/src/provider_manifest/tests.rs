@@ -125,6 +125,33 @@ fn bundled_video_understanding_targets_compile_with_exact_upload_references() {
 
 /// Verifies MiniMax M3 binds to the video-capable OpenAI route, rejects native structured output, and owns both regional upload channels.
 /// 验证 MiniMax M3 固定绑定支持视频的 OpenAI 路由、不声明原生结构化输出，并拥有两个区域上传通道。
+/// Verifies service tags follow entry kinds and standalone tool families, not generation features.
+/// 验证服务标记遵循入口类型与独立工具类别，而非生成类功能。
+#[test]
+fn compiled_descriptor_derives_service_tags_from_entries_and_tool_families() {
+    use crate::ProviderServiceTag::{Analysis, Model, Search};
+    // compiled_tags compiles one bundled manifest and returns its derived tags.
+    // compiled_tags 编译一份随包清单并返回其派生标记。
+    let compiled_tags = |file: &str| {
+        let path = vulcan_runtime_assets::source_bundled_provider_manifests_directory().join(file);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("missing bundled manifest at {}", path.display()));
+        super::compiler::compile_manifest_text(text.as_str(), super::ManifestOwnership::System)
+            .unwrap_or_else(|error| panic!("{file} must compile: {error:?}"))
+            .descriptor
+            .service_tags
+    };
+    // Tavily exposes only provider tools, so it carries no model tag.
+    // Tavily 只公开供应商工具，因此没有模型标记。
+    assert_eq!(compiled_tags("tavily.json"), vec![Search]);
+    // Kimi's video understanding is a standalone analysis service beside its models.
+    // Kimi 的视频理解是模型之外的独立分析服务。
+    assert_eq!(compiled_tags("kimi.json"), vec![Model, Analysis]);
+    // Image generation belongs to models and adds no tag of its own.
+    // 图片生成归属于模型，不单独增加标记。
+    assert_eq!(compiled_tags("apikeyfan.json"), vec![Model]);
+}
+
 #[test]
 fn bundled_minimax_m3_declares_image_video_and_provider_upload_contract() {
     // manifestPath is the authoritative MiniMax source asset used by production compilation.

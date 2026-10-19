@@ -109,6 +109,22 @@ pub(crate) struct PublicAiInternalModelEnabledSaveRequest {
     enabled: bool,
 }
 
+/// Saves one internal-use choice for several models of one provider.
+/// 为同一供应商的多个模型保存一项内部使用选择。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PublicAiInternalModelSetEnabledSaveRequest {
+    /// Exact provider identifier owning every listed model.
+    /// 持有全部所列模型的精确供应商标识。
+    provider_id: String,
+    /// Exact model identifiers; duplicates are ignored and the list must not be empty.
+    /// 精确模型标识；重复项被忽略，列表不得为空。
+    model_ids: Vec<String>,
+    /// Requested enabled state for every listed model.
+    /// 每个所列模型请求的启用状态。
+    enabled: bool,
+}
+
 /// Replaces one exact consumer-profile inference route.
 /// 替换一条精确消费者配置档推理路由。
 #[derive(Debug, Clone, Deserialize)]
@@ -233,24 +249,81 @@ pub(crate) async fn service_save_public_ai_internal_model_enabled(
     state: SharedServiceBridgeState,
     request: PublicAiInternalModelEnabledSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    save_public_ai_internal_model_use(
+        app,
+        state,
+        request.provider_id.as_str(),
+        &[request.model_id],
+        request.enabled,
+    )
+    .await
+}
+
+/// Saves one internal-use switch for several models of one provider in a single transaction.
+/// 在单个事务中为同一供应商的多个模型保存内部使用开关。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, and `request` identify the settings transaction, the exact models, and their new state.
+/// `app`、`state` 与 `request` 标识设置事务、精确模型及其新状态。
+///
+/// # Returns
+/// 返回值
+/// The complete refreshed settings snapshot, or an explicit failure that leaves every model unchanged.
+/// 返回完整刷新后的设置快照；失败时显式报错且所有模型保持不变。
+pub(crate) async fn service_save_public_ai_internal_model_set_enabled(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiInternalModelSetEnabledSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    save_public_ai_internal_model_use(
+        app,
+        state,
+        request.provider_id.as_str(),
+        &request.model_ids,
+        request.enabled,
+    )
+    .await
+}
+
+/// Applies one internal-use state to a set of provider models atomically.
+/// 将一项内部使用状态原子地应用到一组供应商模型。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` owns every model in `model_ids`; `enabled` is applied to each of them.
+/// `provider_id` 持有 `model_ids` 中的全部模型；`enabled` 应用到其中每个模型。
+///
+/// # Returns
+/// 返回值
+/// The complete refreshed settings snapshot.
+/// 返回完整刷新后的设置快照。
+async fn save_public_ai_internal_model_use(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    provider_id: &str,
+    model_ids: &[String],
+    enabled: bool,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", provider_id)?;
+    let model_ids = super::model_settings::deduplicated_model_ids(model_ids)?;
     // transaction serializes validation, activation, and Workbench publication.
     // transaction 串行化校验、激活与工作台发布。
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let providers = runtime.effective_providers(&current_configuration)?;
     let catalogs = runtime.catalog_snapshot()?;
-    let exists =
-        build_internal_inference_candidates(&current_configuration, &providers, &catalogs)?
-            .iter()
-            .any(|candidate| {
-                candidate.route.provider_id == request.provider_id
-                    && candidate.route.model_id == request.model_id
-            });
-    if !exists {
-        return Err(format!(
-            "Provider `{}` model `{}` does not expose a registered internal inference operation.",
-            request.provider_id, request.model_id
-        ));
+    let candidates =
+        build_internal_inference_candidates(&current_configuration, &providers, &catalogs)?;
+    for model_id in &model_ids {
+        let exists = candidates.iter().any(|candidate| {
+            candidate.route.provider_id == provider_id && candidate.route.model_id == *model_id
+        });
+        if !exists {
+            return Err(format!(
+                "Provider `{provider_id}` model `{model_id}` does not expose a registered internal inference operation."
+            ));
+        }
     }
     let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
         &app,
@@ -259,11 +332,9 @@ pub(crate) async fn service_save_public_ai_internal_model_enabled(
         &current_configuration,
         "Failed to save the internal inference model enable state",
         |configuration| {
-            configuration.set_internal_model_enabled(
-                request.provider_id.as_str(),
-                request.model_id.as_str(),
-                request.enabled,
-            );
+            for model_id in &model_ids {
+                configuration.set_internal_model_enabled(provider_id, model_id, enabled);
+            }
             Ok(())
         },
         |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),

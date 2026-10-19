@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 32,
-  "published_at": "2026-10-14T00:00:00Z",
+  "revision": 33,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -31,7 +31,13 @@
   "display": {
     "name": "MiniMax",
     "category": "official",
-    "credential_directory_visibility": "configured_only"
+    "directory_rank": 30,
+    "credential_directory_visibility": "configured_only",
+    "promotion": {
+      "signup_url": "https://platform.minimax.io/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
   },
   "credential_registration": "mini_max_regional_api_key",
   "services": [

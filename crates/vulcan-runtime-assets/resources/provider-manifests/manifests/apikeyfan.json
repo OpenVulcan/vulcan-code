@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "apikeyfan",
-"revision": 10,
-"published_at": "2026-09-23T04:30:08Z",
+"revision": 11,
+"published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -22,6 +22,7 @@
   "display": {
     "name": "APIKEY.FAN",
     "category": "relay",
+    "directory_rank": 100,
     "credential_directory_visibility": "pinned_onboarding",
     "promotion": {
       "signup_url": "https://apikey.fan/register",

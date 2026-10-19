@@ -139,6 +139,7 @@ pub fn project_custom_descriptor_manifest(
                     partnership_kind: promotion.partnership_kind,
                     disclosure_key: promotion.disclosure_key,
                 }),
+            directory_rank: provider.directory_rank,
         },
         credential_registration: provider.credential_registration,
         services,
@@ -223,6 +224,9 @@ pub fn custom_manifest_matches_activated_descriptor(
 /// This function mutates the temporary projection and returns no value.
 /// 此函数修改临时投影且不返回值。
 fn clear_manifest_owned_protocol_profiles(descriptor: &mut ProviderDescriptor) {
+    // Service tags are derived from the manifest's entries and tool families at compile time.
+    // 服务标记在编译时由 Manifest 的入口与工具族推导。
+    descriptor.service_tags.clear();
     for service_entry in &mut descriptor.service_entries {
         for route in &mut service_entry.protocol_routes {
             route.usage_extraction_profiles.clear();

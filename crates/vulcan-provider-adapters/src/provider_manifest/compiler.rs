@@ -1489,8 +1489,46 @@ fn compile_descriptor(
         },
         credential_registration: manifest.credential_registration,
         promotion: manifest.display.promotion.as_ref().map(compile_promotion),
+        directory_rank: manifest.display.directory_rank,
+        service_tags: compile_service_tags(manifest),
         service_entries,
     })
+}
+
+/// Derives the provider's service-family tags from its declared entries and tool targets.
+/// 根据声明的入口与工具目标派生供应商的服务类别标记。
+///
+/// # Parameters
+/// 参数
+/// `manifest` is the validated provider manifest being compiled.
+/// `manifest` 是正在编译的已校验供应商清单。
+///
+/// # Returns
+/// 返回值
+/// Sorted, deduplicated tags: a conversation entry yields `Model`; search and analysis tool
+/// targets or templates yield their standalone families.
+/// 返回已排序去重的标记：会话入口产生 `Model`；搜索与分析工具目标或模板产生对应独立类别。
+fn compile_service_tags(manifest: &ProviderManifestV1) -> Vec<crate::ProviderServiceTag> {
+    let mut tags = BTreeSet::new();
+    if manifest
+        .services
+        .iter()
+        .any(|entry| entry.kind == super::ManifestEntryKind::Conversation)
+    {
+        tags.insert(crate::ProviderServiceTag::Model);
+    }
+    let capabilities = manifest
+        .tool_targets
+        .iter()
+        .map(|target| target.capability)
+        .chain(
+            manifest
+                .tool_target_templates
+                .iter()
+                .map(|template| template.capability),
+        );
+    tags.extend(capabilities.filter_map(crate::ProviderServiceTag::for_tool_capability));
+    tags.into_iter().collect()
 }
 
 /// Compiles every declared provider tool target into the runtime descriptor.

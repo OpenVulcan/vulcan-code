@@ -361,6 +361,8 @@ impl CustomProviderDefinition {
             credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
             credential_registration: crate::CredentialRegistrationKind::Direct,
             promotion: None,
+            directory_rank: None,
+            service_tags: vec![crate::ProviderServiceTag::Model],
             service_entries: vec![ServiceEntry {
                 id: String::from("default"),
                 display_name: String::from("Compatible API"),

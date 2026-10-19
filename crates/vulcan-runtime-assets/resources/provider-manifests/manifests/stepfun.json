@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "stepfun",
-  "revision": 4,
-  "published_at": "2026-09-24T18:40:23Z",
+  "revision": 5,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -19,7 +19,13 @@
   "display": {
     "name": "阶跃星辰 StepFun",
     "category": "official",
-    "credential_directory_visibility": "configured_only"
+    "directory_rank": 220,
+    "credential_directory_visibility": "configured_only",
+    "promotion": {
+      "signup_url": "https://platform.stepfun.com/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
   },
   "services": [
     {

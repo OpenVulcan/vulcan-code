@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 21,
-  "published_at": "2026-10-14T00:00:00Z",
+  "revision": 22,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -31,7 +31,13 @@
   "display": {
     "name": "Alibaba Cloud",
     "category": "cloud_maa_s",
-    "credential_directory_visibility": "configured_only"
+    "directory_rank": 40,
+    "credential_directory_visibility": "configured_only",
+    "promotion": {
+      "signup_url": "https://bailian.console.aliyun.com/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
   },
   "services": [
     {

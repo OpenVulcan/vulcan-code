@@ -146,7 +146,8 @@ pub(super) use inference_settings::{
 pub(super) use inference_settings::{
     remove_knowledge_inference_profiles, resolve_knowledge_internal_inference_candidate,
     service_save_public_ai_inference_route, service_save_public_ai_internal_model_enabled,
-    service_save_public_ai_internal_model_overrides, sync_knowledge_inference_profile,
+    service_save_public_ai_internal_model_overrides,
+    service_save_public_ai_internal_model_set_enabled, sync_knowledge_inference_profile,
 };
 pub(super) use inference_testing::service_test_public_ai_inference_route;
 // Preserve the original crate-visible RPC type paths even when dispatch infers their types.
@@ -191,9 +192,11 @@ pub(super) use model_settings::{
 };
 pub(super) use model_settings::{
     service_save_public_ai_connection_model_enabled,
+    service_save_public_ai_connection_model_set_enabled,
     service_save_public_ai_connection_models_enabled,
     service_save_public_ai_model_capability_overrides, service_save_public_ai_model_enabled,
-    service_save_public_ai_model_overrides, service_save_public_ai_provider_capability_overrides,
+    service_save_public_ai_model_overrides, service_save_public_ai_model_set_enabled,
+    service_save_public_ai_provider_capability_overrides,
 };
 // Preserve the existing OAuth request paths while RPC dispatch infers request types.
 // RPC 分发推导请求类型时仍保留现有 OAuth 请求路径。

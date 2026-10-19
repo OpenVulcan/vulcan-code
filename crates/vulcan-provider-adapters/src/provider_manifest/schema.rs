@@ -146,6 +146,10 @@ pub struct ManifestDisplay {
     /// 可选的公开注册与推广元数据。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub promotion: Option<ManifestPromotion>,
+    /// Optional ascending recommended position in the provider directory.
+    /// 可选的供应商目录升序推荐位置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory_rank: Option<u32>,
 }
 
 /// Provider business category projected from the manifest.

@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "open-design",
-  "revision": 2,
-  "published_at": "2026-10-14T17:22:34.274Z",
+  "revision": 3,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -18,7 +18,13 @@
   "display": {
     "name": "OpenDesign",
     "category": "relay",
-    "credential_directory_visibility": "pinned_onboarding"
+    "directory_rank": 250,
+    "credential_directory_visibility": "pinned_onboarding",
+    "promotion": {
+      "signup_url": "https://open-design.ai/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
   },
   "services": [
     {

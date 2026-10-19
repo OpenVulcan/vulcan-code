@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "fennoai",
-  "revision": 1,
-  "published_at": "2026-08-06T00:00:00Z",
+  "revision": 2,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -16,6 +16,7 @@
   "display": {
     "name": "FennoAI",
     "category": "relay",
+    "directory_rank": 130,
     "credential_directory_visibility": "pinned_onboarding",
     "promotion": {
       "signup_url": "https://api.fenno.ai/register",

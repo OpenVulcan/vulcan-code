@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "commandcode",
-  "revision": 10,
-  "published_at": "2026-09-16T08:56:22Z",
+  "revision": 11,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -18,7 +18,13 @@
   "display": {
     "name": "CommandCode",
     "category": "relay",
-    "credential_directory_visibility": "pinned_onboarding"
+    "directory_rank": 230,
+    "credential_directory_visibility": "pinned_onboarding",
+    "promotion": {
+      "signup_url": "https://commandcode.ai/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
   },
   "services": [
     {

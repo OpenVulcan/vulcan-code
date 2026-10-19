@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openvulcan",
-  "revision": 1,
-  "published_at": "2026-10-12T00:00:00Z",
+  "revision": 2,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -15,6 +15,7 @@
   "display": {
     "name": "OpenVulcan",
     "category": "official",
+    "directory_rank": 5,
     "credential_directory_visibility": "core_account"
   },
   "services": [

@@ -57,6 +57,52 @@ pub enum CredentialDirectoryVisibility {
     PinnedOnboarding,
 }
 
+/// Identifies one service family a provider offers, shown as a tag in the provider directory.
+/// 标识供应商提供的一类服务，在供应商目录中显示为标记。
+///
+/// Generation features stay with their models; only standalone search and analysis services get
+/// their own tag beside the model tag.
+/// 生成类功能归属于模型；只有独立的搜索与分析服务在模型标记之外拥有自己的标记。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderServiceTag {
+    /// Conversation models served through at least one conversation entry.
+    /// 通过至少一个会话入口提供的会话模型。
+    Model,
+    /// Standalone web search or page extraction tools.
+    /// 独立的网页搜索或网页抓取工具。
+    Search,
+    /// Standalone understanding or transcription services for files and media.
+    /// 面向文件与媒体的独立理解或转写服务。
+    Analysis,
+}
+
+impl ProviderServiceTag {
+    /// Maps one provider-tool capability to the standalone service family it belongs to.
+    /// 将一项供应商工具能力映射到其所属的独立服务类别。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `capability` is one declared provider-tool capability.
+    /// `capability` 是一项已声明的供应商工具能力。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The search or analysis tag, or `None` for generation features that belong to models.
+    /// 返回搜索或分析标记；属于模型的生成类功能返回 `None`。
+    pub fn for_tool_capability(capability: crate::ProviderToolCapabilityKind) -> Option<Self> {
+        use crate::ProviderToolCapabilityKind as Capability;
+        match capability {
+            Capability::WebSearch | Capability::WebExtract => Some(Self::Search),
+            Capability::ImageUnderstand
+            | Capability::VideoUnderstand
+            | Capability::AudioUnderstand
+            | Capability::SpeechTranscribe => Some(Self::Analysis),
+            _ => None,
+        }
+    }
+}
+
 /// Identifies the commercial relationship disclosed beside one registration link.
 /// 标识在注册链接旁披露的商业合作关系。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +203,14 @@ pub struct ProviderDescriptor {
     /// 可选的公开注册与推广元数据。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub promotion: Option<ProviderPromotion>,
+    /// Ascending recommended position in the provider directory; absent sorts after every ranked provider.
+    /// 供应商目录中的升序推荐位置；缺省时排在所有已排名供应商之后。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory_rank: Option<u32>,
+    /// Sorted, deduplicated service families offered by the provider.
+    /// 供应商提供的已排序、去重服务类别。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_tags: Vec<ProviderServiceTag>,
     /// Registered service entries.
     /// 已注册服务入口。
     pub service_entries: Vec<ServiceEntry>,

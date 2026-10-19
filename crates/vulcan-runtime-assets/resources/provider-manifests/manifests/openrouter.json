@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openrouter",
-  "revision": 13,
-  "published_at": "2026-10-10T00:00:00Z",
+  "revision": 14,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -26,7 +26,13 @@
   "display": {
     "name": "OpenRouter",
     "category": "relay",
-    "credential_directory_visibility": "configured_only"
+    "directory_rank": 200,
+    "credential_directory_visibility": "configured_only",
+    "promotion": {
+      "signup_url": "https://openrouter.ai/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
   },
   "services": [
     {

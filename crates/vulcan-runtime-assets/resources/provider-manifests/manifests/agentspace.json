@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "agentspace",
-  "revision": 2,
-  "published_at": "2026-09-10T00:00:00Z",
+  "revision": 3,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": ["openai-codex-responses.v1"],
@@ -13,7 +13,13 @@
   "display": {
     "name": "AgentSpace",
     "category": "relay",
-    "credential_directory_visibility": "pinned_onboarding"
+    "directory_rank": 270,
+    "credential_directory_visibility": "pinned_onboarding",
+    "promotion": {
+      "signup_url": "https://agent.space/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
   },
   "services": [
     {

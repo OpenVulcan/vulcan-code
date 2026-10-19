@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "deepseek",
-  "revision": 17,
-  "published_at": "2026-10-18T13:38:38Z",
+  "revision": 18,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -34,7 +34,13 @@
   "display": {
     "name": "DeepSeek",
     "category": "official",
-    "credential_directory_visibility": "configured_only"
+    "directory_rank": 10,
+    "credential_directory_visibility": "configured_only",
+    "promotion": {
+      "signup_url": "https://platform.deepseek.com/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
   },
   "services": [
     {

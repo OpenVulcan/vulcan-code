@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "google",
-"revision": 9,
-"published_at": "2026-08-18T00:00:00Z",
+"revision": 10,
+"published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -17,7 +17,13 @@
   "display": {
     "name": "Google",
     "category": "official",
-    "credential_directory_visibility": "configured_only"
+    "directory_rank": 70,
+    "credential_directory_visibility": "configured_only",
+    "promotion": {
+      "signup_url": "https://aistudio.google.com/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
   },
   "services": [
     {

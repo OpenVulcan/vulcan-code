@@ -992,6 +992,21 @@ rtk cargo run -p vulcan-provider-manifest-cli -- build-index crates/vulcan-runti
 该命令只生成本地随包清单，不替代远端 Index 的签名、验签和发布流程。生成后必须再次运行
 `validate-all`，且不得手工只改其中一个摘要以掩盖目录漂移。
 
+日常编辑随包清单后，用一条命令完成上述步骤：
+
+```powershell
+node scripts/provider-manifests-refresh.mjs            # 加 --dry-run 只列计划，加 --no-sync 跳过同步
+```
+
+脚本按 `bundled-index.json` 固定的摘要找出改动的清单；作者未提高 `revision` 的清单自动递增
+`revision` 并刷新 `published_at`（只改这两行，保留手工排版）；随后以下一个 Index 修订重建
+`bundled-index.json`、执行 `validate-all`，最后执行 `make.ps1 sync`。任一步失败即停止。
+
+`display.directory_rank` 决定供应商在设置目录「可添加」区的默认顺序（数字小者在前，未设置者排在
+最后）；用户已配置的供应商始终在前，并按用户自己的排序显示。`display.promotion.signup_url` 是
+目录与介绍卡上的注册入口；无合作关系的供应商使用 `partnership_kind: "none"` 与中性披露键，不得
+填写 `referral_url`。
+
 发布门禁脚本：
 
 ```powershell

@@ -42,6 +42,7 @@ fn minimal_manifest() -> ProviderManifestV1 {
             category: Default::default(),
             credential_directory_visibility: Default::default(),
             promotion: None,
+            directory_rank: None,
         },
         credential_registration: Default::default(),
         services: vec![crate::provider_manifest::schema::ManifestServiceEntry {

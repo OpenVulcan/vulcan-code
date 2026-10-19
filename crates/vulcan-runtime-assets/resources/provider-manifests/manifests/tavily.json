@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "tavily",
-  "revision": 3,
-  "published_at": "2026-08-18T00:00:00Z",
+  "revision": 4,
+  "published_at": "2026-10-19T07:42:22Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [],
@@ -19,7 +19,13 @@
   "display": {
     "name": "Tavily",
     "category": "official",
-    "credential_directory_visibility": "configured_only"
+    "directory_rank": 240,
+    "credential_directory_visibility": "configured_only",
+    "promotion": {
+      "signup_url": "https://app.tavily.com/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
   },
   "services": [
     {

@@ -120,6 +120,38 @@ pub(crate) struct PublicAiModelEnabledSaveRequest {
     restore: bool,
 }
 
+/// Saves one conversation choice for several models of one provider.
+/// 为同一供应商的多个模型保存一项会话选择。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PublicAiModelSetEnabledSaveRequest {
+    /// Exact provider identifier owning every listed model.
+    /// 持有全部所列模型的精确供应商标识。
+    provider_id: String,
+    /// Exact model identifiers; duplicates are ignored and the list must not be empty.
+    /// 精确模型标识；重复项被忽略，列表不得为空。
+    model_ids: Vec<String>,
+    /// Requested enabled state for every listed model.
+    /// 每个所列模型请求的启用状态。
+    enabled: bool,
+}
+
+/// Saves one access choice for several models of one credential account.
+/// 为一个凭据账号的多个模型保存一项访问选择。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PublicAiConnectionModelSetEnabledSaveRequest {
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    connection_id: String,
+    /// Exact upstream model identifiers; duplicates are ignored and the list must not be empty.
+    /// 精确上游模型标识；重复项被忽略，列表不得为空。
+    model_ids: Vec<String>,
+    /// Requested access state for every listed model.
+    /// 每个所列模型请求的访问状态。
+    enabled: bool,
+}
+
 /// Reads one account model from the management catalog independently from its access switch.
 /// 从独立于访问开关的管理目录读取一个账号模型。
 ///
@@ -252,99 +284,149 @@ pub(crate) async fn service_save_public_ai_connection_model_enabled(
     state: SharedServiceBridgeState,
     request: PublicAiConnectionModelEnabledSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
-    validate_non_empty("connectionId", request.connection_id.as_str())?;
-    validate_non_empty("modelId", request.model_id.as_str())?;
+    save_public_ai_connection_model_access(
+        app,
+        state,
+        request.connection_id.as_str(),
+        &[request.model_id],
+        request.enabled,
+    )
+    .await
+}
+
+/// Saves one access choice for several models of one credential account in a single transaction.
+/// 在单个事务中为一个凭据账号的多个模型保存访问选择。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes changes, `state` owns configuration/runtime, and `request` lists the exact models and their new state.
+/// `app` 发布变更，`state` 持有配置与运行时，`request` 列出精确模型及其新状态。
+///
+/// # Returns
+/// 返回值
+/// Returns the rebuilt snapshot, or an explicit failure that leaves every model unchanged.
+/// 返回重建快照；失败时显式报错且所有模型保持不变。
+pub(crate) async fn service_save_public_ai_connection_model_set_enabled(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiConnectionModelSetEnabledSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    save_public_ai_connection_model_access(
+        app,
+        state,
+        request.connection_id.as_str(),
+        &request.model_ids,
+        request.enabled,
+    )
+    .await
+}
+
+/// Applies one access state to a set of models of one credential account atomically.
+/// 将一项访问状态原子地应用到一个凭据账号的一组模型。
+///
+/// # Parameters
+/// 参数
+/// `connection_id` owns every model in `model_ids`; `enabled` is applied to each of them.
+/// `connection_id` 持有 `model_ids` 中的全部模型；`enabled` 应用到其中每个模型。
+///
+/// # Returns
+/// 返回值
+/// Returns the rebuilt snapshot after validated persistence and exact lease revocation, or an explicit failure.
+/// 校验持久化并完成精确租约撤销后返回重建快照，或返回显式失败。
+async fn save_public_ai_connection_model_access(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    connection_id: &str,
+    model_ids: &[String],
+    enabled: bool,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("connectionId", connection_id)?;
+    let model_ids = deduplicated_model_ids(model_ids)?;
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let connection = current_configuration
         .connection_graph
         .connections
-        .get(request.connection_id.as_str())
-        .ok_or_else(|| {
-            format!(
-                "Credential connection `{}` is not configured.",
-                request.connection_id
-            )
-        })?;
-    let Some(management_model) = connection_management_model(
-        runtime.as_ref(),
-        &current_configuration,
-        request.connection_id.as_str(),
-        request.model_id.as_str(),
-    )?
-    else {
-        return Err(format!(
-            "Credential connection `{}` does not support model `{}`.",
-            request.connection_id, request.model_id
-        ));
-    };
-    if request.enabled
-        && let Some(issue) = model_capability_limit_issue(
-            request.connection_id.as_str(),
-            request.model_id.as_str(),
-            &management_model.capabilities,
-            &management_model.capability_evidence,
-        )
-    {
-        return Err(format!(
-            "Model `{}` cannot be enabled until its configuration is repaired: {issue}",
-            request.model_id
-        ));
-    }
-    if request.enabled
-        && !runtime.model_is_enabled_for_connection(
+        .get(connection_id)
+        .ok_or_else(|| format!("Credential connection `{connection_id}` is not configured."))?;
+    for model_id in &model_ids {
+        let Some(management_model) = connection_management_model(
+            runtime.as_ref(),
             &current_configuration,
-            request.connection_id.as_str(),
-            request.model_id.as_str(),
+            connection_id,
+            model_id,
         )?
-    {
-        return Err(format!(
-            "Provider `{}` has disabled model `{}`; enable the provider model before enabling it for a credential connection.",
-            connection.provider_id, request.model_id
-        ));
+        else {
+            return Err(format!(
+                "Credential connection `{connection_id}` does not support model `{model_id}`."
+            ));
+        };
+        if enabled
+            && let Some(issue) = model_capability_limit_issue(
+                connection_id,
+                model_id,
+                &management_model.capabilities,
+                &management_model.capability_evidence,
+            )
+        {
+            return Err(format!(
+                "Model `{model_id}` cannot be enabled until its configuration is repaired: {issue}"
+            ));
+        }
+        if enabled
+            && !runtime.model_is_enabled_for_connection(
+                &current_configuration,
+                connection_id,
+                model_id,
+            )?
+        {
+            return Err(format!(
+                "Provider `{}` has disabled model `{model_id}`; enable the provider model before enabling it for a credential connection.",
+                connection.provider_id
+            ));
+        }
     }
 
     let mut candidate_configuration = current_configuration.clone();
     if !candidate_configuration
         .connection_model_access_policies
-        .contains_key(request.connection_id.as_str())
+        .contains_key(connection_id)
     {
         let initial_policy = initial_connection_model_policy(
             runtime.as_ref(),
             &current_configuration,
-            request.connection_id.as_str(),
+            connection_id,
         )?;
         candidate_configuration
             .connection_model_access_policies
-            .insert(request.connection_id.clone(), initial_policy);
+            .insert(connection_id.to_owned(), initial_policy);
     }
-    candidate_configuration.set_connection_model_enabled(
-        request.connection_id.as_str(),
-        request.model_id.as_str(),
-        request.enabled,
-    );
+    for model_id in &model_ids {
+        candidate_configuration.set_connection_model_enabled(connection_id, model_id, enabled);
+    }
     let candidate_catalogs = runtime.resolved_model_catalog_snapshot(&candidate_configuration)?;
-    let active_was_disabled = !request.enabled
-        && candidate_configuration
+    // disabled_active_model_id names the active route model only when this save revokes it.
+    // disabled_active_model_id 仅在本次保存撤销当前路由模型时给出该模型。
+    let disabled_active_model_id = if enabled {
+        None
+    } else {
+        candidate_configuration
             .active
             .as_ref()
-            .is_some_and(|selection| {
-                selection.connection_id == request.connection_id
-                    && selection.model_id == request.model_id
-            });
-    let replacement = if active_was_disabled {
-        preferred_replacement_model_selection(
+            .filter(|selection| {
+                selection.connection_id == connection_id
+                    && model_ids.contains(selection.model_id.as_str())
+            })
+            .map(|selection| selection.model_id.clone())
+    };
+    if let Some(disabled_model_id) = disabled_active_model_id {
+        candidate_configuration.active = preferred_replacement_model_selection(
             runtime.as_ref(),
             &candidate_configuration,
             &candidate_catalogs,
             connection.provider_id.as_str(),
-            request.model_id.as_str(),
-        )?
-    } else {
-        None
-    };
-    if active_was_disabled {
-        candidate_configuration.active = replacement;
+            disabled_model_id.as_str(),
+        )?;
     }
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
 
@@ -361,15 +443,17 @@ pub(crate) async fn service_save_public_ai_connection_model_enabled(
             },
             |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
             |workspace| {
-                Ok(if request.enabled {
-                    BTreeSet::new()
-                } else {
-                    reconcile_disabled_connection_sessions(
-                        workspace,
-                        request.connection_id.as_str(),
-                        Some(request.model_id.as_str()),
-                    )
-                })
+                let mut changed_session_ids = BTreeSet::new();
+                if !enabled {
+                    for model_id in &model_ids {
+                        changed_session_ids.extend(reconcile_disabled_connection_sessions(
+                            workspace,
+                            connection_id,
+                            Some(model_id),
+                        ));
+                    }
+                }
+                Ok(changed_session_ids)
             },
             "connection_model_access_revoked",
         )?;
@@ -674,6 +758,18 @@ pub(crate) async fn service_save_public_ai_model_overrides(
     Ok(snapshot)
 }
 
+/// Requested conversation publication change applied to every model of one save.
+/// 一次保存中应用到每个模型的会话发布变更。
+#[derive(Debug, Clone, Copy)]
+enum ModelPublicationChange {
+    /// Persists an explicit enabled state.
+    /// 持久化显式启用状态。
+    Set(bool),
+    /// Restores the inherited value instead of creating or replacing a model layer.
+    /// 恢复继承值，而不是创建或替换模型层。
+    Restore,
+}
+
 /// Saves one provider-model conversation choice and reconciles invalid active selections.
 /// 保存一个供应商模型会话选择，并协调失效的当前选择。
 ///
@@ -691,6 +787,69 @@ pub(crate) async fn service_save_public_ai_model_enabled(
     state: SharedServiceBridgeState,
     request: PublicAiModelEnabledSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    let change = if request.restore {
+        ModelPublicationChange::Restore
+    } else {
+        ModelPublicationChange::Set(request.enabled)
+    };
+    save_public_ai_model_publication(
+        app,
+        state,
+        request.provider_id.as_str(),
+        &[request.model_id],
+        change,
+    )
+    .await
+}
+
+/// Saves one conversation choice for several models of one provider in a single transaction.
+/// 在单个事务中为同一供应商的多个模型保存会话选择。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes changes, `state` owns configuration/runtime, and `request` lists the exact models and their new state.
+/// `app` 发布变更，`state` 持有配置与运行时，`request` 列出精确模型及其新状态。
+///
+/// # Returns
+/// 返回值
+/// Returns the rebuilt snapshot, or an explicit failure that leaves every model unchanged.
+/// 返回重建快照；失败时显式报错且所有模型保持不变。
+pub(crate) async fn service_save_public_ai_model_set_enabled(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiModelSetEnabledSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    save_public_ai_model_publication(
+        app,
+        state,
+        request.provider_id.as_str(),
+        &request.model_ids,
+        ModelPublicationChange::Set(request.enabled),
+    )
+    .await
+}
+
+/// Applies one conversation publication change to a set of provider models atomically.
+/// 将一项会话发布变更原子地应用到一组供应商模型。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` owns every model in `model_ids`; `change` is applied to each of them.
+/// `provider_id` 持有 `model_ids` 中的全部模型；`change` 应用到其中每个模型。
+///
+/// # Returns
+/// 返回值
+/// Returns the rebuilt snapshot after default resolution, global selection repair, and exact lease revocation.
+/// 解析默认值、修正全局选择并精确撤销租约后返回重建快照。
+async fn save_public_ai_model_publication(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    provider_id: &str,
+    model_ids: &[String],
+    change: ModelPublicationChange,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", provider_id)?;
+    let model_ids = deduplicated_model_ids(model_ids)?;
     let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
     // transaction keeps manifest publication, support validation, persistence, and response projection ordered.
     // transaction 让 Manifest 发布、支持校验、持久化与响应投影保持有序。
@@ -701,39 +860,42 @@ pub(crate) async fn service_save_public_ai_model_enabled(
     // settings_catalog captures conversation model membership from one generation.
     // settings_catalog 从同一代际捕获会话模型成员关系。
     let settings_catalog = runtime.settings_catalog_snapshot(&current_configuration)?;
-    // conversation_model_supported accepts only manual or catalog models that explicitly expose
-    // text conversation. Provider extension targets have their own selection boundary.
-    // conversation_model_supported 仅接受手工模型或明确公开文本会话的目录模型；Provider 扩展目标
-    // 拥有独立选择边界。
-    let conversation_model_supported = current_configuration
-        .custom_model(request.provider_id.as_str(), request.model_id.as_str())
-        .is_some_and(|model| {
-            current_configuration
-                .custom_providers
-                .contains_key(request.provider_id.as_str())
-                || vulcan_provider_adapters::model_supports_text_conversation(&model.capabilities)
-        })
-        || current_configuration
-            .connection_graph
-            .connections
-            .values()
-            .filter(|connection| connection.provider_id == request.provider_id)
-            .any(|connection| {
-                settings_catalog
-                    .model_support_catalogs
-                    .get(connection.id.as_str())
-                    .is_some_and(|catalog| {
-                        catalog.models.iter().any(|model| {
-                            model.id == request.model_id
-                                && catalog_model_supports_text_conversation(model)
+    for model_id in &model_ids {
+        // conversation_model_supported accepts only manual or catalog models that explicitly expose
+        // text conversation. Provider extension targets have their own selection boundary.
+        // conversation_model_supported 仅接受手工模型或明确公开文本会话的目录模型；Provider 扩展目标
+        // 拥有独立选择边界。
+        let conversation_model_supported = current_configuration
+            .custom_model(provider_id, model_id)
+            .is_some_and(|model| {
+                current_configuration
+                    .custom_providers
+                    .contains_key(provider_id)
+                    || vulcan_provider_adapters::model_supports_text_conversation(
+                        &model.capabilities,
+                    )
+            })
+            || current_configuration
+                .connection_graph
+                .connections
+                .values()
+                .filter(|connection| connection.provider_id == provider_id)
+                .any(|connection| {
+                    settings_catalog
+                        .model_support_catalogs
+                        .get(connection.id.as_str())
+                        .is_some_and(|catalog| {
+                            catalog.models.iter().any(|model| {
+                                model.id == *model_id
+                                    && catalog_model_supports_text_conversation(model)
+                            })
                         })
-                    })
-            });
-    if !conversation_model_supported {
-        return Err(format!(
-            "Provider `{}` does not expose model `{}` for text conversation.",
-            request.provider_id, request.model_id
-        ));
+                });
+        if !conversation_model_supported {
+            return Err(format!(
+                "Provider `{provider_id}` does not expose model `{model_id}` for text conversation."
+            ));
+        }
     }
     // catalogs retains the same generation used for support validation and fallback selection.
     // catalogs 保留用于支持校验与回退选择的同一代际。
@@ -741,41 +903,38 @@ pub(crate) async fn service_save_public_ai_model_enabled(
     // candidateConfiguration freezes restore/default semantics before any durable activation.
     // candidateConfiguration 在任何持久激活前冻结恢复与默认值语义。
     let mut candidate_configuration = current_configuration.clone();
-    if request.restore {
-        candidate_configuration
-            .restore_model_enabled(request.provider_id.as_str(), request.model_id.as_str());
-    } else {
-        candidate_configuration.set_model_enabled(
-            request.provider_id.as_str(),
-            request.model_id.as_str(),
-            request.enabled,
-        );
+    for model_id in &model_ids {
+        match change {
+            ModelPublicationChange::Restore => {
+                candidate_configuration.restore_model_enabled(provider_id, model_id);
+            }
+            ModelPublicationChange::Set(enabled) => {
+                candidate_configuration.set_model_enabled(provider_id, model_id, enabled);
+            }
+        }
     }
-    // modelEffectivelyDisabled follows the resolved manifest default after a restore request.
-    // modelEffectivelyDisabled 在恢复请求后遵循已解析 Manifest 默认值。
-    let model_effectively_disabled = !runtime.model_is_enabled(
-        &candidate_configuration,
-        request.provider_id.as_str(),
-        request.model_id.as_str(),
-    );
-    // fallback is one deterministic enabled route and never probes another protocol.
-    // fallback 是一个确定性的已启用路由，绝不探测其他协议。
-    let fallback = if model_effectively_disabled {
-        first_enabled_model_selection(runtime.as_ref(), &candidate_configuration, &catalogs)?
-    } else {
-        None
-    };
+    // disabled_model_ids follows the resolved manifest default after a restore request.
+    // disabled_model_ids 在恢复请求后遵循已解析 Manifest 默认值。
+    let disabled_model_ids = model_ids
+        .iter()
+        .copied()
+        .filter(|model_id| {
+            !runtime.model_is_enabled(&candidate_configuration, provider_id, model_id)
+        })
+        .collect::<BTreeSet<_>>();
     let active_model_is_disabled =
         candidate_configuration
             .active
             .as_ref()
             .is_some_and(|selection| {
-                selection.provider_id == request.provider_id
-                    && selection.model_id == request.model_id
-                    && model_effectively_disabled
+                selection.provider_id == provider_id
+                    && disabled_model_ids.contains(selection.model_id.as_str())
             });
     if active_model_is_disabled {
-        candidate_configuration.active = fallback;
+        // fallback is one deterministic enabled route and never probes another protocol.
+        // fallback 是一个确定性的已启用路由，绝不探测其他协议。
+        candidate_configuration.active =
+            first_enabled_model_selection(runtime.as_ref(), &candidate_configuration, &catalogs)?;
     }
     let (_configuration, snapshot) =
         mutate_public_ai_configuration_and_publish_sessions_in_transaction(
@@ -790,21 +949,75 @@ pub(crate) async fn service_save_public_ai_model_enabled(
             },
             |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
             |workspace| {
-                Ok(if model_effectively_disabled {
+                Ok(if disabled_model_ids.is_empty() {
+                    BTreeSet::new()
+                } else {
                     reconcile_explicitly_revoked_session_model_selections(
                         workspace,
                         |_session_id, runtime_state| {
-                            runtime_state.active_provider_id.as_deref()
-                                == Some(request.provider_id.as_str())
-                                && runtime_state.active_model_id.as_deref()
-                                    == Some(request.model_id.as_str())
+                            runtime_state.active_provider_id.as_deref() == Some(provider_id)
+                                && runtime_state
+                                    .active_model_id
+                                    .as_deref()
+                                    .is_some_and(|model_id| disabled_model_ids.contains(model_id))
                         },
                     )
-                } else {
-                    BTreeSet::new()
                 })
             },
             "provider_model_access_revoked",
         )?;
     Ok(snapshot)
+}
+
+/// Validates and deduplicates the model identities of one set-based save.
+/// 校验并去重一次集合保存中的模型身份。
+///
+/// # Parameters
+/// 参数
+/// `model_ids` is the caller-supplied list of exact model identifiers.
+/// `model_ids` 是调用方提供的精确模型标识列表。
+///
+/// # Returns
+/// 返回值
+/// The sorted unique identities, or an error for an empty list or an empty identifier.
+/// 返回已排序的唯一身份；列表为空或标识为空时返回错误。
+pub(super) fn deduplicated_model_ids(model_ids: &[String]) -> Result<BTreeSet<&str>, String> {
+    if model_ids.is_empty() {
+        return Err(String::from("modelIds must list at least one model."));
+    }
+    for model_id in model_ids {
+        validate_non_empty("modelId", model_id.as_str())?;
+    }
+    Ok(model_ids.iter().map(String::as_str).collect())
+}
+
+#[cfg(test)]
+mod set_request_tests {
+    use super::*;
+
+    #[test]
+    fn set_saves_collapse_duplicates_and_reject_empty_identities() {
+        let ids = vec!["b".to_owned(), "a".to_owned(), "b".to_owned()];
+        assert_eq!(
+            deduplicated_model_ids(&ids).expect("valid ids"),
+            BTreeSet::from(["a", "b"])
+        );
+        assert!(deduplicated_model_ids(&[]).is_err());
+        assert!(deduplicated_model_ids(&["a".to_owned(), " ".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn set_requests_accept_only_the_list_shape() {
+        serde_json::from_value::<PublicAiModelSetEnabledSaveRequest>(serde_json::json!({
+            "providerId": "p", "modelIds": ["m"], "enabled": true
+        }))
+        .expect("list request should deserialize");
+        assert!(
+            serde_json::from_value::<PublicAiConnectionModelSetEnabledSaveRequest>(
+                serde_json::json!({ "connectionId": "c", "modelId": "m", "enabled": true })
+            )
+            .is_err(),
+            "a single-model field must not be accepted by a set request"
+        );
+    }
 }
