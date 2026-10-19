@@ -15,6 +15,7 @@ import {
   saveUnattendedSystemDefault,
 } from "@/service/permission-judge-service";
 import type { ProjectSummary, ProjectUnattendedDefaultSnapshot, UnattendedSystemDefaultSnapshot } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 /** Unattended defaults page: the system deny policy and each project's replacement. They only
  * prefill the dialog that turns unattended mode on; sessions keep the text the user confirmed.

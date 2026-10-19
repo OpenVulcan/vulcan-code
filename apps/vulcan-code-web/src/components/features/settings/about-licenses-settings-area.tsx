@@ -13,6 +13,7 @@ import {
   loadLicenseBody, loadLicenseCatalog,
   type LicenseCatalog, type LicenseDependency, type LicenseGroup,
 } from "@/service/licenses-service"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // LICENSE_DEPENDENCY_PAGE_SIZE bounds each dependency table without dropping search results.
 // LICENSE_DEPENDENCY_PAGE_SIZE 限制每页依赖表大小，不丢弃搜索结果。

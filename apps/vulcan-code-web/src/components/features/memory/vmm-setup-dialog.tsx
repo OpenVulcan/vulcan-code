@@ -1,4 +1,5 @@
 import * as React from "react"
+import { PageEmptyState } from "@/components/page"
 import {
   BrainCircuit,
   Check,
@@ -41,6 +42,8 @@ import type {
   VmmProtocolProjectEntry,
   VmmProtocolUserEntry,
 } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // VmmQuickSetupMode identifies the mutually exclusive VMM backend.
 // VmmQuickSetupMode 标识互斥的 VMM 后端。
@@ -377,12 +380,12 @@ function VmmSetupDialog({
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!effectiveBusy) onOpenChange(nextOpen) }}>
-      <DialogContent className="flex min-h-0 flex-col" size="xl" scrollMode="fixed-footer" showCloseButton={!effectiveBusy}
+      <DialogContent size="xl" scrollMode="fixed-footer" showCloseButton={!effectiveBusy}
         onEscapeKeyDown={(event) => { if (effectiveBusy) event.preventDefault() }}
         onInteractOutside={(event) => { if (effectiveBusy) event.preventDefault() }}>
-        <DialogHeader className="shrink-0">
-          <DialogTitle className="flex items-center gap-2">
-            <BrainCircuit className="size-5" aria-hidden="true" />
+        <DialogHeader>
+          <DialogTitle className="vk-form-inline">
+            <BrainCircuit className="vk-icon" aria-hidden="true" />
             {t("vmm.setup.title")}
           </DialogTitle>
           <DialogDescription>
@@ -390,8 +393,8 @@ function VmmSetupDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <Progress className="shrink-0" value={(step + 1) * 25} />
-        <fieldset disabled={effectiveBusy} className="min-h-0 min-w-0 flex-1 overflow-y-auto py-1">
+        <Progress value={(step + 1) * 25} />
+        <fieldset disabled={effectiveBusy} className="vk-form-loose">
           {step === 0 ? (
             <SetupModeStep
               apiKey={externalApiKey}
@@ -407,7 +410,7 @@ function VmmSetupDialog({
             />
           ) : null}
           {step === 1 ? (
-            <div className="space-y-3">
+            <div className="vk-form-stack">
               <SetupStepHeading
                 description={t("vmm.setup.inference.description")}
                 title={t("vmm.setup.inference.title")}
@@ -416,7 +419,7 @@ function VmmSetupDialog({
               {!inferenceReady ? (
                 <Alert>
                   <CircleAlert aria-hidden="true" />
-                  <AlertDescription className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <AlertDescription className="vk-form-bar">
                     <span>{t("vmm.setup.inference.required")}</span>
                     <Button
                       onClick={() => {
@@ -467,22 +470,22 @@ function VmmSetupDialog({
           ) : null}
 
           {effectiveBusy ? (
-            <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
-              <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+            <p className="vk-form-status">
+              <LoaderCircle className="vk-spin" aria-hidden="true" />
               {t("vmm.setup.running")}
             </p>
           ) : null}
           {failed ? (
-            <Alert className="mt-4" variant="destructive">
+            <Alert variant="destructive">
               <AlertDescription>
                 {t("vmm.setup.failed")}
-                {notice ? <span className="mt-1 block text-xs">{notice}</span> : null}
+                {notice ? <span className="vk-form-note">{notice}</span> : null}
               </AlertDescription>
             </Alert>
           ) : null}
         </fieldset>
 
-        <DialogFooter className="shrink-0 sm:justify-between">
+        <DialogFooter className="vk-form-spread">
           <Button
             disabled={effectiveBusy}
             onClick={() => {
@@ -493,7 +496,7 @@ function VmmSetupDialog({
             type="button"
             variant="outline"
           >
-            {step === 0 ? null : <ChevronLeft className="size-4" aria-hidden="true" />}
+            {step === 0 ? null : <ChevronLeft className="vk-icon" aria-hidden="true" />}
             {step === 0 ? t("vmm.setup.cancel") : t("vmm.setup.previous")}
           </Button>
           {step < 3 ? (
@@ -506,11 +509,11 @@ function VmmSetupDialog({
               type="button"
             >
               {t("vmm.setup.next")}
-              <ChevronRight className="size-4" aria-hidden="true" />
+              <ChevronRight className="vk-icon" aria-hidden="true" />
             </Button>
           ) : (
             <Button disabled={!canSubmit} onClick={() => void handleSubmit()} type="button">
-              {effectiveBusy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}
+              {effectiveBusy ? <LoaderCircle className="vk-spin" aria-hidden="true" /> : <Check className="vk-icon" aria-hidden="true" />}
               {t("vmm.setup.submit")}
             </Button>
           )}
@@ -547,32 +550,32 @@ function SetupModeStep({
 }) {
   const { t } = useI18n()
   return (
-    <div className="space-y-4">
+    <div className="vk-form-loose">
       <SetupStepHeading description={t("vmm.setup.mode.description")} title={t("vmm.setup.mode.title")} />
-      <RadioGroup className="grid gap-3 sm:grid-cols-2" onValueChange={(value) => onModeChange(value as VmmQuickSetupMode)} value={mode}>
-        <label className="flex cursor-pointer items-start gap-3 rounded-xl border p-4">
+      <RadioGroup className="vk-form-grid" onValueChange={(value) => onModeChange(value as VmmQuickSetupMode)} value={mode}>
+        <label className="vk-mem-choice">
           <RadioGroupItem value="native" />
           <span>
-            <span className="flex items-center gap-2 font-medium">
-              <BrainCircuit className="size-4" aria-hidden="true" />
+            <span className="vk-form-inline vk-form-em">
+              <BrainCircuit className="vk-icon" aria-hidden="true" />
               {t("vmm.setup.native.title")}
             </span>
-            <span className="mt-1 block text-sm text-muted-foreground">{t("vmm.setup.native.description")}</span>
+            <span className="vk-form-text">{t("vmm.setup.native.description")}</span>
           </span>
         </label>
-        <label className="flex cursor-pointer items-start gap-3 rounded-xl border p-4">
+        <label className="vk-mem-choice">
           <RadioGroupItem value="external" />
           <span>
-            <span className="flex items-center gap-2 font-medium">
-              <Server className="size-4" aria-hidden="true" />
+            <span className="vk-form-inline vk-form-em">
+              <Server className="vk-icon" aria-hidden="true" />
               {t("vmm.setup.external.title")}
             </span>
-            <span className="mt-1 block text-sm text-muted-foreground">{t("vmm.setup.external.description")}</span>
+            <span className="vk-form-text">{t("vmm.setup.external.description")}</span>
           </span>
         </label>
       </RadioGroup>
       {mode === "external" ? (
-        <div className="grid gap-4 rounded-xl border p-4 sm:grid-cols-2">
+        <div className="vk-form-box vk-form-grid">
           <SetupInput id="vmm-setup-endpoint" label={t("memory.advanced.endpoint")} onChange={onEndpointChange} placeholder="127.0.0.1:17625" value={endpoint} />
           <SetupInput id="vmm-setup-api-key" label={t("memory.advanced.apiKey")} onChange={onApiKeyChange} password value={apiKey} />
           <SetupInput id="vmm-setup-management-url" label={t("memory.advanced.managementEndpoint")} onChange={onManagementBaseUrlChange} placeholder="http://127.0.0.1:17635" value={managementBaseUrl} />
@@ -612,34 +615,34 @@ function SetupBindingsStep(props: {
     ? props.nativeProjects.map((project) => ({ id: String(project.projectId), label: project.name }))
     : props.externalProjects.map((project) => ({ id: String(project.project_id), label: project.display_path }))
   return (
-    <div className="space-y-4">
+    <div className="vk-form-loose">
       <SetupStepHeading description={t("vmm.setup.binding.description")} title={t("vmm.setup.binding.title")} />
-      <RadioGroup className="grid gap-3 sm:grid-cols-2" onValueChange={(value) => props.onBindingModeChange(value as VmmProjectBindingMode)} value={props.bindingMode}>
-        <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3">
+      <RadioGroup className="vk-form-grid" onValueChange={(value) => props.onBindingModeChange(value as VmmProjectBindingMode)} value={props.bindingMode}>
+        <label className="vk-mem-choice">
           <RadioGroupItem value="fixed" />
-          <span><span className="block text-sm font-medium">{t("vmm.setup.binding.fixed")}</span><span className="text-xs text-muted-foreground">{t("vmm.setup.binding.fixedDescription")}</span></span>
+          <span><span className="vk-field-label">{t("vmm.setup.binding.fixed")}</span><span className="vk-form-note">{t("vmm.setup.binding.fixedDescription")}</span></span>
         </label>
-        <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3">
+        <label className="vk-mem-choice">
           <RadioGroupItem value="per_project" />
-          <span><span className="block text-sm font-medium">{t("vmm.setup.binding.separate")}</span><span className="text-xs text-muted-foreground">{t("vmm.setup.binding.separateDescription")}</span></span>
+          <span><span className="vk-field-label">{t("vmm.setup.binding.separate")}</span><span className="vk-form-note">{t("vmm.setup.binding.separateDescription")}</span></span>
         </label>
       </RadioGroup>
 
       {props.mode === "native" ? (
-        <div className="space-y-2">
+        <div className="vk-form-stack">
           <Label>{t("vmm.setup.binding.defaultProject")}</Label>
           <ProjectSelect onChange={props.onNativeFixedProjectIdChange} options={existingProjects} value={props.nativeFixedProjectId} />
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="vk-form-grid">
           <SetupInput id="vmm-setup-user" label={t("vmm.setup.user")} onChange={props.onUserNameChange} value={props.userName} />
           <SetupInput id="vmm-setup-prefix" label={t("vmm.setup.binding.prefix")} onChange={props.onExternalProjectPrefixChange} placeholder="vulcan/space" value={props.externalProjectPrefix} />
         </div>
       )}
 
       {props.mode === "external" && props.bindingMode === "fixed" ? (
-        <div className="space-y-3">
-          <div className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[12rem_minmax(0,1fr)]">
+        <div className="vk-form-stack">
+          <div className="vk-form-box vk-mem-bind-fixed">
             <ActionSelect onChange={props.onExternalFixedActionChange} value={props.externalFixedAction} />
             {props.externalFixedAction === "create_and_bind" ? (
               <Input onChange={(event) => props.onExternalFixedProjectNameChange(event.target.value)} value={props.externalFixedProjectName} />
@@ -651,10 +654,10 @@ function SetupBindingsStep(props: {
       ) : null}
 
       {(
-        <div className="space-y-2">
-          <p className="text-sm font-medium">{t("vmm.setup.binding.unboundProjects")}</p>
+        <div className="vk-form-stack">
+          <p className="vk-form-strong">{t("vmm.setup.binding.unboundProjects")}</p>
           {props.projects.length === 0 ? (
-            <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">{t("vmm.setup.binding.none")}</p>
+            <PageEmptyState title={t("vmm.setup.binding.none")} />
           ) : props.projects.map((project) => {
             const decision = props.decisions[project.projectId]
             const fixedExternalLabel = props.externalFixedAction === "create_and_bind"
@@ -669,8 +672,8 @@ function SetupBindingsStep(props: {
               ? [{ id: FIXED_TARGET_SENTINEL, label: `${t("vmm.setup.binding.fixed")}: ${fixedTargetLabel}` }, ...existingProjects]
               : existingProjects
             return (
-              <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-[minmax(10rem,1fr)_12rem_minmax(12rem,1fr)]" key={project.projectId}>
-                <div className="min-w-0"><p className="truncate text-sm font-medium">{project.name}</p><p className="truncate text-xs text-muted-foreground">{project.projectId}</p></div>
+              <div className="vk-form-box vk-mem-bind-row" key={project.projectId}>
+                <div className="vk-form-cell"><p className="vk-form-name">{project.name}</p><p className="vk-form-note vk-truncate">{project.projectId}</p></div>
                 <ActionSelect
                   onChange={(action) => props.onDecisionChange(project.projectId, {
                     action,
@@ -705,9 +708,9 @@ function SetupConfirmationStep({ mode, bindingMode, projectCount }: {
 }) {
   const { t } = useI18n()
   return (
-    <div className="space-y-4">
+    <div className="vk-form-loose">
       <SetupStepHeading description={t("vmm.setup.confirm.description")} title={t("vmm.setup.confirm.title")} />
-      <dl className="grid gap-3 rounded-xl border p-4 sm:grid-cols-2">
+      <dl className="vk-form-stats">
         <SetupSummaryRow label={t("vmm.setup.mode.title")} value={mode === "native" ? t("vmm.setup.native.title") : t("vmm.setup.external.title")} />
         <SetupSummaryRow label={t("vmm.setup.binding.title")} value={bindingMode === "fixed" ? t("vmm.setup.binding.fixed") : t("vmm.setup.binding.separate")} />
         <SetupSummaryRow label={t("vmm.setup.binding.unboundProjects")} value={String(projectCount)} />
@@ -730,7 +733,7 @@ function SetupInput({ id, label, onChange, password = false, placeholder, value 
   placeholder?: string
   value: string
 }) {
-  return <div className="space-y-2"><Label htmlFor={id}>{label}</Label><Input id={id} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} type={password ? "password" : "text"} value={value} /></div>
+  return <div className="vk-form-stack"><Label htmlFor={id}>{label}</Label><Input id={id} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} type={password ? "password" : "text"} value={value} /></div>
 }
 
 // ActionSelect switches one row between creating a project and binding an existing project.
@@ -757,13 +760,13 @@ function ProjectSelect({ onChange, options, value }: {
 // SetupStepHeading renders one consistent wizard step heading.
 // SetupStepHeading 渲染一致的向导步骤标题。
 function SetupStepHeading({ description, title }: { description: string; title: string }) {
-  return <div><h3 className="text-base font-semibold">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{description}</p></div>
+  return <div><h3 className="vk-form-heading">{title}</h3><p className="vk-form-text">{description}</p></div>
 }
 
 // SetupSummaryRow renders one human-readable confirmation fact.
 // SetupSummaryRow 渲染一条人类可读确认事实。
 function SetupSummaryRow({ label, value }: { label: string; value: string }) {
-  return <div><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 truncate text-sm font-medium" title={value}>{value}</dd></div>
+  return <div><dt>{label}</dt><dd className="vk-truncate" title={value}>{value}</dd></div>
 }
 
 export { VmmSetupDialog }

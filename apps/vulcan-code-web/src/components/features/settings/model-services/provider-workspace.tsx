@@ -28,6 +28,7 @@ import type { ProviderAlert } from "./provider-alerts"
 import { ConnectProgress, ProviderConnectPanel } from "./provider-connect"
 import { AffiliateChip, providerCategoryLabel, providerSignupUrl, ProviderTagChips } from "./provider-intro"
 import type { SnapshotMutations } from "./use-snapshot-mutations"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ProviderWorkspaceProps binds the selected provider to the page-owned state and dialogs.
 // ProviderWorkspaceProps 将选中的供应商绑定到页面持有的状态与弹窗。

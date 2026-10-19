@@ -52,6 +52,8 @@ import type {
 import { VmmNativeSessionBrowser } from "./vmm-native-session-browser"
 import { VmmSearchRetrieval } from "./vmm-search-retrieval"
 import type { VmmMemorySearchRetrieval } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // MemorySearchHitView is the exact product projection used by one search card.
 // MemorySearchHitView 是单个检索卡片使用的准确产品投影。
@@ -201,7 +203,7 @@ function VmmContentPage({
   }, [onRunAction, snapshot.selectedConversationId, writeDetails, writeSummary])
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-4">
+    <div className="vk-form-loose">
       <PageTabs
         actions={<Button
           disabled={busy || !canWriteMemory}
@@ -211,7 +213,7 @@ function VmmContentPage({
           type="button"
           variant="outline"
         >
-          <Plus className="size-4" aria-hidden="true" />
+          <Plus className="vk-icon" aria-hidden="true" />
           {t("memory.content.add")}
         </Button>}
         ariaLabel={t("memory.content.title")}
@@ -242,10 +244,10 @@ function VmmContentPage({
       ) : null}
 
       </div>
-      <div hidden={contentMode !== "search"} className="space-y-4">
-      <p className="text-sm text-muted-foreground">{t("memory.workspace.searchScope")}</p>
+      <div hidden={contentMode !== "search"} className="vk-form-loose">
+      <p className="vk-form-text">{t("memory.workspace.searchScope")}</p>
       <form
-        className="flex flex-wrap gap-2"
+        className="vk-form-chips"
         onSubmit={(event) => {
           event.preventDefault()
           void submitSearch()
@@ -259,7 +261,7 @@ function VmmContentPage({
           value={query}
         />
         <Button disabled={busy || !query.trim()} type="submit">
-          <Search className="size-4" aria-hidden="true" />
+          <Search className="vk-icon" aria-hidden="true" />
           {t("memory.content.search")}
         </Button>
       </form>
@@ -267,9 +269,9 @@ function VmmContentPage({
       <div className={selectedHit ? "vmm-search-workspace" : ""}>
       <div>
       {searchHits.length === 0 ? (
-        <Empty className="min-h-72" variant="outlined">
+        <Empty variant="outlined">
           <EmptyHeader>
-            <EmptyMedia variant="icon"><Search className="size-5" /></EmptyMedia>
+            <EmptyMedia variant="icon"><Search className="vk-icon" /></EmptyMedia>
             <EmptyTitle>
               {searchPerformed ? t("memory.content.noResults") : t("memory.content.title")}
             </EmptyTitle>
@@ -279,27 +281,27 @@ function VmmContentPage({
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="vk-form-stack">
           {searchHits.map((hit) => (
             <Card key={hit.memoryId}>
-              <CardHeader className="gap-2">
-                <div className="flex items-start justify-between gap-3">
-                  <CardTitle className="line-clamp-2 text-base">{hit.summary}</CardTitle>
+              <CardHeader>
+                <div className="vk-form-row">
+                  <CardTitle className="vk-mem-clamp2">{hit.summary}</CardTitle>
                   {hit.category ? <Badge variant="secondary">{hit.category}</Badge> : null}
                 </div>
                 {hit.createdAt ? <CardDescription>{hit.createdAt}</CardDescription> : null}
               </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="line-clamp-4 text-sm text-muted-foreground">{hit.preview}</p>
+              <CardContent className="vk-form-stack">
+                <p className="vk-mem-excerpt vk-mem-clamp4">{hit.preview}</p>
                 {hit.retrieval ? <VmmSearchRetrieval retrieval={hit.retrieval} /> : null}
-                <div className="flex justify-end gap-2">
+                <div className="vk-form-acts">
                   <Button disabled={busy} onClick={() => void openDetails(hit)} size="sm" type="button" variant="outline">
-                    <FileText className="size-4" />
+                    <FileText className="vk-icon" />
                     {t("memory.content.details")}
                   </Button>
                   <Button onClick={() => setDeleteHit(hit)} size="icon-sm" type="button" variant="ghost">
-                    <Trash2 className="size-4 text-destructive" />
-                    <span className="sr-only">{t("memory.identity.delete")}</span>
+                    <Trash2 className="vk-icon vk-form-bad" />
+                    <span className="vk-sr-only">{t("memory.identity.delete")}</span>
                   </Button>
                 </div>
               </CardContent>
@@ -309,9 +311,9 @@ function VmmContentPage({
       )}
 
       </div>
-      {selectedHit ? <aside className="vmm-search-detail rounded-xl border p-4">
-        <div className="mb-4 flex items-start justify-between gap-3"><h3 className="text-base font-semibold">{selectedHit.summary}</h3><Button variant="ghost" size="sm" onClick={() => { setSelectedHit(null); setTurnDetail(null) }}>{t("memory.common.close")}</Button></div>
-          <div className="space-y-4 px-4 pb-4">
+      {selectedHit ? <aside className="vmm-search-detail vk-form-box">
+        <div className="vk-mem-tile-head vk-mem-mb4"><h3 className="vk-form-heading">{selectedHit.summary}</h3><Button variant="ghost" size="sm" onClick={() => { setSelectedHit(null); setTurnDetail(null) }}>{t("memory.common.close")}</Button></div>
+          <div className="vk-form-loose vk-form-pad">
             {busy && !turnDetail ? (
               <StreamPlaceholder label={t("memory.common.loading")} count={4} />
             ) : null}
@@ -344,8 +346,8 @@ function VmmContentPage({
             <AlertDialogTitle>{t("memory.content.deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>{t("memory.content.deleteDescription")}</AlertDialogDescription>
           </AlertDialogHeader>
-          {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
-          <div className="space-y-2">
+          {notice ? <p role="status" className="vk-form-text">{notice}</p> : null}
+          <div className="vk-form-stack">
             <Label htmlFor="vmm-memory-delete-reason">{t("memory.content.deleteReason")}</Label>
             <Input
               disabled={busy}
@@ -376,10 +378,10 @@ function VmmContentPage({
           if (!busy) setWriteOpen(open)
         }}
       >
-        <DialogContent className="flex min-h-0 flex-col" size="md" scrollMode="fixed-footer" showCloseButton={!busy}
+        <DialogContent size="md" scrollMode="fixed-footer" showCloseButton={!busy}
           onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}
           onInteractOutside={(event) => { if (busy) event.preventDefault() }}>
-          <DialogHeader className="shrink-0">
+          <DialogHeader>
             <DialogTitle>{t("memory.content.addTitle")}</DialogTitle>
             <DialogDescription>
               {t(snapshot.experienceState.deployment === "native"
@@ -387,9 +389,9 @@ function VmmContentPage({
                 : "memory.content.description")}
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
-            {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
-            <div className="space-y-2">
+          <div className="vk-fieldset vk-form-scroll">
+            {notice ? <p role="status" className="vk-form-text">{notice}</p> : null}
+            <div className="vk-form-stack">
               <Label htmlFor="vmm-write-summary">{t("memory.content.summary")}</Label>
               <Input
                 disabled={busy}
@@ -398,10 +400,10 @@ function VmmContentPage({
                 value={writeSummary}
               />
             </div>
-            <div className="space-y-2">
+            <div className="vk-form-stack">
               <Label htmlFor="vmm-write-details">{t("memory.content.fullDetails")}</Label>
               <Textarea
-                className="min-h-40"
+                className="vk-form-area"
                 disabled={busy}
                 id="vmm-write-details"
                 onChange={(event) => setWriteDetails(event.target.value)}
@@ -409,7 +411,7 @@ function VmmContentPage({
               />
             </div>
           </div>
-          <DialogFooter className="shrink-0">
+          <DialogFooter>
             <Button disabled={busy} onClick={() => setWriteOpen(false)} type="button" variant="outline">
               {t("memory.common.cancel")}
             </Button>
@@ -431,9 +433,9 @@ function VmmContentPage({
 // DetailBlock 渲染一个带标签且可选择的详情区块。
 function DetailBlock({ label, value }: { label: string; value: string }) {
   return (
-    <section className="space-y-1.5">
-      <h3 className="text-sm font-medium">{label}</h3>
-      <p className="whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-sm">{value}</p>
+    <section className="vk-form-tight">
+      <h3 className="vk-form-strong">{label}</h3>
+      <p className="vk-form-well vk-form-prose">{value}</p>
     </section>
   )
 }

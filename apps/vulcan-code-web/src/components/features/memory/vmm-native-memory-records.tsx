@@ -1,17 +1,11 @@
 import * as React from "react"
+import { PageEmptyState } from "@/components/page"
 import { BrainCircuit, Database, Eye, RefreshCw } from "lucide-react"
 
 import { Badge } from "@/ui-kit/primitives/badge"
 import { Button } from "@/ui-kit/primitives/button"
 import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/ui-kit/primitives/empty"
 import { Label } from "@/ui-kit/primitives/label"
 import { Checkbox } from "@/ui-kit/primitives/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
@@ -38,6 +32,8 @@ import type {
   VmmNativeTurnStatusCounts,
 } from "@/types"
 import { formatDateTime } from "@/lib/display-format"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // SESSION_OVERVIEW_VALUE is the non-identity selector value used for project-level session summaries.
 // SESSION_OVERVIEW_VALUE 是用于项目级会话汇总的非身份选择器值。
@@ -390,24 +386,24 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
-        <div className="min-w-0 space-y-1">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Database className="size-4" aria-hidden="true" />
+      <CardHeader className="vk-form-head">
+        <div>
+        <CardTitle className="vk-form-inline">
+          <Database className="vk-icon" aria-hidden="true" />
           {selectedSession ? nativeSessionLabel(selectedSession) : t("memory.nativeRecords.title")}
         </CardTitle>
         <CardDescription>{t("memory.nativeRecords.description")}</CardDescription>
         </div>
-        <Button className="shrink-0" disabled={effectiveBusy} type="button" variant="outline" onClick={() => {
+        <Button disabled={effectiveBusy} type="button" variant="outline" onClick={() => {
           if (!projectId) { loadedContextRef.current = null; setCatalogRefreshVersion((current) => current + 1); return }
           if (sessionId !== SESSION_OVERVIEW_VALUE) void loadSessionRecords(sessionId)
           else void loadProjectRecords(Number(projectId), null)
-        }}><RefreshCw className={`size-4 ${effectiveBusy ? "animate-spin" : ""}`} aria-hidden="true" />{t("memory.nativeRecords.refresh")}</Button>
+        }}><RefreshCw className={effectiveBusy ? "vk-spin" : undefined} aria-hidden="true" />{t("memory.nativeRecords.refresh")}</Button>
       </CardHeader>
-      <CardContent className="space-y-3">
-        {loadError ? <p role="alert" className="text-sm text-destructive">{t("memory.sessionList.detailFailed")}</p> : null}
-        {!initialSelection ? <div className="grid gap-3 md:grid-cols-2 md:items-end">
-          <div className="space-y-2">
+      <CardContent className="vk-form-stack">
+        {loadError ? <p role="alert" className="vk-field-error">{t("memory.sessionList.detailFailed")}</p> : null}
+        {!initialSelection ? <div className="vk-form-grid">
+          <div className="vk-form-stack">
             <Label>{t("memory.nativeRecords.project")}</Label>
             <Select
               disabled={effectiveBusy || !catalog?.projects.length}
@@ -428,7 +424,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
+          <div className="vk-form-stack">
             <Label>{t("memory.nativeRecords.session")}</Label>
             <Select
               disabled={effectiveBusy || !records?.sessions.length}
@@ -479,28 +475,28 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
         ) : null}
 
         {records && projectOverview && records.sessions.length > 0 ? (
-          <section className="space-y-3">
-            <h3 className="text-sm font-medium">{t("memory.nativeRecords.sessions")}</h3>
+          <section className="vk-form-stack">
+            <h3 className="vk-form-strong">{t("memory.nativeRecords.sessions")}</h3>
             <VmmNativeRemoval projectId={records.projectId} selection={{ kind: "sessions", ids: removalSessions }} sessionNames={sessionNames} busy={effectiveBusy} onBusyChange={setLocalBusy} onRunAction={onRunAction} onRefresh={() => loadProjectRecords(records.projectId, null)} />
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="vk-form-grid">
               {records.sessions.map((session) => (
-                <div className="relative" key={session.sessionSourceId}>
-                <Checkbox className="absolute left-3 top-4" aria-label={`${t("memory.removal.selectSession")} ${nativeSessionLabel(session)}`} checked={removalSessions.includes(session.sessionSourceId)} disabled={effectiveBusy || (session.status !== "active" && session.status !== "archived") || (!removalSessions.includes(session.sessionSourceId) && removalSessions.length >= 100)} onCheckedChange={(checked) => setRemovalSessions((current) => checked === true ? [...current, session.sessionSourceId] : current.filter((id) => id !== session.sessionSourceId))} />
+                <div className="vk-mem-pick" key={session.sessionSourceId}>
+                <Checkbox aria-label={`${t("memory.removal.selectSession")} ${nativeSessionLabel(session)}`} checked={removalSessions.includes(session.sessionSourceId)} disabled={effectiveBusy || (session.status !== "active" && session.status !== "archived") || (!removalSessions.includes(session.sessionSourceId) && removalSessions.length >= 100)} onCheckedChange={(checked) => setRemovalSessions((current) => checked === true ? [...current, session.sessionSourceId] : current.filter((id) => id !== session.sessionSourceId))} />
                 <button
-                  className="w-full rounded-xl border p-4 pl-10 text-left transition-colors hover:bg-muted/40"
+                  className="vk-mem-tile"
                   disabled={effectiveBusy}
                   onClick={() => void loadSessionRecords(session.sessionSourceId)}
                   type="button"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{nativeSessionLabel(session)}</p>
-                      <p className="truncate font-mono text-xs text-muted-foreground">{session.sessionSourceId}</p>
+                  <div className="vk-form-row">
+                    <div className="vk-form-cell">
+                      <p className="vk-form-name">{nativeSessionLabel(session)}</p>
+                      <p className="vk-form-id">{session.sessionSourceId}</p>
                       <NativeSessionStatus status={session.status} />
                     </div>
-                    <Eye className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <Eye className="vk-faint" aria-hidden="true" />
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                  <div className="vk-form-meta">
                     <span>{t("memory.nativeRecords.turns")} {session.turnCount}</span>
                     <span>{t("memory.nativeRecords.memories")} {session.memoryCount}</span>
                     <span>{t("memory.nativeRecords.profileNodes")} {session.profileNodeCount}</span>
@@ -508,7 +504,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                     <span>{t("memory.nativeRecords.pending")} {session.turnStatuses.pending}</span>
                   </div>
                   {session.lastActivityAtUnixMs != null ? (
-                    <p className="mt-2 text-xs text-muted-foreground">
+                    <p className="vk-form-note">
                       {t("memory.nativeRecords.lastActivity")} {formatNativeTimestamp(session.lastActivityAtUnixMs, locale)}
                     </p>
                   ) : null}
@@ -519,7 +515,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
           </section>
         ) : null}
 
-        {records && selectedSession ? <div className="flex flex-wrap items-start gap-2">
+        {records && selectedSession ? <div className="vk-form-inline">
           <VmmNativeSessionArchive
             key={`${records.projectId}:${selectedSession.sessionSourceId}:${selectedSession.status}`}
             projectId={records.projectId}
@@ -532,7 +528,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
         {(selectedSession.status === "active" || selectedSession.status === "archived") ? (
           <VmmNativeRemoval projectId={records.projectId} selection={{ kind: "sessions", ids: [selectedSession.sessionSourceId] }} sessionNames={sessionNames} busy={effectiveBusy} onBusyChange={setLocalBusy} onRunAction={onRunAction} onRefresh={() => loadSessionRecords(selectedSession.sessionSourceId)} />
         ) : null}
-          <details className="w-full text-xs"><summary className="cursor-pointer text-muted-foreground">{t("memory.workspace.recordInfo")}</summary><NativeSessionSummary session={selectedSession} /></details>
+          <details className="vk-mem-details"><summary>{t("memory.workspace.recordInfo")}</summary><NativeSessionSummary session={selectedSession} /></details>
         </div> : null}
 
         {records ? (
@@ -543,51 +539,51 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
               options={([["turns", "memory.nativeRecords.turns", records.turns.length], ["memories", "memory.nativeRecords.memories", records.memories.length], ["profiles", "memory.nativeRecords.profileNodes", records.profileNodes.length]] as const).map(([value, label, count]) => ({ count, label: t(label), value }))}
               value={recordView}
             />
-            {recordTotal > 30 ? <div className="flex items-center justify-between gap-2 text-sm"><span>{recordPage * 30 + 1}–{Math.min((recordPage + 1) * 30, recordTotal)} / {recordTotal}</span><div className="flex gap-2"><Button type="button" variant="outline" disabled={effectiveBusy || recordPage === 0} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage - 1 })) }}>{t("memory.sessionList.previous")}</Button><Button type="button" variant="outline" disabled={effectiveBusy || (recordPage + 1) * 30 >= recordTotal} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage + 1 })) }}>{t("memory.sessionList.next")}</Button></div></div> : null}
-            <section hidden={recordView !== "turns"} className="space-y-3">
-              <h3 className="text-sm font-medium">
+            {recordTotal > 30 ? <div className="vk-mem-pager"><span>{recordPage * 30 + 1}–{Math.min((recordPage + 1) * 30, recordTotal)} / {recordTotal}</span><div className="vk-form-inline"><Button type="button" variant="outline" disabled={effectiveBusy || recordPage === 0} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage - 1 })) }}>{t("memory.sessionList.previous")}</Button><Button type="button" variant="outline" disabled={effectiveBusy || (recordPage + 1) * 30 >= recordTotal} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage + 1 })) }}>{t("memory.sessionList.next")}</Button></div></div> : null}
+            <section hidden={recordView !== "turns"} className="vk-form-stack">
+              <h3 className="vk-form-strong">
                 {t(projectOverview
                   ? "memory.nativeRecords.projectTurnRecords"
                   : "memory.nativeRecords.turnRecords")}
               </h3>
               {records.turns.length > 0 ? <VmmNativeRemoval projectId={records.projectId} selection={{ kind: "turns", ids: removalTurns }} sessionNames={sessionNames} busy={effectiveBusy} onBusyChange={setLocalBusy} onRunAction={onRunAction} onRefresh={() => loadSessionRecords(sessionId)} /> : null}
               {records.turns.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noTurns")}</p>
+                <p className="vk-form-text">{t("memory.nativeRecords.noTurns")}</p>
               ) : (
-                <div className="space-y-2">
+                <div className="vk-form-stack">
                   {records.turns.slice(recordView === "turns" ? recordPage * 30 : 0, recordView === "turns" ? (recordPage + 1) * 30 : 30).map((turn) => (
-                    <div className="relative" key={turn.turnId}>
-                    <Checkbox className="absolute left-3 top-4" aria-label={`${t("memory.removal.selectTurn")} #${turn.turnId}`} checked={removalTurns.includes(`vmm-turn-${turn.turnId}`)} disabled={effectiveBusy || !Number.isSafeInteger(turn.turnId) || turn.turnId <= 0 || (!removalTurns.includes(`vmm-turn-${turn.turnId}`) && removalTurns.length >= 100)} onCheckedChange={(checked) => setRemovalTurns((current) => checked === true ? [...current, `vmm-turn-${turn.turnId}`] : current.filter((id) => id !== `vmm-turn-${turn.turnId}`))} />
+                    <div className="vk-mem-pick" key={turn.turnId}>
+                    <Checkbox aria-label={`${t("memory.removal.selectTurn")} #${turn.turnId}`} checked={removalTurns.includes(`vmm-turn-${turn.turnId}`)} disabled={effectiveBusy || !Number.isSafeInteger(turn.turnId) || turn.turnId <= 0 || (!removalTurns.includes(`vmm-turn-${turn.turnId}`) && removalTurns.length >= 100)} onCheckedChange={(checked) => setRemovalTurns((current) => checked === true ? [...current, `vmm-turn-${turn.turnId}`] : current.filter((id) => id !== `vmm-turn-${turn.turnId}`))} />
                     <button
-                      className="w-full rounded-xl border p-4 pl-10 text-left transition-colors hover:bg-muted/40"
+                      className="vk-mem-tile"
                       disabled={effectiveBusy}
                       onClick={() => setSelectedTurn(turn)}
                       type="button"
                     >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
+                      <div className="vk-form-bar">
+                        <div className="vk-form-inline">
                           <Badge variant={turn.status === "completed" ? "default" : "secondary"}>
                             {t(nativeTurnStatusKey(turn.status))}
                           </Badge>
-                          <span className="font-mono text-xs text-muted-foreground">#{turn.turnId}</span>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="vk-form-codeline vk-faint">#{turn.turnId}</span>
+                          <span className="vk-form-note">
                             {formatNativeTimestamp(turn.createdAtUnixMs, locale)}
                           </span>
                         </div>
-                        <span className="text-xs text-muted-foreground">
+                        <span className="vk-form-note">
                           {t("memory.nativeRecords.generatedMemories")} {turn.generatedMemoryIds.length}
                           {" · "}
                           {t("memory.nativeRecords.generatedProfiles")} {turn.generatedProfileNodeIds.length}
                         </span>
                       </div>
-                      <p className="mt-3 line-clamp-2 text-sm">{turn.userPreview || t("memory.nativeRecords.noUserPreview")}</p>
+                      <p className="vk-mem-excerpt vk-mem-clamp2">{turn.userPreview || t("memory.nativeRecords.noUserPreview")}</p>
                       {projectOverview ? (
-                        <p className="mt-2 truncate text-xs text-muted-foreground">
+                        <p className="vk-form-note vk-truncate">
                           {t("memory.nativeRecords.session")} {nativeSessionReference(records.sessions, turn.sessionSourceId)}
                         </p>
                       ) : null}
                       {turn.analysisAttemptCount > 0 ? (
-                        <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                        <p className="vk-mem-retry">
                           {t("memory.nativeRecords.retryCount")} {turn.analysisAttemptCount}
                           {turn.analysisLastError ? ` · ${turn.analysisLastError}` : ""}
                         </p>
@@ -599,34 +595,34 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
               )}
             </section>
 
-            <section hidden={recordView !== "memories"} className="space-y-3">
-              <h3 className="text-sm font-medium">
+            <section hidden={recordView !== "memories"} className="vk-form-stack">
+              <h3 className="vk-form-strong">
                 {t(projectOverview
                   ? "memory.nativeRecords.projectMemories"
                   : "memory.nativeRecords.sessionMemories")}
               </h3>
               {records.memories.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noMemories")}</p>
+                <p className="vk-form-text">{t("memory.nativeRecords.noMemories")}</p>
               ) : (
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="vk-form-grid">
                   {records.memories.slice(recordView === "memories" ? recordPage * 30 : 0, recordView === "memories" ? (recordPage + 1) * 30 : 30).map((memory) => (
                     <button
-                      className="rounded-xl border p-4 text-left transition-colors hover:bg-muted/40"
+                      className="vk-mem-tile"
                       key={memory.memoryId}
                       onClick={() => setSelectedMemory(memory)}
                       type="button"
                     >
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <p className="line-clamp-2 font-medium">{memory.summary}</p>
-                        <div className="flex shrink-0 gap-1">
+                      <div className="vk-mem-tile-head">
+                        <p className="vk-mem-clamp2">{memory.summary}</p>
+                        <div className="vk-mem-tags">
                           <Badge variant="outline">{t(nativeMemoryLevelKey(memory.memoryLevel))}</Badge>
                           <Badge variant={memory.state === "active" ? "secondary" : "outline"}>
                             {t(nativeMemoryStateKey(memory.state))}
                           </Badge>
                         </div>
                       </div>
-                      <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{memory.content}</p>
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      <p className="vk-mem-excerpt vk-mem-clamp3">{memory.content}</p>
+                      <div className="vk-form-meta">
                         <span>#{memory.memoryId}</span>
                         <span>{t(nativeMemorySourceKey(memory.sourceKind))}</span>
                         {memory.sourceTurnId != null ? <span>{t("memory.nativeRecords.sourceTurn")} #{memory.sourceTurnId}</span> : null}
@@ -644,22 +640,22 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
               )}
             </section>
 
-            <section hidden={recordView !== "profiles"} className="space-y-3">
-              <h3 className="text-sm font-medium">{t("memory.nativeRecords.profileNodes")}</h3>
+            <section hidden={recordView !== "profiles"} className="vk-form-stack">
+              <h3 className="vk-form-strong">{t("memory.nativeRecords.profileNodes")}</h3>
               {records.profileNodes.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noProfileNodes")}</p>
+                <p className="vk-form-text">{t("memory.nativeRecords.noProfileNodes")}</p>
               ) : (
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="vk-form-grid">
                   {records.profileNodes.slice(recordView === "profiles" ? recordPage * 30 : 0, recordView === "profiles" ? (recordPage + 1) * 30 : 30).map((profile) => (
                     <button
-                      className="rounded-xl border p-4 text-left transition-colors hover:bg-muted/40"
+                      className="vk-mem-tile"
                       key={`${profile.target}-${profile.profileNodeId}`}
                       onClick={() => setSelectedProfile(profile)}
                       type="button"
                     >
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <p className="line-clamp-3 font-medium">{profile.content}</p>
-                        <div className="flex shrink-0 gap-1">
+                      <div className="vk-mem-tile-head">
+                        <p className="vk-mem-clamp3">{profile.content}</p>
+                        <div className="vk-mem-tags">
                           <Badge variant="outline">
                             {t(profile.target === "user" ? "memory.profile.user" : "memory.profile.project")}
                           </Badge>
@@ -668,7 +664,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                           </Badge>
                         </div>
                       </div>
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      <div className="vk-form-meta">
                         <span>#{profile.profileNodeId}</span>
                         <span>{t(nativeProfileSourceKey(profile.sourceKind))}</span>
                         <span>
@@ -725,18 +721,18 @@ function NativeProjectSummary({
 }) {
   const { t } = useI18n()
   return (
-    <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
+    <section className="vk-form-box">
       <div>
-        <h3 className="font-medium">{projectName}</h3>
-        <p className="text-xs text-muted-foreground">{t("memory.nativeRecords.projectSummary")}</p>
+        <h3 className="vk-form-em">{projectName}</h3>
+        <p className="vk-form-note">{t("memory.nativeRecords.projectSummary")}</p>
       </div>
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="vk-mem-counts">
         <NativeCount label={t("memory.nativeRecords.sessions")} value={sessionCount} />
         <NativeCount label={t("memory.nativeRecords.turns")} value={turnCount} />
         <NativeCount label={t("memory.nativeRecords.memories")} value={memoryCount} />
         <NativeCount label={t("memory.nativeRecords.profileNodes")} value={profileNodeCount} />
       </div>
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="vk-mem-counts">
         <NativeCount label={t("memory.nativeRecords.completed")} value={counts.turnStatuses.completed} />
         <NativeCount label={t("memory.nativeRecords.pending")} value={counts.turnStatuses.pending} />
         <NativeCount label={t("memory.nativeRecords.processedUnknown")} value={counts.turnStatuses.processedUnknown} />
@@ -753,19 +749,19 @@ function NativeProjectSummary({
 function NativeSessionSummary({ session }: { session: VmmNativeMemorySessionSummary }) {
   const { t } = useI18n()
   return (
-    <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
+    <section className="vk-form-box">
       <div>
-        <h3 className="font-medium">{nativeSessionLabel(session)}</h3>
-        <p className="font-mono text-xs text-muted-foreground">{session.sessionSourceId}</p>
+        <h3 className="vk-form-em">{nativeSessionLabel(session)}</h3>
+        <p className="vk-form-codeline vk-faint">{session.sessionSourceId}</p>
       </div>
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="vk-mem-counts">
         <NativeCount label={t("memory.nativeRecords.completed")} value={session.turnStatuses.completed} />
         <NativeCount label={t("memory.nativeRecords.pending")} value={session.turnStatuses.pending} />
         <NativeCount label={t("memory.nativeRecords.processedUnknown")} value={session.turnStatuses.processedUnknown} />
         <NativeCount label={t("memory.nativeRecords.bypassed")} value={session.turnStatuses.analysisBypassed} />
         <NativeCount label={t("memory.nativeRecords.corrupted")} value={session.turnStatuses.corrupted} />
       </div>
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="vk-mem-counts">
         <NativeCount label={t("memory.nativeRecords.turns")} value={session.turnCount} />
         <NativeCount label={t("memory.nativeRecords.memories")} value={session.memoryCount} />
         <NativeCount label={t("memory.nativeRecords.profileNodes")} value={session.profileNodeCount} />
@@ -780,7 +776,7 @@ function NativeSessionSummary({ session }: { session: VmmNativeMemorySessionSumm
 function NativeMemoryLevelCountsView({ counts }: { counts: VmmNativeMemoryLevelCounts }) {
   const { t } = useI18n()
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="vk-form-chips">
       <Badge variant="outline">{t("memory.nativeRecords.levelSession")} {counts.session}</Badge>
       <Badge variant="outline">{t("memory.nativeRecords.levelPhase")} {counts.phase}</Badge>
       <Badge variant="outline">{t("memory.nativeRecords.levelStable")} {counts.stable}</Badge>
@@ -793,9 +789,9 @@ function NativeMemoryLevelCountsView({ counts }: { counts: VmmNativeMemoryLevelC
 // NativeCount 渲染一个紧凑的带标签计数。
 function NativeCount({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-lg border bg-background px-3 py-2">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-lg font-semibold">{value}</p>
+    <div className="vk-mem-count">
+      <span>{label}</span>
+      <strong className="vk-num">{value}</strong>
     </div>
   )
 }
@@ -804,13 +800,7 @@ function NativeCount({ label, value }: { label: string; value: number }) {
 // NativeRecordsEmpty 渲染一个原生浏览器空状态。
 function NativeRecordsEmpty({ title, description }: { title: string; description: string }) {
   return (
-    <Empty className="min-h-40" variant="outlined">
-      <EmptyHeader>
-        <EmptyMedia variant="icon"><BrainCircuit className="size-5" /></EmptyMedia>
-        <EmptyTitle>{title}</EmptyTitle>
-        <EmptyDescription>{description}</EmptyDescription>
-      </EmptyHeader>
-    </Empty>
+    <PageEmptyState description={description} icon={<BrainCircuit aria-hidden="true" />} size="panel" title={title} />
   )
 }
 
@@ -879,30 +869,30 @@ export function NativeTurnSheet({
   const missingProfileIds = turn?.generatedProfileNodeIds.filter((id) => !generatedProfiles.some((profile) => profile.profileNodeId === id)) ?? []
   return (
     <Sheet open={turn !== null} onOpenChange={(open) => { if (!open) onClose() }}>
-      <SheetContent className="overflow-y-auto" size="md">
+      <SheetContent className="vk-form-scroll" size="md">
         <SheetHeader>
           <SheetTitle>{t("memory.nativeRecords.turn")} #{turn?.turnId}</SheetTitle>
           <SheetDescription>
             {turn ? `${t(nativeTurnStatusKey(turn.status))} · ${formatNativeTimestamp(turn.createdAtUnixMs, locale)}` : ""}
           </SheetDescription>
         </SheetHeader>
-        <div className="space-y-4 px-4 pb-4">
+        <div className="vk-form-loose vk-form-pad">
           {([
             ["memory.nativeRecords.previousTurns", adjacent.previous],
             ["memory.nativeRecords.nextTurns", adjacent.next],
           ] as const).map(([label, neighbors]) => neighbors.length > 0 ? (
-            <section className="space-y-2" key={label}>
-              <h3 className="text-sm font-medium">{t(label)}</h3>
-              <div className="space-y-2">
+            <section className="vk-form-stack" key={label}>
+              <h3 className="vk-form-strong">{t(label)}</h3>
+              <div className="vk-form-stack">
                 {neighbors.map((neighbor) => (
                   <button
-                    className="flex w-full items-center gap-2 rounded-lg border p-3 text-left transition-colors hover:bg-muted/40"
+                    className="vk-mem-link"
                     key={neighbor.turnId}
                     onClick={() => onOpenTurn(neighbor)}
                     type="button"
                   >
-                    <span className="shrink-0 text-xs text-muted-foreground">#{neighbor.turnId}</span>
-                    <span className="truncate text-sm">{neighbor.userPreview}</span>
+                    <span className="vk-form-note vk-num">#{neighbor.turnId}</span>
+                    <span className="vk-truncate">{neighbor.userPreview}</span>
                   </button>
                 ))}
               </div>
@@ -914,23 +904,23 @@ export function NativeTurnSheet({
           {turn?.analysisLastError ? (
             <NativeDetail label={t("memory.nativeRecords.lastError")} value={turn.analysisLastError} />
           ) : null}
-          <section className="space-y-2">
-            <h3 className="text-sm font-medium">{t("memory.nativeRecords.generatedMemories")}</h3>
-            {missingMemoryIds.length > 0 ? <p className="text-sm text-muted-foreground">{t("memory.workspace.missingOutputs")} {missingMemoryIds.map((id) => `#${id}`).join(", ")}</p> : null}
+          <section className="vk-form-stack">
+            <h3 className="vk-form-strong">{t("memory.nativeRecords.generatedMemories")}</h3>
+            {missingMemoryIds.length > 0 ? <p className="vk-form-text">{t("memory.workspace.missingOutputs")} {missingMemoryIds.map((id) => `#${id}`).join(", ")}</p> : null}
             {generatedMemories.length === 0 && missingMemoryIds.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noGeneratedMemories")}</p>
+              <p className="vk-form-text">{t("memory.nativeRecords.noGeneratedMemories")}</p>
             ) : (
-              <div className="space-y-2">
+              <div className="vk-form-stack">
                 {generatedMemories.map((memory) => (
                   <button
-                    className="flex w-full items-start justify-between gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/40"
+                    className="vk-mem-link"
                     key={memory.memoryId}
                     onClick={() => onOpenMemory(memory)}
                     type="button"
                   >
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium">{memory.summary}</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">#{memory.memoryId}</span>
+                    <span className="vk-form-cell">
+                      <span className="vk-form-name">{memory.summary}</span>
+                      <span className="vk-form-note">#{memory.memoryId}</span>
                     </span>
                     <Badge variant="outline">{t(nativeMemoryLevelKey(memory.memoryLevel))}</Badge>
                   </button>
@@ -938,23 +928,23 @@ export function NativeTurnSheet({
               </div>
             )}
           </section>
-          <section className="space-y-2">
-            <h3 className="text-sm font-medium">{t("memory.nativeRecords.generatedProfiles")}</h3>
-            {missingProfileIds.length > 0 ? <p className="text-sm text-muted-foreground">{t("memory.workspace.missingOutputs")} {missingProfileIds.map((id) => `#${id}`).join(", ")}</p> : null}
+          <section className="vk-form-stack">
+            <h3 className="vk-form-strong">{t("memory.nativeRecords.generatedProfiles")}</h3>
+            {missingProfileIds.length > 0 ? <p className="vk-form-text">{t("memory.workspace.missingOutputs")} {missingProfileIds.map((id) => `#${id}`).join(", ")}</p> : null}
             {generatedProfiles.length === 0 && missingProfileIds.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noGeneratedProfiles")}</p>
+              <p className="vk-form-text">{t("memory.nativeRecords.noGeneratedProfiles")}</p>
             ) : (
-              <div className="space-y-2">
+              <div className="vk-form-stack">
                 {generatedProfiles.map((profile) => (
                   <button
-                    className="flex w-full items-start justify-between gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/40"
+                    className="vk-mem-link"
                     key={`${profile.target}-${profile.profileNodeId}`}
                     onClick={() => onOpenProfile(profile)}
                     type="button"
                   >
-                    <span className="min-w-0">
-                      <span className="block line-clamp-2 text-sm font-medium">{profile.content}</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">#{profile.profileNodeId}</span>
+                    <span className="vk-form-cell">
+                      <span className="vk-mem-clamp2">{profile.content}</span>
+                      <span className="vk-form-note">#{profile.profileNodeId}</span>
                     </span>
                     <Badge variant="outline">
                       {t(profile.target === "user" ? "memory.profile.user" : "memory.profile.project")}
@@ -964,15 +954,15 @@ export function NativeTurnSheet({
               </div>
             )}
           </section>
-          <section className="space-y-2">
-            <h3 className="text-sm font-medium">{t("memory.nativeRecords.timeline")}</h3>
+          <section className="vk-form-stack">
+            <h3 className="vk-form-strong">{t("memory.nativeRecords.timeline")}</h3>
             {turn?.timeline.map((item, index) => (
-              <div className="rounded-lg border p-3" key={`${item.occurredAtUnixMs}-${index}`}>
-                <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              <div className="vk-form-box" key={`${item.occurredAtUnixMs}-${index}`}>
+                <div className="vk-form-bar vk-form-note">
                   <Badge variant="outline">{t(nativeTimelineRoleKey(item.role))}</Badge>
                   <span>{formatNativeTimestamp(item.occurredAtUnixMs, locale)}</span>
                 </div>
-                <p className="whitespace-pre-wrap text-sm">{item.content}</p>
+                <p className="vk-form-prose">{item.content}</p>
               </div>
             ))}
           </section>
@@ -1003,16 +993,16 @@ function NativeMemorySheet({
   const sourceTurn = memory?.sourceTurnId == null ? undefined : turns.find((turn) => turn.turnId === memory.sourceTurnId && turn.sessionSourceId === memory.sessionSourceId)
   return (
     <Sheet open={memory !== null} onOpenChange={(open) => { if (!open) onClose() }}>
-      <SheetContent className="overflow-y-auto" size="md">
+      <SheetContent className="vk-form-scroll" size="md">
         <SheetHeader>
           <SheetTitle>{memory?.summary}</SheetTitle>
           <SheetDescription>
             {memory ? `#${memory.memoryId} · ${formatNativeTimestamp(memory.createdAtUnixMs, locale)}` : ""}
           </SheetDescription>
         </SheetHeader>
-        <div className="space-y-4 px-4 pb-4">
+        <div className="vk-form-loose vk-form-pad">
           {memory ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="vk-form-chips">
               <Badge>{t(nativeMemoryLevelKey(memory.memoryLevel))}</Badge>
               <Badge variant="secondary">{t(nativeMemoryStateKey(memory.state))}</Badge>
               <Badge variant="outline">{t(nativeMemorySourceKey(memory.sourceKind))}</Badge>
@@ -1020,20 +1010,20 @@ function NativeMemorySheet({
             </div>
           ) : null}
           {memory ? <>
-            <section className="space-y-2" aria-label={t("memory.content.fullDetails")}>
-              <h3 className="text-sm font-medium">{t("memory.content.fullDetails")}</h3>
-              <p className="whitespace-pre-wrap break-words text-sm leading-7">{memory.content}</p>
+            <section className="vk-form-stack" aria-label={t("memory.content.fullDetails")}>
+              <h3 className="vk-form-strong">{t("memory.content.fullDetails")}</h3>
+              <p className="vk-form-prose vk-mem-reading">{memory.content}</p>
             </section>
-            <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-t pt-4 text-sm">
+            <dl className="vk-facts vk-mem-provenance">
               {memory.sourceTurnId != null ? <>
-                <dt className="text-muted-foreground">{t("memory.nativeRecords.sourceTurn")}</dt>
-                <dd>{sourceTurn ? <Button className="h-auto p-0" type="button" variant="link" onClick={() => onOpenTurn(sourceTurn)}>#{sourceTurn.turnId}</Button> : <span className="text-muted-foreground">#{memory.sourceTurnId} · {t("memory.workspace.missingSource")}</span>}</dd>
+                <dt className="vk-faint">{t("memory.nativeRecords.sourceTurn")}</dt>
+                <dd>{sourceTurn ? <Button type="button" variant="link" onClick={() => onOpenTurn(sourceTurn)}>#{sourceTurn.turnId}</Button> : <span className="vk-faint">#{memory.sourceTurnId} · {t("memory.workspace.missingSource")}</span>}</dd>
               </> : null}
-              {memory.sessionSourceId ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.session")}</dt><dd className="break-all text-xs" title={memory.sessionSourceId}>{memory.sessionSourceId}</dd></> : null}
-              <dt className="text-muted-foreground">{t("memory.nativeRecords.priority")}</dt><dd>{memory.priority}</dd>
-              {memory.tags.length > 0 ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.tags")}</dt><dd className="break-words">{memory.tags.join(", ")}</dd></> : null}
-              {memory.statusReason ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.statusReason")}</dt><dd className="break-words">{memory.statusReason}</dd></> : null}
-              {memory.expiresAtUnixMs != null ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.expiresAt")}</dt><dd>{formatNativeTimestamp(memory.expiresAtUnixMs, locale)}</dd></> : null}
+              {memory.sessionSourceId ? <><dt className="vk-faint">{t("memory.nativeRecords.session")}</dt><dd className="vk-form-codeline" title={memory.sessionSourceId}>{memory.sessionSourceId}</dd></> : null}
+              <dt className="vk-faint">{t("memory.nativeRecords.priority")}</dt><dd>{memory.priority}</dd>
+              {memory.tags.length > 0 ? <><dt className="vk-faint">{t("memory.nativeRecords.tags")}</dt><dd className="vk-form-break">{memory.tags.join(", ")}</dd></> : null}
+              {memory.statusReason ? <><dt className="vk-faint">{t("memory.nativeRecords.statusReason")}</dt><dd className="vk-form-break">{memory.statusReason}</dd></> : null}
+              {memory.expiresAtUnixMs != null ? <><dt className="vk-faint">{t("memory.nativeRecords.expiresAt")}</dt><dd>{formatNativeTimestamp(memory.expiresAtUnixMs, locale)}</dd></> : null}
             </dl>
           </> : null}
         </div>
@@ -1054,7 +1044,7 @@ function NativeProfileSheet({
   const { t, locale } = useI18n()
   return (
     <Sheet open={profile !== null} onOpenChange={(open) => { if (!open) onClose() }}>
-      <SheetContent className="overflow-y-auto" size="md">
+      <SheetContent className="vk-form-scroll" size="md">
         <SheetHeader>
           <SheetTitle>
             {t(profile?.target === "user" ? "memory.profile.user" : "memory.profile.project")}
@@ -1064,9 +1054,9 @@ function NativeProfileSheet({
             {profile ? formatNativeTimestamp(profile.updatedAtUnixMs, locale) : ""}
           </SheetDescription>
         </SheetHeader>
-        <div className="space-y-4 px-4 pb-4">
+        <div className="vk-form-loose vk-form-pad">
           {profile ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="vk-form-chips">
               <Badge>{t(nativeProfileStateKey(profile.effectiveState))}</Badge>
               <Badge variant="secondary">
                 {t("memory.profile.level")}{t("global.labelSeparator")}{profile.level}
@@ -1109,9 +1099,9 @@ function NativeProfileSheet({
 // NativeDetail 渲染一个可选择的详情字段。
 function NativeDetail({ label, value }: { label: string; value: string }) {
   return (
-    <section className="space-y-1.5">
-      <h3 className="text-sm font-medium">{label}</h3>
-      <p className="whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-sm">{value}</p>
+    <section className="vk-form-tight">
+      <h3 className="vk-form-strong">{label}</h3>
+      <p className="vk-form-well vk-form-prose">{value}</p>
     </section>
   )
 }

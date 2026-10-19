@@ -5,6 +5,8 @@ import { Button } from "@/ui-kit/primitives/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
 import { useI18n } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeLexicalIndexStatus } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // The parent sequences status loading through the exclusive memory-action channel.
 // 父级通过独占记忆动作通道顺序加载状态。
@@ -57,15 +59,15 @@ export function VmmNativeLexicalIndex({ status, loading = true, busy, onRunActio
 
   return <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !pending) setConfirmation(null) }}><Card>
     <CardHeader><CardTitle>{t("memory.lexical.title")}</CardTitle><CardDescription>{t("memory.lexical.description")}</CardDescription></CardHeader>
-    <CardContent className="space-y-3">
-      {status ? <dl className="grid gap-3 text-sm sm:grid-cols-3">
-        <div><dt className="text-muted-foreground">{t("memory.maintenance.activeMemories")}</dt><dd>{status.activeMemoryCount}</dd></div>
-        <div><dt className="text-muted-foreground">{t("memory.lexical.documents")}</dt><dd>{status.documentCount}</dd></div>
-        <div><dt className="text-muted-foreground">{t("memory.lexical.rows")}</dt><dd>{status.indexedRowCount}</dd></div>
-      </dl> : <p className="text-sm text-muted-foreground">{t(loading ? "memory.resources.loading" : "memory.maintenance.readFailed")}</p>}
-      <p className="text-xs text-muted-foreground">{t("memory.lexical.countsNote")}</p>
-      <AlertDialogTrigger asChild><Button disabled={busy || pending || status === null} onClick={() => { setNotice(null); setConfirmation(status) }} variant="outline" type="button"><Search aria-hidden="true" className="size-4" />{t("memory.lexical.rebuild")}</Button></AlertDialogTrigger>
-      {notice ? <p role="status" className="text-sm">{notice}</p> : null}
+    <CardContent className="vk-form-stack">
+      {status ? <dl className="vk-mem-three vk-form-sm">
+        <div><dt className="vk-faint">{t("memory.maintenance.activeMemories")}</dt><dd>{status.activeMemoryCount}</dd></div>
+        <div><dt className="vk-faint">{t("memory.lexical.documents")}</dt><dd>{status.documentCount}</dd></div>
+        <div><dt className="vk-faint">{t("memory.lexical.rows")}</dt><dd>{status.indexedRowCount}</dd></div>
+      </dl> : <p className="vk-form-text">{t(loading ? "memory.resources.loading" : "memory.maintenance.readFailed")}</p>}
+      <p className="vk-form-note">{t("memory.lexical.countsNote")}</p>
+      <AlertDialogTrigger asChild><Button disabled={busy || pending || status === null} onClick={() => { setNotice(null); setConfirmation(status) }} variant="outline" type="button"><Search aria-hidden="true" className="vk-icon" />{t("memory.lexical.rebuild")}</Button></AlertDialogTrigger>
+      {notice ? <p role="status" className="vk-form-sm">{notice}</p> : null}
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{t("memory.lexical.confirmTitle")}</AlertDialogTitle><AlertDialogDescription>{t("memory.lexical.confirmDescription").replace("{count}", String(confirmation?.activeMemoryCount ?? 0))}</AlertDialogDescription></AlertDialogHeader>
           <AlertDialogFooter><AlertDialogCancel disabled={busy || pending}>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction disabled={busy || pending} onClick={(event) => { event.preventDefault(); void rebuild() }}>{t("memory.lexical.rebuild")}</AlertDialogAction></AlertDialogFooter>

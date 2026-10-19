@@ -1,5 +1,5 @@
 import * as React from "react"
-import "@/styles/memory.css"
+import "@/ui-kit/styles/features/memory.css"
 import { useI18n } from "@/i18n"
 
 import type { VmmConfigDraftSummary, VmmMemorySnapshot } from "@/types"

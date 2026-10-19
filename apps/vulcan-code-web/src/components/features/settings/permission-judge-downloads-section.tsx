@@ -11,6 +11,7 @@ import type {
   PermissionJudgeModelDownload,
   PermissionJudgeModelFormat,
 } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Labels of the download phases sent by the service; unknown phases render as themselves.
 // 服务发送的下载阶段标签；未知阶段按原样显示。

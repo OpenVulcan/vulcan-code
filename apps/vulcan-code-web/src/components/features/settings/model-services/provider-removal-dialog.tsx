@@ -13,6 +13,7 @@ import { removePublicAiCustomProvider } from "@/service/settings-actions-service
 import type { PublicAiProviderDescriptor, PublicAiSettingsSnapshot } from "@/types"
 
 import type { SnapshotMutations } from "./use-snapshot-mutations"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // providerRemovalCustomizationCount counts the provider-owned settings the cascade removal deletes.
 // providerRemovalCustomizationCount 统计级联移除会删除的供应商专属设置数量。

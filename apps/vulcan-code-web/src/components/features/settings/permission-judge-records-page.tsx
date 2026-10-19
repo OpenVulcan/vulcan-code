@@ -22,6 +22,7 @@ import {
   markPermissionJudgeRecord,
 } from "@/service/permission-judge-service";
 import type { JudgeLabel, PermissionJudgeRecord, PermissionJudgeRecordPage } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Records per page; the service caps it with its own page limit.
 // 每页记录数；服务以自身的分页上限约束。

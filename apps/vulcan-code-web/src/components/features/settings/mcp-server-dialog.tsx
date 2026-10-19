@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/ui-kit/primitives/switch"
 import type { McpServerSummary } from "@/types"
 import { useI18n } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // McpServerSaveRequest describes one MCP server configuration save request.
 // McpServerSaveRequest 描述单次 MCP 服务器配置保存请求。

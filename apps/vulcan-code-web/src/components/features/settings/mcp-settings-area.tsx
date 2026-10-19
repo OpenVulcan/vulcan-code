@@ -11,6 +11,7 @@ import { McpSchemaDetail } from "./mcp-schema-detail"
 import { McpOAuthPanel } from "./mcp-oauth-panel"
 import "@/ui-kit/styles/features/mcp.css"
 import { useI18n, formatMessage, type Translate } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // connectionLabels distinguishes configured enablement from observed connectivity.
 // connectionLabels 区分配置启用与已观测连接状态。

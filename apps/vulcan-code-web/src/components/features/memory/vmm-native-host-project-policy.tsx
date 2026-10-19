@@ -11,6 +11,7 @@ import { parseRecallDraft, recallDraft, recallFields, recallChoiceFields, recall
 import { VmmNativeDurationInput } from "./vmm-native-duration-input"
 import { VmmNativeTextPolicy } from "./vmm-native-text-policy"
 import { VmmNativeRetrievalPolicy } from "./vmm-native-retrieval-policy"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // CallerPolicyProps fixes the caller identity for this mounted editor; the parent keys it by project tag.
 // CallerPolicyProps 为当前挂载编辑器固定调用方身份；父级以项目标签作为组件键。
@@ -117,35 +118,35 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
   const disabled = busy || pending
   // inheritance renders the current source and an explicit independent reset for one group.
   // inheritance 渲染当前来源及单个配置组的显式独立重置。
-  const inheritance = (group: keyof VmmNativeHostProjectPolicyOverrides) => <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+  const inheritance = (group: keyof VmmNativeHostProjectPolicyOverrides) => <div className="vk-form-bar vk-form-sm">
     <span>{t(policy!.overrides[group] === null ? "memory.hostPolicy.inherited" : "memory.hostPolicy.overridden")}</span>
     <Button variant="outline" disabled={disabled || policy!.overrides[group] === null} onClick={() => void save(group, null)}>{t("memory.hostPolicy.inherit")}</Button>
   </div>
   // source keeps each group's acknowledged source visible while its mounted editor is collapsed.
   // source 在已挂载的编辑器折叠时仍显示各组已确认的配置来源。
   const source = (group: keyof VmmNativeHostProjectPolicyOverrides) => t(policy!.overrides[group] === null ? "projectSettings.inheritGlobal" : "projectSettings.projectOverride")
-  return <section className="project-vmm-policy space-y-3">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="font-medium">{t("memory.hostPolicy.title")}</h3>
+  return <section className="project-vmm-policy vk-form-stack">
+    <div className="vk-form-bar">
+      <h3 className="vk-form-em">{t("memory.hostPolicy.title")}</h3>
       <Button variant="outline" size="sm" disabled={disabled} onClick={() => { initialLoadIssued.current = false; setRefresh((value) => value + 1); setSaved(false) }}>{t("memory.data.refresh")}</Button>
     </div>
-    <p className="text-sm text-muted-foreground">{t("memory.hostPolicy.description")}</p>
-    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    <p className="vk-form-text">{t("memory.hostPolicy.description")}</p>
+    {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
     {policy && draft ? <>
       <DisclosureSection className="project-vmm-policy-group" description={t("projectSettings.policyGroup.recallHint")} keepMounted meta={source("recall")} title={t("projectSettings.policyGroup.recall")}>
-        <div className="space-y-3">{inheritance("recall")}
-        <div className="grid gap-3 sm:grid-cols-2">{recallFields.map((field) => <div key={field.key} className="space-y-1">
+        <div className="vk-form-stack">{inheritance("recall")}
+        <div className="vk-form-grid">{recallFields.map((field) => <div key={field.key} className="vk-form-tight">
           <Label htmlFor={`caller-policy-${field.key}`}>{t(field.label)}</Label>
           {field.key === "postactionMemoryExpiryMs" ? <VmmNativeDurationInput id={`caller-policy-${field.key}`} value={draft[field.key]} disabled={disabled} onChange={(value) => { setDraft({ ...draft, [field.key]: value }); setSaved(false) }} /> : <Input id={`caller-policy-${field.key}`} type="number" min={field.min} max={field.max} step={field.step} disabled={disabled} value={draft[field.key]}
             onChange={(event) => { setDraft({ ...draft, [field.key]: event.target.value }); setSaved(false) }} />}
-        </div>)}{recallChoiceFields.map((field) => <div key={field.key} className="space-y-1">
+        </div>)}{recallChoiceFields.map((field) => <div key={field.key} className="vk-form-tight">
           <Label htmlFor={`caller-policy-${field.key}`}>{t(field.label)}</Label>
           <Select disabled={disabled} value={draft[field.key]} onValueChange={(value) => { setDraft({ ...draft, [field.key]: value }); setSaved(false) }}>
-            <SelectTrigger id={`caller-policy-${field.key}`} className="w-full"><SelectValue /></SelectTrigger>
+            <SelectTrigger id={`caller-policy-${field.key}`}><SelectValue /></SelectTrigger>
             <SelectContent>{field.options.map((option) => <SelectItem key={option.value} value={option.value}>{t(option.label)}</SelectItem>)}</SelectContent>
           </Select>
         </div>)}</div>
-        <p className="text-xs text-muted-foreground">{t("memory.policy.extractedHint")}</p>
+        <p className="vk-form-note">{t("memory.policy.extractedHint")}</p>
         {!parsed ? <p role="alert">{t("memory.policy.invalidValues")}</p> : null}
         {saved ? <p role="status">{t("memory.hostPolicy.saved")}</p> : null}
         <Button disabled={disabled || !parsed || !recallChanged} onClick={() => { if (parsed) void save("recall", parsed) }}>{t("memory.policy.save")}</Button>

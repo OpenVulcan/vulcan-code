@@ -34,6 +34,7 @@ import type {
   PublicAiSettingsSnapshot,
 } from "@/types"
 import { errorMessage } from "@/lib/display-format";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // credentialSupportsModelSynchronization identifies directories whose model membership can change remotely.
 // credentialSupportsModelSynchronization 标识模型成员可由远端变化的目录。

@@ -15,6 +15,7 @@ import type {
   LogEntrySummary,
   StartupSnapshot,
 } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // LogsArea renders startup and diagnostic logs.
 // LogsArea 渲染启动与诊断日志。

@@ -24,8 +24,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/ui-kit/primitives/dialog"
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty"
+import { PageEmptyState } from "@/components/page"
 import { Input } from "@/ui-kit/primitives/input"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group"
 import { Label } from "@/ui-kit/primitives/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/ui-kit/primitives/table"
@@ -36,6 +37,8 @@ import type { VmmMemoryActionResult, VmmMemorySnapshot } from "@/types"
 
 import { VmmContentPage } from "./vmm-content-page"
 import { formatBytes, formatDateTime } from "@/lib/display-format"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // ManagementPage is one cursor-based VMM management response.
 // ManagementPage 是一页基于游标的 VMM 管理响应。
@@ -499,14 +502,14 @@ export function VmmDataPage(props: VmmDataPageProps) {
     || t("memory.data.extractionRuntimeWaiting")
 
   return (
-    <div className="space-y-4">
+    <div className="vk-form-loose">
       <div className="vmm-page-toolbar">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="vk-form-inline">
           <Badge variant={capabilities ? "default" : "destructive"}>{capabilities ? t("memory.data.managementReady") : t("memory.data.managementUnavailable")}</Badge>
           {capabilities ? <Badge variant="outline">{capabilities.protocol_version} · {capabilities.storage_mode}</Badge> : null}
           {capabilities?.full_text_index_status ? <Badge variant="outline">{t("memory.data.fullTextIndex")}: {capabilities.full_text_index_status}</Badge> : null}
-          {updatedAt ? <span className="text-xs text-muted-foreground">{t("memory.data.updatedAt").replace("{time}", formatManagementTime(updatedAt, locale))}</span> : null}
-          <Button aria-label={t("memory.data.refresh")} disabled={props.busy} onClick={() => void refreshWorkspace()} size="icon" variant="outline"><RefreshCw className="size-4" /></Button>
+          {updatedAt ? <span className="vk-form-note">{t("memory.data.updatedAt").replace("{time}", formatManagementTime(updatedAt, locale))}</span> : null}
+          <Button aria-label={t("memory.data.refresh")} disabled={props.busy} onClick={() => void refreshWorkspace()} size="icon" variant="outline"><RefreshCw className="vk-icon" /></Button>
         </div>
       </div>
       {error ? (
@@ -525,15 +528,15 @@ export function VmmDataPage(props: VmmDataPageProps) {
         if (value === "recycle") void loadRecycleBatches()
         if (value === "turns") void loadGlobalTurns(false)
       }}>
-        <div className="max-w-full overflow-x-auto overflow-y-hidden pb-1">
-          <TabsList className="justify-start">
+        <div className="vk-mem-tabstrip">
+          <TabsList>
             <TabsTrigger value="sessions" disabled={props.busy}>{t("memory.data.sessions")}</TabsTrigger>
             <TabsTrigger value="turns" disabled={props.busy}>{t("memory.data.turns")}</TabsTrigger>
             <TabsTrigger value="recycle" disabled={props.busy}>{t("memory.data.recycleBin")}</TabsTrigger>
             <TabsTrigger value="memories" disabled={props.busy}>{t("memory.data.memoryEntries")}</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="sessions" className="space-y-3">
+        <TabsContent value="sessions" className="vk-form-stack">
           {openSession ? (
             <TurnWorkspace
               busy={props.busy}
@@ -550,11 +553,11 @@ export function VmmDataPage(props: VmmDataPageProps) {
             />
           ) : (
             <>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="relative min-w-[240px] flex-1">
-                  <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-                  <Input
-                    className="pl-8"
+              <div className="vk-form-inline">
+                <InputGroup className="vk-mem-search">
+                  <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+                  <InputGroupInput
+                    aria-label={t("memory.data.searchPlaceholder")}
                     onChange={(event) => setQuery(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") void loadSessions(false)
@@ -562,9 +565,9 @@ export function VmmDataPage(props: VmmDataPageProps) {
                     placeholder={t("memory.data.searchPlaceholder")}
                     value={query}
                   />
-                </div>
+                </InputGroup>
                 <Select value={status} onValueChange={setStatus}>
-                  <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="vk-form-w-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">{t("memory.data.statusAll")}</SelectItem>
                     <SelectItem value="active">{t("memory.data.statusActive")}</SelectItem>
@@ -574,42 +577,42 @@ export function VmmDataPage(props: VmmDataPageProps) {
                   </SelectContent>
                 </Select>
                 <Select value={userId} onValueChange={setUserId}>
-                  <SelectTrigger className="w-[170px]"><UserRound className="size-4" /><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="vk-form-w-md"><UserRound className="vk-icon" /><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">{t("memory.data.allUsers")}</SelectItem>
                     {users.map((user) => <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
                 <Select value={projectId} onValueChange={setProjectId}>
-                  <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="vk-form-w-lg"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">{t("memory.data.allProjects")}</SelectItem>
                     {projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.path}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <Input aria-label={t("memory.data.createdFrom")} className="w-[150px]" max={createdTo || undefined} onChange={(event) => setCreatedFrom(event.target.value)} type="date" value={createdFrom} />
-                <Input aria-label={t("memory.data.createdTo")} className="w-[150px]" min={createdFrom || undefined} onChange={(event) => setCreatedTo(event.target.value)} type="date" value={createdTo} />
+                <Input aria-label={t("memory.data.createdFrom")} className="vk-form-w-sm" max={createdTo || undefined} onChange={(event) => setCreatedFrom(event.target.value)} type="date" value={createdFrom} />
+                <Input aria-label={t("memory.data.createdTo")} className="vk-form-w-sm" min={createdFrom || undefined} onChange={(event) => setCreatedTo(event.target.value)} type="date" value={createdTo} />
                 <Button disabled={props.busy} onClick={() => void resetFilters()} variant="ghost">{t("memory.data.resetFilters")}</Button>
                 <Button disabled={props.busy} onClick={() => void loadSessions(false)} variant="outline">
-                  <RefreshCw className="size-4" />{t("memory.data.refresh")}
+                  <RefreshCw className="vk-icon" />{t("memory.data.refresh")}
                 </Button>
               </div>
               {selectedSessionIds.size > 0 ? (
                 <Card>
-                  <CardContent className="flex flex-wrap items-center gap-2 py-3">
-                    <span className="mr-auto text-sm font-medium">{t("memory.data.selected").replace("{count}", String(selectedSessionIds.size))}</span>
-                    {selectionHasMixedLifecycle ? <span className="text-xs text-muted-foreground">{t("memory.data.mixedLifecycle")}</span> : null}
+                  <CardContent className="vk-mem-selection">
+                    <span className="vk-form-strong">{t("memory.data.selected").replace("{count}", String(selectedSessionIds.size))}</span>
+                    {selectionHasMixedLifecycle ? <span className="vk-form-note">{t("memory.data.mixedLifecycle")}</span> : null}
                     {allSelectedForgotten ? (
                         <Button disabled={props.busy} onClick={() => void previewSelection("session", "restart", [...selectedSessionIds])} variant="outline">
-                        <RotateCcw className="size-4" />{t("memory.data.restartMemory")}
+                        <RotateCcw className="vk-icon" />{t("memory.data.restartMemory")}
                       </Button>
                     ) : (
                       <>
                         <Button disabled={props.busy || (!allSelectedActive && !allSelectedArchived)} onClick={() => void previewSelection("session", allSelectedArchived ? "unarchive" : "archive", [...selectedSessionIds])} variant="outline">
-                          <Archive className="size-4" />{allSelectedArchived ? t("memory.data.unarchive") : t("memory.data.archive")}
+                          <Archive className="vk-icon" />{allSelectedArchived ? t("memory.data.unarchive") : t("memory.data.archive")}
                         </Button>
                         <Button disabled={props.busy || !selectionAllowsRecycle} onClick={() => void previewSelection("session", "recycle", [...selectedSessionIds])} variant="destructive">
-                          <Trash2 className="size-4" />{t("memory.data.recycle")}
+                          <Trash2 className="vk-icon" />{t("memory.data.recycle")}
                         </Button>
                       </>
                     )}
@@ -625,38 +628,38 @@ export function VmmDataPage(props: VmmDataPageProps) {
               />
               {sessionHasMore ? (
                 <Button disabled={props.busy} onClick={() => void loadSessions(true)} variant="outline">
-                  <ChevronRight className="size-4" />{t("memory.data.loadMore")}
+                  <ChevronRight className="vk-icon" />{t("memory.data.loadMore")}
                 </Button>
               ) : null}
             </>
           )}
         </TabsContent>
-        <TabsContent value="turns" className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-[240px] flex-1">
-              <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-              <Input className="pl-8" onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void loadGlobalTurns(false) }} placeholder={t("memory.data.searchTurnPlaceholder")} value={query} />
-            </div>
+        <TabsContent value="turns" className="vk-form-stack">
+          <div className="vk-form-inline">
+            <InputGroup className="vk-mem-search">
+              <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+              <InputGroupInput aria-label={t("memory.data.searchTurnPlaceholder")} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void loadGlobalTurns(false) }} placeholder={t("memory.data.searchTurnPlaceholder")} value={query} />
+            </InputGroup>
             <Select value={userId} onValueChange={setUserId}>
-              <SelectTrigger className="w-[170px]"><UserRound className="size-4" /><SelectValue /></SelectTrigger>
+              <SelectTrigger className="vk-form-w-md"><UserRound className="vk-icon" /><SelectValue /></SelectTrigger>
               <SelectContent><SelectItem value="all">{t("memory.data.allUsers")}</SelectItem>{users.map((user) => <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>)}</SelectContent>
             </Select>
             <Select value={projectId} onValueChange={setProjectId}>
-              <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="vk-form-w-lg"><SelectValue /></SelectTrigger>
               <SelectContent><SelectItem value="all">{t("memory.data.allProjects")}</SelectItem>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.path}</SelectItem>)}</SelectContent>
             </Select>
             <Select value={turnStatus} onValueChange={setTurnStatus}>
-              <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="vk-form-w-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t("memory.data.allStatuses")}</SelectItem>
                 <SelectItem value="pending">{t("memory.data.extractionPending")}</SelectItem>
                 <SelectItem value="extracted">{t("memory.data.extractionCompleted")}</SelectItem>
               </SelectContent>
             </Select>
-            <Input aria-label={t("memory.data.createdFrom")} className="w-[150px]" max={createdTo || undefined} onChange={(event) => setCreatedFrom(event.target.value)} type="date" value={createdFrom} />
-            <Input aria-label={t("memory.data.createdTo")} className="w-[150px]" min={createdFrom || undefined} onChange={(event) => setCreatedTo(event.target.value)} type="date" value={createdTo} />
+            <Input aria-label={t("memory.data.createdFrom")} className="vk-form-w-sm" max={createdTo || undefined} onChange={(event) => setCreatedFrom(event.target.value)} type="date" value={createdFrom} />
+            <Input aria-label={t("memory.data.createdTo")} className="vk-form-w-sm" min={createdFrom || undefined} onChange={(event) => setCreatedTo(event.target.value)} type="date" value={createdTo} />
             <Button disabled={props.busy} onClick={() => void resetFilters()} variant="ghost">{t("memory.data.resetFilters")}</Button>
-            <Button disabled={props.busy} onClick={() => void loadGlobalTurns(false)} variant="outline"><RefreshCw className="size-4" />{t("memory.data.refresh")}</Button>
+            <Button disabled={props.busy} onClick={() => void loadGlobalTurns(false)} variant="outline"><RefreshCw className="vk-icon" />{t("memory.data.refresh")}</Button>
           </div>
           <TurnList
             busy={props.busy}
@@ -720,11 +723,11 @@ function SessionTable(props: {
   }
   return (
     <>
-      <div className="grid gap-2 md:hidden">
+      <div className="vk-form-stack vk-mem-narrow-only">
         {props.sessions.map((session) => (
           <Card key={session.session_id}>
-            <CardContent className="space-y-3 py-3">
-              <div className="flex items-start gap-3">
+            <CardContent className="vk-form-stack">
+              <div className="vk-mem-check-row">
                 <Checkbox
                   aria-label={session.display_title}
                   checked={props.selected.has(session.session_id)}
@@ -736,9 +739,9 @@ function SessionTable(props: {
                     props.onSelectionChange(next)
                   }}
                 />
-                <div className="min-w-0 flex-1">
-                  <div className="line-clamp-2 font-medium">{session.display_title}</div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+                <div className="vk-form-fill">
+                  <div className="vk-mem-clamp2 vk-form-em">{session.display_title}</div>
+                  <div className="vk-form-meta">
                     <span>{session.user.name}</span>
                     <span>·</span>
                     <span>{formatManagementTime(session.updated_at, locale)}</span>
@@ -747,28 +750,28 @@ function SessionTable(props: {
                   </div>
                 </div>
               </div>
-              <div className="truncate text-xs text-muted-foreground">{session.project.path}</div>
-              <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+              <div className="vk-form-note vk-truncate">{session.project.path}</div>
+              <div className="vk-form-meta">
                 <span>{t("memory.data.turnCount")}: {session.visible_turn_count}</span>
                 <span>{t("memory.data.memoryCount")}: {session.active_memory_count}</span>
-                <Button className="ml-auto" disabled={props.busy} onClick={() => props.onOpen(session)} size="sm" variant="outline">
-                  {t("memory.data.viewTurns")}<ChevronRight className="size-4" />
+                <Button className="vk-mem-push" disabled={props.busy} onClick={() => props.onOpen(session)} size="sm" variant="outline">
+                  {t("memory.data.viewTurns")}<ChevronRight className="vk-icon" />
                 </Button>
               </div>
             </CardContent>
           </Card>
         ))}
       </div>
-      <Card className="hidden overflow-hidden md:block">
+      <Card className="vk-mem-wide-only">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-10" />
+            <TableHead className="vk-mem-col-check" />
             <TableHead>{t("memory.data.sessions")}</TableHead>
             <TableHead>{t("memory.identity.projects")}</TableHead>
             <TableHead>{t("memory.data.turnCount")}</TableHead>
             <TableHead>{t("memory.data.memoryCount")}</TableHead>
-            <TableHead className="w-28" />
+            <TableHead className="vk-mem-col-action" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -787,9 +790,9 @@ function SessionTable(props: {
                   }}
                 />
               </TableCell>
-              <TableCell className="max-w-[360px]">
-                <div className="truncate font-medium">{session.display_title}</div>
-                <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+              <TableCell className="vk-mem-col-title">
+                <div className="vk-form-name">{session.display_title}</div>
+                <div className="vk-form-meta">
                   <span>{session.user.name}</span>
                   <span>·</span>
                   <span>{formatManagementTime(session.updated_at, locale)}</span>
@@ -797,12 +800,12 @@ function SessionTable(props: {
                   {session.active_runtime ? <Badge variant="destructive">{t("memory.data.activeRuntime")}</Badge> : null}
                 </div>
               </TableCell>
-              <TableCell className="max-w-[260px] truncate">{session.project.path}</TableCell>
-              <TableCell>{session.visible_turn_count}</TableCell>
-              <TableCell>{session.active_memory_count}</TableCell>
+              <TableCell className="vk-mem-col-path" title={session.project.path}>{session.project.path}</TableCell>
+              <TableCell className="vk-num">{session.visible_turn_count}</TableCell>
+              <TableCell className="vk-num">{session.active_memory_count}</TableCell>
               <TableCell>
                 <Button disabled={props.busy} onClick={() => props.onOpen(session)} size="sm" variant="ghost">
-                  {t("memory.data.viewTurns")}<ChevronRight className="size-4" />
+                  {t("memory.data.viewTurns")}<ChevronRight className="vk-icon" />
                 </Button>
               </TableCell>
             </TableRow>
@@ -828,32 +831,32 @@ function TurnWorkspace(props: {
 }) {
   const { t, locale } = useI18n()
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Button disabled={props.busy} onClick={props.onBack} size="sm" variant="ghost"><ChevronLeft className="size-4" />{t("memory.data.backToSessions")}</Button>
-        <div className="min-w-0">
-          <h3 className="truncate font-semibold">{props.session.display_title}</h3>
-          <p className="truncate text-xs text-muted-foreground">{props.session.project.path}</p>
+    <div className="vk-form-stack">
+      <div className="vk-form-inline">
+        <Button disabled={props.busy} onClick={props.onBack} size="sm" variant="ghost"><ChevronLeft className="vk-icon" />{t("memory.data.backToSessions")}</Button>
+        <div className="vk-form-cell">
+          <h3 className="vk-form-heading vk-truncate">{props.session.display_title}</h3>
+          <p className="vk-form-note vk-truncate">{props.session.project.path}</p>
         </div>
       </div>
       {props.turns.length === 0 ? <DataEmpty description={t("memory.data.noTurns")} /> : (
-        <div className="space-y-2">
+        <div className="vk-form-stack">
           {props.turns.map((turn) => (
             <Card key={turn.turn_id} variant="interactive">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="line-clamp-2 text-sm">{turn.display_excerpt}</CardTitle>
+              <CardHeader>
+                <div className="vk-form-row">
+                  <CardTitle className="vk-mem-clamp2 vk-form-sm">{turn.display_excerpt}</CardTitle>
                   <Badge variant="outline">{managementExtractionStatusLabel(t, turn.extraction_status)}</Badge>
                 </div>
               </CardHeader>
-              <CardContent className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <CardContent className="vk-form-meta">
                 <span>{formatManagementTime(turn.created_at, locale)}</span>
                 <span>{formatBytes(turn.content_bytes)}</span>
                 <span>{t("memory.data.memoryCount")}: {turn.derived_memories}</span>
                 <span>{t("memory.data.profileCount")}: {turn.profile_references}</span>
-                <div className="ml-auto flex items-center gap-2">
+                <div className="vk-form-inline vk-mem-push">
                   <Button disabled={props.busy} onClick={() => props.onOpenTurn(turn)} size="sm" variant="outline">{t("memory.data.details")}</Button>
-                  <Button disabled={props.busy} onClick={() => props.onRecycleTurn(turn)} size="sm" variant="destructive"><Trash2 className="size-4" />{t("memory.data.recycle")}</Button>
+                  <Button disabled={props.busy} onClick={() => props.onRecycleTurn(turn)} size="sm" variant="destructive"><Trash2 className="vk-icon" />{t("memory.data.recycle")}</Button>
                 </div>
               </CardContent>
             </Card>
@@ -876,13 +879,13 @@ function TurnList(props: {
   const { t, locale } = useI18n()
   if (props.turns.length === 0) return <DataEmpty description={t("memory.data.noTurns")} />
   return (
-    <div className="grid gap-2">
+    <div className="vk-form-stack">
       {props.turns.map((turn) => (
         <Card key={turn.turn_id}>
-          <CardContent className="flex flex-col items-stretch gap-3 py-3 sm:flex-row sm:items-start">
-            <div className="min-w-0 flex-1">
-              <div className="line-clamp-2 text-sm font-medium">{turn.display_excerpt}</div>
-              <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+          <CardContent className="vk-mem-turn-row">
+            <div className="vk-form-fill">
+              <div className="vk-mem-clamp2 vk-form-strong">{turn.display_excerpt}</div>
+              <div className="vk-form-meta">
                 {turn.user ? <span>{turn.user.name}</span> : null}
                 {turn.project ? <span>{turn.project.path}</span> : null}
                 <span>{formatManagementTime(turn.created_at, locale)}</span>
@@ -890,10 +893,10 @@ function TurnList(props: {
                 <span>{t("memory.data.memoryCount")}: {turn.derived_memories}</span>
               </div>
             </div>
-            <Badge className="self-start" variant="outline">{managementExtractionStatusLabel(t, turn.extraction_status)}</Badge>
-            <div className="flex items-center justify-end gap-2">
+            <Badge variant="outline">{managementExtractionStatusLabel(t, turn.extraction_status)}</Badge>
+            <div className="vk-form-acts">
               <Button disabled={props.busy} onClick={() => props.onOpen(turn)} size="sm" variant="outline">{t("memory.data.details")}</Button>
-              <Button aria-label={t("memory.data.recycle")} disabled={props.busy} onClick={() => props.onRecycle(turn)} size="icon" variant="destructive"><Trash2 className="size-4" /></Button>
+              <Button aria-label={t("memory.data.recycle")} disabled={props.busy} onClick={() => props.onRecycle(turn)} size="icon" variant="destructive"><Trash2 className="vk-icon" /></Button>
             </div>
           </CardContent>
         </Card>
@@ -914,7 +917,7 @@ function TurnDetailDialog(props: {
   const { t, locale } = useI18n()
   return (
     <Dialog open={Boolean(props.openTurn)} onOpenChange={(open) => { if (!open) props.onClose() }}>
-      <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
+      <DialogContent size="xl">
         <DialogHeader>
           <DialogTitle>{t("memory.data.turnDetails")}</DialogTitle>
           <DialogDescription>{props.openTurn?.project?.path ?? formatManagementTime(props.openTurn?.created_at ?? "", locale)}</DialogDescription>
@@ -923,9 +926,9 @@ function TurnDetailDialog(props: {
           const value = props.content[section]
           return (
             <Card key={section}>
-              <CardHeader className="pb-2"><CardTitle className="text-sm">{section === "user" ? t("memory.data.userContent") : t("memory.data.assistantContent")}</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                {value?.chunk !== undefined ? <pre className="max-h-80 whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-sans text-sm">{value.chunk}</pre> : <StreamPlaceholder className="rounded-md bg-muted p-3" label={t("memory.data.loading")} count={5} />}
+              <CardHeader><CardTitle className="vk-form-sm">{section === "user" ? t("memory.data.userContent") : t("memory.data.assistantContent")}</CardTitle></CardHeader>
+              <CardContent className="vk-form-stack">
+                {value?.chunk !== undefined ? <pre className="vk-mem-chunk">{value.chunk}</pre> : <StreamPlaceholder className="vk-mem-chunk" label={t("memory.data.loading")} count={5} />}
                 {value?.has_more ? <Button disabled={props.busy} onClick={() => void props.onLoadMore(section)} size="sm" variant="outline">{t("memory.data.loadMore")}</Button> : null}
               </CardContent>
             </Card>
@@ -947,28 +950,28 @@ function RecycleBin(props: {
   const { t, locale } = useI18n()
   if (props.batches.length === 0) return <DataEmpty description={t("memory.data.recycleEmpty")} />
   return (
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <div className="vk-form-grid">
       {props.batches.map((batch) => (
         <Card key={batch.batch_id}>
-          <CardHeader className="pb-2">
-            <div className="flex items-start justify-between gap-2">
-              <CardTitle className="text-sm">{batch.reason || t("memory.data.recycleBin")}</CardTitle>
+          <CardHeader>
+            <div className="vk-mem-tile-head">
+              <CardTitle className="vk-form-sm">{batch.reason || t("memory.data.recycleBin")}</CardTitle>
               <Badge variant={batch.restorable ? "default" : "secondary"}>{batch.restorable ? t("memory.data.restorable") : t("memory.data.systemBatch")}</Badge>
             </div>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+          <CardContent className="vk-form-stack">
+            <div className="vk-form-meta">
               <span>{t("memory.data.turnCount")}: {batch.turn_count}</span>
               <span>{t("memory.data.memoryCount")}: {batch.memory_count}</span>
               <span>{t("memory.data.profileCount")}: {batch.profile_count}</span>
               <span>{formatManagementTime(batch.recycled_at, locale)}</span>
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="vk-form-acts">
               {batch.restorable && batch.state === "recycled" ? (
-                <Button disabled={props.busy} onClick={() => props.onRestore(batch.batch_id)} size="sm" variant="outline"><RotateCcw className="size-4" />{t("memory.data.restore")}</Button>
+                <Button disabled={props.busy} onClick={() => props.onRestore(batch.batch_id)} size="sm" variant="outline"><RotateCcw className="vk-icon" />{t("memory.data.restore")}</Button>
               ) : null}
               {batch.state === "recycled" ? (
-                <Button disabled={props.busy} onClick={() => props.onPurge(batch.batch_id)} size="sm" variant="destructive"><Trash2 className="size-4" />{t("memory.data.purge")}</Button>
+                <Button disabled={props.busy} onClick={() => props.onPurge(batch.batch_id)} size="sm" variant="destructive"><Trash2 className="vk-icon" />{t("memory.data.purge")}</Button>
               ) : null}
             </div>
           </CardContent>
@@ -1002,7 +1005,7 @@ function ImpactDialog(props: {
           <DialogDescription>{impact?.action === "purge" ? purgeDescription : t("memory.data.impactDescription")}</DialogDescription>
         </DialogHeader>
         {impact ? (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div className="vk-mem-counts">
             <ImpactMetric label={t("memory.data.sessions")} value={impact.session_count} />
             <ImpactMetric label={t("memory.data.turnCount")} value={impact.turn_count} />
             <ImpactMetric label={t("memory.data.memoryCount")} value={impact.memory_count} />
@@ -1012,7 +1015,7 @@ function ImpactDialog(props: {
           </div>
         ) : null}
         {impact?.action === "purge" ? (
-          <div className="space-y-2">
+          <div className="vk-form-stack">
             <Label htmlFor="vmm-purge-confirmation">{purgeDescription}</Label>
             <Input disabled={props.busy} id="vmm-purge-confirmation" onChange={(event) => props.onPurgePhraseChange(event.target.value)} placeholder={confirmationPhrase} value={props.purgePhrase} />
           </div>
@@ -1036,9 +1039,9 @@ function ImpactDialog(props: {
 // ImpactMetric 渲染一个紧凑影响计数。
 function ImpactMetric(props: { label: string; value: number; danger?: boolean }) {
   return (
-    <div className={`rounded-lg border p-3 ${props.danger ? "border-destructive/50 bg-destructive/5" : ""}`}>
-      <div className="text-xs text-muted-foreground">{props.label}</div>
-      <div className="text-lg font-semibold">{props.value}</div>
+    <div className="vk-mem-count" data-tone={props.danger ? "bad" : undefined}>
+      <span>{props.label}</span>
+      <strong className="vk-num">{props.value}</strong>
     </div>
   )
 }
@@ -1048,13 +1051,7 @@ function ImpactMetric(props: { label: string; value: number; danger?: boolean })
 function DataEmpty(props: { description: string }) {
   const { t } = useI18n()
   return (
-    <Empty className="py-12" variant="outlined">
-      <EmptyHeader>
-        <EmptyMedia variant="icon"><Database /></EmptyMedia>
-        <EmptyTitle>{t("memory.data.title")}</EmptyTitle>
-        <EmptyDescription>{props.description}</EmptyDescription>
-      </EmptyHeader>
-    </Empty>
+    <PageEmptyState description={props.description} icon={<Database aria-hidden="true" />} size="panel" title={t("memory.data.title")} />
   )
 }
 

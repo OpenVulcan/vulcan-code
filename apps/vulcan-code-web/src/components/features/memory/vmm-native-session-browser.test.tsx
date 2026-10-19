@@ -125,7 +125,7 @@ it("bounds large session-detail rendering and pages without another full record 
     const started = performance.now()
     await act(async () => button(view.container, "显示标题 0").click())
     const detail = view.container.querySelector(".vmm-session-detail")!
-    expect(detail.querySelectorAll('button.pl-10')).toHaveLength(30)
+    expect(detail.querySelectorAll('.vk-mem-pick > button.vk-mem-tile')).toHaveLength(30)
     expect(detail.textContent).toContain("1–30 / 5000")
     await act(async () => button(detail, "下一页").click())
     expect(detail.textContent).toContain("31–60 / 5000")

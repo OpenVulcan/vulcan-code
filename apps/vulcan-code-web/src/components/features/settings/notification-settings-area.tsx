@@ -10,6 +10,7 @@ import type { NotificationPreferencesV1 } from "@/notifications/types";
 import { shellClient } from "@/service/webui-service-runtime";
 import type { ShellNotificationPermission } from "@/host-shell";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // NotificationSettingsArea separates durable user intent, native permission and delivery feedback.
 // NotificationSettingsArea 分离持久化用户意图、原生权限与投递反馈。

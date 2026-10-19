@@ -40,6 +40,7 @@ import type {
 } from "@/types"
 import { formatDateTime } from "@/lib/display-format"
 import "@/ui-kit/styles/features/settings-forms.css";
+import "@/ui-kit/styles/features/memory.css"
 
 // VmmNativeMaintenancePageProps binds native retention controls to the shared action channel.
 // VmmNativeMaintenancePageProps 将原生保留控制绑定到共享动作通道。
@@ -381,11 +382,11 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
   ), [catalog])
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-4">
+    <div className="vk-form-loose">
       <PageTabs
         actions={<>
-          <Button ref={cleanupTrigger} disabled={controlsBusy || status?.running} onClick={() => void previewCleanup()} size="sm" type="button"><Sparkles className="size-4" aria-hidden="true" />{t("memory.maintenance.previewCleanup")}</Button>
-          <Button disabled={controlsBusy} onClick={() => void loadPage()} size="sm" type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
+          <Button ref={cleanupTrigger} disabled={controlsBusy || status?.running} onClick={() => void previewCleanup()} size="sm" type="button"><Sparkles className="vk-icon" aria-hidden="true" />{t("memory.maintenance.previewCleanup")}</Button>
+          <Button disabled={controlsBusy} onClick={() => void loadPage()} size="sm" type="button" variant="outline"><RefreshCw className="vk-icon" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
         </>}
         ariaLabel={t("memory.maintenance.title")}
         className="vmm-page-tabs"
@@ -395,14 +396,14 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
       />
       {error ? <p className="vk-field-error">{error}</p> : null}
       {vectorStatus && (!vectorStatus.configured || vectorStatus.rebuildRequiredMemoryCount > 0) ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3" role="alert">
-          <div className="flex items-start gap-2">
-            <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 text-destructive" />
+        <div className="vk-form-alert" data-tone="bad" role="alert">
+          <div className="vk-form-inline">
+            <AlertTriangle aria-hidden="true" />
             <div>
-              <p className="text-sm font-medium">{t(vectorStatus.configured ? "memory.maintenance.vectorRebuildRequired" : "memory.maintenance.vectorRouteUnavailable")}</p>
+              <p className="vk-form-strong">{t(vectorStatus.configured ? "memory.maintenance.vectorRebuildRequired" : "memory.maintenance.vectorRouteUnavailable")}</p>
               {vectorStatus.configured
-                ? <p className="mt-1 text-xs text-muted-foreground">{t("memory.maintenance.vectorRebuildCounts").replace("{memories}", String(vectorStatus.rebuildRequiredMemoryCount)).replace("{active}", String(vectorStatus.activeRebuildRequiredMemoryCount)).replace("{recycled}", String(vectorStatus.recycleBinRebuildRequiredMemoryCount)).replace("{spaces}", String(vectorStatus.legacyVectorSpaceCount))}</p>
-                : nativeVectorRouteCause(vectorStatus) ? <p className="mt-1 text-xs text-destructive">{nativeVectorRouteCause(vectorStatus)}</p> : null}
+                ? <p className="vk-form-note">{t("memory.maintenance.vectorRebuildCounts").replace("{memories}", String(vectorStatus.rebuildRequiredMemoryCount)).replace("{active}", String(vectorStatus.activeRebuildRequiredMemoryCount)).replace("{recycled}", String(vectorStatus.recycleBinRebuildRequiredMemoryCount)).replace("{spaces}", String(vectorStatus.legacyVectorSpaceCount))}</p>
+                : nativeVectorRouteCause(vectorStatus) ? <p className="vk-field-error">{nativeVectorRouteCause(vectorStatus)}</p> : null}
             </div>
           </div>
           <Button onClick={() => setMaintenanceView("index")} size="sm" type="button" variant="outline">{t(vectorStatus.configured ? "memory.vectorHealth.openRepair" : "memory.maintenance.vectorTitle")}</Button>
@@ -410,21 +411,21 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
       ) : null}
 
       <div hidden={maintenanceView !== "cleanup"}><Card>
-        <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="size-4" aria-hidden="true" />{t("memory.maintenance.status")}</CardTitle><CardDescription>{t("memory.maintenance.statusDescription")}</CardDescription></CardHeader>
-        <CardContent className="space-y-4">
-      {status ? <><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6"><Metric label={t("memory.maintenance.worker")} value={status.running ? t("memory.maintenance.running") : status.enabled ? t("memory.maintenance.enabled") : t("memory.maintenance.disabled")} /><Metric label={t("memory.maintenance.profileExpiryWorker")} value={status.profileExpiryRunning ? t("memory.maintenance.running") : status.enabled ? t("memory.maintenance.enabled") : t("memory.maintenance.disabled")} /><Metric label={t("memory.maintenance.interval")} value={`${status.intervalMinutes} min`} /><Metric label={t("memory.maintenance.profileExpiryInterval")} value={`${status.profileExpiryIntervalSeconds} s`} /><Metric label={t("memory.maintenance.pendingJobs")} value={String(status.pendingColdJobs)} /><Metric label={t("memory.maintenance.recycleBatches")} value={String(status.recycleBatchCount)} /></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label={t("memory.maintenance.hotWindow")} value={String(status.policy.turnHotWindowSize)} /><Metric label={t("memory.maintenance.idleWindow")} value={formatNativeDuration(status.policy.sessionIdleMs, locale, t)} /><Metric label={t("memory.maintenance.trashWindow")} value={formatNativeDuration(status.policy.trashRetentionMs, locale, t)} /><Metric label={t("memory.maintenance.protectionFloor")} value={`${status.policy.protectedPriorityFloor} / L${status.policy.protectedMemoryLevelFloor}`} /></div><div className="space-y-2"><p className="text-sm font-medium">{t("memory.maintenance.limits")}</p><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><Metric label={t("memory.maintenance.profileExpiryLimit")} value={String(status.policy.profileExpiryLimit)} /><Metric label={t("memory.maintenance.memoryRecycleLimit")} value={String(status.policy.memoryRecycleLimit)} /><Metric label={t("memory.maintenance.coldScanLimit")} value={String(status.policy.coldTurnScanLimit)} /><Metric label={t("memory.maintenance.coldJobLimit")} value={String(status.policy.coldTurnJobLimit)} /><Metric label={t("memory.maintenance.idleSessionLimit")} value={String(status.policy.idleSessionLimit)} /><Metric label={t("memory.maintenance.trashPurgeLimit")} value={String(status.policy.trashPurgeLimit)} /></div><p className="text-xs text-muted-foreground">{t("memory.maintenance.vectorConsistency")}</p></div><div className="grid gap-3 lg:grid-cols-2"><div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm"><p>{t("memory.maintenance.lastRun")}: {formatTimestamp(status.lastFinishedAtUnixMs, t("memory.maintenance.never"), locale)}</p>{status.lastResult ? <p className="mt-1 text-muted-foreground">{t("memory.maintenance.lastResult").replace("{profiles}", String(status.lastResult.expiredProfileNodes)).replace("{memories}", String(status.lastResult.recycledMemories)).replace("{turns}", String(status.lastResult.recycledTurns)).replace("{enqueued}", String(status.lastResult.enqueuedColdJobs)).replace("{completed}", String(status.lastResult.completedColdJobs)).replace("{purged}", String(status.lastResult.purgedTrashBatches))}</p> : null}{status.lastError ? <p className="mt-1 text-destructive">{status.lastError}</p> : null}{status.lastResult?.projectFailures.length ? <ul className="mt-2 space-y-1 text-xs text-destructive">{status.lastResult.projectFailures.map((failure) => <li key={`${failure.projectId}:${failure.error}`}>{projectNames.get(failure.projectId) ?? `#${failure.projectId}`}: {failure.error}</li>)}</ul> : null}</div><div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm"><p>{t("memory.maintenance.profileExpiryLastRun")}: {formatTimestamp(status.profileExpiryLastFinishedAtUnixMs, t("memory.maintenance.never"), locale)}</p>{status.profileExpiryLastResult ? <p className="mt-1 text-muted-foreground">{t("memory.maintenance.profileExpiryLastResult").replace("{profiles}", String(status.profileExpiryLastResult.expiredProfileNodes))}</p> : null}{status.profileExpiryLastError ? <p className="mt-1 text-destructive">{status.profileExpiryLastError}</p> : null}{status.profileExpiryLastResult?.projectFailures.length ? <ul className="mt-2 space-y-1 text-xs text-destructive">{status.profileExpiryLastResult.projectFailures.map((failure) => <li key={`${failure.projectId}:${failure.error}`}>{projectNames.get(failure.projectId) ?? `#${failure.projectId}`}: {failure.error}</li>)}</ul> : null}</div></div></> : pagePending ? <StreamPlaceholder label={t("memory.resources.loading")} shape="tiles" count={6} /> : <p className="text-sm text-muted-foreground">{t("memory.maintenance.invalidResponse")}</p>}
+        <CardHeader><CardTitle className="vk-form-inline"><ShieldCheck className="vk-icon" aria-hidden="true" />{t("memory.maintenance.status")}</CardTitle><CardDescription>{t("memory.maintenance.statusDescription")}</CardDescription></CardHeader>
+        <CardContent className="vk-form-loose">
+      {status ? <><div className="vk-mem-tiles"><Metric label={t("memory.maintenance.worker")} value={status.running ? t("memory.maintenance.running") : status.enabled ? t("memory.maintenance.enabled") : t("memory.maintenance.disabled")} /><Metric label={t("memory.maintenance.profileExpiryWorker")} value={status.profileExpiryRunning ? t("memory.maintenance.running") : status.enabled ? t("memory.maintenance.enabled") : t("memory.maintenance.disabled")} /><Metric label={t("memory.maintenance.interval")} value={`${status.intervalMinutes} min`} /><Metric label={t("memory.maintenance.profileExpiryInterval")} value={`${status.profileExpiryIntervalSeconds} s`} /><Metric label={t("memory.maintenance.pendingJobs")} value={String(status.pendingColdJobs)} /><Metric label={t("memory.maintenance.recycleBatches")} value={String(status.recycleBatchCount)} /></div><div className="vk-mem-tiles"><Metric label={t("memory.maintenance.hotWindow")} value={String(status.policy.turnHotWindowSize)} /><Metric label={t("memory.maintenance.idleWindow")} value={formatNativeDuration(status.policy.sessionIdleMs, locale, t)} /><Metric label={t("memory.maintenance.trashWindow")} value={formatNativeDuration(status.policy.trashRetentionMs, locale, t)} /><Metric label={t("memory.maintenance.protectionFloor")} value={`${status.policy.protectedPriorityFloor} / L${status.policy.protectedMemoryLevelFloor}`} /></div><div className="vk-form-stack"><p className="vk-form-strong">{t("memory.maintenance.limits")}</p><div className="vk-mem-three"><Metric label={t("memory.maintenance.profileExpiryLimit")} value={String(status.policy.profileExpiryLimit)} /><Metric label={t("memory.maintenance.memoryRecycleLimit")} value={String(status.policy.memoryRecycleLimit)} /><Metric label={t("memory.maintenance.coldScanLimit")} value={String(status.policy.coldTurnScanLimit)} /><Metric label={t("memory.maintenance.coldJobLimit")} value={String(status.policy.coldTurnJobLimit)} /><Metric label={t("memory.maintenance.idleSessionLimit")} value={String(status.policy.idleSessionLimit)} /><Metric label={t("memory.maintenance.trashPurgeLimit")} value={String(status.policy.trashPurgeLimit)} /></div><p className="vk-form-note">{t("memory.maintenance.vectorConsistency")}</p></div><div className="vk-mem-two"><div className="vk-form-well"><p>{t("memory.maintenance.lastRun")}: {formatTimestamp(status.lastFinishedAtUnixMs, t("memory.maintenance.never"), locale)}</p>{status.lastResult ? <p className="vk-faint">{t("memory.maintenance.lastResult").replace("{profiles}", String(status.lastResult.expiredProfileNodes)).replace("{memories}", String(status.lastResult.recycledMemories)).replace("{turns}", String(status.lastResult.recycledTurns)).replace("{enqueued}", String(status.lastResult.enqueuedColdJobs)).replace("{completed}", String(status.lastResult.completedColdJobs)).replace("{purged}", String(status.lastResult.purgedTrashBatches))}</p> : null}{status.lastError ? <p className="vk-field-error">{status.lastError}</p> : null}{status.lastResult?.projectFailures.length ? <ul className="vk-field-error vk-form-tight vk-form-after">{status.lastResult.projectFailures.map((failure) => <li key={`${failure.projectId}:${failure.error}`}>{projectNames.get(failure.projectId) ?? `#${failure.projectId}`}: {failure.error}</li>)}</ul> : null}</div><div className="vk-form-well"><p>{t("memory.maintenance.profileExpiryLastRun")}: {formatTimestamp(status.profileExpiryLastFinishedAtUnixMs, t("memory.maintenance.never"), locale)}</p>{status.profileExpiryLastResult ? <p className="vk-faint">{t("memory.maintenance.profileExpiryLastResult").replace("{profiles}", String(status.profileExpiryLastResult.expiredProfileNodes))}</p> : null}{status.profileExpiryLastError ? <p className="vk-field-error">{status.profileExpiryLastError}</p> : null}{status.profileExpiryLastResult?.projectFailures.length ? <ul className="vk-field-error vk-form-tight vk-form-after">{status.profileExpiryLastResult.projectFailures.map((failure) => <li key={`${failure.projectId}:${failure.error}`}>{projectNames.get(failure.projectId) ?? `#${failure.projectId}`}: {failure.error}</li>)}</ul> : null}</div></div></> : pagePending ? <StreamPlaceholder label={t("memory.resources.loading")} shape="tiles" count={6} /> : <p className="vk-form-text">{t("memory.maintenance.invalidResponse")}</p>}
         </CardContent>
       </Card>
 
       </div>
       <div hidden={maintenanceView !== "index"}><Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><DatabaseZap className="size-4" aria-hidden="true" />{t("memory.maintenance.vectorTitle")}</CardTitle>
+          <CardTitle className="vk-form-inline"><DatabaseZap className="vk-icon" aria-hidden="true" />{t("memory.maintenance.vectorTitle")}</CardTitle>
           <CardDescription>{t("memory.maintenance.vectorDescription")}</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="vk-form-loose">
           {vectorStatus ? <>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="vk-mem-metrics">
               <Metric label={t("memory.maintenance.vectorConfigured")} value={vectorStatus.configured ? t("memory.maintenance.configured") : t("memory.maintenance.notConfigured")} />
               <Metric label={t("memory.maintenance.vectorDimension")} value={vectorStatus.embeddingDimension == null ? "-" : String(vectorStatus.embeddingDimension)} />
               <Metric label={t("memory.maintenance.activeMemories")} value={String(vectorStatus.activeMemoryCount)} />
@@ -433,25 +434,25 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
               <Metric label={t("memory.maintenance.currentRecycleBinVectors")} value={String(vectorStatus.currentRecycleBinMemoryCount)} />
               <Metric label={t("memory.maintenance.pendingAnalysisJobs")} value={String(vectorStatus.pendingAnalysisJobCount)} />
             </div>
-            <div className={!vectorStatus.configured || vectorStatus.rebuildRequiredMemoryCount > 0 ? "rounded-lg border border-destructive/40 bg-destructive/5 p-3" : "rounded-lg border bg-muted/20 p-3"}>
-              <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="vk-form-alert" data-tone={!vectorStatus.configured || vectorStatus.rebuildRequiredMemoryCount > 0 ? "bad" : undefined}>
+              <div className="vk-form-bar">
                 <div>
-                  <p className="text-sm font-medium">{!vectorStatus.configured ? t("memory.maintenance.vectorRouteUnavailable") : vectorStatus.rebuildRequiredMemoryCount > 0 ? t("memory.maintenance.vectorRebuildRequired") : t("memory.maintenance.vectorCompatible")}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{t("memory.maintenance.vectorRebuildCounts").replace("{memories}", String(vectorStatus.rebuildRequiredMemoryCount)).replace("{active}", String(vectorStatus.activeRebuildRequiredMemoryCount)).replace("{recycled}", String(vectorStatus.recycleBinRebuildRequiredMemoryCount)).replace("{spaces}", String(vectorStatus.legacyVectorSpaceCount))}</p>
-                  {nativeVectorRouteCause(vectorStatus) ? <p className="mt-1 text-xs text-destructive">{nativeVectorRouteCause(vectorStatus)}</p> : null}
+                  <p className="vk-form-strong">{!vectorStatus.configured ? t("memory.maintenance.vectorRouteUnavailable") : vectorStatus.rebuildRequiredMemoryCount > 0 ? t("memory.maintenance.vectorRebuildRequired") : t("memory.maintenance.vectorCompatible")}</p>
+                  <p className="vk-form-note">{t("memory.maintenance.vectorRebuildCounts").replace("{memories}", String(vectorStatus.rebuildRequiredMemoryCount)).replace("{active}", String(vectorStatus.activeRebuildRequiredMemoryCount)).replace("{recycled}", String(vectorStatus.recycleBinRebuildRequiredMemoryCount)).replace("{spaces}", String(vectorStatus.legacyVectorSpaceCount))}</p>
+                  {nativeVectorRouteCause(vectorStatus) ? <p className="vk-field-error">{nativeVectorRouteCause(vectorStatus)}</p> : null}
                 </div>
                 <Button ref={vectorTrigger} disabled={controlsBusy || !vectorStatus.configured || vectorStatus.rebuildRequiredMemoryCount === 0} onClick={() => void previewVectorRebuild()} type="button" variant="outline">
-                  <DatabaseZap className="size-4" aria-hidden="true" />{t("memory.maintenance.previewVectorRebuild")}
+                  <DatabaseZap className="vk-icon" aria-hidden="true" />{t("memory.maintenance.previewVectorRebuild")}
                 </Button>
               </div>
             </div>
             {vectorAdoption?.adopted ? (
-              <p className="text-sm text-muted-foreground" role="status">{formatSkillText(t("memory.maintenance.keepVectorsDone"), {
+              <p className="vk-form-text" role="status">{formatSkillText(t("memory.maintenance.keepVectorsDone"), {
                 count: vectorAdoption.adoptedMemoryCount,
                 remaining: vectorAdoption.remainingRebuildMemoryCount,
               })}</p>
             ) : null}
-          </> : pagePending ? <StreamPlaceholder label={t("memory.resources.loading")} shape="fields" count={3} /> : <p className="text-sm text-muted-foreground">{t("memory.maintenance.readFailed")}</p>}
+          </> : pagePending ? <StreamPlaceholder label={t("memory.resources.loading")} shape="fields" count={3} /> : <p className="vk-form-text">{t("memory.maintenance.readFailed")}</p>}
         </CardContent>
       </Card>
 
@@ -459,14 +460,14 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
       </div>
       <div hidden={maintenanceView !== "recycle"}><Card>
         <CardHeader><CardTitle>{t("memory.maintenance.recycleBin")}</CardTitle><CardDescription>{t("memory.maintenance.recycleDescription")}</CardDescription></CardHeader>
-        <CardContent className="space-y-4">
-          <div className="max-w-sm space-y-2"><Label htmlFor="memory-recycle-project-filter">{t("memory.maintenance.projectFilter")}</Label><Select disabled={controlsBusy} onValueChange={(filter) => void changeProjectFilter(filter)} value={projectFilter}><SelectTrigger id="memory-recycle-project-filter"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("memory.maintenance.allProjects")}</SelectItem>{catalog?.projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent></Select></div>
-          {recycleBin?.batches.length ? <TooltipProvider><ol className="vmm-recycle-list" aria-label={t("memory.maintenance.recycleBin")}>{recycleBin.batches.map((batch) => <RecycleBatchCard batch={batch} busy={controlsBusy} key={batch.batchId} onRunAction={onRunAction} onConfirm={(action, trigger) => { recycleTrigger.current = trigger; setError(null); setConfirmation({ action, batch, storageVersion: recycleBin.storageVersion }) }} projectName={projectNames.get(batch.projectId) ?? `#${batch.projectId}`} />)}</ol></TooltipProvider> : recycleBin === null && !error ? <StreamPlaceholder label={t("memory.common.loading")} shape="cards" count={3} /> : <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">{recycleBin !== null ? t("memory.maintenance.emptyRecycleBin") : t("memory.maintenance.invalidResponse")}</div>}
+        <CardContent className="vk-form-loose">
+          <div className="vk-field vk-form-narrow"><Label htmlFor="memory-recycle-project-filter">{t("memory.maintenance.projectFilter")}</Label><Select disabled={controlsBusy} onValueChange={(filter) => void changeProjectFilter(filter)} value={projectFilter}><SelectTrigger id="memory-recycle-project-filter"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("memory.maintenance.allProjects")}</SelectItem>{catalog?.projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent></Select></div>
+          {recycleBin?.batches.length ? <TooltipProvider><ol className="vmm-recycle-list" aria-label={t("memory.maintenance.recycleBin")}>{recycleBin.batches.map((batch) => <RecycleBatchCard batch={batch} busy={controlsBusy} key={batch.batchId} onRunAction={onRunAction} onConfirm={(action, trigger) => { recycleTrigger.current = trigger; setError(null); setConfirmation({ action, batch, storageVersion: recycleBin.storageVersion }) }} projectName={projectNames.get(batch.projectId) ?? `#${batch.projectId}`} />)}</ol></TooltipProvider> : recycleBin === null && !error ? <StreamPlaceholder label={t("memory.common.loading")} shape="cards" count={3} /> : <div className="vk-mem-placeholder">{recycleBin !== null ? t("memory.maintenance.emptyRecycleBin") : t("memory.maintenance.invalidResponse")}</div>}
         </CardContent>
       </Card>
 
       </div>
-      <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && !busy && !actionLock.current && setConfirmation(null)}><AlertDialogContent onCloseAutoFocus={(event) => { event.preventDefault(); recycleTrigger.current?.focus() }} onEscapeKeyDown={(event) => { if (actionLock.current || busy) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>{confirmation?.action === "purge" ? t("memory.maintenance.confirmPurgeTitle") : t("memory.maintenance.confirmRestoreTitle")}</AlertDialogTitle><AlertDialogDescription>{confirmation?.action === "purge" ? t("memory.maintenance.confirmPurgeDescription") : t("memory.maintenance.confirmRestoreDescription")}</AlertDialogDescription></AlertDialogHeader>{confirmation ? <div className="min-w-0 space-y-1 text-sm"><p className="break-all font-medium">{projectNames.get(confirmation.batch.projectId) ?? `#${confirmation.batch.projectId}`}</p><p className="break-all font-mono text-xs text-muted-foreground">{confirmation.batch.batchId}</p></div> : null}{error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}<AlertDialogFooter><AlertDialogCancel disabled={busy || actionPending}>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction disabled={busy || actionPending} onClick={(event) => { event.preventDefault(); void applyRecycleAction() }}>{confirmation?.action === "purge" ? t("memory.maintenance.purge") : t("memory.maintenance.restore")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+      <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && !busy && !actionLock.current && setConfirmation(null)}><AlertDialogContent onCloseAutoFocus={(event) => { event.preventDefault(); recycleTrigger.current?.focus() }} onEscapeKeyDown={(event) => { if (actionLock.current || busy) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>{confirmation?.action === "purge" ? t("memory.maintenance.confirmPurgeTitle") : t("memory.maintenance.confirmRestoreTitle")}</AlertDialogTitle><AlertDialogDescription>{confirmation?.action === "purge" ? t("memory.maintenance.confirmPurgeDescription") : t("memory.maintenance.confirmRestoreDescription")}</AlertDialogDescription></AlertDialogHeader>{confirmation ? <div className="vk-form-tight vk-form-sm"><p className="vk-form-break vk-form-em">{projectNames.get(confirmation.batch.projectId) ?? `#${confirmation.batch.projectId}`}</p><p className="vk-form-codeline vk-faint">{confirmation.batch.batchId}</p></div> : null}{error ? <p role="alert" className="vk-field-error">{error}</p> : null}<AlertDialogFooter><AlertDialogCancel disabled={busy || actionPending}>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction disabled={busy || actionPending} onClick={(event) => { event.preventDefault(); void applyRecycleAction() }}>{confirmation?.action === "purge" ? t("memory.maintenance.purge") : t("memory.maintenance.restore")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
       <VmmNativeCleanupPreview preview={cleanupPreview} busy={busy || cleanupPending} onClose={() => { if (!busy && !actionLock.current) setCleanupPreview(null) }} onConfirm={() => void runCleanup()} onRestoreFocus={() => cleanupTrigger.current?.focus()} />
       <AlertDialog open={vectorPreview !== null} onOpenChange={(open) => !open && !busy && !actionLock.current && setVectorPreview(null)}>
         <AlertDialogContent onCloseAutoFocus={(event) => { event.preventDefault(); vectorTrigger.current?.focus() }} onEscapeKeyDown={(event) => { if (actionLock.current || busy) event.preventDefault() }}>
@@ -483,18 +484,18 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
             </AlertDialogDescription>
           </AlertDialogHeader>
           {vectorPreview && vectorPreview.adoptableMemoryCount > 0 ? (
-            <div className="space-y-1 rounded-lg border bg-muted/20 p-3 text-sm">
-              <p className="font-medium">{t("memory.maintenance.keepVectorsTitle")}</p>
-              <p className="text-xs text-muted-foreground">{formatSkillText(t("memory.maintenance.keepVectorsDescription"), { count: vectorPreview.adoptableMemoryCount })}</p>
+            <div className="vk-form-well vk-form-tight">
+              <p className="vk-form-em">{t("memory.maintenance.keepVectorsTitle")}</p>
+              <p className="vk-form-note">{formatSkillText(t("memory.maintenance.keepVectorsDescription"), { count: vectorPreview.adoptableMemoryCount })}</p>
               {vectorAdoption && !vectorAdoption.adopted ? (
-                <p role="alert" className="text-xs text-destructive">{formatSkillText(t("memory.maintenance.keepVectorsRejected"), {
+                <p role="alert" className="vk-field-error">{formatSkillText(t("memory.maintenance.keepVectorsRejected"), {
                   similarity: vectorAdoption.sampleSimilarity.toFixed(4),
                   required: vectorAdoption.requiredSimilarity.toFixed(4),
                 })}</p>
               ) : null}
             </div>
           ) : null}
-          {error ? <p role="alert" className="break-all text-sm text-destructive">{error}</p> : null}
+          {error ? <p role="alert" className="vk-field-error vk-form-break">{error}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy || actionPending}>{t("memory.common.cancel")}</AlertDialogCancel>
             {vectorPreview && vectorPreview.adoptableMemoryCount > 0 && !(vectorAdoption && !vectorAdoption.adopted) ? (
@@ -513,7 +514,7 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
 // Parameters: label names the setting; value contains the formatted status and unit. Returns: a compact definition row.
 // 参数：label 为设置名称；value 包含已格式化状态和单位。返回值：紧凑的定义行。
 function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="flex min-w-0 items-baseline justify-between gap-3 border-b py-2"><p className="min-w-0 text-xs text-muted-foreground">{label}</p><p className="shrink-0 text-sm font-medium tabular-nums">{value}</p></div>
+  return <div className="vk-mem-metric"><p>{label}</p><p className="vk-num">{value}</p></div>
 }
 
 // RecycleBatchCard renders one recoverable batch as a list row: identity and contents on the left, guarded actions on the right.
@@ -537,11 +538,11 @@ function RecycleBatchCard({ batch, busy, onConfirm, projectName, onRunAction }: 
         <span className="vmm-recycle-batch-reason">{retentionReasonLabel(batch.reason, t)}</span>
         <Tooltip>
           <TooltipTrigger asChild>
-            <button aria-label={`${t("memory.maintenance.batchId")}${separator}${batch.batchId}`} className="vmm-recycle-batch-marker" type="button"><Fingerprint className="size-3.5" aria-hidden="true" /></button>
+            <button aria-label={`${t("memory.maintenance.batchId")}${separator}${batch.batchId}`} className="vmm-recycle-batch-marker" type="button"><Fingerprint className="vk-icon" aria-hidden="true" /></button>
           </TooltipTrigger>
-          <TooltipContent className="flex-col items-start" side="top">
+          <TooltipContent className="vk-mem-col-start" side="top">
             <span>{t("memory.maintenance.batchId")}</span>
-            <span className="font-mono">{batch.batchId}</span>
+            <span className="vk-mono">{batch.batchId}</span>
             <span>{t("memory.maintenance.recycledAt")}{separator}{formatTimestamp(batch.recycledAtUnixMs, "-", locale)}</span>
           </TooltipContent>
         </Tooltip>
@@ -552,7 +553,7 @@ function RecycleBatchCard({ batch, busy, onConfirm, projectName, onRunAction }: 
           : <span>{t("memory.maintenance.emptyBatch")}</span>}
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="vmm-recycle-batch-expiry" tabIndex={0}><Clock className="size-3.5" aria-hidden="true" /><span className="sr-only">{t("memory.maintenance.expiresAt")}{separator}</span>{expiresAt}</span>
+            <span className="vmm-recycle-batch-expiry" tabIndex={0}><Clock className="vk-icon" aria-hidden="true" /><span className="vk-sr-only">{t("memory.maintenance.expiresAt")}{separator}</span>{expiresAt}</span>
           </TooltipTrigger>
           <TooltipContent side="top">{t("memory.maintenance.expiresAt")}</TooltipContent>
         </Tooltip>
@@ -560,13 +561,13 @@ function RecycleBatchCard({ batch, busy, onConfirm, projectName, onRunAction }: 
     </div>
     <div className="vmm-recycle-batch-actions">
       <VmmNativeRecycleRecords batch={batch} busy={busy} onRunAction={onRunAction} />
-      <Button disabled={busy} onClick={(event) => onConfirm("restore", event.currentTarget)} size="sm" type="button" variant="outline"><ArchiveRestore className="size-3.5" aria-hidden="true" />{t("memory.maintenance.restore")}</Button>
-      <Button disabled={busy} onClick={(event) => onConfirm("purge", event.currentTarget)} size="sm" type="button" variant="destructive"><Trash2 className="size-3.5" aria-hidden="true" />{t("memory.maintenance.purge")}</Button>
+      <Button disabled={busy} onClick={(event) => onConfirm("restore", event.currentTarget)} size="sm" type="button" variant="outline"><ArchiveRestore className="vk-icon" aria-hidden="true" />{t("memory.maintenance.restore")}</Button>
+      <Button disabled={busy} onClick={(event) => onConfirm("purge", event.currentTarget)} size="sm" type="button" variant="destructive"><Trash2 className="vk-icon" aria-hidden="true" />{t("memory.maintenance.purge")}</Button>
     </div>
     {batch.manualSelection ? <details className="vmm-recycle-batch-sources">
       <summary>{t("memory.maintenance.manualSources")} ({batch.manualSelection.ids.length})</summary>
-      <p className="mt-2 text-xs text-muted-foreground">{t(batch.manualSelection.kind === "sessions" ? "memory.removal.sessionEffect" : "memory.removal.turnEffect")}</p>
-      <ul className="mt-2 max-h-40 overflow-y-auto">{batch.manualSelection.ids.map((id) => <li className="break-all font-mono text-xs" key={id}>{id}</li>)}</ul>
+      <p className="vk-form-note">{t(batch.manualSelection.kind === "sessions" ? "memory.removal.sessionEffect" : "memory.removal.turnEffect")}</p>
+      <ul className="vk-mem-scroll-list vk-form-after">{batch.manualSelection.ids.map((id) => <li className="vk-form-codeline" key={id}>{id}</li>)}</ul>
     </details> : null}
   </li>
 }

@@ -15,6 +15,7 @@ import {
   saveReviewRulesSystemDefault,
 } from "@/service/permission-judge-service";
 import type { ProjectReviewRulesSnapshot, ProjectSummary, ReviewRules, ReviewRulesSystemDefaultSnapshot } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // GROUPS lists the rule groups in the order the reviewer applies them, with their labels and hints.
 // GROUPS 按复核器应用顺序列出规则分组及其标签与说明。

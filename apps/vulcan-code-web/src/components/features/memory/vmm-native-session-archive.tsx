@@ -5,6 +5,8 @@ import { VmmNativeSessionRestart } from "./vmm-native-session-restart"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/ui-kit/primitives/alert-dialog"
 import { useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeMemorySessionSummary, VmmNativeSessionArchivePreview } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // Status labels describe authoritative metadata; null is explicitly not a lifecycle state.
 // 状态文案描述权威元数据；null 明确不属于生命周期状态。
@@ -107,26 +109,26 @@ export function VmmNativeSessionArchive({ projectId, sessions, busy, onBusyChang
     finally { operation.current = false; if (mounted.current) setPending(false); onBusyChange(false) }
   }
 
-  return <AlertDialog open={visiblePreview !== null} onOpenChange={(open) => { if (!open && !pending) setPreview(null) }}><div className="space-y-2">
-    <div className="flex flex-wrap items-center gap-2">
+  return <AlertDialog open={visiblePreview !== null} onOpenChange={(open) => { if (!open && !pending) setPreview(null) }}><div className="vk-form-stack">
+    <div className="vk-form-inline">
       {sessions.length === 1 ? <NativeSessionStatus status={sessions[0].status} /> : null}
       {eligible ? <AlertDialogTrigger asChild><Button type="button" variant="outline" disabled={busy || pending} onClick={() => void prepare()}>{t(actionKey)}</Button></AlertDialogTrigger> : null}
       <VmmNativeSessionRestart projectId={projectId} sessions={sessions} busy={busy || pending} onBusyChange={onBusyChange} onRunAction={onRunAction} onRefresh={onRefresh} />
     </div>
-    {error ? <p role="alert" className="text-sm text-destructive">{t("memory.sessionArchive.failed")}</p> : null}
+    {error ? <p role="alert" className="vk-field-error">{t("memory.sessionArchive.failed")}</p> : null}
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{t(visiblePreview?.selection.archived ? "memory.sessionArchive.archive" : "memory.sessionArchive.unarchive")}</AlertDialogTitle>
           <AlertDialogDescription>{t("memory.sessionArchive.description")}</AlertDialogDescription>
         </AlertDialogHeader>
-        <ul className="max-h-64 space-y-2 overflow-y-auto">
+        <ul className="vk-mem-scroll-list vk-form-stack">
           {visiblePreview?.selection.sessionSourceIds.map((sessionSourceId) => {
             // Titles are presentation only; the accepted preview identity remains authoritative.
             // 标题只用于展示；已接纳预览中的身份始终具有权威性。
             const session = sessions.find((item) => item.sessionSourceId === sessionSourceId)
             return <li key={sessionSourceId}>
-              <p className="break-all text-sm">{session?.displayTitle ?? sessionSourceId}</p>
-              <p className="break-all font-mono text-xs text-muted-foreground">{sessionSourceId}</p>
+              <p className="vk-form-break vk-form-sm">{session?.displayTitle ?? sessionSourceId}</p>
+              <p className="vk-form-codeline vk-faint">{sessionSourceId}</p>
             </li>
           })}
         </ul>

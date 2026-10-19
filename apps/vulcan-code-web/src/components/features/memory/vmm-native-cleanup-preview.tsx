@@ -2,6 +2,8 @@ import { AlertTriangle } from "lucide-react"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog"
 import { useI18n } from "@/i18n"
 import type { VmmNativeRetentionPreview } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // Carries server-prepared impact and explicit callbacks; rendering never executes cleanup.
 // 携带服务端准备的影响与明确回调，渲染绝不执行清洗。
@@ -30,22 +32,22 @@ interface CleanupPreviewProps {
 export function VmmNativeCleanupPreview({ preview, busy, onClose, onConfirm, onRestoreFocus }: CleanupPreviewProps) {
   const { t } = useI18n()
   return <AlertDialog open={preview !== null} onOpenChange={(open) => { if (!open && !busy) onClose() }}>
-    <AlertDialogContent className="flex max-h-[85dvh] min-h-0 flex-col overflow-hidden" size="md" onCloseAutoFocus={onRestoreFocus ? (event) => { event.preventDefault(); onRestoreFocus() } : undefined}>
-      <AlertDialogHeader className="shrink-0">
+    <AlertDialogContent size="md" onCloseAutoFocus={onRestoreFocus ? (event) => { event.preventDefault(); onRestoreFocus() } : undefined}>
+      <AlertDialogHeader>
         <AlertDialogTitle>{t("memory.maintenance.cleanupPreviewTitle")}</AlertDialogTitle>
         <AlertDialogDescription>{t("memory.maintenance.cleanupPreviewDescription")}</AlertDialogDescription>
       </AlertDialogHeader>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
-        {preview?.projects.map((project) => <section className="rounded-lg border p-3" key={project.projectId}>
-          <h3 className="text-sm font-medium">{project.projectName}</h3>
-          <p className="mt-1 text-sm text-muted-foreground">{t("memory.maintenance.cleanupImpact")
+      <div className="vk-form-stack vk-mem-scroll-body">
+        {preview?.projects.map((project) => <section className="vk-form-box" key={project.projectId}>
+          <h3 className="vk-form-strong">{project.projectName}</h3>
+          <p className="vk-form-text">{t("memory.maintenance.cleanupImpact")
             .replace("{memories}", String(project.recycledMemoryIds.length))
             .replace("{turns}", String(project.recycledTurnIds.length))
             .replace("{profiles}", String(project.expiredProfileNodeIds.length))
             .replace("{batches}", String(project.purgedBatchIds.length))}</p>
-          <details className="mt-2 text-xs">
-            <summary className="cursor-pointer">{t("memory.maintenance.cleanupRecordIds")}</summary>
-            <dl className="mt-2 space-y-2 break-all font-mono">
+          <details className="vk-mem-details">
+            <summary>{t("memory.maintenance.cleanupRecordIds")}</summary>
+            <dl className="vk-form-stack vk-form-codeline">
               <dt>{t("memory.maintenance.memoryRecycleLimit")}</dt><dd>{project.recycledMemoryIds.join(", ") || "—"}</dd>
               <dt>{t("memory.maintenance.turns")}</dt><dd>{project.recycledTurnIds.join(", ") || "—"}</dd>
               <dt>{t("memory.maintenance.profileExpiryLimit")}</dt><dd>{project.expiredProfileNodeIds.join(", ") || "—"}</dd>
@@ -54,10 +56,10 @@ export function VmmNativeCleanupPreview({ preview, busy, onClose, onConfirm, onR
           </details>
         </section>)}
       </div>
-      <AlertDialogFooter className="shrink-0">
+      <AlertDialogFooter>
         <AlertDialogCancel disabled={busy}>{t("memory.common.cancel")}</AlertDialogCancel>
         <AlertDialogAction disabled={busy || preview === null} onClick={(event) => { event.preventDefault(); onConfirm() }}>
-          <AlertTriangle className="mr-2 size-4" aria-hidden="true" />{t("memory.maintenance.runNow")}
+          <AlertTriangle className="vk-icon" aria-hidden="true" />{t("memory.maintenance.runNow")}
         </AlertDialogAction>
       </AlertDialogFooter>
     </AlertDialogContent>

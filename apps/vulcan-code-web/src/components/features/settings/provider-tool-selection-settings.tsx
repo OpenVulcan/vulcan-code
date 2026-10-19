@@ -41,6 +41,7 @@ import type {
   PublicAiSettingsSnapshot,
 } from "@/types";
 import { ProviderToolTestDialog } from "./provider-tool-test-dialog";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ProviderToolSelectionSettingsArea separates the system capability switch, default model, and default account.
 // ProviderToolSelectionSettingsArea 分离系统能力开关、默认模型与默认账号。

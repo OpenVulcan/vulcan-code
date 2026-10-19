@@ -7,6 +7,7 @@ import { MODE_KEYS, OPTION_HINT_KEYS, OPTION_KEYS, label } from "@/components/fe
 import { FOLLOW_DEFAULT, useProjectPermissionJudgePolicy } from "@/components/project/project-permission-judge-section";
 import { formatMessage, useI18n } from "@/i18n";
 import type { ProjectSummary } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 /** Category authorization page: choose a project, then how the judge treats each category of the
  * model in use there, such as database resets. Choices live in the project and save at once.

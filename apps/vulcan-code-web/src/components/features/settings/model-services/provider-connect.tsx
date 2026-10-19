@@ -16,6 +16,7 @@ import type {
 
 import { billingLabel, ProviderIntroCard } from "./provider-intro"
 import type { SnapshotMutations } from "./use-snapshot-mutations"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ProviderConnectPanel is the workspace of a provider without accounts: its introduction beside a choice of entry.
 // ProviderConnectPanel 是尚无账号的供应商的工作区：介绍与接入方式选择并排。

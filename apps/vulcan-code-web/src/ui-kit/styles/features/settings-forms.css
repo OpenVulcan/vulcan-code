@@ -172,6 +172,31 @@ fieldset.vk-form-stack, fieldset.vk-form-loose { min-width: 0; margin: 0; paddin
 .vk-form-prefs { display: grid; align-content: start; max-width: 52rem; }
 .vk-form-pref { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 8); padding: calc(var(--vk-u) * 4) 0; border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
 .vk-form-pref:first-child { padding-top: 0; }
+.vk-form-pref:last-child { padding-bottom: 0; border-bottom: 0; }
 .vk-form-pref-text { display: grid; gap: var(--vk-u); min-width: 0; }
 .vk-form-pref-text > strong { font-size: var(--vk-fs-sm); font-weight: 500; color: var(--vk-ink); }
 .vk-form-pref > :nth-child(n + 3) { grid-column: 1 / -1; }
+
+/* ---------- Text blocks, wells, meta lines and frames shared by data-heavy pages ---------- */
+/* 数据型页面共用的文本块、底板、元信息行与边框。 */
+.vk-form-w-xs, .vk-form-w-sm, .vk-form-w-md, .vk-form-w-lg { flex: none; }
+.vk-form-xs { font-size: var(--vk-fs-xs); }
+.vk-form-sm { font-size: var(--vk-fs-sm); }
+.vk-form-bad { color: var(--vk-bad); }
+.vk-form-heading { margin: 0; font-size: var(--vk-fs-md); font-weight: 600; color: var(--vk-ink); }
+.vk-form-prose { margin: 0; font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-form-codeline { font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
+.vk-form-pad { padding: 0 calc(var(--vk-u) * 4) calc(var(--vk-u) * 4); }
+.vk-form-padx { padding-inline: calc(var(--vk-u) * 4); }
+.vk-form-frame { border: var(--vk-bw) solid var(--vk-line); }
+.vk-form-well { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-sunken); color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+.vk-form-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vk-u) calc(var(--vk-u) * 3); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-form-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); min-width: 0; }
+
+/* ---------- Toned alert block: one ruled callout with an optional trailing action ---------- */
+/* 带语气的提示块：一条带边框的提示，可附带尾部操作。 */
+.vk-form-alert { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); }
+.vk-form-alert[data-tone] { border-color: color-mix(in srgb, var(--vk-tone) 40%, var(--vk-line)); background: color-mix(in srgb, var(--vk-tone) 6%, var(--vk-panel)); box-shadow: inset 2px 0 0 var(--vk-tone); }
+.vk-form-alert > .vk-form-inline { flex-wrap: nowrap; align-items: flex-start; }
+.vk-form-alert > .vk-form-inline > svg { flex: none; margin-top: 2px; color: var(--vk-tone, var(--vk-ink-3)); }
+.vk-form-alert > .vk-form-bar { flex: 1; }

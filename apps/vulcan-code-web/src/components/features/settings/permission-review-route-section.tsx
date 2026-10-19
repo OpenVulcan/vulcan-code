@@ -15,6 +15,7 @@ import type {
   PublicAiReasoningEffort,
   PublicAiSettingsSnapshot,
 } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // The reviewer's consumer profile and its single LLM purpose, owned by the service kernel.
 // 复核器的消费者配置档及其唯一 LLM 用途，由服务内核持有。

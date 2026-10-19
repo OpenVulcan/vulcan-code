@@ -7,6 +7,8 @@ import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n } from "@/i18n"
 import type { TranslationKey } from "@/i18n-messages"
 import type { VmmMemoryActionResult, VmmNativeRetrievalPolicySummary, VmmNativeRuntimePolicySummary } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // NumericKey selects only the declared numeric ranking fields; RRF stays lossless decimal text.
 // NumericKey 仅选择声明为数值的排序字段；RRF 保持无损十进制文本。
@@ -143,36 +145,36 @@ export function VmmNativeRetrievalPolicy({ settings, defaults, busy, onRunAction
   const parsed = parseRankingDraft(draft)
   const changed = parsed && (Object.keys(settings) as (keyof VmmNativeRetrievalPolicySummary)[]).some((key) => parsed[key] !== settings[key])
   const disabled = busy || pending
-  return <Card className="w-full min-w-0">
+  return <Card>
     <CardHeader><CardTitle>{t("memory.ranking.title")}</CardTitle><CardDescription>{t("memory.ranking.description")}</CardDescription></CardHeader>
-    <CardContent className="space-y-4">
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    <CardContent className="vk-form-loose">
+      {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
       {saved ? <p role="status">{t("memory.ranking.saved")}</p> : null}
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="vk-mem-three">
         {([ ["hybridEnabled", "memory.ranking.hybrid"], ["mmrEnabled", "memory.ranking.mmr"], ["weibullEnabled", "memory.ranking.decay"] ] as const).map(([key, label]) =>
-          <Label key={key} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+          <Label key={key} className="vk-form-switch vk-form-framed">
             {t(label)}<Switch checked={draft[key]} disabled={disabled} onCheckedChange={(checked) => { setDraft({ ...draft, [key]: checked }); setSaved(false) }} />
           </Label>)}
       </div>
       <details>
-        <summary className="cursor-pointer text-sm font-medium">{t("memory.ranking.advanced")}</summary>
-        <p className="my-3 text-xs text-muted-foreground">{t("memory.ranking.scoreHint")}</p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2"><Label htmlFor="vmm-ranking-rrfK">{t("memory.ranking.rrf")}</Label>
+        <summary className="vk-form-strong">{t("memory.ranking.advanced")}</summary>
+        <p className="vk-form-note vk-mem-gap">{t("memory.ranking.scoreHint")}</p>
+        <div className="vk-form-grid">
+          <div className="vk-form-stack"><Label htmlFor="vmm-ranking-rrfK">{t("memory.ranking.rrf")}</Label>
             <Input id="vmm-ranking-rrfK" inputMode="numeric" value={draft.rrfK} disabled={disabled}
               onChange={(event) => { setDraft({ ...draft, rrfK: event.target.value }); setSaved(false) }} />
-            <p className="text-xs text-muted-foreground">1–9223372036854775807</p>
+            <p className="vk-form-note">1–9223372036854775807</p>
           </div>
-          {fields.map((field) => <div className="space-y-2" key={field.key}>
+          {fields.map((field) => <div className="vk-form-stack" key={field.key}>
             <Label htmlFor={`vmm-ranking-${field.key}`}>{t(field.label)}</Label>
             <Input id={`vmm-ranking-${field.key}`} type="number" min={field.min} max={field.max} step={field.integer ? 1 : "any"}
               value={draft[field.key]} disabled={disabled} onChange={(event) => { setDraft({ ...draft, [field.key]: event.target.value }); setSaved(false) }} />
-            <p className="text-xs text-muted-foreground">{field.exclusiveMin ? "> " : "≥ "}{field.min}{field.max !== undefined ? ` · ≤ ${field.max}` : ""}</p>
+            <p className="vk-form-note">{field.exclusiveMin ? "> " : "≥ "}{field.min}{field.max !== undefined ? ` · ≤ ${field.max}` : ""}</p>
           </div>)}
         </div>
       </details>
-      {!parsed ? <p role="alert" className="text-sm text-destructive">{t("memory.ranking.invalidValues")}</p> : null}
-      <div className="flex flex-wrap gap-2">
+      {!parsed ? <p role="alert" className="vk-field-error">{t("memory.ranking.invalidValues")}</p> : null}
+      <div className="vk-form-chips">
         <Button type="button" disabled={disabled || !changed || !parsed} onClick={() => { if (parsed) void save(parsed) }}>{t("memory.ranking.save")}</Button>
         <Button type="button" variant="outline" disabled={disabled} onClick={() => { setDraft(draftFromSettings(defaults)); setSaved(false) }}>{t("memory.policy.resetDraft")}</Button>
       </div>

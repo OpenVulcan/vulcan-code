@@ -250,3 +250,7 @@
   transition-duration: 1ms !important;
 }
 }
+
+/* Disclosure summaries read as controls. */
+/* 展开摘要呈现为可点击控件。 */
+summary { cursor: pointer; }

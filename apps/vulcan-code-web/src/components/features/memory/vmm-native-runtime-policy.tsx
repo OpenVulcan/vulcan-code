@@ -15,6 +15,7 @@ import { VmmNativeProfilePolicy } from "./vmm-native-profile-policy"
 import { VmmNativeDurationInput } from "./vmm-native-duration-input"
 import type { TranslationKey } from "@/i18n-messages"
 import type { VmmMemoryActionResult, VmmNativeRecallPolicySummary, VmmNativeRuntimePolicySummary } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // RecallField binds a visible input to one exact server field and its closed numeric range.
 // RecallField 将可见输入绑定到一个准确的服务端字段及其封闭数值范围。
@@ -194,46 +195,46 @@ export function VmmNativeRuntimePolicy({ busy, onRunAction, leading }: VmmNative
       value={policyTab}
     />
     {leading ? <div hidden={policyTab !== "leading"}>{leading.content}</div> : null}
-    <div hidden={policyTab !== "recall"}><Card className="w-full min-w-0">
+    <div hidden={policyTab !== "recall"}><Card>
     <CardHeader>
       <CardTitle>{t("memory.policy.title")}</CardTitle>
       <CardDescription>{t("memory.policy.description")}</CardDescription>
     </CardHeader>
-    <CardContent className="space-y-4">
-      {policy ? <p className="text-sm text-muted-foreground">{t(policy.userOverride ? "memory.policy.userSource" : "memory.policy.defaultSource")}</p> : disabled ? <StreamPlaceholder label={t("memory.common.loading")} shape="fields" count={2} /> : null}
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-      {saved ? <p role="status" className="text-sm text-muted-foreground">{t("memory.policy.saved")}</p> : null}
-      {draft ? <div className="grid gap-4 sm:grid-cols-2">
-        {recallFields.map((field) => <div className="space-y-2" key={field.key}>
+    <CardContent className="vk-form-loose">
+      {policy ? <p className="vk-form-text">{t(policy.userOverride ? "memory.policy.userSource" : "memory.policy.defaultSource")}</p> : disabled ? <StreamPlaceholder label={t("memory.common.loading")} shape="fields" count={2} /> : null}
+      {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
+      {saved ? <p role="status" className="vk-form-text">{t("memory.policy.saved")}</p> : null}
+      {draft ? <div className="vk-form-grid">
+        {recallFields.map((field) => <div className="vk-form-stack" key={field.key}>
           <Label htmlFor={`vmm-policy-${field.key}`}>{t(field.label)}</Label>
           {field.key === "postactionMemoryExpiryMs" ? <VmmNativeDurationInput id={`vmm-policy-${field.key}`} value={draft[field.key]} disabled={disabled} onChange={(value) => { setDraft({ ...draft, [field.key]: value }); setSaved(false) }} /> : <Input id={`vmm-policy-${field.key}`} type="number" min={field.min} max={field.max} step={field.step}
             value={draft[field.key]} disabled={disabled} onChange={(event) => {
               setDraft({ ...draft, [field.key]: event.target.value })
               setSaved(false)
             }} />}
-          <p className="text-xs text-muted-foreground">{field.key === "postactionMemoryExpiryMs" ? t("memory.policy.expiryRange") : `${field.min}–${field.max}`}</p>
+          <p className="vk-form-note">{field.key === "postactionMemoryExpiryMs" ? t("memory.policy.expiryRange") : `${field.min}–${field.max}`}</p>
         </div>)}
-        {recallChoiceFields.map((field) => <div key={field.key} className="space-y-2">
+        {recallChoiceFields.map((field) => <div key={field.key} className="vk-form-stack">
           <Label htmlFor={`vmm-policy-${field.key}`}>{t(field.label)}</Label>
           <Select disabled={disabled} value={draft[field.key]} onValueChange={(value) => { setDraft({ ...draft, [field.key]: value }); setSaved(false) }}>
-            <SelectTrigger id={`vmm-policy-${field.key}`} className="w-full"><SelectValue /></SelectTrigger>
+            <SelectTrigger id={`vmm-policy-${field.key}`}><SelectValue /></SelectTrigger>
             <SelectContent>{field.options.map((option) => <SelectItem key={option.value} value={option.value}>{t(option.label)}</SelectItem>)}</SelectContent>
           </Select>
         </div>)}
       </div> : null}
-      <p className="text-xs text-muted-foreground">{t("memory.policy.extractedHint")}</p>
-      <p className="text-xs text-muted-foreground">{t("memory.policy.scoreHint")}</p>
-      {draft && !parsed ? <p role="alert" className="text-sm text-destructive">{t("memory.policy.invalidValues")}</p> : null}
-      <div className="flex flex-wrap gap-2">
+      <p className="vk-form-note">{t("memory.policy.extractedHint")}</p>
+      <p className="vk-form-note">{t("memory.policy.scoreHint")}</p>
+      {draft && !parsed ? <p role="alert" className="vk-field-error">{t("memory.policy.invalidValues")}</p> : null}
+      <div className="vk-form-chips">
         <Button type="button" disabled={disabled || !changed || !parsed} onClick={() => { if (parsed) void execute(parsed) }}>
-          <Save className="size-4" aria-hidden="true" />{t("memory.policy.save")}
+          <Save className="vk-icon" aria-hidden="true" />{t("memory.policy.save")}
         </Button>
         <Button type="button" variant="outline" disabled={disabled || !policy} onClick={() => {
           if (policy) setDraft(recallDraft(policy.defaults))
           setSaved(false)
-        }}><RotateCcw className="size-4" aria-hidden="true" />{t("memory.policy.resetDraft")}</Button>
+        }}><RotateCcw className="vk-icon" aria-hidden="true" />{t("memory.policy.resetDraft")}</Button>
         <Button type="button" variant="outline" disabled={disabled} onClick={() => void execute()}>
-          <RefreshCw className="size-4" aria-hidden="true" />{t("memory.data.refresh")}
+          <RefreshCw className="vk-icon" aria-hidden="true" />{t("memory.data.refresh")}
         </Button>
       </div>
     </CardContent>

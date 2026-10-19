@@ -3,6 +3,8 @@ import { Button } from "@/ui-kit/primitives/button"
 import { Combobox } from "@/ui-kit/primitives/combobox"
 import { Input } from "@/ui-kit/primitives/input"
 import { useI18n } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // ProjectDirectoryEntry keeps host and memory identities explicit; descriptions disambiguate equal names.
 // ProjectDirectoryEntry 明确保留宿主与记忆身份；说明用于区分同名项目。
@@ -42,8 +44,8 @@ export function VmmProjectDirectory({ entries, value, disabled, allowOverrides =
     <div className="vmm-project-directory-expanded">
       <Input aria-label={t("memory.profile.searchProject")} placeholder={t("memory.profile.searchProject")} value={search} onChange={(event) => setSearch(event.target.value)} />
       <div className="vmm-directory-filters">{(["all", "bound", "unbound", "overrides"] as const).filter((kind) => kind !== "overrides" || allowOverrides).map((kind) => <Button type="button" key={kind} size="sm" variant={filter === kind ? "secondary" : "ghost"} aria-pressed={filter === kind} onClick={() => setFilter(kind)}>{t(`memory.workspace.${kind}`)}</Button>)}</div>
-      <div className="vmm-project-list" role="group" aria-label={t("memory.nativeRecords.project")}>{visible.map((entry) => <Button key={entry.value} variant="ghost" disabled={disabled} aria-pressed={value === entry.value} title={`${entry.label}\n${entry.description}`} onClick={() => onChange(entry.value)}><span className="vmm-project-list-identity"><span className="block truncate">{entry.label}</span><span className="block truncate text-xs text-muted-foreground">{entry.description}</span></span><span className="vmm-project-list-state">{t(entry.bound ? "memory.workspace.bound" : "memory.workspace.unbound")}</span></Button>)}</div>
-      {visible.length === 0 ? <p className="text-sm text-muted-foreground">{t("memory.workspace.noMatches")}</p> : null}
+      <div className="vmm-project-list" role="group" aria-label={t("memory.nativeRecords.project")}>{visible.map((entry) => <Button key={entry.value} variant="ghost" disabled={disabled} aria-pressed={value === entry.value} title={`${entry.label}\n${entry.description}`} onClick={() => onChange(entry.value)}><span className="vmm-project-list-identity"><span className="vk-truncate vk-mem-line">{entry.label}</span><span className="vk-form-note vk-truncate">{entry.description}</span></span><span className="vmm-project-list-state">{t(entry.bound ? "memory.workspace.bound" : "memory.workspace.unbound")}</span></Button>)}</div>
+      {visible.length === 0 ? <p className="vk-form-text">{t("memory.workspace.noMatches")}</p> : null}
     </div>
   </div>
 }

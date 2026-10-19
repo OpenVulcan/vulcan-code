@@ -15,6 +15,8 @@ import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n } from "@/i18n"
 import { isOptionalUnsignedDraft } from "./vmm-draft-number"
 import type { VmmConfigDraftSummary, VmmProjectScopeSummary } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // VmmRulesPageProps defines one editable rules draft and explicit application targets.
 // VmmRulesPageProps 定义一份可编辑规则草稿与明确应用目标。
@@ -55,39 +57,39 @@ function VmmRulesPage({
   const numbersValid = [draft.implicitMemoryTurns, draft.profileRefreshTurns, draft.profileNodeLimit].every((value) => isOptionalUnsignedDraft(value, 32))
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-4">
+    <div className="vk-form-loose">
       {/* The edit scope and the apply action share one toolbar row, so the save target stays beside its scope.
           编辑范围与应用操作共用一行工具栏，使保存目标始终紧邻其范围。 */}
       <div className="vmm-scope-toolbar">
         <div className="vmm-scope-field">
           <Label>{t("memory.workspace.editScope")}</Label>
           <Select disabled={busy} value={scope === "global" ? "global" : `project:${projectId}`} onValueChange={(value) => onSelectScope(value === "global" ? "global" : "project", value === "global" ? null : value.slice("project:".length))}>
-            <SelectTrigger className="w-full sm:w-80" aria-label={t("memory.workspace.editScope")}><SelectValue /></SelectTrigger>
+            <SelectTrigger className="vk-mem-scope-select" aria-label={t("memory.workspace.editScope")}><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem value="global">{t("memory.rules.allProjects")}</SelectItem>{projects.map((project) => <SelectItem key={project.projectId} value={`project:${project.projectId}`}>{project.name}</SelectItem>)}</SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">{t("memory.workspace.scopeHint")}</p>
+          <p className="vk-form-note">{t("memory.workspace.scopeHint")}</p>
         </div>
         <Button disabled={busy || !draftReady || !numbersValid} onClick={() => void onApply(scope, scope === "project" ? projectId : null, draft)} type="button">
-          <Save className="size-4" aria-hidden="true" />
+          <Save className="vk-icon" aria-hidden="true" />
           {t("memory.rules.applySettings")}
         </Button>
       </div>
       {notice ? (
-        <p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+        <p className="vk-form-well">
           {notice}
         </p>
       ) : null}
-      {!numbersValid ? <p role="alert" className="text-sm text-destructive">{t("memory.rules.invalidNumbers")}</p> : null}
+      {!numbersValid ? <p role="alert" className="vk-field-error">{t("memory.rules.invalidNumbers")}</p> : null}
 
-      <fieldset disabled={busy || !draftReady} className="grid min-w-0 gap-4 lg:grid-cols-2">
+      <fieldset disabled={busy || !draftReady} className="vk-mem-two">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <BrainCircuit className="size-4" aria-hidden="true" />
+            <CardTitle className="vk-form-inline">
+              <BrainCircuit className="vk-icon" aria-hidden="true" />
               {t("memory.rules.features")}
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-1">
+          <CardContent className="vk-form-prefs">
             <RuleSwitch
               checked={draft.enabled}
               description={t("memory.rules.enableDescription")}
@@ -123,12 +125,12 @@ function VmmRulesPage({
 
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Settings2 className="size-4" aria-hidden="true" />
+            <CardTitle className="vk-form-inline">
+              <Settings2 className="vk-icon" aria-hidden="true" />
               {t("memory.rules.retentionProfiles")}
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2">
+          <CardContent className="vk-form-grid">
             <NumberSetting
               label={t("memory.rules.recallTurns")}
               value={draft.implicitMemoryTurns}
@@ -167,12 +169,12 @@ function RuleSwitch({
   onCheckedChange: (checked: boolean) => void
 }) {
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-lg px-2 py-3 hover:bg-muted/40">
-      <Switch checked={checked} onCheckedChange={onCheckedChange} />
-      <span className="min-w-0">
-        <span className="block text-sm font-medium">{label}</span>
-        <span className="block text-xs text-muted-foreground">{description}</span>
+    <label className="vk-form-pref">
+      <span className="vk-form-pref-text">
+        <strong>{label}</strong>
+        <span className="vk-form-note">{description}</span>
       </span>
+      <Switch checked={checked} onCheckedChange={onCheckedChange} />
     </label>
   )
 }
@@ -190,7 +192,7 @@ function NumberSetting({
 }) {
   const inputId = React.useId()
   return (
-    <div className="space-y-2">
+    <div className="vk-form-stack">
       <Label htmlFor={inputId}>{label}</Label>
       <Input
         id={inputId}

@@ -4,6 +4,7 @@ import { Input } from "@/ui-kit/primitives/input"
 import { cancelMcpOAuth, finishMcpOAuth, loadMcpOAuthStatus, removeMcpOAuth, startMcpOAuth, type McpOAuthStatus } from "@/service/mcp-settings-service"
 import { openExternalUrl } from "@/service/project-actions-service"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Poll interval while a sign-in flow waits for the browser or exchanges the code.
 // 登录流程等待浏览器或交换授权码期间的轮询间隔。

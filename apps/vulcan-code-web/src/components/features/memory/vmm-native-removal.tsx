@@ -5,6 +5,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useI18n } from "@/i18n"
 import { formatNativeDuration } from "./native-duration-display"
 import type { VmmMemoryActionResult, VmmNativeRemovalPreview, VmmNativeRemovalTarget } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // Binds a selected source family to the existing native preview/confirmation transport.
 // 将所选来源类别绑定到既有原生预览及确认传输。
@@ -114,20 +116,20 @@ export function VmmNativeRemoval({ projectId, selection, sessionNames, busy, onB
     }
   }
 
-  return <AlertDialog open={visiblePreview !== null} onOpenChange={(open) => { if (!open && !inFlight.current) setPreview(null) }}><div className="space-y-2">
-    <AlertDialogTrigger asChild><Button type="button" variant="outline" disabled={busy || pending || !eligible} onClick={() => void prepare()}>
-      <Trash2 className="size-4" aria-hidden="true" />
+  return <AlertDialog open={visiblePreview !== null} onOpenChange={(open) => { if (!open && !inFlight.current) setPreview(null) }}><div className="vk-form-stack">
+    <AlertDialogTrigger asChild><Button className="vk-form-fit" type="button" variant="outline" disabled={busy || pending || !eligible} onClick={() => void prepare()}>
+      <Trash2 className="vk-icon" aria-hidden="true" />
       {t(selection.kind === "sessions" ? "memory.removal.sessions" : "memory.removal.turns")} ({selection.ids.length})
     </Button></AlertDialogTrigger>
-    {error ? <p role="alert" className="text-sm text-destructive">{t("memory.removal.failed")}</p> : null}
-      <AlertDialogContent className="max-h-[85vh] overflow-y-auto">
+    {error ? <p role="alert" className="vk-field-error">{t("memory.removal.failed")}</p> : null}
+      <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{t("memory.removal.title")}</AlertDialogTitle>
           <AlertDialogDescription>{t("memory.removal.description")}</AlertDialogDescription>
         </AlertDialogHeader>
         {visiblePreview ? <>
-          <p className="text-sm">{t(visiblePreview.impact.query.selection.kind === "sessions" ? "memory.removal.sessionEffect" : "memory.removal.turnEffect")}</p>
-          <dl className="grid grid-cols-2 gap-2 text-sm">
+          <p className="vk-form-sm">{t(visiblePreview.impact.query.selection.kind === "sessions" ? "memory.removal.sessionEffect" : "memory.removal.turnEffect")}</p>
+          <dl className="vk-mem-pairs">
             <RemovalCount label={t("memory.nativeRecords.sessions")} count={visiblePreview.impact.sessionSourceIds.length} />
             <RemovalCount label={t("memory.nativeRecords.turns")} count={visiblePreview.impact.turnIds.length} />
             <RemovalCount label={t("memory.nativeRecords.memories")} count={visiblePreview.impact.memoryIds.length} />
@@ -139,12 +141,12 @@ export function VmmNativeRemoval({ projectId, selection, sessionNames, busy, onB
             <RemovalCount label={t("memory.removal.projectProfiles")} count={visiblePreview.impact.projectProfileNodeIds.length} />
             <RemovalCount label={t("memory.removal.userProfiles")} count={visiblePreview.impact.userProfileNodeIds.length} />
           </dl>
-          <p className="text-sm">{t("memory.removal.retention")} {formatNativeDuration(visiblePreview.trashRetentionMs, locale, t)}{t("memory.removal.expirySuffix")}</p>
-          <details className="rounded-md border p-3 text-sm">
-            <summary className="cursor-pointer">{t("memory.removal.sources")}</summary>
-            <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">
-              {visiblePreview.impact.sessionSourceIds.map((id) => <li className="break-all" key={id}>{sessionNames.get(id) ?? id}<span className="ml-2 font-mono text-xs text-muted-foreground">{id}</span></li>)}
-              {visiblePreview.impact.turnIds.map((id) => <li className="break-all font-mono text-xs" key={id}>{id}</li>)}
+          <p className="vk-form-sm">{t("memory.removal.retention")} {formatNativeDuration(visiblePreview.trashRetentionMs, locale, t)}{t("memory.removal.expirySuffix")}</p>
+          <details className="vk-mem-disclosure vk-form-sm">
+            <summary>{t("memory.removal.sources")}</summary>
+            <ul className="vk-mem-scroll-list vk-form-tight">
+              {visiblePreview.impact.sessionSourceIds.map((id) => <li className="vk-form-break" key={id}>{sessionNames.get(id) ?? id}<span className="vk-mem-inline-code vk-faint vk-form-xs">{id}</span></li>)}
+              {visiblePreview.impact.turnIds.map((id) => <li className="vk-form-codeline" key={id}>{id}</li>)}
             </ul>
           </details>
         </> : null}
@@ -159,5 +161,5 @@ export function VmmNativeRemoval({ projectId, selection, sessionNames, busy, onB
 // Renders one authoritative impact count from its translated label and numeric value.
 // 根据翻译标签及数值展示一项权威影响计数。
 function RemovalCount({ label, count }: { label: string; count: number }) {
-  return <div className="rounded-md border p-2"><dt className="text-muted-foreground">{label}</dt><dd>{count}</dd></div>
+  return <div className="vk-mem-disclosure"><dt className="vk-faint">{label}</dt><dd>{count}</dd></div>
 }

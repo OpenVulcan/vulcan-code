@@ -52,6 +52,7 @@ import type {
   PublicAiProviderToolTargetSnapshot,
   PublicAiSettingsSnapshot,
 } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // PublicProviderModelRow binds one rendered provider model to its routes and effective enabled state.
 // PublicProviderModelRow 将一个渲染中的供应商模型绑定到其路由与有效启用状态。

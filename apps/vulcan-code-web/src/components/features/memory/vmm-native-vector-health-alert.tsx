@@ -7,6 +7,7 @@ import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
 import { useI18n } from "@/i18n"
 import { nativeVectorRouteCause } from "./vmm-native-vector-status"
 import type { VmmMemoryActionRequest, VmmMemoryActionResult, VmmNativeVectorStatusSummary } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // VmmNativeVectorHealthAlertProps supplies the read-only status endpoint and exact repair destinations.
 // VmmNativeVectorHealthAlertProps 提供只读状态端点与准确的修复入口。
@@ -113,18 +114,18 @@ export function VmmNativeVectorHealthAlert({
     <Alert aria-live="polite" variant="destructive">
       <AlertTriangle aria-hidden="true" />
       <AlertTitle>{title}</AlertTitle>
-      <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <AlertDescription className="vk-form-bar">
+        <div className="vk-form-fill vk-form-tight">
           <span>{description}</span>
           {routeUnavailable && routeDetail ? (
             <InlineDisclosure label={t("memory.vectorHealth.technicalDetails")}>
-              <span className="break-all font-mono text-xs">{routeDetail}</span>
+              <span className="vk-form-codeline">{routeDetail}</span>
             </InlineDisclosure>
           ) : null}
         </div>
         {error ? (
           <Button disabled={loading} onClick={() => void loadStatus()} size="sm" type="button" variant="outline">
-            <RefreshCw aria-hidden="true" className="size-4" />{t("memory.vectorHealth.retry")}
+            <RefreshCw aria-hidden="true" className="vk-icon" />{t("memory.vectorHealth.retry")}
           </Button>
         ) : (
           <Button onClick={routeUnavailable ? onOpenEmbeddingSettings : onOpenRepair} size="sm" type="button" variant="outline">

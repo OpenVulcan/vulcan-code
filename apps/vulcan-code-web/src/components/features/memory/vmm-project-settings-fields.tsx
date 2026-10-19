@@ -44,7 +44,7 @@ function VmmSelectField({
     <Field>
       <FieldLabel htmlFor={fieldId}>{label}</FieldLabel>
       <Select disabled={disabled} onValueChange={onChange} value={value}>
-        <SelectTrigger className="w-full" id={fieldId}>
+        <SelectTrigger id={fieldId}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

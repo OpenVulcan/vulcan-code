@@ -8,6 +8,8 @@ import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n } from "@/i18n"
 import type { TranslationKey } from "@/i18n-messages"
 import type { VmmMemoryActionResult, VmmNativeRetentionSettingsSummary, VmmNativeRuntimePolicySummary } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // NumericKey names only editable numeric cleanup fields from the exact host contract.
 // NumericKey 仅命名准确宿主契约中的可编辑数值清洗字段。
@@ -137,46 +139,46 @@ export function VmmNativeRetentionSettings({ settings, defaults, busy, onRunActi
       if (mounted.current) setPending(false)
     }
   }
-  return <Card className="w-full min-w-0">
+  return <Card>
     <CardHeader><CardTitle>{t("memory.cleanup.title")}</CardTitle><CardDescription>{t("memory.cleanup.description")}</CardDescription></CardHeader>
-    <CardContent className="space-y-4">
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    <CardContent className="vk-form-loose">
+      {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
       {saved ? <p role="status">{t("memory.cleanup.saved")}</p> : null}
-      <Label className="flex items-center justify-between rounded-lg border p-3">{t("memory.cleanup.enabled")}
+      <Label className="vk-form-switch vk-form-framed">{t("memory.cleanup.enabled")}
         <Switch checked={draft.enabled} disabled={disabled} onCheckedChange={(enabled) => edit({ ...draft, enabled })} /></Label>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="vk-form-grid">
         {numericFields.filter(({ key }) => key !== "protectedMemoryLevelFloor" && key !== "protectedPriorityFloor").map((field) => {
           const durationKey = field.key === "sessionIdleMs" || field.key === "trashRetentionMs" ? field.key : null
-          return <div className="space-y-2" key={field.key}>
+          return <div className="vk-form-stack" key={field.key}>
             <Label htmlFor={`vmm-cleanup-${field.key}`}>{t(field.label)}</Label>
-            <div className="flex gap-2"><Input className="min-w-0 flex-1" id={`vmm-cleanup-${field.key}`} type="number" min={1} step={1}
+            <div className="vk-form-inline"><Input className="vk-form-fill" id={`vmm-cleanup-${field.key}`} type="number" min={1} step={1}
               value={draft[field.key]} disabled={disabled} onChange={(event) => edit({ ...draft, [field.key]: event.target.value })} />
               {durationKey ? <Select disabled={disabled}
                 value={String(draft.units[durationKey])} onValueChange={(value) => edit({ ...draft, units: { ...draft.units, [durationKey]: Number(value) } })}>
-                <SelectTrigger className="w-24 shrink-0" aria-label={`${t(field.label)} · ${t("memory.cleanup.unit")}`}><SelectValue /></SelectTrigger>
+                <SelectTrigger className="vk-form-w-xs" aria-label={`${t(field.label)} · ${t("memory.cleanup.unit")}`}><SelectValue /></SelectTrigger>
                 <SelectContent>{units.map(([factor, label]) => <SelectItem key={factor} value={String(factor)}>{t(label)}</SelectItem>)}</SelectContent>
               </Select> : null}</div>
           </div>
         })}
       </div>
-      <details><summary className="cursor-pointer text-sm font-medium">{t("memory.cleanup.protection")}</summary>
-        <p className="my-3 text-xs text-muted-foreground">{t("memory.cleanup.protectionHint")}</p>
-        <Label className="flex items-center justify-between gap-3">{t("memory.cleanup.protectShared")}
+      <details><summary className="vk-form-strong">{t("memory.cleanup.protection")}</summary>
+        <p className="vk-form-note vk-mem-gap">{t("memory.cleanup.protectionHint")}</p>
+        <Label className="vk-form-row">{t("memory.cleanup.protectShared")}
           <Switch disabled={disabled} checked={draft.skipProtectedSharedMemories} onCheckedChange={(skipProtectedSharedMemories) => edit({ ...draft, skipProtectedSharedMemories })} /></Label>
-        <div className="mt-3 grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2"><Label htmlFor="vmm-cleanup-protectedPriorityFloor">{t("memory.cleanup.priority")}</Label>
+        <div className="vk-form-grid vk-mem-gap">
+          <div className="vk-form-stack"><Label htmlFor="vmm-cleanup-protectedPriorityFloor">{t("memory.cleanup.priority")}</Label>
             <Input id="vmm-cleanup-protectedPriorityFloor" type="number" min={0} max={100} step={1} disabled={disabled}
               value={draft.protectedPriorityFloor} onChange={(event) => edit({ ...draft, protectedPriorityFloor: event.target.value })} /></div>
-          <div className="space-y-2"><Label htmlFor="vmm-cleanup-protectedMemoryLevelFloor">{t("memory.cleanup.level")}</Label>
+          <div className="vk-form-stack"><Label htmlFor="vmm-cleanup-protectedMemoryLevelFloor">{t("memory.cleanup.level")}</Label>
             <Select disabled={disabled}
               value={draft.protectedMemoryLevelFloor} onValueChange={(value) => edit({ ...draft, protectedMemoryLevelFloor: value })}>
-              <SelectTrigger id="vmm-cleanup-protectedMemoryLevelFloor" className="w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger id="vmm-cleanup-protectedMemoryLevelFloor"><SelectValue /></SelectTrigger>
               <SelectContent>{([ [1, "memory.cleanup.session"], [2, "memory.cleanup.phase"], [3, "memory.cleanup.stable"], [4, "memory.cleanup.persistent"] ] as const).map(([value, label]) => <SelectItem key={value} value={String(value)}>{t(label)}</SelectItem>)}</SelectContent>
             </Select></div>
         </div>
       </details>
-      {!parsed ? <p role="alert" className="text-sm text-destructive">{t("memory.cleanup.invalid")}</p> : null}
-      <div className="flex flex-wrap gap-2">
+      {!parsed ? <p role="alert" className="vk-field-error">{t("memory.cleanup.invalid")}</p> : null}
+      <div className="vk-form-chips">
         <Button disabled={disabled || !parsed || !changed} onClick={() => void save()}>{t("memory.cleanup.save")}</Button>
         <Button variant="outline" disabled={disabled} onClick={() => edit(retentionDraft(defaults))}>{t("memory.policy.resetDraft")}</Button>
       </div>

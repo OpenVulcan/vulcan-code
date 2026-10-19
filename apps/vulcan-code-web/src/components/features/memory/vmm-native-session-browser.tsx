@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ChevronDown, ChevronUp } from "lucide-react"
+import { ChevronDown, ChevronLeft, ChevronUp } from "lucide-react"
 import { VmmNativeRemoval } from "./vmm-native-removal"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
@@ -12,6 +12,8 @@ import type { VmmMemoryActionResult, VmmMemorySnapshot, VmmNativeProjectCatalogS
 import { nativeProjectOwnerId, VmmNativeMemoryRecords } from "./vmm-native-memory-records"
 import { NativeSessionStatus, VmmNativeSessionArchive } from "./vmm-native-session-archive"
 import { formatDateTime } from "@/lib/display-format"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // BrowserProps retains the native management transport and current host-project context.
 // BrowserProps 保留原生管理传输及当前宿主项目上下文。
@@ -152,8 +154,8 @@ export function VmmNativeSessionBrowser(props: BrowserProps) {
   }, [props.onRunAction])
   return <div ref={workspace} className={selection ? "vmm-session-workspace has-selection" : "vmm-session-workspace"}>
     <div className="vmm-session-browser" hidden={selection !== null}><NativeSessionList key={props.snapshot.selectedProjectId} {...props} onRunAction={runListAction} revision={revision} onOpen={openDetail} onScopeChange={() => setSelection(null)} selection={selection} /></div>
-    {selection ? <div className="vmm-session-detail space-y-3">
-      <Button variant="outline" disabled={props.busy} onClick={() => { restoreBrowse.current = true; setSelection(null) }}>{t("memory.sessionList.back")}</Button>
+    {selection ? <div className="vmm-session-detail vk-form-stack">
+      <Button className="vk-form-fit" size="sm" variant="ghost" disabled={props.busy} onClick={() => { restoreBrowse.current = true; setSelection(null) }}><ChevronLeft aria-hidden="true" />{t("memory.sessionList.back")}</Button>
       <VmmNativeMemoryRecords key={`${selection.projectId}:${selection.sessionSourceId}:${detailRevision}`} {...props} onRunAction={runDetailAction} initialSelection={selection} />
     </div> : null}
   </div>
@@ -304,11 +306,11 @@ function NativeSessionList({ busy, snapshot, onRunAction, onCheckUpdates = check
 
   return <Card>
     <CardHeader><CardTitle>{t("memory.sessionList.title")}</CardTitle><CardDescription>{t("memory.sessionList.description")}</CardDescription></CardHeader>
-    <CardContent className="space-y-4">
-      <div className="vmm-session-scope flex flex-wrap items-end gap-3">
-        <label className="min-w-0 flex-1 space-y-1 text-sm">{t("memory.nativeRecords.project")}
+    <CardContent className="vk-form-loose">
+      <div className="vmm-session-scope vk-mem-filters">
+        <label className="vk-field vk-form-fill">{t("memory.nativeRecords.project")}
           <Select disabled={occupied || !catalog?.projects.length} value={query ? String(query.vmmProjectId) : ""} onValueChange={(value) => { onScopeChange(); void load(nativeSessionInitialQuery(Number(value))) }}>
-            <SelectTrigger aria-label={t("memory.nativeRecords.project")} className="w-full"><SelectValue placeholder={t("memory.nativeRecords.selectProject")} /></SelectTrigger>
+            <SelectTrigger aria-label={t("memory.nativeRecords.project")}><SelectValue placeholder={t("memory.nativeRecords.selectProject")} /></SelectTrigger>
             <SelectContent>{catalog?.projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name}{project.name !== project.tag ? ` · ${project.tag}` : ""}</SelectItem>)}</SelectContent>
           </Select>
         </label>
@@ -316,48 +318,48 @@ function NativeSessionList({ busy, snapshot, onRunAction, onCheckUpdates = check
         <Button variant="outline" disabled={occupied || !query} onClick={() => { if (query) onOpen({ projectId: query.vmmProjectId, sessionSourceId: null }) }}>{t("memory.sessionList.projectSources")}</Button>
       </div>
       {query ? <form key={JSON.stringify([query.vmmProjectId, query.search, query.status, query.extractionStatus, query.sort, query.lastActivityFromUnixMs, query.lastActivityBeforeUnixMs])} className="vmm-session-filters" onSubmit={applyFilters} onChange={() => setSelectedIds([])}>
-        <label className="space-y-1 text-sm">{t("memory.sessionList.search")}<Input name="search" maxLength={512} disabled={occupied} defaultValue={query.search} /></label>
-        <label className="space-y-1 text-sm">{t("memory.sessionList.sort")}<Select name="sort" disabled={occupied} defaultValue={query.sort} onValueChange={() => setSelectedIds([])}>
-          <SelectTrigger aria-label={t("memory.sessionList.sort")} className="w-full"><SelectValue /></SelectTrigger>
+        <label className="vk-form-tight">{t("memory.sessionList.search")}<Input name="search" maxLength={512} disabled={occupied} defaultValue={query.search} /></label>
+        <label className="vk-form-tight">{t("memory.sessionList.sort")}<Select name="sort" disabled={occupied} defaultValue={query.sort} onValueChange={() => setSelectedIds([])}>
+          <SelectTrigger aria-label={t("memory.sessionList.sort")}><SelectValue /></SelectTrigger>
           <SelectContent><SelectItem value="last_activity_desc">{t("memory.sessionList.newest")}</SelectItem><SelectItem value="last_activity_asc">{t("memory.sessionList.oldest")}</SelectItem><SelectItem value="title_asc">{t("memory.sessionList.titleSort")}</SelectItem></SelectContent>
         </Select></label>
-        <Button type="button" variant="ghost" aria-expanded={filtersOpen} aria-controls="vmm-session-advanced-filters" onClick={() => setFiltersOpen((current) => !current)}>{filtersOpen ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}{t("memory.workspace.filters")}{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}</Button>
+        <Button type="button" variant="ghost" aria-expanded={filtersOpen} aria-controls="vmm-session-advanced-filters" onClick={() => setFiltersOpen((current) => !current)}>{filtersOpen ? <ChevronUp className="vk-icon" /> : <ChevronDown className="vk-icon" />}{t("memory.workspace.filters")}{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}</Button>
         <Button type="submit" variant="outline" disabled={occupied}>{t("memory.sessionList.apply")}</Button>
         <div id="vmm-session-advanced-filters" className="vmm-session-filter-details" hidden={!filtersOpen}><div className="vmm-filter-fields">
-          <label className="space-y-1 text-sm">{t("memory.sessionList.status")}<Select name="status" disabled={occupied} defaultValue={query.status} onValueChange={() => setSelectedIds([])}><SelectTrigger aria-label={t("memory.sessionList.status")} className="w-full"><SelectValue /></SelectTrigger><SelectContent>{lifecycleOptions.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent></Select></label>
-          <label className="space-y-1 text-sm">{t("memory.sessionList.extraction")}<Select name="extraction" disabled={occupied} defaultValue={query.extractionStatus} onValueChange={() => setSelectedIds([])}><SelectTrigger aria-label={t("memory.sessionList.extraction")} className="w-full"><SelectValue /></SelectTrigger><SelectContent>{extractionOptions.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent></Select></label>
-          <label className="space-y-1 text-sm">{t("memory.sessionList.from")}<Input name="from" type="date" disabled={occupied} defaultValue={nativeSessionInputDate(query.lastActivityFromUnixMs, false)} /></label>
-          <label className="space-y-1 text-sm">{t("memory.sessionList.before")}<Input name="before" type="date" disabled={occupied} defaultValue={nativeSessionInputDate(query.lastActivityBeforeUnixMs, true)} /></label>
-        </div><p className="mt-2 text-xs text-muted-foreground">{t("memory.workspace.dateHint")}</p></div>
+          <label className="vk-form-tight">{t("memory.sessionList.status")}<Select name="status" disabled={occupied} defaultValue={query.status} onValueChange={() => setSelectedIds([])}><SelectTrigger aria-label={t("memory.sessionList.status")}><SelectValue /></SelectTrigger><SelectContent>{lifecycleOptions.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent></Select></label>
+          <label className="vk-form-tight">{t("memory.sessionList.extraction")}<Select name="extraction" disabled={occupied} defaultValue={query.extractionStatus} onValueChange={() => setSelectedIds([])}><SelectTrigger aria-label={t("memory.sessionList.extraction")}><SelectValue /></SelectTrigger><SelectContent>{extractionOptions.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent></Select></label>
+          <label className="vk-form-tight">{t("memory.sessionList.from")}<Input name="from" type="date" disabled={occupied} defaultValue={nativeSessionInputDate(query.lastActivityFromUnixMs, false)} /></label>
+          <label className="vk-form-tight">{t("memory.sessionList.before")}<Input name="before" type="date" disabled={occupied} defaultValue={nativeSessionInputDate(query.lastActivityBeforeUnixMs, true)} /></label>
+        </div><p className="vk-form-note">{t("memory.workspace.dateHint")}</p></div>
       </form> : null}
-      {activeFilterCount > 0 && query ? <div className="flex flex-wrap items-center gap-2 text-xs">
+      {activeFilterCount > 0 && query ? <div className="vk-form-inline vk-form-xs">
         {query.search ? <Button size="sm" variant="secondary" disabled={occupied} onClick={() => void load({ ...query, search: "", offset: 0, expectedStorageVersion: null })}>{query.search} ×</Button> : null}
         {query.status !== "all" ? <Button size="sm" variant="secondary" disabled={occupied} onClick={() => void load({ ...query, status: "all", offset: 0, expectedStorageVersion: null })}>{t(lifecycleOptions.find(([value]) => value === query.status)![1])} ×</Button> : null}
         {query.extractionStatus !== "all" ? <Button size="sm" variant="secondary" disabled={occupied} onClick={() => void load({ ...query, extractionStatus: "all", offset: 0, expectedStorageVersion: null })}>{t(extractionOptions.find(([value]) => value === query.extractionStatus)![1])} ×</Button> : null}
         {query.lastActivityFromUnixMs !== null || query.lastActivityBeforeUnixMs !== null ? <Button size="sm" variant="secondary" disabled={occupied} onClick={() => void load({ ...query, lastActivityFromUnixMs: null, lastActivityBeforeUnixMs: null, offset: 0, expectedStorageVersion: null })}>{nativeSessionInputDate(query.lastActivityFromUnixMs, false)} – {nativeSessionInputDate(query.lastActivityBeforeUnixMs, true)} ×</Button> : null}
         <Button size="sm" variant="ghost" disabled={occupied} onClick={() => void load(nativeSessionInitialQuery(query.vmmProjectId))}>{t("memory.workspace.clearFilters")}</Button>
       </div> : null}
-      {updatesAvailable ? <p role="status" className="text-sm text-muted-foreground">{t("memory.workspace.updatesAvailable")}</p> : null}
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      {updatesAvailable ? <p role="status" className="vk-form-text">{t("memory.workspace.updatesAvailable")}</p> : null}
+      {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
       {loading ? <StreamPlaceholder fill label={t("memory.sessionList.loading")} shape="rows" count={5} /> : null}
       {!loading && catalog?.projects.length === 0 ? <p>{t("memory.nativeRecords.noProjects")}</p> : null}
       {page && query ? <>
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <label className="flex items-center gap-2"><input type="checkbox" disabled={occupied || page.sessions.length === 0} checked={page.sessions.length > 0 && selectedIds.length === page.sessions.length} onChange={(event) => setSelectedIds(event.target.checked ? page.sessions.map((session) => session.sessionSourceId) : [])} />{t("memory.sessionList.selectPage")}</label>
+        <div className="vk-form-inline vk-form-sm">
+          <label className="vk-check-label"><input type="checkbox" disabled={occupied || page.sessions.length === 0} checked={page.sessions.length > 0 && selectedIds.length === page.sessions.length} onChange={(event) => setSelectedIds(event.target.checked ? page.sessions.map((session) => session.sessionSourceId) : [])} />{t("memory.sessionList.selectPage")}</label>
           <span>{t("memory.sessionList.selected").replace("{count}", String(selectedIds.length))}</span>
           {selectedSessions.length > 0 ? <VmmNativeSessionArchive key={JSON.stringify([page.projectId, selectedIds])} projectId={page.projectId} sessions={selectedSessions} busy={occupied} onBusyChange={setMutating} onRunAction={onRunAction} onRefresh={() => load({ ...query, offset: 0, expectedStorageVersion: null })} /> : null}
           {removalEligible ? <VmmNativeRemoval projectId={page.projectId} selection={{ kind: "sessions", ids: selectedIds }} sessionNames={new Map(selectedSessions.map((session) => [session.sessionSourceId, session.displayTitle ?? session.sessionSourceId]))} busy={occupied} onBusyChange={setMutating} onRunAction={onRunAction} onRefresh={() => load({ ...query, offset: 0, expectedStorageVersion: null })} /> : null}
           {selectedSessions.length > 0 && !archiveEligible ? <span>{t("memory.sessionList.mixed")}</span> : null}
         </div>
-        <div className="divide-y rounded-lg border">
-          {page.sessions.map((session) => <div key={session.sessionSourceId} className={`vmm-session-row flex items-start gap-3 p-3 ${selection?.sessionSourceId === session.sessionSourceId ? "selected" : ""}`}>
-            <input className="mt-1" type="checkbox" aria-label={`${t("memory.sessionList.select")} ${session.displayTitle ?? session.sessionSourceId}`} disabled={occupied} checked={selectedIds.includes(session.sessionSourceId)} onChange={(event) => setSelectedIds((ids) => event.target.checked ? [...ids, session.sessionSourceId] : ids.filter((id) => id !== session.sessionSourceId))} />
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-              <Button className="h-auto max-w-full whitespace-normal break-all p-0 text-left" variant="link" disabled={occupied} onClick={() => onOpen({ projectId: page.projectId, sessionSourceId: session.sessionSourceId })}>{session.displayTitle ?? session.sessionSourceId}</Button>
+        <div className="vk-mem-rows">
+          {page.sessions.map((session) => <div key={session.sessionSourceId} className={`vmm-session-row vk-mem-session ${selection?.sessionSourceId === session.sessionSourceId ? "selected" : ""}`}>
+            <input className="vk-mem-native-check" type="checkbox" aria-label={`${t("memory.sessionList.select")} ${session.displayTitle ?? session.sessionSourceId}`} disabled={occupied} checked={selectedIds.includes(session.sessionSourceId)} onChange={(event) => setSelectedIds((ids) => event.target.checked ? [...ids, session.sessionSourceId] : ids.filter((id) => id !== session.sessionSourceId))} />
+            <div className="vk-form-fill vk-form-tight">
+              <div className="vk-form-bar">
+              <Button className="vk-mem-title-link" variant="link" disabled={occupied} onClick={() => onOpen({ projectId: page.projectId, sessionSourceId: session.sessionSourceId })}>{session.displayTitle ?? session.sessionSourceId}</Button>
               <NativeSessionStatus status={session.status} />
               </div>
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <div className="vk-form-meta">
                 <span>{t("memory.nativeRecords.turns")} {session.turnCount}</span><span>{t("memory.nativeRecords.memories")} {session.memoryCount}</span>{session.profileNodeCount > 0 ? <span>{t("memory.nativeRecords.profileNodes")} {session.profileNodeCount}</span> : null}
                 {extractionOptions.filter(([value]) => value !== "all").map(([value, label]) => {
                   // API counters use camelCase keys; the query enum uses snake_case by contract.
@@ -366,17 +368,17 @@ function NativeSessionList({ busy, snapshot, onRunAction, onCheckUpdates = check
                   return counts[value] > 0 ? <span key={value}>{t(label)} {counts[value]}</span> : null
                 })}
               </div>
-              <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <div className="vk-form-meta vk-mem-spread">
                 {session.lastActivityAtUnixMs != null ? <p>{t("memory.nativeRecords.lastActivity")} {formatDateTime(session.lastActivityAtUnixMs, locale)}</p> : null}
-                <details><summary className="cursor-pointer">{t("memory.workspace.recordInfo")}</summary><p className="break-all font-mono">{session.sessionSourceId}</p></details>
+                <details><summary>{t("memory.workspace.recordInfo")}</summary><p className="vk-mono vk-form-break">{session.sessionSourceId}</p></details>
               </div>
             </div>
           </div>)}
-          {page.sessions.length === 0 ? <p className="p-4 text-sm text-muted-foreground">{t(activeFilterCount > 0 ? "memory.workspace.noMatches" : "memory.sessionList.empty")}</p> : null}
+          {page.sessions.length === 0 ? <p className="vk-form-text vk-mem-inset">{t(activeFilterCount > 0 ? "memory.workspace.noMatches" : "memory.sessionList.empty")}</p> : null}
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+        <div className="vk-form-bar vk-form-sm">
           <span>{t("memory.sessionList.total").replace("{total}", String(page.total)).replace("{page}", String(Math.floor(page.offset / page.limit) + 1))}</span>
-          <div className="flex gap-2">
+          <div className="vk-form-inline">
             <Button variant="outline" disabled={occupied || page.offset === 0} onClick={() => void load({ ...query, offset: Math.max(0, page.offset - page.limit), expectedStorageVersion: page.storageVersion })}>{t("memory.sessionList.previous")}</Button>
             <Button variant="outline" disabled={occupied || page.offset + page.sessions.length >= page.total} onClick={() => void load({ ...query, offset: page.offset + page.limit, expectedStorageVersion: page.storageVersion })}>{t("memory.sessionList.next")}</Button>
           </div>
