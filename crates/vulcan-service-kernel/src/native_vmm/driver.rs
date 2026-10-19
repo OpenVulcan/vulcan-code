@@ -3565,9 +3565,17 @@ const fn structured_output_name(
     }
 }
 
-/// Converts a host AI error into the explicit degradable failure understood by Core.
-/// 将宿主 AI 错误转换为 Core 理解的显式可降级失败。
+/// Bounds the diagnostic retained by Core, including transport status and provider code.
+/// 限制 Core 保留的诊断长度，包含传输状态和供应商错误码。
+const AI_FAILURE_DIAGNOSTIC_CHARS: usize = 512;
+
+/// Converts `error` for the requested effect `kind`, preserving normalized provider diagnostics.
+/// 将 `error` 转换为指定效果 `kind` 的失败，并保留已归一化的供应商诊断。
+/// Returns the explicit degradable failure understood by Core without changing retry semantics.
+/// 返回 Core 理解的显式可降级失败，保持重试语义不变。
 fn ai_failure(kind: EffectFailureKind, error: HostAiError) -> HostEffectResult {
+    // Classification continues to follow the host contract, independently of display details.
+    // 分类继续遵循宿主契约，与展示详情相互独立。
     let class = match error.code {
         HostAiErrorCode::Contract
         | HostAiErrorCode::InvalidRequest
@@ -3576,12 +3584,33 @@ fn ai_failure(kind: EffectFailureKind, error: HostAiError) -> HostEffectResult {
         HostAiErrorCode::Provider => FailureClass::Provider,
         _ => FailureClass::Transport,
     };
+    // Read only normalized fields; the original response body and credentials never enter diagnostics.
+    // 仅读取已归一化字段；原始响应正文和凭据不会进入诊断。
+    let mut details = Vec::new();
+    if let Some(provider_error) = error.provider_error.as_deref() {
+        if let Some(status) = provider_error.http_status {
+            details.push(format!("HTTP {status}"));
+        }
+        if let Some(code) = provider_error.upstream_code.as_deref() {
+            details.push(code.to_owned());
+        }
+    }
+    // Put structured identifiers first so truncation cannot hide the actionable service error.
+    // 将结构化标识放在前面，避免截断后丢失可用于排查的服务错误。
+    let diagnostic = if details.is_empty() {
+        error.message
+    } else {
+        format!("{}: {}", details.join(" / "), error.message)
+    };
     HostEffectResult::Failure(EffectFailure {
         kind,
         class,
         retryable: error.retryable,
         allow_degrade: true,
-        diagnostic: error.message.chars().take(512).collect(),
+        diagnostic: diagnostic
+            .chars()
+            .take(AI_FAILURE_DIAGNOSTIC_CHARS)
+            .collect(),
     })
 }
 
@@ -3797,6 +3826,66 @@ mod tests {
         DistanceMetric, EmbeddingCapabilities, EmbeddingNormalization, InferenceCapabilitySnapshot,
         InferenceOperationCapability,
     };
+
+    /// Verifies provider failures retain structured transport identifiers and the existing size bound.
+    /// 验证供应商失败保留结构化传输标识及既有长度上限。
+    /// Uses synthetic normalized errors and returns only assertion results.
+    /// 使用合成的已归一化错误，仅返回断言结果。
+    #[test]
+    fn native_vmm_ai_failure_preserves_provider_diagnostics() {
+        // Provider fields follow AiExecutionError's optional metadata contract.
+        // 供应商字段遵循 AiExecutionError 的可选元数据契约。
+        for (status, code) in [
+            (Some(503_u16), Some("billing_unavailable")),
+            (Some(503), Some("credential_authority_unavailable")),
+            (Some(429), None),
+            (None, Some("synthetic_code")),
+        ] {
+            // Required execution fields model a dispatched failure without semantic output.
+            // 必填执行字段模拟已分派但没有语义输出的失败。
+            let provider = serde_json::from_value(serde_json::json!({
+                "category": "provider_unavailable",
+                "stage": "http",
+                "http_status": status,
+                "upstream_code": code,
+                "message": "x".repeat(AI_FAILURE_DIAGNOSTIC_CHARS * 2),
+                "dispatch_outcome": "dispatched",
+                "semantic_output_observed": false,
+                "terminal": true,
+                "retryable": false
+            }))
+            .expect("valid normalized provider error");
+            // The Core projection must preserve diagnostic metadata without enabling retries.
+            // Core 投影必须保留诊断元数据，同时不启用重试。
+            let HostEffectResult::Failure(failure) = ai_failure(
+                EffectFailureKind::Embedding,
+                HostAiError::from_execution_error(provider),
+            ) else {
+                panic!("expected a failed host effect");
+            };
+            if let Some(status) = status {
+                assert!(failure.diagnostic.contains(&format!("HTTP {status}")));
+            }
+            if let Some(code) = code {
+                assert!(failure.diagnostic.contains(code));
+            }
+            assert_eq!(
+                failure.diagnostic.chars().count(),
+                AI_FAILURE_DIAGNOSTIC_CHARS
+            );
+            assert!(!failure.retryable);
+        }
+        // A local error has no provider metadata and must remain unchanged.
+        // 本地错误没有供应商元数据，必须保持原样。
+        let original = "synthetic local failure";
+        let HostEffectResult::Failure(failure) = ai_failure(
+            EffectFailureKind::Embedding,
+            HostAiError::new(HostAiErrorCode::Internal, original),
+        ) else {
+            panic!("expected a failed host effect");
+        };
+        assert_eq!(failure.diagnostic, original);
+    }
 
     /// Verifies stored and retrieval text keep separate tasks only when both are declared.
     /// 验证仅在两者均已声明时，存储文本与检索文本才使用各自任务。

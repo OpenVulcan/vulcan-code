@@ -51,7 +51,7 @@
   "apps/vulcan-code-web/src/components/features/memory/vmm-native-duration-input.test.tsx": 2,
   "apps/vulcan-code-web/src/components/features/memory/vmm-native-host-project-policy.test.tsx": 4,
   "apps/vulcan-code-web/src/components/features/memory/vmm-native-lexical-index.test.tsx": 5,
-  "apps/vulcan-code-web/src/components/features/memory/vmm-native-maintenance-actions.test.tsx": 11,
+  "apps/vulcan-code-web/src/components/features/memory/vmm-native-maintenance-actions.test.tsx": 10,
   "apps/vulcan-code-web/src/components/features/memory/vmm-native-maintenance-page.test.tsx": 9,
   "apps/vulcan-code-web/src/components/features/memory/vmm-native-policy-http.test.tsx": 1,
   "apps/vulcan-code-web/src/components/features/memory/vmm-native-profile-policy.test.tsx": 1,

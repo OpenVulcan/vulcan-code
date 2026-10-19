@@ -19,6 +19,9 @@ export interface MemoryActionRunOptions {
   // Stable UUID for one logical action; omission allocates a fresh command identity.
   // 单个逻辑动作的稳定 UUID；省略时分配新的命令身份。
   commandId?: string;
+  // Rethrows the original failure when the requesting surface owns its error presentation.
+  // 当请求界面负责错误展示时，重新抛出原始失败。
+  propagateError?: boolean;
 }
 
 // MemoryActionProps groups service-backed actions used by the VMM memory page.
@@ -515,9 +518,9 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
       if (acceptsFeedback(operation)) {
         setNotice(t("memory.vmm.action.failed").replace("{message}", message));
       }
-      // Management workspaces own request-local error rendering and must receive the original failure.
-      // 管理工作区负责渲染请求级错误，因此必须收到原始失败。
-      if (action.startsWith("management_")) {
+      // Request-local error owners must receive the original failure instead of an absent result.
+      // 负责请求级错误展示的界面必须收到原始失败，不能将其转换为缺失结果。
+      if (options.propagateError || action.startsWith("management_")) {
         throw error;
       }
       return null;

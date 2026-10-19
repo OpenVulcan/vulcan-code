@@ -2,7 +2,7 @@
 import { act, StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { afterAll, beforeAll, expect, it, vi } from "vitest"
-import { I18nProvider } from "@/i18n"
+import { I18nProvider, readLocaleMessage } from "@/i18n"
 import type { VmmMemoryActionResult } from "@/types"
 import { VmmNativeMaintenancePage } from "./vmm-native-maintenance-page"
 import { maintenanceBatch, maintenanceReply } from "./vmm-native-maintenance.test-fixture"
@@ -51,7 +51,13 @@ it("starts one StrictMode sequence and stops after an unmounted in-flight read",
 })
 
 it("renders exact short durations and distinguishes failed reads from loading", async () => {
-  const run = vi.fn(async (action: string) => action === "native_vector_status" ? null : maintenanceReply(action))
+  // A rejected read must keep its service diagnostic rather than become a mismatched result.
+  // 读取被拒绝时必须保留服务诊断，不能将其转换为结果不匹配。
+  const failure = "HTTP 503 / credential_authority_unavailable: synthetic authority failure"
+  const run = vi.fn(async (action: string) => {
+    if (action === "native_vector_status") throw new Error(failure)
+    return maintenanceReply(action)
+  })
   const view = await mount(run)
   try {
     expect(run.mock.calls.map(([action]) => action)).toEqual(["native_retention_status", "native_lexical_status", "native_vector_status", "native_project_catalog", "native_recycle_bin"])
@@ -61,7 +67,9 @@ it("renders exact short durations and distinguishes failed reads from loading", 
     await act(async () => button("向量与检索索引").click())
     const vector = [...view.container.querySelectorAll('[data-slot="card"]')].find((entry) => entry.textContent?.includes("向量代次与重建"))!
     expect(vector.textContent).not.toContain("正在加载")
-    expect(vector.textContent).toContain("返回了不匹配的结果")
+    expect(vector.textContent).toContain(readLocaleMessage("zh-CN", "memory.maintenance.readFailed"))
+    expect(view.container.textContent).toContain(failure)
+    expect(view.container.textContent).not.toContain(readLocaleMessage("zh-CN", "memory.maintenance.invalidResponse"))
   } finally { await view.dispose() }
 })
 
@@ -119,7 +127,7 @@ it("keeps same-dimension vectors through the exact rebuild precheck and closes t
     await act(async () => button("预检向量重建", view.container).click())
     const dialog = document.querySelector('[role="alertdialog"]')!
     await act(async () => button("沿用现有向量", dialog).click())
-    expect(run).toHaveBeenCalledWith("native_vector_adoption", { expectedStorageVersion: 19, expectedPreviewFingerprint: "audit-fingerprint", confirmed: true })
+    expect(run).toHaveBeenCalledWith("native_vector_adoption", { expectedStorageVersion: 19, expectedPreviewFingerprint: "audit-fingerprint", confirmed: true }, { propagateError: true })
     await vi.waitFor(() => expect(document.querySelector('[role="alertdialog"]')).toBeNull())
     expect(view.container.querySelector('[role="status"]')).not.toBeNull()
   } finally { await view.dispose() }
@@ -140,7 +148,9 @@ it("keeps the rebuild confirmation open when the sample shows a different model"
 })
 
 it("keeps a vector rejection inside its confirmation and restores the exact trigger", async () => {
-  const run = vi.fn(async (action: string, payload?: Record<string, unknown>) => action === "native_vector_rebuild" ? null : maintenanceReply(action, payload))
+  // A genuine response-kind violation still uses the contract error independently of service failures.
+  // 真实的响应类型违约仍使用契约错误，与服务失败分别处理。
+  const run = vi.fn(async (action: string, payload?: Record<string, unknown>) => maintenanceReply(action === "native_vector_rebuild" ? "native_vector_status" : action, payload))
   const view = await mount(run)
   try {
     await act(async () => button("向量与检索索引").click())
@@ -148,7 +158,7 @@ it("keeps a vector rejection inside its confirmation and restores the exact trig
     await act(async () => { trigger.focus(); trigger.click() })
     const dialog = document.querySelector('[role="alertdialog"]')!
     await act(async () => button("确认重建", dialog).click())
-    expect(run).toHaveBeenLastCalledWith("native_vector_rebuild", { expectedStorageVersion: 19, expectedPreviewFingerprint: "audit-fingerprint", confirmed: true })
+    expect(run).toHaveBeenLastCalledWith("native_vector_rebuild", { expectedStorageVersion: 19, expectedPreviewFingerprint: "audit-fingerprint", confirmed: true }, { propagateError: true })
     expect(dialog.querySelector('[role="alert"]')).not.toBeNull()
     await act(async () => button("取消", dialog).click())
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger))

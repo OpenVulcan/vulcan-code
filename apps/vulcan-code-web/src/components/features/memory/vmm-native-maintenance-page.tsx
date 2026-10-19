@@ -25,6 +25,7 @@ import { VmmNativeRecycleRecords } from "./vmm-native-recycle-records"
 import { formatSkillText } from "@/components/features/featureText"
 import { formatNativeDuration } from "./native-duration-display"
 import { nativeVectorRouteCause } from "./vmm-native-vector-status"
+import type { MemoryActionRunOptions } from "./use-memory-area-controller"
 import type {
   VmmMemoryActionResult,
   VmmNativeProjectCatalogSummary,
@@ -49,6 +50,7 @@ interface VmmNativeMaintenancePageProps {
   onRunAction: (
     action: string,
     payload?: Record<string, unknown>,
+    options?: MemoryActionRunOptions,
   ) => Promise<VmmMemoryActionResult | null>
 }
 
@@ -125,15 +127,24 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
   // loadVectorStatus refreshes exact compatibility with the configured embedding generation.
   // loadVectorStatus 刷新与已配置 Embedding 代次的准确兼容状态。
   const loadVectorStatus = React.useCallback(async (generation = pageGeneration.current) => {
-    const result = await onRunAction("native_vector_status")
-    if (!mounted.current || generation !== pageGeneration.current) return false
-    if (result?.data.kind !== "native_vector_status") {
+    try {
+      // Preserve the transport failure separately from a completed response with the wrong kind.
+      // 将传输失败与已完成但类型错误的响应分别保留。
+      const result = await onRunAction("native_vector_status", undefined, { propagateError: true })
+      if (!mounted.current || generation !== pageGeneration.current || !result) return false
+      if (result.data.kind !== "native_vector_status") {
+        setVectorStatus(null)
+        setError(t("memory.maintenance.invalidResponse"))
+        return false
+      }
+      setVectorStatus(result.data.value)
+      return true
+    } catch (cause) {
+      if (!mounted.current || generation !== pageGeneration.current) return false
       setVectorStatus(null)
-      setError(t("memory.maintenance.invalidResponse"))
+      setError(cause instanceof Error ? cause.message : String(cause))
       return false
     }
-    setVectorStatus(result.data.value)
-    return true
   }, [onRunAction, t])
 
   // loadLexicalStatus reads versioned source/index counts without calling an AI model.
@@ -271,16 +282,19 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
     if (actionLock.current) return
     actionLock.current = true
     setActionPending(true)
+    setError(null)
     try {
-      const result = await onRunAction("native_vector_rebuild_preview")
-      if (!mounted.current) return
-      if (result?.data.kind !== "native_vector_rebuild_preview") {
+      const result = await onRunAction("native_vector_rebuild_preview", undefined, { propagateError: true })
+      if (!mounted.current || !result) return
+      if (result.data.kind !== "native_vector_rebuild_preview") {
         setError(t("memory.maintenance.invalidResponse"))
         return
       }
       setVectorPreview(result.data.value)
       setVectorAdoption(null)
       setError(null)
+    } catch (cause) {
+      if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause))
     } finally { actionLock.current = false; if (mounted.current) setActionPending(false) }
   }, [onRunAction, t])
 
@@ -290,20 +304,23 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
     if (!vectorPreview || actionLock.current) return
     actionLock.current = true
     setActionPending(true)
+    setError(null)
     try {
       const result = await onRunAction("native_vector_rebuild", {
         expectedStorageVersion: vectorPreview.storageVersion,
         expectedPreviewFingerprint: vectorPreview.previewFingerprint,
         confirmed: true,
-      })
-      if (!mounted.current) return
-      if (result?.data.kind !== "native_vector_rebuild") {
+      }, { propagateError: true })
+      if (!mounted.current || !result) return
+      if (result.data.kind !== "native_vector_rebuild") {
         setError(t("memory.maintenance.invalidResponse"))
         return
       }
       setVectorPreview(null)
       setVectorAdoption(null)
       await loadPage()
+    } catch (cause) {
+      if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause))
     } finally { actionLock.current = false; if (mounted.current) setActionPending(false) }
   }, [loadPage, onRunAction, t, vectorPreview])
 
@@ -315,14 +332,15 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
     if (!vectorPreview || actionLock.current) return
     actionLock.current = true
     setActionPending(true)
+    setError(null)
     try {
       const result = await onRunAction("native_vector_adoption", {
         expectedStorageVersion: vectorPreview.storageVersion,
         expectedPreviewFingerprint: vectorPreview.previewFingerprint,
         confirmed: true,
-      })
-      if (!mounted.current) return
-      if (result?.data.kind !== "native_vector_adoption") {
+      }, { propagateError: true })
+      if (!mounted.current || !result) return
+      if (result.data.kind !== "native_vector_adoption") {
         setError(t("memory.maintenance.invalidResponse"))
         return
       }
@@ -330,6 +348,8 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
       if (!result.data.value.adopted) return
       setVectorPreview(null)
       await loadPage()
+    } catch (cause) {
+      if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause))
     } finally { actionLock.current = false; if (mounted.current) setActionPending(false) }
   }, [loadPage, onRunAction, t, vectorPreview])
 
@@ -430,7 +450,7 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
                 remaining: vectorAdoption.remainingRebuildMemoryCount,
               })}</p>
             ) : null}
-          </> : pagePending ? <StreamPlaceholder label={t("memory.resources.loading")} shape="fields" count={3} /> : <p className="text-sm text-muted-foreground">{t("memory.maintenance.invalidResponse")}</p>}
+          </> : pagePending ? <StreamPlaceholder label={t("memory.resources.loading")} shape="fields" count={3} /> : <p className="text-sm text-muted-foreground">{t("memory.maintenance.readFailed")}</p>}
         </CardContent>
       </Card>
 
