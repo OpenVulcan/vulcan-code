@@ -15,15 +15,13 @@
   overflow: hidden;
 }
 .workspace-directory-catalog :is(.agent-management-surface, .agent-skills-management-surface) .skill-card-list {
-  padding: 0 24px 20px;
+  padding: 0 0 20px;
 }
 
 
-/* Keep the agent search and short status selector on one line while a tablet-width pane still has room. */
-/* 平板宽度面板仍有空间时，将智能体搜索与短状态选择器保留在同一行。 */
+/* Keep agent rows on one line while a tablet-width pane still has room. */
+/* 平板宽度面板仍有空间时，将智能体行保留在同一行。 */
 @container workspace-page (min-width: 480px) and (max-width: 720px) {
-  .agent-management-surface .agent-catalog-toolbar-heading { grid-template-columns: minmax(0, 1fr) auto; }
-  .agent-management-surface .agent-catalog-filter-row { grid-template-columns: minmax(0, 1fr) 128px; }
   .agent-management-surface .agent-definition-row { grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; }
   .agent-management-surface .agent-definition-row-actions { grid-column: auto; justify-content: flex-end; }
 }

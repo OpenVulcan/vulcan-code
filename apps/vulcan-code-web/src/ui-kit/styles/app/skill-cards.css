@@ -1,18 +1,6 @@
 /* Shared rules preserve their original workbench cascade position. */
 /* 共用规则保留工作台中的原有层叠位置。 */
 
-/* Generic toolbar rules must precede agent overrides on the same multi-class element. */
-/* 通用工具栏规则必须先于同一多类元素上的智能体专用覆盖。 */
-.skill-toolbar {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* A disabled primary action turns neutral instead of showing a washed-out brand colour. */
-
 .skill-page-body {
   min-width: 0;
   min-height: 0;
@@ -34,61 +22,10 @@
   grid-template-rows: auto minmax(0, 96px) minmax(0, 1fr);
 }
 
-.skill-toolbar {
-  border: 1px solid var(--vk-line);
-  padding: 9px;
-  background: var(--vk-sunken);
-}
-
-.agent-catalog-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 16;
-  display: grid;
-  gap: 14px;
-  border: 0;
-  border-bottom: 1px solid var(--vk-line);
-  border-radius: 0;
-  background: color-mix(in srgb, var(--vk-ground) 96%, var(--vk-panel));
-  padding: 14px 14px 12px;
-}
-
-.agent-catalog-toolbar-heading,
-.agent-catalog-filter-row {
-  min-width: 0;
-  display: grid;
-  align-items: center;
-  gap: 12px;
-}
-
-.agent-catalog-toolbar-heading {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.agent-catalog-toolbar-heading p {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-md);
-  line-height: 1.45;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-catalog-toolbar-actions {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.agent-catalog-filter-row {
-  grid-template-columns: minmax(0, 1fr) 144px;
-}
-
-/* Catalog tools and filters stay outside the list viewport instead of covering scrolled records. */
-/* 目录操作与筛选独立于列表视口，避免遮盖滚动后的条目。 */
+/* Skill and agent catalogs: one kit toolbar row (search and filters, then actions) above a full-width */
+/* hairline list. The stage header already names the page and its counts. */
+/* 技能与智能体目录：一行套件工具栏（搜索与筛选，随后是操作），下方是全宽细线列表。 */
+/* 舞台标题已给出页面名称与数量。 */
 :is(.agent-management-surface, .agent-skills-management-surface) {
   height: 100%;
   overflow: hidden;
@@ -102,10 +39,14 @@
   overflow: hidden;
 }
 
-:is(.agent-management-surface, .agent-skills-management-surface) .agent-catalog-toolbar {
-  position: static;
+.agent-catalog-toolbar {
   flex: 0 0 auto;
-  padding: 16px 24px;
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 5);
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+}
+
+.agent-catalog-toolbar .agent-catalog-search {
+  width: min(100%, 17rem);
 }
 
 :is(.agent-management-surface, .agent-skills-management-surface) .agent-skill-card-list {
@@ -113,7 +54,6 @@
   min-height: 0;
   overflow: auto;
   align-content: start;
-  padding: 0 24px 20px;
   overscroll-behavior: contain;
 }
 
@@ -121,11 +61,10 @@
   flex: 0 0 auto;
   max-height: 96px;
   overflow: auto;
-  padding-inline: 24px;
+  padding-inline: calc(var(--vk-u) * 5);
 }
 
 @media (max-width: 760px) {
-
   .agent-definition-row {
     grid-template-columns: 36px minmax(0, 1fr);
     align-items: start;
@@ -133,15 +72,6 @@
 
   .agent-definition-row-actions {
     grid-column: 2;
-    justify-content: flex-start;
-  }
-
-  .agent-catalog-toolbar-heading,
-  .agent-catalog-filter-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .agent-catalog-toolbar-actions {
     justify-content: flex-start;
   }
 }
@@ -180,9 +110,14 @@
   grid-template-columns: 36px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  border-bottom: 1px solid var(--vk-line);
+  border-bottom: var(--vk-bw) solid var(--vk-line-soft);
   background: var(--vk-panel);
-  padding: 14px 16px;
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 5);
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
+}
+
+.agent-definition-row:hover {
+  background: var(--vk-hover);
 }
 
 .agent-definition-row:last-child {
@@ -196,41 +131,6 @@
   gap: 10px;
 }
 
-.agent-skills-management-surface .agent-catalog-toolbar-main {
-  justify-content: space-between;
-}
-
-.agent-skills-management-surface .agent-catalog-toolbar-heading {
-  flex: 1 1 320px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 3px;
-}
-
-.agent-skills-management-surface .agent-catalog-toolbar-heading h2 {
-  margin: 0;
-  font-size: var(--vk-fs-lg);
-}
-
-.agent-skills-management-surface .agent-catalog-filter-row {
-  grid-template-columns: minmax(240px, 1fr) auto 150px;
-}
-
-.agent-skills-management-surface .agent-catalog-search-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.agent-skills-management-surface .agent-catalog-search-input input {
-  min-width: 0;
-  flex: 1;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: inherit;
-}
-
 .agent-skill-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -238,7 +138,6 @@
 }
 
 @media (max-width: 900px) {
-  .agent-skills-management-surface .agent-catalog-filter-row,
   .agent-skill-form-grid {
     grid-template-columns: 1fr;
   }

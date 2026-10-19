@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Bot, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react"
+import { Bot, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Trash2, X } from "lucide-react"
 import { toast } from "@/ui-kit/primitives/toast"
 
 import { ModelPickerControl, modelPickerGroupKey } from "@/components/composer/model-picker-control"
@@ -8,7 +8,9 @@ import { Badge } from "@/ui-kit/primitives/badge"
 import { Button, IconButton } from "@/ui-kit/primitives/button"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog"
 import { Checkbox } from "@/ui-kit/primitives/checkbox"
-import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls"
+import { FilterChip, FilterChipGroup, SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group"
+import { PageEmptyState, PageToolbar } from "@/components/page"
 import { Input } from "@/ui-kit/primitives/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { Switch } from "@/ui-kit/primitives/switch"
@@ -313,42 +315,41 @@ export function AgentsArea(props: {
   return (
     <section className="skill-management-surface agent-management-surface">
       <div className="skill-page-body agent-skill-page-body">
-        <section className="skill-toolbar agent-catalog-toolbar" aria-label={t("agents.agentCatalogActions")}>
-          <div className="agent-catalog-toolbar-heading">
-            <p>{t("agents.manageUserLevelAgent")}</p>
-            <div className="agent-catalog-toolbar-actions">
-              <IconButton aria-label={t("agents.newAgent")} disabled={catalogActionDisabled} onClick={() => { setActionError(null); setEditorDraft(emptyAgentDraft()) }} size="xs" title={t("agents.newAgent")} type="button">
-                <Plus size={15} />
-              </IconButton>
-              <IconButton aria-label={t("agents.openUserDirectory")} disabled={catalogActionDisabled} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} size="xs" title={t("agents.openUserDirectory")} type="button">
-                <FolderOpen size={15} />
-              </IconButton>
-              <IconButton aria-label={t("skills.action.refresh")} disabled={catalogActionDisabled} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} size="xs" title={t("skills.action.refresh")} type="button">
-                <RefreshCw className={busyAction === "refresh" ? "vk-spin" : undefined} size={15} />
-              </IconButton>
-            </div>
-          </div>
-          <div className="agent-catalog-filter-row">
-            <input
+        <PageToolbar
+          actions={<>
+            <Button disabled={catalogActionDisabled} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} size="sm" type="button" variant="ghost">
+              <RefreshCw className={busyAction === "refresh" ? "vk-spin" : undefined} size={15} />
+              {t("skills.action.refresh")}
+            </Button>
+            <Button disabled={catalogActionDisabled} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} size="sm" type="button" variant="ghost">
+              <FolderOpen size={15} />
+              {t("agents.openUserDirectory")}
+            </Button>
+            <Button disabled={catalogActionDisabled} onClick={() => { setActionError(null); setEditorDraft(emptyAgentDraft()) }} size="sm" type="button">
+              <Plus size={15} />
+              {t("agents.newAgent")}
+            </Button>
+          </>}
+          aria-label={t("agents.agentCatalogActions")}
+          className="agent-catalog-toolbar"
+          role="toolbar"
+        >
+          <InputGroup className="agent-catalog-search">
+            <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+            <InputGroupInput
               aria-label={t("agents.searchAgents")}
-              className="agent-catalog-search-input"
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder={t("agents.searchAgents2")}
               type="search"
               value={searchQuery}
             />
-            <Select onValueChange={(value) => setStatusFilter(value as AgentStatusFilter)} value={statusFilter}>
-              <SelectTrigger aria-label={t("agents.enabledStateFilter")} className="agent-catalog-status-select">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{t("agents.all")}</SelectItem>
-                <SelectItem value="enabled">{t("agents.enabled")}</SelectItem>
-                <SelectItem value="disabled">{t("agents.disabled")}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </section>
+          </InputGroup>
+          <FilterChipGroup aria-label={t("agents.enabledStateFilter")}>
+            <FilterChip onClick={() => setStatusFilter("all")} selected={statusFilter === "all"}>{t("agents.all")}</FilterChip>
+            <FilterChip onClick={() => setStatusFilter("enabled")} selected={statusFilter === "enabled"}>{t("agents.enabled")}</FilterChip>
+            <FilterChip onClick={() => setStatusFilter("disabled")} selected={statusFilter === "disabled"}>{t("agents.disabled")}</FilterChip>
+          </FilterChipGroup>
+        </PageToolbar>
         <AgentCatalogIssues catalog={props.workbench.subagentCatalog} />
         {actionError && !editorDraft ? (
           <div role="alert" className="agent-catalog-issues">
@@ -358,15 +359,9 @@ export function AgentsArea(props: {
         ) : null}
         <div className="skill-card-list agent-skill-card-list">
           {props.workbench.subagentCatalog.definitions.length === 0 ? (
-            <article className="skill-empty-card">
-              <strong>{t("agents.noAgentDefinitions")}</strong>
-              <span>{t("agents.createAnAgentManually")}</span>
-            </article>
+            <PageEmptyState description={t("agents.createAnAgentManually")} icon={<Bot />} size="panel" title={t("agents.noAgentDefinitions")} />
           ) : visibleDefinitions.length === 0 ? (
-            <article className="skill-empty-card">
-              <strong>{t("agents.noMatchingAgents")}</strong>
-              <span>{t("agents.adjustTheCategoryEnabled")}</span>
-            </article>
+            <PageEmptyState description={t("agents.adjustTheCategoryEnabled")} size="panel" title={t("agents.noMatchingAgents")} />
           ) : visibleDefinitions.map((definition) => (
             <AgentDefinitionCard
               actions={props.actions}

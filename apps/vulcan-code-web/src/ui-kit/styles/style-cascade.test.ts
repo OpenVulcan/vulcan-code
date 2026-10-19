@@ -55,17 +55,13 @@ it("keeps multi-class agent toolbar overrides after generic styles when the lazy
   // shell 保留实际同时出现的类，而非只测试孤立选择器名称。
   const shell = document.createElement("section");
   shell.className = "agent-management-surface";
-  shell.innerHTML = '<div class="skill-page-body agent-skill-page-body"><section class="skill-toolbar agent-catalog-toolbar"></section><div class="skill-card-list agent-skill-card-list"></div></div><div class="agent-catalog-filter-row skill-list-filter-row"></div>';
+  shell.innerHTML = '<div class="skill-page-body agent-skill-page-body"><div class="vk-page-toolbar agent-catalog-toolbar"></div><div class="skill-card-list agent-skill-card-list"></div></div>';
   document.head.appendChild(style); document.body.appendChild(shell);
   try {
-    // toolbar must retain the specialized grid and edge treatment after loading the lazy stylesheet.
-    // toolbar 在载入懒加载样式后必须保留专用网格及边缘处理。
-    const toolbar = getComputedStyle(shell.querySelector(".agent-catalog-toolbar")!);
-    expect(toolbar.display).toBe("grid");
-    expect(toolbar.borderRadius).toBe("0");
-    expect(toolbar.borderTopWidth).toBe("0px");
+    // toolbar stays a fixed row above the scrolling list after loading the lazy stylesheet.
+    // toolbar 在载入懒加载样式后仍是滚动列表上方的固定行。
+    expect(getComputedStyle(shell.querySelector(".agent-catalog-toolbar")!).flexGrow).toBe("0");
     expect(getComputedStyle(shell.querySelector(".agent-skill-page-body")!).display).toBe("flex");
-    expect(getComputedStyle(shell.querySelector(".skill-list-filter-row")!).gridTemplateColumns).toBe("minmax(240px, 1fr) auto 144px");
     // list is a scrolling region, whose full height must not become a surrounding card.
     // list 是滚动区域，其完整高度不能形成外围卡片。
     const list = getComputedStyle(shell.querySelector(".agent-skill-card-list")!);

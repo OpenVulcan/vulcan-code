@@ -4,10 +4,11 @@ import { Copy, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Search, Tags, Tra
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-import { agentSkillsCatalogSummary, type AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
+import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
 import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "@/components/features/agent-skills/agent-skill-management-dialogs"
 import { hasLinkedGitHubSourceOrigin, SourceOriginLink } from "@/components/features/source-origin-link"
-import { PageEmptyState } from "@/components/page"
+import { PageEmptyState, PageToolbar } from "@/components/page"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group"
 import { Badge } from "@/ui-kit/primitives/badge"
 import { Button, IconButton } from "@/ui-kit/primitives/button"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog"
@@ -227,55 +228,36 @@ export function AgentSkillsArea(props: {
   return (
     <section className="skill-management-surface agent-management-surface agent-skills-management-surface">
       <div className="skill-page-body agent-skill-page-body">
-        <div className="agent-catalog-toolbar">
-          <div className="agent-catalog-toolbar-main">
-            <div className="agent-catalog-toolbar-heading">
-              <h2>{t("agentSkills.skills")}</h2>
-              <p>{agentSkillsCatalogSummary(props.workbench.agentSkills, t)}</p>
-            </div>
-            <div className="agent-catalog-toolbar-actions">
-              <Button disabled={pageBusy} onClick={() => openEditor(null)}>
-                <Plus size={15} />
-                {t("agentSkills.createSkill")}
-              </Button>
-              <Button
-                disabled={pageBusy}
-                onClick={() => {
-                  setCategoryDialogOpen(true)
-                }}
-                variant="outline"
-              >
-                <Tags size={15} />
-                {t("agentSkills.manageCategories")}
-              </Button>
-              <Button
-                disabled={pageBusy}
-                onClick={() => void runCatalogAction("open-directory", props.actions.onOpenAgentSkillsUserDirectory)}
-                variant="outline"
-              >
-                <FolderOpen size={15} />
-                {t("agentSkills.skillDirectory")}
-              </Button>
-              <Button
-                disabled={pageBusy}
-                onClick={() => void runCatalogAction("refresh", props.actions.onRefreshAgentSkills)}
-                variant="outline"
-              >
-                <RefreshCw size={15} />
-                {t("agentSkills.refreshCatalog")}
-              </Button>
-            </div>
-          </div>
-          <div className="agent-catalog-filter-row">
-            <label className="agent-catalog-search-input">
-              <Search size={15} />
-              <input
+        <PageToolbar
+          actions={<>
+            <Button disabled={pageBusy} onClick={() => void runCatalogAction("refresh", props.actions.onRefreshAgentSkills)} size="sm" variant="ghost">
+              <RefreshCw size={15} />
+              {t("agentSkills.refreshCatalog")}
+            </Button>
+            <Button disabled={pageBusy} onClick={() => void runCatalogAction("open-directory", props.actions.onOpenAgentSkillsUserDirectory)} size="sm" variant="ghost">
+              <FolderOpen size={15} />
+              {t("agentSkills.skillDirectory")}
+            </Button>
+            <Button disabled={pageBusy} onClick={() => setCategoryDialogOpen(true)} size="sm" variant="ghost">
+              <Tags size={15} />
+              {t("agentSkills.manageCategories")}
+            </Button>
+            <Button disabled={pageBusy} onClick={() => openEditor(null)} size="sm">
+              <Plus size={15} />
+              {t("agentSkills.createSkill")}
+            </Button>
+          </>}
+          className="agent-catalog-toolbar"
+        >
+            <InputGroup className="agent-catalog-search">
+              <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+              <InputGroupInput
                 aria-label={t("agentSkills.searchSkills")}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder={t("agentSkills.searchNamesDescriptionsTags")}
                 value={searchQuery}
               />
-            </label>
+            </InputGroup>
             <FilterChipGroup aria-label={t("agentSkills.filterSkillsByState")}>
               <FilterChip onClick={() => setStatusFilter("all")} selected={statusFilter === "all"}>{t("agentSkills.all")}</FilterChip>
               <FilterChip onClick={() => setStatusFilter("enabled")} selected={statusFilter === "enabled"}>{t("agentSkills.enabled")}</FilterChip>
@@ -283,7 +265,7 @@ export function AgentSkillsArea(props: {
               <FilterChip onClick={() => setStatusFilter("issues")} selected={statusFilter === "issues"}>{t("agentSkills.issues")}</FilterChip>
             </FilterChipGroup>
             <Select onValueChange={(value) => setSourceFilter(value as AgentSkillSourceFilter)} value={sourceFilter}>
-              <SelectTrigger aria-label={t("agentSkills.filterSkillsBySource")} className="agent-catalog-status-select">
+              <SelectTrigger aria-label={t("agentSkills.filterSkillsBySource")} size="sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -294,8 +276,7 @@ export function AgentSkillsArea(props: {
                 <SelectItem value="overrides">{t("agentSkills.overrides")}</SelectItem>
               </SelectContent>
             </Select>
-          </div>
-        </div>
+        </PageToolbar>
 
         {props.workbench.agentSkills.errors.length > 0 ? (
           <div className="agent-catalog-issues">

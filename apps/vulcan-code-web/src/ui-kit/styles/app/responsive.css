@@ -33,25 +33,8 @@
     overflow: hidden;
   }
 
-  .agent-catalog-toolbar-actions {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
   .agent-catalog-toolbar {
-    position: static;
     padding: 12px;
-  }
-
-  .agent-catalog-toolbar-heading,
-  .agent-catalog-filter-row,
-  .agent-skills-management-surface .agent-catalog-toolbar-heading,
-  .agent-skills-management-surface .agent-catalog-filter-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .agent-catalog-toolbar-heading p {
-    white-space: normal;
   }
 
   .agent-definition-row {

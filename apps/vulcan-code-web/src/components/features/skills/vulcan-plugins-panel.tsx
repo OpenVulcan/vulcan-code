@@ -14,7 +14,8 @@ import { StatusPill } from "@/components/shared/status";
 import { formatMessage, useI18n } from "@/i18n";
 import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-browser-runtime-controls";
 import { ALL_PLUGINS_SCOPE, PluginMaintenanceDrawer, usePluginMaintenanceDrawer } from "./plugin-maintenance-drawer";
-import { PageEmptyState, PageNotice } from "@/components/page";
+import { PageEmptyState, PageNotice, PageToolbar } from "@/components/page";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group";
 import type { PluginUninstallUncertainty } from "./plugin-recovery-center";
 import type { PluginRuntimeErrorRecord, PluginSummary, VulcanPluginPermissionPreview, WorkbenchSnapshot } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
@@ -698,18 +699,24 @@ export function VulcanPluginsPanel(props: {
           </div>
         ) : null}
       </section>
-      <div className="agent-catalog-filter-row skill-list-filter-row plugin-skill-filter-row">
-        <label className="agent-catalog-search-input skill-list-search-input">
-          <Search size={15} />
-          <input
+      <PageToolbar
+        actions={<Button aria-controls={installPanelId} aria-expanded={installOpen} onClick={() => setInstallOpen(!installOpen)} size="sm" type="button"
+          variant={installOpen ? "secondary" : "outline"}>
+          <Plus aria-hidden="true" size={15} />{t("skills.plugins.installLocalPlugin")}
+        </Button>}
+        className="skill-list-toolbar"
+      >
+        <InputGroup className="agent-catalog-search">
+          <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+          <InputGroupInput
             aria-label={t("skills.filter.searchLabel")}
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder={t("skills.filter.searchPlaceholder")}
             value={searchQuery}
           />
-        </label>
+        </InputGroup>
         <Select onValueChange={(value) => setStatusFilter(value as VulcanPluginStatusFilter)} value={statusFilter}>
-          <SelectTrigger aria-label={t("skills.filter.statusLabel")} className="agent-catalog-status-select">
+          <SelectTrigger aria-label={t("skills.filter.statusLabel")} size="sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -719,11 +726,7 @@ export function VulcanPluginsPanel(props: {
             <SelectItem value="issues">{t("skills.filter.issues")}</SelectItem>
           </SelectContent>
         </Select>
-        <Button aria-controls={installPanelId} aria-expanded={installOpen} onClick={() => setInstallOpen(!installOpen)} size="sm" type="button"
-          variant={installOpen ? "secondary" : "outline"}>
-          <Plus aria-hidden="true" size={15} />{t("skills.plugins.installLocalPlugin")}
-        </Button>
-      </div>
+      </PageToolbar>
       {uninstallUncertainty !== null || (retainedUninstalls ?? 0) > 0 ? <PageNotice data-attention="plugin-maintenance" actions={
         <Button onClick={() => maintenance.open(ALL_PLUGINS_SCOPE, "recovery")} size="sm" type="button" variant="outline">
           {t("pluginMaintenance.attention.open")}

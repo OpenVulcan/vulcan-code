@@ -1,6 +1,7 @@
 import * as React from "react";
 import { PackagePlus, Search } from "lucide-react";
-import { PageEmptyState, PageNotice } from "@/components/page";
+import { PageEmptyState, PageNotice, PageToolbar } from "@/components/page";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group";
 import { Button } from "@/ui-kit/primitives/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
 import { FilterChip, FilterChipGroup } from "@/ui-kit/primitives/choice-controls";
@@ -329,23 +330,23 @@ export function LuaSkillsPanel(props: {
           : formatMessage(t("skills.lua.configWatchScope"), { storeScope: configWatchIssue.storeScope })}</p>
         <pre>{configWatchIssue.code}: {configWatchIssue.message}</pre>
       </PageNotice>)}
-      <div className="agent-catalog-filter-row skill-list-filter-row">
-        <label className="agent-catalog-search-input skill-list-search-input">
-          <Search size={15} />
-          <input
+      <PageToolbar className="skill-list-toolbar">
+        <InputGroup className="agent-catalog-search">
+          <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+          <InputGroupInput
             aria-label={t("skills.filter.searchLabel")}
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder={t("skills.filter.searchPlaceholder")}
             value={searchQuery}
           />
-        </label>
+        </InputGroup>
         <FilterChipGroup aria-label={t("skills.filter.statusLabel")}>
           <FilterChip onClick={() => setStatusFilter("all")} selected={statusFilter === "all"}>{t("skills.filter.allStatuses")}</FilterChip>
           <FilterChip onClick={() => setStatusFilter("enabled")} selected={statusFilter === "enabled"}>{t("skills.status.enabled")}</FilterChip>
           <FilterChip onClick={() => setStatusFilter("disabled")} selected={statusFilter === "disabled"}>{t("skills.status.stopped")}</FilterChip>
         </FilterChipGroup>
         <Select onValueChange={(value) => setSourceFilter(value as LuaSkillSourceFilter)} value={sourceFilter}>
-          <SelectTrigger aria-label={t("skills.filter.sourceLabel")} className="agent-catalog-status-select">
+          <SelectTrigger aria-label={t("skills.filter.sourceLabel")} size="sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -354,7 +355,7 @@ export function LuaSkillsPanel(props: {
             <SelectItem value="user">{t("skills.label.user")}</SelectItem>
           </SelectContent>
         </Select>
-      </div>
+      </PageToolbar>
       <div className="skill-card-list agent-skill-card-list">
         {visibleSkills.length === 0 ? (
           <PageEmptyState size="panel" title={props.skills.length === 0 ? t("skills.lua.emptyDetail") : t("skills.filter.empty")} />

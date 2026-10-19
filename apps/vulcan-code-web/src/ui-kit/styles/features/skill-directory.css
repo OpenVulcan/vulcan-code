@@ -8,7 +8,6 @@
   grid-template-rows: minmax(0, 96px) minmax(0, 1fr);
 }
 
-.skill-empty-card,
 .skill-warning-row {
   min-width: 0;
   border: 1px solid var(--vk-line);
@@ -16,48 +15,18 @@
   padding: 11px;
 }
 
-.skill-empty-card,
 .skill-warning-row,
 .skill-tool-row > div {
   display: grid;
   gap: 6px;
 }
 
-.skill-empty-card span,
 .skill-warning-row span,
 .skill-tool-row span {
   min-width: 0;
   color: var(--vk-ink-2);
   font-size: var(--vk-fs-sm);
   overflow-wrap: anywhere;
-}
-
-.agent-catalog-toolbar-main {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.agent-catalog-search-input {
-  min-width: 0;
-  height: 36px;
-  border: 1px solid var(--vk-line);
-  background: var(--vk-ground);
-  color: var(--vk-ink);
-  padding: 0 12px;
-  font-size: var(--vk-fs-md);
-}
-
-.agent-catalog-search-input::placeholder {
-  color: var(--vk-ink-2);
-}
-
-.agent-catalog-status-select {
-  width: 100%;
-  min-width: 0;
-  height: 36px;
 }
 
 .agent-editor-form {
@@ -355,20 +324,6 @@
   gap: 8px;
 }
 
-.skill-toolbar input {
-  min-width: 0;
-  height: 32px;
-  border: 1px solid var(--vk-line);
-  background: var(--vk-ground);
-  color: var(--vk-ink);
-  padding: 0 9px;
-  font-size: var(--vk-fs-sm);
-}
-
-.skill-toolbar input {
-  flex: 1 1 210px;
-}
-
 .lua-skill-install-form,
 .lua-skill-install-field {
   min-width: 0;
@@ -402,27 +357,10 @@
   scrollbar-gutter: stable;
 }
 
-.skill-list-filter-row {
-  grid-template-columns: minmax(240px, 1fr) auto 144px;
-}
-
-.skill-list-filter-row.plugin-skill-filter-row {
-  grid-template-columns: minmax(240px, 1fr) 144px auto;
-}
-
-.skill-list-search-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.skill-list-search-input input {
-  min-width: 0;
-  flex: 1;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: inherit;
+/* In-page skill and plugin lists reuse the catalog search width inside a plain kit toolbar. */
+/* 页内技能与插件列表在普通套件工具栏中沿用目录搜索宽度。 */
+.skill-list-toolbar .agent-catalog-search {
+  width: min(100%, 17rem);
 }
 
 /* LuaSkills settings: kit page sections over a fieldset, runtime status rows and a sticky save bar. */
@@ -1357,9 +1295,4 @@
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 760px) {
-  .skill-list-filter-row,
-  .skill-list-filter-row.plugin-skill-filter-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
+
