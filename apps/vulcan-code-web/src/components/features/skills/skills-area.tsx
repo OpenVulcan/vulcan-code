@@ -88,7 +88,7 @@ export function SkillsArea(props: {
 }
 // Directory-only rules follow this lazy owner; shared workbench and responsive rules remain global.
 // 目录专有规则随此懒加载归属载入；共用工作台与响应式规则保持全局。
-import "@/styles/skill-directory.css";
+import "@/ui-kit/styles/features/skill-directory.css";
 // Plugin maintenance rules load after the directory rules they refine.
 // 插件维护规则在其所细化的目录规则之后载入。
-import "@/styles/plugin-maintenance.css";
+import "@/ui-kit/styles/features/plugin-maintenance.css";

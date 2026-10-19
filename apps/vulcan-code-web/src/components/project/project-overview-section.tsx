@@ -8,7 +8,7 @@ import { listProjectKnowledgeBindings, subscribeKnowledgeProjectBindingsChanged 
 import { runVmmMemoryAction } from "@/service/memory-actions-service";
 import type { KnowledgeProjectBinding, ProjectSummary, VmmConfigDraftSummary, VmmMemorySnapshot, VmmNativeProjectCatalogSummary } from "@/types";
 import type { ProjectSettingsSectionId } from "./project-settings-types";
-import "@/styles/project-overview.css";
+import "@/ui-kit/styles/features/project-overview.css";
 
 // ProjectOverviewSection summarizes exact project authority and routes to existing settings without editing it.
 // ProjectOverviewSection 汇总精确项目权威并进入既有设置，不修改项目状态。

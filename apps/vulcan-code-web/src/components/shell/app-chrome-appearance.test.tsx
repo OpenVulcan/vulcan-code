@@ -60,7 +60,7 @@ it("applies a theme picked from the app menu even when this client refuses to st
   await clickItem("menuitem", "Theme");
   await clickItem("menuitemradio", "Command");
   expect(document.documentElement.dataset.vkTheme).toBe("command");
-  expect(document.documentElement.classList.contains("dark")).toBe(true);
+  expect(document.documentElement.dataset.vkScheme).toBe("dark");
   expect(toast.error).toHaveBeenCalledOnce();
 });
 

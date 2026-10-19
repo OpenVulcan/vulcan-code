@@ -27,8 +27,8 @@ interface VmmSelectFieldProps {
   onChange: (value: string) => void
 }
 
-// VmmSelectField renders one accessible shadcn select without importing obsolete management panels.
-// VmmSelectField 渲染一个可访问的 shadcn 选择器，且不再引入已废弃的管理面板。
+// VmmSelectField renders one accessible kit select without importing obsolete management panels.
+// VmmSelectField 渲染一个可访问的套件选择器，且不再引入已废弃的管理面板。
 function VmmSelectField({
   disabled,
   label,
@@ -36,8 +36,8 @@ function VmmSelectField({
   options,
   value,
 }: VmmSelectFieldProps) {
-  // fieldId connects the shared field label to the exact shadcn trigger.
-  // fieldId 将公共字段标签与准确的 shadcn 触发器关联。
+  // fieldId connects the shared field label to the exact kit trigger.
+  // fieldId 将公共字段标签与准确的套件触发器关联。
   const fieldId = useId()
 
   return (

@@ -204,7 +204,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     // 每次重试重新发起导入请求，不保留应用层已拒绝 Promise。
     void Promise.all([
       loadPersistentPluginUiModule(props.plugin.id, props.mount.id, extension.runtimeIdentity, loadPluginUiModule),
-      import("@/styles/plugin-host-components.css"),
+      import("@/ui-kit/styles/features/plugin-host-components.css"),
     ]).then(([{ namespace: moduleNamespace, source: moduleSource }]) => {
         if (cancelled) {
           return;

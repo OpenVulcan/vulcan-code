@@ -9,35 +9,30 @@
 }
 
 .skill-empty-card,
-.skill-card,
 .skill-warning-row {
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--card);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
   padding: 11px;
 }
 
 .skill-empty-card,
-.skill-card,
 .skill-warning-row,
 .skill-tool-row > div {
   display: grid;
   gap: 6px;
 }
 
-.skill-card small,
 .skill-empty-card span,
 .skill-warning-row span,
 .skill-tool-row span {
   min-width: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   overflow-wrap: anywhere;
 }
 
-.agent-catalog-toolbar-main,
-.agent-import-inline-form {
+.agent-catalog-toolbar-main {
   min-width: 0;
   display: flex;
   align-items: center;
@@ -48,60 +43,21 @@
 .agent-catalog-search-input {
   min-width: 0;
   height: 36px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-  color: var(--foreground);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
   padding: 0 12px;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
 }
 
 .agent-catalog-search-input::placeholder {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .agent-catalog-status-select {
   width: 100%;
   min-width: 0;
   height: 36px;
-}
-
-.agent-catalog-notice {
-  min-width: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-  overflow-wrap: anywhere;
-}
-
-.agent-import-inline-form input {
-  min-width: 0;
-  height: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-  color: var(--foreground);
-  padding: 0 9px;
-  font-size: var(--vcn-font-size-sm);
-}
-
-.agent-import-inline-form input:first-child {
-  flex: 1 1 260px;
-}
-
-.agent-import-inline-form.remote input:first-child {
-  flex-basis: 320px;
-}
-
-.agent-import-inline-form.remote input:nth-child(2) {
-  flex: 0 1 160px;
-}
-
-.agent-import-inline-form.package input:first-child {
-  flex: 0 1 160px;
-}
-
-.agent-import-inline-form.package input:nth-child(2) {
-  flex: 1 1 320px;
 }
 
 .agent-editor-form {
@@ -133,7 +89,7 @@
   margin: 0;
   padding: 12px 0 0;
   border-radius: 0;
-  background: var(--popover);
+  background: var(--vk-raised);
 }
 
 .agent-editor-grid {
@@ -152,7 +108,7 @@
 
 .agent-editor-definition > summary small {
   margin-left: 12px;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   font-weight: 400;
 }
 
@@ -173,8 +129,8 @@
 
 .agent-editor-grid span,
 .agent-editor-checkbox span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .agent-editor-color-picker {
@@ -189,10 +145,9 @@
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-  color: var(--foreground);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
   padding: 0 9px;
   text-align: left;
   cursor: pointer;
@@ -206,7 +161,7 @@
 .agent-editor-color-trigger > span:last-child {
   min-width: 0;
   overflow: hidden;
-  color: var(--foreground);
+  color: var(--vk-ink);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -214,7 +169,7 @@
 .agent-editor-color-swatch {
   width: 18px;
   height: 18px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--vk-line);
   border-radius: 50%;
 }
 
@@ -245,7 +200,7 @@
   min-width: 0;
   display: grid;
   gap: 8px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--vk-line);
   padding-top: 16px;
 }
 
@@ -268,24 +223,23 @@
 }
 
 .agent-tool-policy-toolbar strong {
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
 }
 
 .agent-tool-policy-toolbar span,
 .agent-tool-policy-main span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .agent-tool-policy-toolbar input {
   min-width: 0;
   height: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-  color: var(--foreground);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
   padding: 0 9px;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
 }
 
 .agent-tool-policy-list {
@@ -323,8 +277,8 @@
 .agent-tool-policy-main code {
   min-width: 0;
   overflow-wrap: anywhere;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
 }
 
 /* Expand technical tool descriptions on demand without filling the policy selector. */
@@ -332,13 +286,13 @@
 .agent-policy-description {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
 }
 
 .agent-policy-description summary {
   width: fit-content;
   cursor: pointer;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .agent-tool-policy-mode {
@@ -352,8 +306,8 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
   white-space: nowrap;
 }
 
@@ -380,8 +334,8 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .agent-editor-context span,
@@ -391,7 +345,7 @@
 }
 
 .agent-editor-context strong {
-  color: var(--foreground);
+  color: var(--vk-ink);
 }
 
 .agent-editor-checkbox {
@@ -404,12 +358,11 @@
 .skill-toolbar input {
   min-width: 0;
   height: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-  color: var(--foreground);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
   padding: 0 9px;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
 }
 
 .skill-toolbar input {
@@ -428,19 +381,18 @@
 }
 
 .lua-skill-install-field span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .lua-skill-install-field input {
   min-width: 0;
   height: 34px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-  color: var(--foreground);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
   padding: 0 10px;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
 }
 
 .agent-skill-page-body > .skill-warning-list {
@@ -475,7 +427,7 @@
 
 .lua-settings-page-body {
   grid-template-rows: minmax(0, 1fr);
-  background: var(--background);
+  background: var(--vk-ground);
 }
 
 .lua-settings-section h4 {
@@ -484,8 +436,8 @@
 
 .lua-settings-section > p {
   margin: 4px 0 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1.5;
 }
 
@@ -500,14 +452,13 @@
   min-width: 0;
   display: grid;
   gap: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--card);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
   padding: 14px;
 }
 
 .lua-settings-section h4 {
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   font-weight: 700;
 }
 
@@ -524,8 +475,8 @@
 }
 
 .lua-inference-route-row > span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   font-weight: 600;
 }
 
@@ -543,14 +494,14 @@
 }
 
 .lua-settings-field > span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   font-weight: 600;
 }
 
 .lua-settings-field small {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   line-height: 1.45;
 }
 
@@ -559,8 +510,8 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
   cursor: pointer;
 }
 
@@ -577,13 +528,13 @@
   margin-left: -4px;
   border: 0;
   background: transparent;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   cursor: help;
 }
 
 .lua-settings-help-trigger:hover,
 .lua-settings-help-trigger:focus-visible {
-  color: var(--foreground);
+  color: var(--vk-ink);
 }
 
 .lua-managed-runtime-list {
@@ -593,12 +544,12 @@
 
 .lua-managed-runtime-row {
   min-width: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--vk-line);
   padding: 10px 0;
 }
 
 .lua-managed-runtime-row:first-child {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--vk-line);
 }
 
 .lua-managed-runtime-row-main {
@@ -610,14 +561,14 @@
 }
 
 .lua-managed-runtime-row-name {
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
   font-weight: 650;
 }
 
 .lua-managed-runtime-row-version {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .lua-managed-runtime-row-action {
@@ -625,12 +576,12 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .lua-managed-runtime-row.unavailable .lua-managed-runtime-row-action > span {
-  color: var(--destructive);
+  color: var(--vk-bad);
 }
 
 .lua-managed-runtime-row-progress {
@@ -642,40 +593,39 @@
 
 .lua-managed-runtime-row-progress > span,
 .lua-managed-runtime-row-progress > small {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
 }
 
 .lua-managed-runtime-row-progress > progress {
   width: 100%;
   height: 8px;
-  accent-color: var(--primary);
+  accent-color: var(--vk-ink);
 }
 
 .lua-settings-restart-note,
 .lua-settings-feedback {
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
+  border: 1px solid var(--vk-line);
   padding: 10px 12px;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   line-height: 1.5;
 }
 
 .lua-settings-restart-note {
-  background: color-mix(in srgb, var(--muted) 70%, var(--card));
-  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--vk-sunken) 70%, var(--vk-panel));
+  color: var(--vk-ink-2);
 }
 
 .lua-settings-feedback.error {
-  border-color: color-mix(in srgb, var(--destructive) 38%, var(--border));
-  background: color-mix(in srgb, var(--destructive) 9%, var(--card));
-  color: var(--destructive);
+  border-color: color-mix(in srgb, var(--vk-bad) 38%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-bad) 9%, var(--vk-panel));
+  color: var(--vk-bad);
 }
 
 .lua-settings-feedback.success {
-  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
-  background: color-mix(in srgb, var(--primary) 8%, var(--card));
-  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--vk-ink) 34%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-ink) 8%, var(--vk-panel));
+  color: var(--vk-ink);
 }
 
 .lua-settings-actions {
@@ -690,27 +640,6 @@
 
 }
 
-.skill-card {
-  gap: 10px;
-}
-
-.agent-skill-card {
-  height: 196px;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
-  align-content: stretch;
-  overflow: hidden;
-}
-
-.agent-skill-card {
-  grid-template-rows: auto minmax(0, 1fr) auto;
-}
-
-.subagent-definition-card {
-  height: 196px;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
-}
-
 .agent-definition-row-icon {
   position: relative;
   width: 36px;
@@ -718,10 +647,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-pill);
-  background: var(--background);
-  color: var(--muted-foreground);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink-2);
   padding: 0;
 }
 
@@ -743,9 +671,8 @@
   bottom: -2px;
   width: 10px;
   height: 10px;
-  border: 2px solid var(--card);
-  border-radius: var(--vcn-radius-pill);
-  box-shadow: 0 0 0 1px var(--border);
+  border: 2px solid var(--vk-panel);
+  box-shadow: 0 0 0 1px var(--vk-line);
   pointer-events: none;
 }
 
@@ -767,9 +694,9 @@
 .agent-definition-row-title-text {
   min-width: 0;
   max-width: min(360px, 100%);
-  color: var(--foreground);
+  color: var(--vk-ink);
   overflow: hidden;
-  font-size: var(--vcn-font-size-lg);
+  font-size: var(--vk-fs-read);
   font-weight: 700;
   line-height: 1.25;
   text-align: left;
@@ -786,7 +713,7 @@
 }
 
 .agent-definition-title-button:hover {
-  color: var(--primary);
+  color: var(--vk-ink);
   text-decoration: none;
 }
 
@@ -800,7 +727,7 @@
 
 .agent-definition-row-badges [data-slot="badge"] {
   max-width: 160px;
-  font-size: var(--vcn-font-size-xs);
+  font-size: var(--vk-fs-xs);
 }
 
 .agent-definition-row-main p,
@@ -808,19 +735,19 @@
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .agent-definition-row-main p {
-  color: var(--foreground);
+  color: var(--vk-ink);
 }
 
 .vulcan-plugin-definition-row .agent-definition-row-path.warning {
-  color: var(--destructive);
+  color: var(--vk-bad);
 }
 
 /* Secondary plugin facts are icon chips; their meaning and contributed identifiers live in tooltips. */
@@ -843,10 +770,9 @@
   align-items: center;
   gap: 3px;
   padding: 0 6px;
-  border-radius: var(--vcn-radius-pill);
-  background: var(--vcn-fill-subtle);
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  background: color-mix(in srgb, var(--vk-ink) 3%, transparent);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   font-variant-numeric: tabular-nums;
   line-height: 1;
   cursor: default;
@@ -855,11 +781,11 @@
 
 .vulcan-plugin-fact:hover,
 .vulcan-plugin-fact:focus-visible {
-  color: var(--foreground);
+  color: var(--vk-ink);
 }
 
 .vulcan-plugin-fact:focus-visible {
-  box-shadow: 0 0 0 1px var(--ring);
+  box-shadow: 0 0 0 1px var(--vk-signal);
 }
 
 .vulcan-plugin-fact-tooltip {
@@ -892,7 +818,7 @@
   max-height: 240px;
   margin: 0;
   overflow: auto;
-  font-size: var(--vcn-font-size-xs);
+  font-size: var(--vk-fs-xs);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -905,8 +831,8 @@
   gap: 3px;
   margin: 2px 0 0;
   padding: 0;
-  color: var(--vcn-content-warning);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-warn);
+  font-size: var(--vk-fs-sm);
   line-height: 1.45;
   list-style: none;
 }
@@ -926,7 +852,7 @@
 }
 
 .vulcan-plugin-mcp-error {
-  color: var(--destructive);
+  color: var(--vk-bad);
 }
 
 /* Retained runtime failures show their source and time above the host-reported message. */
@@ -937,8 +863,8 @@
 }
 
 .vulcan-plugin-runtime-error-source {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
 }
 
 /* Plugin-owned runtimes (MCP servers, the browser component) sit in one inset panel under the plugin summary. */
@@ -949,16 +875,15 @@
   gap: 8px;
   margin-top: 6px;
   padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--vcn-fill-subtle);
-  font-size: var(--vcn-font-size-sm);
+  border: 1px solid var(--vk-line);
+  background: color-mix(in srgb, var(--vk-ink) 3%, transparent);
+  font-size: var(--vk-fs-sm);
 }
 
 .vulcan-plugin-mcp > h4 {
   margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   font-weight: 600;
 }
 
@@ -969,7 +894,7 @@
 
 .vulcan-plugin-mcp-server + .vulcan-plugin-mcp-server {
   padding-top: 8px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--vk-line);
 }
 
 .vulcan-plugin-mcp-server-head {
@@ -982,21 +907,21 @@
 
 .vulcan-plugin-mcp-server-head > strong {
   min-width: 0;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   font-weight: 600;
 }
 
 .vulcan-plugin-mcp-server-head [data-slot="badge"] {
-  font-size: var(--vcn-font-size-xs);
+  font-size: var(--vk-fs-xs);
 }
 
 .vulcan-plugin-mcp-server-icon {
   flex: 0 0 auto;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .vulcan-plugin-mcp-server .vulcan-plugin-fact {
-  background: var(--card);
+  background: var(--vk-panel);
 }
 
 .vulcan-plugin-mcp-secret {
@@ -1012,9 +937,9 @@
   align-items: center;
   gap: 5px;
   overflow: hidden;
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1022,9 +947,8 @@
   display: grid;
   gap: 12px;
   padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--card);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
 }
 
 .vulcan-plugin-install-heading,
@@ -1041,8 +965,8 @@
 
 .vulcan-plugin-install-heading p {
   margin: 3px 0 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .vulcan-plugin-install-input-row input {
@@ -1054,9 +978,8 @@
   display: grid;
   gap: 12px;
   padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--background);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
 }
 
 .vulcan-plugin-permission-preview dl {
@@ -1072,7 +995,7 @@
 }
 
 .vulcan-plugin-permission-preview dt {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .vulcan-plugin-permission-preview dd {
@@ -1084,7 +1007,7 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   line-height: 1.5;
 }
 
@@ -1093,19 +1016,18 @@
 }
 
 .vulcan-plugin-permission-consent.warning {
-  color: var(--destructive);
+  color: var(--vk-bad);
 }
 
 .agent-catalog-issues {
   display: grid;
   gap: 6px;
   margin: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
-  border-radius: var(--vcn-radius-md);
-  background: color-mix(in srgb, var(--destructive) 6%, var(--background));
+  border: 1px solid color-mix(in srgb, var(--vk-bad) 45%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-bad) 6%, var(--vk-ground));
   padding: 10px;
-  color: var(--destructive);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-bad);
+  font-size: var(--vk-fs-sm);
 }
 
 .agent-catalog-issues > div {
@@ -1113,19 +1035,10 @@
   gap: 2px;
 }
 
-.agent-definition-detail-dialog {
-  width: min(94vw, 980px);
-  max-width: 980px;
-  max-height: 90vh;
-  overflow: hidden;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-}
-
 .agent-skill-editor-dialog {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-.agent-definition-detail-body,
 .agent-skill-editor-body {
   min-height: 0;
   overflow-y: auto;
@@ -1133,8 +1046,7 @@
 
 .agent-definition-prompt-preview {
   margin-top: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
+  border: 1px solid var(--vk-line);
   padding: 14px;
 }
 
@@ -1146,14 +1058,13 @@
 
 .agent-skill-editor-body fieldset {
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
+  border: 1px solid var(--vk-line);
   padding: 12px;
 }
 
 .agent-skill-editor-body legend {
   padding: 0 6px;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   font-weight: 700;
 }
 
@@ -1161,15 +1072,15 @@
   min-width: 0;
   display: grid;
   gap: 5px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .agent-skill-source-editor textarea {
   min-height: 360px;
   resize: vertical;
-  font-family: var(--font-mono);
-  font-size: var(--vcn-font-size-sm);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-sm);
   tab-size: 2;
 }
 
@@ -1177,25 +1088,9 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-.agent-skill-category-management-body,
-.agent-skill-category-management-list {
-  min-height: 0;
-  display: grid;
-  gap: 8px;
-}
-
-.agent-skill-category-management-body {
-  overflow: hidden;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
 .agent-skill-category-management-actions {
   display: flex;
   justify-content: flex-end;
-}
-
-.agent-skill-category-management-list {
-  overflow-y: auto;
 }
 
 .agent-skill-category-management-row {
@@ -1204,7 +1099,7 @@
   grid-template-columns: 34px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--vk-line);
   padding: 9px 4px;
 }
 
@@ -1214,7 +1109,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--vcn-radius-md);
   color: white;
 }
 
@@ -1226,8 +1120,8 @@
 
 .agent-skill-category-management-row > div:nth-child(2) span,
 .agent-skill-category-management-row > span:nth-child(3) {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
 }
 
 .agent-skill-category-management-row > div:last-child {
@@ -1242,14 +1136,13 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: var(--vcn-radius-sm);
   background: transparent;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .agent-skill-category-management-row > div:last-child button:hover {
-  background: var(--muted);
-  color: var(--foreground);
+  background: var(--vk-sunken);
+  color: var(--vk-ink);
 }
 
 .agent-skill-form-span {
@@ -1260,18 +1153,17 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
 }
 
 .agent-skill-form-error {
   margin: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
-  border-radius: var(--vcn-radius-md);
-  background: color-mix(in srgb, var(--destructive) 6%, var(--background));
-  color: var(--destructive);
+  border: 1px solid color-mix(in srgb, var(--vk-bad) 45%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-bad) 6%, var(--vk-ground));
+  color: var(--vk-bad);
   padding: 8px 10px;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
 }
 
 @media (max-width: 900px) {
@@ -1288,11 +1180,10 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-sm);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-xs);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-xs);
   font-weight: 500;
   line-height: 1;
   text-decoration: none;
@@ -1318,8 +1209,8 @@
 
 .agent-source-origin-link:hover,
 .agent-source-origin-detail-link:hover {
-  border-color: var(--primary);
-  color: var(--primary);
+  border-color: var(--vk-ink);
+  color: var(--vk-ink);
 }
 
 .lua-skill-action-menu {
@@ -1330,21 +1221,11 @@
   gap: 8px;
 }
 
-.skill-card p,
 .skill-tool-row p,
 .skill-body-preview {
   margin: 0;
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-.agent-skill-card > p {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--foreground);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
 }
 
 .skill-tool-list,
@@ -1364,9 +1245,8 @@
   min-width: 0;
   display: grid;
   gap: 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--card);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
   padding: 10px;
 }
 
@@ -1375,14 +1255,14 @@
 }
 
 .lua-skill-detail-grid span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .lua-skill-detail-grid strong {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
 }
 
 .dialog-tool-list {
@@ -1397,9 +1277,8 @@
   min-width: 0;
   display: grid;
   gap: 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--muted);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-sunken);
   padding: 9px;
 }
 
@@ -1433,7 +1312,7 @@
 .dialog-tool-list > .skill-tool-row {
   gap: 6px;
   border: 0;
-  border-top: 1px solid var(--vcn-border-subtle);
+  border-top: 1px solid var(--vk-line-soft);
   border-radius: 0;
   background: transparent;
   padding: 12px 2px;
@@ -1454,13 +1333,13 @@
 }
 
 .dialog-tool-list .skill-tool-row-header strong {
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   font-weight: 600;
 }
 
 .dialog-tool-list .skill-tool-row-header > div:first-child span {
-  font-family: var(--font-mono);
-  font-size: var(--vcn-font-size-xs);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-xs);
 }
 
 .dialog-tool-list .skill-tool-control {
@@ -1470,8 +1349,8 @@
 .dialog-tool-list .skill-tool-description p {
   display: -webkit-box;
   overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-md);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
@@ -1487,8 +1366,8 @@
 }
 
 .skill-sync-status {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   text-align: right;
 }
 
@@ -1505,13 +1384,12 @@
 .skill-body-preview {
   max-height: 240px;
   overflow: auto;
-  border: 1px solid var(--vcn-border-subtle);
-  border-radius: var(--vcn-radius-md);
-  background: var(--vcn-fill-subtle);
-  color: var(--foreground);
+  border: 1px solid var(--vk-line-soft);
+  background: color-mix(in srgb, var(--vk-ink) 3%, transparent);
+  color: var(--vk-ink);
   padding: 10px;
   font-family: "JetBrains Mono", "Cascadia Code", monospace;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   white-space: pre-wrap;
 }
 
@@ -1538,9 +1416,9 @@
 .lua-skill-config-summary > span {
   min-width: 0;
   flex: 1;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   overflow-wrap: anywhere;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
 }
 
 .lua-skill-config-fields {
@@ -1557,8 +1435,8 @@
 
 .lua-skill-config-group > h3 {
   margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   font-weight: 650;
 }
 
@@ -1566,9 +1444,8 @@
   min-width: 0;
   display: grid;
   gap: 7px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--card);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
   padding: 11px;
 }
 
@@ -1579,9 +1456,9 @@
 
 .lua-skill-config-field-heading > label {
   min-width: 0;
-  color: var(--foreground);
+  color: var(--vk-ink);
   overflow-wrap: anywhere;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   font-weight: 650;
 }
 
@@ -1598,12 +1475,12 @@
 .lua-skill-config-error {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   line-height: 1.45;
 }
 
 .lua-skill-config-field > p {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .lua-skill-config-field-footer {
@@ -1612,25 +1489,24 @@
 
 .lua-skill-config-field-footer > span,
 .lua-skill-config-secret-status {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
 }
 
 .lua-skill-config-warning {
-  color: var(--vcn-content-warning);
+  color: var(--vk-warn);
 }
 
 .lua-skill-config-error,
 .lua-skill-config-issues {
-  color: var(--destructive);
+  color: var(--vk-bad);
 }
 
 .lua-skill-config-issues {
   display: grid;
   gap: 4px;
-  border: 1px solid color-mix(in srgb, var(--destructive) 34%, var(--border));
-  border-radius: var(--vcn-radius-md);
-  background: color-mix(in srgb, var(--destructive) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--vk-bad) 34%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-bad) 7%, transparent);
   padding: 9px;
 }
 
@@ -1644,9 +1520,9 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  color: var(--foreground);
+  color: var(--vk-ink);
   cursor: pointer;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   font-weight: 650;
 }
 
@@ -1657,8 +1533,7 @@
 .lua-skill-config-orphaned {
   display: grid;
   gap: 7px;
-  border: 1px dashed var(--border);
-  border-radius: var(--vcn-radius-md);
+  border: 1px dashed var(--vk-line);
   padding: 10px;
 }
 

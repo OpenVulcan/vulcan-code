@@ -8,7 +8,7 @@ import { DisclosureSection } from "@/ui-kit/primitives/disclosure";
 import { Input } from "@/ui-kit/primitives/input";
 import { Textarea } from "@/ui-kit/primitives/textarea";
 import { Switch } from "@/ui-kit/primitives/switch";
-import "@/styles/project-vmm.css";
+import "@/ui-kit/styles/features/project-vmm.css";
 import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-project-settings-fields";
 import { canonicalProjectPath } from "@/components/features/memory/vmm-identity-project-page";
 import { VmmNativeHostProjectPolicy } from "@/components/features/memory/vmm-native-host-project-policy";

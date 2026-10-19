@@ -596,4 +596,4 @@ function agentSkillMatchesSearch(record: AgentSkillRecordSummary, query: string)
 }
 // Directory-only rules follow this lazy owner; shared workbench and responsive rules remain global.
 // 目录专有规则随此懒加载归属载入；共用工作台与响应式规则保持全局。
-import "@/styles/skill-directory.css";
+import "@/ui-kit/styles/features/skill-directory.css";

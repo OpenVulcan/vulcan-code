@@ -1,5 +1,5 @@
 import React from "react";
-import "@/styles/knowledge.css";
+import "@/ui-kit/styles/features/knowledge.css";
 import { BookMarked, LoaderCircle } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { useI18n } from "@/i18n";
@@ -218,7 +218,7 @@ export function ProjectKnowledgeBasesSection(props: {
                   />
                   <span>{t("knowledge.sessionDefaultEnabled")}</span>
                 </label>
-                {saving ? <LoaderCircle className="spin" size={14} /> : null}
+                {saving ? <LoaderCircle className="vk-spin" size={14} /> : null}
               </div>
             );
           })}

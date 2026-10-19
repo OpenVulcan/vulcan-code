@@ -8,7 +8,7 @@
 
 .project-context-menu svg,
 .conversation-context-menu svg {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .archive-dialog {
@@ -29,7 +29,7 @@
 
 .project-settings-dialog-header {
   padding: 18px 48px 16px 24px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--vk-line);
 }
 
 .project-settings-dialog [data-slot="dialog-description"] {
@@ -52,8 +52,8 @@
   gap: 4px;
   overflow: auto;
   padding: 12px 10px;
-  border-right: 1px solid var(--border);
-  background: color-mix(in srgb, var(--muted) 30%, transparent);
+  border-right: 1px solid var(--vk-line);
+  background: color-mix(in srgb, var(--vk-sunken) 30%, transparent);
 }
 
 .project-settings-nav-button {
@@ -64,26 +64,25 @@
   gap: 9px;
   align-items: center;
   border: 1px solid transparent;
-  border-radius: var(--vcn-radius-md);
   background: transparent;
-  color: var(--foreground);
+  color: var(--vk-ink);
   padding: 8px;
   text-align: left;
   cursor: pointer;
 }
 
 .project-settings-nav-button:hover {
-  background: var(--vcn-fill-hover);
+  background: var(--vk-hover);
 }
 
 .project-settings-nav-button.active {
-  border-color: color-mix(in srgb, var(--primary) 14%, transparent);
-  background: color-mix(in srgb, var(--primary) 8%, var(--background));
-  color: var(--primary);
+  border-color: color-mix(in srgb, var(--vk-ink) 14%, transparent);
+  background: color-mix(in srgb, var(--vk-ink) 8%, var(--vk-ground));
+  color: var(--vk-ink);
 }
 
 .project-settings-nav-button svg {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .project-settings-nav-button span,
@@ -95,7 +94,7 @@
 
 .project-settings-nav-button strong {
   overflow: hidden;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -103,8 +102,8 @@
 .project-settings-nav-button small {
   margin-top: 2px;
   overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -135,29 +134,6 @@
   align-items: start;
 }
 
-.project-settings-heading-with-action {
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-}
-
-.project-settings-heading-actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.project-settings-heading-status {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-  line-height: 1.45;
-  text-align: right;
-}
-
 .project-settings-heading strong,
 .project-settings-summary strong {
   display: block;
@@ -170,16 +146,10 @@
 .project-settings-summary > div > span {
   display: block;
   margin-top: 3px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1.45;
   overflow-wrap: anywhere;
-}
-
-.project-settings-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
 }
 
 .project-settings-panel {
@@ -187,9 +157,8 @@
   display: grid;
   gap: 7px;
   padding: 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--card);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
 }
 
 .project-settings-panel.compact {
@@ -197,13 +166,13 @@
 }
 
 .project-settings-panel strong {
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
 }
 
 .project-settings-panel p {
   margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
@@ -217,9 +186,8 @@
 
 .project-settings-toggle-row {
   padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--card);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
 }
 
 .project-settings-toggle-row span,
@@ -230,13 +198,13 @@
 }
 
 .project-settings-toggle-row strong {
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
 }
 
 .project-settings-toggle-row small {
   margin-top: 2px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1.4;
 }
 
@@ -262,8 +230,8 @@
 }
 
 .project-settings-field span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .project-settings-field textarea {
@@ -284,21 +252,20 @@
 .project-settings-kind-chip {
   min-height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--card);
-  font-size: var(--vcn-font-size-md);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
+  font-size: var(--vk-fs-md);
   cursor: pointer;
-  transition: border-color var(--vcn-duration-fast) var(--vcn-ease-out), background-color var(--vcn-duration-fast) var(--vcn-ease-out);
+  transition: border-color var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease);
 }
 
 .project-settings-kind-chip:hover {
-  background: var(--muted);
+  background: var(--vk-sunken);
 }
 
 .project-settings-kind-chip:has([data-state="checked"]) {
-  border-color: color-mix(in oklab, var(--primary) 45%, var(--border));
-  background: color-mix(in oklab, var(--primary) 7%, var(--card));
+  border-color: color-mix(in oklab, var(--vk-ink) 45%, var(--vk-line));
+  background: color-mix(in oklab, var(--vk-ink) 7%, var(--vk-panel));
 }
 
 .project-settings-kind-chip:has(:disabled) {
@@ -314,19 +281,19 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 10px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-md);
   line-height: 1.5;
 }
 
 .project-settings-skill-summary strong {
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
   font-weight: 600;
 }
 
 .project-settings-skill-summary-issue {
-  color: var(--vcn-content-warning);
+  color: var(--vk-warn);
 }
 
 /* Skills sit in one card as a divided list; each row carries only its name, a one-line description and the control. */
@@ -335,10 +302,9 @@
   display: grid;
   gap: 0;
   padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--card);
-  box-shadow: var(--vcn-shadow-raised);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
+  box-shadow: var(--vk-shadow-1);
 }
 
 .project-settings-skill-row {
@@ -348,7 +314,7 @@
   gap: 16px;
   align-items: center;
   padding: 11px 0;
-  border-top: 1px solid var(--vcn-border-subtle);
+  border-top: 1px solid var(--vk-line-soft);
 }
 
 .project-settings-skill-row:first-child {
@@ -363,8 +329,7 @@
   width: 6px;
   height: 6px;
   margin-left: 7px;
-  border-radius: var(--vcn-radius-pill);
-  background: var(--primary);
+  background: var(--vk-ink);
   vertical-align: 2px;
 }
 
@@ -377,7 +342,7 @@
 
 .project-settings-skill-row strong {
   overflow: hidden;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -385,8 +350,8 @@
 .project-settings-skill-row small {
   margin-top: 3px;
   overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -416,8 +381,8 @@
 
 .project-settings-muted {
   margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1.55;
 }
 
@@ -435,94 +400,26 @@
   gap: 16px;
 }
 
-.step-list,
-.tool-list,
-.card-list,
-.log-list {
-  min-width: 0;
-  display: grid;
-  gap: 10px;
-}
-
-.step-item {
-  display: grid;
-  grid-template-columns: 22px 1fr;
-  gap: 8px;
-  align-items: start;
-}
-
-.step-item strong,
-.step-item span {
-  display: block;
-  font-size: var(--vcn-font-size-md);
-}
-
 .status-icon.ready {
-  color: var(--vcn-content-success);
+  color: var(--vk-ok);
 }
 
 .status-icon.warning {
-  color: var(--vcn-content-warning);
+  color: var(--vk-warn);
 }
 
 .status-icon.error {
-  color: var(--destructive);
+  color: var(--vk-bad);
 }
 
 .status-icon.pending {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
-.log-preview {
-  display: grid;
-  gap: 5px;
-  margin-top: 14px;
-  padding: 10px;
-  border-radius: var(--vcn-radius-md);
-  background: var(--muted);
-}
-
-.log-preview code {
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.card-grid,
-.settings-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
-  gap: 10px;
-}
-
-.tool-card,
-.data-card,
-.settings-card,
-.log-row {
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
+.tool-card {
+  border: 1px solid var(--vk-line);
   padding: 11px;
-  background: var(--card);
-}
-
-.data-card,
-.settings-card,
-.log-row {
-  display: grid;
-  gap: 8px;
-}
-
-.data-card strong,
-.settings-card strong {
-  font-size: var(--vcn-font-size-lg);
-}
-
-.data-card p,
-.settings-card p {
-  margin: 0;
-  line-height: 1.5;
+  background: var(--vk-panel);
 }
 
 .settings-detail-panel {

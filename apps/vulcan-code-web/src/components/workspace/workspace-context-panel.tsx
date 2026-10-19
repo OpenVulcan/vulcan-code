@@ -53,7 +53,7 @@ import type {
   WorkspaceDiffSnapshotResponse,
   WorkspaceReviewFocusRequest,
 } from "@/diff/types";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
 import { useConversationSessionEventWindowOwnerV1 } from "@/state/conversation-session-event-window-owner-v1";
@@ -1099,7 +1099,7 @@ function WorkspaceSubagentPanel(args: {
       {!tailLocked ? (
         <Button
           aria-label={t("composer.scrollToBottom")}
-          className={cn("workspace-subagent-scroll-bottom", taskRunning || taskOpen ? "workspace-subagent-scroll-bottom-with-footer" : null)}
+          className={cx("workspace-subagent-scroll-bottom", taskRunning || taskOpen ? "workspace-subagent-scroll-bottom-with-footer" : null)}
           onClick={() => subagentScrollController.scrollToBottom()}
           size="icon"
           title={t("composer.scrollToBottom")}

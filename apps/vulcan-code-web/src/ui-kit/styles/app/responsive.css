@@ -25,15 +25,6 @@
   overflow-wrap: anywhere;
 }
 
-/* Form layouts respond to available content width, including a resized desktop side pane. */
-/* 表单根据内容可用宽度变化，同时兼顾桌面侧栏挤占空间的情况。 */
-@container workspace-page (max-width: 640px) {
-  .settings-form-grid.two,
-  .settings-form-grid.three {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 /* Phones use one bounded application viewport and an accessible navigation drawer. */
 /* 手机使用单个受限应用视口，以及支持键盘访问的导航抽屉。 */
 @media (max-width: 720px) {
@@ -76,8 +67,6 @@
     flex-wrap: wrap;
   }
 
-  .settings-form-grid.two,
-  .settings-form-grid.three,
   .badge-editor,
   .agent-skill-form-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -110,7 +99,7 @@
     overflow-x: auto;
     padding: 8px;
     border-right: 0;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--vk-line);
   }
 
   .project-settings-nav-button {
@@ -136,12 +125,6 @@
     max-height: min(310px, 48dvh);
   }
 
-  .composer-capability-dialog {
-    --composer-dialog-padding: 16px;
-    width: calc(100vw - 24px);
-    height: calc(100dvh - 24px);
-  }
-
   .feature-header-actions {
     flex-wrap: wrap;
     gap: 4px;
@@ -159,7 +142,7 @@
   .feature-header-actions > button:not(.feature-header-refresh) {
     padding-inline: 8px;
     gap: 4px;
-    font-size: var(--vcn-font-size-sm);
+    font-size: var(--vk-fs-sm);
   }
 
   [data-slot="tabs-list"][data-orientation="horizontal"] {
@@ -201,16 +184,33 @@
   }
 
   :is([data-slot="dialog-content"], .settings-form-field) input {
-    font-size: var(--vcn-font-size-xl);
+    font-size: var(--vk-fs-lg);
   }
 }
 
-/* Short capability dialogs scroll one body instead of squeezing two independent panes below their usable height. */
-/* 低高度能力弹窗统一滚动正文，避免两个独立面板被挤压至不可用高度。 */
-@media (max-height: 480px) {
-  .composer-capability-dialog {
-    height: calc(100dvh - 24px);
-    max-height: calc(100dvh - 24px);
+/* Project settings grids collapse to one column on phones; the segmented control keeps its wide first option. */
+/* 项目设置网格在手机上折叠为单列；分段控件保留较宽的第一项。 */
+@media (max-width: 720px) {
+  .project-settings-form-grid,
+  .project-settings-cleanup-grid,
+  .project-settings-kind-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .project-settings-kind-grid {
+    grid-column: auto;
+  }
+
+  .project-settings-skill-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .project-settings-skill-row .status-pill {
+    width: fit-content;
+  }
+
+  .project-settings-segmented {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
   }
 }
-

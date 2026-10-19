@@ -221,7 +221,7 @@ export async function checkUiArchitecture(
 const pluginsRoot = resolve(scriptDirectory, "../../../plugins")
 // pluginStyleVocabulary is the published stylesheet whose classes plugin UI modules may name.
 // pluginStyleVocabulary 是插件 UI 模块可以引用其类名的已发布样式表。
-const pluginStyleVocabulary = resolve(sourceRoot, "styles/plugin-host-components.css")
+const pluginStyleVocabulary = resolve(sourceRoot, "ui-kit/styles/features/plugin-host-components.css")
 // pluginStyleRules are the custom-style limits of docs/contracts/plugin-ui-authoring.md; each pattern runs on non-test UI modules.
 // pluginStyleRules 是 docs/contracts/plugin-ui-authoring.md 中的自定义样式限制；每条规则作用于非测试 UI 模块。
 const pluginStyleRules = [
@@ -294,7 +294,7 @@ export async function checkPluginUiStyle(root = pluginsRoot, vocabularyPath = pl
       // unknown 列出不在已发布词汇表中的类名标记，每个只报告一次。
       const unknown = [...new Set(moduleClassNames(source).filter((token) => !vocabulary.has(token)))]
       if (unknown.length > 0) {
-        failures.push(`${name}: class names ${unknown.join(", ")} are not defined in styles/plugin-host-components.css; use page kit components or add a plugin-scoped rule there`)
+        failures.push(`${name}: class names ${unknown.join(", ")} are not defined in ui-kit/styles/features/plugin-host-components.css; use page kit components or add a plugin-scoped rule there`)
       }
     }
   }

@@ -13,9 +13,9 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   width: min(560px, 100vw);
-  border-left: 1px solid var(--border);
-  background: var(--background);
-  box-shadow: var(--vcn-shadow-modal);
+  border-left: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  box-shadow: var(--vk-shadow-2);
   outline: none;
 }
 
@@ -25,14 +25,14 @@
   justify-content: space-between;
   gap: 8px;
   padding: 12px 12px 10px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--vk-line);
 }
 
 .plugin-maintenance-drawer-header > h2 {
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -49,22 +49,11 @@
 .plugin-capacity,
 .plugin-prewarm {
   display: grid;
-  gap: var(--vcn-space-3);
+  gap: calc(var(--vk-u) * 3);
   min-width: 0;
 }
 
 .plugin-usage { outline: none; }
-
-.plugin-recovery-extra-form {
-  display: flex;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.plugin-recovery-extra-form > input {
-  flex: 1;
-  min-width: 0;
-}
 
 /* Runtime resources: usage meters inside each capacity row, the register form and the edit dialog grid. */
 /* 运行资源：每条容量行内的用量条、注册表单与编辑对话框网格。 */
@@ -83,12 +72,12 @@
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
 }
 
 .plugin-capacity-meter-label > span:last-child {
-  color: var(--foreground);
+  color: var(--vk-ink);
   font-variant-numeric: tabular-nums;
 }
 
@@ -124,9 +113,8 @@
   min-width: 0;
   margin: 0;
   padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
 }
 
 .plugin-prewarm-editor-fields {
@@ -147,8 +135,8 @@
 }
 
 .plugin-prewarm-editor-head {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   font-weight: 600;
 }
 

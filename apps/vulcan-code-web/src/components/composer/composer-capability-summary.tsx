@@ -2,7 +2,7 @@ import * as React from "react";
 import { AlertTriangle, ChevronRight, Settings2 } from "lucide-react";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import type { PublicAiProviderToolCapabilityKind } from "@/types";
 
 // ComposerCapabilitySummaryItem is one resolved capability row shown by the hover summary.

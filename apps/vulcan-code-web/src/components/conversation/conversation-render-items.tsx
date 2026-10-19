@@ -55,7 +55,7 @@ import type {
   ConversationMessage,
 } from "@/types";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 
 import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 import { DedicatedUserMessageMarks } from "./dedicated-transcript-memory";

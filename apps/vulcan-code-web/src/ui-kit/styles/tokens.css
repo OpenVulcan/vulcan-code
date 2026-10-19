@@ -71,6 +71,8 @@
   --vk-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
   --vk-t-fast: 120ms;
   --vk-t-med: 180ms;
+  /* One beat between siblings that enter in sequence. */
+  --vk-stagger: 32ms;
 }
 
 :root[data-vk-text="xs"] { font-size: 12px; }

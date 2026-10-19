@@ -23,7 +23,7 @@ import {
   TabsTrigger,
 } from "@/ui-kit/primitives/tabs";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import type { ProjectSummary } from "@/types";
 import {
   DEFAULT_PROJECT_BADGE_CONFIG,
@@ -268,7 +268,7 @@ export function ProjectIconDialog(props: {
                       {streamedIconOptions.map((option) => (
                         <button
                           aria-pressed={selectedIcon.pack === option.pack && selectedIcon.key === option.key}
-                          className={cn(
+                          className={cx(
                             "project-icon-option",
                             option.pack !== "lucide" && "color-icon-option",
                             selectedIcon.pack === option.pack && selectedIcon.key === option.key && "selected",

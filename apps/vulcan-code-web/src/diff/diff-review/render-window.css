@@ -23,20 +23,20 @@
 }
 
 .diff-plain-rendered-window pre[data-diff] {
-  --diffs-bg: var(--background);
-  --diffs-fg: var(--foreground);
-  --diffs-bg-buffer: color-mix(in oklab, var(--muted-foreground) 22%, transparent);
-  --diffs-bg-addition: color-mix(in oklab, #2ea043 13%, var(--background));
-  --diffs-bg-addition-number: color-mix(in oklab, #2ea043 10%, var(--background));
+  --diffs-bg: var(--vk-ground);
+  --diffs-fg: var(--vk-ink);
+  --diffs-bg-buffer: color-mix(in oklab, var(--vk-ink-2) 22%, transparent);
+  --diffs-bg-addition: color-mix(in oklab, #2ea043 13%, var(--vk-ground));
+  --diffs-bg-addition-number: color-mix(in oklab, #2ea043 10%, var(--vk-ground));
   --diffs-bg-addition-emphasis: color-mix(in oklab, #2ea043 24%, transparent);
-  --diffs-bg-deletion: color-mix(in oklab, #f85149 13%, var(--background));
-  --diffs-bg-deletion-number: color-mix(in oklab, #f85149 10%, var(--background));
+  --diffs-bg-deletion: color-mix(in oklab, #f85149 13%, var(--vk-ground));
+  --diffs-bg-deletion-number: color-mix(in oklab, #f85149 10%, var(--vk-ground));
   --diffs-bg-deletion-emphasis: color-mix(in oklab, #f85149 24%, transparent);
   --diffs-number-gutter-width: calc(var(--diffs-min-number-column-width, var(--diffs-min-number-column-width-default, 4ch)) + 3ch);
   background: var(--diffs-bg);
   color: var(--diffs-fg);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   line-height: 20px;
   tab-size: 2;
 }
@@ -52,7 +52,6 @@
   position: absolute;
   inset: 1px;
   z-index: 2;
-  border-radius: 2px;
   box-shadow: inset 0 0 0 1px color-mix(in oklab, #f2cc60 55%, transparent);
   pointer-events: none;
 }
@@ -68,8 +67,8 @@
   background:
     repeating-linear-gradient(
       to bottom,
-      color-mix(in oklab, var(--muted) 38%, transparent) 0,
-      color-mix(in oklab, var(--muted) 38%, transparent) 1px,
+      color-mix(in oklab, var(--vk-sunken) 38%, transparent) 0,
+      color-mix(in oklab, var(--vk-sunken) 38%, transparent) 1px,
       transparent 1px,
       transparent 20px
     );
@@ -80,22 +79,22 @@
   gap: 3px;
   min-width: 100%;
   padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in oklab, var(--muted) 36%, transparent);
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  border-top: 1px solid var(--vk-line);
+  background: color-mix(in oklab, var(--vk-sunken) 36%, transparent);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1.35;
 }
 
 .diff-render-worker-note span {
-  color: var(--foreground);
+  color: var(--vk-ink);
   font-weight: 600;
 }
 
 .diff-render-worker-note small {
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-xs);
 }
 
 .diff-virtual-spacer {
@@ -105,16 +104,15 @@
 }
 
 .diff-hunk-header.virtual {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--vk-line);
 }
 
 .diff-binary-note {
   margin: 8px;
   padding: 12px;
-  border: 1px dashed var(--border);
-  border-radius: var(--vcn-radius-sm);
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  border: 1px dashed var(--vk-line);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .diff-file-load-state .diff-summary-placeholder-note > span,
@@ -125,23 +123,22 @@
 }
 
 .diff-file-load-state .diff-summary-placeholder-note > small {
-  color: color-mix(in oklab, var(--muted-foreground) 78%, var(--foreground));
-  font-size: var(--vcn-font-size-xs);
+  color: color-mix(in oklab, var(--vk-ink-2) 78%, var(--vk-ink));
+  font-size: var(--vk-fs-xs);
 }
 
 .diff-file-load-state.failed,
 .diff-file-load-state.timed-out {
-  border-color: color-mix(in oklab, #da3633 45%, var(--border));
+  border-color: color-mix(in oklab, #da3633 45%, var(--vk-line));
 }
 
 .diff-file-load-retry {
   justify-self: start;
   height: 24px;
   padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-sm);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
 }
 

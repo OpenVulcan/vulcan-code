@@ -26,14 +26,13 @@
   align-items: center;
   gap: 12px;
   padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--muted);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-sunken);
 }
 
 .project-icon-preview strong {
   overflow: hidden;
-  font-size: var(--vcn-font-size-lg);
+  font-size: var(--vk-fs-read);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -63,8 +62,8 @@
 }
 
 .project-icon-filter span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   white-space: nowrap;
 }
 
@@ -89,10 +88,9 @@
   place-items: center;
   gap: 6px;
   padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--card);
-  color: var(--foreground);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
+  color: var(--vk-ink);
 }
 
 .picker-icon-grid .project-icon-option {
@@ -100,9 +98,9 @@
 }
 
 .picker-icon-grid .icon-load-more {
-  font-size: var(--vcn-font-size-sm);
-  color: var(--muted-foreground);
-  background: var(--muted);
+  font-size: var(--vk-fs-sm);
+  color: var(--vk-ink-2);
+  background: var(--vk-sunken);
 }
 
 .color-icon-option svg {
@@ -112,19 +110,19 @@
 
 .project-icon-option:hover,
 .project-icon-option.selected {
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--vk-hover);
+  color: var(--vk-ink);
 }
 
 .project-icon-option.selected {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 1px var(--ring);
+  border-color: var(--vk-signal);
+  box-shadow: 0 0 0 1px var(--vk-signal);
 }
 
 .project-icon-option span {
   overflow: hidden;
   width: 100%;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -147,8 +145,8 @@
 .badge-editor label > span,
 .badge-editor-field > span,
 .color-picker-row > span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   font-weight: 600;
 }
 
@@ -160,9 +158,8 @@
   width: 100%;
   height: 36px;
   padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--card);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
 }
 
 .color-swatch-row {
@@ -174,9 +171,8 @@
 .color-swatch {
   width: 20px;
   height: 20px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-pill);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--background) 40%, transparent);
+  border: 1px solid var(--vk-line);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vk-ground) 40%, transparent);
 }
 
 .feature-content {
@@ -184,14 +180,13 @@
   min-height: 0;
   flex: 1 1 auto;
   height: 100%;
-  padding: var(--vcn-page-gutter);
+  padding: clamp(12px, 1.6vw, 24px);
   overflow: hidden;
 }
 
 .feature-content > .panel,
 .feature-content > .skill-management-surface,
 .feature-content > .vmm-memory-page,
-.feature-content > .settings-direct-content,
 .feature-content > .vk-chat {
   min-height: 0;
   height: 100%;

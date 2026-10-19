@@ -12,7 +12,7 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .model-builtin-capability-icon svg {
@@ -27,8 +27,7 @@
 .vk-mcat-builtin-capabilities .model-builtin-capability-icon {
   width: 21px;
   height: 21px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-sm);
-  background: var(--background);
-  color: var(--foreground);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
 }

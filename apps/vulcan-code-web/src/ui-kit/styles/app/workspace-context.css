@@ -7,7 +7,7 @@
   flex: 1 1 auto;
   flex-direction: column;
   padding-top: 2.5rem;
-  background: var(--background);
+  background: var(--vk-ground);
   overflow: hidden;
 }
 
@@ -18,7 +18,7 @@
   place-items: center;
   align-content: center;
   gap: 8px;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   text-align: center;
   pointer-events: none;
 }
@@ -29,10 +29,10 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border));
-  background: color-mix(in srgb, var(--destructive) 8%, var(--background));
-  color: var(--destructive);
-  font-size: var(--vcn-font-size-sm);
+  border-bottom: 1px solid color-mix(in srgb, var(--vk-bad) 28%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-bad) 8%, var(--vk-ground));
+  color: var(--vk-bad);
+  font-size: var(--vk-fs-sm);
   line-height: 1.4;
 }
 
@@ -48,9 +48,8 @@
   z-index: 4;
   width: 38px;
   height: 38px;
-  border-radius: var(--vcn-radius-pill);
-  background: var(--card);
-  box-shadow: 0 10px 30px color-mix(in srgb, var(--foreground) 12%, transparent);
+  background: var(--vk-panel);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--vk-ink) 12%, transparent);
 }
 
 .workspace-subagent-scroll-bottom-with-footer {
@@ -77,10 +76,9 @@
   display: grid;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--background);
-  font-size: var(--vcn-font-size-sm);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  font-size: var(--vk-fs-sm);
   pointer-events: auto;
 }
 
@@ -92,17 +90,17 @@
 }
 
 .workspace-subagent-message-queue-item strong {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   font-weight: 500;
 }
 
 .workspace-subagent-stop-button {
   max-width: min(100%, 320px);
-  border-color: color-mix(in srgb, var(--border) 82%, transparent);
-  background: color-mix(in srgb, var(--background) 94%, transparent);
-  box-shadow: 0 12px 32px color-mix(in srgb, var(--foreground) 16%, transparent);
-  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--vk-line) 82%, transparent);
+  background: color-mix(in srgb, var(--vk-ground) 94%, transparent);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--vk-ink) 16%, transparent);
+  color: var(--vk-ink);
   pointer-events: auto;
 }
 

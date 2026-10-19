@@ -7,7 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/ui-kit/primitives/dialog";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import type {
   VmmConfigDraftSummary,
   WorkbenchSnapshot,
@@ -641,7 +641,7 @@ export function ProjectSettingsDialog(props: {
           <nav className="project-settings-nav" aria-label={t("projectSettings.categoryAria")}>
             {sections.map((section) => (
               <button
-                className={cn("project-settings-nav-button", activeSection === section.id && "active")}
+                className={cx("project-settings-nav-button", activeSection === section.id && "active")}
                 aria-current={activeSection === section.id ? "page" : undefined}
                 key={section.id}
                 onClick={() => setActiveSection(section.id)}

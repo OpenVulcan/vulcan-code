@@ -22,7 +22,7 @@ import { KnowledgeIndex } from "./knowledge-index";
 import { KnowledgeBindings, KnowledgeDictionary } from "./knowledge-management";
 import { KnowledgeLibraryCard, KnowledgeLibraryHero, knowledgeLibraryReadable } from "./knowledge-library-overview";
 import { useKnowledgeRead } from "./use-knowledge-read";
-import "@/styles/knowledge.css";
+import "@/ui-kit/styles/features/knowledge.css";
 
 // Human lifecycle management receives projects from their authoritative workbench owner.
 // 人工生命周期管理从权威工作台所有者接收项目。

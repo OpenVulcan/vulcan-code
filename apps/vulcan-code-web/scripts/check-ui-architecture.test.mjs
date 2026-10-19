@@ -132,7 +132,7 @@ describe("checkUiArchitecture", () => {
     // shells is an explicit baseline for the fixture tree.
     // shells 是样本源码树的显式基线。
     const shells = new Set(["legacy-empty"])
-    await withFixture('export const a = <div className="legacy-empty page-notice" />\n', async (directory) => {
+    await withFixture('export const a = <div className="legacy-empty vk-page-notice" />\n', async (directory) => {
       assert.deepEqual(await checkUiArchitecture(directory, new Map(), shells), [])
     })
     await withFixture('export const a = <div className="legacy-empty" />\nexport const b = <p className="fresh-notice" />\n', async (directory) => {
@@ -140,7 +140,7 @@ describe("checkUiArchitecture", () => {
         'fixture.tsx: bespoke feedback shell "fresh-notice"; use PageEmptyState or PageNotice from @/components/page',
       ])
     })
-    await withFixture('export const a = <div className="page-empty-state" />\n', async (directory) => {
+    await withFixture('export const a = <div className="vk-page-empty-state" />\n', async (directory) => {
       assert.deepEqual(await checkUiArchitecture(directory, new Map(), shells), [
         "legacy-empty: feedback shell is no longer used; remove its legacyFeedbackShells entry",
       ])
@@ -229,7 +229,7 @@ describe("checkPluginUiStyle", () => {
     const source = 'export const a = (h) => [h("div", { className: "p-4 text-sm" }), h("div", { className: `plugin-demo-cell ${state} p-4` }), h("i", { className: "commented-out" })]\n'
     await withPluginFixture({ "demo/ui/index.mjs": source }, async (root, vocabulary) => {
       assert.deepEqual(await checkPluginUiStyle(root, vocabulary), [
-        "demo/ui/index.mjs: class names p-4, text-sm, commented-out are not defined in styles/plugin-host-components.css; use page kit components or add a plugin-scoped rule there",
+        "demo/ui/index.mjs: class names p-4, text-sm, commented-out are not defined in ui-kit/styles/features/plugin-host-components.css; use page kit components or add a plugin-scoped rule there",
       ])
     })
     assert.deepEqual(moduleClassNames('h("a", { className: cond ? "one two" : `three ${x}` })'), ["one", "two", "three"])

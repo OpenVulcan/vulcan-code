@@ -35,10 +35,9 @@
 }
 
 .skill-toolbar {
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
+  border: 1px solid var(--vk-line);
   padding: 9px;
-  background: var(--muted);
+  background: var(--vk-sunken);
 }
 
 .agent-catalog-toolbar {
@@ -48,9 +47,9 @@
   display: grid;
   gap: 14px;
   border: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--vk-line);
   border-radius: 0;
-  background: color-mix(in srgb, var(--background) 96%, var(--card));
+  background: color-mix(in srgb, var(--vk-ground) 96%, var(--vk-panel));
   padding: 14px 14px 12px;
 }
 
@@ -70,8 +69,8 @@
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-md);
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -87,12 +86,6 @@
 .agent-catalog-filter-row {
   grid-template-columns: minmax(0, 1fr) 144px;
 }
-
-/* The editor body owns scrolling so saving remains reachable at every scroll position. */
-/* 编辑正文独立负责滚动，保存操作在任意滚动位置均可访问。 */
-
-/* Segmented choices remain a single horizontal control inside the form toolbar. */
-/* 分段选项在表单工具栏中保持为单个横向控件。 */
 
 /* Catalog tools and filters stay outside the list viewport instead of covering scrolled records. */
 /* 目录操作与筛选独立于列表视口，避免遮盖滚动后的条目。 */
@@ -187,8 +180,8 @@
   grid-template-columns: 36px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--card);
+  border-bottom: 1px solid var(--vk-line);
+  background: var(--vk-panel);
   padding: 14px 16px;
 }
 
@@ -216,7 +209,7 @@
 
 .agent-skills-management-surface .agent-catalog-toolbar-heading h2 {
   margin: 0;
-  font-size: var(--vcn-font-size-xl);
+  font-size: var(--vk-fs-lg);
 }
 
 .agent-skills-management-surface .agent-catalog-filter-row {
@@ -238,30 +231,6 @@
   color: inherit;
 }
 
-.agent-definition-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.agent-definition-detail-grid > div {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  padding: 8px;
-}
-
-.agent-definition-detail-grid dt {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-}
-
-.agent-definition-detail-grid dd {
-  margin: 4px 0 0;
-  overflow-wrap: anywhere;
-  font-size: var(--vcn-font-size-sm);
-}
-
 .agent-skill-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -270,8 +239,7 @@
 
 @media (max-width: 900px) {
   .agent-skills-management-surface .agent-catalog-filter-row,
-  .agent-skill-form-grid,
-  .agent-definition-detail-grid {
+  .agent-skill-form-grid {
     grid-template-columns: 1fr;
   }
 

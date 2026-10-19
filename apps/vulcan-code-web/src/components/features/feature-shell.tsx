@@ -177,7 +177,7 @@ function FeatureShell(props: {
         type="button"
         variant="secondary"
       >
-        <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
+        <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "vk-spin" : undefined} size={15} />
         <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
       </Button>
       <Button disabled={skillHeaderBusyAction !== null} onClick={() => setLuaInstallDialogOpen(true)} size="sm" type="button">

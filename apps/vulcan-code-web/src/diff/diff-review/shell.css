@@ -6,7 +6,7 @@
   min-height: 0;
   height: 100%;
   width: 100%;
-  color: var(--foreground);
+  color: var(--vk-ink);
 }
 
 .diff-review-panel.empty {
@@ -19,17 +19,17 @@
   place-items: center;
   gap: 8px;
   padding: 24px;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   text-align: center;
 }
 
 .diff-empty-state strong {
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-lg);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-read);
 }
 
 .diff-empty-state span {
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   line-height: 1.6;
 }
 
@@ -44,7 +44,7 @@
   min-width: 0;
   min-height: 29px;
   padding: 6px 8px 6px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--vk-line);
 }
 
 .diff-review-floating-actions {
@@ -57,9 +57,8 @@
   gap: 2px;
   max-width: calc(100% - 28px);
   padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-pill);
-  background: color-mix(in oklab, var(--background) 94%, transparent);
+  border: 1px solid var(--vk-line);
+  background: color-mix(in oklab, var(--vk-ground) 94%, transparent);
   transform: translateX(50%);
   -webkit-backdrop-filter: blur(12px) saturate(1.14);
   backdrop-filter: blur(12px) saturate(1.14);
@@ -74,10 +73,9 @@
   min-width: 0;
   padding: 0 11px;
   border: 0;
-  border-radius: var(--vcn-radius-pill);
   background: transparent;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1;
   white-space: nowrap;
   transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
@@ -99,8 +97,8 @@
 }
 
 .diff-review-floating-action-button:not(:disabled):hover {
-  background: color-mix(in oklab, var(--muted) 72%, transparent);
-  color: var(--foreground);
+  background: color-mix(in oklab, var(--vk-sunken) 72%, transparent);
+  color: var(--vk-ink);
 }
 
 .diff-review-floating-action-button:disabled {
@@ -117,6 +115,6 @@
   align-items: center;
   gap: 8px;
   min-height: 30px;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
 }
 

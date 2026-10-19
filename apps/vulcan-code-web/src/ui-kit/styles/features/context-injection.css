@@ -13,7 +13,6 @@
   justify-self: start;
   margin: 0;
   padding: 2px;
-  border-radius: var(--vcn-radius-md);
 }
 
 .context-injection-tabs-list [data-slot="tabs-trigger"] {
@@ -22,8 +21,7 @@
   height: 20px;
   gap: 4px;
   padding: 0 11px;
-  border-radius: var(--vcn-radius-sm);
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   line-height: 1;
   font-weight: 500;
 }
@@ -73,8 +71,8 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
 }
 
 .vmm-static-profile-section-title strong {
@@ -86,7 +84,7 @@
 
 .vmm-static-profile-date-group {
   gap: 7px;
-  border-left: 2px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--vk-ink) 30%, transparent);
   padding-left: 8px;
 }
 
@@ -94,11 +92,10 @@
   width: fit-content;
   max-width: 100%;
   overflow: hidden;
-  border-radius: var(--vcn-radius-pill);
-  background: var(--muted);
-  color: var(--muted-foreground);
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
   padding: 2px 7px;
-  font-size: var(--vcn-font-size-xs);
+  font-size: var(--vk-fs-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -109,9 +106,8 @@
 
 .vmm-static-profile-node {
   gap: 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: color-mix(in srgb, var(--muted) 34%, transparent);
+  border: 1px solid var(--vk-line);
+  background: color-mix(in srgb, var(--vk-sunken) 34%, transparent);
   padding: 8px 9px;
 }
 
@@ -124,61 +120,18 @@
 
 .vmm-static-profile-node-content {
   min-width: 0;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
   line-height: 1.5;
   white-space: pre-wrap;
-}
-
-.context-injection-card {
-  min-width: 0;
-  display: grid;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  padding: 10px;
-  background: var(--card);
-}
-
-.context-injection-card-header {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-}
-
-.context-injection-tag {
-  width: fit-content;
-  max-width: 100%;
-  overflow: hidden;
-  border-radius: var(--vcn-radius-pill);
-  padding: 2px 7px;
-  background: var(--muted);
-  color: var(--foreground);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: var(--vcn-font-size-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-injection-card-header p {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-  line-height: 1.45;
-}
-
-.context-injection-item-list {
-  display: grid;
-  gap: 8px;
 }
 
 .context-injection-item {
   min-width: 0;
   display: grid;
   gap: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: color-mix(in srgb, var(--muted) 42%, transparent);
+  border: 1px solid var(--vk-line);
+  background: color-mix(in srgb, var(--vk-sunken) 42%, transparent);
   padding: 8px 9px;
 }
 
@@ -192,8 +145,8 @@
 
 .context-injection-item-content {
   min-width: 0;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -220,20 +173,19 @@
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: var(--vcn-radius-sm);
   background: transparent;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   cursor: pointer;
 }
 
 .context-injection-delete-button:hover {
-  background: color-mix(in srgb, var(--destructive) 12%, transparent);
-  color: var(--destructive);
+  background: color-mix(in srgb, var(--vk-bad) 12%, transparent);
+  color: var(--vk-bad);
 }
 
 .context-injection-lookup-button:hover {
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
-  color: var(--primary);
+  background: color-mix(in srgb, var(--vk-ink) 12%, transparent);
+  color: var(--vk-ink);
 }
 
 .context-injection-delete-button:disabled,
@@ -244,8 +196,8 @@
 
 .context-injection-delete-notice {
   margin: 8px 2px 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .context-injection-item-footer {
@@ -253,8 +205,8 @@
   min-width: 0;
   flex-wrap: wrap;
   gap: 6px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   line-height: 1.35;
 }
 
@@ -263,31 +215,30 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: var(--vcn-radius-pill);
-  background: var(--background);
-  color: var(--muted-foreground);
+  border: 1px solid color-mix(in srgb, var(--vk-line) 72%, transparent);
+  background: var(--vk-ground);
+  color: var(--vk-ink-2);
   padding: 2px 5px;
-  font-size: var(--vcn-font-size-xs);
+  font-size: var(--vk-fs-xs);
   line-height: 1.2;
 }
 
 .context-injection-pill.inverse {
-  border-color: var(--foreground);
-  background: var(--foreground);
-  color: var(--background);
+  border-color: var(--vk-ink);
+  background: var(--vk-ink);
+  color: var(--vk-ground);
 }
 
 .context-injection-pill.success {
-  border-color: color-mix(in srgb, var(--vcn-content-success) 42%, transparent);
-  background: color-mix(in srgb, var(--vcn-content-success) 13%, transparent);
-  color: color-mix(in srgb, var(--vcn-content-success) 88%, var(--foreground));
+  border-color: color-mix(in srgb, var(--vk-ok) 42%, transparent);
+  background: color-mix(in srgb, var(--vk-ok) 13%, transparent);
+  color: color-mix(in srgb, var(--vk-ok) 88%, var(--vk-ink));
 }
 
 .context-injection-pill.warning {
-  border-color: color-mix(in srgb, var(--vcn-content-warning) 42%, transparent);
-  background: color-mix(in srgb, var(--vcn-content-warning) 15%, transparent);
-  color: color-mix(in srgb, var(--vcn-content-warning) 88%, var(--foreground));
+  border-color: color-mix(in srgb, var(--vk-warn) 42%, transparent);
+  background: color-mix(in srgb, var(--vk-warn) 15%, transparent);
+  color: color-mix(in srgb, var(--vk-warn) 88%, var(--vk-ink));
 }
 
 .context-injection-item pre,
@@ -296,11 +247,11 @@
   margin: 0;
   max-height: 240px;
   overflow: auto;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--vk-line);
   padding: 9px;
-  color: var(--foreground);
+  color: var(--vk-ink);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: var(--vcn-font-size-xs);
+  font-size: var(--vk-fs-xs);
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -313,10 +264,9 @@
   display: grid;
   gap: 12px;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--popover);
-  color: var(--popover-foreground);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-raised);
+  color: var(--vk-ink);
   padding: 14px;
 }
 
@@ -329,19 +279,18 @@
 .context-injection-delete-dialog h3,
 .context-injection-lookup-dialog h3 {
   margin: 0;
-  font-size: var(--vcn-font-size-lg);
+  font-size: var(--vk-fs-read);
 }
 
 .context-injection-dialog-preview {
   margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1.45;
   white-space: pre-wrap;
 }
 
-.context-injection-delete-dialog-actions,
-.context-injection-lookup-header {
+.context-injection-delete-dialog-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -368,10 +317,9 @@
 .context-injection-turn-entry {
   display: grid;
   gap: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
+  border: 1px solid var(--vk-line);
   padding: 10px;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   line-height: 1.45;
 }
 
@@ -383,7 +331,7 @@
 
 .context-injection-card-group.expired {
   margin-top: 4px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--vk-line) 78%, transparent);
   padding-top: 10px;
 }
 
@@ -391,15 +339,15 @@
   min-width: 0;
   display: grid;
   gap: 3px;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .context-injection-expired-header strong {
-  color: color-mix(in srgb, var(--vcn-content-warning) 82%, var(--foreground));
-  font-size: var(--vcn-font-size-sm);
+  color: color-mix(in srgb, var(--vk-warn) 82%, var(--vk-ink));
+  font-size: var(--vk-fs-sm);
 }
 
 .context-injection-expired-header span {
-  font-size: var(--vcn-font-size-xs);
+  font-size: var(--vk-fs-xs);
   line-height: 1.4;
 }

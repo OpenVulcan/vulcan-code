@@ -324,7 +324,7 @@ export function AgentsArea(props: {
                 <FolderOpen size={15} />
               </IconButton>
               <IconButton aria-label={t("skills.action.refresh")} disabled={catalogActionDisabled} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} size="xs" title={t("skills.action.refresh")} type="button">
-                <RefreshCw className={busyAction === "refresh" ? "spin" : undefined} size={15} />
+                <RefreshCw className={busyAction === "refresh" ? "vk-spin" : undefined} size={15} />
               </IconButton>
             </div>
           </div>
@@ -1837,5 +1837,5 @@ function localizedAgentScopeLabel(
 }
 // Directory-only rules follow this lazy owner; shared workbench and responsive rules remain global.
 // 目录专有规则随此懒加载归属载入；共用工作台与响应式规则保持全局。
-import "@/styles/skill-directory.css";
+import "@/ui-kit/styles/features/skill-directory.css";
 import "@/ui-kit/styles/features/settings-forms.css";

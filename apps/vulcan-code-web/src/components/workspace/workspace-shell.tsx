@@ -102,8 +102,8 @@ const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent
 // LazyAgentSkillCategoryMenu defers prompt-skill directory navigation.
 // LazyAgentSkillCategoryMenu 延迟提示词技能目录导航。
 const LazyAgentSkillCategoryMenu = React.lazy(() => import("@/components/features/agent-skills/agent-skills-area").then((module) => ({ default: module.AgentSkillCategoryMenu })));
-// WorkspaceShell renders the shadcn dashboard-like fused sidebar and inset console area.
-// WorkspaceShell 渲染类似 shadcn dashboard 的融合侧栏与 inset 控制台区域。
+// WorkspaceShell renders the fused sidebar and the inset console area.
+// WorkspaceShell 渲染融合侧栏与内嵌控制台区域。
 // selectEventWindowOwnerSessionId reads the selected V1 owner id with a stable selector identity.
 // selectEventWindowOwnerSessionId 以稳定的选择器身份读取选中的 V1 归属 id。
 function selectEventWindowOwnerSessionId(snapshot: ConversationEventWindowControllerSnapshot): string | null {
@@ -694,7 +694,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
             type="button"
             variant="secondary"
           >
-            <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
+            <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "vk-spin" : undefined} size={15} />
             <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
           </Button>
           <Button onClick={() => setLuaInstallDialogOpen(true)} size="sm" type="button">

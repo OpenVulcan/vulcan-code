@@ -40,9 +40,9 @@
   min-width: 0;
   min-height: 0;
   order: 2;
-  border-right: 1px solid var(--border);
-  border-left: 1px solid var(--border);
-  background: var(--background);
+  border-right: 1px solid var(--vk-line);
+  border-left: 1px solid var(--vk-line);
+  background: var(--vk-ground);
 }
 
 .diff-file-tree-handle {
@@ -55,10 +55,10 @@
   width: 11px;
   min-height: 100%;
   border: 0;
-  border-left: 1px solid color-mix(in oklab, var(--diff-file-tree-handle-color) 42%, var(--border));
-  border-right: 1px solid color-mix(in oklab, var(--diff-file-tree-handle-color) 42%, var(--border));
-  background: color-mix(in oklab, var(--diff-file-tree-handle-color) 28%, var(--background));
-  color: color-mix(in oklab, var(--diff-file-tree-handle-color) 74%, var(--foreground));
+  border-left: 1px solid color-mix(in oklab, var(--diff-file-tree-handle-color) 42%, var(--vk-line));
+  border-right: 1px solid color-mix(in oklab, var(--diff-file-tree-handle-color) 42%, var(--vk-line));
+  background: color-mix(in oklab, var(--diff-file-tree-handle-color) 28%, var(--vk-ground));
+  color: color-mix(in oklab, var(--diff-file-tree-handle-color) 74%, var(--vk-ink));
   pointer-events: auto;
   cursor: pointer;
 }
@@ -68,8 +68,8 @@
 }
 
 .diff-file-tree-handle:hover {
-  background: color-mix(in oklab, var(--diff-file-tree-handle-color) 42%, var(--background));
-  color: var(--foreground);
+  background: color-mix(in oklab, var(--diff-file-tree-handle-color) 42%, var(--vk-ground));
+  color: var(--vk-ink);
 }
 
 .diff-file-tree-filter {
@@ -80,10 +80,9 @@
   height: 30px;
   margin: 8px;
   padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: color-mix(in oklab, var(--background) 88%, var(--muted));
-  color: var(--muted-foreground);
+  border: 1px solid var(--vk-line);
+  background: color-mix(in oklab, var(--vk-ground) 88%, var(--vk-sunken));
+  color: var(--vk-ink-2);
 }
 
 .diff-file-tree-filter input {
@@ -92,8 +91,8 @@
   border: 0;
   outline: 0;
   background: transparent;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
 }
 
 .diff-file-tree-filter-actions {
@@ -111,15 +110,14 @@
   width: 20px;
   height: 20px;
   border: 0;
-  border-radius: var(--vcn-radius-xs);
   background: transparent;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   cursor: pointer;
 }
 
 .diff-file-tree-filter-actions button:hover:not(:disabled) {
-  background: var(--muted);
-  color: var(--foreground);
+  background: var(--vk-sunken);
+  color: var(--vk-ink);
 }
 
 .diff-file-tree-filter-actions button:disabled {
@@ -136,8 +134,8 @@
 
 .diff-file-tree-empty {
   padding: 12px 10px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 /* A loading folder shows indented shimmer lines where its children will appear. */
@@ -145,10 +143,6 @@
 .diff-file-tree-placeholder {
   gap: 8px;
   padding: 6px 10px 8px 26px;
-}
-
-.diff-file-tree-placeholder .vcn-shimmer {
-  height: 9px;
 }
 
 .diff-file-tree-node {
@@ -163,10 +157,9 @@
   min-width: 0;
   height: 26px;
   border: 0;
-  border-radius: var(--vcn-radius-sm);
   background: transparent;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -199,11 +192,11 @@
 
 .diff-file-tree-row:hover,
 .diff-file-tree-row.active {
-  background: color-mix(in oklab, var(--muted) 72%, transparent);
+  background: color-mix(in oklab, var(--vk-sunken) 72%, transparent);
 }
 
 .diff-file-tree-row.active {
-  color: var(--foreground);
+  color: var(--vk-ink);
 }
 
 .diff-file-tree-name {
@@ -219,7 +212,7 @@
   gap: 5px;
   align-items: center;
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--vcn-font-size-xs);
+  font-size: var(--vk-fs-xs);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -238,11 +231,10 @@
   justify-content: center;
   width: 16px;
   height: 16px;
-  border-radius: var(--vcn-radius-xs);
-  background: color-mix(in oklab, var(--muted) 66%, var(--background));
-  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--vk-sunken) 66%, var(--vk-ground));
+  color: var(--vk-ink-2);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--vcn-font-size-glyph);
+  font-size: 8px;
   font-weight: 700;
   line-height: 1;
 }

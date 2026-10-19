@@ -3,9 +3,9 @@
 .project-settings-nav-button.active,
 .project-settings-nav-button.active:hover {
   border-color: transparent;
-  background: var(--vcn-control-on);
-  box-shadow: var(--vcn-shadow-control-on);
-  color: var(--foreground);
+  background: var(--vk-panel);
+  box-shadow: var(--vk-shadow-1), 0 0 0 1px var(--vk-line);
+  color: var(--vk-ink);
   font-weight: 600;
 }
-.project-settings-nav-button.active svg { color: var(--primary); }
+.project-settings-nav-button.active svg { color: var(--vk-ink); }

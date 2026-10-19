@@ -3,7 +3,7 @@ import { AudioLines, Image as ImageIcon, Search, Video } from "lucide-react"
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n, type TranslationKey } from "@/i18n"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core";
 import type { PublicAiNativeToolKind, PublicAiResourceKind } from "@/types"
 
 import "@/components/shared/model-builtin-capabilities.css"
@@ -82,7 +82,7 @@ export function ModelBuiltinCapabilityIcons(props: ModelBuiltinCapabilityIconsPr
     return null
   }
   return (
-    <span className={cn("model-builtin-capabilities", props.className)}>
+    <span className={cx("model-builtin-capabilities", props.className)}>
       {capabilities.map((capability) => {
         const label = t(modelBuiltinCapabilityLabelKey(capability))
         return (

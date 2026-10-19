@@ -17,9 +17,8 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px 12px;
 padding: 12px 14px;
-border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: color-mix(in srgb, var(--card) 94%, transparent);
+border: 1px solid var(--vk-line);
+  background: color-mix(in srgb, var(--vk-panel) 94%, transparent);
   box-shadow: 0 14px 40px rgb(0 0 0 / 18%);
   backdrop-filter: blur(12px);
   pointer-events: auto;
@@ -34,14 +33,14 @@ min-width: 0;
 .media-upload-progress-heading {
 display: flex;
 justify-content: space-between;
-font-size: var(--vcn-font-size-sm);
+font-size: var(--vk-fs-sm);
 font-weight: 600;
 }
 
 .media-upload-progress-file {
 overflow: hidden;
-color: var(--muted-foreground);
-font-size: var(--vcn-font-size-xs);
+color: var(--vk-ink-2);
+font-size: var(--vk-fs-xs);
 text-overflow: ellipsis;
 white-space: nowrap;
 }

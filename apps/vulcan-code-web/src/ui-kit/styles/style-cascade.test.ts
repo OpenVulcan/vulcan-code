@@ -16,7 +16,7 @@ const postcss = createRequire(load.resolve("vite"))("postcss");
 function desktopRules(name: string): string {
   // root is parsed from current source so moving a generic rule after its specialized override is observable.
   // root 从当前源码解析，使将通用规则移至专用覆盖之后的变化可被观察。
-  const root = postcss.parse(readFileSync(resolve("src/styles", `${name}.css`), "utf8"));
+  const root = postcss.parse(readFileSync(resolve(name === "skill-cards" ? "src/ui-kit/styles/app" : "src/ui-kit/styles/features", `${name}.css`), "utf8"));
   return root.nodes.filter((node: { type: string }) => node.type === "rule").map((node: { toString(): string }) => node.toString()).join("\n");
 }
 

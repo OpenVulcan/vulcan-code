@@ -22,10 +22,9 @@
   min-width: 0;
   padding: 0 5px;
   border: 0;
-  border-radius: var(--vcn-radius-sm);
-  color: var(--foreground);
+  color: var(--vk-ink);
   background: transparent;
-  font-size: var(--vcn-font-size-xs);
+  font-size: var(--vk-fs-xs);
   line-height: 22px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -41,7 +40,7 @@
 
 .diff-review-repository-trigger:hover,
 .diff-review-repository-trigger[aria-expanded="true"] {
-  background: color-mix(in oklab, var(--muted) 74%, transparent);
+  background: color-mix(in oklab, var(--vk-sunken) 74%, transparent);
 }
 
 .diff-review-repository-check-spacer {
@@ -76,15 +75,15 @@
 
 .diff-review-repository-path {
   max-width: 220px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .diff-panel-title-text {
   flex: 1 1 auto;
   min-width: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   overflow: hidden;
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
   mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
@@ -105,12 +104,12 @@
 
 .diff-stat {
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--vcn-font-size-2xs);
+  font-size: var(--vk-fs-2xs);
   font-weight: 600;
 }
 
 .diff-panel-title-row .diff-stat {
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
   line-height: 1.2;
 }
 
@@ -128,8 +127,8 @@
   align-items: center;
   gap: 3px;
   height: 21px;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-2xs);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-2xs);
 }
 
 .diff-mode-trigger {
@@ -138,9 +137,8 @@
   height: 24px;
   padding: 0 7px;
   border: 0;
-  border-radius: var(--vcn-radius-lg);
   background: transparent;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   line-height: 1;
   white-space: nowrap;
   transition: background-color 120ms ease, color 120ms ease;
@@ -148,7 +146,7 @@
 
 .diff-mode-trigger:hover,
 .diff-mode-trigger[aria-expanded="true"] {
-  background: color-mix(in oklab, var(--muted) 74%, transparent);
+  background: color-mix(in oklab, var(--vk-sunken) 74%, transparent);
 }
 
 .diff-mode-count {
@@ -158,21 +156,19 @@
   min-width: 17px;
   height: 17px;
   padding: 0 5px;
-  border-radius: var(--vcn-radius-pill);
-  background: color-mix(in oklab, var(--muted) 82%, var(--foreground) 7%);
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  background: color-mix(in oklab, var(--vk-sunken) 82%, var(--vk-ink) 7%);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   font-weight: 600;
 }
 
 .diff-branch-trigger {
   border: 1px solid transparent;
-  border-radius: var(--vcn-radius-sm);
-  background: var(--background);
+  background: var(--vk-ground);
   max-width: 180px;
   padding: 0 2px;
   border-color: transparent;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .diff-branch-trigger span {
@@ -210,7 +206,7 @@
   display: flex;
   justify-content: space-between;
   min-height: 30px;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
   white-space: nowrap;
 }
 
@@ -256,8 +252,8 @@
 }
 
 .diff-commit-menu-item small {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   white-space: nowrap;
 }
 
@@ -270,8 +266,8 @@
 }
 
 .diff-branch-arrow {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .diff-branch-menu {
@@ -285,7 +281,7 @@
   gap: 7px;
   height: 32px;
   padding: 0 8px;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .diff-branch-search input {
@@ -294,14 +290,14 @@
   border: 0;
   outline: 0;
   background: transparent;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
 }
 
 .diff-branch-menu-label {
   padding: 7px 8px 5px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
 .diff-branch-menu-item {
@@ -325,11 +321,10 @@
   justify-content: center;
   gap: 5px;
   height: 22px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-sm);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-2xs);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-2xs);
 }
 
 .diff-action-button {
@@ -362,9 +357,9 @@
 }
 
 .diff-search-toggle.active {
-  color: var(--primary);
-  border-color: color-mix(in oklab, var(--primary) 42%, var(--border));
-  background: color-mix(in oklab, var(--primary) 8%, var(--background));
+  color: var(--vk-ink);
+  border-color: color-mix(in oklab, var(--vk-ink) 42%, var(--vk-line));
+  background: color-mix(in oklab, var(--vk-ink) 8%, var(--vk-ground));
 }
 
 .diff-panel-search-anchor {
@@ -378,7 +373,7 @@
   top: calc(100% + 6px);
   right: 0;
   z-index: 260;
-  filter: drop-shadow(0 8px 18px color-mix(in oklab, var(--foreground) 13%, transparent));
+  filter: drop-shadow(0 8px 18px color-mix(in oklab, var(--vk-ink) 13%, transparent));
 }
 
 .diff-mode-menu,
@@ -397,10 +392,9 @@
   width: min(320px, calc(100vw - 40px));
   min-width: 260px;
   padding: 0 5px 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-sm);
-  background: var(--background);
-  color: var(--muted-foreground);
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink-2);
 }
 
 .diff-panel-search > svg {
@@ -413,17 +407,17 @@
   border: 0;
   outline: 0;
   background: transparent;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
 }
 
 .diff-search-count {
   flex: 0 0 48px;
   width: 48px;
   overflow: hidden;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--vcn-font-size-xs);
+  font-size: var(--vk-fs-xs);
   text-align: right;
   white-space: nowrap;
 }
@@ -435,9 +429,8 @@
   width: 20px;
   height: 20px;
   border: 0;
-  border-radius: var(--vcn-radius-xs);
   background: transparent;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .diff-search-step:disabled {
@@ -445,7 +438,7 @@
 }
 
 .diff-search-step:not(:disabled):hover {
-  background: var(--muted);
-  color: var(--foreground);
+  background: var(--vk-sunken);
+  color: var(--vk-ink);
 }
 

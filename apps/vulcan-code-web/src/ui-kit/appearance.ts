@@ -93,8 +93,8 @@ export function resolvedDark(theme: AppearanceTheme): boolean {
   return theme !== "light";
 }
 
-// applyAppearance writes the root attributes; legacy styles still read the `.dark` class and color-scheme.
-// applyAppearance 写入根节点属性；旧样式仍读取 `.dark` 类与 color-scheme。
+// applyAppearance writes the root attributes and the native color-scheme the resolved theme implies.
+// applyAppearance 写入根节点属性及解析后主题对应的原生 color-scheme。
 export function applyAppearance(preferences: AppearancePreferences): void {
   const root = document.documentElement;
   if (preferences.theme === "auto") delete root.dataset.vkTheme;
@@ -105,7 +105,6 @@ export function applyAppearance(preferences: AppearancePreferences): void {
   else delete root.dataset.vkMotion;
   const dark = resolvedDark(preferences.theme);
   root.dataset.vkScheme = dark ? "dark" : "light";
-  root.classList.toggle("dark", dark);
   root.style.colorScheme = dark ? "dark" : "light";
 }
 

@@ -1,35 +1,7 @@
-@import "./styles/foundations/theme.css";
-@import "./styles/foundations/tokens.css";
+/* The startup screen needs only the kit tokens and element reset; the workbench loads the full kit later. */
+/* 启动界面只需套件令牌与元素重置；工作台稍后载入完整套件。 */
 @import "./ui-kit/styles/tokens.css";
-@import "./ui-kit/styles/legacy-bridge.css";
-@import "./styles/scrollbars.css";
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body,
-#root {
-  width: 100%;
-  height: 100%;
-}
-
-body {
-  margin: 0;
-  min-width: 0;
-  overflow: hidden;
-  background: var(--background);
-}
-
-/* Keep the boot reset from overriding typography after the application loads. */
-/* 启动样式保留时，不覆盖应用加载后的组件字号与字重。 */
-@layer base {
-  button,
-  textarea {
-    font: inherit;
-  }
-}
+@import "./ui-kit/styles/base.css";
 
 /* Startup screens share one column: the loading panel stretches to the full height to pin its logo, while the
    error panel is centered by the column itself. */
@@ -42,12 +14,12 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: safe center;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   padding: 24px;
 }
 
 .loading-screen.error {
-  color: var(--foreground);
+  color: var(--vk-ink);
 }
 
 /* The persistent startup surface covers the app until the workbench takes over, then fades out above it.
@@ -59,7 +31,7 @@ body {
   inset: 0;
   z-index: 60;
   height: auto;
-  background: var(--background);
+  background: var(--vk-ground);
   transition: opacity var(--startup-surface-fade, 0ms) ease, visibility 0s linear var(--startup-surface-fade, 0ms);
 }
 
@@ -73,16 +45,15 @@ body {
 /* 启动恢复沿用共享主题，不引入工作台按钮分块。 */
 .startup-reload-button {
   justify-self: start;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-sm);
+  border: 1px solid var(--vk-line);
   padding: 6px 12px;
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
   font: inherit;
   cursor: pointer;
 }
-.startup-reload-button:hover { background: var(--muted); }
-.startup-reload-button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.startup-reload-button:hover { background: var(--vk-sunken); }
+.startup-reload-button:focus-visible { outline: 2px solid var(--vk-signal); outline-offset: 2px; }
 
 .startup-error-panel {
   width: min(520px, 100%);
@@ -99,21 +70,20 @@ body {
   justify-items: start;
   gap: 12px;
   padding: 20px;
-  border: 1px solid color-mix(in srgb, var(--destructive) 30%, var(--border));
-  border-radius: var(--vcn-radius-xl);
-  background: color-mix(in srgb, var(--popover) 92%, transparent);
-  box-shadow: 0 18px 42px color-mix(in srgb, var(--foreground) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--vk-bad) 30%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-raised) 92%, transparent);
+  box-shadow: 0 18px 42px color-mix(in srgb, var(--vk-ink) 8%, transparent);
 }
 
 .startup-error-content strong {
-  color: var(--destructive);
+  color: var(--vk-bad);
 }
 
 .startup-error-message {
   margin: 0;
   overflow-wrap: anywhere;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
   line-height: 1.6;
   max-height: min(32dvh, 240px);
   overflow: auto;
@@ -126,7 +96,7 @@ body {
 .startup-error-details { min-width: 0; width: 100%; }
 .startup-error-details summary { cursor: pointer; }
 .startup-error-details[open] summary { margin-bottom: 8px; }
-.startup-error-details summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.startup-error-details summary:focus-visible { outline: 2px solid var(--vk-signal); outline-offset: 2px; }
 
 /* The loading panel fills the column in three rows: empty space, the logo, then the progress block hanging below.
    The logo row sits slightly above the middle and never moves when progress rows appear or disappear. */
@@ -158,7 +128,7 @@ body {
   height: 100%;
   display: block;
   overflow: visible;
-  color: var(--vcn-brand-ink);
+  color: var(--vk-ink);
   /* A neutral black lift: derived from --foreground it would turn into a grey halo on the dark ground. */
   /* 中性黑色投影：若取自 --foreground，深色底上会变成灰色光晕。 */
   filter: drop-shadow(0 14px 28px rgb(0 0 0 / 12%));
@@ -262,21 +232,21 @@ body {
 }
 
 .startup-progress-title {
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-lg);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-read);
   font-weight: 600;
   line-height: 1.4;
 }
 
 .startup-progress-message {
   margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   line-height: 1.45;
 }
 
 .startup-progress-message.error {
-  color: var(--destructive);
+  color: var(--vk-bad);
 }
 
 .startup-progress-meter {
@@ -292,8 +262,7 @@ body {
   position: relative;
   height: 4px;
   overflow: hidden;
-  border-radius: var(--vcn-radius-pill);
-  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  background: color-mix(in srgb, var(--vk-ink) 9%, transparent);
 }
 
 .startup-progress-track.compact {
@@ -304,7 +273,7 @@ body {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--vcn-brand-flame-start), var(--vcn-brand-flame-end));
+  background: linear-gradient(90deg, var(--vk-ember-2), var(--vk-ember));
   transform-origin: left center;
   transform: scaleX(var(--startup-progress-ratio, 0));
   transition: transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -330,8 +299,8 @@ body {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
 }
@@ -341,7 +310,7 @@ body {
   display: grid;
   gap: 8px;
   padding-top: 14px;
-  border-top: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--vk-ink) 7%, transparent);
 }
 
 .startup-download-progress-heading {
@@ -350,8 +319,8 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   font-variant-numeric: tabular-nums;
 }
 
@@ -377,19 +346,4 @@ body {
   .startup-surface {
     transition: none;
   }
-}
-
-.progress-ring {
-  display: inline-block;
-  flex: none;
-  overflow: visible;
-}
-
-.progress-ring-track {
-  stroke: color-mix(in srgb, currentColor 18%, transparent);
-}
-
-.progress-ring-value {
-  stroke: currentColor;
-  transition: stroke-dashoffset 180ms ease;
 }

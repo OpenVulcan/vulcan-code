@@ -5,7 +5,7 @@ import { OpenVulcanAccountContext } from "@/components/features/account/openvulc
 import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { Button } from "@/ui-kit/primitives/button"
 import { useI18n } from "@/i18n"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core";
 import { queryPublicAiConnectionUsage, syncPublicAiConnection } from "@/service/settings-actions-service"
 import type {
   PublicAiAccountUsage,
@@ -176,7 +176,7 @@ export function ConnectProgress(props: ConnectProgressProps) {
       </div>
       <ol>
         {steps.map((step) => (
-          <li className={cn("vk-ms-connect-step")} data-state={step.state} key={step.key}>
+          <li className={cx("vk-ms-connect-step")} data-state={step.state} key={step.key}>
             <ConnectStepIcon state={step.state} />
             <span className="vk-ms-connect-copy">
               <span>{step.title}</span>

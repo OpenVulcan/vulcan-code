@@ -27,7 +27,7 @@ import { Input } from "@/ui-kit/primitives/input";
 import { Spinner } from "@/ui-kit/primitives/spinner";
 import { formatMessage, useI18n } from "@/i18n";
 import type { ProjectDirectoryListing } from "@/types";
-import "@/styles/project-folder-picker.css";
+import "@/ui-kit/styles/features/project-folder-picker.css";
 import "@/ui-kit/styles/features/settings-forms.css"
 
 // PLACE_LIMIT caps how many project parent folders the sidebar offers as quick places.

@@ -42,7 +42,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount()); host.remove();
   vi.restoreAllMocks(); vi.unstubAllGlobals();
-  document.documentElement.classList.remove("dark");
+  delete document.documentElement.dataset.vkScheme;
 });
 
 // Harness renders actual shell state with a complete synthetic startup snapshot.

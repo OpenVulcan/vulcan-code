@@ -19,10 +19,10 @@ vi.mock("@xterm/xterm", () => ({ Terminal: class {
 describe("terminal theme", () => {
   it("preserves the terminal palette and emulator when the application theme changes", async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-    // computed styles represent the same root-class palette switch used by the shell.
-    // 计算样式模拟外壳使用的同一根类名色板切换。
+    // computed styles represent the same root scheme switch used by the shell.
+    // 计算样式模拟外壳使用的同一根配色方案切换。
     const styles = vi.spyOn(globalThis, "getComputedStyle").mockImplementation(() => ({
-      getPropertyValue: (key: string) => `${document.documentElement.classList.contains("dark") ? "dark" : "light"}:${key}`,
+      getPropertyValue: (key: string) => `${document.documentElement.dataset.vkScheme === "dark" ? "dark" : "light"}:${key}`,
     } as CSSStyleDeclaration));
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host);
@@ -31,14 +31,14 @@ describe("terminal theme", () => {
       const instance = emulator.instances.at(-1)!;
       expect(instance.options.theme).toMatchObject({ background: "#111318", foreground: "#d9dee8" });
       const count = emulator.instances.length;
-      await act(async () => { document.documentElement.classList.add("dark"); });
+      await act(async () => { document.documentElement.dataset.vkScheme = "dark"; });
       expect(instance.options.theme).toMatchObject({ background: "#111318", foreground: "#d9dee8" });
       expect(styles).not.toHaveBeenCalled();
       expect(emulator.instances).toHaveLength(count);
       await act(async () => root.unmount());
       expect(instance.dispose).toHaveBeenCalledOnce();
     } finally {
-      document.documentElement.classList.remove("dark"); styles.mockRestore(); host.remove();
+      delete document.documentElement.dataset.vkScheme; styles.mockRestore(); host.remove();
     }
   });
 });

@@ -552,4 +552,4 @@ export function LuaSkillInstallDialog(props: {
 }
 // The standalone install dialog can load before SkillsArea and owns the same directory rules.
 // 独立安装弹窗可能早于 SkillsArea 载入，并拥有同一组目录规则。
-import "@/styles/skill-directory.css";
+import "@/ui-kit/styles/features/skill-directory.css";

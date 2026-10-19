@@ -10,7 +10,7 @@ import { browseKnowledgePackages } from "@/service/knowledge-base-service";
 import type { KnowledgePackageFileListing, KnowledgePackageInspection } from "@/types/knowledge-base";
 import { formatBytes } from "@/lib/display-format";
 import { KNOWLEDGE_MODE_COPY } from "./knowledge-mode";
-import "@/styles/project-folder-picker.css";
+import "@/ui-kit/styles/features/project-folder-picker.css";
 
 // Parameters: path is a native directory identity. Returns its comparison key for the host-declared root list.
 // 参数：path 为原生目录身份。返回其在宿主声明根列表中的比较键。

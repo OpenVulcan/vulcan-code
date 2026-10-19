@@ -24,7 +24,7 @@ import {
 import { useI18n } from "@/i18n";
 import { PageEmptyState } from "@/components/page";
 import { MediaPathContextMenu } from "./media-path-context-menu";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import type {
   GeneratedMediaAttachment,
   GeneratedMediaImageOffset,
@@ -300,7 +300,7 @@ function GeneratedMediaPlayerContent(props: {
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogContent
-        className={cn(
+        className={cx(
           "generated-media-player-window",
           isMaximized && "maximized",
         )}
@@ -342,7 +342,7 @@ function GeneratedMediaPlayerContent(props: {
           </span>
         </header>
         <MediaPathContextMenu locator={props.attachment.kind === "document" ? null : props.attachment.localPath}>
-        <div className={cn("generated-media-player-body", isImage && "image")}>
+        <div className={cx("generated-media-player-body", isImage && "image")}>
           {loadFailed || !source ? (
             <PageEmptyState
               role="alert"
@@ -354,7 +354,7 @@ function GeneratedMediaPlayerContent(props: {
             />
           ) : isImage ? (
             <div
-              className={cn("generated-media-image-viewer", isImageDragging && "dragging")}
+              className={cx("generated-media-image-viewer", isImageDragging && "dragging")}
               aria-label={t("media.player.imageViewerArrowKeys")}
               tabIndex={0}
               role="region"

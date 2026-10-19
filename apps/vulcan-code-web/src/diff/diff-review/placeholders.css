@@ -2,8 +2,8 @@
   position: relative;
   overflow: hidden;
   min-width: 100%;
-  border-top: 1px solid var(--border);
-  background: color-mix(in oklab, var(--background) 94%, var(--muted));
+  border-top: 1px solid var(--vk-line);
+  background: color-mix(in oklab, var(--vk-ground) 94%, var(--vk-sunken));
   contain: layout paint;
 }
 
@@ -23,7 +23,7 @@
   position: absolute;
   right: 0;
   left: 0;
-  border-top: 1px solid color-mix(in oklab, var(--border) 76%, transparent);
+  border-top: 1px solid color-mix(in oklab, var(--vk-line) 76%, transparent);
   opacity: 0.72;
 }
 
@@ -36,15 +36,15 @@
   align-items: center;
   height: 29px;
   padding: 0 12px;
-  background: color-mix(in oklab, var(--muted) 66%, var(--background));
-  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--vk-sunken) 66%, var(--vk-ground));
+  color: var(--vk-ink-2);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
 }
 
 .diff-summary-hunk-placeholder.active .diff-summary-hunk-header-placeholder {
-  background: color-mix(in oklab, #f2cc60 18%, var(--muted));
-  color: var(--foreground);
+  background: color-mix(in oklab, #f2cc60 18%, var(--vk-sunken));
+  color: var(--vk-ink);
 }
 
 .diff-summary-hunk-lines-placeholder {
@@ -56,8 +56,7 @@
 .diff-summary-hunk-lines-placeholder span {
   height: 8px;
   max-width: min(760px, calc(100vw - 220px));
-  border-radius: var(--vcn-radius-xs);
-  background: color-mix(in oklab, var(--muted-foreground) 18%, transparent);
+  background: color-mix(in oklab, var(--vk-ink-2) 18%, transparent);
 }
 
 .diff-summary-placeholder-note {
@@ -69,17 +68,16 @@
   width: min(100% - 16px, 760px);
   margin: 8px;
   padding: 9px 11px;
-  border: 1px dashed var(--border);
-  border-radius: var(--vcn-radius-sm);
-  background: color-mix(in oklab, var(--background) 86%, transparent);
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  border: 1px dashed var(--vk-line);
+  background: color-mix(in oklab, var(--vk-ground) 86%, transparent);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
   backdrop-filter: blur(6px);
 }
 
 .diff-summary-placeholder.failed .diff-summary-placeholder-note,
 .diff-summary-placeholder.timed-out .diff-summary-placeholder-note {
-  border-color: color-mix(in oklab, #da3633 45%, var(--border));
+  border-color: color-mix(in oklab, #da3633 45%, var(--vk-line));
 }
 
 .diff-summary-search-marker {

@@ -5,7 +5,7 @@ import {
   dispatchConversationLayoutSettled,
   dispatchConversationManualViewportInteraction,
 } from "@/components/conversation/conversation-layout-events";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 
 // CONVERSATION_MEASURED_COLLAPSE_MS matches the transcript fold animation duration.
 // CONVERSATION_MEASURED_COLLAPSE_MS 对齐会话折叠动画时长。
@@ -457,7 +457,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
   return (
     <div
       aria-hidden={!props.expanded && collapsedHeight <= 0}
-      className={cn("vk-collapse", props.className)}
+      className={cx("vk-collapse", props.className)}
       data-open={visualOpen ? "" : undefined}
       data-conversation-measured-collapse-id={props.collapseId}
       data-conversation-measured-target-height={targetHeight === null ? undefined : String(targetHeight)}

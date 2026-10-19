@@ -4,7 +4,7 @@ import { CircleAlert, Copy } from "lucide-react"
 import { Button } from "@/ui-kit/primitives/button"
 import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
 import { useI18n } from "@/i18n"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core";
 import "@/ui-kit/styles/features/settings-error-notice.css"
 
 // SettingsErrorNoticeProps describes one failed settings action: a plain-language outcome plus the raw error.
@@ -37,7 +37,7 @@ export function SettingsErrorNotice(props: SettingsErrorNoticeProps) {
   const [copied, setCopied] = React.useState<"idle" | "copied" | "failed">("idle")
   const detail = props.detail?.trim()
   return (
-    <div className={cn("settings-error-notice", props.className)} role="alert">
+    <div className={cx("settings-error-notice", props.className)} role="alert">
       <CircleAlert aria-hidden="true" className="settings-error-notice-icon" size={16} />
       <div className="settings-error-notice-body">
         <p>{props.message}</p>

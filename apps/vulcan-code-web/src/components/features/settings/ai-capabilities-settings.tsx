@@ -11,7 +11,7 @@ import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/ui-kit/primitives/sheet";
 import { useI18n } from "@/i18n";
 import { isModelExtensionCapability } from "@/lib/provider-tool-capabilities";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import { loadPublicAiSettings } from "@/service/settings-actions-service";
 import type {
   PublicAiProviderToolCapabilityKind,
@@ -173,7 +173,7 @@ export function AiCapabilitiesSettingsArea(props: {
                     <strong>{t(item.labelKey)}</strong>
                     <small>{t(item.descriptionKey)}</small>
                   </span>
-                  <span className={cn("ai-capability-target", !summary?.target && "empty")}>
+                  <span className={cx("ai-capability-target", !summary?.target && "empty")}>
                     {summary ? summary.target ?? t("settings.aiCapabilities.notConfigured") : <InlineStreamPlaceholder label={t("settings.providerTools.loading")} />}
                   </span>
                   <span className="ai-capability-status" data-enabled={summary?.enabled ? "true" : "false"}>

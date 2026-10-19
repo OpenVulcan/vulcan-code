@@ -9,7 +9,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitiv
 import { Input } from "@/ui-kit/primitives/input"
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
 import { useI18n } from "@/i18n"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core";
 import type { PublicAiProviderDescriptor } from "@/types"
 
 import type { HealthState } from "./provider-alerts"
@@ -80,7 +80,7 @@ export function ProviderRail(props: ProviderRailProps) {
     const below = reorderable ? neighbour(provider.id, 1) : undefined
     return (
       <li
-        className={cn("vk-ms-rail-item", dragId === provider.id && "dragging")}
+        className={cx("vk-ms-rail-item", dragId === provider.id && "dragging")}
         draggable={reorderable && !props.reorderDisabled}
         key={provider.id}
         onDragEnd={() => setDragId(null)}
@@ -238,7 +238,7 @@ function RailRowButton(props: {
       <HoverCardTrigger asChild>
         <button
           aria-current={props.active ? "page" : undefined}
-          className={cn("vk-ms-rail-row", props.active && "active")}
+          className={cx("vk-ms-rail-row", props.active && "active")}
           onClick={props.onSelect}
           onKeyDown={props.onKeyDown}
           onPointerDown={() => {

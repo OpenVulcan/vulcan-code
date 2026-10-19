@@ -28,9 +28,8 @@
   display: flex;
   align-items: center;
   margin: 0 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--vcn-fill-subtle);
+  border: 1px solid var(--vk-line);
+  background: color-mix(in srgb, var(--vk-ink) 3%, transparent);
 }
 
 .project-folder-picker-crumbs {
@@ -40,7 +39,7 @@
 
 .project-folder-picker-path-form {
   padding: 0 2px 0 0;
-  background: var(--background);
+  background: var(--vk-ground);
 }
 
 .project-folder-picker-path-input {
@@ -69,22 +68,21 @@
   flex: 0 0 auto;
   height: 26px;
   border: 0;
-  border-radius: var(--vcn-radius-sm);
   background: transparent;
   padding: 0 6px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-md);
   cursor: pointer;
-  transition: background-color var(--vcn-duration-instant) var(--vcn-ease-out);
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
 }
 
 .project-folder-picker-crumb:hover:not(:disabled) {
-  background: var(--vcn-fill-hover);
-  color: var(--foreground);
+  background: var(--vk-hover);
+  color: var(--vk-ink);
 }
 
 .project-folder-picker-crumb[aria-current] {
-  color: var(--foreground);
+  color: var(--vk-ink);
   font-weight: 600;
   cursor: default;
 }
@@ -95,7 +93,7 @@
 
 .project-folder-picker-crumb-sep {
   flex: 0 0 auto;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   opacity: 0.6;
 }
 
@@ -136,8 +134,8 @@
 .project-folder-picker-group h3 {
   margin: 0;
   padding: 0 8px 4px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   font-weight: 560;
 }
 
@@ -149,18 +147,17 @@
   width: 100%;
   height: 32px;
   border: 0;
-  border-radius: var(--vcn-radius-md);
   background: transparent;
   padding: 0 8px;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
   text-align: left;
   cursor: pointer;
-  transition: background-color var(--vcn-duration-instant) var(--vcn-ease-out);
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
 }
 
 .project-folder-picker-place svg {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .project-folder-picker-place span {
@@ -171,11 +168,11 @@
 }
 
 .project-folder-picker-place:hover:not(:disabled) {
-  background: var(--vcn-fill-hover);
+  background: var(--vk-hover);
 }
 
 .project-folder-picker-place[data-active] {
-  background: var(--vcn-fill-active);
+  background: color-mix(in srgb, var(--vk-ink) 9%, transparent);
   font-weight: 600;
 }
 
@@ -184,8 +181,7 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
+  border: 1px solid var(--vk-line);
   overflow: hidden;
 }
 
@@ -195,9 +191,9 @@
   align-items: center;
   gap: 8px;
   height: 38px;
-  border-bottom: 1px solid var(--vcn-border-subtle);
+  border-bottom: 1px solid var(--vk-line-soft);
   padding: 0 8px 0 12px;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .project-folder-picker-filter input {
@@ -206,13 +202,13 @@
   height: 100%;
   border: 0;
   background: transparent;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
   outline: none;
 }
 
 .project-folder-picker-filter input::placeholder {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .project-folder-picker-toggle {
@@ -222,18 +218,17 @@
   align-items: center;
   gap: 4px;
   border: 0;
-  border-radius: var(--vcn-radius-pill);
   background: transparent;
   padding: 0 8px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
   cursor: pointer;
 }
 
 .project-folder-picker-toggle:hover,
 .project-folder-picker-toggle[aria-pressed="true"] {
-  background: var(--vcn-fill-hover);
-  color: var(--foreground);
+  background: var(--vk-hover);
+  color: var(--vk-ink);
 }
 
 .project-folder-picker-list {
@@ -245,7 +240,7 @@
   overflow: auto;
   padding: 6px;
   outline: none;
-  transition: opacity var(--vcn-duration-fast) var(--vcn-ease-out);
+  transition: opacity var(--vk-t-fast) var(--vk-ease);
 }
 
 .project-folder-picker-list[aria-busy="true"] {
@@ -253,7 +248,7 @@
 }
 
 .project-folder-picker-list:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--primary) 40%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--vk-ink) 40%, transparent);
   outline-offset: -2px;
 }
 
@@ -263,29 +258,28 @@
   align-items: center;
   gap: 8px;
   min-height: 34px;
-  border-radius: var(--vcn-radius-md);
   padding: 0 4px 0 10px;
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
   cursor: default;
   user-select: none;
-  transition: background-color var(--vcn-duration-instant) var(--vcn-ease-out);
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
 }
 
 .project-folder-picker-row > svg {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .project-folder-picker-row:hover {
-  background: var(--vcn-fill-hover);
+  background: var(--vk-hover);
 }
 
 .project-folder-picker-row[aria-selected="true"] {
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  background: color-mix(in srgb, var(--vk-ink) 12%, transparent);
 }
 
 .project-folder-picker-row[aria-selected="true"] > svg {
-  color: var(--primary);
+  color: var(--vk-ink);
 }
 
 .project-folder-picker-row-name {
@@ -296,13 +290,12 @@
 }
 
 .project-folder-picker-row small {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
 }
 
 .project-folder-picker-row small.project-folder-picker-badge {
-  border-radius: var(--vcn-radius-pill);
-  background: var(--vcn-fill-active);
+  background: color-mix(in srgb, var(--vk-ink) 9%, transparent);
   padding: 1px 7px;
 }
 
@@ -314,12 +307,11 @@
   display: inline-grid;
   place-items: center;
   border: 0;
-  border-radius: var(--vcn-radius-sm);
   background: transparent;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
   opacity: 0.35;
   cursor: pointer;
-  transition: opacity var(--vcn-duration-instant) var(--vcn-ease-out), background-color var(--vcn-duration-instant) var(--vcn-ease-out);
+  transition: opacity var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease);
 }
 
 .project-folder-picker-row:hover .project-folder-picker-enter,
@@ -328,8 +320,8 @@
 }
 
 .project-folder-picker-enter:hover:not(:disabled) {
-  background: var(--vcn-fill-active);
-  color: var(--foreground);
+  background: color-mix(in srgb, var(--vk-ink) 9%, transparent);
+  color: var(--vk-ink);
 }
 
 .project-folder-picker-footer {
@@ -345,18 +337,18 @@
   align-items: baseline;
   gap: 8px;
   margin-right: auto;
-  font-size: var(--vcn-font-size-sm);
+  font-size: var(--vk-fs-sm);
 }
 
 .project-folder-picker-selection span {
   flex: 0 0 auto;
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .project-folder-picker-selection strong {
   min-width: 0;
   overflow: hidden;
-  color: var(--foreground);
+  color: var(--vk-ink);
   font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -365,19 +357,18 @@
 .project-folder-picker-empty,
 .project-folder-picker-error,
 .project-folder-picker-notice {
-  border-radius: var(--vcn-radius-md);
   padding: 10px;
-  font-size: var(--vcn-font-size-md);
+  font-size: var(--vk-fs-md);
 }
 
 .project-folder-picker-empty,
 .project-folder-picker-notice {
-  color: var(--muted-foreground);
+  color: var(--vk-ink-2);
 }
 
 .project-folder-picker-error {
-  background: color-mix(in srgb, var(--destructive) 12%, transparent);
-  color: var(--destructive);
+  background: color-mix(in srgb, var(--vk-bad) 12%, transparent);
+  color: var(--vk-bad);
 }
 
 @media (max-width: 720px) {

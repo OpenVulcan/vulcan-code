@@ -30,7 +30,7 @@ import {
 } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
 import { formatDurationSeconds } from "@/lib/usage-format"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core";
 import {
   loadPublicAiSettings,
   savePublicAiInferenceRoute,
@@ -904,7 +904,7 @@ function InferencePickerControl(props: {
           <div className="model-picker-list">
             {props.showNoRoute !== false ? (
                 <Button
-                  className={cn("model-picker-row", props.value === null && "selected")}
+                  className={cx("model-picker-row", props.value === null && "selected")}
                   aria-pressed={props.value === null}
                   onClick={() => {
                     props.onValueChange(null)
@@ -933,7 +933,7 @@ function InferencePickerControl(props: {
                 return (
                     <Button
                       key={option.key}
-                      className={cn("model-picker-row", selected && "selected")}
+                      className={cx("model-picker-row", selected && "selected")}
                       aria-pressed={selected}
                       onClick={() => {
                         props.onValueChange(option.key)
