@@ -49,10 +49,10 @@ async function type(input: HTMLInputElement | HTMLTextAreaElement, value: string
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
-// Locate one visible action by exact text; absence must fail the test.
-// 按精确文本定位可见动作，缺失必须使测试失败。
+// Locate one visible action by its exact text or accessible name; absence must fail the test.
+// 按精确文本或无障碍名称定位可见动作，缺失必须使测试失败。
 function button(label: string): HTMLButtonElement {
-  const result = [...document.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent === label);
+  const result = [...document.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent === label || entry.getAttribute("aria-label") === label);
   expect(result, label).toBeTruthy(); return result!;
 }
 // Open a menu from its trigger by keyboard, as Radix does, and return the item whose text starts with the label.

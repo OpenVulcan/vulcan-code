@@ -251,11 +251,13 @@ function RailRowButton(props: {
           <ProviderIcon category={props.provider.category} size={28} providerId={props.provider.id} />
           <span className="vk-ms-rail-copy">
             <span className="vk-ms-rail-name" title={props.name}>{props.name}</span>
-            <span className="vk-ms-rail-sub">
+            {/* Configured rows show health and counts on their second line; their service tags stay in the header and filter. */}
+            {/* 已配置行第二行显示健康状态与数量；其服务标签保留在详情标题与筛选中。 */}
+            {props.configured ? null : <span className="vk-ms-rail-sub">
               <ProviderTagChips provider={props.provider} small />
-              {!props.configured && category ? <span className="vk-ms-chip" data-variant="category">{category}</span> : null}
-              {!props.configured ? <AffiliateChip provider={props.provider} /> : null}
-            </span>
+              {category ? <span className="vk-ms-chip" data-variant="category">{category}</span> : null}
+              <AffiliateChip provider={props.provider} />
+            </span>}
           </span>
           {props.children}
         </button>

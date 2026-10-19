@@ -9,56 +9,6 @@
   min-width: 0;
 }
 
-/* Top-level sections are a raised segmented control, so they never read like the in-page filters below them. */
-/* 顶层分区使用凸起的分段控件，避免与下方页内筛选混淆。 */
-.vk-ms-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  width: fit-content;
-  max-width: 100%;
-  padding: 4px;
-  border: var(--vk-bw) solid var(--vk-line);
-  background: var(--vk-sunken);
-}
-
-.vk-ms-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 0 16px;
-  border: 0;
-  background: transparent;
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-md);
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
-}
-
-.vk-ms-tab > svg { width: 16px; height: 16px; }
-.vk-ms-tab:hover { color: var(--vk-ink); }
-.vk-ms-tab:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
-
-.vk-ms-tab[aria-selected="true"] {
-  background: var(--vk-panel);
-  color: var(--vk-ink);
-  box-shadow: var(--vk-shadow-1), 0 0 0 1px var(--vk-line);
-}
-
-.vk-ms-tab[aria-selected="true"] > svg { color: var(--vk-ember-2); }
-
-.vk-ms-tab > small {
-  min-width: 18px;
-  padding: 0 5px;
-  background: var(--vk-bad);
-  color: var(--vk-ink-inverse);
-  font-size: var(--vk-fs-2xs);
-  line-height: 18px;
-  text-align: center;
-}
-
 /* Shell: one bordered card; alerts on top, the provider rail and the working panel side by side. */
 /* 外壳：一张带边框的卡片；顶部为提醒，下方左侧目录与右侧工作区并排。 */
 .vk-ms-shell {
@@ -286,33 +236,34 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 .vk-ms-rail-grip[data-hidden="true"] { display: none; }
 .vk-ms-rail-item:hover .vk-ms-rail-grip { opacity: 0.8; }
 
-/* Two-line row: logo, name over chips, and a meta column with health and counts. */
-/* 两行目录项：图标、名称与标签两行，以及显示健康状态与数量的信息列。 */
+/* Two-line row: the logo beside a full-width name, then chips with health and counts on the second line. */
+/* 两行目录项：图标旁为整行名称，第二行为标签及健康状态与数量。 */
 .vk-ms-rail-row {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
+  grid-template-columns: 28px minmax(0, 1fr);
   align-items: center;
-  gap: 9px;
+  gap: 3px 9px;
   min-width: 0;
   padding: 7px 8px 7px 16px;
-  border: var(--vk-bw) solid transparent;
+  border: 0;
   background: transparent;
   color: var(--vk-ink);
   text-align: left;
   cursor: pointer;
 }
 
+.vk-ms-rail-row > :first-child { grid-row: 1 / span 2; }
+.vk-ms-rail-row > .vk-ms-rail-copy { display: contents; }
+.vk-ms-rail-row :is(.vk-ms-rail-name, .vk-ms-rail-sub, .vk-ms-rail-meta) { grid-column: 2 / -1; }
+
 .vk-ms-rail-row:hover { background: var(--vk-hover); }
 .vk-ms-rail-row:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -2px; }
 
 .vk-ms-rail-row.active {
-  border-color: var(--vk-line);
   background: var(--vk-panel);
-  box-shadow: inset 2px 0 0 var(--vk-ember), var(--vk-shadow-1);
+  box-shadow: inset 2px 0 0 var(--vk-ember);
 }
-
-.vk-ms-rail-copy { display: grid; gap: 3px; min-width: 0; }
 
 .vk-ms-rail-name {
   overflow: hidden;
@@ -326,15 +277,16 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 .vk-ms-rail-sub:empty { display: none; }
 
 .vk-ms-rail-meta {
-  display: grid;
-  justify-items: end;
-  gap: 2px;
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-xs);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--vk-ink-3);
+  font-size: var(--vk-fs-2xs);
   white-space: nowrap;
 }
 
-.vk-ms-rail-meta > span { display: inline-flex; align-items: center; gap: 5px; }
+.vk-ms-rail-meta > span { display: inline-flex; align-items: center; gap: 4px; }
+.vk-ms-rail-meta > span + span::before { content: "·"; margin-right: 2px; }
 
 /* Move buttons appear on hover or keyboard focus only, so the list stays calm. */
 /* 移动按钮仅在悬停或键盘聚焦时出现，保持列表安静。 */
@@ -491,19 +443,23 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 .vk-ms-head-facts dt { color: var(--vk-ink-2); }
 .vk-ms-head-facts dd { margin: 0; color: var(--vk-ink); overflow-wrap: anywhere; }
 
+/* A quiet hint strip: icon in its own column, the text and its link stacked beside it. */
+/* 安静的提示条：图标独占一列，文字与链接在旁边上下排列。 */
 .vk-ms-note {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 2px 8px;
   margin: 0;
   padding: 8px 12px;
-  border: var(--vk-bw) dashed var(--vk-line);
+  background: var(--vk-sunken);
   color: var(--vk-ink-2);
   font-size: var(--vk-fs-sm);
+  line-height: var(--vk-lh-ui);
 }
 
-.vk-ms-note > button { height: auto; padding: 0; }
+.vk-ms-note > svg { margin-top: 2px; color: var(--vk-ink-3); }
+.vk-ms-note > button { grid-column: 2; justify-self: start; height: auto; padding: 0; }
 .vk-ms-section { display: grid; gap: 10px; min-width: 0; }
 
 .vk-ms-section-title {

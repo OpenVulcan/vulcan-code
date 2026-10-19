@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Boxes, CircleCheck, Rows3, Stethoscope, WandSparkles } from "lucide-react"
+import { Boxes, CircleCheck, Rows3 } from "lucide-react"
 
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context"
 import { AiCapabilitiesSettingsArea } from "@/components/features/settings/ai-capabilities-settings"
@@ -11,7 +11,7 @@ import { isFunctionalProvider } from "@/components/features/settings/provider-or
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
 import { SystemProviderModelsDialog } from "@/components/features/settings/system-provider-models-dialog"
-import { PageEmptyState } from "@/components/page"
+import { PageEmptyState, PageTabs } from "@/components/page"
 import { Button } from "@/ui-kit/primitives/button"
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
 import { useI18n } from "@/i18n"
@@ -190,10 +190,10 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
     return provider ? localizedProviderName(provider.id, provider.display_name, t) : providerId
   }
 
-  const tabs: { value: ModelServicesTab; label: string; icon: React.ReactNode; count?: number }[] = [
-    { value: "providers", label: t("settings.modelServices.tabs.providers"), icon: <Boxes aria-hidden="true" /> },
-    { value: "functions", label: t("settings.modelServices.tabs.functions"), icon: <WandSparkles aria-hidden="true" /> },
-    { value: "diagnostics", label: t("settings.modelServices.tabs.diagnostics"), icon: <Stethoscope aria-hidden="true" />, count: snapshot?.customProviderManifestFailureTotalCount || undefined },
+  const tabs: { value: ModelServicesTab; label: string; count?: number }[] = [
+    { value: "providers", label: t("settings.modelServices.tabs.providers") },
+    { value: "functions", label: t("settings.modelServices.tabs.functions") },
+    { value: "diagnostics", label: t("settings.modelServices.tabs.diagnostics"), count: snapshot?.customProviderManifestFailureTotalCount || undefined },
   ]
   const viewSwitch = (
     <div className="vk-ms-view-switch" role="group" aria-label={t("settings.modelServices.view.label")}>
@@ -208,22 +208,7 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
 
   return (
     <div className="vk-ms-page">
-      <div className="vk-ms-tabs" role="tablist" aria-label={t("settings.modelProviders")}>
-        {tabs.map((option) => (
-          <button
-            aria-selected={tab === option.value}
-            className="vk-ms-tab"
-            key={option.value}
-            onClick={() => selectTab(option.value)}
-            role="tab"
-            type="button"
-          >
-            {option.icon}
-            <span>{option.label}</span>
-            {option.count ? <small>{option.count}</small> : null}
-          </button>
-        ))}
-      </div>
+      <PageTabs ariaLabel={t("settings.modelProviders")} onValueChange={selectTab} options={tabs} value={tab} />
 
       {mutations.error ? (
         <SettingsErrorNotice

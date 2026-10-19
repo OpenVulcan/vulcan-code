@@ -394,17 +394,13 @@ export function ProviderManifestStatusPanel() {
                       </small>
                     ) : null}
                   </TableCell>
-                  <TableCell>
-                    <div className="vk-form-chips">
-                      <Badge variant={status.active?.layer === "bundled" ? "secondary" : "default"}>
-                        {status.active ? activeLayerLabel(status.active.layer) : "—"}
-                      </Badge>
-                      {status.active ? (
-                        <Badge variant="outline">
-                          {formatMessage(t("settings.manifest.engineBadge"), { engine: status.active.minimum_manifest_engine, provenance: manifestProvenanceStatusLabel(status.active.provenance_status, t), count: status.active.evidence_source_count })}
-                        </Badge>
-                      ) : null}
-                    </div>
+                  <TableCell className="vk-mf-name">
+                    <strong data-layer={status.active?.layer}>{status.active ? activeLayerLabel(status.active.layer) : "—"}</strong>
+                    {status.active ? (
+                      <small className="vk-mf-flag">
+                        {formatMessage(t("settings.manifest.engineBadge"), { engine: status.active.minimum_manifest_engine, provenance: manifestProvenanceStatusLabel(status.active.provenance_status, t), count: status.active.evidence_source_count })}
+                      </small>
+                    ) : null}
                   </TableCell>
                   <TableCell>
                     {status.active?.revision ?? status.bundled?.revision ?? "—"}
@@ -413,7 +409,7 @@ export function ProviderManifestStatusPanel() {
                   <TableCell className="vk-mono vk-faint">
                     {shortHash(status.active?.sha256 ?? status.bundled?.sha256)}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="vk-mf-name vk-mf-sync">
                     {(() => {
                       const summary = syncStatusSummary(status, t, locale)
                       if (summary.kind === "unconfigured") {
@@ -437,34 +433,37 @@ export function ProviderManifestStatusPanel() {
                   </TableCell>
                   <TableCell className="vk-mf-end">
                     <div className="vk-mf-acts">
+                      {/* Row actions are icon buttons named by their labels, so the table keeps room for its data columns. */}
+                      {/* 行操作为以标签命名的图标按钮，使表格为数据列保留空间。 */}
                       <Button
+                        aria-label={t("settings.manifest.preview")}
                         disabled={refreshing || busyProviderId !== null || !status.sync_configured}
                         onClick={() => void previewOne(status.provider_id)}
-                        size="sm"
+                        size="icon-sm"
                         variant="ghost"
                         title={status.sync_configured ? t("settings.manifest.previewHint") : t("settings.manifest.syncNotConfigured")}
                       >
                         <Eye aria-hidden="true" />
-                        {t("settings.manifest.preview")}
                       </Button>
                       <Button
+                        aria-label={t("settings.manifest.sync")}
                         disabled={refreshing || busyProviderId !== null}
                         onClick={() => void syncOne(status.provider_id)}
-                        size="sm"
+                        size="icon-sm"
                         variant="ghost"
+                        title={t("settings.manifest.sync")}
                       >
                         <RefreshCw aria-hidden="true" />
-                        {t("settings.manifest.sync")}
                       </Button>
                       <Button
+                        aria-label={t("settings.manifest.rollback")}
                         disabled={refreshing || busyProviderId !== null || !status.previous}
                         onClick={() => void rollbackOne(status.provider_id)}
-                        size="sm"
+                        size="icon-sm"
                         variant="ghost"
                         title={status.previous ? t("settings.manifest.rollbackHint") : t("settings.manifest.noPrevious")}
                       >
                         <RotateCcw aria-hidden="true" />
-                        {t("settings.manifest.rollback")}
                       </Button>
                     </div>
                   </TableCell>

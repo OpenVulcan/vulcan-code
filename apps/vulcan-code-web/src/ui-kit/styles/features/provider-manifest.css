@@ -3,10 +3,15 @@
 .vk-mf-title { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); }
 .vk-mf-title > svg { width: var(--vk-icon); height: var(--vk-icon); color: var(--vk-ember); }
 .vk-mf-body { display: grid; gap: calc(var(--vk-u) * 3); min-width: 0; }
-.vk-mf-name { display: grid; gap: 2px; }
+/* Stacked table cells stay table cells; their name and flag lines are blocks inside. */
+/* 堆叠的表格单元格仍是表格单元格；名称与标记行在其内部以块显示。 */
+.vk-mf-name > :is(strong, small) { display: block; }
+.vk-mf-name > small { margin-top: 2px; }
 .vk-mf-name > strong { font-weight: 500; }
 .vk-mf-flag { display: inline-flex; align-items: center; gap: var(--vk-u); max-width: 18rem; margin: 0; color: var(--vk-tone, var(--vk-ink-3)); font-size: var(--vk-fs-xs); font-weight: 400; }
 .vk-mf-flag > svg { width: 0.85rem; height: 0.85rem; flex: none; }
+.vk-mf-name > strong[data-layer="bundled"] { color: var(--vk-ink-2); }
+.vk-mf-sync { white-space: nowrap; }
 .vk-mf-end { text-align: right; }
 .vk-mf-acts { display: inline-flex; gap: 2px; }
 

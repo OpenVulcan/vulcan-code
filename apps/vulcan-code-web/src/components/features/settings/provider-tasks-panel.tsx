@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ListTodo, XCircle } from "lucide-react";
 
+import { PageEmptyState } from "@/components/page";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { Button } from "@/ui-kit/primitives/button";
 import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
@@ -98,7 +99,7 @@ export function ProviderTasksPanel(props: {
     return <InlineStreamPlaceholder label={t("settings.providerTools.loading")} />;
   }
   if (tasks.length === 0) {
-    return <p className="ai-capabilities-message">{t("settings.providerTasks.empty")}</p>;
+    return <PageEmptyState description={t("settings.providerTasks.empty")} icon={<ListTodo />} title={t("settings.providerTasks.emptyTitle")} />;
   }
   return (
     <>
