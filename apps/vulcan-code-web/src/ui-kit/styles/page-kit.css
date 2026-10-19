@@ -1,0 +1,76 @@
+/* Page kit: the host components behind sdk.components (PageBody, PageTabs, PageToolbar, PageSection,
+ * MetricGrid, PageTable, charts...) and the declarative kind: settings renderer. Plugin authors keep
+ * the same component names and props; only this implementation and look change. */
+
+.vk-page { display: grid; gap: calc(var(--vk-u) * 5); min-width: 0; }
+
+.vk-page-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: calc(var(--vk-u) * 3);
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+}
+.vk-page-tabs > .vk-tabs { flex: 1; }
+.vk-page-tabs > .vk-actions { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); flex: none; }
+
+.vk-page-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-page-toolbar > .vk-input-wrap { width: min(18rem, 100%); }
+.vk-page-toolbar > .vk-actions { margin-left: auto; display: flex; gap: calc(var(--vk-u) * 1.5); align-items: center; }
+
+.vk-page-section { display: grid; min-width: 0; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); backdrop-filter: blur(var(--vk-panel-blur)); }
+.vk-page-section-head { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-page-section-head > div { flex: 1; min-width: min(100%, 12rem); }
+.vk-page-section-head h3 { font-size: var(--vk-fs-md); font-weight: 600; }
+.vk-page-section-head p { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-page-section-head > .vk-actions { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); align-items: center; }
+.vk-page-section-body { padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 4) calc(var(--vk-u) * 3); min-width: 0; }
+.vk-page-section-body[data-flush] { padding: 0; }
+.vk-page-section-body[data-pad] { padding: calc(var(--vk-u) * 4); }
+.vk-page-section-foot { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4); border-top: var(--vk-bw) solid var(--vk-line-soft); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
+.vk-page-section-foot > .vk-actions { margin-left: auto; display: flex; gap: calc(var(--vk-u) * 1); }
+.vk-page-links { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4); border-top: var(--vk-bw) solid var(--vk-line-soft); font-size: var(--vk-fs-sm); }
+.vk-page-links a { color: var(--vk-signal); display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1); text-decoration: none; }
+
+.vk-page-hint { display: flex; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-page-guide { display: grid; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border: var(--vk-bw) dashed var(--vk-line-strong); }
+.vk-page-guide ol { padding-left: 1.2em; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+
+.vk-page-actionbar { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3) 0; border-top: var(--vk-bw) solid var(--vk-line); background: color-mix(in srgb, var(--vk-ground) 88%, transparent); backdrop-filter: blur(8px); }
+.vk-page-actionbar > .vk-faint { margin-right: auto; font-size: var(--vk-fs-sm); }
+
+/* Declarative settings: inline layout packs compact checkboxes side by side. */
+.vk-inline-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 11rem), 1fr)); gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4); padding: calc(var(--vk-u) * 3) 0; }
+.vk-checklist-group { display: grid; gap: calc(var(--vk-u) * 1.5); }
+.vk-checklist-group + .vk-checklist-group { margin-top: calc(var(--vk-u) * 3); }
+.vk-credential { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); justify-content: flex-end; }
+.vk-credential > .vk-input { width: 14rem; max-width: 100%; }
+
+/* Heatmap. */
+.vk-heatmap { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 1fr); gap: 2px; overflow-x: auto; padding-bottom: calc(var(--vk-u) * 1); }
+.vk-heatmap > i { width: 0.78rem; height: 0.78rem; background: var(--vk-line-soft); }
+.vk-heatmap > i[data-l="1"] { background: color-mix(in srgb, var(--vk-chart-2) 30%, var(--vk-line-soft)); }
+.vk-heatmap > i[data-l="2"] { background: color-mix(in srgb, var(--vk-chart-2) 55%, var(--vk-line-soft)); }
+.vk-heatmap > i[data-l="3"] { background: color-mix(in srgb, var(--vk-chart-2) 80%, var(--vk-line-soft)); }
+.vk-heatmap > i[data-l="4"] { background: var(--vk-chart-2); }
+.vk-heat-legend { display: flex; align-items: center; gap: 2px; font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
+.vk-heat-legend > i { width: 0.7rem; height: 0.7rem; }
+
+/* Charts drawn as SVG from data; text and marks take theme tokens. */
+.vk-chart { width: 100%; height: auto; display: block; overflow: visible; }
+.vk-chart text { fill: var(--vk-ink-3); font-size: 10px; font-family: var(--vk-font-ui); }
+.vk-chart .grid { stroke: var(--vk-line-soft); stroke-width: 1; }
+.vk-chart .bar { fill: var(--vk-chart-1); }
+.vk-chart .bar:hover { fill: var(--vk-signal); }
+.vk-chart .bar[data-last] { fill: var(--vk-ember); }
+.vk-chart .l1 { stroke: var(--vk-chart-1); fill: none; stroke-width: 1.6; }
+.vk-chart .l2 { stroke: var(--vk-chart-2); fill: none; stroke-width: 1.6; }
+.vk-chart .a1 { fill: color-mix(in srgb, var(--vk-chart-1) 12%, transparent); }
+.vk-chart .end { fill: var(--vk-chart-1); stroke: var(--vk-panel); stroke-width: 2; }
+.vk-legend { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 3); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
+.vk-legend > span { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); }
+.vk-legend > span > i { width: 0.7rem; height: 2px; background: var(--c); }
+
+/* Plugin load state rows (extension loading). */
+.vk-load-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: calc(var(--vk-u) * 3); align-items: center; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-load-row:last-child { border-bottom: 0; }
+.vk-load-row .vk-progress { margin-top: calc(var(--vk-u) * 1.5); }

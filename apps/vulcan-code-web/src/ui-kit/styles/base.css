@@ -1,0 +1,238 @@
+/* Base layer: document ground, scrollbars, focus, selection, shared helpers and motion. */
+
+.vk-root,
+.vk-root *,
+.vk-root *::before,
+.vk-root *::after {
+  box-sizing: border-box;
+  border-radius: var(--vk-radius);
+}
+
+.vk-root {
+  font-family: var(--vk-font-ui);
+  font-size: var(--vk-fs-md);
+  line-height: var(--vk-lh-ui);
+  color: var(--vk-ink);
+  background-color: var(--vk-ground);
+  background-image: var(--vk-ambient);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+}
+
+.vk-root :where(button, input, textarea, select) {
+  font: inherit;
+  color: inherit;
+}
+
+.vk-root :where(h1, h2, h3, h4, p, ul, ol, figure) {
+  margin: 0;
+}
+
+.vk-root :where(h1, h2, h3) {
+  text-wrap: balance;
+  line-height: var(--vk-lh-tight);
+}
+
+.vk-root ::selection {
+  background: var(--vk-signal-soft);
+  color: var(--vk-ink);
+}
+
+/* Focus: one 2px outline for every interactive element. */
+.vk-root :where(a, button, input, textarea, [tabindex], [role="option"], [role="menuitem"], [role="tab"]):focus-visible {
+  outline: var(--vk-focus-w) solid var(--vk-signal);
+  outline-offset: 1px;
+}
+
+/* Scrollbars: thin square thumb, quiet until hovered. */
+.vk-root,
+.vk-root * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--vk-line-strong) transparent;
+}
+
+.vk-root ::-webkit-scrollbar {
+  width: calc(var(--vk-u) * 2.5);
+  height: calc(var(--vk-u) * 2.5);
+}
+
+.vk-root ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.vk-root ::-webkit-scrollbar-thumb {
+  background: var(--vk-line-strong);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.vk-root ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--vk-ink-3);
+}
+
+.vk-root ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:root[data-vk-theme="command"] .vk-root ::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--vk-signal) 38%, transparent);
+}
+
+/* Helpers. */
+.vk-label {
+  font-family: var(--vk-label-font);
+  font-size: var(--vk-fs-xs);
+  font-weight: 500;
+  letter-spacing: var(--vk-label-track);
+  text-transform: var(--vk-label-case);
+  color: var(--vk-ink-3);
+}
+
+.vk-mono {
+  font-family: var(--vk-font-mono);
+  font-size: 0.94em;
+}
+
+.vk-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.vk-muted {
+  color: var(--vk-ink-2);
+}
+
+.vk-faint {
+  color: var(--vk-ink-3);
+}
+
+.vk-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vk-icon,
+.vk-root svg.lucide {
+  width: var(--vk-icon);
+  height: var(--vk-icon);
+  flex: none;
+  stroke-width: 1.75;
+}
+
+.vk-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Frame: an object with a border. In the command skin it gains HUD corner ticks. */
+.vk-frame {
+  position: relative;
+  background: var(--vk-panel);
+  border: var(--vk-bw) solid var(--vk-line);
+  backdrop-filter: blur(var(--vk-panel-blur));
+}
+
+.vk-frame::before,
+.vk-frame::after {
+  content: "";
+  position: absolute;
+  width: calc(var(--vk-u) * 2);
+  height: calc(var(--vk-u) * 2);
+  pointer-events: none;
+  border-color: var(--vk-frame-tick);
+  border-style: solid;
+}
+
+.vk-frame::before {
+  top: -1px;
+  left: -1px;
+  border-width: 1px 0 0 1px;
+}
+
+.vk-frame::after {
+  right: -1px;
+  bottom: -1px;
+  border-width: 0 1px 1px 0;
+}
+
+/* Ember line: the flame shows that AI is working. */
+.vk-ember-line {
+  position: absolute;
+  inset: -1px -1px auto;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--vk-ember) 30%, var(--vk-ember-2) 50%, var(--vk-ember) 70%, transparent);
+  background-size: 200% 100%;
+  animation: vk-ember-sweep 1.6s linear infinite;
+}
+
+.vk-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--vk-ink-3);
+  flex: none;
+}
+
+.vk-dot[data-tone="ok"] { background: var(--vk-ok); }
+.vk-dot[data-tone="warn"] { background: var(--vk-warn); }
+.vk-dot[data-tone="bad"] { background: var(--vk-bad); }
+.vk-dot[data-tone="info"] { background: var(--vk-info); }
+.vk-dot[data-tone="ember"] { background: var(--vk-ember); box-shadow: 0 0 0 3px var(--vk-ember-soft); }
+.vk-dot[data-live] { animation: vk-pulse 2s var(--vk-ease) infinite; }
+
+@keyframes vk-ember-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@keyframes vk-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@keyframes vk-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes vk-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -20% 0; }
+}
+
+@keyframes vk-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes vk-caret {
+  50% { opacity: 0.35; }
+}
+
+.vk-rise {
+  animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vk-root *,
+  .vk-root *::before,
+  .vk-root *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+:root[data-vk-motion="reduce"] .vk-root *,
+:root[data-vk-motion="reduce"] .vk-root *::before,
+:root[data-vk-motion="reduce"] .vk-root *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+}

@@ -1,0 +1,281 @@
+/* Vulcan kit design tokens.
+ * Layout concept: a dense, square-cornered instrument panel. Neutrals carry the structure, the flame
+ * ("ember") is ambience and AI activity only, and a cool "signal" hue marks focus, selection and links.
+ *
+ * Three axes, each one attribute on the document root:
+ *   data-vk-theme  light | dark | command | <skin id>   (absent = follow the system)
+ *   data-vk-text   xs | s | m | l | xl                  (UI text tier; everything scales from it)
+ *   data-vk-motion reduce                               (optional user override of motion)
+ *
+ * Skins (built-in or from theme plugins) only redefine the color and atmosphere tokens declared in
+ * the "skin surface" block below. Size, spacing and type tokens are not skinnable, so a skin can never
+ * break layout or the text-size tiers.
+ */
+
+/* ---------- Size system: every length derives from the root text tier ---------- */
+:root {
+  /* UI body size; the five tiers below only change this value. */
+  font-size: 13px;
+  /* One spacing unit: 4px at the standard tier. */
+  --vk-u: calc(1rem / 3.25);
+
+  /* Type scale (px at the standard tier in comments). */
+  --vk-fs-2xs: 0.77rem;   /* 10 */
+  --vk-fs-xs: 0.846rem;   /* 11 */
+  --vk-fs-sm: 0.923rem;   /* 12 */
+  --vk-fs-md: 1rem;       /* 13 UI body */
+  --vk-fs-read: 1.077rem; /* 14 conversation reading text */
+  --vk-fs-lg: 1.23rem;    /* 16 */
+  --vk-fs-xl: 1.54rem;    /* 20 */
+  --vk-fs-2xl: 2.15rem;   /* 28 */
+  --vk-lh-tight: 1.3;
+  --vk-lh-ui: 1.45;
+  --vk-lh-read: 1.68;
+
+  /* Control heights: 24 / 28 / 32. */
+  --vk-h-sm: calc(var(--vk-u) * 6);
+  --vk-h-md: calc(var(--vk-u) * 7);
+  --vk-h-lg: calc(var(--vk-u) * 8);
+  --vk-icon: 1.077em;
+
+  /* Shell geometry, in units so it grows with the tier. */
+  --vk-rail-w: calc(var(--vk-u) * 12);
+  --vk-sidebar-w: calc(var(--vk-u) * 66);
+  --vk-panel-w: calc(var(--vk-u) * 94);
+  --vk-read-w: 46rem;
+  --vk-statusbar-h: calc(var(--vk-u) * 6);
+
+  /* Borders never scale. Corners are square by decision D2. */
+  --vk-bw: 1px;
+  --vk-radius: 0;
+  --vk-focus-w: 2px;
+
+  --vk-font-ui: "Geist", "Geist Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --vk-font-mono: "Geist Mono", "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+
+  --vk-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --vk-t-fast: 120ms;
+  --vk-t-med: 180ms;
+}
+
+:root[data-vk-text="xs"] { font-size: 12px; }
+:root[data-vk-text="s"] { font-size: 13px; }
+:root[data-vk-text="m"] { font-size: 15px; }
+:root[data-vk-text="l"] { font-size: 17px; }
+:root[data-vk-text="xl"] { font-size: 19px; }
+
+/* ---------- Skin surface: light (default) ---------- */
+:root {
+  --vk-ground: #f2f3f5;
+  --vk-ground-2: #ebedf0;
+  --vk-panel: #ffffff;
+  --vk-raised: #ffffff;
+  --vk-sunken: #f6f7f9;
+  --vk-hover: #e8ebef;
+  --vk-select: #e3e9f8;
+  --vk-line: #dde1e6;
+  --vk-line-strong: #c3c9d1;
+  --vk-line-soft: #eaecef;
+
+  --vk-ink: #14171c;
+  --vk-ink-2: #4a515c;
+  --vk-ink-3: #7b838e;
+  --vk-ink-inverse: #ffffff;
+
+  --vk-ember: #e2511a;
+  --vk-ember-2: #f5872e;
+  --vk-ember-soft: #fcebe2;
+  --vk-ember-ink: #ad3d0d;
+
+  --vk-signal: #2e58cc;
+  --vk-signal-soft: #e4eafa;
+
+  --vk-ok: #1b8653;
+  --vk-warn: #a3660a;
+  --vk-bad: #c7313e;
+  --vk-info: #2d68c4;
+
+  --vk-chart-1: #4f7fc9;
+  --vk-chart-2: #2e9c86;
+  --vk-chart-3: #9a6cc4;
+  --vk-chart-4: #c8892e;
+  --vk-chart-5: #cf5e6a;
+
+  --vk-code-bg: #f4f5f7;
+  --vk-term-bg: #12151a;
+  --vk-term-ink: #d6dbe1;
+  --vk-diff-add-bg: #e6f4eb;
+  --vk-diff-add-ink: #16643d;
+  --vk-diff-del-bg: #fbe9ea;
+  --vk-diff-del-ink: #a32632;
+
+  --vk-shadow-1: 0 1px 2px rgba(17, 21, 28, 0.05);
+  --vk-shadow-2: 0 12px 32px rgba(17, 21, 28, 0.14), 0 2px 6px rgba(17, 21, 28, 0.06);
+  --vk-scrim: rgba(16, 19, 24, 0.36);
+  --vk-glow: 0 0 0 1px rgba(226, 81, 26, 0.18), 0 6px 22px rgba(226, 81, 26, 0.12);
+  --vk-ambient:
+    radial-gradient(70rem 30rem at 8% -12%, rgba(226, 81, 26, 0.07), transparent 62%),
+    radial-gradient(60rem 36rem at 105% 0%, rgba(46, 88, 204, 0.05), transparent 60%);
+  --vk-panel-blur: 0px;
+
+  --vk-label-font: var(--vk-font-ui);
+  --vk-label-case: none;
+  --vk-label-track: 0;
+  --vk-frame-tick: transparent;
+  color-scheme: light;
+}
+
+/* ---------- Dark: follows the system when no theme is chosen ---------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-vk-theme]) {
+    --vk-ground: #0c0e11;
+    --vk-ground-2: #101317;
+    --vk-panel: #15181d;
+    --vk-raised: #1b1f25;
+    --vk-sunken: #0f1215;
+    --vk-hover: #1e2329;
+    --vk-select: #1c2537;
+    --vk-line: #23282f;
+    --vk-line-strong: #343b45;
+    --vk-line-soft: #1a1e24;
+    --vk-ink: #e6e9ed;
+    --vk-ink-2: #a2aab5;
+    --vk-ink-3: #6b737e;
+    --vk-ink-inverse: #0c0e11;
+    --vk-ember: #ff6a2b;
+    --vk-ember-2: #ff9a40;
+    --vk-ember-soft: #2a1810;
+    --vk-ember-ink: #ff9b68;
+    --vk-signal: #7d9dff;
+    --vk-signal-soft: #1a2236;
+    --vk-ok: #3fc48a;
+    --vk-warn: #e0a83a;
+    --vk-bad: #f0646f;
+    --vk-info: #6aa8f0;
+    --vk-chart-1: #85a9db;
+    --vk-chart-2: #6ec4af;
+    --vk-chart-3: #be9bdf;
+    --vk-chart-4: #e1b66b;
+    --vk-chart-5: #ed99a1;
+    --vk-code-bg: #111418;
+    --vk-term-bg: #0a0c0e;
+    --vk-term-ink: #d0d6dd;
+    --vk-diff-add-bg: #0f251a;
+    --vk-diff-add-ink: #72d6a2;
+    --vk-diff-del-bg: #2d1316;
+    --vk-diff-del-ink: #f38c94;
+    --vk-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --vk-shadow-2: 0 16px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+    --vk-scrim: rgba(0, 0, 0, 0.56);
+    --vk-glow: 0 0 0 1px rgba(255, 106, 43, 0.28), 0 8px 28px rgba(255, 106, 43, 0.16);
+    --vk-ambient:
+      radial-gradient(64rem 30rem at 50% 118%, rgba(255, 106, 43, 0.11), transparent 66%),
+      radial-gradient(52rem 26rem at -4% -8%, rgba(125, 157, 255, 0.06), transparent 60%);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"]:not([data-vk-theme]),
+:root[data-vk-theme="dark"] {
+  --vk-ground: #0c0e11;
+  --vk-ground-2: #101317;
+  --vk-panel: #15181d;
+  --vk-raised: #1b1f25;
+  --vk-sunken: #0f1215;
+  --vk-hover: #1e2329;
+  --vk-select: #1c2537;
+  --vk-line: #23282f;
+  --vk-line-strong: #343b45;
+  --vk-line-soft: #1a1e24;
+  --vk-ink: #e6e9ed;
+  --vk-ink-2: #a2aab5;
+  --vk-ink-3: #6b737e;
+  --vk-ink-inverse: #0c0e11;
+  --vk-ember: #ff6a2b;
+  --vk-ember-2: #ff9a40;
+  --vk-ember-soft: #2a1810;
+  --vk-ember-ink: #ff9b68;
+  --vk-signal: #7d9dff;
+  --vk-signal-soft: #1a2236;
+  --vk-ok: #3fc48a;
+  --vk-warn: #e0a83a;
+  --vk-bad: #f0646f;
+  --vk-info: #6aa8f0;
+  --vk-chart-1: #85a9db;
+  --vk-chart-2: #6ec4af;
+  --vk-chart-3: #be9bdf;
+  --vk-chart-4: #e1b66b;
+  --vk-chart-5: #ed99a1;
+  --vk-code-bg: #111418;
+  --vk-term-bg: #0a0c0e;
+  --vk-term-ink: #d0d6dd;
+  --vk-diff-add-bg: #0f251a;
+  --vk-diff-add-ink: #72d6a2;
+  --vk-diff-del-bg: #2d1316;
+  --vk-diff-del-ink: #f38c94;
+  --vk-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --vk-shadow-2: 0 16px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --vk-scrim: rgba(0, 0, 0, 0.56);
+  --vk-glow: 0 0 0 1px rgba(255, 106, 43, 0.28), 0 8px 28px rgba(255, 106, 43, 0.16);
+  --vk-ambient:
+    radial-gradient(64rem 30rem at 50% 118%, rgba(255, 106, 43, 0.11), transparent 66%),
+    radial-gradient(52rem 26rem at -4% -8%, rgba(125, 157, 255, 0.06), transparent 60%);
+  color-scheme: dark;
+}
+
+/* An explicit light choice needs no block: the dark blocks above skip any root with data-vk-theme. */
+
+/* ---------- Command bridge: a dark tactical skin with HUD framing ---------- */
+:root[data-vk-theme="command"] {
+  --vk-ground: #03060b;
+  --vk-ground-2: rgba(5, 11, 18, 0.86);
+  --vk-panel: rgba(8, 17, 27, 0.78);
+  --vk-raised: #0a1520;
+  --vk-sunken: rgba(2, 7, 12, 0.82);
+  --vk-hover: rgba(56, 214, 255, 0.07);
+  --vk-select: rgba(56, 214, 255, 0.13);
+  --vk-line: #12303e;
+  --vk-line-strong: #1d4b60;
+  --vk-line-soft: #0c2230;
+  --vk-ink: #d8f3ff;
+  --vk-ink-2: #8cb2c3;
+  --vk-ink-3: #4f7385;
+  --vk-ink-inverse: #03060b;
+  --vk-ember: #ff7a2f;
+  --vk-ember-2: #ffb24a;
+  --vk-ember-soft: rgba(255, 122, 47, 0.12);
+  --vk-ember-ink: #ffa56d;
+  --vk-signal: #38d6ff;
+  --vk-signal-soft: rgba(56, 214, 255, 0.12);
+  --vk-ok: #34e5a1;
+  --vk-warn: #ffc44d;
+  --vk-bad: #ff5068;
+  --vk-info: #38d6ff;
+  --vk-chart-1: #38d6ff;
+  --vk-chart-2: #34e5a1;
+  --vk-chart-3: #a98bff;
+  --vk-chart-4: #ffb24a;
+  --vk-chart-5: #ff6b86;
+  --vk-code-bg: rgba(2, 8, 14, 0.85);
+  --vk-term-bg: #01040a;
+  --vk-term-ink: #b9f0ff;
+  --vk-diff-add-bg: rgba(52, 229, 161, 0.1);
+  --vk-diff-add-ink: #6ff0bf;
+  --vk-diff-del-bg: rgba(255, 80, 104, 0.1);
+  --vk-diff-del-ink: #ff8d9f;
+  --vk-shadow-1: 0 0 0 1px rgba(56, 214, 255, 0.04);
+  --vk-shadow-2: 0 0 0 1px rgba(56, 214, 255, 0.22), 0 18px 48px rgba(0, 0, 0, 0.7), 0 0 32px rgba(56, 214, 255, 0.08);
+  --vk-scrim: rgba(1, 4, 9, 0.7);
+  --vk-glow: 0 0 0 1px rgba(255, 122, 47, 0.4), 0 0 26px rgba(255, 122, 47, 0.22);
+  --vk-ambient:
+    radial-gradient(70rem 26rem at 50% 116%, rgba(255, 122, 47, 0.16), transparent 70%),
+    radial-gradient(90rem 34rem at 50% -24%, rgba(56, 214, 255, 0.11), transparent 66%),
+    repeating-linear-gradient(0deg, rgba(56, 214, 255, 0.04) 0 1px, transparent 1px calc(var(--vk-u) * 8)),
+    repeating-linear-gradient(90deg, rgba(56, 214, 255, 0.04) 0 1px, transparent 1px calc(var(--vk-u) * 8));
+  --vk-panel-blur: 10px;
+  --vk-label-font: var(--vk-font-mono);
+  --vk-label-case: uppercase;
+  --vk-label-track: 0.08em;
+  --vk-frame-tick: var(--vk-signal);
+  color-scheme: dark;
+}
