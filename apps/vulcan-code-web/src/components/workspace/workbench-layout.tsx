@@ -11,7 +11,7 @@ import {
   primaryFeatureAreas as buildPrimaryFeatureAreas,
 } from "@/components/features/feature-shell";
 import { ActivityRail, type ActivityRailEntry } from "@/components/shell/activity-rail";
-import { RepositoryLink } from "@/components/shell/app-chrome";
+import { WorkbenchStatusBar } from "@/components/shell/workbench-status-bar";
 import { StartupOverlay } from "@/components/shell/startup-screen";
 import {
   normalizedComposerSlashCommandId,
@@ -600,6 +600,23 @@ export function WorkbenchLayout(props: {
       nonce: (request?.nonce ?? 0) + 1,
     }));
   }, [activeProject]);
+  // statusBar is the one bottom strip both the workspace and the feature pages show.
+  // statusBar 是工作台与功能页共用的底部状态条。
+  const statusBar = (
+    <WorkbenchStatusBar
+      appVersion={props.workbench.appVersion}
+      hosts={{ settings: setSettingsHost, todolist: setTodolistStatusHost, runtime: setRuntimeStatusHost }}
+      plugins={workbenchState.plugins}
+      startup={props.startup}
+      terminalRunningCount={activeProjectId ? projectTerminalRunningCounts[activeProjectId]?.runningCount ?? 0 : null}
+      vmmMemory={workbenchState.vmmMemory}
+      onOpenDiagnostics={handleOpenRuntimeDiagnostics}
+      onOpenExternalUrl={openExternalUrl}
+      onOpenMemory={handleOpenWorkspaceMemory}
+      onOpenPlugins={handleOpenWorkspaceSkills}
+      onToggleTerminal={handleToggleActiveProjectTerminal}
+    />
+  );
   // consoleWorkbenchState reprojects selected-session fields from the UI-local selection.
   // consoleWorkbenchState 根据 UI 本地选择重新投影当前会话字段。
   const consoleWorkbenchState = React.useMemo<WorkbenchSnapshot>(() => {
@@ -1203,19 +1220,7 @@ export function WorkbenchLayout(props: {
             onStageAttachmentBytes={stageComposerAttachmentBytes}
             onCopyText={copyText}
             resolveMediaSourceUrl={localMediaSourceUrl}
-            footer={(
-              <footer className="statusbar workspace-statusbar">
-                <div className="workspace-statusbar-leading">
-                  <div className="workspace-statusbar-settings" ref={setSettingsHost} />
-                  <div className="workspace-statusbar-todolist-status" ref={setTodolistStatusHost} />
-                </div>
-                <div className="workspace-statusbar-runtime-status" ref={setRuntimeStatusHost} />
-                <div className="workspace-statusbar-trailing">
-                  <RepositoryLink onOpenExternalUrl={openExternalUrl} />
-                  <span className="workspace-statusbar-version">v{props.workbench.appVersion}</span>
-                </div>
-              </footer>
-            )}
+            footer={statusBar}
             runtimeStatusHost={runtimeStatusHost}
             todolistStatusHost={todolistStatusHost}
             onTrace={webuiClickTrace}
@@ -1268,6 +1273,7 @@ export function WorkbenchLayout(props: {
             workbench={workbenchState}
             selectedConversationId={selectedConversationId}
             chromeActions={shellChromeActions}
+            footer={statusBar}
             titlebarDragRegion={windowDragRegionEnabled}
             onTitlebarDoubleClick={handleTitlebarDoubleClick}
           />

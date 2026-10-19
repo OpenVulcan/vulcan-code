@@ -132,46 +132,6 @@
     flex-wrap: wrap;
   }
 
-  .console-header {
-    gap: 4px;
-    padding-inline: 8px;
-  }
-
-  .console-header-main {
-    gap: 6px;
-  }
-
-  .console-header .app-chrome-actions {
-    margin-right: -8px;
-  }
-
-  .workspace-custom-header-title small {
-    display: none;
-  }
-
-  .workspace-custom-header-title,
-  .workspace-header-title-text {
-    flex: 1 1 auto;
-  }
-
-  .workspace-custom-header-title h1 {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .workspace-statusbar-host {
-    flex-basis: calc(28px + env(safe-area-inset-bottom));
-    min-height: calc(28px + env(safe-area-inset-bottom));
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-
-  .statusbar.workspace-statusbar {
-    height: 28px;
-    min-height: 0;
-    padding: 0 10px;
-  }
-
   .conversation-panel {
     /* Preserve the external reasoning gutter on phones without indenting individual content rows. */
     /* 手机端同样保留外置思考侧栏，不对单独内容行增加缩进。 */
@@ -390,7 +350,7 @@
     min-width: 40px;
   }
 
-  :is(.composer-toolbar, .console-header, .vk-shell-drawer) button,
+  :is(.composer-toolbar, .vk-stage-head, .vk-shell-drawer) button,
   .composer-toolbar [role="combobox"] {
     min-height: 40px;
     min-width: 40px;

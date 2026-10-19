@@ -149,7 +149,7 @@ it.each(["image", "video", "audio", "pdf", "file"])("dispatches the enabled %s f
 it("moves settings to the footer and leaves only attachment, plan and goal in the add menu", async () => {
   await openMenu("add");
   expect(footer.querySelector('button')?.textContent).toBe("会话设置");
-  expect(host.querySelector('.workspace-settings-button')).toBeNull();
+  expect(host.querySelector('[data-action="session-settings"]')).toBeNull();
   expect(Array.from(document.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"]'), entry => entry.textContent)).toEqual(["附件", "计划模式", "目标"]);
   expect(document.querySelector('[role="menu"]')?.textContent).not.toContain("记忆选项");
 });

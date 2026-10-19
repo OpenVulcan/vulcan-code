@@ -388,25 +388,6 @@ align-self: center;
   pointer-events: auto;
 }
 
-.composer-runtime-cue {
-  max-width: min(100%, 520px);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-pill);
-  background: color-mix(in srgb, var(--card) 86%, transparent);
-  box-shadow: 0 10px 30px color-mix(in srgb, var(--foreground) 8%, transparent);
-  pointer-events: none;
-}
-
-.composer-runtime-cue .shimmer {
-  font-size: var(--vcn-font-size-md);
-  font-weight: 600;
-}
-
 .composer-panel {
   width: 100%;
   display: grid;
@@ -480,50 +461,6 @@ align-self: center;
   font-size: var(--vcn-font-size-md);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.composer-session-progress-root {
-  position: relative;
-  display: flex;
-  justify-content: center;
-  max-width: min(100%, 560px);
-  pointer-events: auto;
-}
-
-.composer-session-progress-capsule {
-  min-height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  max-width: min(100%, 560px);
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-pill);
-  background: var(--card);
-  color: var(--muted-foreground);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--vcn-font-size-md);
-  line-height: 1;
-  outline: none;
-  overflow: hidden;
-  white-space: nowrap;
-  transition:
-    border-color 160ms ease,
-    background-color 160ms ease,
-    color 160ms ease;
-}
-
-.composer-session-progress-capsule:hover,
-.composer-session-progress-capsule:focus-visible {
-  border-color: color-mix(in srgb, var(--ring) 46%, var(--border));
-  background: color-mix(in srgb, var(--card) 94%, var(--muted));
-  color: var(--foreground);
-}
-
-.composer-session-progress-capsule > svg {
-  color: oklch(0.58 0.18 245);
 }
 
 .composer-session-progress-review-summary {

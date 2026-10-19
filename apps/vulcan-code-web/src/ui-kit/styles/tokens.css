@@ -47,6 +47,9 @@
   --vk-sidebar-w: calc(var(--vk-u) * 66);
   --vk-panel-w: calc(var(--vk-u) * 94);
   --vk-read-w: 46rem;
+  /* The conversation column: the reading measure plus its side padding, or the whole stage at "full". */
+  --vk-column-pad: calc(var(--vk-u) * 8);
+  --vk-column-w: calc(var(--vk-read-w) + var(--vk-column-pad) * 2);
   --vk-statusbar-h: calc(var(--vk-u) * 6);
   --vk-titlebar-h: calc(var(--vk-u) * 12);
 
@@ -70,11 +73,12 @@
 :root[data-vk-text="xl"] { font-size: 19px; }
 
 /* Reading width presets for the conversation column (data-vk-width). "full" drops the cap entirely
- * (see conversation.css); the others only move the reading measure, so they scale with the text tier. */
+ * (--vk-column-w); the others only move the reading measure, so they scale with the text tier. */
 :root[data-vk-width="compact"] { --vk-read-w: 38rem; }
 :root[data-vk-width="standard"] { --vk-read-w: 46rem; }
 :root[data-vk-width="wide"] { --vk-read-w: 58rem; }
 :root[data-vk-width="xwide"] { --vk-read-w: 72rem; }
+:root[data-vk-width="full"] { --vk-column-w: 100%; }
 
 /* ---------- Skin surface: light (default) ---------- */
 :root {
@@ -93,6 +97,8 @@
   --vk-ink-2: #4a515c;
   --vk-ink-3: #7b838e;
   --vk-ink-inverse: #ffffff;
+  /* Text on a solid danger fill (the window close button); the same in every theme. */
+  --vk-on-bad: #ffffff;
 
   --vk-ember: #e2511a;
   --vk-ember-2: #f5872e;

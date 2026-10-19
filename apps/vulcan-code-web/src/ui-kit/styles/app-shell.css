@@ -171,6 +171,78 @@
   background: var(--vk-ground);
 }
 
+/* ---------- Stage head as the application renders it ----------
+ * The panel toggle, the title (empty title space drags the desktop window), page actions, then the app
+ * menu and the desktop window controls flush against the right edge. */
+.vk-stage-head { flex: none; padding-right: calc(var(--vk-u) * 2); user-select: none; }
+.vk-stage-head:has(.vk-winctl) { padding-right: 0; }
+.vk-stage-head .vk-stage-title { display: flex; align-items: center; align-self: stretch; gap: calc(var(--vk-u) * 1.5); }
+.vk-stage-name { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 2); flex: 0 1 auto; min-width: 0; }
+.vk-stage-name[data-tauri-drag-region] > * { pointer-events: none; }
+.vk-stage-name > h1 { flex: 0 1 auto; min-width: 0; margin: 0; font-size: var(--vk-fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-stage-name > small { flex: 0 1 auto; min-width: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-stage-drag { flex: 1 1 auto; align-self: stretch; min-width: calc(var(--vk-u) * 8); }
+.vk-stage-chrome { display: flex; align-items: center; align-self: stretch; flex: none; gap: calc(var(--vk-u) * 1); }
+.vk-winctl { display: flex; align-self: stretch; }
+.vk-win-btn {
+  display: grid;
+  place-items: center;
+  width: calc(var(--vk-u) * 11.5);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  cursor: default;
+  transition: background var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-win-btn:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-win-btn:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
+.vk-win-btn[data-action="close"]:hover { background: var(--vk-bad); color: var(--vk-on-bad); }
+.vk-win-btn > .lucide { width: 1rem; height: 1rem; stroke-width: 1.5; }
+.vk-win-btn > .lucide[data-restore] { width: 0.9rem; height: 0.9rem; transform: scaleX(-1); }
+@media (max-width: 640px) {
+  .vk-stage-name > small { display: none; }
+}
+
+/* ---------- App menu ---------- */
+.vk-app-menu { min-width: calc(var(--vk-u) * 64); }
+.vk-app-menu-status { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-app-menu-status > .vk-badge { margin-left: auto; }
+.vk-lang-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  min-width: 1.35rem;
+  height: 1rem;
+  padding: 0 2px;
+  border: var(--vk-bw) solid var(--vk-line-strong);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-2xs);
+  font-weight: 600;
+}
+
+/* ---------- Status bar as the application renders it ----------
+ * Session surfaces portal their own items (settings, plan progress, the runtime cue) into hosts between
+ * the fixed items; the runtime host also works as the spacer between the left and right groups. */
+.vk-status-frame { position: relative; z-index: 20; flex: none; height: var(--vk-statusbar-h); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.vk-status-frame > .vk-status { height: 100%; }
+.vk-status-host { display: flex; align-items: center; align-self: stretch; min-width: 0; }
+.vk-status-host:empty:not([data-grow]) { display: none; }
+.vk-status-host[data-grow] { flex: 1 1 auto; justify-content: center; overflow: hidden; }
+.vk-status-item { flex: none; max-width: 100%; }
+.vk-status-item > svg { flex: none; width: 0.95rem; height: 0.95rem; }
+.vk-status-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vk-status-item[data-state="open"] { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-status-item[data-static] { cursor: default; }
+.vk-status-item[data-static]:hover { background: none; color: inherit; }
+.vk-status-item > .vk-count { padding: 0 calc(var(--vk-u) * 1); background: var(--vk-ember-soft); color: var(--vk-ember-ink); font-variant-numeric: tabular-nums; }
+.vk-status-item .added { color: var(--vk-ok); }
+.vk-status-item .removed { color: var(--vk-bad); }
+@media (max-width: 640px) {
+  .vk-status > [data-optional],
+  .vk-status > a.vk-status-item { display: none; }
+}
+
 /* ---------- Phone drawer: rail and panel side by side ---------- */
 .vk-shell-drawer[data-slot="sheet-content"] {
   width: min(var(--vk-sidebar-w), calc(100vw - 40px));
@@ -191,7 +263,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .vk-shell .vk-sidebar { transition: none; }
+  .vk-win-btn { transition: none; }
   .vk-rail-flyout { animation: none; }
 }
 :root[data-vk-motion="reduce"] .vk-shell .vk-sidebar { transition: none; }
 :root[data-vk-motion="reduce"] .vk-rail-flyout { animation: none; }
+:root[data-vk-motion="reduce"] .vk-win-btn { transition: none; }

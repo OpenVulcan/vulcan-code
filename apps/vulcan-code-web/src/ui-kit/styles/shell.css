@@ -273,7 +273,7 @@
   align-items: center;
   gap: calc(var(--vk-u) * 2.5);
   min-width: 0;
-  height: calc(var(--vk-u) * 12);
+  height: var(--vk-titlebar-h);
   padding: 0 calc(var(--vk-u) * 4);
   border-bottom: var(--vk-bw) solid var(--vk-line);
   background: color-mix(in srgb, var(--vk-ground) 70%, transparent);

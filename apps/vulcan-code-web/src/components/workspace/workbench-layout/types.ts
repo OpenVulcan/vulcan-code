@@ -3,10 +3,6 @@ import type {
   WorkbenchDeltaEnvelope,
 } from "@/types";
 
-// ThemeMode and initialThemeMode live in the boot-safe theme module so the startup screen can apply the theme early.
-// ThemeMode 与 initialThemeMode 位于启动安全的主题模块中，使启动界面能提前套用主题。
-export { initialThemeMode, type ThemeMode } from "@/lib/theme-mode";
-
 // WorkbenchDeltaSignal wraps the newest partial update with a React-visible sequence.
 // WorkbenchDeltaSignal 使用 React 可见序号包装最新局部更新。
 export interface WorkbenchDeltaSignal {

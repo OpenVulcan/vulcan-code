@@ -7,8 +7,6 @@ import { shellClient } from "@/service/webui-service-runtime";
 import { useI18n, type LocaleCode } from "@/i18n";
 import { toast } from "@/ui-kit/primitives/toast";
 import type { StartupSnapshot } from "@/types";
-import { resolvedDark, setAppearance, useAppearance } from "@/ui-kit/appearance";
-import type { ThemeMode } from "./types";
 
 // WorkbenchShellChromeOptions carries the app-level chrome inputs owned by the workbench layout.
 // WorkbenchShellChromeOptions 携带由工作台布局持有的应用级 chrome 输入。
@@ -27,8 +25,8 @@ interface WorkbenchShellChromeOptions {
 // WorkbenchShellChromeState exposes reusable titlebar and shell chrome render state.
 // WorkbenchShellChromeState 暴露可复用的标题栏与外壳 chrome 渲染状态。
 interface WorkbenchShellChromeState {
-  // shellChromeActions contains the app-wide global actions and optional Tauri window controls.
-  // shellChromeActions 包含应用级全局操作与可选 Tauri 窗口控制。
+  // shellChromeActions contains the app menu and the optional desktop window controls.
+  // shellChromeActions 包含应用菜单与可选的桌面窗口控制。
   shellChromeActions: React.ReactNode;
   // showWindowControls reports whether the current runtime supports custom window controls.
   // showWindowControls 表示当前运行时是否支持自定义窗口控制。
@@ -50,8 +48,8 @@ export function shouldEnableWindowDragRegion(
   return showWindowControls && !isWindowMaximized;
 }
 
-// useWorkbenchShellChrome owns the theme and Tauri titlebar state for WorkbenchLayout.
-// useWorkbenchShellChrome 为 WorkbenchLayout 持有主题与 Tauri 标题栏状态。
+// useWorkbenchShellChrome owns the desktop titlebar state for WorkbenchLayout.
+// useWorkbenchShellChrome 为 WorkbenchLayout 持有桌面标题栏状态。
 export function useWorkbenchShellChrome({
   startup,
   locale,
@@ -60,10 +58,6 @@ export function useWorkbenchShellChrome({
   // t translates shell failures without exposing backend details as the main message.
   // t 翻译壳层失败提示，避免将后端详情作为主要文案。
   const { t } = useI18n();
-  // theme is the resolved light or dark rendering of the shared appearance choice.
-  // theme 是共享外观选择解析后的明暗呈现。
-  const appearance = useAppearance();
-  const theme: ThemeMode = resolvedDark(appearance.theme) ? "dark" : "light";
   // showWindowControls enables the custom titlebar only inside the Tauri desktop shell.
   // showWindowControls 仅在 Tauri 桌面壳内启用自定义标题栏。
   const showWindowControls = shellClient.supportsWindowControls();
@@ -132,17 +126,6 @@ export function useWorkbenchShellChrome({
     void toggleWindowMaximize().catch(reportWindowError);
   }, [showWindowControls, toggleWindowMaximize, reportWindowError]);
 
-  // toggleTheme persists only the user's explicit selection; denied storage keeps the current session usable.
-  // toggleTheme 仅持久化用户明确选择；存储被拒绝时仍允许当前会话切换主题。
-  const toggleTheme = React.useCallback(() => {
-    // nextTheme is applied locally even when persistence is unavailable.
-    // nextTheme 即使无法持久化也会在当前客户端生效。
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    if (!setAppearance("theme", nextTheme)) {
-      toast.error(t("appChrome.themeSaveFailed"), { id: "theme-save-failed" });
-    }
-  }, [theme, t]);
-
   React.useEffect(() => {
     if (!showWindowControls) {
       return;
@@ -182,34 +165,18 @@ export function useWorkbenchShellChrome({
     };
   }, [refreshWindowMaximizedState, showWindowControls, reportWindowError]);
 
-  // shellChromeActions moves app-wide status and window controls into the shared content header.
-  // shellChromeActions 将应用级状态与窗口控制移动到共享内容标题栏中。
+  // shellChromeActions holds the app menu and, in a desktop window, the window controls at the strip edge.
+  // shellChromeActions 包含应用菜单，桌面窗口中还包含位于标题条边缘的窗口控制。
   const shellChromeActions = (
-    <div className="app-chrome-actions" data-no-drag>
+    <div className="vk-stage-chrome" data-no-drag>
+      <GlobalActions startup={startup} locale={locale} onChangeLocale={onChangeLocale} />
       {showWindowControls ? (
         <WindowControls
-          leadingControl={(
-            <GlobalActions
-              startup={startup}
-              theme={theme}
-              locale={locale}
-              onChangeLocale={onChangeLocale}
-              onToggleTheme={toggleTheme}
-            />
-          )}
           isMaximized={isWindowMaximized}
           onMaximizeToggle={toggleWindowMaximize}
           onMaximizeStateRefresh={refreshWindowMaximizedState}
         />
-      ) : (
-        <GlobalActions
-          startup={startup}
-          theme={theme}
-          locale={locale}
-          onChangeLocale={onChangeLocale}
-          onToggleTheme={toggleTheme}
-        />
-      )}
+      ) : null}
     </div>
   );
 

@@ -37,10 +37,8 @@ async function openMenu(): Promise<void> {
   await act(async () => root.render(
     <GlobalActions
       startup={{ ready: true, phase: "ready", steps: [], recentLogs: [] }}
-      theme="light"
       locale="zh-CN"
       onChangeLocale={() => {}}
-      onToggleTheme={() => {}}
     />,
   ));
   await act(async () => host.querySelector<HTMLButtonElement>("button")!

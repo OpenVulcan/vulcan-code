@@ -1072,3 +1072,15 @@
   from { left: -35%; }
   to { left: 100%; }
 }
+
+/* Text that shimmers while work is in progress (the runtime cue, live headings). */
+.vk-shimmer-text {
+  background: linear-gradient(90deg, var(--vk-ink-3) 0%, var(--vk-ember) 40%, var(--vk-ink-3) 80%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: vk-shimmer 2.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .vk-shimmer-text { animation: none; color: var(--vk-ink-2); background: none; } }
+:root[data-vk-motion="reduce"] .vk-shimmer-text { animation: none; color: var(--vk-ink-2); background: none; }

@@ -32,35 +32,34 @@ export function ComposerSessionProgressCapsule(props: {
   const reviewSummary = props.reviewSummary?.changedFiles ? props.reviewSummary : null;
   return (
     <Popover>
-      <div className="composer-session-progress-root">
-        <PopoverTrigger asChild>
-          <button
-            aria-label={t("composer.progress.open")}
-            className="composer-session-progress-capsule"
-            type="button"
-          >
-            <ProgressRing aria-label={formatProgressTranslation(t, "composer.progress.progressLabel", { current: String(currentStepNumber), total: String(props.todolist.totalCount) })} size={14} value={progressValue} />
-            <span>{formatProgressTranslation(t, "composer.progress.step", { current: String(currentStepNumber), total: String(props.todolist.totalCount) })}</span>
-            {reviewSummary ? (
-              <span className="composer-session-progress-review-summary">
-                <span>· {formatProgressTranslation(t, "composer.progress.changedFiles", { count: String(reviewSummary.changedFiles) })}</span>
-                <span className="added">+{reviewSummary.additions}</span>
-                <span className="removed">-{reviewSummary.deletions}</span>
-              </span>
-            ) : null}
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className="composer-session-progress-popover" side="top" align="start" sideOffset={8} collisionPadding={12} aria-label={t("composer.progress.open")}>
-          <div className="composer-session-progress-list">
-            {props.todolist.items.map((item, index) => (
-              <div className={cn("composer-session-progress-row", `status-${item.status}`)} key={`${index}-${item.status}-${item.step}`}>
-                {composerSessionProgressStatusIcon(item.status, t)}
-                <span>{item.step}</span>
-              </div>
-            ))}
-          </div>
-        </PopoverContent>
-      </div>
+      <PopoverTrigger asChild>
+        <button
+          aria-label={t("composer.progress.open")}
+          className="vk-status-item"
+          data-action="session-progress"
+          type="button"
+        >
+          <ProgressRing aria-label={formatProgressTranslation(t, "composer.progress.progressLabel", { current: String(currentStepNumber), total: String(props.todolist.totalCount) })} size={14} value={progressValue} />
+          <span>{formatProgressTranslation(t, "composer.progress.step", { current: String(currentStepNumber), total: String(props.todolist.totalCount) })}</span>
+          {reviewSummary ? (
+            <span className="composer-session-progress-review-summary">
+              <span>· {formatProgressTranslation(t, "composer.progress.changedFiles", { count: String(reviewSummary.changedFiles) })}</span>
+              <span className="added">+{reviewSummary.additions}</span>
+              <span className="removed">-{reviewSummary.deletions}</span>
+            </span>
+          ) : null}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="composer-session-progress-popover" side="top" align="start" sideOffset={8} collisionPadding={12} aria-label={t("composer.progress.open")}>
+        <div className="composer-session-progress-list">
+          {props.todolist.items.map((item, index) => (
+            <div className={cn("composer-session-progress-row", `status-${item.status}`)} key={`${index}-${item.status}-${item.step}`}>
+              {composerSessionProgressStatusIcon(item.status, t)}
+              <span>{item.step}</span>
+            </div>
+          ))}
+        </div>
+      </PopoverContent>
     </Popover>
   );
 }

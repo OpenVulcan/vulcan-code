@@ -1069,7 +1069,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           )}
         </WorkspaceResizableBody>
         {props.footer ? (
-          <div className="workspace-statusbar-host">
+          <div className="vk-status-frame">
             {props.footer}
           </div>
         ) : null}

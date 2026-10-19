@@ -82,14 +82,14 @@ export function WorkspaceTitleMenu(props: {
       <DropdownMenuTrigger asChild>
         <button
           aria-label={t("conversationMenu.moreTitleActions")}
-          className="workspace-title-menu-trigger"
+          className="vk-icon-btn" data-size="sm"
           title={t("conversationMenu.moreTitleActions")}
           type="button"
         >
-          <MoreHorizontal size={15} />
+          <MoreHorizontal />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="conversation-title-menu" side="bottom" sideOffset={7}>
+      <DropdownMenuContent align="start" className="vk-title-menu" side="bottom" sideOffset={4}>
         <DropdownMenuItem onSelect={() => void handleCopyTitle()}>
           <Copy size={15} />
           <span>{t("conversationMenu.copyTitle")}</span>

@@ -12,12 +12,11 @@
   grid-template-rows: minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
-  --vk-col-pad: calc(var(--vk-u) * 8);
-  --vk-col-max: calc(var(--vk-read-w) + var(--vk-col-pad) * 2);
+  --vk-col-pad: var(--vk-column-pad);
+  --vk-col-max: var(--vk-column-w);
   --vk-float-w: min(24rem, 34%);
   transition: padding var(--vk-t-med) var(--vk-ease);
 }
-:root[data-vk-width="full"] .vk-chat { --vk-col-max: 100%; }
 :root[data-vk-think="popup"] .vk-chat { --vk-col-pad: calc(var(--vk-u) * 24); --vk-col-max: calc(var(--vk-read-w) + var(--vk-u) * 48); }
 :root[data-vk-think="popup"][data-vk-width="full"] .vk-chat { --vk-col-max: 100%; }
 /* Right-docked reasoning takes its own column; the conversation re-centers in what remains. */

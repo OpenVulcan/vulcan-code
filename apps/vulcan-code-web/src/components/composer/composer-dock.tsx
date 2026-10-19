@@ -423,9 +423,9 @@ export function ComposerDock(props: {
         : null}
       {props.runtimeStatusHost && props.runtimeCue
         ? createPortal(
-          <div className="composer-runtime-cue" aria-live="polite" aria-busy="true">
-            <span className="shimmer">{props.runtimeCue.text}</span>
-          </div>,
+          <span className="vk-status-item" data-static="" aria-live="polite" aria-busy="true">
+            <span className="vk-shimmer-text">{props.runtimeCue.text}</span>
+          </span>,
           props.runtimeStatusHost,
         )
         : null}

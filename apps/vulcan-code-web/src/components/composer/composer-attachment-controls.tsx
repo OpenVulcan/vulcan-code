@@ -264,7 +264,7 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
     if (!open) setRequestedSection(null);
   }}>
     <DropdownMenuTrigger asChild>
-      <Button aria-label={t("composer.sessionSettings")} className="workspace-settings-button" size="sm" type="button" variant="ghost"><Settings size={14} /><span>{t("composer.sessionSettings")}</span></Button>
+      <button aria-label={t("composer.sessionSettings")} className="vk-status-item" data-action="session-settings" type="button"><Settings /><span>{t("composer.sessionSettings")}</span></button>
     </DropdownMenuTrigger>
     <ComposerSettingsRequestContext.Provider value={requestedSection}>
     <DropdownMenuContent align="start" className="composer-settings-menu" side="top" sideOffset={8}>

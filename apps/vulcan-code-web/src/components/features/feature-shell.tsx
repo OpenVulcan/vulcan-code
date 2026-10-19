@@ -11,6 +11,7 @@ import { FeatureSidebar, areaIconMap, pluginDetailMountIcon, primaryFeatureAreas
 import { activeAgentsHeaderSummary } from "@/components/features/agents/agent-area-header"
 import type { AgentActionProps } from "@/components/features/agents/agent-area-types"
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu"
+import { StageHead } from "@/components/shell/stage-head"
 import {
   activeSettingsHeaderSummary,
   settingsSubAreas,
@@ -27,7 +28,6 @@ import type { MemoryActionProps } from "@/components/features/memory/use-memory-
 import {
   SidebarInset,
   SidebarProvider,
-  SidebarTrigger,
 } from "@/ui-kit/shell/sidebar"
 import { useI18n } from "@/i18n"
 import type {
@@ -100,6 +100,9 @@ function FeatureShell(props: {
   // App-wide chrome actions rendered in the shared content header.
   // 渲染在共享内容标题栏中的应用级窗口控制区。
   chromeActions?: React.ReactNode
+  // Status bar pinned to the bottom edge of the page.
+  // 固定在页面底部边缘的状态栏。
+  footer?: React.ReactNode
   // Whether shared title bar empty space should be a native drag region.
   // 共享标题栏空白区域是否作为原生拖动区域。
   titlebarDragRegion?: boolean
@@ -288,6 +291,7 @@ function FeatureShell(props: {
           />
           {pageDescriptor.content}
         </div>
+        {props.footer ? <div className="vk-status-frame">{props.footer}</div> : null}
         {luaInstallDialogOpen ? (
           <React.Suspense fallback={null}>
             <LazyLuaSkillInstallDialog
@@ -323,36 +327,20 @@ function FeatureHeader(props: {
   // headerTitle 保存可见功能页标题，用于展示与复制。
   const headerTitle = props.descriptor.title ?? t("sidebar.console")
   return (
-    <header className="console-header">
-      <div className="console-header-main">
-        <SidebarTrigger />
-        <span className="console-header-separator" aria-hidden="true" />
-        <div
-          className="workspace-custom-header-title"
-        >
-          <div
-            className="workspace-header-title-text"
-            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-            onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
-          >
-            <h1>{headerTitle}</h1>
-            {props.descriptor.detail ? <small>{props.descriptor.detail}</small> : null}
-          </div>
-          <WorkspaceTitleMenu title={headerTitle} />
-        </div>
-        <span
-          aria-hidden="true"
-          className="console-header-drag-fill"
-          data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-          onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
-        />
-      </div>
-      <div className="console-header-actions">
-        {props.descriptor.headerActions}
-        {props.descriptor.headerRightActions}
-        {props.chromeActions}
-      </div>
-    </header>
+    <StageHead
+      actions={props.descriptor.headerActions || props.descriptor.headerRightActions ? (
+        <>
+          {props.descriptor.headerActions}
+          {props.descriptor.headerRightActions}
+        </>
+      ) : null}
+      chrome={props.chromeActions}
+      detail={props.descriptor.detail}
+      onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+      title={headerTitle}
+      titleMenu={<WorkspaceTitleMenu title={headerTitle} />}
+      titlebarDragRegion={props.titlebarDragRegion}
+    />
   )
 }
 

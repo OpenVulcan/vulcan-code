@@ -7,7 +7,8 @@ import type {
 } from "@/components/workspace/workspace-context-panel";
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
-import { SidebarTrigger } from "@/ui-kit/shell/sidebar";
+import { StageHead } from "@/components/shell/stage-head";
+import { ReadingWidthMenu } from "@/components/shell/app-chrome";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -534,7 +535,6 @@ export function WorkspaceResizableBody(props: {
   return (
     <div ref={dockedLayoutRef} className={cn("workspace-resizable-body-shell", floatingContextLayoutActive && "has-floating-context", props.conversationNavigationPhase && `conversation-navigation-${props.conversationNavigationPhase}`)}>
       <ConsoleHeader
-        className={props.headerTitle ? "workspace-custom-header" : undefined}
         draftConversation={props.selectedDraftConversation}
         conversation={props.selectedConversation}
         detail={props.headerDetail}
@@ -653,9 +653,6 @@ export function WorkspaceResizableBody(props: {
 // ConsoleHeader renders the inset title bar for the current conversation.
 // ConsoleHeader 渲染当前会话的 inset 标题栏。
 function ConsoleHeader(props: {
-  // Optional CSS class for specialized header layouts.
-  // 专用标题栏布局使用的可选 CSS 类。
-  className?: string;
   // Current selected conversation summary.
   // 当前选中会话摘要。
   conversation?: ConversationSummary;
@@ -704,40 +701,28 @@ function ConsoleHeader(props: {
   const titleMenuConversation = props.title || props.draftConversation ? undefined : props.conversation;
 
   return (
-    <header className={cn("console-header", props.className)}>
-      <div className="console-header-main">
-        <SidebarTrigger onClick={props.onToggleLeftPanel} />
-        <span className="console-header-separator" aria-hidden="true" />
-        <div
-          className="workspace-custom-header-title"
-        >
-          <div
-            className="workspace-header-title-text"
-            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-            onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
-          >
-            <h1>{headerTitle}</h1>
-            {props.detail ? <small>{props.detail}</small> : null}
-          </div>
-          <WorkspaceTitleMenu
-            conversation={titleMenuConversation}
-            isPinned={props.isConversationPinned}
-            title={headerTitle}
-            onConversationMenuAction={props.onConversationMenuAction}
-          />
-        </div>
-        <span
-          aria-hidden="true"
-          className="console-header-drag-fill"
-          data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-          onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
+    <StageHead
+      actions={props.headerActions || props.headerRightActions || !props.title ? (
+        <>
+          {props.headerActions}
+          {props.headerRightActions}
+          {props.title ? null : <ReadingWidthMenu />}
+        </>
+      ) : null}
+      chrome={props.chromeActions}
+      detail={props.detail}
+      onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+      onToggleSidebar={props.onToggleLeftPanel}
+      title={headerTitle}
+      titleMenu={(
+        <WorkspaceTitleMenu
+          conversation={titleMenuConversation}
+          isPinned={props.isConversationPinned}
+          title={headerTitle}
+          onConversationMenuAction={props.onConversationMenuAction}
         />
-      </div>
-      <div className="console-header-actions">
-        {props.headerActions}
-        {props.headerRightActions}
-        {props.chromeActions}
-      </div>
-    </header>
+      )}
+      titlebarDragRegion={props.titlebarDragRegion}
+    />
   );
 }
