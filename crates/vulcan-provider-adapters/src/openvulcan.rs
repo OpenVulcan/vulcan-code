@@ -21,8 +21,10 @@ struct Catalog {
     models: Vec<serde_json::Value>,
 }
 
-/// Public model descriptor; only documented native kinds acquire executable capabilities.
-/// 公开模型描述符；仅已记录的原生类型获得可执行能力。
+/// Public model descriptor; only documented native kinds acquire executable capabilities, and
+/// kinds the server adds later are skipped as unsupported instead of failing the whole catalog.
+/// 公开模型描述符；仅已记录的原生类型获得可执行能力，服务端后续新增的类型视为不受支持而跳过，
+/// 不会导致整个目录失败。
 #[derive(Deserialize)]
 struct PublicModel {
     /// Stable public model identifier.
@@ -56,6 +58,10 @@ enum PublicOperation {
         /// 准确判定限制。
         decision_capabilities: PublicDecision,
     },
+    /// Any kind this host does not execute yet; its fields are ignored and the entry is skipped.
+    /// 宿主尚不执行的任何类型；忽略其字段并跳过该条目。
+    #[serde(other)]
+    Unsupported,
 }
 
 /// Embedding limits advertised by the user-center catalog.
@@ -80,9 +86,9 @@ struct PublicEmbedding {
     /// Server output representations, intersected with host-supported shapes.
     /// 服务端输出表示，与宿主支持的形态求交集。
     allowed_output_kinds: BTreeSet<String>,
-    /// Server-declared numeric encodings.
-    /// 服务端声明的数值编码。
-    allowed_encodings: BTreeSet<EmbeddingEncoding>,
+    /// Server-declared numeric encodings; values the host does not execute are ignored.
+    /// 服务端声明的数值编码；宿主不执行的取值会被忽略。
+    allowed_encodings: BTreeSet<String>,
 }
 
 /// Decision context bound; remaining admission rules are enforced by the authority.
@@ -139,7 +145,7 @@ pub(crate) fn parse_catalog(
                         .allowed_dimensions
                         .contains(&published.default_dimensions)
                     || published.allowed_tasks.is_empty()
-                    || published.allowed_encodings != BTreeSet::from([EmbeddingEncoding::Float])
+                    || published.allowed_encodings.is_empty()
                 {
                     return Err(String::from(
                         "OpenVulcan published invalid embedding capabilities.",
@@ -158,7 +164,12 @@ pub(crate) fn parse_catalog(
                     .collect::<BTreeSet<_>>();
                 embedding_task_values =
                     project_embedding_tasks(model_index, published.allowed_tasks)?;
-                if output_kinds.is_empty() || embedding_task_values.is_empty() {
+                // Native execution decodes float vectors only, so a model without them is unsupported here.
+                // 原生执行仅解码浮点向量，因此不提供浮点编码的模型在此视为不受支持。
+                if output_kinds.is_empty()
+                    || embedding_task_values.is_empty()
+                    || !published.allowed_encodings.contains("float")
+                {
                     continue;
                 }
                 capabilities.operations = vec![AiOperation::EmbeddingCreate];
@@ -167,7 +178,7 @@ pub(crate) fn parse_catalog(
                     tasks: embedding_task_values.keys().copied().collect(),
                     input_resources: BTreeSet::new(),
                     output_kinds,
-                    encodings: published.allowed_encodings,
+                    encodings: BTreeSet::from([EmbeddingEncoding::Float]),
                     dimensions: published.allowed_dimensions,
                     minimum_dimensions: None,
                     maximum_dimensions: None,
@@ -189,6 +200,7 @@ pub(crate) fn parse_catalog(
                 capabilities.operations = vec![AiOperation::DecisionEvaluate];
                 capabilities.context_limit = Some(decision_capabilities.max_total_input_tokens);
             }
+            PublicOperation::Unsupported => continue,
         }
         models.push(crate::ConnectionModel {
             id: descriptor.model_id,
@@ -367,6 +379,46 @@ mod tests {
         );
         assert!(
             unsupported
+                .models
+                .iter()
+                .any(|model| model.id == "task-decision")
+        );
+    }
+
+    /// With no inputs, verifies a kind the host does not know is skipped while known models still load.
+    /// 无需参数，验证宿主未知的类型被跳过，已知模型仍正常加载，成功时正常返回。
+    #[test]
+    fn openvulcan_catalog_skips_unknown_model_kinds() {
+        // body appends a future kind with its own capability object next to the known fixtures.
+        // body 在已知夹具旁追加一个带自身能力对象的未来类型。
+        let mut body = task_catalog(&["retrieval_query"]);
+        body["models"]
+            .as_array_mut()
+            .expect("catalog array")
+            .push(serde_json::json!(
+                {"model_id":"future-search", "display_name":"Future Search", "kind":"search",
+                 "search_capabilities":{"max_results":10}}
+            ));
+        // encodings beyond float are ignored rather than rejecting the vector model.
+        // float 之外的编码被忽略，而不是拒绝该向量模型。
+        let vector = body["models"]
+            .as_array_mut()
+            .expect("catalog array")
+            .iter_mut()
+            .find(|model| model["model_id"] == "task-vector")
+            .expect("fixture model");
+        vector["capabilities"]["allowed_encodings"] = serde_json::json!(["float", "int8"]);
+        let parsed =
+            parse_catalog("fixture", 1, &body.to_string()).expect("catalog with unknown kind");
+        assert!(
+            !parsed
+                .models
+                .iter()
+                .any(|model| model.id == "future-search")
+        );
+        assert!(parsed.models.iter().any(|model| model.id == "task-vector"));
+        assert!(
+            parsed
                 .models
                 .iter()
                 .any(|model| model.id == "task-decision")
