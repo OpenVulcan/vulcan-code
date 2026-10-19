@@ -82,45 +82,6 @@
     max-height: calc(100dvh - 24px);
   }
 
-  .project-settings-dialog {
-    width: calc(100vw - 24px);
-    height: calc(100dvh - 24px);
-    max-width: calc(100vw - 24px) !important;
-  }
-
-  .project-settings-layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .project-settings-nav {
-    height: auto;
-    display: flex;
-    overflow-x: auto;
-    padding: 8px;
-    border-right: 0;
-    border-bottom: 1px solid var(--vk-line);
-  }
-
-  .project-settings-nav-button {
-    width: auto;
-    min-height: 36px;
-    flex: 0 0 auto;
-  }
-
-  .project-settings-nav-button small {
-    display: none;
-  }
-
-  .project-settings-content {
-    max-height: none;
-    padding: 16px;
-  }
-
-  .project-settings-dialog-header {
-    padding: 16px 44px 14px 16px;
-  }
-
   .model-picker-scroll {
     max-height: min(310px, 48dvh);
   }
@@ -185,32 +146,5 @@
 
   :is([data-slot="dialog-content"], .settings-form-field) input {
     font-size: var(--vk-fs-lg);
-  }
-}
-
-/* Project settings grids collapse to one column on phones; the segmented control keeps its wide first option. */
-/* 项目设置网格在手机上折叠为单列；分段控件保留较宽的第一项。 */
-@media (max-width: 720px) {
-  .project-settings-form-grid,
-  .project-settings-cleanup-grid,
-  .project-settings-kind-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .project-settings-kind-grid {
-    grid-column: auto;
-  }
-
-  .project-settings-skill-row {
-    grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
-  }
-
-  .project-settings-skill-row .status-pill {
-    width: fit-content;
-  }
-
-  .project-settings-segmented {
-    grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
   }
 }

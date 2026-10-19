@@ -141,8 +141,8 @@ export function ProjectOverviewSection(props: {
         : projectKnowledge?.error ? t("projectOverview.knowledgeFailed") : <InlineStreamPlaceholder label={t("projectOverview.knowledgeLoading")} />}</p></div>{openAction("knowledge-bases", t("projectOverview.knowledgeSettings"))}</section>
       <section><div><strong>{t("projectSettings.agentTitle")}</strong><p>{props.agentLoading ? <InlineStreamPlaceholder label={t("projectOverview.skillsLoading")} /> : !props.agentLoaded ? t("projectOverview.skillsUnknown")
         : Object.keys(props.agentOverrides).length ? t("projectOverview.skillsCount").replace("{count}", String(Object.keys(props.agentOverrides).length)) : t("projectOverview.skillsInherited")}</p></div>{openAction("agent-skills", t("projectOverview.skillSettings"))}</section>
+      <section><div><strong>{t("projectSettings.attachmentCache")}</strong><p>{t("projectOverview.maintenance")}</p></div>{openAction("attachments", t("projectOverview.attachments"))}</section>
     </div>
-    <div className="project-overview-maintenance"><span>{t("projectOverview.maintenance")}</span>{openAction("attachments", t("projectOverview.attachments"))}</div>
     <section className="project-overview-location" aria-label={t("projectOverview.details")}>
       <strong>{t("projectOverview.details")}</strong>
       <dl><dt>{t("projectOverview.attachmentPath")}</dt><dd>{props.attachmentRoot}</dd><dt>{t("projectOverview.id")}</dt><dd>{props.project.id}</dd></dl>

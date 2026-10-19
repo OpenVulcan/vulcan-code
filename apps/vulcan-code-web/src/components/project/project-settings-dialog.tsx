@@ -37,6 +37,7 @@ import {
   projectConversationCount,
   projectSettingsSections,
 } from "./project-settings-utils";
+import "@/ui-kit/styles/features/project-settings.css";
 
 export type {
   ProjectAgentSkillState,

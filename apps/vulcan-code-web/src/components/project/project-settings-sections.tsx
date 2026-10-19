@@ -620,7 +620,7 @@ export function ProjectAttachmentCleanupSection(props: {
         </label>
         <div className="project-settings-kind-grid">
           {(["image", "audio", "video", "pdf"] as const).map((kind) => (
-            <label className="project-settings-check-row project-settings-kind-chip" key={kind}>
+            <label className="vk-check-label project-settings-kind-chip" key={kind}>
               <Checkbox
                 checked={props.cleanupKinds[kind]}
                 disabled={props.cleanupBusy !== "idle"}

@@ -7,14 +7,13 @@
 .project-overview-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
 .project-overview-copy-status:empty { display: none; }
 .project-overview-identity h3 { margin: 0 0 3px; font-size: 17px; }
-.project-overview-identity span, .project-overview small, .project-overview-maintenance, .project-overview-location { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.project-overview-identity span, .project-overview small, .project-overview-location { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
 .project-overview-capabilities { display: grid; }
 .project-overview-capabilities section { display: flex; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--vk-line); }
 .project-overview-capabilities section > div { min-width: 0; }
 .project-overview-capabilities p { margin: 5px 0; font-size: var(--vk-fs-md); overflow-wrap: anywhere; }
 .project-overview-capabilities small { display: block; line-height: 1.7; }
 .project-overview-capabilities button { flex-shrink: 0; align-self: center; }
-.project-overview-maintenance { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .project-overview-issues { padding: 12px; border: 1px solid var(--vk-line); color: var(--vk-bad); }
 .project-overview-issues p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--vk-fs-sm); }
 .project-overview-issue-long { margin-top: 6px; }
@@ -26,4 +25,4 @@
 .project-overview-location dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; }
 .project-overview-location dt { color: var(--vk-ink-2); }
 .project-overview-location dd { margin: 0; color: var(--vk-ink); font-family: var(--vk-font-mono, ui-monospace, monospace); font-size: var(--vk-fs-sm); overflow-wrap: anywhere; user-select: text; }
-@container (max-width: 440px) { .project-overview-capabilities section, .project-overview-maintenance { align-items: flex-start; flex-direction: column; gap: 8px; } .project-overview-capabilities button { align-self: flex-start; } }
+@container (max-width: 440px) { .project-overview-capabilities section { align-items: flex-start; flex-direction: column; gap: 8px; } .project-overview-capabilities button { align-self: flex-start; } }
