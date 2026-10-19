@@ -139,7 +139,7 @@ export function AboutLicensesSettingsArea(props: {
   }
 
   return (
-    <section className="settings-preferences-page settings-detail-panel settings-license-panel">
+    <section className="settings-preferences-page vk-form-scroll settings-license-panel">
       <div className="settings-license-summary">
         <strong>Vulcan Code</strong><Badge variant="outline">{props.appVersion}</Badge>
         {catalog && <span>{allGroups.length} {t("settings.licenses.types")} · {totalDependencies} {t("settings.licenses.dependencies")}</span>}
@@ -173,7 +173,7 @@ export function AboutLicensesSettingsArea(props: {
                 <span>{dependencies.length} {t("settings.licenses.dependencies")} · {selectedGroup.sections.length} {t("settings.licenses.variants")}</span>
               </div>
               <div className="settings-license-table-scroll"><table className="settings-license-table">
-                <caption className="sr-only">{selectedGroup.title || t("settings.licenses.unknown")} · {t("settings.licenses.dependencies")}</caption>
+                <caption className="vk-sr-only">{selectedGroup.title || t("settings.licenses.unknown")} · {t("settings.licenses.dependencies")}</caption>
                 <thead><tr><th>{t("settings.licenses.dependency")}</th><th>{t("settings.licenses.version")}</th><th>{t("settings.licenses.source")}</th><th>{t("settings.licenses.view")}</th></tr></thead>
                 <tbody>{visibleDependencies.map((dependency) => <tr key={JSON.stringify([dependency.name, dependency.version, dependency.source])}>
                   <td>{dependency.name}</td><td>{dependency.version}</td><td><span>{dependency.source}</span></td>
@@ -191,7 +191,7 @@ export function AboutLicensesSettingsArea(props: {
               <Dialog open={viewedDependency !== null} onOpenChange={(open) => { if (!open) setViewedDependency(null) }}>
                 <DialogContent size="xl" scrollMode="body-scroll" className="settings-license-dialog">
                   <DialogHeader>
-                    <DialogTitle>{viewedDependency?.name} <span className="text-muted-foreground font-normal">{viewedDependency?.version}</span></DialogTitle>
+                    <DialogTitle>{viewedDependency?.name} <span className="vk-form-note vk-form-inline-note">{viewedDependency?.version}</span></DialogTitle>
                     <DialogDescription>{selectedGroup.title || t("settings.licenses.unknown")}</DialogDescription>
                   </DialogHeader>
               {viewedDependency && viewedDependency.sectionIds.length > 1 && <div className="settings-license-body-heading"><h3>{t("settings.licenses.body")}</h3>
@@ -206,7 +206,7 @@ export function AboutLicensesSettingsArea(props: {
               {body?.sectionId === requestedSectionId && body.revision === revision
                 ? body.error ? <div role="alert" className="settings-license-error"><p>{body.error}</p><Button variant="outline" onClick={() => setBodyRetry((value) => value + 1)}>{t("settings.licenses.retry")}</Button></div>
                   : <pre className="settings-license-body" tabIndex={0}>{body.text}</pre>
-                : <StreamPlaceholder className="p-1" label={t("settings.licenses.loadingBody")} count={12} />}
+                : <StreamPlaceholder label={t("settings.licenses.loadingBody")} count={12} />}
                 </DialogContent>
               </Dialog>
             </>}

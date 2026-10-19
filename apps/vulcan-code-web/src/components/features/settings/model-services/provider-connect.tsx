@@ -60,7 +60,7 @@ export function ProviderConnectPanel(props: {
         </div>
         <p className="vk-ms-panel-hint">{t("settings.modelServices.connectPanel.hint")}</p>
         <Button
-          className="self-end"
+          className="vk-form-end"
           disabled={props.busy || (!core && !entryId)}
           onClick={() => core ? account?.setOpen(true) : props.onConnect(entryId)}
           type="button"

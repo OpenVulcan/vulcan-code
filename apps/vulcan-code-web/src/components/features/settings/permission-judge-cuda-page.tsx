@@ -159,7 +159,7 @@ export function PermissionJudgeCudaPage(props: {
             ? `${formatBytes(install.completedBytes)} / ${formatBytes(install.totalBytes)}`
             : "",
         })}</p>
-        {progress !== null ? <Progress className="mt-2" value={progress} /> : null}
+        {progress !== null ? <Progress className="vk-form-after" value={progress} /> : null}
       </PageNotice> : install?.error ? <PageNotice tone="error" details={install.error} detailsLabel={t("settings.errors.showErrorDetails")}>
         {t("settings.permissionJudge.cuda.installFailed")}
       </PageNotice> : install ? <PageNotice tone="success">
@@ -184,7 +184,7 @@ export function PermissionJudgeCudaPage(props: {
             </Button>} />;
       })}
       <PageRow stacked label={t("settings.permissionJudge.cuda.customFolder")}>
-        <div className="flex w-full items-center gap-2">
+        <div className="vk-form-cols2">
           <Input aria-label={t("settings.permissionJudge.cuda.customFolder")} className="vk-form-fill"
             placeholder={props.selectedDirectory ?? ""} value={custom} onChange={(event) => setCustom(event.target.value)} />
           <Button type="button" size="sm" variant="outline" disabled={props.busy !== null || custom.trim() === ""}

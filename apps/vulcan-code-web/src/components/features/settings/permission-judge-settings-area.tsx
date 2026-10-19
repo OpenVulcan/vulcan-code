@@ -264,7 +264,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
         <Button type="button" size="sm" variant="ghost" data-judge-back="" onClick={back}>
           <ChevronLeft size={14} />{t("settings.permissionJudge")}
         </Button>
-        <span aria-hidden="true" className="text-muted-foreground">/</span>
+        <span aria-hidden="true" className="vk-faint">/</span>
         <h2 className="vk-form-title">{title}</h2>
       </PageToolbar>
     </div>
@@ -410,7 +410,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
         : undefined}>
         <Select disabled={busy !== null} value={choices.device ?? undefined}
           onValueChange={(device) => persist({ device: device as JudgeDevice })}>
-          <SelectTrigger aria-label={t("settings.permissionJudge.device")} className="w-56"><SelectValue /></SelectTrigger>
+          <SelectTrigger aria-label={t("settings.permissionJudge.device")} className="vk-form-w-lg"><SelectValue /></SelectTrigger>
           <SelectContent>
             {snapshot.devices.map((device) => (
               <SelectItem disabled={device.unavailableReason !== null} key={device.device} value={device.device}>
@@ -519,7 +519,7 @@ function ApprovalTimeoutInput(props: {
     }
     if (seconds !== props.value) props.onCommit(seconds);
   };
-  return <Input type="number" inputMode="numeric" min={0} max={props.max} step={1} className="h-8 w-28"
+  return <Input type="number" inputMode="numeric" min={0} max={props.max} step={1} className="vk-form-w-xs"
     aria-label={props.label} data-approval-timeout="" disabled={props.disabled} value={draft}
     onChange={(event) => setDraft(event.currentTarget.value)} onBlur={commit}
     onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />;
@@ -613,7 +613,7 @@ function ModelsPage(props: {
                 {t("settings.permissionJudge.remove")}
               </Button>
             </>}>
-            <PageHint className="break-all">{model.path}</PageHint>
+            <PageHint className="vk-form-break">{model.path}</PageHint>
           </PageItem>;
         })}
     </PageSection>

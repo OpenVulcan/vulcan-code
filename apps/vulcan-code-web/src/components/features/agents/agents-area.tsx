@@ -641,7 +641,7 @@ function AgentEditorForm(props: {
               </label>
               <div className="wide agent-editor-model-field">
                 <span>{t("agents.model")}</span>
-                <div className="settings-card-actions">
+                <div className="vk-form-inline">
                   <ModelPickerControl
                     selectionScope="model"
                     ariaLabel={t("agents.chooseFixedAgentModel")}
@@ -670,11 +670,11 @@ function AgentEditorForm(props: {
                     <span>{t("agents.followSession")}</span>
                   </Button>
                 </div>
-                <small className="settings-muted-line">
+                <small className="vk-form-note">
                   {fixedModelValue ? `${t("agents.fixedModel")}: ${draft.fixedModelProviderId}/${draft.fixedModelId}` : t("agents.currentlyFollowsTheSession")}
                 </small>
                 {fixedModelUnavailable ? (
-                  <small className="settings-muted-line">{fixedModelUnavailableReason}</small>
+                  <small className="vk-form-note">{fixedModelUnavailableReason}</small>
                 ) : null}
               </div>
               <div className="wide">
@@ -1838,3 +1838,4 @@ function localizedAgentScopeLabel(
 // Directory-only rules follow this lazy owner; shared workbench and responsive rules remain global.
 // 目录专有规则随此懒加载归属载入；共用工作台与响应式规则保持全局。
 import "@/styles/skill-directory.css";
+import "@/ui-kit/styles/features/settings-forms.css";

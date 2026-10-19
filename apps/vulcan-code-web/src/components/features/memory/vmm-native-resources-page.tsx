@@ -28,6 +28,7 @@ import {
 } from "@/diff/diff-highlight"
 import { escapeHtml, tokenSpansToHtml } from "@/diff/diff-shiki-shared"
 import { useI18n } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css";
 import type {
   VmmMemoryActionResult,
   VmmNativeNoiseTestResult,
@@ -278,7 +279,7 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
           value={activeGroup}
         />
       <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"><span>{t("memory.resources.overrideDirectory")}: </span><span className="break-all font-mono">{catalog?.overrideRoot ?? <InlineStreamPlaceholder label={t("memory.resources.loading")} />}</span></div>
-      {error ? <p className="settings-error-text text-sm">{error}</p> : null}
+      {error ? <p className="vk-field-error">{error}</p> : null}
           {/* The key remounts the group's panel on switch, matching the previous tab panels' lifecycle.
               key 在切换时重新挂载分组面板，与原标签面板的生命周期一致。 */}
           <div className="space-y-4" key={group}>

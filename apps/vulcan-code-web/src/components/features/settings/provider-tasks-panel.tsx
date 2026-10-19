@@ -87,7 +87,7 @@ export function ProviderTasksPanel(props: {
   if (error && !tasks) {
     return (
       <div className="ai-capabilities-message" role="alert">
-        <p className="settings-error-text">{error}</p>
+        <p className="vk-field-error">{error}</p>
         <Button onClick={() => setReloadVersion((value) => value + 1)} size="sm" type="button" variant="outline">
           {t("settings.modelExperience.retryLoad")}
         </Button>
@@ -102,7 +102,7 @@ export function ProviderTasksPanel(props: {
   }
   return (
     <>
-      {error ? <p className="settings-error-text" role="alert">{error}</p> : null}
+      {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
       <ul className="ai-capability-list">
         {tasks.map((task) => {
           const title = task.capability ? props.capabilityLabel(task.capability) : t("settings.providerTasks.untitled");

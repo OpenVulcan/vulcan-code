@@ -154,7 +154,7 @@ export function PermissionReviewRouteSection(props: { children?: React.ReactNode
     {selected ? <PageRow label={t("settings.permissionJudge.review.reasoning")}>
       <Select disabled={busy} value={savedEffort ?? MODEL_DEFAULT_EFFORT}
         onValueChange={(effort) => void save(selected.route, effort)}>
-        <SelectTrigger aria-label={t("settings.permissionJudge.review.reasoning")} className="w-56"><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label={t("settings.permissionJudge.review.reasoning")} className="vk-form-w-lg"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value={MODEL_DEFAULT_EFFORT}>{t("settings.permissionJudge.review.reasoningDefault")}</SelectItem>
           {efforts.map((effort) => (

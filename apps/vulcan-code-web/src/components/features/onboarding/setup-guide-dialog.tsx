@@ -20,6 +20,7 @@ import {
   savePermissionJudgeSettings,
 } from "@/service/permission-judge-service";
 import type { PermissionJudgeSettingsSnapshot } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css";
 
 // Choice is one of the three permission judge answers the guide offers.
 // Choice 是引导提供的三种权限判定答案之一。
@@ -144,7 +145,7 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
               : null}
             {choice === "cloud" ? <div className="grid gap-2">
               <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />
-              <div className="settings-card-actions">
+              <div className="vk-form-inline">
                 <Button type="button" size="sm" variant="ghost" onClick={props.onOpenProviderSettings}>
                   <ExternalLink size={14} />{t("setupGuide.cloud.providers")}
                 </Button>

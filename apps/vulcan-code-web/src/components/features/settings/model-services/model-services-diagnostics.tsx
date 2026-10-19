@@ -41,14 +41,14 @@ export function ModelServicesDiagnostics(props: {
     <div className="vk-ms-diagnostics">
       {failureTotal > 0 ? (
         <section className="vk-ms-isolated" role="alert">
-          <p className="font-semibold text-destructive">
+          <p className="vk-form-strong" data-tone="bad">
             {t("settings.providers.isolatedCount").replace("{count}", String(failureTotal))}
           </p>
-          <p className="text-muted-foreground">{t("settings.providers.isolatedDescription")}</p>
+          <p className="vk-form-note">{t("settings.providers.isolatedDescription")}</p>
           <ul>
             {failures.map((failure, index) => (
               <li key={`${failure.providerId}:${index}`}>
-                <span className="min-w-0 flex-1 break-all font-mono">{failure.providerId}: {failure.message}</span>
+                <span className="vk-form-fill vk-form-break vk-mono">{failure.providerId}: {failure.message}</span>
                 <Button disabled={busy} onClick={() => setRemoving(failure.providerId)} size="sm" type="button" variant="destructive">
                   <Trash2 aria-hidden="true" />
                   {t("settings.providers.removeIsolated")}
@@ -67,9 +67,9 @@ export function ModelServicesDiagnostics(props: {
           <AlertDialogHeader>
             <AlertDialogTitle>{t("settings.providers.removeIsolatedTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              <span className="block space-y-2">
-                <span className="block">{t("settings.providers.removeIsolatedDescription")}</span>
-                <span className="block break-all font-mono text-foreground">{removing}</span>
+              <span className="vk-form-lines">
+                <span>{t("settings.providers.removeIsolatedDescription")}</span>
+                <code className="vk-form-break">{removing}</code>
               </span>
             </AlertDialogDescription>
           </AlertDialogHeader>

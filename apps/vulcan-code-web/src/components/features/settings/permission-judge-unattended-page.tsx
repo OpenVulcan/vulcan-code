@@ -129,7 +129,7 @@ function ProjectDefaultSection(props: { projects: readonly ProjectSummary[] }) {
       {t("settings.permissionJudge.unattended.save")}
     </Button> : undefined}
     actions={<Select value={current} onValueChange={setProjectId}>
-      <SelectTrigger aria-label={t("settings.permissionJudge.policy.project")} className="h-8 w-auto max-w-72"><SelectValue /></SelectTrigger>
+      <SelectTrigger aria-label={t("settings.permissionJudge.policy.project")} className="vk-form-w-auto" size="sm"><SelectValue /></SelectTrigger>
       <SelectContent>
         {props.projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}
       </SelectContent>
@@ -147,9 +147,9 @@ function ProjectDefaultSection(props: { projects: readonly ProjectSummary[] }) {
           <Textarea aria-label={t("settings.permissionJudge.unattended.projectTitle")} density="large" maxLength={snapshot.maxChars}
             placeholder={t("permissionMode.unattended.placeholder")} value={text} onChange={(event) => setText(event.target.value)} />
         </PageRow>
-      </> : <PageHint className="px-(--card-spacing) py-2" data-unattended-follows="">
+      </> : <PageHint className="vk-form-inset" data-unattended-follows="">
         {snapshot.systemDenyPolicy === "" ? t("settings.permissionJudge.unattended.followsEmpty") : t("settings.permissionJudge.unattended.follows")}
-        {snapshot.systemDenyPolicy === "" ? null : <span className="mt-1 block whitespace-pre-wrap text-foreground">{snapshot.systemDenyPolicy}</span>}
+        {snapshot.systemDenyPolicy === "" ? null : <span className="vk-form-quote">{snapshot.systemDenyPolicy}</span>}
       </PageHint>}
     </>}
   </PageSection>;

@@ -250,7 +250,7 @@ function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean;
             <div><dt>{t("settings.modelServices.head.entries")}</dt><dd>{provider.service_entries.map((entry) => entry.display_name).join(" · ")}</dd></div>
           ) : null}
           {provider.kind === "custom" ? (
-            <div><dt>{t("settings.providers.table.endpoint")}</dt><dd className="font-mono break-all">{provider.service_entries.map((entry) => entry.base_url).join(" · ")}</dd></div>
+            <div><dt>{t("settings.providers.table.endpoint")}</dt><dd className="vk-mono vk-form-break">{provider.service_entries.map((entry) => entry.base_url).join(" · ")}</dd></div>
           ) : null}
         </dl>
       ) : null}

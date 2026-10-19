@@ -76,8 +76,8 @@ export function ProviderRemovalDialog(props: {
         <AlertDialogHeader>
           <AlertDialogTitle>{t("settings.customProviders.removeTitle")}</AlertDialogTitle>
           <AlertDialogDescription>
-            <span className="block space-y-2">
-              {lines.map((line) => <span className="block" key={line}>{line}</span>)}
+            <span className="vk-form-lines">
+              {lines.map((line) => <span key={line}>{line}</span>)}
             </span>
           </AlertDialogDescription>
         </AlertDialogHeader>

@@ -124,3 +124,54 @@
 .vk-form-narrow { max-width: 20rem; }
 .vk-form-framed { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); }
 .vk-form-scrollable { overflow-y: auto; }
+
+/* ---------- Inline control widths, numbers, breaks and small text blocks ---------- */
+.vk-form-w-xs { width: 7rem; }
+.vk-form-w-sm { width: 9rem; }
+.vk-form-w-md { width: 11rem; }
+.vk-form-w-lg { width: 14rem; }
+.vk-form-w-auto { width: auto; max-width: 18rem; }
+.vk-form-num { text-align: right; font-variant-numeric: tabular-nums; }
+.vk-form-break { overflow-wrap: anywhere; }
+.vk-form-nowrap { white-space: nowrap; }
+.vk-form-wrap { display: inline-flex; }
+.vk-form-end { align-self: flex-end; }
+.vk-form-after { margin-top: calc(var(--vk-u) * 2); }
+.vk-form-inset { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4); }
+.vk-form-inline-note { display: inline; margin-left: calc(var(--vk-u) * 1.5); font-family: var(--vk-font-mono); }
+.vk-form-clamp { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
+.vk-form-lines { display: grid; gap: calc(var(--vk-u) * 2); }
+.vk-form-lines > code { color: var(--vk-ink); font-family: var(--vk-font-mono); }
+.vk-form-quote { display: block; margin-top: var(--vk-u); padding-left: calc(var(--vk-u) * 2); border-left: 2px solid var(--vk-line-strong); color: var(--vk-ink); white-space: pre-wrap; }
+.vk-form-pre { max-height: 12rem; margin: calc(var(--vk-u) * 2) 0 0; padding: calc(var(--vk-u) * 2); overflow: auto; background: var(--vk-sunken); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-form-bullets { display: grid; gap: calc(var(--vk-u) * 1.5); margin: 0; padding-left: calc(var(--vk-u) * 4); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: var(--vk-lh-ui); list-style: square; }
+.vk-form-bullets > li::marker { color: var(--vk-ember); }
+.vk-form-scroll-list { max-height: 10rem; overflow: auto; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+fieldset.vk-form-stack, fieldset.vk-form-loose { min-width: 0; margin: 0; padding: 0; border: 0; }
+.vk-form-switch > span { display: grid; gap: 2px; min-width: 0; }
+.vk-form-switch small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 400; }
+
+/* Threshold band: a ruled fieldset holding a kind-by-threshold input matrix. */
+/* 阈值分组：带分隔线的字段组，承载类型 × 阈值的输入矩阵。 */
+.vk-form-band { display: grid; gap: calc(var(--vk-u) * 3); min-width: 0; margin: 0; padding: calc(var(--vk-u) * 3) 0 0; border: 0; border-top: var(--vk-bw) solid var(--vk-line); }
+.vk-form-band > legend { float: left; width: 100%; padding: 0; font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-form-matrix { display: grid; grid-template-columns: minmax(3.5rem, 0.65fr) minmax(5rem, 1fr) minmax(5rem, 1fr); align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); }
+.vk-form-matrix > span:nth-child(-n + 3) { color: var(--vk-ink-3); }
+.vk-form-band > .vk-form-acts { font-size: var(--vk-fs-xs); }
+
+/* Startup step log: status glyph column beside label and message. */
+/* 启动步骤日志：状态图标列与标签、消息并排。 */
+.vk-form-steplog { display: grid; gap: calc(var(--vk-u) * 2.5); margin: 0; padding: 0; list-style: none; }
+.vk-form-steplog > li { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: start; gap: calc(var(--vk-u) * 2); }
+.vk-form-steplog strong { display: block; font-size: var(--vk-fs-sm); font-weight: 500; }
+.vk-form-steplog span { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-form-strong[data-tone] { color: var(--vk-tone); }
+
+/* ---------- Preference list: ruled rows with title and notes left, one control right ---------- */
+/* 偏好列表：带分隔线的行，左侧标题与说明，右侧单个控件。 */
+.vk-form-prefs { display: grid; align-content: start; max-width: 52rem; }
+.vk-form-pref { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 8); padding: calc(var(--vk-u) * 4) 0; border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-form-pref:first-child { padding-top: 0; }
+.vk-form-pref-text { display: grid; gap: var(--vk-u); min-width: 0; }
+.vk-form-pref-text > strong { font-size: var(--vk-fs-sm); font-weight: 500; color: var(--vk-ink); }
+.vk-form-pref > :nth-child(n + 3) { grid-column: 1 / -1; }

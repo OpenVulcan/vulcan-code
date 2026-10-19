@@ -227,7 +227,7 @@ export function PermissionJudgeRecordsPage() {
         </FilterChip>
         {page.workspaces.length > 0 ? <Select value={filters.workspace ?? ALL_WORKSPACES}
           onValueChange={(workspace) => setFilters({ ...filters, workspace: workspace === ALL_WORKSPACES ? null : workspace })}>
-          <SelectTrigger aria-label={t("settings.permissionJudge.records.detail.workspace")} className="h-7 w-auto max-w-72"><SelectValue /></SelectTrigger>
+          <SelectTrigger aria-label={t("settings.permissionJudge.records.detail.workspace")} className="vk-form-w-auto" size="sm"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_WORKSPACES}>{t("settings.permissionJudge.records.allWorkspaces")}</SelectItem>
             {page.workspaces.map((workspace) => <SelectItem key={workspace} value={workspace}>{workspace}</SelectItem>)}
@@ -290,7 +290,7 @@ function RecordItem(props: {
     }] : []),
   ];
   return <PageItem data-record-id={record.id} icon={look.icon} tone={look.tone}
-    title={<span className="break-all font-mono text-xs">{callSummary(record)}</span>}
+    title={<span className="vk-mono vk-form-break vk-form-note">{callSummary(record)}</span>}
     meta={<>
       {result ? <Badge variant="outline">{t(RESULT_KEYS[result])}</Badge> : null}
       <Badge variant="secondary">{label(t, OUTCOME_KEYS, record.outcome)}</Badge>
@@ -300,17 +300,17 @@ function RecordItem(props: {
     </>}
     description={[props.time, record.workspaceRoot].filter(Boolean).join(" · ")}>
     <PageDetails label={t("settings.permissionJudge.records.details")} items={facts}>
-      <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-all whitespace-pre-wrap">{record.arguments}</pre>
+      <pre className="vk-form-pre">{record.arguments}</pre>
     </PageDetails>
-    {trace ? <div className="mt-2 flex flex-wrap items-center gap-1" data-record-mark="">
-      <PageHint className="mr-1">{t("settings.permissionJudge.records.markAs")}</PageHint>
+    {trace ? <div className="vk-form-inline vk-form-after" data-record-mark="">
+      <PageHint>{t("settings.permissionJudge.records.markAs")}</PageHint>
       {MARK_LABELS.map((name) => (
         <FilterChip key={name} selected={record.correction === name} disabled={props.busy}
           onClick={() => props.onMark(record.correction === name ? null : name)}>
           {t(RESULT_KEYS[name])}
         </FilterChip>
       ))}
-    </div> : <PageHint className="mt-2">{t("settings.permissionJudge.records.noTrace")}</PageHint>}
+    </div> : <PageHint className="vk-form-after">{t("settings.permissionJudge.records.noTrace")}</PageHint>}
   </PageItem>;
 }
 

@@ -123,7 +123,7 @@ export function SystemPromptSettingsCard(props: { projects: ProjectSummary[] }) 
         <h3 className="vk-form-title">{t("settings.modelExperience.systemPrompt")}</h3>
         <p className="vk-form-note">{t("settings.systemPrompt.description")}</p>
       </div>
-      <label className="flex items-center gap-3 text-sm">
+      <label className="vk-form-inline">
         <span>{t("settings.systemPrompt.scope")}</span>
         <Select value={scopeValue} onValueChange={setScopeValue} disabled={busy}>
           <SelectTrigger><SelectValue /></SelectTrigger>

@@ -90,13 +90,13 @@ export function McpOAuthPanel(props: {
     <h4>{t("settings.mcp.oauthSignIn")}</h4>
     <p role="status">{status ? authStatusText(status, t) : t("settings.mcp.loading")}</p>
     {flow && flowActive && <>
-      <p className="settings-muted-line">{phase === "exchanging" ? t("settings.mcp.oauth.exchanging") : t("settings.mcp.oauth.waitingForBrowser")}</p>
-      <p className="settings-muted-line"><code className="break-all">{flow.authorizationUrl}</code></p>
+      <p className="vk-form-note">{phase === "exchanging" ? t("settings.mcp.oauth.exchanging") : t("settings.mcp.oauth.waitingForBrowser")}</p>
+      <p className="vk-form-note"><code className="vk-form-break">{flow.authorizationUrl}</code></p>
       {phase === "awaiting_callback" && flow.callbackMode === "manual" && <>
-        <label className="settings-form-field"><span>{t("settings.mcp.oauth.callbackUrl")}</span>
+        <label className="vk-field"><span>{t("settings.mcp.oauth.callbackUrl")}</span>
           <Input autoComplete="off" value={callbackUrl} disabled={busy} placeholder={flow.redirectUri} onChange={e => setCallbackUrl(e.target.value)} />
         </label>
-        <p className="settings-muted-line">{t("settings.mcp.oauth.manualHint")}</p>
+        <p className="vk-form-note">{t("settings.mcp.oauth.manualHint")}</p>
       </>}
       <div className="mcp-filter-row">
         {phase === "awaiting_callback" && flow.callbackMode === "manual" && <Button size="sm" disabled={busy || !callbackUrl.trim()} onClick={() => void run(() => finishMcpOAuth({ serverId: props.serverId, flowId: flow.flowId, callbackUrl }))}>{t("settings.mcp.oauth.finish")}</Button>}

@@ -20,10 +20,14 @@ export function ConversationLinkSettingsSection() {
   // error 明确展示持久化失败，不改变已显示的选择。
   const [error, setError] = React.useState("");
   if (!readElectronLocalBrowserBridge()) return null;
-  return <section className="settings-form-grid mt-6">
-    <label className="vk-form-switch">
-      <span>{t("settings.conversationLinks.openLinksInThe")}</span>
-      <Switch checked={enabled} onCheckedChange={(checked) => {
+  return <section className="vk-form-pref">
+    <div className="vk-form-pref-text">
+      <strong>{t("settings.conversationLinks.openLinksInThe")}</strong>
+      <p className="vk-form-note">{t("settings.conversationLinks.whenOnWebLinks")}</p>
+    </div>
+      <Switch
+ aria-label={t("settings.conversationLinks.openLinksInThe")}
+ checked={enabled} onCheckedChange={(checked) => {
         try {
           saveConversationLinkPreference(checked);
           setEnabled(checked);
@@ -32,8 +36,6 @@ export function ConversationLinkSettingsSection() {
           setError(cause instanceof Error ? cause.message : String(cause));
         }
       }} />
-    </label>
-    <p className="settings-muted-line">{t("settings.conversationLinks.whenOnWebLinks")}</p>
     {error && <p role="alert" className="vk-field-error">{error}</p>}
   </section>;
 }

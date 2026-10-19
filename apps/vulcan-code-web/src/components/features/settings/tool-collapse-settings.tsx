@@ -40,17 +40,18 @@ export function ToolCollapseSettingsSection() {
       setPending(null);
     }
   };
-  return <section className="settings-form-grid mt-6">
-    <label className="vk-form-switch">
-      <span>{t("settings.toolCollapse.collapseToolCallsBy")}</span>
+  return <section className="vk-form-pref">
+    <div className="vk-form-pref-text">
+      <strong>{t("settings.toolCollapse.collapseToolCallsBy")}</strong>
+      <p className="vk-form-note">{t("settings.toolCollapse.whenOnToolCalls")}</p>
+    </div>
       <Switch
+        aria-label={t("settings.toolCollapse.collapseToolCallsBy")}
         checked={pending ?? preferences.defaultEnabled}
         disabled={pending !== null || !preferences.saveDefault}
         onCheckedChange={(enabled) => { void save(enabled); }}
       />
-    </label>
-    <p className="settings-muted-line">{t("settings.toolCollapse.whenOnToolCalls")}</p>
-    {pending !== null ? <p role="status" className="settings-muted-line">{t("settings.toolCollapse.saving")}</p> : null}
+    {pending !== null ? <p role="status" className="vk-form-note">{t("settings.toolCollapse.saving")}</p> : null}
     {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
   </section>;
 }

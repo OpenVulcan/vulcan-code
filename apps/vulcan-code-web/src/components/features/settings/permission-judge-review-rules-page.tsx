@@ -175,7 +175,7 @@ function ProjectRulesSection(props: { projects: readonly ProjectSummary[] }) {
       {t("settings.permissionJudge.reviewRules.save")}
     </Button> : undefined}
     actions={<Select value={current} onValueChange={setProjectId}>
-      <SelectTrigger aria-label={t("settings.permissionJudge.policy.project")} className="h-8 w-auto max-w-72"><SelectValue /></SelectTrigger>
+      <SelectTrigger aria-label={t("settings.permissionJudge.policy.project")} className="vk-form-w-auto" size="sm"><SelectValue /></SelectTrigger>
       <SelectContent>
         {props.projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}
       </SelectContent>
@@ -189,7 +189,7 @@ function ProjectRulesSection(props: { projects: readonly ProjectSummary[] }) {
           onCheckedChange={(checked) => void save(checked ? snapshot.systemRules : null)} />
       </PageRow>
       {own !== null ? <RulesEditor scope="project" rules={rules} maxChars={snapshot.maxChars} onChange={setRules} />
-        : <PageHint className="px-(--card-spacing) py-2" data-review-rules-follows="">
+        : <PageHint className="vk-form-inset" data-review-rules-follows="">
           {systemEmpty ? t("settings.permissionJudge.reviewRules.followsEmpty") : t("settings.permissionJudge.reviewRules.follows")}
         </PageHint>}
     </>}

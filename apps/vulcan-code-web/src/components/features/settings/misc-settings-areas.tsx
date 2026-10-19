@@ -131,13 +131,13 @@ export function GitCommitSettingsArea(props: {
     }
   }
   return (
-    <section className="settings-detail-panel settings-preferences-page git-commit-settings-page">
+    <section className="vk-form-scroll settings-preferences-page git-commit-settings-page">
       <fieldset className="settings-preferences-fields" disabled={saveState === "saving"}>
         <section className="settings-preferences-section">
           <h2><GitCommitHorizontal size={16} />{t("settings.misc.whoWritesCommitMessages")}</h2>
-          <div className="settings-form-field">
+          <div className="vk-field">
             <span>{t("settings.gitCommit.summaryModel")}</span>
-            <div className="settings-card-actions">
+            <div className="vk-form-inline">
               <ModelPickerControl
                 selectionScope="model"
                 ariaLabel={t("settings.gitCommit.chooseSummaryModel")}
@@ -156,35 +156,35 @@ export function GitCommitSettingsArea(props: {
                 type="button"
               ><RotateCcw size={14} />{t("settings.gitCommit.followSessionModel")}</Button> : null}
             </div>
-            <small className="settings-muted-line">{draft.summaryModel.mode === "session" ? t("settings.gitCommit.followSessionModelHelp") : t("settings.gitCommit.fixedSummaryModelHelp")}</small>
+            <small className="vk-form-note">{draft.summaryModel.mode === "session" ? t("settings.gitCommit.followSessionModelHelp") : t("settings.gitCommit.fixedSummaryModelHelp")}</small>
             {fixedModelValue && !modelPickerChoiceExists(props.workbench.providers, fixedModelValue) ? (
-              <p role="status" className="settings-muted-line">{t("settings.gitCommit.fixedSummaryModelUnavailable")}</p>
+              <p role="status" className="vk-form-note">{t("settings.gitCommit.fixedSummaryModelUnavailable")}</p>
             ) : null}
           </div>
         </section>
         <section className="settings-preferences-section">
           <h2>{t("settings.misc.howCommitMessagesAre")}</h2>
-          <label className="settings-form-field">
+          <label className="vk-field">
             <span>{t("settings.gitCommit.summaryExtraPrompt")}</span>
             <Textarea rows={4} value={draft.summaryExtraPrompt}
               placeholder={t("settings.gitCommit.summaryExtraPromptPlaceholder")}
               onChange={(event) => setDraft({ ...draft, summaryExtraPrompt: event.currentTarget.value })} />
-            <small className="settings-muted-line">{t("settings.gitCommit.summaryExtraPromptHelp")}</small>
+            <small className="vk-form-note">{t("settings.gitCommit.summaryExtraPromptHelp")}</small>
           </label>
         </section>
         <section className="settings-preferences-section">
           <h2>{t("settings.misc.branchNaming")}</h2>
-          <label className="settings-form-field">
+          <label className="vk-field">
             <span>{t("settings.misc.newBranchNamePrefix")}</span>
             <Input value={draft.newBranchPrefix} placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
               onChange={(event) => setDraft({ ...draft, newBranchPrefix: event.currentTarget.value })} />
-            <small className="settings-muted-line">{t("settings.misc.example")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code></small>
-            <small className="settings-muted-line">{t("settings.misc.onlyAffectsNewBranches")}</small>
+            <small className="vk-form-note">{t("settings.misc.example")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code></small>
+            <small className="vk-form-note">{t("settings.misc.onlyAffectsNewBranches")}</small>
           </label>
         </section>
       </fieldset>
       <div className="settings-preferences-footer">
-        <span role="status" className="settings-muted-line">{dirty ? t("settings.misc.unsavedChanges") : saveState === "saved" ? t("settings.misc.saved") : ""}</span>
+        <span role="status" className="vk-form-note">{dirty ? t("settings.misc.unsavedChanges") : saveState === "saved" ? t("settings.misc.saved") : ""}</span>
         <Button disabled={saveState === "saving" || !dirty} onClick={() => void saveDraft()} type="button">
           <Save size={14} />{saveState === "saving" ? t("settings.misc.saving") : t("settings.misc.save")}
         </Button>
@@ -282,18 +282,18 @@ export function OutputStyleSettingsSection(props: {
     setOutputStyleId(nextId)
     if (nextId !== props.outputStyleCatalog.selectedId && props.outputStyleCatalog.entries.some((entry) => entry.id === nextId)) void saveOutputStyle(nextId)
   }
-  return <div className="settings-form-grid">
-    <label className="settings-form-field">
-      <span>{t("settings.misc.answerStyleForNew")}</span>
+  return <div className="vk-form-pref">
+    <div className="vk-form-pref-text">
+      <strong>{t("settings.misc.answerStyleForNew")}</strong>
+      <p className="vk-form-note">{t("settings.misc.takesEffectForNew")}</p>
+    </div>
       <Select disabled={saving} onValueChange={selectStyle} value={outputStyleId}>
-        <SelectTrigger><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label={t("settings.misc.answerStyleForNew")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
         <SelectContent>{props.outputStyleCatalog.entries.map((entry) => (
           <SelectItem key={entry.id} value={entry.id}>{pickBilingualText(locale, entry.labelZh, entry.labelEn)}</SelectItem>
         ))}</SelectContent>
       </Select>
-    </label>
-    <p className="settings-muted-line">{t("settings.misc.takesEffectForNew")}</p>
-    {saving || saved ? <p className="settings-muted-line" role="status">{saving ? t("settings.misc.saving2") : t("settings.misc.saved")}</p> : null}
+    {saving || saved ? <p className="vk-form-note" role="status">{saving ? t("settings.misc.saving2") : t("settings.misc.saved")}</p> : null}
     {error ? <SettingsErrorNotice detail={error} message={t("settings.misc.couldnTSaveYour2")} /> : null}
   </div>
 }
@@ -336,20 +336,20 @@ export function AnswerModeSettingsSection(props: {
       setSaving(false)
     }
   }
-  return <div className="settings-form-grid">
-    <label className="settings-form-field">
-      <span>{t("answerMode.globalDefault")}</span>
+  return <div className="vk-form-pref">
+    <div className="vk-form-pref-text">
+      <strong>{t("answerMode.globalDefault")}</strong>
+      <p className="vk-form-note">{t(mode === "interactive" ? "answerMode.interactiveHint" : "answerMode.standardHint")}</p>
+      <p className="vk-form-note">{t("settings.misc.takesEffectForNew")}</p>
+    </div>
       <Select disabled={saving} onValueChange={(next) => void selectMode(next)} value={mode}>
-        <SelectTrigger><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label={t("answerMode.globalDefault")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="standard">{t("answerMode.standard")}</SelectItem>
           <SelectItem value="interactive">{t("answerMode.interactive")}</SelectItem>
         </SelectContent>
       </Select>
-    </label>
-    <p className="settings-muted-line">{t(mode === "interactive" ? "answerMode.interactiveHint" : "answerMode.standardHint")}</p>
-    <p className="settings-muted-line">{t("settings.misc.takesEffectForNew")}</p>
-    {saving ? <p className="settings-muted-line" role="status">{t("settings.misc.saving2")}</p> : null}
+    {saving ? <p className="vk-form-note" role="status">{t("settings.misc.saving2")}</p> : null}
     {error ? <SettingsErrorNotice detail={error} message={t("answerMode.saveFailed")} /> : null}
   </div>
 }
@@ -448,9 +448,9 @@ export function ArchivedRestoreSettingsArea(props: {
   }, [props.actions])
 
   return (
-    <section className="settings-preferences-page settings-detail-panel settings-archive-page">
+    <section className="vk-form-scroll settings-preferences-page settings-archive-page">
       <div className="settings-archive-toolbar">
-        <span className="settings-muted-line">{formatMessage(t("settings.misc.selected"), { selectedCount })}</span>
+        <span className="vk-form-note">{formatMessage(t("settings.misc.selected"), { selectedCount })}</span>
         <div className="vk-form-inline">
           <Button
             disabled={selectedCount === 0 || operation !== "idle"}
@@ -479,7 +479,7 @@ export function ArchivedRestoreSettingsArea(props: {
             <AlertDialogDescription>
               {formatMessage(t("settings.misc.permanentlyDeleteArchivedConversations2"), { length: deleteTargetIds.length })}
             </AlertDialogDescription>
-            <ul className="max-h-40 overflow-auto text-sm">{deleteTargetIds.map((id) => <li key={id}>{archivedConversations.find((conversation) => conversation.id === id)?.title}</li>)}</ul>
+            <ul className="vk-form-bullets vk-form-scroll-list">{deleteTargetIds.map((id) => <li key={id}>{archivedConversations.find((conversation) => conversation.id === id)?.title}</li>)}</ul>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("settings.misc.cancel")}</AlertDialogCancel>
@@ -491,9 +491,9 @@ export function ArchivedRestoreSettingsArea(props: {
       </AlertDialog>
       <div className="settings-archive-table-scroll">
         <table className="settings-archive-table">
-          <caption className="sr-only">{t("settings.misc.archivedConversations")}</caption>
+          <caption className="vk-sr-only">{t("settings.misc.archivedConversations")}</caption>
           <thead><tr>
-            <th className="settings-archive-selection"><label className="inline-flex items-center gap-2 whitespace-nowrap">
+            <th className="settings-archive-selection"><label className="vk-check-label vk-form-nowrap">
             <Checkbox
               aria-label={t("settings.misc.selectAllArchivedConversations")}
               checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
@@ -513,7 +513,7 @@ export function ArchivedRestoreSettingsArea(props: {
                 onCheckedChange={(checked) => toggleConversationSelection(conversation.id, checked === true)} /></td>
               <td className="settings-archive-title">{conversation.title}</td>
               <td>{conversation.projectId ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? t("settings.misc.originalProjectUnavailable") : t("settings.misc.standaloneConversation")}</td>
-              <td className="whitespace-nowrap text-muted-foreground">{conversation.lastUpdatedLabel}</td>
+              <td className="vk-form-nowrap vk-faint">{conversation.lastUpdatedLabel}</td>
               <td><div className="vk-form-acts">
                 <Button size="sm" variant="outline" aria-label={formatMessage(t("settings.misc.restoreConversation"), { title: conversation.title })} disabled={operation !== "idle"}
                   onClick={() => void runArchivedConversationAction("restore", [conversation.id])}><RotateCcw size={14} />{t("settings.misc.restore")}</Button>
@@ -526,9 +526,9 @@ export function ArchivedRestoreSettingsArea(props: {
       </div>
       {archivedConversations.length > 0 ? (
         <div className="settings-pagination">
-          <span className="settings-muted-line">{formatMessage(t("settings.misc.pageOf"), { currentPage, pageCount })}</span>
-          <div className="settings-card-actions">
-            <span className="settings-muted-line">{currentPageSelected ? t("settings.misc.currentPageSelected") : t("settings.misc.selectionIsKeptAcross")}</span>
+          <span className="vk-form-note">{formatMessage(t("settings.misc.pageOf"), { currentPage, pageCount })}</span>
+          <div className="vk-form-inline">
+            <span className="vk-form-note">{currentPageSelected ? t("settings.misc.currentPageSelected") : t("settings.misc.selectionIsKeptAcross")}</span>
             <Button
               aria-label={t("settings.misc.previousPage")}
               variant="outline"

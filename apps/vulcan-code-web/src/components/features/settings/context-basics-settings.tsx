@@ -369,7 +369,7 @@ function AccountUsageRefreshCard(props: {
         onValueChange={(value) => void save(Number(value))}
         value={String(props.intervalSeconds)}
       >
-        <SelectTrigger aria-label={t("settings.usageRefresh.title")} className="w-48"><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label={t("settings.usageRefresh.title")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="60">{t("settings.usageRefresh.minute").replace("{count}", "1")}</SelectItem>
           <SelectItem value="300">{t("settings.usageRefresh.minutes").replace("{count}", "5")}</SelectItem>
@@ -448,7 +448,7 @@ export function ContextBasicsSettingsArea(props: {
     }>
       {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
       <div className="context-basics-tabs">
-        {props.outputStyleSettings ? <section hidden={activeSection !== "conversation"}>{props.outputStyleSettings}</section> : null}
+        {props.outputStyleSettings ? <section className="vk-form-prefs" hidden={activeSection !== "conversation"}>{props.outputStyleSettings}</section> : null}
         {props.systemPromptSettings ? <section hidden={activeSection !== "system-prompt"}>{props.systemPromptSettings}</section> : null}
         {snapshot ? (
           <>

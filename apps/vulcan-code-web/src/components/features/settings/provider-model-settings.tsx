@@ -424,9 +424,9 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
             <span />
           </div> : null}
           {providerModelRows.length === 0 ? (
-            <p className="settings-muted-line">{t("settings.models.emptyCatalog")}</p>
+            <p className="vk-form-note">{t("settings.models.emptyCatalog")}</p>
           ) : visibleModelRows.length === 0 ? (
-            <p className="settings-muted-line">{t("settings.models.emptyFilter")}</p>
+            <p className="vk-form-note">{t("settings.models.emptyFilter")}</p>
           ) : pageRows.map((row) => {
             const { modelId, enabled, displayName, inventory, provider } = row
             // representative supplies editable normalized capability facts when a catalog model exists.
@@ -522,7 +522,7 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                   {/* Tooltip disclosure state belongs to its wrapper, preserving the switch's checked state.
                       提示层的展开状态由外层元素承担，保留开关自身的选中状态。 */}
                   {multimodalCandidateEligible || multimodalCandidateEnabled ? (
-                    <Tooltip><TooltipTrigger asChild><span className="inline-flex">
+                    <Tooltip><TooltipTrigger asChild><span className="vk-form-wrap">
                       <Switch
                         aria-label={`${t("settings.models.multimodalUnderstandingCandidate")} ${displayName}`}
                         aria-description={t("settings.modelExperience.candidateExplanation")}
@@ -548,7 +548,7 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                 <div className="vk-mcat-purpose-cell vk-mcat-extension-cell">
                   <span className="vk-mcat-purpose-label">{t("settings.models.internalUse")}</span>
                   {internalState ? (
-                    <Tooltip><TooltipTrigger asChild><span className="inline-flex">
+                    <Tooltip><TooltipTrigger asChild><span className="vk-form-wrap">
                       <Switch
                         aria-label={`${t("settings.models.internalUse")} ${displayName}`}
                         aria-description={internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter"))}

@@ -155,7 +155,7 @@ export function AiCapabilitiesSettingsArea(props: {
           }} />
         ) : error && !snapshot ? (
           <div className="ai-capabilities-message" role="alert">
-            <p className="settings-error-text">{error}</p>
+            <p className="vk-field-error">{error}</p>
             <Button onClick={() => setReloadVersion((value) => value + 1)} size="sm" type="button" variant="outline">
               {t("settings.modelExperience.retryLoad")}
             </Button>

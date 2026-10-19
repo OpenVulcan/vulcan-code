@@ -149,7 +149,7 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
       {/* Keep detailed delivery rules available without pushing the editable thresholds below a wall of text. */}
       {/* 保留完整投递规则，避免长篇说明将可编辑阈值推到首屏之外。 */}
       <InlineDisclosure className="media-delivery-rules" keepMounted label={t("settings.mediaDelivery.howItWorks")} openLabel={t("settings.mediaDelivery.hideExplanation")}>
-        <ul className="grid list-disc gap-1.5 pl-4 text-xs leading-5 text-muted-foreground">
+        <ul className="vk-form-bullets">
           <li>{t("settings.mediaDelivery.uploadRule")}</li>
           <li>{t("settings.mediaDelivery.historyRule")}</li>
           <li>{t("settings.mediaDelivery.failureRule")}</li>
@@ -157,9 +157,9 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
         </ul>
       </InlineDisclosure>
       {MEDIA_DELIVERY_PURPOSES.map((purpose) => (
-        <fieldset className="min-w-0 space-y-3 border-t pt-3" disabled={pending} key={purpose}>
+        <fieldset className="vk-form-band" disabled={pending} key={purpose}>
           <legend>{t(PURPOSE_LABELS[purpose])}</legend>
-          <div className="grid grid-cols-[minmax(3.5rem,0.65fr)_minmax(5rem,1fr)_minmax(5rem,1fr)] items-center gap-2 text-xs">
+          <div className="vk-form-matrix">
             <span>{t("settings.mediaDelivery.kind")}</span>
             <span>{t(THRESHOLD_LABELS.with_upload_max_bytes)} (KiB)</span>
             <span>{t(THRESHOLD_LABELS.without_upload_max_bytes)} (KiB)</span>
@@ -170,7 +170,7 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
                   // Field identity binds accessibility, validation and the exact backend configuration slot.
                   // 字段身份绑定无障碍、校验与精确后端配置位置。
                   const id = `${purpose}-${kind}-${field}`;
-                  return <Input key={field} id={id} type="text" inputMode="decimal" className="min-w-0 text-right tabular-nums"
+                  return <Input key={field} id={id} type="text" inputMode="decimal" className="vk-form-num"
                     aria-label={`${t(PURPOSE_LABELS[purpose])} / ${t(KIND_LABELS[kind])} / ${t(THRESHOLD_LABELS[field])} (KiB)`}
                     aria-invalid={validation.error?.field === id}
                     value={draft[purpose][kind][field]} onChange={(event) => updateThreshold(purpose, kind, field, event.currentTarget.value)} />;
@@ -178,9 +178,9 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
               </React.Fragment>
             ))}
           </div>
-          <label className="flex flex-wrap items-center justify-between gap-2 text-xs" htmlFor={`${purpose}-max_total_encoded_bytes`}>
+          <label className="vk-form-acts" data-spread="" htmlFor={`${purpose}-max_total_encoded_bytes`}>
             <span>{t("settings.mediaDelivery.aggregate")} (KiB)</span>
-            <Input id={`${purpose}-max_total_encoded_bytes`} type="text" inputMode="decimal" className="w-36 text-right tabular-nums"
+            <Input id={`${purpose}-max_total_encoded_bytes`} type="text" inputMode="decimal" className="vk-form-w-sm vk-form-num"
               aria-label={`${t(PURPOSE_LABELS[purpose])} / ${t("settings.mediaDelivery.aggregate")} (KiB)`}
               aria-invalid={validation.error?.field === `${purpose}-max_total_encoded_bytes`}
               value={draft[purpose].max_total_encoded_bytes}

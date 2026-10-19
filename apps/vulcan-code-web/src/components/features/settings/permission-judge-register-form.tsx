@@ -146,7 +146,7 @@ export function PermissionJudgeRegisterForm(props: {
     </PageNotice> : facts ? <PageNotice
       tone={facts.registered ? "info" : official ? "success" : "warning"}
       data-judge-package-state={facts.registered ? "registered" : official ? "official" : "custom"}
-      title={<span className="inline-flex flex-wrap items-center gap-2">
+      title={<span className="vk-form-inline">
         {t("settings.permissionJudge.packageValid")}
         <Badge variant="outline">{official
           ? formatMessage(t("settings.permissionJudge.modelOfficial"), { name: official })
@@ -166,7 +166,7 @@ export function PermissionJudgeRegisterForm(props: {
       <Checkbox checked={custom} data-judge-register-custom="" onCheckedChange={(next) => setCustom(next === true)} />
       {t("settings.permissionJudge.registerCustom")}
     </label> : null}
-    <div className="settings-card-actions">
+    <div className="vk-form-inline">
       <Button type="button" size="sm" disabled={!canRegister}
         onClick={() => void props.onRegister({ path: trimmed, name: name.trim(), custom: official === null && custom }, reset)}>
         {t("settings.permissionJudge.registerSubmit")}

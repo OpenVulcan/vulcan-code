@@ -250,8 +250,8 @@ export function ProviderToolSelectionSettingsArea(props: {
   ]);
 
   return (
-    <div className="settings-direct-content settings-capability-page">
-      {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
+    <div className="vk-form-scroll settings-capability-page">
+      {error ? <p className="vk-field-error">{error}</p> : null}
       {!snapshot && error ? <Button onClick={() => setLoadAttempt((value) => value + 1)} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : !snapshot ? (
         <StreamPlaceholder label={t("settings.providerTools.loading")} shape="fields" count={3} />
       ) : mediaUnderstandingMode ? (
@@ -277,7 +277,7 @@ export function ProviderToolSelectionSettingsArea(props: {
           </header>
           {targets.length === 0 ? (
             <>
-              <p className="settings-muted-line">{t("settings.providerTools.noTargets")}</p>
+              <p className="vk-form-note">{t("settings.providerTools.noTargets")}</p>
               <div className="settings-provider-tool-defaults-grid">
                 <label>
                   <span>{t("settings.providerTools.model")}</span>
@@ -407,7 +407,7 @@ export function ProviderToolSelectionSettingsArea(props: {
               onCheckedChange={(checked) => void saveEnabled(checked)}
             />
           </header>
-          {targets.length === 0 ? <p className="settings-muted-line">{t("settings.providerTools.noTargets")}</p> : null}
+          {targets.length === 0 ? <p className="vk-form-note">{t("settings.providerTools.noTargets")}</p> : null}
           <div className="settings-provider-tool-defaults-grid">
             <label>
               <span>{t("settings.providerTools.model")}</span>

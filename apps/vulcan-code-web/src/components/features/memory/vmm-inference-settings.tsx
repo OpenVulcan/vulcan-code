@@ -45,6 +45,7 @@ import type {
   PublicAiSettingsSnapshot,
 } from "@/types"
 import { errorMessage } from "@/lib/display-format"
+import "@/ui-kit/styles/features/settings-forms.css";
 
 // VmmInferenceSettingsProps exposes required-foundation readiness to the first-run workflow.
 // VmmInferenceSettingsProps 向首次配置流程暴露必需基础能力就绪状态。
@@ -324,7 +325,7 @@ export function VmmInferenceSettings({
           <p className="mt-0.5 text-xs text-muted-foreground">{t("settings.inference.subtitle")}</p>
         </div>
       </div>
-      {error ? <p role="alert" className="settings-muted-line settings-error-text mb-2">{error}</p> : null}
+      {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
       {!snapshot ? (
         loadPending ? <StreamPlaceholder label={t("settings.models.loadingCatalog")} shape="fields" count={3} />
           : <Button type="button" variant="outline" onClick={() => setLoadRevision((current) => current + 1)}>{t("settings.modelExperience.retryLoad")}</Button>

@@ -134,7 +134,7 @@ export function LogsArea(props: {
             </article>
           ))}
         </div>
-        {visibleLogs.length === 0 ? <p className="settings-muted-line">{t("settings.diagnostics.noMatchingDiagnosticLogs")}</p> : null}
+        {visibleLogs.length === 0 ? <p className="vk-form-note">{t("settings.diagnostics.noMatchingDiagnosticLogs")}</p> : null}
       </section> : null}
       {category === "trace" ? <section>
         <div className="provider-trace-settings">
@@ -222,7 +222,7 @@ export function LogsArea(props: {
               </AlertDialogContent>
             </AlertDialog>
             {traceDirectoryNotice ? (
-              <p className="settings-muted-line">{traceDirectoryNotice}</p>
+              <p className="vk-form-note">{traceDirectoryNotice}</p>
             ) : null}
             {traceSettingError ? (
               <p className="settings-inline-error">
@@ -247,17 +247,17 @@ function StartupPanel(props: {
   return (
     <section className="settings-diagnostics-startup">
       <PanelTitle icon={<PlugZap size={17} />} title={t("settings.diagnostics.startupStatus")} />
-      <div className="step-list">
+      <ol className="vk-form-steplog">
         {props.startup.steps.map((step) => (
-          <div className="step-item" key={step.id}>
+          <li key={step.id}>
             <StatusIcon status={step.status} />
             <div>
               <strong>{step.label}</strong>
               <span>{step.message ?? t("settings.diagnostics.waitingStatus")}</span>
             </div>
-          </div>
+          </li>
         ))}
-      </div>
+      </ol>
     </section>
   );
 }

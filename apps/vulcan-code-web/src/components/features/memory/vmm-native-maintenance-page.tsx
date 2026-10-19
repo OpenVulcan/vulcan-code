@@ -39,6 +39,7 @@ import type {
   VmmNativeVectorStatusSummary,
 } from "@/types"
 import { formatDateTime } from "@/lib/display-format"
+import "@/ui-kit/styles/features/settings-forms.css";
 
 // VmmNativeMaintenancePageProps binds native retention controls to the shared action channel.
 // VmmNativeMaintenancePageProps 将原生保留控制绑定到共享动作通道。
@@ -392,7 +393,7 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
         options={([["recycle", "memory.maintenance.recycleBin"], ["cleanup", "memory.workspace.cleanup"], ["index", "memory.workspace.index"]] as const).map(([value, label]) => ({ label: t(label), value }))}
         value={maintenanceView}
       />
-      {error ? <p className="settings-error-text text-sm">{error}</p> : null}
+      {error ? <p className="vk-field-error">{error}</p> : null}
       {vectorStatus && (!vectorStatus.configured || vectorStatus.rebuildRequiredMemoryCount > 0) ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3" role="alert">
           <div className="flex items-start gap-2">

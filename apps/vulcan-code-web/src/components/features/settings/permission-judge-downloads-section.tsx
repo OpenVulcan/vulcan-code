@@ -71,7 +71,7 @@ export function PermissionJudgeDownloadsSection(props: {
         phase: download.phase ? label(t, DOWNLOAD_PHASE_KEYS, download.phase) : "…",
         progress: `${formatBytes(download.completedBytes)} / ${formatBytes(download.totalBytes)}`,
       })}</p>
-      {progress !== null ? <Progress className="mt-2" value={progress} /> : null}
+      {progress !== null ? <Progress className="vk-form-after" value={progress} /> : null}
     </PageNotice> : download?.error ? <PageNotice tone="error" details={download.error} detailsLabel={t("settings.errors.showErrorDetails")}>
       {t("settings.permissionJudge.downloads.failed")}
     </PageNotice> : download?.modelId ? <PageNotice tone="success">

@@ -530,28 +530,18 @@
   display: none;
 }
 
-/* Retry controls share the label-left and switch-right alignment used by other settings. */
-/* 重试控件与其他设置保持标签在左、开关在右的排列。 */
-.settings-check-row.settings-retry-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-weight: 400;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-}
-.settings-retry-toggle > span { min-width: 0; }
-.settings-retry-toggle small {
-  display: block;
-  margin-top: 2px;
-  font-size: var(--vk-fs-sm);
-  line-height: 1.5;
-  color: var(--vk-ink-2);
-}
+/* Retry toggles keep the label-left, switch-right row at body weight. */
+/* 重试开关保持标签在左、开关在右，使用正文字重。 */
+.settings-retry-section .vk-form-switch { padding: var(--vk-u) 0; font-weight: 400; }
 
-.context-basics-tabs > section > section {
+/* Blocked model rows: a framed record with its title line, reason and repair actions. */
+/* 被阻止的模型行：带边框的记录，包含标题行、原因与修复操作。 */
+.vk-mcat-row { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 2.5); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vk-mcat-row strong { display: block; font-size: var(--vk-fs-md); }
+.vk-mcat-row .vk-mcat-title-line strong { display: inline; }
+.vk-mcat-row span { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); overflow-wrap: anywhere; }
+
+.context-basics-tabs > section > section:not(.vk-form-pref) {
   border: 0;
   padding: 0;
   box-shadow: none;
@@ -579,7 +569,7 @@
   line-height: 1.6;
 }
 
-.context-basics-tabs > section > section > fieldset:not(.settings-form-grid),
+.context-basics-tabs > section > section > fieldset:not(.vk-form-stack),
 .context-basics-tabs .settings-retry-section > fieldset > article {
   border: var(--vk-bw) solid var(--vk-line);
   padding: 16px;

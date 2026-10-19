@@ -96,7 +96,7 @@ export function McpSettingsArea(props: {
   React.useEffect(() => { setTab("overview"); setConfirmDelete(false); setActionError("") }, [selectedId])
   return <div className="mcp-workspace">
     <aside className="mcp-directory">
-      <div className="settings-panel-title-row"><h3>{t("settings.mcp.servers")}</h3><Button size="sm" onClick={() => setCreating(true)}>{t("settings.mcp.add")}</Button></div>
+      <div className="vk-form-head"><h3>{t("settings.mcp.servers")}</h3><Button size="sm" onClick={() => setCreating(true)}>{t("settings.mcp.add")}</Button></div>
       <Input aria-label={t("settings.mcp.searchMcp")} placeholder={t("settings.mcp.searchNameOrId")} value={search} onChange={e => setSearch(e.target.value)} />
       <div className="mcp-filter-row">
         <Select value={source} onValueChange={setSource}><SelectTrigger aria-label={t("settings.mcp.source")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("settings.mcp.allSources")}</SelectItem><SelectItem value="user">{t("settings.mcp.user")}</SelectItem><SelectItem value="plugin">{t("settings.mcp.plugin")}</SelectItem></SelectContent></Select>
@@ -115,7 +115,7 @@ export function McpSettingsArea(props: {
     </aside>
     <section className="mcp-detail">
       {selected ? <>
-        <header className="settings-panel-title-row"><div><h3>{selected.name}</h3><small>{selected.id}</small></div>{selected.config && <div className="mcp-filter-row">
+        <header className="vk-form-head"><div><h3>{selected.name}</h3><small>{selected.id}</small></div>{selected.config && <div className="mcp-filter-row">
           <Button size="sm" variant="outline" onClick={() => setEditing(selected.config ?? null)}>{t("settings.mcp.edit")}</Button>
           <Button size="sm" variant="outline" disabled={removing} onClick={() => setConfirmDelete(value => !value)}>{t("settings.mcp.delete")}</Button>
         </div>}</header>
@@ -141,7 +141,7 @@ export function McpSettingsArea(props: {
             <dt>{t("settings.mcp.server")}</dt><dd>{selected.runtime.state.serverProduct ?? "—"} {selected.runtime.state.serverVersion}</dd>
             <dt>{t("settings.mcp.provides")}</dt><dd>{formatMessage(t("settings.mcp.toolsPromptsResources"), { length: selected.runtime.tools.length, promptCount: selected.runtime.state.promptCount, resourceCount: selected.runtime.state.resourceCount })}</dd>
           </dl>}
-          <p className="settings-muted-line">{t("settings.mcp.thisListsEveryTool")}</p>
+          <p className="vk-form-note">{t("settings.mcp.thisListsEveryTool")}</p>
         </>}
         {tab === "tools" && !loaded && <StreamPlaceholder fill label={t("settings.mcp.loading")} shape="rows" />}
         {tab === "tools" && loaded && <McpToolCatalog runtime={selected.runtime} stale={Boolean(error)} />}
@@ -190,7 +190,7 @@ function McpToolDetails(props: { tool: McpToolInspection }) {
   // text and expanded control localized display and expensive schema mounting.
   // text 与 expanded 控制本地化展示及开销较大的 Schema 挂载。
   const [expanded, setExpanded] = React.useState(false)
-  return <DisclosureSection className="mcp-tool" description={props.tool.description ? <span className="line-clamp-1">{props.tool.description}</span> : undefined} onOpenChange={setExpanded} title={props.tool.name}>
+  return <DisclosureSection className="mcp-tool" description={props.tool.description ? <span className="vk-form-clamp">{props.tool.description}</span> : undefined} onOpenChange={setExpanded} title={props.tool.name}>
     {expanded && <><p>{props.tool.description}</p>
       <McpSchemaDetail title={t("settings.mcp.inputParameters")} schema={props.tool.inputSchema} />
       <McpSchemaDetail title={t("settings.mcp.outputResult")} schema={props.tool.outputSchema} />
@@ -223,12 +223,12 @@ function McpOptionalCapabilities(props: { serverId: string; connected: boolean }
   return <div><p>{t("settings.mcp.namesAndDescriptionsOnly")}</p>
     <Button size="sm" variant="outline" disabled={busy} onClick={() => setRefreshKey(key => key + 1)}>{busy ? t("settings.mcp.loading") : t("settings.mcp.refresh")}</Button>
     {error && <p role="alert">{error}</p>}{busy && !result && <StreamPlaceholder fill label={t("settings.mcp.loading")} shape="rows" />}{result && <>
-      <h4>{t("settings.mcp.prompts")} ({result.prompts?.length ?? "—"})</h4>{result.promptError ? <p role="alert">{result.promptError}</p> : result.prompts?.map(prompt => <DisclosureSection className="mcp-tool" description={prompt.description ? <span className="line-clamp-1">{prompt.description}</span> : undefined} key={prompt.name} title={prompt.name}>
+      <h4>{t("settings.mcp.prompts")} ({result.prompts?.length ?? "—"})</h4>{result.promptError ? <p role="alert">{result.promptError}</p> : result.prompts?.map(prompt => <DisclosureSection className="mcp-tool" description={prompt.description ? <span className="vk-form-clamp">{prompt.description}</span> : undefined} key={prompt.name} title={prompt.name}>
         {prompt.description && <p>{prompt.description}</p>}
         {prompt.arguments?.map(argument => <p key={argument.name}><strong>{argument.name}</strong> · {argument.required ? t("settings.mcp.required") : t("settings.mcp.optional")} {argument.description}</p>)}
         <InlineDisclosure label={t("settings.mcp.viewRawData")} openLabel={t("settings.mcp.hideRawData")}><pre>{JSON.stringify(prompt, null, 2)}</pre></InlineDisclosure>
       </DisclosureSection>)}
-      <h4>{t("settings.mcp.resources")} ({result.resources?.length ?? "—"})</h4>{result.resourceError ? <p role="alert">{result.resourceError}</p> : result.resources?.map(resource => <DisclosureSection className="mcp-tool" description={<span className="line-clamp-1 font-mono">{resource.uri}</span>} key={resource.uri} title={resource.name}>
+      <h4>{t("settings.mcp.resources")} ({result.resources?.length ?? "—"})</h4>{result.resourceError ? <p role="alert">{result.resourceError}</p> : result.resources?.map(resource => <DisclosureSection className="mcp-tool" description={<span className="vk-form-clamp vk-mono">{resource.uri}</span>} key={resource.uri} title={resource.name}>
         <code>{resource.uri}</code>{resource.description && <p>{resource.description}</p>}<p>{resource.mimeType} {resource.size !== undefined && `${resource.size} bytes`}</p>
         <InlineDisclosure label={t("settings.mcp.viewRawData")} openLabel={t("settings.mcp.hideRawData")}><pre>{JSON.stringify(resource, null, 2)}</pre></InlineDisclosure>
       </DisclosureSection>)}
