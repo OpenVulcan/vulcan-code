@@ -87,7 +87,7 @@ it("does not open a second preview while the live thinking popup owns the stream
         </TooltipProvider>
       </I18nProvider>,
     ));
-    expect(document.querySelectorAll(".streaming-thinking-overlay")).toHaveLength(1);
+    expect(document.querySelectorAll(".vk-think-float")).toHaveLength(1);
     expect(host.querySelector(".vk-think-tag[data-indicator]")).not.toBeNull();
     expect(host.querySelector("button.vk-think-tag")).toBeNull();
     expect(document.querySelector(".vk-think-pop")).toBeNull();

@@ -24,9 +24,6 @@
 }
 :root[data-vk-think="popup"] .vk-chat { --vk-col-pad: calc(var(--vk-u) * 24); --vk-col-max: calc(var(--vk-read-w) + var(--vk-u) * 48); }
 :root[data-vk-think="popup"][data-vk-width="full"] .vk-chat { --vk-col-max: 100%; }
-/* Right-docked reasoning takes its own column; the conversation re-centers in what remains. */
-.vk-chat:has(> .vk-chat-side[data-float="right"]) { padding-right: calc(var(--vk-float-w) + var(--vk-u) * 3); }
-.vk-chat:has(> .vk-chat-side[data-float="right"]) > .vk-prompt-nav { right: calc(var(--vk-float-w) + var(--vk-u) * 5); }
 /* Output fades out under the floating composer instead of running into it; the scrollbar stays clear. */
 .vk-chat:not([data-empty], [data-loading])::after {
   content: "";
@@ -261,7 +258,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-prompt-files { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); white-space: normal; }
 
 /* ---------- Assistant answer ---------- */
-.vk-answer { display: grid; gap: calc(var(--vk-u) * 3); min-width: 0; }
 .vk-answer-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
 .vk-answer-mark {
   display: grid;
@@ -272,7 +268,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 }
 /* The brand symbol is shown as-is (ink body, ember flame); it is never placed on a colored tile. */
 .vk-answer-mark svg { width: 80%; height: 80%; transition: filter var(--vk-t-med); }
-.vk-answer[data-live] .vk-answer-mark svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--vk-ember) 70%, transparent)); }
 .vk-answer-head strong { color: var(--vk-ink-2); font-weight: 500; }
 
 /* ---------- Transcript rows ---------- */
@@ -360,132 +355,33 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tool-seq-body { margin-left: calc(var(--vk-u) * -8); padding-left: calc(var(--vk-u) * 8); }
 
 /* ---------- Thinking ---------- */
-.vk-think {
-  border-left: 2px solid var(--vk-line-strong);
-  padding-left: calc(var(--vk-u) * 3);
-}
-.vk-think > summary {
-  display: flex;
-  align-items: center;
-  gap: calc(var(--vk-u) * 2);
-  min-height: var(--vk-h-sm);
-  color: var(--vk-ink-3);
-  font-size: var(--vk-fs-sm);
-  cursor: pointer;
-  list-style: none;
-}
-.vk-think > summary::-webkit-details-marker { display: none; }
-.vk-think-body {
-  padding: calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 1);
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-md);
-  line-height: var(--vk-lh-read);
-}
-.vk-think[data-live] { border-left-color: var(--vk-ember); }
-.vk-think[data-live] > summary > b {
-  background: linear-gradient(90deg, var(--vk-ink-3) 0%, var(--vk-ember) 40%, var(--vk-ink-3) 80%);
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: vk-shimmer 2.4s linear infinite;
-  font-weight: 500;
-}
-.vk-think[data-live] .vk-think-body { max-height: 7.5em; overflow: hidden; mask-image: linear-gradient(to bottom, transparent, #000 40%); display: flex; flex-direction: column; justify-content: flex-end; }
 
-/* Popup display mode (root data-vk-think="popup", the default): each reasoning segment stays attached
- * in front of the tool run or reply it precedes, as a compact tag; its content opens as a popover on
- * hover or click. Live reasoning is owned by the floating window, so the live tag only indicates. */
-[data-vk-think="popup"] .vk-think { position: relative; justify-self: start; margin-bottom: calc(var(--vk-u) * -2); border: 0; padding: 0; }
-[data-vk-think="popup"] .vk-think > summary {
-  display: inline-flex;
-  min-height: var(--vk-h-sm);
-  padding: 0 calc(var(--vk-u) * 2);
-  border: var(--vk-bw) solid var(--vk-line);
-  background: var(--vk-sunken);
-  font-size: var(--vk-fs-xs);
-}
-[data-vk-think="popup"] .vk-think > summary:hover,
-[data-vk-think="popup"] .vk-think[open] > summary { color: var(--vk-ink); border-color: var(--vk-line-strong); }
-[data-vk-think="popup"] .vk-think[data-live] > summary { border-color: color-mix(in srgb, var(--vk-ember) 45%, var(--vk-line)); }
-[data-vk-think="popup"] .vk-think[data-live] > .vk-think-body { display: none; }
-[data-vk-think="popup"] .vk-think:not([data-live]) > .vk-think-body {
-  position: absolute;
-  z-index: 6;
-  top: calc(100% + var(--vk-u));
-  left: 0;
-  width: min(36rem, 80cqi);
-  max-height: 18rem;
-  overflow: auto;
-  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3.5);
-  border: var(--vk-bw) solid var(--vk-line-strong);
-  background: var(--vk-raised);
-  box-shadow: var(--vk-shadow-2);
-  animation: vk-rise var(--vk-t-fast) var(--vk-ease) backwards;
-}
-
-/* Gutter placement: with room, a reasoning tag sits in the left gutter at the top of the tool run or
- * reply it belongs to and takes no row of its own; its content still opens as a popover. */
-@container vk-chat (min-width: 50em) {
-  :root[data-vk-think="popup"] .vk-answer > .vk-think { height: 0; margin-bottom: calc(var(--vk-u) * -3); z-index: 3; }
-  :root[data-vk-think="popup"] .vk-answer > .vk-think > summary {
-    position: absolute;
-    top: calc(var(--vk-u) * 1.5);
-    right: calc(var(--vk-u) * 3);
-    gap: calc(var(--vk-u) * 1);
-    padding: 0 calc(var(--vk-u) * 1.5);
-    border-color: transparent;
-    background: transparent;
-    color: var(--vk-ink-3);
-    white-space: nowrap;
-  }
-  :root[data-vk-think="popup"] .vk-answer > .vk-think > summary > b { display: none; }
-  :root[data-vk-think="popup"] .vk-answer > .vk-think > summary::after { content: ""; position: absolute; left: 100%; top: 50%; width: calc(var(--vk-u) * 3); height: 1px; background: var(--vk-line-strong); }
-  :root[data-vk-think="popup"] .vk-answer > .vk-think > summary:hover,
-  :root[data-vk-think="popup"] .vk-answer > .vk-think[open] > summary { border-color: var(--vk-line-strong); background: var(--vk-raised); color: var(--vk-ink); }
-  :root[data-vk-think="popup"] .vk-answer > .vk-think[data-live] > summary { color: var(--vk-ember); }
-  :root[data-vk-think="popup"] .vk-answer > .vk-think[data-live] > summary::after { background: var(--vk-ember); }
-  :root[data-vk-think="popup"] .vk-answer > .vk-think:not([data-live]) > .vk-think-body { top: calc(var(--vk-u) * 8); }
-}
-
-/* The floating reasoning window. Centered, it sits in the flow between transcript and composer;
- * right-docked, it takes a column beside the transcript. Either way it never covers the output.
- * It can be hidden to a pill and shown again; Markdown rendering is a per-viewer toggle. */
+/* The floating reasoning window shown while the model thinks. Centered, it floats over the transcript
+ * just above the composer, where no reply is being written yet; right-docked, it keeps to the right
+ * edge. It fades out once the reply starts. Markdown rendering is a per-viewer toggle. */
 .vk-think-float {
   position: absolute;
   z-index: 7;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   border: var(--vk-bw) solid color-mix(in srgb, var(--vk-ember) 35%, var(--vk-line-strong));
-  background: color-mix(in srgb, var(--vk-raised) 94%, transparent);
+  background: var(--vk-raised);
   backdrop-filter: blur(10px);
   box-shadow: var(--vk-shadow-2), 0 0 0 1px color-mix(in srgb, var(--vk-ember) 10%, transparent);
   animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
   transition: opacity var(--vk-t-med) var(--vk-ease), transform var(--vk-t-med) var(--vk-ease);
 }
-.vk-think-slot { grid-row: 2; width: 100%; max-width: var(--vk-col-max); margin: 0 auto; padding: 0 var(--vk-col-pad); }
-.vk-think-slot:empty { display: none; }
-.vk-think-float[data-dock="center"] { position: relative; max-height: min(11rem, 28svh); margin-bottom: calc(var(--vk-u) * 2); }
-.vk-think-float[data-dock="right"] { position: relative; flex: 1; min-height: 0; }
+.vk-think-float { bottom: calc(var(--vk-dock-h) + var(--vk-u) * 7); min-height: 7.875rem; max-height: min(22.5rem, calc(100% - var(--vk-dock-h) - 6rem)); overflow: hidden; }
+.vk-think-float[data-dock="center"] { left: calc(50% - var(--conversation-inline-offset, 0px)); width: min(var(--vk-column-w), calc(100% - 4rem)); translate: -50% 0; transition: left 260ms var(--vk-ease), opacity var(--vk-think-exit) ease, transform var(--vk-think-exit) ease; }
+.vk-think-float[data-dock="right"] { right: calc(var(--vk-u) * 4); width: min(28.5rem, calc(60% - 2.375rem)); max-height: min(27rem, calc(100% - var(--vk-dock-h) - 6rem)); }
+.vk-think-float[data-leaving] { opacity: 0; transform: translateY(8px); pointer-events: none; }
+.vk-think-float-content { min-width: 0; }
+.vk-think-float-content .markdown-message { max-width: none; color: inherit; font-size: inherit; }
 
-/* Chat side stack (top right): the session tools menu, the right-docked reasoning window or its pill. */
-.vk-chat-side {
-  position: absolute;
-  z-index: 6;
-  top: calc(var(--vk-u) * 3);
-  right: calc(var(--vk-u) * 3);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: calc(var(--vk-u) * 2);
-  max-width: calc(100% - var(--vk-u) * 6);
-  max-height: calc(100% - var(--vk-u) * 6);
-  pointer-events: none;
-}
-.vk-chat-side > * { pointer-events: auto; }
-.vk-chat-side[data-float="right"] { bottom: calc(var(--vk-u) * 3); width: var(--vk-float-w); align-items: stretch; }
-.vk-chat-side > .vk-think-pill { position: static; }
-.vk-think-float[data-leaving] { opacity: 0; transform: translateY(-4px); pointer-events: none; }
+/* Request-local reasoning progress: summary lines shimmering where the next row will appear. */
+.vk-reason-status { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 1); width: min(100%, var(--vk-column-w)); min-width: 0; pointer-events: none; }
+.vk-reason-line { min-width: 0; font-size: var(--vk-fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-reason-line p { margin: 0; }
 .vk-think-float-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-height: var(--vk-h-lg); padding: 0 calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line); font-size: var(--vk-fs-sm); }
 .vk-think-float-head > .lucide { color: var(--vk-ember); }
 .vk-think-float-head > b { font-weight: 500; background: linear-gradient(90deg, var(--vk-ink-2) 0%, var(--vk-ember) 40%, var(--vk-ink-2) 80%); background-size: 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: vk-shimmer 2.4s linear infinite; }
@@ -495,25 +391,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-think-md { font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs); font-weight: 600; }
 .vk-think-float-body { overflow: auto; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3.5); color: var(--vk-ink-2); font-size: var(--vk-fs-md); line-height: var(--vk-lh-read); overscroll-behavior: contain; }
 .vk-think-float-body[data-plain] { white-space: pre-wrap; }
-.vk-think-pill {
-  position: absolute;
-  z-index: 7;
-  top: calc(var(--vk-u) * 3);
-  right: calc(var(--vk-u) * 3);
-  display: inline-flex;
-  align-items: center;
-  gap: calc(var(--vk-u) * 2);
-  height: var(--vk-h-md);
-  padding: 0 calc(var(--vk-u) * 2.5);
-  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-ember) 45%, var(--vk-line));
-  background: var(--vk-raised);
-  box-shadow: var(--vk-shadow-1);
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-xs);
-  cursor: pointer;
-}
-.vk-think-pill:hover { color: var(--vk-ink); border-color: var(--vk-ember); }
-.vk-think-pill > .lucide { color: var(--vk-ember); }
 
 /* ---------- Markdown ---------- */
 .vk-md { font-size: var(--vk-fs-read); line-height: var(--vk-lh-read); min-width: 0; overflow-wrap: anywhere; }

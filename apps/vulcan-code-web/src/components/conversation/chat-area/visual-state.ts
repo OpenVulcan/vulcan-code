@@ -7,6 +7,9 @@ import { useThinkingDisplayPreference } from "@/components/conversation/thinking
 // CONVERSATION_ENTRY_MOTION_MS 与空提示和输入区入场过渡时长保持一致。
 const CONVERSATION_ENTRY_MOTION_MS = 360;
 
+// THINKING_OVERLAY_EXIT_MS is how long the live reasoning window waits, then fades, once reasoning ends; its fade CSS reads it too.
+// THINKING_OVERLAY_EXIT_MS 是思考结束后实时思考窗等待及淡出的时长；其淡出样式也读取该值。
+export const THINKING_OVERLAY_EXIT_MS = 500;
 
 // thinkingOverlayBlockSignature identifies one displayed thinking block without importing the legacy transcript parser.
 // thinkingOverlayBlockSignature 在不导入旧转录解析器的前提下标识一个已显示的思考块。
@@ -150,13 +153,13 @@ export function useConversationVisualTransitions(
     // fadeTimer 在实时浮层消失后启动视觉退场。
     const fadeTimer = window.setTimeout(() => {
       setThinkingOverlayLeaving(true);
-    }, 500);
+    }, THINKING_OVERLAY_EXIT_MS);
     // removeTimer unmounts the retained overlay after the complete exit interval.
     // removeTimer 在完整退场间隔后卸载保留浮层。
     const removeTimer = window.setTimeout(() => {
       setRetainedThinkingBlock(null);
       setThinkingOverlayLeaving(false);
-    }, 1000);
+    }, THINKING_OVERLAY_EXIT_MS * 2);
     return () => {
       window.clearTimeout(fadeTimer);
       window.clearTimeout(removeTimer);
