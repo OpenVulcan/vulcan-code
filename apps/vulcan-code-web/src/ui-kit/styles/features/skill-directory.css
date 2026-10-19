@@ -425,219 +425,30 @@
   color: inherit;
 }
 
-.lua-settings-page-body {
-  grid-template-rows: minmax(0, 1fr);
-  background: var(--vk-ground);
-}
+/* LuaSkills settings: kit page sections over a fieldset, runtime status rows and a sticky save bar. */
+/* LuaSkills 设置：字段集内的套件页面分区、运行时状态行与吸底保存栏。 */
+.lua-settings-content { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 4); min-width: 0; }
+.lua-settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: calc(var(--vk-u) * 3); min-width: 0; }
+.lua-settings-encoding { width: min(100%, 20rem); }
+.lua-inference-route-row > .vk-page-row-text { flex: 0 1 16rem; }
+.lua-inference-route-row > .vk-page-actions { flex: 1 1 22rem; flex-wrap: nowrap; }
+.lua-inference-route-row > .vk-page-actions > :first-child { flex: 1; min-width: 0; }
 
-.lua-settings-section h4 {
-  margin: 0;
-}
-
-.lua-settings-section > p {
-  margin: 4px 0 0;
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-  line-height: 1.5;
-}
-
-.lua-settings-content {
-  min-width: 0;
-  display: grid;
-  gap: 12px;
-  padding: 14px 14px 18px;
-}
-
-.lua-settings-section {
-  min-width: 0;
-  display: grid;
-  gap: 12px;
-  border: 1px solid var(--vk-line);
-  background: var(--vk-panel);
-  padding: 14px;
-}
-
-.lua-settings-section h4 {
-  font-size: var(--vk-fs-md);
-  font-weight: 700;
-}
-
-.lua-inference-routes {
-  margin: 0 14px 18px;
-}
-
-.lua-inference-route-row {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr);
-  align-items: center;
-  gap: 12px;
-}
-
-.lua-inference-route-row > span {
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-  font-weight: 600;
-}
-
-.lua-settings-grid {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.lua-settings-field {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-}
-
-.lua-settings-field > span {
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-  font-weight: 600;
-}
-
-.lua-settings-field small {
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-xs);
-  line-height: 1.45;
-}
-
-.lua-settings-toggle {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  color: var(--vk-ink);
-  font-size: var(--vk-fs-md);
-  cursor: pointer;
-}
-
-.lua-settings-toggle > label {
-  cursor: pointer;
-}
-
-.lua-settings-help-trigger {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: -4px;
-  border: 0;
-  background: transparent;
-  color: var(--vk-ink-2);
-  cursor: help;
-}
-
-.lua-settings-help-trigger:hover,
-.lua-settings-help-trigger:focus-visible {
-  color: var(--vk-ink);
-}
-
-.lua-managed-runtime-list {
-  min-width: 0;
-  display: grid;
-}
-
-.lua-managed-runtime-row {
-  min-width: 0;
-  border-bottom: 1px solid var(--vk-line);
-  padding: 10px 0;
-}
-
-.lua-managed-runtime-row:first-child {
-  border-top: 1px solid var(--vk-line);
-}
-
-.lua-managed-runtime-row-main {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 30px;
-}
-
-.lua-managed-runtime-row-name {
-  color: var(--vk-ink);
-  font-size: var(--vk-fs-md);
-  font-weight: 650;
-}
-
-.lua-managed-runtime-row-version {
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-}
-
-.lua-managed-runtime-row-action {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-}
-
-.lua-managed-runtime-row.unavailable .lua-managed-runtime-row-action > span {
-  color: var(--vk-bad);
-}
-
-.lua-managed-runtime-row-progress {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-  padding-top: 8px;
-}
-
+.lua-managed-runtime-list { display: grid; min-width: 0; border: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-ground-2); }
+.lua-managed-runtime-row { min-width: 0; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); }
+.lua-managed-runtime-row + .lua-managed-runtime-row { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.lua-managed-runtime-row-main { display: flex; align-items: center; gap: calc(var(--vk-u) * 2.5); min-width: 0; min-height: var(--vk-h-sm); }
+.lua-managed-runtime-row-name { color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 600; }
+.lua-managed-runtime-row-version { color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+.lua-managed-runtime-row-action { display: flex; align-items: center; gap: calc(var(--vk-u) * 2.5); margin-left: auto; color: var(--vk-ok); font-size: var(--vk-fs-sm); }
+.lua-managed-runtime-row:is(.unavailable, .unsupported) .lua-managed-runtime-row-action > span { color: var(--vk-bad); }
+.lua-managed-runtime-row-progress { display: grid; gap: calc(var(--vk-u) * 1.5); min-width: 0; padding-top: calc(var(--vk-u) * 2); }
 .lua-managed-runtime-row-progress > span,
-.lua-managed-runtime-row-progress > small {
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-xs);
-}
-
-.lua-managed-runtime-row-progress > progress {
-  width: 100%;
-  height: 8px;
-  accent-color: var(--vk-ink);
-}
-
-.lua-settings-restart-note,
-.lua-settings-feedback {
-  border: 1px solid var(--vk-line);
-  padding: 10px 12px;
-  font-size: var(--vk-fs-sm);
-  line-height: 1.5;
-}
-
-.lua-settings-restart-note {
-  background: color-mix(in srgb, var(--vk-sunken) 70%, var(--vk-panel));
-  color: var(--vk-ink-2);
-}
-
-.lua-settings-feedback.error {
-  border-color: color-mix(in srgb, var(--vk-bad) 38%, var(--vk-line));
-  background: color-mix(in srgb, var(--vk-bad) 9%, var(--vk-panel));
-  color: var(--vk-bad);
-}
-
-.lua-settings-feedback.success {
-  border-color: color-mix(in srgb, var(--vk-ink) 34%, var(--vk-line));
-  background: color-mix(in srgb, var(--vk-ink) 8%, var(--vk-panel));
-  color: var(--vk-ink);
-}
-
-.lua-settings-actions {
-  display: flex;
-  justify-content: flex-end;
-}
+.lua-managed-runtime-row-progress > small { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+.lua-managed-runtime-row-progress > progress { width: 100%; height: calc(var(--vk-u) * 1.5); accent-color: var(--vk-ember); }
 
 @media (max-width: 720px) {
-  .lua-settings-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
+  .lua-settings-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .agent-definition-row-icon {
