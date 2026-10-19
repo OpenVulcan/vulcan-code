@@ -179,8 +179,10 @@
 .vk-stage-head .vk-stage-title { display: flex; align-items: center; align-self: stretch; gap: calc(var(--vk-u) * 1.5); }
 .vk-stage-name { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 2); flex: 0 1 auto; min-width: 0; }
 .vk-stage-name[data-tauri-drag-region] > * { pointer-events: none; }
-.vk-stage-name > h1 { flex: 0 0 auto; max-width: 70%; min-width: 0; margin: 0; font-size: var(--vk-fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vk-stage-name > small { flex: 0 1 auto; min-width: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The title keeps its full width while room allows; the subtitle gives way first. */
+/* 空间允许时标题保持完整宽度；副标题优先让出空间。 */
+.vk-stage-name > h1 { flex: 0 1 auto; min-width: 4em; margin: 0; font-size: var(--vk-fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-stage-name > small { flex: 0 999 auto; min-width: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vk-stage-drag { flex: 1 1 auto; align-self: stretch; min-width: calc(var(--vk-u) * 8); }
 .vk-stage-chrome { display: flex; align-items: center; align-self: stretch; flex: none; gap: calc(var(--vk-u) * 1); }
 .vk-winctl { display: flex; align-self: stretch; }

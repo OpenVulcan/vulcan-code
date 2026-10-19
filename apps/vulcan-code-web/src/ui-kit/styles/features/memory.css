@@ -53,13 +53,15 @@
 .vmm-session-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
 .vmm-session-workspace > .vmm-session-browser[hidden] { display: none; }
 .vmm-session-browser, .vmm-session-detail { min-width: 0; container: memory-session / inline-size; }
-.vmm-session-row.selected { background: var(--vk-hover); box-shadow: inset 3px 0 var(--vk-ink); }
-.vmm-session-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
-.vmm-session-filters > label { flex: 1; min-width: 160px; }
-.vmm-session-filters > label > .vk-select, .vmm-filter-fields .vk-select { width: 100%; }
-/* Keep the project identity readable before placing secondary actions beside it. */
-/* 优先保证项目名称可读，再为次要操作分配同行空间。 */
-.vmm-session-scope > label { flex-basis: 220px; }
+.vmm-session-row.selected { background: var(--vk-panel); box-shadow: inset 2px 0 0 var(--vk-ember); }
+/* The section body stacks scope, filters, bulk actions, rows and paging at one rhythm. */
+/* 区块正文以统一节奏堆叠范围、筛选、批量操作、列表行与分页。 */
+.vmm-session-section > .vk-page-section-body { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 3); }
+.vmm-session-scope { display: flex; min-width: 0; }
+.vmm-session-scope > .vk-select { width: min(100%, 28rem); }
+.vmm-session-filters { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vmm-session-filters > .vmm-session-search { flex: 1 1 14rem; min-width: 0; }
+.vmm-filter-fields .vk-select { width: 100%; }
 .vmm-session-filter-details { flex-basis: 100%; order: 2; font-size: var(--vk-fs-md); }
 .vmm-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 12px; padding-top: 4px; align-items: end; }
 .vmm-filter-fields > label { display: flex; min-width: 0; flex-direction: column; justify-content: flex-end; gap: 4px; }
@@ -318,10 +320,10 @@ fieldset.vk-mem-two, fieldset.vk-form-grid { margin: 0; padding: 0; border: 0; m
 .vk-mem-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); }
 .vk-mem-session { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3); }
 .vk-mem-native-check { margin-top: 4px; accent-color: var(--vk-ember); }
-.vk-btn.vk-mem-title-link { justify-content: flex-start; max-width: 100%; height: auto; padding: 0; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.vk-btn.vk-mem-title-link { justify-content: flex-start; max-width: 100%; height: auto; padding: 0; color: var(--vk-ink); font-weight: 500; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.vk-btn.vk-mem-title-link:hover { color: var(--vk-ember); }
 .vk-mem-spread { justify-content: space-between; align-items: flex-start; }
 .vk-mem-inset { padding: calc(var(--vk-u) * 4); }
-.vk-mem-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: calc(var(--vk-u) * 3); }
 .vk-mem-inline-code { margin-left: calc(var(--vk-u) * 2); font-family: var(--vk-font-mono); overflow-wrap: anywhere; }
 .vk-mem-disclosure { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
 .vk-mem-disclosure > summary { color: var(--vk-ink-2); cursor: pointer; }
