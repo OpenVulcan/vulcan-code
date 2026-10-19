@@ -1,0 +1,34 @@
+/* Browser panels: the AI core browser and the local client browser share one chrome.
+ * 浏览器面板：AI 核心浏览器与本机客户端浏览器共用同一套外框。 */
+.vk-browser { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 2); width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; padding: calc(var(--vk-u) * 2); background: var(--vk-ground); }
+.vk-browser > * { flex: none; }
+.vk-browser-bar { display: flex; align-items: center; gap: var(--vk-u); min-width: 0; }
+.vk-browser-fill { flex: 1; }
+.vk-browser-bar > form { display: flex; flex: 1; align-items: center; gap: var(--vk-u); min-width: 0; }
+.vk-browser-address { flex: 1; min-width: 0; height: var(--vk-h-sm, 1.85rem); padding: 0 calc(var(--vk-u) * 2); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); color: var(--vk-ink); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
+.vk-browser-address:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-browser-size { display: flex; align-items: center; justify-content: center; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-browser-size > input { width: 4.5rem; height: 1.75rem; padding: 0 var(--vk-u); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); color: var(--vk-ink); font-variant-numeric: tabular-nums; text-align: center; }
+.vk-browser-stage { position: relative; display: flex; flex: 1 1 0; align-items: center; justify-content: center; width: 100%; min-width: 0; min-height: 0; overflow: hidden; border: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-sunken); }
+.vk-browser-stage > .vk-page-empty { border: 0; }
+.vk-browser-projection { position: relative; width: 100%; height: 100%; outline: none; cursor: default; }
+.vk-browser-projection[data-control] { cursor: crosshair; touch-action: none; }
+.vk-browser-projection:focus-visible { box-shadow: inset 0 0 0 var(--vk-focus-w) var(--vk-signal); }
+.vk-browser-frame { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.vk-browser-wait { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-browser-status { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); height: 1.5rem; color: var(--vk-ink-3); font-size: var(--vk-fs-2xs); }
+.vk-browser-status > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-browser-status .vk-num { font-variant-numeric: tabular-nums; }
+.vk-browser-count { position: absolute; top: -2px; right: -2px; min-width: 0.85rem; padding: 0 2px; background: var(--vk-ember); color: var(--vk-ground); font-size: 0.6rem; font-weight: 600; line-height: 0.85rem; text-align: center; }
+.vk-browser-status .vk-btn { position: relative; }
+.vk-browser-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-browser-downloads { max-height: 8rem; overflow: auto; font-size: var(--vk-fs-xs); }
+.vk-browser-downloads > div { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-browser-prompt { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); border-left: 2px solid var(--vk-ember); background: var(--vk-panel); font-size: var(--vk-fs-sm); }
+.vk-browser-prompt > .vk-browser-address { flex: 0 1 16rem; font-family: inherit; font-size: var(--vk-fs-sm); }
+.vk-browser-fallback { display: flex; flex: 1; flex-direction: column; gap: calc(var(--vk-u) * 2); min-height: 0; padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.vk-browser-fallback > p { margin: 0; }
+.vk-browser-fallback > a { overflow-wrap: anywhere; color: var(--vk-signal); text-decoration: underline; }
+.vk-browser-runtime { display: grid; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); }
+.vk-browser-runtime > div { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-browser-runtime pre { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; color: var(--vk-bad); font-family: var(--vk-font-mono); }

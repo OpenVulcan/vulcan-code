@@ -79,7 +79,7 @@ export function LocalBrowserCloseDialog(props: {
         <AlertDialogDescription>{t("browser.closeLocalPages").replace("{count}", count === null ? "…" : String(count))}</AlertDialogDescription>
       </AlertDialogHeader>
       {count === null && !error ? <StreamPlaceholder /> : null}
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
       <AlertDialogFooter>
         <AlertDialogCancel disabled={closing}>{t("browser.cancel")}</AlertDialogCancel>
         <AlertDialogAction disabled={closing || count === null} onClick={(event) => { event.preventDefault(); void confirm(); }}>

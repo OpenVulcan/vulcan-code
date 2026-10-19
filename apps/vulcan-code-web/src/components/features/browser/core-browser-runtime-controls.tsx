@@ -2,6 +2,7 @@ import * as React from "react";
 import { Button } from "@/ui-kit/primitives/button";
 import { useI18n } from "@/i18n";
 import { getCoreBrowserRuntimeStatus, installCoreBrowserRuntime, type CoreBrowserRuntimeStatus } from "@/service/core-browser-service";
+import "@/ui-kit/styles/features/browser.css"
 
 // CoreBrowserRuntimeControls exposes installation, repair and actionable failure details.
 // CoreBrowserRuntimeControls 提供安装、修复及可操作的失败详情。
@@ -62,8 +63,8 @@ export function CoreBrowserRuntimeControls({ compact = false }: { compact?: bool
   // A background readiness check must not add and remove a temporary toolbar row.
   // 后台就绪检查不得临时插入再移除工具栏行。
   if (compact && !busy && !error && (!status || (status.ready && !status.diagnostic && !status.installation?.error))) return null;
-  return <div className="space-y-2 text-xs">
-    <div className="flex flex-wrap items-center gap-2">
+  return <div className="vk-browser-runtime">
+    <div>
       <span role="status">{busy
         ? t("browser.downloadingAndVerifyingThe")
         : status?.ready ? t("browser.coreBrowserReady")
@@ -75,8 +76,8 @@ export function CoreBrowserRuntimeControls({ compact = false }: { compact?: bool
         {t("browser.refreshStatus")}
       </Button>
     </div>
-    {!busy && (error || status?.installation?.error || status?.diagnostic) && <p role="alert" className="whitespace-pre-wrap break-all text-destructive">
+    {!busy && (error || status?.installation?.error || status?.diagnostic) && <pre role="alert">
       {error || status?.installation?.error || status?.diagnostic}
-    </p>}
+    </pre>}
   </div>;
 }

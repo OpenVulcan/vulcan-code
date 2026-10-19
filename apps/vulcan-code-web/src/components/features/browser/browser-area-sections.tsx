@@ -12,6 +12,7 @@ import type {
   CoreBrowserPage,
   CoreBrowserSession,
 } from "@/service/core-browser-service";
+import "@/ui-kit/styles/features/browser.css"
 
 // BrowserCloseRequest freezes the exact browser or page the user asked to close.
 // BrowserCloseRequest 冻结用户要求关闭的精确浏览器或页面。
@@ -74,7 +75,7 @@ export function BrowserInstanceTabs({ visibleSessions, selectedSessionId, select
   // t 本地化页签标签与操作。
   const { t } = useI18n();
   return (
-    <div hidden={visibleSessions.length <= 1} data-browser-instance-row className="shrink-0">
+    <div hidden={visibleSessions.length <= 1} data-browser-instance-row>
       <div className="vk-tab-strip" hidden={visibleSessions.length <= 1} role="tablist" aria-label={t("browser.activeAiBrowsers")}>
         {visibleSessions.map((session, index) => {
           // The browser label is its displayed page, never the last AI navigation URL.
@@ -172,9 +173,9 @@ export function BrowserPagePrompts({ dialogs, fileChoosers, selectedPageId, dial
   return (
     <>
       {dialogs.filter((dialog) => dialog.pageId === selectedPageId).map((dialog) => (
-        <div key={dialog.dialogId} role="alertdialog" className="flex flex-wrap items-center gap-2 rounded border p-3 text-sm">
+        <div key={dialog.dialogId} role="alertdialog" className="vk-browser-prompt">
           <strong>{dialog.dialogType}</strong><span>{dialog.message}</span>
-          {dialog.dialogType === "prompt" ? <input className="rounded border bg-background px-2 py-1"
+          {dialog.dialogType === "prompt" ? <input className="vk-browser-address"
             value={dialogText} onChange={(event) => setDialogText(event.target.value)} disabled={!ownsControl} /> : null}
           <Button type="button" size="sm" disabled={!ownsControl} onClick={() => void answerDialog(dialog, true)}>
             {t("browser.accept")}
@@ -184,7 +185,7 @@ export function BrowserPagePrompts({ dialogs, fileChoosers, selectedPageId, dial
         </div>
       ))}
       {fileChoosers.filter((chooser) => chooser.pageId === selectedPageId).map((chooser) => (
-        <label key={chooser.chooserId} className="flex flex-wrap items-center gap-2 rounded border p-3 text-sm">
+        <label key={chooser.chooserId} className="vk-browser-prompt">
           <span>{t("browser.pageRequestsAFile")}</span>
           <input type="file" disabled={!ownsControl} onChange={(event) => void submitFileChooser(chooser, event.target.files?.[0])} />
         </label>
@@ -234,7 +235,7 @@ export function BrowserCloseConfirmDialog({ closeRequest, setCloseRequest, close
               ? t("browser.activeAutomationWillBe") : null}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {closeError ? <p role="alert" className="text-xs text-destructive">{closeError}</p> : null}
+        {closeError ? <p role="alert" className="vk-field-error">{closeError}</p> : null}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={closing}>{t("browser.cancel")}</AlertDialogCancel>
           <Button type="button" variant="destructive" disabled={closing} onClick={() => void closeSession()}>{closing ? t("browser.closing") : t("browser.confirmClose")}</Button>

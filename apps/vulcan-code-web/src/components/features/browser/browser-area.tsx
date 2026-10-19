@@ -1,5 +1,6 @@
 import * as React from "react";
-import { ArrowRight, Download, Hand, Keyboard, MonitorSmartphone, MoreHorizontal, MousePointer2, RefreshCw, Settings2, X } from "lucide-react";
+import { ArrowRight, Download, Globe, Hand, Keyboard, MonitorSmartphone, MoreHorizontal, MousePointer2, RefreshCw, Settings2, X } from "lucide-react";
+import { PageEmptyState, PageNotice } from "@/components/page";
 
 import { Button } from "@/ui-kit/primitives/button";
 import { CoreBrowserRuntimeControls } from "./core-browser-runtime-controls";
@@ -35,6 +36,7 @@ import {
   observeCoreBrowserDialogs, observeCoreBrowserFileChoosers,
   refreshCoreBrowserSessions, refreshCoreBrowserPages,
 } from "@/service/core-browser-metadata";
+import "@/ui-kit/styles/features/browser.css"
 
 // BrowserPollSource identifies independently refreshed Core browser metadata.
 // BrowserPollSource 标识独立刷新的 Core 浏览器元数据来源。
@@ -842,7 +844,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 w-full flex-col gap-2 overflow-hidden bg-background p-2" aria-label={t("browser.aiBrowser")}>
+    <div className="vk-browser" aria-label={t("browser.aiBrowser")}>
       <CoreBrowserRuntimeControls compact={!showRuntime} />
       <BrowserInstanceTabs
         visibleSessions={visibleSessions}
@@ -855,10 +857,10 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       />
       {selectedSession ? (
         <>
-          {selectedSession.status === "crashed" ? <p role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">
+          {selectedSession.status === "crashed" ? <PageNotice tone="error">
             {t("browser.thePlaywrightBrowserHost")}
-          </p> : null}
-          {selectedSession.blockedReason ? <p className="shrink-0 text-xs text-destructive">{selectedSession.blockedReason}</p> : null}
+          </PageNotice> : null}
+          {selectedSession.blockedReason ? <p className="vk-field-error">{selectedSession.blockedReason}</p> : null}
           <BrowserPageTabs
             pages={pages}
             selectedPageId={selectedPageId}
@@ -869,20 +871,20 @@ export function BrowserArea(props: { ownerSessionId: string }) {
           />
         </>
       ) : null}
-      <div className="flex min-w-0 shrink-0 items-center gap-1">
-        <div className="min-w-0 flex-1">{selectedSession ? <form className="flex min-w-0 items-center gap-1" onSubmit={(event) => void navigate(event)}>
-            <input ref={addressRef} className="h-8 min-w-0 flex-1 rounded border bg-background px-2 text-xs" value={address}
+      <div className="vk-browser-bar">
+        {selectedSession ? <form onSubmit={(event) => void navigate(event)}>
+            <input ref={addressRef} className="vk-browser-address" value={address}
               onChange={(event) => setAddress(event.target.value)} aria-label={t("browser.pageUrl")} />
-            <Button type="submit" size="icon" variant="ghost" className="h-7 w-7 shrink-0" title={t("browser.go")} aria-label={t("browser.go")} disabled={!ownsControl || !selectedPage}><ArrowRight size={14} /></Button>
-            <Button type="button" size="icon" variant={ownsControl ? "secondary" : "ghost"} className="h-7 w-7 shrink-0"
+            <Button type="submit" size="icon-sm" variant="ghost" title={t("browser.go")} aria-label={t("browser.go")} disabled={!ownsControl || !selectedPage}><ArrowRight size={14} /></Button>
+            <Button type="button" size="icon-sm" variant={ownsControl ? "secondary" : "ghost"}
               disabled={selectedSession.status !== "running" || selectedSession.leaseState === "blocked"}
               title={ownsControl ? t("browser.releaseControl") : selectedSession.leaseState === "free" ? t("browser.takeControl") : t("browser.takeOver")}
               onClick={() => void (ownsControl ? releaseControl() : acquireControl())}>
-              {ownsControl ? <MousePointer2 size={14} /> : <Hand size={14} />}<span className="sr-only">{ownsControl ? t("browser.releaseControl") : selectedSession.leaseState === "free" ? t("browser.takeControl") : t("browser.takeOver")}</span>
+              {ownsControl ? <MousePointer2 size={14} /> : <Hand size={14} />}<span className="vk-sr-only">{ownsControl ? t("browser.releaseControl") : selectedSession.leaseState === "free" ? t("browser.takeControl") : t("browser.takeOver")}</span>
             </Button>
-            <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0" aria-label={t("browser.resizeViewport")} title={t("browser.resizeViewport")} aria-pressed={showViewport} onClick={() => setShowViewport((shown) => !shown)}><MonitorSmartphone size={14} /></Button>
-          </form> : null}</div>
-        <Button type="button" size="icon" variant="ghost" className="h-6 w-6 shrink-0" aria-label={t("browser.refreshBrowserList")} title={t("browser.refreshBrowserList")} onClick={() => {
+            <Button type="button" size="icon-sm" variant="ghost" aria-label={t("browser.resizeViewport")} title={t("browser.resizeViewport")} aria-pressed={showViewport} onClick={() => setShowViewport((shown) => !shown)}><MonitorSmartphone size={14} /></Button>
+          </form> : <span className="vk-browser-fill" />}
+        <Button type="button" size="icon-xs" variant="ghost" aria-label={t("browser.refreshBrowserList")} title={t("browser.refreshBrowserList")} onClick={() => {
           // The shared observer reports errors only to the current owner/lifetime.
           // 共享观察者仅向当前归属与生命周期报告错误。
           void refreshSessions().catch(() => {});
@@ -890,23 +892,23 @@ export function BrowserArea(props: { ownerSessionId: string }) {
           <RefreshCw size={13} />
         </Button>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button type="button" size="icon" variant="ghost" className="h-6 w-6 shrink-0" aria-label={t("browser.browserMenu")}><MoreHorizontal size={14} /></Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button type="button" size="icon-xs" variant="ghost" aria-label={t("browser.browserMenu")}><MoreHorizontal size={14} /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onSelect={() => setShowRuntime((shown) => !shown)}><Settings2 size={14} />{t("browser.browserComponentStatus")}</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem disabled={!selectedSession || !selectedPage} onSelect={() => { if (selectedSession && selectedPage) { setCloseError(null); setCloseRequest({ session: selectedSession, page: selectedPage, label: selectedPage.title || browserTabTitle(selectedPage.url) }); } }}><X size={14} />{t("browser.closeCurrentPage")}</DropdownMenuItem>
-            <DropdownMenuItem disabled={!selectedSession} onSelect={() => { if (selectedSession) { setCloseError(null); setCloseRequest({ session: selectedSession, page: null, label: selectedPage ? selectedPage.title || browserTabTitle(selectedPage.url) : t("browser.aiBrowser") }); } }} className="text-destructive"><X size={14} />{t("browser.closeBrowser")}</DropdownMenuItem>
+            <DropdownMenuItem disabled={!selectedSession} onSelect={() => { if (selectedSession) { setCloseError(null); setCloseRequest({ session: selectedSession, page: null, label: selectedPage ? selectedPage.title || browserTabTitle(selectedPage.url) : t("browser.aiBrowser") }); } }} variant="destructive"><X size={14} />{t("browser.closeBrowser")}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
       {selectedSession ? (
         <>
-          {showViewport ? <div className="flex shrink-0 items-center justify-center gap-2 text-xs text-muted-foreground">
+          {showViewport ? <div className="vk-browser-size">
             <span>{t("browser.pageSize")}</span>
             <Select disabled={!ownsControl}
               value={selectedSession.viewportSize ? `${selectedSession.viewportSize.width}x${selectedSession.viewportSize.height}` : "1280x800"}
               onValueChange={(value) => void resizeViewport(value)}>
-              <SelectTrigger className="w-auto min-w-32 text-xs" aria-label={t("browser.browserViewport")}>
+              <SelectTrigger size="sm" aria-label={t("browser.browserViewport")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -916,10 +918,10 @@ export function BrowserArea(props: { ownerSessionId: string }) {
               </SelectContent>
             </Select>
           </div> : null}
-          {error ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{error}</div> : null}
-          <div data-browser-viewport className="relative flex min-h-0 min-w-0 w-full flex-1 basis-0 items-center justify-center overflow-hidden rounded bg-muted/20">
+          {error ? <PageNotice tone="error">{error}</PageNotice> : null}
+          <div data-browser-viewport className="vk-browser-stage">
             {hasFrame && selectedPage ? (
-              <div ref={projectionRef} className={`relative h-full w-full outline-none ${ownsControl ? "cursor-crosshair touch-none" : "cursor-default"}`}
+              <div ref={projectionRef} className="vk-browser-projection" data-control={ownsControl ? "" : undefined}
                 role="img" aria-label={t("browser.liveCoreBrowserPage")} tabIndex={ownsControl ? 0 : -1}
                 onPointerDown={pressPointer}
                 onPointerMove={movePointer}
@@ -945,7 +947,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
                 }}>
                 <BrowserFrameImage source={frameSource} />
               </div>
-            ) : <span className="text-xs text-muted-foreground">{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : t("browser.waitingForBrowserFrame")}</span>}
+            ) : <span className="vk-browser-wait">{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : t("browser.waitingForBrowserFrame")}</span>}
           </div>
           <BrowserPagePrompts
             dialogs={dialogs}
@@ -957,14 +959,14 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             answerDialog={answerDialog}
             submitFileChooser={submitFileChooser}
           />
-          <div className="flex h-6 shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="min-w-0 flex-1 truncate">{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : streamStatus === "connected" ? (ownsControl ? t("browser.manualControl") : t("browser.liveView")) : t("browser.connectingView")}</span>
+          <div className="vk-browser-status">
+            <span>{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : streamStatus === "connected" ? (ownsControl ? t("browser.manualControl") : t("browser.liveView")) : t("browser.connectingView")}</span>
             <BrowserFrameRateCounter source={frameSource} owner={props.ownerSessionId} browser={selectedSessionId} page={selectedPageId} title={t("browser.receivedFramesOverThe")} />
-            <Button type="button" size="icon" variant="ghost" className="h-6 w-6" title={t("browser.sendTextWithIme")} aria-label={t("browser.textInput")} aria-pressed={showTextInput} onClick={() => setShowTextInput((shown) => !shown)}><Keyboard size={13} /></Button>
-            <Button type="button" size="icon" variant="ghost" className="relative h-6 w-6" title={formatMessage(t("browser.downloads"), { length: downloads.length })} aria-label={t("browser.downloadList")} aria-pressed={showDownloads} onClick={() => setShowDownloads((shown) => !shown)}><Download size={13} />{downloads.length ? <span className="absolute -right-1 -top-1 text-[9px]">{downloads.length}</span> : null}</Button>
+            <Button type="button" size="icon-xs" variant="ghost" title={t("browser.sendTextWithIme")} aria-label={t("browser.textInput")} aria-pressed={showTextInput} onClick={() => setShowTextInput((shown) => !shown)}><Keyboard size={13} /></Button>
+            <Button type="button" size="icon-xs" variant="ghost" title={formatMessage(t("browser.downloads"), { length: downloads.length })} aria-label={t("browser.downloadList")} aria-pressed={showDownloads} onClick={() => setShowDownloads((shown) => !shown)}><Download size={13} />{downloads.length ? <span className="vk-browser-count">{downloads.length}</span> : null}</Button>
           </div>
-          {showTextInput ? <div className="flex shrink-0 items-center gap-2">
-            <input className="h-8 min-w-0 flex-1 rounded border bg-background px-2 text-xs" value={textInput}
+          {showTextInput ? <div className="vk-browser-row">
+            <input className="vk-browser-address" value={textInput}
               onChange={(event) => setTextInput(event.target.value)} placeholder={t("browser.typeTextToSend")}
               aria-label={t("browser.textToSendTo")} />
             <Button type="button" size="sm" disabled={!ownsControl || !hasFrame || !textInput}
@@ -973,8 +975,8 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             </Button>
           </div> : null}
           {downloads.length > 0 ? (
-            <div hidden={!showDownloads} className="max-h-32 shrink-0 overflow-auto text-xs" aria-label={t("browser.browserDownloads")}>
-              <div className="flex flex-wrap items-center gap-2">
+            <div hidden={!showDownloads} className="vk-browser-downloads" aria-label={t("browser.browserDownloads")}>
+              <div>
               <span>{t("browser.downloads2")}</span>
               {downloads.map((download) => (
                 <Button key={download.downloadId} type="button" size="sm" variant="outline"
@@ -986,11 +988,11 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             </div>
           ) : null}
         </>
-      ) : <p className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">{sessions.some((session) => session.status === "running")
+      ) : <PageEmptyState size="panel" icon={<Globe aria-hidden="true" />} title={sessions.some((session) => session.status === "running")
         ? t("browser.selectABrowserAbove")
-        : t("browser.noActiveAiBrowser")}</p>}
-      {!selectedSession && error ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{error}</div> : null}
-      {Object.values(pollErrors).some(Boolean) ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{Object.values(pollErrors).find(Boolean)}</div> : null}
+        : t("browser.noActiveAiBrowser")} />}
+      {!selectedSession && error ? <PageNotice tone="error">{error}</PageNotice> : null}
+      {Object.values(pollErrors).some(Boolean) ? <PageNotice tone="error">{Object.values(pollErrors).find(Boolean)}</PageNotice> : null}
       <BrowserCloseConfirmDialog
         closeRequest={closeRequest}
         setCloseRequest={setCloseRequest}
