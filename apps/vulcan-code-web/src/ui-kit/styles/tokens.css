@@ -111,7 +111,7 @@
 
   --vk-shadow-1: 0 1px 2px rgba(17, 21, 28, 0.05);
   --vk-shadow-2: 0 12px 32px rgba(17, 21, 28, 0.14), 0 2px 6px rgba(17, 21, 28, 0.06);
-  --vk-scrim: rgba(16, 19, 24, 0.36);
+  --vk-scrim: rgba(16, 19, 24, 0.08);
   --vk-glow: 0 0 0 1px rgba(226, 81, 26, 0.18), 0 6px 22px rgba(226, 81, 26, 0.12);
   --vk-ambient:
     radial-gradient(70rem 30rem at 8% -12%, rgba(226, 81, 26, 0.07), transparent 62%),
@@ -166,7 +166,7 @@
     --vk-diff-del-ink: #f38c94;
     --vk-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --vk-shadow-2: 0 16px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
-    --vk-scrim: rgba(0, 0, 0, 0.56);
+    --vk-scrim: rgba(0, 0, 0, 0.18);
     --vk-glow: 0 0 0 1px rgba(255, 106, 43, 0.28), 0 8px 28px rgba(255, 106, 43, 0.16);
     --vk-ambient:
       radial-gradient(64rem 30rem at 50% 118%, rgba(255, 106, 43, 0.11), transparent 66%),
@@ -215,7 +215,7 @@
   --vk-diff-del-ink: #f38c94;
   --vk-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --vk-shadow-2: 0 16px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
-  --vk-scrim: rgba(0, 0, 0, 0.56);
+  --vk-scrim: rgba(0, 0, 0, 0.18);
   --vk-glow: 0 0 0 1px rgba(255, 106, 43, 0.28), 0 8px 28px rgba(255, 106, 43, 0.16);
   --vk-ambient:
     radial-gradient(64rem 30rem at 50% 118%, rgba(255, 106, 43, 0.11), transparent 66%),
@@ -265,7 +265,7 @@
   --vk-diff-del-ink: #ff8d9f;
   --vk-shadow-1: 0 0 0 1px rgba(56, 214, 255, 0.04);
   --vk-shadow-2: 0 0 0 1px rgba(56, 214, 255, 0.22), 0 18px 48px rgba(0, 0, 0, 0.7), 0 0 32px rgba(56, 214, 255, 0.08);
-  --vk-scrim: rgba(1, 4, 9, 0.7);
+  --vk-scrim: rgba(1, 4, 9, 0.22);
   --vk-glow: 0 0 0 1px rgba(255, 122, 47, 0.4), 0 0 26px rgba(255, 122, 47, 0.22);
   --vk-ambient:
     radial-gradient(70rem 26rem at 50% 116%, rgba(255, 122, 47, 0.16), transparent 70%),

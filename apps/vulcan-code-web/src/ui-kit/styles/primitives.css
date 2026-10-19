@@ -405,8 +405,9 @@
   display: grid;
   place-items: center;
   padding: calc(var(--vk-u) * 6) max(16px, env(safe-area-inset-right, 0px)) calc(var(--vk-u) * 6) max(16px, env(safe-area-inset-left, 0px));
+  /* A light frosted glass: the page stays legible behind a dialog. */
   background: var(--vk-scrim);
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(3px) saturate(1.05);
   animation: vk-rise var(--vk-t-fast) linear backwards;
 }
 .vk-dialog {

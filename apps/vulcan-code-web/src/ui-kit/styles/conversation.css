@@ -2,17 +2,33 @@
  * new-session start page. Reading text uses --vk-fs-read so the transcript stays comfortable at
  * every text tier. */
 
+/* One reading column shared by transcript, centered reasoning window and dock, so the conversation
+ * never runs wider than the composer. Width mode: limited (reading measure) or full. In popup thinking
+ * mode the column pads a left gutter that holds the reasoning tags. */
 .vk-chat {
+  container: vk-chat / inline-size;
   position: relative;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
+  --vk-col-pad: calc(var(--vk-u) * 8);
+  --vk-col-max: calc(var(--vk-read-w) + var(--vk-col-pad) * 2);
+  --vk-float-w: min(24rem, 34%);
+  transition: padding var(--vk-t-med) var(--vk-ease);
 }
+:root[data-vk-width="full"] .vk-chat { --vk-col-max: 100%; }
+:root[data-vk-think="popup"] .vk-chat { --vk-col-pad: calc(var(--vk-u) * 24); --vk-col-max: calc(var(--vk-read-w) + var(--vk-u) * 48); }
+:root[data-vk-think="popup"][data-vk-width="full"] .vk-chat { --vk-col-max: 100%; }
+/* Right-docked reasoning takes its own column; the conversation re-centers in what remains. */
+.vk-chat:has(> .vk-chat-side[data-float="right"]) { padding-right: calc(var(--vk-float-w) + var(--vk-u) * 3); }
+.vk-chat:has(> .vk-chat-side[data-float="right"]) > .vk-prompt-nav { right: calc(var(--vk-float-w) + var(--vk-u) * 5); }
 
 .vk-transcript {
+  grid-row: 1;
   position: relative;
   min-height: 0;
+  scrollbar-gutter: stable both-edges;
   overflow-y: auto;
   overflow-anchor: none;
   scroll-behavior: smooth;
@@ -21,9 +37,10 @@
   display: grid;
   gap: calc(var(--vk-u) * 7);
   width: 100%;
-  max-width: calc(var(--vk-read-w) + var(--vk-u) * 16);
+  max-width: var(--vk-col-max);
   margin: 0 auto;
-  padding: calc(var(--vk-u) * 5) calc(var(--vk-u) * 8) calc(var(--vk-u) * 8);
+  /* Floating approval and ask cards report their height, so the latest output can scroll above them. */
+  padding: calc(var(--vk-u) * 5) var(--vk-col-pad) calc(var(--vk-u) * 8 + var(--vk-dock-float-h, 0px));
 }
 
 /* History loader: older turns load on demand when the reader scrolls to the top. */
@@ -157,8 +174,33 @@
   animation: vk-rise var(--vk-t-fast) var(--vk-ease) backwards;
 }
 
-/* The floating reasoning window: centered over the transcript or docked to its right edge; it can be
- * hidden to a pill and shown again. Markdown rendering is a per-viewer toggle. */
+/* Gutter placement: with room, a reasoning tag sits in the left gutter at the top of the tool run or
+ * reply it belongs to and takes no row of its own; its content still opens as a popover. */
+@container vk-chat (min-width: 50em) {
+  :root[data-vk-think="popup"] .vk-answer > .vk-think { height: 0; margin-bottom: calc(var(--vk-u) * -3); z-index: 3; }
+  :root[data-vk-think="popup"] .vk-answer > .vk-think > summary {
+    position: absolute;
+    top: calc(var(--vk-u) * 1.5);
+    right: calc(var(--vk-u) * 3);
+    gap: calc(var(--vk-u) * 1);
+    padding: 0 calc(var(--vk-u) * 1.5);
+    border-color: transparent;
+    background: transparent;
+    color: var(--vk-ink-3);
+    white-space: nowrap;
+  }
+  :root[data-vk-think="popup"] .vk-answer > .vk-think > summary > b { display: none; }
+  :root[data-vk-think="popup"] .vk-answer > .vk-think > summary::after { content: ""; position: absolute; left: 100%; top: 50%; width: calc(var(--vk-u) * 3); height: 1px; background: var(--vk-line-strong); }
+  :root[data-vk-think="popup"] .vk-answer > .vk-think > summary:hover,
+  :root[data-vk-think="popup"] .vk-answer > .vk-think[open] > summary { border-color: var(--vk-line-strong); background: var(--vk-raised); color: var(--vk-ink); }
+  :root[data-vk-think="popup"] .vk-answer > .vk-think[data-live] > summary { color: var(--vk-ember); }
+  :root[data-vk-think="popup"] .vk-answer > .vk-think[data-live] > summary::after { background: var(--vk-ember); }
+  :root[data-vk-think="popup"] .vk-answer > .vk-think:not([data-live]) > .vk-think-body { top: calc(var(--vk-u) * 8); }
+}
+
+/* The floating reasoning window. Centered, it sits in the flow between transcript and composer;
+ * right-docked, it takes a column beside the transcript. Either way it never covers the output.
+ * It can be hidden to a pill and shown again; Markdown rendering is a per-viewer toggle. */
 .vk-think-float {
   position: absolute;
   z-index: 7;
@@ -171,8 +213,28 @@
   animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
   transition: opacity var(--vk-t-med) var(--vk-ease), transform var(--vk-t-med) var(--vk-ease);
 }
-.vk-think-float[data-dock="center"] { top: calc(var(--vk-u) * 6); left: 50%; width: min(42rem, calc(100% - var(--vk-u) * 8)); max-height: 42%; translate: -50% 0; }
-.vk-think-float[data-dock="right"] { top: calc(var(--vk-u) * 3); right: calc(var(--vk-u) * 3); bottom: calc(var(--vk-u) * 3); width: min(24rem, 42%); }
+.vk-think-slot { grid-row: 2; width: 100%; max-width: var(--vk-col-max); margin: 0 auto; padding: 0 var(--vk-col-pad); }
+.vk-think-slot:empty { display: none; }
+.vk-think-float[data-dock="center"] { position: relative; max-height: min(11rem, 28svh); margin-bottom: calc(var(--vk-u) * 2); }
+.vk-think-float[data-dock="right"] { position: relative; flex: 1; min-height: 0; }
+
+/* Chat side stack (top right): the session tools menu, the right-docked reasoning window or its pill. */
+.vk-chat-side {
+  position: absolute;
+  z-index: 6;
+  top: calc(var(--vk-u) * 3);
+  right: calc(var(--vk-u) * 3);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: calc(var(--vk-u) * 2);
+  max-width: calc(100% - var(--vk-u) * 6);
+  max-height: calc(100% - var(--vk-u) * 6);
+  pointer-events: none;
+}
+.vk-chat-side > * { pointer-events: auto; }
+.vk-chat-side[data-float="right"] { bottom: calc(var(--vk-u) * 3); width: var(--vk-float-w); align-items: stretch; }
+.vk-chat-side > .vk-think-pill { position: static; }
 .vk-think-float[data-leaving] { opacity: 0; transform: translateY(-4px); pointer-events: none; }
 .vk-think-float-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-height: var(--vk-h-lg); padding: 0 calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line); font-size: var(--vk-fs-sm); }
 .vk-think-float-head > .lucide { color: var(--vk-ember); }
@@ -259,12 +321,27 @@
 .tok-f { color: var(--vk-chart-1); }
 
 /* ---------- Tool card ---------- */
+[data-family="read"] { --vk-fam: var(--vk-chart-1); }
+[data-family="search"] { --vk-fam: var(--vk-chart-2); }
+[data-family="edit"] { --vk-fam: var(--vk-chart-4); }
+[data-family="run"] { --vk-fam: var(--vk-chart-3); }
+[data-family="web"] { --vk-fam: var(--vk-info); }
+[data-family="agent"] { --vk-fam: var(--vk-ember); }
+[data-family="other"] { --vk-fam: var(--vk-ink-3); }
 .vk-tools { display: grid; min-width: 0; }
 .vk-tools > .vk-tool + .vk-tool { margin-top: -1px; }
+.vk-tools-head { display: flex; align-items: center; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); padding-bottom: calc(var(--vk-u) * 1.5); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
+.vk-tools-head b { color: var(--vk-ink-2); font-weight: 600; }
+.vk-tools-strip { display: inline-flex; gap: 2px; }
+.vk-tools-strip > i { width: calc(var(--vk-u) * 3); height: calc(var(--vk-u) * 1.5); background: var(--vk-fam); opacity: 0.85; }
+.vk-tools-strip > i[data-state="running"] { animation: vk-pulse 1.4s ease-in-out infinite; }
+.vk-tools-strip > i[data-state="failed"],
+.vk-tools-strip > i[data-state="denied"] { background: var(--vk-bad); }
 .vk-tool {
   position: relative;
   min-width: 0;
   border: var(--vk-bw) solid var(--vk-line);
+  border-left: 2px solid color-mix(in srgb, var(--vk-fam, var(--vk-ink-3)) 60%, var(--vk-line));
   background: var(--vk-panel);
   backdrop-filter: blur(var(--vk-panel-blur));
   --vk-tone: var(--vk-ink-3);
@@ -276,25 +353,28 @@
 .vk-tool[data-state="waiting"] { --vk-tone: var(--vk-warn); }
 .vk-tool[data-state="failed"],
 .vk-tool[data-state="denied"],
-.vk-tool[data-state="waiting"] { box-shadow: inset 2px 0 0 var(--vk-tone); }
+.vk-tool[data-state="waiting"] { border-left-color: var(--vk-tone); background: color-mix(in srgb, var(--vk-tone) 5%, var(--vk-panel)); }
 .vk-tool-head {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   gap: calc(var(--vk-u) * 2.5);
   align-items: center;
   width: 100%;
   min-height: calc(var(--vk-u) * 10);
-  padding: 0 calc(var(--vk-u) * 2) 0 calc(var(--vk-u) * 3);
+  padding: 0 calc(var(--vk-u) * 2) 0 calc(var(--vk-u) * 2);
   border: 0;
   background: transparent;
   text-align: left;
   cursor: pointer;
 }
 .vk-tool-head:hover { background: var(--vk-hover); }
-.vk-tool-state { display: grid; place-items: center; width: 1rem; color: var(--vk-tone); }
-.vk-tool-family { color: var(--vk-ink-3); }
+.vk-tool-state { display: grid; place-items: center; width: 1.1rem; height: 1.1rem; color: var(--vk-tone); }
+.vk-tool-state > .lucide { width: 0.9rem; height: 0.9rem; }
+.vk-tool-icon { display: grid; place-items: center; width: calc(var(--vk-u) * 6.5); height: calc(var(--vk-u) * 6.5); background: color-mix(in srgb, var(--vk-fam) 14%, transparent); color: var(--vk-fam); }
+.vk-tool-icon > .lucide { width: 0.95rem; height: 0.95rem; }
+.vk-tool[data-state="running"] .vk-tool-icon { box-shadow: inset 0 0 0 1px var(--vk-ember); color: var(--vk-ember); }
 .vk-tool-title { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 2); min-width: 0; }
-.vk-tool-title > b { font-weight: 500; white-space: nowrap; }
+.vk-tool-title > b { font-weight: 600; color: var(--vk-ink); white-space: nowrap; }
 .vk-tool-title > code {
   min-width: 0;
   overflow: hidden;
@@ -494,10 +574,6 @@
 .vk-prompt-nav > button:hover { width: calc(var(--vk-u) * 6); background: var(--vk-ink-2); }
 .vk-prompt-nav > button[aria-current="true"] { background: var(--vk-ember); width: calc(var(--vk-u) * 6); }
 .vk-jump {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + var(--vk-u) * 3);
-  transform: translateX(-50%);
   display: inline-flex;
   align-items: center;
   gap: calc(var(--vk-u) * 1.5);
@@ -515,18 +591,56 @@
 
 /* ---------- Dock: everything between transcript and composer ---------- */
 .vk-dock {
+  grid-row: 3;
   position: relative;
   display: grid;
   gap: calc(var(--vk-u) * 2);
   width: 100%;
-  max-width: calc(var(--vk-read-w) + var(--vk-u) * 16);
+  max-width: var(--vk-col-max);
   margin: 0 auto;
-  padding: 0 calc(var(--vk-u) * 8) calc(var(--vk-u) * 4);
+  padding: 0 var(--vk-col-pad) calc(var(--vk-u) * 4);
 }
-/* Goal, tasks, approval and ask stack above the composer; together they never take the transcript's
- * room — past the cap they scroll inside the dock. */
-.vk-dock-extras { display: grid; gap: calc(var(--vk-u) * 2); max-height: min(36svh, 26rem); overflow-y: auto; overscroll-behavior: contain; }
+/* Approval and ask float above the composer over the transcript's bottom edge instead of taking its
+ * room; the transcript pads by their height so the latest output can still scroll above them. */
+.vk-dock-float {
+  position: absolute;
+  z-index: 4;
+  left: var(--vk-col-pad);
+  right: var(--vk-col-pad);
+  bottom: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(var(--vk-u) * 2);
+  padding-bottom: calc(var(--vk-u) * 2);
+  pointer-events: none;
+}
+.vk-dock-float > * { pointer-events: auto; }
+.vk-jump-slot { display: flex; justify-content: center; }
+.vk-jump-slot:empty { display: none; }
+.vk-dock-extras { display: grid; gap: calc(var(--vk-u) * 2); max-height: min(52svh, 30rem); overflow-y: auto; overscroll-behavior: contain; }
 .vk-dock-extras:empty { display: none; }
+.vk-dock-extras > .vk-approval,
+.vk-dock-extras > .vk-ask { background: color-mix(in srgb, var(--vk-raised) 90%, transparent); backdrop-filter: blur(12px) saturate(1.1); box-shadow: var(--vk-shadow-2); animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards; }
+.vk-dock-chip {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  max-width: 100%;
+  height: var(--vk-h-md);
+  padding: 0 calc(var(--vk-u) * 2.5);
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-tone, var(--vk-signal)) 50%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-raised) 90%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--vk-shadow-2);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  cursor: pointer;
+}
+.vk-dock-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-dock-chip > .lucide { color: var(--vk-signal); }
+.vk-dock-chip > b { color: var(--vk-signal); font-weight: 500; }
 
 .vk-approval { display: grid; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid color-mix(in srgb, var(--vk-warn) 45%, var(--vk-line)); background: color-mix(in srgb, var(--vk-warn) 7%, var(--vk-raised)); box-shadow: var(--vk-shadow-2); animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards; }
 .vk-approval-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); }
@@ -641,6 +755,13 @@
 .vk-composer-tool:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-composer-tool[data-on] { color: var(--vk-signal); border-color: color-mix(in srgb, var(--vk-signal) 35%, transparent); background: var(--vk-signal-soft); }
 .vk-composer-tool[data-tone] { color: var(--vk-tone); }
+.vk-model-btn { color: var(--vk-ink); }
+.vk-model-btn > small { color: var(--vk-ink-3); font-size: var(--vk-fs-2xs); white-space: nowrap; }
+.vk-model-btn > .lucide:last-child { width: 0.8rem; height: 0.8rem; color: var(--vk-ink-3); }
+.vk-composer-flags { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1); margin-left: calc(var(--vk-u) * 0.5); padding-left: calc(var(--vk-u) * 1.5); border-left: var(--vk-bw) solid var(--vk-line); color: var(--vk-ink-3); }
+.vk-composer-flags > .lucide { width: 0.85rem; height: 0.85rem; }
+.vk-composer-flags > i { font-style: normal; font-size: var(--vk-fs-2xs); margin-left: -2px; }
+.vk-ctx { cursor: default; }
 .vk-ctx { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); padding: 0 calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); font-variant-numeric: tabular-nums; }
 .vk-ctx > .vk-meter { width: 3.6rem; height: 0.45rem; --cells: 10; }
 .vk-send {
@@ -697,16 +818,18 @@
 .vk-start-card small { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
 .vk-start-recent { display: grid; gap: 0; }
 
+@container vk-chat (max-width: 50em) {
+  .vk-chat > * { --vk-col-pad: calc(var(--vk-u) * 5); }
+}
 @container vk-app (max-width: 72em) {
-  .vk-transcript-inner,
-  .vk-dock,
   .vk-start { padding-left: calc(var(--vk-u) * 5); padding-right: calc(var(--vk-u) * 5); }
   .vk-prompt-nav { display: none; }
 }
 @container vk-app (max-width: 46em) {
-  .vk-transcript-inner,
-  .vk-dock,
+  .vk-chat > * { --vk-col-pad: 16px; }
   .vk-start { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .vk-composer-flags,
+  .vk-model-btn > small { display: none; }
   .vk-tool-meta > :not(:last-child) { display: none; }
   .vk-composer-tool > span { display: none; }
   .vk-composer-bar { gap: calc(var(--vk-u) * 0.5); padding-left: calc(var(--vk-u) * 1); padding-right: calc(var(--vk-u) * 1); }
@@ -715,7 +838,6 @@
   .vk-ctx { padding: 0 calc(var(--vk-u) * 1); }
   .vk-ctx > .vk-meter { display: none; }
   .vk-composer-hint > :last-child { display: none; }
-  .vk-think-float[data-dock] { top: calc(var(--vk-u) * 2); left: calc(var(--vk-u) * 2); right: calc(var(--vk-u) * 2); bottom: auto; width: auto; max-height: 45%; translate: none; }
   /* The dock must leave the transcript most of a phone screen. */
   .vk-todo ol { max-height: 4.5rem; }
   .vk-agent { grid-template-columns: auto minmax(0, 1fr) auto; }

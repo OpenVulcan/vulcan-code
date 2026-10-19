@@ -3,79 +3,91 @@
 .vk-root,
 .vk-root *,
 .vk-root *::before,
-.vk-root *::after {
+.vk-root *::after,
+.vk-layer,
+.vk-layer *,
+.vk-layer *::before,
+.vk-layer *::after {
   box-sizing: border-box;
   border-radius: var(--vk-radius);
 }
 
-.vk-root {
+/* .vk-root is the app ground; .vk-layer hosts menus, dialogs and toasts above it and stays transparent,
+ * so an overlay never paints over the whole screen. */
+.vk-root,
+.vk-layer {
   font-family: var(--vk-font-ui);
   font-size: var(--vk-fs-md);
   line-height: var(--vk-lh-ui);
   color: var(--vk-ink);
-  background-color: var(--vk-ground);
-  background-image: var(--vk-ambient);
-  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   font-feature-settings: "ss01", "cv11";
 }
+.vk-root {
+  background-color: var(--vk-ground);
+  background-image: var(--vk-ambient);
+  background-attachment: fixed;
+}
 
-.vk-root :where(button, input, textarea, select) {
+.vk-root :where(button, input, textarea, select),
+.vk-layer :where(button, input, textarea, select) {
   font: inherit;
   color: inherit;
 }
 
-.vk-root :where(h1, h2, h3, h4, p, ul, ol, figure) {
+.vk-root :where(h1, h2, h3, h4, p, ul, ol, figure),
+.vk-layer :where(h1, h2, h3, h4, p, ul, ol, figure) {
   margin: 0;
 }
 
-.vk-root :where(h1, h2, h3) {
+.vk-root :where(h1, h2, h3),
+.vk-layer :where(h1, h2, h3) {
   text-wrap: balance;
   line-height: var(--vk-lh-tight);
 }
 
-.vk-root ::selection {
+:is(.vk-root, .vk-layer) ::selection {
   background: var(--vk-signal-soft);
   color: var(--vk-ink);
 }
 
 /* Focus: one 2px outline for every interactive element. */
-.vk-root :where(a, button, input, textarea, [tabindex], [role="option"], [role="menuitem"], [role="tab"]):focus-visible {
+:is(.vk-root, .vk-layer) :where(a, button, input, textarea, [tabindex], [role="option"], [role="menuitem"], [role="tab"]):focus-visible {
   outline: var(--vk-focus-w) solid var(--vk-signal);
   outline-offset: 1px;
 }
 
 /* Scrollbars: thin square thumb, quiet until hovered. */
-.vk-root,
-.vk-root * {
+:is(.vk-root, .vk-layer),
+:is(.vk-root, .vk-layer) * {
   scrollbar-width: thin;
   scrollbar-color: var(--vk-line-strong) transparent;
 }
 
-.vk-root ::-webkit-scrollbar {
+:is(.vk-root, .vk-layer) ::-webkit-scrollbar {
   width: calc(var(--vk-u) * 2.5);
   height: calc(var(--vk-u) * 2.5);
 }
 
-.vk-root ::-webkit-scrollbar-track {
+:is(.vk-root, .vk-layer) ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.vk-root ::-webkit-scrollbar-thumb {
+:is(.vk-root, .vk-layer) ::-webkit-scrollbar-thumb {
   background: var(--vk-line-strong);
   border: 3px solid transparent;
   background-clip: padding-box;
 }
 
-.vk-root ::-webkit-scrollbar-thumb:hover {
+:is(.vk-root, .vk-layer) ::-webkit-scrollbar-thumb:hover {
   background-color: var(--vk-ink-3);
 }
 
-.vk-root ::-webkit-scrollbar-corner {
+:is(.vk-root, .vk-layer) ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-:root[data-vk-theme="command"] .vk-root ::-webkit-scrollbar-thumb {
+:root[data-vk-theme="command"] :is(.vk-root, .vk-layer) ::-webkit-scrollbar-thumb {
   background-color: color-mix(in srgb, var(--vk-signal) 38%, transparent);
 }
 
@@ -114,7 +126,7 @@
 }
 
 .vk-icon,
-.vk-root svg.lucide {
+:is(.vk-root, .vk-layer) svg.lucide {
   width: var(--vk-icon);
   height: var(--vk-icon);
   flex: none;
@@ -220,18 +232,18 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .vk-root *,
-  .vk-root *::before,
-  .vk-root *::after {
+  :is(.vk-root, .vk-layer) *,
+  :is(.vk-root, .vk-layer) *::before,
+  :is(.vk-root, .vk-layer) *::after {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
   }
 }
 
-:root[data-vk-motion="reduce"] .vk-root *,
-:root[data-vk-motion="reduce"] .vk-root *::before,
-:root[data-vk-motion="reduce"] .vk-root *::after {
+:root[data-vk-motion="reduce"] :is(.vk-root, .vk-layer) *,
+:root[data-vk-motion="reduce"] :is(.vk-root, .vk-layer) *::before,
+:root[data-vk-motion="reduce"] :is(.vk-root, .vk-layer) *::after {
   animation-duration: 1ms !important;
   animation-iteration-count: 1 !important;
   transition-duration: 1ms !important;
