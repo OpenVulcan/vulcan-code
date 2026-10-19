@@ -27,15 +27,22 @@ vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), success: 
 // host/root 持有隔离文档，不打开原生窗口或执行服务写入。
 let host: HTMLDivElement;
 let root: Root;
+// CONVERSATION_RESERVE stands in for the kit --vk-reserve-w token, which jsdom cannot resolve from the stylesheet.
+// CONVERSATION_RESERVE 代替 kit 的 --vk-reserve-w 令牌，因为 jsdom 无法从样式表解析该令牌。
+const CONVERSATION_RESERVE = "922px";
 beforeEach(() => {
   vi.clearAllMocks();
+  document.documentElement.style.setProperty("--vk-reserve-w", CONVERSATION_RESERVE);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1600, bottom: 900, width: 1600, height: 900, toJSON: () => ({}) });
   Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => {
+  await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+  document.documentElement.style.removeProperty("--vk-reserve-w");
+});
 
 /** Mounts content with the actual localization provider; resolves after effects settle.
  * 使用真实本地化提供器挂载 content；副作用结束后完成。 */
@@ -162,8 +169,8 @@ it.each(["stop", "close"] as const)("retains %s failure, prevents duplicate requ
 });
 
 it("resizes the dock with keyboard and releases pointer listeners after cancellation", async () => {
-  // A narrow dock leaves 469px after the reading column, padding, reasoning gutter, and handle.
-  // 窄停靠容器保留阅读列、内边距、思考留白和手柄后，剩余 469px。
+  // A narrow dock leaves 469px after the conversation reserve and the handle.
+  // 窄停靠容器保留会话预留宽度和手柄后，剩余 469px。
   vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1400, bottom: 900, width: 1400, height: 900, toJSON: () => ({}) });
   const context = contextProps();
   const props: React.ComponentProps<typeof WorkspaceResizableBody> = { ...context, selectedDraftConversation: null, contextPanelTabs: [], contextPanelActiveTabId: null,
@@ -190,8 +197,8 @@ it("resizes the dock with keyboard and releases pointer listeners after cancella
 });
 
 it("lets a wide right dock consume whitespace without shrinking the conversation and reasoning gutter", async () => {
-  // The 1800px shell can allocate 869px right after reserving 922px of conversation and the handle.
-  // 1800px 外壳保留 922px 会话区与手柄后，可为右侧分配 869px。
+  // The 1800px shell can allocate 869px right after the conversation reserve and the handle.
+  // 1800px 外壳保留会话预留宽度与手柄后，可为右侧分配 869px。
   vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1800, bottom: 900, width: 1800, height: 900, toJSON: () => ({}) });
   const context = contextProps();
   const props: React.ComponentProps<typeof WorkspaceResizableBody> = { ...context, selectedDraftConversation: null, contextPanelTabs: [], contextPanelActiveTabId: null,

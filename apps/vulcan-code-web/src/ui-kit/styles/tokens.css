@@ -13,10 +13,12 @@
  */
 
 /* ---------- Size system: every length derives from the root text tier ---------- */
-/* The navigation widths are registered lengths so script reads them back as resolved pixels for
- * width-based layout decisions (components/shell/navigation-layout.ts); these tokens stay their only source. */
+/* The navigation widths and the conversation reserve are registered lengths so script reads them back as
+ * resolved pixels for width-based layout decisions (components/shell/navigation-layout.ts); these tokens stay
+ * their only source. */
 @property --vk-rail-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
 @property --vk-sidebar-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --vk-reserve-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
 :root {
   /* UI body size; the five tiers below only change this value. */
   font-size: 13px;
@@ -46,10 +48,15 @@
   --vk-rail-w: calc(var(--vk-u) * 12);
   --vk-sidebar-w: calc(var(--vk-u) * 66);
   --vk-panel-w: calc(var(--vk-u) * 94);
+  /* The "standard" reading measure; the width presets below move it. */
   --vk-read-w: 46rem;
   /* The conversation column: the reading measure plus its side padding, or the whole stage at "full". */
   --vk-column-pad: calc(var(--vk-u) * 8);
-  --vk-column-w: calc(var(--vk-read-w) + var(--vk-column-pad) * 2);
+  --vk-read-col: calc(var(--vk-read-w) + var(--vk-column-pad) * 2);
+  --vk-column-w: var(--vk-read-col);
+  /* Width the stage keeps for the conversation before the context panel floats and the navigation folds:
+   * the limited column plus the reasoning overhang. "full" keeps the standard measure, so it reserves that. */
+  --vk-reserve-w: calc(var(--vk-read-col) + var(--vk-u) * 10);
   --vk-statusbar-h: calc(var(--vk-u) * 6);
   --vk-titlebar-h: calc(var(--vk-u) * 12);
 
@@ -72,10 +79,10 @@
 :root[data-vk-text="l"] { font-size: 17px; }
 :root[data-vk-text="xl"] { font-size: 19px; }
 
-/* Reading width presets for the conversation column (data-vk-width). "full" drops the cap entirely
- * (--vk-column-w); the others only move the reading measure, so they scale with the text tier. */
+/* Reading width presets for the conversation column (data-vk-width). "standard" is the :root default.
+ * "full" drops the cap entirely (--vk-column-w); the others only move the reading measure, so they scale
+ * with the text tier. */
 :root[data-vk-width="compact"] { --vk-read-w: 38rem; }
-:root[data-vk-width="standard"] { --vk-read-w: 46rem; }
 :root[data-vk-width="wide"] { --vk-read-w: 58rem; }
 :root[data-vk-width="xwide"] { --vk-read-w: 72rem; }
 :root[data-vk-width="full"] { --vk-column-w: 100%; }

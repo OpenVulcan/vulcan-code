@@ -2,12 +2,11 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { navigationColumnWidth } from "@/components/shell/navigation-layout";
+import { conversationReservedWidth, navigationColumnWidth } from "@/components/shell/navigation-layout";
 import type { useSidebar } from "@/ui-kit/shell/sidebar";
 import {
   WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH,
   WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
-  WORKSPACE_CONVERSATION_RESERVED_WIDTH,
 } from "@/components/workspace/workspace-resizable-body";
 import { useWorkspacePanelLayout, type WorkspacePanelLayout } from "./use-workspace-panel-layout";
 
@@ -40,7 +39,12 @@ let root: Root;
 // container 是 root 持有的游离 DOM 节点。
 let container: HTMLDivElement;
 
+// SHELL_TOKENS stands in for the kit stylesheet, which jsdom does not load: the layout reads these tokens.
+// SHELL_TOKENS 代替 jsdom 不加载的 kit 样式表：布局读取这些令牌。
+const SHELL_TOKENS = { "--vk-rail-w": "48px", "--vk-sidebar-w": "264px", "--vk-reserve-w": "760px" };
+
 beforeEach(() => {
+  for (const [name, value] of Object.entries(SHELL_TOKENS)) document.documentElement.style.setProperty(name, value);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   container = document.createElement("div");
@@ -51,6 +55,7 @@ afterEach(() => {
   act(() => root.unmount());
   observerCallbacks.clear();
   vi.unstubAllGlobals();
+  for (const name of Object.keys(SHELL_TOKENS)) document.documentElement.style.removeProperty(name);
 });
 
 // publishShellWidth delivers one measured width to every live observer.
@@ -114,19 +119,19 @@ function renderPanelLayout(hasSelectedChatConversation: boolean, shellWidth: num
 
 // openNavigationWidth is the desktop rail plus the expanded navigation panel.
 // openNavigationWidth 是桌面轨道加展开导航面板的宽度。
-const openNavigationWidth = navigationColumnWidth(false, true);
+const openNavigationWidth = (): number => navigationColumnWidth(false, true);
 // dockedPanelFitWidth is the narrowest shell that docks the context panel beside the open navigation.
 // dockedPanelFitWidth 是在导航展开时仍能停靠上下文面板的最窄外壳宽度。
-const dockedPanelFitWidth = openNavigationWidth + WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
-  + WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH + WORKSPACE_CONVERSATION_RESERVED_WIDTH;
+const dockedPanelFitWidth = (): number => openNavigationWidth() + WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
+  + WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH + conversationReservedWidth();
 
 // Width pressure collapses the navigation and growth restores only an automatic collapse.
 // 宽度压力折叠导航，宽度增长只恢复自动折叠。
 it("auto-collapses the navigation on a narrow shell and restores it when the shell grows", () => {
   const harness = renderPanelLayout(true, 0);
-  publishShellWidth(openNavigationWidth + 700);
+  publishShellWidth(openNavigationWidth() + 700);
   expect(harness.sidebarOpen()).toBe(false);
-  publishShellWidth(openNavigationWidth + 900);
+  publishShellWidth(openNavigationWidth() + 900);
   expect(harness.sidebarOpen()).toBe(true);
 });
 
@@ -134,17 +139,17 @@ it("auto-collapses the navigation on a narrow shell and restores it when the she
 // 自动折叠后的手动切换是用户选择；之后的宽度增长不得覆盖。
 it("keeps a manually toggled navigation closed when the shell grows", () => {
   const harness = renderPanelLayout(true, 0);
-  publishShellWidth(openNavigationWidth + 700);
+  publishShellWidth(openNavigationWidth() + 700);
   expect(harness.sidebarOpen()).toBe(false);
   act(() => harness.layout().handleLeftPanelToggle());
-  publishShellWidth(openNavigationWidth + 900);
+  publishShellWidth(openNavigationWidth() + 900);
   expect(harness.sidebarOpen()).toBe(false);
 });
 
 // The context panel docks only when the conversation keeps its reserved width.
 // 只有会话保留其预留宽度时上下文面板才停靠。
 it("floats the context panel when docking would squeeze the conversation", () => {
-  const narrow = renderPanelLayout(true, dockedPanelFitWidth - 1);
+  const narrow = renderPanelLayout(true, dockedPanelFitWidth() - 1);
   act(() => narrow.layout().openRightContextPanel());
   expect(narrow.layout().effectiveRightPanelOpen).toBe(true);
   expect(narrow.layout().rightPanelFloating).toBe(true);
@@ -152,7 +157,7 @@ it("floats the context panel when docking would squeeze the conversation", () =>
   expect(narrow.layout().effectiveRightPanelOpen).toBe(false);
   expect(narrow.layout().rightPanelFloating).toBe(false);
 
-  const wide = renderPanelLayout(true, dockedPanelFitWidth);
+  const wide = renderPanelLayout(true, dockedPanelFitWidth());
   act(() => wide.layout().openRightContextPanel());
   expect(wide.layout().rightPanelFloating).toBe(false);
 });
@@ -160,7 +165,7 @@ it("floats the context panel when docking would squeeze the conversation", () =>
 // Draft and feature pages never show a context panel opened by another surface.
 // 草稿与功能页面绝不显示由其他界面打开的上下文面板。
 it("keeps the context panel closed without a persisted conversation", () => {
-  const harness = renderPanelLayout(false, dockedPanelFitWidth);
+  const harness = renderPanelLayout(false, dockedPanelFitWidth());
   act(() => harness.layout().openRightContextPanel());
   expect(harness.layout().effectiveRightPanelOpen).toBe(false);
 });

@@ -22,3 +22,13 @@ export function navigationColumnWidth(isMobile: boolean, panelOpen: boolean): nu
   }
   return readLengthToken("--vk-rail-w") + (panelOpen ? readLengthToken("--vk-sidebar-w") : 0);
 }
+
+// conversationReservedWidth reads the stage width the conversation keeps before the context panel floats and
+// the navigation folds. It follows the reading-width preset and the text tier through the kit token.
+// conversationReservedWidth 读取会话在上下文面板转为浮动、导航折叠之前保留的舞台宽度。
+// 该值通过 kit 令牌跟随阅读宽度档位与文字档位。
+// Returns pixels, or 0 where no layout engine resolves the token.
+// 返回像素值；没有布局引擎解析该令牌时返回 0。
+export function conversationReservedWidth(): number {
+  return readLengthToken("--vk-reserve-w");
+}

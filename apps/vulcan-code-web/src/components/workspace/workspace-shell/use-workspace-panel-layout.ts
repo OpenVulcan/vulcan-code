@@ -1,8 +1,8 @@
 import React from "react";
-import { navigationColumnWidth } from "@/components/shell/navigation-layout";
+import { conversationReservedWidth, navigationColumnWidth } from "@/components/shell/navigation-layout";
+import { useAppearance } from "@/ui-kit/appearance";
 import type { useSidebar } from "@/ui-kit/shell/sidebar";
 import {
-  WORKSPACE_CONVERSATION_RESERVED_WIDTH,
   WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH,
   WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
 } from "@/components/workspace/workspace-resizable-body";
@@ -55,6 +55,9 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
   // shellRef measures the available workspace width for automatic panel collapse.
   // shellRef 测量工作台可用宽度，用于自动折叠面板。
   const shellRef = React.useRef<HTMLDivElement | null>(null);
+  // appearance re-evaluates the panel modes when the reading width or text tier moves the reserve.
+  // appearance 在阅读宽度或文字档位改变预留宽度时重新判断面板模式。
+  const appearance = useAppearance();
   // previousShellWidthRef tracks resize direction so auto-restore only runs while width grows.
   // previousShellWidthRef 跟踪尺寸变化方向，确保自动恢复只在宽度增长时执行。
   const previousShellWidthRef = React.useRef<number | null>(null);
@@ -78,7 +81,7 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
     const width = shellRef.current?.getBoundingClientRect().width ?? 0;
     const leftWidth = navigationColumnWidth(sidebar.isMobile, sidebar.open);
     setRightPanelFloating(width > 0 && width - leftWidth - WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
-      - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH < WORKSPACE_CONVERSATION_RESERVED_WIDTH);
+      - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH < conversationReservedWidth());
     setRightPanelOpen(true);
   }, [notifyConversationLayoutWillChange, sidebar.isMobile, sidebar.open]);
 
@@ -123,8 +126,9 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
       const canAutoCollapse = previousWidth === null || width < previousWidth - 1;
       previousShellWidthRef.current = width;
       const leftWidth = navigationColumnWidth(sidebar.isMobile, sidebar.open);
+      const reservedWidth = conversationReservedWidth();
       const dockedPanelFits = width - leftWidth - WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
-        - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH >= WORKSPACE_CONVERSATION_RESERVED_WIDTH;
+        - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH >= reservedWidth;
       const shouldFloatRightPanel = effectiveRightPanelOpen && !dockedPanelFits;
       const dockedRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH : 0;
       const shellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH : 0;
@@ -140,7 +144,7 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
       if (sidebar.isMobile) {
         return;
       }
-      if (canAutoCollapse && mainWidth < 800 && sidebar.open) {
+      if (canAutoCollapse && mainWidth < reservedWidth && sidebar.open) {
         notifyConversationLayoutWillChange();
         sidebar.setOpen(false);
         setLeftAutoCollapsed(true);
@@ -153,7 +157,7 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
         const restoredRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH : 0;
         const restoredShellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH : 0;
         const restoredMainWidth = width - navigationColumnWidth(false, true) - restoredRightWidth - restoredShellGaps;
-        if (restoredMainWidth >= 800) {
+        if (restoredMainWidth >= reservedWidth) {
           notifyConversationLayoutWillChange();
           sidebar.setOpen(true);
           setLeftAutoCollapsed(false);
@@ -163,7 +167,7 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [effectiveRightPanelOpen, leftAutoCollapsed, notifyConversationLayoutWillChange, rightPanelFloating, sidebar]);
+  }, [appearance.text, appearance.width, effectiveRightPanelOpen, leftAutoCollapsed, notifyConversationLayoutWillChange, rightPanelFloating, sidebar]);
 
   return {
     shellRef,

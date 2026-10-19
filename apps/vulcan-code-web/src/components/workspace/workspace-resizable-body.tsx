@@ -9,6 +9,8 @@ import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
 import { StageHead } from "@/components/shell/stage-head";
 import { ReadingWidthMenu } from "@/components/shell/app-chrome";
+import { conversationReservedWidth } from "@/components/shell/navigation-layout";
+import { useAppearance } from "@/ui-kit/appearance";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n } from "@/i18n";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar-types";
@@ -70,9 +72,6 @@ export const WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH = 420;
 // WORKSPACE_CONTEXT_PANEL_MIN_WIDTH stores the smallest manual docked panel width.
 // WORKSPACE_CONTEXT_PANEL_MIN_WIDTH 保存停靠面板手动调整时的最小宽度。
 const WORKSPACE_CONTEXT_PANEL_MIN_WIDTH = 320;
-// WORKSPACE_CONVERSATION_RESERVED_WIDTH preserves the 800px reading column, 72px padding, and 50px reasoning overflow.
-// WORKSPACE_CONVERSATION_RESERVED_WIDTH 保留 800px 阅读列、72px 内边距与 50px 思考内容外伸空间。
-export const WORKSPACE_CONVERSATION_RESERVED_WIDTH = 800 + 36 * 2 + 50;
 // WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH is the dock separator width; the stage passes it to CSS.
 // WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH 是停靠分隔条宽度；舞台将其传给 CSS。
 export const WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH = 9;
@@ -378,8 +377,11 @@ export function WorkspaceResizableBody(props: {
   const maximumDockedWidth = React.useCallback((element: HTMLElement): number => Math.max(
     WORKSPACE_CONTEXT_PANEL_MIN_WIDTH,
     (element.closest(".vk-stage")?.getBoundingClientRect().width ?? window.innerWidth)
-      - WORKSPACE_CONVERSATION_RESERVED_WIDTH - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
+      - conversationReservedWidth() - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
   ), []);
+  // appearance re-measures the docked bound when the reading width or text tier moves the reserve.
+  // appearance 在阅读宽度或文字档位改变预留宽度时重新测量停靠边界。
+  const appearance = useAppearance();
   React.useLayoutEffect(() => {
     const element = dockedLayoutRef.current;
     if (!element || !dockedPanelMounted) return;
@@ -397,7 +399,7 @@ export function WorkspaceResizableBody(props: {
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [dockedPanelMounted, maximumDockedWidth]);
+  }, [appearance.text, appearance.width, dockedPanelMounted, maximumDockedWidth]);
 
   // handleDockedResizeKeyDown provides directional resizing and bounded Home/End shortcuts.
   // handleDockedResizeKeyDown 提供方向键缩放和受边界约束的 Home/End 快捷键。
