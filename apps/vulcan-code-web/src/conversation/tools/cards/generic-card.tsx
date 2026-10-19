@@ -46,11 +46,16 @@ export function GenericToolCard(props: ToolCardProps) {
   );
 }
 
-// toolNameParts splits "mcp__server__tool" style names into the server and the tool.
-// toolNameParts 将 "mcp__server__tool" 形式的名称拆分为服务与工具。
+// toolNameParts names the source of an MCP tool and the rest of its public name. Public MCP names are
+// "mcp_<server>_<tool>" with both parts sanitized, so the server cannot be split back out of the name; a
+// "mcp__server__tool" name keeps its explicit server.
+// toolNameParts 标明 MCP 工具的来源及其公开名的其余部分。公开 MCP 名为 "mcp_<server>_<tool>"，两部分均经清理，
+// 因此无法从名称中拆回服务名；"mcp__server__tool" 形式的名称保留其显式服务名。
 export function toolNameParts(name: string): { server: string | null; tool: string } {
-  const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
-  if (mcp) return { server: mcp[1], tool: mcp[2] };
+  const explicit = /^mcp__(.+?)__(.+)$/.exec(name);
+  if (explicit) return { server: explicit[1], tool: explicit[2] };
+  const prefixed = /^mcp_(.+)$/.exec(name);
+  if (prefixed) return { server: "MCP", tool: prefixed[1] };
   return { server: null, tool: name };
 }
 

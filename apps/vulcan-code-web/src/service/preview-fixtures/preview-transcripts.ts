@@ -412,6 +412,8 @@ function toolCardGallery(sessionId: string): ConversationEventHydrationV1Respons
           input: { libraryId: "lib-design", action: "edit", path: "design/tool-cards.md", edits: [{ oldText: "Cards keep the legacy header.", newText: "Cards use one head row:\nfamily tile, verb, target, facts, state." }] },
           output: toolOutput("knowledge_write", "# Knowledge change\n\nLibrary ID: `lib-design`\nChange seq: 14\nPending embeddings: 1\n", { kind: "knowledge_write_v1", payload: { library_id: "lib-design", change_seq: 14, documents: [{ id: "doc-3", path: "design/tool-cards.md", revision: 7 }], pending_embeddings: 1 } }),
         },
+        { name: "read_media", input: { path: "docs/design/tool-card-sketch.png" }, output: toolOutput("read_media", JSON.stringify({ $vulcan_native_media_input: 1, text: "Attached image tool-card-sketch.png.", resource: { file_name: "tool-card-sketch.png" } })) },
+        { name: "mcp_github_list_pull_requests", input: { owner: "openvulcan", repo: "vulcan-code", state: "open" }, output: toolOutput("mcp_github_list_pull_requests", "| # | Title | Author |\n| --- | --- | --- |\n| 412 | Rebuild tool cards | lingeasy |\n| 409 | Split the kit tokens | lingeasy |"), durationMs: 840 },
         { name: "file", input: { action: "list", path: "src/conversation/tools" }, output: toolOutput("file", "- `cards` · directory\n- `views` · directory\n- `tool-call.ts` · file · 4210 bytes\n- `tool-card.tsx` · file · 5032 bytes\n- `tool-call-card.tsx` · file · 3388 bytes") },
         {
           name: "terminal_session",

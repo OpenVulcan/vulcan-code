@@ -13,7 +13,7 @@ import { codeLines, luaSessionBody } from "./cards/lua-card";
 import { goalReport, todoItems } from "./cards/plan-cards";
 import { extractReport, searchReport, sourceParts, stripReportHeading } from "./cards/provider-card";
 import { formatToolDuration, readToolCall, toolCardState } from "./tool-call";
-import { toolCallFamily, toolCallHasPurposeCard } from "./tool-call-card";
+import { toolCallFamily } from "./tool-call-card";
 import { fileDiffRows, fileLineCounts } from "./views/change-set";
 import { parseTerminalText } from "./views/terminal-view";
 
@@ -55,7 +55,7 @@ describe("tool call reading", () => {
     expect(readToolCall(toolEvent("shell_command", {})).durationMs).toBeNull();
   });
 
-  it("routes calls by what they did and leaves unmigrated tools to the legacy card", () => {
+  it("routes calls by what they did and leaves unknown tools to the generic card", () => {
     expect(toolCallFamily(toolEvent("file", { action: "read", path: "a.ts" }))).toBe("read");
     expect(toolCallFamily(toolEvent("file", { action: "list", path: "." }))).toBe("read");
     expect(toolCallFamily(toolEvent("file", { action: "delete", path: "a.ts" }))).toBe("edit");
@@ -63,12 +63,13 @@ describe("tool call reading", () => {
     expect(toolCallFamily(toolEvent("anything", {}, { kind: "command_run", payload: {} }))).toBe("run");
     expect(toolCallFamily(toolEvent("terminal_session", { action: "read" }))).toBe("run");
     expect(toolCallFamily(toolEvent("spawn_agent", { message: "work" }))).toBe("agent");
-    expect(toolCallHasPurposeCard(toolEvent("mcp__github__create_issue", {}))).toBe(false);
-    expect(toolCallFamily(toolEvent("mcp__github__create_issue", {}))).toBe("other");
+    expect(toolCallFamily(toolEvent("read_media", { path: "a.png" }))).toBe("read");
+    expect(toolCallFamily(toolEvent("mcp_github_create_issue", {}))).toBe("other");
   });
 
   it("splits MCP tool names into server and tool", () => {
     expect(toolNameParts("mcp__github__create_issue")).toEqual({ server: "github", tool: "create_issue" });
+    expect(toolNameParts("mcp_github_create_issue")).toEqual({ server: "MCP", tool: "github_create_issue" });
     expect(toolNameParts("shell_command").server).toBeNull();
   });
 });

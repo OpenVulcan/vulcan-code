@@ -2,7 +2,7 @@
 // moved in each file as a diffstat in the head and a unified diff in the body.
 // 文件卡。读取展示返回的精确行；检查展示条目或事实；变更在标题中以差异统计、在正文中以统一差异展示每个文件的改动。
 import * as React from "react";
-import { File, FileDiff, FileMinus, FilePlus, FileSearch, FileText, Folder, FolderTree, type LucideIcon } from "lucide-react";
+import { File, FileDiff, FileImage, FileMinus, FilePlus, FileSearch, FileText, Folder, FolderTree, type LucideIcon } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { PersistentChangeSetFile } from "@/service/conversation-event-window-store";
 import { ToolFrame, type ToolCardProps } from "../tool-card";
@@ -11,6 +11,42 @@ import { fileDisplayPath, fileLineCounts } from "../views/change-set";
 import { CodeView, type CodeLine } from "../views/code-view";
 import { DiffStat, DiffView } from "../views/diff-view";
 import { ErrorNote } from "../views/result-views";
+
+// mediaReadFileName reads the resource name from the host-marked media envelope read_media returns.
+// mediaReadFileName 从 read_media 返回的宿主标记媒体信封读取资源名。
+export function mediaReadFileName(output: string | null): string | null {
+  if (!output) return null;
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(output);
+  } catch {
+    return null;
+  }
+  const record = objectOf(envelope);
+  if (record?.$vulcan_native_media_input !== 1) return null;
+  return textOf(objectOf(record.resource)?.file_name);
+}
+
+/** Renders one read_media call: the media goes to the model, so the card only names it.
+ * 渲染一次 read_media 调用：媒体交给模型，因此卡片只标明它。 */
+export function MediaReadCard(props: ToolCardProps) {
+  const { t } = useI18n();
+  const { call } = props;
+  const path = textOf(call.input.path) ?? "";
+  const name = mediaReadFileName(call.modelOutput) ?? path.replace(/\\/g, "/").split("/").at(-1) ?? path;
+  return (
+    <ToolFrame
+      {...props}
+      icon={FileImage}
+      state={call.state}
+      target={name}
+      targetTitle={path}
+      verb={t("toolCard.media.read")}
+    >
+      {call.isError ? <ErrorNote text={call.modelOutput} /> : null}
+    </ToolFrame>
+  );
+}
 
 /** Renders one file_read call or file read action.
  * 渲染一次 file_read 调用或 file 的读取动作。 */

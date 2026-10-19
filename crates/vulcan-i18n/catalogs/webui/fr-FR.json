@@ -2267,6 +2267,7 @@
   "toolCard.doc.browserSelect": "Changer de navigateur",
   "toolCard.doc.browserClose": "Fermer le navigateur",
   "toolCard.doc.declareIntent": "Déclarer l’intention",
+  "toolCard.media.read": "Lire le média",
   "toolPresentation.command.terminalTitle": "Commande du terminal",
   "toolPresentation.command.shellTitle": "Commande shell",
   "toolPresentation.command.running": "En cours d’exécution",

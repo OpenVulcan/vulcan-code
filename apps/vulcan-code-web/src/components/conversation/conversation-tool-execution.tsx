@@ -46,7 +46,7 @@ import { ToolPresentationCard } from "./conversation-tool-presentation-card";
 import { terminalSummaryById } from "./conversation-terminal-model";
 import { resolveToolPresentation } from "./conversation-tool-presentations";
 import { fixedV1ToolEvent } from "./tool-presentations/presentation-value-readers";
-import { ToolCallCard, toolCallHasPurposeCard } from "@/conversation/tools/tool-call-card";
+import { ToolCallCard } from "@/conversation/tools/tool-call-card";
 
 export type {
   ToolExecutionConversationBlock,
@@ -298,10 +298,10 @@ export function ToolExecutionBlock(props: {
       mediaAttachments: displayedMediaAttachments,
     });
   };
-  // v1CardKey keys the new card's expansion memory by the durable call identity; tools still awaiting a new card keep
-  // the legacy card until their family moves.
-  // v1CardKey 以可靠调用身份作为新卡片展开记忆的键；尚未拥有新卡的工具在其家族迁移前保留旧卡。
-  const v1CardKey = v1ToolEvent && toolCallHasPurposeCard(v1ToolEvent) ? `tool:${v1ToolEvent.api_call_id}:${v1ToolEvent.tool_call_id}` : null;
+  // v1CardKey keys the new card's expansion memory by the durable call identity; every durable call uses the new
+  // cards, and only blocks without one keep the legacy card.
+  // v1CardKey 以可靠调用身份作为新卡片展开记忆的键；所有可靠调用都使用新卡，只有缺少可靠调用的块保留旧卡。
+  const v1CardKey = v1ToolEvent ? `tool:${v1ToolEvent.api_call_id}:${v1ToolEvent.tool_call_id}` : null;
   const handleV1CardOpenChange = React.useCallback((open: boolean) => {
     if (v1CardKey) handleToolPresentationExpandedChange(v1CardKey, open);
   }, [handleToolPresentationExpandedChange, v1CardKey]);

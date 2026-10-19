@@ -5,7 +5,7 @@ import type { ToolCallEvent } from "@/service/conversation-event-display-project
 import { AgentCard, agentToolSpec } from "./cards/agent-card";
 import { AskCard } from "./cards/ask-card";
 import { ShellCommandCard, TerminalSessionCard, toolCallIsShellCommand } from "./cards/command-card";
-import { FileChangeCard, FileInspectCard, FileReadCard } from "./cards/file-cards";
+import { FileChangeCard, FileInspectCard, FileReadCard, MediaReadCard } from "./cards/file-cards";
 import { DocumentCard, documentToolSpec } from "./cards/document-card";
 import { GenericToolCard } from "./cards/generic-card";
 import { KnowledgeWriteCard } from "./cards/knowledge-write-card";
@@ -43,6 +43,7 @@ const FILE_INSPECT_ACTIONS = new Set(["list", "stat"]);
 export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   if (call.event.changeset || FILE_MUTATION_TOOLS.has(call.name)) return { Card: FileChangeCard, family: "edit" };
   if (call.name === "file_read" || call.host?.kind === "file_access") return { Card: FileReadCard, family: "read" };
+  if (call.name === "read_media") return { Card: MediaReadCard, family: "read" };
   if (call.name === "file") {
     const action = textOf(call.input.action) ?? "";
     if (action === "read") return { Card: FileReadCard, family: "read" };
@@ -74,12 +75,6 @@ const GENERIC_CARD: ToolCardDefinition = { Card: GenericToolCard, family: "other
  * 为一次调用解析卡片；没有专用卡的工具使用通用卡。 */
 export function resolveToolCard(call: ToolCall): ToolCardDefinition {
   return resolvePurposeCard(call) ?? GENERIC_CARD;
-}
-
-// toolCallHasPurposeCard reports whether the new transcript already owns a purpose-built card for this call.
-// toolCallHasPurposeCard 报告新转录是否已为该调用提供专用卡。
-export function toolCallHasPurposeCard(event: ToolCallEvent): boolean {
-  return resolvePurposeCard(readToolCall(event)) !== null;
 }
 
 // toolCallFamily returns the family of one event without rendering it.
