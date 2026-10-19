@@ -41,7 +41,7 @@ export function WorkspaceMemorySettings(props: {
   // The section menu lives in the navigation panel beside the rail (MemoryWorkspaceNavigation).
   // 分区菜单位于轨道旁的导航面板中（MemoryWorkspaceNavigation）。
   return (
-    <WorkspaceDirectoryLayout contentClassName="vmm-workspace-body">
+    <WorkspaceDirectoryLayout contentClassName="vmm-workspace-body" pageKey={activeSubArea}>
       <MemoryServiceTabs activeSubArea={activeSubArea} onSelectSubArea={props.onSelectSubArea} workbench={workbench} />
       <React.Suspense fallback={null}>
         <LazyMemoryArea

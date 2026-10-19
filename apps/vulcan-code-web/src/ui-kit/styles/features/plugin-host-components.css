@@ -370,7 +370,8 @@
 
 /* Declarative plugin settings: only control sizing; rows, sections and notices come from the page kit. */
 /* 声明式插件设置：仅控件尺寸；行、区块与提示来自页面套件。 */
-.plugin-settings-input { width: min(260px, 100%); }
+.plugin-settings-input { flex: 0 1 260px; width: min(260px, 100%); min-width: 8rem; }
+.vk-page-actions:has(> .plugin-settings-input) { flex-wrap: nowrap; }
 .plugin-settings-select { min-width: 140px; }
 .plugin-settings-issue { display: block; color: var(--vk-bad); }
 .plugin-settings-checklist { display: grid; flex: 1 1 auto; gap: 14px; width: 100%; min-width: 0; }
@@ -491,7 +492,7 @@
 .plugin-bar-chart-column > span {
   width: min(100%, 20px);
   min-height: 3px;
-  background: var(--vk-ink);
+  background: var(--vk-chart-2);
 }
 .plugin-bar-chart-column > small {
   max-width: 100%;

@@ -1,19 +1,6 @@
 /* Function cards: one card per kind of function. Each card renders a data model with a fixed layout;
  * business adapters convert their data into that model and never emit layout of their own. */
 
-/* ---------- Section head ---------- */
-
-/* ---------- Alert bar: health pills on the left, page tabs on the right, full width ---------- */
-
-/* ---------- Metric card ---------- */
-.vk-metric {
-  display: grid;
-  gap: calc(var(--vk-u) * 1);
-  align-content: start;
-  min-width: 0;
-  padding: calc(var(--vk-u) * 3);
-}
-
 /* ---------- Usage card: one renderer for every provider ----------
  * Row model: { name, exact, remainingRatio, resetAt } or { name, note }. */
 .vk-usage { display: grid; gap: calc(var(--vk-u) * 2.5); }

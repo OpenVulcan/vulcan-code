@@ -21,6 +21,9 @@ interface WorkspaceDirectoryLayoutProps {
   // navigationMode renders short menus as a horizontal tab strip instead of a side column; defaults to column.
   // navigationMode 将较短的菜单渲染为水平标签条而非侧栏，默认 column。
   navigationMode?: "column" | "tabs";
+  // pageKey names the page shown in the body; a new key starts the body scrolled to the top.
+  // pageKey 标识正文显示的页面；键变化时正文从顶部开始滚动。
+  pageKey?: string;
 }
 
 // WorkspaceDirectoryLayout renders fixed desktop navigation and a bounded top menu on narrow panes.
@@ -31,6 +34,8 @@ export function WorkspaceDirectoryLayout(props: WorkspaceDirectoryLayoutProps) {
   const navigationMode = props.navigation === undefined ? "none" : props.navigationMode ?? "column";
   const navigationRef = useRef<HTMLDivElement>(null);
   const indicatorRef = useRef<HTMLSpanElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { if (bodyRef.current) bodyRef.current.scrollTop = 0; }, [props.pageKey]);
   useSlidingTabIndicator(navigationRef, indicatorRef, navigationMode === "tabs");
   return <div className="vk-directory">
     <div className="vk-directory-grid" data-navigation-mode={navigationMode}>
@@ -40,7 +45,7 @@ export function WorkspaceDirectoryLayout(props: WorkspaceDirectoryLayoutProps) {
           {navigationMode === "tabs" ? <span aria-hidden className="vk-tabstrip-ink" ref={indicatorRef} /> : null}
         </div>
       )}
-      <div className={cx("vk-directory-body", props.contentClassName)}>{props.children}</div>
+      <div className={cx("vk-directory-body", props.contentClassName)} ref={bodyRef}>{props.children}</div>
     </div>
   </div>;
 }

@@ -221,7 +221,7 @@ function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSch
       ? tabs.map((tab) => <PageTabPanel active={tab.id === activeTab} key={tab.id}>{tab.sections.map((id) => renderSection(byId.get(id)!))}</PageTabPanel>)
       : layout.sections.map(renderSection)}
     {saveNotice && editable && <PageNotice details={saveNotice.details} detailsLabel={t("plugins.mount.errorDetails")} tone={saveNotice.tone}>{saveNotice.text}</PageNotice>}
-    {layout.config && draft !== null && editable && <PageActionBar actions={<>
+    {layout.config && draft !== null && editable && (dirty || busy === "config") && <PageActionBar actions={<>
       <Button disabled={!dirty || busy !== null} onClick={() => { setDraft(saved); setSaveNotice(null); }} size="sm" type="button" variant="ghost">
         {t("plugins.settings.discard")}</Button>
       <Button disabled={!dirty || invalid || busy !== null} onClick={() => void save()} size="sm" type="button">

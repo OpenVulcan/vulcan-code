@@ -752,7 +752,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // pageDescriptor 注册页面专用标题、按钮、内容与自适应侧边面板。
   const pageDescriptor: WorkspacePageDescriptor = props.mainView === "skills" ? {
     content: (
-      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog">
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog" pageKey={props.activeSkillSubArea}>
         <WorkspaceSkillsSettings
           activeSubArea={props.activeSkillSubArea}
           luaInstallDialogOpen={luaInstallDialogOpen}

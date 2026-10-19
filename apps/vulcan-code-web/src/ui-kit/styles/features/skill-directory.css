@@ -678,16 +678,16 @@
   font-size: var(--vk-fs-xs);
 }
 
-/* Plugin-owned runtimes (MCP servers, the browser component) sit in one inset panel under the plugin summary. */
-/* 插件自有运行时（MCP 服务器、浏览器组件）放在插件摘要下方的同一个内嵌面板中。 */
+/* Plugin-owned runtimes (MCP servers, the browser component) hang under the plugin summary on a left rule. */
+/* 插件自有运行时（MCP 服务器、浏览器组件）以左侧竖线挂在插件摘要下方。 */
 .vulcan-plugin-runtime-panel,
 .vulcan-plugin-mcp {
   display: grid;
-  gap: 8px;
-  margin-top: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--vk-line);
-  background: color-mix(in srgb, var(--vk-ink) 3%, transparent);
+  gap: calc(var(--vk-u) * 2);
+  margin-top: calc(var(--vk-u) * 2);
+  padding: calc(var(--vk-u) * 0.5) 0 calc(var(--vk-u) * 0.5) calc(var(--vk-u) * 3);
+  border-left: 2px solid var(--vk-line);
+  color: var(--vk-ink-2);
   font-size: var(--vk-fs-sm);
 }
 

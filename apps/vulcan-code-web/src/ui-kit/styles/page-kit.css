@@ -33,8 +33,7 @@
   gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3);
   padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4);
   border: var(--vk-bw) solid var(--vk-line);
-  background: color-mix(in srgb, var(--vk-raised) 92%, transparent);
-  backdrop-filter: blur(var(--vk-panel-blur));
+  background: var(--vk-raised);
   transition: box-shadow var(--vk-t-med) var(--vk-ease), border-color var(--vk-t-med) var(--vk-ease);
 }
 .vk-page-actionbar[data-pending] { border-color: var(--vk-line-strong); box-shadow: inset 2px 0 0 var(--vk-ember), var(--vk-shadow-2); }
@@ -161,13 +160,16 @@
   overflow: hidden;
   border: var(--vk-bw) solid var(--vk-line);
   background: var(--vk-panel);
+  container-type: inline-size;
 }
 .vk-metric::before { content: ""; position: absolute; top: 0; left: 0; width: calc(var(--vk-u) * 5); height: 2px; background: var(--vk-ember); opacity: 0.7; }
 .vk-metric > header { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; color: var(--vk-ink-3); }
 .vk-metric > header > svg { flex: none; width: 14px; height: 14px; }
 .vk-metric > header > span,
 .vk-metric > small { min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); text-overflow: ellipsis; white-space: nowrap; }
-.vk-metric > strong { align-self: center; min-width: 0; overflow: hidden; color: var(--vk-ink); font-size: clamp(18px, 2vw, 25px); font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+/* Values scale with the card width and wrap to a second line before they would be cut off. */
+/* 数值随卡片宽度缩放，在被截断前换到第二行。 */
+.vk-metric > strong { display: -webkit-box; align-self: center; min-width: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--vk-ink); font-size: clamp(15px, 10cqi, 25px); font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.15; overflow-wrap: anywhere; }
 .vk-metric > small { align-self: end; font-size: var(--vk-fs-xs); }
 
 .vk-page-details { font-size: var(--vk-fs-xs); }
