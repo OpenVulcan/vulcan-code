@@ -36,6 +36,8 @@
 @import "./styles/workspace-directory.css";
 @import "./styles/motion.css";
 @import "./styles/selection.css";
+/* The kit comes last: rebuilt components use it, and its bridge recolors the legacy ones. */
+@import "./ui-kit/styles/index.css";
 
 /* Shared directory geometry follows the feature and responsive foundations. */
 /* 共享目录布局位于功能样式与响应式基础之后。 */

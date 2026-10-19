@@ -7,11 +7,8 @@ import { shellClient } from "@/service/webui-service-runtime";
 import { useI18n, type LocaleCode } from "@/i18n";
 import { toast } from "sonner";
 import type { StartupSnapshot } from "@/types";
-import { applyThemeMode, THEME_STORAGE_KEY } from "@/lib/theme-mode";
-import {
-  initialThemeMode,
-  type ThemeMode,
-} from "./types";
+import { resolvedDark, setAppearance, useAppearance } from "@/ui-kit/appearance";
+import type { ThemeMode } from "./types";
 
 // WorkbenchShellChromeOptions carries the app-level chrome inputs owned by the workbench layout.
 // WorkbenchShellChromeOptions 携带由工作台布局持有的应用级 chrome 输入。
@@ -63,9 +60,10 @@ export function useWorkbenchShellChrome({
   // t translates shell failures without exposing backend details as the main message.
   // t 翻译壳层失败提示，避免将后端详情作为主要文案。
   const { t } = useI18n();
-  // theme stores the current shadcn visual theme.
-  // theme 保存当前 shadcn 视觉主题。
-  const [theme, setTheme] = React.useState<ThemeMode>(() => initialThemeMode());
+  // theme is the resolved light or dark rendering of the shared appearance choice.
+  // theme 是共享外观选择解析后的明暗呈现。
+  const appearance = useAppearance();
+  const theme: ThemeMode = resolvedDark(appearance.theme) ? "dark" : "light";
   // showWindowControls enables the custom titlebar only inside the Tauri desktop shell.
   // showWindowControls 仅在 Tauri 桌面壳内启用自定义标题栏。
   const showWindowControls = shellClient.supportsWindowControls();
@@ -134,20 +132,13 @@ export function useWorkbenchShellChrome({
     void toggleWindowMaximize().catch(reportWindowError);
   }, [showWindowControls, toggleWindowMaximize, reportWindowError]);
 
-  React.useEffect(() => {
-    applyThemeMode(theme);
-  }, [theme]);
-
   // toggleTheme persists only the user's explicit selection; denied storage keeps the current session usable.
   // toggleTheme 仅持久化用户明确选择；存储被拒绝时仍允许当前会话切换主题。
   const toggleTheme = React.useCallback(() => {
     // nextTheme is applied locally even when persistence is unavailable.
     // nextTheme 即使无法持久化也会在当前客户端生效。
     const nextTheme = theme === "dark" ? "light" : "dark";
-    setTheme(nextTheme);
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
-    } catch {
+    if (!setAppearance("theme", nextTheme)) {
       toast.error(t("appChrome.themeSaveFailed"), { id: "theme-save-failed" });
     }
   }, [theme, t]);

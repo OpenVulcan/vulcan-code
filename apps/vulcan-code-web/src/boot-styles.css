@@ -1,5 +1,7 @@
 @import "./styles/foundations/theme.css";
 @import "./styles/foundations/tokens.css";
+@import "./ui-kit/styles/tokens.css";
+@import "./ui-kit/styles/legacy-bridge.css";
 @import "./styles/scrollbars.css";
 
 * {

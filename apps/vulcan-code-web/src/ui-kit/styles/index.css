@@ -1,0 +1,12 @@
+/* Kit stylesheet entry for the workbench. Loaded after the legacy styles so kit rules win ties during
+ * the migration; the legacy bridge maps old variables onto kit tokens. */
+@import "./tokens.css";
+@import "./base.css";
+@import "./primitives.css";
+@import "./cards.css";
+@import "./shell.css";
+@import "./conversation.css";
+@import "./answer.css";
+@import "./page-kit.css";
+@import "./workbench.css";
+@import "./legacy-bridge.css";

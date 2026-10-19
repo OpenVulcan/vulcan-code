@@ -64,6 +64,13 @@
 :root[data-vk-text="l"] { font-size: 17px; }
 :root[data-vk-text="xl"] { font-size: 19px; }
 
+/* Reading width presets for the conversation column (data-vk-width). "full" drops the cap entirely
+ * (see conversation.css); the others only move the reading measure, so they scale with the text tier. */
+:root[data-vk-width="compact"] { --vk-read-w: 38rem; }
+:root[data-vk-width="standard"] { --vk-read-w: 46rem; }
+:root[data-vk-width="wide"] { --vk-read-w: 58rem; }
+:root[data-vk-width="xwide"] { --vk-read-w: 72rem; }
+
 /* ---------- Skin surface: light (default) ---------- */
 :root {
   --vk-ground: #f2f3f5;

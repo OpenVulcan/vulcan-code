@@ -1,13 +1,8 @@
 /* Base layer: document ground, scrollbars, focus, selection, shared helpers and motion. */
 
-.vk-root,
-.vk-root *,
-.vk-root *::before,
-.vk-root *::after,
-.vk-layer,
-.vk-layer *,
-.vk-layer *::before,
-.vk-layer *::after {
+/* Zero specificity: any component rule wins, so legacy round status dots keep their own radius. */
+:where(.vk-root, .vk-layer),
+:where(.vk-root, .vk-layer) :where(*, *::before, *::after) {
   box-sizing: border-box;
   border-radius: var(--vk-radius);
 }
@@ -125,8 +120,9 @@
   white-space: nowrap;
 }
 
+/* Only icons placed by kit components are sized here; legacy components keep their size props. */
 .vk-icon,
-:is(.vk-root, .vk-layer) svg.lucide {
+:where(.vk-root, .vk-layer) :where([class^="vk-"], [class*=" vk-"]) > svg.lucide {
   width: var(--vk-icon);
   height: var(--vk-icon);
   flex: none;
