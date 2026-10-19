@@ -453,6 +453,28 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 /* A file type without its own icon shows its extension as a small mono tag. */
 .vk-file-glyph { min-width: calc(var(--vk-u) * 4); padding: 0 2px; border: var(--vk-bw) solid var(--vk-line); color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: 0.56rem; font-weight: 700; line-height: 0.82rem; text-align: center; }
 
+
+/* Plan artifact: the plan reads as a document; a long plan previews with a fading foot until opened.
+ * A pending plan asks to run or set it aside, with an optional note that turns the choice into feedback. */
+.vk-plan { display: grid; width: 100%; min-width: 0; border: var(--vk-bw) solid var(--vk-line); border-left: 2px solid var(--vk-chart-5); background: var(--vk-panel); --vk-fam: var(--vk-chart-5); }
+.vk-plan[data-plan-artifact-pending="true"] { border-color: color-mix(in srgb, var(--vk-ember) 35%, var(--vk-line)); border-left-color: var(--vk-ember); box-shadow: 0 0 0 1px color-mix(in srgb, var(--vk-ember) 8%, transparent); }
+.vk-plan-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2.5); min-height: calc(var(--vk-u) * 10); padding: 0 calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 3.5); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-plan-head > svg { flex: none; width: 1rem; height: 1rem; color: var(--vk-fam); }
+.vk-plan-head > strong { flex: 1 1 auto; min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vk-plan-head > .vk-actions { display: flex; gap: 2px; }
+.vk-plan-toggle > svg { transition: transform var(--vk-t-fast); }
+.vk-plan-toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.vk-plan-body { padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4.5) calc(var(--vk-u) * 4); }
+.vk-plan-doc { position: relative; min-width: 0; }
+.vk-plan-doc .markdown-message { font-size: var(--vk-fs-read); line-height: var(--vk-lh-read); }
+.vk-plan[data-plan-artifact-expanded="false"] .vk-plan-doc > .markdown-message { mask-image: linear-gradient(to bottom, #000 55%, transparent); }
+.vk-plan-reveal { position: absolute; left: 50%; bottom: calc(var(--vk-u) * 2); z-index: 1; translate: -50% 0; box-shadow: var(--vk-shadow-1); }
+.vk-plan-confirm { display: grid; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4.5) calc(var(--vk-u) * 3.5); border-top: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-sunken); outline: none; }
+.vk-plan-confirm:focus-visible { box-shadow: inset 0 0 0 2px var(--vk-signal-soft); }
+.vk-plan-note { max-height: 7rem; resize: none; overflow-y: auto; }
+.vk-plan-choices { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: calc(var(--vk-u) * 2); }
+.vk-plan-choice[aria-pressed="true"] { outline: 2px solid var(--vk-signal); outline-offset: 2px; }
+
 /* ---------- Agent collaboration ---------- */
 /* A dispatch line naming the other agent and the delivery state; the message folds beneath it on a ruled lane.
  * Received messages read like a prompt bubble from the other agent, right-aligned with the head above them. */

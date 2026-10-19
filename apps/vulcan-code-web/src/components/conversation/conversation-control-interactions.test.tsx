@@ -185,7 +185,7 @@ describe("conversation control rejection paths", () => {
       pending: true, disabled: true, onCopyText: vi.fn(), onExecute: execute, onSuggest: vi.fn(), onCancel: vi.fn(),
     };
     await render(<PlanArtifactBlock {...props} />);
-    await act(async () => container.querySelector(".plan-artifact-confirmation")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await act(async () => container.querySelector(".vk-plan-confirm")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(execute).not.toHaveBeenCalled();
     await render(<PlanArtifactBlock {...props} disabled={false} />);
     await act(async () => {
@@ -194,7 +194,7 @@ describe("conversation control rejection paths", () => {
       const button = container.querySelector<HTMLButtonElement>("#plan-artifact-action-execute")!;
       button.click();
       button.click();
-      container.querySelector(".plan-artifact-confirmation")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      container.querySelector(".vk-plan-confirm")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
     expect(execute).toHaveBeenCalledTimes(1);
     expect(container.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(true);
