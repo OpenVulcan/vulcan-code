@@ -109,32 +109,10 @@
     flex-wrap: wrap;
   }
 
-  .composer-select-trigger.model {
-    flex: 1 1 calc(100% - 144px);
-    width: auto;
-    max-width: none;
-  }
-
-  .composer-select-label {
-    font-size: var(--vcn-font-size-sm);
-    line-height: 16px;
-  }
-
-  .composer-select-trigger.model .composer-select-copy {
-    justify-items: start;
-    text-align: left;
-  }
-
-  .composer-select-subtitle {
-    font-size: var(--vcn-font-size-xs);
-    line-height: 14px;
-  }
-
   .settings-form-grid.two,
   .settings-form-grid.three,
   .badge-editor,
-  .agent-skill-form-grid,
-  .agent-definition-detail-grid {
+  .agent-skill-form-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -195,19 +173,6 @@
     --composer-dialog-padding: 16px;
     width: calc(100vw - 24px);
     height: calc(100dvh - 24px);
-  }
-
-  .composer-capability-dialog-grid {
-    min-width: 0;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(80px, 32%) minmax(0, 1fr);
-    gap: 12px;
-  }
-
-  .composer-capability-dialog-left {
-    padding: 0 0 8px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
   }
 
   .feature-header-actions {
@@ -279,28 +244,6 @@
   .composer-capability-dialog {
     height: calc(100dvh - 24px);
     max-height: calc(100dvh - 24px);
-  }
-
-  .composer-capability-dialog-body {
-    display: block;
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
-
-  .composer-capability-dialog-grid {
-    display: block;
-  }
-
-  .composer-capability-dialog-left {
-    overflow: visible;
-    padding: 0 0 8px;
-    margin-bottom: 12px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .composer-capability-dialog-right {
-    overflow: visible;
   }
 }
 

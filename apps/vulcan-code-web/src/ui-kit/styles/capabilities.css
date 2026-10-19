@@ -1,0 +1,231 @@
+/* Vulcan kit capabilities: the composer's extended-capability trigger, its read-only hover summary, the
+ * capability dialog (intent tabs, a capability list and a route editor) and the extension model card that
+ * the AI capabilities settings page shares.
+ * Vulcan 套件能力：输入区扩展能力触发器、只读悬浮摘要、能力对话框（意图标签、能力列表与路由编辑器），
+ * 以及与 AI 能力设置页共用的扩展模型卡片。 */
+
+/* ---------- Capability glyph ---------- */
+/* Each capability owns a hue; off capabilities fall back to quiet ink. */
+/* 每项能力拥有自己的色相；关闭的能力回落为安静的墨色。 */
+.vk-cap-glyph { display: inline-grid; place-items: center; flex: none; color: var(--vk-cap-color, var(--vk-ink)); }
+.vk-cap-glyph[data-off] { color: var(--vk-ink-3); filter: grayscale(1); }
+.vk-cap-glyph[data-tile] {
+  width: 26px;
+  height: 26px;
+  background: color-mix(in srgb, var(--vk-cap-color, var(--vk-ink)) 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vk-cap-color, var(--vk-ink)) 18%, transparent);
+}
+.vk-cap-glyph[data-tile][data-off] { background: var(--vk-sunken); box-shadow: inset 0 0 0 1px var(--vk-line-soft); }
+
+/* ---------- Hover summary ---------- */
+.vk-pop.vk-cap-sum-pop { width: 21rem; padding: calc(var(--vk-u) * 3); }
+.vk-cap-sum { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 2.5); }
+.vk-cap-sum-head { display: grid; gap: calc(var(--vk-u) * 2); }
+.vk-sum-title { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--vk-u) * 4); }
+.vk-sum-title > strong { color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 600; line-height: 1.2; }
+.vk-sum-title > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* The enabled share fills a hairline with ember, the same mark the startup progress uses. */
+/* 已启用占比以余烬色填充细线，与启动进度使用同一标识。 */
+.vk-cap-sum-meter { height: 3px; overflow: hidden; background: var(--vk-sunken); }
+.vk-cap-sum-meter > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--vk-ember-2), var(--vk-ember));
+  transform-origin: left center;
+  transform: scaleX(var(--vk-cap-ratio, 0));
+  transition: transform 240ms var(--vk-ease);
+}
+.vk-cap-sum-list,
+.vk-cap-sum-chips { margin: 0; padding: 0; list-style: none; }
+.vk-cap-sum-list { display: grid; gap: 2px; margin: 0 calc(var(--vk-u) * -1.5); }
+/* Each enabled capability stacks its name over its model so the model gets the full width. */
+/* 每个已启用能力将名称叠在模型之上，使模型占满宽度。 */
+.vk-cap-sum-row { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: calc(var(--vk-u) * 2.25); min-width: 0; padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 1.5); transition: background-color var(--vk-t-fast) var(--vk-ease); }
+.vk-cap-sum-row:hover { background: var(--vk-hover); }
+.vk-cap-sum-text { display: grid; gap: 1px; min-width: 0; }
+.vk-cap-sum-label { display: flex; min-width: 0; color: var(--vk-ink); font-size: var(--vk-fs-xs); font-weight: 600; line-height: 1.35; }
+.vk-cap-sum-detail { display: flex; align-items: center; gap: calc(var(--vk-u) * 1); min-width: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.35; }
+.vk-cap-sum-detail > svg { flex: none; }
+.vk-cap-sum-row[data-conflict] .vk-cap-sum-detail,
+.vk-cap-sum-note[data-tone="bad"] { color: var(--vk-bad); }
+.vk-cap-sum-section { display: grid; gap: calc(var(--vk-u) * 1.75); padding-top: calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-cap-sum-section > h4 { margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 600; letter-spacing: 0.02em; }
+/* Off capabilities sit in equal cells: three columns when every label fits, otherwise two (chosen by the component). */
+/* 关闭的能力放在等宽单元格中：所有名称放得下时三列，否则两列（由组件决定）。 */
+.vk-cap-sum-chips { display: grid; grid-template-columns: repeat(var(--vk-cap-columns, 3), minmax(0, 1fr)); gap: calc(var(--vk-u) * 1); }
+.vk-cap-sum-chip { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.25); min-width: 0; height: 24px; padding: 0 calc(var(--vk-u) * 1.75); background: var(--vk-sunken); box-shadow: inset 0 0 0 1px var(--vk-line-soft); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1; }
+.vk-cap-sum-chip > .vk-cap-glyph { opacity: 0.75; }
+.vk-cap-sum-note { margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+/* The footer action is the card's only clickable target; it opens the editor. */
+/* 底部操作是卡片中唯一可点击的目标，用于打开编辑器。 */
+.vk-cap-sum-foot { margin: 0 calc(var(--vk-u) * -1.5) calc(var(--vk-u) * -1); padding-top: calc(var(--vk-u) * 1.5); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-cap-sum-action {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.75);
+  width: 100%;
+  padding: calc(var(--vk-u) * 1.5);
+  border: 0;
+  background: transparent;
+  color: var(--vk-signal);
+  font-size: var(--vk-fs-xs);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-cap-sum-action:hover { background: var(--vk-signal-soft); }
+.vk-cap-sum-action:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-cap-sum-action > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-cap-sum-action > svg:last-child { flex: none; opacity: 0.7; transition: transform var(--vk-t-fast) var(--vk-ease), opacity var(--vk-t-fast) var(--vk-ease); }
+.vk-cap-sum-action:is(:hover, :focus-visible) > svg:last-child { opacity: 1; transform: translateX(2px); }
+
+/* ---------- Overflow marquee ---------- */
+/* Clipped text ends in an ellipsis at rest; hovering its host scrolls it. Margin, not transform, moves it so
+   glyphs stay crisp. */
+/* 被裁切的文本静止时以省略号结尾；悬停宿主时滚动。使用 margin 而非 transform 移动，字形保持清晰。 */
+.vk-marquee { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+.vk-marquee > span { display: block; width: max-content; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.vk-marquee-host:hover .vk-marquee[data-overflow] > span { max-width: none; overflow: visible; animation: vk-marquee var(--vk-marquee-duration, 5s) ease-in-out infinite; }
+@keyframes vk-marquee {
+  0%, 20% { margin-left: 0; }
+  50%, 70% { margin-left: calc(-1 * var(--vk-marquee-shift, 0px)); }
+  100% { margin-left: 0; }
+}
+
+/* ---------- Capability dialog ---------- */
+.vk-dialog.vk-cap-dialog { width: min(860px, 100%); max-width: min(860px, 100%); height: min(540px, 100%); }
+.vk-cap-head { display: grid; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 4) 0; }
+/* Title and effect hint share one baseline; the close button keeps its corner. */
+/* 标题与生效提示共用一条基线；关闭按钮保留其角落位置。 */
+.vk-cap-head > .vk-dialog-header { flex-flow: row wrap; align-items: baseline; gap: 2px calc(var(--vk-u) * 2.5); }
+.vk-cap-head .vk-dialog-description { font-size: var(--vk-fs-xs); }
+.vk-cap-tabs { margin: 0 calc(var(--vk-u) * -4); padding: 0 calc(var(--vk-u) * 4); }
+.vk-cap-tab-count { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+.vk-cap-tab-count[data-conflict] { color: var(--vk-bad); }
+.vk-cap-body { display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 0 calc(var(--vk-u) * 4); }
+.vk-cap-grid { display: grid; grid-template-columns: 252px minmax(0, 1fr); flex: 1; gap: calc(var(--vk-u) * 4); min-height: 0; animation: vk-fade var(--vk-t-med) var(--vk-ease) both; }
+.vk-cap-grid > * { min-height: 0; overflow: auto; padding-top: calc(var(--vk-u) * 3); padding-bottom: calc(var(--vk-u) * 3); }
+.vk-cap-alert { display: grid; gap: calc(var(--vk-u) * 1); margin-top: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); border: var(--vk-bw) solid color-mix(in srgb, var(--vk-bad) 35%, transparent); background: color-mix(in srgb, var(--vk-bad) 6%, transparent); }
+.vk-cap-alert > p { margin: 0; color: var(--vk-bad); font-size: var(--vk-fs-sm); }
+.vk-cap-alert summary,
+.vk-cap-recover summary { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); cursor: pointer; }
+.vk-cap-alert pre { max-height: 6rem; margin: calc(var(--vk-u) * 1) 0 0; overflow: auto; color: var(--vk-ink-2); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-cap-retry { display: grid; gap: calc(var(--vk-u) * 2); padding-top: calc(var(--vk-u) * 3); }
+.vk-cap-retry > div { display: flex; gap: calc(var(--vk-u) * 2); }
+
+/* The list: a switch (or an extension count) and the capability, which selects the row for editing. */
+/* 列表：开关（或扩展数量）与能力本身；点击能力即选中该行进行编辑。 */
+.vk-cap-list { display: grid; align-content: start; gap: 2px; padding-right: calc(var(--vk-u) * 2.5); border-right: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-cap-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: calc(var(--vk-u) * 2.5);
+  width: 100%;
+  padding: calc(var(--vk-u) * 1.75) calc(var(--vk-u) * 2.5);
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-cap-row:hover { background: var(--vk-hover); }
+/* The selected row carries an ember bar at its leading edge instead of an outline. */
+/* 选中行在起始边缘显示余烬色竖条，而不是描边。 */
+.vk-cap-row[data-selected] { background: var(--vk-hover); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-cap-row[data-conflict] { background: color-mix(in srgb, var(--vk-bad) 7%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vk-bad) 30%, transparent); }
+.vk-cap-row[data-conflict]:is(:hover, [data-selected]) { background: color-mix(in srgb, var(--vk-bad) 11%, transparent); box-shadow: inset 2px 0 0 var(--vk-bad), inset 0 0 0 1px color-mix(in srgb, var(--vk-bad) 48%, transparent); }
+.vk-cap-row:has(.vk-cap-select:focus-visible) { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+/* The switch sits above the stretched select target so both stay independently clickable. */
+/* 开关位于拉伸的选择目标之上，两者都可独立点击。 */
+.vk-cap-row > input { position: relative; z-index: 1; }
+.vk-cap-select { position: static; display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: calc(var(--vk-u) * 2.25); min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.vk-cap-select::after { content: ""; position: absolute; inset: 0; }
+.vk-cap-select:focus-visible { outline: none; }
+.vk-cap-select:disabled { cursor: default; }
+.vk-cap-copy { display: grid; gap: 3px; min-width: 0; line-height: 1.15; }
+.vk-cap-copy > :is(span, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-cap-copy > span { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.25); color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 600; }
+.vk-cap-copy > span > svg { flex: none; color: var(--vk-bad); }
+.vk-cap-copy > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-cap-copy > small[role="alert"] { overflow: visible; color: var(--vk-bad); font-weight: 600; line-height: 1.3; white-space: normal; }
+/* Extension families have no switch: a dashed square means nothing chosen, an ember square shows the count. */
+/* 扩展能力族没有开关：虚线方块表示未选择，余烬色方块显示已选数量。 */
+.vk-cap-ext-count { display: inline-grid; place-items: center; width: 15px; height: 15px; border: 1.5px dashed var(--vk-line-strong); color: var(--vk-ink-inverse); font-size: var(--vk-fs-2xs); font-variant-numeric: tabular-nums; font-weight: 700; line-height: 1; }
+.vk-cap-ext-count[data-active] { border: 0; background: linear-gradient(180deg, var(--vk-ember-2), var(--vk-ember)); }
+
+/* The detail pane opens with the capability's identity and state, mirroring its list row. */
+/* 详情面板以能力的标识与状态开头，与其列表行相呼应。 */
+.vk-cap-detail-head { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 3); margin-bottom: calc(var(--vk-u) * 4); padding-bottom: calc(var(--vk-u) * 3.5); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-cap-detail-head > .vk-cap-glyph[data-tile] { width: 36px; height: 36px; }
+.vk-cap-detail-heading { display: grid; gap: 3px; min-width: 0; }
+.vk-cap-detail-heading > :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-cap-detail-heading > strong { color: var(--vk-ink); font-size: var(--vk-fs-lg); font-weight: 600; line-height: 1.25; }
+.vk-cap-detail-heading > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-cap-state { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); max-width: 180px; height: 22px; overflow: hidden; padding: 0 calc(var(--vk-u) * 2.5); background: var(--vk-sunken); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vk-cap-state[data-state="on"] { background: var(--vk-ember-soft); color: var(--vk-ember-ink); }
+.vk-cap-state[data-state="on"]::before { content: ""; flex: none; width: 6px; height: 6px; background: var(--vk-ember); box-shadow: 0 0 0 2px color-mix(in srgb, var(--vk-ember) 22%, transparent); }
+.vk-cap-state[data-state="conflict"] { background: color-mix(in srgb, var(--vk-bad) 11%, transparent); color: var(--vk-bad); }
+.vk-cap-recover-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); margin-bottom: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); }
+.vk-cap-recover-bar > span { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+
+.vk-cap-routes { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-cap-routes > label { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: calc(var(--vk-u) * 3); min-width: 0; color: var(--vk-ink); font-size: var(--vk-fs-sm); }
+.vk-cap-routes > label > span:first-child { color: var(--vk-ink-3); line-height: 1.35; }
+.vk-cap-routes > label > :is(.vk-select, .vk-combobox) { width: 100%; min-width: 0; max-width: 100%; }
+.vk-cap-note { margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); line-height: 1.5; }
+.vk-cap-routes > .vk-cap-note { grid-column: 1 / -1; }
+.vk-cap-none { display: grid; place-items: center; min-height: 220px; border: var(--vk-bw) dashed var(--vk-line-strong); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-cap-ext-list { display: grid; align-content: start; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-cap-recover { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: calc(var(--vk-u) * 1) calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); }
+.vk-cap-recover > div { display: grid; gap: 2px; min-width: 0; }
+.vk-cap-recover > div > p { margin: 0; overflow: hidden; color: var(--vk-ink); font-size: var(--vk-fs-sm); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.vk-cap-recover > div > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-cap-recover > details { grid-column: 1 / -1; min-width: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-cap-recover dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px calc(var(--vk-u) * 2); margin: calc(var(--vk-u) * 2) 0 0; overflow-wrap: anywhere; }
+.vk-cap-recover dd { margin: 0; font-family: var(--vk-font-mono); }
+
+.vk-cap-foot.vk-dialog-footer { gap: calc(var(--vk-u) * 3); }
+.vk-cap-foot-hint { flex: 1; min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- Extension model card ---------- */
+/* One reviewed extension model: a checkbox, its name with profile hints, and the account that serves it. */
+/* 一个已审核的扩展模型：复选框、带档案提示的名称，以及为其服务的账号。 */
+.vk-ext-card {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  gap: calc(var(--vk-u) * 2.5);
+  min-width: 0;
+  padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  transition: border-color var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-ext-card:not([data-disabled]) { cursor: pointer; }
+.vk-ext-card:not([data-disabled]):hover { border-color: var(--vk-line-strong); background: var(--vk-hover); }
+.vk-ext-card:has(> label > input:checked) { box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-ext-card > label { display: grid; width: 15px; height: 15px; cursor: pointer; }
+.vk-ext-card-body { display: grid; gap: calc(var(--vk-u) * 1); min-width: 0; }
+.vk-ext-card-title { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; color: var(--vk-ink); }
+.vk-ext-card-title > strong { flex: 0 1 auto; min-width: 0; overflow: hidden; font-size: var(--vk-fs-md); line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.vk-ext-card-hints { display: inline-flex; align-items: center; gap: 2px; flex: none; margin-left: auto; }
+.vk-ext-card-hint { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; background: transparent; color: var(--vk-ink-3); cursor: help; }
+.vk-ext-card-hint:is(:hover, :focus-visible) { background: var(--vk-hover); color: var(--vk-ink); outline: none; }
+.vk-ext-card-hint[data-kind="summary"] { color: var(--vk-signal); }
+.vk-ext-card-hint[data-kind="constraints"] { color: var(--vk-warn); }
+.vk-ext-card-hint[data-kind="limitations"] { color: var(--vk-bad); }
+.vk-tooltip.vk-ext-card-tip { display: grid; gap: calc(var(--vk-u) * 1.5); max-width: min(360px, calc(100vw - 32px)); line-height: 1.5; }
+.vk-ext-card-row { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2.5); min-width: 0; }
+.vk-ext-card-id { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.vk-ext-card-account { flex: 0 1 180px; width: clamp(132px, 36%, 180px); min-width: 0; cursor: default; }
+.vk-ext-card-account .vk-select { width: 100%; min-width: 0; height: var(--vk-h-md); font-size: var(--vk-fs-sm); }
+
+@media (max-width: 720px) {
+  .vk-cap-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .vk-cap-list { max-height: 11rem; padding-right: 0; border-right: 0; border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+  .vk-cap-routes > label { grid-template-columns: minmax(0, 1fr); gap: calc(var(--vk-u) * 1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vk-marquee-host:hover .vk-marquee[data-overflow] > span { max-width: 100%; overflow: hidden; animation: none; }
+  .vk-cap-grid { animation: none; }
+}

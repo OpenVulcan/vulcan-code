@@ -64,9 +64,9 @@ export function ComposerCapabilitySummary(props: {
   }, [disabledSignature]);
   const enabledRatio = props.items.length ? enabledCount / props.items.length : 0;
   return (
-    <div className="composer-capability-summary">
-      <div className="composer-capability-summary-header">
-        <div className="context-usage-card-header">
+    <div className="vk-cap-sum">
+      <div className="vk-cap-sum-head">
+        <div className="vk-sum-title">
           <strong>{t("composer.capability.extended")}</strong>
           {props.status === "ready" ? (
             <span>
@@ -77,26 +77,26 @@ export function ComposerCapabilitySummary(props: {
           ) : null}
         </div>
         {props.status === "ready" ? (
-          <div aria-hidden="true" className="composer-capability-summary-meter">
-            <span style={{ "--capability-enabled-ratio": enabledRatio } as React.CSSProperties} />
+          <div aria-hidden="true" className="vk-cap-sum-meter">
+            <span style={{ "--vk-cap-ratio": enabledRatio } as React.CSSProperties} />
           </div>
         ) : null}
       </div>
       {props.status !== "ready" ? (
-        <p className={cn("composer-capability-summary-empty", props.status === "failed" && "is-warning")}>
+        <p className="vk-cap-sum-note" data-tone={props.status === "failed" ? "bad" : undefined}>
           {t(props.status === "failed" ? "composer.capability.loadFailed" : "composer.capability.loading")}
         </p>
       ) : (
         <>
           {enabledItems.length > 0 ? (
-            <ul className="composer-capability-summary-list">
+            <ul className="vk-cap-sum-list">
               {enabledItems.map((item) => (
-                <li className={cn("composer-capability-summary-row composer-capability-marquee-host", item.conflict && "is-conflict")} key={item.capability}>
+                <li className="vk-cap-sum-row vk-marquee-host" data-conflict={item.conflict ? "" : undefined} key={item.capability}>
                   <CapabilitySummaryIcon item={item} tile />
-                  <span className="composer-capability-summary-text">
-                    <span className="composer-capability-summary-label"><OverflowMarquee text={item.label} /></span>
+                  <span className="vk-cap-sum-text">
+                    <span className="vk-cap-sum-label"><OverflowMarquee text={item.label} /></span>
                     {item.conflict || item.detail ? (
-                      <span className="composer-capability-summary-detail">
+                      <span className="vk-cap-sum-detail">
                         {item.conflict ? <AlertTriangle aria-hidden="true" size={11} /> : null}
                         <OverflowMarquee text={item.conflict ? t("composer.capability.conflict.tooltip") : item.detail ?? ""} />
                       </span>
@@ -106,18 +106,18 @@ export function ComposerCapabilitySummary(props: {
               ))}
             </ul>
           ) : (
-            <p className="composer-capability-summary-empty">{t("composer.capability.tooltipEmpty")}</p>
+            <p className="vk-cap-sum-note">{t("composer.capability.tooltipEmpty")}</p>
           )}
           {disabledItems.length > 0 ? (
-            <div className="composer-capability-summary-section">
-              <div className="composer-capability-summary-section-title">{t("settings.providerTools.disabled")}</div>
+            <div className="vk-cap-sum-section">
+              <h4>{t("settings.providerTools.disabled")}</h4>
               <ul
-                className="composer-capability-summary-chips"
+                className="vk-cap-sum-chips"
                 ref={chipList}
-                style={{ "--capability-chip-columns": chipColumns } as React.CSSProperties}
+                style={{ "--vk-cap-columns": chipColumns } as React.CSSProperties}
               >
                 {disabledItems.map((item) => (
-                  <li className="composer-capability-summary-chip composer-capability-marquee-host" key={item.capability}>
+                  <li className="vk-cap-sum-chip vk-marquee-host" key={item.capability}>
                     <CapabilitySummaryIcon item={item} />
                     <OverflowMarquee text={item.label} />
                   </li>
@@ -127,11 +127,11 @@ export function ComposerCapabilitySummary(props: {
           ) : null}
         </>
       )}
-      <div className="composer-capability-summary-footer">
-        <button className="composer-capability-summary-action" onClick={props.onConfigure} type="button">
+      <div className="vk-cap-sum-foot">
+        <button className="vk-cap-sum-action" onClick={props.onConfigure} type="button">
           <Settings2 aria-hidden="true" size={13} />
           <span>{t("composer.capability.tooltipTitle")}</span>
-          <ChevronRight aria-hidden="true" className="composer-capability-summary-action-arrow" size={13} />
+          <ChevronRight aria-hidden="true" size={13} />
         </button>
       </div>
     </div>
@@ -144,7 +144,7 @@ export function ComposerCapabilitySummary(props: {
 // current column count, so the decision is stable and cannot oscillate.
 // 参数：list 是已渲染的标签网格；返回列数。自然名称宽度与当前列数无关，因此决策稳定，不会来回切换。
 function capabilityChipColumns(list: HTMLUListElement): number {
-  const chips = Array.from(list.querySelectorAll<HTMLElement>(".composer-capability-summary-chip"));
+  const chips = Array.from(list.querySelectorAll<HTMLElement>(".vk-cap-sum-chip"));
   const first = chips[0];
   if (!first) return 3;
   const listGap = parseFloat(getComputedStyle(list).columnGap) || 0;
@@ -152,7 +152,7 @@ function capabilityChipColumns(list: HTMLUListElement): number {
   const chipChrome = (parseFloat(chipStyle.paddingLeft) || 0) + (parseFloat(chipStyle.paddingRight) || 0)
     + (parseFloat(chipStyle.columnGap) || 0) + ((first.firstElementChild as HTMLElement | null)?.offsetWidth ?? 0);
   const widestLabel = Math.max(...chips.map((chip) => (
-    chip.querySelector<HTMLElement>(".composer-capability-marquee > span")?.scrollWidth ?? 0
+    chip.querySelector<HTMLElement>(".vk-marquee > span")?.scrollWidth ?? 0
   )));
   const thirdCapacity = (list.clientWidth - listGap * 2) / 3 - chipChrome;
   return widestLabel <= thirdCapacity ? 3 : 2;
@@ -183,14 +183,14 @@ function OverflowMarquee(props: { text: string }) {
   }, [props.text]);
   return (
     <span
-      className="composer-capability-marquee"
+      className="vk-marquee"
       data-overflow={shift > 0 ? "true" : undefined}
       ref={frame}
       style={{
-        "--marquee-shift": `${shift}px`,
+        "--vk-marquee-shift": `${shift}px`,
         // Constant reading speed: pauses at both ends plus travel time proportional to the overflow.
         // 恒定阅读速度：两端停顿加上与溢出量成正比的移动时间。
-        "--marquee-duration": `${(2.4 + shift / 18).toFixed(2)}s`,
+        "--vk-marquee-duration": `${(2.4 + shift / 18).toFixed(2)}s`,
       } as React.CSSProperties}
       title={shift > 0 ? props.text : undefined}
     >
@@ -207,8 +207,10 @@ function CapabilitySummaryIcon(props: { item: ComposerCapabilitySummaryItem; til
   return (
     <span
       aria-hidden="true"
-      className={cn("composer-capability-colored-icon", props.item.enabled ? "enabled" : "disabled", props.tile && "tile")}
-      style={{ "--capability-color": props.item.color } as React.CSSProperties}
+      className="vk-cap-glyph"
+      data-off={props.item.enabled ? undefined : ""}
+      data-tile={props.tile ? "" : undefined}
+      style={{ "--vk-cap-color": props.item.color } as React.CSSProperties}
     >
       <ProviderToolCapabilityIcon capability={props.item.capability} size={props.tile ? 14 : 13} />
     </span>
