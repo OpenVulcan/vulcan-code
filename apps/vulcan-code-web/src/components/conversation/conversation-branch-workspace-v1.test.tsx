@@ -1223,7 +1223,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       }),
     ]);
 
-    expect(markup).toContain("查看技能 · terminal-session");
+    expect(markup).toContain("<code>terminal-session</code>");
     // The read card names the exact returned source range and stays collapsed until opened.
     // 读取卡标出实际返回的源码范围，并在打开前保持折叠。
     expect(markup).toContain("D:/openvulcan/tui_test.py<small>L10–11</small>");

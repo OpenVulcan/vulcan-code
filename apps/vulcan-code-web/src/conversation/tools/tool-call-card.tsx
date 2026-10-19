@@ -4,7 +4,9 @@ import * as React from "react";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import { ShellCommandCard, TerminalSessionCard, toolCallIsShellCommand } from "./cards/command-card";
 import { FileChangeCard, FileInspectCard, FileReadCard } from "./cards/file-cards";
+import { DocumentCard, documentToolSpec } from "./cards/document-card";
 import { GenericToolCard } from "./cards/generic-card";
+import { GoalCard, PlanCard, TodoCard } from "./cards/plan-cards";
 import type { ToolCardProps, ToolFamily } from "./tool-card";
 import { readToolCall, textOf, type ToolCall } from "./tool-call";
 
@@ -22,6 +24,10 @@ export interface ToolCardDefinition {
 // FILE_MUTATION_TOOLS change files even when a failed call carries no change-set.
 // FILE_MUTATION_TOOLS 即使失败调用不携带变更集也属于文件修改。
 const FILE_MUTATION_TOOLS = new Set(["file_edit", "file_write", "apply_patch"]);
+
+// GOAL_TOOLS read or change the session goal.
+// GOAL_TOOLS 读取或修改会话目标。
+const GOAL_TOOLS = new Set(["get_goal", "create_goal", "update_goal"]);
 
 // FILE_INSPECT_ACTIONS are the file tool actions that only look.
 // FILE_INSPECT_ACTIONS 是 file 工具中只读取的动作。
@@ -41,6 +47,11 @@ export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   }
   if (toolCallIsShellCommand(call)) return { Card: ShellCommandCard, family: "run" };
   if (call.name === "terminal_session" || call.host?.kind === "terminal_session") return { Card: TerminalSessionCard, family: "run" };
+  if (call.name === "todolist") return { Card: TodoCard, family: "plan" };
+  if (GOAL_TOOLS.has(call.name)) return { Card: GoalCard, family: "plan" };
+  if (call.name === "submit_plan") return { Card: PlanCard, family: "plan" };
+  const document = documentToolSpec(call);
+  if (document) return { Card: DocumentCard, family: document.family };
   return null;
 }
 

@@ -3,12 +3,12 @@
 // 没有专用卡的工具（MCP 服务、插件、技能）的兜底卡：工具名、最能说明问题的参数，正文为完整参数与以 Markdown
 // 渲染的结果。
 import { Wrench } from "lucide-react";
-import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { useI18n } from "@/i18n";
 import { formatDurationSeconds } from "@/lib/usage-format";
 import { ToolFrame, type ToolCardProps } from "../tool-card";
 import type { ToolCall } from "../tool-call";
 import { JsonView } from "../views/json-view";
+import { MarkdownResult } from "../views/result-views";
 
 // TARGET_KEYS are argument names that usually say what a call is about, in preference order.
 // TARGET_KEYS 是通常能说明调用对象的参数名，按优先顺序排列。
@@ -40,11 +40,7 @@ export function GenericToolCard(props: ToolCardProps) {
       {hasInput || call.modelOutput ? (
         <>
           {hasInput ? <JsonView label={t("toolCard.generic.input")} value={call.input} /> : null}
-          {call.modelOutput ? (
-            <div className="vk-tool-result" data-error={call.isError ? "" : undefined}>
-              <MarkdownMessage content={call.modelOutput} />
-            </div>
-          ) : null}
+          {call.modelOutput ? <MarkdownResult error={call.isError} text={call.modelOutput} /> : null}
         </>
       ) : null}
     </ToolFrame>

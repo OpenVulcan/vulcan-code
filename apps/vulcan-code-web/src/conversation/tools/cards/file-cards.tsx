@@ -10,6 +10,7 @@ import { numberOf, objectOf, textOf } from "../tool-call";
 import { fileDisplayPath, fileLineCounts } from "../views/change-set";
 import { CodeView, type CodeLine } from "../views/code-view";
 import { DiffStat, DiffView } from "../views/diff-view";
+import { ErrorNote } from "../views/result-views";
 
 /** Renders one file_read call or file read action.
  * 渲染一次 file_read 调用或 file 的读取动作。 */
@@ -156,13 +157,6 @@ export function FileChangeCard(props: ToolCardProps) {
           ))}
     </ToolFrame>
   );
-}
-
-// ErrorNote shows the error text the model received.
-// ErrorNote 展示模型收到的错误文本。
-function ErrorNote(props: { text: string | null }) {
-  if (!props.text) return null;
-  return <pre className="vk-tool-error">{props.text}</pre>;
 }
 
 // readLines extracts the numbered "L<n>: text" lines a file read returns inside its fence.

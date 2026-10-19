@@ -360,11 +360,84 @@ function introduction(sessionId: string): ConversationEventHydrationV1Response {
     .window();
 }
 
+// GALLERY_TODOS is the checklist the tool-card gallery reports.
+// GALLERY_TODOS 是工具卡展示会话报告的清单。
+const GALLERY_TODOS = [
+  { step: "Rebuild file and command cards", status: "completed" },
+  { step: "Rebuild document and planning cards", status: "in_progress" },
+  { step: "Rebuild subagent and provider cards", status: "pending" },
+];
+
+// toolCardGallery exercises every rebuilt tool card, including failed, stopped and running calls.
+// toolCardGallery 覆盖每张重建的工具卡，包括失败、停止与运行中的调用。
+function toolCardGallery(sessionId: string): ConversationEventHydrationV1Response {
+  return new TranscriptBuilder(sessionId, 60)
+    .user("Audit the tool card layouts against the real tool results.")
+    .api({
+      text: "I'll track the audit and load the terminal skill first.",
+      tools: [
+        { name: "todolist", input: { items: GALLERY_TODOS }, output: toolOutput("todolist", "Todolist updated", { kind: "todolist", payload: { explanation: "Cards move family by family.", items: GALLERY_TODOS } }) },
+        { name: "skill", input: { name: "terminal-session" }, output: toolOutput("skill", "<skill_content name=\"terminal-session\">\n# Terminal Session\n\nKeep long-running processes in a **persistent terminal** and poll it with `read`.\n</skill_content>") },
+        { name: "get_goal", input: {}, output: toolOutput("get_goal", "# Goal\n\nStatus: active\n\n## Objective\n\nReplace every legacy tool card with a purpose-built card\n\nTokens used: 182400\n\nToken budget: 400000\n\nRemaining tokens: 217600\n\nElapsed seconds: 2710\n") },
+      ],
+    })
+    .api({
+      tools: [
+        { name: "knowledge_search", input: { queries: ["tool card layout", "diffstat"] }, output: toolOutput("knowledge_search", "## Hits\n\n1. **Tool card anatomy** · `design/tool-cards.md` · score 0.82\n   > One head row: family tile, verb, target, facts, state.\n2. **Diff colors** · `design/tokens.md` · score 0.64\n   > Additions use the ok tone; removals use the bad tone.") },
+        { name: "file", input: { action: "list", path: "src/conversation/tools" }, output: toolOutput("file", "- `cards` · directory\n- `views` · directory\n- `tool-call.ts` · file · 4210 bytes\n- `tool-card.tsx` · file · 5032 bytes\n- `tool-call-card.tsx` · file · 3388 bytes") },
+        {
+          name: "terminal_session",
+          input: { action: "read", terminal_session_id: "term-7" },
+          output: toolOutput("terminal_session", "Session term-7 is running.", {
+            kind: "terminal_session",
+            payload: {
+              action: "read",
+              terminal_session_id: "term-7",
+              name: "vite",
+              status: "running",
+              events: [
+                { seq: 1, kind: "output", stream: "stdout", text: "\u001b[32m  VITE v7.1.4\u001b[39m  ready in \u001b[1m612 ms\u001b[22m\n\n  ➜  Local:   http://127.0.0.1:17611/\n" },
+                { seq: 2, kind: "output", stream: "stdout", text: "\u001b[2m10:42:07\u001b[22m \u001b[36m[vite]\u001b[39m hmr update /src/conversation/tools/tool-card.tsx\n" },
+              ],
+            },
+          }),
+        },
+      ],
+    })
+    .api({
+      text: "The type check fails on one card; the full build was cancelled.",
+      tools: [
+        {
+          name: "shell_command",
+          input: { command: "pnpm run typecheck" },
+          output: shellOutput("pnpm run typecheck", 2, "", "src/conversation/tools/cards/plan-cards.tsx(58,7): \u001b[31merror\u001b[39m TS2322: Type 'string | null' is not assignable to type 'string'.", 6_400),
+          durationMs: 6_400,
+        },
+        { name: "shell_command", input: { command: "pnpm run build" }, status: "interrupted", durationMs: 2_000 },
+        {
+          name: "submit_plan",
+          input: { name: "tool-card-migration" },
+          output: toolOutput("submit_plan", "# Plan saved\n\nName: `tool-card-migration`\n\nPath: `docs/plan/tool-card-migration.md`\n", {
+            kind: "plan_artifact",
+            payload: {
+              name: "tool-card-migration",
+              path: "docs/plan/tool-card-migration.md",
+              content: "## Steps\n\n1. Fix the nullable target in the todo card.\n2. Rebuild the subagent cards with delivery progress.\n3. Rebuild provider search and extract cards.\n\n## Verification\n\n- `pnpm run build`\n- Preview gallery session",
+            },
+          }),
+        },
+      ],
+    })
+    .end()
+    .window();
+}
+
 // FIXTURES maps preview session ids to their transcript builders.
 // FIXTURES 将预览会话标识映射到其转录构建函数。
 const FIXTURES: Record<string, (sessionId: string) => ConversationEventHydrationV1Response> = {
   preview: migrationPreview,
   "preview-intro": introduction,
+  "preview-cards": toolCardGallery,
 };
 
 // PREVIEW_TRANSCRIPT_SESSION_IDS lists the preview sessions that carry a transcript.

@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import type { PersistentChangeSetFile } from "@/service/conversation-event-window-store";
 import { commandOutputFromText } from "./cards/command-card";
+import { documentBody } from "./cards/document-card";
 import { listEntries, readLines } from "./cards/file-cards";
 import { toolNameParts } from "./cards/generic-card";
+import { goalReport, todoItems } from "./cards/plan-cards";
 import { readToolCall, toolCardState } from "./tool-call";
 import { toolCallFamily, toolCallHasPurposeCard } from "./tool-call-card";
 import { fileDiffRows, fileLineCounts } from "./views/change-set";
@@ -103,5 +105,27 @@ describe("output parsing", () => {
     const spans = parseTerminalText("\u001b[1;31merr\u001b[0m ok \u001b[38;5;196mx\u001b[39m");
     expect(spans[0]).toEqual({ bold: true, text: "err", tone: "t-bad" });
     expect(spans[1]).toEqual({ bold: false, text: " ok x", tone: null });
+  });
+});
+
+describe("planning and document results", () => {
+  it("parses the goal report including an unknown usage and an unset goal", () => {
+    const report = goalReport("# Goal\n\nStatus: active\n\n## Objective\n\nShip the cards\nwith tests\n\nTokens used: unknown\n\nToken budget: 5000\n\nElapsed seconds: 90\n");
+    expect(report).toEqual({ elapsedSeconds: 90, objective: "Ship the cards\nwith tests", status: "active", tokenBudget: 5000, tokensUsed: null });
+    expect(goalReport("# Goal\n\nNo goal is set.\n")?.status).toBeNull();
+    expect(goalReport("Todolist updated")).toBeNull();
+  });
+
+  it("keeps only well-formed checklist steps", () => {
+    expect(todoItems([{ status: "completed", step: "a" }, { status: "later", step: "b" }, { step: "c" }, "d"])).toEqual([{ status: "completed", step: "a" }]);
+  });
+
+  it("unwraps a loaded skill and routes planning and document tools", () => {
+    expect(documentBody("<skill_content name=\"x\">\n# X\n\nBody\n</skill_content>")).toBe("# X\n\nBody");
+    expect(documentBody("plain")).toBe("plain");
+    expect(toolCallFamily(toolEvent("todolist", { items: [] }))).toBe("plan");
+    expect(toolCallFamily(toolEvent("update_goal", { status: "complete" }))).toBe("plan");
+    expect(toolCallFamily(toolEvent("knowledge_search", { queries: ["a"] }))).toBe("search");
+    expect(toolCallFamily(toolEvent("vulcan-codekit-rg", {}))).toBe("search");
   });
 });

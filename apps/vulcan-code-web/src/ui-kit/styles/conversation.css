@@ -398,6 +398,11 @@
 .vk-tool-chev { width: 0.9rem; height: 0.9rem; color: var(--vk-ink-3); transition: transform var(--vk-t-fast); }
 .vk-tool[data-open] .vk-tool-chev { transform: rotate(90deg); }
 .vk-tool-body { border-top: var(--vk-bw) solid var(--vk-line-soft); min-width: 0; }
+.vk-tool-body > .vk-facts,
+.vk-tool-body > .vk-steps-list { padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); font-size: var(--vk-fs-sm); }
+.vk-tool-body > .vk-steps-list > .vk-step { padding: calc(var(--vk-u) * 1.25) 0; }
+.vk-tool-body .vk-step-mark > .lucide { width: 0.8rem; height: 0.8rem; }
+.vk-tool-note { margin: 0; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3) 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
 .vk-tool-note { padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); font-size: var(--vk-fs-sm); color: var(--vk-ink-2); }
 .vk-tool-note[data-tone] { color: var(--vk-tone); }
 .vk-tool-tabs { display: flex; gap: calc(var(--vk-u) * 3); padding: 0 calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
@@ -410,6 +415,9 @@
 .vk-tool-error { margin: 0; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); color: var(--vk-bad); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 .vk-tool-result { padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); min-width: 0; }
 .vk-tool-result[data-error] { color: var(--vk-bad); }
+.vk-tool-result :is(h1, h2) { margin: calc(var(--vk-u) * 2) 0 calc(var(--vk-u) * 1.5); font-size: var(--vk-fs-lg); }
+.vk-tool-result :is(h3, h4, h5, h6) { margin: calc(var(--vk-u) * 2) 0 calc(var(--vk-u) * 1); font-size: var(--vk-fs-md); }
+.vk-tool-result :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
 .vk-json-block + .vk-tool-result { border-top: var(--vk-bw) solid var(--vk-line-soft); }
 .vk-json-label { padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3) 0; background: var(--vk-code-bg); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
 .vk-json-block > .vk-json { max-height: 18rem; overflow: auto; }
