@@ -1,66 +1,103 @@
-/* License browsing owns a fixed local directory and one lazily loaded original body. */
-/* 许可证浏览使用固定局部目录，且一次仅懒加载一份原始正文。 */
-.settings-license-panel { container-type: inline-size; gap: 0; font-family: var(--vk-font-ui); font-size: var(--vk-fs-md); line-height: 1.6; }
-/* Allocate the remaining page height to browsing, keeping the summary and search stationary. */
-/* 将页面剩余高度分配给浏览区，摘要和搜索保持固定。 */
-.settings-preferences-page.settings-license-panel { height: 100%; min-height: 0; overflow: hidden; }
+/* License browsing: a fixed header and search, then a type directory beside one scrolling dependency table. */
+/* 许可证浏览：固定的标题与搜索，下方为类型目录与单独滚动的依赖表。 */
+.settings-license-panel {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--vk-u) * 3);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
 .settings-license-panel > :not(.settings-license-browser) { flex-shrink: 0; }
-.settings-license-panel > .settings-hint { margin: 6px 0 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
-.settings-license-summary > strong { font-size: var(--vk-fs-lg); font-weight: 600; }
-.settings-license-summary,
-.settings-license-toolbar,
-.settings-license-group-heading,
-.settings-license-body-heading,
-.settings-license-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; }
-.settings-license-toolbar { margin-block: 0.75rem 1rem; }
-.settings-license-toolbar > input { flex: 1 1 16rem; min-width: 0; }
-.settings-license-summary > span,
-.settings-license-group-heading > span { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
-.settings-license-browser { display: grid; flex: 1 1 0; min-height: 0; grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr); gap: 1rem; align-items: stretch; }
-.settings-license-directory { display: grid; align-content: start; gap: 0.3rem; min-width: 0; min-height: 0; overflow: auto; padding-right: 0.75rem; border-right: var(--vk-bw) solid var(--vk-line); }
-.settings-license-directory > button { justify-content: space-between; width: 100%; min-width: 0; height: 36px; gap: 10px; white-space: nowrap; text-align: left; font-size: var(--vk-fs-md); font-weight: 500; }
+
+.settings-license-summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 3); }
+.settings-license-summary > svg { width: 20px; height: 20px; color: var(--vk-ember); }
+.settings-license-summary strong { font-size: var(--vk-fs-lg); font-weight: 600; }
+.settings-license-summary strong > .vk-mono { margin-left: calc(var(--vk-u) * 1.5); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 500; }
+.settings-license-summary p { margin: 2px 0 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.settings-license-totals { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.settings-license-browser {
+  display: grid;
+  flex: 1 1 0;
+  grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr);
+  min-height: 0;
+  border: var(--vk-bw) solid var(--vk-line);
+}
+
+/* Directory rows follow the shared directory convention: panel fill and an ember edge mark the open type. */
+/* 目录行遵循共享目录约定：以面板底色与余烬色边缘标记当前类型。 */
+.settings-license-directory { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; padding-block: calc(var(--vk-u) * 1.5); border-right: var(--vk-bw) solid var(--vk-line); background: var(--vk-ground-2); }
+.settings-license-type {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 calc(var(--vk-u) * 3);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  font: inherit;
+  font-size: var(--vk-fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-license-type:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.settings-license-type[aria-current="page"] { background: var(--vk-panel); color: var(--vk-ink); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.settings-license-type:focus-visible { outline: 2px solid var(--vk-signal); outline-offset: -2px; }
+.settings-license-type > small { flex-shrink: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-2xs); font-variant-numeric: tabular-nums; }
 /* Scroll only the overflowing name on hover or keyboard focus, keeping counts stationary. */
 /* 悬停或键盘聚焦时仅滚动超长名称，数量保持固定。 */
 .settings-license-name { flex: 1; min-width: 0; overflow: hidden; container-type: inline-size; }
 .settings-license-name > span { display: block; width: max-content; min-width: 100%; white-space: nowrap; }
-.settings-license-directory > button:is(:hover, :focus-visible) .settings-license-name > span { animation: license-name-scroll 6s ease-in-out infinite alternate; }
+.settings-license-type:is(:hover, :focus-visible) .settings-license-name > span { animation: license-name-scroll 6s ease-in-out infinite alternate; }
 @keyframes license-name-scroll {
   0%, 15% { transform: translateX(0); }
   85%, 100% { transform: translateX(min(0px, calc(100cqw - 100%))); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .settings-license-directory > button:is(:hover, :focus-visible) .settings-license-name > span { animation: none; }
+  .settings-license-type:is(:hover, :focus-visible) .settings-license-name > span { animation: none; }
 }
-.settings-license-directory > button > span:last-child { flex-shrink: 0; }
-.settings-license-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+
+.settings-license-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--vk-panel); }
 .settings-license-content > :not(.settings-license-table-scroll) { flex-shrink: 0; }
 .settings-license-mobile-directory { display: none; }
 .settings-license-mobile-directory [data-slot="select-value"] { display: block; -webkit-line-clamp: unset; white-space: normal; overflow-wrap: anywhere; }
 .settings-license-type-options { max-width: calc(100vw - 1rem); }
 .settings-license-type-options [data-slot="select-item"] { white-space: normal; overflow-wrap: anywhere; }
+
+.settings-license-group-heading,
+.settings-license-body-heading,
+.settings-license-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); }
+.settings-license-group-heading { padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border-bottom: var(--vk-bw) solid var(--vk-line); }
 .settings-license-group-heading h3,
-.settings-license-body-heading h3 { font-size: var(--vk-fs-lg); font-weight: 600; margin: 0; }
-/* Scroll the dependency rows within available space instead of imposing a viewport-height cap. */
-/* 依赖行在可用空间内滚动，不再限制为视口高度的固定比例。 */
-.settings-license-table-scroll { flex: 1 1 0; min-height: 0; overflow: auto; margin-top: 0.75rem; }
-.settings-license-table { width: 100%; border-collapse: collapse; font-size: var(--vk-fs-md); text-align: left; }
-.settings-license-table th,
-.settings-license-table td { border-bottom: var(--vk-bw) solid var(--vk-line); padding: 10px 8px; vertical-align: middle; }
-.settings-license-table th { position: sticky; top: 0; z-index: 1; background: var(--vk-ground); color: var(--vk-ink-2); font-size: var(--vk-fs-sm); font-weight: 500; }
-.settings-license-table td:nth-child(3) { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.settings-license-body-heading h3 { margin: 0; font-size: var(--vk-fs-md); font-weight: 600; }
+.settings-license-group-heading > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+
+/* Only the dependency rows scroll; the sticky header keeps column names readable. */
+/* 仅依赖行滚动；吸顶表头保持列名可读。 */
+.settings-license-table-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
+.settings-license-table { width: 100%; border-collapse: collapse; font-size: var(--vk-fs-sm); text-align: left; }
+.settings-license-table :is(th, td) { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4); border-bottom: var(--vk-bw) solid var(--vk-line-soft); vertical-align: middle; }
+.settings-license-table th { position: sticky; top: 0; z-index: 1; background: var(--vk-panel); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 500; border-bottom-color: var(--vk-line); }
+.settings-license-table tbody tr:hover { background: var(--vk-hover); }
 .settings-license-table td:first-child { min-width: 7rem; overflow-wrap: anywhere; }
-.settings-license-table td:nth-child(2) { white-space: nowrap; }
-.settings-license-table td:nth-child(3) { max-width: 20rem; min-width: 10rem; overflow-wrap: anywhere; }
-.settings-license-table td:last-child { min-width: 5rem; }
-.settings-license-pagination { justify-content: flex-end; margin-block: 0.5rem 1rem; }
-.settings-license-body-heading { margin-top: 1rem; }
+.settings-license-table td:nth-child(2) { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); white-space: nowrap; }
+.settings-license-table td:nth-child(3) { max-width: 20rem; min-width: 10rem; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
+.settings-license-table td:last-child { width: 1%; text-align: right; white-space: nowrap; }
+.settings-license-pagination { justify-content: flex-end; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3); border-top: var(--vk-bw) solid var(--vk-line); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+
+.settings-license-body-heading { margin-top: calc(var(--vk-u) * 4); }
 .settings-license-body-heading > button { min-width: 14rem; max-width: 100%; }
-.settings-license-body { margin: 0; padding: 16px; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); color: var(--vk-ink); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--vk-font-ui); font-size: var(--vk-fs-md); line-height: 1.7; max-height: 65dvh; overflow: auto; }
-.settings-license-dialog { font-family: var(--vk-font-ui); }
-.settings-license-error { border: var(--vk-bw) solid var(--vk-bad); padding: 0.85rem; overflow-wrap: anywhere; }
-@container (max-width: 760px) {
+.settings-license-body { margin: 0; padding: calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); color: var(--vk-ink); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.7; max-height: 65dvh; overflow: auto; }
+
+@container (max-width: 640px) {
   .settings-license-browser { grid-template-columns: minmax(0, 1fr); }
   .settings-license-directory { display: none; }
-  .settings-license-mobile-directory { display: block; margin-bottom: 0.85rem; }
-  .settings-license-mobile-directory > button { width: 100%; height: auto; min-height: 2.5rem; white-space: normal; }
+  .settings-license-mobile-directory { display: block; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3) 0; }
+  .settings-license-summary { grid-template-columns: auto minmax(0, 1fr); }
+  .settings-license-totals { grid-column: 2; }
 }

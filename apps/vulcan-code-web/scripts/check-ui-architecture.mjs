@@ -118,7 +118,7 @@ const legacyFeedbackShells = new Set([
   "context-injection-delete-notice",
   "diff-empty-state", "diff-file-tree-empty", "knowledge-empty",
   "model-picker-empty", "project-folder-picker-empty",
-  "project-folder-picker-notice", "settings-archive-empty",
+  "project-folder-picker-notice",
   "settings-error-notice", "workspace-files-panel-notice",
 ])
 

@@ -32,9 +32,6 @@
 /* Page kit pages scroll with the body: stretching would squeeze their clipped cards and end the sticky save bar early. */
 /* 页面套件页面随正文滚动：拉伸会挤压其裁切的卡片，并使吸附保存栏提前失效。 */
 .settings-page-body > .vk-page { flex: none; }
-/* The frame owns the gutter, so page wrappers drop their historical padding. */
-/* 页面留白由框架负责，页面包装层移除历史内边距。 */
-.settings-page-body > .settings-preferences-page { padding: 0; }
 /* Master-detail directories read as one bordered panel inside the frame. */
 /* 主从目录在框架内呈现为一个带边框的面板。 */
 .settings-page-body > .vk-directory:has(> [data-navigation-mode="column"]) {

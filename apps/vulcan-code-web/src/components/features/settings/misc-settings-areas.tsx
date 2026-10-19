@@ -1,5 +1,6 @@
 import * as React from "react"
 import {
+  Archive,
   ChevronLeft,
   ChevronRight,
   LoaderCircle,
@@ -8,7 +9,7 @@ import {
 } from "lucide-react"
 
 import { ModelPickerControl, modelPickerGroupKey } from "@/components/composer/model-picker-control"
-import { PageActionBar, PageBody, PageRow, PageSection } from "@/components/page"
+import { PageActionBar, PageBody, PageEmptyState, PageRow, PageSection, PageTable, PageToolbar } from "@/components/page"
 import { Button } from "@/ui-kit/primitives/button"
 import { Checkbox } from "@/ui-kit/primitives/checkbox"
 import {
@@ -444,31 +445,106 @@ export function ArchivedRestoreSettingsArea(props: {
     }
   }, [props.actions])
 
+  // Rows address their cells by column key; the selection column header carries the cross-page select-all box.
+  // 行按列键寻址单元格；选择列表头放置跨页全选复选框。
+  const projectName = (conversation: ConversationSummary) => conversation.projectId
+    ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? t("settings.misc.originalProjectUnavailable")
+    : t("settings.misc.standaloneConversation")
+  const rows = visibleConversations.map((conversation) => ({
+    key: conversation.id,
+    selected: selectedConversationIds.has(conversation.id),
+    cells: {
+      select: <Checkbox aria-label={formatMessage(t("settings.misc.selectConversation"), { title: conversation.title })}
+        checked={selectedConversationIds.has(conversation.id)} disabled={operation !== "idle"}
+        onCheckedChange={(checked) => toggleConversationSelection(conversation.id, checked === true)} />,
+      title: conversation.title,
+      project: <span className="vk-faint">{projectName(conversation)}</span>,
+      updated: <span className="vk-faint">{conversation.lastUpdatedLabel ?? "—"}</span>,
+      actions: <div className="vk-form-acts">
+        <Button aria-label={formatMessage(t("settings.misc.restoreConversation"), { title: conversation.title })} disabled={operation !== "idle"}
+          onClick={() => void runArchivedConversationAction("restore", [conversation.id])} size="icon-sm" title={t("settings.misc.restore")} variant="ghost"><RotateCcw /></Button>
+        <Button aria-label={formatMessage(t("settings.misc.deleteConversation"), { title: conversation.title })} disabled={operation !== "idle"}
+          onClick={() => setDeleteTargetIds([conversation.id])} size="icon-sm" title={t("settings.misc.delete")} variant="ghost"><Trash2 /></Button>
+      </div>,
+    },
+  }))
+
   return (
-    <section className="vk-form-scroll settings-preferences-page settings-archive-page">
-      <div className="settings-archive-toolbar">
-        <span className="vk-form-note">{formatMessage(t("settings.misc.selected"), { selectedCount })}</span>
-        <div className="vk-form-inline">
-          <Button
-            disabled={selectedCount === 0 || operation !== "idle"}
-            onClick={() => void runArchivedConversationAction("restore", Array.from(selectedConversationIds))}
-            type="button"
-          >
-            <RotateCcw size={14} />
-            <span>{operation === "restoring" ? t("settings.misc.restoring") : t("settings.misc.restoreSelected")}</span>
-          </Button>
-          <Button
-            variant="destructive"
-            disabled={selectedCount === 0 || operation !== "idle"}
-            onClick={() => setDeleteTargetIds(Array.from(selectedConversationIds))}
-            type="button"
-          >
-            <Trash2 size={14} />
-            <span>{operation === "deleting" ? t("settings.misc.deleting") : t("settings.misc.deleteSelected")}</span>
-          </Button>
-        </div>
-      </div>
-      {actionError ? <SettingsErrorNotice detail={actionError} message={t("settings.misc.thatDidnTFinish")} /> : null}
+    <PageBody>
+      {archivedConversations.length === 0 ? (
+        <PageEmptyState description={t("settings.misc.noArchivedConversationsHint")} icon={<Archive />} title={t("settings.misc.noArchivedConversations")} />
+      ) : (
+        <>
+          <PageToolbar actions={<>
+            <Button
+              disabled={selectedCount === 0 || operation !== "idle"}
+              onClick={() => void runArchivedConversationAction("restore", Array.from(selectedConversationIds))}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {operation === "restoring" ? <LoaderCircle className="vk-spin" /> : <RotateCcw />}
+              <span>{operation === "restoring" ? t("settings.misc.restoring") : t("settings.misc.restoreSelected")}</span>
+            </Button>
+            <Button
+              disabled={selectedCount === 0 || operation !== "idle"}
+              onClick={() => setDeleteTargetIds(Array.from(selectedConversationIds))}
+              size="sm"
+              type="button"
+              variant="destructive"
+            >
+              <Trash2 />
+              <span>{operation === "deleting" ? t("settings.misc.deleting") : t("settings.misc.deleteSelected")}</span>
+            </Button>
+          </>}>
+            <span className="vk-form-note" role="status">{formatMessage(t("settings.misc.selected"), { selectedCount })}</span>
+          </PageToolbar>
+          {actionError ? <SettingsErrorNotice detail={actionError} message={t("settings.misc.thatDidnTFinish")} /> : null}
+          <PageTable
+            columns={[
+              { key: "select", label: <Checkbox
+                aria-label={t("settings.misc.selectAllArchivedConversations")}
+                checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
+                disabled={operation !== "idle"}
+                onCheckedChange={(checked) => toggleAllConversationSelection(checked === true)}
+              />, width: "40px" },
+              { key: "title", label: t("settings.misc.conversation"), wrap: true },
+              { key: "project", label: t("settings.misc.project"), width: "22%" },
+              { key: "updated", label: t("settings.misc.lastUpdated"), width: "18%" },
+              { key: "actions", label: <span className="vk-sr-only">{t("settings.misc.actions")}</span>, width: "84px" },
+            ]}
+            label={t("settings.misc.archivedConversations")}
+            layout="fixed"
+            rows={rows}
+          />
+          <div className="settings-pagination">
+            <span className="vk-form-note">{formatMessage(t("settings.misc.pageOf"), { currentPage, pageCount })}</span>
+            <div className="vk-form-inline">
+              <span className="vk-form-note">{currentPageSelected ? t("settings.misc.currentPageSelected") : t("settings.misc.selectionIsKeptAcross")}</span>
+              <Button
+                aria-label={t("settings.misc.previousPage")}
+                variant="ghost"
+                size="icon-sm"
+                disabled={currentPage <= 1 || operation !== "idle"}
+                onClick={() => setCurrentPage((current) => Math.max(1, current - 1))}
+                type="button"
+              >
+                <ChevronLeft />
+              </Button>
+              <Button
+                aria-label={t("settings.misc.nextPage")}
+                variant="ghost"
+                size="icon-sm"
+                disabled={currentPage >= pageCount || operation !== "idle"}
+                onClick={() => setCurrentPage((current) => Math.min(pageCount, current + 1))}
+                type="button"
+              >
+                <ChevronRight />
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
       <AlertDialog onOpenChange={(open) => { if (!open) setDeleteTargetIds([]) }} open={deleteTargetIds.length > 0}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -486,70 +562,7 @@ export function ArchivedRestoreSettingsArea(props: {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <div className="settings-archive-table-scroll">
-        <table className="settings-archive-table">
-          <caption className="vk-sr-only">{t("settings.misc.archivedConversations")}</caption>
-          <thead><tr>
-            <th className="settings-archive-selection"><label className="vk-check-label vk-form-nowrap">
-            <Checkbox
-              aria-label={t("settings.misc.selectAllArchivedConversations")}
-              checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
-              disabled={archivedConversations.length === 0 || operation !== "idle"}
-              onCheckedChange={(checked) => toggleAllConversationSelection(checked === true)}
-            />
-              <span>{t("settings.misc.selectAll")}</span></label></th>
-            <th>{t("settings.misc.conversation")}</th>
-            <th>{t("settings.misc.project")}</th>
-            <th>{t("settings.misc.lastUpdated")}</th>
-            <th className="settings-archive-actions">{t("settings.misc.actions")}</th>
-          </tr></thead>
-          <tbody>{archivedConversations.length === 0 ? <tr><td colSpan={5} className="settings-archive-empty">{t("settings.misc.noArchivedConversations")}</td></tr>
-            : visibleConversations.map((conversation) => <tr key={conversation.id} data-selected={selectedConversationIds.has(conversation.id)}>
-              <td><Checkbox aria-label={formatMessage(t("settings.misc.selectConversation"), { title: conversation.title })}
-                checked={selectedConversationIds.has(conversation.id)} disabled={operation !== "idle"}
-                onCheckedChange={(checked) => toggleConversationSelection(conversation.id, checked === true)} /></td>
-              <td className="settings-archive-title">{conversation.title}</td>
-              <td>{conversation.projectId ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? t("settings.misc.originalProjectUnavailable") : t("settings.misc.standaloneConversation")}</td>
-              <td className="vk-form-nowrap vk-faint">{conversation.lastUpdatedLabel}</td>
-              <td><div className="vk-form-acts">
-                <Button size="sm" variant="outline" aria-label={formatMessage(t("settings.misc.restoreConversation"), { title: conversation.title })} disabled={operation !== "idle"}
-                  onClick={() => void runArchivedConversationAction("restore", [conversation.id])}><RotateCcw size={14} />{t("settings.misc.restore")}</Button>
-                <Button size="sm" variant="ghost" className="vk-field-error" aria-label={formatMessage(t("settings.misc.deleteConversation"), { title: conversation.title })} disabled={operation !== "idle"}
-                  onClick={() => setDeleteTargetIds([conversation.id])}><Trash2 size={14} />{t("settings.misc.delete")}</Button>
-              </div></td>
-            </tr>)}
-          </tbody>
-        </table>
-      </div>
-      {archivedConversations.length > 0 ? (
-        <div className="settings-pagination">
-          <span className="vk-form-note">{formatMessage(t("settings.misc.pageOf"), { currentPage, pageCount })}</span>
-          <div className="vk-form-inline">
-            <span className="vk-form-note">{currentPageSelected ? t("settings.misc.currentPageSelected") : t("settings.misc.selectionIsKeptAcross")}</span>
-            <Button
-              aria-label={t("settings.misc.previousPage")}
-              variant="outline"
-              size="icon-sm"
-              disabled={currentPage <= 1 || operation !== "idle"}
-              onClick={() => setCurrentPage((current) => Math.max(1, current - 1))}
-              type="button"
-            >
-              <ChevronLeft size={14} />
-            </Button>
-            <Button
-              aria-label={t("settings.misc.nextPage")}
-              variant="outline"
-              size="icon-sm"
-              disabled={currentPage >= pageCount || operation !== "idle"}
-              onClick={() => setCurrentPage((current) => Math.min(pageCount, current + 1))}
-              type="button"
-            >
-              <ChevronRight size={14} />
-            </Button>
-          </div>
-        </div>
-      ) : null}
-    </section>
+    </PageBody>
   )
 }
 

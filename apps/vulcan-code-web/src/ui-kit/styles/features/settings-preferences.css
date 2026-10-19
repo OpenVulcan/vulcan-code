@@ -1,152 +1,36 @@
-/* Preference pages share section rhythm without nesting decorative cards. */
-/* 偏好设置页面使用一致分区节奏，不再嵌套装饰卡片。 */
-.settings-archive-page { height: 100%; overflow: hidden; }
-.settings-archive-page > :not(.settings-archive-table-scroll) { flex-shrink: 0; }
-.settings-archive-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-/* Only rows scroll; headers, batch actions and pagination remain available. */
-/* 仅表格行滚动，标题、批量操作和分页保持可用。 */
-.settings-archive-table-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
-.settings-archive-table { width: 100%; border-collapse: collapse; text-align: left; font-size: var(--vk-fs-md); }
-.settings-archive-table th { position: sticky; top: 0; z-index: 1; background: var(--vk-ground); color: var(--vk-ink-2); font-weight: 500; }
-.settings-archive-table :is(th, td) { padding: 12px 10px; border-bottom: var(--vk-bw) solid var(--vk-line); }
-.settings-archive-table tr[data-selected="true"] { background: var(--vk-hover); }
-.settings-archive-selection { width: 90px; }
-.settings-archive-title { min-width: 180px; overflow-wrap: anywhere; }
-.settings-archive-actions { width: 180px; text-align: right; }
-.settings-archive-table .settings-archive-empty { text-align: center; padding: 40px 16px; color: var(--vk-ink-2); }
-.settings-preferences-page {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  min-width: 0;
-  padding: 24px;
-}
-@container workspace-page (max-width: 640px) {
-  .settings-preferences-page { padding: 16px 12px; }
-}
 .settings-feature-content {
   padding: 0;
 }
 
-/* Page padding belongs inside the scroll owner, never between the title bar and the page. */
-/* 页面留白归属于滚动容器内部，不在标题栏与页面之间留下空带。 */
-
-.settings-diagnostics-page [data-slot="input"] {
-  margin: 16px 0;
-}
-
-/* Keep trace controls in one header and separate readable information from directory actions. */
-/* 将追踪开关集中在标题行，并分离说明信息与目录操作。 */
-.provider-trace-settings {
-  width: 100%;
-  max-width: none;
-}
-
-.provider-trace-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 8px 0 20px;
-  border-bottom: var(--vk-bw) solid var(--vk-line);
-}
-
-.provider-trace-header h2 {
+/* Diagnostic logs read like a console: one dense mono line per entry, level tinted, message wrapping under narrow widths. */
+/* 诊断日志以控制台方式呈现：每条一行等宽紧凑文本，级别着色，窄宽度时消息换行。 */
+.diagnostic-log-list {
   margin: 0;
-  font-size: var(--vk-fs-lg);
-  font-weight: 600;
-}
-
-.provider-trace-header p {
-  margin: 6px 0 0;
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-}
-
-.provider-trace-toggle {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-}
-
-.provider-trace-information {
-  display: grid;
-  gap: 20px;
-  margin: 0;
-  padding: 24px 0;
-}
-
-.provider-trace-information > div {
-  display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
-  gap: 16px;
-  font-size: var(--vk-fs-md);
-  line-height: 1.7;
-}
-
-.provider-trace-information dt {
-  font-weight: 500;
-}
-
-.provider-trace-information dd {
-  margin: 0;
-  color: var(--vk-ink-2);
-  overflow-wrap: anywhere;
-}
-
-.provider-trace-information code {
-  display: block;
-  margin-top: 6px;
-  font-size: var(--vk-fs-sm);
-}
-
-.provider-trace-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  border-top: var(--vk-bw) solid var(--vk-line);
-  padding-top: 16px;
-}
-
-@container workspace-page (max-width: 480px) {
-  .provider-trace-header { gap: 12px; }
-  .provider-trace-information > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-}
-
-.settings-diagnostics-startup {
-  display: grid;
-  gap: 16px;
+  padding: 0;
+  list-style: none;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-sunken);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-xs);
 }
 
 .diagnostic-log-row {
   display: grid;
-  grid-template-columns: 64px minmax(100px, 140px) minmax(0, 1fr);
+  grid-template-columns: 44px minmax(80px, 120px) minmax(0, 1fr);
   align-items: baseline;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: var(--vk-bw) solid var(--vk-line);
-  font-size: var(--vk-fs-sm);
+  gap: calc(var(--vk-u) * 3);
+  padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3);
   overflow-wrap: anywhere;
 }
 
-.diagnostic-log-row > p {
-  margin: 0;
-  white-space: pre-wrap;
-}
-
-.diagnostic-log-level {
-  color: var(--vk-ink-2);
-}
-
-.diagnostic-log-level[data-level="error"] {
-  color: var(--vk-bad);
-}
+.diagnostic-log-row + .diagnostic-log-row { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.diagnostic-log-row > strong { color: var(--vk-ink-2); font-weight: 500; }
+.diagnostic-log-row > p { margin: 0; white-space: pre-wrap; color: var(--vk-ink); }
+.diagnostic-log-level { color: var(--vk-ink-3); text-transform: uppercase; }
+.diagnostic-log-level[data-level="warn"], .diagnostic-log-level[data-level="warning"] { color: var(--vk-warn); }
+.diagnostic-log-level[data-level="error"] { color: var(--vk-bad); }
 
 @container workspace-page (max-width: 640px) {
-  .settings-diagnostics-page { padding: 12px 12px 0; }
-  .diagnostic-log-row { grid-template-columns: 64px minmax(0, 1fr); }
+  .diagnostic-log-row { grid-template-columns: 44px minmax(0, 1fr); }
   .diagnostic-log-row > p { grid-column: 1 / -1; }
 }

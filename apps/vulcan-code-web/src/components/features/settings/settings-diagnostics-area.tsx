@@ -1,10 +1,12 @@
 import {
+  FolderOpen,
   History,
-  PlugZap,
+  Trash2,
 } from "lucide-react";
 import * as React from "react";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
-import { PanelTitle, StatusIcon } from "@/components/shared/status";
+import { StatusIcon } from "@/components/shared/status";
+import { PageEmptyState, PageFacts, PageNotice, PageRow, PageSection, PageToolbar } from "@/components/page";
 import { Button } from "@/ui-kit/primitives/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
 import { Switch } from "@/ui-kit/primitives/switch";
@@ -113,7 +115,7 @@ export function LogsArea(props: {
   }
 
   return (
-    <WorkspaceDirectoryLayout contentClassName="settings-diagnostics-page" navigationMode="tabs" navigation={
+    <WorkspaceDirectoryLayout navigationMode="tabs" navigation={
       <WorkspaceDirectoryMenu ariaLabel={t("settings.diagnostics.diagnosticsCategories")} heading={t("workspaceToolPanel.category")}>
         {([
           ["startup", t("settings.diagnostics.startupStatus")],
@@ -123,116 +125,81 @@ export function LogsArea(props: {
       </WorkspaceDirectoryMenu>
     }>
       {category === "startup" ? <StartupPanel startup={props.startup} /> : null}
-      {category === "logs" ? <section>
-        <PanelTitle icon={<History size={17} />} title={t("settings.diagnostics.logs")} />
-        <Input aria-label={t("settings.diagnostics.filterDiagnosticLogs")} placeholder={t("settings.diagnostics.searchLevelSourceOr")} value={logFilter} onChange={(event) => setLogFilter(event.target.value)} />
-        <div className="diagnostic-log-rows">
-          {visibleLogs.map((log) => (
-            <article className="diagnostic-log-row" key={log.id}>
-              <BadgeLevel level={log.level} />
-              <strong>{log.source}</strong>
-              <p>{log.message}</p>
-            </article>
-          ))}
-        </div>
-        {visibleLogs.length === 0 ? <p className="vk-form-note">{t("settings.diagnostics.noMatchingDiagnosticLogs")}</p> : null}
-      </section> : null}
-      {category === "trace" ? <section>
-        <div className="provider-trace-settings">
-          <article>
-            {/* Keep the setting and its current state together, with recording details always visible below.
-                将设置与当前状态放在一起，下方常显记录说明。 */}
-            <header className="provider-trace-header">
-              <div>
-                <h2>{t("settings.diagnostics.providerRequestTrace.switch")}</h2>
-                <p>{t("settings.diagnostics.providerRequestTrace.completeRequests")}</p>
-              </div>
-              <label className="provider-trace-toggle">
-                <span>{props.providerRequestTraceEnabled
-                  ? t("settings.diagnostics.providerRequestTrace.enabled")
-                  : t("settings.diagnostics.providerRequestTrace.disabled")}</span>
-              <Switch
-                aria-label={t("settings.diagnostics.providerRequestTrace.switch")}
-                checked={props.providerRequestTraceEnabled}
-                disabled={savingTraceSetting}
-                onCheckedChange={(enabled) => void handleTraceSettingChange(enabled)}
-              />
-              </label>
-            </header>
-            <header className="provider-trace-header">
-              <div>
-                <h2>{t("settings.diagnostics.providerRequestTrace.errorsSwitch")}</h2>
-                <p>{t("settings.diagnostics.providerRequestTrace.errorsHelp")}</p>
-              </div>
-              <label className="provider-trace-toggle">
-                <span>{props.providerErrorTraceEnabled
-                  ? t("settings.diagnostics.providerRequestTrace.enabled")
-                  : t("settings.diagnostics.providerRequestTrace.disabled")}</span>
-                <Switch
-                  aria-label={t("settings.diagnostics.providerRequestTrace.errorsSwitch")}
-                  checked={props.providerErrorTraceEnabled}
-                  disabled={savingTraceSetting}
-                  onCheckedChange={(enabled) => void handleTraceSettingChange(props.providerRequestTraceEnabled, enabled)}
-                />
-              </label>
-            </header>
-            <dl className="provider-trace-information">
-              <div>
-                <dt>{t("settings.diagnostics.providerRequestTrace.recordedData")}</dt>
-                <dd>{t("settings.diagnostics.providerRequestTrace.recordedDataHelp")}</dd>
-              </div>
-              <div>
-                <dt>{t("settings.diagnostics.providerRequestTrace.retention")}</dt>
-                <dd>{t("settings.diagnostics.providerRequestTrace.retentionHelp")}<code>temp/provider-api-trace</code></dd>
-              </div>
-              <div>
-                <dt>{t("settings.diagnostics.providerRequestTrace.privacy")}</dt>
-                <dd>{t("settings.diagnostics.providerRequestTrace.privacyHelp")}</dd>
-              </div>
-            </dl>
-            <div className="provider-trace-actions">
-              <Button
-                disabled={traceDirectoryBusy}
-                onClick={() => void handleOpenTraceDirectory()}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                {t("settings.diagnostics.providerRequestTrace.openDirectory")}
-              </Button>
-              <Button
-                disabled={traceDirectoryBusy}
-                onClick={() => setClearConfirmationOpen(true)}
-                size="sm"
-                type="button"
-                variant="destructive"
-              >
-                {t("settings.diagnostics.providerRequestTrace.clearDirectory")}
-              </Button>
-            </div>
-            <AlertDialog open={clearConfirmationOpen} onOpenChange={setClearConfirmationOpen}>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>{t("settings.diagnostics.providerRequestTrace.clearDirectory")}</AlertDialogTitle>
-                  <AlertDialogDescription>{t("settings.diagnostics.providerRequestTrace.clearConfirm")}</AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>{t("settings.diagnostics.cancel")}</AlertDialogCancel>
-                  <AlertDialogAction disabled={traceDirectoryBusy} variant="destructive" onClick={() => void handleClearTraceDirectory()}>{t("settings.diagnostics.confirmCleanup")}</AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-            {traceDirectoryNotice ? (
-              <p className="vk-form-note">{traceDirectoryNotice}</p>
-            ) : null}
-            {traceSettingError ? (
-              <p className="settings-inline-error">
-                {t("settings.diagnostics.providerRequestTrace.saveFailed")}: {traceSettingError}
-              </p>
-            ) : null}
-          </article>
-        </div>
-      </section> : null}
+      {category === "logs" ? <div className="vk-page-panel">
+        <PageToolbar>
+          <Input aria-label={t("settings.diagnostics.filterDiagnosticLogs")} placeholder={t("settings.diagnostics.searchLevelSourceOr")} value={logFilter} onChange={(event) => setLogFilter(event.target.value)} />
+        </PageToolbar>
+        {visibleLogs.length > 0 ? (
+          <ol aria-label={t("settings.diagnostics.logs")} className="diagnostic-log-list">
+            {visibleLogs.map((log) => (
+              <li className="diagnostic-log-row" key={log.id}>
+                <BadgeLevel level={log.level} />
+                <strong>{log.source}</strong>
+                <p>{log.message}</p>
+              </li>
+            ))}
+          </ol>
+        ) : <PageEmptyState icon={<History />} title={t("settings.diagnostics.noMatchingDiagnosticLogs")} />}
+      </div> : null}
+      {category === "trace" ? <div className="vk-page-panel provider-trace-settings">
+        {/* Each switch is one row with its live state beside it; recording details stay visible below. */}
+        {/* 每个开关为一行，当前状态紧挨开关；记录说明在下方常显。 */}
+        <PageSection layout="rows" title={t("settings.diagnostics.providerRequestTrace")}>
+          <PageRow description={t("settings.diagnostics.providerRequestTrace.completeRequests")} label={t("settings.diagnostics.providerRequestTrace.switch")}>
+            <TraceSwitchState enabled={props.providerRequestTraceEnabled} />
+            <Switch
+              aria-label={t("settings.diagnostics.providerRequestTrace.switch")}
+              checked={props.providerRequestTraceEnabled}
+              disabled={savingTraceSetting}
+              onCheckedChange={(enabled) => void handleTraceSettingChange(enabled)}
+            />
+          </PageRow>
+          <PageRow description={t("settings.diagnostics.providerRequestTrace.errorsHelp")} label={t("settings.diagnostics.providerRequestTrace.errorsSwitch")}>
+            <TraceSwitchState enabled={props.providerErrorTraceEnabled} />
+            <Switch
+              aria-label={t("settings.diagnostics.providerRequestTrace.errorsSwitch")}
+              checked={props.providerErrorTraceEnabled}
+              disabled={savingTraceSetting}
+              onCheckedChange={(enabled) => void handleTraceSettingChange(props.providerRequestTraceEnabled, enabled)}
+            />
+          </PageRow>
+        </PageSection>
+        {traceSettingError ? (
+          <PageNotice details={traceSettingError} tone="error">{t("settings.diagnostics.providerRequestTrace.saveFailed")}</PageNotice>
+        ) : null}
+        <PageSection
+          actions={<>
+            <Button disabled={traceDirectoryBusy} onClick={() => void handleOpenTraceDirectory()} size="sm" type="button" variant="outline">
+              <FolderOpen />
+              {t("settings.diagnostics.providerRequestTrace.openDirectory")}
+            </Button>
+            <Button disabled={traceDirectoryBusy} onClick={() => setClearConfirmationOpen(true)} size="sm" type="button" variant="ghost">
+              <Trash2 />
+              {t("settings.diagnostics.providerRequestTrace.clearDirectory")}
+            </Button>
+          </>}
+          title={t("settings.diagnostics.providerRequestTrace.aboutTitle")}
+        >
+          <PageFacts items={[
+            { label: t("settings.diagnostics.providerRequestTrace.recordedData"), value: t("settings.diagnostics.providerRequestTrace.recordedDataHelp") },
+            { label: t("settings.diagnostics.providerRequestTrace.retention"), value: <>{t("settings.diagnostics.providerRequestTrace.retentionHelp")} <code>temp/provider-api-trace</code></> },
+            { label: t("settings.diagnostics.providerRequestTrace.privacy"), value: t("settings.diagnostics.providerRequestTrace.privacyHelp"), tone: "attention" },
+          ]} layout="list" />
+          {traceDirectoryNotice ? <p className="vk-form-note" role="status">{traceDirectoryNotice}</p> : null}
+        </PageSection>
+        <AlertDialog open={clearConfirmationOpen} onOpenChange={setClearConfirmationOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("settings.diagnostics.providerRequestTrace.clearDirectory")}</AlertDialogTitle>
+              <AlertDialogDescription>{t("settings.diagnostics.providerRequestTrace.clearConfirm")}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("settings.diagnostics.cancel")}</AlertDialogCancel>
+              <AlertDialogAction disabled={traceDirectoryBusy} variant="destructive" onClick={() => void handleClearTraceDirectory()}>{t("settings.diagnostics.confirmCleanup")}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div> : null}
     </WorkspaceDirectoryLayout>
   );
 }
@@ -246,9 +213,7 @@ function StartupPanel(props: {
 }) {
   const { t } = useI18n();
   return (
-    <section className="settings-diagnostics-startup">
-      <PanelTitle icon={<PlugZap size={17} />} title={t("settings.diagnostics.startupStatus")} />
-      <ol className="vk-form-steplog">
+    <ol aria-label={t("settings.diagnostics.startupStatus")} className="vk-form-steplog">
         {props.startup.steps.map((step) => (
           <li key={step.id}>
             <StatusIcon status={step.status} />
@@ -258,9 +223,17 @@ function StartupPanel(props: {
             </div>
           </li>
         ))}
-      </ol>
-    </section>
+    </ol>
   );
+}
+
+// TraceSwitchState names a trace switch's current state beside it, so "off" is readable without colour.
+// TraceSwitchState 在追踪开关旁标明当前状态，使“已关闭”无需依赖颜色即可读出。
+function TraceSwitchState(props: { enabled: boolean }) {
+  const { t } = useI18n();
+  return <span className="vk-form-note">{props.enabled
+    ? t("settings.diagnostics.providerRequestTrace.enabled")
+    : t("settings.diagnostics.providerRequestTrace.disabled")}</span>;
 }
 
 // BadgeLevel preserves the exact log severity without implying that every information row is a success.
