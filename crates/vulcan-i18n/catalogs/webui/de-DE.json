@@ -1716,6 +1716,7 @@
   "workspaceContext.loadingReviewPanel": "Reviewbereich wird geladen.",
   "workspaceContext.loadingFilesPanel": "Dateibereich wird geladen.",
   "workspaceMemory.handleDynamicMemory": "Dynamisches Gedächtnis verarbeiten",
+  "workspaceMemory.unavailable": "Das Langzeitgedächtnis ist nicht verfügbar. Diese Sitzung ruft keine Erinnerungen ab und schreibt keine. Den Grund finden Sie in den Gedächtniseinstellungen.",
   "workspaceMemory.expiredRegionTitle": "Abgelaufen",
   "workspaceMemory.expiredRegionDescription": "Diese Erinnerungen werden nach der Kontextkomprimierung entfernt",
   "workspaceMemory.suppressForSession": "Einfügen in dieser Sitzung beenden",

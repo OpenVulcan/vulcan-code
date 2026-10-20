@@ -1716,6 +1716,7 @@
   "workspaceContext.loadingReviewPanel": "正在載入審查面板。",
   "workspaceContext.loadingFilesPanel": "正在載入檔案面板。",
   "workspaceMemory.handleDynamicMemory": "處理動態記憶",
+  "workspaceMemory.unavailable": "長期記憶目前不可用，本對話不會召回或寫入記憶。請在記憶設定中查看原因。",
   "workspaceMemory.expiredRegionTitle": "已過期",
   "workspaceMemory.expiredRegionDescription": "以下記憶將在上下文壓縮後清除",
   "workspaceMemory.suppressForSession": "僅在此對話中停止注入",

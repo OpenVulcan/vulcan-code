@@ -1716,6 +1716,7 @@
   "workspaceContext.loadingReviewPanel": "Загрузка панели ревью.",
   "workspaceContext.loadingFilesPanel": "Загрузка панели файлов.",
   "workspaceMemory.handleDynamicMemory": "Обработать динамическую память",
+  "workspaceMemory.unavailable": "Долговременная память недоступна. Этот сеанс не будет извлекать и записывать воспоминания. Причину смотрите в настройках памяти.",
   "workspaceMemory.expiredRegionTitle": "Истекло",
   "workspaceMemory.expiredRegionDescription": "Эти воспоминания будут удалены после сжатия контекста",
   "workspaceMemory.suppressForSession": "Не внедрять в этой сессии",

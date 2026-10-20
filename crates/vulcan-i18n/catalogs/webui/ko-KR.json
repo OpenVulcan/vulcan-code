@@ -1716,6 +1716,7 @@
   "workspaceContext.loadingReviewPanel": "검토 패널을 불러오는 중.",
   "workspaceContext.loadingFilesPanel": "파일 패널을 불러오는 중.",
   "workspaceMemory.handleDynamicMemory": "동적 메모리 처리",
+  "workspaceMemory.unavailable": "장기 기억을 현재 사용할 수 없습니다. 이 세션은 기억을 불러오거나 기록하지 않습니다. 원인은 기억 설정에서 확인하세요.",
   "workspaceMemory.expiredRegionTitle": "만료됨",
   "workspaceMemory.expiredRegionDescription": "이 메모리는 컨텍스트 압축 후 제거됩니다",
   "workspaceMemory.suppressForSession": "이 세션에서 주입 중지",

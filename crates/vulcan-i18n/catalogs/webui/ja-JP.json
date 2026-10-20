@@ -1716,6 +1716,7 @@
   "workspaceContext.loadingReviewPanel": "レビューパネルを読み込んでいます。",
   "workspaceContext.loadingFilesPanel": "ファイルパネルを読み込んでいます。",
   "workspaceMemory.handleDynamicMemory": "動的メモリを処理",
+  "workspaceMemory.unavailable": "長期記憶は現在利用できません。このセッションでは記憶の想起も書き込みも行われません。理由は記憶設定で確認してください。",
   "workspaceMemory.expiredRegionTitle": "期限切れ",
   "workspaceMemory.expiredRegionDescription": "これらのメモリはコンテキストの圧縮後に削除されます",
   "workspaceMemory.suppressForSession": "このセッションでの注入を停止",

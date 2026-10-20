@@ -1716,6 +1716,7 @@
   "workspaceContext.loadingReviewPanel": "Carregando o painel de revisão.",
   "workspaceContext.loadingFilesPanel": "Carregando o painel de arquivos.",
   "workspaceMemory.handleDynamicMemory": "Gerenciar a memória dinâmica",
+  "workspaceMemory.unavailable": "A memória de longo prazo está indisponível. Esta sessão não recuperará nem gravará memórias. Verifique o motivo nas configurações de memória.",
   "workspaceMemory.expiredRegionTitle": "Expirado",
   "workspaceMemory.expiredRegionDescription": "Estas memórias serão removidas após a compressão do contexto",
   "workspaceMemory.suppressForSession": "Parar de injetar nesta sessão",

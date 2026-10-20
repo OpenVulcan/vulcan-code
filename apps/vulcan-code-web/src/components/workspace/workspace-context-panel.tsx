@@ -816,6 +816,7 @@ function WorkspaceContextTabContent(args: {
           snapshot={args.props.workbench.contextInjection ?? null}
           onRunVmmAction={args.props.onRunVmmAction}
           onOpenSettings={args.props.onOpenMemorySettings}
+          memoryState={args.props.workbench.vmmMemory?.experienceState ?? null}
         />
       </div>
     );

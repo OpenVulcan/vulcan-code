@@ -20,6 +20,7 @@ import type {
   VmmStaticProfileSummary,
   VmmMemoryActionRequest,
   VmmMemoryActionResult,
+  VmmExperienceStateSummary,
 } from "@/types";
 import {
   useWorkspaceMemoryRequestOwnership,
@@ -47,6 +48,9 @@ export function WorkspaceMemoryPanel(props: {
   // Opens the memory settings page.
   // 打开记忆设置页面。
   onOpenSettings?: () => void;
+  // Long-term memory state; an unavailable service means nothing is recalled or written for this session.
+  // 长期记忆状态；服务不可用时本会话既不召回也不写入记忆。
+  memoryState?: VmmExperienceStateSummary | null;
 }) {
   // t translates stable side-panel labels.
   // t 翻译稳定侧面板标签。
@@ -388,6 +392,14 @@ export function WorkspaceMemoryPanel(props: {
         ) : null}
       </div>
       <div className="vk-mem-scroll">
+        {props.memoryState && props.memoryState.deployment !== "disabled" && props.memoryState.health === "unavailable" ? (
+          <PageNotice
+            actions={props.onOpenSettings ? <Button onClick={props.onOpenSettings} size="sm" variant="outline">{t("memory.workspace.settings")}</Button> : undefined}
+            tone="warning"
+          >
+            {t("workspaceMemory.unavailable")}
+          </PageNotice>
+        ) : null}
         {deleteNotice ? <PageNotice tone="info">{deleteNotice}</PageNotice> : null}
         <section className="vk-mem-sec" data-kind="dynamic">
           <header className="vk-mem-head">

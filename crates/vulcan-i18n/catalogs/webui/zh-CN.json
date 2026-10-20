@@ -1716,6 +1716,7 @@
   "workspaceContext.loadingReviewPanel": "正在加载审核面板。",
   "workspaceContext.loadingFilesPanel": "正在加载文件面板。",
   "workspaceMemory.handleDynamicMemory": "处理动态记忆",
+  "workspaceMemory.unavailable": "长期记忆当前不可用，本会话不会召回或写入记忆。请在记忆设置中查看原因。",
   "workspaceMemory.expiredRegionTitle": "已过期",
   "workspaceMemory.expiredRegionDescription": "以下记忆等待上下文压缩后清理",
   "workspaceMemory.suppressForSession": "仅本会话不再注入",

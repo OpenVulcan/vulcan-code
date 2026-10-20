@@ -1716,6 +1716,7 @@
   "workspaceContext.loadingReviewPanel": "Chargement du panneau de revue.",
   "workspaceContext.loadingFilesPanel": "Chargement du panneau des fichiers.",
   "workspaceMemory.handleDynamicMemory": "Gérer la mémoire dynamique",
+  "workspaceMemory.unavailable": "La mémoire à long terme est indisponible. Cette session ne rappellera ni n’écrira de souvenirs. Consultez les paramètres de mémoire pour en connaître la raison.",
   "workspaceMemory.expiredRegionTitle": "Expiré",
   "workspaceMemory.expiredRegionDescription": "Ces souvenirs seront supprimés après la compression du contexte",
   "workspaceMemory.suppressForSession": "Arrêter l’injection dans cette session",

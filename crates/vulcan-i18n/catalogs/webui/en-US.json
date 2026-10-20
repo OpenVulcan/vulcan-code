@@ -1716,6 +1716,7 @@
   "workspaceContext.loadingReviewPanel": "Loading review panel.",
   "workspaceContext.loadingFilesPanel": "Loading files panel.",
   "workspaceMemory.handleDynamicMemory": "Handle dynamic memory",
+  "workspaceMemory.unavailable": "Long-term memory is unavailable. This session will not recall or write memories. Check the memory settings for the reason.",
   "workspaceMemory.expiredRegionTitle": "Expired",
   "workspaceMemory.expiredRegionDescription": "These memories will be removed after context compaction",
   "workspaceMemory.suppressForSession": "Stop injecting in this session",
