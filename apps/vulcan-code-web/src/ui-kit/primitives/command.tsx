@@ -76,12 +76,14 @@ function Command({ className, shouldFilter = true, value, defaultValue, onValueC
   const hasRows = visibleCount > 0;
   const rows = () => Array.from(root.current?.querySelectorAll<HTMLElement>(ITEM_SELECTOR) ?? []);
   const setActive = React.useCallback((next: string | null) => setActiveState(next), [setActiveState]);
-  // The first visible row becomes active on mount and whenever the search changes.
-  // 挂载时以及每次搜索变化时，第一条可见行成为活动行。
+  // On mount and whenever the search changes, the caller's default row becomes active while the search is empty,
+  // otherwise the first visible row does.
+  // 挂载时以及每次搜索变化时，搜索为空则调用方的默认行成为活动行，否则第一条可见行成为活动行。
   React.useLayoutEffect(() => {
-    const first = root.current?.querySelector<HTMLElement>(ITEM_SELECTOR);
-    setActive(first?.dataset.value ?? null);
-  }, [search, hasRows, setActive]);
+    const list = Array.from(root.current?.querySelectorAll<HTMLElement>(ITEM_SELECTOR) ?? []);
+    const preferred = search === "" && defaultValue ? list.find((row) => row.dataset.value === defaultValue) : undefined;
+    setActive((preferred ?? list[0])?.dataset.value ?? null);
+  }, [search, hasRows, setActive, defaultValue]);
   // The search field names the active row for assistive technology after every render.
   // 每次渲染后，搜索框都会为辅助技术指明活动行。
   React.useLayoutEffect(() => {

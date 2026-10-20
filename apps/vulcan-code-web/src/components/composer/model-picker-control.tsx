@@ -258,6 +258,14 @@ export function ModelPickerList(props: {
     () => groupModelPickerChoices(filteredChoices),
     [filteredChoices],
   );
+  // isCurrentGroup marks the grouped model in use: by grouped key in model scope, by exact account row otherwise.
+  // isCurrentGroup 标记正在使用的聚合模型：模型作用域按分组键比较，否则按精确账号行比较。
+  const isCurrentGroup = (group: (typeof filteredGroups)[number]): boolean => props.selectionScope === "model"
+    ? modelPickerGroupKey(group) === props.value
+    : props.selectedChoice?.providerId === group.providerId && props.selectedChoice.modelId === group.modelId;
+  // currentGroupKey starts keyboard focus on the model in use, so Enter right after opening keeps it.
+  // currentGroupKey 让键盘焦点从正在使用的模型开始，打开后直接回车即保持不变。
+  const currentGroupKey = filteredGroups.find(isCurrentGroup);
 
   React.useEffect(() => {
     // Two animation frames place the row only after Radix positions the portal and ScrollArea viewport.
@@ -277,7 +285,7 @@ export function ModelPickerList(props: {
   }, []);
 
   return (
-    <Command shouldFilter={false}>
+    <Command defaultValue={currentGroupKey ? modelPickerGroupKey(currentGroupKey) : undefined} shouldFilter={false}>
       <CommandInput
         aria-label={props.filterPlaceholder}
         autoFocus
@@ -299,9 +307,7 @@ export function ModelPickerList(props: {
             filteredGroups.map((group) => {
               // exactGroupChoice is present only when this grouped model is currently selected.
               // exactGroupChoice 仅在当前聚合模型已被选中时存在。
-              const exactGroupChoice = props.selectedChoice
-                && props.selectedChoice.providerId === group.providerId
-                && props.selectedChoice.modelId === group.modelId
+              const exactGroupChoice = props.selectionScope !== "model" && isCurrentGroup(group)
                 ? props.selectedChoice
                 : undefined;
               // resolvedGroupChoice makes an explicit model-row click adopt the current backend
@@ -314,9 +320,7 @@ export function ModelPickerList(props: {
               );
               // selected marks the grouped model independently from its chosen account.
               // selected 独立于所选账号标记当前聚合模型。
-              const selected = props.selectionScope === "model"
-                ? modelPickerGroupKey(group) === props.value
-                : Boolean(exactGroupChoice);
+              const selected = isCurrentGroup(group);
               return (
                 <CommandItem
                   className="vk-model-row"
