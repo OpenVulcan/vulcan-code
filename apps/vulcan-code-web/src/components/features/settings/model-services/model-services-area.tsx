@@ -239,6 +239,7 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
           action={<Button onClick={() => void reload()} size="sm" type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button>}
           detail={loadError}
           message={t("settings.modelServices.loadFailed")}
+          onServiceReconnected={() => void reload()}
         />
       ) : null}
 

@@ -4,6 +4,7 @@ import { CircleAlert, Copy } from "lucide-react"
 import { Button } from "@/ui-kit/primitives/button"
 import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
 import { useI18n } from "@/i18n"
+import { useServiceReconnected } from "@/components/shell/use-service-connection-status"
 import { cx } from "@/ui-kit/behavior/core";
 import "@/ui-kit/styles/features/settings-error-notice.css"
 
@@ -22,6 +23,9 @@ export interface SettingsErrorNoticeProps {
   // action offers a contextual recovery operation after the diagnostic disclosure.
   // action 在诊断展开区后提供当前情境的恢复操作。
   action?: React.ReactNode
+  // onServiceReconnected re-runs a failed read once the local service connection comes back.
+  // onServiceReconnected 在本地服务连接恢复后重新执行失败的读取。
+  onServiceReconnected?: () => void
 }
 
 // SettingsErrorNotice renders a calm inline error with folded technical details and a copy action.
@@ -36,6 +40,7 @@ export function SettingsErrorNotice(props: SettingsErrorNoticeProps) {
   // copied 在原始错误写入剪贴板后显示简短确认。
   const [copied, setCopied] = React.useState<"idle" | "copied" | "failed">("idle")
   const detail = props.detail?.trim()
+  useServiceReconnected(() => props.onServiceReconnected?.())
   return (
     <div className={cx("settings-error-notice", props.className)} role="alert">
       <CircleAlert aria-hidden="true" className="settings-error-notice-icon" size={16} />
