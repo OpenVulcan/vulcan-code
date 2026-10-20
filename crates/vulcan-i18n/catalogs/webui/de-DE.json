@@ -649,8 +649,6 @@
   "status.plugins.open": "Pluginverwaltung öffnen",
   "status.memory": "Gedächtnis · {state}",
   "status.memory.open": "Gedächtnis öffnen",
-  "status.cycleText": "Textgröße: {value}. Klicken für die nächste Größe",
-  "status.cycleTheme": "Design: {value}. Klicken für das nächste Design",
   "sidebar.user.local": "Lokaler Nutzer",
   "activityRail.label": "App-Navigation",
   "activityRail.more": "Mehr",

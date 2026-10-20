@@ -439,6 +439,12 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-collab-who:focus-visible { outline-offset: 2px; }
 .vk-collab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vk-collab-badge { display: inline-flex; flex: none; align-items: center; height: 1.38rem; padding: 0 calc(var(--vk-u) * 1.5); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); color: var(--vk-ink-2); font-size: var(--vk-fs-xs); white-space: nowrap; }
+/* The whole head is the toggle's hit area, painted underneath: the icon, heading and badge sit above its hover
+ * fill and let presses fall through to it, while the participant button stays pressable on its own.
+ * 整个标题行都是切换按钮的点击区域并绘制在下层：图标、标题与徽标位于其悬停底色之上，并把按下穿透给它；
+ * 参与者按钮仍可单独按下。 */
+.vk-collab-head > :not(.vk-collab-toggle) { position: relative; z-index: 1; pointer-events: none; }
+.vk-collab-head .vk-collab-who { pointer-events: auto; }
 .vk-collab-toggle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; width: 100%; padding: 0 calc(var(--vk-u) * 1.5); border: 0; background: none; color: var(--vk-ink-3); cursor: pointer; }
 .vk-collab-toggle:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-collab-toggle:focus-visible { outline-offset: -2px; color: var(--vk-ink); }

@@ -649,8 +649,6 @@
   "status.plugins.open": "Open plugin management",
   "status.memory": "Memory · {state}",
   "status.memory.open": "Open memory",
-  "status.cycleText": "Text size: {value}. Click for the next size",
-  "status.cycleTheme": "Theme: {value}. Click for the next theme",
   "sidebar.user.local": "Local user",
   "activityRail.label": "App navigation",
   "activityRail.more": "More",

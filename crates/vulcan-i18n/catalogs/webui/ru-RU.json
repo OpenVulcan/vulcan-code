@@ -649,8 +649,6 @@
   "status.plugins.open": "Открыть управление плагинами",
   "status.memory": "Память · {state}",
   "status.memory.open": "Открыть память",
-  "status.cycleText": "Размер текста: {value}. Нажмите для следующего",
-  "status.cycleTheme": "Тема: {value}. Нажмите для следующей",
   "sidebar.user.local": "Локальный пользователь",
   "activityRail.label": "Навигация приложения",
   "activityRail.more": "Ещё",

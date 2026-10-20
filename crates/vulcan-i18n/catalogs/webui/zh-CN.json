@@ -649,8 +649,6 @@
   "status.plugins.open": "打开插件管理",
   "status.memory": "记忆 · {state}",
   "status.memory.open": "打开记忆",
-  "status.cycleText": "字号：{value}。点击切换到下一档",
-  "status.cycleTheme": "主题：{value}。点击切换到下一个",
   "sidebar.user.local": "本地用户",
   "activityRail.label": "应用导航",
   "activityRail.more": "更多",

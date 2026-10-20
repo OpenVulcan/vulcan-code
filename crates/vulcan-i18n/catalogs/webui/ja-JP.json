@@ -649,8 +649,6 @@
   "status.plugins.open": "プラグイン管理を開く",
   "status.memory": "メモリ · {state}",
   "status.memory.open": "メモリを開く",
-  "status.cycleText": "文字サイズ：{value}。クリックで次のサイズへ",
-  "status.cycleTheme": "テーマ：{value}。クリックで次のテーマへ",
   "sidebar.user.local": "ローカルユーザー",
   "activityRail.label": "アプリナビゲーション",
   "activityRail.more": "その他",

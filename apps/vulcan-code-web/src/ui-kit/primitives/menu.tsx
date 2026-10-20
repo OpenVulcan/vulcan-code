@@ -42,14 +42,56 @@ export function useRootMenu(): RootMenuContextValue {
   return context;
 }
 
-// SurfaceContextValue lets items close sibling submenus of the surface they belong to.
-// SurfaceContextValue 让菜单项关闭其所属表面中的兄弟子菜单。
+// SUBMENU_SWITCH_DELAY_MS is how long the pointer may cross other rows on its way into the open submenu before
+// that submenu closes or gives way to another one.
+// SUBMENU_SWITCH_DELAY_MS 是指针移向已打开子菜单途中可经过其他行的时长，超时后该子菜单关闭或让位给另一个子菜单。
+const SUBMENU_SWITCH_DELAY_MS = 160;
+
+// SurfaceContextValue is the single open-submenu slot of one surface; a surface shows at most one submenu.
+// SurfaceContextValue 是单个表面唯一的打开子菜单位置；一个表面最多显示一个子菜单。
 interface SurfaceContextValue {
   activeSub: string | null;
+  // Switches the open submenu at once and drops any pending switch.
+  // 立即切换打开的子菜单，并丢弃待执行的切换。
   setActiveSub: (id: string | null) => void;
+  // Switches the open submenu once the pointer has lingered elsewhere, so a diagonal move keeps it open.
+  // 指针在别处停留后才切换打开的子菜单，使斜向移动时保持其打开。
+  deferSub: (id: string | null) => void;
+  // Drops a pending switch because the pointer reached the open submenu or its trigger.
+  // 指针到达已打开的子菜单或其触发行时，丢弃待执行的切换。
+  keepSub: () => void;
 }
 
-const SurfaceContext = React.createContext<SurfaceContextValue>({ activeSub: null, setActiveSub: () => {} });
+const SurfaceContext = React.createContext<SurfaceContextValue>({ activeSub: null, setActiveSub: () => {}, deferSub: () => {}, keepSub: () => {} });
+
+// useSurfaceState owns one surface's open submenu and its pending pointer switch.
+// useSurfaceState 持有单个表面的打开子菜单及其待执行的指针切换。
+function useSurfaceState(): SurfaceContextValue {
+  const [activeSub, setActive] = React.useState<string | null>(null);
+  const timer = React.useRef<number | null>(null);
+  const pending = React.useRef<string | null | undefined>(undefined);
+  const keepSub = React.useCallback(() => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = null;
+    pending.current = undefined;
+  }, []);
+  const setActiveSub = React.useCallback((id: string | null) => {
+    keepSub();
+    setActive(id);
+  }, [keepSub]);
+  const deferSub = React.useCallback((id: string | null) => {
+    if (timer.current !== null && pending.current === id) return;
+    keepSub();
+    pending.current = id;
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      pending.current = undefined;
+      setActive(id);
+    }, SUBMENU_SWITCH_DELAY_MS);
+  }, [keepSub]);
+  React.useEffect(() => keepSub, [keepSub]);
+  return React.useMemo(() => ({ activeSub, setActiveSub, deferSub, keepSub }), [activeSub, setActiveSub, deferSub, keepSub]);
+}
 
 // MenuRoot provides the open state of a menu chain.
 // MenuRoot 提供菜单链的打开状态。
@@ -221,13 +263,13 @@ export function MenuContent({
   const menu = useRootMenu();
   const element = React.useRef<HTMLDivElement | null>(null);
   const composed = useComposedRefs(element, ref, menu.rootContentRef as React.Ref<HTMLDivElement>);
-  const [activeSub, setActiveSub] = React.useState<string | null>(null);
-  const surface = React.useMemo(() => ({ activeSub, setActiveSub }), [activeSub]);
+  const surface = useSurfaceState();
+  const { setActiveSub } = surface;
   const interactedOutside = React.useRef(false);
   const keyboard = useMenuKeyboard(element, loop);
   React.useEffect(() => {
     if (!menu.open) setActiveSub(null);
-  }, [menu.open]);
+  }, [menu.open, setActiveSub]);
   return (
     <SurfaceContext.Provider value={surface}>
       <FloatingContent
@@ -302,7 +344,7 @@ function useItemBehavior(props: {
   return {
     onPointerMove: (event: React.PointerEvent<HTMLElement>) => {
       if (event.pointerType === "touch" || props.disabled) return;
-      if (surface.activeSub) surface.setActiveSub(null);
+      if (surface.activeSub) surface.deferSub(null);
       if (document.activeElement !== event.currentTarget) focusElement(event.currentTarget);
     },
     onPointerLeave: (event: React.PointerEvent<HTMLElement>) => {
@@ -540,22 +582,19 @@ function useSubMenu(): SubMenuContextValue {
   return context;
 }
 
-// MenuSub holds a submenu's open state; the parent surface keeps at most one submenu open.
-// MenuSub 保存子菜单的打开状态；父表面最多保持一个子菜单打开。
-export function MenuSub({ open: controlled, defaultOpen = false, onOpenChange, children }: {
+// MenuSub is one submenu; it is open exactly while it holds its parent surface's single submenu slot, so
+// hovering another row can never leave two submenus showing.
+// MenuSub 是一个子菜单；仅当它占据父表面唯一的子菜单位置时才打开，因此悬停其他行不会留下两个同时显示的子菜单。
+export function MenuSub({ open: controlled, onOpenChange, children }: {
   open?: boolean;
-  defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
   children?: React.ReactNode;
 }) {
   const surface = React.useContext(SurfaceContext);
   const id = useStableId("vk-submenu");
-  const [ownOpen, setOwnOpen] = useControllableState(controlled, defaultOpen, onOpenChange);
   const triggerRef = React.useRef<HTMLElement | null>(null);
   const focusFirst = React.useRef(false);
-  // A submenu is open when it says so and no sibling took over the surface.
-  // 子菜单在自身声明打开且没有兄弟子菜单接管表面时才处于打开状态。
-  const open = ownOpen && (surface.activeSub === null || surface.activeSub === id);
+  const open = controlled ?? surface.activeSub === id;
   const context = React.useMemo<SubMenuContextValue>(() => ({
     id,
     open,
@@ -564,9 +603,9 @@ export function MenuSub({ open: controlled, defaultOpen = false, onOpenChange, c
     setOpen: (next) => {
       if (next) surface.setActiveSub(id);
       else if (surface.activeSub === id) surface.setActiveSub(null);
-      setOwnOpen(next);
+      onOpenChange?.(next);
     },
-  }), [id, open, surface, setOwnOpen]);
+  }), [id, open, surface, onOpenChange]);
   return <SubMenuContext.Provider value={context}>{children}</SubMenuContext.Provider>;
 }
 
@@ -575,6 +614,7 @@ export function MenuSub({ open: controlled, defaultOpen = false, onOpenChange, c
 export function MenuSubTrigger({ className, inset, disabled, children, ref, onPointerMove, onKeyDown, onClick, onFocus, onBlur, ...props }: React.ComponentProps<"div"> & { inset?: boolean; disabled?: boolean }) {
   const menu = useRootMenu();
   const sub = useSubMenu();
+  const surface = React.useContext(SurfaceContext);
   const composed = useComposedRefs(sub.triggerRef as React.Ref<HTMLDivElement>, ref);
   return (
     <div
@@ -592,7 +632,9 @@ export function MenuSubTrigger({ className, inset, disabled, children, ref, onPo
       onPointerMove={composeHandlers(onPointerMove, (event) => {
         if (event.pointerType === "touch" || disabled) return;
         if (document.activeElement !== event.currentTarget) focusElement(event.currentTarget);
-        if (!sub.open) sub.setOpen(true);
+        if (sub.open) surface.keepSub();
+        else if (surface.activeSub === null) sub.setOpen(true);
+        else surface.deferSub(sub.id);
       })}
       onFocus={composeHandlers(onFocus, (event) => event.currentTarget.setAttribute("data-highlighted", ""))}
       onBlur={composeHandlers(onBlur, (event) => event.currentTarget.removeAttribute("data-highlighted"))}
@@ -626,17 +668,22 @@ export function MenuSubContent({
   loop = false,
   forceMount: _forceMount,
   onKeyDown,
+  onPointerMove,
   ref,
   ...props
 }: Omit<MenuContentProps, "side" | "align" | "width">) {
   const menu = useRootMenu();
   const sub = useSubMenu();
+  const parentSurface = React.useContext(SurfaceContext);
   const element = React.useRef<HTMLDivElement | null>(null);
   const composed = useComposedRefs(element, ref);
-  const [activeSub, setActiveSub] = React.useState<string | null>(null);
-  const surface = React.useMemo(() => ({ activeSub, setActiveSub }), [activeSub]);
+  const surface = useSurfaceState();
+  const { setActiveSub } = surface;
   const keyboard = useMenuKeyboard(element, loop);
   const open = menu.open && sub.open;
+  React.useEffect(() => {
+    if (!open) setActiveSub(null);
+  }, [open, setActiveSub]);
   return (
     <SurfaceContext.Provider value={surface}>
       <FloatingContent
@@ -686,6 +733,9 @@ export function MenuSubContent({
         aria-orientation="vertical"
         data-slot={`${menu.slot}-sub-content`}
         className={cx("vk-pop vk-menu", className)}
+        // Reaching the submenu settles the pointer: rows crossed on the way no longer switch it away.
+        // 指针到达子菜单即视为停稳：途中经过的行不再将其切走。
+        onPointerMove={composeHandlers(onPointerMove, parentSurface.keepSub)}
         onKeyDown={composeHandlers(onKeyDown, (event) => {
           if (event.key === "ArrowLeft") {
             event.preventDefault();

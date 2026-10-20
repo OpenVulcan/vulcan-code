@@ -116,18 +116,29 @@ export function ContextUsageOrb(props: {
   // Both click and delayed hover control the same interactive statistics popover.
   // 点击和延迟悬停控制同一个可交互统计浮层。
   const [statisticsOpen, setStatisticsOpen] = React.useState(false);
-  // Pending hover opens are cancelled when the pointer leaves or the component unmounts.
-  // 指针离开或组件卸载时取消待执行的悬停打开。
+  // hoverTimer holds the pending hover open or hover close; pointer moves and unmounting cancel it.
+  // hoverTimer 保存待执行的悬停打开或悬停关闭；指针移动与组件卸载会取消它。
   const hoverTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Hover must not steal keyboard focus from the conversation composer.
-  // 悬停不得抢走会话输入区的键盘焦点。
+  // openedByHover marks a peek: it must not steal composer focus and it closes once the pointer leaves the
+  // trigger and the card. Pressing inside the card turns the peek into a pinned popover.
+  // openedByHover 标记悬停预览：不得抢走输入区焦点，且指针离开触发器与卡片后关闭。在卡片内按下会将预览固定。
   const openedByHover = React.useRef(false);
-  // Cancels a scheduled hover open; no input or return value is needed.
-  // 取消已安排的悬停打开；无需输入或返回值。
+  // Cancels a scheduled hover open or close; no input or return value is needed.
+  // 取消已安排的悬停打开或关闭；无需输入或返回值。
   const cancelHoverOpen = React.useCallback(() => {
     if (hoverTimer.current !== null) clearTimeout(hoverTimer.current);
     hoverTimer.current = null;
   }, []);
+  // Schedules closing a hover peek after the pointer has left both the trigger and the card.
+  // 指针离开触发器与卡片后，安排关闭悬停预览。
+  const scheduleHoverClose = React.useCallback(() => {
+    cancelHoverOpen();
+    if (!openedByHover.current) return;
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null;
+      if (openedByHover.current) setStatisticsOpen(false);
+    }, 220);
+  }, [cancelHoverOpen]);
   React.useEffect(() => cancelHoverOpen, [cancelHoverOpen]);
   if (!props.snapshot) {
     return null;
@@ -184,15 +195,19 @@ export function ContextUsageOrb(props: {
           data-locked={selectedNode ? "true" : undefined}
           type="button"
           onPointerEnter={(event) => {
-            if (event.pointerType !== "mouse" || statisticsOpen) return;
+            if (event.pointerType !== "mouse") return;
             cancelHoverOpen();
+            if (statisticsOpen) return;
             hoverTimer.current = setTimeout(() => {
               hoverTimer.current = null;
               openedByHover.current = true;
               setStatisticsOpen(true);
             }, 500);
           }}
-          onPointerLeave={cancelHoverOpen}
+          onPointerLeave={(event) => {
+            if (event.pointerType === "mouse" && statisticsOpen) scheduleHoverClose();
+            else cancelHoverOpen();
+          }}
           onPointerDown={() => { cancelHoverOpen(); openedByHover.current = false; }}
         >
           <span
@@ -218,6 +233,9 @@ export function ContextUsageOrb(props: {
         ref={contentRef}
         onOpenAutoFocus={(event) => { event.preventDefault(); if (!openedByHover.current) contentRef.current?.focus(); }}
         onCloseAutoFocus={(event) => { if (openedByHover.current) event.preventDefault(); openedByHover.current = false; }}
+        onPointerEnter={cancelHoverOpen}
+        onPointerLeave={(event) => { if (event.pointerType === "mouse") scheduleHoverClose(); }}
+        onPointerDown={() => { cancelHoverOpen(); openedByHover.current = false; }}
         side="top"
         sideOffset={8}
       >

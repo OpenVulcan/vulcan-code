@@ -649,8 +649,6 @@
   "status.plugins.open": "플러그인 관리 열기",
   "status.memory": "메모리 · {state}",
   "status.memory.open": "메모리 열기",
-  "status.cycleText": "글자 크기: {value}. 클릭하면 다음 크기로 바뀝니다",
-  "status.cycleTheme": "테마: {value}. 클릭하면 다음 테마로 바뀝니다",
   "sidebar.user.local": "로컬 사용자",
   "activityRail.label": "앱 탐색",
   "activityRail.more": "더 보기",

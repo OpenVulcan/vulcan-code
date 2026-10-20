@@ -649,8 +649,6 @@
   "status.plugins.open": "Abrir la gestión de complementos",
   "status.memory": "Memoria · {state}",
   "status.memory.open": "Abrir memoria",
-  "status.cycleText": "Tamaño del texto: {value}. Haz clic para el siguiente",
-  "status.cycleTheme": "Tema: {value}. Haz clic para el siguiente",
   "sidebar.user.local": "Usuario local",
   "activityRail.label": "Navegación de la aplicación",
   "activityRail.more": "Más",

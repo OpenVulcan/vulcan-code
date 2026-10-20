@@ -649,8 +649,6 @@
   "status.plugins.open": "開啟外掛管理",
   "status.memory": "記憶 · {state}",
   "status.memory.open": "開啟記憶",
-  "status.cycleText": "字級：{value}。按一下切換到下一檔",
-  "status.cycleTheme": "主題：{value}。按一下切換到下一個",
   "sidebar.user.local": "本機用戶",
   "activityRail.label": "應用導覽",
   "activityRail.more": "更多",

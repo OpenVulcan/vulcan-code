@@ -3,7 +3,15 @@ import React, { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./dropdown-menu"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "./dropdown-menu"
 
 // container and root own one real mounted menu tree per test.
 // container 与 root 为每项测试持有一个真实挂载的菜单树。
@@ -74,5 +82,51 @@ describe("shared dropdown menu focus restoration", () => {
     })
     await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull())
     expect(document.activeElement).toBe(outside)
+  })
+})
+
+describe("shared dropdown submenus", () => {
+  // openSubmenus lists the labels of the submenu surfaces currently shown.
+  // openSubmenus 列出当前显示的子菜单表面的标签。
+  const openSubmenus = () => Array.from(document.querySelectorAll('[data-slot="dropdown-menu-sub-content"]')).map((node) => node.textContent)
+  // hover moves the pointer over one row the way a mouse does.
+  // hover 以鼠标的方式将指针移到一行上。
+  const hover = async (label: string) => {
+    const row = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((node) => node.textContent === label)!
+    await act(async () => { row.dispatchEvent(new MouseEvent("pointermove", { bubbles: true })) })
+  }
+
+  // Hovering several submenu rows and then a plain row never leaves more than one submenu showing.
+  // 依次悬停多个子菜单行再悬停普通行，始终不会同时显示多个子菜单。
+  it("keeps at most one submenu open while the pointer moves between rows", async () => {
+    vi.useFakeTimers()
+    try {
+      await act(async () => root.render(
+        <DropdownMenu open>
+          <DropdownMenuTrigger>App</DropdownMenuTrigger>
+          <DropdownMenuContent>
+            {["Theme", "Text", "Width"].map((name) => (
+              <DropdownMenuSub key={name}>
+                <DropdownMenuSubTrigger>{name}</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent><DropdownMenuItem>{name} choice</DropdownMenuItem></DropdownMenuSubContent>
+              </DropdownMenuSub>
+            ))}
+            <DropdownMenuItem>Reduce motion</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>,
+      ))
+      await hover("Theme")
+      expect(openSubmenus()).toEqual(["Theme choice"])
+      for (const name of ["Text", "Width"]) {
+        await hover(name)
+        await act(async () => { vi.advanceTimersByTime(400) })
+        expect(openSubmenus()).toEqual([`${name} choice`])
+      }
+      await hover("Reduce motion")
+      await act(async () => { vi.advanceTimersByTime(400) })
+      expect(openSubmenus()).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
