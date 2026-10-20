@@ -382,7 +382,7 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
                     <div className="vmm-linked-project-list">
                       {(catalog?.projects ?? []).filter((item) => item.projectId !== ownerId && `${item.name} ${item.tag}`.toLocaleLowerCase().includes(linkedSearch.trim().toLocaleLowerCase())).map((item) => (
                         <label className="vk-check-label vk-mem-check" key={item.projectId}>
-                          <input disabled={effectiveBusy} checked={(linkedDrafts[project.projectId] ?? []).includes(item.projectId)} onChange={() => toggleLinkedProject(project.projectId, item.projectId)} type="checkbox" />
+                          <input disabled={effectiveBusy} checked={(linkedDrafts[project.projectId] ?? []).includes(item.projectId)} onChange={() => toggleLinkedProject(project.projectId, item.projectId)} className="vk-check" type="checkbox" />
                           <span className="vk-form-cell"><span className="vk-truncate vk-mem-line" title={item.name}>{item.name}</span><span className="vk-form-note">{item.tag}</span></span>
                         </label>
                       ))}

@@ -349,7 +349,7 @@ function NativeSessionList({ busy, snapshot, onRunAction, onCheckUpdates = check
       {!loading && catalog?.projects.length === 0 ? <p>{t("memory.nativeRecords.noProjects")}</p> : null}
       {page && query ? <>
         <div className="vk-form-inline vk-form-sm">
-          <label className="vk-check-label"><input type="checkbox" disabled={occupied || page.sessions.length === 0} checked={page.sessions.length > 0 && selectedIds.length === page.sessions.length} onChange={(event) => setSelectedIds(event.target.checked ? page.sessions.map((session) => session.sessionSourceId) : [])} />{t("memory.sessionList.selectPage")}</label>
+          <label className="vk-check-label"><input className="vk-check" type="checkbox" disabled={occupied || page.sessions.length === 0} checked={page.sessions.length > 0 && selectedIds.length === page.sessions.length} onChange={(event) => setSelectedIds(event.target.checked ? page.sessions.map((session) => session.sessionSourceId) : [])} />{t("memory.sessionList.selectPage")}</label>
           <span>{t("memory.sessionList.selected").replace("{count}", String(selectedIds.length))}</span>
           {selectedSessions.length > 0 ? <VmmNativeSessionArchive key={JSON.stringify([page.projectId, selectedIds])} projectId={page.projectId} sessions={selectedSessions} busy={occupied} onBusyChange={setMutating} onRunAction={onRunAction} onRefresh={() => load({ ...query, offset: 0, expectedStorageVersion: null })} /> : null}
           {removalEligible ? <VmmNativeRemoval projectId={page.projectId} selection={{ kind: "sessions", ids: selectedIds }} sessionNames={new Map(selectedSessions.map((session) => [session.sessionSourceId, session.displayTitle ?? session.sessionSourceId]))} busy={occupied} onBusyChange={setMutating} onRunAction={onRunAction} onRefresh={() => load({ ...query, offset: 0, expectedStorageVersion: null })} /> : null}
@@ -357,7 +357,7 @@ function NativeSessionList({ busy, snapshot, onRunAction, onCheckUpdates = check
         </div>
         <div className="vk-mem-rows">
           {page.sessions.map((session) => <div key={session.sessionSourceId} className={`vmm-session-row vk-mem-session ${selection?.sessionSourceId === session.sessionSourceId ? "selected" : ""}`}>
-            <input className="vk-mem-native-check" type="checkbox" aria-label={`${t("memory.sessionList.select")} ${session.displayTitle ?? session.sessionSourceId}`} disabled={occupied} checked={selectedIds.includes(session.sessionSourceId)} onChange={(event) => setSelectedIds((ids) => event.target.checked ? [...ids, session.sessionSourceId] : ids.filter((id) => id !== session.sessionSourceId))} />
+            <input className="vk-check vk-mem-native-check" type="checkbox" aria-label={`${t("memory.sessionList.select")} ${session.displayTitle ?? session.sessionSourceId}`} disabled={occupied} checked={selectedIds.includes(session.sessionSourceId)} onChange={(event) => setSelectedIds((ids) => event.target.checked ? [...ids, session.sessionSourceId] : ids.filter((id) => id !== session.sessionSourceId))} />
             <div className="vk-form-fill vk-form-tight">
               <div className="vk-form-bar">
               <Button className="vk-mem-title-link" variant="link" disabled={occupied} onClick={() => onOpen({ projectId: page.projectId, sessionSourceId: session.sessionSourceId })}>{session.displayTitle ?? session.sessionSourceId}</Button>
