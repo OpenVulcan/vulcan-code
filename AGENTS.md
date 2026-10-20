@@ -55,6 +55,7 @@
 | 修改回答模式、`ui-*` 回答组件语法或其 WebUI/TUI 渲染 | 组件语法唯一权威是 `agent-prompts/answer-mode-interactive.md`；WebUI 与 TUI 渲染器必须同步且只渲染已闭合围栏；回答模式是新会话物化时复制的快照，修改全局默认不影响已有会话 | [`answer-mode-and-components.md`](docs/contracts/answer-mode-and-components.md) |
 | 修改专职会话（专职助手）的元数据、记忆锁定、请求组成、冻结设置或其界面 | 只能在新建时选择，与普通会话互不转换；基础提示词创建后永不修改；锁定期间已结束的回合不进入 Provider 请求但照常显示；锁定/解锁只在回合之间；冻结设置在首个 `ApiStarted` 之后一律拒绝修改；不使用子代理、上下文压缩与 VMM 记忆 | [`dedicated-sessions.md`](docs/contracts/dedicated-sessions.md) |
 | 修改知识库内容、历史、索引、套件、四工具、授权或其界面 | 人工只管理生命周期，AI 工具管理文档及目录内容；写入为 `Ungoverned` 且计划模式禁用；历史永久保留，还原只由人工确认并追加新变更；模式归库，付费查询不随刷新自动重放；旧库、套件及旧选择字段明确拒绝 | [`knowledge-base.md`](docs/contracts/knowledge-base.md) |
+| 修改 Markdown 记忆模式、记忆模式切换、三工具、注入快照或其界面 | 记忆只存用户目录，绝不写项目目录；读取绝不改写文件，修改已有节点必须带 `expectedRevision` 且整批原子写入；快照走锁定基线，只在新会话与压缩后刷新；非 `vmm` 模式只在内存中视 VMM 为关闭，不改写 VMM 配置或任一后端数据；`memory_write` 在子代理与计划模式不可用；查询不依赖 codekit | [`markdown-memory.md`](docs/contracts/markdown-memory.md) |
 | 修改代码导航、代码检索或其工具暴露链 | 代码导航使用 CodeKit 与实时工作树；不得新增主机预建整库代码索引或内置代码向量检索；语义代码检索通过外部 MCP 接入，概念说明由知识库笔记承担 | [`code-navigation.md`](docs/contracts/code-navigation.md) |
 | 修改界面文案、语言清单或语言匹配规则 | 唯一权威是 `crates/vulcan-i18n/catalogs/`；任何界面不得另建语言列表、匹配规则或文案表副本；默认语言补全一切，非默认语言不得有额外键，占位符必须一致 | [`shared-language-catalogs.md`](docs/contracts/shared-language-catalogs.md) |
 | 修改终端客户端 TUI（`apps/vulcan-code-tui`） | 先读该目录的 `AGENTS.md`；服务调用一对一镜像 WebUI 函数、方法与参数；服务发现令牌不得出现在日志、错误、`Debug` 或命令输出中；验证只用模拟后端或本地合成服务，不对真实服务执行有副作用或付费的操作 | [`tui-design.md`](docs/contracts/tui-design.md)、[`tui-service-adaptation.md`](docs/contracts/tui-service-adaptation.md) |
