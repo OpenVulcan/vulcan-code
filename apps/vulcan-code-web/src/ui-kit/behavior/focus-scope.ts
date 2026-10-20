@@ -36,11 +36,21 @@ export function useFocusScope(
 ): void {
   const latest = React.useRef(options);
   latest.current = options;
+  // opening records the element focused when the scope opens. It is read while rendering the opening update,
+  // because a child's autoFocus takes focus during commit, before any effect could see the opener.
+  // opening 记录范围打开时持有焦点的元素。它在渲染打开更新时读取，因为子元素的 autoFocus 会在提交阶段、
+  // 任何副作用运行之前夺走焦点。
+  const [opening, setOpening] = React.useState<{ active: boolean; opener: HTMLElement | null }>({ active: false, opener: null });
+  if (opening.active !== active) {
+    setOpening({ active, opener: active && document.activeElement instanceof HTMLElement ? document.activeElement : null });
+  }
+  const opener = opening.opener;
   React.useEffect(() => {
     if (!active) return;
     const element = scope.current;
     if (!element) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previous = opener && !element.contains(opener) ? opener : focused && !element.contains(focused) ? focused : null;
     // A child may already have taken focus (autoFocus on an input); keep it.
     // 子元素可能已经取得焦点（输入框的 autoFocus）；保留它。
     if (!element.contains(document.activeElement)) {
@@ -81,5 +91,5 @@ export function useFocusScope(
       const target = latest.current.returnFocus?.() ?? previous;
       if (lost && target?.isConnected) focusElement(target);
     };
-  }, [active, scope]);
+  }, [active, scope, opener]);
 }
