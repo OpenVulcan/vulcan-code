@@ -770,6 +770,7 @@
   "status.label": "状态栏",
   "status.kernel.ready": "内核已连接",
   "status.kernel.starting": "内核启动中",
+  "status.kernel.reconnecting": "内核重连中",
   "status.kernel.open": "打开运行诊断",
   "status.terminal": "终端",
   "status.plugins": "插件 {loaded}/{total}",

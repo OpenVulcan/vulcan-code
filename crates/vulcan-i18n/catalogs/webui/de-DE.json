@@ -770,6 +770,7 @@
   "status.label": "Statusleiste",
   "status.kernel.ready": "Kern verbunden",
   "status.kernel.starting": "Kern startet",
+  "status.kernel.reconnecting": "Kern verbindet neu",
   "status.kernel.open": "Laufzeitdiagnose öffnen",
   "status.terminal": "Terminal",
   "status.plugins": "Plugins {loaded}/{total}",

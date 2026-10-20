@@ -770,6 +770,7 @@
   "status.label": "상태 표시줄",
   "status.kernel.ready": "코어 연결됨",
   "status.kernel.starting": "코어 시작 중",
+  "status.kernel.reconnecting": "코어 재연결 중",
   "status.kernel.open": "실행 진단 열기",
   "status.terminal": "터미널",
   "status.plugins": "플러그인 {loaded}/{total}",

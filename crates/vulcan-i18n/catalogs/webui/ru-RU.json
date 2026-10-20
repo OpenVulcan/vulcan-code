@@ -770,6 +770,7 @@
   "status.label": "Строка состояния",
   "status.kernel.ready": "Ядро подключено",
   "status.kernel.starting": "Ядро запускается",
+  "status.kernel.reconnecting": "Переподключение к ядру",
   "status.kernel.open": "Открыть диагностику выполнения",
   "status.terminal": "Терминал",
   "status.plugins": "Плагины {loaded}/{total}",

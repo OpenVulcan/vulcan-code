@@ -770,6 +770,7 @@
   "status.label": "Barra de status",
   "status.kernel.ready": "Núcleo conectado",
   "status.kernel.starting": "Iniciando o núcleo",
+  "status.kernel.reconnecting": "Reconectando ao núcleo",
   "status.kernel.open": "Abrir diagnóstico de execução",
   "status.terminal": "Terminal",
   "status.plugins": "Plugins {loaded}/{total}",

@@ -770,6 +770,7 @@
   "status.label": "ステータスバー",
   "status.kernel.ready": "コアに接続済み",
   "status.kernel.starting": "コアを起動中",
+  "status.kernel.reconnecting": "コアに再接続中",
   "status.kernel.open": "実行診断を開く",
   "status.terminal": "ターミナル",
   "status.plugins": "プラグイン {loaded}/{total}",

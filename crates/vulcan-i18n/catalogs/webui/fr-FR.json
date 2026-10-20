@@ -770,6 +770,7 @@
   "status.label": "Barre d’état",
   "status.kernel.ready": "Noyau connecté",
   "status.kernel.starting": "Démarrage du noyau",
+  "status.kernel.reconnecting": "Reconnexion au noyau",
   "status.kernel.open": "Ouvrir le diagnostic d’exécution",
   "status.terminal": "Terminal",
   "status.plugins": "Extensions {loaded}/{total}",

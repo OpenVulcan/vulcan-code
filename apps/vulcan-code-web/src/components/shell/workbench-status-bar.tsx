@@ -4,6 +4,7 @@ import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { PluginSummary, StartupSnapshot, VmmMemorySnapshot } from "@/types";
 import { RepositoryLink } from "./app-chrome";
 import { StatusPeek, StatusPeekFacts, type StatusPeekTone } from "./status-peek";
+import { useServiceConnectionStatus } from "./use-service-connection-status";
 
 // StatusTone is the tone a status item takes; undefined keeps the neutral bar color.
 // StatusTone 是状态项的色调；undefined 保持状态栏的中性颜色。
@@ -101,8 +102,14 @@ export function WorkbenchStatusBar(props: {
   const { t, locale } = useI18n();
 
   const preview = props.startup.phase === "browser-preview";
-  const kernelTone: StatusTone = preview ? "warn" : props.startup.ready ? "ok" : "ember";
-  const kernelLabel = preview ? t("global.preview") : props.startup.ready ? t("status.kernel.ready") : t("status.kernel.starting");
+  // A ready kernel whose connection dropped must not keep reading as connected while the app reconnects.
+  // 已就绪内核的连接中断后，在应用重连期间不能继续显示为已连接。
+  const connection = useServiceConnectionStatus();
+  const connectionLost = !preview && (connection === "disconnected" || connection === "reconnecting");
+  const kernelTone: StatusTone = preview ? "warn" : connectionLost ? "bad" : props.startup.ready ? "ok" : "ember";
+  const kernelLabel = preview
+    ? t("global.preview")
+    : connectionLost ? t("status.kernel.reconnecting") : props.startup.ready ? t("status.kernel.ready") : t("status.kernel.starting");
 
   // Plugins count as loaded when the user enabled them and the runtime has them available.
   // 插件在用户已启用且运行时可用时计为已载入。

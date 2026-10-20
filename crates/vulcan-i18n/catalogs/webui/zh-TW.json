@@ -770,6 +770,7 @@
   "status.label": "狀態列",
   "status.kernel.ready": "核心已連線",
   "status.kernel.starting": "核心啟動中",
+  "status.kernel.reconnecting": "核心重新連線中",
   "status.kernel.open": "開啟執行診斷",
   "status.terminal": "終端機",
   "status.plugins": "外掛 {loaded}/{total}",
