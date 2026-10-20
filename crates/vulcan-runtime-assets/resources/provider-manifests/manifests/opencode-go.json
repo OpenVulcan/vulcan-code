@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 8,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 9,
+  "published_at": "2026-10-20T16:35:59Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -11,7 +11,9 @@
       "openai-responses.v1",
       "anthropic-messages-video.v1"
     ],
-    "required_execution_primitives": [],
+    "required_execution_primitives": [
+      "deepseek_chat_reasoning_content_v1"
+    ],
     "required_upload_primitives": [],
     "required_transformers": [
       "copy_request_field",
@@ -211,7 +213,8 @@
           "request_profile_refs": [],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
-          "verified": true
+          "verified": true,
+          "reasoning_replay_contract": "deepseek_chat_reasoning_content_v1"
         },
         {
           "protocol_profile_id": "anthropic-messages.v1",

@@ -69,6 +69,26 @@ Claude、MiniMax、Qwen 按源码 SDK 绑定走 `/anthropic/v1/messages`。鉴�
 MiniMax 与 Qwen 的 Go Anthropic 基地址；不能将通用公开模型表中的 Chat 路由覆盖到这个套餐配置。
 具有视频输入声明的 Messages 模型使用宿主既有 `anthropic-messages-video.v1` 编码扩展，端点不变。
 
+### Chat 路由推理回放
+
+Chat 路由声明 `reasoning_replay_contract = deepseek_chat_reasoning_content_v1`，供应商
+`engine_contract.required_execution_primitives` 列出同名原语：历史助手回合的推理原样写回
+`reasoning_content`，与同一回合的正文及工具调用放在同一条消息。该声明作用于整条路由，
+因此路由上每个产出推理的模型都按同一契约回放。
+
+2026-10-21 以 API Key 在同一会话中实测带工具调用的回合：
+
+- 声明前，DeepSeek V4 Flash 在工具调用后的下一次请求失败；声明后连续 6 次工具调用正常完成。
+- 声明后 GLM-5.3-Flash、MiMo-V2.6-Flash、Hy3、Kimi K3 均完成工具循环。
+- LongCat 2.5 Preview Free 会产出纯空白推理（两个换行）。宿主按原文回放，不把模型真实产出的
+  空白推理当作丢失；Responses 与 Anthropic 契约仍要求非空白文本。按原文回放后，同一历史上的
+  后续请求正常完成。
+- Step 5 Preview Free 返回 `Model is unavailable`；Space Bunny 返回已弃用并指向
+  `minimax-m3.1-flash-free`。两者都在端点层面拒绝，未进入推理回放。固定源码目录暂不随之调整，
+  理由见上文目录说明。
+
+未验证：路由上其余模型的工具循环；Responses 与 Messages 路由不在本声明范围。
+
 Account 与 API 共用固定源码目录：上游 `opencode-go` 的 31 个未弃用文本输出模型。
 上下文、最大输出、输入模态及明确支持温度的模型逐项从同一快照映射；PDF 对应本仓的 `file` 资源。
 思考档位先按 SDK 协议执行 `Variant.resolve` 的规则，再映射到本仓控制字段；不把只声明在快照中、
