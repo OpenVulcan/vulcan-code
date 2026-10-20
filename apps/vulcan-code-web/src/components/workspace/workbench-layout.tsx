@@ -341,6 +341,9 @@ export function WorkbenchLayout(props: {
   // projectTerminalOpenRequest carries explicit open or toggle commands to the project floating terminal.
   // projectTerminalOpenRequest 向项目浮动终端传递明确的展开或切换命令。
   const [projectTerminalOpenRequest, setProjectTerminalOpenRequest] = React.useState<ProjectTerminalVisibilityRequest | null>(null);
+  // projectTerminalExpanded mirrors whether the active project's floating terminal is expanded.
+  // projectTerminalExpanded 镜像当前项目的浮动终端是否展开。
+  const [projectTerminalExpanded, setProjectTerminalExpanded] = React.useState(false);
   // projectTerminalButtonRef exposes the status-bar terminal item the window minimizes into.
   // projectTerminalButtonRef 暴露终端窗口最小化时收入的状态栏终端项。
   const projectTerminalButtonRef = React.useRef<HTMLButtonElement | null>(null);
@@ -637,6 +640,7 @@ export function WorkbenchLayout(props: {
       plugins={workbenchState.plugins}
       startup={props.startup}
       terminal={activeProject ? {
+        expanded: projectTerminalExpanded,
         projectName: activeProject.name,
         runningCount: projectTerminalRunningCounts[activeProject.id]?.runningCount ?? 0,
       } : null}
@@ -1353,6 +1357,7 @@ export function WorkbenchLayout(props: {
         )}
         <ProjectFloatingTerminalLayer
           minimizeAnchorRef={projectTerminalButtonRef}
+          onExpandedChange={setProjectTerminalExpanded}
           openRequest={projectTerminalOpenRequest}
           project={activeProject}
           projects={workbenchState.projects}

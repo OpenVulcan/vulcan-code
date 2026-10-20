@@ -202,6 +202,9 @@ export interface ProjectFloatingTerminalLayerProps {
   // Live top-bar button used as the macOS-style minimize and restore animation anchor.
   // 用作 macOS 风格最小化与恢复动画锚点的实时顶部栏按钮。
   minimizeAnchorRef: React.RefObject<HTMLButtonElement | null>;
+  // Reports whether the current project's terminal is expanded, so its toggle can announce the state.
+  // 报告当前项目的终端是否展开，使其切换按钮能声明该状态。
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 // ProjectFloatingTerminalLayer renders project-owned terminal controls independently of conversation selection.
@@ -341,6 +344,10 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
   const setError = React.useCallback((action: React.SetStateAction<string | null>) => {
     updateActiveState((current) => ({ ...current, error: resolveStateAction(action, current.error) }));
   }, [updateActiveState]);
+  const onExpandedChange = props.onExpandedChange;
+  React.useEffect(() => {
+    onExpandedChange?.(projectId !== null && expanded);
+  }, [expanded, onExpandedChange, projectId]);
   React.useEffect(() => {
     if (!projectId || props.openRequest?.projectId !== projectId) return;
     const seenNonce = seenRequests.current.get(projectId) ?? 0;

@@ -70,6 +70,9 @@ export function WorkbenchStatusBar(props: {
   // The active project terminal, or null when no project is active.
   // 当前项目终端；没有活动项目时为 null。
   terminal: {
+    // Whether the terminal window is expanded.
+    // 终端窗口是否已展开。
+    expanded: boolean;
     // Name of the project that owns the terminal window.
     // 持有终端窗口的项目名称。
     projectName: string;
@@ -154,6 +157,7 @@ export function WorkbenchStatusBar(props: {
       <div className="vk-status-host" data-fixed="" ref={props.hosts.todolist} />
       {terminal !== null ? (
         <button
+          aria-expanded={terminal.expanded}
           aria-haspopup="dialog"
           aria-label={terminalLabel}
           className="vk-status-item"
