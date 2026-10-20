@@ -174,7 +174,6 @@ describe("foldable multi-repository Git panel", () => {
       additions: 0, deletions: 0, unstagedChangedFiles: 0, unstagedAdditions: 0, unstagedDeletions: 0 } }] });
     expect(host.querySelector("[data-action=fold]")).toBeNull();
     expect(host.querySelector(".vk-stools-manage")).toBeNull();
-    expect(host.querySelector(".vk-stools-head[data-inline]")).not.toBeNull();
     expect(host.querySelector<HTMLButtonElement>("[data-row=changes]")!.disabled).toBe(false);
     expect(host.querySelector<HTMLButtonElement>("[data-row=commit]")!.disabled).toBe(true);
   });

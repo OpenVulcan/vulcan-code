@@ -10,6 +10,7 @@ import {
   ClipboardList,
   CloudUpload,
   FileDiff,
+  FolderGit2,
   GitBranch,
   GitCommitHorizontal,
   LoaderCircle,
@@ -25,6 +26,7 @@ import {
 } from "@/components/conversation/conversation-terminal-model";
 import {
   ConversationSessionBranchMenu,
+  ConversationSessionGitGraphButton,
   conversationSessionBranchDisplayName,
   conversationSessionDefaultNewBranchName,
   type ConversationSessionGitBranchActions,
@@ -36,7 +38,7 @@ import {
   runGitCommitAction,
   type GitCommitActionResponse,
 } from "@/service/conversation-actions-service";
-import { IconButton } from "@/ui-kit/primitives/button";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
 import { Checkbox } from "@/ui-kit/primitives/checkbox";
 import {
   Dialog,
@@ -48,7 +50,7 @@ import {
 import { Input } from "@/ui-kit/primitives/input";
 import { Textarea } from "@/ui-kit/primitives/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
-import { useI18n, type TranslationKey } from "@/i18n";
+import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { CommandSessionSummary, SessionTodolistItemSummary, SessionTodolistSummary, WorkbenchSnapshot } from "@/types";
 
 // Conversation session tool morph animation duration in milliseconds.
@@ -518,9 +520,8 @@ export function ConversationSessionTodolistPanel(props: {
 
   return (
     <aside className="vk-stools" data-morph={morph} aria-label={t("sessionTools.menu")}>
-      {/* Only the repository manager earns its own top row; otherwise the collapse control shares the first title row. */}
-      {/* 仅仓库管理器占用独立顶部行；否则折叠控件与首个标题共用一行。 */}
-      <div className="vk-stools-head" data-inline={showReviewRepositoryManager ? undefined : ""}>
+      <div className="vk-stools-head">
+        <span className="vk-label">{t("sessionTools.title")}</span>
         {showReviewRepositoryManager ? (
           <ConversationSessionReviewMonitoringManager
             repositories={orderedReviewRepositories}
@@ -620,16 +621,15 @@ function ConversationSessionReviewMonitoringManager(props: {
   const [open, setOpen] = React.useState(false);
   return (
     <>
-      <button
+      <IconButton
         aria-label={t("gitCommitDialog.monitoringManager")}
         className="vk-stools-manage"
         onClick={() => setOpen(true)}
+        size="xs"
         title={t("gitCommitDialog.monitoringManager")}
-        type="button"
       >
         <Settings2 size={13} />
-        <span>{t("gitCommitDialog.monitoringManager")}</span>
-      </button>
+      </IconButton>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent size="sm">
           <DialogHeader>
@@ -761,6 +761,10 @@ function ConversationSessionReviewSection(props: {
     </span>
   );
 
+  // A repository reads as one line of identity (name, branch, how far it leads its remote) over what can be
+  // done with it: its changes, then committing or pushing and the commit graph.
+  // 仓库以一行身份信息呈现（名称、分支、领先远端多少），其下是可对它执行的操作：变更，然后是提交或推送与提交图谱。
+  const unpushed = props.reviewSummary?.unpushedCommits ?? 0;
   return (
     <section
       className="vk-stools-sec"
@@ -768,27 +772,39 @@ function ConversationSessionReviewSection(props: {
       data-kind="review"
       data-repository-key={props.repositoryKey}
     >
-      {foldable ? (
-        // The whole title row folds the group so hover and click cover the name, chevron, and delta alike.
-        // 整个标题行负责折叠分组，名称、箭头与增减数共享同一悬停与点击区域。
-        <button
-          aria-expanded={reviewSectionExpanded}
-          className="vk-stools-title"
-          data-action="fold"
-          onClick={() => props.onExpandedChange?.(!reviewSectionExpanded)}
-          title={repositoryTitle}
-          type="button"
-        >
-          <span className="vk-stools-name">{repositoryName}</span>
-          <ChevronRight className="vk-stools-chev" size={13} />
-          {titleStatus}
-        </button>
-      ) : (
-        <div className="vk-stools-title">
-          <span className="vk-stools-name" title={repositoryTitle}>{repositoryName}</span>
-          {titleStatus}
-        </div>
-      )}
+      <div className="vk-stools-title" data-kind="repo">
+        {foldable ? (
+          <button
+            aria-expanded={reviewSectionExpanded}
+            className="vk-stools-fold"
+            data-action="fold"
+            onClick={() => props.onExpandedChange?.(!reviewSectionExpanded)}
+            title={repositoryTitle}
+            type="button"
+          >
+            <ChevronRight className="vk-stools-chev" size={13} />
+            <span className="vk-stools-name">{repositoryName}</span>
+          </button>
+        ) : (
+          <>
+            <FolderGit2 size={13} />
+            <span className="vk-stools-name" title={repositoryTitle}>{repositoryName}</span>
+          </>
+        )}
+        {props.reviewSummary?.branchName ? (
+          <ConversationSessionBranchMenu
+            actions={props.gitBranchActions}
+            branchName={props.reviewSummary.branchName}
+            busy={Boolean(props.loading) || Boolean(props.commitBusyState)}
+            changedFiles={props.reviewSummary.changedFiles}
+            repositoryKey={props.repositoryKey ?? null}
+          />
+        ) : null}
+        {unpushed > 0 ? (
+          <span className="vk-badge" data-tone="info" title={formatMessage(t("sessionTools.ahead"), { count: unpushed })}>↑{unpushed}</span>
+        ) : null}
+        {titleStatus}
+      </div>
       {reviewSectionExpanded && props.error ? <p className="vk-stools-note" data-tone="bad" role="alert">{props.error}</p> : null}
       {reviewSectionExpanded && props.error ? <button className="vk-stools-item" data-row="changes"
         disabled={props.loading} onClick={props.onOpenReviewChanges} type="button">
@@ -806,29 +822,26 @@ function ConversationSessionReviewSection(props: {
           >
             <FileDiff size={14} />
             <span>{t("gitCommitDialog.changes")}</span>
+            <small>{formatMessage(t("sessionTools.files"), { count: props.reviewSummary.changedFiles })}</small>
             {conversationSessionReviewDelta(props.reviewSummary)}
           </button>
-          {props.reviewSummary.branchName ? (
-            <ConversationSessionBranchMenu
-              actions={props.gitBranchActions}
-              branchName={props.reviewSummary.branchName}
-              busy={Boolean(props.loading) || Boolean(props.commitBusyState)}
-              changedFiles={props.reviewSummary.changedFiles}
-              repositoryKey={props.repositoryKey ?? null}
-            />
-          ) : null}
-          <button
-            aria-expanded={props.commitDialogOpen}
-            className="vk-stools-item"
-            data-row="commit"
-            disabled={commitTriggerDisabled}
-            onClick={() => props.onCommitDialogOpenChange(true)}
-            type="button"
-          >
-            <GitCommitHorizontal size={14} />
-            <span>{props.commitBusyState?.label ?? t("gitCommitDialog.open")}</span>
-            {props.commitBusyState ? <LoaderCircle className="vk-spin" size={13} /> : null}
-          </button>
+          <div className="vk-stools-actions">
+            <Button
+              aria-expanded={props.commitDialogOpen}
+              data-row="commit"
+              disabled={commitTriggerDisabled}
+              onClick={() => props.onCommitDialogOpenChange(true)}
+              size="sm"
+              type="button"
+              variant="primary"
+            >
+              {props.commitBusyState ? <LoaderCircle className="vk-spin" /> : <GitCommitHorizontal />}
+              {props.commitBusyState?.label ?? t("gitCommitDialog.open")}
+            </Button>
+            {props.gitBranchActions ? (
+              <ConversationSessionGitGraphButton actions={props.gitBranchActions} repositoryKey={props.repositoryKey ?? null} />
+            ) : null}
+          </div>
         </div>
       ) : null}
     </section>
@@ -1351,6 +1364,15 @@ function ConversationSessionSubagentSection(props: {
         <Bot size={13} />
         <span>{t("conversation.subagent.schedule")}</span>
         <b>{props.tasks.length}</b>
+        <Button
+          className="vk-stools-title-act"
+          onClick={() => void props.onOpenSubagentPanel(props.parentConversationId, (props.tasks.find((task) => task.isRunning) ?? props.tasks[0]).taskId)}
+          size="xs"
+          type="button"
+          variant="ghost"
+        >
+          {t("sessionTools.openPanel")}
+        </Button>
       </div>
       <div className="vk-stools-list">
         {props.tasks.map((task) => (

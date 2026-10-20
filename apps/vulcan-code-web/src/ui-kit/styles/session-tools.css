@@ -108,28 +108,7 @@
   box-shadow: var(--vk-shadow-2);
 }
 .vk-stools-head { display: flex; flex: none; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 1) calc(var(--vk-u) * 2); }
-/* Without a repository manager the collapse control sits in the first section's title row. */
-/* 没有仓库管理器时，折叠控件位于首个分区的标题行。 */
-.vk-stools-head[data-inline] { position: absolute; top: calc(var(--vk-u) * 1.5); right: calc(var(--vk-u) * 1.5); z-index: 1; padding: 0; }
-.vk-stools-head[data-inline] + .vk-stools-scroll > .vk-stools-sec:first-child > .vk-stools-title { padding-right: calc(var(--vk-u) * 8); }
-.vk-stools-manage {
-  display: inline-flex;
-  align-items: center;
-  gap: calc(var(--vk-u) * 1.5);
-  min-height: var(--vk-h-sm);
-  padding: 0 calc(var(--vk-u) * 1.5);
-  margin-left: calc(var(--vk-u) * -0.5);
-  border: 0;
-  background: transparent;
-  color: var(--vk-ink-3);
-  font: inherit;
-  font-size: var(--vk-fs-sm);
-  font-weight: 600;
-  cursor: pointer;
-}
-.vk-stools-manage:hover,
-.vk-stools-manage:focus-visible { background: var(--vk-hover); color: var(--vk-ink); }
-.vk-stools-manage:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-stools-head > .vk-label { margin-right: auto; }
 .vk-stools-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; white-space: nowrap; }
 
 /* ---------- Sections ---------- */
@@ -200,10 +179,31 @@ button.vk-stools-item:disabled { cursor: not-allowed; opacity: 0.5; }
 
 /* Terminal rows: the name carries the state colour and the details live in a tooltip; screen and stop sit at the end. */
 /* 终端行：名称带状态色，细节放入提示；查看屏幕与停止位于末端。 */
-.vk-stools-item[data-row="terminal"] { grid-template-columns: minmax(0, 1fr) auto auto; gap: calc(var(--vk-u) * 0.5); padding-right: 0; }
-.vk-stools-term { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; height: 100%; overflow: hidden; outline: none; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); }
-.vk-stools-term > span { min-width: 0; overflow: hidden; white-space: nowrap; }
-.vk-stools-term:focus-visible { box-shadow: inset 0 -1px 0 var(--vk-signal); }
+/* A terminal row is one press target that opens its screen; a live terminal adds a stop button after it. */
+/* 终端行是打开其屏幕的单个按下目标；运行中的终端在其后附加停止按钮。 */
+.vk-stools-item[data-row="terminal"] { grid-template-columns: minmax(0, 1fr) auto; gap: 0; padding: 0; }
+.vk-stools-term { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; height: 100%; min-height: var(--vk-h-sm); padding: 0 calc(var(--vk-u) * 1); border: 0; background: transparent; color: var(--vk-ink); font: inherit; text-align: left; cursor: pointer; transition: background-color var(--vk-t-fast) var(--vk-ease); }
+.vk-stools-term > code { min-width: 0; overflow: hidden; font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-stools-term > small { color: var(--vk-tone, var(--vk-ink-3)); font-size: var(--vk-fs-xs); white-space: nowrap; }
+.vk-stools-term:hover:not(:disabled) { background: var(--vk-hover); }
+.vk-stools-term:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-stools-term:disabled { cursor: default; }
+.vk-stools-aside { margin-left: auto; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 400; }
+.vk-stools-title > .vk-stools-title-act { margin-left: auto; }
+/* Repository identity row: name, branch chip, ahead badge, then refresh state at the end. */
+/* 仓库身份行：名称、分支标签、领先徽标，最后是刷新状态。 */
+.vk-stools-title[data-kind="repo"] { color: var(--vk-ink); }
+.vk-stools-title[data-kind="repo"] > .vk-branch-btn { flex: 0 1 auto; min-width: 0; max-width: 11rem; }
+.vk-stools-title[data-kind="repo"] > .vk-branch-btn > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-stools-title[data-kind="repo"] > .vk-badge { flex: none; font-variant-numeric: tabular-nums; }
+.vk-branch-btn[data-static] { cursor: default; }
+.vk-branch-btn[data-static]:hover { border-color: var(--vk-line); color: var(--vk-ink-2); }
+.vk-stools-fold { display: inline-flex; flex: 0 1 auto; align-items: center; gap: calc(var(--vk-u) * 1); min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.vk-stools-fold:hover { color: var(--vk-ink); }
+.vk-stools-fold[aria-expanded="true"] > .vk-stools-chev { transform: rotate(90deg); }
+.vk-stools-item[data-row="changes"] { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.vk-stools-item[data-row="changes"] > small { font-weight: 400; font-variant-numeric: tabular-nums; }
+.vk-stools-actions { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 1) calc(var(--vk-u) * 0.5); }
 .vk-stools-item .vk-btn[data-action="stop"]:hover:not(:disabled) { color: var(--vk-bad); }
 /* A live terminal's mark breathes; settled ones hold their tone. */
 /* 运行中的终端标记缓慢呼吸；已结束的保持其色调。 */

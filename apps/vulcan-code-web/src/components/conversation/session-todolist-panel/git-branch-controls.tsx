@@ -1,5 +1,5 @@
 import React from "react";
-import { Check, GitBranch, GitGraph, LoaderCircle, Plus, RefreshCw, Search, X } from "lucide-react";
+import { Check, ChevronDown, GitBranch, GitGraph, LoaderCircle, Plus, RefreshCw, Search, X } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { Button } from "@/ui-kit/primitives/button";
 import {
@@ -107,10 +107,10 @@ export function ConversationSessionBranchMenu(props: {
 
   if (!actions) {
     return (
-      <div className="vk-stools-item" data-row="branch">
-        <GitBranch size={14} />
+      <span className="vk-branch-btn" data-static="" title={displayName}>
+        <GitBranch aria-hidden="true" />
         <span>{displayName}</span>
-      </div>
+      </span>
     );
   }
 
@@ -145,14 +145,15 @@ export function ConversationSessionBranchMenu(props: {
       <Popover open={menuOpen} onOpenChange={setMenuOpen}>
         <PopoverTrigger asChild>
           <button
-            aria-label={t("gitBranchMenu.label")}
-            className="vk-stools-item"
+            aria-label={`${t("gitBranchMenu.label")} · ${displayName}`}
+            className="vk-branch-btn"
             data-row="branch"
             title={t("gitBranchMenu.label")}
             type="button"
           >
-            <GitBranch size={14} />
+            <GitBranch aria-hidden="true" />
             <span>{displayName}</span>
+            <ChevronDown aria-hidden="true" />
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="vk-branch-pop" side="left" sideOffset={8}>
@@ -235,6 +236,30 @@ export function ConversationSessionBranchMenu(props: {
         open={graphOpen}
         repositoryKey={repositoryKey}
         onOpenChange={setGraphOpen}
+      />
+    </>
+  );
+}
+
+// ConversationSessionGitGraphButton opens the repository's commit graph straight from the session tools.
+// ConversationSessionGitGraphButton 直接从会话工具打开仓库的提交图谱。
+export function ConversationSessionGitGraphButton(props: {
+  actions: ConversationSessionGitBranchActions;
+  repositoryKey: string | null;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <Button onClick={() => setOpen(true)} size="sm" type="button" variant="outline">
+        <GitGraph aria-hidden="true" />
+        {t("gitBranchMenu.graph")}
+      </Button>
+      <ConversationSessionGitGraphDialog
+        actions={props.actions}
+        open={open}
+        repositoryKey={props.repositoryKey}
+        onOpenChange={setOpen}
       />
     </>
   );

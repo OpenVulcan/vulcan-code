@@ -1,6 +1,6 @@
 import React from "react";
 import { runConversationControlAction } from "../conversation-control-feedback";
-import { Maximize2, Square, TerminalSquare } from "lucide-react";
+import { Square, TerminalSquare } from "lucide-react";
 import {
   terminalStateTone,
   type TerminalSessionViewModel,
@@ -35,6 +35,7 @@ export function ConversationSessionTerminalSection(props: {
         <TerminalSquare size={13} />
         <span>{t("sessionTools.terminal")}</span>
         <b>{props.terminalSessions.length}</b>
+        <small className="vk-stools-aside">{t("sessionTools.aiCommands")}</small>
       </div>
       <div className="vk-stools-list">
         {props.terminalSessions.map((session) => (
@@ -50,8 +51,10 @@ export function ConversationSessionTerminalSection(props: {
   );
 }
 
-// ConversationSessionTerminalRow renders one AI terminal row and its read-only screen action.
-// ConversationSessionTerminalRow 渲染一个 AI 终端行及其只读屏幕操作。
+// ConversationSessionTerminalRow renders one AI terminal as a single pressable row: its state, command and state
+// label open the read-only screen, and only a live terminal adds a stop button at the end.
+// ConversationSessionTerminalRow 将一个 AI 终端渲染为可整行按下的行：状态、命令与状态标签都会打开只读屏幕，
+// 只有仍在运行的终端才在行尾附加停止按钮。
 function ConversationSessionTerminalRow(props: {
   // Normalized terminal session row.
   // 归一化终端会话行。
@@ -78,8 +81,8 @@ function ConversationSessionTerminalRow(props: {
   // screenOpen is the sole display-attachment visibility source.
   // screenOpen 是显示订阅可见性的唯一来源。
   const [screenOpen, setScreenOpen] = React.useState(false);
-  // screenButtonRef is the exact macOS-style minimize and restore animation anchor for this terminal.
-  // screenButtonRef 是当前终端 macOS 风格收回与显示动画的精确锚点。
+  // screenButtonRef (the row itself) is the macOS-style minimize and restore animation anchor for this terminal.
+  // screenButtonRef（即该行本身）是当前终端 macOS 风格收回与显示动画的锚点。
   const screenButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const handleStopRequest = React.useCallback(() => {
     if (props.session.canStop && !stopping) setConfirmOpen(true);
@@ -104,41 +107,41 @@ function ConversationSessionTerminalRow(props: {
     <div className="vk-stools-item" data-row="terminal" data-terminal-session={props.session.id}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="vk-stools-term" tabIndex={0}>
+          <button
+            aria-label={`${t("terminalSession.openScreen")} · ${props.session.name}`}
+            className="vk-stools-term"
+            data-action="screen"
+            disabled={!props.summary}
+            onClick={() => setScreenOpen(true)}
+            ref={screenButtonRef}
+            type="button"
+          >
             <TerminalSquare
               className="vk-term-mark"
               data-state={props.session.state}
               data-tone={terminalStateTone(props.session.state)}
               size={14}
             />
-            <span>{props.session.name}</span>
-          </div>
+            <code>{props.session.name}</code>
+            <small data-tone={terminalStateTone(props.session.state)}>{stateLabel}</small>
+          </button>
         </TooltipTrigger>
         <TooltipContent className="vk-stools-tip" side="left" sideOffset={8}>
-          <pre>{tooltipText}</pre>
+          <pre>{props.summary ? tooltipText : `${tooltipText}\n${t("terminalSession.noScreen")}`}</pre>
         </TooltipContent>
       </Tooltip>
-      <IconButton
-        ref={screenButtonRef}
-        aria-label={t("terminalSession.openScreen")}
-        data-action="screen"
-        disabled={!props.summary}
-        onClick={() => setScreenOpen(true)}
-        size="xs"
-        title={props.summary ? t("terminalSession.openScreen") : t("terminalSession.noScreen")}
-      >
-        <Maximize2 size={12} />
-      </IconButton>
-      <IconButton
-        aria-label={t("terminalSession.forceStopSession")}
-        data-action="stop"
-        disabled={!props.session.canStop || stopping}
-        onClick={handleStopRequest}
-        size="xs"
-        title={props.session.canStop ? t("terminalSession.forceStop") : stateLabel}
-      >
-        <Square fill="currentColor" size={10} strokeWidth={0} />
-      </IconButton>
+      {props.session.canStop ? (
+        <IconButton
+          aria-label={t("terminalSession.forceStopSession")}
+          data-action="stop"
+          disabled={stopping}
+          onClick={handleStopRequest}
+          size="xs"
+          title={t("terminalSession.forceStop")}
+        >
+          <Square fill="currentColor" size={10} strokeWidth={0} />
+        </IconButton>
+      ) : null}
       <TerminalStopConfirmDialog
         command={props.session.command}
         open={confirmOpen}
