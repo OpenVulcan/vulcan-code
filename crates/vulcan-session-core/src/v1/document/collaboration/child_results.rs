@@ -50,15 +50,23 @@ impl SessionDocument {
             });
         }
         // Read the exact original root and reject a task execution from a different resumed run.
-        // 读取精确原根输入，拒绝来自其他续跑的任务执行。
+        // Turn-less host collaboration facts and dynamic system context synchronized during the
+        // turn belong to no other run.
+        // 读取精确原根输入，拒绝来自其他续跑的任务执行。回合内同步的无回合宿主协作事实及动态系统上下文
+        // 不属于其他续跑。
         let (terminal_event, terminal) = terminals[0];
         if self.events.iter().any(|event| {
             event.seq >= terminal.start_seq
                 && event.seq <= terminal.end_seq
                 && event.turn_id != Some(turn_id)
                 && !(event.turn_id.is_none()
-                    && event.visibility == EventVisibility::HostOnly
-                    && matches!(&event.event, EventBody::Collaboration(_)))
+                    && match &event.event {
+                        EventBody::Collaboration(_) => {
+                            event.visibility == EventVisibility::HostOnly
+                        }
+                        EventBody::SystemContext(_) => true,
+                        _ => false,
+                    })
         }) {
             return Err(DomainError::CollaborationStateViolation {
                 field: "collaboration.child_result.source_range",

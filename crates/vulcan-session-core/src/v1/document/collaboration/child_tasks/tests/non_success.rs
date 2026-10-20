@@ -99,6 +99,50 @@ fn child_non_success_closure_reason_is_strict() {
     ));
 }
 
+/// Dynamic system context synchronized inside the failed turn does not hide the failure.
+/// 失败回合内同步的动态系统上下文不会遮蔽该失败。
+#[test]
+fn child_non_success_accepts_dynamic_context_inside_the_turn() {
+    let execution = CollaborationExecutionId::try_new("context-inside-failure").unwrap();
+    let mut child = SessionDocument::new("child-session", "project-1", "child", T0);
+    let turn = child
+        .submit_root_input(
+            ClientInputSubmission::new(
+                ClientActionId::try_new(execution.as_str()).unwrap(),
+                "work",
+                vec![],
+            ),
+            T0,
+        )
+        .unwrap()
+        .into_value();
+    child
+        .synchronize_dynamic_context(
+            vec![crate::v1::DynamicContextInput::new(
+                "memory.snapshot",
+                Some(String::from("remembered facts")),
+                crate::v1::SystemContextScope::Session,
+                None,
+            )],
+            T0 + 1,
+        )
+        .unwrap();
+    child
+        .fail_execution_boundary_and_close_turn("startup_failed", Some("diagnostic"), T0 + 3)
+        .unwrap();
+    let revision = child.prepare_flush_candidates().unwrap().unwrap().revision;
+    child.advance_durable(revision).unwrap();
+    assert!(
+        child
+            .build_child_task_non_success_input(
+                execution,
+                turn,
+                CollaborationChildTaskTerminalOutcome::Failed
+            )
+            .is_ok()
+    );
+}
+
 /// Builds a real stopped child with an execution-owned root and permanent host error.
 /// 构造具有执行所属根输入及永久宿主错误的真实停止子文档。
 /// `execution` supplies root ownership; returns the durable child and its exact turn.
