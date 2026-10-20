@@ -238,6 +238,7 @@ mod file_read;
 mod file_result;
 mod file_write;
 mod knowledge_base;
+mod markdown_memory;
 mod prompt_skill;
 mod registry;
 mod shell_command;
@@ -247,6 +248,7 @@ pub(crate) use file_edit::*;
 pub(crate) use file_read::*;
 pub(crate) use file_write::*;
 pub(crate) use knowledge_base::*;
+pub(crate) use markdown_memory::*;
 pub(crate) use prompt_skill::*;
 pub(crate) use registry::*;
 pub(crate) use shell_command::*;
@@ -518,6 +520,9 @@ pub fn build_native_tool_catalog(
         build_knowledge_list_tool(),
         build_knowledge_read_tool(),
         build_knowledge_write_tool(),
+        build_memory_outline_tool(),
+        build_memory_search_tool(),
+        build_memory_write_tool(),
         build_prompt_skill_detail_tool(),
         build_shell_command_tool(shell_support.clone(), plugin_runtime),
         build_terminal_session_tool(command_session_runtime, shell_support),

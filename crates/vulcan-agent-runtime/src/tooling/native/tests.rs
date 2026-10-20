@@ -202,6 +202,7 @@ async fn prompt_skill_detail_uses_execution_prepared_snapshot() {
 
 mod file_tools;
 mod knowledge_base;
+mod markdown_memory;
 mod planning;
 mod shell;
 mod terminal;

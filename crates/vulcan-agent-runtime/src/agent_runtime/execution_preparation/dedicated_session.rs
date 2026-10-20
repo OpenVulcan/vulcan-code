@@ -11,6 +11,7 @@ use crate::tooling::collaboration::{
 };
 use crate::tooling::native::{
     CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, SUBMIT_PLAN_TOOL_ID, UPDATE_GOAL_TOOL_ID,
+    native_tool_id_is_markdown_memory_tool,
 };
 use crate::vulcan_tools_bridge::{
     native_tool_id_is_knowledge_tool, native_tool_id_is_vmm_memory_tool,
@@ -59,6 +60,7 @@ fn tool_allowed(
         DedicatedToolAccess::None => false,
         DedicatedToolAccess::Standard => {
             !native_tool_id_is_vmm_memory_tool(tool_id)
+                && !native_tool_id_is_markdown_memory_tool(tool_id)
                 && !vulcan_subagent_core::CORE_SUBAGENT_TOOLS.contains(&tool_id)
                 && !DEDICATED_EXCLUDED_TOOL_IDS.contains(&tool_id)
         }

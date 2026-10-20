@@ -29,6 +29,7 @@ pub const CHILD_AGENT_FORBIDDEN_TOOL_IDS: &[&str] = &[
     "vmm_turn_details",
     "vmm_memory_write",
     "vmm_memory_delete",
+    "memory_write",
 ];
 
 /// Returns the stable list of parent-owned tools forbidden in child-agent mode.
@@ -179,6 +180,7 @@ mod tests {
             "vmm_turn_details",
             "vmm_memory_write",
             "vmm_memory_delete",
+            "memory_write",
         ] {
             assert!(
                 forbidden_tools.contains(&tool_id),

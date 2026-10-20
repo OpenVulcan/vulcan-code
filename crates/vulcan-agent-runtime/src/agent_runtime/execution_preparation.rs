@@ -384,6 +384,29 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         );
     }
     filter_resolved_tool_set_by_tool_exposure(&mut resolved_tools, &tool_exposure);
+    // Markdown memory tools exist only in `markdown` mode for projects whose memory is on.
+    // Markdown 记忆工具只在 `markdown` 模式且项目记忆开启时存在。
+    let markdown_memory_active = match crate::tooling::native::resolve_markdown_memory_access(
+        request.project_id.as_deref(),
+        (!workspace_path.is_empty()).then(|| std::path::Path::new(workspace_path.as_str())),
+    ) {
+        Ok(access) => access.is_some(),
+        Err(error) => {
+            warnings.push(format!(
+                "Markdown memory tools are hidden this turn because the memory settings could not be read: {error}"
+            ));
+            false
+        }
+    };
+    if !markdown_memory_active {
+        for tool_id in [
+            crate::tooling::native::MEMORY_OUTLINE_TOOL_ID,
+            crate::tooling::native::MEMORY_SEARCH_TOOL_ID,
+            crate::tooling::native::MEMORY_WRITE_TOOL_ID,
+        ] {
+            remove_resolved_tool(&mut resolved_tools, tool_id);
+        }
+    }
     remove_request_hidden_tools(&mut resolved_tools, &request.tool_request_hidden_tool_ids);
     if request.prompt_purpose == ExecutionPromptPurpose::QuestionExecution {
         remove_question_execution_business_tools(&mut resolved_tools);

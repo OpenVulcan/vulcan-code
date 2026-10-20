@@ -9817,6 +9817,7 @@ dependencies = [
  "vulcan-host-tools",
  "vulcan-llm-core",
  "vulcan-luaskills-prompt",
+ "vulcan-markdown-memory",
  "vulcan-mcp-runtime",
  "vulcan-permission-judge",
  "vulcan-plugin-runtime",

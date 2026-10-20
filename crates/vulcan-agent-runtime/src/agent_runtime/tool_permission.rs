@@ -509,10 +509,13 @@ pub fn classify_tool_call(definition: &ResolvedToolDefinition, args: &Value) -> 
 fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
     let string_arg = |field: &str| args.get(field).and_then(Value::as_str).map(str::to_string);
     match tool_id {
-        // These tools mutate only explicitly enabled knowledge storage or read native local text.
-        // 这些工具仅变更显式启用的知识存储，或读取原生本地文本。
+        // These tools mutate only explicitly enabled knowledge storage or user-directory memory,
+        // or read native local text.
+        // 这些工具仅变更显式启用的知识存储或用户目录记忆，或读取原生本地文本。
         "knowledge_list" | "knowledge_read" | "knowledge_search" | "knowledge_write"
-        | "file_read" => PermissionSubject::Ungoverned,
+        | "memory_outline" | "memory_search" | "memory_write" | "file_read" => {
+            PermissionSubject::Ungoverned
+        }
         FILE_TOOL_ID => {
             let action = args.get("action").and_then(Value::as_str);
             if action.is_some_and(|action| FILE_READ_ACTIONS.contains(&action)) {
