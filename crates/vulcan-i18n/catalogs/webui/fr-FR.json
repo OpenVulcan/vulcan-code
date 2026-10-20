@@ -2744,6 +2744,7 @@
   "memory.sessionList.selected": "{count} sessions sélectionnées",
   "memory.sessionList.mixed": "L’archivage exige que toutes les sessions sélectionnées soient actives ; le désarchivage exige qu’elles soient toutes archivées.",
   "memory.sessionList.select": "Sélectionner la session",
+  "memory.sessionList.removedSession": "Session absente de l’espace de travail · {id}",
   "memory.sessionList.empty": "Aucune session ne correspond à ces filtres.",
   "memory.sessionList.total": "{total} sessions · Page {page}",
   "memory.sessionList.previous": "Précédent",

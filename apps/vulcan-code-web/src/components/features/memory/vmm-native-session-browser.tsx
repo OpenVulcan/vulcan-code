@@ -14,6 +14,7 @@ import { NativeSessionStatus, VmmNativeSessionArchive } from "./vmm-native-sessi
 import { formatDateTime } from "@/lib/display-format"
 import "@/ui-kit/styles/features/settings-forms.css"
 import "@/ui-kit/styles/features/memory.css"
+import { nativeSessionDisplayName } from "./vmm-native-session-label"
 
 // BrowserProps retains the native management transport and current host-project context.
 // BrowserProps 保留原生管理传输及当前宿主项目上下文。
@@ -352,15 +353,15 @@ function NativeSessionList({ busy, snapshot, onRunAction, onCheckUpdates = check
           <label className="vk-check-label"><input className="vk-check" type="checkbox" disabled={occupied || page.sessions.length === 0} checked={page.sessions.length > 0 && selectedIds.length === page.sessions.length} onChange={(event) => setSelectedIds(event.target.checked ? page.sessions.map((session) => session.sessionSourceId) : [])} />{t("memory.sessionList.selectPage")}</label>
           <span>{t("memory.sessionList.selected").replace("{count}", String(selectedIds.length))}</span>
           {selectedSessions.length > 0 ? <VmmNativeSessionArchive key={JSON.stringify([page.projectId, selectedIds])} projectId={page.projectId} sessions={selectedSessions} busy={occupied} onBusyChange={setMutating} onRunAction={onRunAction} onRefresh={() => load({ ...query, offset: 0, expectedStorageVersion: null })} /> : null}
-          {removalEligible ? <VmmNativeRemoval projectId={page.projectId} selection={{ kind: "sessions", ids: selectedIds }} sessionNames={new Map(selectedSessions.map((session) => [session.sessionSourceId, session.displayTitle ?? session.sessionSourceId]))} busy={occupied} onBusyChange={setMutating} onRunAction={onRunAction} onRefresh={() => load({ ...query, offset: 0, expectedStorageVersion: null })} /> : null}
+          {removalEligible ? <VmmNativeRemoval projectId={page.projectId} selection={{ kind: "sessions", ids: selectedIds }} sessionNames={new Map(selectedSessions.map((session) => [session.sessionSourceId, nativeSessionDisplayName(session, session.sessionSourceId, t)]))} busy={occupied} onBusyChange={setMutating} onRunAction={onRunAction} onRefresh={() => load({ ...query, offset: 0, expectedStorageVersion: null })} /> : null}
           {selectedSessions.length > 0 && !archiveEligible ? <span>{t("memory.sessionList.mixed")}</span> : null}
         </div>
         <div className="vk-mem-rows">
           {page.sessions.map((session) => <div key={session.sessionSourceId} className={`vmm-session-row vk-mem-session ${selection?.sessionSourceId === session.sessionSourceId ? "selected" : ""}`}>
-            <input className="vk-check vk-mem-native-check" type="checkbox" aria-label={`${t("memory.sessionList.select")} ${session.displayTitle ?? session.sessionSourceId}`} disabled={occupied} checked={selectedIds.includes(session.sessionSourceId)} onChange={(event) => setSelectedIds((ids) => event.target.checked ? [...ids, session.sessionSourceId] : ids.filter((id) => id !== session.sessionSourceId))} />
+            <input className="vk-check vk-mem-native-check" type="checkbox" aria-label={`${t("memory.sessionList.select")} ${nativeSessionDisplayName(session, session.sessionSourceId, t)}`} disabled={occupied} checked={selectedIds.includes(session.sessionSourceId)} onChange={(event) => setSelectedIds((ids) => event.target.checked ? [...ids, session.sessionSourceId] : ids.filter((id) => id !== session.sessionSourceId))} />
             <div className="vk-form-fill vk-form-tight">
               <div className="vk-form-bar">
-              <Button className="vk-mem-title-link" variant="link" disabled={occupied} onClick={() => onOpen({ projectId: page.projectId, sessionSourceId: session.sessionSourceId })}>{session.displayTitle ?? session.sessionSourceId}</Button>
+              <Button className="vk-mem-title-link" variant="link" disabled={occupied} onClick={() => onOpen({ projectId: page.projectId, sessionSourceId: session.sessionSourceId })} title={session.sessionSourceId}>{nativeSessionDisplayName(session, session.sessionSourceId, t)}</Button>
               <NativeSessionStatus status={session.status} />
               </div>
               <div className="vk-form-meta">

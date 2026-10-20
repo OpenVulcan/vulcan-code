@@ -2744,6 +2744,7 @@
   "memory.sessionList.selected": "세션 {count}개 선택됨",
   "memory.sessionList.mixed": "보관하려면 선택한 세션이 모두 활성 상태여야 하고, 보관 해제하려면 모두 보관된 상태여야 합니다.",
   "memory.sessionList.select": "세션 선택",
+  "memory.sessionList.removedSession": "작업 공간에 없는 세션 · {id}",
   "memory.sessionList.empty": "이 필터와 일치하는 세션이 없습니다.",
   "memory.sessionList.total": "세션 {total}개 · {page}페이지",
   "memory.sessionList.previous": "이전",

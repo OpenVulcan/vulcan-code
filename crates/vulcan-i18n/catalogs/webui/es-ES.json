@@ -2744,6 +2744,7 @@
   "memory.sessionList.selected": "{count} sesiones seleccionadas",
   "memory.sessionList.mixed": "Para archivar, todas las sesiones seleccionadas deben estar activas; para desarchivar, todas deben estar archivadas.",
   "memory.sessionList.select": "Seleccionar sesión",
+  "memory.sessionList.removedSession": "Sesión que ya no está en el espacio de trabajo · {id}",
   "memory.sessionList.empty": "Ninguna sesión coincide con estos filtros.",
   "memory.sessionList.total": "{total} sesiones · Página {page}",
   "memory.sessionList.previous": "Anterior",

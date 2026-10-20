@@ -5,6 +5,7 @@ import { useI18n } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeMemorySessionSummary, VmmNativeSessionRestartPreview } from "@/types"
 import "@/ui-kit/styles/features/settings-forms.css"
 import "@/ui-kit/styles/features/memory.css"
+import { nativeSessionDisplayName } from "./vmm-native-session-label"
 
 // Defines exact native targets and parent-owned operation occupancy for restart.
 // 定义重新启用的准确原生目标及父级拥有的操作占用状态。
@@ -91,7 +92,7 @@ export function VmmNativeSessionRestart({ projectId, sessions, busy, onBusyChang
       <AlertDialogContent>
         <AlertDialogHeader><AlertDialogTitle>{t("memory.sessionRestart.action")}</AlertDialogTitle><AlertDialogDescription>{t("memory.sessionRestart.description")}</AlertDialogDescription></AlertDialogHeader>
         <ul className="vk-mem-scroll-list vk-form-stack">{visiblePreview?.selection.sessionSourceIds.map((id) => <li key={id}>
-          <p className="vk-form-break vk-form-sm">{sessions.find((session) => session.sessionSourceId === id)?.displayTitle ?? id}</p>
+          <p className="vk-form-break vk-form-sm">{nativeSessionDisplayName(sessions.find((session) => session.sessionSourceId === id), id, t)}</p>
           <p className="vk-form-codeline vk-faint">{id}</p>
         </li>)}</ul>
         <AlertDialogFooter>

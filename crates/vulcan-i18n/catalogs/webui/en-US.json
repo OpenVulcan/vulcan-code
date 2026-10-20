@@ -2744,6 +2744,7 @@
   "memory.sessionList.selected": "{count} sessions selected",
   "memory.sessionList.mixed": "Archive requires all selected sessions to be active; unarchive requires all to be archived.",
   "memory.sessionList.select": "Select session",
+  "memory.sessionList.removedSession": "Session no longer in the workspace · {id}",
   "memory.sessionList.empty": "No sessions match these filters.",
   "memory.sessionList.total": "{total} sessions · Page {page}",
   "memory.sessionList.previous": "Previous",

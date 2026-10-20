@@ -7,6 +7,7 @@ import { useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeMemorySessionSummary, VmmNativeSessionArchivePreview } from "@/types"
 import "@/ui-kit/styles/features/settings-forms.css"
 import "@/ui-kit/styles/features/memory.css"
+import { nativeSessionDisplayName } from "./vmm-native-session-label"
 
 // Status labels describe authoritative metadata; null is explicitly not a lifecycle state.
 // 状态文案描述权威元数据；null 明确不属于生命周期状态。
@@ -127,7 +128,7 @@ export function VmmNativeSessionArchive({ projectId, sessions, busy, onBusyChang
             // 标题只用于展示；已接纳预览中的身份始终具有权威性。
             const session = sessions.find((item) => item.sessionSourceId === sessionSourceId)
             return <li key={sessionSourceId}>
-              <p className="vk-form-break vk-form-sm">{session?.displayTitle ?? sessionSourceId}</p>
+              <p className="vk-form-break vk-form-sm">{nativeSessionDisplayName(session, sessionSourceId, t)}</p>
               <p className="vk-form-codeline vk-faint">{sessionSourceId}</p>
             </li>
           })}

@@ -2744,6 +2744,7 @@
   "memory.sessionList.selected": "{count} Sitzungen ausgewählt",
   "memory.sessionList.mixed": "Zum Archivieren müssen alle ausgewählten Sitzungen aktiv sein; zum Dearchivieren müssen alle archiviert sein.",
   "memory.sessionList.select": "Sitzung auswählen",
+  "memory.sessionList.removedSession": "Sitzung nicht mehr im Arbeitsbereich · {id}",
   "memory.sessionList.empty": "Keine Sitzungen entsprechen diesen Filtern.",
   "memory.sessionList.total": "{total} Sitzungen · Seite {page}",
   "memory.sessionList.previous": "Zurück",

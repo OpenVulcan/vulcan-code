@@ -34,6 +34,7 @@ import type {
 import { formatDateTime } from "@/lib/display-format"
 import "@/ui-kit/styles/features/settings-forms.css"
 import "@/ui-kit/styles/features/memory.css"
+import { nativeSessionDisplayName } from "./vmm-native-session-label"
 
 // SESSION_OVERVIEW_VALUE is the non-identity selector value used for project-level session summaries.
 // SESSION_OVERVIEW_VALUE 是用于项目级会话汇总的非身份选择器值。
@@ -373,7 +374,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
   // Display labels remain separate from immutable mutation targets.
   // 展示标签与不可变的变更目标保持分离。
   const sessionNames = React.useMemo(() => new Map(
-    (records?.sessions ?? []).map((session) => [session.sessionSourceId, nativeSessionLabel(session)]),
+    (records?.sessions ?? []).map((session) => [session.sessionSourceId, nativeSessionDisplayName(session, session.sessionSourceId, t)]),
   ), [records])
   const recordCounts = React.useMemo(
     () => nativeRecordCounts(records?.turns ?? [], records?.memories ?? []),
@@ -390,7 +391,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
         <div>
         <CardTitle className="vk-form-inline">
           <Database className="vk-icon" aria-hidden="true" />
-          {selectedSession ? nativeSessionLabel(selectedSession) : t("memory.nativeRecords.title")}
+          {selectedSession ? nativeSessionDisplayName(selectedSession, selectedSession.sessionSourceId, t) : t("memory.nativeRecords.title")}
         </CardTitle>
         <CardDescription>{t("memory.nativeRecords.description")}</CardDescription>
         </div>
@@ -436,7 +437,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                 <SelectItem value={SESSION_OVERVIEW_VALUE}>{t("memory.nativeRecords.sessionOverview")}</SelectItem>
                 {records?.sessions.map((session) => (
                   <SelectItem key={session.sessionSourceId} value={session.sessionSourceId}>
-                    {nativeSessionLabel(session)}
+                    {nativeSessionDisplayName(session, session.sessionSourceId, t)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -481,7 +482,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
             <div className="vk-form-grid">
               {records.sessions.map((session) => (
                 <div className="vk-mem-pick" key={session.sessionSourceId}>
-                <Checkbox aria-label={`${t("memory.removal.selectSession")} ${nativeSessionLabel(session)}`} checked={removalSessions.includes(session.sessionSourceId)} disabled={effectiveBusy || (session.status !== "active" && session.status !== "archived") || (!removalSessions.includes(session.sessionSourceId) && removalSessions.length >= 100)} onCheckedChange={(checked) => setRemovalSessions((current) => checked === true ? [...current, session.sessionSourceId] : current.filter((id) => id !== session.sessionSourceId))} />
+                <Checkbox aria-label={`${t("memory.removal.selectSession")} ${nativeSessionDisplayName(session, session.sessionSourceId, t)}`} checked={removalSessions.includes(session.sessionSourceId)} disabled={effectiveBusy || (session.status !== "active" && session.status !== "archived") || (!removalSessions.includes(session.sessionSourceId) && removalSessions.length >= 100)} onCheckedChange={(checked) => setRemovalSessions((current) => checked === true ? [...current, session.sessionSourceId] : current.filter((id) => id !== session.sessionSourceId))} />
                 <button
                   className="vk-mem-tile"
                   disabled={effectiveBusy}
@@ -490,7 +491,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                 >
                   <div className="vk-form-row">
                     <div className="vk-form-cell">
-                      <p className="vk-form-name">{nativeSessionLabel(session)}</p>
+                      <p className="vk-form-name">{nativeSessionDisplayName(session, session.sessionSourceId, t)}</p>
                       <p className="vk-form-id">{session.sessionSourceId}</p>
                       <NativeSessionStatus status={session.status} />
                     </div>
@@ -751,7 +752,7 @@ function NativeSessionSummary({ session }: { session: VmmNativeMemorySessionSumm
   return (
     <section className="vk-form-box">
       <div>
-        <h3 className="vk-form-em">{nativeSessionLabel(session)}</h3>
+        <h3 className="vk-form-em">{nativeSessionDisplayName(session, session.sessionSourceId, t)}</h3>
         <p className="vk-form-codeline vk-faint">{session.sessionSourceId}</p>
       </div>
       <div className="vk-mem-counts">
@@ -1120,12 +1121,6 @@ function nativeMemoryRecordsValue(
   result: VmmMemoryActionResult | null,
 ): VmmNativeMemoryRecordsSummary | null {
   return result?.data.kind === "native_memory_records" ? result.data.value : null
-}
-
-// nativeSessionLabel returns the optional host title while keeping the stable id separately visible.
-// nativeSessionLabel 返回可选宿主标题，同时让稳定标识保持独立可见。
-function nativeSessionLabel(session: VmmNativeMemorySessionSummary): string {
-  return session.displayTitle?.trim() || session.sessionSourceId
 }
 
 // nativeSessionReference combines the optional host title with the stable session identity.
