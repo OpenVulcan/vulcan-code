@@ -43,9 +43,11 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
       : null;
     // terminal is the only emulator instance owned by this mounted viewport.
     // terminal 是当前已挂载视口拥有的唯一模拟器实例。
+    // A container-fitted terminal leaves rows and cols out entirely: xterm rejects an explicit undefined value.
+    // 容器拟合的终端完全省略 rows 与 cols：xterm 会拒绝显式的 undefined 值。
     const terminal = new Terminal({
+      ...fixedGrid,
       allowProposedApi: false,
-      cols: fixedGrid?.cols,
       convertEol: false,
       cursorBlink: !callbacksRef.current.readOnly,
       cursorStyle: callbacksRef.current.readOnly ? "bar" : "block",
@@ -53,7 +55,6 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
       fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace',
       fontSize: 13,
       lineHeight: 1.15,
-      rows: fixedGrid?.rows,
       scrollback: 10_000,
       // xterm 6 derives its native slider width from the overview ruler width.
       // xterm 6 从概览标尺宽度取得原生滑块宽度。
