@@ -62,7 +62,7 @@ function Combobox({ value, options, placeholder, searchPlaceholder, emptyText, a
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" width="content" className={cx("vk-combobox-pop", contentClassName)}>
-        <Command>
+        <Command defaultValue={value}>
           <CommandInput aria-label={searchPlaceholder} placeholder={searchPlaceholder} />
           <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>

@@ -40,3 +40,27 @@ it("closes an open popup when disabled and does not reopen after becoming enable
     else Reflect.deleteProperty(Element.prototype, "scrollIntoView");
   }
 });
+
+// Opening the list keeps keyboard focus on the chosen option, so Enter right away leaves the choice unchanged.
+// 打开列表时键盘焦点停在已选项上，立即回车不会改变选择。
+it("starts keyboard focus on the chosen option", async () => {
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  const changed = vi.fn();
+  const pickerOptions = [{ value: "first-id", label: "First" }, { value: "second-id", label: "Second" }];
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  const scrollDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+  Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: () => {} });
+  try {
+    await act(async () => root.render(<Combobox options={pickerOptions} value="second-id" ariaLabel="picker" placeholder="pick" searchPlaceholder="search" emptyText="none" onValueChange={changed} />));
+    await act(async () => host.querySelector<HTMLButtonElement>('[role="combobox"]')!.click());
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="search"]')!;
+    await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    expect(changed).toHaveBeenCalledWith("second-id");
+  } finally {
+    await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals();
+    if (scrollDescriptor) Object.defineProperty(Element.prototype, "scrollIntoView", scrollDescriptor);
+    else Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  }
+});
