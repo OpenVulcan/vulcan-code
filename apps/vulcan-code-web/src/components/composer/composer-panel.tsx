@@ -60,6 +60,7 @@ import {
 import { useComposerModelSelection } from "@/components/composer/composer-panel/use-composer-model-selection";
 import { useComposerSlashCommands } from "@/components/composer/composer-panel/use-composer-slash-commands";
 import { useComposerTypingRedirect } from "@/components/composer/composer-panel/use-composer-typing-redirect";
+import { recordSentPrompt, usePromptRecall } from "@/components/composer/composer-panel/use-composer-prompt-recall";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
 import { useComposerSessionSettings } from "@/components/composer/composer-panel/use-composer-answer-mode";
@@ -571,6 +572,17 @@ export function ComposerPanel(props: {
   // placeholder describes the platform-specific send and newline keyboard behavior.
   // placeholder 描述平台相关的发送与换行键盘行为。
   const placeholder = t("composer.placeholder").replace("{shortcut}", composerShortcutHint(t("composer.shortcutHint")));
+  // promptRecallScope groups recalled prompts by project; drafts outside any project share one scope.
+  // promptRecallScope 按项目归组召回的提示词；不属于任何项目的草稿共用一个范围。
+  const promptRecallScope = props.projectId ?? "";
+  const { onSubmitPrompt } = props;
+  // submitPrompt records each prompt the service accepted, so ArrowUp can bring it back.
+  // submitPrompt 记录服务接受的每条提示词，使 ArrowUp 能将其取回。
+  const submitPrompt = React.useCallback(async (submission: ComposerSubmission) => {
+    const accepted = await onSubmitPrompt(submission);
+    if (accepted) recordSentPrompt(promptRecallScope, submission.prompt);
+    return accepted;
+  }, [onSubmitPrompt, promptRecallScope]);
   // Send controller owns duplicate gating, stop routing, draft consumption, and failure recovery.
   // 发送控制器管理重复门控、停止路由、草稿消费与失败恢复。
   const {
@@ -595,7 +607,7 @@ export function ComposerPanel(props: {
     clearForSubmission,
     restoreFailedSubmission,
     restoreInputToSlot,
-    onSubmitPrompt: props.onSubmitPrompt,
+    onSubmitPrompt: submitPrompt,
     onStopConversationRun: props.onStopConversationRun,
     onTrace: props.onTrace,
   });
@@ -779,6 +791,20 @@ export function ComposerPanel(props: {
     onAttachFiles: (files) => void stageComposerFiles(files),
   });
 
+  const recallPrompt = usePromptRecall({
+    scope: promptRecallScope,
+    slotKey: draftSlotKey,
+    input: draftInput,
+    setInput: setDraftInput,
+    textareaRef: composerTextareaRef,
+  });
+  // handleTextareaKeyDown lets an open slash menu keep the arrows, then offers them to prompt recall.
+  // handleTextareaKeyDown 让打开的 slash 菜单保留方向键，其余情况交给提示词召回。
+  const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!slashPanelVisible && recallPrompt(event)) return;
+    handleComposerKeyDown(event);
+  };
+
   React.useLayoutEffect(() => {
     resetSlashCommands();
     setComposerMediaPlayer(null);
@@ -859,7 +885,7 @@ export function ComposerPanel(props: {
             aria-label={t("composer.aria.input")}
             disabled={isPendingPromptEditing}
             onChange={(event) => handleDraftInputChange(event.currentTarget.value)}
-            onKeyDown={handleComposerKeyDown}
+            onKeyDown={handleTextareaKeyDown}
             onPaste={isPendingPromptEditing ? undefined : handleComposerPaste}
             placeholder={placeholder}
             ref={composerTextareaRef}
