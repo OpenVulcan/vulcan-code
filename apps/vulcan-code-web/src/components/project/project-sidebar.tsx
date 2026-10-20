@@ -38,7 +38,7 @@ import { SortableProjectRow } from "./project-sidebar-project-row";
 import type { SortableRowBinding } from "./project-sidebar-sortable";
 import { ProjectIcon } from "./project-icons";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
-import { handleSessionTreeKey } from "./session-tree-keys";
+import { handleSessionTreeKey, SESSION_TREE_ROW_SELECTOR } from "./session-tree-keys";
 import { setSidebarFlow, useSidebarFlow, type SidebarFlow } from "./sidebar-flow";
 
 export type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
@@ -212,6 +212,15 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
                 if (event.key === "Escape" && query) {
                   event.stopPropagation();
                   setQuery("");
+                }
+                // Down leaves the search for the first listed row, so a filtered result opens without the mouse.
+                // 下键离开搜索框进入第一行，使筛选结果无需鼠标即可打开。
+                const firstRow = event.key === "ArrowDown"
+                  ? event.currentTarget.closest(".vk-nav-flow")?.querySelector<HTMLElement>(SESSION_TREE_ROW_SELECTOR)
+                  : null;
+                if (firstRow) {
+                  event.preventDefault();
+                  firstRow.focus();
                 }
               }}
               placeholder={t(flow === "session" ? "sidebar.searchSessions" : "sidebar.searchTree")}
