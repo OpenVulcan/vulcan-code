@@ -2583,6 +2583,7 @@
   "conversation.control.copyFailed": "Не удалось скопировать",
   "conversation.contextMenu.copy": "Копировать",
   "conversation.contextMenu.copyLinkAddress": "Копировать адрес ссылки",
+  "conversation.contextMenu.quote": "Цитировать в поле ввода",
   "conversation.contextMenu.selectAll": "Выделить всё",
   "conversation.control.actionFailed": "Не удалось выполнить действие",
   "conversation.control.detailFailed": "Не удалось загрузить подробности",

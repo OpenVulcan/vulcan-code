@@ -2583,6 +2583,7 @@
   "conversation.control.copyFailed": "복사 실패",
   "conversation.contextMenu.copy": "복사",
   "conversation.contextMenu.copyLinkAddress": "링크 주소 복사",
+  "conversation.contextMenu.quote": "입력창에 인용",
   "conversation.contextMenu.selectAll": "모두 선택",
   "conversation.control.actionFailed": "작업 실패",
   "conversation.control.detailFailed": "세부 정보를 불러올 수 없습니다",

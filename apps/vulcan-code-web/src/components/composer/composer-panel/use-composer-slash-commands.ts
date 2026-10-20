@@ -45,6 +45,9 @@ export interface UseComposerSlashCommandsOptions {
   // Sends the current composer draft when Enter is not consumed by the slash panel.
   // 当 Enter 未被 slash 面板消费时发送当前输入区草稿。
   onSend: () => Promise<void>;
+  // Receives the caret at the end of the draft after another surface inserted text into it.
+  // 其他界面向草稿插入文本后，在此输入框中将光标放到草稿末尾。
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
 }
 
 // ComposerSlashCommandsController exposes slash panel state and keyboard actions to ComposerPanel.
@@ -230,7 +233,15 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
   const insertText = React.useCallback((text: string) => {
     options.setInput((current) => (current.trim() === "" ? text : `${current}
 ${text}`));
-  }, [options.setInput]);
+    // The caret lands only after the inserted draft has rendered.
+    // 光标只在插入后的草稿渲染完成后落下。
+    window.requestAnimationFrame(() => {
+      const textarea = options.textareaRef.current;
+      if (!textarea) return;
+      textarea.focus({ preventScroll: true });
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+  }, [options.setInput, options.textareaRef]);
   useComposerExternalCommands(options.onOpenModelPicker, options.commands, activateCommand, insertText);
 
   return {

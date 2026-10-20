@@ -2583,6 +2583,7 @@
   "conversation.control.copyFailed": "Falha ao copiar",
   "conversation.contextMenu.copy": "Copiar",
   "conversation.contextMenu.copyLinkAddress": "Copiar endereço do link",
+  "conversation.contextMenu.quote": "Citar no editor",
   "conversation.contextMenu.selectAll": "Selecionar tudo",
   "conversation.control.actionFailed": "Falha na ação",
   "conversation.control.detailFailed": "Não foi possível carregar os detalhes",

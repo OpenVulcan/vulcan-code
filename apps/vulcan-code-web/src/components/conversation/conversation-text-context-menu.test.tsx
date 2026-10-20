@@ -30,11 +30,16 @@ afterEach(async () => {
 
 // mountMenu renders the transcript and an adjacent composer-shaped text outside its selection scope.
 // mountMenu 渲染会话转录及一段位于选区范围外的输入区形态文本。
-// onCopyText receives clipboard writes; enabled selects the desktop menu instead of native browser handling.
-// onCopyText 接收剪贴板写入；enabled 选择桌面菜单，而非浏览器原生处理。
-async function mountMenu(onCopyText: (text: string) => Promise<void> | void, enabled = true): Promise<void> {
+// onCopyText receives clipboard writes; enabled selects the desktop menu instead of native browser handling;
+// onQuoteText receives text quoted into the composer.
+// onCopyText 接收剪贴板写入；enabled 选择桌面菜单，而非浏览器原生处理；onQuoteText 接收引用到输入区的文本。
+async function mountMenu(
+  onCopyText: (text: string) => Promise<void> | void,
+  enabled = true,
+  onQuoteText: (text: string) => void = () => {},
+): Promise<void> {
   await act(async () => root.render(
-    <ConversationTextContextMenu enabled={enabled} timelineRef={timelineRef} onCopyText={onCopyText}>
+    <ConversationTextContextMenu enabled={enabled} timelineRef={timelineRef} onCopyText={onCopyText} onQuoteText={onQuoteText}>
       <div>
         <div ref={timelineRef}>
           <span>Selected transcript</span><span> second line</span>
@@ -71,11 +76,27 @@ it("copies only text selected inside the visible transcript", async () => {
   expect(copy).toHaveBeenCalledExactlyOnceWith("Selected transcript");
 });
 
+it("quotes only text selected inside the visible transcript", async () => {
+  const quote = vi.fn((_text: string) => {});
+  await mountMenu(vi.fn(), true, quote);
+  const range = document.createRange();
+  range.selectNodeContents(timelineRef.current!.querySelector("span")!);
+  window.getSelection()!.addRange(range);
+  await openMenu();
+
+  const quoteItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    .find((item) => item.textContent === "conversation.contextMenu.quote")!;
+  expect(quoteItem.getAttribute("data-disabled")).toBeNull();
+  await act(async () => quoteItem.click());
+  expect(quote).toHaveBeenCalledExactlyOnceWith("Selected transcript");
+});
+
 it("selects the transcript without selecting the adjacent composer text", async () => {
   await mountMenu(vi.fn());
   await openMenu();
   const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
   expect(items.find((item) => item.textContent === "conversation.contextMenu.copy")?.hasAttribute("data-disabled")).toBe(true);
+  expect(items.find((item) => item.textContent === "conversation.contextMenu.quote")?.hasAttribute("data-disabled")).toBe(true);
   await act(async () => items.find((item) => item.textContent === "conversation.contextMenu.selectAll")!.click());
   expect(window.getSelection()?.toString()).toContain("Selected transcript second line");
   expect(window.getSelection()?.toString()).not.toContain("Composer draft");

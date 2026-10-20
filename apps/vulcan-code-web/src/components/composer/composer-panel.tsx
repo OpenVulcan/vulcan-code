@@ -6,13 +6,7 @@ import {
 } from "@/components/composer/composer-persistence-queue";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import { ModelReasoningPickerControl } from "@/components/composer/model-reasoning-picker-control";
-import {
-  hasBlockingComposerPopup,
-  isComposerPrintableKey,
-  isComposerTextEntryElement,
-  type ComposerSlashCommandResult,
-  type ComposerSubmission,
-} from "@/components/composer/composer-model";
+import type { ComposerSlashCommandResult, ComposerSubmission } from "@/components/composer/composer-model";
 import {
   ComposerAiCapabilityControl,
   ComposerAttachmentMenu,
@@ -27,7 +21,6 @@ import { Textarea } from "@/ui-kit/primitives/textarea";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { useI18n } from "@/i18n";
 import { isElectronRuntime } from "@/host-shell";
-import { getWorkspaceInputOwner } from "@/components/workspace/workspace-input-owner";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
@@ -66,6 +59,7 @@ import {
 } from "@/components/composer/composer-panel/use-composer-session-draft";
 import { useComposerModelSelection } from "@/components/composer/composer-panel/use-composer-model-selection";
 import { useComposerSlashCommands } from "@/components/composer/composer-panel/use-composer-slash-commands";
+import { useComposerTypingRedirect } from "@/components/composer/composer-panel/use-composer-typing-redirect";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
 import { useComposerSessionSettings } from "@/components/composer/composer-panel/use-composer-answer-mode";
@@ -780,6 +774,7 @@ export function ComposerPanel(props: {
     onOpenGoal: slashSession.openGoal,
     onOpenSettings: slashSession.openSettings,
     onSend: handleComposerSend,
+    textareaRef: composerTextareaRef,
   });
 
   React.useLayoutEffect(() => {
@@ -787,37 +782,7 @@ export function ComposerPanel(props: {
     setComposerMediaPlayer(null);
   }, [draftSlotKey, resetSlashCommands]);
 
-  React.useEffect(() => {
-    // handleGlobalWorkspaceTyping redirects ordinary workspace typing into the composer.
-    // handleGlobalWorkspaceTyping 将工作台中的普通键入重定向到输入区。
-    const handleGlobalWorkspaceTyping = (event: KeyboardEvent) => {
-      if (
-        pendingPromptEditRef.current
-        || event.defaultPrevented
-        || !isComposerPrintableKey(event)
-      ) {
-        return;
-      }
-      const inputOwner = getWorkspaceInputOwner();
-      if (inputOwner.kind === "project_terminal" || inputOwner.kind === "modal") {
-        return;
-      }
-      // textarea is the unique composer input that receives redirected typing.
-      // textarea 是接收重定向输入的唯一输入区文本框。
-      const textarea = composerTextareaRef.current;
-      if (!textarea || document.activeElement === textarea) {
-        return;
-      }
-      if (hasBlockingComposerPopup() || isComposerTextEntryElement(document.activeElement)) {
-        return;
-      }
-      event.preventDefault();
-      textarea.focus({ preventScroll: true });
-      appendGlobalInput(event.key);
-    };
-    document.addEventListener("keydown", handleGlobalWorkspaceTyping);
-    return () => document.removeEventListener("keydown", handleGlobalWorkspaceTyping);
-  }, [appendGlobalInput]);
+  useComposerTypingRedirect(composerTextareaRef, pendingPromptEditRef, appendGlobalInput);
 
   return (
     <TooltipProvider delayDuration={500}>

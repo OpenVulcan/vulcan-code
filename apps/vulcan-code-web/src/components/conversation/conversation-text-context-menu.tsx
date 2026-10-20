@@ -23,10 +23,14 @@ interface ConversationTextContextMenuProps {
   // onCopyText writes selected text through the existing workspace clipboard path.
   // onCopyText 通过既有工作区剪贴板路径写入选中文本。
   onCopyText: (text: string) => Promise<void> | void;
+  // onQuoteText hands selected text to the composer as a quote the user can annotate before sending.
+  // onQuoteText 将选中文本作为引用交给输入区，用户可在发送前为其添加标注。
+  onQuoteText: (text: string) => void;
 }
 
-// ConversationTextContextMenu adds text/link copying and transcript-scoped Select All to the conversation.
-// ConversationTextContextMenu 为会话增加文本与链接复制，以及仅限转录内容的“全选”。
+// ConversationTextContextMenu adds text/link copying, quoting into the composer and transcript-scoped Select
+// All to the conversation.
+// ConversationTextContextMenu 为会话增加文本与链接复制、引用到输入区，以及仅限转录内容的“全选”。
 export function ConversationTextContextMenu(props: ConversationTextContextMenuProps) {
   // t resolves the current client's menu labels and clipboard failure message.
   // t 解析当前客户端的菜单文案与剪贴板失败提示。
@@ -96,6 +100,9 @@ export function ConversationTextContextMenu(props: ConversationTextContextMenuPr
         </ContextMenuItem> : null}
         <ContextMenuItem disabled={!selectedText} onSelect={() => void copyText(selectedText)}>
           {t("conversation.contextMenu.copy")}
+        </ContextMenuItem>
+        <ContextMenuItem disabled={!selectedText.trim()} onSelect={() => props.onQuoteText(selectedText)}>
+          {t("conversation.contextMenu.quote")}
         </ContextMenuItem>
         <ContextMenuItem onSelect={selectTranscript}>
           {t("conversation.contextMenu.selectAll")}

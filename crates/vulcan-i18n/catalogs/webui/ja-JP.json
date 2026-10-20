@@ -2583,6 +2583,7 @@
   "conversation.control.copyFailed": "コピーに失敗しました",
   "conversation.contextMenu.copy": "コピー",
   "conversation.contextMenu.copyLinkAddress": "リンク先アドレスをコピー",
+  "conversation.contextMenu.quote": "入力欄に引用",
   "conversation.contextMenu.selectAll": "すべて選択",
   "conversation.control.actionFailed": "操作に失敗しました",
   "conversation.control.detailFailed": "詳細を読み込めませんでした",

@@ -2583,6 +2583,7 @@
   "conversation.control.copyFailed": "复制失败",
   "conversation.contextMenu.copy": "复制",
   "conversation.contextMenu.copyLinkAddress": "复制链接地址",
+  "conversation.contextMenu.quote": "引用到输入框",
   "conversation.contextMenu.selectAll": "全选",
   "conversation.control.actionFailed": "操作失败",
   "conversation.control.detailFailed": "详情读取失败",

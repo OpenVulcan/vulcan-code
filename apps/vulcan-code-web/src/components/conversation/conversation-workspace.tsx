@@ -51,6 +51,7 @@ import type {
 import { useI18n } from "@/i18n";
 import { Alert, AlertDescription } from "@/ui-kit/primitives/alert";
 import { Button } from "@/ui-kit/primitives/button";
+import { ConversationSelectionQuote, quoteInComposer } from "@/components/conversation/conversation-selection-quote";
 import { ConversationTextContextMenu } from "@/components/conversation/conversation-text-context-menu";
 import { isElectronRuntime } from "@/host-shell";
 import { ConversationTurnSeatList } from "@/components/conversation/conversation-turn-seat";
@@ -602,7 +603,8 @@ export function ConversationWorkspace(props: {
         scopeId={surfaceRestoreId}
         onMemoryChange={handleMeasuredCollapseMemoryChange}
       >
-        <ConversationTextContextMenu enabled={isElectronRuntime()} timelineRef={timelineRef} onCopyText={props.onCopyText}>
+        <ConversationSelectionQuote timelineRef={timelineRef} scrollRef={props.scrollRef} onQuote={quoteInComposer} />
+        <ConversationTextContextMenu enabled={isElectronRuntime()} timelineRef={timelineRef} onCopyText={props.onCopyText} onQuoteText={quoteInComposer}>
         <section
           className="vk-transcript"
           data-conversation-surface-id={props.conversation?.id ?? props.parentConversationId ?? undefined}

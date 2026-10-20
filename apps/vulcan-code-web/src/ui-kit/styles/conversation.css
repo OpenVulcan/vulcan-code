@@ -98,6 +98,9 @@
 .vk-chat-loading-card > strong { color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 600; }
 .vk-chat-loading-card > span { font-size: var(--vk-fs-sm); }
 /* First submission while the session is being created: a quiet chip above the composer. */
+/* Quote action floating over text selected in the transcript; above the floating-window layer. */
+.vk-selection-quote { position: fixed; z-index: 44; translate: -50% calc(-100% - var(--vk-u) * 1.5); box-shadow: var(--vk-shadow-2); }
+.vk-selection-quote[data-placement="below"] { translate: -50% calc(var(--vk-u) * 1.5); }
 .vk-submit-status { position: absolute; z-index: 3; left: 50%; bottom: calc(var(--vk-dock-h) + var(--vk-u) * 4.5); display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); min-height: var(--vk-h-sm); padding: 0 calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-raised); box-shadow: var(--vk-shadow-1); color: var(--vk-ink-2); font-size: var(--vk-fs-sm); pointer-events: none; transform: translateX(-50%); }
 
 /* History loader: older turns load on demand when the reader scrolls to the top. */
