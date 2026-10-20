@@ -337,7 +337,7 @@ fn acknowledge_tray_ready(tray: &TrayIcon) -> bool {
             return false;
         }
     }
-    tracing::error!(
+    tracing::info!(
         "[vulcan-code-service] tray ready (pid {})",
         std::process::id()
     );
