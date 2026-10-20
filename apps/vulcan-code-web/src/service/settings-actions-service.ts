@@ -112,10 +112,23 @@ export async function resetSystemPrompt(
   });
 }
 
-// loadPublicAiSettings loads persisted connections and memory-only catalogs.
-// loadPublicAiSettings 加载持久化连接与仅内存目录。
-export async function loadPublicAiSettings(): Promise<PublicAiSettingsSnapshot> {
-  return serviceClient.request<PublicAiSettingsSnapshot>("service_public_ai_settings_snapshot");
+// sameTurnPublicAiSettingsRead is the snapshot read started in the current event-loop turn, if any.
+// sameTurnPublicAiSettingsRead 是当前事件循环回合内已发起的快照读取（若有）。
+let sameTurnPublicAiSettingsRead: Promise<PublicAiSettingsSnapshot> | null = null;
+
+// loadPublicAiSettings loads persisted connections and memory-only catalogs. Readers mounting together (the
+// composer controls of a newly opened session) share one request; a read issued in a later turn, such as the
+// reload after a save, always starts a fresh request.
+// loadPublicAiSettings 加载持久化连接与仅内存目录。同时挂载的读取方（新打开会话的输入区控件）共用一次请求；
+// 之后回合发起的读取（例如保存后的重新加载）总是发起新请求。
+export function loadPublicAiSettings(): Promise<PublicAiSettingsSnapshot> {
+  if (sameTurnPublicAiSettingsRead) return sameTurnPublicAiSettingsRead;
+  const read = serviceClient.request<PublicAiSettingsSnapshot>("service_public_ai_settings_snapshot");
+  sameTurnPublicAiSettingsRead = read;
+  setTimeout(() => {
+    if (sameTurnPublicAiSettingsRead === read) sameTurnPublicAiSettingsRead = null;
+  }, 0);
+  return read;
 }
 
 // startPublicAiOAuth starts one provider-declared browser authorization flow.

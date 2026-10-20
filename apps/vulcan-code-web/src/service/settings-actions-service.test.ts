@@ -3,6 +3,7 @@ import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
 import type { PublicAiInferenceRoute } from "@/types";
 import {
   loadPublicAiSessionProviderToolSelections,
+  loadPublicAiSettings,
   rebuildPublicAiSessionProviderToolSelections,
   resetPublicAiMediaDeliveryPolicy,
   savePublicAiMediaDeliveryPolicy,
@@ -22,6 +23,25 @@ vi.mock("@/service/webui-service-runtime", () => ({
 vi.mock("@/service/workbench-snapshot-service", () => ({
   loadWorkbenchSnapshot: vi.fn(),
 }));
+
+describe("public AI settings snapshot read", () => {
+  beforeEach(() => {
+    transport.request.mockReset();
+  });
+
+  // Readers mounting together share one request; a later read (for example after a save) is never served stale.
+  // 同时挂载的读取方共用一次请求；之后的读取（例如保存后）绝不复用旧结果。
+  it("shares a read only within the turn that started it", async () => {
+    transport.request.mockResolvedValueOnce({ revision: "first" }).mockResolvedValueOnce({ revision: "second" });
+    const first = loadPublicAiSettings();
+    const second = loadPublicAiSettings();
+    expect(await first).toBe(await second);
+    expect(transport.request).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await loadPublicAiSettings()).toEqual({ revision: "second" });
+    expect(transport.request).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("media delivery settings action", () => {
   // Do not return the mock function: Vitest treats a returned function as hook cleanup.
