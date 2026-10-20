@@ -1,5 +1,6 @@
 import * as React from "react";
 import { PageEmptyState } from "@/components/page";
+import { useI18n } from "@/i18n";
 import {
   CircleHelp,
   CircleAlert,
@@ -472,9 +473,33 @@ const TIME_SERIES_HEIGHT = 260;
 // TIME_SERIES_PADDING 定义图表绘制内边距。
 const TIME_SERIES_PADDING = 24;
 
+// TIME_SERIES_AXIS_WIDTH reserves the left gutter for the y-axis value labels.
+// TIME_SERIES_AXIS_WIDTH 为纵轴数值标签预留左侧栏宽。
+const TIME_SERIES_AXIS_WIDTH = 56;
+
+// TIME_SERIES_GRID_RATIOS places the shared horizontal guides from the top of the drawing area.
+// TIME_SERIES_GRID_RATIOS 从绘图区顶部起放置共享水平参考线。
+const TIME_SERIES_GRID_RATIOS = [0, 0.25, 0.5, 0.75, 1];
+
+// niceAxisMaximum rounds the largest value up so every guide lands on a 1, 2, 2.5 or 5 step.
+// niceAxisMaximum 将最大值向上取整，使每条参考线落在 1、2、2.5 或 5 的步长上。
+// Parameters: the positive data maximum and the number of intervals between guides. Returns the axis top.
+// 参数：正的数据最大值与参考线间隔数。返回纵轴上限。
+function niceAxisMaximum(maximum: number, intervals: number): number {
+  const rawStep = maximum / intervals;
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const residual = rawStep / magnitude;
+  const step = ([1, 2, 2.5, 5].find((candidate) => residual <= candidate) ?? 10) * magnitude;
+  return step * intervals;
+}
+
 // TimeSeriesLineChart renders host-native lines without loading a chart runtime.
 // TimeSeriesLineChart 在不加载图表运行时的前提下渲染宿主原生折线。
 export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
+  const { locale } = useI18n();
+  // axisFormat keeps y-axis labels short; exact values stay in the point tooltips.
+  // axisFormat 保持纵轴标签简短；精确数值保留在数据点提示中。
+  const axisFormat = React.useMemo(() => new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }), [locale]);
   // visibleSeries excludes empty inputs while retaining zero-valued datasets.
   // visibleSeries 排除空输入，同时保留全零数据集。
   const visibleSeries = props.series.filter((item) => item.points.length > 0);
@@ -491,17 +516,17 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
   ));
   // maximumValue establishes one shared y-axis scale.
   // maximumValue 建立一个共享纵轴比例。
-  const maximumValue = Math.max(1, ...visibleSeries.flatMap((item) => item.points.map((point) => point.value)));
+  const maximumValue = niceAxisMaximum(Math.max(1, ...visibleSeries.flatMap((item) => item.points.map((point) => point.value))), TIME_SERIES_GRID_RATIOS.length - 1);
   // drawingWidth is the horizontal area inside chart padding.
   // drawingWidth 是图表内边距中的水平区域。
-  const drawingWidth = TIME_SERIES_WIDTH - TIME_SERIES_PADDING * 2;
+  const drawingWidth = TIME_SERIES_WIDTH - TIME_SERIES_AXIS_WIDTH - TIME_SERIES_PADDING;
   // drawingHeight is the vertical area inside chart padding.
   // drawingHeight 是图表内边距中的垂直区域。
   const drawingHeight = TIME_SERIES_HEIGHT - TIME_SERIES_PADDING * 2;
   // pointPosition maps one aligned point into SVG coordinates.
   // pointPosition 将一个对齐数据点映射到 SVG 坐标。
   const pointPosition = (index: number, value: number) => ({
-    x: TIME_SERIES_PADDING + (pointCount <= 1 ? 0 : (index / (pointCount - 1)) * drawingWidth),
+    x: TIME_SERIES_AXIS_WIDTH + (pointCount <= 1 ? 0 : (index / (pointCount - 1)) * drawingWidth),
     y: TIME_SERIES_PADDING + drawingHeight - (Math.max(0, value) / maximumValue) * drawingHeight,
   });
   // xAxisLabelIndexes samples at most five stable labels including both range endpoints.
@@ -514,11 +539,16 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
   return (
     <div className="plugin-time-series-chart" role="group" aria-label={props.ariaLabel}>
       <svg viewBox={`0 0 ${TIME_SERIES_WIDTH} ${TIME_SERIES_HEIGHT}`} preserveAspectRatio="xMidYMid meet">
-        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+        {TIME_SERIES_GRID_RATIOS.map((ratio) => {
           // gridY is one shared horizontal guide position.
           // gridY 是一条共享水平参考线位置。
           const gridY = TIME_SERIES_PADDING + drawingHeight * ratio;
-          return <line className="plugin-chart-grid-line" key={ratio} x1={TIME_SERIES_PADDING} y1={gridY} x2={TIME_SERIES_WIDTH - TIME_SERIES_PADDING} y2={gridY} />;
+          return (
+            <g key={ratio}>
+              <line className="plugin-chart-grid-line" x1={TIME_SERIES_AXIS_WIDTH} y1={gridY} x2={TIME_SERIES_WIDTH - TIME_SERIES_PADDING} y2={gridY} />
+              <text aria-hidden="true" className="plugin-chart-axis-label" textAnchor="end" x={TIME_SERIES_AXIS_WIDTH - 8} y={gridY + 4}>{axisFormat.format(maximumValue * (1 - ratio))}</text>
+            </g>
+          );
         })}
         {visibleSeries.map((item) => {
           // pathData connects all ordered points in the current series.
