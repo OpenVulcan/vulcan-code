@@ -54,6 +54,8 @@
   --vk-column-pad: calc(var(--vk-u) * 8);
   --vk-read-col: calc(var(--vk-read-w) + var(--vk-column-pad) * 2);
   --vk-column-w: var(--vk-read-col);
+  /* Margin a full-width column keeps on each side of the stage, outside its own side padding. */
+  --vk-full-gutter: calc(var(--vk-u) * 12);
   /* Width the stage keeps for the conversation before the context panel floats and the navigation folds:
    * the limited column plus the reasoning overhang. "full" keeps the standard measure, so it reserves that. */
   --vk-reserve-w: calc(var(--vk-read-col) + var(--vk-u) * 10);
@@ -82,12 +84,12 @@
 :root[data-vk-text="xl"] { font-size: 19px; }
 
 /* Reading width presets for the conversation column (data-vk-width). "standard" is the :root default.
- * "full" drops the cap entirely (--vk-column-w); the others only move the reading measure, so they scale
- * with the text tier. */
+ * "full" drops the cap (--vk-column-w) but keeps a margin on each side; the others only move the reading
+ * measure, so they scale with the text tier. */
 :root[data-vk-width="compact"] { --vk-read-w: 38rem; }
 :root[data-vk-width="wide"] { --vk-read-w: 58rem; }
 :root[data-vk-width="xwide"] { --vk-read-w: 72rem; }
-:root[data-vk-width="full"] { --vk-column-w: 100%; }
+:root[data-vk-width="full"] { --vk-column-w: calc(100% - var(--vk-full-gutter) * 2); }
 
 /* ---------- Skin surface: light (default) ---------- */
 :root {

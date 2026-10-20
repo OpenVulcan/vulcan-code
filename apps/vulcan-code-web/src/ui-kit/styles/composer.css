@@ -13,7 +13,7 @@
   bottom: calc(var(--vk-u) * 4);
   z-index: 5;
   width: var(--vk-column-w);
-  max-width: calc(100% - var(--vk-u) * 8);
+  max-width: calc(100% - var(--vk-u) * 8 - 2 * var(--conversation-inline-offset, 0px));
   min-width: 0;
   display: flex;
   flex-direction: column;
