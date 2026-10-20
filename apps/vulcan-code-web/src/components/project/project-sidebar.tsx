@@ -49,6 +49,7 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 import { ConversationTreeRow, type ConversationRowVariant } from "./project-sidebar-conversation-row";
 import { SortableProjectRow } from "./project-sidebar-project-row";
+import { useOptimisticOrder } from "./project-sidebar-sortable";
 import { ProjectIcon } from "./project-icons";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 import { setSidebarFlow, useSidebarFlow, type SidebarFlow } from "./sidebar-flow";
@@ -441,6 +442,9 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
   // navigate 保留各导航动作并关闭手机导航。
   const navigate = useSidebarNavigation();
   const nowMs = useRelativeNow();
+  // orderedProjects shows a dropped project order while it is being saved.
+  // orderedProjects 在保存期间显示拖放后的项目顺序。
+  const [orderedProjects, showProjectOrder] = useOptimisticOrder(props.projects);
   // openProjectIds stores the project folders currently expanded in the tree.
   // openProjectIds 保存当前在树中展开的项目文件夹。
   const [openProjectIds, setOpenProjectIds] = React.useState<Set<string>>(
@@ -509,7 +513,7 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
   }, [props.projects]);
   // handleProjectDragEnd persists one dnd-kit reorder result.
   // handleProjectDragEnd 持久化一次 dnd-kit 项目排序结果。
-  const handleProjectDragEnd = React.useCallback((sectionProjects: ProjectSummary[], event: DragEndEvent) => {
+  const handleProjectDragEnd = React.useCallback((sectionProjects: readonly ProjectSummary[], event: DragEndEvent) => {
     setActiveProjectDragId(null);
     if (!event.over || event.active.id === event.over.id) {
       return;
@@ -520,8 +524,10 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
     if (activeIndex < 0 || overIndex < 0) {
       return;
     }
-    props.onReorderProjects(arrayMove(sectionIds, activeIndex, overIndex));
-  }, [props]);
+    const nextIds = arrayMove(sectionIds, activeIndex, overIndex);
+    showProjectOrder(nextIds);
+    props.onReorderProjects(nextIds);
+  }, [props, showProjectOrder]);
   // toggleProjectOpen toggles one project folder without changing the selected conversation.
   // toggleProjectOpen 切换单个项目文件夹展开状态且不改变当前会话选择。
   const toggleProjectOpen = React.useCallback((projectId: string) => {
@@ -572,14 +578,14 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
   // 筛选时保持匹配项目展开，并去掉名称与会话均不匹配的项目。
   const filtering = props.query !== "";
   const visibleProjects = filtering
-    ? props.projects.filter((project) => (
+    ? orderedProjects.filter((project) => (
       matchesQuery(project.name, props.query)
       || (conversationsByProject[project.id] ?? []).some((conversation) => matchesQuery(conversation.title, props.query))
     ))
-    : props.projects;
+    : orderedProjects;
   // renderProjectRows renders the project rows while preserving the shared row behavior.
   // renderProjectRows 渲染项目行并保留共享项目行行为。
-  const renderProjectRows = (projects: ProjectSummary[]) => projects.map((project) => {
+  const renderProjectRows = (projects: readonly ProjectSummary[]) => projects.map((project) => {
     const allConversations = conversationsByProject[project.id] ?? [];
     const nameMatches = matchesQuery(project.name, props.query);
     const projectConversations = allConversations
@@ -630,7 +636,7 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
           <DndContext
             collisionDetection={closestCenter}
             onDragCancel={() => setActiveProjectDragId(null)}
-            onDragEnd={(event) => handleProjectDragEnd(props.projects, event)}
+            onDragEnd={(event) => handleProjectDragEnd(orderedProjects, event)}
             onDragStart={(event) => setActiveProjectDragId(String(event.active.id))}
             sensors={projectDragSensors}
           >

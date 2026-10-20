@@ -1,4 +1,4 @@
-import type * as React from "react";
+import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
@@ -21,4 +21,37 @@ export function useVerticalSortableItem(id: string, disabled = false) {
     ...sortable,
     sortableStyle,
   };
+}
+
+// OPTIMISTIC_ORDER_TIMEOUT_MS bounds how long a dropped order is shown before the authoritative order returns,
+// so a rejected reorder cannot leave the list in an order the service never accepted.
+// OPTIMISTIC_ORDER_TIMEOUT_MS 限定拖放后的顺序在权威顺序回来之前最多显示多久，使被拒绝的排序不会让列表停留在服务从未接受的顺序。
+const OPTIMISTIC_ORDER_TIMEOUT_MS = 5000;
+
+// useOptimisticOrder shows a dropped order at once while its persistence is in flight. Without it the list
+// renders the old order for the round trip after dnd-kit releases the row, so the row snaps back and then
+// jumps into place. The pending order clears once the authoritative items arrive in that order, when the item
+// set changes, or after OPTIMISTIC_ORDER_TIMEOUT_MS.
+// useOptimisticOrder 在持久化进行期间立即显示拖放后的顺序。否则 dnd-kit 释放该行后，列表会在往返期间渲染旧顺序，
+// 该行先弹回再跳到位。权威条目按该顺序到达、条目集合变化或超过 OPTIMISTIC_ORDER_TIMEOUT_MS 后，待定顺序即清除。
+export function useOptimisticOrder<T extends { id: string }>(items: readonly T[]): [readonly T[], (ids: string[]) => void] {
+  const [pending, setPending] = React.useState<string[] | null>(null);
+  const signature = items.map((item) => item.id).join("\n");
+  React.useEffect(() => {
+    if (!pending) return;
+    const ids = signature.split("\n");
+    const sameSet = ids.length === pending.length && pending.every((id) => ids.includes(id));
+    if (!sameSet || ids.every((id, index) => id === pending[index])) {
+      setPending(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setPending(null), OPTIMISTIC_ORDER_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [pending, signature]);
+  const ordered = React.useMemo(() => {
+    if (!pending) return items;
+    const rank = new Map(pending.map((id, index) => [id, index]));
+    return [...items].sort((left, right) => (rank.get(left.id) ?? Infinity) - (rank.get(right.id) ?? Infinity));
+  }, [items, pending]);
+  return [ordered, setPending];
 }
