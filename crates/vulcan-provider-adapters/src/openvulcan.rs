@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
     AiOperation, DistanceMetric, EmbeddingCapabilities, EmbeddingEncoding, EmbeddingNormalization,
-    EmbeddingOutputKind, EmbeddingTask, ModelCapabilities,
+    EmbeddingOutputKind, EmbeddingTask, ModelCapabilities, ResourceKind,
 };
 
 /// Versioned account-visible native model directory.
@@ -98,6 +98,10 @@ struct PublicDecision {
     /// Total state and question input limit.
     /// 状态与问题的总输入上限。
     max_total_input_tokens: u64,
+    /// Image parts admitted in one state array; zero (or absent) means the model reads text only.
+    /// 单个状态数组可包含的图片部分数；为零（或缺省）表示模型只读文本。
+    #[serde(default)]
+    max_images: u32,
 }
 
 /// Parses body for connection_id/generation, preserving the catalog's exact native capabilities.
@@ -199,6 +203,9 @@ pub(crate) fn parse_catalog(
                 }
                 capabilities.operations = vec![AiOperation::DecisionEvaluate];
                 capabilities.context_limit = Some(decision_capabilities.max_total_input_tokens);
+                if decision_capabilities.max_images > 0 {
+                    capabilities.input_resources = vec![ResourceKind::Image];
+                }
             }
             PublicOperation::Unsupported => continue,
         }
@@ -535,7 +542,8 @@ mod tests {
     fn openvulcan_catalog_preserves_native_operations_and_rejects_bad_bounds() {
         let mut body = serde_json::json!({"contract_version": CONTRACT_VERSION, "models": [
             {"model_id":"synthetic-vector", "display_name":"Vector", "kind":"embedding", "capabilities":{"max_input_tokens_per_item":8000,"max_batch_size":8,"default_dimensions":3,"allowed_dimensions":[3,6],"allowed_tasks":["query","document"],"allowed_output_kinds":["dense","sparse","dense_and_sparse"],"allowed_encodings":["float"]}},
-            {"model_id":"synthetic-decision", "display_name":"Decision", "kind":"decision", "decision_capabilities":{"max_total_input_tokens":16384}}
+            {"model_id":"synthetic-decision", "display_name":"Decision", "kind":"decision", "decision_capabilities":{"max_total_input_tokens":16384}},
+            {"model_id":"synthetic-vision", "display_name":"Vision", "kind":"decision", "decision_capabilities":{"max_total_input_tokens":16384,"max_images":4}}
         ]});
         let parsed = parse_catalog("fixture", 1, &body.to_string()).expect("native catalog");
         let vector = parsed
@@ -569,6 +577,13 @@ mod tests {
             decision.capabilities.operations,
             [AiOperation::DecisionEvaluate]
         );
+        assert!(decision.capabilities.input_resources.is_empty());
+        let vision = parsed
+            .models
+            .iter()
+            .find(|model| model.id == "synthetic-vision")
+            .expect("multimodal decision model");
+        assert_eq!(vision.capabilities.input_resources, [ResourceKind::Image]);
         body["models"]
             .as_array_mut()
             .unwrap()
