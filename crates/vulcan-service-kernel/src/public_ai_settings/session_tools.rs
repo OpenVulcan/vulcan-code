@@ -1146,6 +1146,23 @@ pub(crate) fn public_ai_session_media_understanding_bridge_kinds(
             configuration.media_understanding_selections.clone(),
         )
     };
+    // Only enabled capabilities with a chosen backend can bridge media; without one, the catalog
+    // projection below is skipped because no candidate could ever match.
+    // 只有已启用且已选择后端的能力才能桥接媒体；没有时跳过下方目录投影，因为不可能有候选匹配。
+    let selected_capabilities = [
+        ProviderToolCapabilityKind::ImageUnderstand,
+        ProviderToolCapabilityKind::VideoUnderstand,
+        ProviderToolCapabilityKind::AudioUnderstand,
+    ]
+    .into_iter()
+    .filter(|capability| {
+        enabled_capabilities.contains(capability)
+            && media_understanding_selections.contains_key(capability)
+    })
+    .collect::<Vec<_>>();
+    if selected_capabilities.is_empty() {
+        return Ok(BTreeSet::new());
+    }
     let settings_catalog = runtime.settings_catalog_snapshot(configuration)?;
     // availableProviderTargets shares one immutable generation with modelCandidates.
     // availableProviderTargets 与 modelCandidates 共享同一份不可变目录代际。
@@ -1156,14 +1173,7 @@ pub(crate) fn public_ai_session_media_understanding_bridge_kinds(
         &settings_catalog.catalogs,
     )?;
     let mut bridged_media_kinds = BTreeSet::new();
-    for capability in [
-        ProviderToolCapabilityKind::ImageUnderstand,
-        ProviderToolCapabilityKind::VideoUnderstand,
-        ProviderToolCapabilityKind::AudioUnderstand,
-    ] {
-        if !enabled_capabilities.contains(&capability) {
-            continue;
-        }
+    for capability in selected_capabilities {
         let route_is_available = media_understanding_selections.get(&capability).is_some_and(
             |selection| match selection {
                 MediaUnderstandingBackendSelection::ProviderTool { selection } => {
