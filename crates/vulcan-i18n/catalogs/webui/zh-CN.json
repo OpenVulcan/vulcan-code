@@ -1749,6 +1749,7 @@
   "workspaceReview.fileDetailFailed": "加载文件 diff 详情失败：{error}",
   "workspaceReview.noProjectPathForRefresh": "当前会话没有关联项目路径，无法刷新 Git diff。",
   "workspaceReview.lastTurnEmpty": "上一轮没有文件变更。",
+  "workspaceReview.loadFailedTitle": "无法读取修改",
   "workspaceReview.fileDetailLoading": "正在加载文件 diff 详情。",
   "workspaceReview.hunkExpanding": "正在展开 hunk 上下文。",
   "workspaceReview.hunkDirectionUp": "向上",

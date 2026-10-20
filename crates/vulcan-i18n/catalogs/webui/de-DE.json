@@ -1749,6 +1749,7 @@
   "workspaceReview.fileDetailFailed": "Diff-Details der Datei konnten nicht geladen werden: {error}",
   "workspaceReview.noProjectPathForRefresh": "Die aktuelle Unterhaltung hat keinen Projektpfad, daher kann der Git-Diff nicht aktualisiert werden.",
   "workspaceReview.lastTurnEmpty": "In der letzten Runde wurden keine Dateien geändert.",
+  "workspaceReview.loadFailedTitle": "Änderungen können nicht gelesen werden",
   "workspaceReview.fileDetailLoading": "Diff-Details der Datei werden geladen.",
   "workspaceReview.hunkExpanding": "Hunk-Kontext wird erweitert.",
   "workspaceReview.hunkDirectionUp": "nach oben",

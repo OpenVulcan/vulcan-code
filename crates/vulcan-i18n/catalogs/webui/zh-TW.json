@@ -1749,6 +1749,7 @@
   "workspaceReview.fileDetailFailed": "載入檔案 diff 詳細資訊失敗：{error}",
   "workspaceReview.noProjectPathForRefresh": "目前對話沒有關聯專案路徑，無法重新整理 Git diff。",
   "workspaceReview.lastTurnEmpty": "上一輪沒有檔案變更。",
+  "workspaceReview.loadFailedTitle": "無法讀取修改",
   "workspaceReview.fileDetailLoading": "正在載入檔案 diff 詳細資訊。",
   "workspaceReview.hunkExpanding": "正在展開 hunk 上下文。",
   "workspaceReview.hunkDirectionUp": "向上",

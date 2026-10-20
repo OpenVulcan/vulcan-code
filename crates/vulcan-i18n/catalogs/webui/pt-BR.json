@@ -1749,6 +1749,7 @@
   "workspaceReview.fileDetailFailed": "Falha ao carregar os detalhes do diff do arquivo: {error}",
   "workspaceReview.noProjectPathForRefresh": "A conversa atual não tem caminho de projeto, então o diff do Git não pode ser atualizado.",
   "workspaceReview.lastTurnEmpty": "O último turno não alterou nenhum arquivo.",
+  "workspaceReview.loadFailedTitle": "Não é possível ler as alterações",
   "workspaceReview.fileDetailLoading": "Carregando os detalhes do diff do arquivo.",
   "workspaceReview.hunkExpanding": "Expandindo o contexto do bloco.",
   "workspaceReview.hunkDirectionUp": "para cima",

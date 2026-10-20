@@ -1749,6 +1749,7 @@
   "workspaceReview.fileDetailFailed": "Failed to load file diff details: {error}",
   "workspaceReview.noProjectPathForRefresh": "The current conversation has no project path, so Git diff cannot refresh.",
   "workspaceReview.lastTurnEmpty": "The last turn changed no files.",
+  "workspaceReview.loadFailedTitle": "Cannot read the changes",
   "workspaceReview.fileDetailLoading": "Loading file diff details.",
   "workspaceReview.hunkExpanding": "Expanding hunk context.",
   "workspaceReview.hunkDirectionUp": "upward",

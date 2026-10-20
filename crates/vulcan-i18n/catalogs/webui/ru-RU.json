@@ -1749,6 +1749,7 @@
   "workspaceReview.fileDetailFailed": "Не удалось загрузить подробности diff файла: {error}",
   "workspaceReview.noProjectPathForRefresh": "У текущей беседы нет пути проекта, поэтому Git diff обновить нельзя.",
   "workspaceReview.lastTurnEmpty": "В последнем ходе файлы не изменялись.",
+  "workspaceReview.loadFailedTitle": "Не удаётся прочитать изменения",
   "workspaceReview.fileDetailLoading": "Загрузка подробностей diff файла.",
   "workspaceReview.hunkExpanding": "Раскрытие контекста блока.",
   "workspaceReview.hunkDirectionUp": "вверх",

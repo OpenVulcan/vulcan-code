@@ -1749,6 +1749,7 @@
   "workspaceReview.fileDetailFailed": "ファイルの差分の詳細を読み込めませんでした：{error}",
   "workspaceReview.noProjectPathForRefresh": "現在の会話にはプロジェクトのパスがないため、Git の差分を更新できません。",
   "workspaceReview.lastTurnEmpty": "前回のターンではファイルが変更されていません。",
+  "workspaceReview.loadFailedTitle": "変更を読み取れません",
   "workspaceReview.fileDetailLoading": "ファイルの差分の詳細を読み込んでいます。",
   "workspaceReview.hunkExpanding": "ハンクのコンテキストを展開しています。",
   "workspaceReview.hunkDirectionUp": "上方向",

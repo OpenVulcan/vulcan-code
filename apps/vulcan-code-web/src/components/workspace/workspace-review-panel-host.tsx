@@ -805,11 +805,13 @@ export function WorkspaceReviewPanelHost(props: {
     workspaceReviewSnapshot,
   ]);
 
+  // reviewLoadError is a failure to read the changes, which must not read as "nothing to review".
+  // reviewLoadError 是读取修改失败，不能显示为“没有可审核的修改”。
+  const reviewLoadError = lastTurnMode ? null : workspaceReviewError ?? gitRepositoryCatalogError;
   return (
     <DiffReviewPanel
-      emptyBody={lastTurnMode
-        ? t("workspaceReview.lastTurnEmpty")
-        : workspaceReviewError ?? gitRepositoryCatalogError ?? undefined}
+      emptyBody={lastTurnMode ? t("workspaceReview.lastTurnEmpty") : reviewLoadError ?? undefined}
+      emptyTitle={reviewLoadError ? t("workspaceReview.loadFailedTitle") : undefined}
       loading={workspaceReviewLoading}
       selection={diffReviewSelection}
       repositories={enabledGitRepositories}
