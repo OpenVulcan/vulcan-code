@@ -33,6 +33,7 @@ members = [
     "crates/vulcan-prompt-skills",
     "crates/vulcan-file-watcher",
     "crates/vulcan-file-ownership",
+    "crates/vulcan-markdown-memory",
     "crates/vulcan-mcp-runtime",
     "crates/vulcan-plugin-runtime",
     "crates/vulcan-tools-manager",
@@ -76,6 +77,7 @@ vulcan-subagent-core = { path = "crates/vulcan-subagent-core" }
 vulcan-session-core = { path = "crates/vulcan-session-core" }
 vulcan-session-boundary = { path = "crates/vulcan-session-boundary" }
 vulcan-task-session = { path = "crates/vulcan-task-session" }
+vulcan-markdown-memory = { path = "crates/vulcan-markdown-memory" }
 vulcan-mcp-runtime = { path = "crates/vulcan-mcp-runtime" }
 vulcan-plugin-runtime = { path = "crates/vulcan-plugin-runtime" }
 vulcan-tools-manager = { path = "crates/vulcan-tools-manager" }

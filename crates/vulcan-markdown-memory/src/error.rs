@@ -1,0 +1,100 @@
+//! Explicit failures of the Markdown memory store.
+//! Markdown 记忆存储的明确失败类型。
+
+/// One failure; every message is English and safe to return to the model.
+/// 单个失败；每条消息均为英文，可直接返回给模型。
+#[derive(Debug, thiserror::Error)]
+pub enum MemoryError {
+    /// The caller supplied an argument that the store cannot accept.
+    /// 调用方提供了存储无法接受的参数。
+    #[error("{0}")]
+    InvalidArgument(String),
+    /// The referenced node does not exist in the requested scope.
+    /// 引用的节点不存在于请求的层中。
+    #[error(
+        "Memory node `{0}` was not found; run memory_outline or memory_search to get current ids."
+    )]
+    NodeNotFound(String),
+    /// The node changed since the caller read it.
+    /// 节点在调用方读取后已发生变化。
+    #[error(
+        "Memory node `{id}` changed (expected revision {expected}, current {current}); read it again before writing."
+    )]
+    RevisionMismatch {
+        /// Node identifier.
+        /// 节点标识。
+        id: String,
+        /// Revision supplied by the caller.
+        /// 调用方提供的修订。
+        expected: String,
+        /// Revision currently stored.
+        /// 当前存储的修订。
+        current: String,
+    },
+    /// The project scope is unavailable for this request.
+    /// 当前请求无法使用项目层。
+    #[error("{0}")]
+    ProjectUnavailable(String),
+    /// A persisted file uses a format this build does not read.
+    /// 持久文件使用了当前版本不读取的格式。
+    #[error("{0}")]
+    UnsupportedFormat(String),
+    /// A memory file was edited outside Vulcan while a write was being prepared.
+    /// 准备写入期间记忆文件在 Vulcan 之外被修改。
+    #[error("Memory file `{0}` changed on disk while the write was prepared; retry the write.")]
+    ConcurrentModification(String),
+    /// Reading or writing a memory file failed.
+    /// 读取或写入记忆文件失败。
+    #[error("Memory file `{path}` could not be {action}: {source}")]
+    Io {
+        /// File path.
+        /// 文件路径。
+        path: String,
+        /// Attempted action in past participle form.
+        /// 以过去分词形式描述的尝试动作。
+        action: &'static str,
+        /// Underlying I/O error.
+        /// 底层 I/O 错误。
+        source: std::io::Error,
+    },
+    /// One operation of a multi-operation write failed; nothing was written.
+    /// 多操作写入中的某个操作失败；未写入任何内容。
+    #[error("Operation {index} failed, so no change was written: {source}")]
+    Operation {
+        /// One-based operation index.
+        /// 从一开始的操作序号。
+        index: usize,
+        /// Failure of that operation.
+        /// 该操作的失败。
+        source: Box<MemoryError>,
+    },
+    /// A JSON file could not be parsed or produced.
+    /// JSON 文件无法解析或生成。
+    #[error("Memory file `{path}` is not valid JSON: {message}")]
+    Json {
+        /// File path.
+        /// 文件路径。
+        path: String,
+        /// Parser message.
+        /// 解析器消息。
+        message: String,
+    },
+}
+
+impl MemoryError {
+    /// Builds an invalid-argument error from any message.
+    /// 由任意消息构建参数无效错误。
+    pub(crate) fn invalid(message: impl Into<String>) -> Self {
+        Self::InvalidArgument(message.into())
+    }
+
+    /// Builds an I/O error for one path and action.
+    /// 为一个路径与动作构建 I/O 错误。
+    pub(crate) fn io(path: &std::path::Path, action: &'static str, source: std::io::Error) -> Self {
+        Self::Io {
+            path: path.display().to_string(),
+            action,
+            source,
+        }
+    }
+}
