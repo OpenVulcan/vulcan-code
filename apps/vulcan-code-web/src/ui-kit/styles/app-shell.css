@@ -239,6 +239,9 @@
 .vk-status-host { display: flex; align-items: center; align-self: stretch; min-width: 0; }
 .vk-status-host:empty:not([data-grow]) { display: none; }
 .vk-status-host[data-grow] { flex: 1 1 auto; justify-content: center; overflow: hidden; }
+/* Session controls keep their labels; the repository link gives way first when the bar runs out of room. */
+.vk-status-host[data-fixed] { flex: none; }
+.vk-status > a.vk-status-item { flex: 0 8 auto; min-width: 0; }
 .vk-status-item { flex: none; max-width: 100%; }
 .vk-status-item > svg { flex: none; width: 0.95rem; height: 0.95rem; }
 .vk-status-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -249,6 +252,8 @@
 .vk-status-item .added { color: var(--vk-ok); }
 .vk-status-item .removed { color: var(--vk-bad); }
 .vk-status-item > .vk-status-plan { color: var(--vk-ink-3); font-variant-numeric: tabular-nums; }
+/* The account name stays whole while its plan summary absorbs the shortage. */
+.vk-status-item > span:has(+ .vk-status-plan) { flex-shrink: 0; }
 .vk-status-item > .lucide + span, .vk-status-item > svg + span { max-width: 14rem; }
 /* Status peek: the card a status item shows on hover or press — a heading with the way to settings over facts. */
 /* 状态预览：状态项在悬停或按下时显示的卡片——标题与前往设置的入口位于事实上方。 */

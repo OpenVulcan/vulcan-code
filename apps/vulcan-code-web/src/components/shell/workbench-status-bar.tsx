@@ -143,8 +143,8 @@ export function WorkbenchStatusBar(props: {
         <RadioTower />
         <span>{kernelLabel}</span>
       </button>
-      <div className="vk-status-host" ref={props.hosts.settings} />
-      <div className="vk-status-host" ref={props.hosts.todolist} />
+      <div className="vk-status-host" data-fixed="" ref={props.hosts.settings} />
+      <div className="vk-status-host" data-fixed="" ref={props.hosts.todolist} />
       {terminal !== null ? (
         <button
           aria-haspopup="dialog"
