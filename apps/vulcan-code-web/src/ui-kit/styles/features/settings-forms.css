@@ -156,12 +156,6 @@ fieldset.vk-form-stack, fieldset.vk-form-loose { min-width: 0; margin: 0; paddin
 .vk-form-switch > span { display: grid; gap: 2px; min-width: 0; }
 .vk-form-switch small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 400; }
 
-/* Startup step log: status glyph column beside label and message. */
-/* 启动步骤日志：状态图标列与标签、消息并排。 */
-.vk-form-steplog { display: grid; gap: calc(var(--vk-u) * 2.5); margin: 0; padding: 0; list-style: none; }
-.vk-form-steplog > li { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: start; gap: calc(var(--vk-u) * 2); }
-.vk-form-steplog strong { display: block; font-size: var(--vk-fs-sm); font-weight: 500; }
-.vk-form-steplog span { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
 .vk-form-strong[data-tone] { color: var(--vk-tone); }
 .vk-form-icon { flex: none; }
 .vk-form-icon[data-tone] { color: var(--vk-tone); }

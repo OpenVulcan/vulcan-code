@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import { I18nProvider } from "@/i18n";
-import type { StartupSnapshot } from "@/types";
 import { LogsArea } from "./settings-diagnostics-area";
 
 // SETTINGS_ACTIONS supplies stable no-op service callbacks for diagnostic-page rendering.
@@ -15,6 +14,7 @@ const SETTINGS_ACTIONS = {
   onSavePromptOutputStyle: async () => undefined,
   onSavePromptAnswerMode: async () => undefined,
   onSaveGitCommitSettings: async () => undefined,
+  onSaveDefaultCommandShell: async () => undefined,
   onSaveProviderRetrySettings: async () => undefined,
   onSaveProviderRequestTraceSettings: async () => undefined,
   onOpenSelectedProviderApiTraceDirectory: async () => undefined,
@@ -23,19 +23,10 @@ const SETTINGS_ACTIONS = {
   onDeleteArchivedConversations: async () => undefined,
 } satisfies SettingsActionProps;
 
-// STARTUP_SNAPSHOT contains the exact diagnostics fields rendered by LogsArea.
-// STARTUP_SNAPSHOT 包含 LogsArea 渲染的精确诊断字段。
-const STARTUP_SNAPSHOT = {
-  steps: [],
-  recentLogs: [],
-} as unknown as StartupSnapshot;
-
 describe("runtime diagnostics provider request trace setting", () => {
-  // Verifies the system setting is visibly off by default and explains its sensitive session-local output.
-  // 验证系统设置默认明确关闭，并说明其包含敏感内容的会话本地输出位置。
-  it("opens tracing on demand with its disabled state and privacy explanation", async () => {
-    // Use the real directory action so unopened categories are not mistaken for missing settings.
-    // 使用真实目录操作，避免将未打开分类误判为设置缺失。
+  // Verifies the trace controls sit beside the logs and read as off by default.
+  // 验证追踪控制与日志同页，且默认明确显示为关闭。
+  it("shows the trace controls beside the logs, off by default", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
@@ -46,24 +37,16 @@ describe("runtime diagnostics provider request trace setting", () => {
           logs={[]}
           providerRequestTraceEnabled={false}
           providerErrorTraceEnabled={false}
-          startup={STARTUP_SNAPSHOT}
         />
       </I18nProvider>,
     ));
-    // The first view contains startup diagnostics without the unrelated trace form.
-    // 初始视图仅展示启动诊断，不混入无关追踪表单。
-    expect(host.textContent).not.toContain("打开记录文件夹");
-    const tab = Array.from(host.querySelectorAll<HTMLButtonElement>('.vk-directory-nav button')).find((entry) => entry.textContent === "模型请求记录");
-    expect(tab).toBeDefined();
-    await act(async () => tab!.click());
-    expect(tab!.getAttribute("aria-current")).toBe("page");
-    expect(host.querySelector('.vk-directory-body .provider-trace-settings')).not.toBeNull();
+    // Logs and the trace controls share one page, so the trace panel renders without navigation.
+    // 日志与追踪控制同处一页，因此追踪面板无需导航即可渲染。
+    expect(host.querySelector(".provider-trace-settings")).not.toBeNull();
     const markup = host.innerHTML;
 
     expect(markup).toContain("模型请求记录");
     expect(markup).toContain("已关闭");
-    expect(markup).toContain("temp/provider-api-trace");
-    expect(markup).toContain("原始内容");
     expect(markup).toContain("打开记录文件夹");
     expect(markup).toContain("清空当前会话的记录");
     expect(markup).toContain('data-state="unchecked"');

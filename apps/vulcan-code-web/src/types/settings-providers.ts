@@ -41,6 +41,23 @@ export interface HostToolsSettingsSummary {
   // Runtime-registered native tool rows available for agent policy editing.
   // 可用于智能体策略编辑的运行时已注册原生工具行。
   nativeTools: NativeToolSummary[];
+  // Default shell shared by the integrated terminal and the command tools; absent from older snapshots.
+  // 集成终端与命令工具共用的默认 Shell；旧快照中缺省。
+  commandShell?: CommandShellSettingsSummary;
+}
+
+// CommandShellSettingsSummary is the persisted shell choice and the shells detected on this host.
+// CommandShellSettingsSummary 是持久化的 Shell 选择及本机检测到的 Shell。
+export interface CommandShellSettingsSummary {
+  // Persisted shell id, or null when the host picks automatically.
+  // 持久化的 Shell 标识；由宿主自动选择时为 null。
+  configuredShellId: string | null;
+  // Shell a new terminal actually uses after the preference is resolved.
+  // 解析偏好后新终端实际使用的 Shell。
+  resolvedShellId: string | null;
+  // Detected shells in automatic priority order.
+  // 按自动选择优先级排列的已检测 Shell。
+  options: { id: string; label: string }[];
 }
 
 // NativeToolSummary describes one runtime-registered native host tool.

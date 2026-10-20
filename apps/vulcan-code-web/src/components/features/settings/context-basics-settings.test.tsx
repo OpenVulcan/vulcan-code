@@ -12,7 +12,7 @@ const service = vi.hoisted(() => {
   // snapshot supplies exactly the fields read by this page; media and retry editors are isolated below.
   // snapshot 提供此页读取的精确字段；媒体与重试编辑器在下方隔离。
   const snapshot = {
-    contextWindowPolicyOverrides: {},
+    contextWindowPolicyOverrides: {}, contextWindowPolicyDefaults: { effective_context_window_percent: 95, auto_compact_percent: 90, auto_compact_token_limit: null, auto_compact_scope: "total", fallback_buffer_tokens: 0 },
     contextCompactionWindowNodes: { nodes: [
       { id: "compression-window-1", tokens: 10000 },
       { id: "compression-window-2", tokens: 20000 },
@@ -56,6 +56,7 @@ describe("context settings draft navigation", () => {
         onSavePromptOutputStyle: vi.fn(async () => undefined),
         onSavePromptAnswerMode: vi.fn(async () => undefined),
         onSaveGitCommitSettings: vi.fn(async () => undefined),
+        onSaveDefaultCommandShell: vi.fn(async () => undefined),
         onSaveProviderRetrySettings: vi.fn(async () => undefined),
         onSaveProviderRequestTraceSettings: vi.fn(async () => undefined),
         onOpenSelectedProviderApiTraceDirectory: vi.fn(async () => undefined),

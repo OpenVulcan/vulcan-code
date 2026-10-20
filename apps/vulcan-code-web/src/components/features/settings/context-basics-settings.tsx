@@ -7,6 +7,7 @@ import { PageActionBar } from "@/components/page"
 import { ContextWindowPolicyEditor } from "@/components/features/settings/context-window-policy-editor"
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings"
 import { MediaDeliveryPolicyCard } from "@/components/features/settings/media-delivery-policy-card"
+import { TerminalShellSettingsCard } from "@/components/features/settings/terminal-shell-settings"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import { Button } from "@/ui-kit/primitives/button"
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
@@ -22,7 +23,9 @@ import {
   savePublicAiUsageRefreshSettings,
 } from "@/service/settings-actions-service"
 import type {
+  CommandShellSettingsSummary,
   ContextCompactionWindowNodeId,
+  PublicAiContextWindowPolicy,
   PublicAiContextWindowPolicyOverrides,
   PublicAiContextCompactionWindowConfiguration,
   PublicAiSettingsSnapshot,
@@ -68,6 +71,9 @@ function ContextBasicsHeader(props: { title: string; children: React.ReactNode; 
 function SystemContextWindowPolicyCard(props: {
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
   policy: PublicAiContextWindowPolicyOverrides
+  // Built-in values shown in every field nobody overrides.
+  // 无人覆盖的字段中显示的内置值。
+  defaults: PublicAiContextWindowPolicy
 }) {
   const { t } = useI18n()
   // draft is the current system-level sparse policy being edited.
@@ -121,9 +127,7 @@ function SystemContextWindowPolicyCard(props: {
         <p>{t("settings.modelExperience.scopeHint")}</p>
         <p className="vk-form-note">{t("settings.contextWindowPolicy.description")}</p>
       </ContextBasicsHeader>
-      {/* These display-only defaults match ContextWindowPolicyOverrides::resolve in vulcan-context. */}
-      {/* 这些仅展示的默认值对应 vulcan-context 中的 ContextWindowPolicyOverrides::resolve。 */}
-      <ContextWindowPolicyEditor disabled={saving} onChange={setDraft} value={draft} inheritanceHints={{
+      <ContextWindowPolicyEditor defaults={props.defaults} disabled={saving} onChange={setDraft} value={draft} inheritanceHints={{
         effective_context_window_percent: t("settings.modelExperience.inheritWindow"),
         auto_compact_percent: t("settings.modelExperience.inheritCompact"),
         auto_compact_token_limit: t("settings.modelExperience.inheritToken"),
@@ -430,6 +434,9 @@ export function ContextBasicsSettingsArea(props: {
   // Base system prompt editor supplied by the settings composition root.
   // 由设置组合入口提供的基础系统提示词编辑器。
   systemPromptSettings?: React.ReactNode
+  // Default shell projection of the integrated terminal; absent before the service is ready.
+  // 集成终端的默认 Shell 投影；服务就绪前缺省。
+  commandShell?: CommandShellSettingsSummary
   // Opens an actually installed statistics mount; absence leaves the optional link hidden.
   // 打开实际安装的统计挂载；缺少挂载时不显示可选链接。
   onOpenUsageStatistics?: () => void
@@ -448,6 +455,7 @@ export function ContextBasicsSettingsArea(props: {
     { id: "context", label: t("settings.modelExperience.context") },
     { id: "nodes", label: t("settings.modelExperience.nodes") },
     { id: "retry", label: t("settings.modelExperience.retry") },
+    { id: "terminal", label: t("settings.modelExperience.terminal") },
     { id: "media", label: t("settings.modelExperience.media") },
     { id: "usage", label: t("settings.modelExperience.usage") },
   ]
@@ -485,7 +493,7 @@ export function ContextBasicsSettingsArea(props: {
             {/* Adopt only the saved section so late full snapshots cannot regress another independent editor. */}
             {/* 仅采用已保存分区，避免迟到的完整快照使另一独立编辑器倒退。 */}
             <section hidden={activeSection !== "context"}>
-              <SystemContextWindowPolicyCard onSaved={(next) => setSnapshot((current) => current ? { ...current, contextWindowPolicyOverrides: next.contextWindowPolicyOverrides } : next)} policy={snapshot.contextWindowPolicyOverrides} />
+              <SystemContextWindowPolicyCard onSaved={(next) => setSnapshot((current) => current ? { ...current, contextWindowPolicyOverrides: next.contextWindowPolicyOverrides } : next)} policy={snapshot.contextWindowPolicyOverrides} defaults={snapshot.contextWindowPolicyDefaults} />
             </section>
             <section hidden={activeSection !== "nodes"}>
               <ContextCompactionWindowNodesCard nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, contextCompactionWindowNodes: next.contextCompactionWindowNodes } : next)}>
@@ -502,6 +510,9 @@ export function ContextBasicsSettingsArea(props: {
         ) : !error ? <StreamPlaceholder label={t("settings.contextBasics.loading")} shape="fields" count={4} /> : null}
         <section hidden={activeSection !== "retry"}>
           <ProviderRetrySettingsArea actions={props.actions} settings={props.retrySettings} />
+        </section>
+        <section hidden={activeSection !== "terminal"}>
+          <TerminalShellSettingsCard onSave={props.actions.onSaveDefaultCommandShell} settings={props.commandShell} />
         </section>
       </div>
     </WorkspaceDirectoryLayout>

@@ -2,35 +2,132 @@
   padding: 0;
 }
 
-/* Diagnostic logs read like a console: one dense mono line per entry, level tinted, message wrapping under narrow widths. */
-/* 诊断日志以控制台方式呈现：每条一行等宽紧凑文本，级别着色，窄宽度时消息换行。 */
+/* Runtime diagnostics: one page with the log console in the main column and request recording in a side rail;
+   narrow panes stack the rail above the console. */
+/* 运行诊断：单页布局，日志控制台位于主列，请求记录位于侧栏；窄面板时侧栏叠在控制台上方。 */
+.diagnostics-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  grid-template-areas: "console trace";
+  align-items: start;
+  gap: calc(var(--vk-u) * 4);
+  min-height: 0;
+}
+.diagnostics-console { grid-area: console; min-height: 0; }
+.diagnostics-trace { grid-area: trace; position: sticky; top: 0; }
+@container settings-shell (max-width: 980px) {
+  .diagnostics-page { grid-template-columns: minmax(0, 1fr); grid-template-areas: "trace" "console"; }
+  .diagnostics-trace { position: static; }
+}
+
+.diagnostics-count,
+.diagnostics-trace-state {
+  color: var(--vk-ink-3);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+.diagnostics-trace-state { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); }
+.diagnostics-trace-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--vk-ink-3); }
+.diagnostics-trace-state[data-on] { color: var(--vk-warn); }
+.diagnostics-trace-state[data-on]::before { background: var(--vk-warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vk-warn) 18%, transparent); }
+.diagnostics-trace .vk-page-row { padding-block: calc(var(--vk-u) * 2.5); }
+.diagnostics-trace .vk-page-row-text { flex-basis: 180px; }
+
+/* The console toolbar: search on the start side, level filters with live counts on the end. */
+/* 控制台工具栏：起始侧为搜索，末端为带实时计数的级别筛选。 */
+.diagnostics-console-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--vk-u) * 2);
+  padding: 0 calc(var(--vk-u) * 4) calc(var(--vk-u) * 3);
+}
+.diagnostics-console-tools > .vk-input,
+.diagnostics-console-tools > .vk-input-wrap { width: min(320px, 100%); }
+.diagnostics-levels { display: inline-flex; border: var(--vk-bw) solid var(--vk-line); }
+.diagnostics-levels > button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: calc(var(--vk-u) * 1.5);
+  padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2.5);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  cursor: pointer;
+  font-size: var(--vk-fs-sm);
+  transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
+}
+.diagnostics-levels > button + button { border-left: var(--vk-bw) solid var(--vk-line); }
+.diagnostics-levels > button:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.diagnostics-levels > button[aria-pressed="true"] { background: var(--vk-sunken); color: var(--vk-ink); box-shadow: inset 0 -2px 0 var(--vk-ember); }
+.diagnostics-levels > button > small { color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs); font-variant-numeric: tabular-nums; }
+.diagnostics-levels > button[data-level="error"] > small { color: var(--vk-bad); }
+.diagnostics-levels > button[data-level="warn"] > small { color: var(--vk-warn); }
+
+/* Diagnostic logs read like a terminal: dense mono lines, a level stripe on the start edge, wrapping messages. */
+/* 诊断日志以终端方式呈现：紧凑等宽行，起始边带级别色条，消息自动换行。 */
+.diagnostics-console > .vk-page-section-body { padding-bottom: 0; }
 .diagnostic-log-list {
+  max-height: min(68vh, 720px);
   margin: 0;
-  padding: 0;
+  padding: calc(var(--vk-u) * 1.5) 0;
+  overflow: auto;
+  overscroll-behavior: contain;
   list-style: none;
-  border: var(--vk-bw) solid var(--vk-line);
-  background: var(--vk-sunken);
+  border-top: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-term-bg);
+  color: var(--vk-term-ink);
   font-family: var(--vk-font-mono);
   font-size: var(--vk-fs-xs);
 }
-
 .diagnostic-log-row {
   display: grid;
-  grid-template-columns: 44px minmax(80px, 120px) minmax(0, 1fr);
+  grid-template-columns: 52px minmax(80px, 140px) minmax(0, 1fr);
   align-items: baseline;
   gap: calc(var(--vk-u) * 3);
-  padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3);
+  padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 4) calc(var(--vk-u) * 1) calc(var(--vk-u) * 3.5);
+  border-left: 2px solid transparent;
   overflow-wrap: anywhere;
 }
+.diagnostic-log-row:hover { background: color-mix(in srgb, var(--vk-term-ink) 6%, transparent); }
+.diagnostic-log-row[data-level="warn"] { border-left-color: var(--vk-warn); }
+.diagnostic-log-row[data-level="error"] { border-left-color: var(--vk-bad); background: color-mix(in srgb, var(--vk-bad) 7%, transparent); }
+.diagnostic-log-row > strong { overflow: hidden; color: color-mix(in srgb, var(--vk-term-ink) 70%, transparent); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic-log-row > p { margin: 0; white-space: pre-wrap; color: var(--vk-term-ink); }
+.diagnostic-log-level { color: color-mix(in srgb, var(--vk-term-ink) 55%, transparent); text-transform: uppercase; }
+.diagnostic-log-row[data-level="warn"] > .diagnostic-log-level { color: var(--vk-warn); }
+.diagnostic-log-row[data-level="error"] > .diagnostic-log-level { color: var(--vk-bad); }
+.diagnostics-console .vk-page-empty { margin: 0 calc(var(--vk-u) * 4) calc(var(--vk-u) * 4); }
 
-.diagnostic-log-row + .diagnostic-log-row { border-top: var(--vk-bw) solid var(--vk-line-soft); }
-.diagnostic-log-row > strong { color: var(--vk-ink-2); font-weight: 500; }
-.diagnostic-log-row > p { margin: 0; white-space: pre-wrap; color: var(--vk-ink); }
-.diagnostic-log-level { color: var(--vk-ink-3); text-transform: uppercase; }
-.diagnostic-log-level[data-level="warn"], .diagnostic-log-level[data-level="warning"] { color: var(--vk-warn); }
-.diagnostic-log-level[data-level="error"] { color: var(--vk-bad); }
-
-@container workspace-page (max-width: 640px) {
-  .diagnostic-log-row { grid-template-columns: 44px minmax(0, 1fr); }
+@container settings-shell (max-width: 640px) {
+  .diagnostic-log-row { grid-template-columns: 52px minmax(0, 1fr); }
   .diagnostic-log-row > p { grid-column: 1 / -1; }
 }
+
+/* Integrated terminal shell: one square tile per detected shell, the chosen one marked by an ember edge. */
+/* 集成终端 Shell：每个已检测 Shell 一块方形卡片，选中项以余烬色边缘标记。 */
+.terminal-shell-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: calc(var(--vk-u) * 2); }
+.terminal-shell-choice {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2.5);
+  min-height: 56px;
+  padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  color: var(--vk-ink-2);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease), box-shadow var(--vk-t-fast) var(--vk-ease);
+}
+.terminal-shell-choice > svg { width: 18px; height: 18px; }
+.terminal-shell-choice > svg:last-child { width: 15px; height: 15px; color: var(--vk-ember); }
+.terminal-shell-choice > span { display: grid; gap: 2px; min-width: 0; }
+.terminal-shell-choice strong { overflow: hidden; color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-shell-choice small { overflow: hidden; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.terminal-shell-choice:hover:not(:disabled) { border-color: var(--vk-line-strong); background: var(--vk-sunken); }
+.terminal-shell-choice[aria-checked="true"] { border-color: var(--vk-line-strong); background: var(--vk-sunken); color: var(--vk-ink); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.terminal-shell-choice:disabled { cursor: progress; }

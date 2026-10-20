@@ -33,7 +33,6 @@ import {
 } from "@/components/features/settings/settings-navigation";
 import type {
   SettingsSubAreaId,
-  StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types";
 
@@ -56,9 +55,6 @@ export interface SettingsFeatureContentProps {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   actions: SettingsActionProps;
-  // Startup snapshot used by diagnostics.
-  // 诊断页面使用的启动快照。
-  startup: StartupSnapshot;
   // Workbench snapshot used by settings pages.
   // 设置页面使用的工作台快照。
   workbench: WorkbenchSnapshot;
@@ -67,6 +63,10 @@ export interface SettingsFeatureContentProps {
   onOpenUsageStatistics?: () => void;
 }
 
+// READABLE_SETTINGS_PAGES are preference pages that read as one centred column; work surfaces fill the pane.
+// READABLE_SETTINGS_PAGES 是以居中单列阅读的偏好类页面；工作界面铺满面板。
+const READABLE_SETTINGS_PAGES: ReadonlySet<SettingsSubAreaId> = new Set(["context-basics", "appearance", "notifications", "git-commit", "about-licenses"]);
+
 // SettingsFeatureContent frames every settings page; the feature header shows its title and navigation stays in the sidebar.
 // SettingsFeatureContent 包裹每个设置页面；功能页头显示其标题，导航保留在侧栏。
 export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
@@ -74,7 +74,7 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   return (
     // The key replays the page enter transition on navigation and resets page-local state.
     // key 使切换页面时重放进入动效，并重置页面内部状态。
-    <SettingsPage key={current}>
+    <SettingsPage key={current} width={READABLE_SETTINGS_PAGES.has(current) ? "readable" : "full"}>
       <SettingsRoutedPage {...props} />
     </SettingsPage>
   );
@@ -106,7 +106,6 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
         actions={props.actions}
         providerRequestTraceEnabled={props.workbench.providerRequestTraceEnabled === true}
         providerErrorTraceEnabled={props.workbench.providerErrorTraceEnabled === true}
-        startup={props.startup}
         logs={props.workbench.logs}
       />
     );
@@ -133,6 +132,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
       <ContextBasicsSettingsArea
         actions={props.actions}
         retrySettings={props.workbench.providerRetry}
+        commandShell={props.workbench.hostTools?.commandShell}
         onOpenUsageStatistics={props.onOpenUsageStatistics}
         outputStyleSettings={<>
           <OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />

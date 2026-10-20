@@ -948,6 +948,15 @@ export async function selectWebuiLocale(locale: string): Promise<WorkbenchSnapsh
   return serviceClient.request<WorkbenchSnapshot>("service_select_webui_locale", { locale });
 }
 
+// saveDefaultCommandShell persists the shell shared by the integrated terminal and the command tools; null picks automatically.
+// saveDefaultCommandShell 持久化集成终端与命令工具共用的 Shell；null 表示自动选择。
+export async function saveDefaultCommandShell(shellId: string | null): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_save_default_command_shell", { request: { shellId } });
+}
+
 // saveGitCommitSettings persists Git commit settings through the desktop service.
 // saveGitCommitSettings 通过桌面服务持久化 Git 提交设置。
 export async function saveGitCommitSettings(request: {

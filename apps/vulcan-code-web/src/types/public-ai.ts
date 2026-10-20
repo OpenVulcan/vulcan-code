@@ -377,6 +377,16 @@ export interface PublicAiContextWindowPolicyOverrides {
   fallback_buffer_tokens?: number;
 }
 
+// PublicAiContextWindowPolicy is the fully resolved policy; the snapshot uses it for the built-in values.
+// PublicAiContextWindowPolicy 是完整解析后的策略；快照用它表示内置值。
+export interface PublicAiContextWindowPolicy {
+  effective_context_window_percent: number;
+  auto_compact_percent: number;
+  auto_compact_token_limit: number | null;
+  auto_compact_scope: "total" | "body_after_prefix";
+  fallback_buffer_tokens: number;
+}
+
 // ContextCompactionWindowNodeId is one immutable backend-owned node identity.
 // ContextCompactionWindowNodeId 是一个由后台持有的不可变节点身份。
 export type ContextCompactionWindowNodeId =
@@ -1310,6 +1320,9 @@ export interface PublicAiSettingsSnapshot {
   // contextWindowPolicyOverrides is the system-level sparse Codex window policy.
   // contextWindowPolicyOverrides 是系统级稀疏 Codex 窗口策略。
   contextWindowPolicyOverrides: PublicAiContextWindowPolicyOverrides;
+  // contextWindowPolicyDefaults holds the built-in value of every field nobody overrides.
+  // contextWindowPolicyDefaults 保存无人覆盖的各字段内置值。
+  contextWindowPolicyDefaults: PublicAiContextWindowPolicy;
   // contextCompactionWindowNodes exposes the complete fixed system node configuration.
   // contextCompactionWindowNodes 公开完整的固定系统节点配置。
   contextCompactionWindowNodes: PublicAiContextCompactionWindowConfiguration;

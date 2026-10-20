@@ -23,7 +23,7 @@ export const browserFallbackStartup: StartupSnapshot = {
   steps: [
     { id: "service-process", label: "Core Service", status: "warning", message: "Browser preview mode: local Core Service is not connected" },
     { id: "luaskills", label: "LuaSkills", status: "pending", message: "Waiting for the desktop shell to provide live status" },
-    { id: "vldb", label: "VLDB", status: "pending", message: "Waiting for the desktop shell to provide live status" },
+    { id: "data-store", label: "Data store", status: "pending", message: "Waiting for the desktop shell to provide live status" },
     { id: "mcp", label: "MCP Runtime", status: "pending", message: "Waiting for the desktop shell to provide live status" },
     { id: "workspace", label: "Workspace", status: "ready", message: "Frontend layout preview is ready" },
   ],
@@ -47,7 +47,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   modules: [
     { id: "core", label: "Core Service", status: "warning", message: "Browser preview mode" },
     { id: "luaskills", label: "LuaSkills", status: "pending", message: "Waiting for live status" },
-    { id: "vldb", label: "VLDB", status: "pending", message: "Waiting for live status" },
+    { id: "data-store", label: "Data store", status: "pending", message: "Waiting for live status" },
     { id: "mcp", label: "MCP Runtime", status: "pending", message: "Waiting for live status" },
     { id: "workspace", label: "Workspace", status: "ready", message: "Frontend layout preview" },
   ],
@@ -337,7 +337,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     ],
   },
   settings: [
-    { id: "runtime", label: "Runtime", description: "Core Service, LuaSkills, VLDB, and MCP", items: ["Startup mode", "Runtime directory", "MCP tool policy"] },
+    { id: "runtime", label: "Runtime", description: "Core Service, data store, LuaSkills, and MCP", items: ["Startup mode", "Runtime directory", "MCP tool policy"] },
     { id: "providers", label: "Models & Providers", description: "Model providers, access, defaults, and reasoning configuration", items: ["Default provider", "Default model", "Model access", "Reasoning effort"] },
     { id: "remote", label: "Remote Access", description: "Future browser, mobile, and remote-client access to Core Service", items: ["Bind address", "Access token", "Remote switch", "Audit log"] },
   ],

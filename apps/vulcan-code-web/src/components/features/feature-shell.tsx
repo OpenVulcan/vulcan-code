@@ -34,7 +34,6 @@ import type {
   FeatureAreaSummary,
   MainAreaId,
   SettingsSubAreaId,
-  StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types"
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor"
@@ -88,9 +87,6 @@ function FeatureShell(props: {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   settingsActions: SettingsActionProps
-  // Startup snapshot used by diagnostics.
-  // 诊断页面使用的启动快照。
-  startup: StartupSnapshot
   // Workbench snapshot used by feature pages.
   // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot
@@ -254,7 +250,6 @@ function FeatureShell(props: {
         agentActions={props.agentActions}
           luaSkillActions={props.luaSkillActions}
           agentSkillActions={props.agentSkillActions}
-        startup={props.startup}
         workbench={props.workbench}
       />
     ),

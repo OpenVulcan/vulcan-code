@@ -439,7 +439,7 @@ function settings(): PublicAiSettingsSnapshot {
       target: { target_id: "image", provider_id: "p", service_entry_id: "entry", credential_profile_ids: ["profile"], upstream_target_id: "image", display_name: "Image model",
         contract: { tool_id: "image_understand", description: "Understand an image.", capability: "image_understand", input_schema: { type: "object" }, output: { kind: "text", source_path: "$.text", normalized_result_path: "$.text" } } } }],
     providerToolEnabledCapabilities: [], providerToolSelections: {}, mediaUnderstandingSelections: {}, mediaUnderstandingBackendOptions: {}, providerExtensionTargetSets: {},
-    internalInferenceCandidates: [], inferenceProfiles: {}, inferenceRouteDiagnostics: [], internalModelOverrides: {}, contextWindowPolicyOverrides: {},
+    internalInferenceCandidates: [], inferenceProfiles: {}, inferenceRouteDiagnostics: [], internalModelOverrides: {}, contextWindowPolicyOverrides: {}, contextWindowPolicyDefaults: { effective_context_window_percent: 95, auto_compact_percent: 90, auto_compact_token_limit: null, auto_compact_scope: "total", fallback_buffer_tokens: 0 },
   };
 }
 // session constructs a complete session selection, optionally referencing a removed target.

@@ -121,6 +121,7 @@ import {
   openSelectedProviderApiTraceDirectory,
   removeMcpServerConfiguration,
   saveGitCommitSettings,
+  saveDefaultCommandShell,
   saveProviderRequestTraceSettings,
   saveProviderRetrySettings,
   saveMcpServerConfiguration,
@@ -1307,6 +1308,7 @@ export function WorkbenchLayout(props: {
                 return (await loadWorkbenchSnapshot()) ?? workbenchStateRef.current;
               }),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
+              onSaveDefaultCommandShell: (shellId) => applySkillWorkbenchAction(async () => (await saveDefaultCommandShell(shellId)) ?? workbenchStateRef.current),
               onSaveProviderRequestTraceSettings: (enabled, errorsEnabled) => applySkillWorkbenchAction(async () => (await saveProviderRequestTraceSettings(enabled, errorsEnabled)) ?? workbenchStateRef.current),
               onOpenSelectedProviderApiTraceDirectory: async () => {
                 await openSelectedProviderApiTraceDirectory();
@@ -1316,7 +1318,6 @@ export function WorkbenchLayout(props: {
               onRestoreArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await restoreArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
               onDeleteArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await deleteArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
             }}
-            startup={props.startup}
             workbench={workbenchState}
             selectedConversationId={selectedConversationId}
             chromeActions={shellChromeActions}

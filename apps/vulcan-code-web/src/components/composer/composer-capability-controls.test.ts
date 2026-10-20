@@ -150,7 +150,7 @@ function settingsFixture(): PublicAiSettingsSnapshot {
     inferenceProfiles: {},
     inferenceRouteDiagnostics: [],
     internalModelOverrides: {},
-    contextWindowPolicyOverrides: {},
+    contextWindowPolicyOverrides: {}, contextWindowPolicyDefaults: { effective_context_window_percent: 95, auto_compact_percent: 90, auto_compact_token_limit: null, auto_compact_scope: "total", fallback_buffer_tokens: 0 },
   };
 }
 

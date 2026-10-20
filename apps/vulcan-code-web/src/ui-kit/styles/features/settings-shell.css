@@ -153,3 +153,84 @@
 }
 :is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class])[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
 :is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary:hover { color: var(--vk-ink); }
+
+/* ---------- Settings atmosphere ---------- */
+/* A faint drafting grid fades down from the top of every settings page, with one ember horizon line, so the pages
+   read as one console instead of a bare form; it sits behind the content and never takes pointer input. */
+/* 每个设置页顶部向下淡出一层浅制图网格，并有一条余烬色地平线，使各页读作同一控制台而非空白表单；
+   它位于内容之后，从不接收指针输入。 */
+.settings-page { position: relative; isolation: isolate; }
+.settings-page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--vk-line-soft) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--vk-line-soft) 1px, transparent 1px);
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(130% 60% at 50% 0%, #000 0%, transparent 72%);
+  mask-image: radial-gradient(130% 60% at 50% 0%, #000 0%, transparent 72%);
+}
+.settings-page::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: -1;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--vk-ember) 55%, transparent) 22%, transparent 64%);
+}
+
+/* Preference pages keep one centred reading column so labels and their controls stay within one glance. */
+/* 偏好类页面保持一条居中的阅读列，使标签与其控件处于同一视线范围。 */
+.settings-page[data-width="readable"] .settings-page-body > * { width: 100%; max-width: 920px; margin-inline: auto; }
+
+/* Sections on preference pages carry a running index and an ember corner tick; rows answer the pointer. */
+/* 偏好页的分区带有顺序编号与余烬色角标；行会响应指针。 */
+.settings-page[data-width="readable"] .settings-page-body { counter-reset: settings-section; }
+.settings-page[data-width="readable"] :is(.vk-page-section, .context-basics-tabs > section) {
+  position: relative;
+  box-shadow: var(--vk-shadow-1);
+  transition: border-color var(--vk-t-med) var(--vk-ease);
+}
+.settings-page[data-width="readable"] :is(.vk-page-section, .context-basics-tabs > section)::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: calc(var(--vk-u) * 7);
+  height: 2px;
+  background: var(--vk-ember);
+  opacity: 0.8;
+}
+.settings-page[data-width="readable"] :is(.vk-page-section, .context-basics-tabs > section):hover { border-color: var(--vk-line-strong); }
+.settings-page[data-width="readable"] .vk-page-section { counter-increment: settings-section; }
+.settings-page[data-width="readable"] .vk-page-section-title::before {
+  content: counter(settings-section, decimal-leading-zero);
+  padding: 0 calc(var(--vk-u) * 1.25);
+  border: var(--vk-bw) solid var(--vk-line);
+  color: var(--vk-ink-3);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-2xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+}
+.settings-page[data-width="readable"] .vk-page-section[data-layout="rows"] > .vk-page-section-body > .vk-page-row { transition: background-color var(--vk-t-fast) var(--vk-ease); }
+.settings-page[data-width="readable"] .vk-page-section[data-layout="rows"] > .vk-page-section-body > .vk-page-row:hover { background: color-mix(in srgb, var(--vk-sunken) 70%, transparent); }
+
+/* Basic settings tabs render each tab as one framed panel, matching the page-kit sections. */
+/* 基础设置的每个分页呈现为一个带框面板，与页面套件分区一致。 */
+.context-basics-tabs > section {
+  padding: calc(var(--vk-u) * 5) calc(var(--vk-u) * 6) calc(var(--vk-u) * 6);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  animation: vcn-fade-in var(--vk-t-med) var(--vk-ease);
+}
+.context-basics-tabs > section.vk-form-prefs,
+.context-basics-tabs > section > :is(.context-basics-section, .vk-form-prefs) { max-width: none; }
+.context-basics-tabs .context-basics-rows { max-width: none; }

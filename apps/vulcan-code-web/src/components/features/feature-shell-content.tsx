@@ -12,7 +12,6 @@ import { useI18n } from "@/i18n";
 import type {
   MainAreaId,
   SettingsSubAreaId,
-  StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types";
 
@@ -112,9 +111,6 @@ export function FeatureContent(props: {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   settingsActions: SettingsActionProps;
-  // Startup snapshot used by settings diagnostics.
-  // 设置诊断页面使用的启动快照。
-  startup: StartupSnapshot;
   // Workbench snapshot used by feature pages.
   // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot;
@@ -168,7 +164,6 @@ export function FeatureContent(props: {
           activeSettingsSubArea={props.activeSettingsSubArea}
           onOpenUsageStatistics={props.onOpenUsageStatistics}
           actions={props.settingsActions}
-          startup={props.startup}
           workbench={props.workbench}
         /></FeatureLoadBoundary>
       </div>
