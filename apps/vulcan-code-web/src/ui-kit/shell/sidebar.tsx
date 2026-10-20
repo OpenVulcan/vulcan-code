@@ -140,12 +140,14 @@ function Sidebar({
   const { state, isMobile, open, setOpen, focusTrigger } = useSidebar()
   const { t } = useI18n()
 
-  // Render the same navigation children in a focus-trapped drawer on phones.
-  // 在手机上将相同的导航内容呈现于具有焦点约束的抽屉中。
+  // Render the same navigation children in a focus-trapped drawer on phones. The drawer itself takes
+  // focus on open: focusing the first rail button would pop its tooltip over the drawer.
+  // 在手机上将相同的导航内容呈现于具有焦点约束的抽屉中。打开时由抽屉本身获得焦点：
+  // 聚焦第一个轨道按钮会在抽屉上弹出它的提示。
   if (isMobile && collapsible !== "none") {
     return (
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="left" className={cx("vk-shell-drawer", rail ? "vk-shell-drawer-rail" : undefined)} aria-describedby={undefined} onCloseAutoFocus={(event) => { event.preventDefault(); focusTrigger() }}>
+        <SheetContent side="left" className={cx("vk-shell-drawer", rail ? "vk-shell-drawer-rail" : undefined)} aria-describedby={undefined} initialFocus={(scope) => scope} onCloseAutoFocus={(event) => { event.preventDefault(); focusTrigger() }}>
           <SheetTitle className="vk-sr-only">{t("sidebar.console")}</SheetTitle>
           {rail}
           {panel ? (
