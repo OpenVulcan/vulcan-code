@@ -880,6 +880,7 @@
   "diff.file.tooLarge": "サイズが大きすぎるファイルは表示されません",
   "diff.file.added": "追加されたファイル",
   "diff.file.deleted": "削除されたファイル",
+  "diff.file.binary": "バイナリファイルが変更されました。内容は表示されません。",
   "diff.file.gitlink": "サブモジュールのポインターが変更されました。テキストの内容は表示されません。",
   "diff.file.renamedNoChanges": "変更なしで名前が変更されたファイル",
   "diff.file.noContent": "コンテンツなし",

@@ -880,6 +880,7 @@
   "diff.file.tooLarge": "Oversized file not shown",
   "diff.file.added": "Added file",
   "diff.file.deleted": "Deleted file",
+  "diff.file.binary": "Binary file changed. Its content is not shown.",
   "diff.file.gitlink": "Submodule pointer changed. Text content was not rendered.",
   "diff.file.renamedNoChanges": "File renamed without changes",
   "diff.file.noContent": "No content",

@@ -880,6 +880,7 @@
   "diff.file.tooLarge": "너무 큰 파일은 표시되지 않습니다",
   "diff.file.added": "추가된 파일",
   "diff.file.deleted": "삭제된 파일",
+  "diff.file.binary": "바이너리 파일이 변경되었습니다. 내용은 표시되지 않습니다.",
   "diff.file.gitlink": "하위 모듈 포인터가 변경되었습니다. 텍스트 내용은 렌더링되지 않았습니다.",
   "diff.file.renamedNoChanges": "변경 없이 이름이 바뀐 파일",
   "diff.file.noContent": "내용 없음",

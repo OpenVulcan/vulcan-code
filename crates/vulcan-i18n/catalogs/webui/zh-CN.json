@@ -880,6 +880,7 @@
   "diff.file.tooLarge": "超大文件未展示",
   "diff.file.added": "新增文件",
   "diff.file.deleted": "删除文件",
+  "diff.file.binary": "二进制文件已变更，不显示内容。",
   "diff.file.gitlink": "子模块指针变更，未渲染文本内容。",
   "diff.file.renamedNoChanges": "File renamed without changes",
   "diff.file.noContent": "No content",

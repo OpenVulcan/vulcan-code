@@ -880,6 +880,7 @@
   "diff.file.tooLarge": "超大檔案未顯示",
   "diff.file.added": "新增的檔案",
   "diff.file.deleted": "刪除的檔案",
+  "diff.file.binary": "二進位檔案已變更，不顯示內容。",
   "diff.file.gitlink": "子模組指標變更，未呈現文字內容。",
   "diff.file.renamedNoChanges": "檔案已重新命名，內容無變更",
   "diff.file.noContent": "沒有內容",

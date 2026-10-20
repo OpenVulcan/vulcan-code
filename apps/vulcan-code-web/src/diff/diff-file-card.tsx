@@ -194,7 +194,7 @@ export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCard
       {!props.collapsed ? (
         <div className="diff-file-body">
           {props.file.isBinary ? (
-            <div className="diff-binary-note">Binary file not shown</div>
+            <div className="diff-binary-note">{t("diff.file.binary")}</div>
           ) : props.file.isGitlink ? (
             <div className="diff-binary-note">{t("diff.file.gitlink")}</div>
           ) : props.file.hunks.length ? (
