@@ -381,6 +381,7 @@ interface ResourceCodeEditorProps {
 // ResourceCodeEditor renders a guarded syntax-highlighted editor with synchronized line numbers.
 // ResourceCodeEditor 渲染一个带同步行号的受保护语法高亮编辑器。
 function ResourceCodeEditor({ disabled, language, onChange, value }: ResourceCodeEditorProps) {
+  const { t } = useI18n()
   // previewRef targets the token content so native scrollbar gutters cannot clamp its offset.
   // previewRef 指向高亮内容，避免原生滚动条占位限制其偏移量。
   const previewRef = React.useRef<HTMLElement>(null)
@@ -434,7 +435,7 @@ function ResourceCodeEditor({ disabled, language, onChange, value }: ResourceCod
         </pre>
         <pre aria-hidden="true" className="vk-mem-code-gutter"><span ref={gutterRef}>{lineNumbers}</span></pre>
         <textarea
-          aria-label="VMM resource code editor"
+          aria-label={t("memory.resources.fileEditor")}
           aria-readonly={disabled}
           className="vk-mem-code-input"
           onChange={(event) => {
