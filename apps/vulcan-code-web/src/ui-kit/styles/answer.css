@@ -28,7 +28,7 @@
 .vk-md [data-tone="low"] { --vk-tone: var(--vk-ink-3); }
 
 /* Embedded blocks keep the reading rhythm of the paragraphs around them. */
-.vk-md :is(.vk-a-metrics, .vk-a-kv, .vk-a-callout, .vk-a-cards, .vk-a-tabs, .vk-a-columns, .vk-a-gallery, .vk-a-code, .vk-a-sequence, .vk-a-note) { margin: 0 0 0.75em; }
+.vk-md :is(.vk-a-metrics, .vk-a-kv, .vk-a-callout, .vk-a-cards, .vk-a-tabs, .vk-a-columns, .vk-a-gallery, .vk-a-code, .vk-a-note) { margin: 0 0 0.75em; }
 .vk-md :is(.vk-a-checklist, .vk-a-steps, .vk-a-timeline, .vk-a-tree, .vk-a-files ul) { margin: 0 0 0.75em; padding: 0; list-style: none; }
 .vk-md :is(.vk-a-checklist, .vk-a-steps, .vk-a-timeline, .vk-a-tree, .vk-a-files ul) li + li { margin-top: 0; }
 .vk-md :is(.vk-a-details-body, .vk-a-tabpanel, .vk-a-columns section, .vk-a-callout > div) > :last-child { margin-bottom: 0; }
@@ -224,6 +224,9 @@ button.vk-a-gallery-media:focus-visible { outline: 2px solid var(--vk-signal); o
 /* ---------- Sequence ---------- */
 /* One column per actor with a lifeline down its center; a note spans just past the lifelines it covers, and a
  * single-actor note is a compact box on its lifeline. */
+/* The frame is a panel, so labels mask the lifelines with the panel colour. */
+/* 外框是面板，标签以面板色遮住生命线。 */
+.vk-a-sequence-frame { --vk-a-ground: var(--vk-panel); padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 3) calc(var(--vk-u) * 2.5); }
 .vk-a-sequence { display: grid; grid-template-columns: repeat(var(--vk-a-actors), minmax(0, 1fr)); row-gap: calc(var(--vk-u) * 2); padding-bottom: var(--vk-u); background: linear-gradient(90deg, transparent calc(50% - 0.5px), var(--vk-line) calc(50% - 0.5px), var(--vk-line) calc(50% + 0.5px), transparent calc(50% + 0.5px)) 0 0 / calc(100% / var(--vk-a-actors)) 100% repeat-x; font-size: var(--vk-fs-md); }
 .vk-a-sequence-actor { justify-self: center; max-width: 100%; padding: var(--vk-u) calc(var(--vk-u) * 3); background: var(--vk-ink); color: var(--vk-ink-inverse); font-weight: 600; text-align: center; }
 .vk-a-sequence-message { --vk-a-arrow: var(--vk-ink-3); position: relative; min-height: 1.9em; margin: 0 calc(50% / var(--vk-a-span)); border-bottom: 1.5px solid var(--vk-a-arrow); text-align: center; }

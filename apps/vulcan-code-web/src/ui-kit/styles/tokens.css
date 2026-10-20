@@ -139,13 +139,15 @@
   --vk-chart-4: #c8892e;
   --vk-chart-5: #cf5e6a;
   /* Data palette for reply charts and plugin pages: ember leads and the rest are built from theme tokens, so every
-     theme and skin keeps it in tune without its own copy. */
-  /* 回答图表与插件页面的数据色板：余烬色领先，其余由主题令牌构成，使每个主题与皮肤无需另备一份即保持协调。 */
+     theme and skin keeps it in tune without its own copy. Neighbouring series change hue, so two series never read
+     as two shades of orange. */
+  /* 回答图表与插件页面的数据色板：余烬色领先，其余由主题令牌构成，使每个主题与皮肤无需另备一份即保持协调。
+     相邻序列换色相，两条序列不会看成两种深浅的橙色。 */
   --vk-data-1: var(--vk-ember);
-  --vk-data-2: var(--vk-ember-2);
-  --vk-data-3: color-mix(in srgb, var(--vk-signal) 62%, var(--vk-ink-3));
-  --vk-data-4: color-mix(in srgb, var(--vk-ok) 58%, var(--vk-ink-3));
-  --vk-data-5: color-mix(in srgb, var(--vk-ember) 40%, var(--vk-ink-2));
+  --vk-data-2: color-mix(in srgb, var(--vk-signal) 62%, var(--vk-ink-3));
+  --vk-data-3: color-mix(in srgb, var(--vk-ok) 58%, var(--vk-ink-3));
+  --vk-data-4: color-mix(in srgb, color-mix(in srgb, var(--vk-signal) 55%, var(--vk-bad)) 72%, var(--vk-ink-3));
+  --vk-data-5: var(--vk-ember-2);
 
   --vk-code-bg: #f4f5f7;
   --vk-term-bg: #12151a;
