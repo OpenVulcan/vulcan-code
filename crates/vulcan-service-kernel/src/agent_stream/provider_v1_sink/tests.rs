@@ -2650,6 +2650,12 @@ async fn tool_batch_persists_prepared_running_finished_and_unique_stats() {
         .expect("read durable Prepared source boundary");
     assert_eq!(memory_revision, durable_revision);
     assert_eq!(stats_count, 0);
+    // The prepared tools belong to the session's open root turn, whatever id it was allocated.
+    // 已准备工具属于会话的开放根回合，无论其分配到的 id 是多少。
+    let root_turn_id = handle
+        .read(|document| document.active_turn().map(|turn| turn.turn_id))
+        .expect("read open root turn")
+        .expect("open root turn");
     let duplicate_batch = sink
         .apply_tool_boundary(
             &ToolExecutionRecoveryBoundary::BatchPrepared(vec![first.clone(), second.clone()]),
@@ -2663,8 +2669,7 @@ async fn tool_batch_persists_prepared_running_finished_and_unique_stats() {
             prepared
                 .iter()
                 .map(|(seq, tool)| PreparedToolInvocationIdentity {
-                    turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1)
-                        .expect("synthetic turn"),
+                    turn_id: root_turn_id,
                     api_call_id: tool.api_call_id,
                     tool_call_id: tool.tool_call_id,
                     request_stream_id: tool.request_stream_id.clone(),
