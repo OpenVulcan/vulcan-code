@@ -249,6 +249,9 @@ export function WorkspaceResizableBody(props: {
   // Runs one VMM memory action for the right context panel.
   // 为右侧上下文面板执行单个 VMM 记忆动作。
   onRunVmmAction: WorkspaceContextPanelProps["onRunVmmAction"];
+  // Opens the memory settings page from the memory tab.
+  // 从记忆标签页打开记忆设置页面。
+  onOpenMemorySettings?: WorkspaceContextPanelProps["onOpenMemorySettings"];
   // Loads one workspace diff snapshot for the right context panel.
   // 为右侧上下文面板载入单个工作区 diff 快照。
   loadWorkspaceDiffSnapshot: WorkspaceContextPanelProps["loadWorkspaceDiffSnapshot"];
@@ -625,6 +628,7 @@ export function WorkspaceResizableBody(props: {
               onStopCommandSession={props.onStopCommandSession}
               onStopSubagentTask={props.onStopSubagentTask}
               onRunVmmAction={props.onRunVmmAction}
+              onOpenMemorySettings={props.onOpenMemorySettings}
               resolveMediaSourceUrl={props.resolveMediaSourceUrl}
               loadWorkspaceFileDirectory={props.loadWorkspaceFileDirectory}
               loadWorkspaceFilePreview={props.loadWorkspaceFilePreview}

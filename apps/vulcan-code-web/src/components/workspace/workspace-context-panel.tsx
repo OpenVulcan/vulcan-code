@@ -209,6 +209,9 @@ export interface WorkspaceContextPanelProps {
   // Runs one VMM memory management action.
   // 执行单个 VMM 记忆管理动作。
   onRunVmmAction: (request: VmmMemoryActionRequest) => Promise<VmmMemoryActionResult>;
+  // Opens the memory settings page from the memory tab.
+  // 从记忆标签页打开记忆设置页面。
+  onOpenMemorySettings?: () => void;
   // Opens one subagent transcript in the right context panel.
   // 在右侧上下文面板中打开单个子代理转录。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -806,12 +809,13 @@ function WorkspaceContextTabContent(args: {
   }
   if (args.activeTab.kind === "memory") {
     return (
-      <div className="vk-panel-body" data-pad="">
+      <div className="vk-panel-body" data-fill="">
         <WorkspaceMemoryPanel
           selectedConversationId={args.props.selectedConversationId}
           selectedProjectId={selectedContextProjectId(args.props)}
           snapshot={args.props.workbench.contextInjection ?? null}
           onRunVmmAction={args.props.onRunVmmAction}
+          onOpenSettings={args.props.onOpenMemorySettings}
         />
       </div>
     );

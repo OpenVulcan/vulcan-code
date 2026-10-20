@@ -6,8 +6,8 @@ import { I18nProvider } from "@/i18n";
 import type { VmmMemoryActionRequest, VmmMemoryActionResult } from "@/types";
 import { WorkspaceMemoryPanel } from "./workspace-memory-panel";
 
-// Verifies opening static memory restores the selected session's durable profile without a prompt.
-// 验证打开静态记忆即可恢复选中会话的长期画像，无需提交提示词。
+// Verifies the memory card restores the selected session's durable profile below dynamic memory without a prompt.
+// 验证记忆卡片无需提交提示词即可在动态记忆下方恢复选中会话的长期画像。
 it("loads static profile for the exact selected conversation", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   // run returns a distinct read-only profile for each exact conversation request.
@@ -62,17 +62,16 @@ it("loads static profile for the exact selected conversation", async () => {
       action: "load_dynamic_memory_for_panel",
       conversationId: "session-a",
     }));
-    const staticTab = Array.from(container.querySelectorAll('[role="tab"]')).find((tab) => tab.textContent?.includes("静态"));
-    expect(staticTab).toBeDefined();
-    await act(async () => {
-      staticTab!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-    });
-    expect(staticTab?.getAttribute("data-state")).toBe("active");
     expect(run).toHaveBeenCalledWith(expect.objectContaining({
       action: "load_static_profile_for_panel",
       conversationId: "session-a",
     }));
     expect(container.textContent).toContain("profile-session-a");
+    // Static memory sits in the same card, after the dynamic section.
+    // 静态记忆位于同一卡片中，在动态分区之后。
+    const sections = Array.from(container.querySelectorAll(".vk-mem-sec")).map((section) => section.getAttribute("data-kind"));
+    expect(sections).toEqual(["dynamic", "static"]);
+    expect(container.querySelector('[role="tab"]')).toBeNull();
 
     await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><WorkspaceMemoryPanel
       selectedConversationId="session-b" onRunVmmAction={run}

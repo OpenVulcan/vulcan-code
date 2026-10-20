@@ -1011,6 +1011,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onWorkspaceGitStateChanged={refreshProjectGitSummary}
           onSelectGitRepository={setSelectedGitRepositoryKey}
           onRunVmmAction={props.memoryActions.onRunVmmAction}
+          onOpenMemorySettings={props.onOpenMemory}
           onTrace={props.onTrace}
           gitCommitActionBusy={Boolean(gitCommitBusyState)}
           gitCommitActionDisabled={!sessionGitCommitActionAvailable}
