@@ -704,7 +704,7 @@ function AgentEditorForm(props: {
                   options={props.promptSkillOptions}
                   searchPlaceholder={t("agents.searchPromptSkills")}
                   selectedItems={listFromText(draft.promptSkillPolicySkills)}
-                  title="Prompt Skills"
+                  title={t("agents.promptSkillPolicy")}
                 />
               </div>
             </div>
@@ -1149,7 +1149,7 @@ function AgentDefinitionDetailDialog(props: {
                 <strong>{formatMessage(t("agents.allowDeny"), { allowedToolCount: definition.allowedToolCount, disabledToolCount: definition.disabledToolCount })}</strong>
               </div>
               <div>
-                <span>Prompt Skills</span>
+                <span>{t("agents.promptSkillPolicy")}</span>
                 <strong>{formatMessage(t("agents.allowDeny2"), { enabledPromptSkillCount: definition.enabledPromptSkillCount, disabledPromptSkillCount: definition.disabledPromptSkillCount })}</strong>
               </div>
               <div className="wide">
