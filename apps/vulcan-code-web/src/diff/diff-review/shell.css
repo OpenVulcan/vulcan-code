@@ -69,3 +69,11 @@
   white-space: nowrap;
 }
 
+.diff-review-body {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}

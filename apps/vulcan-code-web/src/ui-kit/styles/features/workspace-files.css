@@ -1,3 +1,6 @@
+/* The files tab shows the project tree until a file is opened; then a file bar names that one file above */
+/* its preview, and the same tree opens from the bar. */
+/* 文件标签页在打开文件前展示项目目录树；打开后由文件栏在预览上方标明该文件，同一目录树从文件栏打开。 */
 .workspace-files-panel {
   flex: 1 1 auto;
   min-width: 0;
@@ -10,47 +13,6 @@
 .workspace-files-panel.empty {
   display: grid;
   place-items: center;
-}
-
-.workspace-files-body {
-  position: relative;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-}
-
-.workspace-files-body.has-selection {
-  padding-right: 11px;
-}
-
-.workspace-file-row-menu-trigger {
-  opacity: 0;
-}
-
-.diff-file-tree-row:hover .workspace-file-row-menu-trigger,
-.workspace-file-row-menu-trigger:focus-visible,
-.workspace-file-row-menu-trigger[aria-expanded="true"] {
-  opacity: 1;
-}
-
-.workspace-files-panel-notice {
-  position: absolute;
-  top: 46px;
-  left: 18px;
-  z-index: 430;
-  max-width: calc(100% - 36px);
-  padding: 8px 10px;
-  border: 1px solid var(--vk-line);
-  background: var(--vk-ground);
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--vk-ink) 10%, transparent);
-}
-
-.workspace-files-panel-notice.error {
-  color: var(--vk-bad);
 }
 
 .workspace-files-filter-menu {
@@ -110,50 +72,8 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  padding: 46px 16px 24px;
+  padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 4) calc(var(--vk-u) * 6);
   overflow: auto;
-}
-
-.workspace-file-preview-header {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  min-height: 34px;
-  padding: 6px 10px;
-  border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--vk-line) 70%, transparent);
-  background: color-mix(in srgb, var(--vk-ground) 46%, transparent);
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-  text-align: left;
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--vk-ground) 35%, transparent) inset;
-  -webkit-backdrop-filter: blur(22px) saturate(1.45);
-  backdrop-filter: blur(22px) saturate(1.45);
-  cursor: pointer;
-}
-
-.workspace-file-preview-header:hover {
-  background: color-mix(in srgb, var(--vk-ground) 62%, transparent);
-  color: var(--vk-ink);
-}
-
-.workspace-file-preview-format-icon {
-  flex: 0 0 auto;
-}
-
-.workspace-file-preview-title-text {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .workspace-file-preview-code-lines {
@@ -161,7 +81,7 @@
   min-width: 0;
   min-height: 0;
   margin: 0;
-  padding: 36px 0 18px;
+  padding: calc(var(--vk-u) * 2) 0 calc(var(--vk-u) * 4);
   overflow: auto;
   font-family: var(--vk-font-mono);
   font-size: var(--vk-fs-sm);
@@ -195,7 +115,7 @@
 .workspace-file-preview.media {
   display: grid;
   place-items: center;
-  padding: 46px 12px 12px;
+  padding: calc(var(--vk-u) * 3);
   background: color-mix(in srgb, var(--vk-sunken) 28%, var(--vk-ground));
 }
 
@@ -205,22 +125,4 @@
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-}
-
-/* Directory-only mode: no file is selected, so the tree fills the panel instead of floating over an empty preview. */
-/* 仅目录模式：未选中文件时目录树铺满面板，而不是悬浮在空白预览之上。 */
-.workspace-files-body.directory-only > .diff-file-tree-drawer {
-  position: relative;
-  inset: auto;
-  flex: 1 1 auto;
-  width: 100%;
-  max-width: none;
-}
-
-.workspace-files-body.directory-only > .diff-file-tree-drawer .diff-file-tree-panel {
-  border-inline: 0;
-}
-
-.workspace-files-body.directory-only > .workspace-file-preview.empty {
-  display: none;
 }

@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WorkspaceFileTreeDrawer, type WorkspaceFileTreeNode } from "./workspace-file-tree-drawer";
+import { WorkspaceFileTree, type WorkspaceFileTreeNode } from "./workspace-file-tree";
 import { WorkspaceFilePreview } from "./workspace-files-preview";
 import { useWorkspaceFilesRequestOwnership, type WorkspaceFilesRequestOwnership } from "./workspace-files-panel-request-ownership";
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
@@ -28,22 +28,24 @@ describe("workspace file controls", () => {
   afterEach(async () => { await act(async () => root.unmount()); host.remove(); });
   it("expands every actual directory even when the initial open set is empty", async () => {
     const onOpen = vi.fn();
-    await act(async () => root.render(<WorkspaceFileTreeDrawer tree={tree} activeFileKey={null} filter=""
-      defaultOpenDirectoryPaths={new Set()} lockedOpen pinnedOpen onPinnedOpenChange={vi.fn()}
-      onFilterChange={vi.fn()} onSelectFile={vi.fn()} fileKey={(file) => file} onDirectoryOpenStateChange={onOpen} />));
-    expect(host.querySelector(".diff-file-tree-file-main")).toBeNull();
+    const defaultOpen = new Set<string>();
+    await act(async () => root.render(<WorkspaceFileTree tree={tree} activeFileKey={null} filter=""
+      defaultOpenDirectoryPaths={defaultOpen} onFilterChange={vi.fn()} onSelectFile={vi.fn()}
+      fileKey={(file) => file} onDirectoryOpenStateChange={onOpen} />));
+    expect(host.querySelector('.vk-ftree-row[data-kind="file"]')).toBeNull();
     await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="workspaceFileTree.expandAll"]')!.click());
-    expect(host.querySelector(".diff-file-tree-file-main")?.textContent).toContain("file");
+    expect(host.querySelector('.vk-ftree-row[data-kind="file"]')?.textContent).toContain("file");
     expect(onOpen.mock.calls).toEqual([["root/a", true], ["root/a/b", true]]);
-    expect(host.querySelector<HTMLButtonElement>(".diff-file-tree-handle")!.disabled).toBe(true);
-    expect(host.querySelectorAll('button.directory[aria-expanded="true"]')).toHaveLength(2);
+    expect(host.querySelectorAll('.vk-ftree-row[data-kind="dir"][aria-expanded="true"]')).toHaveLength(2);
   });
-  it("removes collapsed drawer controls from the interaction tree", async () => {
-    await act(async () => root.render(<WorkspaceFileTreeDrawer tree={tree} activeFileKey="file" filter=""
-      lockedOpen={false} pinnedOpen={false} onPinnedOpenChange={vi.fn()} onFilterChange={vi.fn()}
-      onSelectFile={vi.fn()} fileKey={(file) => file} />));
-    expect(host.querySelector(".diff-file-tree-panel")?.hasAttribute("inert")).toBe(true);
-    expect(host.querySelector(".diff-file-tree-handle")?.getAttribute("aria-expanded")).toBe("false");
+  it("marks the open file and hands a chosen file to the owner", async () => {
+    const onSelect = vi.fn();
+    await act(async () => root.render(<WorkspaceFileTree tree={tree} activeFileKey="file" filter=""
+      onFilterChange={vi.fn()} onSelectFile={onSelect} fileKey={(file) => file} />));
+    const row = host.querySelector<HTMLButtonElement>('.vk-ftree-row[data-kind="file"]')!;
+    expect(row.getAttribute("aria-current")).toBe("true");
+    await act(async () => row.click());
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("file");
   });
   it("revokes directory and preview response ownership after unmount", async () => {
     let ownership!: WorkspaceFilesRequestOwnership;
@@ -62,7 +64,7 @@ describe("workspace file controls", () => {
     await act(async () => root.render(<WorkspaceFilePreview entry={{ name: "file.txt", path: "/synthetic/file.txt",
       relativePath: "file.txt", kind: "code", isDirectory: false, hidden: false, hasChildren: false }}
       missingPath={null} preview={null} mediaPermissionEntry={null} loading={false} error="synthetic preview failure"
-      resolveMediaSourceUrl={(path) => path} onAllowMediaPreview={vi.fn()} onClosePreview={vi.fn()} onRetryPreview={retry} />));
+      resolveMediaSourceUrl={(path) => path} onAllowMediaPreview={vi.fn()} onRetryPreview={retry} />));
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("synthetic preview failure");
     expect(retry).not.toHaveBeenCalled();
     await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());

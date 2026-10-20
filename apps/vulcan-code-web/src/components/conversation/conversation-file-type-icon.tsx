@@ -1,6 +1,5 @@
 import { Icon as IconifyIcon, addCollection } from "@iconify/react";
 import { FileWarning } from "lucide-react";
-import { workspaceFileTreeExtensionLabel } from "@/components/workspace/workspace-file-tree-drawer";
 import { FILE_ICON_COLLECTION } from "@/generated/file-icon-collection";
 
 addCollection(FILE_ICON_COLLECTION);
@@ -33,6 +32,13 @@ export function FileTypeIcon(props: {
     return <IconifyIcon aria-hidden="true" height={16} icon={props.icon.iconName} width={16} />;
   }
   return <span aria-hidden="true" className="vk-file-glyph">{workspaceFileTreeExtensionLabel(props.icon.fallbackName)}</span>;
+}
+
+// workspaceFileTreeExtensionLabel returns a short file-type label for files without a library icon.
+// workspaceFileTreeExtensionLabel 为没有图库图标的文件返回简短的文件类型标签。
+export function workspaceFileTreeExtensionLabel(name: string): string {
+  const extension = name.includes(".") ? name.split(".").pop()?.trim() : "";
+  return extension ? extension.slice(0, 3).toUpperCase() : "•";
 }
 
 // resolveFileTypeIcon returns a stable file icon for common source and data extensions.

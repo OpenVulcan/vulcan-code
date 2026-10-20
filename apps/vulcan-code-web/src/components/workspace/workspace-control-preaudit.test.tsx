@@ -223,9 +223,12 @@ it("does not report copied file content when the host clipboard rejects", async 
     loadWorkspaceFileDirectory={async () => ({ workspacePath: "X:/copy-audit", path: "X:/copy-audit", relativePath: "", entries: [entry], filters: DEFAULT_WORKSPACE_FILE_FILTERS, truncated: false, entryCount: 1 })}
     loadWorkspaceFilePreview={async () => ({ ...entry, workspacePath: "X:/copy-audit", sizeBytes: 5, content: "hello", truncated: false })}
     resolveMediaSourceUrl={path => path} onCopyText={onCopyText} onTitleChange={vi.fn()} />);
+  // The file's actions belong to the open file, so the file is opened from the tree first.
+  // 文件操作属于已打开的文件，因此先从目录树打开该文件。
+  await act(async () => host.querySelector<HTMLButtonElement>('.vk-ftree-row[data-kind="file"]')!.click());
   // menu opens through the same pointer trigger used by the production Radix dropdown.
   // menu 通过生产 Radix 下拉菜单的同一指针触发器打开。
-  const menu = host.querySelector<HTMLButtonElement>(".workspace-file-row-menu-trigger")!;
+  const menu = host.querySelector<HTMLButtonElement>('[data-action="file-actions"]')!;
   expect(menu).not.toBeNull();
   await act(async () => menu.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
   const content = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(item => item.textContent?.includes("复制文件内容"))!;

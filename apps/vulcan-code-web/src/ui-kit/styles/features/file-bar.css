@@ -36,3 +36,21 @@
 .vk-filemenu-none { margin: 0; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 2.5); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
 .vk-filemenu-foot { display: flex; flex: none; align-items: center; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
 .vk-filemenu-foot > span:first-of-type { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Project tree: a filter row, folders that open in place and file rows, and a footer naming the rules that hide */
+/* files. It fills the files tab before a file is open and the file bar's menu after. */
+/* 项目目录树：筛选行、原地展开的目录与文件行，以及说明隐藏文件规则的页脚。打开文件前铺满文件标签页，之后位于文件栏菜单中。 */
+.vk-ftree { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
+.vk-ftree-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 1) 0; }
+.vk-ftree-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); width: 100%; min-height: var(--vk-h-sm); padding: 0 calc(var(--vk-u) * 2.5) 0 calc(var(--vk-u) * 2.5 + var(--vk-depth, 0) * var(--vk-u) * 4); border: 0; background: transparent; color: var(--vk-ink); font: inherit; font-size: var(--vk-fs-sm); text-align: left; cursor: pointer; }
+.vk-ftree-row > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-ftree-row > svg { flex: none; }
+.vk-ftree-row[data-kind="dir"] { color: var(--vk-ink-2); }
+.vk-ftree-row[data-kind="dir"] > svg:first-child { color: var(--vk-ink-3); }
+.vk-ftree-row[data-kind="file"] { padding-left: calc(var(--vk-u) * 6 + var(--vk-depth, 0) * var(--vk-u) * 4); }
+.vk-ftree-row:hover,
+.vk-ftree-row:focus-visible { background: var(--vk-hover); outline: none; }
+.vk-ftree-row[aria-current="true"] { background: var(--vk-panel); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-ftree-loading { padding-left: calc(var(--vk-u) * 8); }
+.vk-filebar > .vk-filepick .vk-badge { flex: none; }
+.workspace-files-panel > .vk-page-notice { margin: calc(var(--vk-u) * 2); }
