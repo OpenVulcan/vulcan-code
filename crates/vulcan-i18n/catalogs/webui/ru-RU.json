@@ -6040,7 +6040,7 @@
   "openvulcan.plan.expires": "Истекает {date}",
   "openvulcan.plan.empty": "Нет активной квоты.",
   "knowledge.filter": "Фильтр библиотек",
-  "knowledge.empty": "Библиотек пока нет.",
+  "knowledge.empty": "Библиотек пока нет",
   "knowledge.emptyStart": "Создайте или импортируйте библиотеку. Затем ИИ записывает документы через инструменты знаний.",
   "knowledge.documentCount": "Документов: {count}",
   "knowledge.selectLibrary": "Выберите библиотеку для просмотра содержимого и настроек.",

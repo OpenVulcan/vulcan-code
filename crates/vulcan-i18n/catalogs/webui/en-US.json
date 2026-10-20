@@ -6040,7 +6040,7 @@
   "openvulcan.plan.expires": "Expires {date}",
   "openvulcan.plan.empty": "No active quota.",
   "knowledge.filter": "Filter libraries",
-  "knowledge.empty": "No knowledge libraries yet.",
+  "knowledge.empty": "No knowledge libraries yet",
   "knowledge.emptyStart": "Create a library or import one. AI then writes documents through the knowledge tools.",
   "knowledge.documentCount": "{count} documents",
   "knowledge.selectLibrary": "Select a library to view its content and settings.",

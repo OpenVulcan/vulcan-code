@@ -6040,7 +6040,7 @@
   "openvulcan.plan.expires": "{date} 到期",
   "openvulcan.plan.empty": "目前沒有生效的額度。",
   "knowledge.filter": "篩選知識庫",
-  "knowledge.empty": "尚無知識庫。",
+  "knowledge.empty": "尚無知識庫",
   "knowledge.emptyStart": "建立一個知識庫，或匯入完整庫。之後由 AI 透過知識庫工具寫入文件。",
   "knowledge.documentCount": "{count} 份文件",
   "knowledge.selectLibrary": "選擇知識庫以查看內容與設定。",

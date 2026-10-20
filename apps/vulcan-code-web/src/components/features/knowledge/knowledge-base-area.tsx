@@ -130,29 +130,29 @@ export function KnowledgeBaseArea({ projects }: KnowledgeBaseAreaProps) {
     } catch (reason) { if (active.current) setDeleteError(reason instanceof Error ? reason.message : String(reason)); }
   }
 
+  // empty drops the filter and the list/detail split until a first library exists; one empty state offers creating
+  // or importing it.
+  // empty 在首个知识库出现前去掉筛选与列表/详情分栏；由单个空状态提供新建或导入入口。
+  const empty = registry.value !== null && registry.value.length === 0;
+  const createButton = <Button size="sm" disabled={!writable} onClick={() => setPolicy({ kind: "create" })}><Plus size={15} />{t("knowledge.create")}</Button>;
+  const importButton = <Button size="sm" variant="outline" disabled={!writable} onClick={() => setPickingPackage(true)}><Upload size={15} />{t("knowledge.package.import")}</Button>;
   return <div className="knowledge-page vk-bleed">
     <header className="knowledge-page-toolbar">
-      <div className="knowledge-search-field"><Search size={14} aria-hidden="true" /><Input aria-label={t("knowledge.filter")} placeholder={t("knowledge.filter")} value={filter} disabled={registry.value === null} onChange={(event) => setFilter(event.target.value)} /></div>
+      {empty ? null : <div className="knowledge-search-field"><Search size={14} aria-hidden="true" /><Input aria-label={t("knowledge.filter")} placeholder={t("knowledge.filter")} value={filter} disabled={registry.value === null} onChange={(event) => setFilter(event.target.value)} /></div>}
       <div className="knowledge-actions">
         <Button size="sm" variant="ghost" disabled={busy || registry.loading} onClick={() => void registry.refresh(true)}><RefreshCw className={registry.loading ? "vk-spin" : undefined} size={15} />{t("skills.action.refresh")}</Button>
-        <Button size="sm" variant="outline" disabled={!writable} onClick={() => setPickingPackage(true)}><Upload size={15} />{t("knowledge.package.import")}</Button>
-        <Button size="sm" disabled={!writable} onClick={() => setPolicy({ kind: "create" })}><Plus size={15} />{t("knowledge.create")}</Button>
+        {empty ? null : <>{importButton}{createButton}</>}
       </div>
     </header>
     {registry.error !== null ? <KnowledgeReadFailure error={registry.error} busy={busy || registry.loading} onRetry={registry.refresh} /> : null}
     {registry.loading && registry.value === null ? <StreamPlaceholder label={t("knowledge.librariesLoading")} /> : null}
-    {registry.value !== null ? <div className="knowledge-workspace">
+    {empty ? <section className="knowledge-detail knowledge-detail-placeholder"><PageEmptyState icon={<Library />} title={t("knowledge.empty")} description={t("knowledge.emptyStart")} action={<div className="knowledge-empty-actions">{createButton}{importButton}</div>} /></section>
+      : registry.value !== null ? <div className="knowledge-workspace">
       <aside className="knowledge-rail">
-        {registry.value.length === 0 ? <p className="knowledge-rail-note">{t("knowledge.empty")}</p> : null}
-        {registry.value.length > 0 && visible.length === 0 ? <p className="knowledge-rail-note">{t("knowledge.filterEmpty")}</p> : null}
+        {visible.length === 0 ? <p className="knowledge-rail-note">{t("knowledge.filterEmpty")}</p> : null}
         <ul className="knowledge-rail-list">{visible.map((library) => <li key={library.id}><KnowledgeLibraryCard library={library} t={t} selected={library.id === selectedId} disabled={busy} onSelect={() => setSelectedId(library.id)} /></li>)}</ul>
       </aside>
-      {selected === undefined ? <section className="knowledge-detail knowledge-detail-placeholder">{registry.value.length === 0
-        ? <PageEmptyState icon={<Library />} title={t("knowledge.empty")} description={t("knowledge.emptyStart")} action={<div className="knowledge-empty-actions">
-          <Button size="sm" disabled={!writable} onClick={() => setPolicy({ kind: "create" })}><Plus size={15} />{t("knowledge.create")}</Button>
-          <Button size="sm" variant="outline" disabled={!writable} onClick={() => setPickingPackage(true)}><Upload size={15} />{t("knowledge.package.import")}</Button>
-        </div>} />
-        : <PageEmptyState icon={<Library />} title={t("knowledge.selectLibrary")} description={t("knowledge.content.readOnly")} />}</section> : <section className="knowledge-detail">
+      {selected === undefined ? <section className="knowledge-detail knowledge-detail-placeholder"><PageEmptyState icon={<Library />} title={t("knowledge.selectLibrary")} description={t("knowledge.content.readOnly")} /></section> : <section className="knowledge-detail">
         <KnowledgeLibraryHero library={selected} t={t} locale={locale} actions={<>
           {knowledgeLibraryReadable(selected) ? <><Button size="sm" variant="outline" disabled={!writable} onClick={() => setMetadata(selected)}><PencilLine size={14} />{t("knowledge.metadata")}</Button><Button size="sm" variant="outline" disabled={!writable} onClick={() => setPolicy({ kind: "mode", library: selected })}><Settings2 size={14} />{t("knowledge.indexMode")}</Button><Button size="sm" variant="outline" disabled={!writable} onClick={() => setExporting(selected)}><Download size={14} />{t("knowledge.package.export")}</Button></> : null}
           <Button size="sm" variant="outline" disabled={!writable} onClick={() => { setDeleteError(null); setDeleting(selected); }}><Trash2 size={14} />{t("knowledge.delete")}</Button>
