@@ -87,6 +87,20 @@ fn is_mutating_event_filters_non_mutating_event_kinds() {
     )));
 }
 
+/// Verify a live watcher is refused outside a runtime, where its event loop could never deliver a change.
+/// 验证在运行时之外拒绝创建实时监听器，因为其事件循环永远无法送达变更。
+#[test]
+fn live_watcher_requires_a_tokio_runtime() {
+    assert!(LiveFileWatcher::new().is_err());
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("fixture runtime");
+    let _entered = runtime.enter();
+    let watcher = LiveFileWatcher::new().expect("watcher inside a runtime");
+    assert!(watcher.health.running.load(Ordering::Acquire));
+}
+
 /// Verify duplicate registrations are ref-counted by path and scope.
 /// 验证重复注册会按路径和范围进行引用计数。
 #[test]

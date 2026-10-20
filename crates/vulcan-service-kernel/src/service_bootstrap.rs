@@ -1362,9 +1362,14 @@ fn run_service_bootstrap(
             luaskills_model_availability.llm, luaskills_model_availability.embedding
         ));
     }
-    // workspaceWatcher owns the single physical notify backend shared by Git subscribers.
-    // workspaceWatcher 持有供 Git 订阅者共享的唯一物理 notify 后端。
-    let workspace_watcher = match crate::workspace_watcher::WorkspaceWatcherCenter::new() {
+    // workspaceWatcher owns the single physical notify backend shared by Git subscribers. Its event loop runs on the
+    // service runtime, so it is created inside that runtime.
+    // workspaceWatcher 持有供 Git 订阅者共享的唯一物理 notify 后端。其事件循环运行在服务运行时上，因此在该运行时内创建。
+    let workspace_watcher_center = {
+        let _runtime_guard = runtime.enter();
+        crate::workspace_watcher::WorkspaceWatcherCenter::new()
+    };
+    let workspace_watcher = match workspace_watcher_center {
         Ok(watcher) => Some(watcher),
         Err(error) => {
             tracing::warn!("[webui-service] shared workspace watcher unavailable: {error}");

@@ -466,9 +466,20 @@ pub struct LiveFileWatcher {
 }
 
 impl LiveFileWatcher {
-    /// Create a live filesystem watcher and spawn its event loop when possible.
-    /// 创建实时文件系统监听器，并在可用时启动事件循环。
+    /// Create a live filesystem watcher and spawn its event loop on the current Tokio runtime.
+    /// 创建实时文件系统监听器，并在当前 Tokio 运行时上启动事件循环。
+    ///
+    /// # Errors
+    /// 错误
+    /// Fails outside a Tokio runtime, where the event loop could never run and no change would ever be delivered, and
+    /// when the platform notify backend cannot be created.
+    /// 在 Tokio 运行时之外失败（事件循环永远无法运行，任何变更都不会送达），平台 notify 后端无法创建时也失败。
     pub fn new() -> notify::Result<Self> {
+        if Handle::try_current().is_err() {
+            return Err(notify::Error::generic(
+                "a live file watcher must be created inside a Tokio runtime",
+            ));
+        }
         let health = Arc::new(LiveWatchHealthState::default());
         let (raw_tx, raw_rx) = raw_events::channel(Arc::clone(&health));
         let watcher = notify::recommended_watcher(move |res| {
