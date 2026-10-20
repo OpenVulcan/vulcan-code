@@ -8,7 +8,7 @@ export function nativeMediaInputPreview(value: unknown): string | undefined {
   const result = nativeMediaInputEnvelope(value);
   if (!result) return undefined;
   return result.$vulcan_native_media_input === 1 && typeof result.text === "string"
-    ? result.text : "媒体读取结果格式无效，无法展示。";
+    ? result.text : "The media read result has an invalid format and cannot be displayed.";
 }
 
 /** Returns only the readable resource filename from canonical `value`, or undefined when no valid native receipt exists.

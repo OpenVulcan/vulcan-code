@@ -13,6 +13,8 @@ describe("native media input display", () => {
   it("preserves ordinary output and rejects unsupported marked versions", () => {
     expect(nativeMediaInputPreview("ordinary text")).toBeUndefined();
     expect(nativeMediaInputPreview({ text: "ordinary JSON" })).toBeUndefined();
-    expect(nativeMediaInputPreview({ $vulcan_native_media_input: 2, text: "private result" })).toBe("媒体读取结果格式无效，无法展示。");
+    const rejected = nativeMediaInputPreview({ $vulcan_native_media_input: 2, text: "private result" });
+    expect(rejected).toEqual(expect.any(String));
+    expect(rejected).not.toContain("private result");
   });
 });

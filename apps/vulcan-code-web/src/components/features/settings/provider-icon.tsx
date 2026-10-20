@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactElement } from "react"
+import { useI18n } from "@/i18n"
 
 import antigravityIcon from "@/assets/provider-icons/provider-antigravity.svg"
 import agentSpaceIcon from "@/assets/provider-icons/provider-agentspace.png"
@@ -234,18 +235,22 @@ export function ProviderIcon({
   // image is the artwork file entry, or null for the inline brand symbol.
   // image 是图标文件项；内联品牌图标时为 null。
   const image = "light" in asset ? asset : null
+  // relayLabel names the relay marker for assistive technology and the hover hint.
+  // relayLabel 为辅助技术与悬停提示命名中转标识。
+  const { t } = useI18n()
+  const relayLabel = category === "relay" ? t("settings.modelServices.category.relay") : undefined
 
   return (
     <span
       aria-hidden={category === "relay" ? undefined : "true"}
-      aria-label={category === "relay" ? "Relay provider / 中转站" : undefined}
+      aria-label={relayLabel}
       className={cx("vk-provider-icon", className)}
       data-provider-category={category}
       data-surface={!image ? "none" : image.themeSurface ? "theme" : image.transparent ? "none" : undefined}
       data-provider-icon={iconKey}
       role={category === "relay" ? "img" : undefined}
       style={size === undefined ? undefined : { "--vk-provider-size": `${size}px` } as CSSProperties}
-      title={category === "relay" ? "Relay provider / 中转站" : undefined}
+      title={relayLabel}
     >
       {image ? (
         <img

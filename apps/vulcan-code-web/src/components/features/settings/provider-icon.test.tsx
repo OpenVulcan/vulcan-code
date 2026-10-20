@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { renderToStaticMarkup } from "react-dom/server"
+import type { ReactElement } from "react"
+import { renderToStaticMarkup as renderMarkup } from "react-dom/server"
 
 import { ProviderIcon, resolveProviderIconKey } from "@/components/features/settings/provider-icon"
+import { I18nProvider } from "@/i18n"
+
+// renderToStaticMarkup renders inside the localization provider the icon reads its relay label from.
+// renderToStaticMarkup 在图标读取中转标签所需的本地化提供者内渲染。
+const renderToStaticMarkup = (element: ReactElement) => renderMarkup(<I18nProvider initialLocale="en-US">{element}</I18nProvider>)
 
 // Provider artwork resolution preserves family, product, theme, and fallback behavior.
 // 供应商图标解析保留系列、产品、主题与回退行为。
@@ -81,10 +87,10 @@ describe("provider icon library", () => {
     const cloudMarkup = renderToStaticMarkup(<ProviderIcon category="cloud_maas" providerId="qiniu" />)
 
     expect(relayMarkup).toContain('data-provider-category="relay"')
-    expect(relayMarkup).toContain('aria-label="Relay provider / 中转站"')
+    expect(relayMarkup).toMatch(/aria-label="[^"]+"/)
     expect(relayMarkup).toContain('role="img"')
     expect(relayMarkup).toContain(">R</span>")
-    expect(cloudMarkup).not.toContain("Relay provider / 中转站")
+    expect(cloudMarkup).not.toContain("aria-label=")
     expect(cloudMarkup).not.toContain(">R</span>")
   })
 })

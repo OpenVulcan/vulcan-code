@@ -32,5 +32,5 @@ async function mountWorkbench(): Promise<void> {
 void mountWorkbench().catch((error: unknown) => {
   // Startup failures remain visible instead of mounting over an uninitialized native surface.
   // 启动失败保持可见，避免在未初始化的原生视图上继续挂载。
-  document.getElementById("root")!.textContent = `GUI 初始化失败：${String(error)}`;
+  document.getElementById("root")!.textContent = `Vulcan Code failed to start: ${String(error)}`;
 });
