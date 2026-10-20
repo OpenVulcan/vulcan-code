@@ -69,6 +69,8 @@ pub(crate) mod lifecycle_write;
 #[cfg(test)]
 mod native_dispatch_tests;
 mod notifications;
+#[cfg(test)]
+mod orphan_return_tests;
 mod participants;
 mod projection;
 mod question_failures;
@@ -259,6 +261,64 @@ fn session_change<T>(mutation: IdempotentMutation<T>) -> SessionMutationChange<T
         IdempotentMutation::Committed(value) => SessionMutationChange::Changed(value),
         IdempotentMutation::Idempotent(value) => SessionMutationChange::Unchanged(value),
     }
+}
+
+/// Settles a child execution whose result the parent can no longer receive.
+/// 结算父会话已无法接收其结果的子执行。
+///
+/// # Parameters
+/// 参数
+/// `parent` owns the reservation; `execution_id` names it; `now_ms` is the stop observation time.
+/// `parent` 持有预留；`execution_id` 指定该预留；`now_ms` 是停止观测时间。
+///
+/// # Returns
+/// 返回值
+/// True when the parent already settled the execution without success or its turn has closed,
+/// in which case an open reservation is durably stopped; false when the result is still deliverable.
+/// 父会话已以非成功结算该执行或其回合已闭合时返回 true，开放预留会被可靠停止；结果仍可回流时返回 false。
+pub(crate) fn settle_child_return_without_open_parent_turn(
+    parent: &SessionHandle,
+    execution_id: &CollaborationExecutionId,
+    now_ms: i64,
+) -> Result<bool, String> {
+    let receipt = parent
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::SubagentReturned,
+            |document| {
+                let settled_without_success = document
+                    .collaboration_state()
+                    .child_tasks
+                    .get(execution_id)
+                    .is_some_and(|task| {
+                        task.terminal_outcome.is_some_and(|outcome| {
+                            outcome != CollaborationChildTaskTerminalOutcome::Completed
+                        })
+                    });
+                if settled_without_success {
+                    return Ok(SessionMutationChange::Unchanged(true));
+                }
+                document
+                    .stop_child_task_of_closed_parent_turn(execution_id, now_ms)
+                    .map(|stopped| match stopped {
+                        Some(IdempotentMutation::Committed(_)) => {
+                            SessionMutationChange::Changed(true)
+                        }
+                        Some(IdempotentMutation::Idempotent(_)) => {
+                            SessionMutationChange::Unchanged(true)
+                        }
+                        None => SessionMutationChange::Unchanged(false),
+                    })
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    if receipt.changed {
+        tracing::warn!(
+            execution_id = execution_id.as_str(),
+            "Stopped a child task whose parent turn had already closed"
+        );
+    }
+    Ok(receipt.value)
 }
 
 /// Reads the exact current V1 generation from a validated locator.

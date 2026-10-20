@@ -259,6 +259,9 @@ pub(crate) fn start_admitted_detached_subagent_listener(
 
 /// Atomically returns durable child final content and its source identity to the parent.
 /// 将可靠子会话最终正文与来源身份原子回流给父会话。
+/// Returns `None` when the parent can no longer receive the result: it already settled the
+/// execution without success, or its turn closed and the reservation is stopped instead.
+/// 父会话已无法接收结果时返回 `None`：父侧已以非成功结算该执行，或其回合已闭合而预留改为停止。
 fn append_exact_v1_subagent_return(
     state: &SharedServiceBridgeState,
     parent_session_id: SessionId,
@@ -266,7 +269,7 @@ fn append_exact_v1_subagent_return(
     execution_id: &str,
     child_handle: &SessionHandle,
     completed_assistant: Option<&ProviderV1CompletedAssistantText>,
-) -> Result<SubagentReturnReceipt, String> {
+) -> Result<Option<SubagentReturnReceipt>, String> {
     if child_handle.session_id() != task_id {
         return Err(format!(
             "Detached child handle identity mismatch: expected={task_id} actual={}",
@@ -286,6 +289,20 @@ fn append_exact_v1_subagent_return(
             .get(parent_session_id)
             .map_err(|error| error.to_string())?
     };
+    let execution =
+        vulcan_session_core::v1::collaboration::CollaborationExecutionId::try_new(execution_id)
+            .map_err(|error| error.to_string())?;
+    if crate::agent_collaboration::settle_child_return_without_open_parent_turn(
+        &parent_handle,
+        &execution,
+        current_v1_unix_millis()?,
+    )? {
+        webui_trace(
+            "detached_subagent_v1_return_discarded",
+            format!("parent={parent_session_id} task={task_id} execution_id={execution_id}"),
+        );
+        return Ok(None);
+    }
     // Source sequence coverage is meaningful only inside the exact child generation.
     // 来源序号覆盖只在精确子代次内部有意义。
     let child_generation = child_handle
@@ -339,12 +356,7 @@ fn append_exact_v1_subagent_return(
         })
         .map_err(|error| format!("Failed to read the child session V1 return facts: {error}"))??;
     let committed = parent_handle
-        .append_execution_subagent_return(
-            vulcan_session_core::v1::collaboration::CollaborationExecutionId::try_new(execution_id)
-                .map_err(|error| error.to_string())?,
-            input,
-            current_v1_unix_millis()?,
-        )
+        .append_execution_subagent_return(execution, input, current_v1_unix_millis()?)
         .map_err(|error| format!("Failed to commit the subagent V1 return: {error}"))?;
     webui_trace(
         "detached_subagent_v1_return_committed",
@@ -355,7 +367,7 @@ fn append_exact_v1_subagent_return(
             committed.changed
         ),
     );
-    Ok(committed.value)
+    Ok(Some(committed.value))
 }
 
 /// Applies one detached subagent runtime event to the shared WebUI transcript projection.

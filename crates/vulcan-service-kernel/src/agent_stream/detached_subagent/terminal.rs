@@ -95,7 +95,6 @@ pub(super) async fn handle_parent_event(
                     child_handle,
                     completed_assistant,
                 )
-                .map(Some)
             } else {
                 // Resolve the already registered canonical parent without a service lock across I/O.
                 // 解析已经登记的规范父句柄，不让服务锁跨越 I/O。
