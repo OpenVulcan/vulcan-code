@@ -345,6 +345,9 @@ export function ModelReasoningPickerControl(props: {
         <HoverCardTrigger asChild>
           <PopoverTrigger asChild>
             <button
+              // Only the composer's picker receives the external open signal, so only it answers Ctrl+M.
+              // 只有输入区的选择器接收外部打开信号，因此只有它响应 Ctrl+M。
+              aria-keyshortcuts={props.modelOpenSignal !== undefined ? "Control+M" : undefined}
               aria-label={props.ariaLabel}
               className="vk-pick"
               data-kind="model"
