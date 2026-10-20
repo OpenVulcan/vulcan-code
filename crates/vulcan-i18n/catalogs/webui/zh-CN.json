@@ -2599,6 +2599,7 @@
   "markdown.wrap.disable": "关闭自动换行",
   "markdown.copyCode": "复制代码",
   "conversation.control.copyFailed": "复制失败",
+  "conversation.itemFault": "会话的这一部分暂时无法显示。",
   "conversation.contextMenu.copy": "复制",
   "conversation.contextMenu.copyLinkAddress": "复制链接地址",
   "conversation.contextMenu.quote": "引用到输入框",

@@ -2599,6 +2599,7 @@
   "markdown.wrap.disable": "折り返しを無効にする",
   "markdown.copyCode": "コードをコピー",
   "conversation.control.copyFailed": "コピーに失敗しました",
+  "conversation.itemFault": "会話のこの部分を表示できませんでした。",
   "conversation.contextMenu.copy": "コピー",
   "conversation.contextMenu.copyLinkAddress": "リンク先アドレスをコピー",
   "conversation.contextMenu.quote": "入力欄に引用",

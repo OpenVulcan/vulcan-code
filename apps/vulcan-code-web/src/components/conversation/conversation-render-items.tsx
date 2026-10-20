@@ -55,6 +55,8 @@ import type {
   ConversationMessage,
 } from "@/types";
 import { useI18n } from "@/i18n";
+import { RenderErrorBoundary } from "@/app/render-error-boundary";
+import { PageNotice } from "@/components/page/page-feedback";
 import { cx } from "@/ui-kit/behavior/core";
 
 import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
@@ -557,9 +559,9 @@ function isTurnProcessUserRenderItem(item: ConversationRenderItem): boolean {
   return metadataValue(item.userMessage?.metadata ?? item.sourceMessage?.metadata, ["turn_process"]) === true;
 }
 
-// ConversationRenderItemView renders one projected transcript item.
-// ConversationRenderItemView 渲染单条投影后的转录展示项。
-export function ConversationRenderItemView(props: {
+// ConversationRenderItemViewProps carries one projected transcript item and the callbacks its row uses.
+// ConversationRenderItemViewProps 携带单条投影后的转录展示项及其行使用的回调。
+type ConversationRenderItemViewProps = {
   // Projected transcript row.
   // 投影后的转录行。
   item: ConversationRenderItem;
@@ -647,7 +649,52 @@ export function ConversationRenderItemView(props: {
   // Optional trace callback for local diagnostics.
   // 用于本地诊断的可选埋点回调。
   onTrace?: (action: string, detail?: Record<string, unknown>) => void;
-}) {
+};
+
+// itemRevisions numbers each projected item object; projection replaces an item's object whenever its content
+// changes, so a new number means new content to try rendering again.
+// itemRevisions 为每个投影项对象编号；投影在内容变化时替换项对象，因此新编号意味着可以重新尝试渲染的新内容。
+const itemRevisions = new WeakMap<ConversationRenderItem, string>();
+let nextItemRevision = 0;
+function itemRevision(item: ConversationRenderItem): string {
+  let revision = itemRevisions.get(item);
+  if (revision === undefined) {
+    revision = String(nextItemRevision++);
+    itemRevisions.set(item, revision);
+  }
+  return revision;
+}
+
+// ConversationRenderItemView renders one projected transcript item. A row that fails to render shows a notice in
+// its place and leaves the rest of the conversation working; it tries again when the item's content changes.
+// ConversationRenderItemView 渲染单条投影后的转录展示项。渲染失败的行在原位显示提示，会话其余部分照常工作；
+// 该项内容变化时会再次尝试渲染。
+export function ConversationRenderItemView(props: ConversationRenderItemViewProps) {
+  return (
+    <RenderErrorBoundary fallback={(error) => <ConversationItemFault error={error} />} resetKey={itemRevision(props.item)}>
+      <ConversationRenderItemContent {...props} />
+    </RenderErrorBoundary>
+  );
+}
+
+// ConversationItemFault stands in for a row that failed to render, with the error behind a disclosure.
+// ConversationItemFault 代替渲染失败的行，错误信息收在展开区中。
+function ConversationItemFault(props: { error: Error }) {
+  const { t } = useI18n();
+  return (
+    <PageNotice
+      className="vk-msg-fault"
+      details={props.error.message}
+      detailsLabel={t("features.shell.errorDetails")}
+      title={t("conversation.itemFault")}
+      tone="warning"
+    />
+  );
+}
+
+// ConversationRenderItemContent renders one projected transcript item inside its error boundary.
+// ConversationRenderItemContent 在错误边界内渲染单条投影后的转录展示项。
+function ConversationRenderItemContent(props: ConversationRenderItemViewProps) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();

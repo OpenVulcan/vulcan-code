@@ -2599,6 +2599,7 @@
   "markdown.wrap.disable": "Выключить перенос строк",
   "markdown.copyCode": "Копировать код",
   "conversation.control.copyFailed": "Не удалось скопировать",
+  "conversation.itemFault": "Не удалось отобразить эту часть беседы.",
   "conversation.contextMenu.copy": "Копировать",
   "conversation.contextMenu.copyLinkAddress": "Копировать адрес ссылки",
   "conversation.contextMenu.quote": "Цитировать в поле ввода",

@@ -2599,6 +2599,7 @@
   "markdown.wrap.disable": "Zeilenumbruch deaktivieren",
   "markdown.copyCode": "Code kopieren",
   "conversation.control.copyFailed": "Kopieren fehlgeschlagen",
+  "conversation.itemFault": "Dieser Teil der Unterhaltung konnte nicht angezeigt werden.",
   "conversation.contextMenu.copy": "Kopieren",
   "conversation.contextMenu.copyLinkAddress": "Linkadresse kopieren",
   "conversation.contextMenu.quote": "In Eingabe zitieren",

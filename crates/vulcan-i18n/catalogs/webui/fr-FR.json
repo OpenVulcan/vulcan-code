@@ -2599,6 +2599,7 @@
   "markdown.wrap.disable": "Désactiver le retour à la ligne",
   "markdown.copyCode": "Copier le code",
   "conversation.control.copyFailed": "Échec de la copie",
+  "conversation.itemFault": "Impossible d’afficher cette partie de la conversation.",
   "conversation.contextMenu.copy": "Copier",
   "conversation.contextMenu.copyLinkAddress": "Copier l’adresse du lien",
   "conversation.contextMenu.quote": "Citer dans la saisie",

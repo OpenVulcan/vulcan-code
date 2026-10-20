@@ -2599,6 +2599,7 @@
   "markdown.wrap.disable": "關閉自動換行",
   "markdown.copyCode": "複製程式碼",
   "conversation.control.copyFailed": "複製失敗",
+  "conversation.itemFault": "工作階段的這一部分暫時無法顯示。",
   "conversation.contextMenu.copy": "複製",
   "conversation.contextMenu.copyLinkAddress": "複製連結位址",
   "conversation.contextMenu.quote": "引用到輸入框",
