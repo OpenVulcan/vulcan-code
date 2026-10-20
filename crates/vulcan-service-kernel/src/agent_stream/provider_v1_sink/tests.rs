@@ -3832,3 +3832,41 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
     );
     Ok(())
 }
+
+/// Proves tool-request formation events gain the active API identity that projection requires, for every stream owner.
+/// 证明工具请求构造事件获得投影所需的活动 API 身份，适用于每个事件流所有者。
+#[test]
+fn tool_request_formation_binds_the_active_api() {
+    use vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind;
+    let handle = published_open_turn();
+    let mut sink = ProviderV1StreamSink::new(
+        Arc::clone(&handle),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    let formation = || {
+        RuntimeEvent::new(RuntimeEventKind::ToolRequestProgress, "", "")
+            .with_metadata(Some(json!({ "request_stream_id": "stream" })))
+    };
+
+    let mut early = formation();
+    assert!(sink.bind_tool_request_preview(&mut early).is_err());
+    assert!(
+        early
+            .metadata
+            .as_ref()
+            .unwrap()
+            .get("api_call_id")
+            .is_none()
+    );
+
+    prepare_sink_request(&handle, &mut sink);
+    let api_call_id = sink.request_preview_api_id().unwrap();
+    let mut bound = formation();
+    sink.bind_tool_request_preview(&mut bound).unwrap();
+    assert_eq!(bound.metadata.unwrap()["api_call_id"], json!(api_call_id));
+
+    let mut other = RuntimeEvent::new(RuntimeEventKind::ToolRequestAborted, "", "")
+        .with_metadata(Some(json!({ "request_stream_id": "stream" })));
+    sink.bind_tool_request_preview(&mut other).unwrap();
+    assert!(other.metadata.unwrap().get("api_call_id").is_none());
+}

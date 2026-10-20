@@ -651,7 +651,17 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
         ExecutionStreamEvent::OutputDelta { delta, .. } => provider_v1_sink
             .append_assistant_delta(&delta, current_v1_unix_millis()?)
             .map_err(|error| error.to_string()),
-        ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+        ExecutionStreamEvent::RuntimeEvent {
+            session_id,
+            mut event,
+        } => {
+            // Bind formation to the child's real V1 API, exactly as the root stream does before projection.
+            // 与根事件流在投影前的处理一致，将构造阶段绑定到子任务的真实 V1 API。
+            if let Err(error) = provider_v1_sink.bind_tool_request_preview(&mut event) {
+                tracing::warn!(
+                    "[webui-service] detached tool request preview ownership failed: {error}"
+                );
+            }
             if let Err(error) =
                 dispatch_runtime_event_hook(agent_runtime, session_id, &event, execution_id)
             {

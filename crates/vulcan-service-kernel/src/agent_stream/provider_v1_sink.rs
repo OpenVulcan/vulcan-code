@@ -1713,6 +1713,33 @@ impl ProviderV1StreamSink {
             .ok_or(ProviderV1SinkError::RequestNotActive)
     }
 
+    /// Binds a tool-request formation event to the active API before projection, which requires `api_call_id`.
+    /// 在投影前将工具请求构造事件绑定到活动 API，投影要求提供 `api_call_id`。
+    /// `event` is the runtime event about to be projected; other event kinds are left untouched.
+    /// `event` 是即将投影的运行时事件；其他事件类型保持不变。
+    /// Returns an explicit inactive-request error when a formation event arrives without an active API.
+    /// 构造事件到达时若无活动 API，返回明确的请求未活动错误。
+    pub(crate) fn bind_tool_request_preview(
+        &self,
+        event: &mut RuntimeEvent,
+    ) -> Result<(), ProviderV1SinkError> {
+        use vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind;
+        if !matches!(
+            event.kind,
+            RuntimeEventKind::ToolRequestStarted
+                | RuntimeEventKind::ToolRequestProgress
+                | RuntimeEventKind::ToolRequestPreviewUpdated
+                | RuntimeEventKind::ToolRequestReady
+        ) {
+            return Ok(());
+        }
+        let api_call_id = self.request_preview_api_id()?;
+        if let Some(serde_json::Value::Object(metadata)) = event.metadata.as_mut() {
+            metadata.insert("api_call_id".into(), serde_json::json!(api_call_id));
+        }
+        Ok(())
+    }
+
     /// Publishes queued steering before the next request projection without touching active work.
     /// 在下一次请求投影前发布插队消息，不触碰当前执行。
     /// `runtime` owns message delivery; returns the number durably consumed or the exact failure.
