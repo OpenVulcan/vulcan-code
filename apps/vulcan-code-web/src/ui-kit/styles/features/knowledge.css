@@ -75,7 +75,7 @@
   transition: border-color var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease), box-shadow var(--vk-t-fast) var(--vk-ease);
 }
 .knowledge-library-card:hover:not(:disabled) { border-color: color-mix(in srgb, var(--vk-ink) 28%, var(--vk-line)); background: var(--vk-hover); }
-.knowledge-library-card:focus-visible { outline: none; box-shadow: var(--vk-signal); }
+.knowledge-library-card:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
 .knowledge-library-card[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--vk-ink) 45%, var(--vk-line));
   background: var(--vk-select);
@@ -258,7 +258,7 @@
   transition: background-color var(--vk-t-fast) var(--vk-ease);
 }
 .knowledge-tree-row:hover { background: var(--vk-hover); }
-.knowledge-tree-row:focus-visible { outline: none; box-shadow: var(--vk-signal); }
+.knowledge-tree-row:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
 .knowledge-tree-row[aria-current="true"] { color: var(--vk-ink); background: var(--vk-select); }
 .knowledge-tree-row > svg { flex: 0 0 auto; margin-top: 2px; color: var(--vk-ink-2); }
 .knowledge-tree-row[aria-current="true"] > svg { color: var(--vk-ink); }
@@ -282,7 +282,7 @@
   transition: border-color var(--vk-t-fast) var(--vk-ease);
 }
 .knowledge-hit:hover { border-color: color-mix(in srgb, var(--vk-ink) 35%, var(--vk-line)); }
-.knowledge-hit:focus-visible { outline: none; box-shadow: var(--vk-signal); }
+.knowledge-hit:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
 .knowledge-hit[aria-current="true"] { border-color: color-mix(in srgb, var(--vk-ink) 55%, var(--vk-line)); background: var(--vk-select); }
 .knowledge-hit-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: var(--vk-fs-sm); font-weight: 600; }
 .knowledge-hit-title > small { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); font-weight: 400; font-variant-numeric: tabular-nums; }
@@ -357,7 +357,7 @@
   font-weight: 500;
 }
 .knowledge-segmented > button:hover { color: var(--vk-ink); }
-.knowledge-segmented > button:focus-visible { outline: none; box-shadow: var(--vk-signal); }
+.knowledge-segmented > button:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
 .knowledge-segmented > button[aria-pressed="true"] { color: var(--vk-ink); background: var(--vk-ground); box-shadow: var(--vk-shadow-1); }
 
 .knowledge-reader-body { flex: 1; min-height: 12rem; max-height: 60vh; overflow: auto; padding: 14px 18px; user-select: text; }
@@ -495,7 +495,7 @@
 .knowledge-term > button:last-child { display: grid; place-items: center; width: 26px; height: 28px; color: var(--vk-ink-2); }
 .knowledge-term > button:last-child:hover:not(:disabled) { color: var(--vk-bad); }
 .knowledge-term button:disabled { cursor: default; opacity: 0.6; }
-.knowledge-term button:focus-visible { outline: none; box-shadow: var(--vk-signal); }
+.knowledge-term button:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
 
 /* Policy dialog: selectable index-mode cards with cost hints. */
 /* 策略对话框：带成本提示的可选索引模式卡片。 */
@@ -513,7 +513,7 @@
   transition: border-color var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease);
 }
 .knowledge-mode-card:hover:not(:disabled) { border-color: color-mix(in srgb, var(--knowledge-tone) 40%, var(--vk-line)); }
-.knowledge-mode-card:focus-visible { outline: none; box-shadow: var(--vk-signal); }
+.knowledge-mode-card:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
 .knowledge-mode-card[aria-checked="true"] { border-color: color-mix(in srgb, var(--knowledge-tone) 65%, var(--vk-line)); background: color-mix(in srgb, var(--knowledge-tone) 8%, transparent); }
 .knowledge-mode-card:disabled { cursor: default; opacity: 0.6; }
 .knowledge-mode-card > span:first-child { display: grid; grid-row: span 3; place-items: center; width: 30px; height: 30px; color: var(--knowledge-tone); background: color-mix(in srgb, var(--knowledge-tone) 12%, transparent); }
