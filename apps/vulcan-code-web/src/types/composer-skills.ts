@@ -1685,12 +1685,6 @@ export interface SubagentDefinitionSummary {
   // Optional fixed provider/model selection for this agent.
   // 当前智能体可选的固定供应商/模型选择。
   providerModel: SubagentProviderModelSummary;
-  // Optional base system prompt.
-  // 可选基础系统提示词。
-  systemPrompt?: string | null;
-  // Optional appended system prompt.
-  // 可选追加系统提示词。
-  systemPromptAppend?: string | null;
   // Explicitly allowed host tool names.
   // 显式允许的宿主工具名称。
   allowedTools: string[];
@@ -1751,6 +1745,21 @@ export interface SubagentOriginSummary {
 
 // SubagentProviderModelSummary describes one optional fixed provider/model selection.
 // SubagentProviderModelSummary 描述单个可选固定供应商/模型选择。
+// SubagentDefinitionPrompts is the prompt text of one agent, read on demand because the catalog
+// travels with every workbench snapshot.
+// SubagentDefinitionPrompts 是单个智能体的提示词正文；目录随每个工作台快照传输，因此按需读取。
+export interface SubagentDefinitionPrompts {
+  // Agent id the prompts belong to.
+  // 提示词所属的智能体标识。
+  agentId: string;
+  // Optional base system prompt.
+  // 可选基础系统提示词。
+  systemPrompt: string | null;
+  // Optional appended system prompt.
+  // 可选追加系统提示词。
+  systemPromptAppend: string | null;
+}
+
 export interface SubagentProviderModelSummary {
   // Optional provider identifier.
   // 可选供应商标识。

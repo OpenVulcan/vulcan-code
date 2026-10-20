@@ -55,6 +55,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_subagent_definition",
     "service_delete_subagent_definition",
     "service_restore_subagent_definition_default",
+    "service_subagent_definition_prompts",
     "service_set_agent_skill_enabled",
     "service_load_project_agent_skill_overrides",
     "service_set_agent_skill_project_state",
@@ -395,6 +396,10 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "agentId")?,
             )
             .await,
+        ),
+        "service_subagent_definition_prompts" => rpc_json_result(
+            service_subagent_definition_prompts(state, rpc_required_param(params, "agentId")?)
+                .await,
         ),
         "service_restore_subagent_definition_default" => rpc_json_result(
             service_restore_subagent_definition_default(

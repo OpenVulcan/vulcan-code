@@ -3,7 +3,9 @@
 
 use super::*;
 use vulcan_luaskills_config::LuaSkillsRuntimeSettings;
-use vulcan_service_api::{LuaSkillsManagedRuntimeProgressSummary, ProjectSettingsDomain};
+use vulcan_service_api::{
+    LuaSkillsManagedRuntimeProgressSummary, ProjectSettingsDomain, SubagentDefinitionPrompts,
+};
 
 mod local_plugin_uninstall;
 mod local_plugin_update;
@@ -2847,6 +2849,42 @@ pub(crate) async fn service_delete_subagent_definition(
     refresh_subagent_catalog_local_state_and_emit(&app, &state)
 }
 
+/// Reads the prompt text of one agent definition from the retained runtime catalog.
+/// 从保留的运行时目录读取单个智能体定义的提示词正文。
+pub(crate) async fn service_subagent_definition_prompts(
+    state: SharedServiceBridgeState,
+    agent_id: String,
+) -> Result<SubagentDefinitionPrompts, String> {
+    let catalog = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let runtime = guard.agent_runtime.as_ref().ok_or_else(|| {
+            String::from("service is still starting; the agent catalog is not ready")
+        })?;
+        Arc::clone(&runtime.subagent_catalog)
+    };
+    subagent_definition_prompts_from_catalog(&catalog, agent_id.trim())
+}
+
+/// Projects the prompt text of one definition in an already loaded catalog.
+/// 从已加载目录中投影单个定义的提示词正文。
+fn subagent_definition_prompts_from_catalog(
+    catalog: &vulcan_task_session::SubagentCatalog,
+    agent_id: &str,
+) -> Result<SubagentDefinitionPrompts, String> {
+    let definition = catalog
+        .definitions
+        .iter()
+        .find(|definition| definition.id == agent_id)
+        .ok_or_else(|| format!("Agent definition not found: {agent_id}"))?;
+    Ok(SubagentDefinitionPrompts {
+        agent_id: definition.id.clone(),
+        system_prompt: definition.system_prompt.clone(),
+        system_prompt_append: definition.system_prompt_append.clone(),
+    })
+}
+
 /// Restores one system-backed agent definition by deleting its user override.
 /// 通过删除用户覆盖来恢复单个系统集成智能体定义。
 pub(crate) async fn service_restore_subagent_definition_default(
@@ -4082,6 +4120,26 @@ mod tests {
                 .contains("not present in the committed plugin catalog")
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Verifies prompts are served by agent id and unknown ids fail instead of returning empty prompts.
+    /// 验证提示词按智能体标识提供，未知标识报错而不是返回空提示词。
+    #[test]
+    fn subagent_definition_prompts_resolve_by_agent_id() {
+        let mut definition = test_user_subagent_definition();
+        definition.system_prompt = Some(String::from("base"));
+        definition.system_prompt_append = Some(String::from("append"));
+        let catalog = vulcan_task_session::SubagentCatalog {
+            definitions: vec![definition],
+            ..Default::default()
+        };
+
+        let prompts = subagent_definition_prompts_from_catalog(&catalog, "engineering/test-agent")
+            .expect("known agent prompts");
+        assert_eq!(prompts.agent_id, "engineering/test-agent");
+        assert_eq!(prompts.system_prompt.as_deref(), Some("base"));
+        assert_eq!(prompts.system_prompt_append.as_deref(), Some("append"));
+        assert!(subagent_definition_prompts_from_catalog(&catalog, "missing").is_err());
     }
 
     /// Builds one minimal user subagent definition for file-candidate tests.

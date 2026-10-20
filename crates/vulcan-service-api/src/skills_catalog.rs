@@ -885,12 +885,6 @@ pub struct SubagentDefinitionSummary {
     /// 当前智能体可选的固定供应商/模型选择。
     #[serde(default)]
     pub provider_model: SubagentProviderModelSummary,
-    /// Editable base system prompt restored into the agent editor.
-    /// 恢复到智能体编辑器中的可编辑基础系统提示词。
-    pub system_prompt: Option<String>,
-    /// Editable appended system prompt restored into the agent editor.
-    /// 恢复到智能体编辑器中的可编辑追加系统提示词。
-    pub system_prompt_append: Option<String>,
     /// Explicitly allowed host tool selectors.
     /// 显式允许的宿主工具选择器。
     pub allowed_tools: Vec<String>,
@@ -915,6 +909,27 @@ pub struct SubagentDefinitionSummary {
     /// Explicitly disabled prompt skill names.
     /// 显式禁用的提示词技能名称。
     pub disabled_prompt_skills: Vec<String>,
+}
+
+/// Prompt text of one agent definition, read on demand by the agent detail and editor views.
+/// 单个智能体定义的提示词正文，由智能体详情与编辑视图按需读取。
+///
+/// Prompts stay out of [`SubagentDefinitionSummary`] because the catalog travels with every
+/// workbench snapshot and the bundled prompts alone exceed several megabytes.
+/// 提示词不进入 [`SubagentDefinitionSummary`]，因为目录随每个工作台快照传输，
+/// 而内置提示词合计就超过数 MB。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentDefinitionPrompts {
+    /// Agent id the prompts belong to.
+    /// 提示词所属的智能体标识。
+    pub agent_id: String,
+    /// Editable base system prompt.
+    /// 可编辑基础系统提示词。
+    pub system_prompt: Option<String>,
+    /// Editable appended system prompt.
+    /// 可编辑追加系统提示词。
+    pub system_prompt_append: Option<String>,
 }
 
 /// Provider/model selection projected for one subagent definition.

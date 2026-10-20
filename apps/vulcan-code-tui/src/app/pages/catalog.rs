@@ -115,13 +115,7 @@ pub(super) fn agents(app: &App) -> Vec<Row> {
             || (app.agent_status == "disabled" && b(agent, "/enabled"))
             || !matches_query(
                 agent,
-                &[
-                    "/agentId",
-                    "/name",
-                    "/description",
-                    "/systemPrompt",
-                    "/systemPromptAppend",
-                ],
+                &["/agentId", "/name", "/description"],
                 &["name", "description"],
                 &app.agent_query,
             )
@@ -173,17 +167,9 @@ pub(super) fn agents(app: &App) -> Vec<Row> {
                 Tone::Bad,
             ));
         }
-        // Prompt content is displayed as text; optional prompt append is separate from the base prompt.
-        // 提示词正文按文本呈现；可选附加提示词与基础提示词分开。
-        let mut lines = vec![format!("{}: {}", tr!("tui.catalog.identifier"), id)];
-        for pointer in ["/systemPrompt", "/systemPromptAppend"] {
-            if let Some(content) = v(agent, pointer)
-                .as_str()
-                .filter(|content| !content.is_empty())
-            {
-                lines.extend(content.lines().map(str::to_string));
-            }
-        }
+        // Prompt text is not part of the catalog summary; the row shows the stable identifier.
+        // 提示词正文不属于目录摘要；该行展示稳定标识。
+        let lines = vec![format!("{}: {}", tr!("tui.catalog.identifier"), id)];
         rows.push(
             item(&id, name, description)
                 .badge(layer_label(&s(agent, "/scopeKey")), Tone::Muted)

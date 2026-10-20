@@ -25,7 +25,7 @@ import {
 } from "@/ui-kit/primitives/dialog"
 import { DirectoryRow, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
-import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, WorkbenchSnapshot } from "@/types"
+import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionPrompts, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, WorkbenchSnapshot } from "@/types"
 import type { AgentActionProps } from "./agent-area-types"
 import { colorInputValue, colorSwatchValue } from "@/lib/agent-color"
 
@@ -369,7 +369,7 @@ export function AgentsArea(props: {
               categoryById={categoryById}
               definition={definition}
               key={definition.sourceKey}
-              onEdit={() => { setActionError(null); setEditorDraft(draftFromDefinition(definition, locale)) }}
+              onEdit={() => { setActionError(null); void runAction("load", async () => setEditorDraft(draftFromDefinition(definition, await props.actions.onLoadAgentDefinitionPrompts(definition.agentId), locale))) }}
               onOpenDetail={setDetailDefinition}
               onRequestDelete={() => { setActionError(null); setDefinitionConfirmation({ definition, operation: "delete" }) }}
               onRequestRestore={() => { setActionError(null); setDefinitionConfirmation({ definition, operation: "restore" }) }}
@@ -391,6 +391,7 @@ export function AgentsArea(props: {
         />
         <AgentDefinitionDetailDialog
           definition={detailDefinition}
+          loadPrompts={props.actions.onLoadAgentDefinitionPrompts}
           open={detailDefinition !== null}
           onOpenChange={(open) => {
             if (!open) {
@@ -1109,9 +1110,13 @@ function AgentDefinitionDetailDialog(props: {
   // Updates the details dialog open state.
   // 更新详情弹窗打开状态。
   onOpenChange: (open: boolean) => void
+  // Reads the prompt text shown in the dialog.
+  // 读取弹窗展示的提示词正文。
+  loadPrompts: AgentActionProps["onLoadAgentDefinitionPrompts"]
 }) {
   const { locale, t } = useI18n()
   const definition = props.definition
+  const loaded = useAgentDefinitionPrompts(props.open ? definition?.agentId ?? null : null, props.loadPrompts)
   const displayName = definition ? localizedDefinitionName(definition, locale) : null
   const modelDetail = definition ? agentDefinitionProviderModelDetail(definition, t) : null
   const scopeLabel = definition ? localizedAgentScopeLabel(definition.scopeKey, t) : null
@@ -1190,16 +1195,17 @@ function AgentDefinitionDetailDialog(props: {
                 </div>
               </div>
             ) : null}
-            {definition.systemPrompt ? (
+            {loaded?.error ? <p role="alert" className="vk-field-error">{loaded.error}</p> : null}
+            {loaded?.prompts?.systemPrompt ? (
               <div className="skill-tool-row">
                 <strong>{t("agents.systemPrompt")}</strong>
-                <pre className="skill-body-preview">{definition.systemPrompt}</pre>
+                <pre className="skill-body-preview">{loaded.prompts.systemPrompt}</pre>
               </div>
             ) : null}
-            {definition.systemPromptAppend ? (
+            {loaded?.prompts?.systemPromptAppend ? (
               <div className="skill-tool-row">
                 <strong>{t("agents.promptAppend")}</strong>
-                <pre className="skill-body-preview">{definition.systemPromptAppend}</pre>
+                <pre className="skill-body-preview">{loaded.prompts.systemPromptAppend}</pre>
               </div>
             ) : null}
           </div>
@@ -1207,6 +1213,24 @@ function AgentDefinitionDetailDialog(props: {
       </DialogContent>
     </Dialog>
   )
+}
+
+// useAgentDefinitionPrompts loads one agent's prompt text while its detail dialog is open.
+// useAgentDefinitionPrompts 在详情弹窗打开期间加载单个智能体的提示词正文。
+// Parameters: agentId is null while closed; load reads the prompts. Returns: the result for agentId, or null while loading.
+// 参数：关闭时 agentId 为 null；load 读取提示词。返回值：agentId 对应的结果，加载中为 null。
+function useAgentDefinitionPrompts(agentId: string | null, load: AgentActionProps["onLoadAgentDefinitionPrompts"]) {
+  const [result, setResult] = React.useState<{ agentId: string; prompts?: SubagentDefinitionPrompts; error?: string } | null>(null)
+  React.useEffect(() => {
+    if (agentId === null) return
+    let cancelled = false
+    load(agentId).then(
+      (prompts) => { if (!cancelled) setResult({ agentId, prompts }) },
+      (error: unknown) => { if (!cancelled) setResult({ agentId, error: error instanceof Error ? error.message : String(error) }) },
+    )
+    return () => { cancelled = true }
+  }, [agentId, load])
+  return result?.agentId === agentId ? result : null
 }
 
 // emptyAgentDraft builds the default draft for a new user agent.
@@ -1241,9 +1265,9 @@ function emptyAgentDraft(): AgentEditorDraft {
 
 // draftFromDefinition converts one catalog row into editable form state.
 // draftFromDefinition 将单个目录行转换为可编辑表单状态。
-// Parameters: locale selects the shown name of localized system agents, whose metadata stays read-only.
-// 参数：locale 选择本地化系统智能体的显示名称，其元数据保持只读。
-function draftFromDefinition(definition: SubagentDefinitionSummary, locale: string): AgentEditorDraft {
+// Parameters: prompts carries the on-demand prompt text; locale selects the shown name of localized system agents, whose metadata stays read-only.
+// 参数：prompts 携带按需读取的提示词正文；locale 选择本地化系统智能体的显示名称，其元数据保持只读。
+function draftFromDefinition(definition: SubagentDefinitionSummary, prompts: SubagentDefinitionPrompts, locale: string): AgentEditorDraft {
   return {
     agentId: definition.agentId,
     originalAgentId: definition.agentId,
@@ -1254,8 +1278,8 @@ function draftFromDefinition(definition: SubagentDefinitionSummary, locale: stri
     color: definition.color || "gray",
     vibe: definition.vibe ?? "",
     enabled: definition.enabled,
-    systemPrompt: definition.systemPrompt ?? "",
-    systemPromptAppend: definition.systemPromptAppend ?? "",
+    systemPrompt: prompts.systemPrompt ?? "",
+    systemPromptAppend: prompts.systemPromptAppend ?? "",
     fixedModelProviderId: definition.providerModel?.providerId ?? "",
     fixedModelId: definition.providerModel?.modelId ?? "",
     fixedModelAvailable: definition.providerModel?.available ?? null,

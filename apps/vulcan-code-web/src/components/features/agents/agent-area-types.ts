@@ -1,4 +1,4 @@
-import type { SubagentDefinitionSaveRequest } from "@/types"
+import type { SubagentDefinitionPrompts, SubagentDefinitionSaveRequest } from "@/types"
 
 // AgentActionProps groups service-backed actions used by the independent Agents page.
 // AgentActionProps 归组独立智能体页面使用的服务端动作。
@@ -12,6 +12,9 @@ export interface AgentActionProps {
   // Toggles one agent definition enabled state.
   // 切换单个智能体定义启停状态。
   onSetAgentDefinitionEnabled: (agentId: string, enabled: boolean) => Promise<void>
+  // Reads the prompt text of one agent, which the catalog summary does not carry.
+  // 读取单个智能体的提示词正文；目录摘要不携带该正文。
+  onLoadAgentDefinitionPrompts: (agentId: string) => Promise<SubagentDefinitionPrompts>
   // Saves one editable agent definition into the user layer.
   // 将单个可编辑智能体定义保存到用户层。
   onSaveAgentDefinition: (definition: SubagentDefinitionSaveRequest) => Promise<void>

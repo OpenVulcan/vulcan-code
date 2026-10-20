@@ -83,7 +83,7 @@ hydration 的 `session_config.unattended`，只在当前为自动审批时出现
 | 诊断 | 重试配置、完整请求追踪和会话错误独立记录开关、打开及清理追踪目录、模块与日志 | Workbench |
 | 关于 | 应用版本、许可证目录与按哈希读取正文 | Workbench、Licenses、LicenseBody |
 | 代理技能 | 真实分类导航与生效数量、状态/来源/覆盖/跨语言搜索筛选、查看正文、启用、刷新、用户目录、删除用户覆盖与还原默认 | Workbench.agentSkills.categories/records/errors |
-| 子代理定义 | 真实分类导航与数量、状态及跨语言搜索筛选、查看定义、启用、刷新、用户目录、删除用户覆盖与还原默认 | Workbench.subagentCatalog.categories/definitions |
+| 子代理定义 | 真实分类导航与数量、状态及跨语言搜索筛选、查看定义元数据（提示词正文不随目录下发，WebUI 经 `service_subagent_definition_prompts` 按需读取）、启用、刷新、用户目录、删除用户覆盖与还原默认 | Workbench.subagentCatalog.categories/definitions |
 | LuaSkills | GitHub 安装、更新、卸载、启用、显式/隐式/禁用工具 | Workbench.luaSkills |
 | LuaSkills 设置 | 完整运行时配置、私有地址允许列表、运行时重试 | Workbench.luaSkills.runtimeSettings |
 | Vulcan 插件 | 检查包、审查权限及指纹、输入安装密钥、安装/更新、启用、卸载 | Workbench.plugins、插件预检 |

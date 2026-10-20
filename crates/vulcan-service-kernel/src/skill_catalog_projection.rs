@@ -839,8 +839,6 @@ fn subagent_definition_summary(
             .to_string(),
         prompt_skill_policy_skills: definition.prompt_skills.policy.selectors.clone(),
         provider_model: subagent_provider_model_summary(definition, available_model_selectors),
-        system_prompt: definition.system_prompt.clone(),
-        system_prompt_append: definition.system_prompt_append.clone(),
         allowed_tools: capability_policy_allowed_selectors(&definition.tool_exposure.policy),
         disabled_tools: capability_policy_denied_selectors(&definition.tool_exposure.policy),
         allowed_ai_capabilities: Vec::new(),

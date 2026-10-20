@@ -20,6 +20,7 @@ import type {
   VulcanPluginInitialSecret,
   VulcanPluginPermissionPreview,
   SubagentCatalogUpdate,
+  SubagentDefinitionPrompts,
   SubagentDefinitionSummary,
   SubagentDefinitionSaveRequest,
   WorkbenchSnapshot,
@@ -796,6 +797,22 @@ export async function openSubagentUserDirectory(): Promise<SubagentCatalogUpdate
   return serviceClient.request<SubagentCatalogUpdate>("service_open_subagent_user_directory");
 }
 
+// browserPreviewAgentPrompts keeps browser-preview prompt text outside the catalog, like the service does.
+// browserPreviewAgentPrompts 像服务一样将浏览器预览提示词正文保存在目录之外。
+const browserPreviewAgentPrompts = new Map<string, Omit<SubagentDefinitionPrompts, "agentId">>([
+  ["code-reviewer", { systemPrompt: "Review code changes and return actionable findings first.", systemPromptAppend: null }],
+]);
+
+// loadSubagentDefinitionPrompts reads the prompt text of one agent for the detail and editor views.
+// loadSubagentDefinitionPrompts 为详情与编辑视图读取单个智能体的提示词正文。
+export async function loadSubagentDefinitionPrompts(agentId: string): Promise<SubagentDefinitionPrompts> {
+  if (!hasServiceRuntime()) {
+    const prompts = browserPreviewAgentPrompts.get(agentId) ?? { systemPrompt: null, systemPromptAppend: null };
+    return { agentId, ...prompts };
+  }
+  return serviceClient.request<SubagentDefinitionPrompts>("service_subagent_definition_prompts", { agentId });
+}
+
 // saveSubagentDefinition persists one editable agent definition.
 // saveSubagentDefinition 持久化单个可编辑智能体定义。
 export async function saveSubagentDefinition(definition: SubagentDefinitionSaveRequest): Promise<SubagentCatalogUpdate> {
@@ -846,8 +863,6 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
         promptSkillPolicyMode: definition.promptSkillPolicyMode ?? "all",
         promptSkillPolicySkills: definition.promptSkillPolicySkills ?? [],
         providerModel: definition.providerModel ?? {},
-        systemPrompt: definition.systemPrompt ?? null,
-        systemPromptAppend: definition.systemPromptAppend ?? null,
         allowedTools: definition.allowedTools,
         disabledTools: definition.disabledTools,
         allowedAiCapabilities: [],
@@ -857,6 +872,8 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
         enabledPromptSkills: definition.enabledPromptSkills,
         disabledPromptSkills: definition.disabledPromptSkills,
       };
+      browserPreviewAgentPrompts.delete(originalAgentId);
+      browserPreviewAgentPrompts.set(targetAgentId, { systemPrompt: definition.systemPrompt ?? null, systemPromptAppend: definition.systemPromptAppend ?? null });
       if (existingIndex >= 0) {
         snapshot.subagentCatalog.definitions[existingIndex] = nextDefinition;
       } else {
@@ -928,6 +945,7 @@ export async function deleteSubagentDefinition(agentId: string): Promise<Subagen
         throw new Error(translateActive("agents.service.onlyCustomDeletable"));
       }
       snapshot.subagentCatalog.definitions.splice(index, 1);
+      browserPreviewAgentPrompts.delete(agentId);
     }));
   }
   return serviceClient.request<SubagentCatalogUpdate>("service_delete_subagent_definition", { agentId });

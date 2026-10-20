@@ -39,7 +39,7 @@ async function mountEditable(save: AgentActionProps["onSaveAgentDefinition"], re
   workbench.subagentCatalog.definitions = [definition];
   // actions are complete page callbacks; unrelated controls remain deterministic no-ops.
   // actions 是完整页面回调；不相关控件保持确定性的空操作。
-  const actions: AgentActionProps = { onSaveAgentDefinition: save, onDeleteAgentDefinition: remove, onRefreshAgentCatalog: async () => {}, onOpenAgentUserDirectory: async () => {}, onSetAgentDefinitionEnabled: async () => {}, onRestoreAgentDefinitionDefault: restore ?? (async () => {}) };
+  const actions: AgentActionProps = { onSaveAgentDefinition: save, onDeleteAgentDefinition: remove, onRefreshAgentCatalog: async () => {}, onOpenAgentUserDirectory: async () => {}, onSetAgentDefinitionEnabled: async () => {}, onRestoreAgentDefinitionDefault: restore ?? (async () => {}), onLoadAgentDefinitionPrompts: async (agentId) => ({ agentId, systemPrompt: "Synthetic prompt", systemPromptAppend: null }) };
   await act(async () => root.render(<TooltipProvider><AgentsArea actions={actions} workbench={workbench} /></TooltipProvider>));
   return definition.agentId;
 }
@@ -79,6 +79,9 @@ it("folds built-in metadata while retaining readable full prompts and editable o
   expect(definitionDetails.open).toBe(false);
   expect(definitionDetails.querySelector<HTMLTextAreaElement>("textarea")!.readOnly).toBe(true);
   expect(definitionDetails.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(false);
+  // The prompt arrives through the on-demand read because the catalog summary omits it.
+  // 目录摘要不含提示词，因此提示词经按需读取进入编辑器。
+  expect(definitionDetails.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Synthetic prompt");
   // append remains editable and mounted as the source definition is opened and closed.
   // 源定义展开和收起时，append 保持可编辑且不卸载。
   const append = document.querySelector<HTMLTextAreaElement>(".agent-prompt-field:not(.primary) textarea")!;

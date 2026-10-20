@@ -323,8 +323,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
         promptSkillPolicyMode: "all",
         promptSkillPolicySkills: [],
         providerModel: {},
-        systemPrompt: "Review code changes and return actionable findings first.",
-        systemPromptAppend: null,
         allowedTools: [],
         disabledTools: [],
         allowedAiCapabilities: [],

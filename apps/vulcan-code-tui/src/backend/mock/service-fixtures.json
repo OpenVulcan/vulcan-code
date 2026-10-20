@@ -174,7 +174,6 @@
           "canRestoreDefault": true,
           "canEdit": true,
           "definitionFile": "C:\\demo\\agents\\demo-agent.md",
-          "systemPrompt": "Synthetic agent instructions",
           "categoryId": "development",
           "locales": {}
         }
