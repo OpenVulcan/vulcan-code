@@ -4461,6 +4461,7 @@
   "settings.mediaDelivery.howItWorks": "它是怎么工作的",
   "settings.mediaDelivery.hideExplanation": "收起说明",
   "settings.contextBasics.loading": "正在读取基础设置…",
+  "settings.contextBasics.loadFailed": "无法读取基础设置。",
   "settings.contextBasics.saveSystemDefault": "保存",
   "settings.contextCompactionNodes.title": "窗口大小档位",
   "settings.contextCompactionNodes.description": "会话里可以从这五档中选择上下文窗口大小。这里可以修改每一档的 Token 数。",

@@ -4461,6 +4461,7 @@
   "settings.mediaDelivery.howItWorks": "So funktioniert es",
   "settings.mediaDelivery.hideExplanation": "Erklärung ausblenden",
   "settings.contextBasics.loading": "Grundeinstellungen werden geladen…",
+  "settings.contextBasics.loadFailed": "Grundeinstellungen konnten nicht geladen werden.",
   "settings.contextBasics.saveSystemDefault": "Speichern",
   "settings.contextCompactionNodes.title": "Optionen für die Fenstergröße",
   "settings.contextCompactionNodes.description": "Sitzungen können eine dieser fünf Kontextfenstergrößen wählen. Passen Sie hier die Token-Anzahl jeder Größe an.",

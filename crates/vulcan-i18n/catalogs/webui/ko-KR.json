@@ -4461,6 +4461,7 @@
   "settings.mediaDelivery.howItWorks": "작동 방식",
   "settings.mediaDelivery.hideExplanation": "설명 숨기기",
   "settings.contextBasics.loading": "기본 설정을 불러오는 중…",
+  "settings.contextBasics.loadFailed": "기본 설정을 불러오지 못했습니다.",
   "settings.contextBasics.saveSystemDefault": "저장",
   "settings.contextCompactionNodes.title": "창 크기 옵션",
   "settings.contextCompactionNodes.description": "세션에서 이 다섯 가지 컨텍스트 창 크기 중 하나를 선택할 수 있습니다. 여기서 각 크기의 토큰 수를 조정하세요.",

@@ -4461,6 +4461,7 @@
   "settings.mediaDelivery.howItWorks": "Fonctionnement",
   "settings.mediaDelivery.hideExplanation": "Masquer l’explication",
   "settings.contextBasics.loading": "Chargement des paramètres de base…",
+  "settings.contextBasics.loadFailed": "Impossible de charger les paramètres de base.",
   "settings.contextBasics.saveSystemDefault": "Enregistrer",
   "settings.contextCompactionNodes.title": "Options de taille de fenêtre",
   "settings.contextCompactionNodes.description": "Les sessions peuvent choisir l’une de ces cinq tailles de fenêtre de contexte. Ajustez ici le nombre de jetons de chacune.",

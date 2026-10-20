@@ -4461,6 +4461,7 @@
   "settings.mediaDelivery.howItWorks": "Как это работает",
   "settings.mediaDelivery.hideExplanation": "Скрыть пояснение",
   "settings.contextBasics.loading": "Загрузка основных настроек…",
+  "settings.contextBasics.loadFailed": "Не удалось загрузить основные настройки.",
   "settings.contextBasics.saveSystemDefault": "Сохранить",
   "settings.contextCompactionNodes.title": "Варианты размера окна",
   "settings.contextCompactionNodes.description": "Сеансы могут выбрать один из этих пяти размеров контекстного окна. Здесь можно изменить количество токенов для каждого.",

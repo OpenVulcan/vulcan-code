@@ -11,6 +11,7 @@ import { TerminalShellSettingsCard } from "@/components/features/settings/termin
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import { Button } from "@/ui-kit/primitives/button"
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
 import { Input } from "@/ui-kit/primitives/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { useI18n } from "@/i18n"
@@ -417,6 +418,10 @@ function AccountUsageRefreshCard(props: {
   )
 }
 
+// SNAPSHOT_SECTIONS lists the categories whose editors are built from the AI settings snapshot.
+// SNAPSHOT_SECTIONS 列出编辑器依赖 AI 设置快照构建的分类。
+const SNAPSHOT_SECTIONS: ReadonlySet<string> = new Set(["context", "nodes", "media", "usage"])
+
 // ContextBasicsSettingsArea groups independent settings editors by user task while retaining their save ownership.
 // ContextBasicsSettingsArea 按用户任务组织独立设置编辑器，同时保留各自保存归属。
 // Parameters: props supplies optional output-style content and the real statistics navigation callback; returns task-grouped settings with independent save ownership.
@@ -465,18 +470,25 @@ export function ContextBasicsSettingsArea(props: {
   // error exposes configuration loading failures.
   // error 展示配置加载失败。
   const [error, setError] = React.useState<string | null>(null)
-
-  React.useEffect(() => {
-    // active prevents late loading results from updating an unmounted page.
-    // active 防止迟到加载结果更新已卸载页面。
-    let active = true
+  // loadGeneration lets only the latest read, and only while mounted, publish its result.
+  // loadGeneration 只允许最近一次且仍处于挂载状态的读取发布结果。
+  const loadGeneration = React.useRef(0)
+  const loadSnapshot = React.useCallback(() => {
+    const generation = ++loadGeneration.current
+    setError(null)
     void loadPublicAiSettings().then((next) => {
-      if (active) setSnapshot(next)
+      if (generation === loadGeneration.current) setSnapshot(next)
     }).catch((reason: unknown) => {
-      if (active) setError(reason instanceof Error ? reason.message : String(reason))
+      if (generation === loadGeneration.current) setError(reason instanceof Error ? reason.message : String(reason))
     })
-    return () => { active = false }
   }, [])
+  React.useEffect(() => {
+    loadSnapshot()
+    return () => { loadGeneration.current += 1 }
+  }, [loadSnapshot])
+  // Only these sections read the AI settings snapshot; the others never wait on it or show its failure.
+  // 只有这些分区读取 AI 设置快照；其他分区既不等待它，也不显示它的失败。
+  const snapshotSection = SNAPSHOT_SECTIONS.has(activeSection)
 
   return (
     <WorkspaceDirectoryLayout contentClassName="context-basics-surface vk-form-loose" navigationMode="tabs" navigation={
@@ -484,7 +496,14 @@ export function ContextBasicsSettingsArea(props: {
         {sections.map((section) => <DirectoryRow active={activeSection === section.id} key={section.id} label={section.label} onSelect={() => setActiveSection(section.id)} />)}
       </WorkspaceDirectoryMenu>
     }>
-      {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
+      {error && snapshotSection ? (
+        <SettingsErrorNotice
+          action={<Button onClick={loadSnapshot} size="sm" type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button>}
+          detail={error}
+          message={t("settings.contextBasics.loadFailed")}
+          onServiceReconnected={loadSnapshot}
+        />
+      ) : null}
       <div className="context-basics-tabs">
         {props.outputStyleSettings ? <section className="vk-form-prefs" hidden={activeSection !== "conversation"}>{props.outputStyleSettings}</section> : null}
         {props.systemPromptSettings ? <section hidden={activeSection !== "system-prompt"}>{props.systemPromptSettings}</section> : null}
@@ -507,7 +526,7 @@ export function ContextBasicsSettingsArea(props: {
               <AccountUsageRefreshCard intervalSeconds={snapshot.usageRefreshIntervalSeconds} onOpenUsageStatistics={props.onOpenUsageStatistics} onSaved={(next) => setSnapshot((current) => current ? { ...current, usageRefreshIntervalSeconds: next.usageRefreshIntervalSeconds } : next)} />
             </section>
           </>
-        ) : !error ? <StreamPlaceholder label={t("settings.contextBasics.loading")} shape="fields" count={4} /> : null}
+        ) : !error && snapshotSection ? <StreamPlaceholder label={t("settings.contextBasics.loading")} shape="fields" count={4} /> : null}
         <section hidden={activeSection !== "retry"}>
           <ProviderRetrySettingsArea actions={props.actions} settings={props.retrySettings} />
         </section>

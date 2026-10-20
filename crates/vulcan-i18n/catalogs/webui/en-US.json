@@ -4461,6 +4461,7 @@
   "settings.mediaDelivery.howItWorks": "How it works",
   "settings.mediaDelivery.hideExplanation": "Hide explanation",
   "settings.contextBasics.loading": "Loading basic settings…",
+  "settings.contextBasics.loadFailed": "Couldn’t load basic settings.",
   "settings.contextBasics.saveSystemDefault": "Save",
   "settings.contextCompactionNodes.title": "Window size options",
   "settings.contextCompactionNodes.description": "Sessions can pick one of these five context window sizes. Adjust the token count of each here.",

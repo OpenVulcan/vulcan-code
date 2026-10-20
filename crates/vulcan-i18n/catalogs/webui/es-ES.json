@@ -4461,6 +4461,7 @@
   "settings.mediaDelivery.howItWorks": "Cómo funciona",
   "settings.mediaDelivery.hideExplanation": "Ocultar explicación",
   "settings.contextBasics.loading": "Cargando los ajustes básicos…",
+  "settings.contextBasics.loadFailed": "No se pudieron cargar los ajustes básicos.",
   "settings.contextBasics.saveSystemDefault": "Guardar",
   "settings.contextCompactionNodes.title": "Opciones de tamaño de ventana",
   "settings.contextCompactionNodes.description": "Las sesiones pueden elegir uno de estos cinco tamaños de ventana de contexto. Ajusta aquí el número de tokens de cada uno.",

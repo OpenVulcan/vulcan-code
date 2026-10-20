@@ -4461,6 +4461,7 @@
   "settings.mediaDelivery.howItWorks": "運作方式",
   "settings.mediaDelivery.hideExplanation": "收合說明",
   "settings.contextBasics.loading": "正在讀取基本設定…",
+  "settings.contextBasics.loadFailed": "無法讀取基本設定。",
   "settings.contextBasics.saveSystemDefault": "儲存",
   "settings.contextCompactionNodes.title": "視窗大小檔位",
   "settings.contextCompactionNodes.description": "工作階段可以從這五個檔位中選擇上下文視窗大小。可在此修改每個檔位的 Token 數。",
