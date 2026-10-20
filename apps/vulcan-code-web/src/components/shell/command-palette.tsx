@@ -22,9 +22,11 @@ const THEME_LABEL: Record<AppearanceTheme, TranslationKey> = {
 // CommandPalette is one searchable list of everything the workbench can do from anywhere: start a session,
 // switch the model or theme, run a slash command in the composer, go to any area or settings page, and, once
 // something is typed, open a session by its title or project.
-// Ctrl+K (Cmd+K) toggles it and Ctrl+M (Cmd+M) opens the composer's model picker directly.
+// Ctrl+K (Cmd+K) toggles it, Ctrl+M (Cmd+M) opens the composer's model picker directly and Ctrl+Shift+O
+// (Cmd+Shift+O) starts a new session in the current project.
 // CommandPalette 是可在任何位置使用的工作台全部操作的可搜索列表：新建会话、切换模型或主题、在输入区运行 slash 指令，
-// 前往任意区域或设置页，并在输入内容后按标题或项目打开会话。Ctrl+K（Cmd+K）切换其显示，Ctrl+M（Cmd+M）直接打开输入区的模型选择器。
+// 前往任意区域或设置页，并在输入内容后按标题或项目打开会话。Ctrl+K（Cmd+K）切换其显示，Ctrl+M（Cmd+M）直接打开输入区的模型选择器，
+// Ctrl+Shift+O（Cmd+Shift+O）在当前项目中新建会话。
 export function CommandPalette(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -46,7 +48,7 @@ export function CommandPalette(props: {
 }) {
   const { t } = useI18n();
   const { theme } = useAppearance();
-  const { onOpenChange } = props;
+  const { onOpenChange, onNewConversation } = props;
   // query is kept here so sessions are listed only once something is typed, not as a wall of rows on open.
   // query 保存在此，使会话只在输入内容后列出，而不是打开时铺满整列。
   const [query, setQuery] = React.useState("");
@@ -55,8 +57,16 @@ export function CommandPalette(props: {
   }, [props.open]);
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
       const key = event.key.toLowerCase();
+      if (event.shiftKey) {
+        if (key === "o" && onNewConversation) {
+          event.preventDefault();
+          onOpenChange(false);
+          onNewConversation();
+        }
+        return;
+      }
       if (key === "k") {
         event.preventDefault();
         onOpenChange(!props.open);
@@ -67,7 +77,7 @@ export function CommandPalette(props: {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onOpenChange, props.open]);
+  }, [onNewConversation, onOpenChange, props.open]);
   // run closes the palette before the command so focus returns to the page the command acts on.
   // run 在执行指令前关闭面板，使焦点回到指令作用的页面。
   const run = (action: () => void) => () => {
@@ -86,6 +96,7 @@ export function CommandPalette(props: {
               <CommandItem onSelect={run(props.onNewConversation)} value="new-conversation" keywords={[t("palette.newConversation")]}>
                 <SquarePen />
                 <span>{t("palette.newConversation")}</span>
+                <CommandShortcut>Ctrl Shift O</CommandShortcut>
               </CommandItem>
             ) : null}
             <CommandItem onSelect={run(() => requestComposerCommand({ kind: "model" }))} value="switch-model" keywords={[t("palette.switchModel")]}>

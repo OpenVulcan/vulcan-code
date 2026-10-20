@@ -89,6 +89,18 @@ function SidebarProvider({
     onOpenChange?.(nextOpen)
   }, [collapsible, isControlled, isMobile, onOpenChange])
   const toggleSidebar = React.useCallback(() => setOpen(!currentOpen), [currentOpen, setOpen])
+  // Ctrl+B (Cmd+B) toggles the panel from anywhere like the trigger button; a terminal keeps the key for its shell.
+  // Ctrl+B（Cmd+B）可在任意位置像触发按钮一样切换面板；终端内该按键保留给其 shell。
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+      if (event.key.toLowerCase() !== "b" || (event.target instanceof Element && event.target.closest(".xterm"))) return
+      event.preventDefault()
+      toggleSidebar()
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => document.removeEventListener("keydown", onKeyDown)
+  }, [toggleSidebar])
   const state = isMobile || currentOpen ? "expanded" : "collapsed"
   const value = React.useMemo<SidebarContextValue>(
     () => ({ state, open: currentOpen, setOpen, toggleSidebar, isMobile, closeMobileSidebar, focusTrigger }),
@@ -202,6 +214,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
     <Button
       aria-label={t("sidebar.toggle")}
       aria-expanded={open}
+      aria-keyshortcuts="Control+B"
       className={cx("vk-sidebar-trigger", className)}
       data-slot="sidebar-trigger"
       onClick={(event) => {
