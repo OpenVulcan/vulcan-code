@@ -159,6 +159,7 @@ ${props.project.path}`}
               {hasConversationOverflow ? (
                 <SidebarMenuItem>
                   <button
+                    aria-expanded={props.isConversationListExpanded}
                     className="vk-btn vk-tree-more"
                     data-size="sm"
                     data-variant="ghost"
