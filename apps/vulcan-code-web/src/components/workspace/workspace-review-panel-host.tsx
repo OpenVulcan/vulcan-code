@@ -263,7 +263,7 @@ export function WorkspaceReviewPanelHost(props: {
   const pendingReviewSourceHydrationRef = React.useRef<string | null>(null);
   // forceWorkspaceReviewRefreshRef marks real project switches while ignoring simple collapse/reopen cycles.
   // forceWorkspaceReviewRefreshRef 标记真实项目切换，同时忽略单纯折叠再展开。
-  const forceWorkspaceReviewRefreshRef = React.useRef(false);
+  const forceWorkspaceReviewRefreshRef = useWorkspaceSwitchRefreshFlag(workspacePath);
   // workspaceDetailAttemptedRef records file details already attempted for this snapshot.
   // workspaceDetailAttemptedRef 记录当前快照中已经尝试加载过详情的文件。
   const workspaceDetailAttemptedRef = React.useRef(new Set<string>());
@@ -702,13 +702,6 @@ export function WorkspaceReviewPanelHost(props: {
   }, [handleDiffReviewSelectionChange, props.reviewFocusRequest]);
 
   React.useEffect(() => {
-    if (lastWorkspaceReviewVisibleWorkspacePath !== workspacePath) {
-      forceWorkspaceReviewRefreshRef.current = true;
-      lastWorkspaceReviewVisibleWorkspacePath = workspacePath;
-    }
-  }, [workspacePath]);
-
-  React.useEffect(() => {
     if (lastHydratedReviewPanelCacheKeyRef.current === reviewSourceCacheKey) {
       return;
     }
@@ -840,6 +833,21 @@ export function WorkspaceReviewPanelHost(props: {
 
 // workspaceReviewPanelCacheKey builds a project-level cache key for right-panel Git review state.
 // workspaceReviewPanelCacheKey 为右侧 Git 审核状态构建项目级缓存键。
+// useWorkspaceSwitchRefreshFlag raises a flag when the panel represents a different project than last time.
+// useWorkspaceSwitchRefreshFlag 在面板代表的项目与上次不同时置起标记。
+// Parameters: workspacePath is the current project. Returns a ref the refresh effect clears after use.
+// 参数：workspacePath 为当前项目。返回由刷新 effect 使用后清除的 ref。
+function useWorkspaceSwitchRefreshFlag(workspacePath: string | null): React.MutableRefObject<boolean> {
+  const flagRef = React.useRef(false);
+  React.useEffect(() => {
+    if (lastWorkspaceReviewVisibleWorkspacePath !== workspacePath) {
+      flagRef.current = true;
+      lastWorkspaceReviewVisibleWorkspacePath = workspacePath;
+    }
+  }, [workspacePath]);
+  return flagRef;
+}
+
 function workspaceReviewPanelCacheKey(workspacePath: string | null): string {
   return workspacePath ?? "no-workspace";
 }
