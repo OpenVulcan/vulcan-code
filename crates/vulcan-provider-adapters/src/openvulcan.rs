@@ -89,6 +89,10 @@ struct PublicEmbedding {
     /// Server-declared numeric encodings; values the host does not execute are ignored.
     /// 服务端声明的数值编码；宿主不执行的取值会被忽略。
     allowed_encodings: BTreeSet<String>,
+    /// Input wrapping keyed by an exact server task value; absent when the model needs none.
+    /// 以准确服务端任务值为键的输入包裹；模型不需要时缺省。
+    #[serde(default)]
+    input_templates: BTreeMap<String, String>,
 }
 
 /// Decision context bound; remaining admission rules are enforced by the authority.
@@ -194,6 +198,11 @@ pub(crate) fn parse_catalog(
                 {
                     continue;
                 }
+                let input_templates = project_input_templates(
+                    model_index,
+                    &embedding_task_values,
+                    published.input_templates,
+                )?;
                 let (dimensions, minimum_dimensions, maximum_dimensions) =
                     project_dimensions(published.allowed_dimensions);
                 capabilities.operations = vec![AiOperation::EmbeddingCreate];
@@ -211,7 +220,13 @@ pub(crate) fn parse_catalog(
                     maximum_tokens_per_input: Some(published.max_input_tokens_per_item),
                     normalization: EmbeddingNormalization::Unknown,
                     distance_metric: DistanceMetric::Unknown,
+                    input_templates,
                 });
+                if let Some(embedding) = capabilities.embedding.as_ref() {
+                    embedding.validate_input_templates().map_err(|error| {
+                        format!("Invalid OpenVulcan model catalog at models[{model_index}].capabilities.input_templates: {error}")
+                    })?;
+                }
             }
             PublicOperation::Decision {
                 decision_capabilities,
@@ -284,6 +299,34 @@ fn project_embedding_tasks(
         }
     }
     Ok(bindings)
+}
+
+/// Keys published input templates by host task through the exact wire values in `task_values`.
+/// 通过 `task_values` 中的准确线协议值，将已发布输入模板按宿主任务建立键。
+/// A template for a server task the host does not execute is dropped with that task; one naming a
+/// task the model never declared makes the catalog invalid. `model_index` identifies the entry in errors.
+/// 宿主不执行的服务端任务的模板随该任务一起忽略；指向模型未声明任务的模板使目录无效。
+/// `model_index` 在错误中标识条目。
+fn project_input_templates(
+    model_index: usize,
+    task_values: &BTreeMap<EmbeddingTask, String>,
+    published: BTreeMap<String, String>,
+) -> Result<BTreeMap<EmbeddingTask, String>, String> {
+    let mut templates = BTreeMap::new();
+    for (wire_task, template) in published {
+        if let Some((task, _)) = task_values.iter().find(|(_, value)| **value == wire_task) {
+            templates.insert(*task, template);
+        } else if project_embedding_tasks(model_index, BTreeSet::from([wire_task.clone()]))?
+            .is_empty()
+        {
+            continue;
+        } else {
+            return Err(format!(
+                "Invalid OpenVulcan model catalog at models[{model_index}].capabilities.input_templates: {wire_task} is not an allowed task."
+            ));
+        }
+    }
+    Ok(templates)
 }
 
 /// Validates that secret may reach url and returns its exact native authorization header.
@@ -410,6 +453,47 @@ mod tests {
                 .iter()
                 .any(|model| model.id == "task-decision")
         );
+    }
+
+    /// With no inputs, verifies published input templates are keyed by host task and validated.
+    /// 无需参数，验证已发布输入模板按宿主任务建立键并经过校验，成功时正常返回。
+    #[test]
+    fn openvulcan_catalog_projects_input_templates() {
+        // templated returns the vector capabilities parsed from one catalog carrying `templates`.
+        // templated 返回从携带 `templates` 的目录解析出的向量能力。
+        let templated = |templates: serde_json::Value| {
+            let mut body = task_catalog(&["retrieval_query", "retrieval_document", "opaque_task"]);
+            let vector = body["models"]
+                .as_array_mut()
+                .expect("catalog array")
+                .iter_mut()
+                .find(|model| model["model_id"] == "task-vector")
+                .expect("fixture model");
+            vector["capabilities"]["input_templates"] = templates;
+            parse_catalog("fixture", 1, &body.to_string()).map(|catalog| {
+                catalog
+                    .models
+                    .into_iter()
+                    .find(|model| model.id == "task-vector")
+                    .and_then(|model| model.capabilities.embedding)
+                    .expect("vector embedding")
+            })
+        };
+        let embedding = templated(serde_json::json!({
+            "retrieval_query": "Instruct: find\nQuery:{input}",
+            "opaque_task": "Opaque: {input}"
+        }))
+        .expect("templated catalog");
+        assert_eq!(
+            embedding.input_templates,
+            BTreeMap::from([(EmbeddingTask::Query, String::from("Instruct: find\nQuery:{input}"))])
+        );
+        let failure = templated(serde_json::json!({"retrieval_query": "no placeholder"}))
+            .expect_err("template without placeholder");
+        assert!(failure.contains("capabilities.input_templates"));
+        let failure = templated(serde_json::json!({"code_retrieval": "Code: {input}"}))
+            .expect_err("template for an undeclared task");
+        assert!(failure.contains("capabilities.input_templates"));
     }
 
     /// With no inputs, verifies a kind the host does not know is skipped while known models still load.

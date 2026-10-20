@@ -372,6 +372,7 @@ fn openrouter_embedding_capabilities(model: &OpenRouterModelEntry) -> ModelCapab
             maximum_tokens_per_input: model.context_length,
             normalization: EmbeddingNormalization::Unknown,
             distance_metric: DistanceMetric::Unknown,
+            input_templates: BTreeMap::new(),
         }),
         context_limit: model.context_length,
         evidence_revision: String::from("openrouter-embeddings-models-api-2026-07"),

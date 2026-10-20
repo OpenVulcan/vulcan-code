@@ -87,6 +87,7 @@ fn fixture() -> (
         maximum_tokens_per_input: None,
         normalization: EmbeddingNormalization::None,
         distance_metric: DistanceMetric::Cosine,
+        input_templates: BTreeMap::new(),
     };
     // This fixture binds one account, protocol and immutable execution revision.
     // 此夹具绑定一个账号、协议及不可变执行修订。

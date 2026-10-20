@@ -3421,6 +3421,10 @@ fn embedding_config_from_capability(
             &route.secondary_route_id,
         )
     });
+    // Stored memories are encoded with the storage-side task, so only its input template shapes their
+    // vectors; a query-only template changes retrieval, never a stored vector.
+    // 已存记忆以存储侧任务编码，因此只有该任务的输入模板决定其向量；仅作用于查询的模板改变检索，
+    // 从不改变已存向量。
     let compatibility = (
         "native-vmm-vector-compatibility-v1",
         route,
@@ -3428,6 +3432,7 @@ fn embedding_config_from_capability(
         &capabilities.encodings,
         capabilities.normalization,
         capabilities.distance_metric,
+        capabilities.input_templates.get(&tasks.document),
     );
     let mut material = serde_json::to_vec(&compatibility).map_err(|error| {
         CoreError::new(
@@ -4016,6 +4021,35 @@ mod tests {
         assert_ne!(original, generation("account-a", "revision-1", "other-model"));
     }
 
+    /// Verifies a query-only input template keeps the generation, while a document template changes it.
+    /// 验证仅作用于查询的输入模板保持向量代次，而文档模板会改变它。
+    #[test]
+    fn native_vmm_vector_generation_tracks_only_the_storage_template() {
+        let generation = |templates: &[(EmbeddingTask, &str)]| {
+            let mut handle = embedding_capability_handle(BTreeSet::from([
+                EmbeddingTask::Query,
+                EmbeddingTask::Document,
+            ]));
+            let embedding = handle
+                .snapshot
+                .operations
+                .iter_mut()
+                .find(|operation| operation.operation == AiOperation::EmbeddingCreate)
+                .and_then(|operation| operation.embedding.as_mut())
+                .expect("embedding capability should exist");
+            embedding.input_templates = templates
+                .iter()
+                .map(|(task, template)| (*task, (*template).to_owned()))
+                .collect();
+            embedding_config_from_capability(&handle)
+                .expect("route should activate")
+                .1
+        };
+        let plain = generation(&[]);
+        assert_eq!(plain, generation(&[(EmbeddingTask::Query, "Instruct: find\nQuery:{input}")]));
+        assert_ne!(plain, generation(&[(EmbeddingTask::Document, "Passage: {input}")]));
+    }
+
     /// Verifies query and document calls of one paired route lock the same space fingerprint.
     /// 验证同一配对路由的查询与文档调用锁定相同的空间指纹。
     #[test]
@@ -4272,6 +4306,7 @@ mod tests {
             maximum_tokens_per_input: Some(8_192),
             normalization: EmbeddingNormalization::Unknown,
             distance_metric: DistanceMetric::Unknown,
+            input_templates: BTreeMap::new(),
         }
     }
 

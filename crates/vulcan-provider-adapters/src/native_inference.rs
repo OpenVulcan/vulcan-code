@@ -566,6 +566,13 @@ impl ProviderExecutionClient {
         capabilities
             .validate_request(request)
             .map_err(pre_dispatch_failure)?;
+        // The model's declared input template wraps every input before any wire projection.
+        // 模型声明的输入模板在任何线协议投影之前包裹每条输入。
+        capabilities
+            .validate_input_templates()
+            .map_err(pre_dispatch_failure)?;
+        let templated = capabilities.apply_input_template(request);
+        let request: &EmbeddingRequest = &templated;
         let (native_route, endpoint, binding_id) =
             NativeInferenceRoute::embedding(route, model.id.as_str())?;
         if native_route.binding.projection == crate::NativeInferenceProjectionKind::OpenVulcan {

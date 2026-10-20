@@ -1571,9 +1571,65 @@ pub struct EmbeddingCapabilities {
     /// Declared distance metric.
     /// 声明的距离度量。
     pub distance_metric: DistanceMetric,
+    /// Optional per-task input wrapping the model expects, such as an instruction-aware model's query
+    /// instruction; each template holds [`EMBEDDING_INPUT_TEMPLATE_PLACEHOLDER`] exactly once.
+    /// 模型期望的可选逐任务输入包裹，例如指令感知模型的查询指令；每个模板恰好包含一次
+    /// [`EMBEDDING_INPUT_TEMPLATE_PLACEHOLDER`]。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_templates: BTreeMap<EmbeddingTask, String>,
 }
 
+/// Marks where an embedding input template places the original input.
+/// 标记向量输入模板放置原始输入的位置。
+pub const EMBEDDING_INPUT_TEMPLATE_PLACEHOLDER: &str = "{input}";
+
 impl EmbeddingCapabilities {
+    /// Validates that every input template names a declared task and holds one placeholder.
+    /// 校验每个输入模板都指向已声明任务且只包含一个占位符。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when every template is applicable; otherwise the first offending task.
+    /// 每个模板都可套用时返回成功；否则返回首个出错的任务。
+    pub fn validate_input_templates(&self) -> Result<(), String> {
+        for (task, template) in &self.input_templates {
+            if !self.tasks.contains(task) {
+                return Err(format!(
+                    "Embedding input template targets undeclared task {task:?}."
+                ));
+            }
+            if template.matches(EMBEDDING_INPUT_TEMPLATE_PLACEHOLDER).count() != 1 {
+                return Err(format!(
+                    "Embedding input template for {task:?} must contain `{EMBEDDING_INPUT_TEMPLATE_PLACEHOLDER}` exactly once."
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Wraps every text input of `request` in the template declared for its task.
+    /// 用请求任务声明的模板包裹 `request` 的每条文本输入。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The request unchanged when its task declares no template, otherwise a templated copy.
+    /// 任务未声明模板时原样返回请求，否则返回套用模板后的副本。
+    pub fn apply_input_template<'a>(
+        &self,
+        request: &'a EmbeddingRequest,
+    ) -> std::borrow::Cow<'a, EmbeddingRequest> {
+        let Some(template) = self.input_templates.get(&request.task) else {
+            return std::borrow::Cow::Borrowed(request);
+        };
+        let mut templated = request.clone();
+        for input in &mut templated.inputs {
+            if let EmbeddingInputContent::Text { text } = &mut input.content {
+                *text = template.replacen(EMBEDDING_INPUT_TEMPLATE_PLACEHOLDER, text, 1);
+            }
+        }
+        std::borrow::Cow::Owned(templated)
+    }
+
     /// Validates one request against an exact model-route embedding contract.
     /// 根据精确模型路由向量契约校验一个请求。
     ///
@@ -1902,6 +1958,74 @@ mod tests {
         assert_eq!(decoded, request);
     }
 
+    /// Verifies the declared template wraps text inputs of its task only, and malformed templates are rejected.
+    /// 验证已声明模板只包裹其任务的文本输入，且格式错误的模板会被拒绝。
+    #[test]
+    fn embedding_input_template_wraps_only_its_task() {
+        let mut capabilities = EmbeddingCapabilities {
+            tasks: BTreeSet::from([EmbeddingTask::Query, EmbeddingTask::Document]),
+            input_resources: BTreeSet::new(),
+            output_kinds: BTreeSet::from([EmbeddingOutputKind::Dense]),
+            encodings: BTreeSet::from([EmbeddingEncoding::Float]),
+            dimensions: BTreeSet::from([4]),
+            minimum_dimensions: None,
+            maximum_dimensions: None,
+            default_dimensions: Some(4),
+            maximum_inputs: None,
+            maximum_tokens_per_input: None,
+            normalization: EmbeddingNormalization::Unknown,
+            distance_metric: DistanceMetric::Unknown,
+            input_templates: BTreeMap::from([(
+                EmbeddingTask::Query,
+                String::from("Instruct: find\nQuery:{input}"),
+            )]),
+        };
+        capabilities
+            .validate_input_templates()
+            .expect("query template is valid");
+        // The input itself may contain the placeholder text; only the template's own one is replaced.
+        // 输入本身可以包含占位符文本；只替换模板自身的占位符。
+        let request = |task| EmbeddingRequest {
+            contract_version: INFERENCE_CONTRACT_VERSION,
+            request_id: String::from("request-template"),
+            idempotency_key: None,
+            consumer_profile_id: String::from("template-test-consumer"),
+            inputs: vec![EmbeddingInput {
+                input_id: String::from("input-1"),
+                content: EmbeddingInputContent::Text {
+                    text: String::from("what is {input}"),
+                },
+            }],
+            task,
+            dimensions: Some(4),
+            output_kind: EmbeddingOutputKind::Dense,
+            encoding: EmbeddingEncoding::Float,
+            invalid_input_policy: EmbeddingInvalidInputPolicy::FailBatch,
+        };
+        let query = request(EmbeddingTask::Query);
+        let templated = capabilities.apply_input_template(&query);
+        assert_eq!(
+            templated.inputs[0].content,
+            EmbeddingInputContent::Text {
+                text: String::from("Instruct: find\nQuery:what is {input}")
+            }
+        );
+        let document = request(EmbeddingTask::Document);
+        assert!(matches!(
+            capabilities.apply_input_template(&document),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        for template in ["no placeholder", "{input} {input}"] {
+            capabilities
+                .input_templates
+                .insert(EmbeddingTask::Query, String::from(template));
+            assert!(capabilities.validate_input_templates().is_err(), "{template}");
+        }
+        capabilities.input_templates =
+            BTreeMap::from([(EmbeddingTask::Clustering, String::from("Cluster: {input}"))]);
+        assert!(capabilities.validate_input_templates().is_err());
+    }
+
     /// Verifies Batch aggregate size is governed by Batch limits rather than the synchronous request limit.
     /// 验证 Batch 聚合数量由 Batch 限制约束，而不是由同步请求条数限制约束。
     #[test]
@@ -1921,6 +2045,7 @@ mod tests {
             maximum_tokens_per_input: None,
             normalization: EmbeddingNormalization::Unknown,
             distance_metric: DistanceMetric::Unknown,
+            input_templates: BTreeMap::new(),
         };
         // request represents two independent single-input requests in the asynchronous provider file.
         // request 表示异步供应商文件中的两个独立单输入请求。

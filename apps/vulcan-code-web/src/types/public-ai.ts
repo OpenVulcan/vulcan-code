@@ -657,6 +657,9 @@ export interface PublicAiEmbeddingCapabilities {
   maximum_tokens_per_input?: number;
   normalization: string;
   distance_metric: string;
+  // input_templates maps a task to the text each input is wrapped in; "{input}" marks the input.
+  // input_templates 将任务映射到包裹每条输入的文本；"{input}" 标记输入位置。
+  input_templates?: Record<string, string>;
 }
 
 // PublicAiRerankCapabilities describes exact rerank defaults and request limits.
