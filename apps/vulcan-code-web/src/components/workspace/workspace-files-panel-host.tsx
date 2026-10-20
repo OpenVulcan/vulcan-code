@@ -697,11 +697,11 @@ function WorkspaceOpenFileBar(props: {
 // WorkspaceFileTreeFooter 说明目录树省略了哪些内容，以及面板一次只展示一个文件。
 function WorkspaceFileTreeFooter(props: { filters: WorkspaceFileFilterOptions }) {
   const { t } = useI18n();
-  const activeRules = workspaceFileActiveRuleLabels(props.filters, t);
+  const text = [...workspaceFileActiveRuleLabels(props.filters, t), t("workspaceFiles.oneFileAtATime")].join(" · ");
   return (
     <>
       <Info aria-hidden="true" size={12} />
-      <span title={activeRules.join(" · ")}>{[...activeRules, t("workspaceFiles.oneFileAtATime")].join(" · ")}</span>
+      <span title={text}>{text}</span>
     </>
   );
 }
