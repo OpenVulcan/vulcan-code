@@ -28,6 +28,7 @@ import tavilyIcon from "@/assets/provider-icons/provider-tavily.svg"
 import tokenRhythmIcon from "@/assets/provider-icons/provider-tokenrhythm.svg"
 import vertexIcon from "@/assets/provider-icons/provider-vertex.svg"
 import zhipuIcon from "@/assets/provider-icons/provider-zhipu.svg"
+import { VulcanSymbol } from "@/components/shell/vulcan-symbol"
 import { cx } from "@/ui-kit/behavior/core"
 import type { PublicAiProviderCategory } from "@/types"
 
@@ -51,6 +52,7 @@ export type ProviderIconKey =
   | "minimax"
   | "opencode-go"
   | "open-design"
+  | "openvulcan"
   | "openrouter"
   | "qwen"
   | "qiniu"
@@ -60,9 +62,9 @@ export type ProviderIconKey =
   | "vertex"
   | "zhipu"
 
-// ProviderIconAsset stores theme-aware rendering metadata for one artwork entry.
-// ProviderIconAsset 保存一个图标项的主题感知渲染元数据。
-interface ProviderIconAsset {
+// ProviderIconImage stores theme-aware rendering metadata for one artwork file.
+// ProviderIconImage 保存一个图标文件的主题感知渲染元数据。
+interface ProviderIconImage {
   // Light-theme artwork.
   // 亮色主题图标。
   light: string
@@ -79,6 +81,18 @@ interface ProviderIconAsset {
   // 暗色主题是否需要反转一个通过外部资源加载的单色 SVG。
   monochrome?: boolean
 }
+
+// ProviderIconSymbol renders the OpenVulcan brand symbol inline from its locked master instead of a copied file,
+// so the provider logo always matches the app logo and its body follows the theme text color.
+// ProviderIconSymbol 从锁定母版内联渲染 OpenVulcan 品牌图标，而不是使用复制的图标文件，使供应商 Logo 始终与应用 Logo
+// 一致，且主体跟随主题文字颜色。
+interface ProviderIconSymbol {
+  symbol: "vulcan"
+}
+
+// ProviderIconAsset is one artwork entry: an image file or the inline brand symbol.
+// ProviderIconAsset 是一个图标项：图标文件或内联品牌图标。
+type ProviderIconAsset = ProviderIconImage | ProviderIconSymbol
 
 // providerIconLibrary is the immutable frontend artwork library.
 // providerIconLibrary 是不可变的前端图标库。
@@ -109,6 +123,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
   minimax: { light: miniMaxIcon },
   "opencode-go": { light: openCodeGoIcon, monochrome: true, transparent: true },
   "open-design": { light: openDesignIcon, monochrome: true, transparent: true },
+  openvulcan: { symbol: "vulcan" },
   openrouter: { light: openRouterIcon, transparent: true },
   qwen: { light: qwenIcon },
   qiniu: { light: qiniuIcon, transparent: true },
@@ -138,6 +153,7 @@ const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   openai: "compatibility",
   "opencode-go": "opencode-go",
   "open-design": "open-design",
+  openvulcan: "openvulcan",
   openrouter: "openrouter",
   qwen: "qwen",
   qiniu: "qiniu",
@@ -215,6 +231,9 @@ export function ProviderIcon({
   // asset is the complete theme-aware artwork entry.
   // asset 是完整的主题感知图标项。
   const asset = providerIconLibrary[iconKey]
+  // image is the artwork file entry, or null for the inline brand symbol.
+  // image 是图标文件项；内联品牌图标时为 null。
+  const image = "light" in asset ? asset : null
 
   return (
     <span
@@ -222,27 +241,29 @@ export function ProviderIcon({
       aria-label={category === "relay" ? "Relay provider / 中转站" : undefined}
       className={cx("vk-provider-icon", className)}
       data-provider-category={category}
-      data-surface={asset.themeSurface ? "theme" : asset.transparent ? "none" : undefined}
+      data-surface={!image ? "none" : image.themeSurface ? "theme" : image.transparent ? "none" : undefined}
       data-provider-icon={iconKey}
       role={category === "relay" ? "img" : undefined}
       style={size === undefined ? undefined : { "--vk-provider-size": `${size}px` } as CSSProperties}
       title={category === "relay" ? "Relay provider / 中转站" : undefined}
     >
-      <img
-        alt=""
-        className="vk-provider-art"
-        data-mono={asset.monochrome || undefined}
-        data-scheme={asset.dark ? "light" : undefined}
-        draggable={false}
-        src={asset.light}
-      />
-      {asset.dark ? (
+      {image ? (
+        <img
+          alt=""
+          className="vk-provider-art"
+          data-mono={image.monochrome || undefined}
+          data-scheme={image.dark ? "light" : undefined}
+          draggable={false}
+          src={image.light}
+        />
+      ) : <VulcanSymbol className="vk-provider-art" />}
+      {image?.dark ? (
         <img
           alt=""
           className="vk-provider-art"
           data-scheme="dark"
           draggable={false}
-          src={asset.dark}
+          src={image.dark}
         />
       ) : null}
       {category === "relay" ? (
