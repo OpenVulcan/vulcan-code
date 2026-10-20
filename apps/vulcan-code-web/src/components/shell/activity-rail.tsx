@@ -231,7 +231,8 @@ export function ActivityRail(props: {
         <ActivityRailButton
           active={false}
           icon={<Command size={18} />}
-          label={`${t("palette.title")}  Ctrl K`}
+          label={t("palette.title")}
+          shortcut={{ aria: "Control+K", text: "Ctrl K" }}
           onClick={props.onOpenCommandPalette}
         />
         <ActivityRailButton
@@ -248,7 +249,7 @@ export function ActivityRail(props: {
 
 // ActivityRailButton renders one square rail destination with a right-side tooltip.
 // ActivityRailButton 渲染单个方形轨道目标，并在右侧显示提示。
-function ActivityRailButton({ active, icon, label, onClick, tooltip = true }: {
+function ActivityRailButton({ active, icon, label, onClick, shortcut, tooltip = true }: {
   // Whether the destination is current.
   // 该目标是否为当前页面。
   active: boolean;
@@ -261,6 +262,9 @@ function ActivityRailButton({ active, icon, label, onClick, tooltip = true }: {
   // Activates the destination.
   // 激活该目标。
   onClick: () => void;
+  // Optional keyboard shortcut announced to assistive technology and shown in the tooltip.
+  // 可选键盘快捷键，向辅助技术声明并显示在提示中。
+  shortcut?: { aria: string; text: string };
   // Whether to show the hover tooltip; a flyout trigger supplies its own titled surface instead.
   // 是否显示悬停提示；浮层触发器自带标题浮层，因此不需要。
   tooltip?: boolean;
@@ -268,6 +272,7 @@ function ActivityRailButton({ active, icon, label, onClick, tooltip = true }: {
   const button = (
     <button
       aria-current={active ? "page" : undefined}
+      aria-keyshortcuts={shortcut?.aria}
       aria-label={label}
       className="vk-rail-btn"
       data-active={active ? "true" : "false"}
@@ -283,7 +288,10 @@ function ActivityRailButton({ active, icon, label, onClick, tooltip = true }: {
   return (
     <Tooltip>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent side="right">{label}</TooltipContent>
+      <TooltipContent side="right">
+        {label}
+        {shortcut ? <kbd className="vk-kbd">{shortcut.text}</kbd> : null}
+      </TooltipContent>
     </Tooltip>
   );
 }
