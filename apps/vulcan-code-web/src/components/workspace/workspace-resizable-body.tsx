@@ -6,6 +6,7 @@ import type {
   WorkspaceContextPanelProps,
 } from "@/components/workspace/workspace-context-panel";
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
+import { useFloatingContextDismiss } from "@/components/workspace/use-floating-context-dismiss";
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
 import { StageHead } from "@/components/shell/stage-head";
 import { ReadingWidthMenu } from "@/components/shell/app-chrome";
@@ -417,6 +418,16 @@ export function WorkspaceResizableBody(props: {
       : event.key === "End" ? maximum : dockedPanelWidth + (event.key === "ArrowLeft" ? 20 : -20);
     setDockedPanelWidth(Math.min(maximum, Math.max(WORKSPACE_CONTEXT_PANEL_MIN_WIDTH, next)));
   };
+  // A floating panel covers the conversation, so it closes like a drawer.
+  // 浮动面板覆盖会话区，因此按抽屉方式关闭。
+  const panelHostRef = React.useRef<HTMLDivElement | null>(null);
+  const stageMainRef = React.useRef<HTMLDivElement | null>(null);
+  useFloatingContextDismiss({
+    active: props.rightPanelOpen && props.rightPanelFloating,
+    hostRef: panelHostRef,
+    coveredRef: stageMainRef,
+    onDismiss: props.onToggleRightPanel,
+  });
   // rightPanelMounted keeps one context panel instance alive across floating and docked modes.
   // rightPanelMounted 让同一个上下文面板实例在浮动与停靠模式切换时保持存活。
   const rightPanelMounted = rightPanelTransition.mounted;
@@ -568,7 +579,7 @@ export function WorkspaceResizableBody(props: {
         onToggleLeftPanel={props.onToggleLeftPanel}
       />
       <div className="vk-stage-body" style={dockedPanelMounted ? dockedLayoutStyle : undefined}>
-        <div className="vk-stage-main">
+        <div ref={stageMainRef} className="vk-stage-main">
           {renderedMainContent}
         </div>
         {dockedPanelMounted ? (
@@ -590,6 +601,7 @@ export function WorkspaceResizableBody(props: {
         ) : null}
         {rightPanelMounted ? (
           <div
+            ref={panelHostRef}
             className="vk-panel-host"
             data-floating={renderedRightPanelFloating ? "" : undefined}
             data-state={rightPanelVisualState}
