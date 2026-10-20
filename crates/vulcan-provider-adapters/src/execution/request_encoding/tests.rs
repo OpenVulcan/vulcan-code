@@ -373,6 +373,45 @@ fn deepseek_chat_uses_empty_body_for_recorded_tool_only_turn() {
     assert_eq!(assistants[0]["tool_calls"][0]["id"], "call-1");
 }
 
+/// Verifies whitespace-only reasoning a model really emitted replays verbatim on the Chat route.
+/// 验证模型真实产出的纯空白推理在 Chat 路由上原样回放。
+#[test]
+fn deepseek_chat_replays_whitespace_only_reasoning_verbatim() {
+    let mut request = minimal_request();
+    request.model_id = String::from("deepseek-chat");
+    request.messages.push(vulcan_ai_contract::AiMessage {
+        role: vulcan_ai_contract::MessageRole::Assistant,
+        content: vec![
+            ContentItem::Reasoning {
+                text: String::from("\n\n"),
+                signature: None,
+            },
+            ContentItem::ToolCall {
+                call: vulcan_ai_contract::ToolCall {
+                    id: String::from("call-1"),
+                    name: String::from("read_file"),
+                    arguments: json!({}),
+                    signature: None,
+                },
+            },
+        ],
+        provider_context_items: Vec::new(),
+    });
+
+    let encoded = encoding_client()
+        .encode_request(&deepseek_route(OPENAI_CHAT_PROFILE_ID), &request)
+        .expect("recorded whitespace reasoning is replayable text on the Chat route");
+
+    let assistants = chat_assistant_messages(&encoded.body);
+    assert_eq!(
+        assistants.len(),
+        1,
+        "one turn stays one message: {assistants:#?}"
+    );
+    assert_eq!(assistants[0]["reasoning_content"], "\n\n");
+    assert_eq!(assistants[0]["tool_calls"][0]["id"], "call-1");
+}
+
 /// Verifies a tool-carrying request replays every earlier reasoning turn, not only tool turns.
 /// 验证携带工具的请求回放每个更早的推理回合，而不只是调用工具的回合。
 #[test]

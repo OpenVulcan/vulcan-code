@@ -657,9 +657,18 @@ fn validate_replayable_reasoning_history(
             }
         }
         for item in &message.content {
-            if let ContentItem::Reasoning { text, .. } = item
-                && text.trim().is_empty()
-            {
+            let ContentItem::Reasoning { text, .. } = item else {
+                continue;
+            };
+            let replayable = match contract {
+                // `reasoning_content` is a plain string, so whitespace-only reasoning that a model
+                // really emitted still replays verbatim.
+                // `reasoning_content` 是普通字符串，模型真实产出的纯空白推理仍可原样回放。
+                ReasoningReplayContract::DeepseekChatReasoningContentV1 => !text.is_empty(),
+                ReasoningReplayContract::DeepseekResponsesPlaintextV1
+                | ReasoningReplayContract::DeepseekAnthropicThinkingV1 => !text.trim().is_empty(),
+            };
+            if !replayable {
                 return Err(unreplayable(
                     "persisted canonical reasoning carries no replayable text",
                 ));
@@ -713,7 +722,7 @@ fn validate_deepseek_chat_reasoning_content_replay(
         }
         for item in &message.content {
             if let ContentItem::Reasoning { text, .. } = item
-                && !text.trim().is_empty()
+                && !text.is_empty()
             {
                 durable_texts.push(text.clone());
             }
