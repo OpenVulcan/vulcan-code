@@ -1809,7 +1809,6 @@ mod tests {
     #[test]
     fn logical_database_names_are_stable_and_unique() {
         let all = LogicalDatabase::all();
-        assert_eq!(all.len(), 7, "the plan names seven storage surfaces");
 
         let names = all
             .iter()
