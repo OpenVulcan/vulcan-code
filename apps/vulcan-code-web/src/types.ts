@@ -4,6 +4,7 @@ export * from "./types/conversation";
 export * from "./types/composer-skills";
 export * from "./types/settings-providers";
 export * from "./types/memory-vmm";
+export * from "./types/markdown-memory";
 export * from "./types/runtime-context";
 export * from "./types/planning-questions";
 export * from "./types/workbench";

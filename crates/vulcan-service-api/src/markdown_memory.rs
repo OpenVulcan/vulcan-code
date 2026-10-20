@@ -22,6 +22,9 @@ pub struct MemorySettingsView {
     /// Largest accepted value of one budget part.
     /// 单个预算分项可接受的最大值。
     pub max_part_tokens: usize,
+    /// Usage percentage of a budget part from which pages and write receipts warn.
+    /// 预算分项达到该用量百分比时，页面与写入回执发出提醒。
+    pub warning_percent: usize,
 }
 
 /// Saves the global memory settings.
@@ -139,6 +142,22 @@ pub struct MarkdownMemoryProjectView {
     pub updated: String,
 }
 
+/// A preset section created with a new scope file.
+/// 新建层文件时创建的预置分区。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkdownMemorySectionView {
+    /// Scope key: `user`, `space` or `project`.
+    /// 层键：`user`、`space` 或 `project`。
+    pub scope: String,
+    /// Stable section key.
+    /// 稳定分区键。
+    pub key: String,
+    /// Default title written into the file.
+    /// 写入文件的默认标题。
+    pub title: String,
+}
+
 /// An orphaned project suggested for the current host project.
 /// 为当前宿主项目建议的孤立项目。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -187,6 +206,9 @@ pub struct MarkdownMemoryOverview {
     /// Injection usage for the shown scopes.
     /// 所显示各层的注入占用。
     pub usage: Vec<MarkdownMemoryUsageView>,
+    /// Preset sections of every scope, offered when a node is added.
+    /// 各层的预置分区，供新增节点时选择。
+    pub preset_sections: Vec<MarkdownMemorySectionView>,
 }
 
 /// Applies node operations written by the user in the memory page.

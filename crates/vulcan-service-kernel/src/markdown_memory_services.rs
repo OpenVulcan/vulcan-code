@@ -12,16 +12,16 @@ use crate::runtime_workspace_helpers::workspace_task_project_for_project_id;
 use crate::vmm_hooks::refresh_guard_vmm_hook_snapshot;
 use std::path::Path;
 use vulcan_markdown_memory::{
-    InjectionBudget, MarkdownMemorySettings, MarkdownMemoryStore, MemoryDocument, MemoryError,
-    MemoryProject, MemoryScope, NodeSource, NodeView, ProjectContext, ScopeDocuments,
-    WriteOperation, build_injection_snapshot, now_utc_minute,
+    BUDGET_WARNING_PERCENT, InjectionBudget, MarkdownMemorySettings, MarkdownMemoryStore,
+    MemoryDocument, MemoryError, MemoryProject, MemoryScope, NodeSource, NodeView, ProjectContext,
+    ScopeDocuments, WriteOperation, build_injection_snapshot, now_utc_minute, preset_sections,
 };
 use vulcan_service_api::{
     MarkdownMemoryFileReplaceRequest, MarkdownMemoryFileRequest, MarkdownMemoryFileView,
     MarkdownMemoryNodeView, MarkdownMemoryOrphanView, MarkdownMemoryOverview,
     MarkdownMemoryProjectAction, MarkdownMemoryProjectView, MarkdownMemoryScopeRequest,
-    MarkdownMemoryUsageView, MarkdownMemoryWriteRequest, MemorySettingsSaveRequest,
-    MemorySettingsView,
+    MarkdownMemorySectionView, MarkdownMemoryUsageView, MarkdownMemoryWriteRequest,
+    MemorySettingsSaveRequest, MemorySettingsView,
 };
 
 /// A host project as the memory page sees it.
@@ -85,6 +85,7 @@ fn settings_view(settings: &MarkdownMemorySettings) -> MemorySettingsView {
         budget: settings.budget,
         default_budget: InjectionBudget::default(),
         max_part_tokens: InjectionBudget::MAX_PART_TOKENS,
+        warning_percent: BUDGET_WARNING_PERCENT,
     }
 }
 
@@ -295,6 +296,18 @@ fn load_overview(
         orphan_candidates,
         projects: registry.projects.iter().map(project_view).collect(),
         usage,
+        preset_sections: [MemoryScope::User, MemoryScope::Space, MemoryScope::Project]
+            .into_iter()
+            .flat_map(|scope| {
+                preset_sections(scope)
+                    .iter()
+                    .map(move |(key, title)| MarkdownMemorySectionView {
+                        scope: scope.key().to_string(),
+                        key: (*key).to_string(),
+                        title: (*title).to_string(),
+                    })
+            })
+            .collect(),
     })
 }
 

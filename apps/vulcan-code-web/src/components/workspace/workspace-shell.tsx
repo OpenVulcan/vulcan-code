@@ -23,7 +23,7 @@ import {
   WorkspaceSkillsSettings,
 } from "@/components/workspace/workspace-skills-settings";
 import {
-  memorySubAreaMeta,
+  useMemorySubAreaMeta,
   MemoryWorkspaceNavigation,
   WorkspaceMemorySettings,
 } from "@/components/workspace/workspace-memory-settings";
@@ -711,7 +711,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const agentsHeaderActions = null;
   // memoryHeaderMeta stores the active memory page title detail for descriptor generation.
   // memoryHeaderMeta 保存当前记忆页 descriptor 使用的标题详情。
-  const memoryHeaderMeta = memorySubAreaMeta(props.activeMemorySubArea, props.workbench, t);
+  const memoryHeaderMeta = useMemorySubAreaMeta(props.activeMemorySubArea, props.workbench, t);
 
   // featureNavigation is the menu a feature page shows in the panel beside the rail, replacing the project tree.
   // featureNavigation 是功能页显示在轨道旁面板中的菜单，用于替换项目树。

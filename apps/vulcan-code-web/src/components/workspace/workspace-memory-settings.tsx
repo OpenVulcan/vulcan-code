@@ -1,9 +1,18 @@
 import * as React from "react";
+import { Folder, Globe, SlidersHorizontal, UserRound } from "lucide-react";
 import { DirectoryRow, PageTabs, WorkspaceDirectoryLayout } from "@/components/workspace/workspace-directory-layout";
 import { localizedVmmManagementSection, vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections";
 import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
+import {
+  isMarkdownMemorySection,
+  MEMORY_MODE_SECTION,
+  memorySectionForMode,
+  useMemorySettings,
+  useMemorySettingsSnapshot,
+} from "@/components/features/memory/markdown/memory-mode-store";
+import type { TranslationKey } from "@/i18n-messages";
 import { useI18n } from "@/i18n";
-import type { WorkbenchSnapshot } from "@/types";
+import type { MemoryMode, WorkbenchSnapshot } from "@/types";
 
 // MemorySubAreaId identifies one service-projected VMM section.
 // MemorySubAreaId 标识一个由服务投影的 VMM 分区。
@@ -12,6 +21,18 @@ type MemorySubAreaId = string;
 // LazyMemoryArea keeps the full VMM editor outside the console-first workbench chunk.
 // LazyMemoryArea 将完整 VMM 编辑器保留在控制台优先的工作台分块之外。
 const LazyMemoryArea = React.lazy(() => import("@/components/features/memory/memory-area").then((module) => ({ default: module.MemoryArea })));
+// LazyMarkdownMemoryArea keeps the Markdown memory pages and the mode settings in their own chunk.
+// LazyMarkdownMemoryArea 将 Markdown 记忆页面与模式设置保留在独立分块中。
+const LazyMarkdownMemoryArea = React.lazy(() => import("@/components/features/memory/markdown/markdown-memory-area").then((module) => ({ default: module.MarkdownMemoryArea })));
+
+// MARKDOWN_SECTION_KEYS binds the Markdown and mode sections to their navigation copy and icon.
+// MARKDOWN_SECTION_KEYS 将 Markdown 与模式分区绑定到导航文案与图标。
+const MARKDOWN_SECTION_KEYS: Record<string, { detail: TranslationKey; icon: React.ReactNode; label: TranslationKey }> = {
+  md_user: { detail: "memory.markdown.detail.user", icon: <UserRound size={16} />, label: "memory.markdown.nav.user" },
+  md_space: { detail: "memory.markdown.detail.space", icon: <Globe size={16} />, label: "memory.markdown.nav.space" },
+  md_project: { detail: "memory.markdown.detail.project", icon: <Folder size={16} />, label: "memory.markdown.nav.project" },
+  [MEMORY_MODE_SECTION]: { detail: "memory.markdown.detail.mode", icon: <SlidersHorizontal size={16} />, label: "memory.markdown.nav.mode" },
+};
 
 // WorkspaceMemorySettings renders the embedded VMM memory settings page.
 // WorkspaceMemorySettings 渲染内嵌 VMM 记忆设置页面。
@@ -36,7 +57,21 @@ export function WorkspaceMemorySettings(props: {
     memoryActions,
     workbench,
   } = props;
-  const activeSubArea = effectiveMemorySubArea(props.activeSubArea, workbench);
+  const mode = useMemorySettings()?.mode ?? null;
+  const activeSubArea = effectiveMemorySubArea(props.activeSubArea, workbench, mode);
+
+  if (activeSubArea === MEMORY_MODE_SECTION || isMarkdownMemorySection(activeSubArea)) {
+    return (
+      <WorkspaceDirectoryLayout contentClassName="vmm-workspace-body vk-atmosphere" pageKey={activeSubArea}>
+        <React.Suspense fallback={null}>
+          <LazyMarkdownMemoryArea
+            section={activeSubArea}
+            workbench={workbench}
+          />
+        </React.Suspense>
+      </WorkspaceDirectoryLayout>
+    );
+  }
 
   // The section menu lives in the navigation panel beside the rail (MemoryWorkspaceNavigation).
   // 分区菜单位于轨道旁的导航面板中（MemoryWorkspaceNavigation）。
@@ -74,30 +109,39 @@ interface MemoryNavigationProps {
 // serviceSections 将连接、运行状态与推理归组，不改变后端 ID。
 const serviceSections = ["inference", "overview", "advanced"];
 
-// effectiveMemorySubArea sends first-use content navigation to setup until a backend is configured.
-// effectiveMemorySubArea 在后端配置完成前，将首次使用时的内容入口导向配置总览。
-// Parameters: the requested section and the snapshot. Returns the section actually shown.
-// 参数：请求的分区与快照。返回实际显示的分区。
-function effectiveMemorySubArea(subArea: MemorySubAreaId, workbench: WorkbenchSnapshot): MemorySubAreaId {
-  return subArea === "content" && workbench.vmmMemory.experienceState.deployment === "disabled" ? "overview" : subArea;
+// effectiveMemorySubArea maps the request onto the pages of the memory mode, then sends first-use VMM
+// content navigation to setup until a backend is configured.
+// effectiveMemorySubArea 先把请求映射到当前记忆模式的页面，再在 VMM 后端配置完成前将首次使用时的
+// 内容入口导向配置总览。
+// Parameters: the requested section, the snapshot and the mode (null while loading). Returns the section shown.
+// 参数：请求的分区、快照与模式（加载中为 null）。返回实际显示的分区。
+function effectiveMemorySubArea(subArea: MemorySubAreaId, workbench: WorkbenchSnapshot, mode: MemoryMode | null): MemorySubAreaId {
+  const section = memorySectionForMode(subArea, mode);
+  return section === "content" && workbench.vmmMemory.experienceState.deployment === "disabled" ? "overview" : section;
 }
 
 // MemoryWorkspaceNavigation renders fixed task navigation for the panel beside the rail. Props own selection; returns the navigation.
 // MemoryWorkspaceNavigation 为轨道旁面板渲染固定任务导航。props 持有选择状态；返回导航。
 export function MemoryWorkspaceNavigation(props: MemoryNavigationProps) {
   const { t } = useI18n();
+  const mode = useMemorySettings()?.mode ?? null;
   // activeSubArea mirrors the section the page actually shows, so first-use redirects stay highlighted.
   // activeSubArea 与页面实际显示的分区一致，使首次使用的重定向保持高亮。
-  const activeSubArea = effectiveMemorySubArea(props.activeSubArea, props.workbench);
+  const activeSubArea = effectiveMemorySubArea(props.activeSubArea, props.workbench, mode);
   // rows preserves capability filtering from the service snapshot.
   // rows 保留服务快照的能力过滤。
   const rows = memoryMenuRows(props.workbench, t);
-  // groups orders reading before management and configuration.
-  // groups 将阅读排在管理与配置之前。
-  const groups = [
+  // groups orders reading before management and configuration; the mode decides which pages exist.
+  // groups 将阅读排在管理与配置之前；模式决定存在哪些页面。
+  const groups = mode === "markdown" ? [
+    { label: t("memory.workspace.read"), ids: ["md_user", "md_space", "md_project"] },
+    { label: t("memory.workspace.settings"), ids: [MEMORY_MODE_SECTION] },
+  ] : mode === "off" ? [
+    { label: t("memory.workspace.settings"), ids: [MEMORY_MODE_SECTION] },
+  ] : [
     { label: t("memory.workspace.read"), ids: ["content", "profile"] },
     { label: t("memory.workspace.manage"), ids: ["identity_projects", "maintenance"] },
-    { label: t("memory.workspace.settings"), ids: ["rules", "service", "resource_rules"] },
+    { label: t("memory.workspace.settings"), ids: ["rules", "service", "resource_rules", MEMORY_MODE_SECTION] },
   ];
   return <nav className="vk-dir" aria-label={t("workspaceToolPanel.memorySettingsMenu")}>
     {groups.map((group) => <div className="vk-dir-group" key={group.label}>
@@ -136,19 +180,28 @@ function MemoryServiceTabs(props: MemoryNavigationProps) {
 // memoryMenuRows builds embedded memory menu rows from the snapshot.
 // memoryMenuRows 根据快照构建内嵌记忆菜单行。
 function memoryMenuRows(workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): Array<{ detail: string; icon: React.ReactNode; id: MemorySubAreaId; label: string }> {
-  return workbench.vmmMemory.sections.map((section) => ({
-    ...localizedVmmManagementSection(section, workbench.vmmMemory.experienceState.deployment, t),
-    icon: vmmSectionIcon(section.id),
-    id: section.id,
-  }));
+  return [
+    ...workbench.vmmMemory.sections.map((section) => ({
+      ...localizedVmmManagementSection(section, workbench.vmmMemory.experienceState.deployment, t),
+      icon: vmmSectionIcon(section.id),
+      id: section.id,
+    })),
+    ...Object.entries(MARKDOWN_SECTION_KEYS).map(([id, keys]) => ({
+      detail: t(keys.detail),
+      icon: keys.icon,
+      id,
+      label: t(keys.label),
+    })),
+  ];
 }
 
-// memorySubAreaMeta returns the header title and description for one embedded memory page.
+// useMemorySubAreaMeta returns the header title and description for one embedded memory page.
 // Service subpages share the "models and services" title because their own names are the page tabs.
-// memorySubAreaMeta 返回单个内嵌记忆页面的标题栏标题与说明。
+// useMemorySubAreaMeta 返回单个内嵌记忆页面的标题栏标题与说明。
 // 服务子页面共用“模型与服务”标题，因为其各自名称已作为页内标签显示。
-export function memorySubAreaMeta(subArea: MemorySubAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): { detail: string; label: string } {
-  const visibleSubArea = effectiveMemorySubArea(subArea, workbench);
+export function useMemorySubAreaMeta(subArea: MemorySubAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): { detail: string; label: string } {
+  const mode = useMemorySettingsSnapshot()?.mode ?? null;
+  const visibleSubArea = effectiveMemorySubArea(subArea, workbench, mode);
   const row = memoryMenuRows(workbench, t).find((item) => item.id === visibleSubArea);
   return {
     detail: row?.detail ?? t("area.memory.description"),

@@ -1,0 +1,48 @@
+/* Markdown memory owns its visual vocabulary in this lazy stylesheet; it never grows the workbench CSS. */
+/* Markdown 记忆在此惰性样式表中拥有视觉词汇；绝不增加工作台 CSS。 */
+
+.vk-mm-page { display: grid; gap: calc(var(--vk-u) * 4); min-width: 0; }
+
+.vk-mm-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-mm-project-select { min-width: min(18rem, 100%); }
+
+/* Budget editor. */
+/* 预算编辑。 */
+.vk-mm-budget-input { width: 8rem; text-align: end; font-variant-numeric: tabular-nums; }
+.vk-mm-budget-total { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: calc(var(--vk-u) * 3); font-size: var(--vk-fs-sm); font-variant-numeric: tabular-nums; }
+
+/* Injection usage: one row per budget part, toned by how full it is. */
+/* 注入占用：每个预算分项一行，按占用程度着色。 */
+.vk-mm-usage { display: grid; gap: calc(var(--vk-u) * 3); }
+.vk-mm-usage-row { display: grid; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
+.vk-mm-usage-head { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-sm); }
+.vk-mm-usage-head > span:nth-child(2) { margin-inline-start: auto; color: var(--vk-ink-2); font-variant-numeric: tabular-nums; }
+.vk-mm-usage-row[data-tone="warn"] .vk-mm-usage-bar > i { background: var(--vk-warn); }
+.vk-mm-usage-row[data-tone="bad"] .vk-mm-usage-bar > i { background: var(--vk-bad); }
+
+/* Node tree: headings indent by level; H1 sections read as group headers. */
+/* 节点树：标题按级别缩进；H1 分区作为分组标题。 */
+.vk-mm-tree { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.vk-mm-node { display: grid; gap: calc(var(--vk-u) * 1); min-width: 0; padding: calc(var(--vk-u) * 2) 0; border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-mm-node:first-child { border-top: 0; }
+.vk-mm-node[data-level="1"] { margin-top: calc(var(--vk-u) * 2); padding-top: calc(var(--vk-u) * 3); border-top-color: var(--vk-line); }
+.vk-mm-node[data-level="1"]:first-child { margin-top: 0; padding-top: 0; }
+.vk-mm-node[data-level="1"] .vk-mm-node-head > strong { font-size: var(--vk-fs-md); }
+.vk-mm-node[data-level="2"] { padding-inline-start: calc(var(--vk-u) * 4); }
+.vk-mm-node[data-level="3"] { padding-inline-start: calc(var(--vk-u) * 8); }
+.vk-mm-node[data-level="4"] { padding-inline-start: calc(var(--vk-u) * 12); }
+.vk-mm-node-head { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-mm-node-head > strong { min-width: 0; font-size: var(--vk-fs-sm); font-weight: 600; overflow-wrap: anywhere; }
+.vk-mm-node-head > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-mm-node-acts { display: inline-flex; gap: 2px; margin-inline-start: auto; opacity: 0.55; transition: opacity var(--vk-t-fast) var(--vk-ease); }
+.vk-mm-node:hover .vk-mm-node-acts,
+.vk-mm-node:focus-within .vk-mm-node-acts { opacity: 1; }
+.vk-mm-node-body { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-read); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Editors. */
+/* 编辑器。 */
+.vk-mm-editor { display: grid; gap: calc(var(--vk-u) * 3); min-width: 0; }
+.vk-mm-field { display: grid; gap: calc(var(--vk-u) * 1.5); min-width: 0; font-size: var(--vk-fs-sm); }
+.vk-mm-field > span { color: var(--vk-ink-2); font-weight: 500; }
+.vk-mm-path { display: block; overflow: hidden; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-mm-file-text { min-height: 24rem; font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
