@@ -77,27 +77,40 @@ interface PanelHarness {
   // Latest desktop sidebar visibility.
   // 最新桌面侧栏可见性。
   sidebarOpen: () => boolean;
+  // Re-renders the hook on another surface, as switching pages or selecting a draft does.
+  // 在另一界面上重新渲染 hook，如同切换页面或选择草稿。
+  showSurface: (surface: PanelSurface) => void;
 }
+
+// PanelSurface is the page the shell shows: a persisted chat, a chat draft, or another page such as settings.
+// PanelSurface 是外壳显示的页面：持久会话、会话草稿或设置等其他页面。
+type PanelSurface = "chat" | "draft" | "page";
 
 // renderPanelLayout mounts the hook with a stateful desktop sidebar and a measurable shell element.
 // renderPanelLayout 使用有状态的桌面侧栏与可测量的外壳元素挂载 hook。
-// Parameters: hasSelectedChatConversation selects a persisted chat surface; shellWidth is the bounding width.
-// 参数：hasSelectedChatConversation 选择持久会话界面；shellWidth 是外壳边界宽度。
+// Parameters: hasSelectedChatConversation selects a persisted chat surface (otherwise another page); shellWidth is the
+// bounding width.
+// 参数：hasSelectedChatConversation 选择持久会话界面（否则为其他页面）；shellWidth 是外壳边界宽度。
 function renderPanelLayout(hasSelectedChatConversation: boolean, shellWidth: number): PanelHarness {
   // latest stores the most recent hook result and sidebar visibility.
   // latest 保存最近一次 hook 结果与侧栏可见性。
   let latest: { layout: WorkspacePanelLayout; sidebarOpen: boolean } | undefined;
-  // Probe owns sidebar visibility like SidebarProvider and attaches the shell ref.
-  // Probe 像 SidebarProvider 一样持有侧栏可见性，并挂载外壳 ref。
-  function Probe(): React.ReactElement {
+  // Probe owns sidebar visibility like SidebarProvider and the context panel flag like the workbench, and attaches
+  // the shell ref.
+  // Probe 像 SidebarProvider 一样持有侧栏可见性，像工作台一样持有上下文面板标记，并挂载外壳 ref。
+  function Probe(props: { surface: PanelSurface }): React.ReactElement {
     const [open, setOpen] = React.useState(true);
+    const [rightPanelOpen, setRightPanelOpen] = React.useState(false);
     const sidebar = React.useMemo(
       () => ({ isMobile: false, open, setOpen }) as unknown as ReturnType<typeof useSidebar>,
       [open],
     );
     const layout = useWorkspacePanelLayout({
       sidebar,
-      hasSelectedChatConversation,
+      hasSelectedChatConversation: props.surface === "chat",
+      chatViewActive: props.surface !== "page",
+      rightPanelOpen,
+      setRightPanelOpen,
       notifyConversationLayoutWillChange: () => undefined,
     });
     latest = { layout, sidebarOpen: open };
@@ -110,10 +123,12 @@ function renderPanelLayout(hasSelectedChatConversation: boolean, shellWidth: num
       },
     });
   }
-  act(() => root.render(React.createElement(Probe)));
+  const showSurface = (surface: PanelSurface) => act(() => root.render(React.createElement(Probe, { surface })));
+  showSurface(hasSelectedChatConversation ? "chat" : "page");
   return {
     layout: () => latest!.layout,
     sidebarOpen: () => latest!.sidebarOpen,
+    showSurface,
   };
 }
 
@@ -167,5 +182,21 @@ it("floats the context panel when docking would squeeze the conversation", () =>
 it("keeps the context panel closed without a persisted conversation", () => {
   const harness = renderPanelLayout(false, dockedPanelFitWidth());
   act(() => harness.layout().openRightContextPanel());
+  expect(harness.layout().effectiveRightPanelOpen).toBe(false);
+});
+
+// Another page only hides the panel, so it is back on return; a chat draft closes it.
+// 其他页面只隐藏面板，返回时恢复；会话草稿则关闭面板。
+it("restores the context panel after another page but not after a draft", () => {
+  const harness = renderPanelLayout(true, dockedPanelFitWidth());
+  act(() => harness.layout().openRightContextPanel());
+
+  harness.showSurface("page");
+  expect(harness.layout().effectiveRightPanelOpen).toBe(false);
+  harness.showSurface("chat");
+  expect(harness.layout().effectiveRightPanelOpen).toBe(true);
+
+  harness.showSurface("draft");
+  harness.showSurface("chat");
   expect(harness.layout().effectiveRightPanelOpen).toBe(false);
 });

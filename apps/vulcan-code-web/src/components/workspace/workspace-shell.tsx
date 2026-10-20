@@ -258,7 +258,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     openRightContextPanel,
     handleLeftPanelToggle,
     handleRightPanelToggle,
-  } = useWorkspacePanelLayout({ sidebar, hasSelectedChatConversation, notifyConversationLayoutWillChange });
+  } = useWorkspacePanelLayout({
+    sidebar,
+    hasSelectedChatConversation,
+    chatViewActive: props.mainView === "chat",
+    rightPanelOpen: props.contextPanelOpen,
+    setRightPanelOpen: props.onContextPanelOpenChange,
+    notifyConversationLayoutWillChange,
+  });
   // aiBrowserAvailable never carries a previous conversation's browser into the selected route.
   // aiBrowserAvailable 绝不会把上一会话的浏览器带入当前路由。
   const aiBrowserAvailable = aiBrowserPluginEnabled && aiBrowserState.owner === props.selectedConversationId

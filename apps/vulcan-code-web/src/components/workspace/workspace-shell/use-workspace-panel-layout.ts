@@ -13,9 +13,18 @@ export interface WorkspacePanelLayoutOptions {
   // Left navigation controller that width pressure may collapse and restore.
   // 宽度压力可能折叠与恢复的左侧导航控制器。
   sidebar: ReturnType<typeof useSidebar>;
-  // True only for an existing persisted conversation surface; the context panel closes otherwise.
-  // 仅在当前界面是已存在的持久化会话时为真；否则上下文面板关闭。
+  // True only for an existing persisted conversation surface; the context panel is hidden otherwise.
+  // 仅在当前界面是已存在的持久化会话时为真；否则隐藏上下文面板。
   hasSelectedChatConversation: boolean;
+  // True while the chat view is shown. A draft there closes the panel; other pages only hide it, so it returns with the chat.
+  // 显示会话视图时为真。其中的草稿会关闭面板；其他页面只隐藏面板，返回会话时恢复。
+  chatViewActive: boolean;
+  // Whether the context panel is open; the caller holds it so it outlives this shell.
+  // 上下文面板是否展开；由调用方保存，使其比本外壳存活更久。
+  rightPanelOpen: boolean;
+  // Updates the context panel open state.
+  // 更新上下文面板展开状态。
+  setRightPanelOpen: (open: boolean) => void;
   // Lets the active chat preserve scroll before shell geometry changes.
   // 让当前会话在外壳几何变化前保留滚动位置。
   notifyConversationLayoutWillChange: () => void;
@@ -51,7 +60,14 @@ export interface WorkspacePanelLayout {
 // Returns: the shell ref to attach, the context panel mode and the panel toggles.
 // 返回值：需挂载的外壳 ref、上下文面板模式与面板切换。
 export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): WorkspacePanelLayout {
-  const { sidebar, hasSelectedChatConversation, notifyConversationLayoutWillChange } = options;
+  const {
+    sidebar,
+    hasSelectedChatConversation,
+    chatViewActive,
+    rightPanelOpen,
+    setRightPanelOpen,
+    notifyConversationLayoutWillChange,
+  } = options;
   // shellRef measures the available workspace width for automatic panel collapse.
   // shellRef 测量工作台可用宽度，用于自动折叠面板。
   const shellRef = React.useRef<HTMLDivElement | null>(null);
@@ -61,9 +77,6 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
   // previousShellWidthRef tracks resize direction so auto-restore only runs while width grows.
   // previousShellWidthRef 跟踪尺寸变化方向，确保自动恢复只在宽度增长时执行。
   const previousShellWidthRef = React.useRef<number | null>(null);
-  // rightPanelOpen stores whether the review and memory panel is visible.
-  // rightPanelOpen 保存审核与记忆面板是否可见。
-  const [rightPanelOpen, setRightPanelOpen] = React.useState(false);
   // rightPanelFloating stores whether the right panel overlays instead of resizing the chat area.
   // rightPanelFloating 保存右侧面板是否以浮动方式覆盖而不是压缩会话区。
   const [rightPanelFloating, setRightPanelFloating] = React.useState(false);
@@ -83,7 +96,7 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
     setRightPanelFloating(width > 0 && width - leftWidth - WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
       - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH < conversationReservedWidth());
     setRightPanelOpen(true);
-  }, [notifyConversationLayoutWillChange, sidebar.isMobile, sidebar.open]);
+  }, [notifyConversationLayoutWillChange, setRightPanelOpen, sidebar.isMobile, sidebar.open]);
 
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
@@ -102,15 +115,15 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
       return;
     }
     openRightContextPanel();
-  }, [notifyConversationLayoutWillChange, openRightContextPanel, rightPanelOpen]);
+  }, [notifyConversationLayoutWillChange, openRightContextPanel, rightPanelOpen, setRightPanelOpen]);
 
   React.useEffect(() => {
-    if (!hasSelectedChatConversation && rightPanelOpen) {
+    if (chatViewActive && !hasSelectedChatConversation && rightPanelOpen) {
       notifyConversationLayoutWillChange();
       setRightPanelOpen(false);
       setRightPanelFloating(false);
     }
-  }, [hasSelectedChatConversation, notifyConversationLayoutWillChange, rightPanelOpen]);
+  }, [chatViewActive, hasSelectedChatConversation, notifyConversationLayoutWillChange, rightPanelOpen, setRightPanelOpen]);
 
   React.useEffect(() => {
     const element = shellRef.current;

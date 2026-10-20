@@ -272,6 +272,9 @@ export function WorkbenchLayout(props: {
   // sessionPanelOpen is the only collapsible panel state; feature menus and the settings tree always stay beside the rail.
   // sessionPanelOpen 是唯一可折叠的面板状态；功能菜单与设置树始终位于轨道旁。
   const [sessionPanelOpen, setSessionPanelOpen] = React.useState(true);
+  // contextPanelOpen keeps the conversation's right panel across visits to settings, which unmount the workspace shell.
+  // contextPanelOpen 在访问会卸载工作区外壳的设置页期间保留会话右侧面板状态。
+  const [contextPanelOpen, setContextPanelOpen] = React.useState(false);
   // workspaceMainView stores the selected main surface inside the workbench.
   // workspaceMainView 保存工作台内部当前选中的主内容界面。
   const [workspaceMainView, setWorkspaceMainView] = React.useState<WorkspaceMainView>("chat");
@@ -1202,6 +1205,8 @@ export function WorkbenchLayout(props: {
             mainView={workspaceMainView}
             sidebarOpen={sessionPanelOpen}
             onSidebarOpenChange={setSessionPanelOpen}
+            contextPanelOpen={contextPanelOpen}
+            onContextPanelOpenChange={setContextPanelOpen}
             rail={activityRail}
             selectedDraftConversation={selectedDraftConversation}
             selectedConversation={selectedConversation}

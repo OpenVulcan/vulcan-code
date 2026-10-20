@@ -74,6 +74,12 @@ export interface WorkspaceShellProps {
   // Updates the session panel open state.
   // 更新会话面板展开状态。
   onSidebarOpenChange: (open: boolean) => void;
+  // Context panel open state, held above the shell so leaving for settings and coming back keeps it.
+  // 上下文面板展开状态，保存在外壳之上，使进入设置后返回时保持不变。
+  contextPanelOpen: boolean;
+  // Updates the context panel open state.
+  // 更新上下文面板展开状态。
+  onContextPanelOpenChange: (open: boolean) => void;
   // Selected embedded skills sub page.
   // 当前选中的内嵌技能子页面。
   activeSkillSubArea: SkillSubAreaId;
