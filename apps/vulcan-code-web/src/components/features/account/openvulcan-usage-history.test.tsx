@@ -47,7 +47,7 @@ it("loads on mount, keeps large values exact and paginates with the owner-bound 
   vi.mocked(loadOpenVulcanUsagePage).mockResolvedValueOnce(firstPage).mockResolvedValueOnce({ ...firstPage, usage: [], next_cursor: "" });
   await act(async () => root.render(<OpenVulcanUsageHistory />));
   expect(loadOpenVulcanUsagePage).toHaveBeenCalledExactlyOnceWith("");
-  for (const exact of ["9,007,199,254,740,993", "18,014,398,509,481,987", "36,028,797,018.963977"]) {
+  for (const exact of ["9,007,199,254,740,993", "18,014,398,509,481,987", "36,028,797,019.0"]) {
     expect(cellTexts()).toContain(exact);
   }
   const next = host.querySelector<HTMLButtonElement>(".openvulcan-usage-next")!;

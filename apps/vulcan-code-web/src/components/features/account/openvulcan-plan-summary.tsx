@@ -77,7 +77,7 @@ export function OpenVulcanPlanSummary(props: {
     {error ? <SettingsErrorNotice message={t("openvulcan.account.failed")} detail={error} /> : null}
     {remaining !== null ? <p className="openvulcan-plan-balance">
       <span>{t("openvulcan.plan.remaining")}</span>
-      <strong>{formatMicroPoints(remaining, locale)}</strong>
+      <strong>{formatMicroPoints(remaining, locale, "floor")}</strong>
     </p> : null}
     {usage && usage.quota_windows.length > 0 ? <ul className="openvulcan-plan-lots">
       {usage.quota_windows.map((lot) => {
@@ -87,7 +87,7 @@ export function OpenVulcanPlanSummary(props: {
           <div className="openvulcan-plan-lot-head">
             <span>{SOURCE_LABELS[source] ? t(SOURCE_LABELS[source]) : source}</span>
             <span>
-              {lot.remaining && lot.total ? `${formatPoints(lot.remaining, locale)} / ${formatPoints(lot.total, locale)}` : null}
+              {lot.remaining && lot.total ? `${formatPoints(lot.remaining, locale, "floor")} / ${formatPoints(lot.total, locale, "floor")}` : null}
             </span>
           </div>
           {share !== null ? <div className="openvulcan-plan-meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={share}>
