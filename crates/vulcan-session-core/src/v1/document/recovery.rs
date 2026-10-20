@@ -3,7 +3,8 @@
 
 use super::*;
 use crate::v1::collaboration::{
-    CollaborationOperationId, CollaborationRunControl, SetRunControlInput,
+    CollaborationChildTaskState, CollaborationChildTaskTerminalOutcome, CollaborationOperationId,
+    CollaborationRunControl, SetRunControlInput, TerminalChildTaskInput,
 };
 
 impl SessionDocument {
@@ -360,10 +361,55 @@ impl SessionDocument {
             })?;
         }
         if let Some(turn_id) = business_turn_id {
+            staged.stop_open_child_tasks_for_failed_turn(turn_id, now_ms)?;
             staged.record_task_results_for_turn(turn_id, now_ms)?;
         }
         staged.commit();
         Ok(true)
+    }
+
+    /// Stops every reserved or active child task still owned by the failed business `turn_id`.
+    /// 停止已失败业务回合 `turn_id` 仍持有的全部预留或活动子任务。
+    /// A closed parent turn can never accept their return, so leaving them open would strand
+    /// recovery and edit/delete settlement forever; called inside the closure's atomic draft.
+    /// 已闭合父回合永远无法接收其回流，保持开放会让恢复与编辑删除结算永久卡住；
+    /// 在闭合的原子草稿内调用。
+    fn stop_open_child_tasks_for_failed_turn(
+        &mut self,
+        turn_id: TurnId,
+        now_ms: i64,
+    ) -> Result<(), DomainError> {
+        // Clone only the matching records so each terminal transition owns a stable input.
+        // 仅复制匹配记录，使每次终态转换持有稳定输入。
+        let open_tasks = self
+            .collaboration_state()
+            .child_tasks
+            .values()
+            .filter(|task| {
+                task.parent_turn_id == turn_id
+                    && matches!(
+                        task.state,
+                        CollaborationChildTaskState::Reserved | CollaborationChildTaskState::Active
+                    )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for task in open_tasks {
+            // The reservation identity keeps the stop idempotent and distinct from a later completion.
+            // 预留身份使停止保持幂等，并与之后的完成区分。
+            let operation_id = CollaborationOperationId::try_new(format!(
+                "{}:terminal:stopped",
+                task.reservation_operation_id.as_str()
+            ))?;
+            self.terminal_child_task(TerminalChildTaskInput {
+                operation_id,
+                execution_id: task.execution_id,
+                task_id: task.task_id,
+                outcome: CollaborationChildTaskTerminalOutcome::Stopped,
+                terminal_at_ms: now_ms,
+            })?;
+        }
+        Ok(())
     }
 
     /// Stages the failure note and exact closure after question attempts have been handled.

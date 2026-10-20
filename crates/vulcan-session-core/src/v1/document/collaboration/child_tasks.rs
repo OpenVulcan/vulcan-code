@@ -415,6 +415,7 @@ mod tests {
     use super::*;
     use crate::v1::TurnOutcome;
     mod non_success;
+    mod parent_failure;
 
     /// Reuses one child across parent turns without allowing old receipts to settle the new run.
     /// 跨父回合复用同一子会话，旧回执不得结算新执行。
