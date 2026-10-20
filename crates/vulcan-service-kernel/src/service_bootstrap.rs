@@ -1441,8 +1441,12 @@ fn run_service_bootstrap(
             // The durable worker starts only after every public native client registry accepts it.
             // 仅在全部公开原生客户端注册表接纳后启动耐久工作器。
             native_vmm_client.start_pending_analysis_worker(runtime.handle());
+            // Workers follow the memory mode; the backend itself bootstraps from the saved layer.
+            // 工作器遵循记忆模式；后端本身仍按已保存配置层引导。
+            let mode_vmm_layer =
+                vulcan_agent_runtime::tooling::memory_mode_vmm_layer(&provider_configuration.vmm);
             native_vmm_maintenance.set_native_backend_enabled(native_vmm_bootstrap_is_required(
-                &global_vmm_effective,
+                &vulcan_vmm::VmmEffectiveConfig::resolve(&mode_vmm_layer, None, None),
             ));
             native_vmm_maintenance.start_retention_worker(runtime.handle());
             Ok(native_vmm_maintenance)

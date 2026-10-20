@@ -32,6 +32,7 @@ pub use search::{
 pub use settings::{InjectionBudget, MarkdownMemorySettings, MemoryMode};
 pub use snapshot::{BudgetPart, BudgetUsage, InjectionSnapshot, build_injection_snapshot};
 pub use store::{MarkdownMemoryStore, ProjectContext, ScopeDocuments};
+pub use timestamp::now_utc_minute;
 
 /// Directory under the user Vulcan root that owns every memory file.
 /// 用户 Vulcan 根目录下持有全部记忆文件的目录。

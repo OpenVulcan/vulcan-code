@@ -14,6 +14,7 @@ fn project_context(root: &tempfile::TempDir) -> ProjectContext {
     ProjectContext {
         host_project_id: Some(String::from("host-1")),
         root_path: Some(root.path().join("repo").display().to_string()),
+        memory_project_id: None,
     }
 }
 

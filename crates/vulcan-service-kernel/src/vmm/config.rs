@@ -232,7 +232,11 @@ pub(crate) async fn save_vmm_memory_config(
             // 在仍持有同一持久配置事务时发布不会失败的工作器开关。
             // A late request must never overwrite a newer mode after releasing the transaction and service locks.
             // 较早请求释放事务及服务锁后，绝不能再覆盖较新的模式。
-            let committed = vulcan_vmm::VmmEffectiveConfig::resolve(&configuration.vmm, None, None);
+            // Workers follow the memory mode, which may disable VMM in memory only.
+            // 工作器遵循记忆模式，记忆模式可能仅在内存中关闭 VMM。
+            let mode_vmm_layer =
+                vulcan_agent_runtime::tooling::memory_mode_vmm_layer(&configuration.vmm);
+            let committed = vulcan_vmm::VmmEffectiveConfig::resolve(&mode_vmm_layer, None, None);
             if let Some(maintenance) = guard.native_vmm_maintenance.as_ref() {
                 maintenance.set_native_backend_enabled(
                     committed.enabled

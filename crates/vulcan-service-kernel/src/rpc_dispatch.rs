@@ -10,6 +10,7 @@ mod conversation_events_v1;
 mod conversation_runtime;
 mod extensibility;
 mod knowledge_base;
+mod markdown_memory;
 mod plugin_runtime;
 mod project_conversation;
 mod session_resources_v1;
@@ -64,6 +65,10 @@ async fn dispatch_known_service_rpc(
         return Ok(outcome);
     }
     let outcome = knowledge_base::dispatch(app.clone(), state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = markdown_memory::dispatch(state.clone(), method, params).await?;
     if outcome.is_handled() {
         return Ok(outcome);
     }
@@ -217,6 +222,7 @@ pub(crate) fn service_rpc_method_names() -> BTreeSet<&'static str> {
         configuration::RPC_METHODS,
         project_conversation::RPC_METHODS,
         knowledge_base::RPC_METHODS,
+        markdown_memory::RPC_METHODS,
         browser::RPC_METHODS,
     ]
     .into_iter()
@@ -245,8 +251,10 @@ mod tests {
             + conversation_runtime::RPC_METHODS.len()
             + configuration::RPC_METHODS.len()
             + project_conversation::RPC_METHODS.len();
-        let declared_method_count =
-            declared_method_count + knowledge_base::RPC_METHODS.len() + browser::RPC_METHODS.len();
+        let declared_method_count = declared_method_count
+            + knowledge_base::RPC_METHODS.len()
+            + markdown_memory::RPC_METHODS.len()
+            + browser::RPC_METHODS.len();
         assert_eq!(methods.len(), declared_method_count);
         assert!(methods.contains("service_submit_conversation_prompt"));
         assert!(methods.contains("service_continue_conversation"));

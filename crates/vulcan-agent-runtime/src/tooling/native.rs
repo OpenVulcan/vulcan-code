@@ -249,6 +249,7 @@ pub(crate) use file_read::*;
 pub(crate) use file_write::*;
 pub(crate) use knowledge_base::*;
 pub(crate) use markdown_memory::*;
+pub use markdown_memory::{current_memory_mode, memory_mode_vmm_layer, project_vmm_layer_for_mode};
 pub(crate) use prompt_skill::*;
 pub(crate) use registry::*;
 pub(crate) use shell_command::*;

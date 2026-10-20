@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Returns the current UTC time as `YYYY-MM-DDTHH:MMZ`.
 /// 以 `YYYY-MM-DDTHH:MMZ` 返回当前 UTC 时间。
-pub(crate) fn now_utc_minute() -> String {
+pub fn now_utc_minute() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())

@@ -23,6 +23,28 @@ pub struct ProjectContext {
     /// Project root path.
     /// 项目根路径。
     pub root_path: Option<String>,
+    /// Explicit memory project chosen in the memory page, overriding the host binding.
+    /// 在记忆页中显式选择的记忆项目，覆盖宿主绑定。
+    pub memory_project_id: Option<String>,
+}
+
+impl ProjectContext {
+    /// Returns the memory project this context addresses: the explicit choice or the host binding.
+    /// 返回该上下文指向的记忆项目：显式选择或宿主绑定。
+    pub fn bound_project<'registry>(
+        &self,
+        registry: &'registry MemoryRegistry,
+    ) -> Result<Option<&'registry MemoryProject>, MemoryError> {
+        if let Some(id) = &self.memory_project_id {
+            return registry.project(id).map(Some).ok_or_else(|| {
+                MemoryError::ProjectUnavailable(format!("Memory project `{id}` does not exist."))
+            });
+        }
+        Ok(self
+            .host_project_id
+            .as_deref()
+            .and_then(|host| registry.project_for_host(host)))
+    }
 }
 
 /// The documents of every scope visible to one request.
@@ -187,11 +209,7 @@ impl MarkdownMemoryStore {
     /// 读取项目上下文可见的全部层。
     pub fn load_scopes(&self, context: &ProjectContext) -> Result<ScopeDocuments, MemoryError> {
         let registry = self.registry()?;
-        let project = context
-            .host_project_id
-            .as_deref()
-            .and_then(|host| registry.project_for_host(host))
-            .cloned();
+        let project = context.bound_project(&registry)?.cloned();
         let project = match project {
             Some(project) => {
                 let document = self.load(MemoryScope::Project, Some(&project.id))?;

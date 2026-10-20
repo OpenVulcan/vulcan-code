@@ -287,7 +287,7 @@ impl RuntimeFoundation {
             &runtime_config,
             config.default_command_shell.as_deref(),
             Arc::clone(&command_session_runtime),
-            config.vmm.clone(),
+            crate::tooling::memory_mode_vmm_layer(&config.vmm),
             vulcan_plugin_runtime.clone(),
             luaskills_runtime.clone(),
         );

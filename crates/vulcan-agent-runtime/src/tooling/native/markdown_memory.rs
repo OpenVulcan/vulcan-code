@@ -43,6 +43,37 @@ pub(crate) struct MarkdownMemoryAccess {
     pub settings: MarkdownMemorySettings,
 }
 
+/// Reads the global memory mode from the user directory; a missing file means the default `vmm`.
+/// 从用户目录读取全局记忆模式；文件缺失表示默认的 `vmm`。
+pub fn current_memory_mode() -> Result<MemoryMode, String> {
+    let Some(user_root) = crate::runtime_assets::resolve_user_vulcan_root() else {
+        return Ok(MemoryMode::default());
+    };
+    MarkdownMemoryStore::new(&user_root)
+        .settings()
+        .map(|settings| settings.mode)
+        .map_err(|error| error.to_string())
+}
+
+/// Projects the saved global VMM layer for runtime use: outside `vmm` mode VMM is disabled in
+/// memory only, and the saved configuration is never rewritten. An unreadable mode keeps the
+/// saved layer, because the mode file is the only source that can turn VMM off.
+/// 投影已保存的全局 VMM 层供运行时使用：非 `vmm` 模式下仅在内存中关闭 VMM，绝不改写已保存配置。
+/// 模式无法读取时保留已保存层，因为只有模式文件能关闭 VMM。
+pub fn memory_mode_vmm_layer(saved: &VmmConfigLayer) -> VmmConfigLayer {
+    project_vmm_layer_for_mode(saved, current_memory_mode().unwrap_or_default())
+}
+
+/// Projects a global VMM layer for an explicit memory mode.
+/// 按明确的记忆模式投影全局 VMM 层。
+pub fn project_vmm_layer_for_mode(saved: &VmmConfigLayer, mode: MemoryMode) -> VmmConfigLayer {
+    let mut layer = saved.clone();
+    if mode != MemoryMode::Vmm {
+        layer.enabled = Some(false);
+    }
+    layer
+}
+
 /// Resolves Markdown memory for a project; `None` when the mode is not `markdown`, the user root
 /// is unknown, or the user turned memory off for this project (which also hides user and space).
 /// 解析某项目的 Markdown 记忆；模式不是 `markdown`、用户根目录未知或用户关闭了本项目记忆
@@ -75,6 +106,7 @@ pub(crate) fn resolve_markdown_memory_access_in(
             .filter(|id| !id.is_empty())
             .map(str::to_string),
         root_path: workspace_root.map(|root| root.display().to_string()),
+        memory_project_id: None,
     };
     if let Some(host) = context.host_project_id.as_deref() {
         let registry = store.registry().map_err(|error| error.to_string())?;

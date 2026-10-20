@@ -8,6 +8,7 @@ pub mod native;
 pub use command_session_runtime::CommandSessionRuntime;
 pub use native::{
     NativeToolCatalog, NativeToolDescriptor, NativeToolExecutionRequest, build_native_tool_catalog,
+    current_memory_mode, memory_mode_vmm_layer, project_vmm_layer_for_mode,
 };
 pub use vulcan_change_set as change_set;
 pub use vulcan_host_tools::{command_session_runtime, output_decode, result_format, shell_host};

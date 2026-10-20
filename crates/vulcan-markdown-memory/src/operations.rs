@@ -350,9 +350,7 @@ impl MarkdownMemoryStore {
         let _guard = write_guard();
         let registry = self.registry()?;
         let project_id = context
-            .host_project_id
-            .as_deref()
-            .and_then(|host| registry.project_for_host(host))
+            .bound_project(&registry)?
             .map(|project| project.id.clone());
         let mut session = WriteSession {
             store: self,
@@ -419,10 +417,13 @@ impl WriteSession<'_> {
     /// 返回已绑定的记忆项目；需要时为宿主项目新建并绑定。
     fn ensure_project(&mut self) -> Result<String, MemoryError> {
         if let Some(id) = &self.project_id {
-            if self
-                .registry
-                .project(id)
-                .is_some_and(|project| !project.memory_enabled)
+            // Users may still edit a project whose memory is off; only AI writes are refused.
+            // 用户仍可编辑已关闭记忆的项目；只拒绝 AI 写入。
+            if self.source == NodeSource::Ai
+                && self
+                    .registry
+                    .project(id)
+                    .is_some_and(|project| !project.memory_enabled)
             {
                 return Err(MemoryError::ProjectUnavailable(String::from(
                     "Memory is turned off for this project.",

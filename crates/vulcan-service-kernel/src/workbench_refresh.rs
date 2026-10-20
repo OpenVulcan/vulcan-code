@@ -789,7 +789,9 @@ pub(crate) fn native_tool_summaries_from_agent_runtime(
             .default_command_shell
             .as_deref(),
         std::sync::Arc::clone(&agent_runtime.command_session_runtime),
-        agent_runtime.provider_configuration.vmm.clone(),
+        vulcan_agent_runtime::tooling::memory_mode_vmm_layer(
+            &agent_runtime.provider_configuration.vmm,
+        ),
         Some(agent_runtime.vulcan_plugin_runtime.clone()),
         agent_runtime.luaskills_runtime.clone(),
     );

@@ -172,6 +172,7 @@ mod git_watcher;
 mod host_tools_settings;
 mod internal_ai;
 mod knowledge_base_services;
+mod markdown_memory_services;
 mod licenses;
 pub mod luaskills_diagnostics;
 mod luaskills_install_progress;
@@ -294,6 +295,7 @@ use host_tools_settings::{
     host_tools_settings, host_tools_settings_with_native_tools, service_save_default_command_shell,
 };
 use knowledge_base_services::*;
+use markdown_memory_services::*;
 use mcp_settings::*;
 use media_upload::*;
 pub(crate) use output_style::{

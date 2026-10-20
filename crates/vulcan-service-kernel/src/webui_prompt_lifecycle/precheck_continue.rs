@@ -89,7 +89,9 @@ pub(crate) fn webui_vmm_runtime_readiness(
             return Ok(project_webui_vmm_runtime_readiness(false, false, false));
         };
         (
-            agent_runtime.provider_configuration.vmm.clone(),
+            vulcan_agent_runtime::tooling::memory_mode_vmm_layer(
+                &agent_runtime.provider_configuration.vmm,
+            ),
             guard
                 .native_vmm_maintenance
                 .as_ref()

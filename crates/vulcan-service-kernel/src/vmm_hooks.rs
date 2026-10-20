@@ -268,14 +268,17 @@ pub(super) fn refresh_guard_vmm_hook_snapshot(
 ) -> Result<(), String> {
     // Global activation cannot be overridden by a project; observe it without fabricated session IDs.
     // 项目不能覆盖全局启用状态；不虚构会话 ID 来观察它。
-    let next = vulcan_vmm::VmmEffectiveConfig::resolve(&provider_configuration.vmm, None, None);
+    // Outside `vmm` memory mode the hooks see VMM as disabled; the saved layer is untouched.
+    // 非 `vmm` 记忆模式下 Hook 视 VMM 为关闭；已保存的配置层保持不变。
+    let global = vulcan_agent_runtime::tooling::memory_mode_vmm_layer(&provider_configuration.vmm);
+    let next = vulcan_vmm::VmmEffectiveConfig::resolve(&global, None, None);
     let next_mode = next.enabled.then_some(next.backend_mode);
     let mut reset_sources = next_mode.is_none();
     if let Some(agent_runtime) = guard.agent_runtime.as_ref() {
         reset_sources |= agent_runtime.vmm_hook_runtime.global_memory_mode()? != next_mode;
         agent_runtime
             .vmm_hook_runtime
-            .replace_global_projection(&provider_configuration.vmm)?;
+            .replace_global_projection(&global)?;
     }
     if reset_sources {
         global_mode_projection::clear_global_mode_caches(guard)?;
@@ -407,7 +410,7 @@ pub(super) fn build_vmm_hook_config_snapshot(
     }
     let snapshot = VmmHookConfigSnapshot {
         writeback_admissions: Default::default(),
-        global: provider_configuration.vmm.clone(),
+        global: vulcan_agent_runtime::tooling::memory_mode_vmm_layer(&provider_configuration.vmm),
         projects_by_workspace,
         sessions,
         outboxes,

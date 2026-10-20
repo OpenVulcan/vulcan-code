@@ -22,6 +22,7 @@ vulcan-luaskills-config.workspace = true
 vulcan-permission-judge.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-session-core.workspace = true
+vulcan-markdown-memory.workspace = true
 vulcan-vmm.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
