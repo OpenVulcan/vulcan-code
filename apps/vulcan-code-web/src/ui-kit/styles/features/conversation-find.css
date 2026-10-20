@@ -1,0 +1,23 @@
+/* Conversation find bar: floats over the transcript's top right corner, clear of the scrollbar. */
+/* 会话查找栏：浮在转录区右上角，避开滚动条。 */
+.vk-find-bar {
+  position: absolute;
+  top: calc(var(--vk-u) * 2);
+  right: calc(var(--vk-u) * 5);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 0.5);
+  width: min(26rem, calc(100% - var(--vk-u) * 10));
+  padding: calc(var(--vk-u) * 1);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-raised);
+  box-shadow: var(--vk-shadow-2);
+}
+.vk-find-bar > .vk-input-group { flex: 1; min-width: 0; }
+.vk-find-bar .vk-input-group-text { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Matches are tinted; the current one is stronger and underlined, so colour is not the only signal. */
+/* 匹配项着色；当前匹配颜色更深并带下划线，使颜色不是唯一信号。 */
+::highlight(vk-find) { background-color: color-mix(in srgb, var(--vk-warn) 30%, transparent); color: var(--vk-ink); }
+::highlight(vk-find-current) { background-color: color-mix(in srgb, var(--vk-ember) 55%, transparent); color: var(--vk-ink); text-decoration: underline 2px; }

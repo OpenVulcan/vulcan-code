@@ -43,6 +43,7 @@ import { useConversationSurfaceLayoutMemory } from "@/components/conversation/ch
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
 import { ConversationContinueControl } from "@/components/conversation/conversation-continue-control";
 import { activeThinkingOverlayBlock } from "@/components/conversation/thinking-display";
+import { ConversationFindBar } from "@/components/conversation/conversation-find-bar";
 import { selectConversationContinueCandidateV1 } from "@/service/conversation-continuation-selector-v1";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type {
@@ -507,6 +508,11 @@ export function ChatArea(props: ChatAreaProps) {
     conversationScrollController.remember();
     return props.onOpenSubagentPanel(parentConversationId, taskId);
   }, [conversationScrollController, props.onOpenSubagentPanel]);
+  // revealFindMatch brings a find match into view without smooth scrolling, so stepping through matches keeps up.
+  // revealFindMatch 不经平滑滚动地显示查找匹配，使逐个浏览匹配时跟得上。
+  const revealFindMatch = React.useCallback((range: Range) => {
+    conversationScrollController.revealAnchor(range, "auto");
+  }, [conversationScrollController]);
   // scrollConversationToBottom transfers the main viewport to explicit tail ownership.
   // scrollConversationToBottom 将主视口切换到显式尾部所有权。
   const scrollConversationToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
@@ -654,6 +660,13 @@ export function ChatArea(props: ChatAreaProps) {
           scrollRef={workspaceRef}
           submission={props.selectedDraftConversation.pendingSubmission}
           surfaceId={props.selectedDraftConversation.id}
+        />
+      ) : null}
+      {selectedConversation ? (
+        <ConversationFindBar
+          key={selectedConversation.id}
+          onReveal={revealFindMatch}
+          scrollRef={workspaceRef}
         />
       ) : null}
       {visibleStreamingThinkingOverlayBlock && activeSurfaceConversationId ? (

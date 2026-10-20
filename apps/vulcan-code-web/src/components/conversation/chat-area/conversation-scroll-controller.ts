@@ -57,9 +57,11 @@ export interface ConversationScrollController {
   // Transfers ownership to tail following and moves to the latest content.
   // 将所有权切换为尾部跟随并移动到最新内容。
   scrollToBottom: (behavior?: ScrollBehavior) => void;
-  // Releases tail following and moves one mounted transcript anchor to the top of the viewport.
-  // 释放尾部跟随，并将一个已挂载转录锚点移动到视口顶部。
-  revealAnchor: (anchor: HTMLElement, behavior?: ScrollBehavior) => void;
+  // Releases tail following and moves one mounted transcript anchor to the top of the viewport; a text range,
+  // such as a find match, goes a third of the way down instead so the text around it stays in sight.
+  // 释放尾部跟随，并将一个已挂载转录锚点移动到视口顶部；文本范围（例如查找匹配）则移动到视口三分之一处，
+  // 使其周围的文本仍然可见。
+  revealAnchor: (anchor: HTMLElement | Range, behavior?: ScrollBehavior) => void;
 }
 
 // CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX keeps a revealed anchor slightly below the scrollport top edge.
@@ -607,14 +609,14 @@ export function useConversationScrollController(
   // 参数：anchor 是当前滚动视口的后代节点；behavior 选择立即或平滑原生移动。
   // Returns: nothing.
   // 返回值：无。
-  const revealAnchor = React.useCallback((anchor: HTMLElement, behavior: ScrollBehavior = "smooth"): void => {
+  const revealAnchor = React.useCallback((anchor: HTMLElement | Range, behavior: ScrollBehavior = "smooth"): void => {
     // currentOptions resolves the active surface at user action time.
     // currentOptions 解析用户操作时的活动界面。
     const currentOptions = latestOptionsRef.current;
     // element is the exact current mutation target.
     // element 是当前精确修改目标。
     const element = currentOptions.scrollRef.current;
-    if (!currentOptions.active || !currentOptions.surfaceId || !element || !element.contains(anchor)) {
+    if (!currentOptions.active || !currentOptions.surfaceId || !element || !element.contains(anchor instanceof Range ? anchor.startContainer : anchor)) {
       return;
     }
     // anchorOffset is the anchor's current distance from the scrollport's visible top edge.
@@ -624,7 +626,8 @@ export function useConversationScrollController(
     layoutTransactionRef.current = null;
     cancelPendingFrame();
     publishFollowTail(false);
-    writeScrollTop(element, element.scrollTop + anchorOffset - CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX, behavior);
+    const topGap = anchor instanceof Range ? element.clientHeight / 3 : CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX;
+    writeScrollTop(element, element.scrollTop + anchorOffset - topGap, behavior);
     writeCurrentSnapshot(element, currentOptions.surfaceId);
   }, [cancelPendingFrame, publishFollowTail, writeCurrentSnapshot, writeScrollTop]);
 
