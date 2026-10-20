@@ -11,6 +11,9 @@ const SETTINGS: &[Slot] = &[Slot::MemorySettings, Slot::MarkdownMemory];
 // A node or file write changes both the node tree and the file text.
 // 节点或文件写入同时改变节点树与文件文本。
 const CONTENT: &[Slot] = &[Slot::MarkdownMemory, Slot::MarkdownMemoryFile];
+// An import changes the notes and the merge the package preview reports.
+// 导入会改变笔记以及导出包预览报告的合并结果。
+const IMPORT: &[Slot] = &[Slot::MarkdownMemory, Slot::MarkdownMemoryImport];
 
 /// Builds the request for `service_get_memory_settings`.
 /// 构建 `service_get_memory_settings` 的请求。
@@ -110,6 +113,51 @@ pub fn replace_markdown_memory_file(
         "service_replace_markdown_memory_file",
         json!({ "request": request }),
         CONTENT,
+    )
+}
+
+/// Builds the request for `service_export_markdown_memory`.
+/// 构建 `service_export_markdown_memory` 的请求。
+/// `request` follows `MarkdownMemoryExportRequest`.
+/// `request` 遵循 `MarkdownMemoryExportRequest`。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn export_markdown_memory(request: Value) -> ServiceCall {
+    ServiceCall::mutate(
+        "export_markdown_memory",
+        "service_export_markdown_memory",
+        json!({ "request": request }),
+        &[],
+    )
+}
+
+/// Builds the request for `service_preview_markdown_memory_import`; nothing is written.
+/// 构建 `service_preview_markdown_memory_import` 的请求；不写入任何内容。
+/// `archive_path` is the exact package path; `projects` lists the chosen `ProjectMapping`s.
+/// `archive_path` 为精确导出包路径；`projects` 列出已选的 `ProjectMapping`。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn preview_markdown_memory_import(archive_path: &str, projects: Value) -> ServiceCall {
+    ServiceCall::load(
+        "preview_markdown_memory_import",
+        "service_preview_markdown_memory_import",
+        json!({ "request": { "archivePath": archive_path, "projects": projects } }),
+        Slot::MarkdownMemoryImport,
+    )
+}
+
+/// Builds the request for `service_import_markdown_memory`; replaced files are backed up first.
+/// 构建 `service_import_markdown_memory` 的请求；被替换的文件会先备份。
+/// `request` follows `MarkdownMemoryImportRequest`.
+/// `request` 遵循 `MarkdownMemoryImportRequest`。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn import_markdown_memory(request: Value) -> ServiceCall {
+    ServiceCall::mutate(
+        "import_markdown_memory",
+        "service_import_markdown_memory",
+        json!({ "request": request }),
+        IMPORT,
     )
 }
 

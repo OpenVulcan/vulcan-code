@@ -184,6 +184,10 @@ pub enum Slot {
     /// `readMarkdownMemoryFile` opened for whole-file editing; its loader carries the scope.
     /// 为整文件编辑打开的 `readMarkdownMemoryFile`；其加载器携带层。
     MarkdownMemoryFile,
+    /// `previewMarkdownMemoryImport` of the package under review; its loader carries the
+    /// package path and the chosen project targets.
+    /// 正在审阅的导出包的 `previewMarkdownMemoryImport`；其加载器携带导出包路径与所选项目去向。
+    MarkdownMemoryImport,
     /// `loadLicenseCatalog`
     /// 许可证目录。
     Licenses,

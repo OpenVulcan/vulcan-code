@@ -21,6 +21,16 @@ const BUDGET_PARTS: [&str; 5] = [
 /// 其笔记全文注入的分区键；该标题不能移动或删除。
 const BASE_SECTION: &str = "base";
 
+/// Localized name of one scope.
+/// 单个层的本地化名称。
+fn scope_label(scope: &str) -> String {
+    match scope {
+        "user" => tr!("memory.markdown.nav.user"),
+        "space" => tr!("memory.markdown.nav.space"),
+        _ => tr!("memory.markdown.nav.project"),
+    }
+}
+
 /// Localized label of one budget part.
 /// 单个预算分项的本地化标签。
 fn part_label(part: &str) -> String {
@@ -220,7 +230,365 @@ pub(super) fn mode(app: &App) -> Vec<Row> {
         }
         rows.push(row);
     }
+    transfer_rows(&mut rows, app, projects);
     rows
+}
+
+/// Conflict resolutions in the WebUI order.
+/// 与 WebUI 相同顺序的冲突解决方式。
+const CONFLICT_CHOICES: [&str; 3] = ["keep_local", "take_imported", "keep_both"];
+
+/// Export and import of memory packages. Export writes every scope; import is previewed against
+/// the chosen project targets and applied with a resolution for every conflict.
+/// 记忆导出包的导出与导入。导出写入全部层；导入按所选项目去向预览，并在每个冲突都有解决方式后应用。
+fn transfer_rows(rows: &mut Vec<Row>, app: &App, projects: &[Value]) {
+    rows.push(section(tr!("memory.markdown.transfer.title")));
+    rows.push(note(tr!("memory.markdown.transfer.hint"), Tone::Muted));
+    rows.push(note(tr!("tui.memory.transfer.exportAll"), Tone::Muted));
+    let ids = projects
+        .iter()
+        .map(|project| s(project, "/id"))
+        .collect::<Vec<_>>();
+    rows.push(button(
+        tr!("memory.markdown.transfer.export"),
+        form(
+            json!({ "destinationDirectory": "", "user": true, "space": true, "memoryProjectIds": ids }),
+            vec![field(
+                tr!("memory.markdown.transfer.folderTitle"),
+                "/destinationDirectory",
+                false,
+                false,
+            )],
+            markdown::export_markdown_memory,
+        ),
+        Tone::Normal,
+    ));
+    rows.push(button(
+        tr!("memory.markdown.transfer.import"),
+        form(
+            json!({ "archivePath": "" }),
+            vec![field(
+                tr!("memory.markdown.transfer.pickTitle"),
+                "/archivePath",
+                false,
+                false,
+            )],
+            |request| {
+                markdown::preview_markdown_memory_import(&s(&request, "/archivePath"), json!([]))
+            },
+        ),
+        Tone::Normal,
+    ));
+    import_rows(rows, app, projects);
+}
+
+/// The open import: project targets, the merge of every mapped scope and the apply button.
+/// 已打开的导入：项目去向、每个已指定层的合并以及应用按钮。
+fn import_rows(rows: &mut Vec<Row>, app: &App, local: &[Value]) {
+    let preview = app.slots.value(Slot::MarkdownMemoryImport);
+    let Some(loader) = app.slots.loader(Slot::MarkdownMemoryImport) else {
+        return;
+    };
+    if preview.is_null() {
+        return;
+    }
+    let archive = s(&loader.params, "/request/archivePath");
+    let mappings = v(&loader.params, "/request/projects").clone();
+    rows.push(section(tr!("memory.markdown.transfer.importTitle")));
+    rows.push(info(
+        tr!("memory.markdown.transfer.pickTitle"),
+        archive.clone(),
+        Tone::Normal,
+    ));
+    rows.push(note(
+        tr!(
+            "memory.markdown.transfer.importHint",
+            time = s(preview, "/exportedAt")
+        ),
+        Tone::Muted,
+    ));
+    let packaged = a(preview, "/projects");
+    let mut unset = false;
+    if !packaged.is_empty() {
+        rows.push(note(
+            tr!("memory.markdown.transfer.projectsHint"),
+            Tone::Muted,
+        ));
+    }
+    for entry in packaged {
+        let id = s(entry, "/project/id");
+        let current = target_value(&mappings, &id);
+        unset |= current.is_empty();
+        let candidates = a(entry, "/candidates");
+        let mut options = Vec::new();
+        if current.is_empty() {
+            options.push((String::new(), tr!("memory.markdown.transfer.targetUnset")));
+        }
+        for candidate in candidates {
+            let reasons = a(candidate, "/reasons")
+                .iter()
+                .filter_map(Value::as_str)
+                .map(reason_label)
+                .collect::<Vec<_>>()
+                .join(", ");
+            options.push((
+                format!("link:{}", s(candidate, "/memoryProjectId")),
+                tr!(
+                    "memory.markdown.transfer.linkCandidate",
+                    name = s(candidate, "/name"),
+                    reasons = reasons
+                ),
+            ));
+        }
+        for project in local {
+            let local_id = s(project, "/id");
+            if candidates
+                .iter()
+                .any(|candidate| s(candidate, "/memoryProjectId") == local_id)
+            {
+                continue;
+            }
+            options.push((
+                format!("link:{local_id}"),
+                tr!("memory.markdown.transfer.link", name = s(project, "/name")),
+            ));
+        }
+        options.push(("create".into(), tr!("memory.markdown.transfer.create")));
+        options.push(("ignore".into(), tr!("memory.markdown.transfer.ignore")));
+        rows.push(choice(
+            s(entry, "/project/name"),
+            options,
+            current,
+            Edit::Call(Setter::Build {
+                ctx: json!({ "archivePath": archive, "projects": mappings, "id": id }),
+                build: retarget,
+            }),
+        ));
+    }
+    if unset {
+        for (label, target) in [
+            (tr!("memory.markdown.transfer.createRest"), "create"),
+            (tr!("memory.markdown.transfer.ignoreRest"), "ignore"),
+        ] {
+            rows.push(button(
+                label,
+                call(markdown::preview_markdown_memory_import(
+                    &archive,
+                    filled(packaged, &mappings, target),
+                )),
+                Tone::Normal,
+            ));
+        }
+        return;
+    }
+    let scopes = a(preview, "/scopes");
+    if scopes.is_empty() {
+        rows.push(note(tr!("memory.markdown.transfer.nothing"), Tone::Muted));
+        return;
+    }
+    let mut resolutions = Vec::new();
+    for scope in scopes {
+        let key = s(scope, "/scope");
+        let package_project = v(scope, "/packageProjectId").as_str();
+        let label = match package_project {
+            Some(package_project) => tr!(
+                "memory.markdown.transfer.projectScope",
+                name = packaged
+                    .iter()
+                    .find(|entry| s(entry, "/project/id") == package_project)
+                    .map(|entry| s(entry, "/project/name"))
+                    .unwrap_or_else(|| package_project.to_string())
+            ),
+            None => scope_label(&key),
+        };
+        let conflicts = a(scope, "/conflicts");
+        rows.push(info(
+            label,
+            tr!(
+                "memory.markdown.transfer.counts",
+                same = n(scope, "/same"),
+                added = a(scope, "/added").len(),
+                conflicts = conflicts.len()
+            ),
+            Tone::Normal,
+        ));
+        let titles = |pointer: &str| {
+            a(scope, pointer)
+                .iter()
+                .map(|node| title_path(v(node, "/path")))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if !a(scope, "/newSections").is_empty() {
+            let sections = a(scope, "/newSections")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            rows.push(note(
+                tr!("memory.markdown.transfer.newSections", titles = sections),
+                Tone::Muted,
+            ));
+        }
+        if !a(scope, "/duplicates").is_empty() {
+            rows.push(note(
+                tr!(
+                    "memory.markdown.transfer.duplicates",
+                    titles = titles("/duplicates")
+                ),
+                Tone::Muted,
+            ));
+        }
+        for conflict in conflicts {
+            let node = s(conflict, "/id");
+            let conflict_key = format!("{key}:{}:{node}", package_project.unwrap_or_default());
+            let chosen = app
+                .markdown_memory_conflicts
+                .get(&conflict_key)
+                .cloned()
+                .unwrap_or_else(|| newer_choice(conflict).to_string());
+            let mut resolution = json!({ "scope": key, "nodeId": node, "choice": chosen });
+            if let Some(package_project) = package_project {
+                resolution["packageProjectId"] = json!(package_project);
+            }
+            resolutions.push(resolution);
+            rows.push(
+                choice(
+                    title_path(v(conflict, "/path")),
+                    CONFLICT_CHOICES
+                        .iter()
+                        .map(|choice| {
+                            (
+                                format!("{conflict_key}{PERIOD_SEPARATOR}{choice}"),
+                                choice_label(choice),
+                            )
+                        })
+                        .collect(),
+                    format!("{conflict_key}{PERIOD_SEPARATOR}{chosen}"),
+                    Edit::Local(LocalSetting::MarkdownMemoryConflict),
+                )
+                .detail(format!(
+                    "{}: {}\n{}: {}",
+                    tr!("memory.markdown.transfer.local"),
+                    s(conflict, "/local/body"),
+                    tr!("memory.markdown.transfer.imported"),
+                    s(conflict, "/imported/body")
+                )),
+            );
+        }
+    }
+    rows.push(button(
+        tr!("memory.markdown.transfer.apply"),
+        call(markdown::import_markdown_memory(json!({
+            "archivePath": archive,
+            "expectedSha256": s(preview, "/sha256"),
+            "projects": mappings,
+            "resolutions": resolutions,
+        }))),
+        Tone::Accent,
+    ));
+}
+
+/// The picker value of one packaged project's chosen target, or "" when none is chosen.
+/// 单个包内项目所选去向的选择值；未选择时为 ""。
+fn target_value(mappings: &Value, package_project: &str) -> String {
+    let Some(target) = mappings.as_array().and_then(|mappings| {
+        mappings
+            .iter()
+            .find(|mapping| s(mapping, "/packageProjectId") == package_project)
+    }) else {
+        return String::new();
+    };
+    match s(target, "/target/action").as_str() {
+        "link" => format!("link:{}", s(target, "/target/memoryProjectId")),
+        other => other.to_string(),
+    }
+}
+
+/// The `ProjectTarget` of a picker value.
+/// 选择值对应的 `ProjectTarget`。
+fn target_of(value: &str) -> Option<Value> {
+    match value {
+        "create" | "ignore" => Some(json!({ "action": value })),
+        _ => value
+            .strip_prefix("link:")
+            .map(|id| json!({ "action": "link", "memoryProjectId": id })),
+    }
+}
+
+/// Re-previews with one packaged project's target changed; `ctx` is `{archivePath, projects, id}`.
+/// 修改单个包内项目的去向后重新预览；`ctx` 为 `{archivePath, projects, id}`。
+fn retarget(ctx: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    let id = s(ctx, "/id");
+    let target = target_of(value.as_str())?;
+    let mut projects = a(ctx, "/projects")
+        .iter()
+        .filter(|mapping| s(mapping, "/packageProjectId") != id)
+        .cloned()
+        .collect::<Vec<_>>();
+    projects.push(json!({ "packageProjectId": id, "target": target }));
+    Some(markdown::preview_markdown_memory_import(
+        &s(ctx, "/archivePath"),
+        Value::Array(projects),
+    ))
+}
+
+/// The mappings with every packaged project still without a target given `action`.
+/// 为所有尚无去向的包内项目指定 `action` 后的去向列表。
+fn filled(packaged: &[Value], mappings: &Value, action: &str) -> Value {
+    let mut projects = mappings.as_array().cloned().unwrap_or_default();
+    for entry in packaged {
+        let id = s(entry, "/project/id");
+        if target_value(mappings, &id).is_empty() {
+            projects.push(json!({ "packageProjectId": id, "target": { "action": action } }));
+        }
+    }
+    Value::Array(projects)
+}
+
+/// The default resolution: the newer side, keeping the local note when unknown.
+/// 默认解决方式：较新一侧；无法判断时保留本地笔记。
+fn newer_choice(conflict: &Value) -> &'static str {
+    if s(conflict, "/newer") == "imported" {
+        "take_imported"
+    } else {
+        "keep_local"
+    }
+}
+
+/// Localized label of one conflict resolution.
+/// 单个冲突解决方式的本地化标签。
+fn choice_label(choice: &str) -> String {
+    match choice {
+        "keep_local" => tr!("memory.markdown.transfer.choice.keepLocal"),
+        "take_imported" => tr!("memory.markdown.transfer.choice.takeImported"),
+        _ => tr!("memory.markdown.transfer.choice.keepBoth"),
+    }
+}
+
+/// Localized label of one candidate match reason.
+/// 单个候选匹配原因的本地化标签。
+fn reason_label(reason: &str) -> String {
+    match reason {
+        "same_path" => tr!("memory.markdown.transfer.reason.samePath"),
+        "same_first_commit" => tr!("memory.markdown.orphan.reason.sameFirstCommit"),
+        "same_directory_name" => tr!("memory.markdown.orphan.reason.sameDirectoryName"),
+        other => other.to_string(),
+    }
+}
+
+/// A note's titles from its section down, joined for display.
+/// 笔记从分区向下的标题，拼接用于显示。
+fn title_path(path: &Value) -> String {
+    path.as_array()
+        .map(|titles| {
+            titles
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" › ")
+        })
+        .unwrap_or_default()
 }
 
 /// Replaces one note's body; `ctx` is `{projectId, id, expectedRevision}`.
@@ -312,11 +680,7 @@ pub(super) fn scope(app: &App, scope: &str) -> Vec<Row> {
         }
     }
     usage(&mut rows, overview, scope);
-    rows.push(section(match scope {
-        "user" => tr!("memory.markdown.nav.user"),
-        "space" => tr!("memory.markdown.nav.space"),
-        _ => tr!("memory.markdown.nav.project"),
-    }));
+    rows.push(section(scope_label(scope)));
     for preset in a(overview, "/presetSections")
         .iter()
         .filter(|preset| s(preset, "/scope") == scope)

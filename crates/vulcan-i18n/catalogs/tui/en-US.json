@@ -289,6 +289,7 @@
   "tui.inspector.title": "Inspector",
   "tui.knowledge.catalog": "Manage libraries",
   "tui.knowledge.managedDescription": "Manage library access and settings. AI maintains all document and folder content.",
+  "tui.memory.transfer.exportAll": "Export writes the user profile, the space and every memory project into one package.",
   "tui.knowledge.chunks": "Chunks",
   "tui.knowledge.document": "Read document",
   "tui.knowledge.documents": "Documents",

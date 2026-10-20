@@ -1537,6 +1537,36 @@
       "path": "memory/user.md",
       "text": "# Identity\n\n## Role\n<!-- id: u2 -->\nMaintains the Vulcan Code workspace.\n"
     },
+    "service_preview_markdown_memory_import": {
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "exportedAt": "2026-10-20T08:00Z",
+      "projects": [
+        {
+          "project": { "id": "p-demo", "name": "Demo", "paths": ["X:/demo"] },
+          "candidates": []
+        }
+      ],
+      "scopes": [
+        {
+          "scope": "space",
+          "packageProjectId": null,
+          "memoryProjectId": null,
+          "same": 1,
+          "added": [],
+          "duplicates": [],
+          "newSections": [],
+          "conflicts": [
+            {
+              "id": "s1",
+              "path": ["Rules", "Shell"],
+              "local": { "title": "Shell", "body": "Use bash.", "updated": "2026-10-01T00:00Z" },
+              "imported": { "title": "Shell", "body": "Use PowerShell.", "updated": "2026-10-02T00:00Z" },
+              "newer": "imported"
+            }
+          ]
+        }
+      ]
+    },
     "service_unattended_system_default": {
       "denyPolicy": "Never push to a remote.\nNever delete or reset a database.",
       "maxChars": 4000

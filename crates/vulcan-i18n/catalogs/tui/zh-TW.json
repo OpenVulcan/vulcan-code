@@ -289,6 +289,7 @@
   "tui.inspector.title": "詳情",
   "tui.knowledge.catalog": "管理知識庫",
   "tui.knowledge.managedDescription": "管理知識庫授權與設定，全部文件和目錄內容由 AI 維護。",
+  "tui.memory.transfer.exportAll": "匯出會把使用者畫像、空間和全部記憶專案寫入同一個匯出包。",
   "tui.knowledge.chunks": "切片",
   "tui.knowledge.document": "閱讀文件",
   "tui.knowledge.documents": "文件",

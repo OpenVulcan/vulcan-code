@@ -4,11 +4,13 @@
 use super::action::{Edit, UiAction, perform};
 use super::pages::{Area, PageId, Row, RowKind, navigation, rows};
 use super::*;
-use crate::backend::mock;
+use crate::backend::{Command, mock};
 use crate::model::SettingValue;
-use crate::service_api::Slot;
+use crate::service_api::markdown_memory as markdown;
+use crate::service_api::{ServiceCall, Slot};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use serde_json::json;
 
 /// Applies backend events until `done` holds and no write is pending.
 /// 持续应用后端事件，直到 `done` 成立且没有待完成的写入。
@@ -148,4 +150,58 @@ fn markdown_mode_pages_follow_the_mode_and_render() {
     );
     assert!(shown(&app).iter().any(|row| row.label.trim() == "Build"));
     draw(&mut app);
+
+    // Import: the package preview asks for the project target first, then offers the conflict
+    // with its newer side chosen and applies the reviewed resolutions.
+    // 导入：导出包预览先要求项目去向，再以较新一侧为默认提供冲突，并应用已审阅的解决方式。
+    open(&mut app, &mut driver, PageId::MemoryMode);
+    perform(
+        &mut app,
+        UiAction::Send(Command::Call(markdown::preview_markdown_memory_import(
+            "X:/demo/memory.zip",
+            json!([]),
+        ))),
+    );
+    settle(&mut app, &mut driver, "import preview", |app| {
+        app.slots.loaded(Slot::MarkdownMemoryImport)
+    });
+    assert!(
+        apply_button(&app).is_none(),
+        "every project needs a target first"
+    );
+    let create_rest = shown(&app)
+        .into_iter()
+        .find_map(|row| match row.kind {
+            RowKind::Button { action, .. } if row.label == "Create the rest" => Some(action),
+            _ => None,
+        })
+        .expect("the create-the-rest button");
+    perform(&mut app, create_rest);
+    settle(&mut app, &mut driver, "mapped preview", |app| {
+        app.slots
+            .loader(Slot::MarkdownMemoryImport)
+            .is_some_and(|loader| loader.params.pointer("/request/projects/0").is_some())
+    });
+    let request = apply_button(&app).expect("the apply button").params;
+    assert_eq!(
+        request.pointer("/request/resolutions/0/choice"),
+        Some(&json!("take_imported"))
+    );
+    assert_eq!(
+        request.pointer("/request/projects/0/target/action"),
+        Some(&json!("create"))
+    );
+    draw(&mut app);
+}
+
+/// The import call behind the apply button, when the page offers one.
+/// 页面提供应用按钮时，其背后的导入调用。
+fn apply_button(app: &App) -> Option<ServiceCall> {
+    shown(app).into_iter().find_map(|row| match row.kind {
+        RowKind::Button {
+            action: UiAction::Send(Command::Call(call)),
+            ..
+        } if call.method == "service_import_markdown_memory" => Some(call),
+        _ => None,
+    })
 }

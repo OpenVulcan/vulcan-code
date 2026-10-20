@@ -639,6 +639,9 @@ pub struct App {
     /// Chosen period per plugin chart, keyed by section id and block position.
     /// 每个插件图表所选的周期，以区块标识与数据块位置为键。
     pub plugin_periods: HashMap<String, String>,
+    /// Chosen resolutions of import conflicts by conflict key; unset conflicts take the newer side.
+    /// 按冲突键记录的导入冲突解决方式；未选择的冲突取较新一侧。
+    pub markdown_memory_conflicts: HashMap<String, String>,
     /// When each plugin data section last received a result, by data slot index.
     /// 每个插件数据区块最近收到结果的时间，以数据槽位下标为键。
     pub plugin_loaded_at: HashMap<u8, std::time::SystemTime>,
@@ -771,6 +774,7 @@ impl App {
             plugin_mount: None,
             plugin_tab: None,
             plugin_periods: HashMap::new(),
+            markdown_memory_conflicts: HashMap::new(),
             plugin_loaded_at: HashMap::new(),
             live_poll_due: std::collections::BTreeMap::new(),
             agent_category: String::new(),

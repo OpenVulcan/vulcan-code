@@ -56,6 +56,10 @@ pub enum LocalSetting {
     /// Host project whose Markdown memory the project page shows.
     /// 项目页显示其 Markdown 记忆的宿主项目。
     MarkdownMemoryProject,
+    /// Resolution of one import conflict; the value is the conflict key and the choice joined by
+    /// `pages::PERIOD_SEPARATOR`.
+    /// 单个导入冲突的解决方式；值为以 `pages::PERIOD_SEPARATOR` 连接的冲突键与选择。
+    MarkdownMemoryConflict,
     /// Project shown on the permission strategy page.
     /// 权限策略页显示的项目。
     JudgePolicyProject,
@@ -855,6 +859,15 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                     app.plugin_tab = Some(value.as_str().to_string());
                     for call in super::pages::plugin_tab_reads(app) {
                         perform(app, UiAction::Send(Command::Call(call)));
+                    }
+                    return;
+                }
+                LocalSetting::MarkdownMemoryConflict => {
+                    if let Some((conflict, choice)) =
+                        value.as_str().split_once(super::pages::PERIOD_SEPARATOR)
+                    {
+                        app.markdown_memory_conflicts
+                            .insert(conflict.to_string(), choice.to_string());
                     }
                     return;
                 }
