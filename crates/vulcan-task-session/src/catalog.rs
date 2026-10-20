@@ -731,29 +731,15 @@ pub fn load_plugin_subagent_catalog(plugin_id: &str, agents_root: PathBuf) -> Su
 ///
 /// # Returns
 /// 返回值
-/// The bilingual plugin category definition.
-/// 双语插件分类定义。
+/// The plugin category definition. It carries only the English name; interfaces name it from their own catalogs
+/// by its stable identifier.
+/// 插件分类定义。只携带英文名称；界面按其稳定标识从各自目录中命名。
 pub fn plugin_subagent_category() -> SubagentCategoryDefinition {
     SubagentCategoryDefinition {
         id: String::from(PLUGIN_SUBAGENT_CATEGORY_ID),
         name: String::from("Plugins"),
         description: None,
-        locales: BTreeMap::from([
-            (
-                String::from("en-US"),
-                SubagentCategoryLocaleDefinition {
-                    name: Some(String::from("Plugins")),
-                    description: None,
-                },
-            ),
-            (
-                String::from("zh-CN"),
-                SubagentCategoryLocaleDefinition {
-                    name: Some(String::from("Plugins")),
-                    description: None,
-                },
-            ),
-        ]),
+        locales: BTreeMap::new(),
         emoji: String::from("🧩"),
         color: String::from("#6366F1"),
         order: Some(110),
