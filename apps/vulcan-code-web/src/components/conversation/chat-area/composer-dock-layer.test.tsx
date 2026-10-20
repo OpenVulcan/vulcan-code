@@ -74,6 +74,11 @@ describe("composer dock authoritative settings", () => {
     workbench.vmmMemory.runtime.processReady = false;
     expect(project(workbench, "preview", false).vmmStatus).toBe("not_ready");
   });
+  it("reports memory as not ready while a scope blocker stops it on a ready process", () => {
+    const workbench = configuredSnapshot();
+    workbench.vmmMemory.runtime.scopeError = "vector rebuild required";
+    expect(project(workbench, "preview", false).vmmStatus).toBe("not_ready");
+  });
   it("does not treat missing session policy as enabled or an explicit disabled state", () => {
     const workbench = configuredSnapshot();
     workbench.sessionVmmPolicy = null;

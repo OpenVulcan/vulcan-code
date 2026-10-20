@@ -78,11 +78,13 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
     : props.projectId
       ? workbench.vmmMemory.projectScopes.find((project) => project.projectId === props.projectId)?.memoryEnabled
       : workbench.vmmMemory.globalDraft.enabled;
-  // Native host readiness is process-wide; external endpoint health is valid only for its projected scope.
-  // 原生宿主就绪属于进程级；外链端点健康仅对其投影作用域有效。
+  // Native host readiness is process-wide; external endpoint health is valid only for its projected scope. A scope
+  // blocker such as stale vector generations stops memory even while the process is ready.
+  // 原生宿主就绪属于进程级；外链端点健康仅对其投影作用域有效。旧向量代次等作用域阻断即使进程就绪也会停止记忆。
+  const memoryRuntime = workbench.vmmMemory.runtime;
   const memoryReady = workbench.vmmMemory.globalDraft.backendMode === "native"
     || (workbench.vmmMemory.selectedProjectId === props.projectId && workbench.vmmMemory.selectedConversationId === props.conversationId)
-    ? workbench.vmmMemory.runtime.processReady : undefined;
+    ? memoryRuntime.processReady && !memoryRuntime.scopeError : undefined;
   return (
     <ComposerDock
       attachmentCapabilities={workbench.composerAttachmentCapabilities ?? []}
