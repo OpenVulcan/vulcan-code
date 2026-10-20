@@ -396,6 +396,9 @@ export class ConversationEventWindowController {
     serviceInstanceChanged: boolean,
     options?: ServiceRequestOptions,
   ): Promise<void> {
+    // A live subscription that failed while the channel was down is installed again before reconciling.
+    // 通道中断期间建立失败的实时订阅，在协调前重新安装。
+    await this.ensureLiveSubscription();
     if (!serviceInstanceChanged) {
       await this.reconnect(options);
       return;

@@ -239,6 +239,10 @@ export class BrowserServiceTransport implements ServiceTransport {
   // socket 保存当前活动事件 WebSocket。
   private socket: WebSocket | null = null;
 
+  // retiredSockets marks sockets this transport closed on purpose because no subscriber remained.
+  // retiredSockets 标记本传输因已无订阅者而主动关闭的套接字。
+  private readonly retiredSockets = new WeakSet<WebSocket>();
+
   // reconnectTimer stores the pending reconnect timer id.
   // reconnectTimer 保存待执行的重连定时器标识。
   private reconnectTimer: number | null = null;
@@ -356,6 +360,7 @@ export class BrowserServiceTransport implements ServiceTransport {
     if (this.disposed || this.handlerCount() === 0) {
       return null;
     }
+    this.releaseStaleSocket();
     if (this.socket) {
       return this.socket;
     }
@@ -373,6 +378,7 @@ export class BrowserServiceTransport implements ServiceTransport {
     if (this.disposed || this.handlerCount() === 0) {
       return null;
     }
+    this.releaseStaleSocket();
     if (this.socket) {
       return this.socket;
     }
@@ -392,15 +398,7 @@ export class BrowserServiceTransport implements ServiceTransport {
       // A superseded socket cannot clear the newer socket's endpoint or reconnect state.
       // 已被替换的旧套接字不能清除新套接字的端点或重连状态。
       if (this.socket !== socket) return;
-      this.socket = null;
-      // Active reconnects must rediscover the endpoint because service restarts rotate tokens.
-      // 活跃重连必须重新发现端点，因为服务重启会轮换令牌。
-      if (!this.disposed && this.handlerCount() > 0) {
-        this.baseUrl = null;
-        this.baseUrlPromise = null;
-        clearBrowserServiceEndpointCache();
-        emitBrowserServiceConnectionStatus("disconnected", "Browser service connection was closed.");
-      }
+      this.releaseClosedSocket(socket);
       this.scheduleReconnect();
     });
     socket.addEventListener("error", () => {
@@ -413,6 +411,40 @@ export class BrowserServiceTransport implements ServiceTransport {
     });
     this.socket = socket;
     return socket;
+  }
+
+  // releaseStaleSocket drops a current socket that is already closing, so a new subscriber gets a fresh
+  // connection instead of a handshake that can never open; its pending close event is then ignored.
+  // releaseStaleSocket 丢弃已在关闭中的当前套接字，使新订阅者获得新连接而不是永远无法打开的握手；
+  // 其尚未到达的 close 事件随后会被忽略。
+  private releaseStaleSocket(): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState === socket.CONNECTING || socket.readyState === socket.OPEN) {
+      return;
+    }
+    this.releaseClosedSocket(socket);
+  }
+
+  // releaseClosedSocket forgets one closed socket and reports the delivery gap unless it was retired on purpose.
+  // releaseClosedSocket 遗忘一个已关闭的套接字，并在其并非主动退役时报告推送缺口。
+  //
+  // Parameters
+  // 参数
+  // `socket` is the exact socket that is, or is about to be, closed.
+  // `socket` 是已经关闭或即将关闭的精确套接字。
+  private releaseClosedSocket(socket: WebSocket): void {
+    this.socket = null;
+    // A socket retired for lack of subscribers lost nothing anyone was waiting for.
+    // 因无订阅者而退役的套接字没有丢失任何人等待的事件。
+    if (this.retiredSockets.has(socket) || this.disposed || this.handlerCount() === 0) {
+      return;
+    }
+    // Active reconnects must rediscover the endpoint because service restarts rotate tokens.
+    // 活跃重连必须重新发现端点，因为服务重启会轮换令牌。
+    this.baseUrl = null;
+    this.baseUrlPromise = null;
+    clearBrowserServiceEndpointCache();
+    emitBrowserServiceConnectionStatus("disconnected", "Browser service connection was closed.");
   }
 
   // closeSocketIfUnused closes the current socket only after its ownership state is revalidated.
@@ -429,7 +461,13 @@ export class BrowserServiceTransport implements ServiceTransport {
     }
     closeWebSocketWhenReady(
       socket,
-      () => this.socket === socket && (this.disposed || this.handlerCount() === 0),
+      () => {
+        const unused = this.socket === socket && (this.disposed || this.handlerCount() === 0);
+        if (unused) {
+          this.retiredSockets.add(socket);
+        }
+        return unused;
+      },
     );
   }
 

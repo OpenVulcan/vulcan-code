@@ -103,3 +103,93 @@ it("recovers completion after the replacement socket opens, not after discovery 
     window.removeEventListener(BROWSER_SERVICE_CONNECTION_EVENT, onConnection);
   }
 });
+
+it("gives a subscriber arriving while the server closes the socket a fresh connection", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("localStorage", { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() });
+  vi.stubGlobal("sessionStorage", { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() });
+  const sockets: RecoverySocket[] = [];
+  vi.stubGlobal("WebSocket", class extends RecoverySocket {
+    /** Captures each physical connection without contacting the user's service.
+     * 捕获每条物理连接，不联系用户服务。 */
+    constructor() { super(); sockets.push(this); }
+  });
+  vi.mocked(readElectronServiceConnection).mockResolvedValue({
+    baseUrl: "http://127.0.0.1:17921", pid: 42, startedAt: "123",
+    serviceToken: "recovery-fixture", status: "ready",
+  });
+  const transport = new BrowserServiceTransport();
+  const statuses: string[] = [];
+  const onConnection = (event: Event): void => {
+    statuses.push((event as CustomEvent<BrowserServiceConnectionDetail>).detail.status);
+  };
+  window.addEventListener(BROWSER_SERVICE_CONNECTION_EVENT, onConnection);
+  try {
+    const first = transport.subscribe("workbench", vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0]!.open();
+    await first;
+    // The server has started closing, but the browser has not yet delivered the close event.
+    // 服务端已开始关闭，但浏览器尚未送达 close 事件。
+    sockets[0]!.readyState = 2;
+    const second = transport.subscribe("conversation.event.delta.v1", vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(2);
+    sockets[1]!.open();
+    await expect(second).resolves.toBeTypeOf("function");
+    // The superseded socket's late close cannot tear down the replacement.
+    // 被替换套接字迟到的 close 不能拆除替代连接。
+    sockets[0]!.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sockets).toHaveLength(2);
+    expect(statuses.at(-1)).toBe("connected");
+  } finally {
+    transport.dispose();
+    window.removeEventListener(BROWSER_SERVICE_CONNECTION_EVENT, onConnection);
+  }
+});
+
+it("does not report a disconnect for a socket it retired after the last unsubscribe", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("localStorage", { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() });
+  vi.stubGlobal("sessionStorage", { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() });
+  const sockets: RecoverySocket[] = [];
+  vi.stubGlobal("WebSocket", class extends RecoverySocket {
+    /** Captures each physical connection without contacting the user's service.
+     * 捕获每条物理连接，不联系用户服务。 */
+    constructor() { super(); sockets.push(this); }
+  });
+  vi.mocked(readElectronServiceConnection).mockResolvedValue({
+    baseUrl: "http://127.0.0.1:17921", pid: 42, startedAt: "123",
+    serviceToken: "recovery-fixture", status: "ready",
+  });
+  const transport = new BrowserServiceTransport();
+  const statuses: string[] = [];
+  const onConnection = (event: Event): void => {
+    statuses.push((event as CustomEvent<BrowserServiceConnectionDetail>).detail.status);
+  };
+  window.addEventListener(BROWSER_SERVICE_CONNECTION_EVENT, onConnection);
+  try {
+    const first = transport.subscribe("workbench", vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0]!.open();
+    // The browser acknowledges the close request at once but delivers the close event later.
+    // 浏览器立即受理关闭请求，但稍后才送达 close 事件。
+    const retired = sockets[0]!;
+    retired.close = () => { retired.readyState = 2; };
+    (await first)();
+    expect(retired.readyState).toBe(2);
+    const second = transport.subscribe("workbench", vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    retired.readyState = retired.CLOSED;
+    retired.dispatchEvent(new Event("close"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(2);
+    sockets[1]!.open();
+    await second;
+    expect(statuses).not.toContain("disconnected");
+  } finally {
+    transport.dispose();
+    window.removeEventListener(BROWSER_SERVICE_CONNECTION_EVENT, onConnection);
+  }
+});
