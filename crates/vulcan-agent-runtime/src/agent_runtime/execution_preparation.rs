@@ -293,11 +293,18 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     } else {
         Default::default()
     };
-    let system_prompt_hook_blocks = if request.runtime_policy.hooks_enabled {
+    let mut system_prompt_hook_blocks = if request.runtime_policy.hooks_enabled {
         request.system_prompt_hook_blocks.clone()
     } else {
         Vec::new()
     };
+    // Dedicated sessions and subagents never receive long-term memory.
+    // 专职会话与子代理永不接收长期记忆。
+    if request.dedicated_session.is_some() || !request.runtime_policy.memory_recall_enabled {
+        crate::agent_runtime::markdown_memory_hooks::remove_markdown_memory_block(
+            &mut system_prompt_hook_blocks,
+        );
+    }
     let workspace_root =
         (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone()));
     let suppress_external_web_search = model_blueprint

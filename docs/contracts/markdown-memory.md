@@ -7,7 +7,7 @@
 - `crates/vulcan-markdown-memory/`：节点解析、元数据注释、分区、修订、原子写入、搜索、大纲、注册表、
   注入快照与预算、导入导出包，以及全部边界常量。
 - `crates/vulcan-agent-runtime/src/tooling/native/markdown_memory.rs`：三工具的 Schema、执行与结果投影。
-- `crates/vulcan-agent-runtime/src/agent_runtime/markdown_memory_hooks.rs`：画像准备点位的注入快照块。
+- `crates/vulcan-agent-runtime/src/agent_runtime/markdown_memory_hooks.rs`：提示回合准备时追加的注入快照块。
 - `crates/vulcan-service-kernel/src/markdown_memory_services.rs`：模式设置、页面服务与 RPC。
 - `apps/vulcan-code-web/src/service/markdown-memory-service.ts`：WebUI 调用；TUI 一对一镜像。
 
@@ -70,7 +70,9 @@
 
 ## 注入
 
-- 快照块由画像准备点位生成，带 `MemoryProfile` 锁定基线来源。会话锁定基线一经初始化即按字节复用，
+- 快照块在提示回合准备时（画像线路之后）生成，标签 `long_term_memory`，带 `MemoryProfile` 锁定基线来源；
+  专职会话与关闭记忆召回的执行（子代理）在执行准备中移除该块。读取失败只记入画像失败说明，请求照常继续。
+  会话锁定基线一经初始化即按字节复用，
   因此快照只在新会话与上下文压缩后的基线刷新时更新；会话中途的写入立即落盘但不改变已注入内容，
   不破坏提示词缓存。模式切换同样只影响新会话与压缩后的请求，工具可见性在下一次 Provider 请求生效。
 - 默认注入预算合计 4000 tokens（用户画像 500、空间基础 400、项目基础 600、空间目录 1000、

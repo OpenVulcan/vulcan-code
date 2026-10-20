@@ -35,6 +35,7 @@ use crate::{
             vmm_session_status_effect_from_report,
         },
         execution_models::ExecutionTurnStartMode,
+        markdown_memory_hooks::append_markdown_memory_block,
         vmm_hooks::{
             VMM_PRECHECK_HOOK_ID, apply_vmm_profile_sync_state, reconcile_vmm_precheck_publication,
             reconcile_vmm_profile_publication, stabilize_vmm_profile_system_prompt_blocks,
@@ -1222,6 +1223,20 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             &mut system_prompt_hook_blocks,
             &Default::default(),
         );
+    }
+    // The Markdown memory snapshot only seeds a new or compaction-refreshed locked baseline.
+    // Markdown 记忆快照只用于建立新的或压缩后刷新的锁定基线。
+    if let Err(error) = append_markdown_memory_block(
+        &mut system_prompt_hook_blocks,
+        input.start.project_id.as_deref(),
+        &input.start.workspace_path,
+        runtime_state.last_compaction_id.is_some(),
+    ) {
+        let detail = format!("Long-term memory was not injected into this request: {error}");
+        profile_failure_detail = Some(match profile_failure_detail {
+            Some(existing) => format!("{existing}\n{detail}"),
+            None => detail,
+        });
     }
     request_prompt = append_hidden_model_guidance_to_prompt(
         request_prompt,
