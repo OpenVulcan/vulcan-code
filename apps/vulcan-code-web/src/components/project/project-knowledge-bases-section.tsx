@@ -25,6 +25,9 @@ export function ProjectKnowledgeBasesSection(props: {
   // Exact project identifier whose bindings are edited.
   // 当前编辑绑定的精确项目标识符。
   projectId: string;
+  // Leaves the dialog for library management, where libraries are created; absent while that would drop unsaved edits.
+  // 离开弹窗前往知识库管理（在那里创建知识库）；会丢弃未保存编辑时不提供。
+  onOpenKnowledge?: () => void;
 }) {
   // t resolves user-visible project authorization copy.
   // t 解析用户可见的项目授权文案。
@@ -181,7 +184,12 @@ export function ProjectKnowledgeBasesSection(props: {
           <Button type="button" variant="outline" disabled={Boolean(savingLibraryId)} onClick={() => void loadBindings()}>{t("composer.capability.retry")}</Button>
         </div>
       ) : libraries.length === 0 ? (
-        <div className="knowledge-empty">{t("knowledge.emptyLibraries")}</div>
+        <div className="knowledge-empty">
+          {t("knowledge.emptyLibraries")}
+          {props.onOpenKnowledge ? (
+            <Button type="button" size="sm" variant="outline" onClick={props.onOpenKnowledge}>{t("knowledge.composer.manage")}</Button>
+          ) : null}
+        </div>
       ) : (
         <div className="knowledge-binding-grid">
           {libraries.map((library) => {

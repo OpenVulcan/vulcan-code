@@ -141,6 +141,9 @@ export interface WorkbenchDialogsProps {
   // Executes a project attachment cleanup.
   // 执行项目附件清理。
   onExecuteAttachmentCleanup: React.ComponentProps<typeof ProjectSettingsDialog>["onExecuteAttachmentCleanup"];
+  // Closes project settings and opens knowledge library management.
+  // 关闭项目设置并打开知识库管理。
+  onOpenKnowledge: () => void;
   // Project targeted by archive-all-conversations.
   // 全部归档对话目标项目。
   archiveProjectTarget: ProjectSummary | null;
@@ -224,6 +227,7 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
         workbench={props.workbench}
         onCancel={props.onCancelProjectSettings}
         onExecuteAttachmentCleanup={props.onExecuteAttachmentCleanup}
+        onOpenKnowledge={props.onOpenKnowledge}
         onLoadAgentSkillOverrides={props.onLoadAgentSkillOverrides}
         onLoadVmmDraft={props.onLoadVmmDraft}
         onPreviewAttachmentCleanup={props.onPreviewAttachmentCleanup}

@@ -600,7 +600,7 @@
 @media (max-width: 640px) {
   .knowledge-binding-grid, .knowledge-binding-row { grid-template-columns: minmax(0, 1fr); }
 }
-.knowledge-empty { padding: 24px; color: var(--vk-ink-2); text-align: center; }
+.knowledge-empty { display: grid; justify-items: center; gap: 12px; padding: 24px; color: var(--vk-ink-2); text-align: center; }
 
 @media (prefers-reduced-motion: reduce) {
   .knowledge-dot[data-status="building"] { animation: none; }

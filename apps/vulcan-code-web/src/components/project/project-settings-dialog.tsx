@@ -117,6 +117,9 @@ export function ProjectSettingsDialog(props: {
   // Executes one managed attachment cleanup for the current project.
   // 执行当前项目的一次托管附件清理。
   onExecuteAttachmentCleanup: (request: ProjectAttachmentCleanupRequest) => Promise<ProjectAttachmentCleanupReportSummary>;
+  // Closes the dialog and opens knowledge library management.
+  // 关闭弹窗并打开知识库管理。
+  onOpenKnowledge?: () => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -706,7 +709,7 @@ export function ProjectSettingsDialog(props: {
               />
             ) : null}
 
-            {activeSection === "knowledge-bases" ? <ProjectKnowledgeBasesSection projectId={project.id} /> : null}
+            {activeSection === "knowledge-bases" ? <ProjectKnowledgeBasesSection projectId={project.id} onOpenKnowledge={vmmDirty ? undefined : props.onOpenKnowledge} /> : null}
 
             {activeSection === "collaboration-grants" ? <ProjectCollaborationGrantsSection projectId={project.id} workbench={props.workbench} /> : null}
 

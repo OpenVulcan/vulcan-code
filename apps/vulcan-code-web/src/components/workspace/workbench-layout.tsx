@@ -1398,6 +1398,10 @@ export function WorkbenchLayout(props: {
         onConfirmRename={handleRenameConfirm}
         onConfirmStopConversationRun={resolveStopConversationRunChoice}
         onExecuteAttachmentCleanup={executeProjectAttachmentCleanup}
+        onOpenKnowledge={() => {
+          setProjectSettingsTarget(null);
+          handleOpenWorkspaceKnowledge();
+        }}
         onLoadAgentSkillOverrides={loadProjectAgentSkillOverrides}
         onLoadVmmDraft={loadProjectVmmConfig}
         onPreviewAttachmentCleanup={previewProjectAttachmentCleanup}
