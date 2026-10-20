@@ -309,3 +309,89 @@ fn settings_snapshot_separates_provider_tool_templates_from_conversation_access(
             .any(|available| { available.target.upstream_target_id == "qwen-image-2.0-pro" })
     );
 }
+
+/// Verifies raw discovery catalogs reach the browser only for custom-provider connections.
+/// 验证原始发现目录只对自定义供应商连接进入浏览器快照。
+#[test]
+fn settings_snapshot_limits_source_catalogs_to_custom_providers() {
+    // runtime uses bundled declarations and cannot contact a live provider.
+    // runtime 使用内置声明，不能访问真实供应商。
+    let runtime = PublicAiRuntime::unavailable().expect("offline runtime");
+    let custom_provider_id = String::from("custom:source-catalog-scope");
+    let descriptor = vulcan_provider_adapters::CustomProviderDefinition {
+        id: custom_provider_id.clone(),
+        display_name: String::from("Source Catalog Scope"),
+        base_url: String::from("https://source-catalog-scope.example.test/v1"),
+        authentication: vulcan_provider_adapters::CustomProviderAuthentication::BearerAuthorization,
+        model_discovery_mode: vulcan_provider_adapters::CustomProviderModelDiscoveryMode::Standard,
+        model_discovery_path: None,
+        protocols: vec![vulcan_provider_adapters::CustomProviderProtocol::OpenAiResponses],
+        protocol_routes: Vec::new(),
+        request_headers: BTreeMap::new(),
+        session_header: None,
+    }
+    .into_descriptor()
+    .expect("custom provider should compile");
+    let mut configuration = PersistedAiConfiguration::default();
+    configuration
+        .custom_providers
+        .insert(custom_provider_id.clone(), descriptor);
+    let providers = runtime
+        .effective_providers(&configuration)
+        .expect("effective providers should resolve");
+    // connection builds one account per provider family so only the provider kind differs.
+    // connection 为每类供应商构建一个账号，使两者只在供应商类型上不同。
+    let connection = |id: &str, provider_id: &str, service_entry_id: &str| CredentialConnection {
+        id: id.to_string(),
+        provider_id: provider_id.to_string(),
+        service_entry_id: service_entry_id.to_string(),
+        credential_profile_id: String::from("api-key"),
+        credential_mode: CredentialMode::Token,
+        credential_id: format!("{id}-credential"),
+        display_name: id.to_string(),
+        secret_reference: format!("{id}-secret"),
+        management_secret_reference: None,
+        service_origin_override: None,
+        prompt_cache_by_protocol: BTreeMap::new(),
+    };
+    for account in [
+        connection("custom-source-account", &custom_provider_id, "default"),
+        connection("system-source-account", "openrouter", "public-api"),
+    ] {
+        configuration
+            .connection_graph
+            .add_connection(&providers, account)
+            .expect("connection should register");
+    }
+    for connection_id in ["custom-source-account", "system-source-account"] {
+        runtime
+            .stage_source_catalog_for_testing(ConnectionModelCatalog {
+                connection_id: connection_id.to_string(),
+                models: Vec::new(),
+                generation: 1,
+                page_count: 1,
+                discovery_schema_revision: String::from("source-catalog-scope-v1"),
+            })
+            .expect("source catalog should stage");
+    }
+    runtime
+        .replace_configuration(configuration.clone())
+        .expect("configuration should activate");
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("overlays should activate");
+
+    let snapshot = build_public_ai_settings_snapshot(&runtime, &configuration)
+        .expect("settings snapshot should build");
+
+    assert!(
+        snapshot
+            .source_catalogs
+            .contains_key("custom-source-account")
+    );
+    assert!(
+        !snapshot
+            .source_catalogs
+            .contains_key("system-source-account")
+    );
+}

@@ -97,8 +97,10 @@ pub(crate) struct PublicAiSettingsSnapshot {
     /// Process-local connection model catalogs.
     /// 进程内的连接模型目录。
     catalogs: BTreeMap<String, ConnectionModelCatalog>,
-    /// Immutable provider-discovery catalogs before user overlays.
-    /// 应用用户覆盖前的不可变供应商发现目录。
+    /// Immutable provider-discovery catalogs before user overlays, limited to custom-provider
+    /// connections because only their model editor compares against the raw discovery result.
+    /// 应用用户覆盖前的不可变供应商发现目录；只包含自定义供应商连接，
+    /// 因为只有其模型编辑器需要对照原始发现结果。
     source_catalogs: BTreeMap<String, ConnectionModelCatalog>,
     /// Account support catalogs after membership and capability resolution but before access switches.
     /// 解析成员关系与能力后、应用访问开关前的账号支持目录。
@@ -796,7 +798,20 @@ pub(super) fn build_public_ai_settings_snapshot(
             .clone(),
         active: configuration.active.clone(),
         catalogs,
-        source_catalogs,
+        source_catalogs: source_catalogs
+            .into_iter()
+            .filter(|(connection_id, _)| {
+                configuration
+                    .connection_graph
+                    .connections
+                    .get(connection_id.as_str())
+                    .is_some_and(|connection| {
+                        configuration
+                            .custom_providers
+                            .contains_key(connection.provider_id.as_str())
+                    })
+            })
+            .collect(),
         model_support_catalogs,
         model_route_records,
         catalog_statuses,

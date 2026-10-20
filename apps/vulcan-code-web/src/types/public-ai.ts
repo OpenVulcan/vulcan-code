@@ -1342,6 +1342,8 @@ export interface PublicAiSettingsSnapshot {
   providerDefaults: Record<string, string>;
   active?: PublicAiActiveSelection;
   catalogs: Record<string, PublicAiConnectionCatalog>;
+  // sourceCatalogs holds raw discovery catalogs for custom-provider connections only.
+  // sourceCatalogs 只保存自定义供应商连接的原始发现目录。
   sourceCatalogs: Record<string, PublicAiConnectionCatalog>;
   modelSupportCatalogs: Record<string, PublicAiConnectionCatalog>;
   // modelRouteRecords prevents browser-side model protocol resolution.
