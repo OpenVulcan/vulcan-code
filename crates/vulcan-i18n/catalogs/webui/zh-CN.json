@@ -6075,5 +6075,17 @@
   "knowledge.change.import": "导入套件",
   "toolPresentation.native.knowledgeList": "列知识库目录",
   "toolPresentation.native.knowledgeWrite": "写入知识库",
-  "toolDomain.knowledge.change": "知识库变更回执"
+  "toolDomain.knowledge.change": "知识库变更回执",
+  "agentSkills.builtinCategory.general": "通用",
+  "agentSkills.builtinCategory.engineering": "工程开发",
+  "agentSkills.builtinCategory.quality": "测试与质量",
+  "agentSkills.builtinCategory.operations": "运维与自动化",
+  "agentSkills.builtinCategory.data": "数据",
+  "agentSkills.builtinCategory.documents": "文档与内容",
+  "agentSkills.builtinCategory.design": "设计与媒体",
+  "agentSkills.builtinCategory.research": "研究与检索",
+  "agentSkills.builtinCategory.security": "安全",
+  "agentSkills.builtinCategory.integrations": "集成",
+  "agentSkills.builtinCategory.plugins": "插件",
+  "agentSkills.builtinCategory.uncategorized": "未分配"
 }

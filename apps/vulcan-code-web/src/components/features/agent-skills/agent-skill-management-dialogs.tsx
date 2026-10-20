@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/ui-kit/primitives/dialog"
+import { localizedAgentSkillCategoryName } from "@/components/features/agent-skills/agent-skills-types"
 import type {
   AgentSkillCategorySaveRequest,
   AgentSkillCategorySummary,
@@ -163,7 +164,7 @@ export function AgentSkillEditorDialog(props: {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {props.categories.map((category) => <SelectItem key={category.categoryId} value={category.categoryId}>{category.emoji} {localizedCategoryName(category, props.locale)}</SelectItem>)}
+                    {props.categories.map((category) => <SelectItem key={category.categoryId} value={category.categoryId}>{category.emoji} {localizedAgentSkillCategoryName(category, props.locale, t)}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </label>
@@ -294,7 +295,7 @@ export function AgentSkillCategoryManagementDialog(props: {
               {props.categories.map((category) => (
                 <div className="agent-skill-category-management-row" key={category.categoryId}>
                   <span className="agent-skill-category-management-marker" style={{ backgroundColor: category.color }}>{category.emoji}</span>
-                  <div><strong>{localizedCategoryName(category, props.locale)}</strong><span>{category.categoryId}</span></div>
+                  <div><strong>{localizedAgentSkillCategoryName(category, props.locale, t)}</strong><span>{category.categoryId}</span></div>
                   <span>{category.builtin ? t("agentSkills.system2") : t("agentSkills.added")}</span>
                   {!category.builtin ? (
                     <div>
@@ -330,7 +331,7 @@ export function AgentSkillCategoryManagementDialog(props: {
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>{t("agentSkills.deleteCategory")}</AlertDialogTitle>
-              <AlertDialogDescription>{pendingDelete ? (formatMessage(t("agentSkills.deleteCategory2"), { value: localizedCategoryName(pendingDelete, props.locale) })) : ""}</AlertDialogDescription>
+              <AlertDialogDescription>{pendingDelete ? (formatMessage(t("agentSkills.deleteCategory2"), { value: localizedAgentSkillCategoryName(pendingDelete, props.locale, t) })) : ""}</AlertDialogDescription>
             </AlertDialogHeader>
             {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
             <AlertDialogFooter>
@@ -525,12 +526,6 @@ function localizedRecordDisplayName(record: AgentSkillRecordSummary, locale: str
 function localizedRecordShortDescription(record: AgentSkillRecordSummary, locale: string): string {
   const localized = record.locales[locale] ?? Object.entries(record.locales).find(([candidate]) => candidate.split("-")[0] === locale.split("-")[0])?.[1]
   return localized?.shortDescription?.trim() || record.description
-}
-
-// localizedCategoryName resolves exact then language-prefix category metadata.
-// localizedCategoryName 按精确语言再语言前缀解析分类元数据。
-function localizedCategoryName(category: AgentSkillCategorySummary, locale: string): string {
-  return category.locales[locale]?.name ?? Object.entries(category.locales).find(([candidate]) => candidate.split("-")[0] === locale.split("-")[0])?.[1].name ?? category.name
 }
 
 // uniqueCommaSeparatedValues returns stable trimmed unique tags.

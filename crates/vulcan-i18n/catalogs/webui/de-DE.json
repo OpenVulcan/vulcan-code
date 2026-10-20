@@ -6075,5 +6075,17 @@
   "knowledge.change.import": "Paket importieren",
   "toolPresentation.native.knowledgeList": "Wissen auflisten",
   "toolPresentation.native.knowledgeWrite": "Wissen schreiben",
-  "toolDomain.knowledge.change": "Bestätigung der Wissensänderung"
+  "toolDomain.knowledge.change": "Bestätigung der Wissensänderung",
+  "agentSkills.builtinCategory.general": "Allgemein",
+  "agentSkills.builtinCategory.engineering": "Entwicklung",
+  "agentSkills.builtinCategory.quality": "Tests und Qualität",
+  "agentSkills.builtinCategory.operations": "Betrieb und Automatisierung",
+  "agentSkills.builtinCategory.data": "Daten",
+  "agentSkills.builtinCategory.documents": "Dokumente und Inhalte",
+  "agentSkills.builtinCategory.design": "Design und Medien",
+  "agentSkills.builtinCategory.research": "Recherche und Abruf",
+  "agentSkills.builtinCategory.security": "Sicherheit",
+  "agentSkills.builtinCategory.integrations": "Integrationen",
+  "agentSkills.builtinCategory.plugins": "Plugins",
+  "agentSkills.builtinCategory.uncategorized": "Nicht zugeordnet"
 }

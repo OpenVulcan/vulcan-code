@@ -6075,5 +6075,17 @@
   "knowledge.change.import": "匯入套件",
   "toolPresentation.native.knowledgeList": "列知識庫目錄",
   "toolPresentation.native.knowledgeWrite": "寫入知識庫",
-  "toolDomain.knowledge.change": "知識庫變更回執"
+  "toolDomain.knowledge.change": "知識庫變更回執",
+  "agentSkills.builtinCategory.general": "通用",
+  "agentSkills.builtinCategory.engineering": "工程開發",
+  "agentSkills.builtinCategory.quality": "測試與質素",
+  "agentSkills.builtinCategory.operations": "運維與自動化",
+  "agentSkills.builtinCategory.data": "數據",
+  "agentSkills.builtinCategory.documents": "文件與內容",
+  "agentSkills.builtinCategory.design": "設計與媒體",
+  "agentSkills.builtinCategory.research": "研究與檢索",
+  "agentSkills.builtinCategory.security": "安全",
+  "agentSkills.builtinCategory.integrations": "整合",
+  "agentSkills.builtinCategory.plugins": "外掛",
+  "agentSkills.builtinCategory.uncategorized": "未分配"
 }

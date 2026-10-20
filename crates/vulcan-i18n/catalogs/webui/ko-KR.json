@@ -6075,5 +6075,17 @@
   "knowledge.change.import": "패키지 가져오기",
   "toolPresentation.native.knowledgeList": "지식 목록",
   "toolPresentation.native.knowledgeWrite": "지식 쓰기",
-  "toolDomain.knowledge.change": "지식 변경 결과"
+  "toolDomain.knowledge.change": "지식 변경 결과",
+  "agentSkills.builtinCategory.general": "일반",
+  "agentSkills.builtinCategory.engineering": "엔지니어링",
+  "agentSkills.builtinCategory.quality": "테스트 및 품질",
+  "agentSkills.builtinCategory.operations": "운영 및 자동화",
+  "agentSkills.builtinCategory.data": "데이터",
+  "agentSkills.builtinCategory.documents": "문서 및 콘텐츠",
+  "agentSkills.builtinCategory.design": "디자인 및 미디어",
+  "agentSkills.builtinCategory.research": "조사 및 검색",
+  "agentSkills.builtinCategory.security": "보안",
+  "agentSkills.builtinCategory.integrations": "통합",
+  "agentSkills.builtinCategory.plugins": "플러그인",
+  "agentSkills.builtinCategory.uncategorized": "미분류"
 }

@@ -6075,5 +6075,17 @@
   "knowledge.change.import": "パッケージ取り込み",
   "toolPresentation.native.knowledgeList": "ナレッジ一覧",
   "toolPresentation.native.knowledgeWrite": "ナレッジ書き込み",
-  "toolDomain.knowledge.change": "ナレッジ変更結果"
+  "toolDomain.knowledge.change": "ナレッジ変更結果",
+  "agentSkills.builtinCategory.general": "一般",
+  "agentSkills.builtinCategory.engineering": "エンジニアリング",
+  "agentSkills.builtinCategory.quality": "テストと品質",
+  "agentSkills.builtinCategory.operations": "運用と自動化",
+  "agentSkills.builtinCategory.data": "データ",
+  "agentSkills.builtinCategory.documents": "ドキュメントとコンテンツ",
+  "agentSkills.builtinCategory.design": "デザインとメディア",
+  "agentSkills.builtinCategory.research": "調査と検索",
+  "agentSkills.builtinCategory.security": "セキュリティ",
+  "agentSkills.builtinCategory.integrations": "連携",
+  "agentSkills.builtinCategory.plugins": "プラグイン",
+  "agentSkills.builtinCategory.uncategorized": "未分類"
 }

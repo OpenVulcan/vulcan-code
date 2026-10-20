@@ -6075,5 +6075,17 @@
   "knowledge.change.import": "Импорт пакета",
   "toolPresentation.native.knowledgeList": "Список знаний",
   "toolPresentation.native.knowledgeWrite": "Запись знаний",
-  "toolDomain.knowledge.change": "Результат изменения знаний"
+  "toolDomain.knowledge.change": "Результат изменения знаний",
+  "agentSkills.builtinCategory.general": "Общее",
+  "agentSkills.builtinCategory.engineering": "Разработка",
+  "agentSkills.builtinCategory.quality": "Тестирование и качество",
+  "agentSkills.builtinCategory.operations": "Эксплуатация и автоматизация",
+  "agentSkills.builtinCategory.data": "Данные",
+  "agentSkills.builtinCategory.documents": "Документы и контент",
+  "agentSkills.builtinCategory.design": "Дизайн и медиа",
+  "agentSkills.builtinCategory.research": "Исследование и поиск",
+  "agentSkills.builtinCategory.security": "Безопасность",
+  "agentSkills.builtinCategory.integrations": "Интеграции",
+  "agentSkills.builtinCategory.plugins": "Плагины",
+  "agentSkills.builtinCategory.uncategorized": "Без категории"
 }

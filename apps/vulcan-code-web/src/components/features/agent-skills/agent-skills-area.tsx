@@ -4,7 +4,7 @@ import { Copy, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Search, Tags, Tra
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
+import { localizedAgentSkillCategoryName, type AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
 import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "@/components/features/agent-skills/agent-skill-management-dialogs"
 import { hasLinkedGitHubSourceOrigin, SourceOriginLink } from "@/components/features/source-origin-link"
 import { PageEmptyState, PageToolbar } from "@/components/page"
@@ -525,9 +525,7 @@ function localizedAgentSkillCategory(category: AgentSkillCategorySummary | undef
   if (!category) {
     return t("agentSkills.uncategorized")
   }
-  return category.locales[locale]?.name
-    ?? Object.entries(category.locales).find(([candidate]) => candidate.split("-")[0] === locale.split("-")[0])?.[1].name
-    ?? category.name
+  return localizedAgentSkillCategoryName(category, locale, t)
 }
 
 // localizedAgentSkillOrigin resolves host-known provenance kinds without rewriting third-party labels.
