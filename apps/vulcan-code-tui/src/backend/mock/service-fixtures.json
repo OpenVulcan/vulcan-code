@@ -1193,6 +1193,350 @@
         "pollIntervalMs": 2000
       }
     },
+    "service_get_memory_settings": {
+      "mode": "vmm",
+      "budget": {
+        "user": 500,
+        "spaceBase": 400,
+        "projectBase": 600,
+        "spaceCatalog": 1000,
+        "projectCatalog": 1500
+      },
+      "defaultBudget": {
+        "user": 500,
+        "spaceBase": 400,
+        "projectBase": 600,
+        "spaceCatalog": 1000,
+        "projectCatalog": 1500
+      },
+      "maxPartTokens": 16000,
+      "warningPercent": 80
+    },
+    "service_load_markdown_memory": {
+      "settings": {
+        "mode": "vmm",
+        "budget": {
+          "user": 500,
+          "spaceBase": 400,
+          "projectBase": 600,
+          "spaceCatalog": 1000,
+          "projectCatalog": 1500
+        },
+        "defaultBudget": {
+          "user": 500,
+          "spaceBase": 400,
+          "projectBase": 600,
+          "spaceCatalog": 1000,
+          "projectCatalog": 1500
+        },
+        "maxPartTokens": 16000,
+        "warningPercent": 80
+      },
+      "user": [
+        {
+          "id": "u1",
+          "level": 1,
+          "path": [
+            "Identity"
+          ],
+          "section": "identity",
+          "revision": "u1000000",
+          "body": "",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": null,
+          "descendants": 0
+        },
+        {
+          "id": "u2",
+          "level": 2,
+          "path": [
+            "Identity",
+            "Role"
+          ],
+          "section": "identity",
+          "revision": "u2000000",
+          "body": "Maintains the Vulcan Code workspace.",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": "user",
+          "descendants": 0
+        },
+        {
+          "id": "u3",
+          "level": 1,
+          "path": [
+            "Communication"
+          ],
+          "section": "communication",
+          "revision": "u3000000",
+          "body": "",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": null,
+          "descendants": 0
+        },
+        {
+          "id": "u4",
+          "level": 2,
+          "path": [
+            "Communication",
+            "Language"
+          ],
+          "section": "communication",
+          "revision": "u4000000",
+          "body": "Status updates in Traditional Chinese.\nCode comments in English.",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": "ai",
+          "descendants": 0
+        }
+      ],
+      "space": [
+        {
+          "id": "s1",
+          "level": 1,
+          "path": [
+            "Base"
+          ],
+          "section": "base",
+          "revision": "s1000000",
+          "body": "",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": null,
+          "descendants": 0
+        },
+        {
+          "id": "s2",
+          "level": 2,
+          "path": [
+            "Base",
+            "Shell"
+          ],
+          "section": "base",
+          "revision": "s2000000",
+          "body": "Windows with PowerShell and Git Bash.",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": "ai",
+          "descendants": 0
+        },
+        {
+          "id": "s3",
+          "level": 1,
+          "path": [
+            "Conventions"
+          ],
+          "section": "conventions",
+          "revision": "s3000000",
+          "body": "",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": null,
+          "descendants": 0
+        }
+      ],
+      "project": [
+        {
+          "id": "p1",
+          "level": 1,
+          "path": [
+            "Base"
+          ],
+          "section": "base",
+          "revision": "p1000000",
+          "body": "",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": null,
+          "descendants": 0
+        },
+        {
+          "id": "p2",
+          "level": 2,
+          "path": [
+            "Base",
+            "Build"
+          ],
+          "section": "base",
+          "revision": "p2000000",
+          "body": "Run make check before committing.",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": "ai",
+          "descendants": 0
+        },
+        {
+          "id": "p3",
+          "level": 1,
+          "path": [
+            "Pitfalls"
+          ],
+          "section": "pitfalls",
+          "revision": "p3000000",
+          "body": "",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": null,
+          "descendants": 0
+        },
+        {
+          "id": "p4",
+          "level": 2,
+          "path": [
+            "Pitfalls",
+            "Line endings"
+          ],
+          "section": "pitfalls",
+          "revision": "p4000000",
+          "body": "Catalog files use CRLF.",
+          "created": "2026-10-18 09:12",
+          "updated": "2026-10-20 14:05",
+          "session": null,
+          "source": "user",
+          "descendants": 0
+        }
+      ],
+      "memoryProjectId": "mp-core",
+      "boundMemoryProjectId": "mp-core",
+      "hostProjectId": null,
+      "orphanCandidates": [],
+      "projects": [
+        {
+          "id": "mp-core",
+          "name": "vulcan-code",
+          "hostProjectIds": [
+            "p-core"
+          ],
+          "paths": [
+            "D:\\openvulcan\\vulcan-code"
+          ],
+          "memoryEnabled": true,
+          "orphaned": false,
+          "updated": "2026-10-20 14:05"
+        },
+        {
+          "id": "mp-old",
+          "name": "old-tools",
+          "hostProjectIds": [],
+          "paths": [
+            "D:\\old-tools"
+          ],
+          "memoryEnabled": false,
+          "orphaned": true,
+          "updated": "2026-09-02 10:00"
+        }
+      ],
+      "usage": [
+        {
+          "part": "user",
+          "tokens": 120,
+          "budget": 500,
+          "omitted": []
+        },
+        {
+          "part": "spaceBase",
+          "tokens": 340,
+          "budget": 400,
+          "omitted": []
+        },
+        {
+          "part": "spaceCatalog",
+          "tokens": 60,
+          "budget": 1000,
+          "omitted": []
+        },
+        {
+          "part": "projectBase",
+          "tokens": 90,
+          "budget": 600,
+          "omitted": []
+        },
+        {
+          "part": "projectCatalog",
+          "tokens": 40,
+          "budget": 1500,
+          "omitted": []
+        }
+      ],
+      "presetSections": [
+        {
+          "scope": "user",
+          "key": "identity",
+          "title": "Identity"
+        },
+        {
+          "scope": "user",
+          "key": "communication",
+          "title": "Communication"
+        },
+        {
+          "scope": "user",
+          "key": "expertise",
+          "title": "Expertise"
+        },
+        {
+          "scope": "space",
+          "key": "base",
+          "title": "Base"
+        },
+        {
+          "scope": "space",
+          "key": "conventions",
+          "title": "Conventions"
+        },
+        {
+          "scope": "space",
+          "key": "environment",
+          "title": "Environment"
+        },
+        {
+          "scope": "space",
+          "key": "references",
+          "title": "References"
+        },
+        {
+          "scope": "project",
+          "key": "base",
+          "title": "Base"
+        },
+        {
+          "scope": "project",
+          "key": "architecture",
+          "title": "Architecture"
+        },
+        {
+          "scope": "project",
+          "key": "constraints",
+          "title": "Constraints"
+        },
+        {
+          "scope": "project",
+          "key": "pitfalls",
+          "title": "Pitfalls"
+        },
+        {
+          "scope": "project",
+          "key": "in-progress",
+          "title": "In progress"
+        }
+      ]
+    },
+    "service_read_markdown_memory_file": {
+      "path": "memory/user.md",
+      "text": "# Identity\n\n## Role\n<!-- id: u2 -->\nMaintains the Vulcan Code workspace.\n"
+    },
     "service_unattended_system_default": {
       "denyPolicy": "Never push to a remote.\nNever delete or reset a database.",
       "maxChars": 4000

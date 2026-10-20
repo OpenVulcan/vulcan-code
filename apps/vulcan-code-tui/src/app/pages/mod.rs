@@ -12,6 +12,7 @@
 mod catalog;
 mod inference;
 mod knowledge;
+mod markdown_memory;
 mod memory;
 mod models;
 mod navigation;
@@ -36,6 +37,7 @@ use crate::tr;
 use serde_json::{Value, json};
 
 pub use knowledge::knowledge_view;
+pub use markdown_memory::page_for_mode as memory_page_for_mode;
 pub use navigation::navigation;
 pub use plugin_settings::{PERIOD_SEPARATOR, reads as plugin_reads, tab_reads as plugin_tab_reads};
 
@@ -126,12 +128,17 @@ impl Area {
                     ],
                 ),
                 (
+                    Some(tr!("memory.markdown.mode.markdown")),
+                    vec![MarkdownUser, MarkdownSpace, MarkdownProject],
+                ),
+                (
                     Some(tr!("tui.memory.groupConfig")),
                     vec![
                         MemoryRules,
                         MemoryInference,
                         MemoryResources,
                         MemoryAdvanced,
+                        MemoryMode,
                     ],
                 ),
             ],
@@ -225,6 +232,18 @@ pub enum PageId {
     MemoryInference,
     MemoryResources,
     MemoryAdvanced,
+    /// The memory mode and the Markdown injection budget; reachable in every mode.
+    /// 记忆模式与 Markdown 注入预算；任何模式下都可进入。
+    MemoryMode,
+    /// The Markdown user scope, offered in Markdown mode.
+    /// Markdown 用户层，在 Markdown 模式下提供。
+    MarkdownUser,
+    /// The Markdown space scope, offered in Markdown mode.
+    /// Markdown 空间层，在 Markdown 模式下提供。
+    MarkdownSpace,
+    /// The Markdown memory of the project chosen on the page, offered in Markdown mode.
+    /// 页面所选项目的 Markdown 记忆，在 Markdown 模式下提供。
+    MarkdownProject,
     KnowledgeBases,
     KnowledgeLibrary,
     KnowledgeSearch,
@@ -300,6 +319,10 @@ impl PageId {
             PageId::MemoryInference => tr!("settings.inference.title"),
             PageId::MemoryResources => tr!("memory.resources.title"),
             PageId::MemoryAdvanced => tr!("memory.advanced.title"),
+            PageId::MemoryMode => tr!("memory.markdown.nav.mode"),
+            PageId::MarkdownUser => tr!("memory.markdown.nav.user"),
+            PageId::MarkdownSpace => tr!("memory.markdown.nav.space"),
+            PageId::MarkdownProject => tr!("memory.markdown.nav.project"),
             PageId::KnowledgeBases => tr!("area.knowledge"),
             PageId::KnowledgeLibrary => tr!("tui.knowledge.overview"),
             PageId::KnowledgeSearch => tr!("knowledge.content.search"),
@@ -376,6 +399,11 @@ impl PageId {
         // Workbench is refreshed separately by its snapshot and event stream.
         // 工作台由其快照与事件流单独刷新。
         let mut calls = Vec::new();
+        // Every memory page reads the mode, since the mode decides which pages exist.
+        // 每个记忆页面都读取模式，因为模式决定存在哪些页面。
+        if self.area() == Area::Memory {
+            calls.extend(markdown_memory::loaders(app, self));
+        }
         match self {
             Self::Context => {
                 calls.push(settings::load_public_ai_settings());
@@ -1079,6 +1107,10 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::MemoryInference => memory::inference(app),
         PageId::MemoryResources => memory::resources(app),
         PageId::MemoryAdvanced => memory::advanced(app),
+        PageId::MemoryMode => markdown_memory::mode(app),
+        PageId::MarkdownUser | PageId::MarkdownSpace | PageId::MarkdownProject => {
+            markdown_memory::scope(app, markdown_memory::page_scope(page).unwrap_or_default())
+        }
         PageId::KnowledgeBases => knowledge::libraries(app),
         PageId::KnowledgeLibrary => knowledge::library(app),
         PageId::KnowledgeSearch => knowledge::search(app),

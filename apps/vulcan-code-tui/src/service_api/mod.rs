@@ -18,6 +18,7 @@ pub mod knowledge_base;
 #[cfg(test)]
 mod knowledge_contract_tests;
 pub mod licenses;
+pub mod markdown_memory;
 pub mod mcp_settings;
 pub mod memory_actions;
 pub mod permission_judge;
@@ -174,6 +175,15 @@ pub enum Slot {
     /// `runVmmMemoryAction(native_recycle_bin)`
     /// 原生记忆回收批次目录。
     VmmRecycleBin,
+    /// `loadMemorySettings`: the memory mode and the Markdown injection budget.
+    /// 记忆模式与 Markdown 注入预算。
+    MemorySettings,
+    /// `loadMarkdownMemory` of the open Markdown memory page; its loader carries the project.
+    /// 当前 Markdown 记忆页的 `loadMarkdownMemory`；其加载器携带项目。
+    MarkdownMemory,
+    /// `readMarkdownMemoryFile` opened for whole-file editing; its loader carries the scope.
+    /// 为整文件编辑打开的 `readMarkdownMemoryFile`；其加载器携带层。
+    MarkdownMemoryFile,
     /// `loadLicenseCatalog`
     /// 许可证目录。
     Licenses,

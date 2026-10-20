@@ -197,6 +197,13 @@ pub fn navigation(app: &App) -> Vec<(Option<String>, Vec<NavigationEntry>)> {
                         {
                             return Vec::new();
                         }
+                        // Memory pages the current memory mode does not offer are left out.
+                        // 当前记忆模式不提供的记忆页面不予列出。
+                        if page.area() == Area::Memory
+                            && super::memory_page_for_mode(page, app.memory_mode.as_deref()) != page
+                        {
+                            return Vec::new();
+                        }
                         vec![NavigationEntry {
                             label: page.label(),
                             badge: page.badge(app),
@@ -204,8 +211,11 @@ pub fn navigation(app: &App) -> Vec<(Option<String>, Vec<NavigationEntry>)> {
                             selected: app.current_page() == Some(page),
                         }]
                     })
-                    .collect(),
+                    .collect::<Vec<_>>(),
             )
         })
+        // A group whose pages the memory mode leaves out disappears with its heading.
+        // 页面全部被记忆模式排除的分组连同标题一起隐藏。
+        .filter(|(_, entries)| !entries.is_empty())
         .collect()
 }

@@ -21,6 +21,8 @@ pub mod input;
 pub mod insight;
 pub mod knowledge_actions;
 pub mod knowledge_state;
+#[cfg(test)]
+mod markdown_memory_tests;
 pub mod menus;
 #[cfg(test)]
 mod model_list_tests;
@@ -610,6 +612,12 @@ pub struct App {
     /// Project whose permission strategy is shown.
     /// 显示其权限策略的项目。
     pub judge_policy_project: Option<String>,
+    /// Saved memory mode from the last settings read; it decides which memory pages exist.
+    /// 最近一次设置读取得到的已保存记忆模式；它决定存在哪些记忆页面。
+    pub memory_mode: Option<String>,
+    /// Host project whose Markdown memory the project page shows.
+    /// 项目页显示其 Markdown 记忆的宿主项目。
+    pub markdown_memory_project: Option<String>,
     /// Local record filter for the memory page.
     /// 记忆页面的本地记录筛选。
     pub memory_query: String,
@@ -754,6 +762,8 @@ impl App {
             profile_target: "user".into(),
 
             judge_policy_project: None,
+            memory_mode: None,
+            markdown_memory_project: None,
             memory_query: String::new(),
             knowledge: knowledge_state::KnowledgeUiState::default(),
             library: None,
@@ -941,6 +951,25 @@ impl App {
                     self.slots.clear(Slot::ProjectUnattendedDefault);
                     self.slots.clear(Slot::ProjectReviewRules);
                 }
+                if !self
+                    .projects
+                    .iter()
+                    .any(|project| Some(&project.id) == self.markdown_memory_project.as_ref())
+                {
+                    let next = self.projects.first().map(|project| project.id.clone());
+                    changed |= next != self.markdown_memory_project
+                        && self.current_page() == Some(PageId::MarkdownProject);
+                    self.markdown_memory_project = next;
+                }
+            }
+            // A mode change moves the memory area onto the pages of the new mode.
+            // 模式变化会把记忆区域切换到新模式的页面。
+            Slot::MemorySettings => {
+                let mode = self.slots.at(slot, "/mode").as_str().map(str::to_string);
+                if mode.is_some() && mode != self.memory_mode {
+                    self.memory_mode = mode;
+                    changed = self.area == Area::Memory;
+                }
             }
             _ => {}
         }
@@ -963,7 +992,16 @@ impl App {
         // Clamp only view state, never entity identities.
         // 只限制视图状态，不处理实体身份。
         let index = self.nav.get(&self.area).copied().unwrap_or(0);
-        pages.get(index.min(pages.len().saturating_sub(1))).copied()
+        let page = pages
+            .get(index.min(pages.len().saturating_sub(1)))
+            .copied()?;
+        // The memory mode decides which memory pages exist.
+        // 记忆模式决定存在哪些记忆页面。
+        Some(if self.area == Area::Memory {
+            pages::memory_page_for_mode(page, self.memory_mode.as_deref())
+        } else {
+            page
+        })
     }
 
     pub fn page_state(&self, page: PageId) -> PageState {

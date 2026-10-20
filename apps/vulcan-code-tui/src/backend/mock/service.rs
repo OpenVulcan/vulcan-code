@@ -554,6 +554,13 @@ impl FakeService {
                     policy["projectId"] = required(&call.params, "/projectId")?.clone();
                     return Ok(policy);
                 }
+                // The demo shows one memory tree and reports it for the requested host project.
+                // 演示只有一棵记忆树，并按所请求的宿主项目报告。
+                "service_load_markdown_memory" => {
+                    let mut overview = self.loads[call.method].clone();
+                    overview["hostProjectId"] = call.param("/request/projectId").clone();
+                    return Ok(overview);
+                }
                 "service_mcp_oauth_status" => {
                     let mut status = self.loads["service_mcp_oauth_status"].clone();
                     status["serverId"] = required(&call.params, "/serverId")?.clone();
@@ -896,6 +903,16 @@ impl FakeService {
                 }
                 snapshot["cuda"]["lockedDirectory"] =
                     required(request, "/cudaLibraryDirectory")?.clone();
+            }
+            "service_save_memory_settings" => {
+                // The demo keeps one settings document, also reported inside the overview.
+                // 演示保留一份设置文档，并在总览中同样报告。
+                let settings = &mut self.loads["service_get_memory_settings"];
+                settings["mode"] = required(params, "/request/mode")?.clone();
+                settings["budget"] = required(params, "/request/budget")?.clone();
+                let settings = settings.clone();
+                self.loads["service_load_markdown_memory"]["settings"] = settings.clone();
+                return Ok(settings);
             }
             "service_save_unattended_system_default" => {
                 // The demo keeps one system text; a project that follows it shows the new text.

@@ -53,6 +53,9 @@ pub enum LocalSetting {
     /// 选中的原生 VMM 项目；变更后重新加载可见记录。
     VmmProject,
 
+    /// Host project whose Markdown memory the project page shows.
+    /// 项目页显示其 Markdown 记忆的宿主项目。
+    MarkdownMemoryProject,
     /// Project shown on the permission strategy page.
     /// 权限策略页显示的项目。
     JudgePolicyProject,
@@ -837,6 +840,10 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                         .clear(crate::service_api::Slot::ProjectUnattendedDefault);
                     app.slots
                         .clear(crate::service_api::Slot::ProjectReviewRules);
+                }
+                LocalSetting::MarkdownMemoryProject => {
+                    app.markdown_memory_project = Some(value.as_str().to_string());
+                    app.slots.clear(crate::service_api::Slot::MarkdownMemory);
                 }
                 LocalSetting::ProfileTarget => {
                     app.profile_target = value.as_str().to_string();
