@@ -5099,6 +5099,7 @@
   "settings.mcp.enabledStateUnavailable": "Включён · Состояние недоступно",
   "settings.mcp.tools": "Инструментов: {length}",
   "settings.mcp.noMatches": "Нет совпадений",
+  "settings.mcp.noServers": "MCP-серверов пока нет.",
   "settings.mcp.addAServerTo": "Добавьте сервер, чтобы проверить его подключение и инструменты.",
   "settings.mcp.refreshing": "Обновление",
   "settings.mcp.refreshStatus": "Обновить статус",

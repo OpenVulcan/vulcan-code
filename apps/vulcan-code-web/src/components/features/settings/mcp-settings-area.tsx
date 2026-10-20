@@ -119,7 +119,7 @@ export function McpSettingsArea(props: {
         {row.runtime?.state.lastError && <span className="mcp-error">{row.runtime.state.lastError}</span>}
       </button>)}</div>
       {!filtered.length && !loaded && <StreamPlaceholder label={t("settings.mcp.loading")} shape="rows" count={4} />}
-      {!filtered.length && loaded && rows.length > 0 && <p className="mcp-rail-note">{t("settings.mcp.noMatches")}</p>}
+      {!filtered.length && loaded && <p className="mcp-rail-note">{t(rows.length > 0 ? "settings.mcp.noMatches" : "settings.mcp.noServers")}</p>}
     </aside>
     <section className="mcp-detail">
       {selected ? <>

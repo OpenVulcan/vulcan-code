@@ -5099,6 +5099,7 @@
   "settings.mcp.enabledStateUnavailable": "Enabled · State unavailable",
   "settings.mcp.tools": "{length} tools",
   "settings.mcp.noMatches": "No matches",
+  "settings.mcp.noServers": "No MCP servers yet.",
   "settings.mcp.addAServerTo": "Add a server to inspect its connection and tools.",
   "settings.mcp.refreshing": "Refreshing",
   "settings.mcp.refreshStatus": "Refresh status",

@@ -5099,6 +5099,7 @@
   "settings.mcp.enabledStateUnavailable": "已啟用 · 未取得連線狀態",
   "settings.mcp.tools": "{length} 個工具",
   "settings.mcp.noMatches": "沒有符合的伺服器",
+  "settings.mcp.noServers": "尚無 MCP 伺服器。",
   "settings.mcp.addAServerTo": "新增伺服器後，可在這裡查看連線與工具。",
   "settings.mcp.refreshing": "正在重新整理",
   "settings.mcp.refreshStatus": "重新整理狀態",
