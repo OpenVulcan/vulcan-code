@@ -86,6 +86,11 @@
   --vk-stagger: 32ms;
 }
 
+/* Reduced motion collapses the duration tokens as well, so script timers that wait for a transition (motionTokenMs)
+ * stop waiting along with the 1ms transitions in base.css. */
+@media (prefers-reduced-motion: reduce) { :root { --vk-t-fast: 1ms; --vk-t-med: 1ms; } }
+:root[data-vk-motion="reduce"] { --vk-t-fast: 1ms; --vk-t-med: 1ms; }
+
 :root[data-vk-text="xs"] { font-size: 12px; }
 :root[data-vk-text="s"] { font-size: 13px; }
 :root[data-vk-text="m"] { font-size: 15px; }
