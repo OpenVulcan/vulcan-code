@@ -104,8 +104,12 @@ pub(crate) fn resolve_webui_workspace_path_from_text(
     } else {
         requested_path
     };
-    fs::canonicalize(&workspace_path)
-        .map_err(|error| format!("failed to resolve workspace path `{workspace_path:?}`: {error}"))
+    fs::canonicalize(&workspace_path).map_err(|error| {
+        format!(
+            "Failed to resolve the workspace path `{}`: {error}",
+            workspace_path.display()
+        )
+    })
 }
 
 /// Builds the Git unified-context argument for one normalized context line count.
