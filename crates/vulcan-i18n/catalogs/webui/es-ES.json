@@ -807,7 +807,7 @@
   "projectMenu.openDirectory": "Abrir en el explorador de archivos",
   "projectMenu.renameProject": "Cambiar el nombre del proyecto",
   "projectMenu.setIcon": "Establecer el icono del proyecto",
-  "projectMenu.archiveConversations": "Archivar conversaciones",
+  "projectMenu.archiveConversations": "Archivar todas las conversaciones",
   "projectMenu.removeProject": "Quitar el proyecto",
   "projectMenu.projectSettings": "Configuración del proyecto",
   "conversationMenu.pin": "Fijar la conversación",

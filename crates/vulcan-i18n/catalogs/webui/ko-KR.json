@@ -807,7 +807,7 @@
   "projectMenu.openDirectory": "파일 탐색기에서 열기",
   "projectMenu.renameProject": "프로젝트 이름 바꾸기",
   "projectMenu.setIcon": "프로젝트 아이콘 설정",
-  "projectMenu.archiveConversations": "대화 보관",
+  "projectMenu.archiveConversations": "모든 대화 보관",
   "projectMenu.removeProject": "프로젝트 제거",
   "projectMenu.projectSettings": "프로젝트 설정",
   "conversationMenu.pin": "대화 고정",

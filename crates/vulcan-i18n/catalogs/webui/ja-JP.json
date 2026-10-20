@@ -807,7 +807,7 @@
   "projectMenu.openDirectory": "ファイルエクスプローラーで開く",
   "projectMenu.renameProject": "プロジェクト名を変更",
   "projectMenu.setIcon": "プロジェクトアイコンを設定",
-  "projectMenu.archiveConversations": "会話をアーカイブ",
+  "projectMenu.archiveConversations": "すべての会話をアーカイブ",
   "projectMenu.removeProject": "プロジェクトを削除",
   "projectMenu.projectSettings": "プロジェクト設定",
   "conversationMenu.pin": "会話をピン留め",

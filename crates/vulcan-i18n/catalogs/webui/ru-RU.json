@@ -807,7 +807,7 @@
   "projectMenu.openDirectory": "Открыть в проводнике",
   "projectMenu.renameProject": "Переименовать проект",
   "projectMenu.setIcon": "Задать значок проекта",
-  "projectMenu.archiveConversations": "Архивировать беседы",
+  "projectMenu.archiveConversations": "Архивировать все беседы",
   "projectMenu.removeProject": "Удалить проект",
   "projectMenu.projectSettings": "Настройки проекта",
   "conversationMenu.pin": "Закрепить беседу",

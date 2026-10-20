@@ -807,7 +807,7 @@
   "projectMenu.openDirectory": "在檔案總管中開啟",
   "projectMenu.renameProject": "重新命名項目",
   "projectMenu.setIcon": "設定項目圖示",
-  "projectMenu.archiveConversations": "封存對話",
+  "projectMenu.archiveConversations": "封存全部對話",
   "projectMenu.removeProject": "移除項目",
   "projectMenu.projectSettings": "項目設定",
   "conversationMenu.pin": "固定對話",
