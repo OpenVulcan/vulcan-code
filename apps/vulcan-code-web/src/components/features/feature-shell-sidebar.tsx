@@ -39,7 +39,6 @@ import {
   SidebarMenuItem,
   useSidebarNavigation,
 } from "@/ui-kit/shell/sidebar"
-import { moveInList } from "@/ui-kit/behavior/roving"
 import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus"
 import { useI18n } from "@/i18n"
 import type {
@@ -106,7 +105,7 @@ function FeatureSidebar(props: {
           onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         />
       </SidebarHeader>
-      <SidebarContent onKeyDown={moveBetweenNavItems}>
+      <SidebarContent>
         {props.activeArea === "settings" ? (
           <SettingsSidebarMenu
             activeSettingsSubArea={props.activeSettingsSubArea}
@@ -125,18 +124,6 @@ function FeatureSidebar(props: {
       </SidebarContent>
     </Sidebar>
   )
-}
-
-// NAV_ITEM_KEYS are the keys that move focus between the page entries of a feature sidebar.
-// NAV_ITEM_KEYS 是在功能侧栏页面入口之间移动焦点的按键。
-const NAV_ITEM_KEYS = new Set(["ArrowDown", "ArrowUp", "Home", "End"])
-
-// moveBetweenNavItems lets Up, Down, Home and End step through every page entry across the sidebar's groups.
-// moveBetweenNavItems 让上下键、Home 与 End 跨越侧栏分组逐个经过所有页面入口。
-function moveBetweenNavItems(event: React.KeyboardEvent<HTMLElement>): void {
-  if (!NAV_ITEM_KEYS.has(event.key) || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-  if (!(event.target instanceof HTMLElement) || !event.target.matches(".vk-nav-item")) return
-  moveInList(event, event.currentTarget, ".vk-nav-item")
 }
 
 // FeatureOverviewMenu renders compact side navigation for non-settings feature pages.

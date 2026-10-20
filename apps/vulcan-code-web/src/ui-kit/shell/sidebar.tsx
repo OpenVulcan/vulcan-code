@@ -6,7 +6,8 @@ import { Button } from "@/ui-kit/primitives/button"
 import { Sheet, SheetContent, SheetTitle } from "@/ui-kit/primitives/sheet"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
-import { cx } from "@/ui-kit/behavior/core"
+import { composeHandlers, cx } from "@/ui-kit/behavior/core"
+import { moveInList } from "@/ui-kit/behavior/roving"
 
 // subscribeSidebarViewport observes window resizing and returns its cleanup callback.
 // subscribeSidebarViewport 监听窗口尺寸变化，返回取消监听的回调。
@@ -237,10 +238,27 @@ function SidebarHeader({ className, ...props }: React.ComponentProps<"div">) {
   return <div className={cx("vk-sidebar-head", className)} data-slot="sidebar-header" {...props} />
 }
 
+// SIDEBAR_ENTRY_SELECTOR names the page entries that Up, Down, Home and End step through in a sidebar body.
+// SIDEBAR_ENTRY_SELECTOR 指定侧栏主体中上下键、Home 与 End 逐项经过的页面入口。
+const SIDEBAR_ENTRY_SELECTOR = ".vk-nav-item:not(:disabled), .vk-dir-row:not(:disabled)"
+
+// SIDEBAR_ENTRY_KEYS are the keys that move focus between sidebar page entries.
+// SIDEBAR_ENTRY_KEYS 是在侧栏页面入口之间移动焦点的按键。
+const SIDEBAR_ENTRY_KEYS = new Set(["ArrowDown", "ArrowUp", "Home", "End"])
+
+// moveBetweenEntries steps focus through every page entry across the sidebar's groups; keys pressed anywhere else,
+// such as on a session tree row with its own movement, are left alone.
+// moveBetweenEntries 跨越侧栏分组逐项移动焦点；在其他位置按下的键（例如有自身移动规则的会话树行）不作处理。
+function moveBetweenEntries(event: React.KeyboardEvent<HTMLDivElement>): void {
+  if (!SIDEBAR_ENTRY_KEYS.has(event.key) || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+  if (!(event.target instanceof HTMLElement) || !event.target.matches(SIDEBAR_ENTRY_SELECTOR)) return
+  moveInList(event, event.currentTarget, SIDEBAR_ENTRY_SELECTOR)
+}
+
 // SidebarContent renders the scrollable sidebar body.
 // SidebarContent 渲染可滚动的侧栏主体。
-function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cx("vk-sidebar-body", className)} data-slot="sidebar-content" {...props} />
+function SidebarContent({ className, onKeyDown, ...props }: React.ComponentProps<"div">) {
+  return <div className={cx("vk-sidebar-body", className)} data-slot="sidebar-content" onKeyDown={composeHandlers(onKeyDown, moveBetweenEntries)} {...props} />
 }
 
 // SidebarFooter renders fixed controls below the scrollable sidebar body.
