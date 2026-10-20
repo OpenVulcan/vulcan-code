@@ -30,10 +30,12 @@ import {
 } from "@/ui-kit/shell/sidebar";
 import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus";
 import { useI18n, type TranslationKey } from "@/i18n";
-import type { ConversationSummary, ProjectGroupSummary, ProjectSummary } from "@/types";
+import type { ConversationSummary, ProjectSummary, ProjectTreeSummary } from "@/types";
 import { ConversationTreeRow, type ConversationRowVariant } from "./project-sidebar-conversation-row";
+import { EMPTY_PROJECT_TREE } from "./project-group-layout";
 import { ProjectTreeSection, type ProjectGroupAction, type ProjectRowPlacement } from "./project-sidebar-groups";
 import { SortableProjectRow } from "./project-sidebar-project-row";
+import type { SortableRowBinding } from "./project-sidebar-sortable";
 import { ProjectIcon } from "./project-icons";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 import { setSidebarFlow, useSidebarFlow, type SidebarFlow } from "./sidebar-flow";
@@ -47,9 +49,9 @@ export type ProjectSessionTreeProps = {
   projects: ProjectSummary[];
   conversations: ConversationSummary[];
   expandedProjectIds?: string[];
-  // User-named project groups shown by the code flow.
-  // 代码流显示的用户命名项目分组。
-  projectGroups?: ProjectGroupSummary[];
+  // Project tree shown by the code flow: groups, the default group position and the pinned section.
+  // 代码流显示的项目树：分组、默认分组位置与置顶分区。
+  projectTree?: ProjectTreeSummary;
   pinnedConversationIds: Set<string>;
   selectedConversationId: string | null;
   // Explicit project that owns project-level floating tools.
@@ -60,12 +62,13 @@ export type ProjectSessionTreeProps = {
   // Opens a new draft preset to a dedicated assistant; the entry is hidden when absent.
   // 打开预设为专职助手的新草稿；缺省时隐藏该入口。
   onCreateDedicatedConversation?: (project: ProjectSummary) => void;
-  onCreateProject: () => void;
+  // Opens the add-project flow; a group id places the chosen folder in that group.
+  // 打开添加项目流程；给出分组标识时，所选文件夹放入该分组。
+  onCreateProject: (groupId?: string) => void;
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
-  onReorderProjects: (projectIds: string[]) => void;
-  // Persists one project-group change; rejects with the service error.
-  // 持久化一次项目分组变更；失败时以服务错误拒绝。
+  // Persists one project-tree change; rejects with the service error.
+  // 持久化一次项目树变更；失败时以服务错误拒绝。
   onProjectGroupAction: (action: ProjectGroupAction) => Promise<void>;
   // Selects one project without selecting a conversation.
   // 选择一个项目且不选择会话。
@@ -156,7 +159,7 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
         {flow === "session" && currentProject ? (
           <ProjectSwitch
             currentProject={currentProject}
-            onCreateProject={props.onCreateProject}
+            onCreateProject={() => props.onCreateProject()}
             onSelectProject={props.onSelectProject}
             projects={props.projects}
           />
@@ -172,6 +175,7 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
                 <TooltipTrigger asChild>
                   <IconButton
                     aria-label={t("sidebar.newDedicated")}
+                  data-action="new-dedicated"
                     onClick={() => navigate(props.onCreateDedicatedConversation!)(currentProject)}
                     variant="outline"
                   >
@@ -181,6 +185,19 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
                 <TooltipContent side="bottom">{t("sidebar.newDedicated")}</TooltipContent>
               </Tooltip>
             ) : null}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <IconButton
+                  aria-label={t("sidebar.newProject")}
+                  data-action="new-project"
+                  onClick={() => navigate(props.onCreateProject)()}
+                  variant="outline"
+                >
+                  <FolderPlus aria-hidden="true" />
+                </IconButton>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{t("sidebar.newProject")}</TooltipContent>
+            </Tooltip>
           </div>
         ) : null}
         {props.projects.length > 0 ? (
@@ -205,7 +222,7 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
       </div>
       <div className="vk-nav-list">
         {props.projects.length === 0 ? (
-          <NoProjectsEntry onCreateProject={navigate(props.onCreateProject)} />
+          <NoProjectsEntry onCreateProject={() => navigate(props.onCreateProject)()} />
         ) : flow === "session" && currentProject ? (
           <SessionFlowList {...props} currentProject={currentProject} query={normalizedQuery} />
         ) : (
@@ -373,7 +390,12 @@ function SessionFlowList(props: ProjectSessionTreeProps & {
       .filter((conversation) => conversation.projectId === props.currentProject.id && matchesQuery(conversation.title, props.query)),
     [props.conversations, props.currentProject.id, props.query],
   );
-  const pinned = projectSessions.filter((conversation) => props.pinnedConversationIds.has(conversation.id));
+  // pinOrder follows the service's pinned order, which the pin set preserves.
+  // pinOrder 遵循服务的置顶顺序，置顶集合保留了该顺序。
+  const pinOrder = [...props.pinnedConversationIds];
+  const pinned = projectSessions
+    .filter((conversation) => props.pinnedConversationIds.has(conversation.id))
+    .sort((left, right) => pinOrder.indexOf(left.id) - pinOrder.indexOf(right.id));
   const buckets = new Map<SessionWhen, ConversationSummary[]>();
   for (const conversation of projectSessions) {
     if (props.pinnedConversationIds.has(conversation.id)) continue;
@@ -474,11 +496,6 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
     && (!conversation.projectId || !projectIds.has(conversation.projectId))
     && matchesQuery(conversation.title, props.query)
   ));
-  // pinnedConversations renders conversation pins in an independent section above the projects.
-  // pinnedConversations 将置顶会话渲染到项目上方的独立分区。
-  const pinnedConversations = listedConversations.filter((conversation) => (
-    props.pinnedConversationIds.has(conversation.id) && matchesQuery(conversation.title, props.query)
-  ));
   React.useEffect(() => {
     // next is the externally authoritative expansion projection for this render.
     // next 是本次渲染对应的外部权威展开投影。
@@ -525,9 +542,10 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
   }, []);
   // renderConversationRow renders a conversation row outside or inside one project folder.
   // renderConversationRow 渲染项目内外复用的会话行。
-  const renderConversationRow = (conversation: ConversationSummary, compactPinned = false) => (
+  const renderConversationRow = (conversation: ConversationSummary, compactPinned = false, sortable?: SortableRowBinding) => (
     <ConversationTreeRow
       compactPinned={compactPinned}
+      sortable={sortable}
       conversation={conversation}
       isPinned={props.pinnedConversationIds.has(conversation.id)}
       isSelected={props.selectedConversationId === conversation.id}
@@ -547,7 +565,7 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
     || (conversationsByProject[project.id] ?? []).some((conversation) => matchesQuery(conversation.title, props.query));
   // renderProjectRow renders one project row; placement offers its move-to-group entries.
   // renderProjectRow 渲染一个项目行；placement 提供其“移动到分组”入口。
-  const renderProjectRow = (project: ProjectSummary, placement: ProjectRowPlacement | null) => {
+  const renderProjectRow = (project: ProjectSummary, placement: ProjectRowPlacement | null, sortableId?: string) => {
     const allConversations = conversationsByProject[project.id] ?? [];
     const nameMatches = matchesQuery(project.name, props.query);
     const projectConversations = allConversations
@@ -573,32 +591,27 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
         placement={placement}
         project={project}
         selectedConversationId={props.selectedConversationId}
+        sortableId={sortableId}
       />
     );
   };
 
   return (
     <div className="vk-project-tree" data-sorting={sorting ? "" : undefined}>
-      {pinnedConversations.length > 0 ? (
-        <section>
-          <TreeHead icon={<Pin aria-hidden="true" />} label={t("sidebar.pinned")} />
-          <SidebarMenu>
-            {pinnedConversations.map((conversation) => renderConversationRow(conversation, true))}
-          </SidebarMenu>
-        </section>
-      ) : null}
       <ProjectTreeSection
-        emptyNotice={pinnedConversations.length === 0 && unlinkedConversations.length === 0
+        conversations={listedConversations}
+        emptyNotice={unlinkedConversations.length === 0
           ? <SidebarMenuItem><div className="vk-tree-blank">{t("sidebar.noMatches")}</div></SidebarMenuItem>
           : null}
         filtering={filtering}
+        isConversationVisible={(conversation) => matchesQuery(conversation.title, props.query)}
         isProjectVisible={isProjectVisible}
-        onCreateProject={props.onCreateProject}
+        onCreateProject={(groupId) => navigate(props.onCreateProject)(groupId)}
         onGroupAction={props.onProjectGroupAction}
-        onReorderPinned={props.onReorderProjects}
         onSortingChange={setSorting}
-        projectGroups={props.projectGroups ?? []}
+        projectTree={props.projectTree ?? EMPTY_PROJECT_TREE}
         projects={props.projects}
+        renderPinnedConversation={(conversation, sortable) => renderConversationRow(conversation, true, sortable)}
         renderProjectRow={renderProjectRow}
         sessionCount={(projectId) => conversationsByProject[projectId]?.length ?? 0}
       />

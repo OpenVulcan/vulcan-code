@@ -45,8 +45,9 @@ pub use persistence::{
     persist_project_pinned_and_order_update, rename_project, restore_archived_project_row_v1,
 };
 pub use project_groups::{
-    PROJECT_GROUP_NAME_MAX_CHARS, PROJECT_GROUPS_FORMAT_VERSION, ProjectGroup, load_project_groups,
-    normalize_project_group_name, persist_project_groups, validate_project_groups,
+    DEFAULT_PROJECT_GROUP_ID, PROJECT_GROUP_NAME_MAX_CHARS, PROJECT_GROUPS_FORMAT_VERSION, ProjectGroup,
+    ProjectGroupSlot, ProjectTree, ProjectTreePin, ProjectTreePinKind, load_project_tree,
+    normalize_project_group_name, persist_project_tree, validate_project_tree,
 };
 pub use provider_api_trace::{
     PROVIDER_API_TRACE_LIMIT, ProviderApiTraceAttemptReservation, ProviderApiTraceDiagnostic,

@@ -120,7 +120,7 @@ export interface WorkspaceShellProps {
   onCreateDedicatedConversation: (project: ProjectSummary) => void;
   // Opens the create-project flow.
   // 打开创建项目流程。
-  onCreateProject: () => void;
+  onCreateProject: (groupId?: string) => void;
   // Opens the memory feature area from conversation prompts.
   // 从会话提示中打开记忆功能区。
   onOpenMemory: () => void;
@@ -150,7 +150,6 @@ export interface WorkspaceShellProps {
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   // Persists project order changes.
   // 持久化项目排序变化。
-  onReorderProjects: (projectIds: string[]) => void;
   // Persists one project-group change; rejects with the service error.
   // 持久化一次项目分组变更；失败时以服务错误拒绝。
   onProjectGroupAction: (action: ProjectGroupAction) => Promise<void>;

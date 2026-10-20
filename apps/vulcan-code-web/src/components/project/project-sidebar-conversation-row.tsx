@@ -15,6 +15,7 @@ import type { ConversationSummary, ProjectSummary } from "@/types";
 
 import { ConversationContextMenu } from "./project-sidebar-menus";
 import type { ConversationMenuAction } from "./project-sidebar-types";
+import type { SortableRowBinding } from "./project-sidebar-sortable";
 import { formatConversationRelativeTime } from "./project-sidebar-time";
 
 // ConversationRowVariant selects the compact tree line or the two-line session-flow entry.
@@ -56,6 +57,9 @@ export function ConversationTreeRow(props: {
   // Row layout; the tree variant is the default.
   // 行布局；默认为树行。
   variant?: ConversationRowVariant;
+  // Joins a sortable list, as pinned rows do; the grip follows the row actions.
+  // 加入可排序列表（置顶行即如此）；手柄位于行操作之后。
+  sortable?: SortableRowBinding;
 }) {
   const { t } = useI18n();
   // archiveConfirming tracks the inline archive confirmation state.
@@ -75,7 +79,10 @@ export function ConversationTreeRow(props: {
     <SidebarMenuItem
       className="vk-tree-item"
       data-confirming={archiveConfirming ? "" : undefined}
+      data-dragging={props.sortable?.dragging ? "" : undefined}
       onMouseLeave={resetArchiveConfirming}
+      ref={props.sortable?.setNodeRef}
+      style={props.sortable?.style}
     >
       <ConversationContextMenu
         conversation={props.conversation}
@@ -139,6 +146,7 @@ export function ConversationTreeRow(props: {
                 <Archive />
               </button>
             )}
+            {props.sortable?.grip}
           </>
         )}
       </span>

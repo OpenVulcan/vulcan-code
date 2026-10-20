@@ -126,6 +126,9 @@
 .vk-tree-group[data-dragging] { z-index: 20; background: var(--vk-raised); box-shadow: var(--vk-shadow-2); opacity: 1; }
 .vk-tree-group[data-drop] { background: var(--vk-signal-soft); box-shadow: inset 2px 0 0 var(--vk-signal); }
 .vk-tree-group[data-drop] > .vk-tree-item > .vk-group-row { color: var(--vk-signal); }
+/* A pinned session row lifts like a project row while its pinned order is dragged. */
+/* 拖动置顶顺序时，置顶会话行像项目行一样浮起。 */
+.vk-tree-pins .vk-tree-item[data-dragging] { position: relative; z-index: 20; background: var(--vk-raised); box-shadow: var(--vk-shadow-2); }
 
 /* ---------- Project rows ---------- */
 .vk-tree-project { display: grid; }

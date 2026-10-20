@@ -34,13 +34,13 @@ pub(super) struct RetainedProjectLayoutEntry {
 /// Complete ordered identities for both active project sections.
 /// 两个活动项目分区的完整有序身份。
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ProjectLayoutIds {
+pub(super) struct ProjectLayoutIds {
     /// Complete ordered pinned-section project identities.
     /// 完整有序的置顶分区项目身份。
-    pinned: Vec<String>,
+    pub(super) pinned: Vec<String>,
     /// Complete ordered regular-section project identities.
     /// 完整有序的普通分区项目身份。
-    regular: Vec<String>,
+    pub(super) regular: Vec<String>,
 }
 
 /// Builds the complete resulting layout for one exact pin transition.
@@ -57,7 +57,7 @@ struct ProjectLayoutIds {
 /// 返回值
 /// Returns the resulting target pinned state and complete two-section layout.
 /// 返回目标的结果置顶状态与完整双分区布局。
-fn project_layout_after_pin_toggle(
+pub(super) fn project_layout_after_pin_toggle(
     projects: &[RetainedProjectLayoutEntry],
     project_id: &str,
 ) -> Result<(bool, ProjectLayoutIds), String> {
@@ -279,13 +279,23 @@ pub(crate) async fn service_toggle_project_pinned(
     // next_pinned 与 layout 描述单次转换以及两个完整结果分区。
     let (next_pinned, layout) = project_layout_after_pin_toggle(&retained_layout, &project_id)?;
     vulcan_workspace_store::workspace_store::persist_project_pinned_and_order_update(
-        controller_runtime,
+        controller_runtime.clone(),
         &project_id,
         next_pinned,
         &layout.pinned,
         &layout.regular,
     )
     .await?;
+    // The project tree orders the pinned section, so a new pin joins its end and an old one leaves it.
+    // 项目树负责排列置顶分区，因此新置顶加入其末尾，取消的置顶离开该分区。
+    let mut tree = vulcan_workspace_store::workspace_store::load_project_tree(&controller_runtime)?;
+    tree.set_pinned(
+        vulcan_workspace_store::workspace_store::ProjectTreePinKind::Project,
+        &project_id,
+        next_pinned,
+    );
+    vulcan_workspace_store::workspace_store::persist_project_tree(controller_runtime, &tree)
+        .await?;
     // The refreshed snapshot applies both the new section and every recomputed sort order.
     // 刷新后的快照会同时应用新分区以及每个重新计算的顺序。
     let _refreshed_snapshot = refresh_workbench_snapshot(state).await?;

@@ -95,14 +95,11 @@ export function ProjectContextMenu(props: {
   );
 }
 
-// MoveToGroupSubmenu lists the groups a project can move to, the ungrouped bucket, and a new group.
-// MoveToGroupSubmenu 列出项目可移入的分组、未分组区以及新建分组。
+// MoveToGroupSubmenu lists every group a project can move to, the default group included, and a new group.
+// MoveToGroupSubmenu 列出项目可移入的每个分组（含默认分组）以及新建分组。
 function MoveToGroupSubmenu(props: { placement: ProjectRowPlacement }) {
   const { t } = useI18n();
   const { placement } = props;
-  // UNGROUPED_VALUE stands for "outside every group" in the radio group; group ids are UUIDs.
-  // UNGROUPED_VALUE 在单选组中代表“不在任何分组中”；分组标识为 UUID。
-  const UNGROUPED_VALUE = "";
   return (
     <ContextMenuSub>
       <ContextMenuSubTrigger>
@@ -110,20 +107,12 @@ function MoveToGroupSubmenu(props: { placement: ProjectRowPlacement }) {
         <span>{t("projectMenu.moveToGroup")}</span>
       </ContextMenuSubTrigger>
       <ContextMenuSubContent>
-        {placement.groups.length > 0 ? (
-          <>
-            <ContextMenuRadioGroup
-              onValueChange={(value) => placement.onMove(value === UNGROUPED_VALUE ? null : value)}
-              value={placement.currentGroupId ?? UNGROUPED_VALUE}
-            >
-              {placement.groups.map((group) => (
-                <ContextMenuRadioItem key={group.id} value={group.id}>{group.name}</ContextMenuRadioItem>
-              ))}
-              <ContextMenuRadioItem value={UNGROUPED_VALUE}>{t("sidebar.group.ungrouped")}</ContextMenuRadioItem>
-            </ContextMenuRadioGroup>
-            <ContextMenuSeparator />
-          </>
-        ) : null}
+        <ContextMenuRadioGroup onValueChange={placement.onMove} value={placement.currentGroupId}>
+          {placement.groups.map((group) => (
+            <ContextMenuRadioItem key={group.id} value={group.id}>{group.name}</ContextMenuRadioItem>
+          ))}
+        </ContextMenuRadioGroup>
+        <ContextMenuSeparator />
         <ContextMenuItem onSelect={placement.onMoveToNewGroup}>
           <FolderPlus size={15} />
           <span>{t("projectMenu.moveToNewGroup")}</span>

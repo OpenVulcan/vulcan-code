@@ -88,7 +88,7 @@
   "apps/vulcan-code-web/src/components/shell/startup-controls.test.tsx": 1,
   "apps/vulcan-code-web/src/components/sidebar/sidebar-profile-menus.test.tsx": 3,
   "apps/vulcan-code-web/src/components/workspace/media-upload-progress-panel.test.tsx": 1,
-  "apps/vulcan-code-web/src/components/workspace/workbench-layout/project-menu-lifecycle.test.tsx": 2,
+  "apps/vulcan-code-web/src/components/workspace/workbench-layout/project-menu-lifecycle.test.tsx": 1,
   "apps/vulcan-code-web/src/components/workspace/workspace-control-preaudit.test.tsx": 2,
   "apps/vulcan-code-web/src/components/workspace/workspace-memory-delete-feedback.test.tsx": 1,
   "apps/vulcan-code-web/src/components/workspace/workspace-skills-settings.test.tsx": 3,

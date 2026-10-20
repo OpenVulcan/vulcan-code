@@ -21,6 +21,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_rename_project_group",
     "service_delete_project_group",
     "service_set_project_groups_layout",
+    "service_set_project_tree_pinned",
+    "service_set_project_tree_pins_order",
+    "service_add_project_to_group",
     "service_archive_project_conversations",
     "service_remove_project",
     "service_rename_conversation",
@@ -123,6 +126,7 @@ pub(super) async fn dispatch(
                 state,
                 rpc_required_param(params, "name")?,
                 rpc_required_param(params, "projectIds")?,
+                rpc_optional_param(params, "afterGroupId")?,
             )
             .await,
         ),
@@ -136,15 +140,32 @@ pub(super) async fn dispatch(
             .await,
         ),
         "service_delete_project_group" => rpc_json_result(
-            service_delete_project_group(app, state, rpc_required_param(params, "groupId")?)
-                .await,
+            service_delete_project_group(app, state, rpc_required_param(params, "groupId")?).await,
         ),
         "service_set_project_groups_layout" => rpc_json_result(
-            service_set_project_groups_layout(
+            service_set_project_groups_layout(app, state, rpc_required_param(params, "groups")?)
+                .await,
+        ),
+        "service_set_project_tree_pinned" => rpc_json_result(
+            service_set_project_tree_pinned(
                 app,
                 state,
-                rpc_required_param(params, "groups")?,
-                rpc_required_param(params, "ungroupedProjectIds")?,
+                rpc_required_param(params, "kind")?,
+                rpc_required_param(params, "id")?,
+                rpc_required_param(params, "pinned")?,
+            )
+            .await,
+        ),
+        "service_set_project_tree_pins_order" => rpc_json_result(
+            service_set_project_tree_pins_order(app, state, rpc_required_param(params, "pins")?)
+                .await,
+        ),
+        "service_add_project_to_group" => rpc_json_result(
+            service_add_project_to_group(
+                app,
+                state,
+                PathBuf::from(rpc_required_param::<String>(params, "path")?),
+                rpc_required_param(params, "groupId")?,
             )
             .await,
         ),

@@ -51,8 +51,7 @@ async function mount(onCreateDedicatedConversation = vi.fn()) {
         onCreateProject={noop}
         onExpandedProjectIdsChange={noop}
         onProjectMenuAction={noop}
-        onReorderProjects={noop}
-        onProjectGroupAction={async () => undefined}
+                onProjectGroupAction={async () => undefined}
         onSelectConversation={noop}
         onSelectProject={noop}
         pinnedConversationIds={new Set()}
@@ -104,7 +103,7 @@ it("opens a dedicated assistant draft in the current project", async () => {
   setSidebarFlow("session");
   const onCreateDedicatedConversation = vi.fn();
   await mount(onCreateDedicatedConversation);
-  const actions = container.querySelectorAll<HTMLButtonElement>(".vk-sidebar-actions button");
-  await act(async () => actions[actions.length - 1].click());
+  const dedicated = container.querySelector<HTMLButtonElement>('.vk-sidebar-actions [data-action="new-dedicated"]')!;
+  await act(async () => dedicated.click());
   expect(onCreateDedicatedConversation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "a" }));
 });

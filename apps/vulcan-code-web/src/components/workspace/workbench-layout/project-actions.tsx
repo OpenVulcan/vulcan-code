@@ -11,14 +11,16 @@ import type { DraftConversationSelection } from "@/components/workspace/workspac
 import type { AgentSkillsCatalogUpdate, LuaSkillsCatalogUpdate, ProjectSummary, SubagentCatalogUpdate, VmmConfigDraftSummary, WorkbenchSnapshot } from "@/types";
 import {
   addProjectFromPath,
+  addProjectToGroup,
   createProjectGroup,
   deleteProjectGroup,
   openProjectDirectory,
   renameProjectGroup,
-  reorderProjects,
   resetProjectIcon,
   setExpandedTaskProjects,
   setProjectGroupsLayout,
+  setProjectTreePinned,
+  setProjectTreePinsOrder,
   setProjectIcon,
   toggleProjectPinned,
 } from "@/service/project-actions-service";
@@ -434,16 +436,26 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     setSelectedConversationId(draftId);
   }, [handleOpenWorkspaceChat]);
 
-  // handleCreateProject opens the service-backed project folder picker.
-  // handleCreateProject 打开服务驱动的项目文件夹选择器。
-  const handleCreateProject = React.useCallback(() => {
+  // projectFolderTargetGroupRef remembers the group the open folder picker adds into; null adds without placing.
+  // projectFolderTargetGroupRef 记住打开的文件夹选择器要添加到的分组；为 null 时添加但不指定分组。
+  const projectFolderTargetGroupRef = React.useRef<string | null>(null);
+
+  // handleCreateProject opens the service-backed project folder picker, optionally targeting one group.
+  // handleCreateProject 打开服务驱动的项目文件夹选择器，可选地以某分组为目标。
+  const handleCreateProject = React.useCallback((groupId?: string) => {
+    projectFolderTargetGroupRef.current = groupId ?? null;
     setProjectFolderPickerOpen(true);
   }, []);
 
   // handleConfirmProjectFolder adds the selected service-host directory as a project.
   // handleConfirmProjectFolder 将选中的服务宿主目录添加为项目。
   const handleConfirmProjectFolder = React.useCallback(async (path: string) => {
-    const snapshot = await addProjectFromPath(path) ?? await loadWorkbenchSnapshot();
+    // A folder chosen for a group joins that group, and an existing project only moves into it.
+    // 为分组选择的文件夹加入该分组；已存在的项目只会移入其中。
+    const groupId = projectFolderTargetGroupRef.current;
+    const snapshot = groupId
+      ? await addProjectToGroup(path, groupId)
+      : await addProjectFromPath(path) ?? await loadWorkbenchSnapshot();
     applyProjectActionSnapshot(snapshot);
     toast.success(t("projectActions.listUpdated"));
     // The binding notice belongs only to this project-add response and must not be inferred later.
@@ -456,33 +468,20 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     }
   }, [applyProjectActionSnapshot, t]);
 
-  // handleReorderProjects persists a same-section project order using the existing order model.
-  // handleReorderProjects 使用现有顺序模型持久化同一分区内的项目排序。
-  const handleReorderProjects = React.useCallback(async (projectIds: string[]) => {
-    try {
-      const snapshot = await reorderProjects(projectIds);
-      if (!snapshot) {
-        throw new Error(t("workspace.projectActions.reorderingReturnedNoAuthoritative"));
-      }
-      if (acceptServiceWorkbenchSnapshot(snapshot)) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    }
-  }, [acceptServiceWorkbenchSnapshot, locale, mergeWorkbenchWithLocalCaches, setWorkbenchState]);
-
   // handleProjectGroupAction persists one project-group change and applies the authoritative snapshot; it rejects
   // with the service error so the caller can show it where the change was made.
   // handleProjectGroupAction 持久化一次项目分组变更并应用权威快照；失败时以服务错误拒绝，使调用方在发起变更处显示错误。
   const handleProjectGroupAction = React.useCallback(async (action: ProjectGroupAction) => {
-    const snapshot = action.kind === "create"
-      ? await createProjectGroup(action.name, action.projectIds)
-      : action.kind === "rename"
-        ? await renameProjectGroup(action.groupId, action.name)
-        : action.kind === "dissolve"
-          ? await deleteProjectGroup(action.groupId)
-          : await setProjectGroupsLayout(action.layout.groups, action.layout.ungroupedProjectIds);
+    const snapshot = await (() => {
+      switch (action.kind) {
+        case "create": return createProjectGroup(action.name, action.projectIds, action.afterGroupId);
+        case "rename": return renameProjectGroup(action.groupId, action.name);
+        case "delete": return deleteProjectGroup(action.groupId);
+        case "layout": return setProjectGroupsLayout(action.layout.groups);
+        case "pin": return setProjectTreePinned(action.item.kind, action.item.id, action.pinned);
+        case "pins-order": return setProjectTreePinsOrder(action.pins);
+      }
+    })();
     if (acceptServiceWorkbenchSnapshot(snapshot)) {
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
     }
@@ -516,7 +515,6 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     handleCreateConversation,
     handleCreateProject,
     handleConfirmProjectFolder,
-    handleReorderProjects,
     handleProjectGroupAction,
     handleExpandedProjectIdsChange,
   };

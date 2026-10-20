@@ -463,6 +463,37 @@ fn normalize_task_project_path(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// Finds the visible project whose root is the selected directory.
+/// 查找根目录为所选目录的可见项目。
+///
+/// # Parameters
+/// 参数
+/// `state` holds the retained workspace snapshot; `selected_path` is the directory as chosen by the user.
+/// `state` 持有保留的工作区快照；`selected_path` 是用户选择的目录。
+///
+/// # Returns
+/// 返回值
+/// Returns the project id, `None` when no visible project has that root, or an error before startup completes.
+/// 返回项目标识；没有可见项目以该目录为根时返回 `None`；启动完成前返回错误。
+pub(crate) fn visible_project_id_for_path(
+    state: &SharedServiceBridgeState,
+    selected_path: &Path,
+) -> Result<Option<String>, String> {
+    let normalized_path_text =
+        normalized_workspace_path_text_from_path(&normalize_task_project_path(selected_path));
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+        String::from("service is still starting; workspace snapshot is not ready")
+    })?;
+    Ok(workspace
+        .task_projects
+        .iter()
+        .find(|project| task_project_matches_path(project, &normalized_path_text))
+        .map(|project| project.id.clone()))
+}
+
 /// Checks whether one project points to the normalized selected path.
 /// 检查单个项目是否指向已规范化的选中路径。
 fn task_project_matches_path(project: &TaskProjectSummary, normalized_path_text: &str) -> bool {

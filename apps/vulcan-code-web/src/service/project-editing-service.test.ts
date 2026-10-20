@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { renameProject, renameConversation, setProjectIcon, resetProjectIcon, toggleProjectPinned, archiveProjectConversations, removeProject, archiveConversation, reorderProjects, setExpandedTaskProjects } from "./project-actions-service"
+import { renameProject, renameConversation, setProjectIcon, resetProjectIcon, toggleProjectPinned, archiveProjectConversations, removeProject, archiveConversation, setExpandedTaskProjects } from "./project-actions-service"
 
 // request is a readout spy; preview mode never has an authorized persistence transport.
 // request 是调用观察器；预览模式没有可执行持久化的传输。
@@ -16,7 +16,6 @@ describe("project editor preview failures", () => {
     await expect(archiveProjectConversations("p")).rejects.toThrow("not archived")
     await expect(removeProject("p")).rejects.toThrow("not removed")
     await expect(archiveConversation("c")).rejects.toThrow("not archived")
-    await expect(reorderProjects(["p"])).rejects.toThrow("not saved")
     await expect(setExpandedTaskProjects(["p"])).rejects.toThrow("not saved")
     expect(request).not.toHaveBeenCalled()
   })

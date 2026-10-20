@@ -945,7 +945,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         projects={props.workbench.projects}
         conversations={props.workbench.conversations}
         expandedProjectIds={props.workbench.expandedProjectIds}
-        projectGroups={props.workbench.projectGroups}
+        projectTree={props.workbench.projectTree}
         pinnedConversationIds={props.pinnedConversationIds}
         selectedConversationId={sidebarNavigationTargetId ?? props.selectedConversationId}
         onConversationMenuAction={props.onConversationMenuAction}
@@ -957,7 +957,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
         onProjectMenuAction={props.onProjectMenuAction}
-        onReorderProjects={props.onReorderProjects}
         onProjectGroupAction={props.onProjectGroupAction}
         onSelectProject={props.onSelectProject}
         onSelectConversation={props.onSelectConversation}

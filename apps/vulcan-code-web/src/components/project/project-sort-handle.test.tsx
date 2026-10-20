@@ -23,7 +23,7 @@ it("sorts with the handle while expansion and new conversation remain independen
   });
   // Callbacks observe only synthetic project actions, never persistence or filesystem access.
   // 回调仅观察合成项目动作，不执行持久化或文件系统访问。
-  const reorder = vi.fn(), expand = vi.fn(), create = vi.fn(), select = vi.fn();
+  const expand = vi.fn(), create = vi.fn(), select = vi.fn();
   const groupAction = vi.fn(async () => undefined);
   const noop = () => undefined;
   const container = document.createElement("div");
@@ -40,7 +40,7 @@ it("sorts with the handle while expansion and new conversation remain independen
       projects={[{ id: "a", name: "Project A", path: "D:/a" }, { id: "b", name: "Project B", path: "D:/b" }]}
       conversations={[]} expandedProjectIds={[]} pinnedConversationIds={new Set()} selectedConversationId={null} activeProjectId={null} rail={null}
       onConversationMenuAction={noop} onCreateConversation={create} onCreateProject={noop} onExpandedProjectIdsChange={expand}
-      onProjectMenuAction={noop} onProjectGroupAction={groupAction} onReorderProjects={reorder} onSelectConversation={noop} onSelectProject={select}
+      onProjectMenuAction={noop} onProjectGroupAction={groupAction} onSelectConversation={noop} onSelectProject={select}
     /></SidebarProvider></I18nProvider>));
     const row = container.querySelector<HTMLDivElement>('.vk-tree-item[data-kind="project"]')!;
     const folder = row.querySelector<HTMLButtonElement>(".vk-tree-row")!;
@@ -56,21 +56,18 @@ it("sorts with the handle while expansion and new conversation remain independen
     // jsdom 不从空格合成原生按钮 click 激活，因此显式执行该边界。
     await act(async () => folder.click());
     expect(expand).toHaveBeenCalledExactlyOnceWith(["a"]);
-    expect(reorder).not.toHaveBeenCalled();
     await act(async () => createButton.focus());
     await key(createButton, "Space");
     await act(async () => createButton.click());
     expect(create).toHaveBeenCalledOnce();
     expect(expand).toHaveBeenCalledOnce();
-    expect(reorder).not.toHaveBeenCalled();
     await act(async () => handle.focus());
     await key(handle, "Space");
     await key(handle, "ArrowDown");
     await key(handle, "Space");
-    // Unpinned projects are saved as one complete layout; the pinned-section reorder stays untouched.
-    // 未置顶项目作为一份完整布局保存；置顶分区排序保持不变。
-    expect(groupAction).toHaveBeenCalledExactlyOnceWith({ kind: "layout", layout: { groups: [], ungroupedProjectIds: ["b", "a"] } });
-    expect(reorder).not.toHaveBeenCalled();
+    // Unpinned projects are saved as one complete layout of every group, the default group included.
+    // 未置顶项目作为一份包含所有分组（含默认分组）的完整布局保存。
+    expect(groupAction).toHaveBeenCalledExactlyOnceWith({ kind: "layout", layout: { groups: [{ groupId: "default", projectIds: ["b", "a"] }] } });
     expect(expand).toHaveBeenCalledOnce();
     expect(create).toHaveBeenCalledOnce();
     expect(select).toHaveBeenCalledOnce();

@@ -1,6 +1,8 @@
 import type {
   ProjectDirectoryListing,
   ProjectGroupLayoutEntry,
+  ProjectTreeItemKind,
+  ProjectTreePin,
   WorkbenchSnapshot,
 } from "@/types";
 import {
@@ -58,15 +60,6 @@ export async function toggleProjectPinned(projectId: string): Promise<void> {
   await serviceClient.request<void>("service_toggle_project_pinned", { projectId });
 }
 
-// reorderProjects asks the desktop shell to persist one same-section project order.
-// reorderProjects 请求桌面壳持久化同一分区内的项目顺序。
-export async function reorderProjects(projectIds: string[]): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    throw new Error("Service runtime is unavailable; project order was not saved.");
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_reorder_projects", { projectIds });
-}
-
 // renameProject asks the desktop shell to apply a new project display name.
 // renameProject 请求桌面壳应用新的项目显示名称。
 export async function renameProject(projectId: string, name: string): Promise<WorkbenchSnapshot | null> {
@@ -107,13 +100,14 @@ export async function setExpandedTaskProjects(projectIds: string[]): Promise<Wor
   return serviceClient.request<WorkbenchSnapshot>("service_set_expanded_task_projects", { projectIds });
 }
 
-// createProjectGroup creates a named group at the end of the list and moves the given projects into it.
-// createProjectGroup 在列表末尾创建命名分组，并把给定项目移入其中。
-export async function createProjectGroup(name: string, projectIds: string[]): Promise<WorkbenchSnapshot> {
+// createProjectGroup creates a named group right after afterGroupId, or right above the default group, and moves
+// the given projects into it.
+// createProjectGroup 在 afterGroupId 之后（未给出时在默认分组正上方）创建命名分组，并把给定项目移入其中。
+export async function createProjectGroup(name: string, projectIds: string[], afterGroupId?: string): Promise<WorkbenchSnapshot> {
   if (!hasServiceRuntime()) {
     throw new Error("Service runtime is unavailable; the project group was not created.");
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_create_project_group", { name, projectIds });
+  return serviceClient.request<WorkbenchSnapshot>("service_create_project_group", { name, projectIds, afterGroupId });
 }
 
 // renameProjectGroup renames one existing project group.
@@ -125,8 +119,8 @@ export async function renameProjectGroup(groupId: string, name: string): Promise
   return serviceClient.request<WorkbenchSnapshot>("service_rename_project_group", { groupId, name });
 }
 
-// deleteProjectGroup dissolves one group; its projects become ungrouped.
-// deleteProjectGroup 解散一个分组；其项目变为未分组。
+// deleteProjectGroup deletes one group; its projects return to the default group.
+// deleteProjectGroup 删除一个分组；其项目回到默认分组。
 export async function deleteProjectGroup(groupId: string): Promise<WorkbenchSnapshot> {
   if (!hasServiceRuntime()) {
     throw new Error("Service runtime is unavailable; the project group was not dissolved.");
@@ -134,16 +128,41 @@ export async function deleteProjectGroup(groupId: string): Promise<WorkbenchSnap
   return serviceClient.request<WorkbenchSnapshot>("service_delete_project_group", { groupId });
 }
 
-// setProjectGroupsLayout saves the complete unpinned layout: group order, members, and ungrouped order.
-// setProjectGroupsLayout 保存完整的未置顶布局：分组顺序、成员以及未分组顺序。
-export async function setProjectGroupsLayout(
-  groups: ProjectGroupLayoutEntry[],
-  ungroupedProjectIds: string[],
-): Promise<WorkbenchSnapshot> {
+// setProjectGroupsLayout saves the complete unpinned layout: every group in order, the default group included,
+// with its members.
+// setProjectGroupsLayout 保存完整的未置顶布局：按顺序排列的所有分组（含默认分组）及其成员。
+export async function setProjectGroupsLayout(groups: ProjectGroupLayoutEntry[]): Promise<WorkbenchSnapshot> {
   if (!hasServiceRuntime()) {
     throw new Error("Service runtime is unavailable; the project group layout was not saved.");
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_set_project_groups_layout", { groups, ungroupedProjectIds });
+  return serviceClient.request<WorkbenchSnapshot>("service_set_project_groups_layout", { groups });
+}
+
+// setProjectTreePinned pins or unpins one session, project or group in the project tree.
+// setProjectTreePinned 在项目树中置顶或取消置顶一个会话、项目或分组。
+export async function setProjectTreePinned(kind: ProjectTreeItemKind, id: string, pinned: boolean): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Service runtime is unavailable; the pin was not saved.");
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_set_project_tree_pinned", { kind, id, pinned });
+}
+
+// setProjectTreePinsOrder saves the order of the pinned section; it must name every shown pin once.
+// setProjectTreePinsOrder 保存置顶分区的顺序；必须恰好包含每个已显示的置顶一次。
+export async function setProjectTreePinsOrder(pins: ProjectTreePin[]): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Service runtime is unavailable; the pinned order was not saved.");
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_set_project_tree_pins_order", { pins });
+}
+
+// addProjectToGroup adds a directory as a project in one group; an existing project only moves into the group.
+// addProjectToGroup 将目录作为项目添加到某分组；已存在的项目只会移入该分组。
+export async function addProjectToGroup(path: string, groupId: string): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Service runtime is unavailable; the project was not added.");
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_add_project_to_group", { path, groupId });
 }
 
 // archiveProjectConversations asks the desktop shell to archive all conversations under one project.

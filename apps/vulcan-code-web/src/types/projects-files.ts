@@ -33,6 +33,35 @@ export interface ProjectGroupSummary {
   projectIds: string[];
 }
 
+// ProjectTreeItemKind is the kind of an item in the project tree's pinned section.
+// ProjectTreeItemKind 是项目树置顶分区中条目的种类。
+export type ProjectTreeItemKind = "session" | "project" | "group";
+
+// ProjectTreePin is one item of the pinned section; the default group pins as "default".
+// ProjectTreePin 是置顶分区中的一个条目；默认分组以 "default" 置顶。
+export interface ProjectTreePin {
+  // Kind of the pinned item.
+  // 置顶条目的种类。
+  kind: ProjectTreeItemKind;
+  // Item identifier within its kind.
+  // 条目在其种类内的标识。
+  id: string;
+}
+
+// ProjectTreeSummary is the code flow's project tree: user groups, the default group position and the pins.
+// ProjectTreeSummary 是代码流的项目树：用户分组、默认分组位置与置顶。
+export interface ProjectTreeSummary {
+  // User groups in display order, without the default group.
+  // 按显示顺序排列的用户分组，不含默认分组。
+  groups: ProjectGroupSummary[];
+  // Position of the default group among the user groups, from 0 (first) to the group count (last).
+  // 默认分组在用户分组之间的位置，从 0（最前）到分组数量（最后）。
+  defaultGroupIndex: number;
+  // Visible pinned items in display order.
+  // 按显示顺序排列的可见置顶条目。
+  pins: ProjectTreePin[];
+}
+
 // ProjectGroupLayoutEntry places one group's members in a requested project-group layout.
 // ProjectGroupLayoutEntry 在请求的项目分组布局中放置一个分组的成员。
 export interface ProjectGroupLayoutEntry {

@@ -1811,7 +1811,7 @@ fn run_service_bootstrap(
             provider_configuration: &selected_provider_configuration,
             public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
             workspace: &workspace_snapshot,
-            project_groups: &vulcan_workspace_store::workspace_store::load_project_groups(
+            project_tree: &vulcan_workspace_store::workspace_store::load_project_tree(
                 &controller_runtime,
             )
             .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?,

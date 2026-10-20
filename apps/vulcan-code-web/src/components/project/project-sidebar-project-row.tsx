@@ -23,9 +23,12 @@ export function SortableProjectRow(props: {
   // Project represented by this sortable row.
   // 当前可排序行代表的项目。
   project: ProjectSummary;
-  // Move-to-group entries; null for pinned projects, which stay outside groups.
-  // “移动到分组”入口；置顶项目不在分组中，因此为 null。
+  // Move-to-group entries; null for pinned projects, which show in the pinned section.
+  // “移动到分组”入口；置顶项目显示在置顶分区中，因此为 null。
   placement: ProjectRowPlacement | null;
+  // Sortable id; defaults to the project id. Pinned rows sort among the pinned items under their own ids.
+  // 可排序标识；默认为项目标识。置顶行以自身标识在置顶条目之间排序。
+  sortableId?: string;
   // Conversations that belong to the project.
   // 归属于当前项目的会话列表。
   conversations: ConversationSummary[];
@@ -76,7 +79,7 @@ export function SortableProjectRow(props: {
   // reorderLabel names the project and explains the independent keyboard sort interaction.
   // reorderLabel 标明项目并说明独立的键盘排序交互。
   const reorderLabel = formatMessage(t("project.sidebar.reorderProject"), { name: props.project.name });
-  const sortable = useVerticalSortableItem(props.project.id);
+  const sortable = useVerticalSortableItem(props.sortableId ?? props.project.id);
   const folderName = projectFolderName(props.project.path);
   const showOriginalFolderName = folderName.length > 0 && folderName !== props.project.name;
   const conversationPreviewLimit = 5;

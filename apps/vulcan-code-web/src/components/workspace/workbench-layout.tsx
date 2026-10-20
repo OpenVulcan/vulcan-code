@@ -696,7 +696,6 @@ export function WorkbenchLayout(props: {
     handleCreateConversation,
     handleCreateProject,
     handleConfirmProjectFolder,
-    handleReorderProjects,
     handleProjectGroupAction,
     handleExpandedProjectIdsChange,
   } = useWorkbenchProjectActions({
@@ -904,11 +903,10 @@ export function WorkbenchLayout(props: {
           onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
           onProjectMenuAction={handleWorkbenchProjectMenuAction}
           onProjectGroupAction={handleProjectGroupAction}
-          onReorderProjects={handleReorderProjects}
           onSelectConversation={handleSelectConversation}
           onSelectProject={setActiveProjectId}
           pinnedConversationIds={pinnedConversationIds}
-          projectGroups={consoleWorkbenchState.projectGroups}
+          projectTree={consoleWorkbenchState.projectTree}
           projects={consoleWorkbenchState.projects}
           selectedConversationId={selectedConversationId}
         />
@@ -1212,8 +1210,7 @@ export function WorkbenchLayout(props: {
             onSelectMemorySubArea={setActiveWorkbenchMemorySubArea}
             onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
             onProjectMenuAction={handleWorkbenchProjectMenuAction}
-            onReorderProjects={handleReorderProjects}
-            onProjectGroupAction={handleProjectGroupAction}
+              onProjectGroupAction={handleProjectGroupAction}
             onSelectProject={setActiveProjectId}
             onSelectConversation={handleSelectConversation}
             onSelectPluginResourceOwner={handleSelectPluginResourceOwner}

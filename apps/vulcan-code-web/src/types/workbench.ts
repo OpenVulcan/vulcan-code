@@ -37,7 +37,7 @@ import type {
   SubagentNavigationSnapshot,
 } from "./planning-questions";
 import type {
-  ProjectGroupSummary,
+  ProjectTreeSummary,
   ProjectSummary,
 } from "./projects-files";
 import type {
@@ -168,9 +168,9 @@ export interface WorkbenchSnapshot {
   // Expanded project identifiers shown in the workspace sidebar.
   // 工作台侧栏中当前展开的项目标识集合。
   expandedProjectIds?: string[];
-  // User-named project groups in display order, projected onto visible projects.
-  // 按显示顺序排列、投影到可见项目上的用户命名项目分组。
-  projectGroups?: ProjectGroupSummary[];
+  // Project tree: user groups, the default group position and the pinned section.
+  // 项目树：用户分组、默认分组位置与置顶分区。
+  projectTree?: ProjectTreeSummary;
   // Authoritative invalidation revisions for independently loaded project settings.
   // 独立加载项目设置所使用的权威失效版本。
   projectSettingsRevisions: ProjectSettingsRevisionSnapshot;

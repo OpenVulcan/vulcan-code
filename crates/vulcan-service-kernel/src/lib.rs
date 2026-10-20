@@ -314,6 +314,7 @@ pub use project_conversation_services::service_add_project_initial_directory;
 use project_conversation_services::*;
 pub use project_directories::service_add_project_from_path;
 use project_directories::service_browse_project_directories;
+use project_directories::visible_project_id_for_path;
 use project_terminals::*;
 use provider_settings::{
     provider_retry_settings, service_clear_selected_provider_api_trace_directory,

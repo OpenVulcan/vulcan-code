@@ -91,7 +91,7 @@
 .vk-project-switch:hover { border-color: var(--vk-line-strong); }
 .vk-project-switch strong { display: block; font-weight: 600; }
 .vk-project-switch small { display: block; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vk-sidebar-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: calc(var(--vk-u) * 1.5); }
+.vk-sidebar-actions { display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-columns: auto; grid-auto-flow: column; gap: calc(var(--vk-u) * 1.5); }
 .vk-session-group { padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 1); display: flex; align-items: center; gap: calc(var(--vk-u) * 2); }
 .vk-session-group::after { content: ""; flex: 1; height: 1px; background: var(--vk-line-soft); }
 /* Project groups: a quiet label row, draggable; projects drag between groups. */

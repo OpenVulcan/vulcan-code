@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { GripVertical } from "lucide-react";
 
 // useVerticalSortableItem centralizes the sidebar-proven vertical sortable item behavior.
 // useVerticalSortableItem 集中左侧侧栏已验证的纵向排序条目行为。
@@ -54,4 +55,47 @@ export function useOptimisticOrder<T extends { id: string }>(items: readonly T[]
     return [...items].sort((left, right) => (rank.get(left.id) ?? Infinity) - (rank.get(right.id) ?? Infinity));
   }, [items, pending]);
   return [ordered, setPending];
+}
+
+// SortableRowBinding lets a row that does not own its sorting join a sortable list: the row applies the node ref,
+// style and dragging mark to its item and renders the grip among its actions.
+// SortableRowBinding 让不自行持有排序的行加入可排序列表：行把节点引用、样式与拖动标记应用到自身条目，并在操作中渲染手柄。
+export interface SortableRowBinding {
+  // Registers the row element with dnd-kit.
+  // 向 dnd-kit 注册行元素。
+  setNodeRef: (node: HTMLElement | null) => void;
+  // Vertical-only transform applied while sorting.
+  // 排序时应用的仅纵向变换。
+  style: React.CSSProperties;
+  // Whether this row is being dragged.
+  // 此行是否正被拖动。
+  dragging: boolean;
+  // Drag handle rendered among the row actions.
+  // 渲染在行操作中的拖动手柄。
+  grip: React.ReactNode;
+}
+
+// useSortableRowBinding builds the sortable binding of one row with a labelled grip.
+// useSortableRowBinding 为一行构建带标签手柄的排序绑定。
+export function useSortableRowBinding(id: string, label: string, disabled = false): SortableRowBinding {
+  const sortable = useVerticalSortableItem(id, disabled);
+  return {
+    setNodeRef: sortable.setNodeRef,
+    style: sortable.sortableStyle,
+    dragging: sortable.isDragging,
+    grip: (
+      <button
+        ref={sortable.setActivatorNodeRef}
+        {...sortable.attributes}
+        {...sortable.listeners}
+        aria-label={label}
+        className="vk-icon-btn vk-tree-grip"
+        data-size="sm"
+        title={label}
+        type="button"
+      >
+        <GripVertical aria-hidden="true" />
+      </button>
+    ),
+  };
 }

@@ -259,6 +259,53 @@ pub struct ProjectGroupSummary {
     pub project_ids: Vec<String>,
 }
 
+/// Project tree shown by the WebUI code flow: user groups, where the default group sits among them, and the
+/// pinned section. Every visible project outside the user groups belongs to the default group.
+/// WebUI 代码流显示的项目树：用户分组、默认分组在其中的位置，以及置顶分区。不属于任何用户分组的可见项目都归入
+/// 默认分组。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTreeSummary {
+    /// User groups in display order, without the default group.
+    /// 按显示顺序排列的用户分组，不含默认分组。
+    pub groups: Vec<ProjectGroupSummary>,
+    /// Position of the default group among the user groups, from 0 (first) to the group count (last).
+    /// 默认分组在用户分组之间的位置，从 0（最前）到分组数量（最后）。
+    pub default_group_index: usize,
+    /// Visible pinned items in display order.
+    /// 按显示顺序排列的可见置顶条目。
+    pub pins: Vec<ProjectTreePinSummary>,
+}
+
+/// Kind of an item in the project tree's pinned section.
+/// 项目树置顶分区中条目的种类。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectTreeItemKind {
+    /// A session (conversation).
+    /// 会话。
+    Session,
+    /// A project.
+    /// 项目。
+    Project,
+    /// A user group or the default group.
+    /// 用户分组或默认分组。
+    Group,
+}
+
+/// One item of the project tree's pinned section.
+/// 项目树置顶分区中的一个条目。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTreePinSummary {
+    /// Kind of the pinned item.
+    /// 置顶条目的种类。
+    pub kind: ProjectTreeItemKind,
+    /// Item identifier within its kind; the default group is `default`.
+    /// 条目在其种类内的标识；默认分组为 `default`。
+    pub id: String,
+}
+
 /// Places one group's members in a requested project-group layout.
 /// 在请求的项目分组布局中放置一个分组的成员。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
