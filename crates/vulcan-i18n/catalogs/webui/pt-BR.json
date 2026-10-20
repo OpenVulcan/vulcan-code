@@ -793,6 +793,7 @@
   "palette.placeholder": "Digite um comando ou pesquise",
   "palette.empty": "Nenhum comando correspondente",
   "palette.actions": "Ações",
+  "palette.conversations": "Conversas",
   "palette.slash": "Comandos de barra",
   "palette.go": "Ir para",
   "palette.settings": "Configurações",

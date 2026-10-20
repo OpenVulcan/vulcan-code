@@ -793,6 +793,7 @@
   "palette.placeholder": "명령 입력 또는 검색",
   "palette.empty": "일치하는 명령이 없습니다",
   "palette.actions": "작업",
+  "palette.conversations": "대화",
   "palette.slash": "슬래시 명령",
   "palette.go": "이동",
   "palette.settings": "설정",

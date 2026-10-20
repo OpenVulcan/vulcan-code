@@ -793,6 +793,7 @@
   "palette.placeholder": "Type a command or search",
   "palette.empty": "No matching commands",
   "palette.actions": "Actions",
+  "palette.conversations": "Conversations",
   "palette.slash": "Slash commands",
   "palette.go": "Go to",
   "palette.settings": "Settings",

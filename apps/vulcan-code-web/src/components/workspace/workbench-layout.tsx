@@ -888,12 +888,24 @@ export function WorkbenchLayout(props: {
     const project = activeProject ?? workbenchState.projects[0];
     if (project) handleCreateConversationForProject(project);
   });
+  // paletteConversations names every session with its project so the command palette can open it by either.
+  // paletteConversations 为每个会话附上项目名称，使命令面板可按两者之一打开会话。
+  const paletteConversations = React.useMemo(() => {
+    const projectNames = new Map(workbenchState.projects.map((project) => [project.id, project.name]));
+    return workbenchState.conversations.map((conversation) => ({
+      id: conversation.id,
+      title: conversation.title,
+      projectName: conversation.projectId ? projectNames.get(conversation.projectId) ?? null : null,
+    }));
+  }, [workbenchState.conversations, workbenchState.projects]);
   // activityRail is shared by the workspace and settings shells so navigation stays put across areas.
   // activityRail 由工作台与设置外壳共用，使导航在区域切换时保持不动。
   const activityRail = (
     <>
     <CommandPalette
       areas={railEntries}
+      conversations={paletteConversations}
+      onOpenConversation={handleSelectConversation}
       onNewConversation={activeProject ? () => handleCreateConversationForProject(activeProject) : undefined}
       onOpenChange={setCommandPaletteOpen}
       onOpenSessions={handleOpenWorkspaceChat}

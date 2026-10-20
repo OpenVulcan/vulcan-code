@@ -793,6 +793,7 @@
   "palette.placeholder": "Введите команду или найдите",
   "palette.empty": "Нет подходящих команд",
   "palette.actions": "Действия",
+  "palette.conversations": "Беседы",
   "palette.slash": "Слэш-команды",
   "palette.go": "Перейти",
   "palette.settings": "Настройки",
