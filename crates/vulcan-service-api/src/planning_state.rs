@@ -14,6 +14,15 @@ pub struct PendingQuestionSnapshot {
     /// Monotonic runtime sequence used to order concurrent asks.
     /// 用于排序并发 ask 请求的运行时单调序号。
     pub sequence: u64,
+    /// Root conversation that surfaces the request when `session_id` is a child agent, which has no
+    /// conversation of its own; absent for a conversation's own requests.
+    /// `session_id` 是子代理时展示该请求的根会话（子代理没有自己的会话）；会话自身的请求不带此字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_conversation_id: Option<String>,
+    /// Display title of the child agent that raised the request; absent for a conversation's own requests.
+    /// 发起请求的子代理展示标题；会话自身的请求不带此字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_label: Option<String>,
     /// Ordered prompts shown in the modal.
     /// 在弹窗中按顺序展示的问题提示。
     pub questions: Vec<PendingQuestionPromptSummary>,

@@ -1,26 +1,26 @@
 import * as React from "react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { FileSearch, Search, X } from "lucide-react";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
-  DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+} from "@/ui-kit/primitives/dialog";
+import { Input } from "@/ui-kit/primitives/input";
+import { Label } from "@/ui-kit/primitives/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+} from "@/ui-kit/primitives/select";
+import { Switch } from "@/ui-kit/primitives/switch";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { useI18n } from "@/i18n";
 import { testPublicAiProviderTool } from "@/service/settings-actions-service";
 import type {
@@ -28,6 +28,8 @@ import type {
   PublicAiProviderToolTestResult,
 } from "@/types";
 import { errorMessage } from "@/lib/display-format";
+import "@/ui-kit/styles/features/settings-forms.css";
+import "@/ui-kit/styles/features/provider-tool-test.css";
 
 // ProviderToolTestDialogProps defines one exact settings-row diagnostic dialog.
 // ProviderToolTestDialogProps 定义一个精确设置行诊断对话框。
@@ -273,31 +275,36 @@ export function ProviderToolTestDialog(props: ProviderToolTestDialogProps) {
         }
       }}
     >
-      <DialogContent
-        className="flex max-h-[min(85vh,720px)] flex-col overflow-hidden p-0 sm:max-w-3xl"
-        showCloseButton={!pending}
-      >
-        <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
-          <DialogTitle>
-            {isSearch
-              ? t("settings.providerTools.testSearchTitle")
-              : t("settings.providerTools.testExtractTitle")}
-          </DialogTitle>
-          <DialogDescription>
-            {isSearch
-              ? t("settings.providerTools.testSearchDescription")
-              : t("settings.providerTools.testExtractDescription")}
-          </DialogDescription>
-        </DialogHeader>
-        {props.target ? (
-          <div className="flex shrink-0 flex-wrap gap-2 px-5">
-            <Badge variant="outline">{props.target.target.display_name}</Badge>
-            <Badge variant="secondary">{props.target.connectionDisplayName}</Badge>
+      <DialogContent className="vk-tt" layout="document" showCloseButton={false} size="xl">
+        <header className="vk-viewer-head">
+          <span className="vk-viewer-mark">{isSearch ? <Search aria-hidden="true" /> : <FileSearch aria-hidden="true" />}</span>
+          <div className="vk-viewer-titles">
+            <DialogTitle>
+              {isSearch
+                ? t("settings.providerTools.testSearchTitle")
+                : t("settings.providerTools.testExtractTitle")}
+            </DialogTitle>
+            <DialogDescription>
+              {isSearch
+                ? t("settings.providerTools.testSearchDescription")
+                : t("settings.providerTools.testExtractDescription")}
+            </DialogDescription>
           </div>
-        ) : null}
-        <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => void submitTest(event)}>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-          <fieldset disabled={pending} className="min-w-0 space-y-4">
+          {props.target ? (
+            <div className="vk-form-chips">
+              <Badge variant="outline">{props.target.target.display_name}</Badge>
+              <Badge variant="secondary">{props.target.connectionDisplayName}</Badge>
+            </div>
+          ) : null}
+          <div className="vk-actions">
+            <IconButton aria-label={t("ui.close")} disabled={pending} onClick={() => { if (!requestBusy.current) props.onClose() }} title={t("ui.close")} type="button">
+              <X aria-hidden="true" />
+            </IconButton>
+          </div>
+        </header>
+        <form className="vk-tt-form" onSubmit={(event) => void submitTest(event)}>
+          <div className="vk-tt-body">
+          <fieldset disabled={pending} className="vk-form-loose">
           {isSearch ? (
             <SearchTestFields
               excludeDomains={excludeDomains}
@@ -331,14 +338,14 @@ export function ProviderToolTestDialog(props: ProviderToolTestDialogProps) {
               onUrlsChange={setUrls}
             />
           )}
-          <p className="text-xs text-muted-foreground">
+          <p className="vk-form-note">
             {t("settings.providerTools.testConsumesQuota")}
           </p>
-          {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+          {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
           </fieldset>
           {result ? <ProviderToolTestResults result={result} /> : null}
           </div>
-          <DialogFooter className="shrink-0 px-5 py-3">
+          <DialogFooter>
             <Button disabled={!canSubmit} type="submit">
               {pending
                 ? t("settings.providerTools.testRunning")
@@ -400,7 +407,7 @@ function SearchTestFields(props: SearchTestFieldsProps) {
   const excludeProperty = schemaProperty(props.target, "exclude_domains");
   return (
     <>
-      <div className="grid gap-2">
+      <div className="vk-field">
         <Label htmlFor="provider-tool-test-query">
           {t("settings.providerTools.testQuery")}
         </Label>
@@ -414,7 +421,7 @@ function SearchTestFields(props: SearchTestFieldsProps) {
         />
       </div>
       {maximumProperty ? (
-        <div className="grid gap-2 sm:max-w-48">
+        <div className="vk-field vk-tt-narrow">
           <Label htmlFor="provider-tool-test-max-results">
             {t("settings.providerTools.testMaxResults")}
           </Label>
@@ -429,9 +436,9 @@ function SearchTestFields(props: SearchTestFieldsProps) {
         </div>
       ) : null}
       {includeProperty || excludeProperty ? (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="vk-form-grid">
           {includeProperty ? (
-            <div className="grid gap-2">
+            <div className="vk-field">
               <Label htmlFor="provider-tool-test-include-domains">
                 {t("settings.providerTools.testIncludeDomains")}
               </Label>
@@ -444,7 +451,7 @@ function SearchTestFields(props: SearchTestFieldsProps) {
             </div>
           ) : null}
           {excludeProperty ? (
-            <div className="grid gap-2">
+            <div className="vk-field">
               <Label htmlFor="provider-tool-test-exclude-domains">
                 {t("settings.providerTools.testExcludeDomains")}
               </Label>
@@ -547,7 +554,7 @@ function ExtractTestFields(props: ExtractTestFieldsProps) {
   const formatValues = schemaEnumValues(formatProperty);
   return (
     <>
-      <div className="grid gap-2">
+      <div className="vk-field">
         <Label htmlFor="provider-tool-test-urls">
           {t("settings.providerTools.testUrls")}
         </Label>
@@ -560,8 +567,8 @@ function ExtractTestFields(props: ExtractTestFieldsProps) {
         />
       </div>
       {queryProperty ? (
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
-          <div className="grid gap-2">
+        <div className="vk-tt-pair">
+          <div className="vk-field">
             <Label htmlFor="provider-tool-test-extract-query">
               {t("settings.providerTools.testExtractQuery")}
             </Label>
@@ -572,7 +579,7 @@ function ExtractTestFields(props: ExtractTestFieldsProps) {
             />
           </div>
           {chunksProperty ? (
-            <div className="grid gap-2">
+            <div className="vk-field">
               <Label htmlFor="provider-tool-test-chunks">
                 {t("settings.providerTools.testChunksPerSource")}
               </Label>
@@ -589,14 +596,14 @@ function ExtractTestFields(props: ExtractTestFieldsProps) {
           ) : null}
         </div>
       ) : null}
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="vk-tt-trio">
         {depthProperty ? (
-          <div className="grid gap-2">
+          <div className="vk-field">
             <Label htmlFor="provider-tool-test-depth">
               {t("settings.providerTools.testDepth")}
             </Label>
             <Select value={props.extractDepth} onValueChange={props.onExtractDepthChange}>
-              <SelectTrigger className="w-full" id="provider-tool-test-depth">
+              <SelectTrigger id="provider-tool-test-depth">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -614,12 +621,12 @@ function ExtractTestFields(props: ExtractTestFieldsProps) {
           </div>
         ) : null}
         {formatProperty ? (
-          <div className="grid gap-2">
+          <div className="vk-field">
             <Label htmlFor="provider-tool-test-format">
               {t("settings.providerTools.testFormat")}
             </Label>
             <Select value={props.extractFormat} onValueChange={props.onExtractFormatChange}>
-              <SelectTrigger className="w-full" id="provider-tool-test-format">
+              <SelectTrigger id="provider-tool-test-format">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -637,7 +644,7 @@ function ExtractTestFields(props: ExtractTestFieldsProps) {
           </div>
         ) : null}
         {timeoutProperty ? (
-          <div className="grid gap-2">
+          <div className="vk-field">
             <Label htmlFor="provider-tool-test-timeout">
               {t("settings.providerTools.testTimeoutSeconds")}
             </Label>
@@ -652,9 +659,9 @@ function ExtractTestFields(props: ExtractTestFieldsProps) {
           </div>
         ) : null}
       </div>
-      <div className="flex flex-wrap gap-5">
+      <div className="vk-tt-switches">
         {schemaProperty(props.target, "include_images") ? (
-          <label className="flex items-center gap-2 text-sm">
+          <label className="vk-check-label">
             <Switch
               checked={props.includeImages}
               onCheckedChange={props.onIncludeImagesChange}
@@ -663,7 +670,7 @@ function ExtractTestFields(props: ExtractTestFieldsProps) {
           </label>
         ) : null}
         {schemaProperty(props.target, "include_favicon") ? (
-          <label className="flex items-center gap-2 text-sm">
+          <label className="vk-check-label">
             <Switch
               checked={props.includeFavicon}
               onCheckedChange={props.onIncludeFaviconChange}
@@ -696,10 +703,10 @@ function ProviderToolTestResults(props: ProviderToolTestResultsProps) {
   return (
     <section
       aria-label={t("settings.providerTools.testResults")}
-      className="grid max-h-[min(45vh,360px)] gap-3 overflow-y-auto border-t pt-4"
+      className="vk-tt-results"
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-semibold">{t("settings.providerTools.testResults")}</h3>
+      <div className="vk-form-inline">
+        <h3 className="vk-form-title">{t("settings.providerTools.testResults")}</h3>
         {output.kind === "search" ? (
           <Badge variant="outline">{output.value.results.length}</Badge>
         ) : (
@@ -717,14 +724,13 @@ function ProviderToolTestResults(props: ProviderToolTestResultsProps) {
       </div>
       {output.kind === "search" ? (
         output.value.results.length ? (
-          <ol className="grid gap-2">
+          <ol className="vk-tt-hits">
             {output.value.results.map((item) => (
-              <li className="rounded-lg border p-3" key={`${item.rank}:${item.url}`}>
-                <div className="flex items-start gap-2">
-                  <span className="text-xs tabular-nums text-muted-foreground">{item.rank}</span>
-                  <div className="min-w-0">
+              <li className="vk-tt-hit" key={`${item.rank}:${item.url}`}>
+                <span className="vk-num">{item.rank}</span>
+                  <div className="vk-form-cell">
                     <a
-                      className="font-medium underline-offset-4 hover:underline"
+                      className="vk-tt-link"
                       href={item.url}
                       rel="noreferrer"
                       target="_blank"
@@ -732,41 +738,40 @@ function ProviderToolTestResults(props: ProviderToolTestResultsProps) {
                       {item.title || item.url}
                     </a>
                     {item.source_domain ? (
-                      <p className="text-xs text-muted-foreground">{item.source_domain}</p>
+                      <p className="vk-form-note">{item.source_domain}</p>
                     ) : null}
                     {item.snippet ? (
-                      <p className="mt-1 whitespace-pre-wrap text-sm">{item.snippet}</p>
+                      <p className="vk-tt-snippet">{item.snippet}</p>
                     ) : null}
                   </div>
-                </div>
               </li>
             ))}
           </ol>
         ) : (
-          <p className="text-sm text-muted-foreground">
+          <p className="vk-form-text">
             {t("settings.providerTools.testNoResults")}
           </p>
         )
       ) : (
         <>
           {output.value.results.map((item) => (
-            <article className="grid gap-2 rounded-lg border p-3" key={item.url}>
+            <article className="vk-tt-page" key={item.url}>
               <a
-                className="truncate font-medium underline-offset-4 hover:underline"
+                className="vk-tt-link vk-truncate"
                 href={item.url}
                 rel="noreferrer"
                 target="_blank"
               >
                 {item.url}
               </a>
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">
+              <pre className="vk-tt-content">
                 {item.content}
               </pre>
               {item.images.length ? (
-                <div className="flex flex-wrap gap-2">
+                <div className="vk-form-chips">
                   {item.images.map((imageUrl) => (
                     <a
-                      className="text-xs underline"
+                      className="vk-tt-link"
                       href={imageUrl}
                       key={imageUrl}
                       rel="noreferrer"
@@ -780,20 +785,20 @@ function ProviderToolTestResults(props: ProviderToolTestResultsProps) {
             </article>
           ))}
           {output.value.failures.map((item) => (
-            <article className="rounded-lg border border-destructive/40 p-3 text-sm" key={item.url}>
-              <p className="font-medium">{item.url}</p>
-              <p className="text-destructive">{item.error}</p>
+            <article className="vk-form-fault" key={item.url}>
+              <p className="vk-form-em">{item.url}</p>
+              <p className="vk-field-error">{item.error}</p>
             </article>
           ))}
           {!output.value.results.length && !output.value.failures.length ? (
-            <p className="text-sm text-muted-foreground">
+            <p className="vk-form-text">
               {t("settings.providerTools.testNoResults")}
             </p>
           ) : null}
         </>
       )}
       {props.result.upstream_response_id ? (
-        <p className="text-xs text-muted-foreground">
+        <p className="vk-form-note">
           {t("settings.providerTools.testProviderRequestId")}:{" "}
           {props.result.upstream_response_id}
         </p>

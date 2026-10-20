@@ -1,13 +1,15 @@
 import * as React from "react"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
+import { RefreshCw } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Button } from "@/ui-kit/primitives/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
+import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeProjectRetentionRules, VmmNativeProjectRetentionSummary, VmmNativeProjectSummary } from "@/types"
 import { VmmNativeDurationInput } from "./vmm-native-duration-input"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Numeric project fields have the same closed bounds as the native data-retention contract.
 // 项目数值字段与原生数据保留契约具有相同封闭范围。
@@ -64,11 +66,11 @@ export function VmmNativeProjectRetention({ projects, busy, onRunAction, selecte
   const selected = projects.find((project) => String(project.projectId) === effectiveId)
   return <Card>
     <CardHeader><CardTitle>{t("memory.projectRetention.title")}</CardTitle><CardDescription>{t("memory.projectRetention.description")}</CardDescription></CardHeader>
-    <CardContent className="space-y-4">
+    <CardContent className="vk-form-loose">
       {selectedProjectId === undefined ? <>
       <Label htmlFor="retention-project">{t("memory.projectRetention.select")}</Label>
       <Select disabled={busy} value={selected ? selectedId : ""} onValueChange={setSelectedId}>
-        <SelectTrigger id="retention-project" className="w-full"><SelectValue placeholder={t("memory.projectRetention.select")} /></SelectTrigger>
+        <SelectTrigger id="retention-project"><SelectValue placeholder={t("memory.projectRetention.select")} /></SelectTrigger>
         <SelectContent>{projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent>
       </Select></> : null}
       {selected ? <ProjectRetentionEditor key={selected.projectId} projectId={selected.projectId} busy={busy} onRunAction={onRunAction} /> : null}
@@ -108,27 +110,29 @@ function ProjectRetentionEditor({ projectId, busy, onRunAction }: Omit<Props, "p
   // Editing changes only this draft; nothing is persisted until a named save operation succeeds.
   // 编辑仅改变当前草稿；具名保存操作成功之前不持久化任何内容。
   const edit = (next: Draft) => { setDraft(next); setSaved(false) }
-  return <div className="space-y-4">
-    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-    <Button variant="outline" disabled={disabled} onClick={() => void execute("read")}>{t("memory.projectRetention.reload")}</Button>
+  return <div className="vk-form-loose">
+    {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
+    <div className="vk-form-bar">
+      <p className="vk-form-text">{policy ? t(policy.overrides === null ? "memory.projectRetention.inherited" : "memory.projectRetention.overridden") : null}</p>
+      <Button size="sm" variant="ghost" disabled={disabled} onClick={() => void execute("read")}><RefreshCw aria-hidden="true" className={pending ? "vk-spin" : undefined} />{t("memory.projectRetention.reload")}</Button>
+    </div>
     {policy && draft ? <>
-      <p className="text-sm text-muted-foreground">{t(policy.overrides === null ? "memory.projectRetention.inherited" : "memory.projectRetention.overridden")}</p>
-      <div className="grid gap-4 sm:grid-cols-2">{fields.map((field) => <div key={field.key} className="space-y-2">
+      <div className="vk-form-grid">{fields.map((field) => <div key={field.key} className="vk-form-stack">
         <Label htmlFor={`project-retention-${field.key}`}>{t(field.label)}</Label>
         {field.key === "sessionIdleMs" || field.key === "trashRetentionMs"
           ? <VmmNativeDurationInput id={`project-retention-${field.key}`} value={draft[field.key]} disabled={disabled} onChange={(value) => edit({ ...draft, [field.key]: value })} />
           : field.key === "protectedMemoryLevelFloor"
             ? <Select value={draft[field.key]} disabled={disabled} onValueChange={(value) => edit({ ...draft, [field.key]: value })}>
-              <SelectTrigger id={`project-retention-${field.key}`} className="w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger id={`project-retention-${field.key}`}><SelectValue /></SelectTrigger>
               <SelectContent>{([[1,"memory.cleanup.session"],[2,"memory.cleanup.phase"],[3,"memory.cleanup.stable"],[4,"memory.cleanup.persistent"]] as const).map(([value,label]) => <SelectItem key={value} value={String(value)}>{t(label)}</SelectItem>)}</SelectContent>
             </Select>
             : <Input id={`project-retention-${field.key}`} type="number" min={field.min} max={field.max} step={1} disabled={disabled} value={draft[field.key]} onChange={(event) => edit({ ...draft, [field.key]: event.target.value })} />}
       </div>)}</div>
-      <Label className="flex items-center justify-between">{t("memory.cleanup.protectShared")}<Switch disabled={disabled} checked={draft.skipProtectedSharedMemories} onCheckedChange={(value) => edit({ ...draft, skipProtectedSharedMemories: value })} /></Label>
-      <p className="text-xs text-muted-foreground">{t("memory.cleanup.protectionHint")}</p>
-      {!parsed ? <p role="alert" className="text-sm text-destructive">{t("memory.cleanup.invalid")}</p> : null}
+      <Label className="vk-form-switch">{t("memory.cleanup.protectShared")}<Switch disabled={disabled} checked={draft.skipProtectedSharedMemories} onCheckedChange={(value) => edit({ ...draft, skipProtectedSharedMemories: value })} /></Label>
+      <p className="vk-form-note">{t("memory.cleanup.protectionHint")}</p>
+      {!parsed ? <p role="alert" className="vk-field-error">{t("memory.cleanup.invalid")}</p> : null}
       {saved ? <p role="status">{t("memory.projectRetention.saved")}</p> : null}
-      <div className="flex flex-wrap gap-2">
+      <div className="vk-form-chips">
         <Button disabled={disabled || !parsed || (policy.overrides !== null && !changed)} onClick={() => { if (parsed) void execute("override", parsed) }}>{t("memory.projectRetention.save")}</Button>
         <Button variant="outline" disabled={disabled || policy.overrides === null} onClick={() => void execute("inherit")}>{t("memory.projectRetention.inherit")}</Button>
         <Button variant="outline" disabled={disabled} onClick={() => edit(draftOf(policy.global))}>{t("memory.projectRetention.fillGlobal")}</Button>

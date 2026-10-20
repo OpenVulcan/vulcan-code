@@ -3,10 +3,10 @@ import type { ConversationBlock } from "@/components/conversation/conversation-m
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
 
-// CONVERSATION_ENTRY_MOTION_MS matches the empty-prompt and Composer entry transition duration.
-// CONVERSATION_ENTRY_MOTION_MS 与空提示和输入区入场过渡时长保持一致。
-const CONVERSATION_ENTRY_MOTION_MS = 360;
 
+// THINKING_OVERLAY_EXIT_MS is how long the live reasoning window waits, then fades, once reasoning ends; its fade CSS reads it too.
+// THINKING_OVERLAY_EXIT_MS 是思考结束后实时思考窗等待及淡出的时长；其淡出样式也读取该值。
+export const THINKING_OVERLAY_EXIT_MS = 500;
 
 // thinkingOverlayBlockSignature identifies one displayed thinking block without importing the legacy transcript parser.
 // thinkingOverlayBlockSignature 在不导入旧转录解析器的前提下标识一个已显示的思考块。
@@ -48,9 +48,6 @@ export interface UseConversationVisualTransitionsOptions {
   // Stable conversation or draft surface key.
   // 稳定的会话或草稿界面键。
   surfaceKey: string;
-  // Whether the selected surface currently represents an empty conversation.
-  // 当前选中界面是否表示空会话。
-  isEmptyConversation: boolean;
   // Live thinking block that should currently occupy the floating overlay.
   // 当前应占用浮动面板的实时思考块。
   displayedThinkingBlock: ConversationBlock | null;
@@ -65,12 +62,6 @@ export interface ConversationVisualTransitionsState {
   // Whether the retained thinking overlay is in its fade-out phase.
   // 保留的思考浮层是否处于淡出阶段。
   thinkingOverlayLeaving: boolean;
-  // Whether the empty-conversation prompt remains mounted.
-  // 空会话提示是否仍保持挂载。
-  emptyPromptVisible: boolean;
-  // Whether the empty-conversation prompt is in its exit phase.
-  // 空会话提示是否处于退场阶段。
-  emptyPromptLeaving: boolean;
 }
 
 // Resolves a session override without rewriting the global service preference.
@@ -83,12 +74,12 @@ export function useThinkingDisplayMode(options: UseThinkingDisplayModeOptions): 
   return useThinkingDisplayPreference(options.conversationId, options.authoritativeMode);
 }
 
-// useConversationVisualTransitions owns scope-safe thinking-overlay and empty-prompt exit retention.
-// useConversationVisualTransitions 管理作用域安全的思考浮层与空提示退场保留。
-// Parameters: options provides the active surface, empty state, and live overlay block.
-// 参数：options 提供活动界面、空状态与实时浮层块。
-// Returns: retained overlay and empty-prompt visibility/exit state.
-// 返回值：保留浮层与空提示的可见性/退场状态。
+// useConversationVisualTransitions owns scope-safe thinking-overlay exit retention.
+// useConversationVisualTransitions 管理作用域安全的思考浮层退场保留。
+// Parameters: options provides the active surface and live overlay block.
+// 参数：options 提供活动界面与实时浮层块。
+// Returns: retained overlay state.
+// 返回值：保留浮层状态。
 export function useConversationVisualTransitions(
   options: UseConversationVisualTransitionsOptions,
 ): ConversationVisualTransitionsState {
@@ -100,12 +91,6 @@ export function useConversationVisualTransitions(
   // thinkingOverlayLeaving marks the fade-out half of overlay exit.
   // thinkingOverlayLeaving 标记浮层退场的淡出阶段。
   const [thinkingOverlayLeaving, setThinkingOverlayLeaving] = React.useState(false);
-  // emptyPromptVisible keeps the empty prompt mounted during its exit animation.
-  // emptyPromptVisible 在退场动画期间保持空提示挂载。
-  const [emptyPromptVisible, setEmptyPromptVisible] = React.useState(options.isEmptyConversation);
-  // emptyPromptLeaving marks the empty prompt exit animation.
-  // emptyPromptLeaving 标记空提示退场动画。
-  const [emptyPromptLeaving, setEmptyPromptLeaving] = React.useState(false);
   // previousSurfaceKeyRef detects actual surface changes before paint.
   // previousSurfaceKeyRef 在绘制前检测真实界面变化。
   const previousSurfaceKeyRef = React.useRef(options.surfaceKey);
@@ -125,11 +110,8 @@ export function useConversationVisualTransitions(
     previousSurfaceKeyRef.current = options.surfaceKey;
     setRetainedThinkingBlock(options.displayedThinkingBlock);
     setThinkingOverlayLeaving(false);
-    setEmptyPromptVisible(options.isEmptyConversation);
-    setEmptyPromptLeaving(false);
   }, [
     options.displayedThinkingBlock,
-    options.isEmptyConversation,
     options.surfaceKey,
   ]);
 
@@ -150,13 +132,13 @@ export function useConversationVisualTransitions(
     // fadeTimer 在实时浮层消失后启动视觉退场。
     const fadeTimer = window.setTimeout(() => {
       setThinkingOverlayLeaving(true);
-    }, 500);
+    }, THINKING_OVERLAY_EXIT_MS);
     // removeTimer unmounts the retained overlay after the complete exit interval.
     // removeTimer 在完整退场间隔后卸载保留浮层。
     const removeTimer = window.setTimeout(() => {
       setRetainedThinkingBlock(null);
       setThinkingOverlayLeaving(false);
-    }, 1000);
+    }, THINKING_OVERLAY_EXIT_MS * 2);
     return () => {
       window.clearTimeout(fadeTimer);
       window.clearTimeout(removeTimer);
@@ -168,29 +150,8 @@ export function useConversationVisualTransitions(
     retainedThinkingBlock,
   ]);
 
-  React.useEffect(() => {
-    if (options.isEmptyConversation) {
-      setEmptyPromptVisible(true);
-      setEmptyPromptLeaving(false);
-      return;
-    }
-    if (!emptyPromptVisible) {
-      return;
-    }
-    setEmptyPromptLeaving(true);
-    // exitTimer removes the empty prompt after its CSS transition interval.
-    // exitTimer 在 CSS 过渡间隔后移除空提示。
-    const exitTimer = window.setTimeout(() => {
-      setEmptyPromptVisible(false);
-      setEmptyPromptLeaving(false);
-    }, CONVERSATION_ENTRY_MOTION_MS);
-    return () => window.clearTimeout(exitTimer);
-  }, [emptyPromptVisible, options.isEmptyConversation, options.surfaceKey]);
-
   return {
     visibleThinkingBlock,
     thinkingOverlayLeaving,
-    emptyPromptVisible,
-    emptyPromptLeaving,
   };
 }

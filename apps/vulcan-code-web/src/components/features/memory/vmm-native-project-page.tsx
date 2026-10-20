@@ -11,14 +11,14 @@ import {
   Trash2,
 } from "lucide-react"
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription, AlertTitle } from "@/ui-kit/primitives/alert"
+import { Button } from "@/ui-kit/primitives/button"
 import { PageTabs } from "@/components/workspace/workspace-directory-layout"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { useI18n, type TranslationKey } from "@/i18n"
 import type {
   VmmMemoryActionResult,
@@ -33,6 +33,8 @@ import type { MemoryActionRunOptions } from "./use-memory-area-controller"
 import { VmmNativeProjectRetention } from "./vmm-native-project-retention"
 import { VmmNativeProjectProfilePolicy } from "./vmm-native-project-profile-policy"
 import { VmmProjectDirectory } from "./vmm-project-directory"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // VmmNativeProjectPageProps defines native project catalog data and guarded maintenance actions.
 // VmmNativeProjectPageProps 定义原生项目目录数据与受保护维护动作。
@@ -317,14 +319,14 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
   }, [preview, runAction])
 
   return (
-    <fieldset disabled={effectiveBusy} className="flex w-full min-w-0 flex-col gap-4">
+    <fieldset disabled={effectiveBusy} className="vk-form-loose">
       <PageTabs
         actions={<>
           <Button disabled={effectiveBusy} onClick={() => void runAction("native_project_catalog")} size="sm" type="button" variant="outline">
-            <RefreshCw className="size-4" aria-hidden="true" />
+            <RefreshCw className="vk-icon" aria-hidden="true" />
             {t("vmm.nativeProjects.refresh")}
           </Button>
-          <Button disabled={effectiveBusy} onClick={() => setCreateOpen(true)} size="sm" type="button"><Plus className="size-4" aria-hidden="true" />{t("vmm.nativeProjects.createTitle")}</Button>
+          <Button disabled={effectiveBusy} onClick={() => setCreateOpen(true)} size="sm" type="button"><Plus className="vk-icon" aria-hidden="true" />{t("vmm.nativeProjects.createTitle")}</Button>
         </>}
         ariaLabel={t("memory.identity.nativeTitle")}
         className="vmm-page-tabs"
@@ -333,19 +335,19 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
         value={projectView}
       />
 
-      {notice ? <p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">{notice}</p> : null}
-      {effectiveBusy ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("vmm.nativeProjects.running")}</p> : null}
+      {notice ? <p className="vk-form-well">{notice}</p> : null}
+      {effectiveBusy ? <p className="vk-form-status"><LoaderCircle className="vk-spin" aria-hidden="true" />{t("vmm.nativeProjects.running")}</p> : null}
 
       <Dialog open={createOpen} onOpenChange={(open) => { if (!effectiveBusy) setCreateOpen(open) }}><DialogContent>
         <DialogHeader><DialogTitle>{t("vmm.nativeProjects.createTitle")}</DialogTitle><DialogDescription>{t("vmm.nativeProjects.createDescription")}</DialogDescription></DialogHeader>
-        <div className="grid gap-3">
+        <div className="vk-form-stack">
           <Select disabled={effectiveBusy} onValueChange={(value) => { setCreateVulcanProjectId(value); setCreateProjectName(value) }} value={createVulcanProjectId}>
             <SelectTrigger><SelectValue placeholder={t("vmm.nativeProjects.selectVulcanProject")} /></SelectTrigger>
             <SelectContent>{unboundProjects.map((project) => <SelectItem key={project.projectId} value={project.projectId}>{project.name}</SelectItem>)}</SelectContent>
           </Select>
           <Input disabled={effectiveBusy} onChange={(event) => setCreateProjectName(event.target.value)} placeholder={t("vmm.nativeProjects.projectName")} value={createProjectName} />
           <Button disabled={effectiveBusy || !createVulcanProjectId || !createProjectName.trim()} onClick={async () => { const response = await runAction("native_project_create_and_bind", { vulcanProjectId: createVulcanProjectId, projectName: createProjectName.trim() }); if (response?.data.kind === "native_project_catalog") setCreateOpen(false) }} type="button">
-            <Plus className="size-4" aria-hidden="true" />{t("vmm.nativeProjects.create")}
+            <Plus className="vk-icon" aria-hidden="true" />{t("vmm.nativeProjects.create")}
           </Button>
         </div>
       </DialogContent></Dialog>
@@ -353,8 +355,8 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
       <div hidden={projectView !== "bindings"}><div className="vmm-project-workspace">
       <VmmProjectDirectory entries={projects.map((project) => ({ value: project.projectId, label: project.name, description: project.path, bound: bindingsByVulcanProject.has(project.projectId), hasOverride: project.hasOverride }))} value={selectedHostId} disabled={effectiveBusy} onChange={setSelectedHostId} />
       <Card>
-        <CardHeader><CardTitle className="flex items-center gap-2"><Link2 className="size-4" aria-hidden="true" />{t("vmm.nativeProjects.bindingsTitle")}</CardTitle><CardDescription>{t("vmm.nativeProjects.bindingsDescription")}</CardDescription></CardHeader>
-        <CardContent className="space-y-3">
+        <CardHeader><CardTitle className="vk-form-inline"><Link2 className="vk-icon" aria-hidden="true" />{t("vmm.nativeProjects.bindingsTitle")}</CardTitle><CardDescription>{t("vmm.nativeProjects.bindingsDescription")}</CardDescription></CardHeader>
+        <CardContent className="vk-form-stack">
           {projects.filter((project) => project.projectId === selectedHostId).map((project) => {
             const ownerId = Number(ownerDrafts[project.projectId])
             // Compare this editor with the accepted binding; project navigation never discards its draft.
@@ -362,26 +364,26 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
             const savedBinding = bindingsByVulcanProject.get(project.projectId)
             const bindingDirty = (ownerDrafts[project.projectId] ?? "") !== (savedBinding ? String(savedBinding.ownerProjectId) : "") || JSON.stringify(linkedDrafts[project.projectId] ?? []) !== JSON.stringify(savedBinding?.linkedProjectIds ?? [])
             return (
-              <div className="space-y-3" key={project.projectId}>
-                <div className="grid gap-3 md:grid-cols-[minmax(10rem,1fr)_minmax(12rem,1fr)_auto]">
-                  <div className="min-w-0"><p className="truncate text-sm font-medium">{project.name}</p><p className="truncate text-xs text-muted-foreground">{project.projectId}</p></div>
+              <div className="vk-form-stack" key={project.projectId}>
+                <div className="vk-mem-link-grid">
+                  <div className="vk-form-cell"><p className="vk-form-name">{project.name}</p><p className="vk-form-note vk-truncate">{project.projectId}</p></div>
                   <Select disabled={effectiveBusy} onValueChange={(value) => { setOwnerDrafts((current) => ({ ...current, [project.projectId]: value === "unbound" ? "" : value })); setLinkedDrafts((current) => ({ ...current, [project.projectId]: value === "unbound" ? [] : (current[project.projectId] ?? []).filter((id) => id !== Number(value)) })) }} value={ownerDrafts[project.projectId] || "unbound"}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent><SelectItem value="unbound">{t("vmm.nativeProjects.unbound")}</SelectItem>{(catalog?.projects ?? []).map((item) => <SelectItem key={item.projectId} value={String(item.projectId)}>{item.name}</SelectItem>)}</SelectContent>
                   </Select>
-                  <Button disabled={effectiveBusy || !bindingDirty} onClick={() => void saveBinding(project.projectId)} type="button" variant="outline"><Save className="size-4" aria-hidden="true" />{t("vmm.nativeProjects.saveBinding")}</Button>
+                  <Button disabled={effectiveBusy || !bindingDirty} onClick={() => void saveBinding(project.projectId)} type="button" variant="outline"><Save className="vk-icon" aria-hidden="true" />{t("vmm.nativeProjects.saveBinding")}</Button>
                 </div>
-                {bindingDirty ? <p className="text-xs text-muted-foreground">{t("composer.capability.saveHint.unsaved")}</p> : null}
+                {bindingDirty ? <p className="vk-form-note">{t("composer.capability.saveHint.unsaved")}</p> : null}
                 {ownerId > 0 ? (
                   <div>
                     <Label>{t("vmm.nativeProjects.linkedRecall")}</Label>
-                    <p className="my-2 text-xs text-muted-foreground">{t("memory.workspace.selectedCount").replace("{count}", String((linkedDrafts[project.projectId] ?? []).filter((id) => id !== ownerId).length))}</p>
+                    <p className="vk-form-note vk-mem-gap">{t("memory.workspace.selectedCount").replace("{count}", String((linkedDrafts[project.projectId] ?? []).filter((id) => id !== ownerId).length))}</p>
                     <Input aria-label={t("memory.profile.searchProject")} placeholder={t("memory.profile.searchProject")} value={linkedSearch} onChange={(event) => setLinkedSearch(event.target.value)} />
                     <div className="vmm-linked-project-list">
                       {(catalog?.projects ?? []).filter((item) => item.projectId !== ownerId && `${item.name} ${item.tag}`.toLocaleLowerCase().includes(linkedSearch.trim().toLocaleLowerCase())).map((item) => (
-                        <label className="flex cursor-pointer items-center gap-2 py-2 text-sm" key={item.projectId}>
-                          <input disabled={effectiveBusy} checked={(linkedDrafts[project.projectId] ?? []).includes(item.projectId)} onChange={() => toggleLinkedProject(project.projectId, item.projectId)} type="checkbox" />
-                          <span className="min-w-0"><span className="block truncate" title={item.name}>{item.name}</span><span className="text-xs text-muted-foreground">{item.tag}</span></span>
+                        <label className="vk-check-label vk-mem-check" key={item.projectId}>
+                          <input disabled={effectiveBusy} checked={(linkedDrafts[project.projectId] ?? []).includes(item.projectId)} onChange={() => toggleLinkedProject(project.projectId, item.projectId)} className="vk-check" type="checkbox" />
+                          <span className="vk-form-cell"><span className="vk-truncate vk-mem-line" title={item.name}>{item.name}</span><span className="vk-form-note">{item.tag}</span></span>
                         </label>
                       ))}
                     </div>
@@ -398,15 +400,15 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
       <VmmProjectDirectory entries={(catalog?.projects ?? []).map((project) => ({ value: String(project.projectId), label: project.name, description: project.tag, bound: (catalog?.bindings ?? []).some((binding) => binding.ownerProjectId === project.projectId), hasOverride: false }))} value={memoryProjectId} disabled={effectiveBusy} allowOverrides={false} onChange={setMemoryProjectId} />
       <Card>
         <CardHeader><CardTitle>{t("vmm.nativeProjects.catalogTitle")}</CardTitle><CardDescription>{t("vmm.nativeProjects.catalogDescription")}</CardDescription></CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="vk-form-stack">
           {(catalog?.projects ?? []).filter((project) => String(project.projectId) === memoryProjectId).map((project) => (
-            <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-[minmax(12rem,1fr)_auto_auto_auto]" key={project.projectId}>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2"><Input onChange={(event) => setRenameDrafts((current) => ({ ...current, [project.projectId]: event.target.value }))} value={renameDrafts[project.projectId] ?? project.name} /><Button disabled={effectiveBusy || !(renameDrafts[project.projectId] ?? "").trim()} onClick={() => void runAction("native_project_rename", { vmmProjectId: project.projectId, name: renameDrafts[project.projectId]?.trim() })} size="icon" title={t("vmm.nativeProjects.rename")} type="button" variant="outline"><Pencil className="size-4" aria-hidden="true" /></Button></div>
-                <p className="text-xs text-muted-foreground">{project.tag}</p>
+            <div className="vk-form-box vk-mem-project-row" key={project.projectId}>
+              <div className="vk-form-tight">
+                <div className="vk-form-inline"><Input onChange={(event) => setRenameDrafts((current) => ({ ...current, [project.projectId]: event.target.value }))} value={renameDrafts[project.projectId] ?? project.name} /><Button disabled={effectiveBusy || !(renameDrafts[project.projectId] ?? "").trim()} onClick={() => void runAction("native_project_rename", { vmmProjectId: project.projectId, name: renameDrafts[project.projectId]?.trim() })} size="icon" title={t("vmm.nativeProjects.rename")} type="button" variant="outline"><Pencil className="vk-icon" aria-hidden="true" /></Button></div>
+                <p className="vk-form-note">{project.tag}</p>
               </div>
-              <Button disabled={effectiveBusy} onClick={() => void runAction("native_project_clear_preview", { vmmProjectId: project.projectId })} type="button" variant="outline"><DatabaseZap className="size-4" aria-hidden="true" />{t("vmm.nativeProjects.clear")}</Button>
-              <Button disabled={effectiveBusy || project.protected} onClick={() => void runAction("native_project_delete_preview", { vmmProjectId: project.projectId })} type="button" variant="destructive"><Trash2 className="size-4" aria-hidden="true" />{project.protected ? t("vmm.nativeProjects.protected") : t("vmm.nativeProjects.delete")}</Button>
+              <Button disabled={effectiveBusy} onClick={() => void runAction("native_project_clear_preview", { vmmProjectId: project.projectId })} type="button" variant="outline"><DatabaseZap className="vk-icon" aria-hidden="true" />{t("vmm.nativeProjects.clear")}</Button>
+              <Button disabled={effectiveBusy || project.protected} onClick={() => void runAction("native_project_delete_preview", { vmmProjectId: project.projectId })} type="button" variant="destructive"><Trash2 className="vk-icon" aria-hidden="true" />{project.protected ? t("vmm.nativeProjects.protected") : t("vmm.nativeProjects.delete")}</Button>
             </div>
           ))}
         </CardContent>
@@ -415,7 +417,7 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
       </div></div>
       <div hidden={projectView !== "migration"}><Card>
         <CardHeader><CardTitle>{t("vmm.nativeProjects.migrateTitle")}</CardTitle><CardDescription>{t("vmm.nativeProjects.migrateDescription")}</CardDescription></CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+        <CardContent className="vk-form-cols3">
           <NativeProjectSelect catalog={catalog} onChange={setMigrationSourceId} placeholder={t("vmm.nativeProjects.source")} value={migrationSourceId} />
           <NativeProjectSelect catalog={catalog} onChange={setMigrationTargetId} placeholder={t("vmm.nativeProjects.target")} value={migrationTargetId} />
           <Button disabled={effectiveBusy || !migrationSourceId || !migrationTargetId || migrationSourceId === migrationTargetId} onClick={() => void runAction("native_project_migration_preview", { sourceProjectId: Number(migrationSourceId), targetProjectId: Number(migrationTargetId) })} type="button" variant="outline">{t("vmm.nativeProjects.previewMigration")}</Button>
@@ -423,7 +425,7 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
       </Card>
 
       </div>
-      <div hidden={projectView !== "rules"} className="space-y-4">
+      <div hidden={projectView !== "rules"} className="vk-form-loose">
       {/* The edited project sits in the rule-group tab row, so both rule groups visibly share one target.
           被编辑项目位于规则分组标签行内，使两个规则分组明确共用同一目标。 */}
       <PageTabs
@@ -441,7 +443,7 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
         <div hidden={projectRuleGroup !== "profile"}><VmmNativeProjectProfilePolicy selectedProjectId={Number(memoryProjectId)} projects={catalog.projects} busy={effectiveBusy || projectView !== "rules" || projectRuleGroup !== "profile"} onRunAction={runAction} /></div>
       </> : null}
       </div>
-      <Dialog open={preview !== null} onOpenChange={(open) => { if (!open && !effectiveBusy) setPreview(null) }}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>{t(preview?.kind === "delete" ? "vmm.nativeProjects.preview.delete" : preview?.kind === "clear" ? "vmm.nativeProjects.preview.clear" : "vmm.nativeProjects.preview.migration")}</DialogTitle><DialogDescription>{t("vmm.nativeProjects.description")}</DialogDescription></DialogHeader>
+      <Dialog open={preview !== null} onOpenChange={(open) => { if (!open && !effectiveBusy) setPreview(null) }}><DialogContent size="lg"><DialogHeader><DialogTitle>{t(preview?.kind === "delete" ? "vmm.nativeProjects.preview.delete" : preview?.kind === "clear" ? "vmm.nativeProjects.preview.clear" : "vmm.nativeProjects.preview.migration")}</DialogTitle><DialogDescription>{t("vmm.nativeProjects.description")}</DialogDescription></DialogHeader>
       {preview ? <NativePreviewCard busy={effectiveBusy} onCancel={() => setPreview(null)} onConfirm={() => void executePreview()} preview={preview} /> : null}
       </DialogContent></Dialog>
     </fieldset>
@@ -482,7 +484,7 @@ function NativePreviewCard({ busy, onCancel, onConfirm, preview }: {
     <Alert variant={preview.kind === "delete" ? "destructive" : "default"}>
       {conflicts > 0 || preview.kind === "delete" ? <CircleAlert aria-hidden="true" /> : <DatabaseZap aria-hidden="true" />}
       <AlertTitle>{t(titleKey)}</AlertTitle>
-      <AlertDescription className="space-y-3">
+      <AlertDescription className="vk-form-stack">
         {preview.kind === "migration" ? (
           <p>
             {t("vmm.nativeProjects.previewMigrationCounts")
@@ -504,20 +506,20 @@ function NativePreviewCard({ busy, onCancel, onConfirm, preview }: {
         )}
         {preview.kind === "migration" ? <p>{t("vmm.nativeProjects.previewConflicts").replace("{count}", String(conflicts))}</p> : null}
         {preview.kind === "migration" ? (
-          <details className="rounded-md border bg-background/60 p-2">
-            <summary className="cursor-pointer text-sm font-medium">
+          <details className="vk-mem-disclosure">
+            <summary className="vk-form-strong">
               {t("vmm.nativeProjects.previewRecords").replace("{count}", String(preview.value.records.length))}
             </summary>
-            <div className="mt-2 max-h-72 space-y-2 overflow-auto">
+            <div className="vk-form-stack vk-mem-scroll-list">
               {preview.value.records.map((record) => (
-                <div className="rounded border px-2 py-1.5 text-xs" key={`${record.recordKind}:${record.recordId}`}>
-                  <p className="font-medium">
+                <div className="vk-mem-record" key={`${record.recordKind}:${record.recordId}`}>
+                  <p className="vk-form-em">
                     {t(`vmm.nativeProjects.recordKind.${record.recordKind}` as TranslationKey)} · {record.recordId}
                   </p>
                   {record.sessionSourceId && record.sessionSourceId !== record.recordId ? (
-                    <p className="text-muted-foreground">{t("vmm.nativeProjects.recordSession").replace("{session}", record.sessionSourceId)}</p>
+                    <p className="vk-faint">{t("vmm.nativeProjects.recordSession").replace("{session}", record.sessionSourceId)}</p>
                   ) : null}
-                  {record.summary ? <p className="mt-1 whitespace-pre-wrap text-muted-foreground">{record.summary}</p> : null}
+                  {record.summary ? <p className="vk-form-prose vk-faint">{record.summary}</p> : null}
                 </div>
               ))}
             </div>
@@ -525,9 +527,9 @@ function NativePreviewCard({ busy, onCancel, onConfirm, preview }: {
         ) : null}
         {owners.length > 0 ? <p>{t("vmm.nativeProjects.previewOwners").replace("{projects}", owners.join(", "))}</p> : null}
         {links.length > 0 ? <p>{t("vmm.nativeProjects.previewLinks").replace("{projects}", links.join(", "))}</p> : null}
-        <div className="flex flex-wrap gap-2">
+        <div className="vk-form-chips">
           <Button disabled={busy} onClick={onConfirm} type="button" variant={preview.kind === "delete" ? "destructive" : "default"}>
-            {conflicts > 0 ? <CircleAlert className="size-4" aria-hidden="true" /> : null}
+            {conflicts > 0 ? <CircleAlert className="vk-icon" aria-hidden="true" /> : null}
             {conflicts > 0 ? t("vmm.nativeProjects.confirmRenameMigration") : t("vmm.nativeProjects.confirm")}
           </Button>
           <Button disabled={busy} onClick={onCancel} type="button" variant="outline">{t("vmm.setup.cancel")}</Button>

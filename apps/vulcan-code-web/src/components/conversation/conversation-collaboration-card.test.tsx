@@ -25,10 +25,10 @@ let contentHeight: number;
 beforeEach(() => {
   contentHeight = 40;
   const computedStyle = window.getComputedStyle.bind(window);
-  vi.spyOn(window, "getComputedStyle").mockImplementation((element) => element.classList.contains("conversation-v1-collaboration-bubble-body")
+  vi.spyOn(window, "getComputedStyle").mockImplementation((element) => element.classList.contains("vk-collab-bubble-body")
     ? { lineHeight: "20px" } as CSSStyleDeclaration : computedStyle(element));
   vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
-    return this.classList.contains("conversation-v1-collaboration-bubble-body") ? contentHeight : 0;
+    return this.classList.contains("vk-collab-bubble-body") ? contentHeight : 0;
   });
   vi.stubGlobal("ResizeObserver", class {
     // Geometry is controlled by the test; no asynchronous resize notifications are needed.
@@ -170,7 +170,7 @@ async function mount(
   );
   // Existing action assertions inspect the real expanded body; the initial surface must stay folded.
   // 既有操作断言检查真实展开正文；初始界面必须保持收起。
-  const toggle = host.querySelector<HTMLButtonElement>(".tool-presentation-summary .conversation-v1-collaboration-fold");
+  const toggle = host.querySelector<HTMLButtonElement>(".vk-collab-head .vk-collab-toggle");
   if (toggle?.getAttribute("aria-expanded") === "false") {
     await act(async () => toggle.click());
   }
@@ -190,7 +190,6 @@ it("renders each collaboration kind under its own card identity", async () => {
   await mount(inboundNotificationEvent());
   const notificationCard = host.querySelector("article")!;
   expect(notificationCard.getAttribute("data-collaboration-card-kind")).toBe("notification");
-  expect(notificationCard.className).toContain("conversation-v1-collaboration-notification-card");
 });
 
 it("renders the interaction view for a collaboration envelope and the result card for a child return", async () => {
@@ -241,7 +240,7 @@ it("renders the interaction view for a collaboration envelope and the result car
   expect(resultCard.textContent).toContain("yes_agent");
   expect(resultCard.querySelector(".lucide-messages-square")).not.toBeNull();
   expect(resultCard.textContent).not.toContain("Child final content");
-  const toggle = resultCard.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-fold")!;
+  const toggle = resultCard.querySelector<HTMLButtonElement>(".vk-collab-toggle")!;
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   await act(async () => toggle.click());
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
@@ -280,8 +279,7 @@ it("shows a failed answer delivery as failed after authorization revocation", as
       },
     },
   });
-  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toBe("Failed");
-  expect(host.querySelector(".conversation-v1-collaboration-details")).toBeNull();
+  expect(host.querySelector(".vk-collab-badge")?.textContent).toBe("Failed");
 });
 
 it("enables session navigation only for a routable participant", async () => {
@@ -295,7 +293,7 @@ it("enables session navigation only for a routable participant", async () => {
   await act(async () => button("Target").click());
   expect(onOpenSession).not.toHaveBeenCalled();
   await mount(questionEvent(), { onOpenSession, availableSessionIds: new Set(["session-target"]), subagentNames: names });
-  const toggle = host.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-row-toggle")!;
+  const toggle = host.querySelector<HTMLButtonElement>(".vk-collab-toggle")!;
   const expandedBeforeNavigation = toggle.getAttribute("aria-expanded");
   expect(button("Target").textContent).toBe("[Target]");
   expect(button("Target").querySelector(".lucide-arrow-up-right")).not.toBeNull();
@@ -307,13 +305,13 @@ it("enables session navigation only for a routable participant", async () => {
 it.each([false, true])("shows incoming content immediately, folding only excess lines (long: %s)", async (long) => {
   contentHeight = long ? 20 * (USER_PROMPT_COLLAPSE_LINE_LIMIT + 1) : 40;
   await mount(inboundNotificationEvent());
-  const bubble = host.querySelector(".user-bubble")!;
+  const bubble = host.querySelector(".vk-prompt")!;
   expect(bubble.textContent).toContain("Phase one finished.");
   expect(bubble.querySelector("time")).toBeNull();
-  expect(host.querySelector("article > .user-message-meta > time")).not.toBeNull();
-  expect(host.querySelector(".tool-presentation-summary .conversation-v1-collaboration-fold")).toBeNull();
-  expect(host.querySelector(".user-message-copy")).toBeNull();
-  const toggle = bubble.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-overflow-toggle");
+  expect(host.querySelector("article > .vk-prompt-foot > time")).not.toBeNull();
+  expect(host.querySelector(".vk-collab-head .vk-collab-toggle")).toBeNull();
+  expect(host.querySelector(".vk-prompt-foot > .vk-icon-btn")).toBeNull();
+  const toggle = bubble.querySelector<HTMLButtonElement>(".vk-collab-more");
   expect(Boolean(toggle)).toBe(long);
   if (toggle) {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -327,8 +325,6 @@ it.each([false, true])("shows incoming content immediately, folding only excess 
 
 it.each(["pending", "answered"] as const)("shows no cancellation control or technical details for a %s question", async (state) => {
   await mount(questionEvent(state));
-  expect(host.querySelector(".conversation-v1-collaboration-cancel-button")).toBeNull();
-  expect(host.querySelector(".conversation-v1-collaboration-details")).toBeNull();
   expect(host.textContent).toContain("Which file owns this behavior?");
 });
 
@@ -343,9 +339,9 @@ it.each([false, true])("renders received questions and answers as incoming bubbl
     input_source: "agent_message", text: '<vulcan_agent_message version="1" event_id="delivery-1" kind="question" source="session-source" target="session-target" question_id="question-1" scope="question">Question `&lt;literal&gt;` &amp; text</vulcan_agent_message>',
   } };
   await act(async () => root.render(<I18nProvider initialLocale="en-US"><ConversationAgentInteractionView interaction={incoming} /></I18nProvider>));
-  expect(host.querySelector(".user-bubble")?.textContent).toContain("Question <literal> & text");
-  expect(host.querySelector(".conversation-v1-collaboration-row-toggle")).toBeNull();
-  expect(Boolean(host.querySelector(".conversation-v1-collaboration-overflow-toggle"))).toBe(long);
+  expect(host.querySelector(".vk-prompt")?.textContent).toContain("Question <literal> & text");
+  expect(host.querySelector(".vk-collab-toggle")).toBeNull();
+  expect(Boolean(host.querySelector(".vk-collab-more"))).toBe(long);
   // The answer's source snapshot contains the original question, which must never appear in its bubble.
   // 答案来源快照含原问题，但它绝不能出现在答案气泡里。
   const replied = questionEvent("answered", "question_answered");
@@ -353,12 +349,12 @@ it.each([false, true])("renders received questions and answers as incoming bubbl
   replied.after_state.question.answer = { operation_id: "reply", responder: participant("target"), body: "Only the answer.", settled_at_ms: 110,
     delivery: { state: "undelivered", delivery_revision: 1, last_operation_id: "reply", updated_at_ms: 110 } };
   await mount(replied);
-  expect(host.querySelector(".user-bubble")?.textContent).toContain("Only the answer.");
+  expect(host.querySelector(".vk-prompt")?.textContent).toContain("Only the answer.");
   expect(host.textContent).not.toContain("Which file owns this behavior?");
-  expect(host.querySelector(".conversation-v1-collaboration-row-toggle")).toBeNull();
-  expect(Boolean(host.querySelector(".conversation-v1-collaboration-overflow-toggle"))).toBe(long);
+  expect(host.querySelector(".vk-collab-toggle")).toBeNull();
+  expect(Boolean(host.querySelector(".vk-collab-more"))).toBe(long);
   await mount({ ...replied, event_kind: "question_created" });
-  expect(host.querySelector(".user-bubble")).toBeNull();
+  expect(host.querySelector(".vk-prompt")).toBeNull();
   expect(host.textContent).toContain("Which file owns this behavior?");
   expect(host.textContent).not.toContain("Only the answer.");
 });
@@ -395,9 +391,9 @@ it("attaches exact answer receipts in place without duplicating or moving the re
   await render([receipt("another-question", 9, "failed"), receipt("question-1", 3, "delivered"), receipt("question-1", 2, "failed")]);
   expect(host.querySelector("article")).toBe(card);
   expect(host.querySelectorAll("article")).toHaveLength(1);
-  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toContain("Delivered");
-  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).not.toContain("Failed");
-  expect(host.querySelector(".user-bubble")?.textContent).toBe("Reply body");
+  expect(host.querySelector(".vk-collab-badge")?.textContent).toContain("Delivered");
+  expect(host.querySelector(".vk-collab-badge")?.textContent).not.toContain("Failed");
+  expect(host.querySelector(".vk-prompt")?.textContent).toBe("Reply body");
   expect(host.querySelector("time")?.dateTime).toBe(timestamp);
 });
 
@@ -431,11 +427,11 @@ it("updates receiver execution in the question bubble and suppresses stale runni
   await render([execution("question-1", "running"), execution("unrelated", "completed", "failed")]);
   const card = host.querySelector("article");
   const timestamp = host.querySelector("time")?.dateTime;
-  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toBe("Running");
+  expect(host.querySelector(".vk-collab-badge")?.textContent).toBe("Running");
   for (const outcome of ["settled", "failed"] as const) {
     await render([execution("question-1", "running"), execution("question-1", "completed", outcome)]);
     expect(host.querySelector("article")).toBe(card);
-    expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toBe(outcome === "settled" ? "Settled" : "Failed");
+    expect(host.querySelector(".vk-collab-badge")?.textContent).toBe(outcome === "settled" ? "Settled" : "Failed");
   }
   // A persisted settlement wins even when the window still contains the earlier running snapshot.
   // 即使窗口仍含此前运行快照，持久化结算也应优先显示。
@@ -448,9 +444,9 @@ it("updates receiver execution in the question bubble and suppresses stale runni
   } }]);
   expect(host.querySelector("article")).toBe(card);
   expect(host.querySelectorAll("article")).toHaveLength(1);
-  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toContain("Answered");
+  expect(host.querySelector(".vk-collab-badge")?.textContent).toContain("Answered");
   expect(host.textContent).not.toContain("Running");
-  expect(host.querySelector(".user-bubble")?.textContent).toBe("Original question");
+  expect(host.querySelector(".vk-prompt")?.textContent).toBe("Original question");
   expect(host.querySelector("time")?.dateTime).toBe(timestamp);
 });
 

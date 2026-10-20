@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { ComposerPanelToolbarRight } from "@/components/composer/composer-panel/toolbar-right";
 import { I18nProvider } from "@/i18n";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type { ContextUsageSnapshot, SessionProviderUsageSummary } from "@/types";
 
 // renderToolbar renders the exact composer action surface for one draft and run state.

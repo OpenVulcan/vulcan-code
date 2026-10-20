@@ -1,0 +1,25 @@
+/* Provider tool test console: a declared-input form above ranked search hits or extracted pages. */
+/* 供应商工具测试台：声明式输入表单，下方为排名搜索结果或抓取页面。 */
+.vk-tt { grid-template-rows: auto minmax(0, 1fr); height: min(720px, 100%); overflow: hidden; }
+.vk-tt-form { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
+.vk-tt-body { display: grid; align-content: start; gap: calc(var(--vk-u) * 4); min-height: 0; padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 5); overflow-y: auto; overscroll-behavior: contain; }
+.vk-tt-narrow { max-width: 12rem; }
+.vk-tt-pair { display: grid; grid-template-columns: minmax(0, 1fr) 12rem; gap: calc(var(--vk-u) * 3); }
+.vk-tt-trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: calc(var(--vk-u) * 3); }
+.vk-tt-switches { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 5); }
+
+/* Results: ranked hits read like a result page; extracted pages show their content in a mono plate. */
+/* 结果：排名命中像结果页一样阅读；抓取页面在等宽底板中显示内容。 */
+.vk-tt-results { display: grid; gap: calc(var(--vk-u) * 3); padding-top: calc(var(--vk-u) * 4); border-top: var(--vk-bw) solid var(--vk-line); }
+.vk-tt-hits { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; background: var(--vk-line-soft); border: var(--vk-bw) solid var(--vk-line); }
+.vk-tt-hit { display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); background: var(--vk-panel); }
+.vk-tt-hit > .vk-num { color: var(--vk-ember); font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-tt-link { color: var(--vk-signal); font-weight: 500; text-decoration: none; overflow-wrap: anywhere; }
+.vk-tt-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.vk-tt-snippet { margin: var(--vk-u) 0 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); white-space: pre-wrap; }
+.vk-tt-page { display: grid; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vk-tt-page .vk-form-chips > .vk-tt-link { font-size: var(--vk-fs-xs); font-weight: 400; }
+.vk-tt-content { max-height: 16rem; margin: 0; padding: calc(var(--vk-u) * 3); overflow: auto; background: var(--vk-sunken); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); white-space: pre-wrap; }
+@media (max-width: 640px) {
+  .vk-tt-pair, .vk-tt-trio { grid-template-columns: minmax(0, 1fr); }
+}

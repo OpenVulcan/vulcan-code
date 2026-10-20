@@ -19,7 +19,7 @@ describe("DraftSubmissionTranscript", () => {
       surfaceId="draft-1"
     />);
     expect(html).toContain('data-client-action-id="client-1"');
-    expect(html).toContain('class="message-row user"');
+    expect(html).toContain('class="vk-prompt-row"');
     expect(html).toContain("first prompt");
     expect(html).toContain("notes.txt");
   });

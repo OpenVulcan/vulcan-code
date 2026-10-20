@@ -24,6 +24,7 @@ describe("provider icon library", () => {
     expect(resolveProviderIconKey({ providerId: "commandcode" })).toBe("commandcode")
     expect(resolveProviderIconKey({ providerId: "opencode-go" })).toBe("opencode-go")
     expect(resolveProviderIconKey({ providerId: "tokenrhythm" })).toBe("tokenrhythm")
+    expect(resolveProviderIconKey({ providerId: "openvulcan" })).toBe("openvulcan")
   })
 
   // Product artwork overrides its provider-family default.
@@ -49,7 +50,7 @@ describe("provider icon library", () => {
     const markup = renderToStaticMarkup(<ProviderIcon providerId="opencode-go" />)
 
     expect(markup).toContain('data-provider-icon="opencode-go"')
-    expect(markup).toContain("dark:invert")
+    expect(markup).toContain("data-mono=\"true\"")
   })
 
   // Token Rhythm uses the supplied monochrome artwork and remains visible in dark theme.
@@ -58,7 +59,7 @@ describe("provider icon library", () => {
     const markup = renderToStaticMarkup(<ProviderIcon providerId="tokenrhythm" />)
 
     expect(markup).toContain('data-provider-icon="tokenrhythm"')
-    expect(markup).toContain("dark:invert")
+    expect(markup).toContain("data-mono=\"true\"")
   })
 
   // StepFun's white supplied artwork uses a contrasting tile and dark-theme inversion.
@@ -69,9 +70,8 @@ describe("provider icon library", () => {
     const markup = renderToStaticMarkup(<ProviderIcon providerId="stepfun" />)
 
     expect(markup).toContain('data-provider-icon="stepfun"')
-    expect(markup).toContain("bg-black")
-    expect(markup).toContain("dark:bg-white")
-    expect(markup).toContain("dark:invert")
+    expect(markup).toContain("data-surface=\"theme\"")
+    expect(markup).toContain("data-mono=\"true\"")
   })
 
   // Relay artwork owns one visible and accessible marker independent of the provider name.

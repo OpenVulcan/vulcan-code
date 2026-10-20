@@ -9,6 +9,12 @@ import { DEFAULT_ANSWER_MODE } from "@/generated/protocol-limits";
 // BROWSER_PREVIEW_USER_VULCAN_ROOT 是浏览器回退数据展示的按构建配置区分的用户根目录。
 export const BROWSER_PREVIEW_USER_VULCAN_ROOT = import.meta.env.DEV ? ".vulcan-debug" : ".vulcan";
 
+// previewUpdatedAt stamps preview sessions relative to page load, in the unix-millisecond text the service sends.
+// previewUpdatedAt 以服务端发送的 Unix 毫秒文本格式，按页面加载时间为预览会话打上时间戳。
+function previewUpdatedAt(minutesAgo: number): string {
+  return String(Date.now() - minutesAgo * 60_000);
+}
+
 // BrowserFallbackStartup is used when the WebUI runs outside Tauri during frontend development.
 // BrowserFallbackStartup 用于 WebUI 在 Tauri 外部进行前端开发时展示。
 export const browserFallbackStartup: StartupSnapshot = {
@@ -17,7 +23,7 @@ export const browserFallbackStartup: StartupSnapshot = {
   steps: [
     { id: "service-process", label: "Core Service", status: "warning", message: "Browser preview mode: local Core Service is not connected" },
     { id: "luaskills", label: "LuaSkills", status: "pending", message: "Waiting for the desktop shell to provide live status" },
-    { id: "vldb", label: "VLDB", status: "pending", message: "Waiting for the desktop shell to provide live status" },
+    { id: "data-store", label: "Data store", status: "pending", message: "Waiting for the desktop shell to provide live status" },
     { id: "mcp", label: "MCP Runtime", status: "pending", message: "Waiting for the desktop shell to provide live status" },
     { id: "workspace", label: "Workspace", status: "ready", message: "Frontend layout preview is ready" },
   ],
@@ -41,7 +47,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   modules: [
     { id: "core", label: "Core Service", status: "warning", message: "Browser preview mode" },
     { id: "luaskills", label: "LuaSkills", status: "pending", message: "Waiting for live status" },
-    { id: "vldb", label: "VLDB", status: "pending", message: "Waiting for live status" },
+    { id: "data-store", label: "Data store", status: "pending", message: "Waiting for live status" },
     { id: "mcp", label: "MCP Runtime", status: "pending", message: "Waiting for live status" },
     { id: "workspace", label: "Workspace", status: "ready", message: "Frontend layout preview" },
   ],
@@ -55,14 +61,19 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   expandedProjectIds: ["preview", "calc", "test-project", "luaskills-packages", "vulcan-workmem"],
   projectSettingsRevisions: { global: { vmm: 0, agentSkills: 0 }, byProject: {} },
   conversations: [
-    { id: "preview", title: "Tauri WebUI migration preview", status: "Completed", lastUpdatedLabel: "now", projectId: "preview" },
-    { id: "preview-intro", title: "Introduce yourself", status: "Completed", lastUpdatedLabel: "now", projectId: "preview" },
-    { id: "calc-curl", title: "Investigate missing lcurl.safe module", status: "Completed", lastUpdatedLabel: "3 days", projectId: "calc" },
-    { id: "calc-iconv", title: "Check missing iconv support", status: "Completed", lastUpdatedLabel: "1 week", projectId: "calc" },
-    { id: "test-tools", title: "Available tools", status: "Completed", lastUpdatedLabel: "now", projectId: "test-project", unread: true },
-    { id: "test-playwright", title: "Add Playwright browser support", status: "Running", lastUpdatedLabel: "1 min", projectId: "test-project" },
-    { id: "luaskills-rust", title: "Analyze the Rust plugin mechanism", status: "Completed", lastUpdatedLabel: "2 days", projectId: "luaskills-packages" },
-    { id: "workmem-plan", title: "VMM pinned-project integration plan", status: "Completed", lastUpdatedLabel: "5 hours", projectId: "vulcan-workmem" },
+    { id: "preview", title: "Tauri WebUI migration preview", status: "Completed", lastUpdatedLabel: "now", lastUpdatedAt: previewUpdatedAt(0), projectId: "preview" },
+    { id: "preview-intro", title: "Introduce yourself", status: "Completed", lastUpdatedLabel: "now", lastUpdatedAt: previewUpdatedAt(1), projectId: "preview" },
+    { id: "preview-picker", title: "Refactor the composer model picker", status: "Waiting", lastUpdatedLabel: "3 h ago", lastUpdatedAt: previewUpdatedAt(180), projectId: "preview", attention: { kind: "ask", priority: 1 } },
+    { id: "preview-release", title: "Release notes assistant", status: "Completed", lastUpdatedLabel: "1 d ago", lastUpdatedAt: previewUpdatedAt(26 * 60), projectId: "preview", dedicated: true },
+    { id: "preview-cards", title: "Audit the tool card layouts", status: "Completed", lastUpdatedLabel: "4 d ago", lastUpdatedAt: previewUpdatedAt(4 * 24 * 60), projectId: "preview", unread: true },
+    { id: "preview-answers", title: "Review the answer components", status: "Completed", lastUpdatedLabel: "5 d ago", lastUpdatedAt: previewUpdatedAt(5 * 24 * 60), projectId: "preview" },
+    { id: "preview-tokens", title: "Draft the design token table", status: "Completed", lastUpdatedLabel: "2 w ago", lastUpdatedAt: previewUpdatedAt(14 * 24 * 60), projectId: "preview" },
+    { id: "calc-curl", title: "Investigate missing lcurl.safe module", status: "Completed", lastUpdatedLabel: "3 days", lastUpdatedAt: previewUpdatedAt(3 * 24 * 60), projectId: "calc" },
+    { id: "calc-iconv", title: "Check missing iconv support", status: "Completed", lastUpdatedLabel: "1 week", lastUpdatedAt: previewUpdatedAt(7 * 24 * 60), projectId: "calc" },
+    { id: "test-tools", title: "Available tools", status: "Completed", lastUpdatedLabel: "now", lastUpdatedAt: previewUpdatedAt(2), projectId: "test-project", unread: true },
+    { id: "test-playwright", title: "Add Playwright browser support", status: "Running", lastUpdatedLabel: "1 min", lastUpdatedAt: previewUpdatedAt(1), projectId: "test-project" },
+    { id: "luaskills-rust", title: "Analyze the Rust plugin mechanism", status: "Completed", lastUpdatedLabel: "2 days", lastUpdatedAt: previewUpdatedAt(2 * 24 * 60), projectId: "luaskills-packages" },
+    { id: "workmem-plan", title: "VMM pinned-project integration plan", status: "Completed", lastUpdatedLabel: "5 hours", lastUpdatedAt: previewUpdatedAt(5 * 60), projectId: "vulcan-workmem" },
   ],
   archivedProjects: [],
   archivedConversations: [],
@@ -326,7 +337,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     ],
   },
   settings: [
-    { id: "runtime", label: "Runtime", description: "Core Service, LuaSkills, VLDB, and MCP", items: ["Startup mode", "Runtime directory", "MCP tool policy"] },
+    { id: "runtime", label: "Runtime", description: "Core Service, data store, LuaSkills, and MCP", items: ["Startup mode", "Runtime directory", "MCP tool policy"] },
     { id: "providers", label: "Models & Providers", description: "Model providers, access, defaults, and reasoning configuration", items: ["Default provider", "Default model", "Model access", "Reasoning effort"] },
     { id: "remote", label: "Remote Access", description: "Future browser, mobile, and remote-client access to Core Service", items: ["Bind address", "Access token", "Remote switch", "Audit log"] },
   ],

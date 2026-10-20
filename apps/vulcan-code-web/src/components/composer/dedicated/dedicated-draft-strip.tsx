@@ -2,14 +2,14 @@ import { Folder } from "lucide-react";
 import {
   SegmentedControl,
   SegmentedControlItem,
-} from "@/components/ui/choice-controls";
+} from "@/ui-kit/primitives/choice-controls";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@/ui-kit/primitives/select";
 import { useI18n } from "@/i18n";
 import type { DedicatedToolAccess } from "@/service/conversation-event-window-client";
 import type { DraftComposerContextValue } from "./draft-composer-context";
@@ -29,9 +29,9 @@ export function DedicatedDraftStrip(props: {
 }) {
   const { t } = useI18n();
   return (
-    <div className="dedicated-composer-tab">
+    <div className="vk-draft-strip">
       <Select disabled={props.disabled} onValueChange={props.draft.onChangeProject} value={props.draft.projectId}>
-        <SelectTrigger aria-label={t("composer.draft.project")} className="max-w-64 shadow-none" size="sm">
+        <SelectTrigger aria-label={t("composer.draft.project")} size="sm">
           <Folder size={14} aria-hidden="true" />
           <SelectValue />
         </SelectTrigger>

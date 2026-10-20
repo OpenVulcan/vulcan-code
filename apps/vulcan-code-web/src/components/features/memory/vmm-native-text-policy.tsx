@@ -1,11 +1,12 @@
 import * as React from "react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
+import { Button } from "@/ui-kit/primitives/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
+import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeRuntimePolicySummary, VmmNativeTextPolicySummary } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // TextPolicyProps shares the parent-owned load and native action channel; rendering never performs an action.
 // TextPolicyProps 共用父级加载与原生动作通道；渲染绝不执行动作。
@@ -71,20 +72,20 @@ export function VmmNativeTextPolicy({ settings, defaults, busy, onRunAction, onS
       if (mounted.current) setPending(false)
     }
   }
-  return <Card className="w-full min-w-0">
+  return <Card>
     <CardHeader><CardTitle>{t("memory.textPolicy.title")}</CardTitle><CardDescription>{t("memory.textPolicy.description")}</CardDescription></CardHeader>
-    <CardContent className="space-y-4">
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    <CardContent className="vk-form-loose">
+      {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
       {saved ? <p role="status">{t("memory.textPolicy.saved")}</p> : null}
-      <Label className="flex items-center justify-between gap-3 rounded-lg border p-3">{t("memory.textPolicy.fold")}
+      <Label className="vk-form-switch vk-form-framed">{t("memory.textPolicy.fold")}
         <Switch checked={fold} disabled={disabled} onCheckedChange={(next) => { setFold(next); setSaved(false) }} /></Label>
-      <div className="space-y-2"><Label htmlFor="vmm-text-budget">{t("memory.textPolicy.budget")}</Label>
+      <div className="vk-form-stack"><Label htmlFor="vmm-text-budget">{t("memory.textPolicy.budget")}</Label>
         <Input id="vmm-text-budget" type="number" min={256} max={131072} step={1} value={budget} disabled={disabled}
           onChange={(event) => { setBudget(event.target.value); setSaved(false) }} />
-        <p className="text-xs text-muted-foreground">{t("memory.textPolicy.budgetHint")}</p>
+        <p className="vk-form-note">{t("memory.textPolicy.budgetHint")}</p>
       </div>
-      {!valid ? <p role="alert" className="text-sm text-destructive">{t("memory.policy.invalidValues")}</p> : null}
-      <div className="flex flex-wrap gap-2">
+      {!valid ? <p role="alert" className="vk-field-error">{t("memory.policy.invalidValues")}</p> : null}
+      <div className="vk-form-chips">
         <Button disabled={disabled || !valid || !changed} onClick={() => void save()}>{t("memory.textPolicy.save")}</Button>
         <Button variant="outline" disabled={disabled} onClick={() => { setFold(defaults.foldMachineText); setBudget(String(defaults.maxFragmentTokens)); setSaved(false) }}>{t("memory.policy.resetDraft")}</Button>
       </div>

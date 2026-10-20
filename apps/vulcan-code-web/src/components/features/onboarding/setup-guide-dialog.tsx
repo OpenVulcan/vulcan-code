@@ -1,12 +1,12 @@
 import * as React from "react";
 import { ExternalLink } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { StatusPill } from "@/components/shared/status";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { RadioGroup, RadioGroupItem } from "@/ui-kit/primitives/radio-group";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
 import { DEVICE_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
 import { PermissionJudgeRegisterForm, type PermissionJudgeRegisterRequest } from "@/components/features/settings/permission-judge-register-form";
@@ -20,6 +20,7 @@ import {
   savePermissionJudgeSettings,
 } from "@/service/permission-judge-service";
 import type { PermissionJudgeSettingsSnapshot } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css";
 
 // Choice is one of the three permission judge answers the guide offers.
 // Choice 是引导提供的三种权限判定答案之一。
@@ -117,24 +118,24 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
   });
 
   return <Dialog open={props.open} onOpenChange={(open) => { if (busy === null) props.onOpenChange(open); }}>
-    <DialogContent size="lg" scrollMode="fixed-footer" className="grid-rows-[auto_minmax(0,1fr)_auto]">
+    <DialogContent size="lg" scrollMode="fixed-footer">
       <DialogHeader>
         <DialogTitle>{t("setupGuide.title")}</DialogTitle>
         <DialogDescription>{t("setupGuide.judge.intro")}</DialogDescription>
       </DialogHeader>
-      <div className="grid min-h-0 gap-4 overflow-y-auto">
+      <div className="vk-dialog-body vk-form-loose">
         {!snapshot
           ? loadError
             ? <SettingsErrorNotice detail={loadError} message={t("settings.permissionJudge.loadFailed")} />
             : <StreamPlaceholder label={t("ui.loading")} shape="rows" count={3} />
           : <>
-            <RadioGroup value={choice} onValueChange={(value) => setChoice(value as Choice)} disabled={busy !== null}>
+            <RadioGroup className="vk-form-choices" value={choice} onValueChange={(value) => setChoice(value as Choice)} disabled={busy !== null}>
               {CHOICES.map((option) => (
-                <label key={option.value} className="flex items-start gap-3 rounded-md border p-3" data-setup-choice={option.value}>
-                  <RadioGroupItem value={option.value} className="mt-1" />
-                  <span className="grid gap-1">
-                    <span className="font-medium">{t(option.title)}</span>
-                    <span className="text-sm text-muted-foreground">{t(option.description)}</span>
+                <label key={option.value} className="vk-form-choice" data-setup-choice={option.value}>
+                  <RadioGroupItem value={option.value} />
+                  <span>
+                    <strong>{t(option.title)}</strong>
+                    <small>{t(option.description)}</small>
                   </span>
                 </label>
               ))}
@@ -142,9 +143,9 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
             {choice === "local"
               ? <LocalModelStep busy={busy} run={run} snapshot={snapshot} onSnapshot={setSnapshot} />
               : null}
-            {choice === "cloud" ? <div className="grid gap-2">
+            {choice === "cloud" ? <div className="vk-form-stack">
               <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />
-              <div className="settings-card-actions">
+              <div className="vk-form-inline">
                 <Button type="button" size="sm" variant="ghost" onClick={props.onOpenProviderSettings}>
                   <ExternalLink size={14} />{t("setupGuide.cloud.providers")}
                 </Button>
@@ -192,17 +193,17 @@ function LocalModelStep(props: {
       reset();
       if (added && registered.activeModelId === null) props.onSnapshot(await activatePermissionJudgeModel(added.id));
     });
-  return <section className="grid gap-2" data-setup-step="local">
-    <p className="text-sm">{formatMessage(t("setupGuide.local.devices"), { devices })}</p>
-    {snapshot.recommendedDevice ? <p className="text-sm text-muted-foreground">
+  return <section className="vk-form-stack" data-setup-step="local">
+    <p className="vk-form-text">{formatMessage(t("setupGuide.local.devices"), { devices })}</p>
+    {snapshot.recommendedDevice ? <p className="vk-form-note">
       {formatMessage(t("settings.permissionJudge.recommended"), { device: t(DEVICE_KEYS[snapshot.recommendedDevice]) })}
     </p> : null}
     {snapshot.models.length === 0
-      ? <p className="text-sm text-muted-foreground">{t("setupGuide.local.howTo")}</p>
+      ? <p className="vk-form-note">{t("setupGuide.local.howTo")}</p>
       : snapshot.models.map((model) => {
         const active = model.id === snapshot.activeModelId;
-        return <div className="flex flex-wrap items-center gap-2" key={model.id}>
-          <span className="font-medium">{model.name}</span>
+        return <div className="vk-form-inline" key={model.id}>
+          <strong className="vk-form-strong">{model.name}</strong>
           {active ? <>
             <Badge variant="secondary">{t("settings.permissionJudge.modelActive")}</Badge>
             <StatusPill label={label(t, PHASE_KEYS, worker.phase)} status={pill} />

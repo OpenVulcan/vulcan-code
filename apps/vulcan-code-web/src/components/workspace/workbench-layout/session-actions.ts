@@ -21,7 +21,7 @@ import {
 import { applySessionAddonsChangedResponse } from "@/state/workbench-state";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import { useI18n } from "@/i18n";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 
 // WorkbenchSessionActionsOptions groups active session state and snapshot update bridges.
 // WorkbenchSessionActionsOptions 归组当前会话状态与快照更新桥接。

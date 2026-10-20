@@ -1,12 +1,14 @@
 import * as React from "react"
 import { Check, LoaderCircle, RotateCcw, Sparkles, X } from "lucide-react"
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription, AlertTitle } from "@/ui-kit/primitives/alert"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
 import { useI18n } from "@/i18n"
 import { formatTokenCount } from "@/lib/usage-format"
 import { CustomProviderMutationContext } from "./custom-provider-mutation-context"
+import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 import {
   getPublicAiCustomModelTemplateSuggestions,
   savePublicAiCustomModelTemplateDecision,
@@ -105,7 +107,7 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
     ? suggestions.find((suggestion) => suggestion.template_key === appliedSelection.template_key)
     : undefined
   if (loading) {
-    return <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />{t("settings.customModels.templateSearching")}</p>
+    return <p className="vk-form-status"><LoaderCircle aria-hidden="true" className="vk-spin" />{t("settings.customModels.templateSearching")}</p>
   }
   if (
     appliedSelection
@@ -113,36 +115,36 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
     && appliedSuggestion.template_revision !== appliedSelection.template_revision
   ) {
     return (
-      <Alert>
-        <Sparkles className="size-4" />
+      <Alert variant="info">
+        <Sparkles aria-hidden="true" />
         <AlertTitle>{t("settings.customModels.templateUpdateAvailable")}</AlertTitle>
-        <AlertDescription className="space-y-3">
+        <AlertDescription className="vk-form-stack">
           <p>{t("settings.customModels.templateUpdateDescription")}</p>
-          <div className="grid gap-2 rounded-lg border p-3 text-xs sm:grid-cols-2">
+          <div className="vk-form-codes">
             <p>{t("settings.customModels.templateCurrent")}: {formatTokenCount(appliedSelection.context_limit)} Token · {(appliedSelection.input_resources ?? []).join(", ") || t("settings.models.modality.text")}</p>
             <p>{t("settings.customModels.templateLatest")}: {formatTokenCount(appliedSuggestion.context_limit)} Token · {appliedSuggestion.input_resources.join(", ") || t("settings.models.modality.text")}</p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="vk-form-inline">
             <Button disabled={saving} onClick={() => void saveDecision(appliedDecision(appliedSuggestion))} size="sm" type="button">
-              <Check className="mr-2 size-4" />{t("settings.customModels.templateApplyUpdate")}
+              <Check aria-hidden="true" />{t("settings.customModels.templateApplyUpdate")}
             </Button>
           </div>
-          {error ? <p className="text-destructive">{error}</p> : null}
+          {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
         </AlertDescription>
       </Alert>
     )
   }
   if (props.decision?.decision === "applied") {
     return (
-      <Alert>
-        <Sparkles className="size-4" />
+      <Alert variant="success">
+        <Sparkles aria-hidden="true" />
         <AlertTitle>{t("settings.customModels.templateApplied")}</AlertTitle>
-        <AlertDescription className="space-y-3">
+        <AlertDescription className="vk-form-stack">
           <p>{props.decision.selection.template_key} · {formatTokenCount(props.decision.selection.context_limit)} Token</p>
           <Button disabled={saving} onClick={() => void saveDecision(undefined)} size="sm" type="button" variant="outline">
-            <RotateCcw className="mr-2 size-4" />{t("settings.customModels.templateRestore")}
+            <RotateCcw aria-hidden="true" />{t("settings.customModels.templateRestore")}
           </Button>
-          {error ? <p className="text-destructive">{error}</p> : null}
+          {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
         </AlertDescription>
       </Alert>
     )
@@ -150,7 +152,7 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
   if (!firstSuggestion) {
     return (
       <Alert>
-        <Sparkles className="size-4" />
+        <Sparkles aria-hidden="true" />
         <AlertTitle>{t("settings.customModels.templateNone")}</AlertTitle>
         <AlertDescription>{t("settings.customModels.templateDefaultFallback")}</AlertDescription>
       </Alert>
@@ -163,12 +165,12 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
   ) {
     return (
       <Alert>
-        <X className="size-4" />
+        <X aria-hidden="true" />
         <AlertTitle>{t("settings.customModels.templateRejected")}</AlertTitle>
-        <AlertDescription className="space-y-3">
+        <AlertDescription className="vk-form-stack">
           <p>{t("settings.customModels.templateDefaultFallback")}</p>
           <Button disabled={saving} onClick={() => void saveDecision(undefined)} size="sm" type="button" variant="outline">
-            <RotateCcw className="mr-2 size-4" />{t("settings.customModels.templateReviewAgain")}
+            <RotateCcw aria-hidden="true" />{t("settings.customModels.templateReviewAgain")}
           </Button>
         </AlertDescription>
       </Alert>
@@ -176,18 +178,18 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
   }
   return (
     <Alert>
-      <Sparkles className="size-4" />
-      <AlertTitle className="flex flex-wrap items-center gap-2">
+      <Sparkles aria-hidden="true" />
+      <AlertTitle className="vk-form-inline">
         {t("settings.customModels.templateSuggested")}
         <Badge variant="secondary">
           {t(`settings.customModels.templateMatch.${firstSuggestion.match_kind}`)}
         </Badge>
       </AlertTitle>
-      <AlertDescription className="space-y-3">
+      <AlertDescription className="vk-form-stack">
         <p>{firstSuggestion.template_key} · {formatTokenCount(firstSuggestion.context_limit)} Token</p>
-        <div className="flex flex-wrap gap-2">
+        <div className="vk-form-inline">
           <Button disabled={saving} onClick={() => void saveDecision(appliedDecision(firstSuggestion))} size="sm" type="button">
-            <Check className="mr-2 size-4" />{t("settings.customModels.templateApply")}
+            <Check aria-hidden="true" />{t("settings.customModels.templateApply")}
           </Button>
           <Button disabled={saving} onClick={() => void saveDecision({
             decision: "rejected",
@@ -197,7 +199,7 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
             {t("settings.customModels.templateKeepDefaults")}
           </Button>
         </div>
-        {error ? <p className="text-destructive">{error}</p> : null}
+        {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
       </AlertDescription>
     </Alert>
   )

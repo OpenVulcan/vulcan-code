@@ -22,14 +22,14 @@ import { localizedProviderName } from "@/components/features/settings/provider-p
 import { isModelExtensionCapability } from "@/lib/provider-tool-capabilities"
 import { PublicAiModelOverridesDialog } from "@/components/features/settings/public-ai-model-overrides-dialog"
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { Switch } from "@/ui-kit/primitives/switch"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
 import {
   savePublicAiConnectionModelEnabled,
@@ -52,6 +52,7 @@ import type {
   PublicAiProviderToolTargetSnapshot,
   PublicAiSettingsSnapshot,
 } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // PublicProviderModelRow binds one rendered provider model to its routes and effective enabled state.
 // PublicProviderModelRow 将一个渲染中的供应商模型绑定到其路由与有效启用状态。
@@ -299,10 +300,10 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
   })
 
   return (
-    <section className="settings-model-list-pane model-services-catalog-pane" aria-label={t("settings.models.liveModels")}>
-      {unavailableAdmissions.length > 0 ? <section className="settings-model-unavailable-admissions" aria-label={t("settings.modelExperience.unavailableCandidates")}>
+    <section className="vk-mcat-list-pane vk-ms-catalog-pane" aria-label={t("settings.models.liveModels")}>
+      {unavailableAdmissions.length > 0 ? <section className="vk-mcat-unavailable-admissions" aria-label={t("settings.modelExperience.unavailableCandidates")}>
         <strong>{t("settings.modelExperience.unavailableCandidates")}</strong>
-        {unavailableAdmissions.map((record) => <div className="settings-model-route-accounts" key={JSON.stringify([record.providerId, record.modelId])}>
+        {unavailableAdmissions.map((record) => <div className="vk-mcat-route-accounts" key={JSON.stringify([record.providerId, record.modelId])}>
           <span>{record.providerId} · {record.modelId}</span>
           <Button type="button" variant="outline" size="sm" disabled={pendingMutationKey !== null} onClick={() => void run(`multimodal-candidate/${record.providerId}/${record.modelId}`, () => savePublicAiMultimodalUnderstandingCandidate({ providerId: record.providerId, modelId: record.modelId, enabled: false }), { reconcile: true })}>{t("settings.modelExperience.disableCandidate")}</Button>
         </div>)}
@@ -312,7 +313,7 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
           <div className="settings-split-column-title">
             {t("settings.models.blockedRouteDiagnostics")}
           </div>
-          <div className="settings-model-row-list">
+          <div className="vk-mcat-row-list">
             {blockedModelRoutes.map((record) => {
               // blockedModel keeps the capability editor reachable while execution stays blocked.
               // blockedModel 让能力编辑入口保持可达，同时继续阻止模型执行。
@@ -322,21 +323,21 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
               const blockedProvider = snapshot.providers.find((provider) => provider.id === record.providerId)
               return (
                 <article
-                  className="settings-model-row"
+                  className="vk-mcat-row"
                   key={JSON.stringify([record.connectionId, record.modelId])}
                 >
-                  <div className="settings-model-row-main">
-                    <div className="settings-model-title-line">
+                  <div className="vk-mcat-row-main">
+                    <div className="vk-mcat-title-line">
                       <strong>{record.modelId}</strong>
                       <Badge variant="outline">{record.protocolId ?? "—"}</Badge>
                     </div>
                     {record.codexBehavior ? (
-                      <span className="settings-model-route-binding">
+                      <span className="vk-mcat-route-binding">
                         {t("settings.models.codexBehavior")}: {codexBehaviorSummary(record.codexBehavior)}
                       </span>
                     ) : null}
                     {record.requiredRuntimePrimitive ? (
-                      <span className="settings-model-route-binding">
+                      <span className="vk-mcat-route-binding">
                         {t("settings.models.requiredRuntimePrimitive")}: {record.requiredRuntimePrimitive}
                       </span>
                     ) : null}
@@ -358,10 +359,10 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
           </div>
         </section>
       ) : null}
-      <div className="settings-model-row-list">
-        <div className="settings-model-sticky-controls">
-          <div className="settings-model-toolbar">
-            <div className="settings-model-search">
+      <div className="vk-mcat-row-list">
+        <div className="vk-mcat-sticky-controls">
+          <div className="vk-mcat-toolbar">
+            <div className="vk-mcat-search">
               <Search aria-hidden="true" size={15} />
               <Input
                 aria-label={t("settings.models.searchLabel")}
@@ -400,16 +401,16 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
               visibleCount={visibleModelRows.length}
             />
           ) : (
-            <div className="settings-model-filter-summary model-services-catalog-status">
+            <div className="vk-mcat-filter-summary vk-ms-catalog-status">
               {t("settings.models.filteredSummary")
                 .replace("{visible}", String(visibleModelRows.length))
                 .replace("{total}", String(providerModelRows.length))}
             </div>
           )}
         </div>
-        <div className="settings-model-catalog model-services-catalog" data-account-scope={props.accountScope ? "true" : "false"}>
-          {visibleModelRows.length > 0 ? <div className="settings-model-catalog-heading">
-            <span className="model-services-select-cell">
+        <div className="vk-mcat-catalog vk-ms-catalog" data-account-scope={props.accountScope ? "true" : "false"}>
+          {visibleModelRows.length > 0 ? <div className="vk-mcat-catalog-heading">
+            <span className="vk-ms-select-cell">
               <Checkbox
                 aria-label={t("settings.modelServices.bulk.selectPage")}
                 checked={pageSelection === 0 ? false : pageSelection === pageRows.length ? true : "indeterminate"}
@@ -424,9 +425,9 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
             <span />
           </div> : null}
           {providerModelRows.length === 0 ? (
-            <p className="settings-muted-line">{t("settings.models.emptyCatalog")}</p>
+            <p className="vk-form-note">{t("settings.models.emptyCatalog")}</p>
           ) : visibleModelRows.length === 0 ? (
-            <p className="settings-muted-line">{t("settings.models.emptyFilter")}</p>
+            <p className="vk-form-note">{t("settings.models.emptyFilter")}</p>
           ) : pageRows.map((row) => {
             const { modelId, enabled, displayName, inventory, provider } = row
             // representative supplies editable normalized capability facts when a catalog model exists.
@@ -454,28 +455,28 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
             const accountScope = props.accountScope
             const accountChecked = accountEnabled?.has(modelId) === true
             return (
-              <article className="settings-model-catalog-row" data-selected={selected.has(modelKey) ? "true" : undefined} key={modelKey}>
-                <span className="model-services-select-cell">
+              <article className="vk-mcat-catalog-row" data-selected={selected.has(modelKey) ? "true" : undefined} key={modelKey}>
+                <span className="vk-ms-select-cell">
                   <Checkbox
                     aria-label={t("settings.modelServices.bulk.selectModel").replace("{model}", displayName)}
                     checked={selected.has(modelKey)}
                     onCheckedChange={(checked) => toggleRow(modelKey, checked === true)}
                   />
                 </span>
-                <div className="settings-model-row-main">
-                  <div className="settings-model-title-line">
+                <div className="vk-mcat-row-main">
+                  <div className="vk-mcat-title-line">
                     <strong title={displayName}>{displayName}</strong>
                   </div>
                   {/* Keep identity and capability metadata together on the second line.
                       将模型标识和能力摘要放在同一条第二行内。 */}
-                  <div className="settings-model-catalog-meta">
+                  <div className="vk-mcat-catalog-meta">
                     {props.showProvider ? (
-                      <span className="model-services-row-provider">
-                        <ProviderIcon category={provider.category} className="size-3.5" providerId={provider.id} />
+                      <span className="vk-ms-row-provider">
+                        <ProviderIcon category={provider.category} size={14} providerId={provider.id} />
                         {providerLabel(provider)}
                       </span>
                     ) : null}
-                    <span className="settings-model-id" title={modelId}>{modelId}</span>
+                    <span className="vk-mcat-id" title={modelId}>{modelId}</span>
                     <ProviderModelModalitySummary model={representative} additionalModels={inventory.catalogModels.slice(1)} extensionCapabilities={inventory.extensionCapabilities} />
                     <span>
                       {t("settings.models.availableCredentials")
@@ -483,8 +484,8 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                     </span>
                   </div>
                 </div>
-                <div className="settings-model-purpose-cell">
-                  <span className="settings-model-purpose-label">{t("settings.models.conversationUse")}</span>
+                <div className="vk-mcat-purpose-cell">
+                  <span className="vk-mcat-purpose-label">{t("settings.models.conversationUse")}</span>
                   {conversationEligible ? (
                     <Switch
                       aria-label={`${t("settings.models.conversationUse")} ${displayName}`}
@@ -503,8 +504,8 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                   ) : <span title={t("settings.modelExperience.noConversation")} aria-label={t("settings.modelExperience.noConversation")}>—</span>}
                 </div>
                 {accountScope ? (
-                  <div className="settings-model-purpose-cell">
-                    <span className="settings-model-purpose-label">{t("settings.modelServices.catalog.accountColumn")}</span>
+                  <div className="vk-mcat-purpose-cell">
+                    <span className="vk-mcat-purpose-label">{t("settings.modelServices.catalog.accountColumn")}</span>
                     <Switch
                       aria-label={`${t("settings.modelServices.catalog.accountColumn")} ${displayName}`}
                       checked={accountChecked}
@@ -517,12 +518,12 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                     />
                   </div>
                 ) : null}
-                <div className="settings-model-purpose-cell">
-                  <span className="settings-model-purpose-label">{t("settings.modelExperience.understandingUse")}</span>
+                <div className="vk-mcat-purpose-cell">
+                  <span className="vk-mcat-purpose-label">{t("settings.modelExperience.understandingUse")}</span>
                   {/* Tooltip disclosure state belongs to its wrapper, preserving the switch's checked state.
                       提示层的展开状态由外层元素承担，保留开关自身的选中状态。 */}
                   {multimodalCandidateEligible || multimodalCandidateEnabled ? (
-                    <Tooltip><TooltipTrigger asChild><span className="inline-flex">
+                    <Tooltip><TooltipTrigger asChild><span className="vk-form-wrap">
                       <Switch
                         aria-label={`${t("settings.models.multimodalUnderstandingCandidate")} ${displayName}`}
                         aria-description={t("settings.modelExperience.candidateExplanation")}
@@ -545,10 +546,10 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                     </span></TooltipTrigger><TooltipContent>{t("settings.modelExperience.candidateExplanation")}</TooltipContent></Tooltip>
                   ) : <span>—</span>}
                 </div>
-                <div className="settings-model-purpose-cell settings-model-extension-cell">
-                  <span className="settings-model-purpose-label">{t("settings.models.internalUse")}</span>
+                <div className="vk-mcat-purpose-cell vk-mcat-extension-cell">
+                  <span className="vk-mcat-purpose-label">{t("settings.models.internalUse")}</span>
                   {internalState ? (
-                    <Tooltip><TooltipTrigger asChild><span className="inline-flex">
+                    <Tooltip><TooltipTrigger asChild><span className="vk-form-wrap">
                       <Switch
                         aria-label={`${t("settings.models.internalUse")} ${displayName}`}
                         aria-description={internalState.operations.map((operation) => internalOperationLabel(operation, t)).join(t("global.listDelimiter"))}
@@ -582,7 +583,7 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                     // available 是包含后端所需审核扩展资料的签名目标。
                     const available = targets.find((target) => target.target.contract.extension_profile !== undefined)
                     const label = extensionCapabilityLabel(capability, t)
-                    return <Tooltip key={capability}><TooltipTrigger asChild><span className="settings-model-extension-toggle">
+                    return <Tooltip key={capability}><TooltipTrigger asChild><span className="vk-mcat-extension-toggle">
                       <Switch
                         aria-label={`${label} ${displayName}`}
                         checked={selectedTarget !== undefined}
@@ -610,7 +611,7 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                   })}
                   {!internalState && !inventory.extensionCapabilities.some(isModelExtensionCapability) ? <span>—</span> : null}
                 </div>
-                <div className="settings-model-catalog-actions">
+                <div className="vk-mcat-catalog-actions">
                   {provider.kind === "custom" && representative ? <Button
                     aria-label={`${t("settings.modelCapabilities.title")} ${displayName}`}
                     disabled={pendingMutationKey !== null}
@@ -636,7 +637,7 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
             )
           })}
         </div>
-        {pageCount > 1 ? <div className="settings-pagination settings-model-pagination">
+        {pageCount > 1 ? <div className="settings-pagination vk-mcat-pagination">
           <Button disabled={effectivePage <= 1} onClick={() => setCurrentPage(effectivePage - 1)} size="sm" type="button" variant="outline">{t("settings.modelExperience.previousPage")}</Button>
           <span>{t("settings.modelExperience.pageStatus").replace("{page}", String(effectivePage)).replace("{count}", String(pageCount))}</span>
           <Button disabled={effectivePage >= pageCount} onClick={() => setCurrentPage(effectivePage + 1)} size="sm" type="button" variant="outline">{t("settings.modelExperience.nextPage")}</Button>
@@ -648,7 +649,7 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
           setEditingRoute(null)
         }
       }}>
-        <DialogContent size="lg" scrollMode="body-scroll" className="settings-model-access-dialog" onCloseAutoFocus={(event) => {
+        <DialogContent size="lg" scrollMode="body-scroll" className="vk-mcat-access-dialog" onCloseAutoFocus={(event) => {
           if (accessTrigger.current?.isConnected) {
             event.preventDefault()
             accessTrigger.current.focus()
@@ -658,13 +659,13 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
             <DialogTitle>{inspectedRow?.displayName}</DialogTitle>
             <DialogDescription>{inspectedRow?.routes.length ? t("settings.modelExperience.routes").replace("{count}", String(inspectedRow.routes.length)) : t("settings.modelExperience.nativeInventory")}</DialogDescription>
           </DialogHeader>
-          <div className="settings-model-access-routes">
-            {inspectedRow && inspectedRow.routes.length === 0 ? <section className="settings-model-access-route">
+          <div className="vk-mcat-access-routes">
+            {inspectedRow && inspectedRow.routes.length === 0 ? <section className="vk-mcat-access-route">
               <ProviderModelModalitySummary model={inspectedRow.inventory.catalogModels[0]} additionalModels={inspectedRow.inventory.catalogModels.slice(1)} extensionCapabilities={inspectedRow.inventory.extensionCapabilities} />
               <p>{t("settings.models.availableCredentials").replace("{count}", String(inspectedRow.inventory.availableAccountCount))}</p>
             </section> : null}
-            {inspectedRow?.routes.map((route) => <section className="settings-model-access-route" key={modelRouteValue(route)}>
-              <div className="settings-model-access-route-heading">
+            {inspectedRow?.routes.map((route) => <section className="vk-mcat-access-route" key={modelRouteValue(route)}>
+              <div className="vk-mcat-access-route-heading">
                 <div><strong>{route.serviceEntryName}</strong><span>{protocolDisplayName(route.protocolId)}</span></div>
                 <ProviderModelModalitySummary model={route.model} />
                 <Button
@@ -679,13 +680,13 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                   variant="outline"
                 ><SlidersHorizontal aria-hidden="true" size={14} />{t("settings.modelExperience.routeSettings")}</Button>
               </div>
-              <dl className="settings-model-access-metadata">
+              <dl className="vk-mcat-access-metadata">
                 <div><dt>{t("settings.modelExperience.bindingSource")}</dt><dd>{route.bindingSource} · {route.bindingRuleId ?? t("settings.models.routeNoRule")} · r{route.manifestRevision}</dd></div>
                 <div><dt>{t("settings.models.routeAvailableProtocols")}</dt><dd>{route.availableProtocols.join(", ") || "—"}</dd></div>
               </dl>
-              <div className="settings-model-access-accounts">
+              <div className="vk-mcat-access-accounts">
                 <span>{t("settings.modelExperience.routeAccounts")}</span>
-                <ul className="settings-model-route-accounts">
+                <ul className="vk-mcat-route-accounts">
                   {route.accounts.map((account) => <li key={account.connectionId}>
                     <span>{account.displayName}</span>
                     <small>{t(account.enabled ? "settings.modelExperience.available" : "settings.modelExperience.accountNotAdmitted")}</small>
@@ -807,7 +808,7 @@ function ModelCatalogBulkBar(props: ModelCatalogBulkBarProps) {
     )
   }
   const group = (label: string, apply: (enabled: boolean) => void) => (
-    <span className="model-services-bulk-group">
+    <span className="vk-ms-bulk-group">
       <span>{label}</span>
       <Button disabled={busy} onClick={() => apply(true)} size="sm" type="button" variant="outline">{t("settings.modelServices.bulk.enable")}</Button>
       <Button disabled={busy} onClick={() => apply(false)} size="sm" type="button" variant="outline">{t("settings.modelServices.bulk.disable")}</Button>
@@ -815,7 +816,7 @@ function ModelCatalogBulkBar(props: ModelCatalogBulkBarProps) {
   )
   return (
     <>
-      <div className="model-services-bulk-bar" role="toolbar" aria-label={t("settings.modelServices.bulk.title")}>
+      <div className="vk-ms-bulk-bar" role="toolbar" aria-label={t("settings.modelServices.bulk.title")}>
         <strong>{t("settings.modelServices.bulk.selected").replace("{count}", String(selectedRows.length))}</strong>
         {selectedRows.length < props.visibleCount ? (
           <Button onClick={props.onSelectFiltered} size="sm" type="button" variant="link">
@@ -827,7 +828,7 @@ function ModelCatalogBulkBar(props: ModelCatalogBulkBarProps) {
         {props.accountScope ? group(t("settings.modelServices.catalog.accountColumn"), bulkAccount) : null}
         <Button onClick={props.onClear} size="sm" type="button" variant="ghost">{t("settings.modelServices.bulk.clear")}</Button>
       </div>
-      {notice ? <p className="settings-model-filter-summary" role="status">{notice}</p> : null}
+      {notice ? <p className="vk-mcat-filter-summary" role="status">{notice}</p> : null}
     </>
   )
 }

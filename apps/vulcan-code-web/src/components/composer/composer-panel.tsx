@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   enqueueComposerPersistence,
   flushLatestComposerPersistence,
@@ -23,11 +23,10 @@ import type { ConversationSessionReviewSummary } from "@/components/conversation
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { ComposerTextContextMenu } from "@/components/composer/composer-text-context-menu";
-import { Textarea } from "@/components/ui/textarea";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Textarea } from "@/ui-kit/primitives/textarea";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { useI18n } from "@/i18n";
 import { isElectronRuntime } from "@/host-shell";
-import { cn } from "@/lib/utils";
 import { getWorkspaceInputOwner } from "@/components/workspace/workspace-input-owner";
 import type {
   ComposerAttachmentCapabilitySummary,
@@ -843,7 +842,7 @@ export function ComposerPanel(props: {
       ) : null}
       <ComposerAnswerReplySlot disabled={isPendingPromptEditing} setDraftInput={setDraftInput} textareaRef={composerTextareaRef} />
       <section
-        className={cn("composer-panel", isAttachmentDragOver && "attachment-drag-over")}
+        className="vk-composer" data-drag-over={isAttachmentDragOver ? "" : undefined}
         data-workspace-input-owner="composer"
         onDragLeave={() => setIsAttachmentDragOver(false)}
         onDragOver={isPendingPromptEditing ? undefined : handleComposerDragOver}
@@ -852,7 +851,7 @@ export function ComposerPanel(props: {
       >
         <input
           accept={attachmentInputAccept}
-          className="composer-attachment-input"
+          hidden
           disabled={isPendingPromptEditing}
           multiple
           onChange={handleAttachmentInputChange}
@@ -900,11 +899,11 @@ export function ComposerPanel(props: {
             value={draftInput}
           />
         </ComposerTextContextMenu>
-        {pendingAttachmentCount > 0 ? <p role="status" aria-busy="true" className="px-3 text-xs text-muted-foreground">
+        {pendingAttachmentCount > 0 ? <p role="status" aria-busy="true" className="vk-composer-note">
           {t("composer.attachment.stagingPending")} ({pendingAttachmentCount})
         </p> : null}
-        <div className="composer-toolbar">
-          <div className="composer-toolbar-left">
+        <div className="vk-composer-bar">
+          <div className="vk-composer-tools">
             <ComposerAttachmentMenu
               answerMode={answerMode}
               capabilities={enabledAttachmentCapabilities}

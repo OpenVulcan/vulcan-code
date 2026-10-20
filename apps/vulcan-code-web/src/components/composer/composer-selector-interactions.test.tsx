@@ -2,13 +2,13 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
 import type { PublicAiSettingsSnapshot, ProviderSummary } from "@/types";
 import type { ComposerProviderToolSettingsSnapshot } from "./composer-model";
 import { ModelPickerControl, modelPickerChoicesFromProviders, type ModelPickerChoice } from "./model-picker-control";
 import { ModelReasoningPickerControl, describeReasoningSelection } from "./model-reasoning-picker-control";
-import { ComposerAiCapabilityControl, ComposerSelectControl, ContextUsageOrb } from "./composer-capability-controls";
+import { ComposerAiCapabilityControl, ContextUsageOrb } from "./composer-capability-controls";
 import { PendingPromptQueueStrip } from "./composer-prompt-controls";
 import { DedicatedComposerContext } from "./dedicated/dedicated-session-controls";
 import type { DedicatedMemorySelection } from "@/service/dedicated-memory";
@@ -155,22 +155,22 @@ it("opens the model list directly from the slash signal and closes it with Escap
   await render(<MergedHarness modelSignal={1} options={["low", "high"]} />);
   const input = document.querySelector<HTMLInputElement>('input[aria-label="Find"]')!;
   expect(input).not.toBeNull();
-  expect(document.querySelector(".model-reasoning-back")).toBeNull();
+  expect(document.querySelector(".vk-mr-back")).toBeNull();
   await press(input, "Escape");
-  expect(document.querySelector(".model-reasoning-content")).toBeNull();
+  expect(document.querySelector(".vk-mr-pop")).toBeNull();
 });
 
 it("asks for an account instead of displaying the first account for a missing exact credential", async () => {
   const choose = vi.fn();
   vi.mocked(loadPublicAiSettings).mockResolvedValue(settings());
   await render(<MergedHarness accountValue="deleted" onAccountChange={choose} />);
-  expect(host.querySelector(".composer-model-reasoning-alert")).not.toBeNull();
+  expect(host.querySelector(".vk-pick-alert")).not.toBeNull();
   await click("Model");
   const row = document.querySelector<HTMLButtonElement>('[aria-label="Account"]')!;
   expect(row.textContent).not.toContain("Account A");
   expect(row.textContent).toContain("composer.modelPicker.selectAccount");
   await click("Account");
-  const option = document.querySelector<HTMLButtonElement>(".model-reasoning-account-option")!;
+  const option = document.querySelector<HTMLButtonElement>(".vk-mr-account")!;
   expect(option.textContent).toContain("Account A");
   await act(async () => option.click());
   expect(choose).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "a" }));
@@ -185,16 +185,16 @@ it("shows a read-only model, reasoning and plan usage summary until the popover 
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 500)); });
   // summary is the mounted hover card; it must not contain any interactive selection control.
   // summary 是已挂载的悬浮卡片；其中不得包含任何交互式选择控件。
-  const summary = document.querySelector(".model-reasoning-summary");
+  const summary = document.querySelector(".vk-mr-summary");
   expect(summary?.textContent).toContain("First");
   expect(summary?.textContent).toContain("composer.reasoning.level.low");
   expect(summary?.textContent).toContain("composer.modelReasoning.planUsage");
-  expect(summary?.querySelectorAll(".model-reasoning-summary-pips > span.on")).toHaveLength(2);
+  expect(summary?.querySelectorAll(".vk-mr-pips > span[data-on]")).toHaveLength(2);
   expect(summary?.querySelector('button, [role="slider"], input')).toBeNull();
   expect(loadPublicAiSettings).toHaveBeenCalledOnce();
   expect(queryPublicAiConnectionUsage).not.toHaveBeenCalled();
   await click("Model");
-  expect(document.querySelector(".model-reasoning-summary")).toBeNull();
+  expect(document.querySelector(".vk-mr-summary")).toBeNull();
   expect(document.querySelector('[role="slider"]')).not.toBeNull();
 });
 
@@ -213,7 +213,7 @@ it("does not offer usage refresh without the declared credential profile", async
   await click("Model");
   expect(loadPublicAiSettings).toHaveBeenCalledOnce();
   await click("Account");
-  expect(document.querySelector(".model-account-card")?.textContent).toContain("Account A");
+  expect(document.querySelector(".vk-account-card")?.textContent).toContain("Account A");
   expect(document.querySelector('[aria-label="composer.accountCard.refresh"]')).toBeNull();
 });
 
@@ -235,8 +235,8 @@ it("ignores an account detail failure after switching to another account", async
   expect(loadPublicAiSettings).toHaveBeenCalledOnce();
   await render(<MergedHarness accounts={accounts} accountValue="b" />);
   await act(async () => rejectRead(new Error("old account failure")));
-  expect(document.querySelector(".model-account-card")?.textContent).toContain("Account B");
-  expect(document.querySelector('.model-reasoning-account-option[aria-pressed="true"]')?.textContent).toContain("Account B");
+  expect(document.querySelector(".vk-account-card")?.textContent).toContain("Account B");
+  expect(document.querySelector('.vk-mr-account[aria-pressed="true"]')?.textContent).toContain("Account B");
   expect(document.body.textContent).not.toContain("old account failure");
 });
 
@@ -279,7 +279,7 @@ it("refreshes declared account usage once and recovers from an explicit failure"
   // Escape steps back to the reasoning pane, whose account row now summarizes the observed balance.
   // Escape 返回思考面板，其账号行此时概括已观测余额。
   await press(document.activeElement ?? document.body, "Escape");
-  expect(document.querySelector(".model-account-card")).toBeNull();
+  expect(document.querySelector(".vk-account-card")).toBeNull();
   expect(document.querySelector('[aria-label="Account"]')?.textContent).toContain("17.25");
 });
 
@@ -303,34 +303,6 @@ it("does not reopen an old model menu after a disabled interval", async () => {
   expect(document.querySelector('[role="listbox"]')).toBeNull();
 });
 
-// ReasoningHarness varies availability without replacing the real selector instance.
-// ReasoningHarness 改变可用性，但不替换真实选择器实例。
-function ReasoningHarness({ disabled = false, signal = 0 }: { disabled?: boolean; signal?: number }) {
-  return <ComposerSelectControl ariaLabel="Reasoning" fallbackLabel="Choose" className="reasoning" disabled={disabled}
-    openSignal={signal} value="low" options={[{ value: "low", label: "Low" }, { value: "high", label: "High" }]} onValueChange={vi.fn()} />;
-}
-
-it("does not replay a consumed slash signal after reasoning becomes available again", async () => {
-  await render(<ReasoningHarness />);
-  await render(<ReasoningHarness signal={1} />);
-  expect(document.querySelector('[role="listbox"]')).not.toBeNull();
-  await press(document.querySelector('[role="listbox"]')!, "Escape");
-  await render(<ReasoningHarness disabled signal={1} />);
-  await render(<ReasoningHarness signal={1} />);
-  expect(document.querySelector('[role="listbox"]')).toBeNull();
-  await render(<ReasoningHarness signal={2} />);
-  expect(document.querySelector('[role="listbox"]')).not.toBeNull();
-});
-
-it("closes a disabled selector without restoring its former open state", async () => {
-  await render(<ReasoningHarness />);
-  await press(document.querySelector('[role="combobox"]')!, "ArrowDown");
-  expect(document.querySelector('[role="listbox"]')).not.toBeNull();
-  await render(<ReasoningHarness disabled />);
-  await render(<ReasoningHarness />);
-  expect(document.querySelector('[role="listbox"]')).toBeNull();
-});
-
 // PlanHarness exposes the real capture handler beside a draft input and a toolbar control.
 // PlanHarness 在草稿输入与工具栏控件旁暴露真实捕获处理器。
 function PlanHarness() {
@@ -349,13 +321,13 @@ it("reserves Shift+Tab for the draft instead of intercepting selector keyboard n
 it("reorders pending entries with Space, ArrowDown and Space using the real keyboard sensor", async () => {
   const reorder = vi.fn();
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    const rows = [...document.querySelectorAll(".pending-prompt-row")];
+    const rows = [...document.querySelectorAll(".vk-queue-row")];
     const index = Math.max(0, rows.indexOf(this));
     return new DOMRect(0, index * 50, 300, 40);
   });
   await render(<PendingPromptQueueStrip entries={["first", "second"].map((id) => ({ id, prompt: id, preview: id, attachments: [], state: "ready", createdAt: "0" }))}
     onEdit={vi.fn()} onInsert={vi.fn()} onRemove={vi.fn()} onReorder={reorder} />);
-  const handle = document.querySelector<HTMLElement>(".pending-prompt-row-handle")!;
+  const handle = document.querySelector<HTMLElement>(".vk-queue-handle")!;
   handle.focus(); await press(handle, " "); await press(handle, "ArrowDown"); await press(handle, " ");
   expect(reorder).toHaveBeenCalledExactlyOnceWith(["second", "first"], "first", null);
 });
@@ -440,11 +412,11 @@ it("retains an invalid saved node and lets the user restore the exact model defa
   await render(<ContextUsageOrb snapshot={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: 0,
     maxTokens: 256_000, percent: 0, severity: "normal", tooltipRows: [], usageBasisPoints: 0, usedTokens: 0 }}
     contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selectedNodeId="compression-window-5" modelContextLimit={256_000} onNodeChange={change} />);
-  await act(async () => host.querySelector<HTMLButtonElement>('.context-usage-control')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('.vk-ctx-button')!.click());
   expect(change).not.toHaveBeenCalled();
   expect(document.querySelector<HTMLButtonElement>('[role="radio"][value="compression-window-5"]')?.disabled).toBe(true);
   expect(document.querySelector('[role="radio"][value="compression-window-2"]')).toBeNull();
-  expect(document.querySelector('.context-usage-cache-row strong')?.textContent).toBe("0.0%");
+  expect(document.querySelector('[data-ctx-cache] strong')?.textContent).toBe("0.0%");
   await act(async () => document.querySelector<HTMLButtonElement>('[role="radio"][value="default"]')!.click());
   expect(change).toHaveBeenCalledExactlyOnceWith(null);
 });
@@ -467,7 +439,7 @@ function settings(): PublicAiSettingsSnapshot {
       target: { target_id: "image", provider_id: "p", service_entry_id: "entry", credential_profile_ids: ["profile"], upstream_target_id: "image", display_name: "Image model",
         contract: { tool_id: "image_understand", description: "Understand an image.", capability: "image_understand", input_schema: { type: "object" }, output: { kind: "text", source_path: "$.text", normalized_result_path: "$.text" } } } }],
     providerToolEnabledCapabilities: [], providerToolSelections: {}, mediaUnderstandingSelections: {}, mediaUnderstandingBackendOptions: {}, providerExtensionTargetSets: {},
-    internalInferenceCandidates: [], inferenceProfiles: {}, inferenceRouteDiagnostics: [], internalModelOverrides: {}, contextWindowPolicyOverrides: {},
+    internalInferenceCandidates: [], inferenceProfiles: {}, inferenceRouteDiagnostics: [], internalModelOverrides: {}, contextWindowPolicyOverrides: {}, contextWindowPolicyDefaults: { effective_context_window_percent: 95, auto_compact_percent: 90, auto_compact_token_limit: null, auto_compact_scope: "total", fallback_buffer_tokens: 0 },
   };
 }
 // session constructs a complete session selection, optionally referencing a removed target.
@@ -487,15 +459,15 @@ async function openCapabilities(value = session(), catalog = settings()) {
 // selectCapabilityTab clicks the intent tab whose visible label is the given translation key.
 // selectCapabilityTab 点击可见标签为指定翻译键的意图标签。
 async function selectCapabilityTab(labelKey: string) {
-  const tab = [...document.querySelectorAll<HTMLButtonElement>(".composer-capability-tabs button")]
-    .find((button) => button.querySelector(".settings-directory-label")?.textContent === labelKey);
+  const tab = [...document.querySelectorAll<HTMLButtonElement>(".vk-cap-tabs button")]
+    .find((button) => button.querySelector("span")?.textContent === labelKey);
   expect(tab, `tab ${labelKey} may have been renamed or regrouped`).toBeDefined();
   await act(async () => tab!.click());
 }
 // listedCapabilities returns the capability labels rendered in the visible list.
 // listedCapabilities 返回可见列表中渲染的能力名称。
 function listedCapabilities(): string[] {
-  return [...document.querySelectorAll(".composer-capability-kind-title")].map((title) => title.textContent ?? "");
+  return [...document.querySelectorAll(".vk-cap-copy > span:first-child")].map((title) => title.textContent ?? "");
 }
 
 it("shows one intent tab at a time and restores the capability last viewed in a tab", async () => {
@@ -507,9 +479,9 @@ it("shows one intent tab at a time and restores the capability last viewed in a 
   await selectCapabilityTab("settings.aiCapabilities.tab.generate");
   expect(listedCapabilities()).toContain("settings.providerTools.imageGenerate");
   expect(listedCapabilities()).not.toContain("settings.aiUnderstandImage");
-  expect(document.querySelectorAll('.composer-capability-kind-select[aria-pressed="true"]')).toHaveLength(1);
+  expect(document.querySelectorAll('.vk-cap-select[aria-pressed="true"]')).toHaveLength(1);
   await selectCapabilityTab("settings.aiCapabilities.tab.understand");
-  expect(document.querySelector('.composer-capability-kind-select[aria-pressed="true"]')?.textContent)
+  expect(document.querySelector('.vk-cap-select[aria-pressed="true"]')?.textContent)
     .toContain("settings.aiUnderstandImage");
 });
 
@@ -542,17 +514,17 @@ it("opens the capability dialog from the hover summary footer action", async () 
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
   // configure is the footer action rendered by the mounted hover summary.
   // configure 是已挂载悬浮摘要渲染的底部操作。
-  const configure = document.querySelector<HTMLButtonElement>(".composer-capability-summary-action");
+  const configure = document.querySelector<HTMLButtonElement>(".vk-cap-sum-action");
   expect(configure?.textContent).toBe("composer.capability.tooltipTitle");
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   await act(async () => configure!.click());
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("composer.capability.dialogTitle");
-  expect(document.querySelector(".composer-capability-summary-action")).toBeNull();
+  expect(document.querySelector(".vk-cap-sum-action")).toBeNull();
 });
 
 it("keeps both empty media modes and disables a stale enabled route even with candidates", async () => {
   await openCapabilities(session("removed"));
-  const checkbox = document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!;
+  const checkbox = document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!;
   expect(checkbox.checked).toBe(false); expect(checkbox.disabled).toBe(true);
   expect(document.querySelectorAll('[role="radio"]')).toHaveLength(2);
   expect(document.querySelector('[role="combobox"][aria-label="settings.providerTools.model"]')).not.toBeNull();
@@ -562,18 +534,18 @@ it("keeps both empty media modes and disables a stale enabled route even with ca
 it("switches to an empty mode without enabling again after a valid target returns", async () => {
   await openCapabilities();
   await act(async () => document.querySelector<HTMLButtonElement>('[role="radio"][value="model_replacement"]')!.click());
-  expect(document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.checked).toBe(false);
+  expect(document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.checked).toBe(false);
   expect(document.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="settings.providerTools.model"]')!.disabled).toBe(true);
   await act(async () => document.querySelector<HTMLButtonElement>('[role="radio"][value="provider_tool"]')!.click());
-  expect(document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.checked).toBe(false);
-  expect(document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.disabled).toBe(false);
+  expect(document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.checked).toBe(false);
+  expect(document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.disabled).toBe(false);
 });
 
 it("blocks duplicate saves and Escape while pending, then keeps the draft on failure", async () => {
   await openCapabilities();
   let reject!: (reason: Error) => void;
   vi.mocked(savePublicAiSessionProviderToolSelections).mockReturnValue(new Promise((_, fail) => { reject = fail; }));
-  await act(async () => document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.click());
+  await act(async () => document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.click());
   const save = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === "composer.capability.save")!;
   await act(async () => { save.click(); save.click(); });
   expect(savePublicAiSessionProviderToolSelections).toHaveBeenCalledTimes(1);
@@ -583,7 +555,7 @@ it("blocks duplicate saves and Escape while pending, then keeps the draft on fai
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("composer.capability.operationFailed");
   expect(document.querySelector('details pre')?.textContent).toBe("save failed");
   expect(document.querySelector('details')?.open).toBe(false);
-  expect(document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.checked).toBe(false);
+  expect(document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.checked).toBe(false);
 });
 
 it("keeps a removed extension category recoverable and saves only the explicit removal", async () => {
@@ -594,7 +566,7 @@ it("keeps a removed extension category recoverable and saves only the explicit r
   await selectCapabilityTab("settings.aiCapabilities.tab.generate");
   // category must remain visible even when the entire extension family has left the catalog.
   // 即使整个扩展能力族已离开目录，category 也必须保持可见。
-  const category = [...document.querySelectorAll<HTMLButtonElement>(".composer-capability-kind-select")]
+  const category = [...document.querySelectorAll<HTMLButtonElement>(".vk-cap-select")]
     .find((button) => button.textContent?.includes("settings.providerTools.imageGenerate"));
   expect(category).toBeDefined();
   await act(async () => category!.click());
@@ -618,8 +590,8 @@ it("restores the global defaults into the draft and saves them only on explicit 
   expect(restore.disabled).toBe(false);
   await act(async () => restore.click());
   expect(savePublicAiSessionProviderToolSelections).not.toHaveBeenCalled();
-  expect(document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.checked).toBe(false);
-  expect(document.querySelector(".composer-capability-dialog-save-hint")?.textContent).toBe("composer.capability.saveHint.unsaved");
+  expect(document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.checked).toBe(false);
+  expect(document.querySelector(".vk-cap-foot-hint")?.textContent).toBe("composer.capability.saveHint.unsaved");
   expect(restore.disabled).toBe(true);
   // defaults mirrors the empty global configuration of the synthetic catalog.
   // defaults 对应合成目录中为空的全局配置。
@@ -637,7 +609,7 @@ it("requires manual activation after replacing a stale media target", async () =
   const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')]
     .find((item) => item.textContent?.includes("Image model"))!;
   await act(async () => option.click());
-  const checkbox = document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!;
+  const checkbox = document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!;
   expect(checkbox.checked).toBe(false);
   expect(checkbox.disabled).toBe(false);
 });
@@ -646,7 +618,7 @@ it("allows a stale media switch to be explicitly cleared without deleting its sa
   const configured = session("removed");
   await openCapabilities(configured);
   await click("composer.capability.disableUnavailable");
-  expect(document.activeElement).toBe(document.querySelector('.composer-capability-kind-select[aria-pressed="true"]'));
+  expect(document.activeElement).toBe(document.querySelector('.vk-cap-select[aria-pressed="true"]'));
   vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...configured, enabledCapabilities: [], conflicts: [] });
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent === "composer.capability.save")!.click());
@@ -678,14 +650,14 @@ it("does not apply an old conversation's pending save to the newly opened conver
   await openCapabilities();
   let finish!: (value: Awaited<ReturnType<typeof savePublicAiSessionProviderToolSelections>>) => void;
   vi.mocked(savePublicAiSessionProviderToolSelections).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
-  await act(async () => document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.click());
+  await act(async () => document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.click());
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent === "composer.capability.save")!.click());
   vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), conflicts: [] });
   await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="new-conversation" />);
   await act(async () => finish({ ...session(), enabledCapabilities: [], conflicts: [] }));
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-  expect(document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.checked).toBe(true);
+  expect(document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.checked).toBe(true);
   expect(savePublicAiSessionProviderToolSelections).toHaveBeenCalledTimes(1);
   expect(vi.mocked(savePublicAiSessionProviderToolSelections).mock.calls[0][0].conversationId).toBe("c");
 });
@@ -699,7 +671,7 @@ it("clears stale content during a new conversation read and does not accept a la
   vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), enabledCapabilities: [], conflicts: [] });
   await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="new" />);
   await act(async () => finish({ ...session("removed"), conflicts: [] }));
-  expect(document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.checked).toBe(false);
+  expect(document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.checked).toBe(false);
   expect(document.querySelector('[aria-invalid="true"]')).toBeNull();
   expect(savePublicAiSessionProviderToolSelections).not.toHaveBeenCalled();
 });
@@ -715,7 +687,7 @@ it("keeps read failures compact and retries reads without overwriting the stored
   expect(document.querySelector('[role="alert"]')?.textContent?.trim()).toBe("composer.capability.loadFailed");
   expect(document.querySelector('details')?.open).toBe(false);
   expect(document.querySelector('details pre')?.textContent).toBe(failure);
-  expect(document.querySelector('.composer-capability-kind-select')).toBeNull();
+  expect(document.querySelector('.vk-cap-select')).toBeNull();
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent === "composer.capability.retry")!.click());
   expect(document.activeElement?.textContent).toBe("composer.capability.retry");
@@ -723,8 +695,8 @@ it("keeps read failures compact and retries reads without overwriting the stored
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent === "composer.capability.retry")!.click());
   expect(document.querySelector('[role="alert"]')).toBeNull();
-  expect(document.activeElement).toBe(document.querySelector('.composer-capability-kind-select[aria-pressed="true"]'));
-  expect(document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.checked).toBe(true);
+  expect(document.activeElement).toBe(document.querySelector('.vk-cap-select[aria-pressed="true"]'));
+  expect(document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.checked).toBe(true);
   expect(savePublicAiSessionProviderToolSelections).not.toHaveBeenCalled();
 });
 
@@ -735,7 +707,7 @@ it("keeps keyboard focus on the next unavailable extension after a removal", asy
   ] } };
   await openCapabilities(configured);
   await selectCapabilityTab("settings.aiCapabilities.tab.generate");
-  await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".composer-capability-kind-select")]
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".vk-cap-select")]
     .find((button) => button.textContent?.includes("settings.providerTools.imageGenerate"))!.click());
   await click("composer.capability.removeUnavailable · first");
   expect(document.activeElement?.getAttribute("aria-label")).toBe("composer.capability.removeUnavailable · second");
@@ -745,7 +717,7 @@ it("selects an existing media category with both modes when every backend is emp
   const catalog = settings();
   catalog.providerToolTargets = [];
   await openCapabilities({ enabledCapabilities: [], selections: {}, mediaUnderstandingSelections: {}, extensionTargetSets: {} }, catalog);
-  expect(document.querySelectorAll('.composer-capability-kind-select[aria-pressed="true"]')).toHaveLength(1);
+  expect(document.querySelectorAll('.vk-cap-select[aria-pressed="true"]')).toHaveLength(1);
   expect(document.querySelectorAll('[role="radio"]')).toHaveLength(2);
   expect(document.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="settings.providerTools.model"]')!.disabled).toBe(true);
   expect(savePublicAiSessionProviderToolSelections).not.toHaveBeenCalled();

@@ -1,16 +1,16 @@
 import * as React from "react";
-import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { ArrowUp, Check, ChevronRight, FileArchive, Folder, FolderOpen, HardDrive, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { Input } from "@/ui-kit/primitives/input";
+import { Spinner } from "@/ui-kit/primitives/spinner";
 import { useI18n } from "@/i18n";
 import { browseKnowledgePackages } from "@/service/knowledge-base-service";
 import type { KnowledgePackageFileListing, KnowledgePackageInspection } from "@/types/knowledge-base";
 import { formatBytes } from "@/lib/display-format";
 import { KNOWLEDGE_MODE_COPY } from "./knowledge-mode";
-import "@/styles/project-folder-picker.css";
+import "@/ui-kit/styles/features/project-folder-picker.css";
 
 // Parameters: path is a native directory identity. Returns its comparison key for the host-declared root list.
 // 参数：path 为原生目录身份。返回其在宿主声明根列表中的比较键。
@@ -144,7 +144,7 @@ export function KnowledgePackagePickerDialog(props: {
         <DialogHeader><DialogTitle>{t("knowledge.package.importPickerTitle")}</DialogTitle></DialogHeader>
         <form className="project-folder-picker-path-row" onSubmit={handlePathSubmit}>
           <Input aria-label={t("projectFolderPicker.pathAria")} disabled={loading || submitting} onChange={(event) => setPathInput(event.target.value)} value={pathInput} />
-          <Button aria-label={t("projectFolderPicker.openPath")} disabled={loading || submitting} size="icon" type="submit" variant="outline">{loading ? <Spinner className="size-4" /> : <ChevronRight size={16} />}</Button>
+          <Button aria-label={t("projectFolderPicker.openPath")} disabled={loading || submitting} size="icon" type="submit" variant="outline">{loading ? <Spinner /> : <ChevronRight size={16} />}</Button>
         </form>
         <div className="project-folder-picker-toolbar">
           <Button disabled={!listing?.directory.parentPath || loading || submitting} onClick={() => void loadDirectory(listing?.directory.parentPath ?? null)} size="sm" type="button" variant="outline"><ArrowUp size={15} />{t("projectFolderPicker.parent")}</Button>
@@ -172,7 +172,7 @@ export function KnowledgePackagePickerDialog(props: {
         {error ? <div className="project-folder-picker-error">{error}</div> : null}
         <DialogFooter>
           <Button disabled={submitting} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("conversation.action.cancel")}</Button>
-          <Button disabled={!selectedPath || submitting || loading} onClick={() => void handleConfirm()} type="button">{submitting ? <Spinner className="size-4" /> : <Check size={16} />}{submitting ? t("knowledge.package.inspecting") : t("knowledge.package.inspect")}</Button>
+          <Button disabled={!selectedPath || submitting || loading} onClick={() => void handleConfirm()} type="button">{submitting ? <Spinner /> : <Check size={16} />}{submitting ? t("knowledge.package.inspecting") : t("knowledge.package.inspect")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -229,14 +229,14 @@ export function KnowledgePackageImportDialog({ inspection, busy, onClose, onImpo
   return <Dialog open onOpenChange={(open) => { if (!open && !busy && !submitting.current) onClose(); }}>
     <DialogContent>
       <DialogHeader><DialogTitle>{t("knowledge.package.import")}</DialogTitle><DialogDescription>{t("knowledge.package.independent")}</DialogDescription></DialogHeader>
-      <div className="space-y-3">
-        <p className="select-text break-words text-sm">{inspection.archivePath}</p>
+      <div className="vk-field-group">
+        <p className="vk-mono vk-wrap-pre">{inspection.archivePath}</p>
         <p>{manifest.description}</p>
         <p>{t("knowledge.package.contentCounts").replace("{documents}", String(manifest.documentCount)).replace("{folders}", String(manifest.folderCount))}</p>
         <p>{t(KNOWLEDGE_MODE_COPY[manifest.settings.indexMode].label)}</p>
-        <p className="text-sm text-muted-foreground">{t(KNOWLEDGE_MODE_COPY[manifest.settings.indexMode].description)}</p>
-        <label className="grid gap-1">{t("knowledge.name")}<Input aria-label={t("knowledge.name")} disabled={busy} value={name} onChange={(event) => setName(event.target.value)} /></label>
-        {error !== null ? <pre role="alert" className="select-text whitespace-pre-wrap break-words text-sm text-destructive">{error}</pre> : null}
+        <p className="vk-field-hint">{t(KNOWLEDGE_MODE_COPY[manifest.settings.indexMode].description)}</p>
+        <label className="vk-field">{t("knowledge.name")}<Input aria-label={t("knowledge.name")} disabled={busy} value={name} onChange={(event) => setName(event.target.value)} /></label>
+        {error !== null ? <pre role="alert" className="vk-diag">{error}</pre> : null}
       </div>
       <DialogFooter><Button variant="outline" disabled={busy} onClick={onClose}>{t("conversation.action.cancel")}</Button><Button disabled={busy || !name.trim()} onClick={() => void submit()}>{t("knowledge.package.import")}</Button></DialogFooter>
     </DialogContent>

@@ -48,6 +48,9 @@ export interface OpenVulcanAccountController {
   // Signs out globally and refreshes state even if remote revocation fails.
   // 全局退出；即使远程撤销失败也刷新状态。
   logout: () => Promise<void>;
+  // Closes the quick dialog and opens the account settings page; absent where no settings shell exists.
+  // 关闭快捷弹窗并打开账户设置页；没有设置外壳的界面不提供。
+  openDetails?: () => void;
 }
 
 // Null denotes a standalone surface without the application account lifecycle, such as a component preview.

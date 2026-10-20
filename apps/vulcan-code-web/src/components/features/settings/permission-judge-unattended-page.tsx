@@ -1,11 +1,11 @@
 import * as React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { PageEmptyState, PageHint, PageNotice, PageRow, PageSection } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/ui-kit/primitives/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Switch } from "@/ui-kit/primitives/switch";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { useI18n } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import {
@@ -15,6 +15,7 @@ import {
   saveUnattendedSystemDefault,
 } from "@/service/permission-judge-service";
 import type { ProjectSummary, ProjectUnattendedDefaultSnapshot, UnattendedSystemDefaultSnapshot } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 /** Unattended defaults page: the system deny policy and each project's replacement. They only
  * prefill the dialog that turns unattended mode on; sessions keep the text the user confirmed.
@@ -129,7 +130,7 @@ function ProjectDefaultSection(props: { projects: readonly ProjectSummary[] }) {
       {t("settings.permissionJudge.unattended.save")}
     </Button> : undefined}
     actions={<Select value={current} onValueChange={setProjectId}>
-      <SelectTrigger aria-label={t("settings.permissionJudge.policy.project")} className="h-8 w-auto max-w-72"><SelectValue /></SelectTrigger>
+      <SelectTrigger aria-label={t("settings.permissionJudge.policy.project")} className="vk-form-w-auto" size="sm"><SelectValue /></SelectTrigger>
       <SelectContent>
         {props.projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}
       </SelectContent>
@@ -147,9 +148,9 @@ function ProjectDefaultSection(props: { projects: readonly ProjectSummary[] }) {
           <Textarea aria-label={t("settings.permissionJudge.unattended.projectTitle")} density="large" maxLength={snapshot.maxChars}
             placeholder={t("permissionMode.unattended.placeholder")} value={text} onChange={(event) => setText(event.target.value)} />
         </PageRow>
-      </> : <PageHint className="px-(--card-spacing) py-2" data-unattended-follows="">
+      </> : <PageHint className="vk-form-inset" data-unattended-follows="">
         {snapshot.systemDenyPolicy === "" ? t("settings.permissionJudge.unattended.followsEmpty") : t("settings.permissionJudge.unattended.follows")}
-        {snapshot.systemDenyPolicy === "" ? null : <span className="mt-1 block whitespace-pre-wrap text-foreground">{snapshot.systemDenyPolicy}</span>}
+        {snapshot.systemDenyPolicy === "" ? null : <span className="vk-form-quote">{snapshot.systemDenyPolicy}</span>}
       </PageHint>}
     </>}
   </PageSection>;

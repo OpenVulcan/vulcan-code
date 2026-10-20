@@ -64,7 +64,7 @@ function en(key: TranslationKey, values: Record<string, string | number> = {}): 
 // stat reads one summary tile's number by its label, independently from tile order.
 // stat 按标签读取单个汇总卡片的数字，独立于卡片顺序。
 function stat(key: TranslationKey): string | undefined {
-  return [...host.querySelectorAll(".page-facts[data-layout='tiles'] > div")].find((tile) => tile.querySelector("dt")?.textContent === en(key))?.querySelector("dd")?.textContent ?? undefined;
+  return [...host.querySelectorAll(".vk-page-facts[data-layout='tiles'] > div")].find((tile) => tile.querySelector("dt")?.textContent === en(key))?.querySelector("dd")?.textContent ?? undefined;
 }
 
 it("shows independent pinned count, retained terminal history, physical blockers and original error codes", async () => {
@@ -76,7 +76,7 @@ it("shows independent pinned count, retained terminal history, physical blockers
   // 终态历史收在独立展开区，与实时阻塞项分开。
   expect(host.textContent).toContain(en("pluginDiagnostics.history", { count: 1 }));
   expect(host.textContent).toContain("retired-host-session");
-  expect([...host.querySelectorAll('.page-item[data-tone="attention"]')]).toHaveLength(2);
+  expect([...host.querySelectorAll(".vk-page-item[data-tone=warn]")]).toHaveLength(2);
   expect(host.textContent).toContain(en("pluginDiagnostics.blocking"));
   expect(host.textContent).toContain("cleanup_failed");
   expect(host.textContent).toContain("9007199254740993");

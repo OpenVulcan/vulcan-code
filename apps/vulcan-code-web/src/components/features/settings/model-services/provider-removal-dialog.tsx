@@ -7,12 +7,13 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
+} from "@/ui-kit/primitives/alert-dialog"
 import { useI18n } from "@/i18n"
 import { removePublicAiCustomProvider } from "@/service/settings-actions-service"
 import type { PublicAiProviderDescriptor, PublicAiSettingsSnapshot } from "@/types"
 
 import type { SnapshotMutations } from "./use-snapshot-mutations"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // providerRemovalCustomizationCount counts the provider-owned settings the cascade removal deletes.
 // providerRemovalCustomizationCount 统计级联移除会删除的供应商专属设置数量。
@@ -76,8 +77,8 @@ export function ProviderRemovalDialog(props: {
         <AlertDialogHeader>
           <AlertDialogTitle>{t("settings.customProviders.removeTitle")}</AlertDialogTitle>
           <AlertDialogDescription>
-            <span className="block space-y-2">
-              {lines.map((line) => <span className="block" key={line}>{line}</span>)}
+            <span className="vk-form-lines">
+              {lines.map((line) => <span key={line}>{line}</span>)}
             </span>
           </AlertDialogDescription>
         </AlertDialogHeader>

@@ -1,14 +1,14 @@
 import * as React from "react";
 import { ArrowRight, Copy, FolderCog } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { InlineStreamPlaceholder, StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { InlineDisclosure } from "@/components/ui/disclosure";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineStreamPlaceholder, StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure";
 import { useI18n } from "@/i18n";
 import { listProjectKnowledgeBindings, subscribeKnowledgeProjectBindingsChanged } from "@/service/knowledge-base-service";
 import { runVmmMemoryAction } from "@/service/memory-actions-service";
 import type { KnowledgeProjectBinding, ProjectSummary, VmmConfigDraftSummary, VmmMemorySnapshot, VmmNativeProjectCatalogSummary } from "@/types";
 import type { ProjectSettingsSectionId } from "./project-settings-types";
-import "@/styles/project-overview.css";
+import "@/ui-kit/styles/features/project-overview.css";
 
 // ProjectOverviewSection summarizes exact project authority and routes to existing settings without editing it.
 // ProjectOverviewSection 汇总精确项目权威并进入既有设置，不修改项目状态。
@@ -141,8 +141,8 @@ export function ProjectOverviewSection(props: {
         : projectKnowledge?.error ? t("projectOverview.knowledgeFailed") : <InlineStreamPlaceholder label={t("projectOverview.knowledgeLoading")} />}</p></div>{openAction("knowledge-bases", t("projectOverview.knowledgeSettings"))}</section>
       <section><div><strong>{t("projectSettings.agentTitle")}</strong><p>{props.agentLoading ? <InlineStreamPlaceholder label={t("projectOverview.skillsLoading")} /> : !props.agentLoaded ? t("projectOverview.skillsUnknown")
         : Object.keys(props.agentOverrides).length ? t("projectOverview.skillsCount").replace("{count}", String(Object.keys(props.agentOverrides).length)) : t("projectOverview.skillsInherited")}</p></div>{openAction("agent-skills", t("projectOverview.skillSettings"))}</section>
+      <section><div><strong>{t("projectSettings.attachmentCache")}</strong><p>{t("projectOverview.maintenance")}</p></div>{openAction("attachments", t("projectOverview.attachments"))}</section>
     </div>
-    <div className="project-overview-maintenance"><span>{t("projectOverview.maintenance")}</span>{openAction("attachments", t("projectOverview.attachments"))}</div>
     <section className="project-overview-location" aria-label={t("projectOverview.details")}>
       <strong>{t("projectOverview.details")}</strong>
       <dl><dt>{t("projectOverview.attachmentPath")}</dt><dd>{props.attachmentRoot}</dd><dt>{t("projectOverview.id")}</dt><dd>{props.project.id}</dd></dl>

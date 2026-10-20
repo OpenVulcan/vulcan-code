@@ -1,11 +1,11 @@
 import { useState, type KeyboardEvent, type MouseEvent } from "react"
 
 import { PageHint, PageSection, PageTabPanel, PageTabs } from "@/components/page"
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { FilterChip, FilterChipGroup, SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls"
-import { NavItem, TreeRow } from "@/components/ui/navigation-item"
-import { Progress } from "@/components/ui/progress"
-import { Surface } from "@/components/ui/surface"
+import { Card, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { FilterChip, FilterChipGroup, SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls"
+import { NavItem, TreeRow } from "@/ui-kit/primitives/navigation-item"
+import { Progress } from "@/ui-kit/primitives/progress"
+import { Surface } from "@/ui-kit/primitives/surface"
 
 import { actionLabel, type VisualLabDemoProps } from "./visual-lab-shared"
 

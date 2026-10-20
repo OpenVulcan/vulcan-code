@@ -48,6 +48,23 @@ describe("buildProviderDirectory", () => {
     expect(directory.configured.map((item) => item.id)).toEqual(["mine-a", "mine-b", "custom"])
     expect(directory.available.map((item) => item.id)).toEqual(["early", "late", "unranked"])
   })
+
+  it("separates core accounts from both lists whatever their priority or configuration", () => {
+    const core = { credential_directory_visibility: "core_account" as const }
+    const directory = buildProviderDirectory({
+      providers: [
+        provider("mine", { directory_rank: 1 }),
+        provider("core-b", { ...core, directory_rank: 9 }),
+        provider("core-a", { ...core, directory_rank: 5 }),
+        provider("other", { directory_rank: 2 }),
+      ],
+      connections: [connection("mine"), connection("core-b")],
+      providerPriorities: { mine: 9, "core-b": -3 },
+    })
+    expect(directory.core.map((item) => item.id)).toEqual(["core-a", "core-b"])
+    expect(directory.configured.map((item) => item.id)).toEqual(["mine"])
+    expect(directory.available.map((item) => item.id)).toEqual(["other"])
+  })
 })
 
 describe("providerMatchesFilter", () => {

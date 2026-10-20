@@ -4,14 +4,14 @@ import type { SkillActionProps, SkillSubAreaId } from "@/components/features/ski
 import type { AgentActionProps } from "@/components/features/agents/agent-area-types";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
-import { Spinner } from "@/components/ui/spinner";
-import { Button } from "@/components/ui/button";
+import { Spinner } from "@/ui-kit/primitives/spinner";
+import { Button } from "@/ui-kit/primitives/button";
+import { PageNotice } from "@/components/page";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { useI18n } from "@/i18n";
 import type {
   MainAreaId,
   SettingsSubAreaId,
-  StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types";
 
@@ -49,14 +49,18 @@ export function FeatureLoadBoundary(props: {
   const { t } = useI18n();
   return (
     <RenderErrorBoundary resetKey={props.regionKey} fallback={(error) => (
-      <section role="alert" className="m-4 space-y-3 rounded-lg border p-4">
-        <p className="text-sm font-medium">{t("features.shell.thisPageCouldNot")}</p>
-        <p className="text-xs text-muted-foreground">{t("features.shell.otherPagesRemainAvailable")}</p>
-        <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{t("features.shell.errorDetails")}</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{error.message}</pre></details>
-        <Button variant="outline" onClick={() => window.location.reload()}>{t("features.shell.reloadApplication")}</Button>
-      </section>
+      <PageNotice
+        className="vk-region-fault"
+        tone="error"
+        title={t("features.shell.thisPageCouldNot")}
+        details={error.message}
+        detailsLabel={t("features.shell.errorDetails")}
+        actions={<Button variant="outline" onClick={() => window.location.reload()}>{t("features.shell.reloadApplication")}</Button>}
+      >
+        {t("features.shell.otherPagesRemainAvailable")}
+      </PageNotice>
     )}>
-    <React.Suspense fallback={<div className="flex min-h-32 items-center justify-center"><Spinner /></div>}>
+    <React.Suspense fallback={<div className="vk-region-wait"><Spinner /></div>}>
       {props.children}
     </React.Suspense>
     </RenderErrorBoundary>
@@ -107,9 +111,6 @@ export function FeatureContent(props: {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   settingsActions: SettingsActionProps;
-  // Startup snapshot used by settings diagnostics.
-  // 设置诊断页面使用的启动快照。
-  startup: StartupSnapshot;
   // Workbench snapshot used by feature pages.
   // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot;
@@ -163,7 +164,6 @@ export function FeatureContent(props: {
           activeSettingsSubArea={props.activeSettingsSubArea}
           onOpenUsageStatistics={props.onOpenUsageStatistics}
           actions={props.settingsActions}
-          startup={props.startup}
           workbench={props.workbench}
         /></FeatureLoadBoundary>
       </div>

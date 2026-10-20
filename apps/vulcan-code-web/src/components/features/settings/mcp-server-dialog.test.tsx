@@ -11,7 +11,7 @@ vi.mock("@/i18n", async (importOriginal) => {
   return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) }
 })
 
-vi.mock("@/components/ui/dialog", () => ({
+vi.mock("@/ui-kit/primitives/dialog", () => ({
   Dialog: (props: { open: boolean; children: ReactNode }) => props.open ? <div>{props.children}</div> : null,
   DialogContent: (props: { children: ReactNode }) => <div>{props.children}</div>,
   DialogDescription: (props: { children: ReactNode }) => <p>{props.children}</p>,

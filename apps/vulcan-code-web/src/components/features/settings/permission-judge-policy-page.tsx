@@ -1,12 +1,13 @@
 import * as React from "react";
 import { PageEmptyState, PageHint, PageNotice, PageRow, PageSection } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { MODE_KEYS, OPTION_HINT_KEYS, OPTION_KEYS, label } from "@/components/features/settings/permission-judge-labels";
 import { FOLLOW_DEFAULT, useProjectPermissionJudgePolicy } from "@/components/project/project-permission-judge-section";
 import { formatMessage, useI18n } from "@/i18n";
 import type { ProjectSummary } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 /** Category authorization page: choose a project, then how the judge treats each category of the
  * model in use there, such as database resets. Choices live in the project and save at once.
@@ -30,7 +31,7 @@ export function PermissionJudgePolicyPage(props: { projects: readonly ProjectSum
   return <PageSection layout="rows" data-judge-policy="" title={t("projectSettings.permissionJudge.title")}
     description={t("projectSettings.permissionJudge.description")}
     actions={<Select value={current} onValueChange={setProjectId}>
-      <SelectTrigger aria-label={t("settings.permissionJudge.policy.project")} className="h-8 w-auto max-w-72"><SelectValue /></SelectTrigger>
+      <SelectTrigger aria-label={t("settings.permissionJudge.policy.project")} className="vk-form-w-auto" size="sm"><SelectValue /></SelectTrigger>
       <SelectContent>
         {props.projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}
       </SelectContent>
@@ -46,7 +47,7 @@ export function PermissionJudgePolicyPage(props: { projects: readonly ProjectSum
           description={Object.hasOwn(OPTION_HINT_KEYS, option.key) ? t(OPTION_HINT_KEYS[option.key]) : undefined}>
           <Select disabled={saving !== null} value={option.chosenMode ?? FOLLOW_DEFAULT}
             onValueChange={(mode) => void save(option.key, mode)}>
-            <SelectTrigger aria-label={label(t, OPTION_KEYS, option.key)} className="h-8 w-44"><SelectValue /></SelectTrigger>
+            <SelectTrigger aria-label={label(t, OPTION_KEYS, option.key)} className="vk-form-w-md" size="sm"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value={FOLLOW_DEFAULT}>
                 {formatMessage(t("projectSettings.permissionJudge.followDefault"), { mode: label(t, MODE_KEYS, option.defaultMode) })}
@@ -56,7 +57,7 @@ export function PermissionJudgePolicyPage(props: { projects: readonly ProjectSum
           </Select>
         </PageRow>
       ))}
-      {unsupported.length > 0 ? <PageHint className="px-(--card-spacing) py-2">
+      {unsupported.length > 0 ? <PageHint className="vk-form-inset">
         {formatMessage(t("projectSettings.permissionJudge.unsupported"), { options: unsupported.map((key) => label(t, OPTION_KEYS, key)).join(", ") })}
       </PageHint> : null}
     </>}

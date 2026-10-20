@@ -256,7 +256,9 @@ impl ProviderExecutionClient {
             fingerprint: EmbeddingSpaceFingerprint {
                 provider_id: route.provider.id.clone(),
                 service_entry_id: route.entry.id.clone(),
-                deployment_id: Some(route.connection.credential_id.clone()),
+                // A credential is not a deployment: every account of one service entry runs the same model.
+                // 凭据不是部署：同一服务入口的每个账号运行同一模型。
+                deployment_id: None,
                 secondary_route_id: secondary_route_id(&route.secondary_route),
                 model_id: model.id.clone(),
                 binding_id: binding_id.to_string(),

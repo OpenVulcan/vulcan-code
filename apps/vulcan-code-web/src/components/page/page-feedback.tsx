@@ -1,10 +1,10 @@
 import * as React from "react"
 import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-react"
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { InlineDisclosure } from "@/components/ui/disclosure"
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { cn } from "@/lib/utils"
+import { Alert, AlertDescription, AlertTitle } from "@/ui-kit/primitives/alert"
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty"
+import { cx } from "@/ui-kit/behavior/core"
 
 // PageNoticeTone is the closed semantic tone set shared by host pages and plugin pages.
 // PageNoticeTone 是宿主页面与插件页面共享的封闭语义色调集合。
@@ -39,20 +39,20 @@ export interface PageNoticeProps extends Omit<React.ComponentProps<"div">, "titl
 export function PageNotice({ tone, title, actions, details, detailsLabel, className, children, ...props }: PageNoticeProps) {
   const Icon = noticeIcon[tone]
   return (
-    <Alert className={cn("page-notice", className)} data-tone={tone} role={tone === "error" ? "alert" : "status"} variant={noticeVariant[tone]} {...props}>
+    <Alert className={cx("vk-page-notice", className)} role={tone === "error" ? "alert" : "status"} variant={noticeVariant[tone]} {...props}>
       <Icon aria-hidden="true" />
       {title ? <AlertTitle>{title}</AlertTitle> : null}
       {children || details ? (
-        <AlertDescription className="page-notice-description">
+        <AlertDescription>
           {children}
           {details ? (
-            <InlineDisclosure className="page-notice-details" keepMounted label={detailsLabel}>
+            <InlineDisclosure className="vk-page-notice-details" keepMounted label={detailsLabel}>
               <pre>{details}</pre>
             </InlineDisclosure>
           ) : null}
         </AlertDescription>
       ) : null}
-      {actions ? <div className="page-notice-actions">{actions}</div> : null}
+      {actions ? <div className="vk-page-actions">{actions}</div> : null}
     </Alert>
   )
 }
@@ -77,7 +77,7 @@ export interface PageEmptyStateProps extends Omit<React.ComponentProps<"div">, "
 // PageEmptyState 以礼貌状态角色渲染共享 Empty 表面。
 export function PageEmptyState({ title, description, icon, action, size = "inline", className, ...props }: PageEmptyStateProps) {
   return (
-    <Empty className={cn("page-empty-state", className)} data-size={size} role="status" variant="outlined" {...props}>
+    <Empty className={cx("vk-page-empty", className)} data-size={size} role="status" variant="outlined" {...props}>
       <EmptyHeader>
         {icon ? <EmptyMedia variant="icon">{icon}</EmptyMedia> : null}
         <EmptyTitle>{title}</EmptyTitle>

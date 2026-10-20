@@ -1,0 +1,158 @@
+/* Shared rules preserve their original workbench cascade position. */
+/* 共用规则保留工作台中的原有层叠位置。 */
+
+.skill-page-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: visible;
+}
+
+.lua-skill-page-body {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.agent-management-surface .agent-skill-page-body:has(> .agent-catalog-toolbar) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.agent-management-surface .agent-skill-page-body:has(> .agent-catalog-toolbar):has(> .skill-warning-list) {
+  grid-template-rows: auto minmax(0, 96px) minmax(0, 1fr);
+}
+
+/* Skill and agent catalogs: one kit toolbar row (search and filters, then actions) above a full-width */
+/* hairline list. The stage header already names the page and its counts. */
+/* 技能与智能体目录：一行套件工具栏（搜索与筛选，随后是操作），下方是全宽细线列表。 */
+/* 舞台标题已给出页面名称与数量。 */
+:is(.agent-management-surface, .agent-skills-management-surface) {
+  height: 100%;
+  overflow: hidden;
+}
+
+:is(.agent-management-surface, .agent-skills-management-surface) > .agent-skill-page-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 0;
+  overflow: hidden;
+}
+
+.agent-catalog-toolbar {
+  flex: 0 0 auto;
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 5);
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+}
+
+.agent-catalog-toolbar .agent-catalog-search {
+  width: min(100%, 17rem);
+}
+
+:is(.agent-management-surface, .agent-skills-management-surface) .agent-skill-card-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
+  overscroll-behavior: contain;
+}
+
+:is(.agent-management-surface, .agent-skills-management-surface) .skill-warning-list {
+  flex: 0 0 auto;
+  max-height: 96px;
+  overflow: auto;
+  padding-inline: calc(var(--vk-u) * 5);
+}
+
+@media (max-width: 760px) {
+  .agent-definition-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .agent-definition-row-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}
+
+.skill-card-list {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding-right: 2px;
+}
+
+.lua-skill-page-body .skill-card-list {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+.agent-skill-card-list {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 0;
+  overflow: hidden;
+}
+
+.agent-skill-card-list:has(> .vk-page-empty) {
+  min-height: max(240px, calc(100dvh - 300px));
+  align-items: center;
+  border: 0;
+  background: transparent;
+}
+
+.agent-definition-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border-bottom: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-panel);
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 5);
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
+}
+
+.agent-definition-row:hover {
+  background: var(--vk-hover);
+}
+
+.agent-definition-row:last-child {
+  border-bottom: 0;
+}
+
+.agent-definition-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.agent-skill-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .agent-skill-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+}
+
+@media (max-width: 760px) {
+
+  .lua-skill-page-body .agent-definition-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .lua-skill-page-body .agent-definition-row-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}

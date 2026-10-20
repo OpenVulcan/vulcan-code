@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { useI18n } from "@/i18n";
 import { answerModeAwaitsRequest, isAnswerModeNewer, type AnswerMode, type AnswerModeOwner } from "@/service/answer-mode";
 import { setSessionAnswerMode } from "@/service/answer-mode-service";

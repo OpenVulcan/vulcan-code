@@ -53,6 +53,11 @@ pub struct WorkbenchSnapshot {
     /// 侧栏树中当前展开的项目标识集合。
     #[serde(default)]
     pub expanded_project_ids: Vec<String>,
+    /// Project tree layout: user groups, the default group position and the pinned section, projected onto
+    /// visible projects and sessions.
+    /// 项目树布局：用户分组、默认分组位置与置顶分区，已投影到可见项目与会话上。
+    #[serde(default)]
+    pub project_tree: ProjectTreeSummary,
     /// Authoritative invalidation revisions for independently loaded project settings.
     /// 独立加载项目设置所使用的权威失效版本。
     pub project_settings_revisions: ProjectSettingsRevisionSnapshot,

@@ -1,8 +1,9 @@
 import React from "react";
-import "@/styles/context-injection.css";
-import { Brain, BrainCircuit, Database, Search, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import "@/ui-kit/styles/features/memory-panel.css";
+import { BrainCircuit, Database, RefreshCw, Search, Settings2, Trash2 } from "lucide-react";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { PageNotice } from "@/components/page/page-feedback";
 import {
   Dialog,
   DialogContent,
@@ -10,13 +11,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+} from "@/ui-kit/primitives/dialog";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type {
   ContextInjectionCardSummary,
@@ -31,8 +26,11 @@ import {
   workspaceMemoryPanelRouteKey,
 } from "@/components/workspace/workspace-memory-panel-request-ownership";
 
-// WorkspaceMemoryPanel renders WebUI-aligned dynamic and static context injection lists.
-// WorkspaceMemoryPanel 渲染对齐 WebUI 的动态与静态上下文注入列表。
+// WorkspaceMemoryPanel shows everything memory puts into the selected session as one card: a search and
+// refresh bar, then the dynamic memories recalled for the coming turns, then the static memory injected into
+// every turn beneath them.
+// WorkspaceMemoryPanel 将记忆注入当前会话的全部内容呈现为一张卡片：搜索与刷新栏，其下是为后续回合召回的动态记忆，
+// 再往下是每一轮都会注入的静态记忆。
 export function WorkspaceMemoryPanel(props: {
   // Selected-session context injection snapshot from the service.
   // 来自服务的当前选中会话上下文注入快照。
@@ -46,6 +44,9 @@ export function WorkspaceMemoryPanel(props: {
   // Runs one VMM memory management action.
   // 执行单个 VMM 记忆管理动作。
   onRunVmmAction?: (request: VmmMemoryActionRequest) => Promise<VmmMemoryActionResult>;
+  // Opens the memory settings page.
+  // 打开记忆设置页面。
+  onOpenSettings?: () => void;
 }) {
   // t translates stable side-panel labels.
   // t 翻译稳定侧面板标签。
@@ -68,9 +69,12 @@ export function WorkspaceMemoryPanel(props: {
   const [pendingDelete, setPendingDelete] = React.useState<ContextInjectionDeleteTarget | null>(null);
   const [lookupDialog, setLookupDialog] = React.useState<ContextInjectionLookupDialogState | null>(null);
   const [deleteNotice, setDeleteNotice] = React.useState<string | null>(null);
-  // activeTab loads durable profile data only when the static memory surface is opened.
-  // activeTab 仅在静态记忆页面打开时加载长期画像数据。
-  const [activeTab, setActiveTab] = React.useState<"dynamic" | "static">("dynamic");
+  // query filters every visible memory by its content; it never reaches the service.
+  // query 按内容筛选所有可见记忆，不会发送到服务。
+  const [query, setQuery] = React.useState("");
+  // reloadToken forces both persisted reads to run again when the user asks for a refresh.
+  // reloadToken 在用户请求刷新时强制两项持久读取重新执行。
+  const [reloadToken, setReloadToken] = React.useState(0);
   // profileRead retains only a read-only sidebar result for its exact selected route.
   // profileRead 仅为准确选中路由保留只读侧栏结果。
   const [profileRead, setProfileRead] = React.useState<{ routeKey: string; profile: VmmStaticProfileSummary | null; error: string | null } | null>(null);
@@ -91,7 +95,7 @@ export function WorkspaceMemoryPanel(props: {
   const staticProfile = props.snapshot?.staticProfile ?? (profileRead?.routeKey === routeKey ? profileRead.profile : null);
 
   React.useEffect(() => {
-    if (activeTab !== "dynamic" || !props.selectedConversationId || !props.onRunVmmAction || (props.snapshot?.dynamicCards.length ?? 0) > 0 || (requestedDynamicRoute.current?.routeKey === routeKey && requestedDynamicRoute.current.snapshot === props.snapshot)) {
+    if (!props.selectedConversationId || !props.onRunVmmAction || (props.snapshot?.dynamicCards.length ?? 0) > 0 || (requestedDynamicRoute.current?.routeKey === routeKey && requestedDynamicRoute.current.snapshot === props.snapshot)) {
       return;
     }
     requestedDynamicRoute.current = { routeKey, snapshot: props.snapshot };
@@ -115,10 +119,10 @@ export function WorkspaceMemoryPanel(props: {
       setDynamicRead({ routeKey, snapshot: props.snapshot, cards: [], error: error instanceof Error ? error.message : String(error) });
     });
     return () => { cancelled = true; };
-  }, [activeTab, props.onRunVmmAction, props.selectedConversationId, props.snapshot, routeKey, selectedProjectId]);
+  }, [props.onRunVmmAction, props.selectedConversationId, props.snapshot, reloadToken, routeKey, selectedProjectId]);
 
   React.useEffect(() => {
-    if (activeTab !== "static" || !props.selectedConversationId || !props.onRunVmmAction || props.snapshot?.staticProfile || requestedProfileRoute.current === routeKey) {
+    if (!props.selectedConversationId || !props.onRunVmmAction || props.snapshot?.staticProfile || requestedProfileRoute.current === routeKey) {
       return;
     }
     requestedProfileRoute.current = routeKey;
@@ -142,7 +146,7 @@ export function WorkspaceMemoryPanel(props: {
       setProfileRead({ routeKey, profile: null, error: error instanceof Error ? error.message : String(error) });
     });
     return () => { cancelled = true; };
-  }, [activeTab, props.onRunVmmAction, props.selectedConversationId, props.snapshot?.staticProfile, routeKey, selectedProjectId]);
+  }, [props.onRunVmmAction, props.selectedConversationId, props.snapshot?.staticProfile, reloadToken, routeKey, selectedProjectId]);
 
   // requestDelete starts a fresh confirmation without carrying another item's previous feedback.
   // requestDelete 开始新的确认，不携带其他条目的历史反馈。
@@ -320,64 +324,96 @@ export function WorkspaceMemoryPanel(props: {
     setLookupDialog(null);
   }, [requestOwnership]);
 
+  // refresh re-reads persisted leases and the static profile after later turns or lifecycle changes.
+  // refresh 在后续回合或生命周期变化后重新读取持久租约与静态画像。
+  const refresh = () => {
+    requestedDynamicRoute.current = null;
+    requestedProfileRoute.current = null;
+    setDynamicRead(null);
+    setProfileRead(null);
+    setReloadToken((value) => value + 1);
+  };
+  const needle = query.trim().toLowerCase();
+  const matches = (content: string) => !needle || content.toLowerCase().includes(needle);
+  const hidden = (item: ContextInjectionItemSummary) => {
+    const dedupeKey = contextInjectionDedupeKey(item);
+    return hiddenMemoryIds.has(contextInjectionMemoryId(item)) || Boolean(dedupeKey && hiddenDedupeKeys.has(dedupeKey));
+  };
+  const visibleCards = (cards: ContextInjectionCardSummary[]) => cards
+    .map((card) => ({ ...card, items: card.items.filter((item) => !hidden(item) && matches(item.content)) }))
+    .filter((card) => card.items.length > 0);
+  const shownDynamic = visibleCards(dynamicCards);
+  const shownStatic = visibleCards(staticCards);
+  const shownProfile = staticProfile ? {
+    sections: staticProfile.sections
+      .map((section) => ({ ...section, dates: section.dates
+        .map((date) => ({ ...date, nodes: date.nodes.filter((node) => matches(node.content)) }))
+        .filter((date) => date.nodes.length > 0) }))
+      .filter((section) => section.dates.length > 0),
+  } : null;
+  const countItems = (cards: ContextInjectionCardSummary[]) => cards.reduce((total, card) => total + card.items.length, 0);
+  const dynamicCount = countItems(shownDynamic);
+  const staticCount = countItems(shownStatic) + (shownProfile?.sections ?? []).reduce((total, section) => (
+    total + section.dates.reduce((sum, date) => sum + date.nodes.length, 0)
+  ), 0);
+  const noneText = (fallback: string) => needle ? t("workspaceMemory.noMatch") : fallback;
+  const dynamicError = dynamicRead?.routeKey === routeKey && dynamicRead.snapshot === props.snapshot ? dynamicRead.error : null;
+  const profileError = profileRead?.routeKey === routeKey ? profileRead.error : null;
+  const itemActions = { busyDeleteKey, onLookupTurn: props.onRunVmmAction ? handleLookupTurn : undefined, onRequestDelete: props.onRunVmmAction ? requestDelete : undefined };
+
   return (
-    <Tabs className="context-injection-tabs" value={activeTab} onValueChange={(value) => {
-      if (value === "dynamic" && activeTab !== "dynamic") {
-        // Reopening dynamic memory refreshes the persisted lease view after later turns or lifecycle changes.
-        // 重新打开动态记忆时刷新持久租约视图，反映后续回合或生命周期变化。
-        requestedDynamicRoute.current = null;
-        setDynamicRead(null);
-      }
-      if (value === "static" && activeTab !== "static") {
-        // Reopening the static tab explicitly refreshes its read-only view after failures or changes.
-        // 重新打开静态页会在失败或内容变化后明确刷新其只读视图。
-        requestedProfileRoute.current = null;
-        setProfileRead(null);
-      }
-      setActiveTab(value === "static" ? "static" : "dynamic");
-    }}>
-      <TabsList className="context-injection-tabs-list">
-        <TabsTrigger value="dynamic">
-          <BrainCircuit className="context-injection-tab-icon left-brain" size={13} />
-          <span>{t("contextPanel.dynamic")}</span>
-        </TabsTrigger>
-        <TabsTrigger value="static">
-          <Brain className="context-injection-tab-icon right-brain" size={13} />
-          <span>{t("contextPanel.static")}</span>
-        </TabsTrigger>
-      </TabsList>
-      <TabsContent className="context-injection-tab-content" value="dynamic">
-        <ContextInjectionCardList
-          busyDeleteKey={busyDeleteKey}
-          cards={dynamicCards}
-          hiddenDedupeKeys={hiddenDedupeKeys}
-          hiddenMemoryIds={hiddenMemoryIds}
-          mode="dynamic"
-          emptyIcon={<BrainCircuit size={20} />}
-          emptyText={t("contextPanel.dynamicEmpty")}
-          title={t("contextPanel.dynamic")}
-          onLookupTurn={props.onRunVmmAction ? handleLookupTurn : undefined}
-          onRequestDelete={props.onRunVmmAction ? requestDelete : undefined}
-        />
-        {deleteNotice ? <p className="context-injection-delete-notice">{deleteNotice}</p> : null}
-      </TabsContent>
-      <TabsContent className="context-injection-tab-content" value="static">
-        <StaticMemoryPanelContent
-          busyDeleteKey={busyDeleteKey}
-          cards={staticCards}
-          hiddenDedupeKeys={hiddenDedupeKeys}
-          hiddenMemoryIds={hiddenMemoryIds}
-          emptyIcon={<Database size={20} />}
-          emptyText={t("contextPanel.staticEmpty")}
-          profile={staticProfile}
-          title={t("contextPanel.static")}
-          onLookupTurn={props.onRunVmmAction ? handleLookupTurn : undefined}
-          onRequestDelete={props.onRunVmmAction ? requestDelete : undefined}
-        />
-        {dynamicRead?.routeKey === routeKey && dynamicRead.snapshot === props.snapshot && dynamicRead.error ? <p className="context-injection-delete-notice">{t("workspaceMemory.lookupFailed").replace("{error}", dynamicRead.error)}</p> : null}
-        {profileRead?.routeKey === routeKey && profileRead.error ? <p className="context-injection-delete-notice">{t("workspaceMemory.lookupFailed").replace("{error}", profileRead.error)}</p> : null}
-        {deleteNotice ? <p className="context-injection-delete-notice">{deleteNotice}</p> : null}
-      </TabsContent>
+    <div className="vk-mem">
+      <div className="vk-mem-bar">
+        <div className="vk-input-wrap">
+          <Search aria-hidden="true" size={13} />
+          <input
+            aria-label={t("workspaceMemory.search")}
+            className="vk-input"
+            data-size="sm"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t("workspaceMemory.search")}
+            type="search"
+            value={query}
+          />
+        </div>
+        {props.onRunVmmAction ? (
+          <IconButton aria-label={t("workspaceMemory.refresh")} onClick={refresh} size="sm" title={t("workspaceMemory.refresh")}>
+            <RefreshCw size={13} />
+          </IconButton>
+        ) : null}
+        {props.onOpenSettings ? (
+          <IconButton aria-label={t("memory.workspace.settings")} onClick={props.onOpenSettings} size="sm" title={t("memory.workspace.settings")}>
+            <Settings2 size={13} />
+          </IconButton>
+        ) : null}
+      </div>
+      <div className="vk-mem-scroll">
+        {deleteNotice ? <PageNotice tone="info">{deleteNotice}</PageNotice> : null}
+        <section className="vk-mem-sec" data-kind="dynamic">
+          <header className="vk-mem-head">
+            <BrainCircuit aria-hidden="true" size={13} />
+            <strong>{t("workspaceMemory.dynamicTitle")}</strong>
+            <b>{dynamicCount}</b>
+            <small>{t("workspaceMemory.dynamicHint")}</small>
+          </header>
+          {shownDynamic.length > 0
+            ? shownDynamic.map((card) => <MemoryCardItems card={card} key={card.tag} mode="dynamic" {...itemActions} />)
+            : <p className="vk-mem-none">{noneText(t("contextPanel.dynamicEmpty"))}</p>}
+          {dynamicError ? <PageNotice tone="error">{t("workspaceMemory.lookupFailed").replace("{error}", dynamicError)}</PageNotice> : null}
+        </section>
+        <section className="vk-mem-sec" data-kind="static">
+          <header className="vk-mem-head">
+            <Database aria-hidden="true" size={13} />
+            <strong>{t("workspaceMemory.staticTitle")}</strong>
+            <b>{staticCount}</b>
+            <small>{t("workspaceMemory.staticHint")}</small>
+          </header>
+          {shownProfile && shownProfile.sections.length > 0 ? <VmmStaticProfileView profile={shownProfile} /> : null}
+          {shownStatic.map((card) => <MemoryCardItems card={card} key={card.tag} mode="static" {...itemActions} />)}
+          {staticCount === 0 ? <p className="vk-mem-none">{noneText(t("contextPanel.staticEmpty"))}</p> : null}
+          {profileError ? <PageNotice tone="error">{t("workspaceMemory.lookupFailed").replace("{error}", profileError)}</PageNotice> : null}
+        </section>
+      </div>
       {pendingDelete ? (
         <ContextInjectionDeleteDialog
           busy={busyDeleteKey === contextInjectionDeleteKey(pendingDelete)}
@@ -395,81 +431,6 @@ export function WorkspaceMemoryPanel(props: {
           onClose={handleCloseLookupDialog}
         />
       ) : null}
-    </Tabs>
-  );
-}
-
-// StaticMemoryPanelContent renders structured VMM profile data plus legacy static cards.
-// StaticMemoryPanelContent 渲染结构化 VMM 画像数据与旧静态卡片。
-function StaticMemoryPanelContent(props: {
-  // Structured VMM profile snapshot from the backend.
-  // 后端返回的结构化 VMM 画像快照。
-  profile: VmmStaticProfileSummary | null;
-  // Static context cards to display after the profile snapshot.
-  // 画像快照后需要展示的静态上下文卡片。
-  cards: ContextInjectionCardSummary[];
-  // Memory ids hidden after delete or session suppression.
-  // 删除或会话抑制后需要隐藏的记忆标识集合。
-  hiddenMemoryIds: Set<number>;
-  // Dedupe keys hidden after delete or session suppression.
-  // 删除或会话抑制后需要隐藏的去重键集合。
-  hiddenDedupeKeys: Set<string>;
-  // Delete key currently being processed.
-  // 当前正在处理的删除键。
-  busyDeleteKey: string | null;
-  // Empty state icon.
-  // 空状态图标。
-  emptyIcon: React.ReactNode;
-  // Empty state title.
-  // 空状态标题。
-  title: string;
-  // Empty state message.
-  // 空状态消息。
-  emptyText: string;
-  // Optional memory delete request callback.
-  // 可选记忆删除请求回调。
-  onRequestDelete?: (target: ContextInjectionDeleteTarget) => void;
-  // Optional turn lookup callback.
-  // 可选回合回查回调。
-  onLookupTurn?: (target: ContextInjectionLookupTarget) => void;
-}) {
-  const hasProfile = Boolean(props.profile?.sections.some((section) => (
-    section.dates.some((date) => date.nodes.length > 0)
-  )));
-
-  if (!hasProfile) {
-    return (
-      <ContextInjectionCardList
-        busyDeleteKey={props.busyDeleteKey}
-        cards={props.cards}
-        hiddenDedupeKeys={props.hiddenDedupeKeys}
-        hiddenMemoryIds={props.hiddenMemoryIds}
-        mode="static"
-        emptyIcon={props.emptyIcon}
-        emptyText={props.emptyText}
-        title={props.title}
-        onLookupTurn={props.onLookupTurn}
-        onRequestDelete={props.onRequestDelete}
-      />
-    );
-  }
-
-  return (
-    <div className="context-injection-card-list">
-      <VmmStaticProfileView profile={props.profile as VmmStaticProfileSummary} />
-      <ContextInjectionCardList
-        busyDeleteKey={props.busyDeleteKey}
-        cards={props.cards}
-        hiddenDedupeKeys={props.hiddenDedupeKeys}
-        hiddenMemoryIds={props.hiddenMemoryIds}
-        mode="static"
-        emptyIcon={props.emptyIcon}
-        emptyText={props.emptyText}
-        showEmpty={false}
-        title={props.title}
-        onLookupTurn={props.onLookupTurn}
-        onRequestDelete={props.onRequestDelete}
-      />
     </div>
   );
 }
@@ -482,117 +443,33 @@ function VmmStaticProfileView(props: {
   profile: VmmStaticProfileSummary;
 }) {
   return (
-    <div className="vmm-static-profile">
+    <>
       {props.profile.sections.map((section) => (
-        <section className="vmm-static-profile-section" key={section.target}>
-          <div className="vmm-static-profile-section-title">
-            <ContextInjectionPill label="VMM" tone="inverse" />
-            <strong>{section.label}</strong>
+        <div className="vk-mem-group" key={section.target}>
+          <div className="vk-mem-sub">
+            <span className="vk-label">{section.label}</span>
           </div>
           {section.dates.map((date) => (
-            <div className="vmm-static-profile-date-group" key={`${section.target}-${date.date}`}>
-              <div className="vmm-static-profile-date">{formatVmmMemoryDateLabel(date.date)}</div>
-              <div className="vmm-static-profile-node-list">
-                {date.nodes.map((node) => (
-                  <article className="vmm-static-profile-node" key={node.id}>
-                    <div className="vmm-static-profile-node-meta">
-                      <ContextInjectionPill label={node.priority} />
-                      <ContextInjectionPill label={node.level} />
-                      <ContextInjectionPill label={node.refreshWeight} />
-                    </div>
-                    <div className="vmm-static-profile-node-content">{node.content}</div>
-                  </article>
-                ))}
-              </div>
+            <div className="vk-mem-dated" key={`${section.target}-${date.date}`}>
+              <time>{formatVmmMemoryDateLabel(date.date)}</time>
+              {date.nodes.map((node) => (
+                <article className="vk-mem-item" key={node.id}>
+                  <p>{node.content}</p>
+                  <small className="vk-mem-meta">{[node.priority, node.level, node.refreshWeight].join(" · ")}</small>
+                </article>
+              ))}
             </div>
           ))}
-        </section>
+        </div>
       ))}
-    </div>
+    </>
   );
 }
 
-// ContextInjectionCardList renders one injection card collection or its empty state.
-// ContextInjectionCardList 渲染一组注入卡片或其空状态。
-function ContextInjectionCardList(props: {
-  // Injection cards to display.
-  // 需要展示的注入卡片。
-  cards: ContextInjectionCardSummary[];
-  // Memory ids hidden after delete or session suppression.
-  // 删除或会话抑制后需要隐藏的记忆标识集合。
-  hiddenMemoryIds: Set<number>;
-  // Dedupe keys hidden after delete or session suppression.
-  // 删除或会话抑制后需要隐藏的去重键集合。
-  hiddenDedupeKeys: Set<string>;
-  // Delete key currently being processed.
-  // 当前正在处理的删除键。
-  busyDeleteKey: string | null;
-  // Visible card mode used to adjust dynamic and static metadata.
-  // 用于调整动态和静态元数据的可见卡片模式。
-  mode: "dynamic" | "static";
-  // Empty state icon.
-  // 空状态图标。
-  emptyIcon: React.ReactNode;
-  // Empty state title.
-  // 空状态标题。
-  title: string;
-  // Empty state message.
-  // 空状态消息。
-  emptyText: string;
-  // Whether an empty state should be rendered when no cards remain.
-  // 没有剩余卡片时是否渲染空状态。
-  showEmpty?: boolean;
-  // Optional memory delete request callback.
-  // 可选记忆删除请求回调。
-  onRequestDelete?: (target: ContextInjectionDeleteTarget) => void;
-  // Optional turn lookup callback.
-  // 可选回合回查回调。
-  onLookupTurn?: (target: ContextInjectionLookupTarget) => void;
-}) {
-  const visibleCards = props.cards
-    .map((card) => ({
-      ...card,
-      items: card.items.filter((item) => {
-        const memoryId = contextInjectionMemoryId(item);
-        const dedupeKey = contextInjectionDedupeKey(item);
-        return !props.hiddenMemoryIds.has(memoryId)
-          && !(dedupeKey && props.hiddenDedupeKeys.has(dedupeKey));
-      }),
-    }))
-    .filter((card) => card.items.length > 0);
-
-  if (visibleCards.length === 0) {
-    if (props.showEmpty === false) {
-      return null;
-    }
-    return (
-      <div className="context-empty-state">
-        {props.emptyIcon}
-        <strong>{props.title}</strong>
-        <span>{props.emptyText}</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="context-injection-card-list">
-      {visibleCards.map((card) => (
-        <ContextInjectionCardView
-          busyDeleteKey={props.busyDeleteKey}
-          card={card}
-          key={card.tag}
-          mode={props.mode}
-          onLookupTurn={props.onLookupTurn}
-          onRequestDelete={props.onRequestDelete}
-        />
-      ))}
-    </div>
-  );
-}
-
-// ContextInjectionCardView renders one injection source group and its items.
-// ContextInjectionCardView 渲染单个注入来源分组及其条目。
-function ContextInjectionCardView(props: {
+// MemoryCardItems renders the rows of one injection source. Each row is the memory itself with a quiet
+// metadata line under it; looking up the source turn and removing the memory appear on hover or focus.
+// MemoryCardItems 渲染单个注入来源的各行。每行是记忆正文，其下是一行安静的元数据；回查来源回合与移除记忆在悬停或聚焦时出现。
+function MemoryCardItems(props: {
   // Injection source card to render.
   // 要渲染的注入来源卡片。
   card: ContextInjectionCardSummary;
@@ -615,102 +492,73 @@ function ContextInjectionCardView(props: {
   // expiredGroup 标识仅在底部展示并保留到上下文压缩时清理的 VMM 区域。
   const expiredGroup = props.card.tag === "VMM_MEMORY_EXPIRED";
   return (
-    <section className={`context-injection-card-group${expiredGroup ? " expired" : ""}`}>
-        {expiredGroup ? (
-          <header className="context-injection-expired-header">
-            <strong>{t("workspaceMemory.expiredRegionTitle")}</strong>
-            <span>{t("workspaceMemory.expiredRegionDescription")}</span>
-          </header>
-        ) : null}
-        {props.card.items.map((item, index) => {
-          const memoryId = contextInjectionMemoryId(item);
-          const turnId = contextInjectionTurnId(item);
-          const dedupeKey = contextInjectionDedupeKey(item);
-          const scoreLabel = contextInjectionScoreLabel(item);
-          const scoreTone = contextInjectionScoreTone(scoreLabel);
-          const dateLabel = contextInjectionDateLabel(item);
-          const deleteTarget = {
-            content: item.content,
-            dedupeKey,
-            memoryId,
-            suppressibleInSession: props.mode === "dynamic",
-          };
-          const lookupTarget = { content: item.content, turnId };
-          const deleteKey = contextInjectionDeleteKey(deleteTarget);
-          const canDelete = Boolean((memoryId > 0 || dedupeKey) && props.onRequestDelete);
-          const canLookup = Boolean(item.hasDialogue && turnId > 0 && props.onLookupTurn);
-          return (
-          <article className="context-injection-item" key={`${props.card.tag}-${index}`}>
-            <div className="context-injection-item-top">
-              <span className="context-injection-item-meta">
-                {sourceLabel ? <ContextInjectionPill label={sourceLabel} tone="inverse" /> : null}
-                {memoryId > 0 ? <ContextInjectionPill label="ID" tone="success" value={String(memoryId)} /> : null}
-                {turnId > 0 ? <ContextInjectionPill label="TID" tone="success" value={String(turnId)} /> : null}
-                {props.mode === "dynamic" ? <ContextInjectionPill label="TTL" value={contextInjectionTtlText(item.ttlLabel, t)} /> : null}
-              </span>
-              <span className="context-injection-item-actions">
+    <div className="vk-mem-group" data-expired={expiredGroup ? "" : undefined}>
+      {expiredGroup ? (
+        <div className="vk-mem-sub">
+          <span className="vk-label">{t("workspaceMemory.expiredRegionTitle")}</span>
+          <small>{t("workspaceMemory.expiredRegionDescription")}</small>
+        </div>
+      ) : null}
+      {props.card.items.map((item, index) => {
+        const memoryId = contextInjectionMemoryId(item);
+        const turnId = contextInjectionTurnId(item);
+        const dedupeKey = contextInjectionDedupeKey(item);
+        const scoreLabel = contextInjectionScoreLabel(item);
+        const dateLabel = contextInjectionDateLabel(item);
+        const deleteTarget = {
+          content: item.content,
+          dedupeKey,
+          memoryId,
+          suppressibleInSession: props.mode === "dynamic",
+        };
+        const deleteKey = contextInjectionDeleteKey(deleteTarget);
+        const canDelete = Boolean((memoryId > 0 || dedupeKey) && props.onRequestDelete);
+        const canLookup = Boolean(item.hasDialogue && turnId > 0 && props.onLookupTurn);
+        const handleLabel = memoryId > 0 ? t("workspaceMemory.handleMemoryWithId").replace("{memoryId}", String(memoryId)) : t("workspaceMemory.handleDynamicMemory");
+        const lookupLabel = t("workspaceMemory.viewDetailsWithTurn").replace("{turnId}", String(turnId));
+        const meta = [
+          sourceLabel,
+          memoryId > 0 ? `#${memoryId}` : null,
+          turnId > 0 ? `T${turnId}` : null,
+          props.mode === "dynamic" ? contextInjectionTtlText(item.ttlLabel, t) : null,
+          dateLabel,
+        ].filter(Boolean).join(" · ");
+        return (
+          <article className="vk-mem-item" key={`${props.card.tag}-${index}`}>
+            <p>{item.content}</p>
+            <small className="vk-mem-meta">
+              {meta}
+              {scoreLabel ? <span data-tone={contextInjectionScoreTone(scoreLabel)}>{scoreLabel}</span> : null}
+            </small>
+            {canLookup || canDelete ? (
+              <span className="vk-mem-acts">
                 {canLookup ? (
-                  <button
-                    aria-label={t("workspaceMemory.viewDetailsWithTurn").replace("{turnId}", String(turnId))}
-                    className="context-injection-lookup-button"
-                    onClick={() => props.onLookupTurn?.(lookupTarget)}
-                    title={t("workspaceMemory.viewDetailsWithTurn").replace("{turnId}", String(turnId))}
-                    type="button"
-                  >
-                    <Search size={14} />
-                  </button>
+                  <IconButton aria-label={lookupLabel} onClick={() => props.onLookupTurn?.({ content: item.content, turnId })} size="xs" title={lookupLabel}>
+                    <Search size={12} />
+                  </IconButton>
                 ) : null}
                 {canDelete ? (
-                  <button
-                    aria-label={memoryId > 0 ? t("workspaceMemory.handleMemoryWithId").replace("{memoryId}", String(memoryId)) : t("workspaceMemory.handleDynamicMemory")}
-                    className="context-injection-delete-button"
+                  <IconButton
+                    aria-label={handleLabel}
+                    data-action="delete"
                     disabled={props.busyDeleteKey === deleteKey}
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
                       props.onRequestDelete?.(deleteTarget);
                     }}
-                    title={memoryId > 0 ? t("workspaceMemory.handleMemoryWithId").replace("{memoryId}", String(memoryId)) : t("workspaceMemory.handleDynamicMemory")}
-                    type="button"
+                    size="xs"
+                    title={handleLabel}
                   >
-                    <Trash2 size={14} />
-                  </button>
+                    <Trash2 size={12} />
+                  </IconButton>
                 ) : null}
               </span>
-            </div>
-            <div className="context-injection-item-content">{item.content}</div>
-            <div className="context-injection-item-footer">
-              {dateLabel ? <ContextInjectionPill label={dateLabel} /> : null}
-              {scoreLabel ? <ContextInjectionPill label={scoreLabel} tone={scoreTone} /> : null}
-            </div>
+            ) : null}
           </article>
-          );
-        })}
-    </section>
-  );
-}
-
-// ContextInjectionPillProps describes one compact memory metadata chip.
-// ContextInjectionPillProps 描述单个紧凑记忆元数据标签。
-interface ContextInjectionPillProps {
-  // Label text shown inside the pill.
-  // 标签内展示的文本。
-  label: string;
-  // Optional value rendered as a rounded count badge.
-  // 以圆角计数标记展示的可选数值。
-  value?: string;
-  // Optional semantic color tone for the pill.
-  // 标签使用的可选语义颜色。
-  tone?: "default" | "inverse" | "success" | "warning";
-}
-
-// ContextInjectionPill renders one framed memory metadata label.
-// ContextInjectionPill 渲染单个带框记忆元数据标签。
-function ContextInjectionPill(props: ContextInjectionPillProps) {
-  return (
-    <span className={`context-injection-pill ${props.tone ?? "default"}`}>
-      {props.value ? `${props.label}:${props.value}` : props.label}
-    </span>
+        );
+      })}
+    </div>
   );
 }
 
@@ -788,7 +636,7 @@ function ContextInjectionDeleteDialog(props: {
   return (
     <Dialog open onOpenChange={(open) => !props.busy && !open && props.onCancel()}>
       <DialogContent
-        className="context-injection-delete-dialog"
+        size="sm"
         onEscapeKeyDown={(event) => {
           if (props.busy) {
             event.preventDefault();
@@ -803,12 +651,12 @@ function ContextInjectionDeleteDialog(props: {
       >
         <DialogHeader>
           <DialogTitle>{t("workspaceMemory.handleDynamicMemory")}</DialogTitle>
-          <DialogDescription className="context-injection-dialog-preview">
+          <DialogDescription className="vk-mem-preview">
             {props.target.content}
           </DialogDescription>
         </DialogHeader>
-        {props.notice ? <p className="context-injection-delete-notice" role="alert">{props.notice}</p> : null}
-        <DialogFooter className="context-injection-delete-dialog-actions">
+        {props.notice ? <PageNotice tone="error">{props.notice}</PageNotice> : null}
+        <DialogFooter>
           <Button disabled={props.busy} onClick={props.onCancel} type="button" variant="ghost">
             {t("conversation.action.cancel")}
           </Button>
@@ -843,19 +691,19 @@ function ContextInjectionLookupDialog(props: {
   const turnEntries = contextInjectionLookupTurns(props.state.result);
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className="context-injection-lookup-dialog">
+      <DialogContent scrollMode="body-scroll" size="lg">
         <DialogHeader>
           <DialogTitle>{t("workspaceMemory.viewDetails")}</DialogTitle>
           <DialogDescription>{t("workspaceMemory.turnId").replace("{turnId}", String(props.state.target.turnId))}</DialogDescription>
         </DialogHeader>
-        <p className="context-injection-dialog-preview">{props.state.target.content}</p>
+        <p className="vk-mem-preview">{props.state.target.content}</p>
         {props.state.loading ? <StreamPlaceholder label={t("workspaceMemory.loadingTurn")} count={3} /> : null}
-        {props.state.error ? <p className="context-injection-delete-notice">{t("workspaceMemory.lookupFailed").replace("{error}", props.state.error)}</p> : null}
+        {props.state.error ? <PageNotice tone="error">{t("workspaceMemory.lookupFailed").replace("{error}", props.state.error)}</PageNotice> : null}
         {!props.state.loading && !props.state.error ? (
           turnEntries.length > 0 ? (
-            <div className="context-injection-turn-list">
+            <div className="vk-mem-turns">
               {turnEntries.map((turn, index) => (
-                <article className="context-injection-turn-entry" key={index}>
+                <article key={index}>
                   <strong>TURNID:{String(contextInjectionLookupTurnId(turn, props.state.target.turnId))}</strong>
                   <span>{t("workspaceMemory.user").replace("{content}", contextInjectionLookupText(turn, "user_question"))}</span>
                   <span>{t("workspaceMemory.assistant").replace("{content}", contextInjectionLookupText(turn, "assistant_answer"))}</span>
@@ -864,7 +712,7 @@ function ContextInjectionLookupDialog(props: {
               ))}
             </div>
           ) : (
-            <pre className="context-injection-lookup-json">{JSON.stringify(props.state.result?.response ?? {}, null, 2)}</pre>
+            <pre className="vk-mem-json">{JSON.stringify(props.state.result?.response ?? {}, null, 2)}</pre>
           )
         ) : null}
       </DialogContent>
@@ -929,18 +777,18 @@ function contextInjectionScoreLabel(item: ContextInjectionItemSummary): string |
 
 // contextInjectionScoreTone maps a relevance score to a compact visual tone.
 // contextInjectionScoreTone 将相关度分数映射为紧凑视觉色调。
-function contextInjectionScoreTone(scoreLabel: string | null): ContextInjectionPillProps["tone"] {
+function contextInjectionScoreTone(scoreLabel: string | null): "ok" | "warn" | undefined {
   const score = Number.parseFloat(scoreLabel ?? "");
   if (!Number.isFinite(score)) {
-    return "default";
+    return undefined;
   }
   if (score >= 0.9) {
-    return "success";
+    return "ok";
   }
   if (score >= 0.8) {
-    return "warning";
+    return "warn";
   }
-  return "default";
+  return undefined;
 }
 
 // contextInjectionDateLabel returns a date-only label for memory metadata.

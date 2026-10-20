@@ -6,7 +6,6 @@ import {
   ConversationLoadingCenter,
   ConversationSubmissionStatus,
   DraftSubmissionTranscript,
-  EmptyConversationPrompt,
 } from "@/components/conversation/conversation-chrome";
 import {
   ConversationBranchWorkspaceV1,
@@ -29,12 +28,11 @@ import type {
   ConversationBlock,
 } from "@/components/conversation/conversation-model";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
-import { cn } from "@/lib/utils";
 import { useI18n, type Translate } from "@/i18n";
 import { selectConversationSessionTodolistV1 } from "@/service/conversation-session-tools-v1";
 import { projectForConversation } from "@/state/workbench-selectors";
 import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import { useChatAreaPlanActions } from "@/components/conversation/chat-area/plan-actions";
 import {
@@ -403,11 +401,8 @@ export function ChatArea(props: ChatAreaProps) {
   const {
     visibleThinkingBlock: visibleStreamingThinkingOverlayBlock,
     thinkingOverlayLeaving: streamingThinkingOverlayLeaving,
-    emptyPromptVisible,
-    emptyPromptLeaving,
   } = useConversationVisualTransitions({
     surfaceKey: visualSurfaceKey,
-    isEmptyConversation,
     displayedThinkingBlock: displayedStreamingReasoningBlock,
   });
   // reasoningDisplaySignature is a stable scroll-restoration marker for V1 reasoning filtering.
@@ -561,6 +556,7 @@ export function ChatArea(props: ChatAreaProps) {
       projectId={selectedProject?.id ?? props.selectedDraftConversation?.projectId ?? null}
       conversationId={selectedConversation?.id ?? null}
       isEmptyConversation={isEmptyConversation}
+      startProjectName={emptyProjectName}
       isConversationRunning={isConversationRunning}
       showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}
       runtimeCue={runtimeCue}
@@ -592,12 +588,6 @@ export function ChatArea(props: ChatAreaProps) {
   // conversationSurfaceContent 将转录、浮层与输入区保留在同一个自适应内容坐标空间内。
   const conversationSurfaceContent = (
     <>
-      {emptyPromptVisible ? (
-        <EmptyConversationPrompt
-          leaving={emptyPromptLeaving}
-          projectName={emptyProjectName}
-        />
-      ) : null}
       {selectedConversation ? (
         <ConversationBranchWorkspaceV1
           collaborationNavigation={{
@@ -687,11 +677,9 @@ export function ChatArea(props: ChatAreaProps) {
   return (
     <AnswerReplyContext.Provider value={answerReplyStore}>
       <div
-        className={cn(
-          "area-grid chat-grid",
-          isEmptyConversation && "empty-conversation-grid",
-          showConversationLoadingOnly && "loading-conversation-grid",
-        )}
+        className="vk-chat"
+        data-empty={isEmptyConversation ? "" : undefined}
+        data-loading={showConversationLoadingOnly ? "" : undefined}
         style={{ "--composer-dock-height": `${composerDockHeight}px` } as React.CSSProperties}
       >
         {showConversationLoadingOnly ? (

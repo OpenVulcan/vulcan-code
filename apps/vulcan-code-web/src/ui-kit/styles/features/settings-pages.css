@@ -1,0 +1,448 @@
+/* Feature-only rules load with exact lazy owners; shared overrides stay global. */
+/* 功能专有规则随准确懒加载归属载入；共用覆盖保留全局。 */
+
+.settings-inline-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--vk-ink);
+  font-weight: 500;
+}
+
+.provider-credential-select {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-capability-page {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.settings-validation-error {
+  margin: 0;
+  color: var(--vk-bad);
+  font-size: var(--vk-fs-sm);
+  font-weight: 650;
+}
+.settings-pagination {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.settings-pagination {
+  justify-content: space-between;
+  padding-top: 2px;
+}
+
+.vk-mcat-list-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-split-column-title {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-md);
+  font-weight: 700;
+}
+
+.vk-mcat-list-pane {
+  gap: 10px;
+  overflow: visible;
+}
+
+.vk-mcat-toolbar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(132px, 160px) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.vk-mcat-search {
+  position: relative;
+  min-width: 0;
+}
+
+.vk-mcat-search > svg {
+  position: absolute;
+  z-index: 1;
+  left: 10px;
+  top: 50%;
+  color: var(--vk-ink-2);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.vk-mcat-search input {
+  padding-left: 32px;
+}
+
+.vk-mcat-filter-summary {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-mcat-sticky-controls {
+  position: sticky;
+  z-index: 3;
+  top: -14px;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 14px 0 8px;
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-ground);
+}
+
+.vk-mcat-row-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 8px;
+}
+
+.vk-mcat-title-line {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.vk-mcat-id {
+  min-width: 0;
+  max-width: min(420px, 46vw);
+  overflow: hidden;
+  color: var(--vk-ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vk-mcat-route-binding {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--vk-ink-2);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-2xs);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vk-mcat-modality-summary,
+.vk-mcat-modality-group {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.vk-mcat-modality-summary {
+  flex: 0 0 auto;
+  margin-left: auto;
+  gap: 7px;
+}
+
+.vk-mcat-modality-icon {
+  width: 21px;
+  height: 21px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
+}
+
+.vk-mcat-modality-icon.muted {
+  border-color: transparent;
+  background: transparent;
+  color: var(--vk-ink-2);
+}
+
+.vk-mcat-modality-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.vk-mcat-row-list {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  overflow: visible;
+  padding-right: 4px;
+}
+
+.vk-mcat-row-list.modal {
+  flex: 1 1 auto;
+}
+
+.settings-provider-tool-defaults {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border: var(--vk-bw) solid var(--vk-line);
+  padding: 14px;
+  background: var(--vk-ground);
+}
+
+.settings-provider-tool-defaults-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-provider-tool-defaults-header > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settings-provider-tool-defaults-header small,
+.settings-provider-tool-defaults-grid > label > span {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.settings-provider-tool-defaults-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.settings-provider-tool-defaults-grid > label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.settings-provider-tool-extension-list {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-provider-tool-defaults-grid > label > [data-slot="select-trigger"] {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Keep empty capability fields and their test action within the actual page width. */
+/* 按实际正文宽度排列空能力字段与测试操作，避免窄窗横向溢出。 */
+@container workspace-page (max-width: 560px) {
+  .settings-capability-page .settings-provider-tool-defaults-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-provider-tool-defaults-grid > button { justify-self: end; }
+}
+.settings-media-understanding-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.settings-media-understanding-status {
+  margin: 0;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.settings-media-mode-field {
+  display: grid;
+  gap: 5px;
+  grid-column: 1 / -1;
+}
+
+.settings-media-mode-field > span {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.settings-media-mode-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-media-understanding-grid [data-slot="select-trigger"] {
+  width: 100%;
+  min-width: 0;
+}
+.context-basics-tabs > section[hidden] {
+  display: none;
+}
+
+/* Blocked model rows: a framed record with its title line, reason and repair actions. */
+/* 被阻止的模型行：带边框的记录，包含标题行、原因与修复操作。 */
+.vk-mcat-row { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 2.5); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vk-mcat-row strong { display: block; font-size: var(--vk-fs-md); }
+.vk-mcat-row .vk-mcat-title-line strong { display: inline; }
+.vk-mcat-row span { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); overflow-wrap: anywhere; }
+
+/* Context, window and usage tabs: a titled header over label-left, control-right rows, matching the
+   conversation-defaults tab; edits commit through the page action bar, which appears only while dirty. */
+/* 上下文、窗口与用量分页：标题栏下为标签在左、控件在右的行，与会话默认分页一致；编辑经由仅在有改动时出现的页面操作栏提交。 */
+.context-basics-section { display: grid; gap: calc(var(--vk-u) * 4); max-width: 52rem; }
+.context-basics-head { display: flex; align-items: flex-start; justify-content: space-between; gap: calc(var(--vk-u) * 4); padding-bottom: calc(var(--vk-u) * 4); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.context-basics-head > div { display: grid; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
+.context-basics-head h3 { margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-lg); font-weight: 600; line-height: var(--vk-lh-tight); }
+.context-basics-head p { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+.context-basics-head p.vk-form-note { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+fieldset.context-basics-rows { min-width: 0; margin: 0; padding: 0; border: 0; }
+.context-basics-rows { max-width: 52rem; }
+/* Groups inside a tab open with the shared settings legend; consecutive groups keep a clear gap. */
+/* 分页内的分组以共用设置 legend 开头；相邻分组保持明确间距。 */
+fieldset.context-basics-group { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; margin: 0; padding: 0; border: 0; }
+.context-basics-group + .context-basics-group { margin-top: calc(var(--vk-u) * 4); }
+/* Media thresholds read as a kind-by-case table with right-aligned numbers. */
+/* 媒体阈值以类型 × 情形表格呈现，数字右对齐。 */
+.media-delivery-matrix { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(6rem, 10rem) minmax(6rem, 10rem); align-items: center; gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); font-size: var(--vk-fs-sm); }
+.media-delivery-matrix > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-align: right; }
+.media-delivery-matrix > span:first-child { text-align: left; }
+.media-delivery-matrix > strong { color: var(--vk-ink); font-weight: 500; }
+/* A token field keeps its unit right after the value. */
+/* Token 字段的单位紧随数值。 */
+.context-basics-unit { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
+
+.vk-mcat-route-accounts {
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 6px 10px;
+}
+
+.vk-mcat-route-accounts > li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-mcat-route-accounts small {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+}
+
+/* Align independent usage controls without repeating labels or expanding technical details in rows. */
+/* 将独立用途控件按列对齐，不在模型行反复堆叠标签或展开技术详情。 */
+.vk-mcat-catalog {
+  container-name: model-catalog;
+  container-type: inline-size;
+  min-width: 0;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+}
+
+.vk-mcat-catalog-heading,
+.vk-mcat-catalog-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 78px 96px 78px 104px;
+  gap: 12px;
+  align-items: center;
+  padding: 16px;
+}
+
+.vk-mcat-catalog-heading {
+  padding-block: 10px;
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  text-align: center;
+}
+
+.vk-mcat-catalog-heading > :first-child { text-align: left; }
+/* Two content lines share compact padding while controls remain vertically centered. */
+/* 两行内容共用紧凑内边距，右侧控件保持垂直居中。 */
+.vk-mcat-catalog-row { padding-block: 9px; }
+.vk-mcat-catalog-row + .vk-mcat-catalog-row { border-top: var(--vk-bw) solid var(--vk-line); }
+.vk-mcat-catalog-row .vk-mcat-title-line { display: block; }
+.vk-mcat-catalog-row .vk-mcat-title-line strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--vk-fs-lg);
+  font-weight: 600;
+}
+
+.vk-mcat-catalog-row .vk-mcat-id {
+  flex: 1 1 auto;
+  max-width: 100%;
+  font-size: var(--vk-fs-xs);
+}
+
+.vk-mcat-catalog-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+}
+
+.vk-mcat-catalog-meta > span:last-child { flex: 0 0 auto; white-space: nowrap; border-left: var(--vk-bw) solid var(--vk-line); padding-left: 10px; }
+.vk-mcat-catalog-meta .vk-mcat-modality-summary { margin-left: 0; }
+.vk-mcat-purpose-cell { display: flex; align-items: center; justify-content: center; color: var(--vk-ink-2); min-width: 0; }
+.vk-mcat-extension-cell { flex-direction: column; gap: 5px; }
+.vk-mcat-extension-toggle { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.vk-mcat-extension-toggle small { max-width: 76px; color: var(--vk-ink-2); font-size: var(--vk-fs-2xs); text-align: center; white-space: normal; }
+.vk-mcat-pagination { border-top: var(--vk-bw) solid var(--vk-line); padding: 10px 16px; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.vk-mcat-purpose-label { display: none; }
+.vk-mcat-catalog-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
+.vk-mcat-catalog-actions > button { padding-inline: 9px; font-size: var(--vk-fs-sm); }
+
+/* Keep route metadata complete in a dedicated window with one scrollable body. */
+/* 将完整路由元数据放在独立窗口中，正文仅使用一个滚动区域。 */
+.vk-mcat-access-routes { min-width: 0; }
+.vk-mcat-access-route { padding-block: 16px; }
+.vk-mcat-access-route + .vk-mcat-access-route { border-top: var(--vk-bw) solid var(--vk-line); }
+.vk-mcat-access-route-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.vk-mcat-access-route-heading > div:first-child { display: grid; gap: 3px; flex: 1; min-width: 160px; }
+.vk-mcat-access-route-heading > div:first-child > span { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.vk-mcat-access-metadata { display: grid; gap: 10px; margin: 16px 0; }
+.vk-mcat-access-metadata > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 12px; }
+.vk-mcat-access-metadata dt,
+.vk-mcat-access-accounts > span { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.vk-mcat-access-metadata dd { margin: 0; font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); overflow-wrap: anywhere; }
+.vk-mcat-access-accounts .vk-mcat-route-accounts { padding-inline: 0; }
+
+@container model-catalog (max-width: 660px) {
+  .vk-mcat-catalog-heading { display: none; }
+  .vk-mcat-catalog-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 12px; }
+  .vk-mcat-catalog-row .vk-mcat-row-main { grid-column: 1 / -1; }
+  .vk-mcat-purpose-cell { flex-direction: column; gap: 9px; align-self: start; }
+  .vk-mcat-purpose-label { display: block; font-size: var(--vk-fs-xs); text-align: center; }
+  .vk-mcat-catalog-actions { grid-column: 1 / -1; border-top: var(--vk-bw) solid var(--vk-line); padding-top: 6px; }
+}
+
+.vk-mcat-unavailable-admissions {
+  border: var(--vk-bw) solid var(--vk-line);
+  padding: 10px;
+  font-size: var(--vk-fs-sm);
+}
+
+@media (max-width: 760px) {
+
+  .vk-mcat-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+}
+

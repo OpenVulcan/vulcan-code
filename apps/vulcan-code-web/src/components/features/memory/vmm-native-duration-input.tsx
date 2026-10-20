@@ -1,7 +1,8 @@
 import * as React from "react"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { useI18n, type TranslationKey } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Units are presentation choices; persisted policy always has a single integer-millisecond owner.
 // 单位仅为展示选择；持久策略始终以单一整数毫秒值为权威。
@@ -67,10 +68,10 @@ export function VmmNativeDurationInput({ id, value, disabled, unitLabel, onChang
     emitted.current = nativeDurationMilliseconds(next.quantity, next.unit)
     onChange(emitted.current)
   }
-  return <div className="flex gap-2">
-    <Input className="min-w-0 flex-1" id={id} inputMode="decimal" maxLength={32} disabled={disabled} value={display.quantity} onChange={(event) => update({ ...display, quantity: event.target.value })} />
+  return <div className="vk-form-inline">
+    <Input className="vk-form-fill" id={id} inputMode="decimal" maxLength={32} disabled={disabled} value={display.quantity} onChange={(event) => update({ ...display, quantity: event.target.value })} />
     <Select disabled={disabled} value={display.unit} onValueChange={(unit) => update({ ...display, unit: unit as typeof display.unit })}>
-      <SelectTrigger className="w-24 shrink-0" aria-label={unitLabel ?? t("memory.policy.durationUnit")}><SelectValue /></SelectTrigger>
+      <SelectTrigger className="vk-form-w-xs" aria-label={unitLabel ?? t("memory.policy.durationUnit")}><SelectValue /></SelectTrigger>
       <SelectContent>{units.map((unit) => <SelectItem key={unit.value} value={unit.value}>{t(unit.label)}</SelectItem>)}</SelectContent>
     </Select>
   </div>

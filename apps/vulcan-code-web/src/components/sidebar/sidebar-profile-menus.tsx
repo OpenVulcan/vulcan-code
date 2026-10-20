@@ -10,8 +10,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { VulcanWordmark } from "@/components/shell/vulcan-wordmark";
 import { useI18n } from "@/i18n";
 
@@ -19,28 +19,30 @@ import { useI18n } from "@/i18n";
 // The brand mark and settings entry live on the activity rail.
 // SidebarBrandMenu 将面板标题条渲染为单行：字标与标志中线对齐，当前区域位于右侧。品牌标记与设置入口位于活动轨道上。
 export function SidebarBrandMenu(props: {
-  // Label shown as the compact current area subtitle.
-  // 作为紧凑当前区域副标题展示的文案。
-  currentLabel: string;
+  // Label shown as the compact current area subtitle; omitted where the actions already name the area.
+  // 作为紧凑当前区域副标题展示的文案；操作已表明区域时省略。
+  currentLabel?: string;
   // Whether the title should behave as a native window drag region.
   // 标题是否应作为原生窗口拖动区域。
   titlebarDragRegion?: boolean;
   // Handles title bar double-click maximize or restore behavior.
   // 处理标题栏双击最大化或还原行为。
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
+  // Controls placed after the drag area, such as the panel flow switch.
+  // 放在拖动区域之后的控件，例如面板流切换。
+  actions?: React.ReactNode;
 }) {
   return (
-    <div className="sidebar-profile-button sidebar-brand-button sidebar-brand-static" aria-label="Vulcan Code">
+    <div className="vk-brand" aria-label="Vulcan Code">
       <div
-        className="sidebar-brand-drag-region"
+        className="vk-brand-drag"
         data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
         onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
       >
-        <span className="vcn-sidebar-label sidebar-profile-label sidebar-brand-label">
-          <VulcanWordmark className="sidebar-brand-wordmark" label="Vulcan Code" />
-          <small>{props.currentLabel}</small>
-        </span>
+        <VulcanWordmark className="vk-wordmark" label="Vulcan Code" />
+        {props.currentLabel ? <small>{props.currentLabel}</small> : null}
       </div>
+      {props.actions}
     </div>
   );
 }
@@ -66,16 +68,16 @@ export function SidebarUserMenu(props: {
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <button aria-label={label} className="activity-rail-button sidebar-user-button" type="button">
-              <AccountAvatar name={account?.snapshot?.displayName} className="sidebar-user-avatar" />
+            <button aria-label={label} className="vk-rail-btn" type="button">
+              <AccountAvatar name={account?.snapshot?.displayName} className="vk-rail-avatar" />
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent side="right">{label}</TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="end" className="sidebar-profile-menu" side="right" sideOffset={8}>
-        <DropdownMenuLabel className="sidebar-user-menu-label">
-          <AccountAvatar name={account?.snapshot?.displayName} className="sidebar-user-avatar" />
+      <DropdownMenuContent align="end" side="right" sideOffset={8}>
+        <DropdownMenuLabel className="vk-account-label">
+          <AccountAvatar name={account?.snapshot?.displayName} className="vk-rail-avatar" />
           <span>
             <strong>{label}</strong>
             <small>Vulcan Code</small>
@@ -83,11 +85,11 @@ export function SidebarUserMenu(props: {
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          {account ? <DropdownMenuItem className="sidebar-profile-menu-item" onSelect={() => account.setOpen(true)}>
+          {account ? <DropdownMenuItem onSelect={() => account.setOpen(true)}>
             <UserRound size={15} />
             <span>{account.snapshot?.connectionId ? t("openvulcan.account.manage") : t("openvulcan.account.login")}</span>
           </DropdownMenuItem> : null}
-          <DropdownMenuItem className="sidebar-profile-menu-item" onSelect={props.onOpenSettings}>
+          <DropdownMenuItem onSelect={props.onOpenSettings}>
             <Settings size={15} />
             <span>{t("area.settings")}</span>
           </DropdownMenuItem>

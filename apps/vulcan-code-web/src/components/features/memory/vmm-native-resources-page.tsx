@@ -10,17 +10,17 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { InlineStreamPlaceholder, StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Button } from "@/components/ui/button"
+} from "@/ui-kit/primitives/alert-dialog"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { InlineStreamPlaceholder, StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Button } from "@/ui-kit/primitives/button"
 import { PageTabs } from "@/components/workspace/workspace-directory-layout"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import {
   highlightedDiffLineSpans,
   useDiffShikiTheme,
@@ -28,6 +28,7 @@ import {
 } from "@/diff/diff-highlight"
 import { escapeHtml, tokenSpansToHtml } from "@/diff/diff-shiki-shared"
 import { useI18n } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css";
 import type {
   VmmMemoryActionResult,
   VmmNativeNoiseTestResult,
@@ -37,6 +38,7 @@ import type {
   VmmNativeResourceFileContent,
   VmmNativeResourceSettingsSummary,
 } from "@/types"
+import "@/ui-kit/styles/features/memory.css"
 
 // ResourceGroup identifies one user-facing resource category.
 // ResourceGroup 标识一个面向用户的资源分类。
@@ -265,31 +267,31 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
   const group = activeGroup
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-4">
+    <div className="vk-form-loose">
       {/* Keep short reads non-interactive without toggling every control's disabled opacity; the tabs share this guard
           so a short read cannot switch groups mid-load. */}
       {/* 短暂读取期间禁止交互，但不切换所有控件的禁用透明度；标签共用此保护，读取期间不能切换分组。 */}
-      <fieldset className="flex min-w-0 flex-col gap-4" disabled={busy} inert={filePending} aria-busy={filePending}>
+      <fieldset className="vk-form-loose" disabled={busy} inert={filePending} aria-busy={filePending}>
         <PageTabs
-          actions={<Button onClick={() => void loadCatalog().then(() => setFileReadRevision((revision) => revision + 1))} size="sm" type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>}
+          actions={<Button onClick={() => void loadCatalog().then(() => setFileReadRevision((revision) => revision + 1))} size="sm" type="button" variant="outline"><RefreshCw className="vk-icon" aria-hidden="true" />{t("memory.resources.refresh")}</Button>}
           ariaLabel={t("memory.resources.title")}
           onValueChange={setActiveGroup}
           options={([["prompt", "memory.resources.promptTab"], ["pii", "memory.resources.piiTab"], ["noise", "memory.resources.noiseTab"]] as const).map(([value, label]) => ({ label: t(label), value }))}
           value={activeGroup}
         />
-      <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"><span>{t("memory.resources.overrideDirectory")}: </span><span className="break-all font-mono">{catalog?.overrideRoot ?? <InlineStreamPlaceholder label={t("memory.resources.loading")} />}</span></div>
-      {error ? <p className="settings-error-text text-sm">{error}</p> : null}
+      <div className="vk-form-well vk-form-xs"><span>{t("memory.resources.overrideDirectory")}: </span><span className="vk-mono vk-form-break">{catalog?.overrideRoot ?? <InlineStreamPlaceholder label={t("memory.resources.loading")} />}</span></div>
+      {error ? <p className="vk-field-error">{error}</p> : null}
           {/* The key remounts the group's panel on switch, matching the previous tab panels' lifecycle.
               key 在切换时重新挂载分组面板，与原标签面板的生命周期一致。 */}
-          <div className="space-y-4" key={group}>
+          <div className="vk-form-loose" key={group}>
             {catalog && settings ? <ResourceCompositionSettings busy={busy} catalog={catalog} group={group} onChange={setSettings} onSave={saveSettings} settings={settings} /> : null}
             <div className="vmm-resource-workspace">
             <ResourceFileSelect effectiveSelector={effectiveSelector} files={visibleFiles} onChange={setSelectedPath} value={selectedPath} />
             <Card className="vmm-resource-editor">
-              <CardHeader><CardTitle className="flex items-center gap-2"><FileCode2 className="size-4" aria-hidden="true" />{t("memory.resources.fileEditor")}</CardTitle><CardDescription>{t("memory.resources.fileEditorDescription")}</CardDescription></CardHeader>
-              <CardContent className="space-y-4">
-                {selectedSummary ? <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selectedSummary.selector}</Badge><Badge variant={selectedSummary.hasUserOverride ? "default" : "secondary"}>{selectedSummary.hasUserOverride ? t("memory.resources.userOverride") : t("memory.resources.builtIn")}</Badge><Badge variant="outline"><LockKeyhole className="mr-1 size-3" aria-hidden="true" />{editUnlocked ? t("memory.resources.unlocked") : t("memory.resources.locked")}</Badge></div> : null}
-                {file ? <><div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm"><div className="flex items-center gap-2 font-medium"><ShieldAlert className="size-4" aria-hidden="true" />{file.highRisk ? t("memory.resources.highRisk") : t("memory.resources.guardedEdit")}</div><p className="mt-2 text-muted-foreground">{resourcePurpose}</p>{group === "prompt" ? <p className="mt-1 text-muted-foreground">{t("memory.resources.promptHowTo")}</p> : null}</div><div className="space-y-2"><Label>{t("memory.resources.currentEffective")}</Label><ResourceCodeEditor disabled={busy || !editUnlocked} language={resourceEditorLanguage(file.path)} onChange={setEditorText} value={editorText} /></div><div className="flex flex-wrap gap-2">{!editUnlocked ? <Button disabled={busy} onClick={() => setConfirmation("unlock")} type="button" variant="outline"><UnlockKeyhole className="size-4" aria-hidden="true" />{t("memory.resources.unlockEditor")}</Button> : null}<Button disabled={busy || !editUnlocked || !changed || !editorText} onClick={() => setConfirmation("save")} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveFile")}</Button><Button disabled={busy || !file.hasUserOverride} onClick={() => setConfirmation("reset")} type="button" variant="outline"><RotateCcw className="size-4" aria-hidden="true" />{t("memory.resources.restoreBuiltIn")}</Button></div></> : <StreamPlaceholder label={t("memory.resources.loading")} shape="fields" count={3} />}
+              <CardHeader><CardTitle className="vk-form-inline"><FileCode2 className="vk-icon" aria-hidden="true" />{t("memory.resources.fileEditor")}</CardTitle><CardDescription>{t("memory.resources.fileEditorDescription")}</CardDescription></CardHeader>
+              <CardContent className="vk-form-loose">
+                {selectedSummary ? <div className="vk-form-inline"><Badge variant="outline">{selectedSummary.selector}</Badge><Badge variant={selectedSummary.hasUserOverride ? "default" : "secondary"}>{selectedSummary.hasUserOverride ? t("memory.resources.userOverride") : t("memory.resources.builtIn")}</Badge><Badge variant="outline"><LockKeyhole className="vk-icon" aria-hidden="true" />{editUnlocked ? t("memory.resources.unlocked") : t("memory.resources.locked")}</Badge></div> : null}
+                {file ? <><div className="vk-mem-warnbox"><div className="vk-form-inline vk-form-em"><ShieldAlert className="vk-icon" aria-hidden="true" />{file.highRisk ? t("memory.resources.highRisk") : t("memory.resources.guardedEdit")}</div><p className="vk-faint vk-form-after">{resourcePurpose}</p>{group === "prompt" ? <p className="vk-faint">{t("memory.resources.promptHowTo")}</p> : null}</div><div className="vk-form-stack"><Label>{t("memory.resources.currentEffective")}</Label><ResourceCodeEditor disabled={busy || !editUnlocked} language={resourceEditorLanguage(file.path)} onChange={setEditorText} value={editorText} /></div><div className="vk-form-chips">{!editUnlocked ? <Button disabled={busy} onClick={() => setConfirmation("unlock")} type="button" variant="outline"><UnlockKeyhole className="vk-icon" aria-hidden="true" />{t("memory.resources.unlockEditor")}</Button> : null}<Button disabled={busy || !editUnlocked || !changed || !editorText} onClick={() => setConfirmation("save")} type="button"><Save className="vk-icon" aria-hidden="true" />{t("memory.resources.saveFile")}</Button><Button disabled={busy || !file.hasUserOverride} onClick={() => setConfirmation("reset")} type="button" variant="outline"><RotateCcw className="vk-icon" aria-hidden="true" />{t("memory.resources.restoreBuiltIn")}</Button></div></> : <StreamPlaceholder label={t("memory.resources.loading")} shape="fields" count={3} />}
               </CardContent>
             </Card>
             </div>
@@ -298,7 +300,7 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
           </div>
       </fieldset>
 
-      <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && !busy && setConfirmation(null)}><AlertDialogContent onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>{confirmationTitle(confirmation, t)}</AlertDialogTitle><AlertDialogDescription>{confirmationDescription(confirmation, resourcePurpose, t)}</AlertDialogDescription></AlertDialogHeader>{error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}<AlertDialogFooter><AlertDialogCancel disabled={busy}>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction disabled={busy} onClick={(event) => {
+      <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && !busy && setConfirmation(null)}><AlertDialogContent onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>{confirmationTitle(confirmation, t)}</AlertDialogTitle><AlertDialogDescription>{confirmationDescription(confirmation, resourcePurpose, t)}</AlertDialogDescription></AlertDialogHeader>{error ? <p role="alert" className="vk-field-error">{error}</p> : null}<AlertDialogFooter><AlertDialogCancel disabled={busy}>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction disabled={busy} onClick={(event) => {
         event.preventDefault()
         if (confirmation === "unlock") { setEditUnlocked(true); setConfirmation(null) }
         if (confirmation === "save") void saveFile().then((completed) => { if (completed) setConfirmation(null) })
@@ -316,9 +318,9 @@ function ResourceCompositionSettings({ busy, catalog, group, onChange, onSave, s
   const { t } = useI18n()
   return (
     <Card>
-      <CardContent className="space-y-4">
+      <CardContent className="vk-form-loose">
         <div className="vmm-resource-composition-toolbar">
-          <div className="vmm-resource-composition-heading space-y-1">
+          <div className="vmm-resource-composition-heading vk-form-tight">
             <CardTitle>{t("memory.resources.composition")}</CardTitle>
             <CardDescription>{t("memory.resources.compositionDescription")}</CardDescription>
           </div>
@@ -326,16 +328,16 @@ function ResourceCompositionSettings({ busy, catalog, group, onChange, onSave, s
             {group === "prompt" ? <ResourceSelect label={t("memory.resources.promptBundle")} onChange={(promptBundle) => onChange((current) => current ? { ...current, promptBundle } : current)} options={catalog.promptBundles} value={settings.promptBundle} /> : null}
             {group === "pii" ? <ResourceSelect label={t("memory.resources.piiLocale")} onChange={(piiLanguage) => onChange((current) => current ? { ...current, piiLanguage } : current)} options={catalog.piiLanguages} value={settings.piiLanguage} /> : null}
             {group === "noise" ? <ResourceSelect label={t("memory.resources.noiseLocale")} onChange={(noiseLanguage) => onChange((current) => current ? { ...current, noiseLanguage } : current)} options={catalog.noiseLanguages} value={settings.noiseLanguage} /> : null}
-            <Button disabled={busy} onClick={() => void onSave()} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveComposition")}</Button>
+            <Button disabled={busy} onClick={() => void onSave()} type="button"><Save className="vk-icon" aria-hidden="true" />{t("memory.resources.saveComposition")}</Button>
           </div>
         </div>
         {group === "noise" ? (
-          <div className="vmm-resource-noise-options border-t pt-4">
+          <div className="vmm-resource-noise-options vk-mem-ruled">
             <BooleanSetting checked={settings.noiseEnabled} label={t("memory.resources.noiseEnabled")} onChange={(noiseEnabled) => onChange((current) => current ? { ...current, noiseEnabled } : current)} />
             <BooleanSetting checked={settings.noiseSemanticEnabled} label={t("memory.resources.noiseSemanticEnabled")} onChange={(noiseSemanticEnabled) => onChange((current) => current ? { ...current, noiseSemanticEnabled } : current)} />
-            <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm">
+            <div className="vk-form-switch vk-form-framed">
               <Label htmlFor="vmm-noise-threshold">{t("memory.resources.noiseThreshold")}</Label>
-              <Input className="w-24 shrink-0" id="vmm-noise-threshold" max="1" min="0.01" onChange={(event) => onChange((current) => current ? { ...current, noiseSemanticThreshold: Number(event.target.value) } : current)} step="0.01" type="number" value={settings.noiseSemanticThreshold} />
+              <Input className="vk-form-w-xs" id="vmm-noise-threshold" max="1" min="0.01" onChange={(event) => onChange((current) => current ? { ...current, noiseSemanticThreshold: Number(event.target.value) } : current)} step="0.01" type="number" value={settings.noiseSemanticThreshold} />
             </div>
           </div>
         ) : null}
@@ -356,7 +358,7 @@ function ResourceFileSelect({ effectiveSelector, files, onChange, value }: { eff
     { label: t("memory.workspace.effectiveFiles"), files: files.filter((entry) => entry.selector === effectiveSelector || (entry.group !== "prompt" && entry.selector === "common")) },
     { label: t("memory.workspace.otherFiles"), files: files.filter((entry) => entry.selector !== effectiveSelector && (entry.group === "prompt" || entry.selector !== "common")) },
   ]
-  return <div className="vmm-resource-file-groups space-y-4">{groups.filter((group) => group.files.length > 0).map((group) => <section key={group.label} aria-label={group.label}><p className="mb-2 text-xs text-muted-foreground">{group.label}</p><div className="vmm-resource-files">{group.files.map((entry) => <button key={entry.path} type="button" aria-pressed={entry.path === value} onClick={() => onChange(entry.path)}><span className="block">{entry.path.split("/").at(-1)}</span><span className="block text-xs text-muted-foreground">{entry.selector}</span></button>)}</div></section>)}</div>
+  return <div className="vmm-resource-file-groups vk-form-loose">{groups.filter((group) => group.files.length > 0).map((group) => <section key={group.label} aria-label={group.label}><p className="vk-form-note vk-mem-mb2">{group.label}</p><div className="vmm-resource-files">{group.files.map((entry) => <button key={entry.path} type="button" aria-pressed={entry.path === value} onClick={() => onChange(entry.path)}><span className="vk-mem-line">{entry.path.split("/").at(-1)}</span><span className="vk-form-note">{entry.selector}</span></button>)}</div></section>)}</div>
 }
 
 // ResourceCodeEditorProps defines one syntax-rendered resource editor surface.
@@ -415,27 +417,26 @@ function ResourceCodeEditor({ disabled, language, onChange, value }: ResourceCod
   }, [])
 
   return (
-    <div className="overflow-hidden rounded-lg border bg-background shadow-sm" data-language={language}>
-      <div className="flex items-center border-b bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-        <span className="font-mono">{language}</span>
+    <div className="vk-mem-code" data-language={language}>
+      <div className="vk-mem-code-bar">
+        <span className="vk-mono">{language}</span>
       </div>
-      <div className="relative h-[28rem] min-h-[28rem] overflow-hidden bg-background font-mono text-xs leading-5 text-foreground">
-        <pre aria-hidden="true" className="pointer-events-none absolute inset-0 m-0 overflow-hidden whitespace-pre py-3 pl-[4.5rem] pr-3 font-mono text-xs leading-5">
-          <code ref={previewRef} className="block w-max min-w-full">
+      <div className="vk-mem-code-body">
+        <pre aria-hidden="true" className="vk-mem-code-preview">
+          <code ref={previewRef}>
             {renderedLines.map((line, index) => (
               <span
-                className="block min-h-5"
                 dangerouslySetInnerHTML={{ __html: line || "&#8203;" }}
                 key={`${index}:${line.length}`}
               />
             ))}
           </code>
         </pre>
-        <pre aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 z-10 m-0 w-14 select-none overflow-hidden border-r bg-muted px-3 py-3 text-right font-mono text-xs leading-5 text-muted-foreground"><span ref={gutterRef} className="block">{lineNumbers}</span></pre>
+        <pre aria-hidden="true" className="vk-mem-code-gutter"><span ref={gutterRef}>{lineNumbers}</span></pre>
         <textarea
           aria-label="VMM resource code editor"
           aria-readonly={disabled}
-          className="absolute inset-0 z-20 h-full w-full resize-none overflow-auto whitespace-pre border-0 bg-transparent py-3 pl-[4.5rem] pr-3 font-mono text-xs leading-5 text-transparent caret-foreground outline-none selection:bg-primary/25 focus:ring-2 focus:ring-ring focus:ring-inset read-only:cursor-default"
+          className="vk-mem-code-input"
           onChange={(event) => {
             if (!disabled) onChange(event.target.value)
           }}
@@ -459,27 +460,27 @@ function resourceEditorLanguage(path: string): "json" | "markdown" {
 // PiiTesters 在 PII 分类内渲染当前组合与临时公式验证。
 function PiiTesters(props: { busy: boolean; input: string; result: VmmNativePiiTestResult | null; formulaInput: string; formulaPattern: string; formulaCondition: string; formulaReplacement: string; formulaResult: VmmNativePiiFormulaTestResult | null; onInputChange: (value: string) => void; onFormulaInputChange: (value: string) => void; onFormulaPatternChange: (value: string) => void; onFormulaConditionChange: (value: string) => void; onFormulaReplacementChange: (value: string) => void; onTest: () => Promise<void>; onTestFormula: () => Promise<void> }) {
   const { t } = useI18n()
-  return <Card><CardHeader><CardTitle>{t("memory.resources.piiTester")}</CardTitle><CardDescription>{t("memory.resources.piiTesterDescription")}</CardDescription></CardHeader><CardContent className="space-y-5"><div className="space-y-3"><Label>{t("memory.resources.piiActiveBundleTest")}</Label><Textarea onChange={(event) => props.onInputChange(event.target.value)} value={props.input} /><Button disabled={props.busy || !props.input} onClick={() => void props.onTest()} type="button" variant="outline"><Play className="size-4" aria-hidden="true" />{t("memory.resources.runTest")}</Button>{props.result ? <div className="rounded-lg border bg-muted/20 p-3 text-sm"><pre className="whitespace-pre-wrap break-words">{props.result.outputText}</pre><p className="mt-2 text-xs text-muted-foreground">{props.result.redactions.map((entry) => `${entry.ruleName} × ${entry.matchCount}`).join(", ") || t("memory.resources.noMatch")}</p></div> : null}</div><div className="space-y-3 border-t pt-4"><div><Label>{t("memory.resources.piiFormulaTester")}</Label><p className="mt-1 text-xs text-muted-foreground">{t("memory.resources.piiFormulaTesterDescription")}</p></div><div className="space-y-2"><Label>{t("memory.resources.piiSampleText")}</Label><Textarea onChange={(event) => props.onFormulaInputChange(event.target.value)} value={props.formulaInput} /></div><div className="space-y-2"><Label>{t("memory.resources.piiPattern")}</Label><Input className="font-mono text-xs" onChange={(event) => props.onFormulaPatternChange(event.target.value)} value={props.formulaPattern} /></div><div className="space-y-2"><Label>{t("memory.resources.piiCondition")}</Label><Input className="font-mono text-xs" onChange={(event) => props.onFormulaConditionChange(event.target.value)} value={props.formulaCondition} /></div><div className="space-y-2"><Label>{t("memory.resources.piiReplacement")}</Label><Input className="font-mono text-xs" onChange={(event) => props.onFormulaReplacementChange(event.target.value)} value={props.formulaReplacement} /></div><Button disabled={props.busy || !props.formulaInput || !props.formulaPattern} onClick={() => void props.onTestFormula()} type="button" variant="outline"><Play className="size-4" aria-hidden="true" />{t("memory.resources.runTest")}</Button>{props.formulaResult ? <div className="space-y-2 rounded-lg border bg-muted/20 p-3 text-sm"><pre className="whitespace-pre-wrap break-words">{props.formulaResult.outputText}</pre><p className="text-xs text-muted-foreground">{t("memory.resources.piiCandidates").replace("{count}", String(props.formulaResult.matches.length))}</p>{props.formulaResult.matches.map((entry, index) => <div className="rounded border bg-background/70 p-2 text-xs" key={`${entry.startByte}:${entry.endByte}:${index}`}><div className="flex flex-wrap items-center gap-2"><Badge variant={entry.conditionAccepted ? "default" : "secondary"}>{entry.conditionAccepted ? t("memory.resources.piiAccepted") : t("memory.resources.piiRejected")}</Badge><code>{entry.matchedText}</code><span className="text-muted-foreground">{entry.startByte}..{entry.endByte}</span></div><p className="mt-2 break-all font-mono text-muted-foreground">{t("memory.resources.piiCaptures")}: {entry.captures.map((capture, captureIndex) => `$${captureIndex}=${capture ?? "<none>"}`).join(" · ")}</p></div>)}</div> : null}</div></CardContent></Card>
+  return <Card><CardHeader><CardTitle>{t("memory.resources.piiTester")}</CardTitle><CardDescription>{t("memory.resources.piiTesterDescription")}</CardDescription></CardHeader><CardContent className="vk-form-loose"><div className="vk-form-stack"><Label>{t("memory.resources.piiActiveBundleTest")}</Label><Textarea onChange={(event) => props.onInputChange(event.target.value)} value={props.input} /><Button disabled={props.busy || !props.input} onClick={() => void props.onTest()} type="button" variant="outline"><Play className="vk-icon" aria-hidden="true" />{t("memory.resources.runTest")}</Button>{props.result ? <div className="vk-form-well"><pre className="vk-form-prose">{props.result.outputText}</pre><p className="vk-form-note">{props.result.redactions.map((entry) => `${entry.ruleName} × ${entry.matchCount}`).join(", ") || t("memory.resources.noMatch")}</p></div> : null}</div><div className="vk-form-stack vk-mem-ruled"><div><Label>{t("memory.resources.piiFormulaTester")}</Label><p className="vk-form-note">{t("memory.resources.piiFormulaTesterDescription")}</p></div><div className="vk-form-stack"><Label>{t("memory.resources.piiSampleText")}</Label><Textarea onChange={(event) => props.onFormulaInputChange(event.target.value)} value={props.formulaInput} /></div><div className="vk-form-stack"><Label>{t("memory.resources.piiPattern")}</Label><Input className="vk-mono" onChange={(event) => props.onFormulaPatternChange(event.target.value)} value={props.formulaPattern} /></div><div className="vk-form-stack"><Label>{t("memory.resources.piiCondition")}</Label><Input className="vk-mono" onChange={(event) => props.onFormulaConditionChange(event.target.value)} value={props.formulaCondition} /></div><div className="vk-form-stack"><Label>{t("memory.resources.piiReplacement")}</Label><Input className="vk-mono" onChange={(event) => props.onFormulaReplacementChange(event.target.value)} value={props.formulaReplacement} /></div><Button disabled={props.busy || !props.formulaInput || !props.formulaPattern} onClick={() => void props.onTestFormula()} type="button" variant="outline"><Play className="vk-icon" aria-hidden="true" />{t("memory.resources.runTest")}</Button>{props.formulaResult ? <div className="vk-form-well vk-form-stack"><pre className="vk-form-prose">{props.formulaResult.outputText}</pre><p className="vk-form-note">{t("memory.resources.piiCandidates").replace("{count}", String(props.formulaResult.matches.length))}</p>{props.formulaResult.matches.map((entry, index) => <div className="vk-mem-record" key={`${entry.startByte}:${entry.endByte}:${index}`}><div className="vk-form-inline"><Badge variant={entry.conditionAccepted ? "default" : "secondary"}>{entry.conditionAccepted ? t("memory.resources.piiAccepted") : t("memory.resources.piiRejected")}</Badge><code>{entry.matchedText}</code><span className="vk-faint">{entry.startByte}..{entry.endByte}</span></div><p className="vk-form-codeline vk-faint vk-form-after">{t("memory.resources.piiCaptures")}: {entry.captures.map((capture, captureIndex) => `$${captureIndex}=${capture ?? "<none>"}`).join(" · ")}</p></div>)}</div> : null}</div></CardContent></Card>
 }
 
 // NoiseTester renders a user-prompt-only deterministic noise validation surface.
 // NoiseTester 渲染仅针对用户提示词的确定性噪音验证界面。
 function NoiseTester({ busy, input, onInputChange, onTest, result }: { busy: boolean; input: string; onInputChange: (value: string) => void; onTest: () => Promise<void>; result: VmmNativeNoiseTestResult | null }) {
   const { t } = useI18n()
-  return <Card><CardHeader><CardTitle>{t("memory.resources.noiseTester")}</CardTitle><CardDescription>{t("memory.resources.noiseTesterDescription")}</CardDescription></CardHeader><CardContent className="space-y-3"><Label>{t("memory.resources.userPromptOnly")}</Label><Textarea onChange={(event) => onInputChange(event.target.value)} value={input} /><Button disabled={busy || !input} onClick={() => void onTest()} type="button" variant="outline"><Play className="size-4" aria-hidden="true" />{t("memory.resources.runTest")}</Button>{result ? <p className="rounded-lg border bg-muted/20 p-3 text-sm">{result.isNoise ? `${t("memory.resources.noiseMatched")}: ${result.category ?? "-"}` : t("memory.resources.noMatch")}</p> : null}</CardContent></Card>
+  return <Card><CardHeader><CardTitle>{t("memory.resources.noiseTester")}</CardTitle><CardDescription>{t("memory.resources.noiseTesterDescription")}</CardDescription></CardHeader><CardContent className="vk-form-stack"><Label>{t("memory.resources.userPromptOnly")}</Label><Textarea onChange={(event) => onInputChange(event.target.value)} value={input} /><Button disabled={busy || !input} onClick={() => void onTest()} type="button" variant="outline"><Play className="vk-icon" aria-hidden="true" />{t("memory.resources.runTest")}</Button>{result ? <p className="vk-form-well">{result.isNoise ? `${t("memory.resources.noiseMatched")}: ${result.category ?? "-"}` : t("memory.resources.noMatch")}</p> : null}</CardContent></Card>
 }
 
 // ResourceSelect renders one closed composition selector.
 // ResourceSelect 渲染一个封闭的组合选择器。
 function ResourceSelect({ label, onChange, options, value }: { label: string; onChange: (value: string) => void; options: string[]; value: string }) {
   const inputId = React.useId()
-  return <div className="space-y-2"><Label htmlFor={inputId}>{label}</Label><Select onValueChange={onChange} value={value}><SelectTrigger id={inputId}><SelectValue /></SelectTrigger><SelectContent>{options.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select></div>
+  return <div className="vk-form-stack"><Label htmlFor={inputId}>{label}</Label><Select onValueChange={onChange} value={value}><SelectTrigger id={inputId}><SelectValue /></SelectTrigger><SelectContent>{options.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select></div>
 }
 
 // BooleanSetting renders one explicit native resource-policy switch.
 // BooleanSetting 渲染一个明确的原生资源策略开关。
 function BooleanSetting({ checked, label, onChange }: { checked: boolean; label: string; onChange: (checked: boolean) => void }) {
-  return <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm"><span>{label}</span><Switch checked={checked} onCheckedChange={onChange} /></label>
+  return <label className="vk-form-switch vk-form-framed"><span>{label}</span><Switch checked={checked} onCheckedChange={onChange} /></label>
 }
 
 // resourcePurposeText explains the semantic responsibility of one editable resource.

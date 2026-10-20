@@ -106,21 +106,19 @@ async function collectSourceFiles(directory) {
   return files.sort()
 }
 
-// feedbackShellPattern matches class names of hand-built empty-state and notice shells; page kit classes are exempt.
+// feedbackShellPattern matches class names of hand-built empty-state and notice shells; kit page classes (vk-page-*) are exempt.
 // feedbackShellPattern 匹配手写空状态与提示外壳的类名；页面套件类名不受限制。
-const feedbackShellPattern = /^(?!page-)[a-z0-9-]+-(?:empty-state|empty|notice)$/
+const feedbackShellPattern = /^(?!vk-page-)[a-z0-9-]+-(?:empty-state|empty|notice)$/
 
 // legacyFeedbackShells is the ratchet of bespoke feedback shells that predate the page kit; it may only shrink.
 // New pages use PageEmptyState and PageNotice; inline widgets that truly cannot must justify a new entry in review.
 // legacyFeedbackShells 是页面套件之前遗留的自定义反馈外壳棘轮表，只能缩减。
 // 新页面使用 PageEmptyState 与 PageNotice；确实无法使用的行内控件须在评审中说明理由后再新增条目。
 const legacyFeedbackShells = new Set([
-  "composer-capability-dialog-empty", "composer-capability-summary-empty", "context-empty-state", "context-injection-delete-notice",
-  "conversation-session-commit-empty", "diff-empty-state", "diff-file-tree-empty", "file-change-empty", "knowledge-empty",
-  "markdown-tool-empty", "model-account-card-empty", "model-picker-empty", "project-folder-picker-empty",
-  "project-folder-picker-notice", "project-terminal-empty", "session-review-repository-notice", "settings-archive-empty",
-  "settings-error-notice", "subagent-orchestration-empty", "system-error-reconciliation-notice", "workspace-files-panel-notice",
-  "workspace-subagent-empty",
+  "knowledge-empty",
+  "model-picker-empty", "project-folder-picker-empty",
+  "project-folder-picker-notice",
+  "settings-error-notice",
 ])
 
 // checkUiArchitecture validates boundaries that must not regress through ordinary component work.
@@ -176,9 +174,11 @@ export async function checkUiArchitecture(
       failures.push(`${name}: tests must not read TypeScript source text; assert rendered behavior or exported contracts instead`)
     }
     if (name.endsWith(".tsx") && !name.includes(".test.")) {
-      // shells lists this file's bespoke feedback shell classes, reported once each.
-      // shells 列出本文件的自定义反馈外壳类名，每个只报告一次。
-      const shells = [...new Set(moduleClassNames(source).filter((token) => feedbackShellPattern.test(token)))]
+      // shells lists this file's bespoke feedback shell classes, reported once each. The ui-kit owns the base
+      // empty and notice primitives that the page kit builds on, so its own classes are not bespoke.
+      // shells 列出本文件的自定义反馈外壳类名，每个只报告一次。ui-kit 拥有页面套件所依赖的基础空状态与提示原语，
+      // 因此其自身类名不属于自定义外壳。
+      const shells = name.startsWith("ui-kit/") ? [] : [...new Set(moduleClassNames(source).filter((token) => feedbackShellPattern.test(token)))]
       for (const shell of shells) {
         if (feedbackShells.has(shell)) seenFeedbackShells.add(shell)
         else failures.push(`${name}: bespoke feedback shell "${shell}"; use PageEmptyState or PageNotice from @/components/page`)
@@ -220,7 +220,7 @@ export async function checkUiArchitecture(
 const pluginsRoot = resolve(scriptDirectory, "../../../plugins")
 // pluginStyleVocabulary is the published stylesheet whose classes plugin UI modules may name.
 // pluginStyleVocabulary 是插件 UI 模块可以引用其类名的已发布样式表。
-const pluginStyleVocabulary = resolve(sourceRoot, "styles/plugin-host-components.css")
+const pluginStyleVocabulary = resolve(sourceRoot, "ui-kit/styles/features/plugin-host-components.css")
 // pluginStyleRules are the custom-style limits of docs/contracts/plugin-ui-authoring.md; each pattern runs on non-test UI modules.
 // pluginStyleRules 是 docs/contracts/plugin-ui-authoring.md 中的自定义样式限制；每条规则作用于非测试 UI 模块。
 const pluginStyleRules = [
@@ -293,7 +293,7 @@ export async function checkPluginUiStyle(root = pluginsRoot, vocabularyPath = pl
       // unknown 列出不在已发布词汇表中的类名标记，每个只报告一次。
       const unknown = [...new Set(moduleClassNames(source).filter((token) => !vocabulary.has(token)))]
       if (unknown.length > 0) {
-        failures.push(`${name}: class names ${unknown.join(", ")} are not defined in styles/plugin-host-components.css; use page kit components or add a plugin-scoped rule there`)
+        failures.push(`${name}: class names ${unknown.join(", ")} are not defined in ui-kit/styles/features/plugin-host-components.css; use page kit components or add a plugin-scoped rule there`)
       }
     }
   }

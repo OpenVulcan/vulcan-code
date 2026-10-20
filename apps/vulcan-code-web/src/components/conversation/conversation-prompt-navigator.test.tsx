@@ -170,7 +170,7 @@ describe("ConversationPromptNavigator", () => {
       </>,
     ));
 
-    const ticks = Array.from(host.querySelectorAll<HTMLButtonElement>(".conversation-prompt-navigator-tick"));
+    const ticks = Array.from(host.querySelectorAll<HTMLButtonElement>(".vk-prompt-nav-tick"));
     expect(ticks.map((tick) => tick.getAttribute("aria-label"))).toEqual(["修复", "conversation.promptNavigator.untitled"]);
 
     const target = ticks.find((tick) => tick.getAttribute("aria-label") === "conversation.promptNavigator.untitled")!;
@@ -180,10 +180,10 @@ describe("ConversationPromptNavigator", () => {
 
     const first = ticks.find((tick) => tick.getAttribute("aria-label") === "修复")!;
     await act(async () => first.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
-    expect(host.querySelector(".conversation-prompt-navigator-card-title")?.textContent).toBe("修复");
-    expect(host.querySelector(".conversation-prompt-navigator-card-preview")?.textContent).toBe("已修复登录问题");
+    expect(host.querySelector(".vk-prompt-nav-title")?.textContent).toBe("修复");
+    expect(host.querySelector(".vk-prompt-nav-preview")?.textContent).toBe("已修复登录问题");
 
     await act(async () => target.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
-    expect(host.querySelector(".conversation-prompt-navigator-card-preview")?.textContent).toBe("conversation.promptNavigator.replyPending");
+    expect(host.querySelector(".vk-prompt-nav-preview")?.textContent).toBe("conversation.promptNavigator.replyPending");
   });
 });

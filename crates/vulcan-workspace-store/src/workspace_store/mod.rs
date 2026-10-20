@@ -20,6 +20,7 @@ use vulcan_sqlite_engine::sql_exec::SqliteValue;
 mod ai_credentials;
 mod git_preferences;
 mod persistence;
+mod project_groups;
 mod provider_api_trace;
 mod provider_usage;
 mod resource_catalog;
@@ -42,6 +43,11 @@ pub use persistence::{
     delete_active_project_row_v1, persist_collapsed_task_project_ids, persist_new_project,
     persist_project_icon_update, persist_project_order_update,
     persist_project_pinned_and_order_update, rename_project, restore_archived_project_row_v1,
+};
+pub use project_groups::{
+    DEFAULT_PROJECT_GROUP_ID, PROJECT_GROUP_NAME_MAX_CHARS, PROJECT_GROUPS_FORMAT_VERSION, ProjectGroup,
+    ProjectGroupSlot, ProjectTree, ProjectTreePin, ProjectTreePinKind, load_project_tree,
+    normalize_project_group_name, persist_project_tree, validate_project_tree,
 };
 pub use provider_api_trace::{
     PROVIDER_API_TRACE_LIMIT, ProviderApiTraceAttemptReservation, ProviderApiTraceDiagnostic,

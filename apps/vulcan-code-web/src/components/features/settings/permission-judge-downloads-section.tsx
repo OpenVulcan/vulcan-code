@@ -1,8 +1,8 @@
 import { Download, PackageCheck } from "lucide-react";
 import { PageItem, PageNotice, PageSection } from "@/components/page";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { Progress } from "@/ui-kit/primitives/progress";
 import { formatMessage, type Translate, type TranslationKey } from "@/i18n";
 import { formatBytes } from "@/lib/display-format";
 import { DEVICE_KEYS, FORMAT_KEYS, label } from "@/components/features/settings/permission-judge-labels";
@@ -11,6 +11,7 @@ import type {
   PermissionJudgeModelDownload,
   PermissionJudgeModelFormat,
 } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Labels of the download phases sent by the service; unknown phases render as themselves.
 // 服务发送的下载阶段标签；未知阶段按原样显示。
@@ -71,7 +72,7 @@ export function PermissionJudgeDownloadsSection(props: {
         phase: download.phase ? label(t, DOWNLOAD_PHASE_KEYS, download.phase) : "…",
         progress: `${formatBytes(download.completedBytes)} / ${formatBytes(download.totalBytes)}`,
       })}</p>
-      {progress !== null ? <Progress className="mt-2" value={progress} /> : null}
+      {progress !== null ? <Progress className="vk-form-after" value={progress} /> : null}
     </PageNotice> : download?.error ? <PageNotice tone="error" details={download.error} detailsLabel={t("settings.errors.showErrorDetails")}>
       {t("settings.permissionJudge.downloads.failed")}
     </PageNotice> : download?.modelId ? <PageNotice tone="success">

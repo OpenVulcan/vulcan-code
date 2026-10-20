@@ -1,5 +1,5 @@
 import React from "react";
-import { ComposerSettingsHostContext } from "@/components/composer/composer-settings-host";
+import { ComposerAccountHostContext, ComposerSettingsHostContext } from "@/components/composer/composer-settings-host";
 import { DraftComposerContext, type DraftComposerContextValue } from "@/components/composer/dedicated/draft-composer-context";
 import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-collapse-preferences";
 import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
@@ -11,7 +11,8 @@ import {
   primaryFeatureAreas as buildPrimaryFeatureAreas,
 } from "@/components/features/feature-shell";
 import { ActivityRail, type ActivityRailEntry } from "@/components/shell/activity-rail";
-import { RepositoryLink } from "@/components/shell/app-chrome";
+import { CommandPalette } from "@/components/shell/command-palette";
+import { WorkbenchStatusBar } from "@/components/shell/workbench-status-bar";
 import { StartupOverlay } from "@/components/shell/startup-screen";
 import {
   normalizedComposerSlashCommandId,
@@ -28,7 +29,7 @@ import {
 import {
   type ProjectSettingsDialogTarget,
 } from "@/components/project/project-settings-types";
-import { ProjectSessionTree } from "@/components/project/project-sidebar";
+import { NavigationPanelBody, SidebarFlowSwitch } from "@/components/project/project-sidebar";
 import {
   ProjectFloatingTerminalLayer,
   type ProjectTerminalVisibilityRequest,
@@ -120,6 +121,7 @@ import {
   openSelectedProviderApiTraceDirectory,
   removeMcpServerConfiguration,
   saveGitCommitSettings,
+  saveDefaultCommandShell,
   saveProviderRequestTraceSettings,
   saveProviderRetrySettings,
   saveMcpServerConfiguration,
@@ -153,7 +155,7 @@ import {
   visibleConversationId,
   workbenchWithSelectedConversationProjection,
 } from "@/state/workbench-state";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { AssistantDockContext } from "@/components/assistant/assistant-dock-context";
 import { useAssistantDockController } from "@/components/assistant/use-assistant-dock-controller";
 
@@ -212,6 +214,9 @@ export function WorkbenchLayout(props: {
   // settingsHost moves the active composer's menu into the footer without moving state ownership.
   // settingsHost 将当前输入区菜单显示到底栏，不迁移状态归属。
   const [settingsHost, setSettingsHost] = React.useState<HTMLDivElement | null>(null);
+  // accountHost receives the active composer's model account item in the footer.
+  // accountHost 在底栏中接收当前输入区的模型账号项。
+  const [accountHost, setAccountHost] = React.useState<HTMLDivElement | null>(null);
   // todolistStatusHost stores the footer node immediately following the settings entry.
   // todolistStatusHost 保存紧跟设置入口的底栏 Todo 节点。
   const [todolistStatusHost, setTodolistStatusHost] = React.useState<HTMLDivElement | null>(null);
@@ -332,8 +337,8 @@ export function WorkbenchLayout(props: {
   // projectTerminalOpenRequest carries explicit open or toggle commands to the project floating terminal.
   // projectTerminalOpenRequest 向项目浮动终端传递明确的展开或切换命令。
   const [projectTerminalOpenRequest, setProjectTerminalOpenRequest] = React.useState<ProjectTerminalVisibilityRequest | null>(null);
-  // projectTerminalButtonRef exposes the exact top-bar target for the macOS-style Genie animation.
-  // projectTerminalButtonRef 暴露 macOS 风格精灵动画使用的精确顶部栏目标。
+  // projectTerminalButtonRef exposes the status-bar terminal item the window minimizes into.
+  // projectTerminalButtonRef 暴露终端窗口最小化时收入的状态栏终端项。
   const projectTerminalButtonRef = React.useRef<HTMLButtonElement | null>(null);
   // mediaUploadProgresses keeps every active pre-dispatch or tool-triggered transfer keyed by its exact identity.
   // mediaUploadProgresses 按精确身份保存所有活跃的分派前或工具触发传输，避免并发上传互相覆盖。
@@ -513,6 +518,15 @@ export function WorkbenchLayout(props: {
     setActiveSettingsSubArea("runtime-diagnostics");
     handleSelectTopFeatureArea("settings");
   }, [handleSelectTopFeatureArea]);
+  // accountHostValue lets the composer's account item open the model services page.
+  // accountHostValue 让输入区的账号项打开模型服务页面。
+  const accountHostValue = React.useMemo(() => ({
+    host: accountHost,
+    onOpenSettings: () => {
+      setActiveSettingsSubArea("model-providers");
+      handleSelectTopFeatureArea("settings");
+    },
+  }), [accountHost, handleSelectTopFeatureArea]);
   // handleOpenPermissionJudgeSettings opens the application-wide permission judge settings page.
   // handleOpenPermissionJudgeSettings 打开应用全局的权限判定设置页。
   const handleOpenPermissionJudgeSettings = React.useCallback(() => {
@@ -521,7 +535,17 @@ export function WorkbenchLayout(props: {
   }, [handleSelectTopFeatureArea]);
   // account owns installation-wide onboarding before the existing optional setup guide.
   // account 在既有可选初始化引导之前持有整个安装的账户引导。
-  const account = useOpenVulcanAccount(props.startup.ready, props.serviceInstanceEpoch);
+  const accountController = useOpenVulcanAccount(props.startup.ready, props.serviceInstanceEpoch);
+  // account adds the shell's way to the account settings page, closing the quick dialog first.
+  // account 加入外壳打开账户设置页的方式，并先关闭快捷弹窗。
+  const account = React.useMemo(() => ({
+    ...accountController,
+    openDetails: () => {
+      if (accountController.open) accountController.setOpen(false);
+      setActiveSettingsSubArea("openvulcan-account");
+      handleSelectTopFeatureArea("settings");
+    },
+  }), [accountController, handleSelectTopFeatureArea]);
   const setupGuide = useSetupGuide(workbenchState.permissionJudgeBackend, props.startup.ready && account.initialized && !account.open);
   const permissionJudgeEntry = React.useMemo<PermissionJudgeEntry>(() => ({
     backend: workbenchState.permissionJudgeBackend ?? null,
@@ -600,6 +624,27 @@ export function WorkbenchLayout(props: {
       nonce: (request?.nonce ?? 0) + 1,
     }));
   }, [activeProject]);
+  // statusBar is the one bottom strip both the workspace and the feature pages show.
+  // statusBar 是工作台与功能页共用的底部状态条。
+  const statusBar = (
+    <WorkbenchStatusBar
+      appVersion={props.workbench.appVersion}
+      hosts={{ settings: setSettingsHost, todolist: setTodolistStatusHost, runtime: setRuntimeStatusHost, account: setAccountHost }}
+      plugins={workbenchState.plugins}
+      startup={props.startup}
+      terminal={activeProject ? {
+        projectName: activeProject.name,
+        runningCount: projectTerminalRunningCounts[activeProject.id]?.runningCount ?? 0,
+      } : null}
+      terminalAnchorRef={projectTerminalButtonRef}
+      vmmMemory={workbenchState.vmmMemory}
+      onOpenDiagnostics={handleOpenRuntimeDiagnostics}
+      onOpenExternalUrl={openExternalUrl}
+      onOpenMemory={handleOpenWorkspaceMemory}
+      onOpenPlugins={handleOpenWorkspaceSkills}
+      onToggleTerminal={handleToggleActiveProjectTerminal}
+    />
+  );
   // consoleWorkbenchState reprojects selected-session fields from the UI-local selection.
   // consoleWorkbenchState 根据 UI 本地选择重新投影当前会话字段。
   const consoleWorkbenchState = React.useMemo<WorkbenchSnapshot>(() => {
@@ -662,7 +707,7 @@ export function WorkbenchLayout(props: {
     handleCreateConversation,
     handleCreateProject,
     handleConfirmProjectFolder,
-    handleReorderProjects,
+    handleProjectGroupAction,
     handleExpandedProjectIdsChange,
   } = useWorkbenchProjectActions({
     workbenchState,
@@ -714,6 +759,12 @@ export function WorkbenchLayout(props: {
   const handleCreateConversationForProject = React.useCallback((project: ProjectSummary) => {
     setActiveProjectId(project.id);
     handleCreateConversation(project);
+  }, [handleCreateConversation]);
+  // handleCreateDedicatedConversationForProject opens a draft preset to a dedicated assistant in one project.
+  // handleCreateDedicatedConversationForProject 在单个项目中打开预设为专职助手的草稿。
+  const handleCreateDedicatedConversationForProject = React.useCallback((project: ProjectSummary) => {
+    setActiveProjectId(project.id);
+    handleCreateConversation(project, "dedicated");
   }, [handleCreateConversation]);
   // handleLeaveConvertedConversation moves the main view off a session that just became an assistant,
   // onto a new draft in its project rather than an arbitrary sibling the user did not pick.
@@ -793,6 +844,9 @@ export function WorkbenchLayout(props: {
     applyLifecycleResponseSnapshot,
   });
 
+  // commandPaletteOpen says whether the command palette (Ctrl+K) is shown.
+  // commandPaletteOpen 表示命令面板（Ctrl+K）是否显示。
+  const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false);
   // railEntries lists built-in areas first, then every enabled plugin detail page from the live catalog.
   // railEntries 先列出内置区域，再列出实时目录中每个已启用的插件详情页。
   const railEntries = React.useMemo<ActivityRailEntry[]>(() => {
@@ -826,8 +880,22 @@ export function WorkbenchLayout(props: {
   // activityRail is shared by the workspace and settings shells so navigation stays put across areas.
   // activityRail 由工作台与设置外壳共用，使导航在区域切换时保持不动。
   const activityRail = (
+    <>
+    <CommandPalette
+      areas={railEntries}
+      onNewConversation={activeProject ? () => handleCreateConversationForProject(activeProject) : undefined}
+      onOpenChange={setCommandPaletteOpen}
+      onOpenSessions={handleOpenWorkspaceChat}
+      onOpenSettingsPage={(page) => {
+        setActiveSettingsSubArea(page);
+        handleSelectTopFeatureArea("settings");
+      }}
+      open={commandPaletteOpen}
+      slashCommands={workbenchState.composerSlashCommands ?? []}
+    />
     <ActivityRail
       entries={railEntries}
+      onOpenCommandPalette={() => setCommandPaletteOpen(true)}
       sessionsActive={activeArea === "chat" && workspaceMainView === "chat"}
       settingsActive={activeArea === "settings"}
       onSelectSessions={handleOpenWorkspaceChat}
@@ -835,27 +903,31 @@ export function WorkbenchLayout(props: {
       // The flyout reuses the session panel's tree and persisted expansion so both surfaces stay identical.
       // 浮层复用会话面板的会话树与持久化展开状态，使两处界面保持一致。
       sessionTree={(
-        <ProjectSessionTree
+        <NavigationPanelBody
           activeProjectId={activeProjectId}
           conversations={consoleWorkbenchState.conversations}
           expandedProjectIds={consoleWorkbenchState.expandedProjectIds}
           onConversationMenuAction={handleConversationMenuAction}
           onCreateConversation={handleCreateConversationForProject}
+          onCreateDedicatedConversation={handleCreateDedicatedConversationForProject}
           onCreateProject={handleCreateProject}
           onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
           onProjectMenuAction={handleWorkbenchProjectMenuAction}
-          onReorderProjects={handleReorderProjects}
+          onProjectGroupAction={handleProjectGroupAction}
           onSelectConversation={handleSelectConversation}
           onSelectProject={setActiveProjectId}
           pinnedConversationIds={pinnedConversationIds}
+          projectTree={consoleWorkbenchState.projectTree}
           projects={consoleWorkbenchState.projects}
           selectedConversationId={selectedConversationId}
         />
       )}
+      sessionTreeActions={<SidebarFlowSwitch />}
       selectedConversationId={selectedConversationId}
       titlebarDragRegion={windowDragRegionEnabled}
       onTitlebarDoubleClick={handleTitlebarDoubleClick}
     />
+    </>
   );
 
   React.useEffect(() => {
@@ -919,29 +991,34 @@ export function WorkbenchLayout(props: {
     applyLifecycleResponseSnapshot,
   });
 
+  // approvalRequestId names the pending tool approval; its outcome shows on the resumed tool card and the session
+  // state, so only ask answers are acknowledged with a toast.
+  // approvalRequestId 标识待处理的工具审批；其结果体现在恢复的工具卡与会话状态上，因此只有 ask 回答才以提示确认。
+  const approvalRequestId = workbenchState.pendingQuestion?.approval ? workbenchState.pendingQuestion.id : null;
+
   // handlePendingQuestionSubmit resumes a blocked ask tool call with validated modal answers.
   // handlePendingQuestionSubmit 使用弹窗校验后的答案恢复被阻塞的 ask 工具调用。
   const handlePendingQuestionSubmit = React.useCallback(async (requestId: string, answers: string[][]) => {
     try {
       await replyPendingQuestion(requestId, answers);
-      toast.success(i18n.t("workbenchAsk.submitted"));
+      if (requestId !== approvalRequestId) toast.success(i18n.t("workbenchAsk.submitted"));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       throw nextError;
     }
-  }, [i18n.t]);
+  }, [approvalRequestId, i18n.t]);
 
   // handlePendingQuestionReject cancels a blocked ask tool call after a second confirmation.
   // handlePendingQuestionReject 在二次确认后取消被阻塞的 ask 工具调用。
   const handlePendingQuestionReject = React.useCallback(async (requestId: string) => {
     try {
       await rejectPendingQuestion(requestId);
-      toast.info(i18n.t("workbenchAsk.cancelled"));
+      if (requestId !== approvalRequestId) toast.info(i18n.t("workbenchAsk.cancelled"));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       throw nextError;
     }
-  }, [i18n.t]);
+  }, [approvalRequestId, i18n.t]);
 
   React.useEffect(() => {
     draftConversationIdRef.current = draftConversation?.id ?? null;
@@ -1087,9 +1164,10 @@ export function WorkbenchLayout(props: {
       saveDefault: handleSaveToolCollapseDefault,
     }}>
     <ComposerSettingsHostContext.Provider value={settingsHost}>
+    <ComposerAccountHostContext.Provider value={accountHostValue}>
     <DraftComposerContext.Provider value={draftComposerContext}>
     <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
-    <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
+    <div className="vk-workbench" data-window={showWindowControls ? "native" : "browser"}>
       {floatingMediaUploadProgresses.length > 0 ? (
         <div className="media-upload-progress-stack">
           <React.Suspense fallback={<div role="status">{i18n.t("composer.attachment.processing")}</div>}>
@@ -1105,15 +1183,10 @@ export function WorkbenchLayout(props: {
       ) : null}
       <PermissionJudgeEntryContext.Provider value={permissionJudgeEntry}>
       <AssistantDockContext.Provider value={assistantDock}>
-      <main className="workspace">
+      <main className="vk-workbench-main">
         {showConsoleSidebar ? (
           <WorkspaceShell
             activeProjectId={activeProjectId}
-            projectTerminalButtonRef={projectTerminalButtonRef}
-            projectTerminalRunningCount={activeProjectId
-              ? projectTerminalRunningCounts[activeProjectId]?.runningCount ?? 0
-              : 0}
-            onToggleProjectTerminal={handleToggleActiveProjectTerminal}
             startup={props.startup}
             workbench={consoleWorkbenchState}
             activeSkillSubArea={activeWorkbenchSkillSubArea}
@@ -1135,6 +1208,7 @@ export function WorkbenchLayout(props: {
             pinnedConversationIds={pinnedConversationIds}
             onConversationMenuAction={handleConversationMenuAction}
             onCreateConversation={handleCreateConversationForProject}
+            onCreateDedicatedConversation={handleCreateDedicatedConversationForProject}
             onCreateProject={handleCreateProject}
             onOpenCredentialManagement={() => {
               setActiveSettingsSubArea("credential-management")
@@ -1147,7 +1221,7 @@ export function WorkbenchLayout(props: {
             onSelectMemorySubArea={setActiveWorkbenchMemorySubArea}
             onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
             onProjectMenuAction={handleWorkbenchProjectMenuAction}
-            onReorderProjects={handleReorderProjects}
+              onProjectGroupAction={handleProjectGroupAction}
             onSelectProject={setActiveProjectId}
             onSelectConversation={handleSelectConversation}
             onSelectPluginResourceOwner={handleSelectPluginResourceOwner}
@@ -1194,19 +1268,7 @@ export function WorkbenchLayout(props: {
             onStageAttachmentBytes={stageComposerAttachmentBytes}
             onCopyText={copyText}
             resolveMediaSourceUrl={localMediaSourceUrl}
-            footer={(
-              <footer className="statusbar workspace-statusbar">
-                <div className="workspace-statusbar-leading">
-                  <div className="workspace-statusbar-settings" ref={setSettingsHost} />
-                  <div className="workspace-statusbar-todolist-status" ref={setTodolistStatusHost} />
-                </div>
-                <div className="workspace-statusbar-runtime-status" ref={setRuntimeStatusHost} />
-                <div className="workspace-statusbar-trailing">
-                  <RepositoryLink onOpenExternalUrl={openExternalUrl} />
-                  <span className="workspace-statusbar-version">v{props.workbench.appVersion}</span>
-                </div>
-              </footer>
-            )}
+            footer={statusBar}
             runtimeStatusHost={runtimeStatusHost}
             todolistStatusHost={todolistStatusHost}
             onTrace={webuiClickTrace}
@@ -1246,6 +1308,7 @@ export function WorkbenchLayout(props: {
                 return (await loadWorkbenchSnapshot()) ?? workbenchStateRef.current;
               }),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
+              onSaveDefaultCommandShell: (shellId) => applySkillWorkbenchAction(async () => (await saveDefaultCommandShell(shellId)) ?? workbenchStateRef.current),
               onSaveProviderRequestTraceSettings: (enabled, errorsEnabled) => applySkillWorkbenchAction(async () => (await saveProviderRequestTraceSettings(enabled, errorsEnabled)) ?? workbenchStateRef.current),
               onOpenSelectedProviderApiTraceDirectory: async () => {
                 await openSelectedProviderApiTraceDirectory();
@@ -1255,10 +1318,10 @@ export function WorkbenchLayout(props: {
               onRestoreArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await restoreArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
               onDeleteArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await deleteArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
             }}
-            startup={props.startup}
             workbench={workbenchState}
             selectedConversationId={selectedConversationId}
             chromeActions={shellChromeActions}
+            footer={statusBar}
             titlebarDragRegion={windowDragRegionEnabled}
             onTitlebarDoubleClick={handleTitlebarDoubleClick}
           />
@@ -1287,6 +1350,7 @@ export function WorkbenchLayout(props: {
         archiveProjectSubmitting={archiveProjectSubmitting}
         archiveProjectTarget={archiveProjectTarget}
         pendingQuestion={workbenchState.pendingQuestion ?? null}
+        pendingQuestionRequester={workbenchState.pendingQuestionRequester ?? null}
         projectFolderPickerOpen={projectFolderPickerOpen}
         projectIconTarget={projectIconTarget}
         projectSettingsRevision={projectSettingsTarget
@@ -1334,6 +1398,7 @@ export function WorkbenchLayout(props: {
     </div>
     </ComposerMediaUploadProgressContext.Provider>
     </DraftComposerContext.Provider>
+    </ComposerAccountHostContext.Provider>
     </ComposerSettingsHostContext.Provider>
     </ToolCollapsePreferencesContext.Provider>
     </ThinkingDisplaySystemContext.Provider>

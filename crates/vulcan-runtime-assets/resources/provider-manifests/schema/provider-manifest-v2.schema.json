@@ -1960,7 +1960,22 @@
         "maximum_inputs": {"type": "integer", "minimum": 0},
         "maximum_tokens_per_input": {"type": "integer", "minimum": 0},
         "normalization": {"enum": ["unknown", "none", "l2"]},
-        "distance_metric": {"enum": ["unknown", "cosine", "euclidean", "dot_product"]}
+        "distance_metric": {"enum": ["unknown", "cosine", "euclidean", "dot_product"]},
+        "input_templates": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "provider_default",
+              "query",
+              "document",
+              "semantic_similarity",
+              "classification",
+              "clustering",
+              "code_retrieval"
+            ]
+          },
+          "additionalProperties": {"type": "string", "pattern": "\\{input\\}"}
+        }
       }
     },
     "rerank_capabilities": {

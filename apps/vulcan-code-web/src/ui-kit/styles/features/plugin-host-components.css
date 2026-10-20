@@ -1,0 +1,514 @@
+.plugin-help-tooltip-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  cursor: help;
+}
+
+.plugin-help-tooltip-trigger:hover,
+.plugin-help-tooltip-trigger:focus-visible {
+  color: var(--vk-ink);
+  outline: none;
+}
+
+.plugin-help-tooltip-content {
+  max-width: 320px;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.5;
+}
+
+.plugin-metadata-link {
+  display: inline-flex;
+  min-width: 0;
+  height: 20px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+  color: var(--vk-ink-2);
+  font: inherit;
+  font-size: var(--vk-fs-sm);
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.plugin-metadata-link:hover,
+.plugin-metadata-link:focus-visible {
+  border-color: color-mix(in srgb, var(--vk-ink) 30%, var(--vk-line));
+  color: var(--vk-ink);
+  outline: none;
+}
+
+.plugin-metadata-link:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.plugin-metadata-link svg {
+  flex: 0 0 auto;
+}
+
+.plugin-text-document-dialog {
+  grid-template-rows: auto minmax(0, 1fr);
+  height: min(680px, calc(100vh - 48px));
+}
+
+/* Usage statistics range dialog: shared Input and Checkbox controls in a compact two-column draft. */
+/* 用量统计时间范围对话框：在紧凑双列草稿中使用共享 Input 与 Checkbox 控件。 */
+.plugin-statistics-range-dialog { width: min(560px, calc(100vw - 32px)); }
+.plugin-statistics-range-presets { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); }
+.plugin-statistics-range-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--vk-u) * 3); }
+.plugin-statistics-range-fields label { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; font-size: var(--vk-fs-sm); color: var(--vk-ink-2); }
+.plugin-statistics-range-follow { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-sm); }
+
+/* Keep statistics details outside table flow, with readable aligned facts in the host tooltip. */
+/* 将统计详情移出表格排版，在宿主提示层内对齐展示可读事实。 */
+.plugin-help-tooltip-trigger[data-tone="error"] { color: var(--vk-bad); }
+.plugin-statistics-detail-tooltip { width: 280px; max-width: calc(100vw - 48px); font-size: var(--vk-fs-sm); }
+.plugin-statistics-detail-tooltip > strong { display: block; margin-bottom: 10px; }
+.plugin-statistics-detail-tooltip p { margin: 10px 0 0; color: color-mix(in srgb, currentColor 80%, transparent); white-space: normal; }
+.plugin-statistics-detail-facts { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(55%); gap: 6px 16px; margin: 0; }
+/* Follow the tooltip foreground so labels stay readable on its inverted surface. */
+/* 跟随提示层前景色，确保名称在反色背景上依然清晰可读。 */
+.plugin-statistics-detail-facts dt { color: color-mix(in srgb, currentColor 80%, transparent); white-space: normal; }
+.plugin-statistics-detail-facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; white-space: normal; }
+/* Align exact nonzero costs and unit prices in a compact tooltip table. */
+/* 将精确非零费用与单价对齐到紧凑的提示表格中。 */
+.plugin-statistics-cost-table { width: 100%; margin: 8px 0; border-collapse: collapse; font-size: var(--vk-fs-xs); }
+.plugin-statistics-cost-table :is(th, td) { padding: 5px 3px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.plugin-statistics-cost-table th { font-weight: 500; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
+.plugin-statistics-cost-table :is(th, td):first-child { text-align: left; }
+.plugin-statistics-cost-total { padding-top: 10px; margin-top: 10px; border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent); font-weight: 600; }
+.plugin-statistics-token-cell, .plugin-statistics-estimate-cell { display: flex; align-items: center; gap: 4px; }
+.plugin-statistics-token-lines { display: grid; gap: 4px; }
+.plugin-statistics-token-lines > div { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.plugin-statistics-token-lines > div:empty { display: none; }
+.plugin-statistics-token-value { display: inline-flex; gap: 3px; align-items: center; font-variant-numeric: tabular-nums; }
+.plugin-statistics-token-value svg { flex-shrink: 0; }
+.plugin-statistics-token-value[data-kind="input"] svg { color: var(--vk-ember); }
+.plugin-statistics-token-value[data-kind="output"] svg { color: var(--vk-ember-2); }
+.plugin-statistics-token-value:is([data-kind="cache"], [data-kind="write"]) { color: var(--vk-ink-2); }
+.plugin-statistics-estimate-cell > span { white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.plugin-statistics-model-identity, .plugin-statistics-time { display: grid; gap: 3px; }
+.plugin-statistics-model-identity { white-space: normal; overflow-wrap: anywhere; }
+.plugin-statistics-model-identity > small, .plugin-statistics-time > small { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+
+.plugin-text-document-content,
+.plugin-text-document-state {
+  min-height: 0;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid var(--vk-line);
+  background: var(--vk-sunken);
+  color: var(--vk-ink);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.plugin-text-document-state.error {
+  color: var(--vk-bad);
+  font-family: inherit;
+}
+
+
+
+
+
+
+
+.plugin-activity-heatmap-scroll {
+  display: grid;
+  width: 100%;
+  overflow-x: auto;
+  padding: 2px;
+}
+
+.plugin-activity-heatmap-content {
+  width: max-content;
+  justify-self: start;
+}
+
+/* Short selected ranges fill one labelled day strip; longer calendars keep compact weekly columns. */
+/* 短筛选范围填充带日期标签的单行日条；较长日历保留紧凑周列。 */
+.plugin-activity-heatmap-content[data-layout="days"] { width: 100%; }
+.plugin-activity-heatmap-content[data-layout="days"] .plugin-activity-month-labels { min-width: 0; }
+.plugin-activity-heatmap-content[data-layout="days"] .plugin-activity-heatmap { grid-auto-flow: row; grid-template-rows: 22px; min-width: 0; }
+.plugin-activity-heatmap-content[data-layout="days"] .plugin-activity-cell { width: 100%; height: 22px; }
+.plugin-activity-day-labels { display: grid; gap: 3px; margin-top: 3px; color: var(--vk-ink-2); font-size: var(--vk-fs-2xs); text-align: center; }
+
+.plugin-activity-month-labels {
+  display: grid;
+  gap: 3px;
+  min-width: max-content;
+  height: 18px;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-2xs);
+  white-space: nowrap;
+}
+
+.plugin-activity-month-labels span {
+  overflow: visible;
+}
+
+.plugin-activity-heatmap {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, 11px);
+  grid-auto-columns: 11px;
+  gap: 3px;
+  min-width: max-content;
+}
+
+.plugin-activity-cell {
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--vk-sunken) 84%, var(--vk-ground));
+}
+
+.plugin-activity-cell[data-intensity="1"] { background: color-mix(in srgb, var(--vk-ember) 24%, var(--vk-sunken)); }
+.plugin-activity-cell[data-intensity="2"] { background: color-mix(in srgb, var(--vk-ember) 42%, var(--vk-sunken)); }
+.plugin-activity-cell[data-intensity="3"] { background: color-mix(in srgb, var(--vk-ember) 60%, var(--vk-sunken)); }
+.plugin-activity-cell[data-intensity="4"] { background: color-mix(in srgb, var(--vk-ember) 78%, var(--vk-sunken)); }
+.plugin-activity-cell[data-intensity="5"] { background: var(--vk-ember); }
+
+.plugin-activity-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-2xs);
+  white-space: nowrap;
+}
+
+.plugin-activity-legend .plugin-activity-cell {
+  flex: 0 0 auto;
+}
+
+.plugin-activity-cell.placeholder {
+  visibility: hidden;
+}
+
+.plugin-activity-cell:focus-visible,
+.plugin-time-series-chart circle:focus-visible,
+.plugin-chart-legend-item:focus-visible {
+  outline: 2px solid var(--vk-signal);
+  outline-offset: 2px;
+}
+
+.plugin-time-series-chart {
+  width: 100%;
+  min-height: 220px;
+  border: 1px solid var(--vk-line);
+  background: color-mix(in srgb, var(--vk-panel) 96%, var(--vk-sunken));
+}
+
+.plugin-time-series-chart svg {
+  display: block;
+  width: 100%;
+  height: 260px;
+  overflow: visible;
+}
+
+.plugin-chart-grid-line {
+  stroke: var(--vk-line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.plugin-chart-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.plugin-chart-axis-label {
+  fill: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+}
+
+.plugin-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 8px;
+}
+
+.plugin-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
+}
+
+.plugin-chart-legend-item[data-visible="false"] {
+  opacity: 0.45;
+}
+
+.plugin-chart-legend-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* Usage statistics: page structure comes from the page kit; these rules style only cell content and charts. */
+/* 用量统计：页面结构来自页面套件；以下规则仅修饰单元格内容与图表。 */
+.plugin-statistics-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--vk-u) * 2);
+  padding-right: calc(calc(var(--vk-u) * 5) + var(--vk-u));
+}
+.plugin-statistics-toolbar-select { width: 138px; }
+.plugin-statistics-refresh-icon { width: 16px; height: 16px; transform-origin: center; }
+.plugin-statistics-refresh-icon.is-loading { animation: plugin-statistics-refresh-spin 800ms linear infinite; }
+@keyframes plugin-statistics-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .plugin-statistics-refresh-icon.is-loading { animation-duration: 1600ms; }
+}
+
+/* Cost and usage share the available panel width and wrap only when their content needs it. */
+/* 费用与用量共享面板可用宽度，仅在内容需要时换行。 */
+.plugin-statistics-balance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: calc(var(--vk-u) * 4);
+}
+.plugin-statistics-cost { display: grid; justify-items: start; gap: var(--vk-u); }
+.plugin-statistics-cost-value { font-size: clamp(18px, 2vw, 25px); font-weight: 650; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.plugin-statistics-token-values { display: grid; grid-template-columns: 1fr 1fr; gap: calc(var(--vk-u) * 3); }
+.plugin-statistics-token-values > div { display: grid; grid-template-columns: 1fr auto; gap: 2px calc(var(--vk-u) * 2); min-width: 0; }
+.plugin-statistics-token-values > div > span:first-child { grid-column: 1 / -1; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.plugin-statistics-token-values strong { font-size: var(--vk-fs-lg); font-variant-numeric: tabular-nums; }
+.plugin-statistics-token-share { align-self: center; font-size: var(--vk-fs-sm); color: var(--vk-ink-2); }
+.plugin-statistics-token-bar { display: flex; height: 8px; overflow: hidden; background: var(--vk-sunken); }
+.plugin-statistics-token-bar > span:first-child { background: var(--vk-ember); }
+.plugin-statistics-token-bar > span:last-child { background: var(--vk-ember-2); }
+.plugin-statistics-cache-facts { font-size: var(--vk-fs-sm); }
+
+/* Price editor: shared Input controls in a responsive grid inside the host dialog. */
+/* 价格编辑器：在宿主对话框内以响应式网格排列共享 Input 控件。 */
+.plugin-statistics-price-dialog { width: min(600px, calc(100vw - 32px)); }
+.plugin-statistics-price-editor { display: grid; gap: calc(var(--vk-u) * 3); min-width: 0; }
+.plugin-statistics-pricing-model { min-width: 0; overflow-wrap: anywhere; }
+.plugin-statistics-price-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(var(--vk-u) * 2);
+}
+.plugin-statistics-price-field {
+  display: grid;
+  gap: var(--vk-u);
+  min-width: 0;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+}
+
+/* Keep caller and operation on separate lines within the same daily column. */
+/* 将每日用量的消费者与操作放在同列的独立两行中。 */
+.plugin-statistics-consumer-operation { display: grid; gap: var(--vk-u); }
+.plugin-statistics-consumer-operation > span:last-child { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+
+/* Timing labels and values stay aligned on two lines, matching the adjacent Token cell density. The start stripe
+   carries the speed grade the plugin reports: fast, medium or slow; an ungraded record keeps a neutral stripe. */
+/* 计时标签和值保持双行对齐，与相邻 Token 单元格保持一致的信息密度。起始色条表示插件报告的快慢分级：
+   快、中等或慢；未分级的记录保持中性色条。 */
+.plugin-statistics-latency {
+  display: grid;
+  gap: var(--vk-u);
+  border-inline-start: 3px solid var(--vk-line-strong);
+  padding-inline-start: calc(var(--vk-u) * 2);
+  font-size: var(--vk-fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.plugin-statistics-latency > div { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 2); }
+.plugin-statistics-latency > div > span:first-child { color: var(--vk-ink-2); min-width: 42px; }
+.plugin-statistics-latency > div > span:last-child { color: var(--vk-ink); }
+.plugin-statistics-latency[data-speed="fast"] { border-inline-start-color: var(--vk-ok); }
+.plugin-statistics-latency[data-speed="medium"] { border-inline-start-color: var(--vk-warn); }
+.plugin-statistics-latency[data-speed="slow"] { border-inline-start-color: var(--vk-bad); }
+.plugin-statistics-latency-unknown { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+
+.plugin-chart-point {
+  cursor: default;
+  stroke: color-mix(in srgb, var(--vk-ground) 72%, transparent);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.plugin-chart-point:hover,
+.plugin-chart-point:focus-visible {
+  stroke: var(--vk-ink);
+  stroke-width: 2;
+}
+
+.plugin-statistics-status[data-status="succeeded"] { color: var(--vk-ok); }
+.plugin-statistics-status[data-status="failed"] { color: var(--vk-bad); }
+
+@media (max-width: 480px) {
+  .plugin-statistics-price-grid, .plugin-statistics-range-fields { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Declarative plugin settings: only control sizing; rows, sections and notices come from the page kit. */
+/* 声明式插件设置：仅控件尺寸；行、区块与提示来自页面套件。 */
+.plugin-settings-input { flex: 0 1 260px; width: min(260px, 100%); min-width: 8rem; }
+.vk-page-actions:has(> .plugin-settings-input) { flex-wrap: nowrap; }
+.plugin-settings-select { min-width: 140px; }
+.plugin-settings-issue { display: block; color: var(--vk-bad); }
+.plugin-settings-checklist { display: grid; flex: 1 1 auto; gap: 14px; width: 100%; min-width: 0; }
+.plugin-settings-checklist-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); }
+.plugin-settings-checklist-none { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+
+/* Checklist groups keep the route-grid look: a titled header with bulk actions above a four-column bordered option grid. */
+/* 清单分组保持路由网格外观：带批量操作的标题行，下方为四列带边框的选项网格。 */
+.plugin-settings-checklist-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.plugin-settings-checklist-group + .plugin-settings-checklist-group { padding-top: 14px; border-top: 1px solid var(--vk-line); }
+.plugin-settings-checklist-header { min-width: 0; font-size: var(--vk-fs-sm); }
+.plugin-settings-checklist-header > strong { font-weight: 600; }
+.plugin-settings-checklist-actions { display: flex; justify-content: flex-end; gap: 4px; }
+.plugin-settings-checklist-actions > button { color: var(--vk-ink-2); }
+.plugin-settings-checklist-options {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px 10px;
+  min-width: 0;
+}
+.plugin-settings-checklist-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 5px 7px;
+  border: 1px solid var(--vk-line);
+  cursor: pointer;
+}
+.plugin-settings-checklist-option:hover { background: color-mix(in srgb, var(--vk-hover) 9%, transparent); }
+.plugin-settings-checklist-option > span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--vk-fs-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Inline sections: unconditional switches side by side, each with its description in a help tooltip. */
+/* 行内区块：无条件开关并排显示，说明放在帮助提示中。 */
+.plugin-settings-inline { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; min-width: 0; }
+.plugin-settings-inline-option { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.plugin-settings-inline-option > label { display: flex; align-items: center; gap: 6px; min-width: 0; cursor: pointer; }
+.plugin-settings-inline-option > label > span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--vk-fs-md);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Page header actions: status pill, repository and license tags on the tab row. */
+/* 页面标题区操作：状态标记、仓库与许可证标签位于标签行。 */
+.plugin-settings-header { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+
+/* Data sections: key-figure tiles, period bar chart and ranked tables of one read action. */
+/* 数据区块：同一读取 Action 的关键数字方块、周期柱状图与排名表格。 */
+.plugin-data-meta { margin: 0; }
+.plugin-data-block { display: grid; gap: 8px; min-width: 0; }
+.plugin-data-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.plugin-data-heading > h4 { display: inline-flex; align-items: center; gap: 4px; margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 600; }
+.plugin-data-heading > span { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.plugin-data-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.plugin-data-tiles[data-columns],
+.plugin-data-cards[data-columns] { grid-template-columns: repeat(var(--plugin-data-columns), minmax(0, 1fr)); }
+.plugin-data-tile {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--vk-line);
+  background: color-mix(in srgb, var(--vk-sunken) 34%, transparent);
+}
+.plugin-data-tile > span { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.plugin-data-tile > strong { font-size: 20px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.plugin-data-periods { display: flex; flex-wrap: wrap; gap: 4px; padding-block: 6px; border-bottom: 1px solid var(--vk-line); }
+.plugin-data-bar {
+  display: inline-flex;
+  width: 72px;
+  height: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--vk-ink-2) 16%, transparent);
+}
+.plugin-data-bar > span { min-width: 4px; border-radius: inherit; background: var(--vk-ember); }
+
+/* Bar chart: one column per period, value bars grow from the baseline with the period label below. */
+/* 柱状图：每个周期一列，数值柱从基线向上生长，周期标签在下方。 */
+.plugin-bar-chart {
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+  height: 150px;
+  padding: 12px 8px 6px;
+  border: 1px solid var(--vk-line);
+}
+.plugin-bar-chart-column {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+.plugin-bar-chart-column > span {
+  width: min(100%, 20px);
+  min-height: 3px;
+  background: var(--vk-ember);
+}
+.plugin-bar-chart-column > small {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .plugin-settings-checklist-options, .plugin-data-tiles, .plugin-data-tiles[data-columns], .plugin-data-cards[data-columns] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plugin-settings-inline { grid-template-columns: minmax(0, 1fr); }
+}

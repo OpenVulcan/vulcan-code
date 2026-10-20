@@ -1,3 +1,4 @@
+import * as React from "react";
 import { ChevronRight, CircleAlert } from "lucide-react";
 
 import { StatusPill } from "@/components/shared/status";
@@ -433,51 +434,46 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
       aria-label={reconciliationPending
         ? t("conversation.systemError.pendingTitle")
         : t("conversation.systemError.title")}
-      className={reconciliationPending
-        ? "system-error-card system-error-card-pending"
-        : "system-error-card"}
+      className="vk-error-card"
+      data-pending={reconciliationPending || undefined}
       role={reconciliationPending ? "status" : "alert"}
     >
-      <summary className="system-error-summary">
-        <div className="system-error-message">
+      <summary className="vk-error-summary">
+        <CircleAlert aria-hidden="true" className="vk-error-icon" />
+        <div className="vk-error-message">
           <span>{t("conversation.systemError.message")}</span>
           <p>{props.error.message}</p>
         </div>
-        <ChevronRight aria-hidden="true" className="system-error-chevron" size={17} />
+        <ChevronRight aria-hidden="true" className="vk-error-chev" />
       </summary>
-      <div className="system-error-details">
-        <div className="system-error-header">
-          <div className="system-error-title">
-            <CircleAlert aria-hidden="true" className="system-error-icon" size={17} />
-            <strong>
+      <div className="vk-error-details">
+        <div className="vk-error-head">
+          <strong>
               {reconciliationPending
                 ? t("conversation.systemError.pendingTitle")
                 : t("conversation.systemError.title")}
-            </strong>
-          </div>
-          <div className="system-error-actions">
-            <StatusPill
+          </strong>
+          <StatusPill
               status={reconciliationPending ? "pending" : "error"}
               label={reconciliationPending
                 ? t("conversation.systemError.pendingStatus")
                 : t("conversation.systemError.status")}
-            />
-          </div>
+          />
         </div>
         {reconciliationPending ? (
-          <p className="system-error-reconciliation-notice">
+          <p className="vk-error-pending">
             {t("conversation.systemError.pendingNotice")}
           </p>
         ) : null}
-        <dl className="system-error-fields">
+        <dl className="vk-facts">
           {fields.map((field) => (
-            <div className="system-error-field" key={field.label}>
+            <React.Fragment key={field.label}>
               <dt>{field.label}</dt>
               <dd>{field.value}</dd>
-            </div>
+            </React.Fragment>
           ))}
         </dl>
-        <div className="system-error-raw">
+        <div className="vk-error-raw">
           <span>{t("conversation.systemError.raw")}</span>
           <pre><code className="language-json">{formatSystemProviderErrorJson(props.error)}</code></pre>
         </div>

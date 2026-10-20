@@ -1,9 +1,8 @@
 import { formatMessage, useI18n } from "@/i18n";
 import { formatDurationSeconds, formatTokenCount, formatTokenSpeed, tokenUnitLabel } from "@/lib/usage-format";
 import { ChevronDown } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import type { SessionLifetimeUsage, SessionUsageBucket, UsageMeasurement } from "@/types/session-lifetime-usage";
-import "./session-lifetime-usage.css";
 
 /** Formats a measured total, preserving unknown and partial reporting.
  * 格式化实测累计，保留未知与部分上报。
@@ -60,19 +59,19 @@ export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsag
   // The persistent heading preserves unknown and partially reported totals while collapsed.
   // 常驻标题在收起时仍保留未知和部分上报累计的明确标记。
   const total = lifetimeTotal(bucket.totalTokens, bucket.requestCount);
-  return <details className="lifetime-usage-section" aria-label={props.title}>
-    <summary className="lifetime-usage-heading">
+  return <details className="vk-lifetime" aria-label={props.title}>
+    <summary className="vk-lifetime-head">
       <strong>{props.title}</strong>
-      <span className="lifetime-usage-total">
+      <span className="vk-lifetime-total">
         <strong>{total}</strong><span>{tokenUnitLabel(locale)}</span>
-        <ChevronDown className="lifetime-usage-chevron" aria-hidden="true" size={12} />
+        <ChevronDown aria-hidden="true" size={12} />
       </span>
     </summary>
-    <div className="lifetime-usage-content">
+    <div className="vk-lifetime-body">
       <LifetimeMetricRows title={t("conversation.usage.calls")} rows={callRows} />
       <LifetimeMetricRows title={t("conversation.usage.tokens")} rows={tokenRows} />
       <LifetimeMetricRows title={t("conversation.usage.timing")} rows={timingRows} />
-      {bucket.unknownUsageCount > 0 ? <p className="lifetime-usage-note">{formatMessage(t("conversation.usage.requestsDidNotReport"), { unknownUsageCount: bucket.unknownUsageCount })}</p> : null}
+      {bucket.unknownUsageCount > 0 ? <p className="vk-stats-note">{formatMessage(t("conversation.usage.requestsDidNotReport"), { unknownUsageCount: bucket.unknownUsageCount })}</p> : null}
     </div>
   </details>;
 }
@@ -86,9 +85,9 @@ function LifetimeMetricRows(props: { title: string; rows: Array<[string, string 
   // 在布局前过滤，避免隐藏维度留下网格空洞。
   const rows = props.rows.filter((row): row is [string, string] => row[1] !== null);
   if (rows.length === 0) return null;
-  return <section className="lifetime-usage-metric-group" aria-label={props.title}>
-    <strong className="lifetime-usage-group-title">{props.title}</strong>
-    <dl className="lifetime-usage-metrics">{rows.map(([label, value]) => (
+  return <section className="vk-lifetime-group" aria-label={props.title}>
+    <strong>{props.title}</strong>
+    <dl>{rows.map(([label, value]) => (
       <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
     ))}</dl>
   </section>;
@@ -108,10 +107,10 @@ export function SessionLifetimeUsagePanel(props: { usage?: SessionLifetimeUsage 
   const hasMain = usage.main.requestCount > 0 || usage.main.toolCallCount > 0;
   const hasChildren = childCount > 0 && (usage.childrenTotal.requestCount > 0 || usage.childrenTotal.toolCallCount > 0);
   if (!hasMain && !hasChildren) return null;
-  return <div className="session-lifetime-usage">
+  return <>
     {hasMain ? <LifetimeUsageBucket title={t("conversation.usage.mainSessionUsage")} bucket={usage.main} /> : null}
     {hasChildren ? <LifetimeUsageBucket title={formatMessage(t("conversation.usage.subagentUsageAgents"), { childCount })} bucket={usage.childrenTotal} /> : null}
-  </div>;
+  </>;
 }
 
 /** Floating child-owned usage chip; hover and keyboard focus reveal details.
@@ -122,14 +121,14 @@ export function ChildLifetimeUsageChip(props: { bucket?: SessionUsageBucket }) {
   const { t } = useI18n();
   const label = t("conversation.usage.childLifetimeUsage");
   if (!props.bucket || (props.bucket.requestCount === 0 && props.bucket.toolCallCount === 0)) return null;
-  return <div className="pointer-events-none absolute right-4 top-2 z-20">
+  return <div className="vk-lifetime-chip-slot">
     <TooltipProvider><Tooltip><TooltipTrigger asChild>
-      <button type="button" className="pointer-events-auto rounded-full border bg-background/95 px-3 py-1 text-xs shadow-sm" aria-label={label}>
+      <button type="button" className="vk-lifetime-chip" aria-label={label}>
         {label} · {props.bucket ? lifetimeTotal(props.bucket.totalTokens, props.bucket.requestCount) : "—"}
       </button>
-    </TooltipTrigger><TooltipContent side="bottom" align="end" className="context-usage-tooltip pointer-events-auto">
+    </TooltipTrigger><TooltipContent side="bottom" align="end" className="vk-stats">
       <LifetimeUsageBucket title={label} bucket={props.bucket} />
-      <p className="mt-2 text-xs text-muted-foreground">{t("conversation.usage.lifetimeReferenceTotalsAcross")}</p>
+      <p className="vk-stats-note">{t("conversation.usage.lifetimeReferenceTotalsAcross")}</p>
     </TooltipContent></Tooltip></TooltipProvider>
   </div>;
 }

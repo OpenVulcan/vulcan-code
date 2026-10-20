@@ -11,9 +11,9 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import {
   ConversationMeasuredCollapse,
@@ -136,29 +136,27 @@ export function ContextCompactionBlock(props: {
   const hasExpandedContent = shouldShowProgress || thinkingBlocks.length > 0 || Boolean(detailBody);
 
   return (
-    <section className={cn("context-compaction-block", displayStatus, expanded && "expanded")}>
+    <section className="vk-compaction" data-state={displayStatus} data-open={expanded || undefined}>
       <button
         aria-expanded={expanded}
-        className="context-compaction-toggle"
+        className="vk-compaction-head"
         onClick={() => {
           setExpanded(!expanded);
         }}
         type="button"
       >
-        <span className="context-compaction-title">
-          <ScrollText size={15} />
-          <strong>{title}</strong>
-          {expanded ? <ChevronDown className="context-compaction-toggle-icon" size={13} /> : <ChevronRight className="context-compaction-toggle-icon" size={13} />}
-        </span>
+        <ScrollText aria-hidden="true" />
+        <span className={running ? "vk-shimmer-text" : undefined}>{title}</span>
+        <ChevronRight aria-hidden="true" className="vk-compaction-chev" />
       </button>
       <ConversationMeasuredCollapse collapseId={collapseId} expanded={expanded}>
-        <div className="context-compaction-body">
+        <div className="vk-compaction-body">
           {shouldShowProgress ? progressBlocks.map((block) => {
             // content keeps progress rendering stable when the record is still being appended.
             // content 在记录仍持续追加时保持进度渲染稳定。
             const content = localizedContextCompactionProgress(block, t);
             return content ? (
-              <div className="context-compaction-progress" key={block.id}>
+              <div key={block.id}>
                 <MarkdownMessage content={content} eager onOpenMedia={props.onOpenMedia} />
               </div>
             ) : null;
@@ -180,9 +178,8 @@ export function ContextCompactionBlock(props: {
           {detailBody ? (
             <MarkdownMessage content={detailBody} onOpenMedia={props.onOpenMedia} />
           ) : !hasExpandedContent ? (
-            <span>{t("contextCompaction.generating")}</span>
+            <span className="vk-shimmer-text">{t("contextCompaction.generating")}</span>
           ) : null}
-          <div className="context-compaction-end-line" aria-hidden="true" />
         </div>
       </ConversationMeasuredCollapse>
     </section>
@@ -334,7 +331,7 @@ export function ThinkingBlock(props: {
   // durationLabel 保留在预览内部，不再占据独立转录标题。
   const durationLabel = props.streaming ? t("contextCompaction.thinkingActive") : thinkingDurationLabel(props.block, locale, t);
   return (
-    <div className="thinking-gutter-anchor">
+    <div className="vk-gutter-anchor">
       <ThinkingPreview compact streaming={props.streaming}>
         {durationLabel ? <p>{durationLabel}</p> : null}
         {useStreamingMarkdown && props.conversationId && props.block.sourceMessageId ? (
@@ -457,7 +454,9 @@ export function TurnStatsBlock(props: {
   const statisticsRow = (
     <div
       aria-label={summary}
-      className={cn("turn-stats-row", props.block.status ?? "completed", subagentStats && "subagent")}
+      className="vk-turn-stat"
+      data-state={props.block.status ?? "completed"}
+      data-subagent={subagentStats || undefined}
       tabIndex={0}
     >
       {subagentStats ? <Bot aria-hidden="true" size={13} /> : <span aria-hidden="true">{turnStatsIcon(props.block.status)}</span>}
@@ -479,7 +478,7 @@ export function TurnStatsBlock(props: {
       </TooltipTrigger>
       <TooltipContent
         align="start"
-        className="context-usage-tooltip turn-stats-tooltip"
+        className="vk-stats"
         showArrow={false}
         side="top"
         sideOffset={8}
@@ -496,20 +495,21 @@ export function TurnStatsBlock(props: {
     return statistics;
   }
   return (
-    <div className="turn-stats-line">
+    <div className="vk-turn-foot">
       {statistics}
       <button
         aria-expanded={changesOpen}
         aria-label={t("conversation.turnChanges.title")}
-        className="turn-stats-row turn-changes-toggle"
+        className="vk-turn-stat"
+        data-turn-changes=""
         onClick={() => setChangesOpen((current) => !current)}
         type="button"
       >
         <FileDiff aria-hidden="true" size={13} />
         <strong>{formatStatsTemplate(t("conversation.turnChanges.files"), turnChanges.files.length)}</strong>
-        <span className="file-change-added">+{turnChanges.additions.toLocaleString(locale)}</span>
-        <span className="file-change-removed">-{turnChanges.deletions.toLocaleString(locale)}</span>
-        {changesOpen ? <ChevronDown aria-hidden="true" size={13} /> : <ChevronRight aria-hidden="true" size={13} />}
+        <span className="vk-add">+{turnChanges.additions.toLocaleString(locale)}</span>
+        <span className="vk-del">-{turnChanges.deletions.toLocaleString(locale)}</span>
+        <ChevronRight aria-hidden="true" className="vk-turn-stat-chev" size={13} />
       </button>
       {changesOpen ? (
         <React.Suspense fallback={null}>

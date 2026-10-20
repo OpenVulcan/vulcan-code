@@ -3,8 +3,8 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { toast } from "sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { toast } from "@/ui-kit/primitives/toast";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { DiffPanelToolbar } from "./diff-review-toolbar";
 import { DiffReviewFloatingGitActions } from "./DiffReviewPanel/floating-git-actions";
 import { DiffFileCard } from "./diff-file-card";
@@ -16,7 +16,7 @@ vi.mock("@/i18n", async (importOriginal) => {
   const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
   return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
 });
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn() } }));
 vi.mock("./diff-highlight", () => ({ diffLanguageForFile: () => null, useHighlightLanguage: () => false, useHighlightedDiffFileRevision: () => 0, useHighlightedDiffWindowRevision: () => 0 }));
 vi.mock("./diff-render-worker-client", async () => {
   const { hunkSeparatorControlsHtml, hunkSeparatorLabelHtml } = await import("./diff-render-hunk-controls");
@@ -80,8 +80,8 @@ it("restores search focus on Escape and does not route button Enter to the next 
 it("locks floating Git actions until rejection and then permits retry", async () => {
   let reject!: (error: Error) => void;
   const action = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
-  await render(<DiffReviewFloatingGitActions mode="unstaged" selectedFile={snapshot.files[0]} busy={false} onAction={action} />);
-  const stage = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Stage all")!;
+  await render(<DiffReviewFloatingGitActions fileCount={1} mode="unstaged" selectedFile={snapshot.files[0]} busy={false} onAction={action} />);
+  const stage = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Stage this file")!;
   await act(async () => { stage.click(); stage.click(); });
   expect(action).toHaveBeenCalledTimes(1);
   expect(stage.disabled).toBe(true);

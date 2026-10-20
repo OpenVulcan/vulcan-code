@@ -49,9 +49,9 @@ pub(crate) fn update_luaskills_bootstrap_progress(
                         "Core Service started",
                     ),
                     (
-                        "vldb",
+                        "data-store",
                         StartupStepStatus::Ready,
-                        "VLDB/controller data plane ready",
+                        "Application data store ready",
                     ),
                     ("luaskills", StartupStepStatus::Running, message),
                     (
@@ -98,9 +98,9 @@ pub(crate) fn update_managed_runtime_bootstrap_progress(
                         "Core Service started",
                     ),
                     (
-                        "vldb",
+                        "data-store",
                         StartupStepStatus::Ready,
-                        "VLDB/controller data plane ready",
+                        "Application data store ready",
                     ),
                     (
                         "luaskills",
@@ -183,7 +183,7 @@ pub(crate) fn startup_failure_steps(
 ) -> Vec<StartupStepSnapshot> {
     let step_order = [
         "service-process",
-        "vldb",
+        "data-store",
         "luaskills",
         "mcp",
         "plugins",
@@ -227,7 +227,7 @@ pub(crate) fn startup_failure_steps(
 pub(crate) fn startup_ready_message(step_id: &str) -> String {
     match step_id {
         "service-process" => "Core Service started",
-        "vldb" => "VLDB/controller data plane ready",
+        "data-store" => "Application data store ready",
         "luaskills" => "LuaSkills engine and skill catalog ready",
         "mcp" => "MCP runtime initialized",
         "plugins" => "Plugin catalog and enabled runtimes ready",

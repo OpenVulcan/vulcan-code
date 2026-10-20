@@ -15,7 +15,7 @@ const service = vi.hoisted(() => ({
   openProjectDirectoryPath: vi.fn(),
 }));
 vi.mock("@/service/project-actions-service", () => service);
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 // workbench contains one visible conversation owned by the confirmed project.
 // workbench 包含一个归属于待确认项目的可见会话。

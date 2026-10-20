@@ -1,16 +1,18 @@
-import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
+import { DirectoryRow, WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
-import { LoaderCircle } from "lucide-react"
-import { toast } from "sonner"
+import { ArrowUpRight, LoaderCircle, RotateCcw } from "lucide-react"
+import { toast } from "@/ui-kit/primitives/toast"
 
-import { ContextWindowPolicyEditor } from "@/components/features/settings/public-ai-model-capability-dialog"
+import { PageActionBar } from "@/components/page"
+import { ContextWindowPolicyEditor } from "@/components/features/settings/context-window-policy-editor"
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings"
 import { MediaDeliveryPolicyCard } from "@/components/features/settings/media-delivery-policy-card"
+import { TerminalShellSettingsCard } from "@/components/features/settings/terminal-shell-settings"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
-import { Button } from "@/components/ui/button"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Button } from "@/ui-kit/primitives/button"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { useI18n } from "@/i18n"
 import { formatTokenCount, tokenUnitLabel } from "@/lib/usage-format"
 import {
@@ -21,12 +23,15 @@ import {
   savePublicAiUsageRefreshSettings,
 } from "@/service/settings-actions-service"
 import type {
+  CommandShellSettingsSummary,
   ContextCompactionWindowNodeId,
+  PublicAiContextWindowPolicy,
   PublicAiContextWindowPolicyOverrides,
   PublicAiContextCompactionWindowConfiguration,
   PublicAiSettingsSnapshot,
   ProviderRetrySettingsSummary,
 } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // CONTEXT_COMPACTION_NODE_LABEL_KEYS binds every fixed node identity to one localized label.
 // CONTEXT_COMPACTION_NODE_LABEL_KEYS 将每个固定节点身份绑定到一个本地化标签。
@@ -45,6 +50,20 @@ const CONTEXT_COMPACTION_NODE_LABEL_KEYS: Record<
   "compression-window-5": "settings.contextCompactionNodes.node5",
 }
 
+// ContextBasicsHeader titles one settings concern with its explanation and optional section command.
+// ContextBasicsHeader 为一个设置事项提供标题、说明与可选的分区命令。
+function ContextBasicsHeader(props: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <header className="context-basics-head">
+      <div>
+        <h3>{props.title}</h3>
+        {props.children}
+      </div>
+      {props.action}
+    </header>
+  )
+}
+
 // SystemContextWindowPolicyCard edits the process-wide context-window policy.
 // SystemContextWindowPolicyCard 编辑进程级上下文窗口策略。
 // Parameters: props supplies the policy snapshot and save result callback; returns the independent context policy draft editor.
@@ -52,6 +71,9 @@ const CONTEXT_COMPACTION_NODE_LABEL_KEYS: Record<
 function SystemContextWindowPolicyCard(props: {
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
   policy: PublicAiContextWindowPolicyOverrides
+  // Built-in values shown in every field nobody overrides.
+  // 无人覆盖的字段中显示的内置值。
+  defaults: PublicAiContextWindowPolicy
 }) {
   const { t } = useI18n()
   // draft is the current system-level sparse policy being edited.
@@ -86,35 +108,41 @@ function SystemContextWindowPolicyCard(props: {
     setError(null)
     try {
       props.onSaved(await savePublicAiContextWindowPolicyOverrides(draft ?? {}))
+      toast.success(t("settings.modelExperience.savedSystem"))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       savingRef.current = false
       setSaving(false)
     }
-  }, [draft, props.onSaved])
+  }, [draft, props.onSaved, t])
 
   return (
-    <section className="space-y-3 rounded-xl border p-4">
-      <div>
-        <h3 className="text-sm font-semibold">{t("settings.modelExperience.context")}</h3>
-        <p className="text-xs text-muted-foreground">{t("settings.modelExperience.scopeHint")}</p>
-      </div>
-      {/* These display-only defaults match ContextWindowPolicyOverrides::resolve in vulcan-context. */}
-      {/* 这些仅展示的默认值对应 vulcan-context 中的 ContextWindowPolicyOverrides::resolve。 */}
-      <ContextWindowPolicyEditor disabled={saving} onChange={setDraft} value={draft} inheritanceHints={{
+    <section className="context-basics-section">
+      <ContextBasicsHeader title={t("settings.modelExperience.context")} action={
+        <Button disabled={saving || !draft} onClick={() => setDraft(undefined)} size="sm" type="button" variant="ghost">
+          <RotateCcw aria-hidden="true" />{t("settings.contextWindowPolicy.clear")}
+        </Button>
+      }>
+        <p>{t("settings.modelExperience.scopeHint")}</p>
+        <p className="vk-form-note">{t("settings.contextWindowPolicy.description")}</p>
+      </ContextBasicsHeader>
+      <ContextWindowPolicyEditor defaults={props.defaults} disabled={saving} onChange={setDraft} value={draft} inheritanceHints={{
         effective_context_window_percent: t("settings.modelExperience.inheritWindow"),
         auto_compact_percent: t("settings.modelExperience.inheritCompact"),
         auto_compact_token_limit: t("settings.modelExperience.inheritToken"),
         auto_compact_scope: t("settings.modelExperience.inheritScope"),
         fallback_buffer_tokens: t("settings.modelExperience.inheritBuffer"),
       }} />
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <p className="text-xs text-muted-foreground" role="status">{t(saving ? "settings.modelExperience.savingSystem" : dirty ? "settings.modelExperience.dirtySystem" : "settings.modelExperience.savedSystem")}</p>
-      <Button disabled={saving || !dirty} onClick={() => void save()} type="button">
-        {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
-        {t("settings.contextBasics.saveSystemDefault")}
-      </Button>
+      {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
+      {dirty || saving ? (
+        <PageActionBar pending={dirty} actions={
+          <Button disabled={saving || !dirty} onClick={() => void save()} size="sm" type="button">
+            {saving ? <LoaderCircle className="vk-spin" /> : null}
+            {t(saving ? "settings.modelExperience.savingSystem" : "settings.contextBasics.saveSystemDefault")}
+          </Button>
+        }>{t("settings.modelExperience.dirtySystem")}</PageActionBar>
+      ) : null}
     </section>
   )
 }
@@ -146,6 +174,9 @@ function ContextCompactionWindowNodesCard(props: {
   // onSaved receives the authoritative settings snapshot after a successful save.
   // onSaved 在保存成功后接收权威设置快照。
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
+  // children renders after the node rows, before the save bar.
+  // children 渲染在节点行之后、保存栏之前。
+  children?: React.ReactNode
 }) {
   const { locale, t } = useI18n()
   // draft is the complete five-node edit buffer; identities are never editable.
@@ -216,44 +247,49 @@ function ContextCompactionWindowNodesCard(props: {
   }, [draft, props, validationError, t])
 
   return (
-    <section className="space-y-4 rounded-xl border p-4">
-      <div>
-        <h3 className="text-sm font-semibold">{t("settings.contextCompactionNodes.title")}</h3>
-        <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.description")}</p>
-      </div>
-      <div className="context-basics-node-grid">
+    <section className="context-basics-section">
+      <ContextBasicsHeader title={t("settings.contextCompactionNodes.title")}>
+        <p>{t("settings.contextCompactionNodes.description")}</p>
+        <p className="vk-form-note">{t("settings.contextCompactionNodes.warning")}</p>
+      </ContextBasicsHeader>
+      <fieldset className="vk-form-prefs context-basics-rows" disabled={saving}>
         {draft.nodes.map((node, index) => (
-          <label className="context-basics-node-row" key={node.id}>
-            <span className="font-medium">{t(CONTEXT_COMPACTION_NODE_LABEL_KEYS[node.id])}</span>
-            <Input
-              disabled={saving}
-              inputMode="numeric"
-              min={1}
-              onChange={(event) => updateNodeTokens(index, Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10))}
-              step={1000}
-              type="number"
-              value={node.tokens}
-            />
-            <span className="text-xs text-muted-foreground">{tokenUnitLabel(locale)}</span>
+          <label className="vk-form-pref" key={node.id}>
+            <span className="vk-form-pref-text"><strong>{t(CONTEXT_COMPACTION_NODE_LABEL_KEYS[node.id])}</strong></span>
+            <span className="context-basics-unit">
+              <Input
+                className="vk-form-w-md"
+                inputMode="numeric"
+                min={1}
+                onChange={(event) => updateNodeTokens(index, Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10))}
+                step={1000}
+                type="number"
+                value={node.tokens}
+              />
+              <small>{tokenUnitLabel(locale)}</small>
+            </span>
           </label>
         ))}
-      </div>
-      <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.warning")}</p>
-      {validationError || error ? <p className="text-sm text-destructive">{error ?? validationError}</p> : null}
-      {dirty && !saving ? <p className="text-xs text-muted-foreground" role="status">{t("settings.modelExperience.dirtyNodes")}</p> : null}
-      <Button disabled={saving || !dirty || validationError !== null} onClick={() => void save()} type="button">
-        {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
-        {t(saving ? "settings.modelExperience.savingNodes" : "settings.contextCompactionNodes.save")}
-      </Button>
+        {props.children}
+      </fieldset>
+      {validationError || error ? <p className="vk-field-error" role="alert">{error ?? validationError}</p> : null}
+      {dirty || saving ? (
+        <PageActionBar pending={dirty} actions={
+          <Button disabled={saving || !dirty || validationError !== null} onClick={() => void save()} size="sm" type="button">
+            {saving ? <LoaderCircle className="vk-spin" /> : null}
+            {t(saving ? "settings.modelExperience.savingNodes" : "settings.contextCompactionNodes.save")}
+          </Button>
+        }>{t("settings.modelExperience.dirtyNodes")}</PageActionBar>
+      ) : null}
     </section>
   )
 }
 
-// NewSessionContextWindowDefaultCard edits only the default applied at conversation creation.
-// NewSessionContextWindowDefaultCard 仅编辑创建会话时应用的默认窗口。
+// NewSessionContextWindowDefaultRow saves the default applied at conversation creation as soon as it is chosen.
+// NewSessionContextWindowDefaultRow 在选择后立即保存创建会话时应用的默认窗口。
 // Parameters: props supplies the saved node identity, node values and snapshot callback.
 // 参数：props 提供已保存节点身份、节点数值和快照回调。
-function NewSessionContextWindowDefaultCard(props: {
+function NewSessionContextWindowDefaultRow(props: {
   // nodeId is null when new conversations follow the selected model.
   // nodeId 为空时新会话遵循所选模型。
   nodeId: ContextCompactionWindowNodeId | null
@@ -265,39 +301,39 @@ function NewSessionContextWindowDefaultCard(props: {
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
 }) {
   const { locale, t } = useI18n()
-  // draft is the proposed fixed node or the follow-model choice.
-  // draft 是拟选择的固定节点或遵循模型选项。
-  const [draft, setDraft] = React.useState<ContextCompactionWindowNodeId | null>(props.nodeId)
-  // saving prevents overlapping settings writes.
-  // saving 防止设置写入重叠。
-  const [saving, setSaving] = React.useState(false)
+  // pending keeps the chosen value visible while its write is in flight.
+  // pending 在写入进行中保持所选值可见。
+  const [pending, setPending] = React.useState<ContextCompactionWindowNodeId | null | undefined>(undefined)
   // error displays one persistence failure.
   // error 展示一条持久化失败。
   const [error, setError] = React.useState<string | null>(null)
-  React.useEffect(() => setDraft(props.nodeId), [props.nodeId])
   // save writes only the new-session default and leaves existing sessions untouched.
   // save 只写入新会话默认值，不改变已有会话。
-  const save = React.useCallback(async () => {
-    setSaving(true)
+  const save = React.useCallback(async (nodeId: ContextCompactionWindowNodeId | null) => {
+    if (pending !== undefined || nodeId === props.nodeId) return
+    setPending(nodeId)
     setError(null)
     try {
-      props.onSaved(await savePublicAiNewSessionContextWindowDefault(draft))
+      props.onSaved(await savePublicAiNewSessionContextWindowDefault(nodeId))
       toast.success(t("settings.contextCompactionNodes.defaultSaved"))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setSaving(false)
+      setPending(undefined)
     }
-  }, [draft, props, t])
+  }, [pending, props, t])
+  // shown is the in-flight choice, else the saved one.
+  // shown 是进行中的选择，否则为已保存值。
+  const shown = pending === undefined ? props.nodeId : pending
 
   return (
-    <section className="space-y-4 rounded-xl border p-4">
-      <div>
-        <h3 className="text-sm font-semibold">{t("settings.contextCompactionNodes.defaultTitle")}</h3>
-        <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.defaultDescription")}</p>
-      </div>
-      <Select disabled={saving} onValueChange={(value) => setDraft(value === "follow-model" ? null : value as ContextCompactionWindowNodeId)} value={draft ?? "follow-model"}>
-        <SelectTrigger aria-label={t("settings.contextCompactionNodes.defaultTitle")}><SelectValue /></SelectTrigger>
+    <div className="vk-form-pref">
+      <span className="vk-form-pref-text">
+        <strong>{t("settings.contextCompactionNodes.defaultTitle")}</strong>
+        <small className="vk-form-note">{t("settings.contextCompactionNodes.defaultDescription")} {t("settings.contextCompactionNodes.defaultLimitHint")}</small>
+      </span>
+      <Select disabled={pending !== undefined} onValueChange={(value) => void save(value === "follow-model" ? null : value as ContextCompactionWindowNodeId)} value={shown ?? "follow-model"}>
+        <SelectTrigger aria-label={t("settings.contextCompactionNodes.defaultTitle")} className="vk-form-w-lg"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="follow-model">{t("settings.contextCompactionNodes.followModel")}</SelectItem>
           {props.nodes.nodes.map((node) => (
@@ -307,20 +343,15 @@ function NewSessionContextWindowDefaultCard(props: {
           ))}
         </SelectContent>
       </Select>
-      <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.defaultLimitHint")}</p>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <Button disabled={saving || draft === props.nodeId} onClick={() => void save()} type="button">
-        {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
-        {t("settings.contextCompactionNodes.defaultSave")}
-      </Button>
-    </section>
+      {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
+    </div>
   )
 }
 
 // AccountUsageRefreshCard edits the persisted background account-usage cadence.
 // AccountUsageRefreshCard 编辑持久化的后台账号用量刷新周期。
-// Parameters: props supplies the persisted interval and save callback; returns the validated background-usage refresh editor.
-// 参数：props 提供持久化间隔与保存回调；返回经过校验的后台用量刷新编辑器。
+// Parameters: props supplies the persisted interval, save callback and optional statistics link; returns the validated background-usage refresh editor.
+// 参数：props 提供持久化间隔、保存回调与可选统计链接；返回经过校验的后台用量刷新编辑器。
 function AccountUsageRefreshCard(props: {
   // onSaved receives the authoritative post-save settings snapshot.
   // onSaved 接收保存后的权威设置快照。
@@ -328,6 +359,9 @@ function AccountUsageRefreshCard(props: {
   // intervalSeconds is the currently persisted refresh cadence.
   // intervalSeconds 是当前持久化刷新周期。
   intervalSeconds: number
+  // onOpenUsageStatistics opens an installed statistics mount; absence hides the link.
+  // onOpenUsageStatistics 打开已安装的统计挂载；缺少时隐藏链接。
+  onOpenUsageStatistics?: () => void
 }) {
   const { t } = useI18n()
   // saving prevents overlapping interval mutations.
@@ -356,29 +390,30 @@ function AccountUsageRefreshCard(props: {
     }
   }, [props])
   return (
-    <section className="space-y-3 rounded-xl border p-4">
-      <div>
-        <h3 className="text-sm font-semibold">{t("settings.usageRefresh.title")}</h3>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.usageRefresh.description")}
-        </p>
+    <div className="vk-form-prefs context-basics-rows">
+      <div className="vk-form-pref">
+        <span className="vk-form-pref-text">
+          <strong>{t("settings.usageRefresh.title")}</strong>
+          <small className="vk-form-note">{t("settings.usageRefresh.description")}</small>
+          {props.onOpenUsageStatistics ? (
+            <Button className="vk-form-fit" onClick={props.onOpenUsageStatistics} size="sm" type="button" variant="link">
+              {t("settings.modelExperience.statistics")}<ArrowUpRight aria-hidden="true" />
+            </Button>
+          ) : null}
+        </span>
+        <Select disabled={saving} onValueChange={(value) => void save(Number(value))} value={String(props.intervalSeconds)}>
+          <SelectTrigger aria-label={t("settings.usageRefresh.title")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="60">{t("settings.usageRefresh.minute").replace("{count}", "1")}</SelectItem>
+            <SelectItem value="300">{t("settings.usageRefresh.minutes").replace("{count}", "5")}</SelectItem>
+            <SelectItem value="900">{t("settings.usageRefresh.minutes").replace("{count}", "15")}</SelectItem>
+            <SelectItem value="1800">{t("settings.usageRefresh.minutes").replace("{count}", "30")}</SelectItem>
+            <SelectItem value="3600">{t("settings.usageRefresh.hour").replace("{count}", "1")}</SelectItem>
+          </SelectContent>
+        </Select>
+        {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
       </div>
-      <Select
-        disabled={saving}
-        onValueChange={(value) => void save(Number(value))}
-        value={String(props.intervalSeconds)}
-      >
-        <SelectTrigger aria-label={t("settings.usageRefresh.title")} className="w-48"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value="60">{t("settings.usageRefresh.minute").replace("{count}", "1")}</SelectItem>
-          <SelectItem value="300">{t("settings.usageRefresh.minutes").replace("{count}", "5")}</SelectItem>
-          <SelectItem value="900">{t("settings.usageRefresh.minutes").replace("{count}", "15")}</SelectItem>
-          <SelectItem value="1800">{t("settings.usageRefresh.minutes").replace("{count}", "30")}</SelectItem>
-          <SelectItem value="3600">{t("settings.usageRefresh.hour").replace("{count}", "1")}</SelectItem>
-        </SelectContent>
-      </Select>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-    </section>
+    </div>
   )
 }
 
@@ -399,6 +434,9 @@ export function ContextBasicsSettingsArea(props: {
   // Base system prompt editor supplied by the settings composition root.
   // 由设置组合入口提供的基础系统提示词编辑器。
   systemPromptSettings?: React.ReactNode
+  // Default shell projection of the integrated terminal; absent before the service is ready.
+  // 集成终端的默认 Shell 投影；服务就绪前缺省。
+  commandShell?: CommandShellSettingsSummary
   // Opens an actually installed statistics mount; absence leaves the optional link hidden.
   // 打开实际安装的统计挂载；缺少挂载时不显示可选链接。
   onOpenUsageStatistics?: () => void
@@ -417,6 +455,7 @@ export function ContextBasicsSettingsArea(props: {
     { id: "context", label: t("settings.modelExperience.context") },
     { id: "nodes", label: t("settings.modelExperience.nodes") },
     { id: "retry", label: t("settings.modelExperience.retry") },
+    { id: "terminal", label: t("settings.modelExperience.terminal") },
     { id: "media", label: t("settings.modelExperience.media") },
     { id: "usage", label: t("settings.modelExperience.usage") },
   ]
@@ -440,39 +479,40 @@ export function ContextBasicsSettingsArea(props: {
   }, [])
 
   return (
-    <WorkspaceDirectoryLayout contentClassName="context-basics-surface space-y-4" navigationMode="tabs" navigation={
+    <WorkspaceDirectoryLayout contentClassName="context-basics-surface vk-form-loose" navigationMode="tabs" navigation={
       <WorkspaceDirectoryMenu ariaLabel={t("settings.contextBasics.title")} heading={t("workspaceToolPanel.category")}>
-        {sections.map((section) => <button key={section.id} type="button"
-          className={`workspace-tool-panel-menu-row ${activeSection === section.id ? "active" : ""}`}
-          aria-current={activeSection === section.id ? "page" : undefined} onClick={() => setActiveSection(section.id)}>{section.label}</button>)}
+        {sections.map((section) => <DirectoryRow active={activeSection === section.id} key={section.id} label={section.label} onSelect={() => setActiveSection(section.id)} />)}
       </WorkspaceDirectoryMenu>
     }>
-      {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+      {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
       <div className="context-basics-tabs">
-        {props.outputStyleSettings ? <section hidden={activeSection !== "conversation"}>{props.outputStyleSettings}</section> : null}
+        {props.outputStyleSettings ? <section className="vk-form-prefs" hidden={activeSection !== "conversation"}>{props.outputStyleSettings}</section> : null}
         {props.systemPromptSettings ? <section hidden={activeSection !== "system-prompt"}>{props.systemPromptSettings}</section> : null}
         {snapshot ? (
           <>
             {/* Adopt only the saved section so late full snapshots cannot regress another independent editor. */}
             {/* 仅采用已保存分区，避免迟到的完整快照使另一独立编辑器倒退。 */}
             <section hidden={activeSection !== "context"}>
-              <SystemContextWindowPolicyCard onSaved={(next) => setSnapshot((current) => current ? { ...current, contextWindowPolicyOverrides: next.contextWindowPolicyOverrides } : next)} policy={snapshot.contextWindowPolicyOverrides} />
+              <SystemContextWindowPolicyCard onSaved={(next) => setSnapshot((current) => current ? { ...current, contextWindowPolicyOverrides: next.contextWindowPolicyOverrides } : next)} policy={snapshot.contextWindowPolicyOverrides} defaults={snapshot.contextWindowPolicyDefaults} />
             </section>
             <section hidden={activeSection !== "nodes"}>
-              <ContextCompactionWindowNodesCard nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, contextCompactionWindowNodes: next.contextCompactionWindowNodes } : next)} />
-              <NewSessionContextWindowDefaultCard nodeId={snapshot.newSessionContextCompactionWindowNodeId} nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, newSessionContextCompactionWindowNodeId: next.newSessionContextCompactionWindowNodeId } : next)} />
+              <ContextCompactionWindowNodesCard nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, contextCompactionWindowNodes: next.contextCompactionWindowNodes } : next)}>
+                <NewSessionContextWindowDefaultRow nodeId={snapshot.newSessionContextCompactionWindowNodeId} nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, newSessionContextCompactionWindowNodeId: next.newSessionContextCompactionWindowNodeId } : next)} />
+              </ContextCompactionWindowNodesCard>
             </section>
             <section hidden={activeSection !== "media"}>
               <MediaDeliveryPolicyCard settings={snapshot.mediaDelivery} onSaved={(next) => setSnapshot((current) => current ? { ...current, mediaDelivery: next.mediaDelivery } : next)} />
             </section>
             <section hidden={activeSection !== "usage"}>
-              <AccountUsageRefreshCard intervalSeconds={snapshot.usageRefreshIntervalSeconds} onSaved={(next) => setSnapshot((current) => current ? { ...current, usageRefreshIntervalSeconds: next.usageRefreshIntervalSeconds } : next)} />
-              {props.onOpenUsageStatistics ? <Button onClick={props.onOpenUsageStatistics} type="button" variant="outline">{t("settings.modelExperience.statistics")}</Button> : null}
+              <AccountUsageRefreshCard intervalSeconds={snapshot.usageRefreshIntervalSeconds} onOpenUsageStatistics={props.onOpenUsageStatistics} onSaved={(next) => setSnapshot((current) => current ? { ...current, usageRefreshIntervalSeconds: next.usageRefreshIntervalSeconds } : next)} />
             </section>
           </>
         ) : !error ? <StreamPlaceholder label={t("settings.contextBasics.loading")} shape="fields" count={4} /> : null}
         <section hidden={activeSection !== "retry"}>
-          <ProviderRetrySettingsArea actions={props.actions} embedded settings={props.retrySettings} />
+          <ProviderRetrySettingsArea actions={props.actions} settings={props.retrySettings} />
+        </section>
+        <section hidden={activeSection !== "terminal"}>
+          <TerminalShellSettingsCard onSave={props.actions.onSaveDefaultCommandShell} settings={props.commandShell} />
         </section>
       </div>
     </WorkspaceDirectoryLayout>

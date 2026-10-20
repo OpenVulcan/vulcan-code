@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { I18nProvider } from "@/i18n";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type {
   ComposerAttachmentPreparationSummary,
   ComposerAttachmentSummary,
@@ -17,9 +17,9 @@ describe("ComposerAttachmentStrip", () => {
         resolvePreview={() => null} onOpenMedia={() => undefined} />
     </TooltipProvider></I18nProvider>);
     expect(markup).not.toContain("0%"); expect(markup).not.toContain("99%");
-    expect(markup).toContain("motion-safe:animate-spin");
+    expect(markup).toContain("data-spin");
     expect(markup).toContain("Preview is unavailable for this file type");
-    expect(markup).toMatch(/composer-attachment-open[^>]*disabled/);
+    expect(markup).toMatch(/vk-attach-open[^>]*disabled/);
   });
   it("keeps metadata-only detail behind an accessible tooltip trigger", () => {
     // attachment is one exact staged video shown in the composer strip.
@@ -60,7 +60,7 @@ describe("ComposerAttachmentStrip", () => {
       </I18nProvider>,
     );
 
-    expect(markup).toContain("composer-attachment-warning");
+    expect(markup).toContain("vk-attach-warn");
     expect(markup).toContain('tabindex="0"');
     expect(markup).toContain("此附件不会直接交给模型理解");
     expect(markup).not.toContain('title="此附件不会直接交给模型理解');

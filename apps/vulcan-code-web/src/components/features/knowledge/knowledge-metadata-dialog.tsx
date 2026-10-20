@@ -1,7 +1,7 @@
 import * as React from "react";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
 import { useI18n } from "@/i18n";
 import type { KnowledgeLibraryRenameRequest, KnowledgeLibrarySummary } from "@/types/knowledge-base";
 
@@ -56,9 +56,9 @@ export function KnowledgeMetadataDialog({ library, busy, onClose, onSave }: Know
   }
   return <Dialog open onOpenChange={(open) => { if (!open && !busy && !saving.current) onClose(); }}><DialogContent>
     <DialogHeader><DialogTitle>{t("knowledge.metadata")}</DialogTitle><DialogDescription>{t("knowledge.metadataDescription")}</DialogDescription></DialogHeader>
-    <label className="grid gap-1">{t("knowledge.name")}<Input aria-label={t("knowledge.name")} value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
-    <label className="grid gap-1">{t("knowledge.purpose")}<Input aria-label={t("knowledge.purpose")} value={description} disabled={busy} onChange={(event) => setDescription(event.target.value)} /></label>
-    {error !== null ? <pre role="alert" className="select-text whitespace-pre-wrap break-words text-sm text-destructive">{error}</pre> : null}
+    <label className="vk-field">{t("knowledge.name")}<Input aria-label={t("knowledge.name")} value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
+    <label className="vk-field">{t("knowledge.purpose")}<Input aria-label={t("knowledge.purpose")} value={description} disabled={busy} onChange={(event) => setDescription(event.target.value)} /></label>
+    {error !== null ? <pre role="alert" className="vk-diag">{error}</pre> : null}
     <DialogFooter><Button variant="outline" disabled={busy} onClick={onClose}>{t("conversation.action.cancel")}</Button><Button disabled={busy || !name.trim()} onClick={() => void submit()}>{t("memory.common.save")}</Button></DialogFooter>
   </DialogContent></Dialog>;
 }

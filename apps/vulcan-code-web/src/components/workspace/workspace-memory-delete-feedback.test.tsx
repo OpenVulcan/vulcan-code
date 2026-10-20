@@ -36,6 +36,8 @@ it("shows delete failure in the dialog and clears it when a fresh confirmation o
     await clickButton(document.querySelector('[role="dialog"]')!, "取消");
     await clickButton(container, "42");
     expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull();
-    expect(run).toHaveBeenCalledOnce();
+    // The card also reads the static profile on mount; only one delete may have been attempted.
+    // 卡片挂载时也会读取静态画像；删除只能被尝试一次。
+    expect(run.mock.calls.filter(([request]) => request.action === "delete_memories")).toHaveLength(1);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });

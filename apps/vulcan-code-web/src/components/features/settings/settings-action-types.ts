@@ -150,6 +150,9 @@ export interface SettingsActionProps {
   // Saves Git commit dialog settings.
   // 保存 Git 提交弹窗设置。
   onSaveGitCommitSettings: (request: GitCommitSettingsSaveRequest) => Promise<void>
+  // Saves the default shell of the integrated terminal and the command tools; null picks automatically.
+  // 保存集成终端与命令工具的默认 Shell；null 表示自动选择。
+  onSaveDefaultCommandShell: (shellId: string | null) => Promise<void>
   // Saves Provider retry settings.
   // 保存 Provider 重试设置。
   onSaveProviderRetrySettings: (request: ProviderRetrySettingsSaveRequest) => Promise<void>

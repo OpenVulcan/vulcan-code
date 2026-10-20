@@ -1,27 +1,26 @@
 import * as React from "react"
 import { Database, SlidersHorizontal } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
-  DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { ScrollArea } from "@/components/ui/scroll-area"
+} from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
+import { ScrollArea } from "@/ui-kit/primitives/scroll-area"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
+} from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n } from "@/i18n"
 import { savePublicAiInternalModelOverrides } from "@/service/settings-actions-service"
 import type {
@@ -33,6 +32,7 @@ import type {
   PublicAiRerankCapabilities,
   PublicAiSettingsSnapshot,
 } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 const INHERIT_VALUE = "__inherit__"
 
@@ -174,28 +174,22 @@ export function PublicAiInternalOverridesDialog(props: {
         props.onOpenChange(open)
       }}
     >
-      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
-        <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
-          <div className="flex items-start gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border bg-background shadow-xs">
-              <SlidersHorizontal className="size-4 text-muted-foreground" />
-            </div>
-            <div className="min-w-0 space-y-2">
-              <div className="space-y-1">
-                <DialogTitle>{t("settings.inference.overridesTitle")}</DialogTitle>
-                <DialogDescription>{t("settings.inference.overridesDescription")}</DialogDescription>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
+      <DialogContent className="vk-form-sheet" layout="document" size="md">
+        <header className="vk-viewer-head">
+          <span className="vk-viewer-mark"><SlidersHorizontal aria-hidden="true" /></span>
+          <div className="vk-viewer-titles">
+            <DialogTitle>{t("settings.inference.overridesTitle")}</DialogTitle>
+            <DialogDescription>{t("settings.inference.overridesDescription")}</DialogDescription>
+          </div>
+        </header>
+        <div className="vk-form-subbar">
                 <Badge variant="outline">{candidate?.providerDisplayName}</Badge>
                 <Badge variant="secondary">{candidate?.modelDisplayName}</Badge>
                 <Badge variant="outline">{operationLabel(candidate?.route.operation, t)}</Badge>
               </div>
-            </div>
-          </div>
-        </DialogHeader>
-        <form ref={formRef} className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => { event.preventDefault(); void save() }}>
-        <ScrollArea className="min-h-0 flex-1">
-          <fieldset disabled={saving} className="min-w-0 space-y-4 p-5">
+        <form ref={formRef} className="vk-form-sheet-form" onSubmit={(event) => { event.preventDefault(); void save() }}>
+        <ScrollArea>
+          <fieldset disabled={saving} className="vk-form-sheet-body">
             {commonCandidate?.route.operation === "conversation_respond" ? (
               <LlmDefaults candidate={commonCandidate} draft={draft} onChange={setDraft} />
             ) : null}
@@ -211,12 +205,12 @@ export function PublicAiInternalOverridesDialog(props: {
               <RerankDefaults candidate={commonCandidate} draft={draft} onChange={setDraft} />
             ) : null}
             {definitions.length > 0 ? (
-              <section className="space-y-4 border-t pt-4">
-                <div className="flex items-start gap-2.5">
-                  <Database className="mt-0.5 size-4 text-muted-foreground" />
+              <section className="vk-form-section">
+                <div className="vk-form-section-head">
+                  <Database aria-hidden="true" />
                   <div>
-                    <h3 className="text-sm font-semibold">{t("settings.modelOverrides.parameters")}</h3>
-                    <p className="text-xs text-muted-foreground">
+                    <h3 className="vk-form-title">{t("settings.modelOverrides.parameters")}</h3>
+                    <p className="vk-form-note">
                       {t("settings.modelOverrides.parametersDescription")}
                     </p>
                   </div>
@@ -235,13 +229,13 @@ export function PublicAiInternalOverridesDialog(props: {
               </section>
             ) : null}
             {error ? (
-              <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">
+              <div className="vk-form-fault" role="alert">
                 {error}
               </div>
             ) : null}
           </fieldset>
         </ScrollArea>
-        <DialogFooter className="m-0 shrink-0 rounded-none px-5 py-3">
+        <DialogFooter>
           <Button disabled={saving} variant="outline" onClick={() => props.onOpenChange(false)} type="button">
             {t("settings.modelOverrides.cancel")}
           </Button>
@@ -261,8 +255,8 @@ function LlmDefaults(props: InternalDefaultsProps) {
   const { t } = useI18n()
   const capabilities = props.candidate.capabilities
   return (
-    <section className="space-y-4 rounded-xl border bg-card/40 p-4">
-      <div className="grid gap-4 sm:grid-cols-2">
+    <section className="vk-form-box">
+      <div className="vk-form-grid">
         <InternalLimitField
           capabilityLimit={capabilities.context_limit}
           id="internal-context-limit"
@@ -290,8 +284,8 @@ function EmbeddingDefaults(props: InternalDefaultsProps) {
     return null
   }
   return (
-    <section className="rounded-xl border bg-card/40 p-4">
-      <div className="max-w-xs">
+    <section className="vk-form-box">
+      <div className="vk-form-narrow">
         <InternalDimensionField
           candidate={props.candidate}
           hasDiscreteConstraint={props.matchingCandidates?.some((candidate) => (
@@ -314,8 +308,8 @@ function RerankDefaults(props: InternalDefaultsProps) {
     return null
   }
   return (
-    <section className="space-y-4 rounded-xl border bg-card/40 p-4">
-      <div className="grid gap-4 sm:grid-cols-2">
+    <section className="vk-form-box">
+      <div className="vk-form-grid">
         <InternalLimitField
           capabilityLimit={capability.maximum_candidates}
           id="internal-rerank-top-n"
@@ -330,7 +324,7 @@ function RerankDefaults(props: InternalDefaultsProps) {
           value={props.draft.rerank_truncation}
         />
       </div>
-      <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+      <div className="vk-form-row vk-form-framed">
         <Label htmlFor="internal-rerank-return-content">
           {t("settings.inference.rerankReturnContent")}
         </Label>
@@ -386,11 +380,11 @@ function InternalLimitField(props: {
   const inputRef = React.useRef<HTMLInputElement>(null)
   React.useEffect(() => { inputRef.current?.setCustomValidity(invalid ? t("settings.modelExperience.invalidValue") : "") }, [invalid, t])
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
+    <div className="vk-form-stack">
+      <div className="vk-form-row">
         <Label htmlFor={props.id}>{props.label}</Label>
         {props.capabilityMinimum !== undefined || props.capabilityLimit !== undefined ? (
-          <Badge className="font-mono font-normal" variant="outline">
+          <Badge className="vk-mono" variant="outline">
             {limitRangeLabel(props.capabilityMinimum, props.capabilityLimit)}
           </Badge>
         ) : null}
@@ -421,7 +415,7 @@ function InternalLimitField(props: {
         value={rawValue}
         aria-invalid={invalid}
       />
-      {invalid && <p role="alert" className="text-xs text-destructive">{t("settings.modelExperience.invalidValue")}</p>}
+      {invalid && <p role="alert" className="vk-field-error">{t("settings.modelExperience.invalidValue")}</p>}
     </div>
   )
 }
@@ -438,7 +432,7 @@ function InternalEnumField(props: {
 }) {
   const { t } = useI18n()
   return (
-    <div className="space-y-2">
+    <div className="vk-form-stack">
       <Label>{props.label}</Label>
       <Select
         onValueChange={(value) => props.onChange(value === INHERIT_VALUE ? undefined : value)}
@@ -474,7 +468,7 @@ function InternalDimensionField(props: {
   }
   if (capability.dimensions.length > 0) {
     return (
-      <div className="space-y-2">
+      <div className="vk-form-stack">
         <Label>{t("settings.inference.embeddingDimensions")}</Label>
         <Select
           onValueChange={(value) => props.onChange(
@@ -529,7 +523,7 @@ function InternalParameterField(props: {
   const { t } = useI18n()
   if (props.definition.schema.type === "boolean") {
     return (
-      <div className="space-y-2">
+      <div className="vk-form-stack">
         <Label>{props.definition.display_name}</Label>
         <Select onValueChange={props.onChange} value={props.value || INHERIT_VALUE}>
           <SelectTrigger><SelectValue /></SelectTrigger>
@@ -542,7 +536,7 @@ function InternalParameterField(props: {
             {props.value && props.value !== INHERIT_VALUE && props.value !== "true" && props.value !== "false" ? <SelectItem disabled value={props.value}>{t("settings.modelExperience.invalidValue")}: {props.value}</SelectItem> : null}
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">{props.definition.description}</p>
+        <p className="vk-form-note">{props.definition.description}</p>
       </div>
     )
   }
@@ -551,7 +545,7 @@ function InternalParameterField(props: {
     : []
   if (enumValues.length > 0) {
     return (
-      <div className="space-y-2">
+      <div className="vk-form-stack">
         <Label>{props.definition.display_name}</Label>
         <Select onValueChange={props.onChange} value={props.value || INHERIT_VALUE}>
           <SelectTrigger><SelectValue /></SelectTrigger>
@@ -565,19 +559,19 @@ function InternalParameterField(props: {
             {props.value && props.value !== INHERIT_VALUE && !enumValues.includes(props.value) ? <SelectItem disabled value={props.value}>{t("settings.modelExperience.invalidValue")}: {props.value}</SelectItem> : null}
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">{props.definition.description}</p>
+        <p className="vk-form-note">{props.definition.description}</p>
       </div>
     )
   }
   return (
-    <div className="space-y-2">
+    <div className="vk-form-stack">
       <Label>{props.definition.display_name}</Label>
       <Input
         onChange={(event) => props.onChange(event.currentTarget.value)}
         type="text"
         value={props.value}
       />
-      <p className="text-xs text-muted-foreground">{props.definition.description}</p>
+      <p className="vk-form-note">{props.definition.description}</p>
     </div>
   )
 }

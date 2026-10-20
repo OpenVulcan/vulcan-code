@@ -17,6 +17,13 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_set_project_icon",
     "service_reset_project_icon",
     "service_set_expanded_task_projects",
+    "service_create_project_group",
+    "service_rename_project_group",
+    "service_delete_project_group",
+    "service_set_project_groups_layout",
+    "service_set_project_tree_pinned",
+    "service_set_project_tree_pins_order",
+    "service_add_project_to_group",
     "service_archive_project_conversations",
     "service_remove_project",
     "service_rename_conversation",
@@ -64,28 +71,38 @@ pub(super) async fn dispatch(
         "service_browse_project_directories" => rpc_json_result(
             service_browse_project_directories(state, rpc_optional_param(params, "path")?),
         ),
-        "service_add_project_from_path" => rpc_json_result(
+        "service_add_project_from_path" => rpc_json_result(broadcast_after_success(
+            &app,
+            &state.clone(),
             service_add_project_from_path(
                 state,
                 PathBuf::from(rpc_required_param::<String>(params, "path")?),
             )
             .await,
-        ),
-        "service_toggle_project_pinned" => rpc_json_result(
+        )),
+        "service_toggle_project_pinned" => rpc_json_result(broadcast_after_success(
+            &app,
+            &state.clone(),
             service_toggle_project_pinned(state, rpc_required_param(params, "projectId")?).await,
-        ),
-        "service_reorder_projects" => rpc_json_result(
+        )),
+        "service_reorder_projects" => rpc_json_result(broadcast_after_success(
+            &app,
+            &state.clone(),
             service_reorder_projects(state, rpc_required_param(params, "projectIds")?).await,
-        ),
-        "service_rename_project" => rpc_json_result(
+        )),
+        "service_rename_project" => rpc_json_result(broadcast_after_success(
+            &app,
+            &state.clone(),
             service_rename_project(
                 state,
                 rpc_required_param(params, "projectId")?,
                 rpc_required_param(params, "name")?,
             )
             .await,
-        ),
-        "service_set_project_icon" => rpc_json_result(
+        )),
+        "service_set_project_icon" => rpc_json_result(broadcast_after_success(
+            &app,
+            &state.clone(),
             service_set_project_icon(
                 state,
                 rpc_required_param(params, "projectId")?,
@@ -93,13 +110,64 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "iconKey")?,
             )
             .await,
-        ),
-        "service_reset_project_icon" => rpc_json_result(
+        )),
+        "service_reset_project_icon" => rpc_json_result(broadcast_after_success(
+            &app,
+            &state.clone(),
             service_reset_project_icon(state, rpc_required_param(params, "projectId")?).await,
-        ),
+        )),
         "service_set_expanded_task_projects" => rpc_json_result(
             service_set_expanded_task_projects(state, rpc_required_param(params, "projectIds")?)
                 .await,
+        ),
+        "service_create_project_group" => rpc_json_result(
+            service_create_project_group(
+                app,
+                state,
+                rpc_required_param(params, "name")?,
+                rpc_required_param(params, "projectIds")?,
+                rpc_optional_param(params, "afterGroupId")?,
+            )
+            .await,
+        ),
+        "service_rename_project_group" => rpc_json_result(
+            service_rename_project_group(
+                app,
+                state,
+                rpc_required_param(params, "groupId")?,
+                rpc_required_param(params, "name")?,
+            )
+            .await,
+        ),
+        "service_delete_project_group" => rpc_json_result(
+            service_delete_project_group(app, state, rpc_required_param(params, "groupId")?).await,
+        ),
+        "service_set_project_groups_layout" => rpc_json_result(
+            service_set_project_groups_layout(app, state, rpc_required_param(params, "groups")?)
+                .await,
+        ),
+        "service_set_project_tree_pinned" => rpc_json_result(
+            service_set_project_tree_pinned(
+                app,
+                state,
+                rpc_required_param(params, "kind")?,
+                rpc_required_param(params, "id")?,
+                rpc_required_param(params, "pinned")?,
+            )
+            .await,
+        ),
+        "service_set_project_tree_pins_order" => rpc_json_result(
+            service_set_project_tree_pins_order(app, state, rpc_required_param(params, "pins")?)
+                .await,
+        ),
+        "service_add_project_to_group" => rpc_json_result(
+            service_add_project_to_group(
+                app,
+                state,
+                PathBuf::from(rpc_required_param::<String>(params, "path")?),
+                rpc_required_param(params, "groupId")?,
+            )
+            .await,
         ),
         "service_archive_project_conversations" => rpc_json_result(
             service_archive_project_conversations(
@@ -196,4 +264,20 @@ pub(super) async fn dispatch(
         _ => return Ok(ServiceRpcDispatch::Unknown),
     };
     Ok(ServiceRpcDispatch::Handled(result))
+}
+
+/// Broadcasts the retained workbench after a successful shared project change so every open window follows;
+/// the caller still receives its own result unchanged.
+/// 共享项目变更成功后广播保留的工作台，使所有打开的窗口一同更新；调用方仍原样收到自身结果。
+fn broadcast_after_success<T>(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    result: Result<T, String>,
+) -> Result<T, String> {
+    if result.is_ok()
+        && let Ok(guard) = state.lock()
+    {
+        emit_workbench_event(app, &guard.workbench);
+    }
+    result
 }

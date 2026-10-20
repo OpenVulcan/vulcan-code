@@ -37,6 +37,7 @@ import type {
   SubagentNavigationSnapshot,
 } from "./planning-questions";
 import type {
+  ProjectTreeSummary,
   ProjectSummary,
 } from "./projects-files";
 import type {
@@ -167,6 +168,9 @@ export interface WorkbenchSnapshot {
   // Expanded project identifiers shown in the workspace sidebar.
   // 工作台侧栏中当前展开的项目标识集合。
   expandedProjectIds?: string[];
+  // Project tree: user groups, the default group position and the pinned section.
+  // 项目树：用户分组、默认分组位置与置顶分区。
+  projectTree?: ProjectTreeSummary;
   // Authoritative invalidation revisions for independently loaded project settings.
   // 独立加载项目设置所使用的权威失效版本。
   projectSettingsRevisions: ProjectSettingsRevisionSnapshot;
@@ -264,6 +268,9 @@ export interface WorkbenchSnapshot {
   // Oldest pending ask-tool request waiting for a user reply.
   // 当前等待用户回复的最早 ask 工具请求。
   pendingQuestion?: PendingQuestionSnapshot | null;
+  // Child agent label when the pending request belongs to a subagent of the selected conversation.
+  // 待处理请求属于当前会话的子代理时的子代理标签。
+  pendingQuestionRequester?: string | null;
   // Pending ask-tool questions grouped by their owning conversation.
   // 按所属会话保留的 ask 工具待回答问题。
   pendingQuestions?: PendingQuestionSnapshot[];

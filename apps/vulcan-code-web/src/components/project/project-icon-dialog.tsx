@@ -1,6 +1,6 @@
 import React from "react";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -8,22 +8,22 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+} from "@/ui-kit/primitives/dialog";
+import { Input } from "@/ui-kit/primitives/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-} from "@/components/ui/select";
+} from "@/ui-kit/primitives/select";
 import {
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-} from "@/components/ui/tabs";
+} from "@/ui-kit/primitives/tabs";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import type { ProjectSummary } from "@/types";
 import {
   DEFAULT_PROJECT_BADGE_CONFIG,
@@ -223,20 +223,20 @@ export function ProjectIconDialog(props: {
   return (
     <Dialog open={Boolean(project)} onOpenChange={(open) => !open && !savingRef.current && props.onCancel()}>
       <DialogContent
-        className="project-icon-dialog flex min-h-0 flex-col"
+        className="project-icon-dialog"
         size="xl"
         scrollMode="fixed-footer"
         showCloseButton={!busy}
         onEscapeKeyDown={event => { if (savingRef.current) event.preventDefault(); }}
         onInteractOutside={handleDialogInteractOutside}
       >
-        <DialogHeader className="shrink-0">
+        <DialogHeader>
           <DialogTitle>{t("projectIcon.title")}</DialogTitle>
           <DialogDescription>
             {t("projectIcon.description").replace("{project}", project.name)}
           </DialogDescription>
         </DialogHeader>
-        <fieldset disabled={busy} className="project-icon-layout min-h-0 min-w-0 flex-1 overflow-y-auto">
+        <fieldset disabled={busy} className="project-icon-layout">
           <div className="project-icon-preview" aria-label={t("projectIcon.previewAria")}>
             <ProjectIcon project={{ ...project, iconPack: finalSelection.pack, iconKey: finalSelection.key }} size={42} />
             <strong>{project.name}</strong>
@@ -262,13 +262,13 @@ export function ProjectIconDialog(props: {
                       <span>{streamedIconOptions.length} / {visibleIconOptions.length} / {activeIconOptions.length}</span>
                     </div>
                     {catalogLoading && <StreamPlaceholder label={t("project.icon.loadingIconCatalog")} shape="tiles" count={6} />}
-                    {catalogError && <div role="alert"><p className="text-sm text-destructive">{catalogError}</p><Button type="button" size="sm" variant="outline" onClick={() => setCatalogRevision(value => value + 1)}>{t("project.icon.retry")}</Button></div>}
+                    {catalogError && <div role="alert"><p className="vk-field-error">{catalogError}</p><Button type="button" size="sm" variant="outline" onClick={() => setCatalogRevision(value => value + 1)}>{t("project.icon.retry")}</Button></div>}
                     {!catalogLoading && !catalogError && visibleIconOptions.length === 0 && <p>{t("project.icon.noMatchingIcons")}</p>}
                     <div className="project-icon-grid picker-icon-grid" onScroll={handleIconGridScroll}>
                       {streamedIconOptions.map((option) => (
                         <button
                           aria-pressed={selectedIcon.pack === option.pack && selectedIcon.key === option.key}
-                          className={cn(
+                          className={cx(
                             "project-icon-option",
                             option.pack !== "lucide" && "color-icon-option",
                             selectedIcon.pack === option.pack && selectedIcon.key === option.key && "selected",
@@ -345,9 +345,9 @@ export function ProjectIconDialog(props: {
               </div>
             </TabsContent>
           </Tabs>
-          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+          {error && <p role="alert" className="vk-field-error">{error}</p>}
         </fieldset>
-        <DialogFooter className="shrink-0">
+        <DialogFooter>
           <Button disabled={busy} type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
           <Button disabled={busy} type="button" variant="outline" onClick={() => void persist(true)}>{t("projectIcon.resetDefault")}</Button>
           <Button disabled={busy} type="button" onClick={() => void persist(false)}>{busy ? t("project.icon.saving") : t("projectIcon.set")}</Button>

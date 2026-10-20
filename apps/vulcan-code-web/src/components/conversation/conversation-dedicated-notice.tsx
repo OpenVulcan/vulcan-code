@@ -28,15 +28,13 @@ export function DedicatedMemoryNotice(props: { kind: DedicatedMemoryNoticeKind; 
   const { t } = useI18n();
   const Icon = props.kind === "memory_locked" ? Lock : LockOpen;
   return (
-    <aside className="special-block notice dedicated-memory-marker" role="note" data-event-kind={props.kind} data-seq={props.seq}>
-      <div className="special-block-main">
-        <Icon size={16} aria-hidden="true" />
-        <div>
-          <strong>{dedicatedMemoryNoticeTitle(props.kind, t)}</strong>
-          <small className="dedicated-memory-marker-hint">{props.kind === "memory_locked"
-            ? t("conversation.dedicatedNotice.lockedHint")
-            : t("conversation.dedicatedNotice.unlockedHint")}</small>
-        </div>
+    <aside className="vk-note" data-tone={props.kind === "memory_locked" ? "warn" : "info"} role="note" data-event-kind={props.kind} data-seq={props.seq}>
+      <Icon aria-hidden="true" />
+      <div className="vk-note-text">
+        <strong>{dedicatedMemoryNoticeTitle(props.kind, t)}</strong>
+        <span>{props.kind === "memory_locked"
+          ? t("conversation.dedicatedNotice.lockedHint")
+          : t("conversation.dedicatedNotice.unlockedHint")}</span>
       </div>
     </aside>
   );

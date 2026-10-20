@@ -3,8 +3,8 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+} from "@/ui-kit/primitives/tooltip";
+import { Button } from "@/ui-kit/primitives/button";
 
 // ConversationContinueControlProps defines the complete presentation contract for one problem-turn recovery entry.
 // ConversationContinueControlProps 定义单个问题回合恢复入口的完整展示契约。
@@ -42,43 +42,37 @@ export function ConversationContinueControl(props: ConversationContinueControlPr
   // blockedDescription 由可聚焦警告触发器与 Tooltip 内容共享。
   const blockedDescription = `${props.blockedLabel}: ${props.blockedReason}`;
   return (
-    <div className="conversation-continue-footer" role="status" aria-live="polite">
-      <button
-        className={cn(
-          "conversation-continue-button",
-          !props.eligible && "conversation-continue-button-blocked",
-        )}
+    <div className="vk-continue" role="status" aria-live="polite">
+      <Button
+        data-continue={props.eligible ? "" : "blocked"}
         disabled={!props.eligible || props.claiming}
         onClick={props.eligible ? props.onContinue : undefined}
+        size="sm"
         type="button"
+        variant="outline"
       >
-        <Play aria-hidden="true" size={15} />
+        <Play aria-hidden="true" />
         {props.claiming ? props.continuingLabel : props.continueLabel}
-      </button>
+      </Button>
       {!props.eligible ? (
         <Tooltip>
           <TooltipTrigger asChild>
             <span
               aria-label={blockedDescription}
-              className="conversation-continue-blocked-reason-trigger"
+              className="vk-continue-reason"
               role="img"
               tabIndex={0}
             >
-              <CircleAlert aria-hidden="true" size={17} />
+              <CircleAlert aria-hidden="true" />
             </span>
           </TooltipTrigger>
-          <TooltipContent className="conversation-continue-blocked-tooltip" side="top">
+          <TooltipContent side="top">
             {blockedDescription}
           </TooltipContent>
         </Tooltip>
       ) : null}
       {props.feedback ? (
-        <span
-          className={cn(
-            "conversation-continue-status",
-            props.feedback.kind === "failed" && "conversation-continue-status-failed",
-          )}
-        >
+        <span className="vk-continue-status" data-failed={props.feedback.kind === "failed" || undefined}>
           {props.feedback.label}
         </span>
       ) : null}

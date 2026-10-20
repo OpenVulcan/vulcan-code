@@ -17,7 +17,7 @@ import {
   type ProviderModelModality,
 } from "@/components/features/settings/provider-model-modalities"
 import { modelBuiltinCapabilities } from "@/components/shared/model-builtin-capabilities"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
 import type { PublicAiModel, PublicAiProviderToolCapabilityKind } from "@/types"
 
@@ -93,9 +93,9 @@ export function ProviderModelModalitySummary(props: ProviderModelModalitySummary
     return null
   }
   return (
-    <span className="settings-model-modality-summary">
+    <span className="vk-mcat-modality-summary">
       {inputModalities.length > 0 ? (
-        <span className="settings-model-modality-group">
+        <span className="vk-mcat-modality-group">
           <ModalityIcon
             icon={<ArrowDownToLine aria-hidden="true" />}
             label={t("settings.models.inputModalities")}
@@ -111,7 +111,7 @@ export function ProviderModelModalitySummary(props: ProviderModelModalitySummary
         </span>
       ) : null}
       {modalities.output.length > 0 ? (
-        <span className="settings-model-modality-group">
+        <span className="vk-mcat-modality-group">
           <ModalityIcon
             icon={<ArrowUpFromLine aria-hidden="true" />}
             label={t("settings.models.outputModalities")}
@@ -152,7 +152,7 @@ function ModalityIcon(props: ModalityIconProps) {
       <TooltipTrigger asChild>
         <span
           aria-label={props.label}
-          className={`settings-model-modality-icon ${props.muted ? "muted" : ""}`}
+          className={`vk-mcat-modality-icon ${props.muted ? "muted" : ""}`}
           role="img"
         >
           {props.icon}

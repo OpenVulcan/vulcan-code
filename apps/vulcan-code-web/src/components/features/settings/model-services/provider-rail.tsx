@@ -4,12 +4,12 @@ import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Stethoscope } from 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
 import { PageEmptyState } from "@/components/page"
-import { Button } from "@/components/ui/button"
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
-import { Input } from "@/components/ui/input"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
+import { Button } from "@/ui-kit/primitives/button"
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card"
+import { Input } from "@/ui-kit/primitives/input"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
 import { useI18n } from "@/i18n"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core";
 import type { PublicAiProviderDescriptor } from "@/types"
 
 import type { HealthState } from "./provider-alerts"
@@ -80,7 +80,7 @@ export function ProviderRail(props: ProviderRailProps) {
     const below = reorderable ? neighbour(provider.id, 1) : undefined
     return (
       <li
-        className={cn("model-services-rail-item", dragId === provider.id && "dragging")}
+        className={cx("vk-ms-rail-item", dragId === provider.id && "dragging")}
         draggable={reorderable && !props.reorderDisabled}
         key={provider.id}
         onDragEnd={() => setDragId(null)}
@@ -97,7 +97,7 @@ export function ProviderRail(props: ProviderRailProps) {
           setDragId(null)
         }}
       >
-        <GripVertical aria-hidden="true" className="model-services-rail-grip" data-hidden={reorderable ? undefined : "true"} />
+        <GripVertical aria-hidden="true" className="vk-ms-rail-grip" data-hidden={reorderable ? undefined : "true"} />
         <RailRowButton
           active={props.selectedId === provider.id}
           configured={reorderable}
@@ -113,8 +113,8 @@ export function ProviderRail(props: ProviderRailProps) {
           provider={provider}
         >
           {reorderable ? (
-            <span className="model-services-rail-meta">
-              <span><i aria-hidden="true" className="model-services-dot" data-state={props.health[provider.id] ?? "ok"} />
+            <span className="vk-ms-rail-meta">
+              <span><i aria-hidden="true" className="vk-ms-dot" data-state={props.health[provider.id] ?? "ok"} />
                 {t("settings.modelServices.rail.accounts").replace("{count}", String(props.accountCounts[provider.id] ?? 0))}</span>
               {props.modelCounts[provider.id] ? (
                 <span>{t("settings.modelServices.rail.modelsInUse").replace("{count}", String(props.modelCounts[provider.id]))}</span>
@@ -123,7 +123,7 @@ export function ProviderRail(props: ProviderRailProps) {
           ) : null}
         </RailRowButton>
         {reorderable ? (
-          <span className="model-services-rail-move">
+          <span className="vk-ms-rail-move">
             <Button
               aria-label={t("settings.modelServices.rail.moveUp").replace("{provider}", name(provider))}
               disabled={!above || props.reorderDisabled}
@@ -147,8 +147,8 @@ export function ProviderRail(props: ProviderRailProps) {
   }
 
   return (
-    <nav aria-label={t("settings.modelServices.rail.title")} className="model-services-rail">
-      <div className="model-services-rail-search">
+    <nav aria-label={t("settings.modelServices.rail.title")} className="vk-ms-rail">
+      <div className="vk-ms-rail-search">
         <Search aria-hidden="true" size={14} />
         <Input
           aria-label={t("settings.modelServices.rail.search")}
@@ -157,11 +157,11 @@ export function ProviderRail(props: ProviderRailProps) {
           value={props.query}
         />
       </div>
-      <div className="model-services-tag-chips" role="group" aria-label={t("settings.modelServices.rail.tagFilter")}>
+      <div className="vk-ms-tag-chips" role="group" aria-label={t("settings.modelServices.rail.tagFilter")}>
         {(["all", ...PROVIDER_SERVICE_TAGS] as const).map((tag) => (
           <button
             aria-pressed={props.tag === tag}
-            className="model-services-tag-chip"
+            className="vk-ms-tag-chip"
             data-tag={tag}
             key={tag}
             onClick={() => props.onTag(tag)}
@@ -172,10 +172,10 @@ export function ProviderRail(props: ProviderRailProps) {
         ))}
       </div>
       {!props.directory ? <StreamPlaceholder decorative shape="rows" count={6} /> : (
-        <div className="model-services-rail-sections">
+        <div className="vk-ms-rail-sections">
           {configured.length > 0 ? (
             <section>
-              <p className="model-services-rail-heading" title={t("settings.modelServices.rail.reorderHint")}>
+              <p className="vk-ms-rail-heading" title={t("settings.modelServices.rail.reorderHint")}>
                 <span>{t("settings.modelServices.rail.configured")} · {configured.length}</span>
                 <small>{t("settings.modelServices.rail.dragHint")}</small>
               </p>
@@ -184,7 +184,7 @@ export function ProviderRail(props: ProviderRailProps) {
           ) : null}
           {available.length > 0 ? (
             <section>
-              <p className="model-services-rail-heading">
+              <p className="vk-ms-rail-heading">
                 <span>{t("settings.modelServices.rail.available")} · {available.length}</span>
                 <small>{t("settings.modelServices.rail.recommended")}</small>
               </p>
@@ -196,7 +196,7 @@ export function ProviderRail(props: ProviderRailProps) {
           ) : null}
         </div>
       )}
-      <div className="model-services-rail-foot">
+      <div className="vk-ms-rail-foot">
         <Button onClick={props.onAddCustom} size="sm" type="button" variant="outline">
           <Plus aria-hidden="true" />
           {t("settings.modelServices.rail.addCustom")}
@@ -238,7 +238,7 @@ function RailRowButton(props: {
       <HoverCardTrigger asChild>
         <button
           aria-current={props.active ? "page" : undefined}
-          className={cn("model-services-rail-row", props.active && "active")}
+          className={cx("vk-ms-rail-row", props.active && "active")}
           onClick={props.onSelect}
           onKeyDown={props.onKeyDown}
           onPointerDown={() => {
@@ -248,14 +248,16 @@ function RailRowButton(props: {
           onPointerLeave={() => { pressed.current = false }}
           type="button"
         >
-          <ProviderIcon category={props.provider.category} className="size-7 shrink-0" providerId={props.provider.id} />
-          <span className="model-services-rail-copy">
-            <span className="model-services-rail-name" title={props.name}>{props.name}</span>
-            <span className="model-services-rail-sub">
+          <ProviderIcon category={props.provider.category} size={28} providerId={props.provider.id} />
+          <span className="vk-ms-rail-copy">
+            <span className="vk-ms-rail-name" title={props.name}>{props.name}</span>
+            {/* Configured rows show health and counts on their second line; their service tags stay in the header and filter. */}
+            {/* 已配置行第二行显示健康状态与数量；其服务标签保留在详情标题与筛选中。 */}
+            {props.configured ? null : <span className="vk-ms-rail-sub">
               <ProviderTagChips provider={props.provider} small />
-              {!props.configured && category ? <span className="model-services-chip" data-variant="category">{category}</span> : null}
-              {!props.configured ? <AffiliateChip provider={props.provider} /> : null}
-            </span>
+              {category ? <span className="vk-ms-chip" data-variant="category">{category}</span> : null}
+              <AffiliateChip provider={props.provider} />
+            </span>}
           </span>
           {props.children}
         </button>

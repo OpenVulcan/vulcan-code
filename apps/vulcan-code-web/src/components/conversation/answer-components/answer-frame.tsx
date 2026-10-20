@@ -2,6 +2,7 @@ import React from "react";
 import { Check, Copy } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { runConversationControlAction } from "../conversation-control-feedback";
+import { IconButton } from "@/ui-kit/primitives/button";
 
 /** Clipboard service shared by framed blocks; rejects when the browser denies it.
  * 框架型区块共用的剪贴板服务；浏览器拒绝时抛出。 */
@@ -21,8 +22,8 @@ export function AnswerFrame({ children, copy, host }: { children: React.ReactNod
   const { t } = useI18n();
   const extraAction = React.useContext(AnswerFrameActionContext);
   return (
-    <section className="answer-frame" data-hover-actions="true">
-      <span className="answer-hover-actions">
+    <section className="vk-figure" data-hover-actions="true">
+      <span className="vk-figure-hover">
         {extraAction}
         <CopyAction host={host} label={t("answerComponents.copyMarkdown")} text={copy} />
       </span>
@@ -43,12 +44,12 @@ export function CopyAction({ host, label, text }: { host: AnswerCopyHost; label:
   }, [copied]);
   const title = copied ? t("markdown.copied") : label;
   return (
-    <button aria-label={title} className="markdown-code-action" title={title} type="button"
+    <IconButton aria-label={title} className="vk-codeblock-action" size="xs" title={title} type="button"
       onClick={() => {
         setCopied(false);
         void runConversationControlAction(() => host.copy(text), t("conversation.control.copyFailed")).then(setCopied);
       }}>
-      {copied ? <Check size={14} /> : <Copy size={14} />}
-    </button>
+      {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+    </IconButton>
   );
 }

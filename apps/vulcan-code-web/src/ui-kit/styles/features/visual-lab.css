@@ -1,0 +1,221 @@
+/* Visual lab: sample-only presentation; page structure comes from the page kit (styles/page-kit.css). */
+/* 视觉实验室：仅用于样本的呈现；页面结构来自页面套件（styles/page-kit.css）。 */
+
+.visual-lab {
+  background: var(--vk-ground);
+  color: var(--vk-ink);
+}
+
+.visual-lab-status { overflow-wrap: anywhere; }
+
+.visual-lab-row {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+}
+
+.visual-lab-stack {
+  min-width: 0;
+  display: grid;
+  gap: calc(var(--vk-u) * 3);
+}
+
+.visual-lab-choice-line {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  font-size: var(--vk-fs-sm);
+}
+
+.visual-lab-control-sizes > [data-slot="input"] {
+  width: auto;
+  flex: 1 1 140px;
+}
+
+.visual-lab-token-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: calc(var(--vk-u) * 2);
+}
+
+.visual-lab-token {
+  min-width: 0;
+  overflow: hidden;
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-panel);
+}
+
+.visual-lab-token-swatch {
+  height: 52px;
+  background: var(--visual-lab-token-color);
+  border-bottom: var(--vk-bw) solid var(--vk-line-soft);
+}
+
+.visual-lab-token-copy {
+  display: grid;
+  gap: 2px;
+  padding: calc(var(--vk-u) * 2);
+}
+
+.visual-lab-token-copy strong {
+  overflow: hidden;
+  font-size: var(--vk-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visual-lab-token-copy code { color: var(--vk-ink-2); font-size: var(--vk-fs-2xs); }
+
+.visual-lab-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: calc(var(--vk-u) * 3);
+}
+
+.visual-lab-card-grid [data-slot="card"] { min-width: 0; }
+
+.visual-lab-surface-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: calc(var(--vk-u) * 2);
+}
+
+.visual-lab-surface-sample {
+  display: grid;
+  min-height: 56px;
+  place-items: center;
+  padding: calc(var(--vk-u) * 3);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.visual-lab-navigation-samples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(var(--vk-u) * 3);
+}
+
+.visual-lab-navigation-samples > * {
+  display: grid;
+  gap: 2px;
+  padding: calc(var(--vk-u) * 2);
+  border: var(--vk-bw) solid var(--vk-line-soft);
+}
+
+.visual-lab-progress {
+  display: grid;
+  gap: calc(var(--vk-u) * 2);
+}
+
+.visual-lab-context-target {
+  display: grid;
+  min-height: 88px;
+  place-items: center;
+  border: var(--vk-bw) dashed var(--vk-line);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  background: var(--vk-sunken);
+  user-select: none;
+}
+
+.visual-lab-context-target:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--vk-signal);
+}
+
+.visual-lab-sheet-body { padding-inline: calc(var(--vk-u) * 4); }
+
+.visual-lab-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  align-items: start;
+  gap: calc(var(--vk-u) * 3);
+}
+
+.visual-lab-usage-narrow { max-width: 280px; }
+
+@media (max-width: 720px) {
+  .visual-lab-surface-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .visual-lab-navigation-samples { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Foundation samples: drawings of elevation, motion, materials and radius tokens inside page sections. */
+/* 基础样本：在页面分区内绘制层级、动效、材质与圆角变量。 */
+
+.visual-lang-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: calc(var(--vk-u) * 4); }
+
+.visual-lang-elevation {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 16px;
+  padding: 18px 14px 20px;
+  background: var(--vk-ground);
+}
+.visual-lang-elevation-tile {
+  display: grid;
+  gap: 4px;
+  min-height: 92px;
+  grid-template-rows: 1fr auto auto;
+  padding: 12px;
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-panel);
+}
+.visual-lang-elevation-tile strong { font-size: var(--vk-fs-sm); font-weight: 600; }
+.visual-lang-elevation-level {
+  margin-bottom: auto;
+  color: var(--vk-ink);
+  font-size: 18px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.visual-lang-curves { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.visual-lang-curve {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--vk-ground);
+}
+.visual-lang-curve-graph { width: 56px; height: 72px; overflow: visible; }
+.visual-lang-curve-axis { fill: none; stroke: var(--vk-line); stroke-width: 1; }
+.visual-lang-curve-line { fill: none; stroke: var(--vk-ink); stroke-width: 2; stroke-linecap: round; }
+.visual-lang-curve-copy { display: grid; gap: 4px; min-width: 0; }
+.visual-lang-curve-copy strong { font-size: var(--vk-fs-sm); font-weight: 600; }
+.visual-lang-lane {
+  position: relative;
+  height: 14px;
+  margin-top: 4px;
+  background: color-mix(in srgb, var(--vk-sunken) 80%, transparent);
+}
+.visual-lang-lane-dot {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  background: var(--vk-ink);
+  box-shadow: none;
+  transition-property: left;
+}
+.visual-lang-lane-dot[data-run] { left: calc(100% - 13px); }
+
+.visual-lang-durations { display: grid; gap: 6px; }
+.visual-lang-duration { display: grid; grid-template-columns: 56px minmax(0, 1fr) 48px; gap: 8px; align-items: center; }
+.visual-lang-duration-bar {
+  height: 6px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--vk-ink) 45%, transparent), var(--vk-ink));
+}
+.visual-lang-duration-value { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; text-align: right; }
+
+.visual-lang-stagger { display: grid; gap: 6px; }
+.visual-lang-stagger span {
+  height: 12px;
+  background: var(--vk-sunken);
+  animation: vcn-page-enter calc(240ms * 4) var(--vk-ease) both;
+}
+.visual-lang-stagger span:nth-child(odd) { width: 86%; }
+.visual-lang-stagger span:nth-child(3) { width: 64%; }

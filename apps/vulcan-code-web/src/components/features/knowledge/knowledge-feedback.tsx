@@ -1,7 +1,8 @@
 import * as React from "react";
 import { AlertCircle, Copy } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { PageNotice } from "@/components/page";
 import { useI18n } from "@/i18n";
 
 // Keeps exact read errors separate from empty results and exposes only an explicit read retry.
@@ -12,11 +13,13 @@ export function KnowledgeReadFailure({ error, onRetry, busy = false }: { error: 
   // Labels share the page locale; diagnostic content remains unchanged.
   // 标签共享页面语言；诊断内容保持原样。
   const { t } = useI18n();
-  return <div role="alert" className="space-y-2 rounded-md border border-destructive/30 p-3 text-sm">
-    <p>{t("knowledge.readFailed")}</p>
-    <details><summary>{t("toolPresentation.output.errorDetails")}</summary><pre className="max-h-40 select-text overflow-auto whitespace-pre-wrap break-words">{error}</pre></details>
-    <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onRetry()}>{t("knowledge.refresh")}</Button>
-  </div>;
+  return <PageNotice
+    tone="error"
+    title={t("knowledge.readFailed")}
+    details={error}
+    detailsLabel={t("toolPresentation.output.errorDetails")}
+    actions={<Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onRetry()}>{t("knowledge.refresh")}</Button>}
+  />;
 }
 
 // KnowledgeMessageDialog shows a complete, selectable diagnostic within the current application window.
@@ -41,13 +44,13 @@ export function KnowledgeMessageDialog({ message, onClose, restoreFocus }: { mes
   return (
     <Dialog open={message !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent size="lg" layout="document" scrollMode="fixed-footer" className="knowledge-message-dialog" onCloseAutoFocus={restoreFocus ? (event) => { event.preventDefault(); restoreFocus(); } : undefined}>
-        <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
+        <DialogHeader>
           <DialogTitle>{t("knowledge.feedback.title")}</DialogTitle>
           <DialogDescription>{t("knowledge.feedback.description")}</DialogDescription>
         </DialogHeader>
         <pre className="knowledge-message-details">{message}</pre>
-        <DialogFooter className="m-0 shrink-0">
-          <span className="self-center text-xs text-muted-foreground" role="status">{copyState === "failed" ? t("knowledge.feedback.copyFailed") : ""}</span>
+        <DialogFooter>
+          <span className="vk-field-hint" role="status">{copyState === "failed" ? t("knowledge.feedback.copyFailed") : ""}</span>
           <Button variant="outline" onClick={() => void copyDetails()}><Copy size={14} />{t(copyState === "copied" ? "knowledge.feedback.copied" : "knowledge.feedback.copy")}</Button>
           <Button variant="outline" onClick={onClose}>{t("knowledge.importDialog.close")}</Button>
         </DialogFooter>
@@ -74,7 +77,7 @@ export function KnowledgeOperationFeedback({ message }: { message: string }) {
   return (
     <>
       <div className="knowledge-operation-feedback" role="alert">
-        <AlertCircle size={18} className="shrink-0" />
+        <AlertCircle size={18} />
         <span>{t("knowledge.feedback.operationError")}</span>
         <Button ref={detailsButton} variant="outline" size="sm" onClick={() => setOpen(true)}>{t("knowledge.feedback.details")}</Button>
       </div>

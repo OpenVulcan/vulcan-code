@@ -93,20 +93,20 @@ export function TurnStatsTooltipCard(props: {
 
   return (
     <>
-      <div className="context-usage-card-header turn-stats-card-header">
+      <div className="vk-sum-title">
         <strong>{props.subagentStats ? t("conversation.turnStats.subagentUsage") : t("conversation.turnStats.turnUsage")}</strong>
         <span title={speedLabel === "-" ? t("conversation.turnStats.pairedFirstTokenTiming") : t("conversation.turnStats.outputTokensDividedBy")}>{formatMessage(t("conversation.turnStats.average"), { speedLabel })}</span>
       </div>
       <TurnStatsUsageRows locale={props.locale} usage={aggregate}>
         {outputDurationMs !== null && outputDurationMs > 0 ? <>
-          <div className="turn-stats-metric-row">
-            {firstTokenLatencyMs !== null ? <div className="turn-stats-metric"><span>{t("conversation.turnStats.averageFirstToken")}</span><strong>{formatDurationSeconds(firstTokenLatencyMs)}</strong></div> : null}
-            <div className="turn-stats-metric"><span>{t("conversation.turnStats.totalOutputTime")}</span><strong>{formatDurationSeconds(outputDurationMs)}</strong></div>
+          <div className="vk-stats-pair">
+            {firstTokenLatencyMs !== null ? <div className="vk-stat"><span>{t("conversation.turnStats.averageFirstToken")}</span><strong>{formatDurationSeconds(firstTokenLatencyMs)}</strong></div> : null}
+            <div className="vk-stat"><span>{t("conversation.turnStats.totalOutputTime")}</span><strong>{formatDurationSeconds(outputDurationMs)}</strong></div>
           </div>
         </> : null}
       </TurnStatsUsageRows>
-      <div className="turn-stats-cache-summary">
-        <div className="turn-stats-cache-header">
+      <div className="vk-stats-grid">
+        <div className="vk-stat">
           <span>{cacheLabel}</span>
           <strong title={cacheHitPercent == null ? t("conversation.turnStats.cacheHitRateNeeds") : undefined}>{cacheHitPercent == null ? "-" : `${cacheHitPercent.toFixed(1)}%`}</strong>
         </div>
@@ -115,15 +115,15 @@ export function TurnStatsTooltipCard(props: {
           aria-valuemax={100}
           aria-valuemin={0}
           aria-valuenow={cacheHitPercent ?? undefined}
-          className="turn-stats-cache-track"
+          className="vk-stats-bar"
           role="progressbar"
         >
-          <div className="turn-stats-cache-fill" style={{ width: `${cacheHitPercent ?? 0}%` }} />
+          <span style={{ width: `${cacheHitPercent ?? 0}%` }} />
         </div>
       </div>
       {subagent ? (
-        <section className="turn-stats-subagent-section">
-          <div className="turn-stats-section-title">{t("conversation.turnStats.subagentTokens")}</div>
+        <section className="vk-stats-section" data-turn-stats-subagent>
+          <h4>{t("conversation.turnStats.subagentTokens")}</h4>
           <TurnStatsUsageRows locale={props.locale} usage={subagent} />
         </section>
       ) : null}
@@ -165,7 +165,7 @@ function TurnStatsUsageRows(props: {
   // 总量保持相同来源优先级，不附加可见限定说明。
   const total = usageMetricDisplay(props.usage.totalTokens, "total_tokens", props.usage.coverage);
   return (
-    <div className="turn-stats-metric-grid">
+    <div className="vk-stats-grid">
       <TurnStatsMetricRow
         leftLabel={t("conversation.turnStats.requests")}
         leftValue={formatTurnStatsNumber(props.usage.providerCallCount, props.locale)}
@@ -196,7 +196,7 @@ function TurnStatsUsageRows(props: {
 // 参数：左右标签和值分别描述当前行的两项统计。
 // Returns one two-column metric row.
 // 返回一行双列统计项。
-export function TurnStatsMetricRow(props: {
+function TurnStatsMetricRow(props: {
   // Label for the left metric.
   // 左侧统计标签。
   leftLabel: string;
@@ -211,12 +211,12 @@ export function TurnStatsMetricRow(props: {
   rightValue: string;
 }) {
   return (
-    <div className="turn-stats-metric-row">
-      <div className="turn-stats-metric">
+    <div className="vk-stats-pair">
+      <div className="vk-stat">
         <span>{props.leftLabel}</span>
         <strong>{props.leftValue}</strong>
       </div>
-      <div className="turn-stats-metric">
+      <div className="vk-stat">
         <span>{props.rightLabel}</span>
         <strong>{props.rightValue}</strong>
       </div>

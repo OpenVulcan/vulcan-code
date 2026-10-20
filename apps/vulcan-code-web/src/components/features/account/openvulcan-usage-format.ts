@@ -8,6 +8,14 @@ const MICRO_POINTS_PER_POINT = 1_000_000n;
 // MICRO_DIGITS is the number of fractional digits one micro-point adds to a point.
 // MICRO_DIGITS 是微积分为积分带来的小数位数。
 const MICRO_DIGITS = 6;
+// MICRO_POINTS_PER_TENTH is the shown precision: points always display exactly one decimal place.
+// MICRO_POINTS_PER_TENTH 是显示精度：积分始终显示一位小数。
+const MICRO_POINTS_PER_TENTH = MICRO_POINTS_PER_POINT / 10n;
+
+// PointRounding chooses how a value is cut to one decimal: balances floor so they are never overstated,
+// consumption rounds to the nearest tenth.
+// PointRounding 选择保留一位小数的方式：余额向下取整以免夸大，消耗按最接近的十分位四舍五入。
+export type PointRounding = "floor" | "nearest";
 
 // parseCount returns value as a BigInt, or null when it is not a non-negative integer string.
 // parseCount 将 value 转为 BigInt；不是非负整数字符串时返回 null。
@@ -22,16 +30,19 @@ export function formatCount(value: string, locale: string): string {
   return parsed === null ? value : parsed.toLocaleString(locale);
 }
 
-// formatMicroPoints converts exact micro-points to points for locale, keeping every significant digit.
-// formatMicroPoints 将精确微积分按 locale 转为积分，保留全部有效数字。
-export function formatMicroPoints(value: string, locale: string): string {
+// formatMicroPoints converts exact micro-points to points for locale with exactly one decimal place.
+// formatMicroPoints 将精确微积分按 locale 转为保留一位小数的积分。
+// Parameters: rounding picks floor or nearest. A non-zero value that rounds to zero shows "<0.1" so
+// a charge never reads as free; returns the raw text when value is not an integer string.
+// 参数：rounding 选择向下取整或四舍五入。非零值舍入为零时显示“<0.1”，避免扣费看似免费；
+// value 不是整数字符串时原样返回。
+export function formatMicroPoints(value: string, locale: string, rounding: PointRounding = "nearest"): string {
   const parsed = parseCount(value);
   if (parsed === null) return value;
-  const whole = (parsed / MICRO_POINTS_PER_POINT).toLocaleString(locale);
-  const fraction = (parsed % MICRO_POINTS_PER_POINT).toString().padStart(MICRO_DIGITS, "0").replace(/0+$/, "");
-  if (!fraction) return whole;
+  const tenths = (rounding === "nearest" ? parsed + MICRO_POINTS_PER_TENTH / 2n : parsed) / MICRO_POINTS_PER_TENTH;
   const separator = new Intl.NumberFormat(locale).formatToParts(1.5).find((part) => part.type === "decimal")?.value ?? ".";
-  return `${whole}${separator}${fraction}`;
+  if (tenths === 0n && parsed > 0n) return `<${(0n).toLocaleString(locale)}${separator}1`;
+  return `${(tenths / 10n).toLocaleString(locale)}${separator}${tenths % 10n}`;
 }
 
 // pointsToMicro converts an exact "whole.micro" point string to micro-points, or null when it is not one.
@@ -42,11 +53,11 @@ export function pointsToMicro(value: string | undefined): bigint | null {
   return BigInt(match[1]) * MICRO_POINTS_PER_POINT + BigInt((match[2] ?? "").padEnd(MICRO_DIGITS, "0"));
 }
 
-// formatPoints groups an exact point string for locale, returning the raw text when it is not one.
-// formatPoints 按 locale 为精确积分字符串分组；格式不符时原样返回。
-export function formatPoints(value: string, locale: string): string {
+// formatPoints formats an exact point string for locale with one decimal, returning the raw text when it is not one.
+// formatPoints 按 locale 将精确积分字符串格式化为一位小数；格式不符时原样返回。
+export function formatPoints(value: string, locale: string, rounding: PointRounding = "nearest"): string {
   const micro = pointsToMicro(value);
-  return micro === null ? value : formatMicroPoints(micro.toString(), locale);
+  return micro === null ? value : formatMicroPoints(micro.toString(), locale, rounding);
 }
 
 // remainingShare returns remaining/total as a 0–100 percentage for a progress bar, or null when unknown.
@@ -67,12 +78,6 @@ export function formatExpiryDate(value: string, locale: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat(locale, { year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
-}
-
-// sumCounts adds exact integer strings; values that are not integers are skipped.
-// sumCounts 累加精确整数字符串；非整数值被跳过。
-export function sumCounts(values: readonly string[]): string {
-  return values.reduce((total, value) => total + (parseCount(value) ?? 0n), 0n).toString();
 }
 
 // formatUsageHour shows a UTC hour start in the viewer's local time, or the raw text when it is not a date.

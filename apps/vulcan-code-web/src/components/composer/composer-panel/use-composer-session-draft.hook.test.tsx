@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { useComposerSessionDraft, type UseComposerSessionDraftState } from "./use-composer-session-draft";
 import { useComposerSendController, type ComposerSendController } from "./use-composer-send-controller";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
@@ -21,7 +21,7 @@ vi.mock("@/service/conversation-session-drafts-v1", () => ({ sessionDraftClientV
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 // Capture visible persistence diagnostics without rendering toast UI.
 // 捕获可见持久化诊断，不渲染提示界面。
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
 // No image preview is created because these transaction tests use no files.
 // 事务测试不使用文件，因此不会创建图片预览。
 vi.mock("@/service/conversation-actions-service", () => ({

@@ -1,0 +1,122 @@
+/* Dedicated assistant creation wizard and its prompt generator; loaded only with the lazy wizard chunk.
+ * The wizard takes the composer's place in the dock, so it uses the same raised square card.
+ * 专职助手创建向导及其提示词生成器；只随懒加载向导分块载入。向导在停靠层中取代输入区，因此沿用相同的方形浮起卡片。 */
+
+.vk-wiz {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--vk-u) * 3);
+  padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-raised);
+  box-shadow: var(--vk-shadow-2);
+  pointer-events: auto;
+}
+
+/* Header: the step name, then a segmented progress rail with the step count beside it. */
+/* 标题：步骤名称，其旁为分段进度条与步骤计数。 */
+.vk-wiz-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 3); }
+.vk-wiz-head > strong { color: var(--vk-ink); font-size: var(--vk-fs-lg); font-weight: 600; }
+.vk-wiz-head > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vk-wiz-rail { display: flex; flex: 1; gap: 3px; min-width: 3rem; max-width: 9rem; margin-left: auto; }
+.vk-wiz-rail > span { flex: 1; height: 3px; background: var(--vk-line); transition: background-color var(--vk-t-med) var(--vk-ease); }
+.vk-wiz-rail > span[data-state="done"] { background: color-mix(in srgb, var(--vk-ember) 55%, var(--vk-line)); }
+.vk-wiz-rail > span[data-state="current"] { background: var(--vk-ember); }
+
+.vk-wiz-body { display: grid; gap: calc(var(--vk-u) * 3); min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.vk-wiz-section { display: grid; gap: calc(var(--vk-u) * 2); container-type: inline-size; }
+.vk-wiz-section + .vk-wiz-section { padding-top: calc(var(--vk-u) * 3); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-wiz-section > h3 { margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.vk-wiz-hint { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-wiz-error { margin: 0; color: var(--vk-bad); font-size: var(--vk-fs-sm); }
+.vk-wiz-bar { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-wiz-bar > .vk-wiz-end { display: inline-flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); margin-left: auto; }
+
+/* ---------- Option cards ---------- */
+/* A small known set keeps every card on one row; narrow wizards halve the row, very narrow ones stack. */
+/* 已知的少量选项保持同一行；向导较窄时每行减半，极窄时纵向堆叠。 */
+.vk-wiz-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: calc(var(--vk-u) * 2); }
+.vk-wiz-options[data-columns="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.vk-wiz-options[data-columns="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.vk-wiz-options[data-columns="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@container (max-width: 560px) {
+  .vk-wiz-options:is([data-columns="3"], [data-columns="4"]) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (max-width: 340px) {
+  .vk-wiz-options[data-columns] { grid-template-columns: minmax(0, 1fr); }
+}
+.vk-wiz-option {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: calc(var(--vk-u) * 1);
+  width: 100%;
+  padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  color: var(--vk-ink);
+  font: inherit;
+  font-size: var(--vk-fs-sm);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-wiz-option:hover:not(:disabled) { border-color: var(--vk-line-strong); background: var(--vk-hover); }
+.vk-wiz-option:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
+.vk-wiz-option:disabled { cursor: default; opacity: 0.6; }
+/* The chosen card gains an ember edge and inset bar, matching selected rows elsewhere. */
+/* 选中的卡片带有余烬色边框与内侧竖条，与其他位置的选中行一致。 */
+.vk-wiz-option[aria-pressed="true"] { border-color: color-mix(in srgb, var(--vk-ember) 60%, var(--vk-line)); background: var(--vk-raised); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-wiz-option > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 400; line-height: 1.45; }
+.vk-wiz-option-title { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); }
+.vk-wiz-option-title > .vk-badge { height: 1.1rem; font-style: normal; }
+/* The choice mark closes the title row: a single choice fills a small square, a multi-select box shows a tick. */
+/* 选择标记位于标题行末端：单选为填充的小方块，多选框显示勾号。 */
+.vk-wiz-mark { position: relative; flex: none; width: 14px; height: 14px; margin-left: auto; border: 1.5px solid var(--vk-line-strong); background: var(--vk-raised); transition: border-color var(--vk-t-fast) var(--vk-ease); }
+.vk-wiz-option[aria-pressed="true"] .vk-wiz-mark { border-color: var(--vk-ember); }
+.vk-wiz-option[aria-pressed="true"] .vk-wiz-mark::after { content: ""; position: absolute; inset: 2px; background: var(--vk-ember); }
+.vk-wiz-options[data-multiple] .vk-wiz-option[aria-pressed="true"] .vk-wiz-mark { background: var(--vk-ember); }
+.vk-wiz-options[data-multiple] .vk-wiz-option[aria-pressed="true"] .vk-wiz-mark::after { inset: 1px 3.5px 3px; border: solid var(--vk-ink-inverse); border-width: 0 1.5px 1.5px 0; background: none; transform: rotate(45deg); }
+/* Output-style prompt size: an empty track means the style adds nothing to the prompt. */
+/* 输出风格提示词长度：空轨道表示该风格不向提示词追加任何内容。 */
+.vk-wiz-meter { display: block; height: 3px; margin-top: calc(var(--vk-u) * 1); overflow: hidden; background: var(--vk-sunken); }
+.vk-wiz-meter > span { display: block; height: 100%; background: var(--vk-ink-3); transition: background-color var(--vk-t-fast) var(--vk-ease); }
+.vk-wiz-option[aria-pressed="true"] .vk-wiz-meter > span { background: var(--vk-ember); }
+
+/* Answer-mode sketch: Markdown lines, or a heading over a mini chart and card for interactive answers. */
+/* 回答模式示意：Markdown 文本行，交互模式为标题下方的迷你图表与卡片。 */
+.vk-wiz-sketch { height: 62px; display: grid; align-content: start; gap: 6px; margin-bottom: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); background: var(--vk-sunken); }
+.vk-wiz-sketch[data-mode="interactive"] { grid-template-rows: auto minmax(0, 1fr); align-content: stretch; }
+.vk-wiz-sketch-line { display: block; width: 100%; height: 4px; background: color-mix(in srgb, var(--vk-ink) 14%, transparent); }
+.vk-wiz-sketch-line[data-variant="heading"] { width: 38%; background: color-mix(in srgb, var(--vk-ink) 30%, transparent); }
+.vk-wiz-sketch-line[data-variant="short"] { width: 62%; }
+.vk-wiz-sketch-widgets { display: flex; gap: calc(var(--vk-u) * 2); min-height: 0; }
+.vk-wiz-sketch-chart { display: flex; align-items: flex-end; gap: 3px; padding: 0 2px; }
+.vk-wiz-sketch-chart > i { width: 7px; background: color-mix(in srgb, var(--vk-ember) 65%, transparent); }
+.vk-wiz-sketch-chart > i:nth-child(1) { height: 45%; }
+.vk-wiz-sketch-chart > i:nth-child(2) { height: 80%; }
+.vk-wiz-sketch-chart > i:nth-child(3) { height: 60%; }
+.vk-wiz-sketch-chart > i:nth-child(4) { height: 100%; }
+.vk-wiz-sketch-card { flex: 1; min-width: 0; display: grid; align-content: center; gap: 4px; padding: 0 calc(var(--vk-u) * 2); border: var(--vk-bw) solid color-mix(in srgb, var(--vk-ember) 35%, var(--vk-line)); background: var(--vk-raised); }
+.vk-wiz-sketch-card > i { display: block; height: 4px; background: color-mix(in srgb, var(--vk-ink) 14%, transparent); }
+.vk-wiz-sketch-card > i:last-child { width: 60%; }
+
+/* ---------- Prompt step and generator ---------- */
+.vk-wiz-prompt { min-height: 180px; resize: vertical; }
+.vk-gen { display: grid; gap: calc(var(--vk-u) * 3); min-width: 0; }
+.vk-gen-model { max-width: 16rem; overflow: hidden; color: var(--vk-ink); font-size: var(--vk-fs-sm); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.vk-gen-revision { display: flex; align-items: flex-end; gap: calc(var(--vk-u) * 2); }
+.vk-gen-revision > .vk-textarea { flex: 1; }
+/* Streamed thinking: an open well while generating that collapses to one row afterwards. */
+/* 流式思考：生成期间展开的内凹区域，结束后折叠为一行。 */
+.vk-gen-thinking { border: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-sunken); font-size: var(--vk-fs-sm); }
+.vk-gen-thinking > summary { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5); color: var(--vk-ink-3); list-style: none; cursor: pointer; }
+.vk-gen-thinking > summary::-webkit-details-marker { display: none; }
+.vk-gen-thinking > summary:hover { color: var(--vk-ink); }
+.vk-gen-thinking[open] > summary > svg:not(.vk-spin) { color: var(--vk-ember); }
+.vk-gen-thinking-body { display: grid; gap: calc(var(--vk-u) * 1.5); max-height: 240px; padding: 0 calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 2); overflow-y: auto; color: var(--vk-ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-gen-thinking-body > p { margin: 0; }
+.vk-gen-thinking-body > strong { color: var(--vk-ink); font-weight: 600; }

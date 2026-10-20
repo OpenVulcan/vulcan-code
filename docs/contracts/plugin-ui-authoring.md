@@ -13,8 +13,8 @@
 | 设置版面渲染 | `apps/vulcan-code-web/src/components/plugins/plugin-settings-page.tsx` 及同目录 `plugin-settings-*`、`plugin-data-*`、`plugin-bar-chart.tsx` |
 | 模块 SDK | `apps/vulcan-code-web/src/components/plugins/dynamic-plugin-mount-panel.tsx`（`PluginUiSdk`） |
 | 模块可用组件 | `apps/vulcan-code-web/src/components/plugins/plugin-ui-sdk-components.ts`（`PLUGIN_UI_SDK_COMPONENTS`） |
-| 页面套件 | `apps/vulcan-code-web/src/components/page/`、`src/styles/page-kit.css` |
-| 自定义样式词汇与限制 | `src/styles/plugin-host-components.css`、`scripts/check-ui-architecture.mjs`（`checkPluginUiStyle`） |
+| 页面套件 | `apps/vulcan-code-web/src/components/page/`、`src/ui-kit/styles/page-kit.css` |
+| 自定义样式词汇与限制 | `src/ui-kit/styles/features/plugin-host-components.css`、`src/ui-kit/styles/plugin-tokens.css`、`scripts/check-ui-architecture.mjs`（`checkPluginUiStyle`） |
 
 以上任一来源变化（新增控件、条目类型、SDK 字段、组件或样式规则）时，须在同一任务中回读源码并同步本文件。
 
@@ -226,7 +226,7 @@ Action 完成后宿主只重读凭据校验状态，不重置配置草稿；状�
 - 禁止颜色字面量（十六进制、`rgb()`、`hsl()`、`oklch()` 等）；颜色只用主题变量，例如 `var(--primary)`、`var(--muted-foreground)`、`var(--chart-1)` 至 `var(--chart-5)`、`var(--destructive)`。
 - 禁止 `position: fixed/sticky` 与 `zIndex`；浮层由宿主组件（`Dialog`、`HelpTooltip`）提供。
 - 禁止像素字号；字号用 `var(--vcn-font-size-xs|sm|md|lg|xl)` 或交给组件。
-- `className` 只能使用 `src/styles/plugin-host-components.css` 中定义的类名；宿主 Tailwind 工具类与页面套件内部类名都不是插件词汇。确需插件专属修饰时，在该样式表新增以插件名为前缀的规则（如 `.plugin-statistics-*`），只修饰单元格内容或图表，不重建区块、卡片、表格或工具栏。
+- `className` 只能使用 `src/ui-kit/styles/features/plugin-host-components.css` 中定义的类名；宿主套件类名（`vk-*`）与页面套件内部类名都不是插件词汇。确需插件专属修饰时，在该样式表新增以插件名为前缀的规则（如 `.plugin-statistics-*`），只修饰单元格内容或图表，不重建区块、卡片、表格或工具栏。
 - 内联 `style` 仅用于数据驱动的尺寸，例如占比条宽度，且颜色同样只用主题变量。
 
 ## 验证

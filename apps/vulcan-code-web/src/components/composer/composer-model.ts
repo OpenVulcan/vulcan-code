@@ -237,8 +237,8 @@ export const SLASH_SKILL_PROMPT = "Decide whether the current task needs the `sk
 // ComposerSelectOption describes one local-only composer dropdown choice.
 // ComposerSelectOption 描述一个仅用于输入区本地预览的下拉选项。
 export interface ComposerSelectOption {
-  // Stable option value used by the shadcn Select state.
-  // shadcn Select 状态使用的稳定选项值。
+  // Stable option value used by the kit Select state.
+  // 套件 Select 状态使用的稳定选项值。
   value: string;
   // Primary label rendered in the compact trigger.
   // 紧凑触发器中渲染的主标签。

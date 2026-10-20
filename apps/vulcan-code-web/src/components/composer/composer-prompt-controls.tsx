@@ -21,13 +21,12 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+} from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { ComposerSlashCommandSummary, PendingPromptSummary } from "@/types";
 import { composerSlashCommandDescriptionKey } from "@/components/composer/composer-model";
@@ -97,10 +96,10 @@ export function PendingPromptQueueStrip(props: {
   }, [entryIds, props]);
 
   return (
-    <div className="pending-prompt-strip" aria-label={t("pendingPrompt.queue")}>
+    <div className="vk-queue" aria-label={t("pendingPrompt.queue")}>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={entryIds} strategy={verticalListSortingStrategy}>
-          <div className="pending-prompt-list">
+          <div className="vk-queue-list">
             {props.entries.map((entry) => (
               <PendingPromptQueueRow
                 disabled={props.disabled}
@@ -154,30 +153,31 @@ function PendingPromptQueueRow(props: {
   const previewText = `${props.entry.preview || props.entry.prompt || t("pendingPrompt.attachmentMessage")}${attachmentText}`;
   return (
     <div
-      className={cn("pending-prompt-row", sortable.isDragging && "dragging", props.entry.state === "inserted" && "inserted")}
+      className="vk-queue-row"
+      data-dragging={sortable.isDragging ? "" : undefined}
+      data-inserted={props.entry.state === "inserted" ? "" : undefined}
       ref={sortable.setNodeRef}
       style={sortable.sortableStyle}
     >
       <div
         aria-label={t("pendingPrompt.drag")}
-        className="pending-prompt-row-handle"
+        className="vk-queue-handle"
         {...sortable.attributes}
         {...sortable.listeners}
       >
         <GripVertical size={13} />
       </div>
-      <div className="pending-prompt-row-main">
-        <span className="pending-prompt-preview">{previewText}</span>
-      </div>
+      <span className="vk-queue-text">{previewText}</span>
       <div
-        className="pending-prompt-row-actions"
+        className="vk-queue-actions"
         onClick={(event) => event.stopPropagation()}
         onPointerDown={(event) => event.stopPropagation()}
       >
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              className={cn("pending-prompt-guide-button", props.entry.state === "inserted" && "inserted")}
+              className="vk-queue-insert"
+              data-inserted={props.entry.state === "inserted" ? "" : undefined}
               aria-label={props.entry.state === "inserted" ? t("pendingPrompt.inserted") : t("pendingPrompt.insert")}
               disabled={Boolean(props.disabled || props.entry.state === "inserted")}
               onClick={() => {
@@ -263,21 +263,21 @@ export function ComposerSlashCommandPanel(props: {
 }) {
   const { t } = useI18n();
   return (
-    <div className="composer-slash-panel" role="listbox" aria-label={t("composer.slash.panel")}>
+    <div className="vk-slash" role="listbox" aria-label={t("composer.slash.panel")}>
       {props.commands.map((command, index) => {
         const descriptionKey = composerSlashCommandDescriptionKey(command);
         return (
         <button
           aria-selected={index === props.highlightedIndex}
-          className={cn("composer-slash-row", index === props.highlightedIndex && "active")}
+          className="vk-slash-row"
           key={command.id || command.command}
           onClick={() => props.onActivate(command)}
           onMouseEnter={() => props.onHighlight(index)}
           role="option"
           type="button"
         >
-          <span className="composer-slash-command">{command.command}</span>
-          <span className="composer-slash-description">{descriptionKey ? t(descriptionKey) : null}</span>
+          <span className="vk-slash-cmd">{command.command}</span>
+          <span className="vk-slash-desc">{descriptionKey ? t(descriptionKey) : null}</span>
         </button>
         );
       })}

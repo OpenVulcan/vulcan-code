@@ -131,16 +131,9 @@ export function ConversationBlocksView(props: {
         blocks={props.blocks}
         conversationId={props.conversationId}
         expandedToolPresentationIds={props.expandedToolPresentationIds}
-        workspacePath={props.workspacePath}
-        commandSessions={props.commandSessions}
-        parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
-        onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
         onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
-        onLoadToolDetail={props.onLoadToolDetail}
-        onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
-        onTrace={props.onTrace}
       />
     );
   }
@@ -351,16 +344,9 @@ function SpecialConversationBlock(props: {
         blocks={[props.block]}
         conversationId={props.conversationId}
         expandedToolPresentationIds={props.expandedToolPresentationIds}
-        workspacePath={props.workspacePath}
-        commandSessions={props.commandSessions}
-        parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
-        onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
         onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
-        onLoadToolDetail={props.onLoadToolDetail}
-        onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
-        onTrace={props.onTrace}
       />
     );
   }
@@ -383,7 +369,8 @@ function SpecialConversationBlock(props: {
   const displayTitle = localizedConversationBlockTitle(props.block, t);
   return (
     <button
-      className={`special-block ${props.block.kind}`}
+      className="vk-note"
+      data-block-kind={props.block.kind}
       disabled={!canOpen}
       onClick={() => {
         if (canOpen) {
@@ -401,15 +388,13 @@ function SpecialConversationBlock(props: {
       }}
       type="button"
     >
-      <div className="special-block-main">
-        <Icon size={16} />
-        <div>
-          <strong>{displayTitle}</strong>
-          <span>{props.block.summary}</span>
-        </div>
+      <Icon aria-hidden="true" />
+      <div className="vk-note-text">
+        <strong>{displayTitle}</strong>
+        <span>{props.block.summary}</span>
       </div>
       {props.block.status ? <StatusPill status={props.block.status} label={props.block.status} /> : null}
-      {canOpen ? <Maximize2 size={15} /> : null}
+      {canOpen ? <Maximize2 aria-hidden="true" className="vk-note-open" /> : null}
     </button>
   );
 }

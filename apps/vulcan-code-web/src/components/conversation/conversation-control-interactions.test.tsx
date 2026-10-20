@@ -3,14 +3,12 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { I18nProvider } from "@/i18n";
 import { MarkdownMessage } from "./conversation-markdown";
 import { MarkdownDiagramFrame } from "./conversation-diagram-frame";
 import { PlanArtifactBlock } from "./conversation-plan-artifact";
-import { ToolPresentationCard } from "./conversation-tool-presentation-card";
-import type { GenericToolMarkdownPresentation } from "./conversation-tool-presentations";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { ConversationGenerationDialogV1 } from "./conversation-generation-dialog-v1";
 import { ConversationDetailModal } from "./conversation-detail";
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
@@ -20,7 +18,7 @@ import type { ConversationEventWindowControllerSnapshot } from "@/service/conver
 import { DEFAULT_THINKING_DISPLAY_MODE } from "./thinking-display";
 import { ConversationSessionTerminalSection } from "./session-todolist-panel/terminal-section";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn() } }));
 
 // container and root mount the real controls without a network or native clipboard.
 // container 和 root 挂载真实控件，不使用网络或原生剪贴板。
@@ -140,32 +138,12 @@ describe("conversation control rejection paths", () => {
     </ConversationLiveStreamProvider></TooltipProvider>);
     // loadButton is the real history control, which remains usable after a rejection.
     // loadButton 是真实历史控件，在拒绝后仍可使用。
-    const loadButton = container.querySelector<HTMLButtonElement>(".conversation-history-load-button")!;
+    const loadButton = container.querySelector<HTMLButtonElement>("[data-history-load]")!;
     await act(async () => loadButton.click());
     expect(toast.error).toHaveBeenCalledWith("操作失败", { description: "history unavailable" });
     expect(loadButton.disabled).toBe(false);
     await act(async () => loadButton.click());
     expect(prependOlder).toHaveBeenCalledTimes(2);
-  });
-
-  it("retains an old tool card after detail failure and rereads the exact stable identity", async () => {
-    // presentation is a persisted legacy card with its original hidden-detail record identity.
-    // presentation 是保留原始隐藏详情记录身份的持久化旧卡片。
-    const presentation: GenericToolMarkdownPresentation = {
-      id: "control-audit-old-card", kind: "generic_tool_markdown", markdown: "Retained summary",
-      state: "completed", toolName: "custom_tool", detailRef: { sessionId: "audit-session", recordId: "audit-record" },
-    };
-    // loader rejects once without changing the tool result, then returns the complete original output.
-    // loader 首次拒绝且不改变工具结果，随后返回完整原始输出。
-    const loader = vi.fn().mockRejectedValueOnce(new Error("detail unavailable")).mockResolvedValue({ body: "Recovered full output" });
-    await render(<TooltipProvider><ToolPresentationCard presentation={presentation} expanded requestProgress={null} detailLoadEnabled expandedToolPresentationIds={new Set()} onExpandedChange={vi.fn()} onLoadToolDetail={loader} /></TooltipProvider>);
-    expect(container.textContent).toContain("Retained summary");
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("detail unavailable");
-    await act(async () => Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "重新读取")!.click());
-    expect(loader).toHaveBeenCalledTimes(2);
-    expect(loader).toHaveBeenNthCalledWith(2, presentation.detailRef);
-    expect(container.textContent).toContain("Recovered full output");
-    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
   it.each([false, "throw"])("does not report copied after a rejected legacy clipboard result %s", async (result) => {
@@ -207,7 +185,7 @@ describe("conversation control rejection paths", () => {
       pending: true, disabled: true, onCopyText: vi.fn(), onExecute: execute, onSuggest: vi.fn(), onCancel: vi.fn(),
     };
     await render(<PlanArtifactBlock {...props} />);
-    await act(async () => container.querySelector(".plan-artifact-confirmation")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await act(async () => container.querySelector(".vk-plan-confirm")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(execute).not.toHaveBeenCalled();
     await render(<PlanArtifactBlock {...props} disabled={false} />);
     await act(async () => {
@@ -216,7 +194,7 @@ describe("conversation control rejection paths", () => {
       const button = container.querySelector<HTMLButtonElement>("#plan-artifact-action-execute")!;
       button.click();
       button.click();
-      container.querySelector(".plan-artifact-confirmation")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      container.querySelector(".vk-plan-confirm")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
     expect(execute).toHaveBeenCalledTimes(1);
     expect(container.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(true);

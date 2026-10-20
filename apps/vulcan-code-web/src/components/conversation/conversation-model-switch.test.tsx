@@ -49,7 +49,7 @@ describe("model switch presentation", () => {
     // markup uses the same component as both conversation renderers.
     // markup 使用两个会话渲染器共用的同一个组件。
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ModelSwitchNotice summary="模型已从 供应商甲 / 甲模型 切换为 供应商乙 / 乙模型。" /></I18nProvider>);
-    expect(markup).toContain("conversation-model-switch-label");
+    expect(markup).toContain("vk-divider");
     expect(markup).toContain('role="note"');
     expect(markup).not.toContain("<button");
     expect(markup).not.toContain("special-block");

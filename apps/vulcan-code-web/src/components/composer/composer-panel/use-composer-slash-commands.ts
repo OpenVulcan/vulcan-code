@@ -7,6 +7,7 @@ import {
 } from "@/components/composer/composer-model";
 import type { ComposerSettingsSection } from "@/components/composer/composer-settings-request";
 import type { ComposerSlashCommandSummary } from "@/types";
+import { useComposerExternalCommands } from "@/components/composer/composer-external-commands";
 
 // UseComposerSlashCommandsOptions defines the input state and routed actions owned outside slash selection.
 // UseComposerSlashCommandsOptions 定义 slash 选择之外持有的输入状态与路由动作。
@@ -224,6 +225,9 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
     setDismissedInput(null);
     setHighlightedIndex(0);
   }, []);
+  // The command palette and Ctrl+M reach the model picker and slash commands through these same handlers.
+  // 命令面板与 Ctrl+M 通过这些相同的处理器打开模型选择器并运行 slash 指令。
+  useComposerExternalCommands(options.onOpenModelPicker, options.commands, activateCommand);
 
   return {
     visibleCommands,

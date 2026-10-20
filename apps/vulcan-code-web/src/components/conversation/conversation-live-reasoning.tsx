@@ -1,14 +1,14 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
-import { Columns2, PanelRightOpen } from "lucide-react";
+import { Brain, Columns2, PanelRightOpen } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import { useI18n } from "@/i18n";
 import { formatTokenCount } from "@/lib/usage-format";
-import { cn } from "@/lib/utils";
+import { IconButton } from "@/ui-kit/primitives/button";
 import type { ConversationBlock } from "@/components/conversation/conversation-model";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import {
@@ -22,6 +22,7 @@ import {
   persistStreamingThinkingMarkdownEnabled,
 } from "@/components/conversation/streaming-thinking-markdown";
 import type { TransientReasoningStatus } from "@/types";
+import { THINKING_OVERLAY_EXIT_MS } from "@/components/conversation/chat-area/visual-state";
 
 // TransientReasoningStatusLine renders request-local reasoning progress outside the durable event ledger.
 // TransientReasoningStatusLine 在持久化事件账本之外渲染请求局部的思考进度。
@@ -58,22 +59,17 @@ export function TransientReasoningStatusLine(props: {
     <div
       aria-busy="true"
       aria-live="polite"
-      className="transient-reasoning-status-stack"
+      className="vk-reason-status"
       data-reasoning-status-kind={props.status.kind}
     >
       {rows.map((row) => (
-        <div
-          className="tool-execution-row transient-reasoning-status-line"
-          key={row.id}
-        >
-          <div className="shimmer transient-reasoning-status-copy">
-            <ReactMarkdown
-              allowedElements={["p", "strong", "em", "br", "code"]}
-              unwrapDisallowed
-            >
-              {row.text}
-            </ReactMarkdown>
-          </div>
+        <div className="vk-reason-line vk-shimmer-text" key={row.id}>
+          <ReactMarkdown
+            allowedElements={["p", "strong", "em", "br", "code"]}
+            unwrapDisallowed
+          >
+            {row.text}
+          </ReactMarkdown>
         </div>
       ))}
     </div>
@@ -142,56 +138,53 @@ export function StreamingThinkingOverlay(props: {
 
   return (
     <section
-      className={cn(
-        "streaming-thinking-overlay",
-        layoutMode === "right_docked" && "right-docked",
-        props.leaving && "leaving",
-      )}
+      className="vk-think-float"
+      data-dock={layoutMode === "right_docked" ? "right" : "center"}
+      data-leaving={props.leaving || undefined}
+      style={{ "--vk-think-exit": `${THINKING_OVERLAY_EXIT_MS}ms` } as React.CSSProperties}
       aria-live="polite"
       aria-busy={!props.leaving}
     >
-      <header className="streaming-thinking-header">
-        <span className="streaming-thinking-title">
-          <span className="shimmer">{t("runtime.thinking")}</span>
-        </span>
-        <div className="streaming-thinking-header-actions">
+      <header className="vk-think-float-head">
+        <Brain aria-hidden="true" />
+        <b>{t("runtime.thinking")}</b>
+        <div className="vk-actions">
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <IconButton
                 aria-label={markdownToggleLabel}
                 aria-pressed={markdownEnabled}
-                className="streaming-thinking-markdown-toggle"
                 onClick={handleMarkdownToggle}
                 type="button"
               >
-                <span aria-hidden="true">MD</span>
-              </button>
+                <span aria-hidden="true" className="vk-think-md">MD</span>
+              </IconButton>
             </TooltipTrigger>
             <TooltipContent side="left">{markdownToggleLabel}</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <IconButton
                 aria-label={layoutToggleLabel}
-                className="streaming-thinking-layout-toggle"
                 onClick={handleLayoutToggle}
                 type="button"
               >
-                {layoutMode === "centered" ? <PanelRightOpen size={16} /> : <Columns2 size={16} />}
-              </button>
+                {layoutMode === "centered" ? <PanelRightOpen aria-hidden="true" /> : <Columns2 aria-hidden="true" />}
+              </IconButton>
             </TooltipTrigger>
             <TooltipContent side="left">{layoutToggleLabel}</TooltipContent>
           </Tooltip>
         </div>
       </header>
       <div
-        className="streaming-thinking-body"
+        className="vk-think-float-body"
+        data-plain={markdownEnabled ? undefined : ""}
         onPointerDown={thinkingViewport.handleBodyPointerDown}
         onScroll={thinkingViewport.handleBodyScroll}
         onWheel={thinkingViewport.handleBodyWheel}
         ref={thinkingViewport.bodyRef}
       >
-        <div className="streaming-thinking-content" ref={thinkingViewport.contentRef}>
+        <div className="vk-think-float-content" ref={thinkingViewport.contentRef}>
           {markdownEnabled ? (
             <MarkdownMessage
               content={props.block.body || t("runtime.thinking")}
@@ -199,9 +192,7 @@ export function StreamingThinkingOverlay(props: {
               streaming={!props.leaving}
             />
           ) : (
-            <div className="streaming-thinking-plain-text">
-              {props.block.body || t("runtime.thinking")}
-            </div>
+            <>{props.block.body || t("runtime.thinking")}</>
           )}
         </div>
       </div>

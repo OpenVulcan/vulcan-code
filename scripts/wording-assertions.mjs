@@ -1,13 +1,13 @@
 // Ratchet gate against assertions that compare Chinese wording instead of behavior.
 // 防止断言比较中文文案而非行为的棘轮门禁。
 //
-// An assertion counts when its statement contains a string literal with CJK characters: Rust
+// An assertion counts when its statement contains a string (or TypeScript regex) literal with CJK characters: Rust
 // `assert!`/`assert_eq!`/`assert_ne!`, and TypeScript `expect(...)` chains or `*ByText(...)` queries.
 // Each file may keep at most its recorded count; rewriting assertions lowers the count, and
 // `--update` records the lower counts. New files start at zero. A test whose behavior genuinely
 // depends on CJK input (for example tokenization) is recorded by editing the baseline by hand, so the
 // exception stays visible in review.
-// 断言语句含有带 CJK 字符的字符串字面量时计数：Rust 的 `assert!`/`assert_eq!`/`assert_ne!`，以及
+// 断言语句含有带 CJK 字符的字符串（或 TypeScript 正则）字面量时计数：Rust 的 `assert!`/`assert_eq!`/`assert_ne!`，以及
 // TypeScript 的 `expect(...)` 链或 `*ByText(...)` 查询。每个文件最多保留已记录的数量；改写断言会降低
 // 数量，`--update` 记录更低的数量。新文件从零开始。行为确实依赖 CJK 输入的测试（例如分词）需手动
 // 编辑基线登记，使该例外在审查中可见。
@@ -45,8 +45,8 @@ const RUST_CHAR = /^'(?:\\(?:u\{[0-9a-fA-F]{1,6}\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'
 // Rust 原始字符串起始 `r"`、`r#"`、`br##"` 等。
 const RUST_RAW = /^b?r(#*)"/u;
 
-// tokenize blanks comments and the contents of string literals, keeping offsets and newlines.
-// tokenize 清空注释与字符串字面量内容，保持偏移与换行不变。
+// tokenize blanks comments and the contents of string and TypeScript regex literals, keeping offsets and newlines.
+// tokenize 清空注释与字符串及 TypeScript 正则字面量内容，保持偏移与换行不变。
 //
 // # Parameters
 // 参数
@@ -122,11 +122,73 @@ export function tokenize(source, language) {
     } else if (character === '"' || character === "'" || character === '`') {
       literal(quotedLength(character), 1, 1);
       continue;
+    } else if (character === '/' && regexMayStartAfter(precedingToken(code))) {
+      // A regex literal is masked like a string so quotes inside it never open one; its flags stay code.
+      // 正则字面量像字符串一样遮蔽，使其中的引号不会开启字符串；其标志保留为代码。
+      const length = regexLength(source, index);
+      if (length !== null) {
+        literal(length, 1, 1);
+        continue;
+      }
     }
     code.push(character);
     index += 1;
   }
   return { code: code.join(''), cjkLiterals };
+}
+
+// Keywords after which a TypeScript `/` starts a regex literal rather than a division.
+// TypeScript 中其后的 `/` 开启正则字面量而非除法的关键字。
+const REGEX_KEYWORDS = new Set([
+  'await', 'case', 'delete', 'do', 'else', 'in', 'instanceof', 'new', 'of', 'return', 'throw', 'typeof', 'void', 'yield',
+]);
+
+// Punctuation after which a TypeScript `/` starts a regex literal. `<`, `>`, `}`, `)` and `]` are left out so
+// JSX closing tags (`</a>`, `<a />`, `{x} />`) and divisions stay code; `=>` is checked separately.
+// 其后的 TypeScript `/` 开启正则字面量的标点。排除 `<`、`>`、`}`、`)` 与 `]`，使 JSX 结束标签
+// （`</a>`、`<a />`、`{x} />`）与除法保持为代码；`=>` 单独判断。
+const REGEX_PUNCTUATION = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', ';', '+', '-', '*', '%', '~', '^', '{']);
+
+// precedingToken returns the last code token emitted so far: a whole identifier, or the last two characters
+// of trailing punctuation; masked comments and literal contents are blank and therefore skipped.
+// precedingToken 返回目前已输出的最后一个代码记号：完整标识符，或末尾标点的最后两个字符；被遮蔽的注释与
+// 字面量内容为空白，因此会被跳过。
+function precedingToken(code) {
+  let text = '';
+  for (let piece = code.length - 1; piece >= 0; piece -= 1) {
+    text = code[piece] + text;
+    const trimmed = text.trimEnd();
+    if (trimmed.length === 0) continue;
+    if (!/[\w$]$/u.test(trimmed)) return trimmed.slice(-2);
+    const word = /[\w$]+$/u.exec(trimmed)[0];
+    if (word.length < trimmed.length || piece === 0) return word;
+  }
+  return '';
+}
+
+// regexMayStartAfter tells whether a `/` following `token` opens a regex literal.
+// regexMayStartAfter 判断位于 `token` 之后的 `/` 是否开启正则字面量。
+function regexMayStartAfter(token) {
+  if (token === '') return true;
+  if (/[\w$]$/u.test(token)) return REGEX_KEYWORDS.has(token);
+  return token === '=>' || REGEX_PUNCTUATION.has(token[token.length - 1]);
+}
+
+// regexLength returns the length of the regex literal opening at `start`, up to and including its closing
+// slash, or null when the line ends first; a slash inside a character class or after a backslash does not close.
+// regexLength 返回从 `start` 开始的正则字面量到其结束斜杠（含）的长度；行先结束时返回 null；
+// 字符类内或反斜杠后的斜杠不会结束字面量。
+function regexLength(source, start) {
+  let inClass = false;
+  for (let cursor = start + 1; cursor < source.length; cursor += 1) {
+    const character = source[cursor];
+    if (character === '\n') return null;
+    if (character === '\\') cursor += 1;
+    else if (character === '[') inClass = true;
+    else if (character === ']') inClass = false;
+    else if (character === '/' && !inClass) return cursor + 1 - start;
+  }
+  return null;
 }
 
 // balancedEnd returns the offset just past the parenthesis matching the one before `start`.

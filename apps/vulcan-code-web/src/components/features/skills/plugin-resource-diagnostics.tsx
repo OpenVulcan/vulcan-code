@@ -1,14 +1,14 @@
 import * as React from "react";
 import { Activity, ArrowLeft, Cog, MessageSquare, RefreshCw } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { InlineDisclosure } from "@/components/ui/disclosure";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
 import type { PluginDiagnosticsSelection, PluginOperationPhase, PluginResourceDiagnostic, PluginResourceKind } from "@/types/plugin-resource-diagnostics";
 import { readPluginResourceDiagnostics, type PluginDiagnosticsObservation } from "@/service/plugin-resource-diagnostics-service";
 import { PageEmptyState, PageFacts, PageHint, PageItem, PageItemList, PageNotice, PageToolbar } from "@/components/page";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { TechnicalDetails } from "./plugin-maintenance-section";
 
 // PluginResourceDiagnosticsProps binds read-only selection to the existing workspace conversation action.
@@ -144,12 +144,12 @@ export function PluginResourceDiagnostics(props: PluginResourceDiagnosticsProps)
         ? <Button onClick={() => { version.current += 1; setBusy(false); }} size="sm" type="button" variant="outline">{t("skills.plugins.cancel")}</Button>
         : <Button onClick={() => void load(selection)} size="sm" type="button" variant="outline"><RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}
     </>}>
-      <p className="page-row-label">{selection.kind === "plugin"
+      <p className="vk-page-row-label">{selection.kind === "plugin"
         ? formatMessage(t("pluginDiagnostics.subject.plugin"), { name })
         : formatMessage(t(selection.kind === "update" ? "pluginDiagnostics.subject.update" : "pluginDiagnostics.subject.uninstall"), { name })}</p>
     </PageToolbar>
     {busy && current === null && <StreamPlaceholder count={2} label={t("ui.loading")} shape="rows" />}
-    {current?.error && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{current.error}</span></PageNotice>}
+    {current?.error && <PageNotice tone="error"><span className="vk-wrap-pre">{current.error}</span></PageNotice>}
     {current !== null && !current.fresh && current.report !== null && !busy && <PageNotice tone="info">{t("pluginUpdates.stale")}</PageNotice>}
     {current?.report !== null && current?.report !== undefined && resources === null && <PageNotice tone="warning">{t("pluginDiagnostics.unavailable")}</PageNotice>}
     {resources && <>

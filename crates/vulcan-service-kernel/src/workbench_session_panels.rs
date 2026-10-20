@@ -356,11 +356,12 @@ pub(crate) fn session_todolist_item_status_key(status: SessionTodolistItemStatus
 pub(crate) fn pending_question_snapshots_from_agent_runtime(
     agent_runtime: Option<&AgentRuntimeBridge>,
 ) -> Result<Vec<PendingQuestionSnapshot>, String> {
-    let Some(question_runtime) = agent_runtime.map(|runtime| runtime.question_runtime.as_ref())
-    else {
+    let Some(runtime) = agent_runtime else {
         return Ok(Vec::new());
     };
-    project_pending_question_requests(question_runtime.list_pending())
+    project_pending_question_requests(runtime.question_runtime.list_pending(), |session_id| {
+        runtime.task_runtime.child_task_owner(session_id)
+    })
 }
 
 /// Converts one authoritative pending-request read into ordered WebUI snapshots.
@@ -375,44 +376,52 @@ pub(crate) fn pending_question_snapshots_from_agent_runtime(
 /// 返回值
 /// Returns ordered snapshots for a successful read, or a contextualized registry-read error.
 /// 读取成功时返回有序快照，失败时返回带上下文的注册表读取错误。
+/// `child_owner` resolves a child task session to its root conversation and display title.
+/// `child_owner` 把子任务会话解析为其根会话与展示标题。
 fn project_pending_question_requests(
     pending_requests: Result<Vec<QuestionRequest>, String>,
+    child_owner: impl Fn(SessionId) -> Result<Option<(SessionId, String)>, String>,
 ) -> Result<Vec<PendingQuestionSnapshot>, String> {
     // snapshots contains only facts read successfully from the authoritative question registry.
     // snapshots 仅包含从权威问题注册表成功读取的事实。
     let mut snapshots = pending_requests
         .map_err(|error| format!("failed to project pending ask requests: {error}"))?
         .into_iter()
-        .map(|request| PendingQuestionSnapshot {
-            approval: request
-                .approval
-                .as_ref()
-                .map(|prompt| pending_approval_snapshot(&request.tool_name, prompt)),
-            id: request.id,
-            session_id: request.session_id.to_string(),
-            sequence: request.sequence,
-            questions: request
-                .questions
-                .into_iter()
-                .map(|question| {
-                    let multiple = question.allows_multiple();
-                    PendingQuestionPromptSummary {
-                        question: question.question,
-                        header: question.header,
-                        options: question
-                            .options
-                            .into_iter()
-                            .map(|option| PendingQuestionOptionSummary {
-                                label: option.label,
-                                description: option.description,
-                            })
-                            .collect(),
-                        multiple,
-                    }
-                })
-                .collect(),
+        .map(|request| {
+            let owner = child_owner(request.session_id)?;
+            Ok(PendingQuestionSnapshot {
+                owner_conversation_id: owner.as_ref().map(|(root, _)| root.to_string()),
+                requester_label: owner.map(|(_, title)| title),
+                approval: request
+                    .approval
+                    .as_ref()
+                    .map(|prompt| pending_approval_snapshot(&request.tool_name, prompt)),
+                id: request.id,
+                session_id: request.session_id.to_string(),
+                sequence: request.sequence,
+                questions: request
+                    .questions
+                    .into_iter()
+                    .map(|question| {
+                        let multiple = question.allows_multiple();
+                        PendingQuestionPromptSummary {
+                            question: question.question,
+                            header: question.header,
+                            options: question
+                                .options
+                                .into_iter()
+                                .map(|option| PendingQuestionOptionSummary {
+                                    label: option.label,
+                                    description: option.description,
+                                })
+                                .collect(),
+                            multiple,
+                        }
+                    })
+                    .collect(),
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     snapshots.sort_by_key(|snapshot| snapshot.sequence);
     Ok(snapshots)
 }
@@ -488,9 +497,17 @@ pub(crate) fn conversation_attention_summary_for_session(
     unread: bool,
     updated_at: Option<String>,
 ) -> Option<ConversationAttentionSummary> {
+    // A conversation's own request comes first; a child agent's request marks its root conversation.
+    // 会话自身的请求优先；子代理的请求标记其根会话。
+    let session_key = session_id.to_string();
     if let Some(question) = pending_questions
         .iter()
-        .find(|question| question.session_id == session_id.to_string())
+        .find(|question| question.session_id == session_key)
+        .or_else(|| {
+            pending_questions.iter().find(|question| {
+                question.owner_conversation_id.as_deref() == Some(session_key.as_str())
+            })
+        })
     {
         return Some(conversation_attention_summary(
             "ask",
@@ -846,9 +863,10 @@ mod tests {
     fn pending_question_projection_preserves_registry_failure() {
         // error is the contextualized Service Kernel failure returned for an authoritative read error.
         // error 是权威读取失败时返回的带上下文 Service Kernel 错误。
-        let error = project_pending_question_requests(Err(String::from(
-            "The question runtime registry is locked.",
-        )))
+        let error = project_pending_question_requests(
+            Err(String::from("The question runtime registry is locked.")),
+            |_| Ok(None),
+        )
         .expect_err("registry failure must not become an empty pending-question list");
 
         assert!(error.contains("failed to project pending ask requests"));
@@ -862,6 +880,8 @@ mod tests {
             id: String::from("question-1"),
             session_id: session_id.to_string(),
             sequence: 1,
+            owner_conversation_id: None,
+            requester_label: None,
             questions: Vec::new(),
             approval: None,
         }

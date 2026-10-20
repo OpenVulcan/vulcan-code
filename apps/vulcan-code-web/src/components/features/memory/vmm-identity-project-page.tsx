@@ -19,17 +19,17 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+} from "@/ui-kit/primitives/alert-dialog"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
-import { Combobox } from "@/components/ui/combobox"
+} from "@/ui-kit/primitives/card"
+import { Combobox } from "@/ui-kit/primitives/combobox"
 import {
   Dialog,
   DialogContent,
@@ -37,16 +37,16 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/ui-kit/primitives/dialog"
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from "@/components/ui/empty"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+} from "@/ui-kit/primitives/empty"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
 import { useI18n } from "@/i18n"
 import type {
   VmmMemoryActionResult,
@@ -54,6 +54,8 @@ import type {
   VmmProjectDisplaySummary,
   VmmUserDisplaySummary,
 } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // VmmIdentityProjectPageProps defines catalog data and guarded management actions.
 // VmmIdentityProjectPageProps 定义目录数据与受保护的管理操作。
@@ -252,26 +254,26 @@ function VmmIdentityProjectPage({
   }, [migrationProject, migrationTarget, onRunAction, refreshCatalog])
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-4">
+    <div className="vk-form-loose">
       <div className="vmm-page-toolbar">
         <Button disabled={busy} onClick={() => void refreshCatalog()} type="button" variant="outline">
-          <RefreshCw className="size-4" aria-hidden="true" />
+          <RefreshCw className="vk-icon" aria-hidden="true" />
           {t("memory.identity.refresh")}
         </Button>
       </div>
 
       {operationMessage ? (
-        <p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+        <p className="vk-form-well">
           {operationMessage}
         </p>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="vk-mem-two">
         <CatalogCard
-          actionIcon={<UserPlus className="size-4" aria-hidden="true" />}
+          actionIcon={<UserPlus className="vk-icon" aria-hidden="true" />}
           actionLabel={t("memory.identity.addUser")}
           emptyLabel={t("memory.identity.emptyUsers")}
-          icon={<Users className="size-4" aria-hidden="true" />}
+          icon={<Users className="vk-icon" aria-hidden="true" />}
           onAdd={() => {
             setCreateName("")
             setCreateKind("user")
@@ -297,10 +299,10 @@ function VmmIdentityProjectPage({
         </CatalogCard>
 
         <CatalogCard
-          actionIcon={<FolderPlus className="size-4" aria-hidden="true" />}
+          actionIcon={<FolderPlus className="vk-icon" aria-hidden="true" />}
           actionLabel={t("memory.identity.addProject")}
           emptyLabel={t("memory.identity.emptyProjects")}
-          icon={<FolderKanban className="size-4" aria-hidden="true" />}
+          icon={<FolderKanban className="vk-icon" aria-hidden="true" />}
           onAdd={() => {
             setCreateTeamName("default")
             setCreateSpaceName("default")
@@ -354,12 +356,12 @@ function VmmIdentityProjectPage({
             <DialogDescription>{t("memory.identity.description")}</DialogDescription>
           </DialogHeader>
           {createKind === "project" ? (
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
+            <div className="vk-form-loose">
+              <p className="vk-form-text">
                 {t("memory.identity.projectPathStructure")}
               </p>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="space-y-2">
+              <div className="vk-mem-three">
+                <div className="vk-form-stack">
                   <Label htmlFor="vmm-create-team">{t("memory.identity.teamName")}</Label>
                   <Input
                     autoFocus
@@ -369,7 +371,7 @@ function VmmIdentityProjectPage({
                     value={createTeamName}
                   />
                 </div>
-                <div className="space-y-2">
+                <div className="vk-form-stack">
                   <Label htmlFor="vmm-create-space">{t("memory.identity.spaceName")}</Label>
                   <Input
                     disabled={busy}
@@ -378,7 +380,7 @@ function VmmIdentityProjectPage({
                     value={createSpaceName}
                   />
                 </div>
-                <div className="space-y-2">
+                <div className="vk-form-stack">
                   <Label htmlFor="vmm-create-project">{t("memory.identity.projectName")}</Label>
                   <Input
                     disabled={busy}
@@ -389,9 +391,9 @@ function VmmIdentityProjectPage({
                   />
                 </div>
               </div>
-              <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm">
-                <span className="text-muted-foreground">{t("memory.identity.projectPathPreview")}</span>
-                <code className="ml-2 break-all">
+              <div className="vk-form-well">
+                <span className="vk-faint">{t("memory.identity.projectPathPreview")}</span>
+                <code className="vk-mem-inline-code">
                   {canonicalProjectPath(
                     createTeamName.trim() || "Team",
                     createSpaceName.trim() || "Space",
@@ -401,7 +403,7 @@ function VmmIdentityProjectPage({
               </div>
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="vk-form-stack">
               <Label htmlFor="vmm-create-name">{t("memory.identity.userName")}</Label>
               <Input
                 autoFocus
@@ -412,7 +414,7 @@ function VmmIdentityProjectPage({
               />
             </div>
           )}
-          {operationMessage ? <p role="status" className="text-sm text-muted-foreground">{operationMessage}</p> : null}
+          {operationMessage ? <p role="status" className="vk-form-text">{operationMessage}</p> : null}
           <DialogFooter>
             <Button disabled={busy} onClick={() => setCreateKind(null)} type="button" variant="outline">
               {t("memory.common.cancel")}
@@ -447,7 +449,7 @@ function VmmIdentityProjectPage({
               {t("memory.identity.confirmDeleteDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="space-y-2">
+          <div className="vk-form-stack">
             <Label htmlFor="vmm-delete-confirm">
               {t("memory.identity.typeName").replace(
                 "{name}",
@@ -462,10 +464,10 @@ function VmmIdentityProjectPage({
               value={deletionText}
             />
             {userConfirmationCode ? (
-              <p className="text-xs text-muted-foreground">{t("memory.identity.checking")}</p>
+              <p className="vk-form-note">{t("memory.identity.checking")}</p>
             ) : null}
           </div>
-          {operationMessage ? <p role="status" className="text-sm text-muted-foreground">{operationMessage}</p> : null}
+          {operationMessage ? <p role="status" className="vk-form-text">{operationMessage}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>{t("memory.common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
@@ -480,7 +482,7 @@ function VmmIdentityProjectPage({
               }}
               variant="destructive"
             >
-              <Trash2 className="size-4" aria-hidden="true" />
+              <Trash2 className="vk-icon" aria-hidden="true" />
               {busy ? t("memory.identity.checking") : t("memory.identity.delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -503,7 +505,7 @@ function VmmIdentityProjectPage({
             <DialogTitle>{t("memory.identity.migrateTitle")}</DialogTitle>
             <DialogDescription>{t("memory.identity.migrateDescription")}</DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <div className="vk-form-stack">
             <Label>{t("memory.identity.targetProjectName")}</Label>
             <Combobox
               ariaLabel={t("memory.identity.targetProjectName")}
@@ -516,13 +518,13 @@ function VmmIdentityProjectPage({
               value={migrationTarget}
             />
           </div>
-          {operationMessage ? <p role="status" className="text-sm text-muted-foreground">{operationMessage}</p> : null}
+          {operationMessage ? <p role="status" className="vk-form-text">{operationMessage}</p> : null}
           <DialogFooter>
             <Button disabled={busy} onClick={() => setMigrationProject(null)} type="button" variant="outline">
               {t("memory.common.cancel")}
             </Button>
             <Button disabled={busy || !migrationTarget} onClick={() => void submitMigration()} type="button">
-              <GitBranch className="size-4" aria-hidden="true" />
+              <GitBranch className="vk-icon" aria-hidden="true" />
               {busy ? t("memory.common.loading") : t("memory.identity.migrate")}
             </Button>
           </DialogFooter>
@@ -554,9 +556,9 @@ function CatalogCard({
   const rows = React.Children.toArray(children)
   return (
     <Card>
-      <CardHeader className="flex-row items-start justify-between gap-3">
-        <div className="space-y-1">
-          <CardTitle className="flex items-center gap-2">
+      <CardHeader className="vk-form-head">
+        <div className="vk-form-tight">
+          <CardTitle className="vk-form-inline">
             {icon}
             {title}
           </CardTitle>
@@ -569,7 +571,7 @@ function CatalogCard({
       </CardHeader>
       <CardContent>
         {rows.length === 0 ? (
-          <Empty className="min-h-40" variant="outlined">
+          <Empty variant="outlined">
             <EmptyHeader>
               <EmptyMedia variant="icon">{icon}</EmptyMedia>
               <EmptyTitle>{title}</EmptyTitle>
@@ -577,7 +579,7 @@ function CatalogCard({
             </EmptyHeader>
           </Empty>
         ) : (
-          <div className="divide-y rounded-lg border">{rows}</div>
+          <div className="vk-mem-rows">{rows}</div>
         )}
       </CardContent>
     </Card>
@@ -607,14 +609,14 @@ function CatalogRow({
 }) {
   const { t } = useI18n()
   return (
-    <div className="flex min-w-0 items-center gap-3 px-3 py-2.5">
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <strong className="truncate text-sm">{title}</strong>
+    <div className="vk-mem-row">
+      <div className="vk-form-fill">
+        <div className="vk-form-inline">
+          <strong className="vk-truncate">{title}</strong>
           {defaultItem ? <Badge>{t("memory.identity.default")}</Badge> : null}
           {protectedItem ? <Badge variant="secondary">{t("memory.identity.protected")}</Badge> : null}
         </div>
-        {detail ? <p className="truncate text-xs text-muted-foreground">{detail}</p> : null}
+        {detail ? <p className="vk-form-note vk-truncate">{detail}</p> : null}
       </div>
       {onSetDefault ? (
         <Button
@@ -626,17 +628,17 @@ function CatalogRow({
           type="button"
           variant="ghost"
         >
-          <Star className="size-4" />
+          <Star className="vk-icon" />
         </Button>
       ) : null}
       {onMigrate ? (
         <Button aria-label={t("memory.identity.migrate")} disabled={busy} onClick={onMigrate} size="icon-sm" type="button" variant="ghost">
-          <GitBranch className="size-4" />
+          <GitBranch className="vk-icon" />
         </Button>
       ) : null}
       {onDelete ? (
         <Button aria-label={t("memory.identity.delete")} disabled={busy} onClick={onDelete} size="icon-sm" type="button" variant="ghost">
-          <Trash2 className="size-4 text-destructive" />
+          <Trash2 className="vk-icon vk-form-bad" />
         </Button>
       ) : null}
     </div>

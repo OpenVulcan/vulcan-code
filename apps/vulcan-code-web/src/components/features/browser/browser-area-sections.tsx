@@ -1,8 +1,9 @@
 import * as React from "react";
-import { Globe2, X } from "lucide-react";
+import { Globe2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { PanelTab } from "@/ui-kit/primitives/panel-tab";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/ui-kit/primitives/alert-dialog";
 import { formatMessage, useI18n } from "@/i18n";
 import type {
   CoreBrowserDialog,
@@ -11,6 +12,7 @@ import type {
   CoreBrowserPage,
   CoreBrowserSession,
 } from "@/service/core-browser-service";
+import "@/ui-kit/styles/features/browser.css"
 
 // BrowserCloseRequest freezes the exact browser or page the user asked to close.
 // BrowserCloseRequest 冻结用户要求关闭的精确浏览器或页面。
@@ -73,25 +75,23 @@ export function BrowserInstanceTabs({ visibleSessions, selectedSessionId, select
   // t 本地化页签标签与操作。
   const { t } = useI18n();
   return (
-    <div hidden={visibleSessions.length <= 1} data-browser-instance-row className="shrink-0">
-      <div className="min-w-0 flex-1" hidden={visibleSessions.length <= 1} role="tablist" aria-label={t("browser.activeAiBrowsers")}>
-        <div className="flex items-center gap-1 overflow-x-auto">
+    <div hidden={visibleSessions.length <= 1} data-browser-instance-row>
+      <div className="vk-tab-strip" hidden={visibleSessions.length <= 1} role="tablist" aria-label={t("browser.activeAiBrowsers")}>
         {visibleSessions.map((session, index) => {
           // The browser label is its displayed page, never the last AI navigation URL.
           // 浏览器标签取其显示页面，绝不使用最后一次 AI 导航地址。
           const displayedPage = session.sessionId === selectedSessionId && selectedPage ? selectedPage : viewedPages.get(session.sessionId);
           const label = displayedPage ? displayedPage.title || browserTabTitle(displayedPage.url) : `${t("browser.browser")} ${index + 1}`;
-          return <div key={session.sessionId} className={`context-dynamic-tab max-w-44 shrink-0 ${selectedSessionId === session.sessionId ? "active" : ""}`}>
-            <span className="context-dynamic-tab-icon"><Globe2 size={12} /></span>
-            <button type="button" role="tab" data-browser-session-id={session.sessionId} aria-selected={selectedSessionId === session.sessionId}
-              className="context-dynamic-tab-label" title={label} onClick={() => void selectSession(session.sessionId)}>
-              <span>{label}{session.status === "crashed" ? t("browser.crashed") : null}</span>
-            </button>
-            <button type="button" className="context-dynamic-tab-close" aria-label={`${t("browser.closeBrowser")}: ${label}`}
-              onClick={() => { setCloseError(null); setCloseRequest({ session, page: null, label }); }}><X size={10} /></button>
-          </div>;
+          return <PanelTab key={session.sessionId}
+            active={selectedSessionId === session.sessionId}
+            closeLabel={`${t("browser.closeBrowser")}: ${label}`}
+            icon={<Globe2 />}
+            label={<>{label}{session.status === "crashed" ? t("browser.crashed") : null}</>}
+            tabProps={{ "data-browser-session-id": session.sessionId, tabIndex: 0 }}
+            title={label}
+            onClose={() => { setCloseError(null); setCloseRequest({ session, page: null, label }); }}
+            onSelect={() => void selectSession(session.sessionId)} />;
         })}
-        </div>
       </div>
     </div>
   );
@@ -123,18 +123,18 @@ export function BrowserPageTabs({ pages, selectedPageId, selectedSession, select
   // t 本地化页签标签与操作。
   const { t } = useI18n();
   return (
-    <div hidden={pages.length <= 1} className="shrink-0" role="tablist" aria-label={t("browser.browserPages")}>
-      <div className="flex items-center gap-1 overflow-x-auto">
+    <div hidden={pages.length <= 1} className="vk-tab-strip" role="tablist" aria-label={t("browser.browserPages")}>
       {pages.map((page) => (
-        <div key={page.pageId} className={`context-dynamic-tab max-w-44 shrink-0 ${page.pageId === selectedPageId ? "active" : ""}`}>
-          <span className="context-dynamic-tab-icon"><Globe2 size={12} /></span>
-          <button type="button" role="tab" data-browser-page-id={page.pageId} aria-selected={page.pageId === selectedPageId}
-            className="context-dynamic-tab-label" title={page.title || page.url} onClick={() => selectPage(page)}><span>{page.title || browserTabTitle(page.url)}</span></button>
-          <button type="button" className="context-dynamic-tab-close" aria-label={`${t("browser.closePage")}: ${page.title || browserTabTitle(page.url)}`}
-            onClick={() => { setCloseError(null); setCloseRequest({ session: selectedSession, page, label: page.title || browserTabTitle(page.url) }); }}><X size={10} /></button>
-        </div>
+        <PanelTab key={page.pageId}
+          active={page.pageId === selectedPageId}
+          closeLabel={`${t("browser.closePage")}: ${page.title || browserTabTitle(page.url)}`}
+          icon={<Globe2 />}
+          label={page.title || browserTabTitle(page.url)}
+          tabProps={{ "data-browser-page-id": page.pageId, tabIndex: 0 }}
+          title={page.title || page.url}
+          onClose={() => { setCloseError(null); setCloseRequest({ session: selectedSession, page, label: page.title || browserTabTitle(page.url) }); }}
+          onSelect={() => selectPage(page)} />
       ))}
-      </div>
     </div>
   );
 }
@@ -173,9 +173,9 @@ export function BrowserPagePrompts({ dialogs, fileChoosers, selectedPageId, dial
   return (
     <>
       {dialogs.filter((dialog) => dialog.pageId === selectedPageId).map((dialog) => (
-        <div key={dialog.dialogId} role="alertdialog" className="flex flex-wrap items-center gap-2 rounded border p-3 text-sm">
+        <div key={dialog.dialogId} role="alertdialog" className="vk-browser-prompt">
           <strong>{dialog.dialogType}</strong><span>{dialog.message}</span>
-          {dialog.dialogType === "prompt" ? <input className="rounded border bg-background px-2 py-1"
+          {dialog.dialogType === "prompt" ? <input className="vk-browser-address"
             value={dialogText} onChange={(event) => setDialogText(event.target.value)} disabled={!ownsControl} /> : null}
           <Button type="button" size="sm" disabled={!ownsControl} onClick={() => void answerDialog(dialog, true)}>
             {t("browser.accept")}
@@ -185,7 +185,7 @@ export function BrowserPagePrompts({ dialogs, fileChoosers, selectedPageId, dial
         </div>
       ))}
       {fileChoosers.filter((chooser) => chooser.pageId === selectedPageId).map((chooser) => (
-        <label key={chooser.chooserId} className="flex flex-wrap items-center gap-2 rounded border p-3 text-sm">
+        <label key={chooser.chooserId} className="vk-browser-prompt">
           <span>{t("browser.pageRequestsAFile")}</span>
           <input type="file" disabled={!ownsControl} onChange={(event) => void submitFileChooser(chooser, event.target.files?.[0])} />
         </label>
@@ -235,7 +235,7 @@ export function BrowserCloseConfirmDialog({ closeRequest, setCloseRequest, close
               ? t("browser.activeAutomationWillBe") : null}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {closeError ? <p role="alert" className="text-xs text-destructive">{closeError}</p> : null}
+        {closeError ? <p role="alert" className="vk-field-error">{closeError}</p> : null}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={closing}>{t("browser.cancel")}</AlertDialogCancel>
           <Button type="button" variant="destructive" disabled={closing} onClick={() => void closeSession()}>{closing ? t("browser.closing") : t("browser.confirmClose")}</Button>

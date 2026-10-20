@@ -1,12 +1,14 @@
 import * as React from "react";
-import { LoaderCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { InlineDisclosure } from "@/components/ui/disclosure";
-import { Input } from "@/components/ui/input";
+import { LoaderCircle, RotateCcw } from "lucide-react";
+import { PageActionBar, PageNotice } from "@/components/page";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure";
+import { Input } from "@/ui-kit/primitives/input";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { loadPublicAiSettings, resetPublicAiMediaDeliveryPolicy, savePublicAiMediaDeliveryPolicy } from "@/service/settings-actions-service";
 import type { PublicAiMediaDeliverySettingsSnapshot, PublicAiSettingsSnapshot } from "@/types";
 import { createMediaDeliveryDraft, MEDIA_DELIVERY_KINDS, MEDIA_DELIVERY_PURPOSES, MediaDeliveryDraftError, parseMediaDeliveryDraft, type MediaDeliveryKind, type MediaDeliveryPurpose, type MediaDeliveryThresholdField } from "./media-delivery-draft";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // PURPOSE_LABELS keeps main conversations and independent AI extensions visibly separate.
 // PURPOSE_LABELS 在界面上明确分离主会话与独立 AI 扩展。
@@ -140,36 +142,41 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
   }
 
   return (
-    <section className="min-w-0 space-y-4" aria-label={t("settings.mediaDelivery.title")}>
-      <div className="space-y-1">
-        <h3 className="text-sm font-semibold">{t("settings.mediaDelivery.title")}</h3>
-        <p className="text-xs text-muted-foreground">{t("settings.mediaDelivery.description")}</p>
-      </div>
-      {/* Keep detailed delivery rules available without pushing the editable thresholds below a wall of text. */}
-      {/* 保留完整投递规则，避免长篇说明将可编辑阈值推到首屏之外。 */}
-      <InlineDisclosure className="media-delivery-rules" keepMounted label={t("settings.mediaDelivery.howItWorks")} openLabel={t("settings.mediaDelivery.hideExplanation")}>
-        <ul className="grid list-disc gap-1.5 pl-4 text-xs leading-5 text-muted-foreground">
-          <li>{t("settings.mediaDelivery.uploadRule")}</li>
-          <li>{t("settings.mediaDelivery.historyRule")}</li>
-          <li>{t("settings.mediaDelivery.failureRule")}</li>
-          <li>{t("settings.mediaDelivery.rawMaximum")}: {settings.maxInlineRawBytes / 1024} KiB；{t("settings.mediaDelivery.totalMaximum")}: {settings.maxTotalEncodedBytes / 1024} KiB</li>
-        </ul>
-      </InlineDisclosure>
+    <section className="context-basics-section" aria-label={t("settings.mediaDelivery.title")}>
+      <header className="context-basics-head">
+        <div>
+          <h3>{t("settings.mediaDelivery.title")}</h3>
+          <p>{t("settings.mediaDelivery.description")}</p>
+          {/* Keep detailed delivery rules available without pushing the editable thresholds below a wall of text. */}
+          {/* 保留完整投递规则，避免长篇说明将可编辑阈值推到首屏之外。 */}
+          <InlineDisclosure keepMounted label={t("settings.mediaDelivery.howItWorks")} openLabel={t("settings.mediaDelivery.hideExplanation")}>
+            <ul className="vk-form-bullets">
+              <li>{t("settings.mediaDelivery.uploadRule")}</li>
+              <li>{t("settings.mediaDelivery.historyRule")}</li>
+              <li>{t("settings.mediaDelivery.failureRule")}</li>
+              <li>{t("settings.mediaDelivery.rawMaximum")}: {settings.maxInlineRawBytes / 1024} KiB；{t("settings.mediaDelivery.totalMaximum")}: {settings.maxTotalEncodedBytes / 1024} KiB</li>
+            </ul>
+          </InlineDisclosure>
+        </div>
+        <Button disabled={pending || conflict} onClick={() => void applyAction("reset")} size="sm" type="button" variant="ghost">
+          <RotateCcw aria-hidden="true" />{t("settings.mediaDelivery.reset")}
+        </Button>
+      </header>
       {MEDIA_DELIVERY_PURPOSES.map((purpose) => (
-        <fieldset className="min-w-0 space-y-3 border-t pt-3" disabled={pending} key={purpose}>
-          <legend className="px-1 text-sm font-medium">{t(PURPOSE_LABELS[purpose])}</legend>
-          <div className="grid grid-cols-[minmax(3.5rem,0.65fr)_minmax(5rem,1fr)_minmax(5rem,1fr)] items-center gap-2 text-xs">
+        <fieldset className="context-basics-rows context-basics-group" disabled={pending} key={purpose}>
+          <legend>{t(PURPOSE_LABELS[purpose])}</legend>
+          <div className="media-delivery-matrix" role="group">
             <span>{t("settings.mediaDelivery.kind")}</span>
-            <span>{t(THRESHOLD_LABELS.with_upload_max_bytes)} (KiB)</span>
-            <span>{t(THRESHOLD_LABELS.without_upload_max_bytes)} (KiB)</span>
+            <span>{t(THRESHOLD_LABELS.with_upload_max_bytes)} · KiB</span>
+            <span>{t(THRESHOLD_LABELS.without_upload_max_bytes)} · KiB</span>
             {MEDIA_DELIVERY_KINDS.map((kind) => (
               <React.Fragment key={kind}>
-                <span>{t(KIND_LABELS[kind])}</span>
+                <strong>{t(KIND_LABELS[kind])}</strong>
                 {(["with_upload_max_bytes", "without_upload_max_bytes"] as const).map((field) => {
                   // Field identity binds accessibility, validation and the exact backend configuration slot.
                   // 字段身份绑定无障碍、校验与精确后端配置位置。
                   const id = `${purpose}-${kind}-${field}`;
-                  return <Input key={field} id={id} type="text" inputMode="decimal" className="min-w-0 text-right tabular-nums"
+                  return <Input key={field} id={id} type="text" inputMode="decimal" className="vk-form-num"
                     aria-label={`${t(PURPOSE_LABELS[purpose])} / ${t(KIND_LABELS[kind])} / ${t(THRESHOLD_LABELS[field])} (KiB)`}
                     aria-invalid={validation.error?.field === id}
                     value={draft[purpose][kind][field]} onChange={(event) => updateThreshold(purpose, kind, field, event.currentTarget.value)} />;
@@ -177,9 +184,9 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
               </React.Fragment>
             ))}
           </div>
-          <label className="flex flex-wrap items-center justify-between gap-2 text-xs" htmlFor={`${purpose}-max_total_encoded_bytes`}>
-            <span>{t("settings.mediaDelivery.aggregate")} (KiB)</span>
-            <Input id={`${purpose}-max_total_encoded_bytes`} type="text" inputMode="decimal" className="w-36 text-right tabular-nums"
+          <label className="vk-form-pref" htmlFor={`${purpose}-max_total_encoded_bytes`}>
+            <span className="vk-form-pref-text"><strong>{t("settings.mediaDelivery.aggregate")} · KiB</strong></span>
+            <Input id={`${purpose}-max_total_encoded_bytes`} type="text" inputMode="decimal" className="vk-form-w-sm vk-form-num"
               aria-label={`${t(PURPOSE_LABELS[purpose])} / ${t("settings.mediaDelivery.aggregate")} (KiB)`}
               aria-invalid={validation.error?.field === `${purpose}-max_total_encoded_bytes`}
               value={draft[purpose].max_total_encoded_bytes}
@@ -192,15 +199,20 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
           </label>
         </fieldset>
       ))}
-      {validation.error ? <p role="alert" className="text-sm text-destructive">{t(validationKeys[validation.error.code])}</p> : null}
-      {conflict || error ? <p role="alert" className="text-sm text-destructive">{error ?? t("settings.mediaDelivery.conflict")}</p> : null}
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" disabled={pending || conflict || !dirty || validation.policy === null} onClick={() => void applyAction("save")}>
-          {pending ? <LoaderCircle className="mr-2 size-4 animate-spin" aria-hidden="true" /> : null}{t("settings.mediaDelivery.save")}
-        </Button>
-        <Button type="button" variant="outline" disabled={pending || conflict} onClick={() => void applyAction("reset")}>{t("settings.mediaDelivery.reset")}</Button>
-        <Button type="button" variant="ghost" disabled={pending} onClick={() => void applyAction("reload")}>{t("settings.mediaDelivery.reload")}</Button>
-      </div>
+      {validation.error ? <p role="alert" className="vk-field-error">{t(validationKeys[validation.error.code])}</p> : null}
+      {conflict ? (
+        <PageNotice tone="warning" title={t("settings.mediaDelivery.conflict")} actions={
+          <Button disabled={pending} onClick={() => void applyAction("reload")} size="sm" type="button" variant="outline">{t("settings.mediaDelivery.reload")}</Button>
+        } />
+      ) : error ? <p role="alert" className="vk-field-error">{error}</p> : null}
+      {dirty || pending ? (
+        <PageActionBar pending={dirty} actions={<>
+          <Button disabled={pending} onClick={() => void applyAction("reload")} size="sm" type="button" variant="ghost">{t("settings.mediaDelivery.reload")}</Button>
+          <Button disabled={pending || conflict || !dirty || validation.policy === null} onClick={() => void applyAction("save")} size="sm" type="button">
+            {pending ? <LoaderCircle className="vk-spin" aria-hidden="true" /> : null}{t("settings.mediaDelivery.save")}
+          </Button>
+        </>}>{t("settings.misc.unsavedChanges")}</PageActionBar>
+      ) : null}
     </section>
   );
 }

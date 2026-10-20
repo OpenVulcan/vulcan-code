@@ -1,15 +1,9 @@
 import React from "react";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { BookMarked, RefreshCw, Settings2 } from "lucide-react";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { BookMarked, Library, RefreshCw, Settings2 } from "lucide-react";
 
-import {
-  DropdownMenuCheckboxItem,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-} from "@/components/ui/dropdown-menu";
-import { RequestedSettingsSub } from "./composer-settings-request";
+import { Button } from "@/ui-kit/primitives/button";
+import { SessionSettingsCheck } from "./composer-session-settings-parts";
 import {
   getSessionKnowledgeLibraries,
   listKnowledgeLibraries,
@@ -65,8 +59,8 @@ export function nextExplicitKnowledgeLibraryIds(
     : currentIds.filter((candidateId) => candidateId !== libraryId);
 }
 
-// ComposerKnowledgeControl renders the session-scoped knowledge selector inside the composer plus menu.
-// ComposerKnowledgeControl 在输入区加号菜单内渲染会话级知识库选择器。
+// ComposerKnowledgeControl renders the session-scoped knowledge checklist inside the session settings panel.
+// ComposerKnowledgeControl 在会话设置面板内渲染会话级知识库勾选列表。
 export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
   // t resolves session knowledge-control copy in the active WebUI language.
   // t 使用当前 WebUI 语言解析会话知识库控件文案。
@@ -106,8 +100,8 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
   const retryFocusPending = React.useRef(false);
   // inheritItem and retryItem name the two exact focus destinations across recovery.
   // inheritItem 与 retryItem 标识恢复过程中的两个精确焦点目标。
-  const inheritItem = React.useRef<HTMLDivElement>(null);
-  const retryItem = React.useRef<HTMLDivElement>(null);
+  const inheritItem = React.useRef<HTMLButtonElement>(null);
+  const retryItem = React.useRef<HTMLButtonElement>(null);
 
   React.useLayoutEffect(() => {
     if (!retryFocusPending.current || loading) return;
@@ -258,83 +252,68 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
     error,
   ]);
 
-  // effectiveCount is the enabled-library count shown on the knowledge submenu trigger.
-  // effectiveCount 是知识库子菜单入口显示的已启用知识库数量。
+  // effectiveCount is the enabled-library count shown beside the knowledge heading.
+  // effectiveCount 是知识库标题旁显示的已启用知识库数量。
   const effectiveCount = selection?.effectiveLibraryIds.length ?? 0;
   // selectionDisabled requires a current authoritative projection and an exact writable owner.
   // selectionDisabled 要求当前权威投影及精确可写归属。
   const selectionDisabled = loading || Boolean(error) || !selection || !props.projectId
     || (!props.conversationId && !props.onDraftSelectionChange);
   return (
-    <RequestedSettingsSub section="knowledge" onOpenChange={(open) => {
-      if (open) void refresh();
-    }}>
-      <DropdownMenuSubTrigger aria-label={t("knowledge.composer.aria")}>
-        <BookMarked size={15} />
-        <span>
-          {effectiveCount > 0
-            ? `${t("knowledge.composer.label")} ${effectiveCount}`
-            : t("knowledge.composer.label")}
-        </span>
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="composer-knowledge-menu w-80">
-        <DropdownMenuItem onSelect={props.onOpenKnowledge}>
-          <Settings2 size={15} />
-          <span>{t("knowledge.composer.manage")}</span>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuCheckboxItem
+    <div aria-busy={loading} className="vk-ss-block" data-ss-section="knowledge">
+      <div className="vk-ss-sub">
+        <BookMarked size={14} />
+        <span>{t("knowledge.composer.label")}</span>
+        {effectiveCount > 0 ? <span className="vk-ss-count vk-num">{effectiveCount}</span> : null}
+        <Button className="vk-ss-sub-action" onClick={props.onOpenKnowledge} size="xs" type="button" variant="ghost">
+          <Settings2 size={13} />
+          {t("knowledge.composer.manage")}
+        </Button>
+      </div>
+      <div aria-label={t("knowledge.composer.aria")} className="vk-ss-checks" role="group">
+        <SessionSettingsCheck
           ref={inheritItem}
           checked={selection?.mode === "inherit"}
           disabled={selectionDisabled}
           onCheckedChange={(checked) => void persist(checked ? "inherit" : "explicit", checked ? [] : selection?.effectiveLibraryIds ?? [])}
-          onSelect={(event) => event.preventDefault()}
         >
           {t("knowledge.composer.inherit")}
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
-        {loading ? <StreamPlaceholder className="px-2 py-1.5" label={t("knowledge.composer.loading")} count={2} /> : null}
+        </SessionSettingsCheck>
+        {loading ? <StreamPlaceholder className="vk-ss-note" label={t("knowledge.composer.loading")} count={2} /> : null}
         {error ? (
           <>
-            <p role="alert" className="px-2 py-1.5 text-xs text-destructive">{t(`knowledge.composer.${error.phase}Failed`)}</p>
-            <DropdownMenuItem ref={retryItem} disabled={loading} onSelect={(event) => {
-              event.preventDefault(); retryFocusPending.current = true; void refresh();
-            }}>
-              <RefreshCw size={15} /><span>{t("knowledge.composer.retry")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem aria-expanded={errorExpanded} onSelect={(event) => { event.preventDefault(); setErrorExpanded(!errorExpanded); }}>
-              {t("knowledge.composer.details")}
-            </DropdownMenuItem>
-            {errorExpanded ? <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words px-2 py-1.5 text-xs text-muted-foreground">{error.message}</pre> : null}
+            <p role="alert" className="vk-ss-note" data-tone="bad">{t(`knowledge.composer.${error.phase}Failed`)}</p>
+            <div className="vk-ss-actions">
+              <Button ref={retryItem} disabled={loading} onClick={() => {
+                retryFocusPending.current = true; void refresh();
+              }} size="xs" type="button" variant="outline">
+                <RefreshCw size={13} />{t("knowledge.composer.retry")}
+              </Button>
+              <Button aria-expanded={errorExpanded} onClick={() => setErrorExpanded(!errorExpanded)} size="xs" type="button" variant="ghost">
+                {t("knowledge.composer.details")}
+              </Button>
+            </div>
+            {errorExpanded ? <pre className="vk-ss-note">{error.message}</pre> : null}
           </>
         ) : loading && !selection ? null : libraries.length === 0 ? (
-          <DropdownMenuItem disabled>{t("knowledge.composer.noneAuthorized")}</DropdownMenuItem>
+          <p className="vk-ss-note">{t("knowledge.composer.noneAuthorized")}</p>
         ) : (
-          libraries.map((library) => {
-            // checked reflects the service-authoritative effective state in both inherited and explicit modes.
-            // checked 在继承与显式模式下都反映服务端权威的实际生效状态。
-            const checked = selection?.effectiveLibraryIds.includes(library.id) ?? false;
-            return (
-              <DropdownMenuCheckboxItem
-                checked={checked}
-                disabled={selectionDisabled}
-                key={library.id}
-                onCheckedChange={(nextChecked) => {
-                  const nextIds = nextExplicitKnowledgeLibraryIds(
-                    selection,
-                    library.id,
-                    Boolean(nextChecked),
-                  );
-                  void persist("explicit", nextIds);
-                }}
-                onSelect={(event) => event.preventDefault()}
-              >
-                <span className="min-w-0 flex-1 truncate" title={library.name}>{library.name}</span>
-              </DropdownMenuCheckboxItem>
-            );
-          })
+          libraries.map((library) => (
+            // Checked reflects the service-authoritative effective state in both inherited and explicit modes.
+            // 勾选状态在继承与显式模式下都反映服务端权威的实际生效状态。
+            <SessionSettingsCheck
+              checked={selection?.effectiveLibraryIds.includes(library.id) ?? false}
+              disabled={selectionDisabled}
+              icon={<Library size={14} />}
+              key={library.id}
+              onCheckedChange={(nextChecked) => void persist("explicit", nextExplicitKnowledgeLibraryIds(selection, library.id, nextChecked))}
+              title={library.name}
+            >
+              {library.name}
+            </SessionSettingsCheck>
+          ))
         )}
-      </DropdownMenuSubContent>
-    </RequestedSettingsSub>
+      </div>
+    </div>
   );
 }

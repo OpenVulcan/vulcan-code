@@ -58,6 +58,31 @@ test('keeps TypeScript strings that contain comment markers intact', () => {
   assert.equal(code.length, source.length);
 });
 
+test('keeps counting after a TypeScript regex literal that contains quotes', () => {
+  const source = [
+    'expect(markup.match(/class="row"/g)).toHaveLength(1);',
+    "expect(text).toMatch(/it's [\"/]/u);",
+    'expect(markup).toContain("缓存");',
+    'expect(markup).toContain("命中");',
+  ].join('\n');
+  assert.equal(countWordingAssertions(source, 'typescript'), 2);
+});
+
+test('counts a TypeScript regex literal with CJK inside an assertion', () => {
+  assert.equal(countWordingAssertions('expect(markup).not.toMatch(/已知|known/);', 'typescript'), 1);
+});
+
+test('treats divisions and JSX closing tags as code, not regex literals', () => {
+  const source = [
+    'const half = total / 2 / count;',
+    'const node = <b title="t">x</b>;',
+    'const self = <Icon size={2} />;',
+    'expect(value).toBe("值");',
+  ].join('\n');
+  assert.equal(countWordingAssertions(source, 'typescript'), 1);
+  assert.equal(tokenize(source, 'typescript').code.length, source.length);
+});
+
 test('reports files above the baseline and files whose count dropped', () => {
   const counts = new Map([
     ['a.rs', 3],

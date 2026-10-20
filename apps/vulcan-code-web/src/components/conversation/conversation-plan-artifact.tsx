@@ -2,12 +2,13 @@ import React from "react";
 import {
   Check,
   ChevronDown,
-  ChevronUp,
+  ClipboardList,
   Copy,
   PlayCircle,
   Send,
   X,
 } from "lucide-react";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
 
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import {
@@ -163,60 +164,56 @@ export function PlanArtifactBlock(props: {
 
   return (
     <section
-      className="plan-artifact-card"
+      className="vk-plan"
       data-plan-artifact-pending={props.pending ? "true" : "false"}
       data-plan-artifact-expanded={expanded ? "true" : "false"}
     >
-      <header className="plan-artifact-card-header">
-        <div className="plan-artifact-card-title">
-          <span>{props.artifact.name || t("planArtifact.titleFallback")}</span>
-        </div>
-        <div className="plan-artifact-card-actions">
-          <button
+      <header className="vk-plan-head">
+        <ClipboardList aria-hidden="true" />
+        <strong>{props.artifact.name || t("planArtifact.titleFallback")}</strong>
+        <div className="vk-actions">
+          <IconButton
             aria-label={copied ? t("planArtifact.copied") : t("planArtifact.copy")}
-            className="plan-artifact-icon-button"
             onClick={() => void handleCopy()}
             title={copied ? t("planArtifact.copied") : t("planArtifact.copy")}
             type="button"
           >
-            {copied ? <Check size={15} /> : <Copy size={15} />}
-          </button>
-          <button
+            {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+          </IconButton>
+          <IconButton
             aria-expanded={expanded}
             aria-label={expanded ? t("planArtifact.collapse") : t("planArtifact.expand")}
-            className="plan-artifact-icon-button plan-artifact-collapse-toggle"
+            className="vk-plan-toggle"
             onClick={() => {
               setExpanded(!expanded);
             }}
             title={expanded ? t("planArtifact.collapse") : t("planArtifact.expand")}
             type="button"
           >
-            {expanded ? (
-              <ChevronUp className="plan-artifact-collapse-icon" size={16} />
-            ) : (
-              <ChevronDown className="plan-artifact-collapse-icon" size={16} />
-            )}
-          </button>
+            <ChevronDown aria-hidden="true" />
+          </IconButton>
         </div>
       </header>
-      <div className="plan-artifact-card-body">
+      <div className="vk-plan-body">
         <ConversationMeasuredCollapse
           collapseId={`plan-artifact-body:${artifactKey}`}
           collapsedHeight={collapsedPreviewHeight}
           expanded={expanded}
         >
-          <div className="plan-artifact-markdown-frame">
+          <div className="vk-plan-doc">
             <MarkdownMessage content={props.artifact.content} eager />
             {!expanded ? (
-              <button
-                className="plan-artifact-expand-overlay"
+              <Button
+                className="vk-plan-reveal"
                 onClick={() => {
                   setExpanded(true);
                 }}
+                size="sm"
                 type="button"
+                variant="outline"
               >
                 {t("planArtifact.expand")}
-              </button>
+              </Button>
             ) : null}
           </div>
         </ConversationMeasuredCollapse>
@@ -227,14 +224,15 @@ export function PlanArtifactBlock(props: {
           aria-activedescendant={`plan-artifact-action-${selectedAction}`}
           aria-label={t("planArtifact.confirmAria")}
           aria-busy={actionPending}
-          className="plan-artifact-confirmation"
+          className="vk-plan-confirm"
           onKeyDown={handleConfirmationKeyDown}
           tabIndex={0}
         >
           <textarea
             ref={noteInputRef}
             aria-label={t("planArtifact.noteAria")}
-            className="plan-artifact-note-input"
+            className="vk-input vk-textarea vk-plan-note"
+            data-density="compact"
             disabled={actionsDisabled}
             onChange={(event) => setNote(event.currentTarget.value)}
             onInput={(event) => resizePlanNoteInput(event.currentTarget)}
@@ -242,35 +240,39 @@ export function PlanArtifactBlock(props: {
             rows={1}
             value={note}
           />
-          <div className="plan-artifact-action-row">
-            <button
-              id="plan-artifact-action-execute"
-              aria-pressed={selectedAction === "execute"}
-              className="plan-artifact-action-choice plan-artifact-action-choice-primary"
-              disabled={actionsDisabled}
-              onClick={() => {
-                setSelectedAction("execute");
-                execute();
-              }}
-              type="button"
-            >
-              <PlayCircle size={13} />
-              <span>{noteHasContent ? t("planArtifact.executeWithNote") : t("planArtifact.execute")}</span>
-            </button>
-            <button
+          <div className="vk-plan-choices">
+            <Button
               id="plan-artifact-action-defer"
               aria-pressed={selectedAction === "defer"}
-              className="plan-artifact-action-choice"
+              className="vk-plan-choice"
               disabled={actionsDisabled}
               onClick={() => {
                 setSelectedAction("defer");
                 suggest();
               }}
+              size="sm"
               type="button"
+              variant="outline"
             >
-              {noteHasContent ? <Send size={13} /> : <X size={13} />}
+              {noteHasContent ? <Send aria-hidden="true" /> : <X aria-hidden="true" />}
               <span>{noteHasContent ? t("planArtifact.suggest") : t("planArtifact.defer")}</span>
-            </button>
+            </Button>
+            <Button
+              id="plan-artifact-action-execute"
+              aria-pressed={selectedAction === "execute"}
+              className="vk-plan-choice"
+              disabled={actionsDisabled}
+              onClick={() => {
+                setSelectedAction("execute");
+                execute();
+              }}
+              size="sm"
+              type="button"
+              variant="ember"
+            >
+              <PlayCircle aria-hidden="true" />
+              <span>{noteHasContent ? t("planArtifact.executeWithNote") : t("planArtifact.execute")}</span>
+            </Button>
           </div>
         </div>
       ) : null}

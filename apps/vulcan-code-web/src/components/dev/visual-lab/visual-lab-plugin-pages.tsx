@@ -5,14 +5,14 @@ import {
 } from "@/components/page"
 import { createPluginSettingsPage, type PluginSettingsHost } from "@/components/plugins/plugin-settings-page"
 import type { PluginCredentialStatus, PluginSettingsLayout } from "@/components/plugins/plugin-settings-layout"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
 
 import type { VisualLabDemoProps, VisualLabText } from "./visual-lab-shared"
 
 // Real mounts load plugin-only styles at the mount boundary; the lab renders the same components directly, so it loads them here.
 // 真实挂载在挂载边界加载插件专用样式；实验室直接渲染相同组件，因此在此加载。
-import "@/styles/plugin-host-components.css"
+import "@/ui-kit/styles/features/plugin-host-components.css"
 
 // DEMO_LATENCY_MS makes every synthetic action resolve asynchronously, like a real plugin action.
 // DEMO_LATENCY_MS 让每个合成 Action 都异步完成，与真实插件 Action 一致。

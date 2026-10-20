@@ -3,10 +3,10 @@ import * as React from "react"
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
 import { usageCapabilityRequiresManagementKey } from "@/components/public-ai/credential-usage-capability"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
+import { Button } from "@/ui-kit/primitives/button"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
 import {
   Dialog,
   DialogContent,
@@ -14,7 +14,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/ui-kit/primitives/dialog"
 import { useI18n } from "@/i18n"
 import {
   addPublicAiConnection,
@@ -34,6 +34,7 @@ import type {
   PublicAiSettingsSnapshot,
 } from "@/types"
 import { errorMessage } from "@/lib/display-format";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // credentialSupportsModelSynchronization identifies directories whose model membership can change remotely.
 // credentialSupportsModelSynchronization 标识模型成员可由远端变化的目录。
@@ -125,10 +126,10 @@ export function PublicAiDeleteConnectionDialog(props: {
           </DialogDescription>
         </DialogHeader>
         {props.isProviderDefault && replacements.length > 0 ? (
-          <div className="settings-field">
+          <div className="vk-field">
             <span>{t("settings.credentials.replacementDefault")}</span>
             <Select disabled={saving} onValueChange={setReplacementId} value={replacementId}>
-              <SelectTrigger aria-label={t("settings.credentials.replacementDefault")} className="w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label={t("settings.credentials.replacementDefault")}><SelectValue /></SelectTrigger>
               <SelectContent>
               {replacements.map((connection) => (
                 <SelectItem key={connection.id} value={connection.id}>{connection.display_name}</SelectItem>
@@ -137,7 +138,7 @@ export function PublicAiDeleteConnectionDialog(props: {
             </Select>
           </div>
         ) : null}
-        {error ? <p className="settings-error-text" role="alert">{error}</p> : null}
+        {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
         <DialogFooter>
           <Button disabled={saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">
             {t("settings.credentials.cancel")}
@@ -483,7 +484,7 @@ export function PublicAiConnectionDialog(props: {
         props.onOpenChange(open)
       }}
     >
-      <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="lg">
+      <DialogContent scrollMode="fixed-footer" size="lg">
         <DialogHeader>
           <DialogTitle>
             {props.connection
@@ -496,8 +497,8 @@ export function PublicAiConnectionDialog(props: {
               : t("settings.credentials.modelDescription")}
           </DialogDescription>
         </DialogHeader>
-        <fieldset className="settings-form-grid min-h-0 flex-1 overflow-y-auto" disabled={saving || cancelling || pendingAuthorization !== null}>
-          <label className="settings-form-field">
+        <fieldset className="vk-form-stack vk-form-fill vk-form-scroll" disabled={saving || cancelling || pendingAuthorization !== null}>
+          <label className="vk-field">
             <span>{t("settings.credentials.provider")}</span>
             <span className="provider-credential-select">
               <ProviderIcon category={provider?.category} providerId={provider?.id} />
@@ -509,7 +510,7 @@ export function PublicAiConnectionDialog(props: {
                 }}
                 value={provider?.id ?? ""}
               >
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {props.providers.map((item) => (
                     <SelectItem key={item.id} value={item.id}>
@@ -520,7 +521,7 @@ export function PublicAiConnectionDialog(props: {
               </Select>
             </span>
           </label>
-          {provider && provider.service_entries.length > 1 && <label className="settings-form-field">
+          {provider && provider.service_entries.length > 1 && <label className="vk-field">
             <span>{t("settings.credentials.serviceEntry")}</span>
             {provider?.credential_registration === "mini_max_regional_api_key"
               && credentialMode === "token" ? (
@@ -535,14 +536,14 @@ export function PublicAiConnectionDialog(props: {
                 }}
                 value={entry?.id ?? ""}
               >
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {(provider?.service_entries ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{item.display_name}</SelectItem>)}
                 </SelectContent>
               </Select>
             )}
           </label>}
-          <label className="settings-form-field">
+          <label className="vk-field">
             <span>{t("settings.credentials.credentialType")}</span>
             <Select
               onValueChange={(value) => {
@@ -552,7 +553,7 @@ export function PublicAiConnectionDialog(props: {
               }}
               value={credentialProfile?.id ?? ""}
             >
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
               {(entry?.credential_profiles ?? []).map((profile) => (
                 <SelectItem key={profile.id} value={profile.id}>{profile.display_name}</SelectItem>
@@ -560,12 +561,12 @@ export function PublicAiConnectionDialog(props: {
               </SelectContent>
             </Select>
           </label>
-          <label className="settings-form-field">
+          <label className="vk-field">
             <span>{t("settings.credentials.displayName")}</span>
             <Input onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
           </label>
           {credentialMode === "token" ? (
-            <label className="settings-form-field">
+            <label className="vk-field">
               <span>{props.connection ? t("settings.credentials.replaceToken") : t("settings.credentials.apiToken")}</span>
               <Input
                 autoComplete="off"
@@ -576,7 +577,7 @@ export function PublicAiConnectionDialog(props: {
             </label>
           ) : null}
           {supportsServiceOriginOverride ? (
-            <label className="settings-form-field">
+            <label className="vk-field">
               <span>{t("settings.providerConnection.serviceOrigin")}</span>
               <Input
                 autoComplete="off"
@@ -589,7 +590,7 @@ export function PublicAiConnectionDialog(props: {
           ) : null}
           {credentialProfile
             && usageCapabilityRequiresManagementKey(credentialProfile.account_usage_query) ? (
-            <div className="settings-form-field">
+            <div className="vk-field">
               <span>{t("settings.credentials.managementKey")}</span>
               <Input
                 autoComplete="off"
@@ -613,11 +614,11 @@ export function PublicAiConnectionDialog(props: {
           {credentialMode === "auth"
             && (registeredOauthProvider === "google_code_assist" || registeredOauthProvider === "google_gemini") ? (
             <>
-              <label className="settings-form-field">
+              <label className="vk-field">
                 <span>Google OAuth Client ID</span>
                 <Input onChange={(event) => setOauthClientId(event.target.value)} value={oauthClientId} />
               </label>
-              <label className="settings-form-field">
+              <label className="vk-field">
                 <span>{t("settings.credentials.oauthClientSecretOptional")}</span>
                 <Input
                   autoComplete="off"
@@ -627,7 +628,7 @@ export function PublicAiConnectionDialog(props: {
                 />
               </label>
               {registeredOauthProvider === "google_gemini" ? (
-                <label className="settings-form-field">
+                <label className="vk-field">
                   <span>Google Cloud Project ID</span>
                   <Input
                     onChange={(event) => setOauthProjectId(event.target.value)}
@@ -639,7 +640,7 @@ export function PublicAiConnectionDialog(props: {
           ) : null}
         </fieldset>
         {oauthTransaction ? (
-          <div className="settings-muted-line">
+          <div className="vk-form-note">
             <span>
               {t("settings.credentials.authorizationStatus")}{t("global.labelSeparator")}{oauthPhaseDisplayName(oauthTransaction.phase, t)}
               {oauthTransaction.message ? ` · ${oauthTransaction.message}` : ""}
@@ -647,7 +648,7 @@ export function PublicAiConnectionDialog(props: {
             {oauthUserCode ? <strong>{t("settings.credentials.authorizationCode")}{t("global.labelSeparator")}{oauthUserCode}</strong> : null}
           </div>
         ) : null}
-        {error ? <p className="settings-muted-line settings-error-text" role="alert">{error}</p> : null}
+        {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
         <DialogFooter>
           <Button
             disabled={saving || cancelling}

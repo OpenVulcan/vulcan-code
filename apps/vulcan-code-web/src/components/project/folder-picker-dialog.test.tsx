@@ -6,7 +6,7 @@ import { I18nProvider } from "@/i18n"
 import type { ProjectDirectoryListing } from "@/types"
 import { ProjectFolderPickerDialog, projectFolderPickerCrumbs, projectFolderPickerPlaces } from "./folder-picker-dialog"
 
-vi.mock("@/components/ui/dialog", () => ({
+vi.mock("@/ui-kit/primitives/dialog", () => ({
   Dialog: (props: { open: boolean; children: ReactNode }) => props.open ? <div>{props.children}</div> : null,
   DialogContent: (props: { children: ReactNode }) => <div>{props.children}</div>,
   DialogDescription: (props: { children: ReactNode }) => <p>{props.children}</p>,

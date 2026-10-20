@@ -1,10 +1,13 @@
 import * as React from "react"
-import { Button } from "@/components/ui/button"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { PageEmptyState } from "@/components/page"
+import { Button } from "@/ui-kit/primitives/button"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/ui-kit/primitives/dialog"
+import { Tabs, TabsList, TabsTrigger } from "@/ui-kit/primitives/tabs"
 import { useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeRecycleBatchSummary, VmmNativeRecycleRecord, VmmNativeRecycleRecordKind, VmmNativeRecycleRecordPage } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // Defines the exact inspected batch and existing read-only action transport.
 // 定义准确查看批次及既有只读动作传输。
@@ -62,26 +65,26 @@ export function VmmNativeRecycleRecords({ batch, busy, onRunAction }: RecycleRec
   }
 
   return <Dialog open={open} onOpenChange={(visible) => { setOpen(visible); if (!visible) { generation.current += 1; setPage(null); setPending(false) } }}>
-    <DialogTrigger asChild><Button type="button" size="sm" variant="outline" disabled={busy || pending} onClick={() => void load("turn", 0, null)}>{t("memory.recycleRecords.inspect")}</Button></DialogTrigger>
-      <DialogContent className="flex min-h-0 flex-col" size="xl" scrollMode="fixed-footer">
-        <DialogHeader className="shrink-0"><DialogTitle>{t("memory.recycleRecords.inspect")}</DialogTitle><DialogDescription>{t("memory.recycleRecords.description")}</DialogDescription></DialogHeader>
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
-        <p className="break-all font-mono text-xs text-muted-foreground">{batch.batchId}</p>
+    <DialogTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={busy || pending} onClick={() => void load("turn", 0, null)}>{t("memory.recycleRecords.inspect")}</Button></DialogTrigger>
+      <DialogContent size="xl" scrollMode="fixed-footer">
+        <DialogHeader><DialogTitle>{t("memory.recycleRecords.inspect")}</DialogTitle><DialogDescription>{t("memory.recycleRecords.description")}</DialogDescription></DialogHeader>
+        <div className="vk-form-stack vk-mem-scroll-body">
+        <p className="vk-form-codeline vk-faint">{batch.batchId}</p>
         <Tabs value={kind} onValueChange={(value) => { if (!busy && !pending) void load(value as VmmNativeRecycleRecordKind, 0, null) }}>
           {/* Keep the current tab focusable while its request runs; inactive tabs cannot start competing reads.
               当前分页请求期间保留焦点，其余分页不可发起竞争读取。 */}
           <TabsList>{(Object.keys(kinds) as VmmNativeRecycleRecordKind[]).map((value) => <TabsTrigger key={value} value={value} disabled={(busy || pending) && value !== kind} aria-disabled={busy || pending}>{t(kinds[value])}</TabsTrigger>)}</TabsList>
         </Tabs>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="vk-form-inline">
           <Button type="button" variant="outline" disabled={busy || pending} onClick={() => void load(kind, 0, null)}>{t("memory.recycleRecords.reload")}</Button>
-          {page ? <span className="text-sm text-muted-foreground">{t("memory.recycleRecords.total").replace("{count}", String(page.total))}</span> : null}
+          {page ? <span className="vk-form-text">{t("memory.recycleRecords.total").replace("{count}", String(page.total))}</span> : null}
         </div>
         {pending ? <StreamPlaceholder fill label={t("memory.resources.loading")} shape="rows" count={4} /> : null}
-        {error ? <p role="alert" className="text-sm text-destructive">{t("memory.recycleRecords.failed")}</p> : null}
-        {page?.records.length === 0 ? <p className="rounded border border-dashed p-5 text-muted-foreground">{t("memory.recycleRecords.empty")}</p> : null}
+        {error ? <p role="alert" className="vk-field-error">{t("memory.recycleRecords.failed")}</p> : null}
+        {page?.records.length === 0 ? <PageEmptyState title={t("memory.recycleRecords.empty")} /> : null}
         {page?.records.map((record) => <RecycleRecord key={recordKey(record)} record={record} />)}
         </div>
-        {page ? <div className="flex shrink-0 flex-wrap gap-2">
+        {page ? <div className="vk-form-inline">
           <Button type="button" variant="outline" disabled={busy || pending || page.query.offset === 0} onClick={() => void load(kind, Math.max(0, page.query.offset - page.query.limit), page.storageVersion)}>{t("memory.recycleRecords.previous")}</Button>
           <Button type="button" variant="outline" disabled={busy || pending || page.nextOffset === null} onClick={() => { if (page.nextOffset !== null) void load(kind, page.nextOffset, page.storageVersion) }}>{t("memory.recycleRecords.next")}</Button>
         </div> : null}
@@ -104,20 +107,20 @@ function recordKey(record: VmmNativeRecycleRecord): string {
 // 将保留文本渲染为只读业务内容，不暴露原始存储 JSON。
 function RecycleRecord({ record }: { record: VmmNativeRecycleRecord }) {
   const { t } = useI18n()
-  return <article className="min-w-0 space-y-2 rounded-lg border p-4">
-    <p className="break-all font-mono text-xs text-muted-foreground">{record.kind === "evidence" ? record.memoryId : recordKey(record)}</p>
-    {(record.kind === "turn" || record.kind === "memory") && record.sessionSourceId ? <p className="break-all text-xs">{t("memory.recycleRecords.session")}: {record.sessionSourceId}</p> : null}
+  return <article className="vk-form-box">
+    <p className="vk-form-codeline vk-faint">{record.kind === "evidence" ? record.memoryId : recordKey(record)}</p>
+    {(record.kind === "turn" || record.kind === "memory") && record.sessionSourceId ? <p className="vk-form-codeline">{t("memory.recycleRecords.session")}: {record.sessionSourceId}</p> : null}
     {record.kind === "turn" ? <>
-      <p className="text-xs text-muted-foreground">{t("memory.recycleRecords.savedStatus")}: {record.status}</p>
-      {record.timeline.map((item, index) => <div key={index} className="rounded bg-muted/40 p-3"><p className="mb-1 text-xs text-muted-foreground">{item.role}</p><p className="whitespace-pre-wrap break-words text-sm">{item.content}</p></div>)}
-      {record.analysisDetails ? <div><p className="text-xs text-muted-foreground">{t("memory.nativeRecords.analysisDetails")}</p><p className="whitespace-pre-wrap break-words text-sm">{record.analysisDetails}</p></div> : null}
+      <p className="vk-form-note">{t("memory.recycleRecords.savedStatus")}: {record.status}</p>
+      {record.timeline.map((item, index) => <div key={index} className="vk-form-well"><p className="vk-form-note">{item.role}</p><p className="vk-form-prose">{item.content}</p></div>)}
+      {record.analysisDetails ? <div><p className="vk-form-note">{t("memory.nativeRecords.analysisDetails")}</p><p className="vk-form-prose">{record.analysisDetails}</p></div> : null}
     </> : null}
     {record.kind === "memory" ? <>
-      <p className="whitespace-pre-wrap break-words font-medium">{record.summary}</p><p className="whitespace-pre-wrap break-words text-sm">{record.content}</p>
-      <p className="break-all text-xs text-muted-foreground">{record.level} · {record.state} · {record.sourceKind}</p>
-      {record.sourceTurnId ? <p className="break-all text-xs">{t("memory.recycleRecords.sourceTurns")}: {record.sourceTurnId}</p> : null}
+      <p className="vk-form-prose vk-form-em">{record.summary}</p><p className="vk-form-prose">{record.content}</p>
+      <p className="vk-form-note vk-form-break">{record.level} · {record.state} · {record.sourceKind}</p>
+      {record.sourceTurnId ? <p className="vk-form-codeline">{t("memory.recycleRecords.sourceTurns")}: {record.sourceTurnId}</p> : null}
     </> : null}
-    {record.kind === "profile" ? <><p className="text-xs">{t(record.target === "user" ? "memory.recycleRecords.userProfile" : "memory.recycleRecords.projectProfile")}</p><p className="whitespace-pre-wrap break-words text-sm">{record.content}</p><p className="break-all text-xs">{t("memory.recycleRecords.sourceTurns")}: {record.sourceTurnIds.join(", ")}</p></> : null}
-    {record.kind === "evidence" ? <><p className="whitespace-pre-wrap break-words text-sm">{record.contextKey}: {record.contextValue}</p><p className="text-xs">{t("memory.recycleRecords.support")}: {record.supportCount} · {t("memory.recycleRecords.rebuttal")}: {record.rebuttalCount}</p></> : null}
+    {record.kind === "profile" ? <><p className="vk-form-xs">{t(record.target === "user" ? "memory.recycleRecords.userProfile" : "memory.recycleRecords.projectProfile")}</p><p className="vk-form-prose">{record.content}</p><p className="vk-form-codeline">{t("memory.recycleRecords.sourceTurns")}: {record.sourceTurnIds.join(", ")}</p></> : null}
+    {record.kind === "evidence" ? <><p className="vk-form-prose">{record.contextKey}: {record.contextValue}</p><p className="vk-form-xs">{t("memory.recycleRecords.support")}: {record.supportCount} · {t("memory.recycleRecords.rebuttal")}: {record.rebuttalCount}</p></> : null}
   </article>
 }

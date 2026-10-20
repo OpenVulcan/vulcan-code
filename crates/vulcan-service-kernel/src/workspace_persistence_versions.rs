@@ -546,6 +546,9 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         provider_configuration,
         public_ai_runtime,
         workspace: &workspace_snapshot,
+        project_tree: &vulcan_workspace_store::workspace_store::load_project_tree(
+            controller_runtime,
+        )?,
         pending_prompt_process_mirrors: &guard.pending_prompt_process_mirrors,
         vmm_session_states: &vmm_session_states,
         native_vmm_host_ai_status: guard

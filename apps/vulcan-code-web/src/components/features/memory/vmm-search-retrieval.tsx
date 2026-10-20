@@ -1,5 +1,7 @@
 import { useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemorySearchRetrieval } from "@/types"
+import "@/ui-kit/styles/features/memory.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Localize known creation tokens while preserving an unknown server token without guessing its meaning.
 // 本地化已知创建标记；保留未知服务端标记，不猜测其含义。
@@ -22,11 +24,11 @@ export function VmmSearchRetrieval({ retrieval }: { retrieval: VmmMemorySearchRe
   // roundedAdjustment prevents a rounded negative zero while preserving the exact value in the title.
   // roundedAdjustment 避免舍入后出现负零，同时在标题中保留准确值。
   const roundedAdjustment = adjustment === null ? null : Number(adjustment.toFixed(4))
-  return <details className="min-w-0 rounded-md border p-2 text-xs [overflow-wrap:anywhere]">
-    <summary className="cursor-pointer truncate font-medium" title={`${retrieval.origin_label}\n${retrieval.origin_explanation}`}>{t("memory.content.retrieval")} · {retrieval.origin_label}</summary>
-    <dl className="mt-2 grid grid-cols-2 gap-2 [&>dd]:min-w-0">
+  return <details className="vk-mem-disclosure vk-form-xs vk-form-break">
+    <summary className="vk-truncate vk-form-em" title={`${retrieval.origin_label}\n${retrieval.origin_explanation}`}>{t("memory.content.retrieval")} · {retrieval.origin_label}</summary>
+    <dl className="vk-facts vk-form-after">
       <dt>{t("memory.content.finalScore")}</dt><dd>{retrieval.final_score.toFixed(4)}</dd>
-      <dt>{t("memory.content.creationSource")}</dt><dd className="truncate" title={sourceLabel ? t(sourceLabel) : retrieval.source_kind}>{sourceLabel ? t(sourceLabel) : retrieval.source_kind}</dd>
+      <dt>{t("memory.content.creationSource")}</dt><dd className="vk-truncate" title={sourceLabel ? t(sourceLabel) : retrieval.source_kind}>{sourceLabel ? t(sourceLabel) : retrieval.source_kind}</dd>
       {retrieval.context_observed ? <>
         <dt>{t("memory.content.totalEvidence")}</dt><dd>{retrieval.support_count} / {retrieval.rebuttal_count}</dd>
         <dt>{t("memory.content.matchedEvidence")}</dt><dd>{retrieval.matched_context_support_count} / {retrieval.matched_context_rebuttal_count}</dd>
@@ -34,7 +36,7 @@ export function VmmSearchRetrieval({ retrieval }: { retrieval: VmmMemorySearchRe
       </> : null}
     </dl>
     {retrieval.context_observed && retrieval.matched_context_values.length > 0
-      ? <p className="mt-2 break-words">{retrieval.matched_context_values.join(" · ")}</p> : null}
-    {!retrieval.context_observed ? <p className="mt-2 text-muted-foreground">{t("memory.content.contextNotObserved")}</p> : null}
+      ? <p className="vk-form-break vk-form-after">{retrieval.matched_context_values.join(" · ")}</p> : null}
+    {!retrieval.context_observed ? <p className="vk-faint vk-form-after">{t("memory.content.contextNotObserved")}</p> : null}
   </details>
 }

@@ -506,7 +506,11 @@ pub(crate) fn refresh_settings_projection_locked(
         provider_configuration.provider_request_trace_enabled;
     guard.workbench.provider_error_trace_enabled =
         provider_configuration.provider_error_trace_enabled;
-    guard.workbench.host_tools = host_tools_settings(provider_configuration);
+    // Settings saves never rebuild the native tool catalog, so the published rows are carried over.
+    // 设置保存不会重建原生工具目录，因此沿用已发布的工具行。
+    let native_tools = std::mem::take(&mut guard.workbench.host_tools.native_tools);
+    guard.workbench.host_tools =
+        host_tools_settings_with_native_tools(provider_configuration, native_tools);
     guard.workbench.output_style_catalog = output_style_catalog_summary(provider_configuration);
     guard.workbench.default_answer_mode =
         crate::answer_mode::global_answer_mode(provider_configuration);

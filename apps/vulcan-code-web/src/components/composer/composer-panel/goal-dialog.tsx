@@ -4,10 +4,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+} from "@/ui-kit/primitives/dialog";
+import { Textarea } from "@/ui-kit/primitives/textarea";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
 import { useI18n } from "@/i18n";
 
 // ComposerGoalDialogProps carries the controlled goal editing dialog state.
@@ -52,14 +52,13 @@ export function ComposerGoalDialog(props: ComposerGoalDialogProps) {
   const { t } = useI18n();
   return (
     <Dialog open={props.open} onOpenChange={(open) => { if (!props.saving) props.onOpenChange(open); }}>
-      <DialogContent size="sm" scrollMode="fixed-footer" className="grid-rows-[auto_minmax(0,1fr)_auto]">
+      <DialogContent size="sm" scrollMode="fixed-footer">
         <DialogHeader>
           <DialogTitle>{props.mode === "resume" ? t("composer.goalDialog.resumeTitle") : t("composer.goalDialog.editTitle")}</DialogTitle>
         </DialogHeader>
-        <div className="composer-goal-dialog-body min-h-0 overflow-y-auto">
+        <div className="vk-goal-form">
           <Textarea
             aria-label={t("composer.goalDialog.objectiveAria")}
-            className="composer-goal-objective-input"
             disabled={props.saving}
             onChange={(event) => props.onObjectiveChange(event.currentTarget.value)}
             placeholder={t("composer.goalDialog.objectivePlaceholder")}
@@ -67,7 +66,6 @@ export function ComposerGoalDialog(props: ComposerGoalDialogProps) {
           />
           <Input
             aria-label={t("composer.goalDialog.tokenBudgetAria")}
-            className="composer-goal-budget-input"
             disabled={props.saving}
             inputMode="numeric"
             onChange={(event) => props.onTokenBudgetChange(event.currentTarget.value)}

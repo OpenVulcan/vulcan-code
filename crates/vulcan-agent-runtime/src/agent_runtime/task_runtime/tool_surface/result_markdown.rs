@@ -165,7 +165,7 @@ fn project(
         kind: if tool == CLOSE_AGENT_TOOL {
             String::from("subagent_control")
         } else {
-            String::from("subagent_receipt_v1")
+            String::from(vulcan_subagent_core::SUBAGENT_RECEIPT_KIND)
         },
         payload,
     });

@@ -9,9 +9,9 @@ import { WorkspaceContextPanel, type WorkspaceContextPanelProps } from "./worksp
 import { WorkspaceResizableBody } from "./workspace-resizable-body";
 import { WorkspaceFilesPanelHost } from "./workspace-files-panel-host";
 import { DEFAULT_WORKSPACE_FILE_FILTERS } from "@/service/workbench-snapshot-service";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { ConversationSessionTodolistPanel } from "@/components/conversation/session-todolist-panel";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 
 // Replace transcript IO and unrelated descendants, preserving the actual workspace controls and Radix dialogs.
 // 替换转录输入输出及无关后代，保留真实工作区控件和 Radix 弹窗。
@@ -19,23 +19,30 @@ vi.mock("@/components/conversation/conversation-branch-workspace-v1", () => ({ C
 vi.mock("@/state/conversation-live-stream-context", () => ({ useConversationTransientReasoningStatus: () => null }));
 vi.mock("@/state/conversation-session-event-window-owner-v1", () => ({ useConversationSessionEventWindowOwnerV1: () => ({ snapshot: { events: [] }, loading: false, error: null }) }));
 vi.mock("@/components/conversation/chat-area/conversation-scroll-controller", () => ({ useConversationScrollController: () => ({ scheduleStoredRestore: () => undefined }) }));
-vi.mock("@/components/ui/sidebar", () => ({ SidebarTrigger: () => null }));
+vi.mock("@/ui-kit/shell/sidebar", () => ({ SidebarTrigger: () => null }));
 vi.mock("@/components/plugins/dynamic-plugin-mount-panel", () => ({ DynamicPluginMountPanel: () => null }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
 // host/root own isolated DOM and never open native windows or execute service mutations.
 // host/root 持有隔离文档，不打开原生窗口或执行服务写入。
 let host: HTMLDivElement;
 let root: Root;
+// CONVERSATION_RESERVE stands in for the kit --vk-reserve-w token, which jsdom cannot resolve from the stylesheet.
+// CONVERSATION_RESERVE 代替 kit 的 --vk-reserve-w 令牌，因为 jsdom 无法从样式表解析该令牌。
+const CONVERSATION_RESERVE = "922px";
 beforeEach(() => {
   vi.clearAllMocks();
+  document.documentElement.style.setProperty("--vk-reserve-w", CONVERSATION_RESERVE);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1600, bottom: 900, width: 1600, height: 900, toJSON: () => ({}) });
   Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => {
+  await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+  document.documentElement.style.removeProperty("--vk-reserve-w");
+});
 
 /** Mounts content with the actual localization provider; resolves after effects settle.
  * 使用真实本地化提供器挂载 content；副作用结束后完成。 */
@@ -79,9 +86,9 @@ it("locks monitoring synchronously and keeps a new project visit locked when an 
   const content = (project: string) => <TooltipProvider><ConversationSessionTodolistPanel {...props} reviewRepositoryOrderStorageKey={project} /></TooltipProvider>;
   // checkbox reads the first repository's monitoring switch from the Git settings dialog, the only monitoring control.
   // checkbox 从 Git 设置弹窗读取首个仓库的监听开关，该弹窗是唯一的监听控件。
-  const checkbox = () => document.querySelector<HTMLInputElement>(".conversation-session-review-manager-check input")!;
+  const checkbox = () => document.querySelector<HTMLButtonElement>(".vk-repo-row [role=checkbox]")!;
   await render(content("project-a"));
-  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-session-review-manager-trigger")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-stools-manage")!.click());
   expect(checkbox()).not.toBeNull();
   await act(async () => { checkbox().click(); checkbox().click(); });
   expect(toggle).toHaveBeenCalledTimes(1);
@@ -130,7 +137,7 @@ it("shows the built-in browser entry only for a capable GUI without requiring th
   // 空插件目录证明本地浏览器卡片是 GUI 内置入口。
   expect(props.workbench.plugins).toEqual([]);
   await render(<WorkspaceContextPanel {...props} localBrowserAvailable tabs={[]} activeTabId={null} />);
-  const localBrowserCard = Array.from(host.querySelectorAll<HTMLButtonElement>(".context-launcher-card"))
+  const localBrowserCard = Array.from(host.querySelectorAll<HTMLButtonElement>(".vk-panel-launch-card"))
     .find(button => button.textContent?.includes("内置浏览器"));
   expect(localBrowserCard).toBeDefined();
   expect(host.textContent).not.toContain("AI 浏览器");
@@ -150,7 +157,7 @@ it.each(["stop", "close"] as const)("retains %s failure, prevents duplicate requ
   await render(<WorkspaceContextPanel {...props} />);
   const buttons = host.querySelectorAll<HTMLButtonElement>(".workspace-subagent-footer button");
   await act(async () => buttons[kind === "stop" ? 0 : 1].click());
-  const confirm = document.querySelector<HTMLButtonElement>('[role="dialog"] button[data-variant="destructive"]')!;
+  const confirm = document.querySelector<HTMLButtonElement>('[role="dialog"] button[data-variant="danger"]')!;
   expect(confirm).not.toBeNull();
   await act(async () => { confirm.click(); confirm.click(); });
   expect(action).toHaveBeenCalledExactlyOnceWith("parent", "task-a");
@@ -162,8 +169,8 @@ it.each(["stop", "close"] as const)("retains %s failure, prevents duplicate requ
 });
 
 it("resizes the dock with keyboard and releases pointer listeners after cancellation", async () => {
-  // A narrow dock leaves 469px after the reading column, padding, reasoning gutter, and handle.
-  // 窄停靠容器保留阅读列、内边距、思考留白和手柄后，剩余 469px。
+  // A narrow dock leaves 469px after the conversation reserve and the handle.
+  // 窄停靠容器保留会话预留宽度和手柄后，剩余 469px。
   vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1400, bottom: 900, width: 1400, height: 900, toJSON: () => ({}) });
   const context = contextProps();
   const props: React.ComponentProps<typeof WorkspaceResizableBody> = { ...context, selectedDraftConversation: null, contextPanelTabs: [], contextPanelActiveTabId: null,
@@ -190,8 +197,8 @@ it("resizes the dock with keyboard and releases pointer listeners after cancella
 });
 
 it("lets a wide right dock consume whitespace without shrinking the conversation and reasoning gutter", async () => {
-  // The 1800px shell can allocate 869px right after reserving 922px of conversation and the handle.
-  // 1800px 外壳保留 922px 会话区与手柄后，可为右侧分配 869px。
+  // The 1800px shell can allocate 869px right after the conversation reserve and the handle.
+  // 1800px 外壳保留会话预留宽度与手柄后，可为右侧分配 869px。
   vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1800, bottom: 900, width: 1800, height: 900, toJSON: () => ({}) });
   const context = contextProps();
   const props: React.ComponentProps<typeof WorkspaceResizableBody> = { ...context, selectedDraftConversation: null, contextPanelTabs: [], contextPanelActiveTabId: null,
@@ -216,9 +223,12 @@ it("does not report copied file content when the host clipboard rejects", async 
     loadWorkspaceFileDirectory={async () => ({ workspacePath: "X:/copy-audit", path: "X:/copy-audit", relativePath: "", entries: [entry], filters: DEFAULT_WORKSPACE_FILE_FILTERS, truncated: false, entryCount: 1 })}
     loadWorkspaceFilePreview={async () => ({ ...entry, workspacePath: "X:/copy-audit", sizeBytes: 5, content: "hello", truncated: false })}
     resolveMediaSourceUrl={path => path} onCopyText={onCopyText} onTitleChange={vi.fn()} />);
+  // The file's actions belong to the open file, so the file is opened from the tree first.
+  // 文件操作属于已打开的文件，因此先从目录树打开该文件。
+  await act(async () => host.querySelector<HTMLButtonElement>('.vk-ftree-row[data-kind="file"]')!.click());
   // menu opens through the same pointer trigger used by the production Radix dropdown.
   // menu 通过生产 Radix 下拉菜单的同一指针触发器打开。
-  const menu = host.querySelector<HTMLButtonElement>(".workspace-file-row-menu-trigger")!;
+  const menu = host.querySelector<HTMLButtonElement>('[data-action="file-actions"]')!;
   expect(menu).not.toBeNull();
   await act(async () => menu.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
   const content = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(item => item.textContent?.includes("复制文件内容"))!;

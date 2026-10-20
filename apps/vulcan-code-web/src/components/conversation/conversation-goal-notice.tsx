@@ -29,11 +29,9 @@ export function GoalStatusNotice(props: { reasonCode: string; seq?: number }) {
   // 实时提示和恢复的历史提示都使用当前界面语言。
   const { t } = useI18n();
   return (
-    <aside className="special-block notice" role="note" data-event-kind="goal_status" data-seq={props.seq}>
-      <div className="special-block-main">
-        <Target size={16} aria-hidden="true" />
-        <strong>{goalNoticeTitle(props.reasonCode, t)}</strong>
-      </div>
+    <aside className="vk-note" data-tone="ember" role="note" data-event-kind="goal_status" data-seq={props.seq}>
+      <Target aria-hidden="true" />
+      <div className="vk-note-text"><strong>{goalNoticeTitle(props.reasonCode, t)}</strong></div>
     </aside>
   );
 }

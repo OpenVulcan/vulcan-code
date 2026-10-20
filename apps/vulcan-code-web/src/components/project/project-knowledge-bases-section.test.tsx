@@ -9,7 +9,7 @@ import type { KnowledgeLibrarySummary } from "@/types";
 // services 将权威读写与真实项目配置隔离。
 const services = vi.hoisted(() => ({ libraries: vi.fn(), bindings: vi.fn(), save: vi.fn(), notify: vi.fn(), success: vi.fn(), error: vi.fn() }));
 vi.mock("@/service/knowledge-base-service", () => ({ listKnowledgeLibraries: services.libraries, listProjectKnowledgeBindings: services.bindings, setKnowledgeProjectBinding: services.save, notifyKnowledgeProjectBindingsChanged: services.notify }));
-vi.mock("sonner", () => ({ toast: { success: services.success, error: services.error } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { success: services.success, error: services.error } }));
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: translate }) }));
 // translate keeps the callback identity stable while exposing exact message keys.
 // translate 保持回调身份稳定并暴露精确文案键。

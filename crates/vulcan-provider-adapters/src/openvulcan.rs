@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
     AiOperation, DistanceMetric, EmbeddingCapabilities, EmbeddingEncoding, EmbeddingNormalization,
-    EmbeddingOutputKind, EmbeddingTask, ModelCapabilities,
+    EmbeddingOutputKind, EmbeddingTask, ModelCapabilities, ResourceKind,
 };
 
 /// Versioned account-visible native model directory.
@@ -89,6 +89,10 @@ struct PublicEmbedding {
     /// Server-declared numeric encodings; values the host does not execute are ignored.
     /// 服务端声明的数值编码；宿主不执行的取值会被忽略。
     allowed_encodings: BTreeSet<String>,
+    /// Input wrapping keyed by an exact server task value; absent when the model needs none.
+    /// 以准确服务端任务值为键的输入包裹；模型不需要时缺省。
+    #[serde(default)]
+    input_templates: BTreeMap<String, String>,
 }
 
 /// Decision context bound; remaining admission rules are enforced by the authority.
@@ -98,6 +102,28 @@ struct PublicDecision {
     /// Total state and question input limit.
     /// 状态与问题的总输入上限。
     max_total_input_tokens: u64,
+    /// Image parts admitted in one state array; zero (or absent) means the model reads text only.
+    /// 单个状态数组可包含的图片部分数；为零（或缺省）表示模型只读文本。
+    #[serde(default)]
+    max_images: u32,
+}
+
+/// Projects published exact widths: an unbroken run of integers becomes the equivalent inclusive range,
+/// so a model accepting every width from 32 to 4096 is not listed as thousands of discrete choices;
+/// any gap keeps the exact set.
+/// 投影已发布的精确维度：连续整数序列转为等价的包含式范围，使接受 32 至 4096 全部维度的模型
+/// 不会被列为数千个离散选项；存在缺口时保留精确集合。
+/// Returns (discrete set, minimum, maximum); exactly one of the set or the range is populated.
+/// 返回（离散集合，最小值，最大值）；集合与范围只填充其一。
+fn project_dimensions(allowed: BTreeSet<u32>) -> (BTreeSet<u32>, Option<u32>, Option<u32>) {
+    match (allowed.first().copied(), allowed.last().copied()) {
+        (Some(minimum), Some(maximum))
+            if minimum < maximum && u64::from(maximum - minimum) + 1 == allowed.len() as u64 =>
+        {
+            (BTreeSet::new(), Some(minimum), Some(maximum))
+        }
+        _ => (allowed, None, None),
+    }
 }
 
 /// Parses body for connection_id/generation, preserving the catalog's exact native capabilities.
@@ -172,6 +198,13 @@ pub(crate) fn parse_catalog(
                 {
                     continue;
                 }
+                let input_templates = project_input_templates(
+                    model_index,
+                    &embedding_task_values,
+                    published.input_templates,
+                )?;
+                let (dimensions, minimum_dimensions, maximum_dimensions) =
+                    project_dimensions(published.allowed_dimensions);
                 capabilities.operations = vec![AiOperation::EmbeddingCreate];
                 capabilities.context_limit = Some(published.max_input_tokens_per_item);
                 capabilities.embedding = Some(EmbeddingCapabilities {
@@ -179,15 +212,21 @@ pub(crate) fn parse_catalog(
                     input_resources: BTreeSet::new(),
                     output_kinds,
                     encodings: BTreeSet::from([EmbeddingEncoding::Float]),
-                    dimensions: published.allowed_dimensions,
-                    minimum_dimensions: None,
-                    maximum_dimensions: None,
+                    dimensions,
+                    minimum_dimensions,
+                    maximum_dimensions,
                     default_dimensions: Some(published.default_dimensions),
                     maximum_inputs: Some(published.max_batch_size),
                     maximum_tokens_per_input: Some(published.max_input_tokens_per_item),
                     normalization: EmbeddingNormalization::Unknown,
                     distance_metric: DistanceMetric::Unknown,
+                    input_templates,
                 });
+                if let Some(embedding) = capabilities.embedding.as_ref() {
+                    embedding.validate_input_templates().map_err(|error| {
+                        format!("Invalid OpenVulcan model catalog at models[{model_index}].capabilities.input_templates: {error}")
+                    })?;
+                }
             }
             PublicOperation::Decision {
                 decision_capabilities,
@@ -199,6 +238,9 @@ pub(crate) fn parse_catalog(
                 }
                 capabilities.operations = vec![AiOperation::DecisionEvaluate];
                 capabilities.context_limit = Some(decision_capabilities.max_total_input_tokens);
+                if decision_capabilities.max_images > 0 {
+                    capabilities.input_resources = vec![ResourceKind::Image];
+                }
             }
             PublicOperation::Unsupported => continue,
         }
@@ -257,6 +299,34 @@ fn project_embedding_tasks(
         }
     }
     Ok(bindings)
+}
+
+/// Keys published input templates by host task through the exact wire values in `task_values`.
+/// 通过 `task_values` 中的准确线协议值，将已发布输入模板按宿主任务建立键。
+/// A template for a server task the host does not execute is dropped with that task; one naming a
+/// task the model never declared makes the catalog invalid. `model_index` identifies the entry in errors.
+/// 宿主不执行的服务端任务的模板随该任务一起忽略；指向模型未声明任务的模板使目录无效。
+/// `model_index` 在错误中标识条目。
+fn project_input_templates(
+    model_index: usize,
+    task_values: &BTreeMap<EmbeddingTask, String>,
+    published: BTreeMap<String, String>,
+) -> Result<BTreeMap<EmbeddingTask, String>, String> {
+    let mut templates = BTreeMap::new();
+    for (wire_task, template) in published {
+        if let Some((task, _)) = task_values.iter().find(|(_, value)| **value == wire_task) {
+            templates.insert(*task, template);
+        } else if project_embedding_tasks(model_index, BTreeSet::from([wire_task.clone()]))?
+            .is_empty()
+        {
+            continue;
+        } else {
+            return Err(format!(
+                "Invalid OpenVulcan model catalog at models[{model_index}].capabilities.input_templates: {wire_task} is not an allowed task."
+            ));
+        }
+    }
+    Ok(templates)
 }
 
 /// Validates that secret may reach url and returns its exact native authorization header.
@@ -383,6 +453,47 @@ mod tests {
                 .iter()
                 .any(|model| model.id == "task-decision")
         );
+    }
+
+    /// With no inputs, verifies published input templates are keyed by host task and validated.
+    /// 无需参数，验证已发布输入模板按宿主任务建立键并经过校验，成功时正常返回。
+    #[test]
+    fn openvulcan_catalog_projects_input_templates() {
+        // templated returns the vector capabilities parsed from one catalog carrying `templates`.
+        // templated 返回从携带 `templates` 的目录解析出的向量能力。
+        let templated = |templates: serde_json::Value| {
+            let mut body = task_catalog(&["retrieval_query", "retrieval_document", "opaque_task"]);
+            let vector = body["models"]
+                .as_array_mut()
+                .expect("catalog array")
+                .iter_mut()
+                .find(|model| model["model_id"] == "task-vector")
+                .expect("fixture model");
+            vector["capabilities"]["input_templates"] = templates;
+            parse_catalog("fixture", 1, &body.to_string()).map(|catalog| {
+                catalog
+                    .models
+                    .into_iter()
+                    .find(|model| model.id == "task-vector")
+                    .and_then(|model| model.capabilities.embedding)
+                    .expect("vector embedding")
+            })
+        };
+        let embedding = templated(serde_json::json!({
+            "retrieval_query": "Instruct: find\nQuery:{input}",
+            "opaque_task": "Opaque: {input}"
+        }))
+        .expect("templated catalog");
+        assert_eq!(
+            embedding.input_templates,
+            BTreeMap::from([(EmbeddingTask::Query, String::from("Instruct: find\nQuery:{input}"))])
+        );
+        let failure = templated(serde_json::json!({"retrieval_query": "no placeholder"}))
+            .expect_err("template without placeholder");
+        assert!(failure.contains("capabilities.input_templates"));
+        let failure = templated(serde_json::json!({"code_retrieval": "Code: {input}"}))
+            .expect_err("template for an undeclared task");
+        assert!(failure.contains("capabilities.input_templates"));
     }
 
     /// With no inputs, verifies a kind the host does not know is skipped while known models still load.
@@ -529,13 +640,32 @@ mod tests {
         assert!(secret.execution_secret().is_err());
     }
 
+    /// An unbroken width run becomes the equivalent range; a single width or a gap stays exact.
+    /// 连续维度序列转为等价范围；单一维度或存在缺口时保持精确集合。
+    #[test]
+    fn openvulcan_dimension_runs_become_ranges() {
+        assert_eq!(
+            project_dimensions((32..=4096).collect()),
+            (BTreeSet::new(), Some(32), Some(4096))
+        );
+        assert_eq!(
+            project_dimensions(BTreeSet::from([1024])),
+            (BTreeSet::from([1024]), None, None)
+        );
+        assert_eq!(
+            project_dimensions(BTreeSet::from([256, 512, 1024])),
+            (BTreeSet::from([256, 512, 1024]), None, None)
+        );
+    }
+
     /// Dynamic catalog parsing preserves native capabilities and cannot invent chat or dimensions.
     /// 动态目录解析保留原生能力，不能虚构聊天或维度。
     #[test]
     fn openvulcan_catalog_preserves_native_operations_and_rejects_bad_bounds() {
         let mut body = serde_json::json!({"contract_version": CONTRACT_VERSION, "models": [
             {"model_id":"synthetic-vector", "display_name":"Vector", "kind":"embedding", "capabilities":{"max_input_tokens_per_item":8000,"max_batch_size":8,"default_dimensions":3,"allowed_dimensions":[3,6],"allowed_tasks":["query","document"],"allowed_output_kinds":["dense","sparse","dense_and_sparse"],"allowed_encodings":["float"]}},
-            {"model_id":"synthetic-decision", "display_name":"Decision", "kind":"decision", "decision_capabilities":{"max_total_input_tokens":16384}}
+            {"model_id":"synthetic-decision", "display_name":"Decision", "kind":"decision", "decision_capabilities":{"max_total_input_tokens":16384}},
+            {"model_id":"synthetic-vision", "display_name":"Vision", "kind":"decision", "decision_capabilities":{"max_total_input_tokens":16384,"max_images":4}}
         ]});
         let parsed = parse_catalog("fixture", 1, &body.to_string()).expect("native catalog");
         let vector = parsed
@@ -560,6 +690,10 @@ mod tests {
             vector.capabilities.embedding.as_ref().unwrap().tasks,
             BTreeSet::from([EmbeddingTask::Query, EmbeddingTask::Document])
         );
+        assert_eq!(
+            vector.capabilities.embedding.as_ref().unwrap().dimensions,
+            BTreeSet::from([3, 6])
+        );
         let decision = parsed
             .models
             .iter()
@@ -569,6 +703,13 @@ mod tests {
             decision.capabilities.operations,
             [AiOperation::DecisionEvaluate]
         );
+        assert!(decision.capabilities.input_resources.is_empty());
+        let vision = parsed
+            .models
+            .iter()
+            .find(|model| model.id == "synthetic-vision")
+            .expect("multimodal decision model");
+        assert_eq!(vision.capabilities.input_resources, [ResourceKind::Image]);
         body["models"]
             .as_array_mut()
             .unwrap()

@@ -123,6 +123,7 @@ function diffSnapshotFromParsedWorkspaceResponse(
     ...snapshot,
     files,
     notice: response.notice ?? snapshot.notice,
+    gitRepository: response.gitRepository,
     stats: {
       ...statsBase,
       isLarge: largeReasons.length > 0,

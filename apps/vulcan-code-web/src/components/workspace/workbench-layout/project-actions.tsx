@@ -6,15 +6,21 @@ import type { AgentSkillActionProps } from "@/components/features/agent-skills/a
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import { normalizeProjectIconSelection, type ProjectIconDialogTarget, type ProjectIconSelection } from "@/components/project/project-icons";
 import { type ProjectAgentSkillState, type ProjectSettingsDialogTarget } from "@/components/project/project-settings-dialog";
-import type { ProjectMenuAction } from "@/components/project/project-sidebar";
+import type { ProjectGroupAction, ProjectMenuAction } from "@/components/project/project-sidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type { AgentSkillsCatalogUpdate, LuaSkillsCatalogUpdate, ProjectSummary, SubagentCatalogUpdate, VmmConfigDraftSummary, WorkbenchSnapshot } from "@/types";
 import {
   addProjectFromPath,
+  addProjectToGroup,
+  createProjectGroup,
+  deleteProjectGroup,
   openProjectDirectory,
-  reorderProjects,
+  renameProjectGroup,
   resetProjectIcon,
   setExpandedTaskProjects,
+  setProjectGroupsLayout,
+  setProjectTreePinned,
+  setProjectTreePinsOrder,
   setProjectIcon,
   toggleProjectPinned,
 } from "@/service/project-actions-service";
@@ -66,7 +72,8 @@ import {
 import { saveVmmMemoryConfig } from "@/service/memory-actions-service";
 import { applyPreviewProjectIcon } from "@/state/workbench-preview-actions";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
+import { INITIAL_DEDICATED_DRAFT, writeDedicatedDraft, type DraftSessionKind } from "@/components/composer/dedicated/dedicated-draft-store";
 
 // WorkbenchProjectActionSnapshotSource separates backend snapshots from local optimistic previews.
 // WorkbenchProjectActionSnapshotSource 区分后端快照与本地乐观预览。
@@ -412,11 +419,15 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     toast.success(formatProjectActionTranslation(t, "projectActions.iconReset", { project: project.name }));
   }, [setProjectIconTarget, setWorkbenchState, t]);
 
-  // handleCreateConversation creates and selects a new empty conversation for a project.
-  // handleCreateConversation 为项目创建并选中一个新的空白会话。
-  const handleCreateConversation = React.useCallback(async (project: ProjectSummary) => {
+  // handleCreateConversation creates and selects a new empty conversation for a project; a dedicated kind presets the
+  // draft's session kind so the composer opens on the dedicated assistant setup.
+  // handleCreateConversation 为项目创建并选中一个新的空白会话；专职种类会预设草稿的会话种类，使输入区直接进入专职助手设置。
+  const handleCreateConversation = React.useCallback(async (project: ProjectSummary, kind: DraftSessionKind = "work") => {
     handleOpenWorkspaceChat();
     const draftId = `draft-${project.id}-${Date.now()}`;
+    if (kind === "dedicated") {
+      writeDedicatedDraft(draftId, { ...INITIAL_DEDICATED_DRAFT, kind });
+    }
     setDraftConversation({
       id: draftId,
       projectId: project.id,
@@ -425,16 +436,26 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     setSelectedConversationId(draftId);
   }, [handleOpenWorkspaceChat]);
 
-  // handleCreateProject opens the service-backed project folder picker.
-  // handleCreateProject 打开服务驱动的项目文件夹选择器。
-  const handleCreateProject = React.useCallback(() => {
+  // projectFolderTargetGroupRef remembers the group the open folder picker adds into; null adds without placing.
+  // projectFolderTargetGroupRef 记住打开的文件夹选择器要添加到的分组；为 null 时添加但不指定分组。
+  const projectFolderTargetGroupRef = React.useRef<string | null>(null);
+
+  // handleCreateProject opens the service-backed project folder picker, optionally targeting one group.
+  // handleCreateProject 打开服务驱动的项目文件夹选择器，可选地以某分组为目标。
+  const handleCreateProject = React.useCallback((groupId?: string) => {
+    projectFolderTargetGroupRef.current = groupId ?? null;
     setProjectFolderPickerOpen(true);
   }, []);
 
   // handleConfirmProjectFolder adds the selected service-host directory as a project.
   // handleConfirmProjectFolder 将选中的服务宿主目录添加为项目。
   const handleConfirmProjectFolder = React.useCallback(async (path: string) => {
-    const snapshot = await addProjectFromPath(path) ?? await loadWorkbenchSnapshot();
+    // A folder chosen for a group joins that group, and an existing project only moves into it.
+    // 为分组选择的文件夹加入该分组；已存在的项目只会移入其中。
+    const groupId = projectFolderTargetGroupRef.current;
+    const snapshot = groupId
+      ? await addProjectToGroup(path, groupId)
+      : await addProjectFromPath(path) ?? await loadWorkbenchSnapshot();
     applyProjectActionSnapshot(snapshot);
     toast.success(t("projectActions.listUpdated"));
     // The binding notice belongs only to this project-add response and must not be inferred later.
@@ -447,21 +468,24 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     }
   }, [applyProjectActionSnapshot, t]);
 
-  // handleReorderProjects persists a same-section project order using the existing order model.
-  // handleReorderProjects 使用现有顺序模型持久化同一分区内的项目排序。
-  const handleReorderProjects = React.useCallback(async (projectIds: string[]) => {
-    try {
-      const snapshot = await reorderProjects(projectIds);
-      if (!snapshot) {
-        throw new Error(t("workspace.projectActions.reorderingReturnedNoAuthoritative"));
+  // handleProjectGroupAction persists one project-group change and applies the authoritative snapshot; it rejects
+  // with the service error so the caller can show it where the change was made.
+  // handleProjectGroupAction 持久化一次项目分组变更并应用权威快照；失败时以服务错误拒绝，使调用方在发起变更处显示错误。
+  const handleProjectGroupAction = React.useCallback(async (action: ProjectGroupAction) => {
+    const snapshot = await (() => {
+      switch (action.kind) {
+        case "create": return createProjectGroup(action.name, action.projectIds, action.afterGroupId);
+        case "rename": return renameProjectGroup(action.groupId, action.name);
+        case "delete": return deleteProjectGroup(action.groupId);
+        case "layout": return setProjectGroupsLayout(action.layout.groups);
+        case "pin": return setProjectTreePinned(action.item.kind, action.item.id, action.pinned);
+        case "pins-order": return setProjectTreePinsOrder(action.pins);
       }
-      if (acceptServiceWorkbenchSnapshot(snapshot)) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    })();
+    if (acceptServiceWorkbenchSnapshot(snapshot)) {
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
     }
-  }, [acceptServiceWorkbenchSnapshot, locale, mergeWorkbenchWithLocalCaches, setWorkbenchState]);
+  }, [acceptServiceWorkbenchSnapshot, mergeWorkbenchWithLocalCaches, setWorkbenchState]);
 
   // handleExpandedProjectIdsChange persists project folder expansion without reapplying stale snapshots.
   // handleExpandedProjectIdsChange 持久化项目文件夹展开状态，但不重新套用可能过期的快照。
@@ -491,7 +515,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     handleCreateConversation,
     handleCreateProject,
     handleConfirmProjectFolder,
-    handleReorderProjects,
+    handleProjectGroupAction,
     handleExpandedProjectIdsChange,
   };
 }

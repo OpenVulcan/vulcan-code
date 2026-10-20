@@ -1,0 +1,11 @@
+/* Command palette: a search field over grouped rows. It sits high on the page so the list grows downward, */
+/* slash rows show the command beside its description, and settings rows carry a go-to arrow. */
+/* 命令面板：搜索框下方是分组列表。面板位于页面上部以便列表向下展开；slash 行在指令旁显示说明，设置行带有前往箭头。 */
+.vk-command-dialog.vk-palette { align-self: start; width: min(36rem, calc(100vw - 2rem)); max-width: 36rem; margin-top: 12vh; box-shadow: var(--vk-shadow-2), 0 0 0 var(--vk-bw) color-mix(in srgb, var(--vk-ember) 18%, transparent); }
+.vk-palette .vk-command-search { margin: calc(var(--vk-u) * 2); }
+.vk-palette .vk-command-list { max-height: min(26rem, 60vh); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-palette .vk-command-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-palette .vk-command-item > .vk-palette-cmd { flex: none; font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); }
+.vk-palette .vk-command-item > .vk-palette-desc { flex: 1 1 auto; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-palette .vk-command-item > .vk-palette-go { margin-left: auto; color: var(--vk-ink-3); }
+.vk-palette .vk-command-item[data-selected] { box-shadow: inset 2px 0 0 var(--vk-ember); }

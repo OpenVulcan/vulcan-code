@@ -7,9 +7,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+} from "@/ui-kit/primitives/alert-dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { UnattendedDefault } from "@/service/permission-mode-service";
 import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";
@@ -73,14 +73,14 @@ export function ComposerUnattendedDialog(props: {
   return (
     <AlertDialog open={props.open} onOpenChange={props.onOpenChange}>
       <AlertDialogContent size="md" data-unattended-dialog="">
-        <AlertDialogHeader className="place-items-start text-left">
+        <AlertDialogHeader>
           <AlertDialogTitle>{t(enabled ? "permissionMode.unattended.editTitle" : "permissionMode.unattended.enableTitle")}</AlertDialogTitle>
           <AlertDialogDescription>{t("permissionMode.unattended.body")}</AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="flex flex-col gap-1.5 text-sm">
-          <div className="flex items-baseline justify-between gap-2">
-            <label className="font-medium" htmlFor={fieldId}>{t("permissionMode.unattended.policyLabel")}</label>
-            {source !== null && source !== "none" ? <span className="text-xs text-muted-foreground" data-unattended-source={source}>
+        <div className="vk-field">
+          <div className="vk-field-row">
+            <label className="vk-field-label" htmlFor={fieldId}>{t("permissionMode.unattended.policyLabel")}</label>
+            {source !== null && source !== "none" ? <span className="vk-field-hint" data-unattended-source={source}>
               {t(SOURCE_KEYS[source])}
             </span> : null}
           </div>
@@ -93,9 +93,9 @@ export function ComposerUnattendedDialog(props: {
             value={text}
             onChange={(event) => setText(event.target.value)}
           />
-          <div className="flex items-baseline justify-between gap-2 text-xs">
-            <span className="text-(--vcn-content-warning)">{loadFailed ? t("permissionMode.unattended.loadFailed") : null}</span>
-            {maxChars !== undefined ? <span className="text-muted-foreground tabular-nums">
+          <div className="vk-field-row">
+            <span className="vk-field-hint" data-tone="warn">{loadFailed ? t("permissionMode.unattended.loadFailed") : null}</span>
+            {maxChars !== undefined ? <span className="vk-field-hint" data-numeric="">
               {formatMessage(t("permissionMode.unattended.counter"), { count: [...text].length, max: maxChars })}
             </span> : null}
           </div>

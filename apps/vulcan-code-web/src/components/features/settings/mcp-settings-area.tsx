@@ -1,16 +1,21 @@
 import * as React from "react"
-import { Button } from "@/components/ui/button"
-import { DisclosureSection, InlineDisclosure } from "@/components/ui/disclosure"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { InlineStreamPlaceholder, StreamPlaceholder } from "@/components/ui/stream-placeholder"
+import { Button } from "@/ui-kit/primitives/button"
+import { DisclosureSection, InlineDisclosure } from "@/ui-kit/primitives/disclosure"
+import { Input } from "@/ui-kit/primitives/input"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group"
+import { Pencil, Plus, RefreshCw, Search, Server, Trash2 } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui-kit/primitives/tabs"
+import { PageEmptyState, PageNotice } from "@/components/page"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { InlineStreamPlaceholder, StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
 import type { LogEntrySummary, McpServerSummary, RuntimeModuleSnapshot, StartupSnapshot } from "@/types"
 import { loadMcpRuntimeSnapshot, loadMcpServerCapabilities, type McpServerInspection, type McpCapabilities, type McpConnectionStatus, type McpToolInspection } from "@/service/mcp-settings-service"
 import { McpServerDialog, type McpSettingsActionProps } from "./mcp-server-dialog"
 import { McpSchemaDetail } from "./mcp-schema-detail"
 import { McpOAuthPanel } from "./mcp-oauth-panel"
-import "@/styles/mcp.css"
+import "@/ui-kit/styles/features/mcp.css"
 import { useI18n, formatMessage, type Translate } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // connectionLabels distinguishes configured enablement from observed connectivity.
 // connectionLabels 区分配置启用与已观测连接状态。
@@ -94,14 +99,19 @@ export function McpSettingsArea(props: {
     if (!rows.some(row => row.id === selectedId)) setSelectedId(rows[0]?.id ?? null)
   }, [props.servers, catalog, selectedId])
   React.useEffect(() => { setTab("overview"); setConfirmDelete(false); setActionError("") }, [selectedId])
-  return <div className="mcp-workspace">
-    <aside className="panel mcp-directory">
-      <div className="settings-panel-title-row"><h3>{t("settings.mcp.servers")}</h3><Button size="sm" onClick={() => setCreating(true)}>{t("settings.mcp.add")}</Button></div>
-      <Input aria-label={t("settings.mcp.searchMcp")} placeholder={t("settings.mcp.searchNameOrId")} value={search} onChange={e => setSearch(e.target.value)} />
-      <div className="mcp-filter-row">
-        <Select value={source} onValueChange={setSource}><SelectTrigger aria-label={t("settings.mcp.source")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("settings.mcp.allSources")}</SelectItem><SelectItem value="user">{t("settings.mcp.user")}</SelectItem><SelectItem value="plugin">{t("settings.mcp.plugin")}</SelectItem></SelectContent></Select>
-        <Select value={status} onValueChange={setStatus}><SelectTrigger aria-label={t("settings.mcp.connectionState")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("settings.mcp.allStates")}</SelectItem>{Object.entries(statusLabels).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}<SelectItem value="unknown">{t("settings.mcp.unknown")}</SelectItem></SelectContent></Select>
+  return <div className="mcp-page vk-bleed">
+    <header className="mcp-toolbar">
+      <InputGroup className="mcp-search"><InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon><InputGroupInput aria-label={t("settings.mcp.searchMcp")} placeholder={t("settings.mcp.searchNameOrId")} value={search} onChange={e => setSearch(e.target.value)} /></InputGroup>
+      <Select value={source} onValueChange={setSource}><SelectTrigger size="sm" aria-label={t("settings.mcp.source")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("settings.mcp.allSources")}</SelectItem><SelectItem value="user">{t("settings.mcp.user")}</SelectItem><SelectItem value="plugin">{t("settings.mcp.plugin")}</SelectItem></SelectContent></Select>
+      <Select value={status} onValueChange={setStatus}><SelectTrigger size="sm" aria-label={t("settings.mcp.connectionState")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("settings.mcp.allStates")}</SelectItem>{Object.entries(statusLabels).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}<SelectItem value="unknown">{t("settings.mcp.unknown")}</SelectItem></SelectContent></Select>
+      <div className="mcp-toolbar-actions">
+        <Button disabled={refreshing} size="sm" variant="ghost" onClick={() => setRefreshKey(key => key + 1)}><RefreshCw className={refreshing ? "vk-spin" : undefined} size={15} aria-hidden="true" />{refreshing ? t("settings.mcp.refreshing") : t("settings.mcp.refreshStatus")}</Button>
+        <Button size="sm" onClick={() => setCreating(true)}><Plus size={15} aria-hidden="true" />{t("settings.mcp.add")}</Button>
       </div>
+    </header>
+    {error && <PageNotice tone="error" title={t("settings.mcp.previousSnapshotRetainedCurrent")} className="mcp-page-banner">{error}</PageNotice>}
+    <div className="mcp-workspace">
+    <aside className="mcp-directory" aria-label={t("settings.mcp.servers")}>
       <div className="mcp-server-list">{filtered.map(row => <button type="button" disabled={removing} className="mcp-server-row" data-active={selectedId === row.id} key={row.id} onClick={() => setSelectedId(row.id)}>
         <strong>{row.name}</strong><span>{row.transport} · {row.source === "plugin" ? t("settings.mcp.plugin") : t("settings.mcp.user2")}</span>
         <span data-status={error ? "unknown" : row.runtime?.state.status}>{!loaded ? <InlineStreamPlaceholder decorative /> : row.runtime ? `${error ? t("settings.mcp.previousState") : ""}${statusLabels[row.runtime.state.status]}` : row.config?.enabled === false ? t("settings.mcp.disabled") : t("settings.mcp.enabledStateUnavailable")}</span>
@@ -109,30 +119,32 @@ export function McpSettingsArea(props: {
         {row.runtime?.state.lastError && <span className="mcp-error">{row.runtime.state.lastError}</span>}
       </button>)}</div>
       {!filtered.length && !loaded && <StreamPlaceholder label={t("settings.mcp.loading")} shape="rows" count={4} />}
-      {!filtered.length && loaded && <p>{rows.length ? t("settings.mcp.noMatches") : t("settings.mcp.addAServerTo")}</p>}
-      <Button disabled={refreshing} size="sm" variant="outline" onClick={() => setRefreshKey(key => key + 1)}>{refreshing ? t("settings.mcp.refreshing") : t("settings.mcp.refreshStatus")}</Button>
-      {error && <p role="alert" className="mcp-error">{error}<br />{t("settings.mcp.previousSnapshotRetainedCurrent")}</p>}
+      {!filtered.length && loaded && <p className="mcp-rail-note">{t(rows.length > 0 ? "settings.mcp.noMatches" : "settings.mcp.noServers")}</p>}
     </aside>
-    <section className="panel mcp-detail">
+    <section className="mcp-detail">
       {selected ? <>
-        <header className="settings-panel-title-row"><div><h3>{selected.name}</h3><small>{selected.id}</small></div>{selected.config && <div className="mcp-filter-row">
-          <Button size="sm" variant="outline" onClick={() => setEditing(selected.config ?? null)}>{t("settings.mcp.edit")}</Button>
-          <Button size="sm" variant="outline" disabled={removing} onClick={() => setConfirmDelete(value => !value)}>{t("settings.mcp.delete")}</Button>
-        </div>}</header>
-        {confirmDelete && selected.config && <div className="mcp-delete-confirm"><p>{t("settings.mcp.removeThisServerConfiguration")}</p><Button variant="destructive" disabled={removing} onClick={async () => {
+        <header className="mcp-detail-head">
+          <div className="mcp-detail-title"><h3>{selected.name}</h3><span className="mcp-status" data-status={error ? "unknown" : selected.runtime?.state.status ?? "unknown"}>{selected.runtime ? `${error ? t("settings.mcp.previousState") : ""}${statusLabels[selected.runtime.state.status]}` : t("settings.mcp.noConnectionStatusYet")}</span><small>{selected.id}</small></div>
+          {selected.config && <div className="mcp-detail-actions">
+            <Button size="sm" variant="outline" onClick={() => setEditing(selected.config ?? null)}><Pencil size={14} aria-hidden="true" />{t("settings.mcp.edit")}</Button>
+            <Button size="sm" variant="outline" disabled={removing} onClick={() => setConfirmDelete(value => !value)}><Trash2 size={14} aria-hidden="true" />{t("settings.mcp.delete")}</Button>
+          </div>}
+        </header>
+        {confirmDelete && selected.config && <PageNotice tone="warning" title={t("settings.mcp.removeThisServerConfiguration")} actions={<><Button size="sm" variant="destructive" disabled={removing} onClick={async () => {
           if (removalInFlight.current) return
           removalInFlight.current = true
           setRemoving(true); setActionError("")
           try { await props.actions.onRemoveMcpServer(selected.id); setConfirmDelete(false); setRefreshKey(key => key + 1) }
           catch (failure) { setActionError(String(failure)) }
           finally { removalInFlight.current = false; setRemoving(false) }
-        }}>{t("settings.mcp.confirmRemoval")}</Button><Button variant="ghost" disabled={removing} onClick={() => setConfirmDelete(false)}>{t("settings.mcp.cancel")}</Button></div>}
-        <nav className="mcp-tabs" aria-label={t("settings.mcp.mcpDetails")}>{[["overview", t("settings.mcp.overview")], ["tools", t("settings.mcp.tools2")], ["capabilities", t("settings.mcp.promptsResources")], ["diagnostics", t("settings.mcp.diagnostics")]].map(([key, label]) => <Button key={key} size="sm" variant={tab === key ? "secondary" : "ghost"} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</Button>)}</nav>
-        {actionError && <p role="alert" className="mcp-error">{actionError}</p>}
-        {tab === "overview" && !loaded && <StreamPlaceholder label={t("settings.mcp.loading")} count={5} />}
-        {tab === "overview" && loaded && <>
-          <p>{selected.runtime ? `${error ? t("settings.mcp.previousState") : ""}${statusLabels[selected.runtime.state.status]}` : t("settings.mcp.noConnectionStatusYet")}</p>
-          {selected.config && !selected.config.enabled && <p>{t("settings.mcp.thisServerIsDisabled")}</p>}
+        }}>{t("settings.mcp.confirmRemoval")}</Button><Button size="sm" variant="ghost" disabled={removing} onClick={() => setConfirmDelete(false)}>{t("settings.mcp.cancel")}</Button></>} />}
+        {actionError && <PageNotice tone="error" title={actionError} />}
+        <Tabs value={tab} onValueChange={setTab} className="mcp-tabs">
+        <TabsList variant="line" aria-label={t("settings.mcp.mcpDetails")}>{[["overview", t("settings.mcp.overview")], ["tools", t("settings.mcp.tools2")], ["capabilities", t("settings.mcp.promptsResources")], ["diagnostics", t("settings.mcp.diagnostics")]].map(([key, label]) => <TabsTrigger key={key} value={key}>{label}</TabsTrigger>)}</TabsList>
+        <TabsContent value="overview" className="mcp-tab-panel">
+        {!loaded && <StreamPlaceholder label={t("settings.mcp.loading")} count={5} />}
+        {loaded && <>
+          {selected.config && !selected.config.enabled && <PageNotice tone="info" title={t("settings.mcp.thisServerIsDisabled")} />}
           {(selected.config?.oauthEnabled || selected.runtime?.state.status === "awaiting_authorization") && <McpOAuthPanel serverId={selected.id} connectionStatus={selected.runtime?.state.status} />}
           {selected.runtime && <dl className="mcp-overview">
             <dt>{t("settings.mcp.address")}</dt><dd>{selected.runtime.state.endpoint}</dd>
@@ -141,22 +153,23 @@ export function McpSettingsArea(props: {
             <dt>{t("settings.mcp.server")}</dt><dd>{selected.runtime.state.serverProduct ?? "—"} {selected.runtime.state.serverVersion}</dd>
             <dt>{t("settings.mcp.provides")}</dt><dd>{formatMessage(t("settings.mcp.toolsPromptsResources"), { length: selected.runtime.tools.length, promptCount: selected.runtime.state.promptCount, resourceCount: selected.runtime.state.resourceCount })}</dd>
           </dl>}
-          <p className="settings-muted-line">{t("settings.mcp.thisListsEveryTool")}</p>
+          <p className="vk-form-note">{t("settings.mcp.thisListsEveryTool")}</p>
         </>}
-        {tab === "tools" && !loaded && <StreamPlaceholder fill label={t("settings.mcp.loading")} shape="rows" />}
-        {tab === "tools" && loaded && <McpToolCatalog runtime={selected.runtime} stale={Boolean(error)} />}
-        {tab === "capabilities" && !loaded && <StreamPlaceholder fill label={t("settings.mcp.loading")} shape="rows" />}
-        {tab === "capabilities" && loaded && <McpOptionalCapabilities key={`${selected.id}:${selected.runtime?.inspectionGeneration ?? "unavailable"}`} serverId={selected.id} connected={selected.runtime?.state.status === "connected" && !error} />}
-        {tab === "diagnostics" && <>
+        </TabsContent>
+        <TabsContent value="tools" className="mcp-tab-panel">{loaded ? <McpToolCatalog runtime={selected.runtime} stale={Boolean(error)} /> : <StreamPlaceholder fill label={t("settings.mcp.loading")} shape="rows" />}</TabsContent>
+        <TabsContent value="capabilities" className="mcp-tab-panel">{loaded ? <McpOptionalCapabilities key={`${selected.id}:${selected.runtime?.inspectionGeneration ?? "unavailable"}`} serverId={selected.id} connected={selected.runtime?.state.status === "connected" && !error} /> : <StreamPlaceholder fill label={t("settings.mcp.loading")} shape="rows" />}</TabsContent>
+        <TabsContent value="diagnostics" className="mcp-tab-panel">
           <p>{t("settings.mcp.recentConnectionActivityFor")}</p>
           {selected.runtime ? <><p>{t("settings.mcp.retries")}{selected.runtime.state.retryCount}</p>
             {selected.runtime.state.lastError && <p className="mcp-error">{selected.runtime.state.lastError}</p>}
             <section className="mcp-logs"><h4>{t("settings.mcp.recentLogs")} ({selected.runtime.state.recentLogs.length})</h4><pre>{selected.runtime.state.recentLogs.join("\n") || t("settings.mcp.noLogs")}</pre></section>
           </> : loaded ? <p>{t("settings.mcp.noDiagnosticsYet")}</p> : <StreamPlaceholder label={t("settings.mcp.loading")} count={4} />}
-          {props.onOpenDiagnostics && <Button variant="outline" onClick={props.onOpenDiagnostics}>{t("settings.mcp.openRuntimeDiagnostics")}</Button>}
-        </>}
-      </> : loaded ? <p>{t("settings.mcp.selectAnMcpServer")}</p> : <StreamPlaceholder fill label={t("settings.mcp.loading")} />}
+          {props.onOpenDiagnostics && <Button size="sm" variant="outline" className="mcp-diagnostics-link" onClick={props.onOpenDiagnostics}>{t("settings.mcp.openRuntimeDiagnostics")}</Button>}
+        </TabsContent>
+        </Tabs>
+      </> : loaded ? <div className="mcp-detail-placeholder">{rows.length ? <PageEmptyState size="panel" icon={<Server />} title={t("settings.mcp.selectAnMcpServer")} /> : <PageEmptyState size="panel" icon={<Server />} title={t("settings.mcp.addAServerTo")} action={<Button size="sm" onClick={() => setCreating(true)}><Plus size={15} aria-hidden="true" />{t("settings.mcp.add")}</Button>} />}</div> : <StreamPlaceholder fill label={t("settings.mcp.loading")} />}
     </section>
+    </div>
     <McpServerDialog actions={props.actions} open={creating || editing !== null} server={editing} onOpenChange={open => { if (!open) { setCreating(false); setEditing(null); setRefreshKey(key => key + 1) } }} />
   </div>
 }
@@ -190,7 +203,7 @@ function McpToolDetails(props: { tool: McpToolInspection }) {
   // text and expanded control localized display and expensive schema mounting.
   // text 与 expanded 控制本地化展示及开销较大的 Schema 挂载。
   const [expanded, setExpanded] = React.useState(false)
-  return <DisclosureSection className="mcp-tool" description={props.tool.description ? <span className="line-clamp-1">{props.tool.description}</span> : undefined} onOpenChange={setExpanded} title={props.tool.name}>
+  return <DisclosureSection className="mcp-tool" description={props.tool.description ? <span className="vk-form-clamp">{props.tool.description}</span> : undefined} onOpenChange={setExpanded} title={props.tool.name}>
     {expanded && <><p>{props.tool.description}</p>
       <McpSchemaDetail title={t("settings.mcp.inputParameters")} schema={props.tool.inputSchema} />
       <McpSchemaDetail title={t("settings.mcp.outputResult")} schema={props.tool.outputSchema} />
@@ -223,12 +236,12 @@ function McpOptionalCapabilities(props: { serverId: string; connected: boolean }
   return <div><p>{t("settings.mcp.namesAndDescriptionsOnly")}</p>
     <Button size="sm" variant="outline" disabled={busy} onClick={() => setRefreshKey(key => key + 1)}>{busy ? t("settings.mcp.loading") : t("settings.mcp.refresh")}</Button>
     {error && <p role="alert">{error}</p>}{busy && !result && <StreamPlaceholder fill label={t("settings.mcp.loading")} shape="rows" />}{result && <>
-      <h4>{t("settings.mcp.prompts")} ({result.prompts?.length ?? "—"})</h4>{result.promptError ? <p role="alert">{result.promptError}</p> : result.prompts?.map(prompt => <DisclosureSection className="mcp-tool" description={prompt.description ? <span className="line-clamp-1">{prompt.description}</span> : undefined} key={prompt.name} title={prompt.name}>
+      <h4>{t("settings.mcp.prompts")} ({result.prompts?.length ?? "—"})</h4>{result.promptError ? <p role="alert">{result.promptError}</p> : result.prompts?.map(prompt => <DisclosureSection className="mcp-tool" description={prompt.description ? <span className="vk-form-clamp">{prompt.description}</span> : undefined} key={prompt.name} title={prompt.name}>
         {prompt.description && <p>{prompt.description}</p>}
         {prompt.arguments?.map(argument => <p key={argument.name}><strong>{argument.name}</strong> · {argument.required ? t("settings.mcp.required") : t("settings.mcp.optional")} {argument.description}</p>)}
         <InlineDisclosure label={t("settings.mcp.viewRawData")} openLabel={t("settings.mcp.hideRawData")}><pre>{JSON.stringify(prompt, null, 2)}</pre></InlineDisclosure>
       </DisclosureSection>)}
-      <h4>{t("settings.mcp.resources")} ({result.resources?.length ?? "—"})</h4>{result.resourceError ? <p role="alert">{result.resourceError}</p> : result.resources?.map(resource => <DisclosureSection className="mcp-tool" description={<span className="line-clamp-1 font-mono">{resource.uri}</span>} key={resource.uri} title={resource.name}>
+      <h4>{t("settings.mcp.resources")} ({result.resources?.length ?? "—"})</h4>{result.resourceError ? <p role="alert">{result.resourceError}</p> : result.resources?.map(resource => <DisclosureSection className="mcp-tool" description={<span className="vk-form-clamp vk-mono">{resource.uri}</span>} key={resource.uri} title={resource.name}>
         <code>{resource.uri}</code>{resource.description && <p>{resource.description}</p>}<p>{resource.mimeType} {resource.size !== undefined && `${resource.size} bytes`}</p>
         <InlineDisclosure label={t("settings.mcp.viewRawData")} openLabel={t("settings.mcp.hideRawData")}><pre>{JSON.stringify(resource, null, 2)}</pre></InlineDisclosure>
       </DisclosureSection>)}

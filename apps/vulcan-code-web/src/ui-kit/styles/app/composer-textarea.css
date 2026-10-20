@@ -1,0 +1,54 @@
+.project-context-menu {
+  min-width: 190px;
+}
+
+.conversation-context-menu {
+  min-width: 210px;
+}
+
+.project-context-menu svg,
+.conversation-context-menu svg {
+  color: var(--vk-ink-2);
+}
+
+.archive-dialog {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.archive-dialog [data-slot="dialog-title"] {
+  font-size: 22px;
+}
+
+.archive-dialog [data-slot="dialog-description"] {
+  max-width: 360px;
+  line-height: 1.65;
+}
+
+.dialog-form {
+  display: grid;
+  gap: 16px;
+}
+
+.status-icon.ready {
+  color: var(--vk-ok);
+}
+
+.status-icon.warning {
+  color: var(--vk-warn);
+}
+
+.status-icon.error {
+  color: var(--vk-bad);
+}
+
+.status-icon.pending {
+  color: var(--vk-ink-2);
+}
+
+.tool-card {
+  border: 1px solid var(--vk-line);
+  padding: 11px;
+  background: var(--vk-panel);
+}
+
+

@@ -1,17 +1,17 @@
 import * as React from "react";
 import { Activity, Bot, Box, ChevronLeft, History, ChevronRight, Gauge, ListChecks, RefreshCw, RotateCcw } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   PageBody, PageEmptyState, PageFacts, PageHint, PageItem, PageNotice, PageRow, PageSection, PageToolbar, type PageFact,
 } from "@/components/page";
 import { StatusPill } from "@/components/shared/status";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Switch } from "@/ui-kit/primitives/switch";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
 import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
@@ -49,6 +49,7 @@ import type {
   PermissionJudgeStatus,
   ProjectSummary,
 } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Labels of stable codes sent by the service; unknown codes render as themselves.
 // 服务发送的稳定代码对应的标签；未知代码按原样显示。
@@ -263,8 +264,8 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
         <Button type="button" size="sm" variant="ghost" data-judge-back="" onClick={back}>
           <ChevronLeft size={14} />{t("settings.permissionJudge")}
         </Button>
-        <span aria-hidden="true" className="text-muted-foreground">/</span>
-        <h2 className="text-sm font-semibold">{title}</h2>
+        <span aria-hidden="true" className="vk-faint">/</span>
+        <h2 className="vk-form-title">{title}</h2>
       </PageToolbar>
     </div>
     {failureNotice}
@@ -409,7 +410,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
         : undefined}>
         <Select disabled={busy !== null} value={choices.device ?? undefined}
           onValueChange={(device) => persist({ device: device as JudgeDevice })}>
-          <SelectTrigger aria-label={t("settings.permissionJudge.device")} className="w-56"><SelectValue /></SelectTrigger>
+          <SelectTrigger aria-label={t("settings.permissionJudge.device")} className="vk-form-w-lg"><SelectValue /></SelectTrigger>
           <SelectContent>
             {snapshot.devices.map((device) => (
               <SelectItem disabled={device.unavailableReason !== null} key={device.device} value={device.device}>
@@ -423,7 +424,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
       {snapshot.cuda.supported ? <PageRow label={t("settings.permissionJudge.cuda")} description={cudaMissing.length === 0
         ? t("settings.permissionJudge.cuda.summaryReady")
         : formatMessage(t("settings.permissionJudge.cuda.summaryMissing"), { items: new Intl.ListFormat(locale, { type: "conjunction" }).format(cudaMissing) })}>
-        <div className="flex items-center gap-2">
+        <div className="vk-form-inline">
           <StatusPill status={cudaMissing.length === 0 ? "ready" : "warning"}
             label={t(cudaMissing.length === 0 ? "settings.permissionJudge.cuda.ready" : "settings.permissionJudge.cuda.missing")} />
           <Button type="button" size="sm" variant="outline" data-judge-open="cuda" onClick={() => setView("cuda")}>
@@ -436,7 +437,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
           p50: formatMs(t, worker.recentP50Ms), p95: formatMs(t, worker.recentP95Ms), count: worker.evaluations,
         })
         : undefined}>
-        <div className="flex items-center gap-2">
+        <div className="vk-form-inline">
           <StatusPill label={label(t, PHASE_KEYS, worker.phase)} status={phaseTone} />
           {worker.phase === "failed" ? <Button type="button" size="sm" variant="outline" disabled={busy !== null}
             onClick={() => void run("reload", "settings.permissionJudge.reloadFailed", async () => setStatus(await reloadPermissionJudge()))}>
@@ -458,7 +459,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
       {snapshot.policyOptions.map((option) => (
         <PageRow key={option.key} label={label(t, OPTION_KEYS, option.key)}
           description={Object.hasOwn(OPTION_HINT_KEYS, option.key) ? t(OPTION_HINT_KEYS[option.key]) : undefined}>
-          <span className="text-sm text-muted-foreground">
+          <span className="vk-form-text">
             {formatMessage(t("settings.permissionJudge.policy.default"), { mode: label(t, MODE_KEYS, option.defaultMode) })}
           </span>
         </PageRow>
@@ -518,7 +519,7 @@ function ApprovalTimeoutInput(props: {
     }
     if (seconds !== props.value) props.onCommit(seconds);
   };
-  return <Input type="number" inputMode="numeric" min={0} max={props.max} step={1} className="h-8 w-28"
+  return <Input type="number" inputMode="numeric" min={0} max={props.max} step={1} className="vk-form-w-xs"
     aria-label={props.label} data-approval-timeout="" disabled={props.disabled} value={draft}
     onChange={(event) => setDraft(event.currentTarget.value)} onBlur={commit}
     onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />;
@@ -612,7 +613,7 @@ function ModelsPage(props: {
                 {t("settings.permissionJudge.remove")}
               </Button>
             </>}>
-            <PageHint className="break-all">{model.path}</PageHint>
+            <PageHint className="vk-form-break">{model.path}</PageHint>
           </PageItem>;
         })}
     </PageSection>

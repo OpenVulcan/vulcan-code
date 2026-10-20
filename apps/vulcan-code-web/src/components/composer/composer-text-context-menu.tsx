@@ -1,11 +1,11 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+} from "@/ui-kit/primitives/context-menu";
 import { useI18n } from "@/i18n";
 import { readElectronDesktopBridge } from "@/host-shell/electron-bridge";
 
@@ -77,10 +77,6 @@ async function readClipboardText(): Promise<string> {
   return navigator.clipboard.readText();
 }
 
-// COMPOSER_MENU_ITEM_HOVER_CLASS_NAME highlights items by pointer when they never take focus.
-// COMPOSER_MENU_ITEM_HOVER_CLASS_NAME 在菜单项不获取焦点时以指针悬停高亮。
-const COMPOSER_MENU_ITEM_HOVER_CLASS_NAME = "hover:bg-(--vcn-fill-hover) hover:text-foreground";
-
 // isContextMenuKey reports the keyboard shortcuts that open a context menu on Windows and Linux.
 // isContextMenuKey 判断 Windows 与 Linux 上打开右键菜单的键盘快捷键。
 function isContextMenuKey(event: React.KeyboardEvent): boolean {
@@ -115,7 +111,7 @@ interface ComposerMenuItemProps {
 function ComposerMenuItem(props: ComposerMenuItemProps) {
   return (
     <ContextMenuItem
-      className={props.keyboard ? undefined : COMPOSER_MENU_ITEM_HOVER_CLASS_NAME}
+      data-pointer-hover={props.keyboard ? undefined : ""}
       disabled={props.disabled}
       onPointerLeave={props.keyboard ? undefined : keepPointerFocusInComposer}
       onPointerMove={props.keyboard ? undefined : keepPointerFocusInComposer}

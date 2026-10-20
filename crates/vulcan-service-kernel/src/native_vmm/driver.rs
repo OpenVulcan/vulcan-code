@@ -3395,15 +3395,46 @@ fn native_vmm_space_fingerprint(
 /// Selects one deterministic supported embedding dimension and opaque Core fingerprint.
 /// 选择一个确定且受支持的向量维度及不透明 Core 指纹。
 ///
-/// The fingerprint covers the declared capability and, for asymmetric routes, the task pairing, so
-/// vectors encoded under a different pairing are never treated as compatible.
-/// 指纹覆盖声明的能力，非对称路由还覆盖任务组合，因此以不同组合编码的向量永不视为兼容。
+/// The fingerprint covers only facts that decide whether two routes produce interchangeable vectors:
+/// the provider, service entry, model, bindings and upstream route, the declared vector shape and,
+/// for asymmetric routes, the task pairing. The credential connection, revisions, availability and
+/// batch or size limits change no vector value, so switching only the account keeps the generation.
+/// 指纹只覆盖决定两条路由能否产出可互换向量的事实：供应商、服务入口、模型、绑定与上游路由、声明的
+/// 向量形态，非对称路由还覆盖任务组合。凭据连接、修订号、可用性及批次或大小限制不改变任何向量值，
+/// 因此只更换账号时向量代次保持不变。
 fn embedding_config_from_capability(
     handle: &HostAiCapabilityHandle,
 ) -> Result<(u32, String), CoreError> {
     let (operation, tasks, dimension) =
         native_vmm_embedding_route(handle).map_err(NativeVmmEmbeddingRouteIssue::core_error)?;
-    let mut material = serde_json::to_vec(operation).map_err(|error| {
+    let capabilities = operation
+        .embedding
+        .as_ref()
+        .ok_or_else(|| NativeVmmEmbeddingRouteIssue::MissingLimits.core_error())?;
+    let route = operation.route.as_ref().map(|route| {
+        (
+            &route.provider_id,
+            &route.service_entry_id,
+            &route.model_id,
+            &route.protocol_binding_id,
+            &route.action_binding_id,
+            &route.secondary_route_id,
+        )
+    });
+    // Stored memories are encoded with the storage-side task, so only its input template shapes their
+    // vectors; a query-only template changes retrieval, never a stored vector.
+    // 已存记忆以存储侧任务编码，因此只有该任务的输入模板决定其向量；仅作用于查询的模板改变检索，
+    // 从不改变已存向量。
+    let compatibility = (
+        "native-vmm-vector-compatibility-v1",
+        route,
+        &capabilities.output_kinds,
+        &capabilities.encodings,
+        capabilities.normalization,
+        capabilities.distance_metric,
+        capabilities.input_templates.get(&tasks.document),
+    );
+    let mut material = serde_json::to_vec(&compatibility).map_err(|error| {
         CoreError::new(
             ErrorCode::InvalidConfiguration,
             ErrorStage::Configuration,
@@ -3952,6 +3983,73 @@ mod tests {
         assert_ne!(shared_fingerprint, paired_fingerprint);
     }
 
+    /// Verifies switching only the account or a revision keeps the generation, while a model change does not.
+    /// 验证只更换账号或修订号时向量代次不变，而更换模型时改变。
+    #[test]
+    fn native_vmm_vector_generation_ignores_the_account() {
+        let generation = |connection_id: &str, revision: &str, model_id: &str| {
+            let mut handle =
+                embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault]));
+            let operation = handle
+                .snapshot
+                .operations
+                .iter_mut()
+                .find(|operation| operation.operation == AiOperation::EmbeddingCreate)
+                .expect("embedding capability should exist");
+            operation.route = Some(vulcan_ai_contract::ExecutionRouteSnapshot {
+                provider_id: String::from("provider"),
+                service_entry_id: String::from("entry"),
+                connection_id: connection_id.to_owned(),
+                model_id: model_id.to_owned(),
+                protocol_binding_id: Some(String::from("binding")),
+                action_binding_id: None,
+                secondary_route_id: None,
+                secondary_provider_name: None,
+                secondary_endpoint_name: None,
+                capability_revision: revision.to_owned(),
+                catalog_revision: revision.to_owned(),
+                route_revision: revision.to_owned(),
+                usage_scope: InferenceUsageScope::InternalBackground,
+            });
+            embedding_config_from_capability(&handle)
+                .expect("route should activate")
+                .1
+        };
+        let original = generation("account-a", "revision-1", "model");
+        assert_eq!(original, generation("account-b", "revision-1", "model"));
+        assert_eq!(original, generation("account-a", "revision-2", "model"));
+        assert_ne!(original, generation("account-a", "revision-1", "other-model"));
+    }
+
+    /// Verifies a query-only input template keeps the generation, while a document template changes it.
+    /// 验证仅作用于查询的输入模板保持向量代次，而文档模板会改变它。
+    #[test]
+    fn native_vmm_vector_generation_tracks_only_the_storage_template() {
+        let generation = |templates: &[(EmbeddingTask, &str)]| {
+            let mut handle = embedding_capability_handle(BTreeSet::from([
+                EmbeddingTask::Query,
+                EmbeddingTask::Document,
+            ]));
+            let embedding = handle
+                .snapshot
+                .operations
+                .iter_mut()
+                .find(|operation| operation.operation == AiOperation::EmbeddingCreate)
+                .and_then(|operation| operation.embedding.as_mut())
+                .expect("embedding capability should exist");
+            embedding.input_templates = templates
+                .iter()
+                .map(|(task, template)| (*task, (*template).to_owned()))
+                .collect();
+            embedding_config_from_capability(&handle)
+                .expect("route should activate")
+                .1
+        };
+        let plain = generation(&[]);
+        assert_eq!(plain, generation(&[(EmbeddingTask::Query, "Instruct: find\nQuery:{input}")]));
+        assert_ne!(plain, generation(&[(EmbeddingTask::Document, "Passage: {input}")]));
+    }
+
     /// Verifies query and document calls of one paired route lock the same space fingerprint.
     /// 验证同一配对路由的查询与文档调用锁定相同的空间指纹。
     #[test]
@@ -4208,6 +4306,7 @@ mod tests {
             maximum_tokens_per_input: Some(8_192),
             normalization: EmbeddingNormalization::Unknown,
             distance_metric: DistanceMetric::Unknown,
+            input_templates: BTreeMap::new(),
         }
     }
 

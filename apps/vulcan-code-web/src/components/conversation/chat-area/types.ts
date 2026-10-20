@@ -38,6 +38,9 @@ export interface ChatAreaProps {
   // Current Git review summary shown beside compact session progress.
   // 当前用于紧凑会话进程旁展示的 Git 审查摘要。
   sessionReviewSummary: ConversationSessionReviewSummary | null;
+  // Opens the review panel on the project's uncommitted changes.
+  // 在审查面板中打开项目的未提交变更。
+  onOpenReviewChanges?: () => void;
   // Optional DOM host that receives the session runtime status through a React portal.
   // 通过 React Portal 接收会话运行状态的可选 DOM 宿主。
   runtimeStatusHost?: HTMLElement | null;

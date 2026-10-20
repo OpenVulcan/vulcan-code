@@ -1,5 +1,5 @@
 import React from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Dialog,
   DialogContent,
@@ -7,9 +7,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
+} from "@/ui-kit/primitives/dialog";
+import { Input } from "@/ui-kit/primitives/input";
+import { Spinner } from "@/ui-kit/primitives/spinner";
 import { useI18n } from "@/i18n";
 import type { ProjectSummary } from "@/types";
 
@@ -95,10 +95,10 @@ export function RenameDialog(props: {
             onChange={(event) => setValue(event.target.value)}
             placeholder={t("projectDialog.renamePlaceholder")}
           />
-          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+          {error && <p role="alert" className="vk-field-error">{error}</p>}
           <DialogFooter>
             <Button disabled={busy} type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
-            <Button disabled={busy || (props.target?.kind === "conversation" && !value.trim())} type="submit">{busy && <Spinner className="size-4" />}{t("projectDialog.confirm")}</Button>
+            <Button disabled={busy || (props.target?.kind === "conversation" && !value.trim())} type="submit">{busy && <Spinner />}{t("projectDialog.confirm")}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -164,7 +164,7 @@ export function ArchiveProjectDialog(props: {
         <DialogFooter>
           <Button disabled={props.busy} type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
           <Button disabled={props.busy} type="button" variant="destructive" onClick={props.onConfirm}>
-            {props.busy ? <Spinner className="size-4" /> : null}
+            {props.busy ? <Spinner /> : null}
             {props.busy ? busyLabel : confirmLabel}
           </Button>
         </DialogFooter>

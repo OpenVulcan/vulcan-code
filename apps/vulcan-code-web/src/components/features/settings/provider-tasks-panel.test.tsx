@@ -111,6 +111,6 @@ describe("ProviderTasksPanel", () => {
     await renderPanel();
 
     expect(container.querySelector("li")).toBeNull();
-    expect(container.querySelector(".ai-capabilities-message")).not.toBeNull();
+    expect(container.querySelector('[role="status"].vk-page-empty')).not.toBeNull();
   });
 });

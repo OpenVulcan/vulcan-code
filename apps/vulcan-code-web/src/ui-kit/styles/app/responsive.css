@@ -1,0 +1,133 @@
+:where([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Inner-scrolling dialogs must override the unlayered fallback above to preserve fixed actions. */
+/* 内部滚动弹窗必须覆盖上述未分层默认规则，确保操作区始终固定。 */
+[data-slot="dialog-content"][data-scroll-mode="fixed-footer"],
+[data-slot="dialog-content"][data-scroll-mode="content-scroll"] {
+  overflow: hidden;
+}
+
+:where([data-slot="dialog-header"]) {
+  padding-right: 28px;
+}
+
+:where([data-slot="dialog-description"], [data-slot="alert-dialog-description"]) {
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+:where([data-slot="popover-content"], [data-slot="select-content"]) {
+  max-width: calc(100vw - 16px);
+  overflow-wrap: anywhere;
+}
+
+/* Phones use one bounded application viewport and an accessible navigation drawer. */
+/* 手机使用单个受限应用视口，以及支持键盘访问的导航抽屉。 */
+@media (max-width: 720px) {
+  html, body, #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .agent-catalog-toolbar {
+    padding: 12px;
+  }
+
+  .agent-definition-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: start;
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .agent-definition-row-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .badge-editor,
+  .agent-skill-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vk-mcat-row {
+    flex-wrap: wrap;
+  }
+
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"] {
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .model-picker-scroll {
+    max-height: min(310px, 48dvh);
+  }
+
+  .feature-header-actions {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .feature-header-refresh {
+    width: 40px;
+    padding-inline: 0;
+  }
+
+  .feature-header-refresh > span {
+    display: none;
+  }
+
+  .feature-header-actions > button:not(.feature-header-refresh) {
+    padding-inline: 8px;
+    gap: 4px;
+    font-size: var(--vk-fs-sm);
+  }
+
+  [data-slot="tabs-list"][data-orientation="horizontal"] {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    max-width: 100%;
+    height: auto;
+    gap: 6px;
+  }
+
+  [data-slot="tabs-list"][data-orientation="horizontal"] > [data-slot="tabs-trigger"] {
+    flex: 0 1 auto;
+    min-height: 36px;
+    height: auto;
+  }
+
+  /* Grow interactive targets without changing virtualized list row measurements. */
+  /* 扩大交互目标，同时不改变虚拟列表的行高测量契约。 */
+  [data-slot="button"],
+  [data-slot="input"],
+  [data-slot="select-trigger"] {
+    min-height: 40px;
+  }
+
+  [data-slot="button"][data-size^="icon"] {
+    min-width: 40px;
+  }
+
+  :is(.vk-composer-bar, .vk-stage-head, .vk-shell-drawer) button,
+  .vk-composer-bar [role="combobox"] {
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  [data-slot="dialog-content"] :is([data-slot="input"], [data-slot="select-trigger"]),
+  [data-slot="dialog-footer"] button {
+    min-height: 40px;
+  }
+
+  [data-slot="dialog-content"] input {
+    font-size: var(--vk-fs-lg);
+  }
+}

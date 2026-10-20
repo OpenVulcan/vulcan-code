@@ -15,22 +15,22 @@ import {
 
 import { formatSkillText } from "@/components/features/featureText"
 import { PublicAiInternalOverridesDialog } from "@/components/features/settings/public-ai-internal-overrides-dialog"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Button } from "@/ui-kit/primitives/button"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
+} from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { ScrollArea } from "@/ui-kit/primitives/scroll-area"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip"
+} from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
 import { formatDurationSeconds } from "@/lib/usage-format"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core";
 import {
   loadPublicAiSettings,
   savePublicAiInferenceRoute,
@@ -45,6 +45,8 @@ import type {
   PublicAiSettingsSnapshot,
 } from "@/types"
 import { errorMessage } from "@/lib/display-format"
+import "@/ui-kit/styles/features/settings-forms.css";
+import "@/ui-kit/styles/features/memory.css"
 
 // VmmInferenceSettingsProps exposes required-foundation readiness to the first-run workflow.
 // VmmInferenceSettingsProps 向首次配置流程暴露必需基础能力就绪状态。
@@ -316,25 +318,25 @@ export function VmmInferenceSettings({
   }, [onEmbeddingRouteSaved, runSnapshotMutation])
 
   return (
-    <section className="rounded-xl border bg-card p-3">
-      <div className="mb-3 flex items-start gap-2">
-        <Database className="mt-0.5 shrink-0" size={17} />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2"><strong>{t("settings.inference.title")} · {t("settings.inference.profileVmm")}</strong><Tooltip><TooltipTrigger asChild><button type="button" aria-label={t("settings.inference.vmmReasoningNotice")} className="shrink-0 text-muted-foreground"><Info className="size-3.5" aria-hidden="true" /></button></TooltipTrigger><TooltipContent>{t("settings.inference.vmmReasoningNotice")}</TooltipContent></Tooltip></div>
-          <p className="mt-0.5 text-xs text-muted-foreground">{t("settings.inference.subtitle")}</p>
+    <section className="vk-form-box">
+      <div className="vk-mem-section-head">
+        <Database aria-hidden="true" />
+        <div className="vk-form-cell">
+          <div className="vk-form-inline"><strong>{t("settings.inference.title")} · {t("settings.inference.profileVmm")}</strong><Tooltip><TooltipTrigger asChild><button type="button" aria-label={t("settings.inference.vmmReasoningNotice")} className="vk-faint"><Info className="vk-icon" aria-hidden="true" /></button></TooltipTrigger><TooltipContent>{t("settings.inference.vmmReasoningNotice")}</TooltipContent></Tooltip></div>
+          <p className="vk-form-note">{t("settings.inference.subtitle")}</p>
         </div>
       </div>
-      {error ? <p role="alert" className="settings-muted-line settings-error-text mb-2">{error}</p> : null}
+      {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
       {!snapshot ? (
         loadPending ? <StreamPlaceholder label={t("settings.models.loadingCatalog")} shape="fields" count={3} />
           : <Button type="button" variant="outline" onClick={() => setLoadRevision((current) => current + 1)}>{t("settings.modelExperience.retryLoad")}</Button>
       ) : (
         <>
           <div className="vmm-inference-routes">
-            <div className="vmm-inference-columns text-xs text-muted-foreground" aria-hidden="true">
+            <div className="vmm-inference-columns vk-faint vk-form-xs" aria-hidden="true">
               <span>{t("memory.workspace.purpose")}</span>
               <div className="vmm-inference-controls"><span>{t("settings.inference.modelRegion")}</span><span>{t("settings.inference.accountRegion")}</span></div>
-              <span className="text-right">{t("memory.workspace.actions")}</span>
+              <span className="vk-mem-end-text">{t("memory.workspace.actions")}</span>
             </div>
             {purposes.map((purpose) => (
               <InferenceRouteField
@@ -607,29 +609,29 @@ function InferenceRouteField(props: {
   }, [persistedRouteKey])
 
   return (
-    <div className="vmm-inference-route min-w-0">
-      <div className="vmm-inference-heading flex min-w-0 flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1">
-          <label className="block text-sm font-medium">{props.label}</label>
+    <div className="vmm-inference-route">
+      <div className="vmm-inference-heading vk-form-bar">
+        <div className="vk-form-inline">
+          <label className="vk-field-label">{props.label}</label>
           {props.description ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   aria-label={props.description}
-                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                  className="vk-mem-info"
                   type="button"
                 >
-                  <Info className="size-3.5" aria-hidden="true" />
+                  <Info className="vk-icon" aria-hidden="true" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent className="max-w-72 text-xs" side="top">
+              <TooltipContent className="vk-mem-tip" side="top">
                 {props.description}
               </TooltipContent>
             </Tooltip>
           ) : null}
         </div>
         {props.showEnableToggle ? (
-          <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <label className="vk-check-label vk-form-note">
             <Checkbox
               aria-label={t("settings.inference.rerankEnabled")}
               checked={featureEnabled}
@@ -643,8 +645,8 @@ function InferenceRouteField(props: {
         ) : null}
       </div>
       <div className="vmm-inference-controls">
-        <div className="min-w-0">
-          <span className="vmm-inference-mobile-label mb-1 text-[11px] text-muted-foreground">
+        <div className="vk-form-cell">
+          <span className="vmm-inference-mobile-label vk-form-note">
             {t("settings.inference.modelRegion")}
           </span>
           <InferencePickerControl
@@ -652,7 +654,7 @@ function InferenceRouteField(props: {
             disabled={props.disabled || !featureEnabled}
             emptyLabel={t("composer.modelPicker.noMatches")}
             filterPlaceholder={t("composer.modelPicker.filter")}
-            icon={<Cpu className="size-4" />}
+            icon={<Cpu className="vk-icon" />}
             onValueChange={(value) => {
               if (value === null) {
                 void requestRouteChange(null, null)
@@ -683,8 +685,8 @@ function InferenceRouteField(props: {
             value={selectedModelKey}
           />
         </div>
-        <div className="min-w-0">
-          <span className="vmm-inference-mobile-label mb-1 text-[11px] text-muted-foreground">
+        <div className="vk-form-cell">
+          <span className="vmm-inference-mobile-label vk-form-note">
             {t("settings.inference.accountRegion")}
           </span>
           <div className="vmm-inference-account">
@@ -693,7 +695,7 @@ function InferenceRouteField(props: {
             disabled={props.disabled || !featureEnabled || selectedModelKey === null}
             emptyLabel={t("settings.inference.noAccountMatches")}
             filterPlaceholder={t("settings.inference.accountFilter")}
-            icon={<UserRound className="size-4" />}
+            icon={<UserRound className="vk-icon" />}
             onValueChange={(value) => {
               void requestRouteChange(
                 value ? candidateByRouteKey.get(value)?.route ?? null : null,
@@ -718,12 +720,11 @@ function InferenceRouteField(props: {
           </div>
         </div>
       </div>
-      {props.route && !selectedCandidate ? <p className="text-xs text-destructive" role="status">{t("settings.inference.unavailable")} · {t("settings.inference.selectAccount")}</p> : null}
-      <div className="vmm-inference-actions flex justify-end gap-1.5">
+      {props.route && !selectedCandidate ? <p className="vk-field-error" role="status">{t("settings.inference.unavailable")} · {t("settings.inference.selectAccount")}</p> : null}
+      <div className="vmm-inference-actions vk-form-acts">
         <Button
           aria-label={t("settings.inference.configureDefaults")}
-          className="size-9 shrink-0"
-          disabled={props.disabled || !featureEnabled || !selectedCandidate}
+                    disabled={props.disabled || !featureEnabled || !selectedCandidate}
           onClick={() => {
             if (selectedCandidate) {
               props.onConfigure(selectedCandidate)
@@ -734,13 +735,12 @@ function InferenceRouteField(props: {
           type="button"
           variant="outline"
         >
-          <SlidersHorizontal className="size-4" />
+          <SlidersHorizontal className="vk-icon" />
         </Button>
         {props.onTest ? (
           <Button
             aria-label={t("settings.inference.testConnection")}
-            className="size-9 shrink-0"
-            disabled={props.disabled || !featureEnabled || props.testPending || !selectedCandidate}
+                        disabled={props.disabled || !featureEnabled || props.testPending || !selectedCandidate}
             onClick={props.onTest}
             size="icon"
             title={t("settings.inference.testConnection")}
@@ -748,9 +748,9 @@ function InferenceRouteField(props: {
             variant="outline"
           >
             {props.testPending ? (
-              <LoaderCircle className="size-4 animate-spin" />
+              <LoaderCircle className="vk-spin" />
             ) : (
-              <Play className="size-4" />
+              <Play className="vk-icon" />
             )}
           </Button>
         ) : null}
@@ -795,9 +795,9 @@ function InferenceRouteStatus(props: {
     : props.unavailableReason ? formatSkillText(t("settings.inference.unavailableReason"), { reason: props.unavailableReason })
     : failed ? t("settings.inference.unavailable")
     : available ? t("settings.inference.credentialAvailable") : t("settings.inference.noRoute")
-  return <Tooltip><TooltipTrigger asChild><button type="button" aria-label={label} className={cn("vmm-inference-status", failed ? "text-destructive" : available ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
-    {failed ? <CircleAlert className="size-4" aria-hidden="true" /> : available ? <CircleCheck className="size-4" aria-hidden="true" /> : <Info className="size-4" aria-hidden="true" />}
-  </button></TooltipTrigger><TooltipContent><span>{label}{props.candidate ? <span className="mt-1 block">{props.candidate.serviceEntryDisplayName}</span> : null}{props.testSummary ? <span className="mt-1 block">{props.testSummary}</span> : null}</span></TooltipContent></Tooltip>
+  return <Tooltip><TooltipTrigger asChild><button type="button" aria-label={label} className="vmm-inference-status" data-tone={failed ? "bad" : available ? "ok" : undefined}>
+    {failed ? <CircleAlert className="vk-icon" aria-hidden="true" /> : available ? <CircleCheck className="vk-icon" aria-hidden="true" /> : <Info className="vk-icon" aria-hidden="true" />}
+  </button></TooltipTrigger><TooltipContent><span>{label}{props.candidate ? <span className="vk-mem-tip-line">{props.candidate.serviceEntryDisplayName}</span> : null}{props.testSummary ? <span className="vk-mem-tip-line">{props.testSummary}</span> : null}</span></TooltipContent></Tooltip>
 }
 
 // InferencePickerControl renders the existing searchable model-picker visual language.
@@ -879,16 +879,16 @@ function InferencePickerControl(props: {
       <DialogTrigger asChild>
         <Button
           aria-label={props.ariaLabel}
-          className="h-auto min-h-10 w-full min-w-0 justify-start gap-2 px-3 py-2 font-normal"
+          className="vk-mem-picker-trigger"
           disabled={props.disabled}
           type="button"
           variant="outline"
         >
-          <span className="shrink-0 text-muted-foreground">{props.icon}</span>
-          <span className="whitespace-normal break-words text-left">{triggerLabel}</span>
+          <span className="vk-faint">{props.icon}</span>
+          <span>{triggerLabel}</span>
         </Button>
       </DialogTrigger>
-      <DialogContent className="vmm-model-dialog sm:max-w-2xl">
+      <DialogContent className="vmm-model-dialog" size="lg">
         <DialogHeader><DialogTitle>{props.ariaLabel}</DialogTitle><DialogDescription>{props.filterPlaceholder}</DialogDescription></DialogHeader>
         <div className="model-picker-filter">
           <Search size={14} />
@@ -904,7 +904,7 @@ function InferencePickerControl(props: {
           <div className="model-picker-list">
             {props.showNoRoute !== false ? (
                 <Button
-                  className={cn("model-picker-row", props.value === null && "selected")}
+                  className={cx("model-picker-row", props.value === null && "selected")}
                   aria-pressed={props.value === null}
                   onClick={() => {
                     props.onValueChange(null)
@@ -933,7 +933,7 @@ function InferencePickerControl(props: {
                 return (
                     <Button
                       key={option.key}
-                      className={cn("model-picker-row", selected && "selected")}
+                      className={cx("model-picker-row", selected && "selected")}
                       aria-pressed={selected}
                       onClick={() => {
                         props.onValueChange(option.key)

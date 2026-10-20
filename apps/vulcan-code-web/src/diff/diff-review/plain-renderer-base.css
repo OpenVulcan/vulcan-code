@@ -6,11 +6,11 @@
   --diffs-gap-block: 0px;
   --diffs-gap-inline: 0px;
   --diffs-gap-style: 2px solid var(--diffs-bg);
-  --diffs-addition-base: #1f883d;
-  --diffs-deletion-base: #cf222e;
-  --diffs-fg-number: var(--muted-foreground);
-  --diffs-bg-context: color-mix(in oklab, var(--muted-foreground) 34%, transparent);
-  --diffs-bg-separator: color-mix(in oklab, var(--muted) 54%, var(--background));
+  --diffs-addition-base: var(--vk-diff-add-ink);
+  --diffs-deletion-base: var(--vk-diff-del-ink);
+  --diffs-fg-number: var(--vk-ink-2);
+  --diffs-bg-context: color-mix(in oklab, var(--vk-ink-2) 34%, transparent);
+  --diffs-bg-separator: color-mix(in oklab, var(--vk-sunken) 54%, var(--vk-ground));
   width: 100%;
   min-width: 100%;
   overflow: visible;
@@ -87,7 +87,7 @@
 
 .diff-plain-rendered-window pre[data-diff] [data-code]::-webkit-scrollbar {
   width: 0;
-  height: var(--scrollbar-size);
+  height: calc(var(--vk-u) * 2.5);
 }
 
 .diff-plain-rendered-window pre[data-diff] [data-gutter] {

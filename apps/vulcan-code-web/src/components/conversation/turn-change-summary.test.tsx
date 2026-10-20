@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type { TurnChangeSummaryV1 } from "@/diff/turn-change-summary-v1";
 import { TurnStatsBlock } from "./conversation-blocks";
 import { TurnChangeReviewActionsContext, TurnChangeReviewTargetContext } from "./turn-change-review-context";
@@ -56,14 +56,14 @@ async function mount(options: { changes?: TurnChangeSummaryV1; targetTurnId?: nu
 // toggle returns the change chip, or null when the row has none.
 // toggle 返回变更胶囊；该行没有时返回 null。
 function toggle(): HTMLButtonElement | null {
-  return host.querySelector<HTMLButtonElement>(".turn-changes-toggle");
+  return host.querySelector<HTMLButtonElement>("[data-turn-changes]");
 }
 
 // openList clicks the change chip and waits for the lazily loaded list.
 // openList 点击变更胶囊并等待懒加载列表。
 async function openList() {
   await act(async () => { toggle()!.click(); });
-  await vi.waitFor(() => expect(host.querySelector(".turn-change-files")).not.toBeNull());
+  await vi.waitFor(() => expect(host.querySelector(".vk-turn-files")).not.toBeNull());
 }
 
 it("shows no change chip for a Turn without applied changes", async () => {
@@ -76,19 +76,19 @@ it("lists the first files and reveals the rest on request", async () => {
   expect(toggle()!.getAttribute("aria-expanded")).toBe("false");
   await openList();
   expect(toggle()!.getAttribute("aria-expanded")).toBe("true");
-  expect(host.querySelectorAll(".turn-change-files li")).toHaveLength(5);
-  await act(async () => { host.querySelector<HTMLButtonElement>(".turn-change-files-more")!.click(); });
-  expect(host.querySelectorAll(".turn-change-files li")).toHaveLength(7);
+  expect(host.querySelectorAll(".vk-turn-files-list > li")).toHaveLength(5);
+  await act(async () => { host.querySelector<HTMLButtonElement>(".vk-turn-files-more")!.click(); });
+  expect(host.querySelectorAll(".vk-turn-files-list > li")).toHaveLength(7);
 });
 
 it("offers the Git review only for the Turn that review shows", async () => {
   const open = vi.fn();
   await mount({ changes: CHANGES, targetTurnId: 6, open });
   await openList();
-  expect(host.querySelector(".turn-change-files-action")).toBeNull();
+  expect(host.querySelector("[data-turn-open-review]")).toBeNull();
 
   await mount({ changes: CHANGES, targetTurnId: 5, open });
-  const action = host.querySelector<HTMLButtonElement>(".turn-change-files-action");
+  const action = host.querySelector<HTMLButtonElement>("[data-turn-open-review]");
   expect(action).not.toBeNull();
   await act(async () => { action!.click(); });
   expect(open).toHaveBeenCalledTimes(1);

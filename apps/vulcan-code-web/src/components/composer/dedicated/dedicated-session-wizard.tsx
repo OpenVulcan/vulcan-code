@@ -1,6 +1,6 @@
 import React from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
 import { composerSessionDraftKey } from "@/components/composer/composer-panel/helpers";
 import { useComposerModelSelection } from "@/components/composer/composer-panel/use-composer-model-selection";
@@ -24,7 +24,7 @@ import {
   DedicatedWizardOptions,
   useProjectKnowledgeLibraries,
 } from "./dedicated-wizard-steps";
-import "@/components/composer/dedicated/dedicated-session-wizard.css";
+import "@/ui-kit/styles/dedicated-wizard.css";
 
 // STEP_TITLE_KEYS names each wizard step.
 // STEP_TITLE_KEYS 为每个向导步骤命名。
@@ -112,12 +112,17 @@ export function DedicatedSessionWizard(props: {
   };
 
   return (
-    <section aria-busy={submitting} aria-label={t("composer.draft.kindDedicated")} className="dedicated-wizard">
-      <header className="dedicated-wizard-header">
+    <section aria-busy={submitting} aria-label={t("composer.draft.kindDedicated")} className="vk-wiz">
+      <header className="vk-wiz-head">
         <strong>{t(STEP_TITLE_KEYS[step])}</strong>
+        <span aria-hidden="true" className="vk-wiz-rail">
+          {DEDICATED_WIZARD_STEPS.map((item, index) => (
+            <span data-state={index < stepIndex ? "done" : index === stepIndex ? "current" : undefined} key={item} />
+          ))}
+        </span>
         <small>{formatMessage(t("composer.dedicated.stepCount"), { current: stepIndex + 1, total: DEDICATED_WIZARD_STEPS.length })}</small>
       </header>
-      <div className="dedicated-wizard-body">
+      <div className="vk-wiz-body">
         {step === "settings" ? (
           <DedicatedSettingsStep
             answerMode={answerMode}
@@ -171,8 +176,8 @@ export function DedicatedSessionWizard(props: {
           />
         ) : null}
       </div>
-      {submitting ? <p className="dedicated-wizard-hint" role="status">{t("composer.dedicated.creating")}</p> : null}
-      <div className="dedicated-wizard-actions">
+      {submitting ? <p className="vk-wiz-hint" role="status">{t("composer.dedicated.creating")}</p> : null}
+      <div className="vk-wiz-bar">
         {previous ? (
           <Button disabled={submitting} onClick={() => goTo(previous)} size="sm" type="button" variant="ghost">
             <ArrowLeft size={14} />
@@ -180,7 +185,7 @@ export function DedicatedSessionWizard(props: {
           </Button>
         ) : null}
         {next ? (
-          <span className="dedicated-wizard-actions-end">
+          <span className="vk-wiz-end">
             <Button disabled={submitting || !canAdvance} onClick={() => goTo(next)} size="sm" type="button">
               {t("composer.dedicated.next")}
               <ArrowRight size={14} />

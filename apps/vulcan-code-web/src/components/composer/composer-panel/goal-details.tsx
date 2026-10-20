@@ -33,27 +33,27 @@ export function ComposerGoalDetails({ goal }: { goal: SessionGoalSummary }) {
   // cachePercent 区分尚无样本与真实的零命中率。
   const cachePercent = goal.usageKnown !== false && input > 0 ? goal.cachedInputTokens / input * 100 : null;
   return <>
-    <div className="composer-goal-details-objective">{goal.objective}</div>
-    <div className="context-usage-card-header">
+    <div className="vk-stats-body">{goal.objective}</div>
+    <div className="vk-sum-title">
       <strong>{t("composer.goal.usage")}</strong><span>{budgetText}</span>
     </div>
-    <dl className="composer-goal-details-metrics">
-      {metrics.map(([label, value]) => <div className="turn-stats-metric" key={label}>
+    <dl className="vk-stats-grid" data-columns="2" data-goal-metrics>
+      {metrics.map(([label, value]) => <div className="vk-stat" key={label}>
         <dt>{label}</dt><dd>{goal.usageKnown === false ? "—" : value}</dd>
       </div>)}
     </dl>
-    <div className="turn-stats-cache-summary">
-      <div className="turn-stats-metric-row">
-        <div className="turn-stats-metric">
+    <div className="vk-stats-section">
+      <div className="vk-stats-pair">
+        <div className="vk-stat">
           <span>{t("composer.goal.tooltip.total")}</span><strong>{goal.usageKnown === false ? "—" : formatTokenCount(goal.totalTokens)}</strong>
         </div>
-        <div className="turn-stats-metric">
+        <div className="vk-stat">
           <span>{t("composer.goal.cacheHit")}</span><strong>{cachePercent === null ? "—" : `${cachePercent.toFixed(1)}%`}</strong>
         </div>
       </div>
-      <div className="turn-stats-cache-track" role="progressbar" aria-label={t("composer.goal.cacheHit")}
+      <div className="vk-stats-bar" role="progressbar" aria-label={t("composer.goal.cacheHit")}
         aria-valuemin={0} aria-valuemax={100} aria-valuenow={cachePercent ?? undefined}>
-        <div className="turn-stats-cache-fill" style={{ width: `${cachePercent ?? 0}%` }} />
+        <span style={{ width: `${cachePercent ?? 0}%` }} />
       </div>
     </div>
   </>;

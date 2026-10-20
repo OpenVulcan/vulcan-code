@@ -51,7 +51,7 @@ import {
   conversationContinuationBlockedReasonText,
   conversationContinuationBlockedReasonTextFromError,
 } from "@/components/conversation/continuation-blocked-reason";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   webuiClickTrace,
   type RequestStopConversationRunChoice,

@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { CoreBrowserFrame } from "@/service/core-browser-service";
 import { useBrowserFrameRate } from "./use-browser-frame-rate";
+import "@/ui-kit/styles/features/browser.css"
 
 // The picture and FPS own high-frequency updates. The surrounding controls only need
 // the transition between having no accepted frame and having one.
@@ -40,7 +41,7 @@ export function createBrowserFrameSource(): BrowserFrameSource {
 const emptySnapshot = () => null;
 export function BrowserFrameImage({ source }: { source: BrowserFrameSource }) {
   const imageUrl = React.useSyncExternalStore(source.subscribe, source.snapshot, emptySnapshot);
-  return <img className="pointer-events-none h-full w-full object-contain" src={imageUrl ?? undefined} alt="" draggable={false} />;
+  return <img className="vk-browser-frame" src={imageUrl ?? undefined} alt="" draggable={false} />;
 }
 
 export function BrowserFrameRateCounter(props: {
@@ -54,5 +55,5 @@ export function BrowserFrameRateCounter(props: {
   React.useLayoutEffect(() => props.source.subscribe(() => {
     if (props.source.snapshot() !== null) recordFrame();
   }), [props.source, recordFrame]);
-  return <span className="tabular-nums" title={props.title}>{fps.toFixed(1)} FPS</span>;
+  return <span className="vk-num" title={props.title}>{fps.toFixed(1)} FPS</span>;
 }

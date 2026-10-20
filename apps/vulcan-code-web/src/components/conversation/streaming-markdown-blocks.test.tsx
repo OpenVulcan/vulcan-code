@@ -82,6 +82,6 @@ describe("streaming Markdown blocks", () => {
   it("shows an oversized tail as plain text", async () => {
     const html = await renderMarkdown(`intro\n\n\`\`\`\n${"x".repeat(STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS)}`, true)
     expect(html).toContain("<p>intro</p>")
-    expect(html).toContain('<pre class="streaming-markdown-raw-preview">')
+    expect(html).toContain('<pre class="vk-md-raw">')
   })
 })

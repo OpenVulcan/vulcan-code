@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { I18nProvider } from "@/i18n";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import type { ProjectSummary, WorkbenchSnapshot } from "@/types";
@@ -10,10 +10,10 @@ import { useWorkbenchProjectActions } from "./project-actions";
 
 // services isolates acknowledged mutations and delayed authoritative reads from real configuration.
 // services 将已确认变更和延迟权威读取与真实配置隔离。
-const services = vi.hoisted(() => ({ toggle: vi.fn(), open: vi.fn(), read: vi.fn(), reorder: vi.fn(), expand: vi.fn() }));
-vi.mock("@/service/project-actions-service", async (original) => ({ ...await original<object>(), toggleProjectPinned: services.toggle, openProjectDirectory: services.open, reorderProjects: services.reorder, setExpandedTaskProjects: services.expand }));
+const services = vi.hoisted(() => ({ toggle: vi.fn(), open: vi.fn(), read: vi.fn(), expand: vi.fn() }));
+vi.mock("@/service/project-actions-service", async (original) => ({ ...await original<object>(), toggleProjectPinned: services.toggle, openProjectDirectory: services.open, setExpandedTaskProjects: services.expand }));
 vi.mock("@/service/workbench-snapshot-service", async (original) => ({ ...await original<object>(), loadWorkbenchSnapshot: services.read }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 
 // Verify unrelated failures, duplicate toggles and rejected stale reads never restore an old workbench.
 // 验证无关动作失败、重复切换和被拒绝的旧读取都不会恢复旧工作台。
@@ -88,17 +88,7 @@ it("keeps current state and drafts across directory failures and stale pin reads
     expect(merge.mock.calls[0][0]).toBe(fresh);
     expect(current.projects.find((entry) => entry.id === "pin-b")?.name).toBe("B");
     expect(current.projects[0].pinned).toBe(true);
-    // ordered captures authoritative state before a failed reorder; no speculative order is published.
-    // ordered 捕获排序失败前的权威状态；不发布推测排序。
     const ordered = current;
-    services.reorder.mockResolvedValueOnce(null);
-    await actions.handleReorderProjects(["pin-b", "pin-a"]);
-    expect(current).toBe(ordered);
-    expect(toast.error).toHaveBeenLastCalledWith(expect.stringContaining("排序未返回权威状态"));
-    services.reorder.mockResolvedValueOnce({ ...ordered, projects: [...ordered.projects].reverse() });
-    accept.mockReturnValueOnce(false);
-    await actions.handleReorderProjects(["pin-b", "pin-a"]);
-    expect(current).toBe(ordered);
     services.expand.mockResolvedValueOnce(null);
     await act(async () => actions.handleExpandedProjectIdsChange(["pin-a"]));
     expect(current.expandedProjectIds).toEqual(["pin-a"]);

@@ -4,9 +4,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { useWorkbenchShellChrome } from "./shell-chrome";
-import { copyText, initialThemeMode } from "./types";
+import { copyText } from "./types";
 
 // nativeShell isolates native window effects while preserving actual hook lifecycle behavior.
 // nativeShell 隔离原生窗口副作用，同时保留真实钩子生命周期行为。
@@ -17,14 +17,12 @@ const nativeShell = vi.hoisted(() => ({
   subscribeWindowResize: vi.fn(async (_handler: () => void) => () => {}),
 }));
 vi.mock("@/service/webui-service-runtime", () => ({ shellClient: nativeShell }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn() } }));
 vi.mock("@/components/shell/app-chrome", () => ({
-  // GlobalActions forwards only explicit theme activation from the test button.
-  // GlobalActions 仅从测试按钮转发明确的主题切换操作。
-  GlobalActions: ({ onToggleTheme }: { onToggleTheme: () => void }) => <button onClick={onToggleTheme}>theme</button>,
-  // WindowControls keeps the hook's leading controls mounted without invoking a native window.
-  // WindowControls 保持钩子前置控件挂载，不操作原生窗口。
-  WindowControls: ({ leadingControl }: { leadingControl: React.ReactNode }) => leadingControl,
+  // GlobalActions and WindowControls render nothing; this suite covers the hook's native window state.
+  // GlobalActions 与 WindowControls 不渲染内容；本套件覆盖钩子的原生窗口状态。
+  GlobalActions: () => null,
+  WindowControls: () => null,
 }));
 
 // state exposes only public hook output; host and root own the isolated React mount.
@@ -44,7 +42,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount()); host.remove();
   vi.restoreAllMocks(); vi.unstubAllGlobals();
-  document.documentElement.classList.remove("dark");
+  delete document.documentElement.dataset.vkScheme;
 });
 
 // Harness renders actual shell state with a complete synthetic startup snapshot.
@@ -86,19 +84,6 @@ it("rejects duplicate titlebar toggles and reports failure without an unhandled 
   await act(async () => { state.handleTitlebarDoubleClick(titlebarEvent); state.handleTitlebarDoubleClick(titlebarEvent); });
   expect(nativeShell.toggleWindowMaximize).toHaveBeenCalledTimes(1);
   await act(async () => rejectToggle(new Error("Synthetic native denial")));
-  expect(toast.error).toHaveBeenCalledTimes(1);
-});
-
-it("keeps theme selection usable when storage access is denied and does not write on mount", async () => {
-  // storage denies both reads and writes without touching the user's persisted preference.
-  // storage 拒绝读写，不接触用户已持久化的偏好。
-  const storage = { getItem: vi.fn(() => { throw new Error("blocked"); }), setItem: vi.fn(() => { throw new Error("blocked"); }) };
-  vi.stubGlobal("localStorage", storage);
-  expect(initialThemeMode()).toBe("light");
-  await mount();
-  expect(storage.setItem).not.toHaveBeenCalled();
-  await act(async () => host.querySelector("button")!.click());
-  expect(document.documentElement.classList.contains("dark")).toBe(true);
   expect(toast.error).toHaveBeenCalledTimes(1);
 });
 

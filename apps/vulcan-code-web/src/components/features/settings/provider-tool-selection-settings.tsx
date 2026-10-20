@@ -1,9 +1,9 @@
 import * as React from "react";
 import { FlaskConical } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Combobox } from "@/components/ui/combobox";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Combobox } from "@/ui-kit/primitives/combobox";
 import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
 import {
   Select,
@@ -11,8 +11,8 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+} from "@/ui-kit/primitives/select";
+import { Switch } from "@/ui-kit/primitives/switch";
 import { useI18n, translateActive } from "@/i18n";
 import {
   isModelExtensionCapability,
@@ -41,6 +41,7 @@ import type {
   PublicAiSettingsSnapshot,
 } from "@/types";
 import { ProviderToolTestDialog } from "./provider-tool-test-dialog";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ProviderToolSelectionSettingsArea separates the system capability switch, default model, and default account.
 // ProviderToolSelectionSettingsArea 分离系统能力开关、默认模型与默认账号。
@@ -250,8 +251,8 @@ export function ProviderToolSelectionSettingsArea(props: {
   ]);
 
   return (
-    <div className="settings-direct-content settings-capability-page">
-      {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
+    <div className="vk-form-scroll settings-capability-page">
+      {error ? <p className="vk-field-error">{error}</p> : null}
       {!snapshot && error ? <Button onClick={() => setLoadAttempt((value) => value + 1)} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : !snapshot ? (
         <StreamPlaceholder label={t("settings.providerTools.loading")} shape="fields" count={3} />
       ) : mediaUnderstandingMode ? (
@@ -277,7 +278,7 @@ export function ProviderToolSelectionSettingsArea(props: {
           </header>
           {targets.length === 0 ? (
             <>
-              <p className="settings-muted-line">{t("settings.providerTools.noTargets")}</p>
+              <p className="vk-form-note">{t("settings.providerTools.noTargets")}</p>
               <div className="settings-provider-tool-defaults-grid">
                 <label>
                   <span>{t("settings.providerTools.model")}</span>
@@ -407,7 +408,7 @@ export function ProviderToolSelectionSettingsArea(props: {
               onCheckedChange={(checked) => void saveEnabled(checked)}
             />
           </header>
-          {targets.length === 0 ? <p className="settings-muted-line">{t("settings.providerTools.noTargets")}</p> : null}
+          {targets.length === 0 ? <p className="vk-form-note">{t("settings.providerTools.noTargets")}</p> : null}
           <div className="settings-provider-tool-defaults-grid">
             <label>
               <span>{t("settings.providerTools.model")}</span>

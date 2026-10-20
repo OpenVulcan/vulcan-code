@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { ConversationSessionCommitBusyState } from "@/components/conversation/session-todolist-panel";
 import type { ConversationSessionGitBranchActions } from "@/components/conversation/session-todolist-panel/git-branch-controls";
 import { createWorkspaceGitRefreshOwnership } from "@/components/workspace/workspace-shell/git-refresh-ownership";

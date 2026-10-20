@@ -11,7 +11,7 @@ const PROJECT = "X:/audit-project";
 // snapshot builds a worktree snapshot; a branch name marks it as coming from a real repository.
 // snapshot 构建工作树快照；带分支名表示其来自真实仓库。
 function snapshot(changedFiles: number, currentBranch: string | null): WorkspaceDiffSnapshotResponse {
-  return { repositoryRoot: PROJECT, unifiedDiff: "", changedFiles, additions: changedFiles, deletions: 0, currentBranch };
+  return { gitRepository: currentBranch !== null, repositoryRoot: PROJECT, unifiedDiff: "", changedFiles, additions: changedFiles, deletions: 0, currentBranch };
 }
 
 // repository builds one catalog-reported repository node.

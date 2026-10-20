@@ -212,15 +212,15 @@ export function useDiffShikiTheme(): DiffShikiTheme {
   );
 }
 
-// subscribeDiffShikiTheme listens for shell theme class changes on the document root.
-// subscribeDiffShikiTheme 监听文档根节点上的外壳主题 class 变化。
+// subscribeDiffShikiTheme listens for the resolved color scheme on the document root.
+// subscribeDiffShikiTheme 监听文档根节点上解析后的配色方案变化。
 function subscribeDiffShikiTheme(onStoreChange: () => void): () => void {
   if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
     return () => undefined;
   }
   const observer = new MutationObserver(onStoreChange);
   observer.observe(document.documentElement, {
-    attributeFilter: ["class"],
+    attributeFilter: ["data-vk-scheme"],
     attributes: true,
   });
   return () => observer.disconnect();

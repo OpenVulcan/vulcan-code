@@ -1,13 +1,12 @@
 import * as React from "react"
-import { CircleHelp } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
+import { Button } from "@/ui-kit/primitives/button"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import { useI18n } from "@/i18n"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { PageActionBar, PageBody, PageNotice, PageRow, PageSection } from "@/components/page"
 import type {
   LuaSkillsCatalogSummary,
   LuaSkillsManagedRuntimeComponentSummary,
@@ -22,6 +21,7 @@ import type {
 
 import { LuaSkillsInferenceRoutes } from "./lua-skills-inference-routes"
 import type { SkillActionProps } from "./skill-area-types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // LuaVmPoolKey identifies one exact VM pool in the package settings document.
 // LuaVmPoolKey 标识包设置文档中的一个精确 VM 池。
@@ -130,6 +130,8 @@ function ManagedRuntimeRow(props: {
           {props.runtime.status === "unavailable" ? (
             <Button
               type="button"
+              size="sm"
+              variant="outline"
               disabled={props.actionDisabled}
               title={props.runtime.diagnostic}
               onClick={props.onRetry}
@@ -506,130 +508,39 @@ export function LuaSkillsSettingsPanel(props: {
   // The page title, description and restart state live in the feature header, so the body starts with the settings.
   // 页面标题、说明与重启状态位于功能页头部，主体直接从设置项开始。
   return (
-    <section className="skill-page-body lua-settings-page-body">
-      <fieldset disabled={saving || retryingTarget !== null} className="lua-settings-content min-w-0 border-0 p-0">
-        {externalUpdate ? <div className="text-sm text-[var(--vcn-content-warning)]" role="status">
-          <p>{t("skills.luaSettings.settingsChangedElsewhereYour")}</p>
+    <PageBody className="lua-settings-page">
+      <fieldset disabled={saving || retryingTarget !== null} className="lua-settings-content vk-fieldset">
+        {externalUpdate ? <PageNotice tone="warning" title={t("skills.luaSettings.settingsChangedElsewhereYour")} actions={(
           <Button variant="outline" size="sm" onClick={() => { setDraft(cloneLuaSkillsRuntimeSettings(committedSettings)); setExternalUpdate(false) }}>
             {t("skills.luaSettings.discardDraftAndLoad")}
           </Button>
-        </div> : null}
-        <div className="lua-managed-runtime-list">
-          {props.catalog.managedPythonRuntime && props.catalog.managedNodeRuntime ? (
-            <>
-              <ManagedRuntimeRow
-                label={t("skills.luaSettings.pythonRuntime")}
-                runtime={props.catalog.managedPythonRuntime}
-                progress={pythonRuntimeProgress}
-                retrying={retryingTarget === "python" || pythonRuntimeProgress != null}
-                actionDisabled={managedRuntimeActionDisabled}
-                onRetry={() => void retryManagedRuntimes("python")}
-              />
-              <ManagedRuntimeRow
-                label={t("skills.luaSettings.nodeRuntime")}
-                runtime={props.catalog.managedNodeRuntime}
-                progress={nodeRuntimeProgress}
-                retrying={retryingTarget === "node" || nodeRuntimeProgress != null}
-                actionDisabled={managedRuntimeActionDisabled}
-                onRetry={() => void retryManagedRuntimes("node")}
-              />
-            </>
-          ) : (
-            <CombinedManagedRuntimeRow status={props.catalog.managedRuntimeBootstrap.status} />
-          )}
-        </div>
+        )} /> : null}
 
-        <section className="lua-settings-section">
-          <h4>{t("skills.luaSettings.aiTools")}</h4>
-          <p>{t("skills.luaSettings.aiToolsHint")}</p>
-          <ToggleSettingField
-            label={t("skills.luaSettings.enableRunLua")}
-            checked={draft.aiTools.enableRunLua}
-            tooltip={t("skills.luaSettings.runLuaTooltip")}
-            onChange={(enabled) => updateRunLuaAiTool("enableRunLua", enabled)}
-          />
-          <ToggleSettingField
-            label={t("skills.luaSettings.enableRunLuaSession")}
-            checked={draft.aiTools.enableRunLuaSession}
-            tooltip={t("skills.luaSettings.runLuaSessionTooltip")}
-            onChange={(enabled) => updateRunLuaAiTool("enableRunLuaSession", enabled)}
-          />
-        </section>
-
-        <PoolSettingsSection
-          title={t("skills.luaSettings.mainPool")}
-          settings={draft.vmPool}
-          onChange={(field, value) => updatePoolSetting("vmPool", field, value)}
-        />
-        <PoolSettingsSection
-          title={t("skills.luaSettings.runLuaPool")}
-          settings={draft.runLuaPool}
-          onChange={(field, value) => updatePoolSetting("runLuaPool", field, value)}
-        />
-
-        <section className="lua-settings-section">
-          <h4>{t("skills.luaSettings.toolCache")}</h4>
-          <div className="lua-settings-grid">
-            <NumberSettingField
-              label={t("skills.luaSettings.maxEntries")}
-              value={draft.toolCache.maxEntries}
-              onChange={(value) => updateToolCacheSetting("maxEntries", value)}
-            />
-            <NumberSettingField
-              label={t("skills.luaSettings.defaultTtl")}
-              value={draft.toolCache.defaultTtlSecs}
-              onChange={(value) => updateToolCacheSetting("defaultTtlSecs", value)}
-            />
-            <NumberSettingField
-              label={t("skills.luaSettings.maxTtl")}
-              value={draft.toolCache.maxTtlSecs}
-              onChange={(value) => updateToolCacheSetting("maxTtlSecs", value)}
-            />
+        <PageSection title={t("skills.luaSettings.managedRuntime")} description={t("skills.luaSettings.managedRuntimeHint")}>
+          <div className="lua-managed-runtime-list">
+            {props.catalog.managedPythonRuntime && props.catalog.managedNodeRuntime ? (
+              <>
+                <ManagedRuntimeRow
+                  label={t("skills.luaSettings.pythonRuntime")}
+                  runtime={props.catalog.managedPythonRuntime}
+                  progress={pythonRuntimeProgress}
+                  retrying={retryingTarget === "python" || pythonRuntimeProgress != null}
+                  actionDisabled={managedRuntimeActionDisabled}
+                  onRetry={() => void retryManagedRuntimes("python")}
+                />
+                <ManagedRuntimeRow
+                  label={t("skills.luaSettings.nodeRuntime")}
+                  runtime={props.catalog.managedNodeRuntime}
+                  progress={nodeRuntimeProgress}
+                  retrying={retryingTarget === "node" || nodeRuntimeProgress != null}
+                  actionDisabled={managedRuntimeActionDisabled}
+                  onRetry={() => void retryManagedRuntimes("node")}
+                />
+              </>
+            ) : (
+              <CombinedManagedRuntimeRow status={props.catalog.managedRuntimeBootstrap.status} />
+            )}
           </div>
-        </section>
-
-        <section className="lua-settings-section">
-          <h4>{t("skills.luaSettings.network")}</h4>
-          <ToggleSettingField
-            label={t("skills.luaSettings.allowDownloads")}
-            checked={draft.network.allowDownloads}
-            onChange={(checked) => updateNetworkBoolean("allowDownloads", checked)}
-          />
-          <div className="lua-settings-grid">
-            <TextSettingField
-              label={t("skills.luaSettings.githubBaseUrl")}
-              value={draft.network.githubBaseUrl ?? ""}
-              onChange={(value) => updateNetworkText("githubBaseUrl", value)}
-            />
-            <TextSettingField
-              label={t("skills.luaSettings.githubApiBaseUrl")}
-              value={draft.network.githubApiBaseUrl ?? ""}
-              onChange={(value) => updateNetworkText("githubApiBaseUrl", value)}
-            />
-            <TextSettingField
-              label={t("skills.luaSettings.skillHubBaseUrl")}
-              value={draft.network.officialSkillHubBaseUrl ?? ""}
-              onChange={(value) => updateNetworkText("officialSkillHubBaseUrl", value)}
-            />
-          </div>
-          <ToggleSettingField
-            label={t("skills.luaSettings.privateUrlInstall")}
-            checked={draft.network.enablePrivateUrlSkillInstall}
-            onChange={(checked) => updateNetworkBoolean("enablePrivateUrlSkillInstall", checked)}
-          />
-          <label className="lua-settings-field wide">
-            <span>{t("skills.luaSettings.privateAllowlist")}</span>
-            <Textarea
-              value={draft.network.privateSkillSourceAllowlist.join("\n")}
-              onChange={(event) => updateNetworkAllowlist(event.currentTarget.value)}
-            />
-            <small>{t("skills.luaSettings.privateAllowlistHint")}</small>
-          </label>
-        </section>
-
-        <section className="lua-settings-section">
-          <h4>{t("skills.luaSettings.managedRuntime")}</h4>
-          <p>{t("skills.luaSettings.managedRuntimeHint")}</p>
           <div className="lua-settings-grid">
             <NumberSettingField
               label={t("skills.luaSettings.managedWorkerPoolMax")}
@@ -661,18 +572,101 @@ export function LuaSkillsSettingsPanel(props: {
               placeholder={t("skills.luaSettings.unlimited")}
             />
           </div>
-        </section>
+        </PageSection>
 
-        <section className="lua-settings-section">
-          <h4>{t("skills.luaSettings.capabilities")}</h4>
-          <label className="lua-settings-field">
+        <PageSection title={t("skills.luaSettings.aiTools")} description={t("skills.luaSettings.aiToolsHint")} layout="rows">
+          <ToggleSettingField
+            label={t("skills.luaSettings.enableRunLua")}
+            checked={draft.aiTools.enableRunLua}
+            description={t("skills.luaSettings.runLuaTooltip")}
+            onChange={(enabled) => updateRunLuaAiTool("enableRunLua", enabled)}
+          />
+          <ToggleSettingField
+            label={t("skills.luaSettings.enableRunLuaSession")}
+            checked={draft.aiTools.enableRunLuaSession}
+            description={t("skills.luaSettings.runLuaSessionTooltip")}
+            onChange={(enabled) => updateRunLuaAiTool("enableRunLuaSession", enabled)}
+          />
+        </PageSection>
+
+        <PoolSettingsSection
+          title={t("skills.luaSettings.mainPool")}
+          settings={draft.vmPool}
+          onChange={(field, value) => updatePoolSetting("vmPool", field, value)}
+        />
+        <PoolSettingsSection
+          title={t("skills.luaSettings.runLuaPool")}
+          settings={draft.runLuaPool}
+          onChange={(field, value) => updatePoolSetting("runLuaPool", field, value)}
+        />
+
+        <PageSection title={t("skills.luaSettings.toolCache")}>
+          <div className="lua-settings-grid">
+            <NumberSettingField
+              label={t("skills.luaSettings.maxEntries")}
+              value={draft.toolCache.maxEntries}
+              onChange={(value) => updateToolCacheSetting("maxEntries", value)}
+            />
+            <NumberSettingField
+              label={t("skills.luaSettings.defaultTtl")}
+              value={draft.toolCache.defaultTtlSecs}
+              onChange={(value) => updateToolCacheSetting("defaultTtlSecs", value)}
+            />
+            <NumberSettingField
+              label={t("skills.luaSettings.maxTtl")}
+              value={draft.toolCache.maxTtlSecs}
+              onChange={(value) => updateToolCacheSetting("maxTtlSecs", value)}
+            />
+          </div>
+        </PageSection>
+
+        <PageSection title={t("skills.luaSettings.network")}>
+          <ToggleSettingField
+            label={t("skills.luaSettings.allowDownloads")}
+            checked={draft.network.allowDownloads}
+            onChange={(checked) => updateNetworkBoolean("allowDownloads", checked)}
+          />
+          <div className="lua-settings-grid">
+            <TextSettingField
+              label={t("skills.luaSettings.githubBaseUrl")}
+              value={draft.network.githubBaseUrl ?? ""}
+              onChange={(value) => updateNetworkText("githubBaseUrl", value)}
+            />
+            <TextSettingField
+              label={t("skills.luaSettings.githubApiBaseUrl")}
+              value={draft.network.githubApiBaseUrl ?? ""}
+              onChange={(value) => updateNetworkText("githubApiBaseUrl", value)}
+            />
+            <TextSettingField
+              label={t("skills.luaSettings.skillHubBaseUrl")}
+              value={draft.network.officialSkillHubBaseUrl ?? ""}
+              onChange={(value) => updateNetworkText("officialSkillHubBaseUrl", value)}
+            />
+          </div>
+          <ToggleSettingField
+            label={t("skills.luaSettings.privateUrlInstall")}
+            checked={draft.network.enablePrivateUrlSkillInstall}
+            onChange={(checked) => updateNetworkBoolean("enablePrivateUrlSkillInstall", checked)}
+          />
+          <label className="vk-field">
+            <span>{t("skills.luaSettings.privateAllowlist")}</span>
+            <Textarea
+              value={draft.network.privateSkillSourceAllowlist.join("\n")}
+              onChange={(event) => updateNetworkAllowlist(event.currentTarget.value)}
+            />
+            <small className="vk-field-hint">{t("skills.luaSettings.privateAllowlistHint")}</small>
+          </label>
+        </PageSection>
+
+        <PageSection title={t("skills.luaSettings.capabilities")}>
+          <label className="vk-field lua-settings-encoding">
             <span>{t("skills.luaSettings.defaultEncoding")}</span>
             <Select
               disabled={saving || retryingTarget !== null}
               onValueChange={(value) => updateDefaultEncoding(value === "auto" ? "" : value)}
               value={draft.capabilities.defaultTextEncoding ?? "auto"}
             >
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="vk-fill">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -697,20 +691,24 @@ export function LuaSkillsSettingsPanel(props: {
             checked={draft.capabilities.enableManagedIoCompat}
             onChange={(checked) => updateCapabilityBoolean("enableManagedIoCompat", checked)}
           />
-        </section>
+        </PageSection>
 
-        <aside className="lua-settings-restart-note">{t("skills.luaSettings.restartHint")}</aside>
-        {error ? <div role="alert" className="lua-settings-feedback error">{error}</div> : null}
-        {feedback ? <div role="status" className="lua-settings-feedback success">{feedback}</div> : null}
-        <div className="lua-settings-actions">
-          <Button
-            type="button"
-            disabled={saving || retryingTarget !== null || !dirty}
-            onClick={() => void saveSettings()}
-          >
-            {saving ? t("skills.luaSettings.saving") : t("skills.luaSettings.save")}
-          </Button>
-        </div>
+        {error ? <PageNotice tone="error" title={error} /> : null}
+        {feedback ? <PageNotice tone="success" title={feedback} /> : null}
+        {dirty || saving ? <PageActionBar
+          pending={dirty}
+          actions={(
+            <Button
+              type="button"
+              disabled={saving || retryingTarget !== null || !dirty}
+              onClick={() => void saveSettings()}
+            >
+              {saving ? t("skills.luaSettings.saving") : t("skills.luaSettings.save")}
+            </Button>
+          )}
+        >
+          {t("skills.luaSettings.restartHint")}
+        </PageActionBar> : null}
       </fieldset>
 
       {/* The internal model routes live outside the runtime-settings fieldset on
@@ -719,7 +717,7 @@ export function LuaSkillsSettingsPanel(props: {
       {/* 内部模型路由刻意位于运行时设置 fieldset 之外：保存运行时设置不得禁用路由选择器，
           路由变更也不得看起来属于未保存的运行时草稿。 */}
       <LuaSkillsInferenceRoutes />
-    </section>
+    </PageBody>
   )
 }
 
@@ -740,9 +738,7 @@ function PoolSettingsSection(props: {
   // t 解析共享池字段标签。
   const { t } = useI18n()
   return (
-    <section className="lua-settings-section">
-      <h4>{props.title}</h4>
-      <p>{t("skills.luaSettings.poolHint")}</p>
+    <PageSection title={props.title} description={t("skills.luaSettings.poolHint")}>
       <div className="lua-settings-grid">
         <NumberSettingField
           label={t("skills.luaSettings.minSize")}
@@ -760,7 +756,7 @@ function PoolSettingsSection(props: {
           onChange={(value) => props.onChange("idleTtlSecs", value)}
         />
       </div>
-    </section>
+    </PageSection>
   )
 }
 
@@ -778,7 +774,7 @@ function NumberSettingField(props: {
   onChange: (value: number) => void
 }) {
   return (
-    <label className="lua-settings-field">
+    <label className="vk-field">
       <span>{props.label}</span>
       <Input
         type="number"
@@ -808,7 +804,7 @@ function OptionalNumberSettingField(props: {
   onChange: (value: number | null) => void
 }) {
   return (
-    <label className="lua-settings-field">
+    <label className="vk-field">
       <span>{props.label}</span>
       <Input
         type="number"
@@ -839,7 +835,7 @@ function TextSettingField(props: {
   onChange: (value: string) => void
 }) {
   return (
-    <label className="lua-settings-field">
+    <label className="vk-field">
       <span>{props.label}</span>
       <Input
         type="text"
@@ -850,15 +846,15 @@ function TextSettingField(props: {
   )
 }
 
-// ToggleSettingField renders one package startup Boolean setting.
-// ToggleSettingField 渲染一个包启动布尔设置。
+// ToggleSettingField renders one package startup Boolean setting as a page row with the switch on the right.
+// ToggleSettingField 将一个包启动布尔设置渲染为页面行，开关位于右侧。
 function ToggleSettingField(props: {
   // Localized toggle label.
   // 本地化开关标签。
   label: string
-  // Optional localized explanation shown from the adjacent help icon.
-  // 可选的本地化说明，通过相邻帮助图标显示。
-  tooltip?: string
+  // Optional localized explanation shown under the label.
+  // 可选的本地化说明，显示在标签下方。
+  description?: string
   // Current Boolean value.
   // 当前布尔值。
   checked: boolean
@@ -866,42 +862,12 @@ function ToggleSettingField(props: {
   // 提交下一份布尔草稿。
   onChange: (checked: boolean) => void
 }) {
-  // inputId associates the visible label with this exact checkbox without wrapping the help button.
-  // inputId 将可见标签与当前精确复选框关联，同时避免包裹帮助按钮。
+  // inputId associates the visible label with this exact switch.
+  // inputId 将可见标签与当前精确开关关联。
   const inputId = React.useId()
-  if (!props.tooltip) {
-    return (
-      <label className="lua-settings-toggle">
-        <Switch
-          checked={props.checked}
-          onCheckedChange={props.onChange}
-        />
-        <span>{props.label}</span>
-      </label>
-    )
-  }
   return (
-    <div className="lua-settings-toggle">
-      <Switch
-        id={inputId}
-        checked={props.checked}
-        onCheckedChange={props.onChange}
-      />
-      <label htmlFor={inputId}>{props.label}</label>
-      <TooltipProvider delayDuration={500}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              aria-label={`${props.label}: ${props.tooltip}`}
-              className="lua-settings-help-trigger"
-              type="button"
-            >
-              <CircleHelp aria-hidden="true" size={14} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top" sideOffset={6}>{props.tooltip}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    </div>
+    <PageRow label={props.label} htmlFor={inputId} description={props.description}>
+      <Switch id={inputId} checked={props.checked} onCheckedChange={props.onChange} />
+    </PageRow>
   )
 }

@@ -1,11 +1,11 @@
 import * as React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { PageEmptyState, PageHint, PageNotice, PageRow, PageSection } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/ui-kit/primitives/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Switch } from "@/ui-kit/primitives/switch";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import {
@@ -15,6 +15,7 @@ import {
   saveReviewRulesSystemDefault,
 } from "@/service/permission-judge-service";
 import type { ProjectReviewRulesSnapshot, ProjectSummary, ReviewRules, ReviewRulesSystemDefaultSnapshot } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // GROUPS lists the rule groups in the order the reviewer applies them, with their labels and hints.
 // GROUPS 按复核器应用顺序列出规则分组及其标签与说明。
@@ -175,7 +176,7 @@ function ProjectRulesSection(props: { projects: readonly ProjectSummary[] }) {
       {t("settings.permissionJudge.reviewRules.save")}
     </Button> : undefined}
     actions={<Select value={current} onValueChange={setProjectId}>
-      <SelectTrigger aria-label={t("settings.permissionJudge.policy.project")} className="h-8 w-auto max-w-72"><SelectValue /></SelectTrigger>
+      <SelectTrigger aria-label={t("settings.permissionJudge.policy.project")} className="vk-form-w-auto" size="sm"><SelectValue /></SelectTrigger>
       <SelectContent>
         {props.projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}
       </SelectContent>
@@ -189,7 +190,7 @@ function ProjectRulesSection(props: { projects: readonly ProjectSummary[] }) {
           onCheckedChange={(checked) => void save(checked ? snapshot.systemRules : null)} />
       </PageRow>
       {own !== null ? <RulesEditor scope="project" rules={rules} maxChars={snapshot.maxChars} onChange={setRules} />
-        : <PageHint className="px-(--card-spacing) py-2" data-review-rules-follows="">
+        : <PageHint className="vk-form-inset" data-review-rules-follows="">
           {systemEmpty ? t("settings.permissionJudge.reviewRules.followsEmpty") : t("settings.permissionJudge.reviewRules.follows")}
         </PageHint>}
     </>}

@@ -1,8 +1,8 @@
 import React from "react";
 import { SessionLifetimeUsagePanel } from "@/components/conversation/session-lifetime-usage";
-import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { InlineStreamPlaceholder, StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
+import { InlineStreamPlaceholder, StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   AlertTriangle,
   LoaderCircle,
@@ -14,15 +14,9 @@ import {
 } from "lucide-react";
 
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-} from "@/components/ui/select";
-import {
   SegmentedControl,
   SegmentedControlItem,
-} from "@/components/ui/choice-controls";
+} from "@/ui-kit/primitives/choice-controls";
 import {
   Dialog,
   DialogContent,
@@ -31,22 +25,15 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+} from "@/ui-kit/primitives/dialog";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
 import { groupProviderToolCapabilities } from "@/components/shared/provider-tool-capability-groups";
-import { PageTabs } from "@/components/workspace/workspace-directory-layout";
 import {
   ComposerCapabilitySummary,
 } from "@/components/composer/composer-capability-summary";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import type {
   ComposerProviderToolSettingsSnapshot,
-  ComposerSelectOption,
 } from "@/components/composer/composer-model";
 import {
   isMediaUnderstandingCapability,
@@ -64,7 +51,6 @@ import {
 } from "@/components/composer/composer-capability-dialog-sections";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { formatTokenCount, tokenUnitLabel } from "@/lib/usage-format";
-import { cn } from "@/lib/utils";
 import {
   isDirectProviderToolCapability,
   isModelExtensionCapability,
@@ -130,18 +116,29 @@ export function ContextUsageOrb(props: {
   // Both click and delayed hover control the same interactive statistics popover.
   // 点击和延迟悬停控制同一个可交互统计浮层。
   const [statisticsOpen, setStatisticsOpen] = React.useState(false);
-  // Pending hover opens are cancelled when the pointer leaves or the component unmounts.
-  // 指针离开或组件卸载时取消待执行的悬停打开。
+  // hoverTimer holds the pending hover open or hover close; pointer moves and unmounting cancel it.
+  // hoverTimer 保存待执行的悬停打开或悬停关闭；指针移动与组件卸载会取消它。
   const hoverTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Hover must not steal keyboard focus from the conversation composer.
-  // 悬停不得抢走会话输入区的键盘焦点。
+  // openedByHover marks a peek: it must not steal composer focus and it closes once the pointer leaves the
+  // trigger and the card. Pressing inside the card turns the peek into a pinned popover.
+  // openedByHover 标记悬停预览：不得抢走输入区焦点，且指针离开触发器与卡片后关闭。在卡片内按下会将预览固定。
   const openedByHover = React.useRef(false);
-  // Cancels a scheduled hover open; no input or return value is needed.
-  // 取消已安排的悬停打开；无需输入或返回值。
+  // Cancels a scheduled hover open or close; no input or return value is needed.
+  // 取消已安排的悬停打开或关闭；无需输入或返回值。
   const cancelHoverOpen = React.useCallback(() => {
     if (hoverTimer.current !== null) clearTimeout(hoverTimer.current);
     hoverTimer.current = null;
   }, []);
+  // Schedules closing a hover peek after the pointer has left both the trigger and the card.
+  // 指针离开触发器与卡片后，安排关闭悬停预览。
+  const scheduleHoverClose = React.useCallback(() => {
+    cancelHoverOpen();
+    if (!openedByHover.current) return;
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null;
+      if (openedByHover.current) setStatisticsOpen(false);
+    }, 220);
+  }, [cancelHoverOpen]);
   React.useEffect(() => cancelHoverOpen, [cancelHoverOpen]);
   if (!props.snapshot) {
     return null;
@@ -187,38 +184,41 @@ export function ContextUsageOrb(props: {
       : percent >= 90
         ? "warning"
         : "normal";
-  const style = {
-    "--context-usage-progress": `${percent * 3.6}deg`,
-    "--context-usage-percent": `${percent}%`,
-  } as React.CSSProperties;
+  const style = { "--vk-ctx-progress": `${percent * 3.6}deg` } as React.CSSProperties;
 
   return (
     <Popover open={statisticsOpen} onOpenChange={(open) => { cancelHoverOpen(); setStatisticsOpen(open); }}>
       <PopoverTrigger asChild>
         <button
           aria-label={contextUsageAriaLabel}
-          className={cn("context-usage-control", selectedNode && "is-locked")}
+          className="vk-ctx-button"
+          data-locked={selectedNode ? "true" : undefined}
           type="button"
           onPointerEnter={(event) => {
-            if (event.pointerType !== "mouse" || statisticsOpen) return;
+            if (event.pointerType !== "mouse") return;
             cancelHoverOpen();
+            if (statisticsOpen) return;
             hoverTimer.current = setTimeout(() => {
               hoverTimer.current = null;
               openedByHover.current = true;
               setStatisticsOpen(true);
             }, 500);
           }}
-          onPointerLeave={cancelHoverOpen}
+          onPointerLeave={(event) => {
+            if (event.pointerType === "mouse" && statisticsOpen) scheduleHoverClose();
+            else cancelHoverOpen();
+          }}
           onPointerDown={() => { cancelHoverOpen(); openedByHover.current = false; }}
         >
           <span
             aria-hidden="true"
-            className={cn("context-usage-orb", `severity-${snapshot.severity}`)}
-            data-threshold-state={thresholdState}
+            className="vk-ctx-ring"
+            data-severity={snapshot.severity}
+            data-threshold={thresholdState}
             style={style}
           />
           {selectedNode ? (
-            <span className="context-usage-lock-label">
+            <span className="vk-ctx-lock">
               <LockKeyhole aria-hidden="true" size={11} strokeWidth={2} />
               {formatContextWindowNodeTokens(selectedNode.tokens)}
             </span>
@@ -228,33 +228,36 @@ export function ContextUsageOrb(props: {
       <PopoverContent
         align="end"
         aria-label={title}
-        className="context-usage-tooltip context-usage-popover"
+        className="vk-stats"
         collisionPadding={12}
         ref={contentRef}
         onOpenAutoFocus={(event) => { event.preventDefault(); if (!openedByHover.current) contentRef.current?.focus(); }}
         onCloseAutoFocus={(event) => { if (openedByHover.current) event.preventDefault(); openedByHover.current = false; }}
+        onPointerEnter={cancelHoverOpen}
+        onPointerLeave={(event) => { if (event.pointerType === "mouse") scheduleHoverClose(); }}
+        onPointerDown={() => { cancelHoverOpen(); openedByHover.current = false; }}
         side="top"
         sideOffset={8}
       >
-        <div className="context-usage-card-header">
+        <div className="vk-sum-title">
           <strong>{title}</strong>
           <span>{formatContextUsageTotal(snapshot, locale)}</span>
         </div>
         <ContextUsageProgressBar breakdown={breakdown} usageBasisPoints={usageBasisPoints} />
         {detailVisible || snapshot.cacheHitBasisPoints != null ? (
-          <div className="context-usage-breakdown">
+          <div className="vk-ctx-legend">
             {breakdown.map((item) => (
-              <div className="context-usage-breakdown-row" key={item.kind}>
-                <span className="context-usage-breakdown-label">
-                  <i className={`context-usage-dot kind-${item.kind}`} />
+              <div className="vk-stat" data-ctx-kind={item.kind} key={item.kind}>
+                <span>
+                  <i className="vk-ctx-dot" />
                   {contextUsageKindLabel(item, t)}
                 </span>
                 <span>{formatBasisPoints(item.basisPoints)}</span>
               </div>
             ))}
-            {snapshot.cacheHitBasisPoints != null ? <div className="context-usage-cache-row">
-              <span className="context-usage-breakdown-label">
-                <RotateCw className="context-usage-dot" aria-hidden="true" />
+            {snapshot.cacheHitBasisPoints != null ? <div className="vk-stat" data-ctx-cache>
+              <span>
+                <RotateCw className="vk-ctx-dot" aria-hidden="true" size={10} />
                 {t("composer.contextUsage.cacheHitRate")}
               </span>
               <strong>{formatBasisPoints(snapshot.cacheHitBasisPoints)}</strong>
@@ -262,14 +265,13 @@ export function ContextUsageOrb(props: {
           </div>
         ) : null}
         <SessionLifetimeUsagePanel usage={providerUsage?.lifetime} error={providerUsage?.lifetimeError} />
-        <div className="context-usage-window-section">
-          <div className="context-usage-window-title">
-            {t("composer.contextWindow.title")}
+        <div className="vk-ctx-window">
+          <div className="vk-sum-title">
+            <strong>{t("composer.contextWindow.title")}</strong>
             <span>{selectedNode ? t("composer.capabilities.lockedForThisSession") : t("composer.capabilities.followsTheModel")}</span>
           </div>
           <SegmentedControl
             aria-label={t("composer.contextWindow.title")}
-            className="context-usage-window-switch"
             disabled={nodeSaving}
             onValueChange={(value) => {
               const nextNodeId = contextWindowNodeIdFromSwitchValue(value, props.contextCompactionWindowNodes);
@@ -308,12 +310,12 @@ export function ContextUsageOrb(props: {
               {defaultContextWindowLabel}
             </SegmentedControlItem>
           </SegmentedControl>
-          {selectedNodeIsInvalid ? <p className="text-xs text-muted-foreground">{formatContextWindowNodeTokens(selectedNode.tokens)} · {t("composer.contextWindow.invalid")}</p> : null}
-          {nodeError !== null ? <div className="text-xs">
-            <p role="alert" className="text-destructive">{t("composer.contextWindow.saveFailed")}</p>
-            {nodeError ? <details className="mt-1">
-              <summary className="cursor-pointer text-muted-foreground">{t("composer.capability.errorDetails")}</summary>
-              <pre tabIndex={0} className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-xs">{nodeError}</pre>
+          {selectedNodeIsInvalid ? <p className="vk-stats-note">{formatContextWindowNodeTokens(selectedNode.tokens)} · {t("composer.contextWindow.invalid")}</p> : null}
+          {nodeError !== null ? <div className="vk-ctx-failure">
+            <p role="alert">{t("composer.contextWindow.saveFailed")}</p>
+            {nodeError ? <details>
+              <summary>{t("composer.capability.errorDetails")}</summary>
+              <pre tabIndex={0}>{nodeError}</pre>
             </details> : null}
           </div> : null}
         </div>
@@ -370,28 +372,28 @@ function ContextUsageProgressBar(props: {
   return (
     <div
       aria-label={t("composer.contextUsage.usedPercent").replace("{percent}", percent.toFixed(1))}
-      className="context-usage-progress-track"
+      className="vk-ctx-track"
       role="progressbar"
       aria-valuemax={100}
       aria-valuemin={0}
       aria-valuenow={percent}
     >
-      <div className="context-usage-threshold-zone threshold-90" />
-      <div className="context-usage-threshold-zone threshold-95" />
-      <div className="context-usage-progress-fill" style={{ width: `${percent}%` }}>
+      <i className="vk-ctx-zone" data-at="90" />
+      <i className="vk-ctx-zone" data-at="95" />
+      <div className="vk-ctx-fill" style={{ width: `${percent}%` }}>
         {props.breakdown.length > 0
           ? props.breakdown.map((item) => (
               <span
-                className={`context-usage-segment kind-${item.kind}`}
+                data-ctx-kind={item.kind}
                 key={item.kind}
                 style={{ width: `${item.basisPoints / 100}%` }}
               />
             ))
           : null}
       </div>
-      <i className="context-usage-threshold-marker marker-90" />
-      <i className="context-usage-threshold-marker marker-95" />
-      <i className="context-usage-threshold-marker marker-100" />
+      <i className="vk-ctx-mark" data-at="90" />
+      <i className="vk-ctx-mark" data-at="95" />
+      <i className="vk-ctx-mark" data-at="100" />
     </div>
   );
 }
@@ -583,24 +585,24 @@ function AiCapabilityControlEditor(props: ComposerAiCapabilityControlProps) {
           <DialogTrigger asChild>
             <button
               aria-label={props.ariaLabel}
-              className="composer-capability-trigger composer-select-trigger capability"
+              className="vk-pick"
               onBlur={() => { summarySuppressed.current = false; }}
               onPointerEnter={() => { summarySuppressed.current = false; }}
               type="button"
             >
-              <span className="composer-select-icon" data-tone={loadStatus !== "loading" && (loadStatus === "failed" || conflicts.length) ? "warning" : undefined}>
-                {loadStatus === "loading" ? <LoaderCircle size={15} className="animate-spin" />
+              <span className="vk-pick-icon" data-tone={loadStatus !== "loading" && (loadStatus === "failed" || conflicts.length) ? "warn" : undefined}>
+                {loadStatus === "loading" ? <LoaderCircle size={15} className="vk-spin" />
                   : loadStatus === "failed" || conflicts.length ? <AlertTriangle size={15} />
                     : <SlidersHorizontal size={15} />}
               </span>
               {settingsReady && enabledCount > 0 ? (
-                <span aria-hidden="true" className="composer-capability-count">{enabledCount}</span>
+                <span aria-hidden="true" className="vk-pick-count">{enabledCount}</span>
               ) : null}
-              <ChevronDown aria-hidden="true" className="composer-select-chevron" />
+              <ChevronDown aria-hidden="true" className="vk-pick-chevron" />
             </button>
           </DialogTrigger>
         </HoverCardTrigger>
-        <HoverCardContent align="start" className="w-[21rem] p-3" side="top" sideOffset={8}>
+        <HoverCardContent align="start" className="vk-cap-sum-pop" side="top" sideOffset={8}>
           <ComposerCapabilitySummary
             items={summaryItems}
             onConfigure={() => {
@@ -611,101 +613,103 @@ function AiCapabilityControlEditor(props: ComposerAiCapabilityControlProps) {
           />
         </HoverCardContent>
       </HoverCard>
-      <DialogContent className="composer-capability-dialog" scrollMode="fixed-footer">
-        {/* Title and effect hint share one line so the tab strip and list start right under the header. */}
-        {/* 标题与生效提示共用一行，让标签条和列表紧贴标题下方。 */}
-        <DialogHeader className="composer-capability-dialog-header">
-          <DialogTitle>{t("composer.capability.dialogTitle")}</DialogTitle>
-          <DialogDescription className="composer-capability-dialog-description">
-            {t("composer.capability.dialogDescription")}
-          </DialogDescription>
-          {/* Intent tabs close the header block so their divider can run edge to edge above both panes. */}
-          {/* 意图标签收尾标题区，使其分隔线可贯通两侧面板上方。 */}
+      <DialogContent className="vk-cap-dialog" layout="document" scrollMode="fixed-footer" size="wide">
+        {/* Title and effect hint share one line so the intent tabs and list start right under the header. */}
+        {/* 标题与生效提示共用一行，让意图标签和列表紧贴标题下方。 */}
+        <div className="vk-cap-head">
+          <DialogHeader>
+            <DialogTitle>{t("composer.capability.dialogTitle")}</DialogTitle>
+            <DialogDescription>{t("composer.capability.dialogDescription")}</DialogDescription>
+          </DialogHeader>
+          {/* Intent tabs close the header so their divider runs edge to edge above both panes. */}
+          {/* 意图标签收尾标题区，使其分隔线贯通两侧面板上方。 */}
           {settingsReady && activeCapabilityTab ? (
-            <PageTabs
-              ariaLabel={t("composer.capability.dialogTitle")}
-              className="composer-capability-tabs"
-              onValueChange={selectCapabilityTab}
-              options={capabilityTabs.map((tab) => {
+            <nav aria-label={t("composer.capability.dialogTitle")} className="vk-tabs vk-cap-tabs" data-variant="line">
+              {capabilityTabs.map((tab) => {
                 const described = tab.capabilities.map(describeCapability);
                 const conflicted = described.some((description) => description.conflict);
-                return {
-                  value: tab.id,
-                  label: tab.label,
-                  disabled: saving,
-                  count: (
-                    <span className={cn("composer-capability-tab-count", conflicted && "conflict")}>
+                const active = tab.id === activeCapabilityTab.id;
+                return (
+                  <button
+                    aria-current={active ? "page" : undefined}
+                    className="vk-tab"
+                    data-state={active ? "active" : undefined}
+                    disabled={saving}
+                    key={tab.id}
+                    onClick={() => selectCapabilityTab(tab.id)}
+                    type="button"
+                  >
+                    <span>{tab.label}</span>
+                    <span className="vk-cap-tab-count" data-conflict={conflicted || undefined}>
                       {conflicted ? <AlertTriangle aria-hidden="true" size={12} /> : null}
-                      {conflicted ? <span className="sr-only">{t("composer.capability.conflict.tooltip")}</span> : null}
+                      {conflicted ? <span className="vk-sr-only">{t("composer.capability.conflict.tooltip")}</span> : null}
                       {described.filter((description) => description.enabled).length}/{tab.capabilities.length}
                     </span>
-                  ),
-                };
+                  </button>
+                );
               })}
-              value={activeCapabilityTab.id}
-            />
+            </nav>
           ) : null}
-        </DialogHeader>
-        <div className="composer-capability-dialog-body flex min-h-0 flex-col overflow-hidden">
+        </div>
+        <div className="vk-cap-body">
         {loadState.conversationId === props.conversationId && error
-          ? <div className="my-2 min-h-0 shrink-0 rounded-md border border-destructive/30 p-3">
-              <p className="text-sm text-destructive" role="alert">
+          ? <div className="vk-cap-alert">
+              <p role="alert">
                 {t(loadStatus === "failed" ? "composer.capability.loadFailed" : "composer.capability.operationFailed")}
               </p>
-              <details className="mt-1 text-xs text-muted-foreground">
-                <summary className="cursor-pointer">{t("composer.capability.errorDetails")}</summary>
-                <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-all">{error}</pre>
+              <details>
+                <summary>{t("composer.capability.errorDetails")}</summary>
+                <pre>{error}</pre>
               </details>
             </div> : null}
         {loadStatus === "loading" ? (
-          <div className="composer-capability-dialog-grid composer-capability-dialog-placeholder flex-1">
-            <StreamPlaceholder className="composer-capability-dialog-left" label={t("composer.capability.loading")} shape="rows" count={6} />
-            <div className="composer-capability-dialog-right grid content-start gap-4">
+          <div className="vk-cap-grid">
+            <StreamPlaceholder className="vk-cap-list" label={t("composer.capability.loading")} shape="rows" count={6} />
+            <div>
               <StreamPlaceholder decorative shape="fields" count={1} />
               <StreamPlaceholder decorative shape="rows" count={4} />
             </div>
           </div>
         ) : null}
         {loadStatus === "failed" ? (
-          <div>
-            {props.conversationId ? <p className="settings-muted-line">{t("composer.capability.rebuildHint")}</p> : null}
-            <div className="flex gap-2">
-              <button className="skill-action-button" type="button" ref={retryButton} disabled={saving} onClick={() => {
+          <div className="vk-cap-retry">
+            {props.conversationId ? <p className="vk-cap-note">{t("composer.capability.rebuildHint")}</p> : null}
+            <div>
+              <Button type="button" variant="outline" ref={retryButton} disabled={saving} onClick={() => {
                 retryFocusPending.current = true;
                 setReloadVersion((current) => current + 1);
               }}>
                 {t("composer.capability.retry")}
-              </button>
-              {props.conversationId ? <button className="skill-action-button" type="button" disabled={saving} onClick={() => void rebuild()}>
+              </Button>
+              {props.conversationId ? <Button type="button" variant="outline" disabled={saving} onClick={() => void rebuild()}>
                 {t(saving ? "composer.capability.rebuilding" : "composer.capability.rebuild")}
-              </button> : null}
+              </Button> : null}
             </div>
           </div>
         ) : null}
-        {settingsReady && activeCapabilityTab ? <div className="composer-capability-dialog-grid vcn-stream-reveal flex-1">
+        {settingsReady && activeCapabilityTab ? <div className="vk-cap-grid">
           <ComposerCapabilityKindList
             selectedCategoryButton={selectedCategoryButton}
             settings={settings}
             tab={activeCapabilityTab}
           />
-          <section className="composer-capability-dialog-right">
+          <section>
             {selectedDescription ? (
-              <header className="composer-capability-detail-header">
+              <header className="vk-cap-detail-head">
                 <span
                   aria-hidden="true"
-                  className={cn("composer-capability-colored-icon tile", selectedDescription.enabled ? "enabled" : "disabled")}
-                  style={{ "--capability-color": providerToolCapabilityColor(selectedCapability) } as React.CSSProperties}
+                  className="vk-cap-glyph"
+                  data-off={selectedDescription.enabled ? undefined : ""}
+                  data-tile=""
+                  style={{ "--vk-cap-color": providerToolCapabilityColor(selectedCapability) } as React.CSSProperties}
                 >
                   <ProviderToolCapabilityIcon capability={selectedCapability} size={17} />
                 </span>
-                <span className="composer-capability-detail-heading">
+                <span className="vk-cap-detail-heading">
                   <strong>{providerToolCapabilityLabel(selectedCapability, t)}</strong>
                   <small>{selectedDescription.subtitle}</small>
                 </span>
-                <span className={cn(
-                  "composer-capability-status",
-                  selectedDescription.conflict ? "conflict" : selectedDescription.enabled ? "enabled" : "disabled",
-                )}>
+                <span className="vk-cap-state" data-state={selectedDescription.conflict ? "conflict" : selectedDescription.enabled ? "on" : "off"}>
                   {selectedDescription.conflict
                     ? t("composer.capability.conflict.tooltip")
                     : t(selectedDescription.enabled ? "settings.providerTools.enabled" : "settings.providerTools.disabled")}
@@ -715,8 +719,8 @@ function AiCapabilityControlEditor(props: ComposerAiCapabilityControlProps) {
             {isMediaUnderstandingCapability(selectedCapability)
               && draft.enabledCapabilities.includes(selectedCapability)
               && conflicts.some((conflict) => conflict.capability === selectedCapability) ? (
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
-                <span className="text-sm text-muted-foreground">{t("composer.capability.unavailableEnabled")}</span>
+              <div className="vk-cap-recover-bar">
+                <span>{t("composer.capability.unavailableEnabled")}</span>
                 <Button aria-label={t("composer.capability.disableUnavailable")} variant="outline" size="sm" disabled={saving}
                   onClick={() => {
                     if (mutationPending.current) return;
@@ -740,158 +744,43 @@ function AiCapabilityControlEditor(props: ComposerAiCapabilityControlProps) {
             ) : isDirectProviderToolCapability(selectedCapability) ? (
               <ComposerCapabilityDirectRoute settings={settings} />
             ) : (
-              <div className="composer-capability-dialog-empty">
+              <div className="vk-cap-none">
                 {t("composer.capability.empty.noTargets")}
               </div>
             )}
           </section>
         </div> : null}
         </div>
-        <DialogFooter className="composer-capability-dialog-footer">
-          <span className="composer-capability-dialog-save-hint">
+        <DialogFooter className="vk-cap-foot">
+          <span className="vk-cap-foot-hint">
             {!settingsReady
               ? loadStatus === "failed" ? t("composer.capability.loadFailed") : <InlineStreamPlaceholder decorative />
               : hasUnsavedChanges
               ? t("composer.capability.saveHint.unsaved")
               : t("composer.capability.saveHint.clean")}
           </span>
-          <button
-            className="skill-action-button secondary composer-capability-restore-defaults"
+          <Button
             disabled={!defaultSettings || saving || draftMatchesDefaults}
             onClick={restoreDefaults}
             title={t("composer.capability.restoreDefaults.hint").replace("{page}", t("settings.aiCapabilities"))}
             type="button"
+            variant="ghost"
           >
             <RotateCcw aria-hidden="true" size={13} />
             {t("composer.capability.restoreDefaults")}
-          </button>
-          <button
-            className="skill-action-button"
+          </Button>
+          <Button
             disabled={!settingsReady || saving || !hasUnsavedChanges || conflicts.length > 0}
             onClick={() => void save()}
             type="button"
+            variant="primary"
           >
             {saving && settingsReady
               ? t("composer.capability.save.saving")
               : t("composer.capability.save")}
-          </button>
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-
-// ComposerSelectControl renders one WebUI-aligned compact composer selector.
-// ComposerSelectControl 渲染一个对齐 WebUI 的紧凑输入区选择器。
-// Parameters: props supplies the exact selected value, options and change callback; returns a compact selector without inventing a missing selection.
-// 参数：props 提供精确选中值、选项及变更回调；返回不伪造失效选择的紧凑选择器。
-export function ComposerSelectControl(props: {
-  // Accessible label for the dropdown trigger.
-  // 下拉触发器的无障碍标签。
-  ariaLabel: string;
-  // Localized fallback label shown when the current value is missing.
-  // 当前值缺失时显示的本地化回退标签。
-  fallbackLabel: string;
-  // Optional visual icon rendered in the left accessory slot.
-  // 渲染在左侧附属槽位中的可选视觉图标。
-  icon?: React.ReactNode;
-  // Optional subtitle rendered only inside the closed trigger.
-  // 仅在闭合触发器中渲染的可选副标题。
-  triggerSubtitle?: string;
-  // Whether the closed trigger should suppress subtitle text.
-  // 闭合触发器是否隐藏副标题文本。
-  hideTriggerSubtitle?: boolean;
-  // CSS class suffix controlling the WebUI-aligned fixed width.
-  // 控制 WebUI 对齐固定宽度的 CSS 类后缀。
-  className: string;
-  // Available local options for this selector.
-  // 当前选择器可用的本地选项。
-  options: ComposerSelectOption[];
-  // Current selected option value.
-  // 当前选中的选项值。
-  value: string;
-  // Whether interaction with this selector is disabled.
-  // 是否禁用此选择器的交互。
-  disabled?: boolean;
-  // Optional signal that opens the selector from an external slash-command route.
-  // 可选信号，用于从外部 slash 指令路由打开选择器。
-  openSignal?: number;
-  // Optional tooltip shown when hovering the closed trigger.
-  // 鼠标悬停闭合触发器时显示的可选提示。
-  tooltip?: React.ReactNode;
-  // Selection change handler.
-  // 选项变更处理函数。
-  onValueChange: (value: string) => void;
-}) {
-  // open controls the Radix select popover so slash commands can reuse it.
-  // open 控制 Radix 选择弹窗，使 slash 指令可复用它。
-  const [open, setOpen] = React.useState(false);
-  const selectedOption = props.options.find((option) => option.value === props.value);
-  // observedOpenSignal consumes each command once; mounting or re-enabling must not replay it.
-  // observedOpenSignal 每条指令只消费一次；挂载或重新启用时不得重放。
-  const observedOpenSignal = React.useRef(props.openSignal);
-
-  React.useEffect(() => {
-    // changed identifies a new explicit command rather than an availability refresh.
-    // changed 区分新显式指令与可用性刷新。
-    const changed = observedOpenSignal.current !== props.openSignal;
-    observedOpenSignal.current = props.openSignal;
-    if (props.disabled) {
-      setOpen(false);
-      return;
-    }
-    if (changed && props.openSignal !== undefined && props.openSignal > 0) setOpen(true);
-  }, [props.disabled, props.openSignal]);
-
-  const trigger = (
-    <SelectTrigger
-      aria-label={props.ariaLabel}
-      className={cn("composer-select-trigger", props.className)}
-    >
-      {props.icon ? <span className="composer-select-icon">{props.icon}</span> : null}
-      <span className={cn("composer-select-copy", !props.icon && "centered")}>
-        <span className="composer-select-label">
-          {selectedOption?.label ?? props.fallbackLabel}
-        </span>
-        {!props.hideTriggerSubtitle &&
-        (props.triggerSubtitle || selectedOption?.subtitle) ? (
-          <span className="composer-select-subtitle">
-            {props.triggerSubtitle ?? selectedOption?.subtitle}
-          </span>
-        ) : null}
-      </span>
-    </SelectTrigger>
-  );
-
-  return (
-    <Select
-      disabled={props.disabled}
-      onOpenChange={setOpen}
-      onValueChange={props.onValueChange}
-      open={props.disabled ? false : open}
-      value={props.value}
-    >
-      {props.tooltip ? (
-        <Tooltip>
-          <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-          <TooltipContent className="composer-control-tooltip" side="top">
-            {props.tooltip}
-          </TooltipContent>
-        </Tooltip>
-      ) : (
-        trigger
-      )}
-      <SelectContent className="composer-select-content" placement="auto">
-        {props.options.map((option) => (
-          <SelectItem className="composer-select-item" key={option.value} value={option.value}>
-            <span className="composer-select-item-copy">
-              <span>{option.label}</span>
-              {option.subtitle ? <small>{option.subtitle}</small> : null}
-            </span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   );
 }

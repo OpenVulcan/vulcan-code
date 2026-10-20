@@ -47,7 +47,6 @@
   max-width: 100%;
 }
 
-.diff-snapshot-policy-note,
 .diff-render-policy-note {
   display: flex;
   align-items: center;
@@ -55,29 +54,17 @@
   gap: 10px;
   min-height: 31px;
   padding: 7px 12px;
-  border-block: 1px solid var(--border);
-  background: color-mix(in oklab, var(--muted) 58%, var(--background));
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
+  border-block: 1px solid var(--vk-line);
+  background: color-mix(in oklab, var(--vk-sunken) 58%, var(--vk-ground));
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
 }
 
-.diff-snapshot-policy-note {
-  position: sticky;
-  top: 0;
-  z-index: 4;
-}
-
-.diff-render-policy-note span,
-.diff-snapshot-policy-note span {
+.diff-render-policy-note span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.diff-empty-state.in-list {
-  min-height: 180px;
-  margin: auto;
 }
 
 .diff-file-card {
@@ -85,7 +72,7 @@
   border: 0;
   border-radius: 0;
   overflow: visible;
-  background: var(--background);
+  background: var(--vk-ground);
 }
 
 .diff-file-header {
@@ -96,88 +83,21 @@
   width: 100%;
   min-height: 38px;
   border: 0;
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--vk-ground);
+  color: var(--vk-ink);
   padding: 7px 12px;
   border-radius: 0;
   text-align: left;
 }
 
 .diff-file-header:hover {
-  background: var(--muted);
+  background: var(--vk-sunken);
 }
 
 .diff-file-list:not(.virtualized) .diff-file-card > .diff-file-header {
   position: sticky;
   top: 0;
   z-index: 3;
-}
-
-.diff-file-sticky-header-overlay {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  height: 0;
-  pointer-events: none;
-}
-
-.diff-file-sticky-header-overlay .diff-file-header {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  pointer-events: auto;
-  box-shadow: 0 1px 0 var(--border);
-  isolation: isolate;
-}
-
-.diff-file-list.single-file-floating-header .diff-file-sticky-header-overlay {
-  position: sticky;
-  height: 38px;
-  flex: 0 0 38px;
-  margin-bottom: -38px;
-  isolation: isolate;
-  z-index: 80;
-}
-
-.diff-file-list.single-file-floating-header .diff-file-sticky-header-overlay::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  background: color-mix(in oklab, var(--muted) 72%, transparent);
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
-  -webkit-backdrop-filter: blur(16px) saturate(1.22);
-  backdrop-filter: blur(16px) saturate(1.22);
-}
-
-.diff-file-list.single-file-floating-header .diff-file-sticky-header-overlay .diff-file-header {
-  position: relative;
-  top: auto;
-  z-index: 1;
-  background: transparent;
-}
-
-.diff-file-list.single-file-floating-header .diff-file-card {
-  padding-top: 38px;
-}
-
-.diff-file-list.single-file-floating-header .diff-file-body {
-  position: relative;
-  z-index: 1;
-}
-
-.diff-file-list.single-file-floating-header .diff-file-card > .diff-file-header {
-  display: none;
-}
-
-.diff-file-sticky-header-overlay .diff-file-header.glass {
-  background: transparent;
-  border-bottom: 0;
-  box-shadow: none;
-}
-
-.diff-file-list.single-file-floating-header .diff-file-sticky-header-overlay:hover::before {
-  background: color-mix(in oklab, var(--background) 86%, transparent);
 }
 
 .diff-file-paths {
@@ -201,33 +121,32 @@
 }
 
 .diff-file-paths strong {
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--vcn-font-size-sm);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-sm);
 }
 
 .diff-file-paths span {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
 }
 
 .diff-file-status-dot {
   width: 6px;
   height: 6px;
   flex: 0 0 auto;
-  border-radius: var(--vcn-radius-pill);
 }
 
 .diff-file-status-dot.added {
-  background: #0969da;
+  background: var(--vk-info);
 }
 
 .diff-file-status-dot.deleted {
-  background: #cf222e;
+  background: var(--vk-diff-del-ink);
 }
 
 .diff-file-large-icon {
   flex: 0 0 auto;
-  color: #d29922;
+  color: var(--vk-warn);
 }
 
 .diff-file-search-placeholder {
@@ -235,9 +154,8 @@
   gap: 4px;
   width: min(100%, 760px);
   padding: 7px 9px;
-  border: 1px solid color-mix(in oklab, #d29922 42%, var(--border));
-  border-radius: var(--vcn-radius-sm);
-  background: color-mix(in oklab, #f2cc60 12%, var(--background));
+  border: 1px solid color-mix(in oklab, var(--vk-warn) 42%, var(--vk-line));
+  background: color-mix(in oklab, var(--vk-warn) 12%, var(--vk-ground));
   text-align: left;
 }
 
@@ -250,8 +168,8 @@
 }
 
 .diff-file-search-placeholder strong {
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
   font-weight: 600;
 }
 
@@ -262,9 +180,9 @@
 }
 
 .diff-file-search-placeholder code {
-  color: var(--muted-foreground);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--vcn-font-size-sm);
+  color: var(--vk-ink-2);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-sm);
   line-height: 17px;
 }
 
@@ -274,7 +192,6 @@
   gap: 0;
   min-width: 0;
   padding: 0;
-  border-radius: 0 0 var(--vcn-radius-md) var(--vcn-radius-md);
 }
 
 .diff-hunk {
@@ -282,57 +199,32 @@
   min-width: 100%;
   max-width: none;
   overflow: visible;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--vk-line);
 }
 
 .diff-hunk:first-child {
   border-top: 0;
 }
 
-.diff-hunk-header {
+/* A file header's added and removed line counts. */
+/* 文件头部的新增与删除行数。 */
+.diff-file-meta {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-  padding: 6px 12px;
-  min-height: 29px;
-  background: color-mix(in oklab, var(--muted) 65%, var(--background));
-  color: var(--muted-foreground);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--vcn-font-size-sm);
-  line-height: 17px;
-  white-space: pre;
+  gap: 5px;
 }
 
-.diff-hunk-header-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.diff-stat {
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-2xs);
+  font-weight: 600;
 }
 
-.diff-hunk-expand-controls {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
+.diff-stat.added {
+  color: var(--vk-diff-add-ink);
 }
 
-.diff-hunk-expand-button {
-  flex: 0 0 auto;
-  height: 20px;
-  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: var(--vcn-radius-xs);
-  background: color-mix(in oklab, var(--background) 78%, var(--muted));
-  color: var(--muted-foreground);
-  font-family: inherit;
-  font-size: var(--vcn-font-size-xs);
-  line-height: 18px;
-  padding: 0 6px;
+.diff-stat.removed {
+  color: var(--vk-bad);
 }
-
-.diff-hunk-expand-button:hover {
-  background: var(--background);
-  color: var(--foreground);
-}
-

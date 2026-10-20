@@ -1,8 +1,9 @@
 import React from "react";
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@/ui-kit/primitives/switch";
 import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
 import { normalizeThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { useI18n } from "@/i18n";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 /** Renders the global popup default without changing session overrides.
  * 渲染全局弹窗默认值，不改变会话覆盖值。
@@ -44,17 +45,18 @@ export function ThinkingPopupSettingsSection() {
       setPending(null);
     }
   };
-  return <section className="settings-form-grid mt-6">
-    <label className="flex items-center justify-between gap-4">
-      <span>{t("settings.thinkingPopup.showThinkingInA")}</span>
+  return <section className="vk-form-pref">
+    <div className="vk-form-pref-text">
+      <strong>{t("settings.thinkingPopup.showThinkingInA")}</strong>
+      <p className="vk-form-note">{t("settings.thinkingPopup.whenOnAiThinking")}</p>
+    </div>
       <Switch
+        aria-label={t("settings.thinkingPopup.showThinkingInA")}
         checked={pending ?? normalizeThinkingDisplayMode(preference.mode) === "popup_only"}
         disabled={pending !== null || !preference.save}
         onCheckedChange={(enabled) => { void save(enabled); }}
       />
-    </label>
-    <p className="settings-muted-line">{t("settings.thinkingPopup.whenOnAiThinking")}</p>
-    {pending !== null ? <p role="status" className="settings-muted-line">{t("settings.thinkingPopup.saving")}</p> : null}
-    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    {pending !== null ? <p role="status" className="vk-form-note">{t("settings.thinkingPopup.saving")}</p> : null}
+    {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
   </section>;
 }

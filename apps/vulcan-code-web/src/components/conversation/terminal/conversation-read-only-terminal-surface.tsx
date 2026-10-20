@@ -1,10 +1,11 @@
 import React from "react";
-import { Maximize2, Minimize2, Minus, TerminalSquare } from "lucide-react";
+import { TerminalSquare } from "lucide-react";
 import { createPortal } from "react-dom";
 
 import type { TerminalSessionViewModel } from "@/components/conversation/conversation-terminal-model";
 import { acquireVisibleTerminalDisplayListener } from "@/components/terminal/terminal-display-listener";
 import { TerminalViewport } from "@/components/terminal/terminal-viewport";
+import { FloatingWindowHead } from "@/components/workspace/floating-window-head";
 import { useTerminalDisplayConnectionState } from "@/components/terminal/use-terminal-display-connection-epoch";
 import {
   ProjectFloatingLayer,
@@ -88,7 +89,7 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
   const { connectionAvailable, connectionEpoch } = useTerminalDisplayConnectionState();
   // workspaceHost keeps every AI terminal constrained below the conversation title bar like project terminals.
   // workspaceHost 使每个 AI 终端像项目终端一样限制在会话标题栏下方。
-  const workspaceHost = props.minimizeAnchorRef.current?.closest<HTMLElement>(".workspace") ?? null;
+  const workspaceHost = props.minimizeAnchorRef.current?.closest<HTMLElement>(".vk-workbench-main") ?? null;
 
   React.useEffect(() => {
     if (!props.open || !props.summary || !connectionAvailable || !workspaceHost) return;
@@ -203,33 +204,15 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
   // header renders read-only ownership plus the shared floating window commands.
   // header 渲染只读归属以及共享浮动窗口命令。
   const header = (floatingControls: ProjectFloatingLayerControls) => (
-    <div className="project-terminal-header conversation-session-terminal-floating-header">
-      <span className="project-terminal-current-title" title={props.session.name}>
-        <TerminalSquare size={15} />
-        <span className="project-terminal-current-title-copy">
-          <strong>{props.session.name}</strong>
-          <small>{liveSummary?.backend ?? props.summary?.backend ?? "unknown"} · {t("workspaceAudit.aiReadOnly")}</small>
-        </span>
-      </span>
-      <div className="project-terminal-header-actions">
-        <button
-          aria-label={t(floatingControls.maximized ? "workspaceAudit.restoreAi" : "workspaceAudit.maximizeAi")}
-          onClick={floatingControls.toggleMaximized}
-          title={t(floatingControls.maximized ? "workspaceAudit.restoreAi" : "workspaceAudit.maximizeAi")}
-          type="button"
-        >
-          {floatingControls.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-        </button>
-        <button
-          aria-label={t("workspaceAudit.minimizeAi")}
-          onClick={() => props.onOpenChange(false)}
-          title={t("workspaceAudit.minimizeAi")}
-          type="button"
-        >
-          <Minus size={14} />
-        </button>
-      </div>
-    </div>
+    <FloatingWindowHead
+      controls={floatingControls}
+      detail={`${liveSummary?.backend ?? props.summary?.backend ?? "unknown"} · ${t("workspaceAudit.aiReadOnly")}`}
+      hoverTitle={props.session.name}
+      icon={<TerminalSquare />}
+      labels={{ maximize: t("workspaceAudit.maximizeAi"), restore: t("workspaceAudit.restoreAi"), minimize: t("workspaceAudit.minimizeAi") }}
+      title={props.session.name}
+      onMinimize={() => props.onOpenChange(false)}
+    />
   );
 
   return createPortal(
@@ -239,14 +222,14 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
       minimizeAnchorRef={props.minimizeAnchorRef}
       projectId={floatingIdentity}
     >
-      <div className="conversation-session-terminal-floating-body">
+      <div className="vk-term-readonly">
         {attachmentError !== null ? (
           <details role="alert">
             <summary>{t("conversation.control.detailFailed")}</summary>
             <pre>{attachmentError}</pre>
           </details>
         ) : null}
-        <div className="conversation-session-terminal-screen-frame">
+        <div className="vk-term-pane">
           <TerminalViewport
             ariaLabel={`${props.session.name} · ${t("terminalSession.openScreen")}`}
             chunks={chunks}

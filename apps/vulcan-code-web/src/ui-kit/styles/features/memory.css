@@ -1,0 +1,368 @@
+.vmm-memory-page {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+/* Memory cards use inset borders because scroll containers clip the shared outward ring. */
+/* 记忆卡片使用内嵌边框，因为滚动容器会裁剪公共组件向外扩展的 ring。 */
+.vmm-memory-page [data-slot="card"] {
+  border: var(--vk-bw) solid var(--vk-line);
+  box-shadow: none;
+}
+
+.vmm-memory-shell {
+  display: grid;
+  min-height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.vmm-memory-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: visible;
+}
+
+.vmm-status-page {
+  padding-right: 0;
+}
+
+.vmm-workspace-body { container: memory-body / inline-size; }
+.vmm-workspace-body .vmm-memory-page { overflow: visible; scrollbar-gutter: auto; }
+.vmm-workspace-body .vmm-memory-shell { min-height: 0; }
+/* Memory pages open with the shared page tab strip; the feature header above already names the page. */
+/* 记忆页面以共享页面标签条开头；上方功能页头已显示页面名称。 */
+.vmm-page-tabs { margin-bottom: 4px; }
+.vmm-workspace-body > .vmm-page-tabs { margin-bottom: 20px; }
+/* Pages without tabs keep their commands in one trailing toolbar instead of a heading row. */
+/* 无标签的页面将命令放在一条尾部工具栏中，而非标题行。 */
+.vmm-page-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+/* A scope picker and its apply action share one row; the field keeps its hint directly below. */
+/* 范围选择与其应用操作共用一行；字段提示紧贴其下方。 */
+.vmm-scope-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; }
+.vmm-scope-field { display: grid; min-width: 0; gap: 8px; }
+/* A compact label-and-control pair placed inside a tab row's trailing actions. */
+/* 放在标签行尾部操作区内的紧凑标签与控件组合。 */
+.vmm-inline-field { display: flex; min-width: 0; align-items: center; gap: 8px; white-space: nowrap; }
+
+/* Let the selected session own the workspace while its hidden list retains browsing state. */
+/* 让选中会话独占工作区，同时隐藏的列表保留浏览状态。 */
+.vmm-session-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
+.vmm-session-workspace > .vmm-session-browser[hidden] { display: none; }
+.vmm-session-browser, .vmm-session-detail { min-width: 0; container: memory-session / inline-size; }
+.vmm-session-row.selected { background: var(--vk-panel); box-shadow: inset 2px 0 0 var(--vk-ember); }
+/* The section body stacks scope, filters, bulk actions, rows and paging at one rhythm. */
+/* 区块正文以统一节奏堆叠范围、筛选、批量操作、列表行与分页。 */
+.vmm-session-section > .vk-page-section-body { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 3); }
+.vmm-session-scope { display: flex; min-width: 0; }
+.vmm-session-scope > .vk-select { width: min(100%, 28rem); }
+.vmm-session-filters { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vmm-session-filters > .vmm-session-search { flex: 1 1 14rem; min-width: 0; }
+.vmm-filter-fields .vk-select { width: 100%; }
+.vmm-session-filter-details { flex-basis: 100%; order: 2; font-size: var(--vk-fs-md); }
+.vmm-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 12px; padding-top: 4px; align-items: end; }
+.vmm-filter-fields > label { display: flex; min-width: 0; flex-direction: column; justify-content: flex-end; gap: 4px; }
+.vmm-session-detail [data-slot="card-content"] .grid { grid-template-columns: minmax(0, 1fr); }
+
+/* Preserve shared modal controls and model-picker styling while giving names readable space. */
+/* 保留共享弹窗控件与模型选择器风格，同时为名称提供可读空间。 */
+.vmm-inference-routes { display: flex; flex-direction: column; container: memory-inference / inline-size; }
+.vmm-inference-route, .vmm-inference-columns { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 2fr) 80px; align-items: center; gap: 8px 18px; padding: 12px 4px; border-bottom: var(--vk-bw) solid var(--vk-line); }
+.vmm-inference-columns { padding-top: 6px; padding-bottom: 8px; }
+.vmm-inference-mobile-label { display: none; }
+.vmm-inference-account { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 4px; }
+.vmm-inference-status { display: flex; align-items: center; justify-content: center; width: 28px; height: 32px; }
+.vmm-inference-status:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 2px; }
+.vmm-inference-heading { grid-column: 1; }
+.vmm-inference-controls { grid-column: 2; }
+.vmm-inference-actions { grid-column: 3; }
+.vmm-inference-route > :not(.vmm-inference-heading):not(.vmm-inference-controls):not(.vmm-inference-actions) { grid-column: 2 / -1; }
+.vmm-inference-route:last-child { border-bottom: 0; }
+.vmm-inference-controls { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; }
+.vmm-model-dialog .model-picker-scroll { height: min(55dvh, 480px); max-height: none; }
+.vmm-model-dialog .model-picker-row-title, .vmm-model-dialog .model-picker-row-meta { white-space: normal; overflow-wrap: anywhere; }
+.vmm-model-dialog .model-picker-row { grid-template-columns: 20px minmax(0, 1.5fr) minmax(0, 1fr); height: auto; min-height: 46px; padding-top: 8px; padding-bottom: 8px; cursor: pointer; }
+.vmm-model-dialog .model-picker-row-id { max-width: none; overflow-wrap: anywhere; white-space: normal; }
+.vmm-profile-counts [data-slot="card-header"] { padding-bottom: 0; }
+/* Base compact numeric rows on the editor width, including narrow split panes. */
+/* 按编辑器实际宽度排列紧凑数值行，兼顾窄分栏正文。 */
+.vmm-profile-policy-editor { container: profile-policy / inline-size; }
+.vmm-profile-lifetime-fields { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); align-items: end; gap: 10px; border: 0; border-top: var(--vk-bw) solid var(--vk-line); padding: 12px 0 0; }
+@container profile-policy (min-width: 280px) {
+  .vmm-profile-lifetime-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+.vmm-profile-counts [data-slot="card-content"] { display: flex; flex-wrap: wrap; gap: 16px; }
+.vmm-profile-counts [data-slot="card-content"] > div { border: 0; background: transparent; padding: 0; display: flex; gap: 8px; align-items: baseline; }
+.vmm-profile-counts [data-slot="card-content"] > div > p { margin: 0; font-size: var(--vk-fs-md); }
+/* Recycle batches form one divided list: identity and contents on the left, actions on the right, manual sources full width. */
+/* 回收批次组成一个分隔列表：左侧为身份与内容，右侧为动作，手动来源占满整行。 */
+.vmm-recycle-list { margin: 0; padding: 0; list-style: none; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vmm-recycle-batch { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding: 12px 16px; }
+.vmm-recycle-batch + .vmm-recycle-batch { border-top: var(--vk-bw) solid var(--vk-line); }
+.vmm-recycle-batch-main { display: grid; min-width: 0; gap: 4px; }
+.vmm-recycle-batch-title { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.vmm-recycle-batch-name { min-width: 0; overflow: hidden; color: var(--vk-ink); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vmm-recycle-batch-reason { flex: none; background: color-mix(in srgb, var(--vk-ink) 3%, transparent); padding: 1px 8px; color: var(--vk-ink-2); font-size: var(--vk-fs-xs); white-space: nowrap; }
+.vmm-recycle-batch-marker { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 22px; height: 22px; color: var(--vk-ink-2); }
+.vmm-recycle-batch-marker:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vmm-recycle-batch-meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 2px 14px; color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+.vmm-recycle-batch-meta strong { color: var(--vk-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.vmm-recycle-batch-expiry { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.vmm-recycle-batch-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.vmm-recycle-batch-sources { grid-column: 1 / -1; font-size: var(--vk-fs-sm); }
+.vmm-recycle-batch-sources > summary { width: fit-content; cursor: pointer; color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+@media (max-width: 720px) {
+  .vmm-recycle-batch { grid-template-columns: minmax(0, 1fr); }
+  .vmm-recycle-batch-actions { justify-content: flex-start; }
+}
+
+/* Profile nodes are structured records: a state and weight row, the statement, then labelled provenance facts. */
+/* 画像节点是结构化记录：状态与权重行、陈述内容，以及带标签的来源信息。 */
+.vmm-profile-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.vmm-profile-node { --vmm-profile-node-tone: var(--vk-ok); display: grid; min-width: 0; gap: 10px; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); padding: 14px 16px; }
+.vmm-profile-node[data-state="pending"] { --vmm-profile-node-tone: var(--vk-warn); }
+.vmm-profile-node[data-state="scheduled"] { --vmm-profile-node-tone: var(--vk-info); }
+.vmm-profile-node:is([data-state="inactive"], [data-state="expired"]) { --vmm-profile-node-tone: var(--vk-ink-2); }
+.vmm-profile-node:is([data-state="inactive"], [data-state="expired"]) .vmm-profile-node-content { color: var(--vk-ink-2); }
+.vmm-profile-node-head { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: var(--vk-fs-sm); }
+.vmm-profile-node-head:empty { display: none; }
+.vmm-profile-node-state { display: inline-flex; align-items: center; gap: 7px; color: var(--vmm-profile-node-tone); font-weight: 600; }
+.vmm-profile-node-dot { width: 7px; height: 7px; flex: 0 0 auto; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
+.vmm-profile-node-weights { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.vmm-profile-node-tag { display: inline-flex; min-height: 22px; align-items: center; background: color-mix(in srgb, var(--vk-ink) 3%, transparent); padding: 0 9px; color: var(--vk-ink-2); font-size: var(--vk-fs-xs); white-space: nowrap; }
+.vmm-profile-node-tag strong { color: var(--vk-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.vmm-profile-node-content { margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-md); line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
+.vmm-profile-node-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 20px; margin: 0; border-top: var(--vk-bw) dashed var(--vk-line); padding-top: 10px; }
+.vmm-profile-node-facts > div { min-width: 0; }
+.vmm-profile-node-facts dt { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+.vmm-profile-node-facts dd { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 2px 0 0; color: var(--vk-ink); font-size: var(--vk-fs-sm); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vmm-profile-node-ref { color: var(--vk-ink-2); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
+/* Target selection is a compact form section, with readable picker width independent of identity text. */
+/* 目标选择是紧凑表单分区，选择器的可读宽度独立于身份文本。 */
+.vmm-profile-target { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 3) calc(var(--vk-u) * 5); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vmm-profile-picker { flex: 1 1 280px; min-width: min(100%, 240px); max-width: 480px; }
+.vmm-profile-identity { flex: 1 1 240px; }
+.vmm-profile-target-description { flex-basis: 100%; }
+.vmm-search-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 18px; }
+.vmm-search-workspace > * { min-width: 0; }
+.vmm-search-detail { position: sticky; top: 0; }
+.vmm-project-workspace { display: grid; grid-template-columns: minmax(160px, .65fr) minmax(0, 2fr); gap: 18px; align-items: start; }
+.vmm-project-list { display: flex; flex-direction: column; gap: 5px; }
+.vmm-project-directory { min-width: 0; }
+.vmm-project-directory-expanded { display: flex; flex-direction: column; gap: 10px; }
+.vmm-project-picker { display: none; }
+.vmm-project-picker > .vk-combobox { max-width: 24rem; }
+.vmm-project-directory .vmm-project-list { max-height: 520px; overflow-y: auto; }
+.vmm-project-directory .vmm-project-list button { display: flex; justify-content: space-between; gap: 8px; height: auto; white-space: normal; }
+/* The identity column absorbs long names and paths; the binding state keeps its own width so it never wraps per character. */
+/* 身份列吸收较长的名称与路径；绑定状态保持自身宽度，不会逐字换行。 */
+.vmm-project-list-identity { flex: 1 1 auto; min-width: 0; }
+.vmm-project-list-state { flex: none; color: var(--vk-ink-2); font-size: var(--vk-fs-xs); font-weight: 400; white-space: nowrap; }
+.vmm-directory-filters { display: flex; flex-wrap: wrap; gap: 2px; }
+.vmm-linked-project-list { max-height: 240px; overflow-y: auto; margin-top: 8px; }
+.vmm-project-list button { text-align: left; padding: 10px 12px; overflow-wrap: anywhere; }
+.vmm-project-list button[aria-pressed="true"] { background: var(--vk-hover); font-weight: 600; }
+/* Keep composition identity, locale and save action compact; related noise controls share a separate row.
+   组合说明、区域与保存操作紧凑排列，相关噪音控件单独成行。 */
+.vmm-resource-composition-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.vmm-resource-composition-heading { flex: 1 1 320px; min-width: 0; }
+.vmm-resource-composition-actions { display: flex; flex: 0 1 340px; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.vmm-resource-composition-actions > div { flex: 1 1 160px; min-width: 0; }
+.vmm-resource-composition-actions [data-slot="select-trigger"] { width: 100%; }
+.vmm-resource-noise-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 16px; }
+.vmm-resource-workspace { display: grid; grid-template-columns: minmax(180px, .65fr) minmax(0, 2fr); gap: 18px; align-items: stretch; }
+.vmm-resource-files { display: flex; flex-direction: column; gap: 4px; }
+/* Let the editor determine the row height while the file list stretches and scrolls independently.
+   由编辑器决定整行高度，文件列表等高拉伸并独立滚动。 */
+.vmm-resource-file-groups { contain: size; min-height: 0; overflow: auto; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vmm-resource-files button { padding: 10px 12px; text-align: left; font-size: var(--vk-fs-md); overflow-wrap: anywhere; }
+.vmm-resource-files button[aria-pressed="true"] { background: var(--vk-hover); font-weight: 600; }
+.vmm-resource-editor { min-width: 0; }
+
+@container memory-body (max-width: 840px) {
+  .vmm-resource-composition-actions { flex-basis: 100%; }
+  .vmm-resource-noise-options { grid-template-columns: minmax(0, 1fr); }
+  .vmm-session-workspace.has-selection { grid-template-columns: minmax(0, 1fr); }
+  .vmm-project-workspace, .vmm-resource-workspace, .vmm-search-workspace { grid-template-columns: minmax(0, 1fr); }
+  .vmm-project-directory-expanded { display: none; }
+  .vmm-project-picker { display: block; }
+  .vmm-resource-files { flex-direction: row; flex-wrap: wrap; }
+  /* Restore content sizing when the file list occupies its own row on narrow layouts.
+     窄布局下文件列表独占一行，恢复按内容计算高度。 */
+  .vmm-resource-file-groups { contain: none; max-height: 240px; }
+}
+@container memory-inference (max-width: 680px) {
+  .vmm-inference-route { grid-template-columns: minmax(0, 1fr) auto; }
+  .vmm-inference-heading { grid-column: 1; grid-row: 1; }
+  .vmm-inference-actions { grid-column: 2; grid-row: 1; }
+  .vmm-inference-route > .vmm-inference-controls { grid-column: 1 / -1; grid-row: 2; }
+  .vmm-inference-columns { display: none; }
+  .vmm-inference-mobile-label { display: block; }
+}
+@container memory-inference (max-width: 420px) {
+  .vmm-inference-controls { grid-template-columns: minmax(0, 1fr); }
+}
+@container memory-body (max-width: 520px) {
+  .vmm-inference-controls { grid-template-columns: minmax(0, 1fr); }
+  .vmm-memory-main .grid { grid-template-columns: minmax(0, 1fr); }
+  .vmm-memory-main [data-slot="tabs-list"] { display: flex; flex-wrap: wrap; height: auto; }
+}
+
+/* Resource code editor: a transparent textarea over a highlighted preview, with a fixed line gutter. */
+/* 资源代码编辑器：透明文本框覆盖在高亮预览之上，左侧为固定行号栏。 */
+.vk-mem-ruled { padding-top: calc(var(--vk-u) * 4); border-top: var(--vk-bw) solid var(--vk-line); }
+.vk-mem-code { overflow: hidden; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vk-mem-code-bar { display: flex; align-items: center; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-mem-code-body { position: relative; height: 28rem; overflow: hidden; background: var(--vk-panel); color: var(--vk-ink); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.25rem; }
+.vk-mem-code-preview, .vk-mem-code-input { padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3) calc(var(--vk-u) * 3) 4.5rem; font: inherit; white-space: pre; }
+.vk-mem-code-preview { position: absolute; inset: 0; margin: 0; overflow: hidden; pointer-events: none; }
+.vk-mem-code-preview > code { display: block; width: max-content; min-width: 100%; font: inherit; }
+.vk-mem-code-preview > code > span { display: block; min-height: 1.25rem; }
+.vk-mem-code-gutter { position: absolute; inset-block: 0; left: 0; z-index: 1; width: 3.5rem; margin: 0; padding: calc(var(--vk-u) * 3); overflow: hidden; border-right: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); color: var(--vk-ink-3); font: inherit; text-align: right; pointer-events: none; user-select: none; }
+.vk-mem-code-gutter > span { display: block; }
+.vk-mem-code-input { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; margin: 0; overflow: auto; resize: none; border: 0; background: transparent; color: transparent; caret-color: var(--vk-ink); outline: none; }
+.vk-mem-code-input::selection { background: color-mix(in srgb, var(--vk-signal) 25%, transparent); }
+.vk-mem-code-input:focus-visible { box-shadow: inset 0 0 0 var(--vk-focus-w) var(--vk-signal); }
+.vk-mem-code-input:read-only { cursor: default; }
+
+/* Maintenance metrics, setup choices, binding rows and inference route details. */
+/* 维护指标、设置选项、绑定行与推理路由细节。 */
+.vk-mem-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0 calc(var(--vk-u) * 6); }
+.vk-mem-metric { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 2) 0; border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-mem-metric > p { margin: 0; }
+.vk-mem-metric > p:first-child { min-width: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-mem-metric > p:last-child { flex: none; font-size: var(--vk-fs-sm); font-weight: 500; }
+.vk-mem-choice { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); cursor: pointer; }
+.vk-mem-choice:hover { border-color: var(--vk-line-strong); }
+.vk-mem-choice:has([data-state="checked"]), .vk-mem-choice:has([aria-checked="true"]) { border-color: color-mix(in srgb, var(--vk-ember) 50%, var(--vk-line)); background: var(--vk-select); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-mem-choice > span { display: grid; gap: var(--vk-u); min-width: 0; }
+.vk-mem-bind-fixed { grid-template-columns: 12rem minmax(0, 1fr); }
+.vk-mem-bind-row { grid-template-columns: minmax(10rem, 1fr) 12rem minmax(12rem, 1fr); align-items: center; }
+@container memory-body (max-width: 640px) { .vk-mem-bind-fixed, .vk-mem-bind-row { grid-template-columns: minmax(0, 1fr); } }
+.vk-mem-section-head { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 2); }
+.vk-mem-section-head > svg { flex: none; margin-top: 2px; color: var(--vk-ember); }
+.vk-mem-info { display: inline-grid; place-items: center; padding: 0; border: 0; background: none; color: var(--vk-ink-3); cursor: help; }
+.vk-mem-info:hover { color: var(--vk-ink); }
+.vk-mem-tip { max-width: 18rem; font-size: var(--vk-fs-xs); }
+.vk-mem-tip-line { display: block; margin-top: var(--vk-u); }
+.vmm-inference-status[data-tone] { color: var(--vk-tone); }
+.vk-mem-picker-trigger.vk-btn { justify-content: flex-start; width: 100%; min-width: 0; height: auto; min-height: calc(var(--vk-u) * 10); padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); font-weight: 400; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+
+/* Memory record browser: selectable record tiles, compact counts and provenance sheets. */
+/* 记忆记录浏览器：可选择的记录卡、紧凑计数与来源抽屉。 */
+.vk-mem-pick { position: relative; min-width: 0; }
+.vk-mem-pick > [role="checkbox"] { position: absolute; top: calc(var(--vk-u) * 4); left: calc(var(--vk-u) * 3); z-index: 1; }
+.vk-mem-tile { display: grid; align-content: start; gap: calc(var(--vk-u) * 2); width: 100%; min-width: 0; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color 120ms ease, border-color 120ms ease; }
+.vk-mem-pick > .vk-mem-tile { padding-left: calc(var(--vk-u) * 10); }
+.vk-mem-tile:hover:not(:disabled) { border-color: var(--vk-line-strong); background: var(--vk-hover); }
+.vk-mem-tile:focus-visible, .vk-mem-link:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-mem-tile:disabled { cursor: default; }
+.vk-mem-tile-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-mem-tile-head > p { flex: 1; min-width: 0; margin: 0; font-size: var(--vk-fs-sm); font-weight: 500; }
+.vk-mem-tags { display: flex; flex: none; gap: var(--vk-u); }
+.vk-mem-excerpt { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+.vk-mem-clamp2, .vk-mem-clamp3 { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.vk-mem-clamp2 { -webkit-line-clamp: 2; }
+.vk-mem-clamp3 { -webkit-line-clamp: 3; }
+.vk-mem-retry { margin: 0; color: var(--vk-warn); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
+.vk-mem-pager { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-sm); font-variant-numeric: tabular-nums; }
+.vk-mem-details { width: 100%; font-size: var(--vk-fs-xs); }
+.vk-mem-details > summary { width: fit-content; color: var(--vk-ink-3); cursor: pointer; }
+.vk-mem-details[open] > summary { margin-bottom: calc(var(--vk-u) * 2); }
+
+/* Counts read as a ruled strip of label over number. */
+/* 计数以分隔条呈现：标签在上，数字在下。 */
+.vk-mem-counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: 1px; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-line-soft); }
+.vk-mem-count { display: grid; gap: 2px; min-width: 0; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); background: var(--vk-panel); }
+.vk-mem-count > span { overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-mem-count > strong { font-size: var(--vk-fs-lg); font-weight: 600; }
+
+/* Linked records inside detail sheets: one compact row each. */
+/* 详情抽屉中的关联记录：每条一行紧凑显示。 */
+.vk-mem-link { display: flex; align-items: flex-start; justify-content: space-between; gap: calc(var(--vk-u) * 3); width: 100%; min-width: 0; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); color: inherit; font: inherit; font-size: var(--vk-fs-sm); text-align: left; cursor: pointer; }
+.vk-mem-link:hover { border-color: var(--vk-line-strong); background: var(--vk-hover); }
+.vk-mem-link > .vk-form-cell { display: grid; gap: 2px; }
+.vk-mem-reading { line-height: 1.75; }
+.vk-mem-provenance { padding-top: calc(var(--vk-u) * 4); border-top: var(--vk-bw) solid var(--vk-line); font-size: var(--vk-fs-sm); }
+
+/* Management data browser: filter strip, selection bar, responsive session list and turn rows. */
+/* 管理数据浏览器：筛选条、选择栏、响应式会话列表与回合行。 */
+.vk-mem-tabstrip { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.vk-mem-search { flex: 1 1 15rem; min-width: 15rem; }
+.vk-mem-selection { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-mem-selection > .vk-form-strong { margin-right: auto; }
+.vk-mem-check-row { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 3); min-width: 0; }
+.vk-mem-check-row > .vk-form-fill { display: grid; gap: var(--vk-u); }
+.vk-mem-push { margin-left: auto; }
+.vk-mem-col-check { width: 2.5rem; }
+.vk-mem-col-action { width: 7rem; }
+.vk-mem-col-title { max-width: 22rem; }
+.vk-mem-col-path { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-mem-turn-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: calc(var(--vk-u) * 3); }
+.vk-mem-turn-row > .vk-form-fill { display: grid; gap: var(--vk-u); flex-basis: 16rem; }
+.vk-mem-chunk { max-height: 20rem; margin: 0; padding: calc(var(--vk-u) * 3); overflow: auto; background: var(--vk-sunken); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-mem-count[data-tone] { box-shadow: inset 2px 0 0 var(--vk-tone); }
+.vk-mem-count[data-tone] > strong { color: var(--vk-tone); }
+.vk-mem-wide-only { overflow: hidden; }
+@media (max-width: 767px) { .vk-mem-wide-only { display: none; } }
+@media (min-width: 768px) { .vk-mem-narrow-only { display: none; } }
+
+/* Shared memory layout helpers: two- and three-up grids, ruled rows, disclosures and scroll lists. */
+/* 记忆页共用布局：双列与三列网格、分隔行、展开块与滚动列表。 */
+.vk-mem-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: calc(var(--vk-u) * 4); min-width: 0; }
+.vk-mem-three { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: calc(var(--vk-u) * 3); min-width: 0; }
+fieldset.vk-mem-two, fieldset.vk-form-grid { margin: 0; padding: 0; border: 0; min-width: 0; }
+.vk-mem-rows { border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vk-mem-rows > * + * { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-mem-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); }
+.vk-mem-session { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3); }
+.vk-mem-native-check { margin-top: 4px; }
+.vk-btn.vk-mem-title-link { justify-content: flex-start; max-width: 100%; height: auto; padding: 0; color: var(--vk-ink); font-weight: 500; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.vk-btn.vk-mem-title-link:hover { color: var(--vk-ember); }
+.vk-mem-spread { justify-content: space-between; align-items: flex-start; }
+.vk-mem-inset { padding: calc(var(--vk-u) * 4); }
+.vk-mem-inline-code { margin-left: calc(var(--vk-u) * 2); font-family: var(--vk-font-mono); overflow-wrap: anywhere; }
+.vk-mem-disclosure { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vk-mem-disclosure > summary { color: var(--vk-ink-2); cursor: pointer; }
+.vk-mem-disclosure[open] > summary { margin-bottom: calc(var(--vk-u) * 2); }
+.vk-mem-scroll-list { max-height: 16rem; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.vk-mem-scroll-body { max-height: min(55dvh, 32rem); overflow-y: auto; }
+.vk-mem-record { padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2); border: var(--vk-bw) solid var(--vk-line-soft); font-size: var(--vk-fs-xs); }
+.vk-mem-pairs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--vk-u) * 2); margin: 0; font-size: var(--vk-fs-sm); }
+.vk-mem-gap { margin-block: calc(var(--vk-u) * 2); }
+.vk-mem-block { display: block; margin-top: var(--vk-u); }
+.vk-mem-span { grid-column: 1 / -1; }
+.vk-mem-legend { margin-bottom: calc(var(--vk-u) * 3); padding: 0; font-size: var(--vk-fs-sm); font-weight: 500; }
+.vk-mem-sublegend { padding: 0 calc(var(--vk-u) * 2) 0 0; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-mem-check { padding-block: calc(var(--vk-u) * 2); }
+.vk-mem-link-grid { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1fr) auto; align-items: end; gap: calc(var(--vk-u) * 3); }
+.vk-mem-project-row { grid-template-columns: minmax(12rem, 1fr) auto auto auto; align-items: center; }
+@container memory-body (max-width: 720px) { .vk-mem-link-grid, .vk-mem-project-row { grid-template-columns: minmax(0, 1fr); } }
+.vk-mem-scope-select { width: min(100%, 20rem); }
+.vk-mem-clamp4 { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+.vk-form-area { min-height: 8rem; }
+
+/* Overview: a hero header with a marked glyph, a two-column body and a capability grid. */
+/* 概览：带标记图标的首部、双列正文与能力网格。 */
+.vk-mem-hero { display: flex; flex-wrap: wrap; align-items: flex-start; gap: calc(var(--vk-u) * 3); }
+.vk-mem-hero-mark { display: inline-grid; flex: none; place-items: center; width: calc(var(--vk-u) * 11); height: calc(var(--vk-u) * 11); border: var(--vk-bw) solid color-mix(in srgb, var(--vk-ember) 40%, var(--vk-line)); background: color-mix(in srgb, var(--vk-ember) 8%, var(--vk-panel)); color: var(--vk-ember); }
+.vk-mem-measure { max-width: 42rem; }
+.vk-mem-overview { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(18rem, 0.7fr); gap: calc(var(--vk-u) * 4); }
+@container memory-body (max-width: 880px) { .vk-mem-overview { grid-template-columns: minmax(0, 1fr); } }
+.vk-mem-caps { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr)); gap: calc(var(--vk-u) * 2); }
+.vk-mem-cap { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-sunken); }
+.vk-mem-cap > .vk-form-inline { flex: none; flex-wrap: nowrap; max-width: 60%; }
+.vk-mem-cap > strong { min-width: 0; white-space: normal; text-align: right; }
+.vk-mem-bottom { display: flex; align-items: flex-end; }
+.vk-mem-kv { display: grid; grid-template-columns: 8rem minmax(0, 1fr); gap: var(--vk-u) calc(var(--vk-u) * 3); }
+.vk-mem-mb4 { margin-bottom: calc(var(--vk-u) * 4); }
+.vk-mem-mb2 { margin-bottom: calc(var(--vk-u) * 2); }
+.vk-mem-end-text { text-align: right; }
+.vk-mem-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: calc(var(--vk-u) * 3); }
+.vk-mem-placeholder { padding: calc(var(--vk-u) * 8); border: var(--vk-bw) dashed var(--vk-line); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); text-align: center; }
+.vk-mem-col-start { flex-direction: column; align-items: flex-start; }
+.vk-mem-line { display: block; }
+.vk-mem-warnbox { padding: calc(var(--vk-u) * 3); border: var(--vk-bw) solid color-mix(in srgb, var(--vk-warn) 40%, var(--vk-line)); background: color-mix(in srgb, var(--vk-warn) 6%, var(--vk-panel)); box-shadow: inset 2px 0 0 var(--vk-warn); font-size: var(--vk-fs-sm); }

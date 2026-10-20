@@ -1,13 +1,13 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
+} from "@/ui-kit/primitives/dialog";
+import { cx } from "@/ui-kit/behavior/core";
 import type {
   VmmConfigDraftSummary,
   WorkbenchSnapshot,
@@ -37,6 +37,7 @@ import {
   projectConversationCount,
   projectSettingsSections,
 } from "./project-settings-utils";
+import "@/ui-kit/styles/features/project-settings.css";
 
 export type {
   ProjectAgentSkillState,
@@ -641,7 +642,7 @@ export function ProjectSettingsDialog(props: {
           <nav className="project-settings-nav" aria-label={t("projectSettings.categoryAria")}>
             {sections.map((section) => (
               <button
-                className={cn("project-settings-nav-button", activeSection === section.id && "active")}
+                className={cx("project-settings-nav-button", activeSection === section.id && "active")}
                 aria-current={activeSection === section.id ? "page" : undefined}
                 key={section.id}
                 onClick={() => setActiveSection(section.id)}

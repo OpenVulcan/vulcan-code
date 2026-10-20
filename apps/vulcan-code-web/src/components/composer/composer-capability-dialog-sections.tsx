@@ -1,6 +1,6 @@
 import React from "react";
-import { Button } from "@/components/ui/button";
-import { Combobox } from "@/components/ui/combobox";
+import { Button } from "@/ui-kit/primitives/button";
+import { Combobox } from "@/ui-kit/primitives/combobox";
 import { AlertTriangle } from "lucide-react";
 import {
   Select,
@@ -8,12 +8,11 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls";
+} from "@/ui-kit/primitives/select";
+import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
 import { mediaUnderstandingCapabilityToggleDisabled } from "@/lib/provider-tool-capabilities";
 import { PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS } from "@/lib/reasoning-effort-labels";
 import type {
@@ -60,18 +59,15 @@ export function ComposerCapabilityKindList(props: {
     describeCapability,
   } = props.settings;
   return (
-    <aside aria-label={activeCapabilityTab.label} className="composer-capability-dialog-left">
+    <aside aria-label={activeCapabilityTab.label} className="vk-cap-list">
       {activeCapabilityTab.capabilities.map((capability) => {
         const { directMode, extensionSelectionCount, mediaAvailable, enabled, targets, targetCount, conflict, subtitle } =
           describeCapability(capability);
         return (
           <div
-            className={cn(
-              "composer-capability-kind-row",
-              enabled && "enabled",
-              selectedCapability === capability && "selected",
-              conflict && "conflict",
-            )}
+            className="vk-cap-row"
+            data-conflict={conflict ? "" : undefined}
+            data-selected={selectedCapability === capability ? "" : undefined}
             aria-invalid={conflict ? true : undefined}
             key={capability}
           >
@@ -114,40 +110,38 @@ export function ComposerCapabilityKindList(props: {
                   });
                 }}
                 onClick={(event) => event.stopPropagation()}
+                className="vk-check"
                 type="checkbox"
               />
             ) : (
-              <span aria-hidden="true" className={cn("composer-capability-extension-count", extensionSelectionCount > 0 && "active")}>
+              <span aria-hidden="true" className="vk-cap-ext-count" data-active={extensionSelectionCount > 0 ? "" : undefined}>
                 {extensionSelectionCount > 0 ? extensionSelectionCount : null}
               </span>
             )}
-            <Button className="composer-capability-kind-select h-auto min-w-0 flex-1 justify-start whitespace-normal text-left" type="button" variant="ghost"
+            <button className="vk-cap-select" type="button"
               ref={selectedCapability === capability ? selectedCategoryButton : undefined}
               aria-pressed={selectedCapability === capability} disabled={saving}
               onClick={() => setSelectedCapability(capability)}>
-              <span className={cn(
-                "composer-capability-colored-icon",
-                enabled ? "enabled" : "disabled",
-              )} style={{
-                "--capability-color": providerToolCapabilityColor(capability),
+              <span className="vk-cap-glyph" data-off={enabled ? undefined : ""} style={{
+                "--vk-cap-color": providerToolCapabilityColor(capability),
               } as React.CSSProperties}>
                 <ProviderToolCapabilityIcon capability={capability} size={16} />
               </span>
-              <span className="composer-capability-kind-copy">
-                <span className="composer-capability-kind-title">
+              <span className="vk-cap-copy">
+                <span>
                   {providerToolCapabilityLabel(capability, t)}
                   {conflict ? <AlertTriangle aria-hidden="true" size={13} /> : null}
                 </span>
                 <small>{subtitle}</small>
                 {conflict ? (
-                  <small className="composer-capability-node-warning" role="alert">
+                  <small role="alert">
                     {t(conflict.kind === "missing_selection"
                       ? "composer.capability.conflict.missingSelection"
                       : "composer.capability.conflict.targetUnavailable")}
                   </small>
                 ) : null}
               </span>
-            </Button>
+            </button>
           </div>
         );
       })}
@@ -188,7 +182,7 @@ export function ComposerCapabilityMediaRoute(props: {
     selectedMediaReasoningEfforts,
   } = props.settings;
   return (
-    <div className="composer-capability-route-selectors">
+    <div className="vk-cap-routes">
       <label>
         <span>{t("composer.capability.mediaBackendMode")}</span>
         <SegmentedControl
@@ -366,15 +360,15 @@ export function ComposerCapabilityMediaRoute(props: {
           ) : null}
         </>
       ) : (
-        <div className="composer-capability-dialog-empty">
+        <div className="vk-cap-none">
           {t("settings.providerTools.noSelection")}
         </div>
       )}
-      <p className="composer-capability-media-note settings-muted-line">
+      <p className="vk-cap-note">
         {t("composer.capability.mediaBackendNote")}
       </p>
       {(selectedMediaMode === "provider_tool" ? selectedMediaTargets.length : selectedMediaCandidates.length) === 0
-        ? <p className="settings-muted-line" role="status">{t("composer.capability.mediaBackendMissing")}</p> : null}
+        ? <p className="vk-cap-note" role="status">{t("composer.capability.mediaBackendMissing")}</p> : null}
     </div>
   );
 }
@@ -405,16 +399,16 @@ export function ComposerCapabilityExtensionList(props: {
     unavailableExtensionTargets,
   } = props.settings;
   return (
-    <div className="composer-capability-extension-list" ref={extensionRecoveryList}>
-      <p className="settings-muted-line">
+    <div className="vk-cap-ext-list" ref={extensionRecoveryList}>
+      <p className="vk-cap-note">
         {t("composer.capability.extensionHint")}
       </p>
       {unavailableExtensionTargets.map((selection) => (
-        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 rounded-md border p-3"
+        <div className="vk-cap-recover"
           key={JSON.stringify([selection.connection_id, selection.target_id])}>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium" title={selection.target_id}>{selection.target_id}</p>
-            <span className="text-xs text-muted-foreground">{t("settings.providerTools.unavailable")}</span>
+          <div>
+            <p title={selection.target_id}>{selection.target_id}</p>
+            <span>{t("settings.providerTools.unavailable")}</span>
           </div>
           <Button variant="outline" size="sm" disabled={saving} data-extension-recovery
             aria-label={`${t("composer.capability.removeUnavailable")} · ${selection.target_id}`}
@@ -429,9 +423,9 @@ export function ComposerCapabilityExtensionList(props: {
             }}>
             {t("composer.capability.removeUnavailable")}
           </Button>
-          <details className="col-span-2 min-w-0 text-xs text-muted-foreground">
-            <summary className="cursor-pointer">{t("composer.capability.unavailableDetails")}</summary>
-            <dl className="mt-2 space-y-1 break-all">
+          <details>
+            <summary>{t("composer.capability.unavailableDetails")}</summary>
+            <dl>
               <dt>{t("settings.providerTools.model")}</dt><dd>{selection.target_id}</dd>
               <dt>{t("settings.providerTools.account")}</dt><dd>{selection.connection_id}</dd>
             </dl>
@@ -439,7 +433,7 @@ export function ComposerCapabilityExtensionList(props: {
         </div>
       ))}
       {selectedModels.length === 0 && unavailableExtensionTargets.length === 0
-        ? <p role="status" className="settings-muted-line">{t("composer.capability.empty.noTargets")}</p> : null}
+        ? <p role="status" className="vk-cap-note">{t("composer.capability.empty.noTargets")}</p> : null}
       {selectedModels.map((model) => {
         // modelTargets contains every configured account for one extension model.
         // modelTargets 包含一个扩展模型的全部已配置账号。
@@ -559,7 +553,7 @@ export function ComposerCapabilityDirectRoute(props: {
     selectedAccount,
   } = props.settings;
   return (
-    <div className="composer-capability-route-selectors">
+    <div className="vk-cap-routes">
       <label>
         <span>{t("settings.providerTools.model")}</span>
         <Combobox
@@ -621,7 +615,7 @@ export function ComposerCapabilityDirectRoute(props: {
           </SelectContent>
         </Select>
       </label>
-      {selectedModels.length === 0 ? <p role="status" className="settings-muted-line">{t("composer.capability.empty.noTargets")}</p> : null}
+      {selectedModels.length === 0 ? <p role="status" className="vk-cap-note">{t("composer.capability.empty.noTargets")}</p> : null}
     </div>
   );
 }

@@ -2,13 +2,13 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { AnswerMode, AnswerModeOwner } from "@/service/answer-mode";
 import { setSessionAnswerMode, type AnswerModeUpdateResponse } from "@/service/answer-mode-service";
 import { useComposerSessionSettings } from "./use-composer-answer-mode";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
 vi.mock("@/service/answer-mode-service", () => ({ setSessionAnswerMode: vi.fn() }));
 
 // root/host isolate actual hook lifetimes; only RPC and text catalogs are synthetic.

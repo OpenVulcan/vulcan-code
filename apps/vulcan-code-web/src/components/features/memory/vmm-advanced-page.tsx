@@ -1,19 +1,21 @@
 import * as React from "react"
 import { Database, Save, Settings2, Stethoscope, Unplug } from "lucide-react"
 
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Combobox } from "@/components/ui/combobox"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/ui-kit/primitives/accordion"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Alert, AlertDescription, AlertTitle } from "@/ui-kit/primitives/alert"
+import { Button } from "@/ui-kit/primitives/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { Combobox } from "@/ui-kit/primitives/combobox"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
+import { RadioGroup, RadioGroupItem } from "@/ui-kit/primitives/radio-group"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { useI18n } from "@/i18n"
 import { isOptionalUnsignedDraft } from "./vmm-draft-number"
 import type { VmmConfigDraftSummary, VmmMemoryActionResult, VmmMemorySnapshot, VmmNativeProjectCatalogSummary } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // VmmAdvancedPageProps defines global native or external settings and diagnostics.
 // VmmAdvancedPageProps 定义全局原生或外置设置与诊断。
@@ -41,37 +43,37 @@ function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTe
   const numbersValid = native || [draft.managementTimeoutMs, draft.receiveTimeoutMs, draft.handshakeTimeoutMs, draft.grpcKeepaliveTimeMs, draft.grpcKeepaliveTimeoutMs].every((value) => isOptionalUnsignedDraft(value, 64))
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-4">
+    <div className="vk-form-loose">
       <div className="vmm-page-toolbar">
-        <Button disabled={busy || !numbersValid} onClick={() => void onSave()} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.advanced.save")}</Button>
+        <Button disabled={busy || !numbersValid} onClick={() => void onSave()} type="button"><Save className="vk-icon" aria-hidden="true" />{t("memory.advanced.save")}</Button>
       </div>
 
-      {notice ? <p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">{notice}</p> : null}
-      {!numbersValid ? <p role="alert" className="text-sm text-destructive">{t("memory.advanced.invalidNumbers")}</p> : null}
+      {notice ? <p className="vk-form-well">{notice}</p> : null}
+      {!numbersValid ? <p role="alert" className="vk-field-error">{t("memory.advanced.invalidNumbers")}</p> : null}
 
-      <fieldset className="min-w-0" disabled={busy}>
+      <fieldset className="vk-form-cell" disabled={busy}>
       <Card>
-        <CardHeader><CardTitle className="flex items-center gap-2"><Settings2 className="size-4" aria-hidden="true" />{t("memory.advanced.deployment")}</CardTitle><CardDescription>{t("memory.advanced.description")}</CardDescription></CardHeader>
-        <CardContent className="space-y-4">
-          <RadioGroup disabled={busy} className="grid gap-3 md:grid-cols-2" onValueChange={(value) => onChange({ backendMode: value as VmmConfigDraftSummary["backendMode"] })} value={draft.backendMode}>
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-4"><RadioGroupItem value="native" /><span><span className="block text-sm font-medium">{t("memory.advanced.native")}</span><span className="mt-1 block text-xs text-muted-foreground">{t("memory.advanced.nativeDescription")}</span></span></label>
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-4"><RadioGroupItem value="external_grpc" /><span><span className="block text-sm font-medium">{t("memory.advanced.external")}</span><span className="mt-1 block text-xs text-muted-foreground">{t("memory.advanced.externalDescription")}</span></span></label>
+        <CardHeader><CardTitle className="vk-form-inline"><Settings2 className="vk-icon" aria-hidden="true" />{t("memory.advanced.deployment")}</CardTitle><CardDescription>{t("memory.advanced.description")}</CardDescription></CardHeader>
+        <CardContent className="vk-form-loose">
+          <RadioGroup disabled={busy} className="vk-form-grid" onValueChange={(value) => onChange({ backendMode: value as VmmConfigDraftSummary["backendMode"] })} value={draft.backendMode}>
+            <label className="vk-mem-choice"><RadioGroupItem value="native" /><span><span className="vk-field-label">{t("memory.advanced.native")}</span><span className="vk-form-note">{t("memory.advanced.nativeDescription")}</span></span></label>
+            <label className="vk-mem-choice"><RadioGroupItem value="external_grpc" /><span><span className="vk-field-label">{t("memory.advanced.external")}</span><span className="vk-form-note">{t("memory.advanced.externalDescription")}</span></span></label>
           </RadioGroup>
 
           {native ? (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="vk-form-grid">
               <BindingModeSelect disabled={busy} label={t("memory.advanced.defaultBinding")} onChange={(nativeProjectBindingMode) => onChange({ nativeProjectBindingMode })} value={draft.nativeProjectBindingMode} />
               {draft.nativeProjectBindingMode === "fixed" ? <NativeFixedProjectSelect disabled={busy} onRunAction={onRunAction} label={t("memory.advanced.nativeFixedProject")} onChange={(nativeFixedProjectId) => onChange({ nativeFixedProjectId })} value={draft.nativeFixedProjectId} /> : null}
             </div>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="vk-form-grid">
               <AdvancedTextField label={t("memory.advanced.endpoint")} onChange={(grpcTarget) => onChange({ grpcTarget })} placeholder="127.0.0.1:17625" value={draft.grpcTarget} />
               <AdvancedSecretField label={t("memory.advanced.apiKey")} onChange={(grpcApiKey) => onChange({ grpcApiKey })} value={draft.grpcApiKey} />
               <AdvancedTextField label={t("memory.advanced.managementEndpoint")} onChange={(managementBaseUrl) => onChange({ managementBaseUrl })} placeholder="http://127.0.0.1:17635" value={draft.managementBaseUrl} />
               <AdvancedSecretField label={t("memory.advanced.managementToken")} onChange={(managementBearerToken) => onChange({ managementBearerToken })} value={draft.managementBearerToken} />
               <BindingModeSelect disabled={busy} label={t("memory.advanced.defaultBinding")} onChange={(externalProjectBindingMode) => onChange({ externalProjectBindingMode })} value={draft.externalProjectBindingMode} />
               <AdvancedTextField label={t("memory.advanced.externalPrefix")} onChange={(externalProjectPrefix) => onChange({ externalProjectPrefix })} placeholder="vulcan/space" value={draft.externalProjectPrefix} />
-              <div className="flex items-end sm:col-span-2"><Button disabled={busy || !numbersValid} onClick={() => void onTestManagement()} type="button" variant="outline"><Unplug className="size-4" aria-hidden="true" />{t("memory.advanced.testManagement")}</Button></div>
+              <div className="vk-mem-span vk-mem-bottom"><Button disabled={busy || !numbersValid} onClick={() => void onTestManagement()} type="button" variant="outline"><Unplug className="vk-icon" aria-hidden="true" />{t("memory.advanced.testManagement")}</Button></div>
             </div>
           )}
         </CardContent>
@@ -81,18 +83,18 @@ function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTe
       {native ? (
         <>
           <Card>
-            <CardHeader><CardTitle className="flex items-center gap-2"><Database className="size-4" aria-hidden="true" />{t("memory.advanced.data")}</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="vk-form-inline"><Database className="vk-icon" aria-hidden="true" />{t("memory.advanced.data")}</CardTitle></CardHeader>
             <CardContent><Alert><Database aria-hidden="true" /><AlertTitle>{t("memory.advanced.nativeStorage")}</AlertTitle><AlertDescription>{t("memory.advanced.nativeStorageDescription")}</AlertDescription></Alert></CardContent>
           </Card>
         </>
       ) : null}
 
-      <Accordion className="rounded-xl border px-4" collapsible type="single">
+      <Accordion className="vk-form-frame vk-form-padx" collapsible type="single">
         {!native ? (
           <AccordionItem value="transport">
             <AccordionTrigger>{t("memory.advanced.transport")}</AccordionTrigger>
             <AccordionContent>
-            <fieldset disabled={busy} className="grid min-w-0 gap-4 pb-4 sm:grid-cols-2">
+            <fieldset disabled={busy} className="vk-form-grid">
               <AdvancedNumberField label={t("memory.advanced.managementTimeout")} onChange={(managementTimeoutMs) => onChange({ managementTimeoutMs })} value={draft.managementTimeoutMs} />
               <AdvancedNumberField label={t("vmm.settings.receiveTimeout")} onChange={(receiveTimeoutMs) => onChange({ receiveTimeoutMs })} value={draft.receiveTimeoutMs} />
               <AdvancedNumberField label={t("vmm.settings.handshakeTimeout")} onChange={(handshakeTimeoutMs) => onChange({ handshakeTimeoutMs })} value={draft.handshakeTimeoutMs} />
@@ -103,8 +105,8 @@ function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTe
           </AccordionItem>
         ) : null}
         <AccordionItem value="diagnostics">
-          <AccordionTrigger><span className="flex items-center gap-2"><Stethoscope className="size-4" aria-hidden="true" />{t("memory.advanced.diagnostics")}</span></AccordionTrigger>
-          <AccordionContent className="space-y-2 pb-4 text-sm">
+          <AccordionTrigger><span className="vk-form-inline"><Stethoscope className="vk-icon" aria-hidden="true" />{t("memory.advanced.diagnostics")}</span></AccordionTrigger>
+          <AccordionContent className="vk-form-stack vk-form-sm">
             <DiagnosticRow label={t("memory.advanced.diagnosticBackend")} value={draft.backendMode} />
             <DiagnosticRow label={t("memory.advanced.diagnosticRuntime")} value={snapshot.effective.diagnostic} />
             {!native ? <DiagnosticRow label={t("memory.advanced.diagnosticGrpc")} value={draft.grpcTarget || "-"} /> : null}
@@ -166,14 +168,14 @@ export function NativeFixedProjectSelect({ disabled, label, onChange, onRunActio
   const options = catalog === null ? [] : catalog.projects.map((project) => ({
     value: String(project.projectId), label: `${project.name} · ${project.tag}`,
   }))
-  return <div className="min-w-0 space-y-2">
+  return <div className="vk-form-stack">
     <Label>{label}</Label>
     <Combobox ariaLabel={label} disabled={disabled || loading || catalog === null} options={options}
       placeholder={t("memory.profile.selectProject")} searchPlaceholder={t("memory.profile.searchProject")}
       emptyText={t("memory.profile.noProject")} onValueChange={onChange} value={value} />
     {loading ? <StreamPlaceholder label={t("memory.advanced.catalogLoading")} count={2} /> : null}
-    {failed ? <div className="space-y-2">
-      <p role="alert" className="text-sm text-destructive">{t("memory.advanced.catalogFailed")}</p>
+    {failed ? <div className="vk-form-stack">
+      <p role="alert" className="vk-field-error">{t("memory.advanced.catalogFailed")}</p>
       <Button type="button" variant="outline" disabled={disabled || loading} onClick={() => void load()}>{t("memory.advanced.catalogRetry")}</Button>
     </div> : null}
   </div>
@@ -191,34 +193,34 @@ function BindingModeSelect({ disabled, label, onChange, value }: {
 }) {
   const { t } = useI18n()
   const inputId = React.useId()
-  return <div className="min-w-0 space-y-2"><Label htmlFor={inputId}>{label}</Label><Select disabled={disabled} onValueChange={(next) => onChange(next as "fixed" | "per_project")} value={value}><SelectTrigger id={inputId} className="w-full min-w-0"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">{t("vmm.setup.binding.fixed")}</SelectItem><SelectItem value="per_project">{t("vmm.setup.binding.separate")}</SelectItem></SelectContent></Select></div>
+  return <div className="vk-form-stack"><Label htmlFor={inputId}>{label}</Label><Select disabled={disabled} onValueChange={(next) => onChange(next as "fixed" | "per_project")} value={value}><SelectTrigger id={inputId}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">{t("vmm.setup.binding.fixed")}</SelectItem><SelectItem value="per_project">{t("vmm.setup.binding.separate")}</SelectItem></SelectContent></Select></div>
 }
 
 // AdvancedNumberField renders one direct positive numeric setting.
 // AdvancedNumberField 渲染一个直接的正数设置。
 function AdvancedNumberField({ label, onChange, value }: { label: string; onChange: (value: string) => void; value: string }) {
   const inputId = React.useId()
-  return <div className="space-y-2"><Label htmlFor={inputId}>{label}</Label><Input id={inputId} inputMode="numeric" aria-invalid={!isOptionalUnsignedDraft(value, 64)} onChange={(event) => onChange(event.target.value)} value={value} /></div>
+  return <div className="vk-form-stack"><Label htmlFor={inputId}>{label}</Label><Input id={inputId} inputMode="numeric" aria-invalid={!isOptionalUnsignedDraft(value, 64)} onChange={(event) => onChange(event.target.value)} value={value} /></div>
 }
 
 // AdvancedTextField renders one plain backend setting.
 // AdvancedTextField 渲染一个普通后端设置。
 function AdvancedTextField({ label, onChange, placeholder, value }: { label: string; onChange: (value: string) => void; placeholder?: string; value: string }) {
   const inputId = React.useId()
-  return <div className="space-y-2"><Label htmlFor={inputId}>{label}</Label><Input id={inputId} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} value={value} /></div>
+  return <div className="vk-form-stack"><Label htmlFor={inputId}>{label}</Label><Input id={inputId} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} value={value} /></div>
 }
 
 // AdvancedSecretField renders one masked external credential.
 // AdvancedSecretField 渲染一个遮罩的外置凭据。
 function AdvancedSecretField({ label, onChange, value }: { label: string; onChange: (value: string) => void; value: string }) {
   const inputId = React.useId()
-  return <div className="space-y-2"><Label htmlFor={inputId}>{label}</Label><Input id={inputId} onChange={(event) => onChange(event.target.value)} type="password" value={value} /></div>
+  return <div className="vk-form-stack"><Label htmlFor={inputId}>{label}</Label><Input id={inputId} onChange={(event) => onChange(event.target.value)} type="password" value={value} /></div>
 }
 
 // DiagnosticRow renders one controlled technical value inside diagnostics.
 // DiagnosticRow 在诊断区内渲染一个受控技术值。
 function DiagnosticRow({ label, value }: { label: string; value: string }) {
-  return <div className="grid gap-1 rounded-lg border bg-muted/20 px-3 py-2 sm:grid-cols-[8rem_minmax(0,1fr)]"><span className="text-muted-foreground">{label}</span><span className="break-all font-mono text-xs">{value}</span></div>
+  return <div className="vk-form-well vk-mem-kv"><span className="vk-faint">{label}</span><span className="vk-form-codeline">{value}</span></div>
 }
 
 export { VmmAdvancedPage }

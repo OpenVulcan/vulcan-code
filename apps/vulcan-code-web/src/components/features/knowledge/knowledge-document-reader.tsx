@@ -1,8 +1,8 @@
 import * as React from "react";
 import { Hash } from "lucide-react";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { formatDateTime } from "@/lib/display-format";
 import { readKnowledgeChangeDocument, readManagedKnowledgeDocument } from "@/service/knowledge-base-service";

@@ -32,7 +32,7 @@ describe("MarkdownMessage", () => {
       "file:///tmp/page.html", "file:///C:/my%20files/page.html",
     ]);
     expect(Array.from(host.querySelectorAll("a"), (link) => link.target)).toEqual(Array(4).fill("_blank"));
-    expect(host.querySelectorAll('a > svg.markdown-link-icon[aria-hidden="true"]')).toHaveLength(4);
+    expect(host.querySelectorAll('a > svg.vk-md-link-icon[aria-hidden="true"]')).toHaveLength(4);
     expect(Array.from(host.querySelectorAll("a"), (link) => link.textContent)).toEqual(["Website", "Local", "POSIX", "Spaced"]);
   });
 

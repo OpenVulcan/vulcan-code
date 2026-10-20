@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Dialog,
   DialogContent,
@@ -6,7 +6,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import { useI18n } from "@/i18n";
 
 // TerminalStopConfirmDialog renders the shared confirmation UI for force-stopping terminal sessions.
@@ -43,7 +43,7 @@ export function TerminalStopConfirmDialog(props: {
             {t("terminalStop.description")}
           </DialogDescription>
         </DialogHeader>
-        <div className="terminal-stop-confirm-body">
+        <div className="vk-stop-target">
           <span>{props.sessionName}</span>
           <code>{props.command}</code>
         </div>

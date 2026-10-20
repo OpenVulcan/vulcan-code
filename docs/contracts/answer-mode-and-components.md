@@ -52,8 +52,8 @@
   并渲染（解析器不进入工作台启动包，语法无效时保留代码块）。流式回复中已闭合的组件即时渲染；
   Mermaid 仍只在回复完成后绘制。TUI 由 `apps/vulcan-code-tui/src/ui/answer_components.rs` 改写为
   终端可读的 Markdown（状态词转符号、图形组件转 Mermaid、树形带引导线、容器正文置于着色竖线之后）。
-- 组件渲染器 `answer-component-view.tsx` 及其样式 `src/styles/answer-components.css` 延迟加载，首次遇到已闭合
-  组件围栏时才取得，到达前该围栏保持代码显示；令牌、共享外框与表格样式在 `src/styles/answer-frame.css`，随
+- 组件渲染器 `answer-component-view.tsx` 及其样式 `src/ui-kit/styles/answer.css`（数学组件另有 `answer-math.css`）延迟加载，首次遇到已闭合
+  组件围栏时才取得，到达前该围栏保持代码显示；回答令牌随该样式表加载；共享外框（`vk-figure`）与表格样式在 `src/ui-kit/styles/prose.css`，随
   工作台启动加载（普通 Markdown 表格也使用）。工作台 CSS 受构建预算门禁约束，新增组件样式放入延迟样式表。
 - 视觉分两类：**框架型**承载可复用数据——Markdown
   表格、`ui-findings`、`ui-compare`（悬停复制为 Markdown）、`ui-chart`（图表与数据切换、复制数据）、

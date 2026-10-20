@@ -1,5 +1,5 @@
-import { Button } from "@/components/ui/button"
-import { DisclosureSection } from "@/components/ui/disclosure"
+import { Button } from "@/ui-kit/primitives/button"
+import { DisclosureSection } from "@/ui-kit/primitives/disclosure"
 import { createMcpDraft, validateMcpDraft } from "./mcp-form-model"
 import { McpStringRows, McpKeyValueRows } from "./mcp-form-fields"
 import * as React from "react"
@@ -11,12 +11,13 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
+} from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
 import type { McpServerSummary } from "@/types"
 import { useI18n } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // McpServerSaveRequest describes one MCP server configuration save request.
 // McpServerSaveRequest 描述单次 MCP 服务器配置保存请求。
@@ -126,45 +127,45 @@ export function McpServerDialog(props: {
     finally { saving.current = false; setBusy(false) }
   }
   return <Dialog open={props.open} onOpenChange={open => { if (!saving.current) props.onOpenChange(open) }}>
-    <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="xl">
-      <DialogHeader className="shrink-0"><DialogTitle>{draft.serverId ? t("settings.mcp.editMcpServer") : t("settings.mcp.addMcpServer")}</DialogTitle>
+    <DialogContent scrollMode="fixed-footer" size="xl">
+      <DialogHeader><DialogTitle>{draft.serverId ? t("settings.mcp.editMcpServer") : t("settings.mcp.addMcpServer")}</DialogTitle>
         <DialogDescription>{t("settings.mcp.itConnectsAutomaticallyAfter")}</DialogDescription>
       </DialogHeader>
       <div className="mcp-dialog-body">
       <fieldset disabled={busy} className="mcp-form">
-        <div className="settings-form-grid two">
-          <label className="settings-form-field"><span>{t("settings.mcp.name")}</span><Input value={draft.name} onChange={e => change("name", e.target.value)} /></label>
-          <div className="settings-form-field"><span>{t("settings.mcp.transport")}</span><Select value={draft.transport} disabled={busy} onValueChange={value => change("transport", value)}>
+        <div className="mcp-identity-row">
+          <label className="vk-field"><span>{t("settings.mcp.name")}</span><Input value={draft.name} onChange={e => change("name", e.target.value)} /></label>
+          <div className="vk-field"><span>{t("settings.mcp.transport")}</span><Select value={draft.transport} disabled={busy} onValueChange={value => change("transport", value)}>
             <SelectTrigger aria-label={t("settings.mcp.transport")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="stdio">{t("settings.mcp.stdio")}</SelectItem><SelectItem value="http">Streamable HTTP</SelectItem><SelectItem value="sse">SSE</SelectItem></SelectContent>
           </Select></div>
-          <label className="settings-check-row inline"><Switch checked={draft.enabled} disabled={busy} onCheckedChange={value => change("enabled", value)} />{t("settings.mcp.enabled")}</label>
+          <label className="vk-check-label"><Switch checked={draft.enabled} disabled={busy} onCheckedChange={value => change("enabled", value)} />{t("settings.mcp.enabled")}</label>
         </div>
         {draft.transport === "stdio" ? <>
-          <label className="settings-form-field"><span>{t("settings.mcp.executable")}</span><Input placeholder="node" value={draft.command} onChange={e => change("command", e.target.value)} /></label>
-          <p className="settings-muted-line">{t("settings.mcp.enterOnlyTheProgram")}</p>
+          <label className="vk-field"><span>{t("settings.mcp.executable")}</span><Input placeholder="node" value={draft.command} onChange={e => change("command", e.target.value)} /></label>
+          <p className="vk-form-note">{t("settings.mcp.enterOnlyTheProgram")}</p>
           <McpStringRows label={t("settings.mcp.arguments")} values={draft.args} onChange={value => change("args", value)} placeholder="server.js" exact />
-          <label className="settings-form-field"><span>{t("settings.mcp.workingDirectory")}</span><Input value={draft.cwd} onChange={e => change("cwd", e.target.value)} /></label>
-          <p className="settings-muted-line">{t("settings.mcp.leaveEmptyToUse")}</p>
+          <label className="vk-field"><span>{t("settings.mcp.workingDirectory")}</span><Input value={draft.cwd} onChange={e => change("cwd", e.target.value)} /></label>
+          <p className="vk-form-note">{t("settings.mcp.leaveEmptyToUse")}</p>
           <McpKeyValueRows label={t("settings.mcp.environmentVariables")} values={draft.env} onChange={value => change("env", value)} secret />
           <McpStringRows label={t("settings.mcp.variablesPassedFromThis")} values={draft.envPassthrough} onChange={value => change("envPassthrough", value)} placeholder="API_TOKEN" />
-          <p className="settings-muted-line">{t("settings.mcp.theProcessAlreadySees")}</p>
+          <p className="vk-form-note">{t("settings.mcp.theProcessAlreadySees")}</p>
         </> : <>
-          <label className="settings-form-field"><span>{t("settings.mcp.serverUrl")}</span><Input placeholder="https://example.com/mcp" value={draft.url} onChange={e => change("url", e.target.value)} /></label>
+          <label className="vk-field"><span>{t("settings.mcp.serverUrl")}</span><Input placeholder="https://example.com/mcp" value={draft.url} onChange={e => change("url", e.target.value)} /></label>
           <section className="mcp-form-section"><h3>{t("settings.mcp.headersAndAuthentication")}</h3>
-            <label className="settings-form-field"><span>Bearer Token</span><Input autoComplete="off" type="password" value={draft.bearerToken} onChange={e => change("bearerToken", e.target.value)} /></label>
+            <label className="vk-field"><span>Bearer Token</span><Input autoComplete="off" type="password" value={draft.bearerToken} onChange={e => change("bearerToken", e.target.value)} /></label>
             <McpKeyValueRows headers label={t("settings.mcp.fixedHeaders")} values={draft.headers} onChange={value => change("headers", value)} secret />
             <McpKeyValueRows headers label={t("settings.mcp.headersReadFromEnvironment")} values={draft.headersFromEnv} onChange={value => change("headersFromEnv", value)} valuePlaceholder="ACCESS_TOKEN" />
-            <p className="settings-muted-line">{t("settings.mcp.headerNameOnThe")}</p>
+            <p className="vk-form-note">{t("settings.mcp.headerNameOnThe")}</p>
           </section>
           <DisclosureSection className="mcp-oauth" description={t("settings.mcp.onlyNeededIfThe")} title={t("settings.mcp.oauthSignIn")}>
             <div className="mcp-form-section">
-            <label className="settings-check-row inline"><Switch checked={draft.oauthEnabled} disabled={busy} onCheckedChange={value => change("oauthEnabled", value)} />{t("settings.mcp.oauth.enable")}</label>
+            <label className="vk-check-label"><Switch checked={draft.oauthEnabled} disabled={busy} onCheckedChange={value => change("oauthEnabled", value)} />{t("settings.mcp.oauth.enable")}</label>
             {draft.oauthEnabled && <>
-            <p className="settings-muted-line">{t("settings.mcp.oauth.dynamicRegistrationHint")}</p>
-            <label className="settings-form-field"><span>Client ID</span><Input value={draft.oauthClientId} onChange={e => change("oauthClientId", e.target.value)} /></label>
-            <label className="settings-form-field"><span>Client secret</span><Input autoComplete="off" type="password" value={draft.oauthClientSecret} onChange={e => change("oauthClientSecret", e.target.value)} /></label>
+            <p className="vk-form-note">{t("settings.mcp.oauth.dynamicRegistrationHint")}</p>
+            <label className="vk-field"><span>Client ID</span><Input value={draft.oauthClientId} onChange={e => change("oauthClientId", e.target.value)} /></label>
+            <label className="vk-field"><span>Client secret</span><Input autoComplete="off" type="password" value={draft.oauthClientSecret} onChange={e => change("oauthClientSecret", e.target.value)} /></label>
             <McpStringRows label="OAuth scopes" values={draft.oauthScopes} onChange={value => change("oauthScopes", value)} placeholder="read" />
-            <label className="settings-form-field"><span>Redirect URI</span><Input value={draft.oauthRedirectUri} onChange={e => change("oauthRedirectUri", e.target.value)} /></label>
+            <label className="vk-field"><span>Redirect URI</span><Input value={draft.oauthRedirectUri} onChange={e => change("oauthRedirectUri", e.target.value)} /></label>
             </>}
             </div>
           </DisclosureSection>
@@ -172,7 +173,7 @@ export function McpServerDialog(props: {
         {error && <p role="alert" className="mcp-error">{error}</p>}
       </fieldset>
       </div>
-      <DialogFooter className="shrink-0"><Button variant="outline" disabled={busy} onClick={() => props.onOpenChange(false)}>{t("settings.mcp.cancel")}</Button><Button disabled={busy} onClick={() => void save()}>{busy ? t("settings.mcp.saving") : t("settings.mcp.save")}</Button></DialogFooter>
+      <DialogFooter><Button variant="outline" disabled={busy} onClick={() => props.onOpenChange(false)}>{t("settings.mcp.cancel")}</Button><Button disabled={busy} onClick={() => void save()}>{busy ? t("settings.mcp.saving") : t("settings.mcp.save")}</Button></DialogFooter>
     </DialogContent>
   </Dialog>
 }

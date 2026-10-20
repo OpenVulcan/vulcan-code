@@ -8,9 +8,9 @@ import {
   systemProviderCapabilitySettingsDraft,
   systemProviderEditableOverrides,
 } from "@/components/features/settings/direct-provider-model-settings"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -18,17 +18,16 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
+} from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n } from "@/i18n"
 import {
   savePublicAiModelCapabilityOverrides,
   savePublicAiProviderCapabilityOverrides,
 } from "@/service/settings-actions-service"
 import type {
-  PublicAiContextWindowPolicyOverrides,
   PublicAiCustomModelRequestProjection,
   PublicAiCustomRequestMutation,
   PublicAiModel,
@@ -37,131 +36,7 @@ import type {
   PublicAiSettingsSnapshot,
   PublicAiStructuredOutputCapability,
 } from "@/types"
-
-// ContextWindowPolicyEditor edits the global sparse window policy and uses built-in values for empty fields.
-// ContextWindowPolicyEditor 编辑全局稀疏窗口策略，空字段使用系统内置值。
-export function ContextWindowPolicyEditor(props: {
-  onChange: (value: PublicAiContextWindowPolicyOverrides | undefined) => void
-  value?: PublicAiContextWindowPolicyOverrides
-  // Optional source-specific inherited values; omitted outside contexts with a verified default layer.
-  // 可选的来源专属继承值；未核实默认层的场景不传入。
-  inheritanceHints?: Partial<Record<keyof PublicAiContextWindowPolicyOverrides, string>>
-  // Locks the complete editor while its owning section persists an immutable draft.
-  // 所属分区持久化不可变草稿时锁定完整编辑器。
-  disabled?: boolean
-}) {
-  const { t } = useI18n()
-  // updateNumber preserves the sparse shape while parsing only safe integer input.
-  // updateNumber 保持稀疏结构，并且只解析安全整数输入。
-  const updateNumber = React.useCallback((
-    field: "effective_context_window_percent" | "auto_compact_percent" | "auto_compact_token_limit" | "fallback_buffer_tokens",
-    rawValue: string,
-  ) => {
-    const next: PublicAiContextWindowPolicyOverrides = { ...(props.value ?? {}) }
-    const trimmed = rawValue.trim()
-    if (!trimmed) {
-      delete next[field]
-    } else {
-      const parsed = Number.parseInt(trimmed, 10)
-      if (Number.isSafeInteger(parsed)) {
-        next[field] = parsed
-      }
-    }
-    props.onChange(Object.keys(next).length > 0 ? next : undefined)
-  }, [props])
-  // updateScope changes only the optional usage-scope field.
-  // updateScope 只修改可选的用量范围字段。
-  const updateScope = React.useCallback((rawValue: string) => {
-    const next: PublicAiContextWindowPolicyOverrides = { ...(props.value ?? {}) }
-    if (rawValue === "") {
-      delete next.auto_compact_scope
-    } else {
-      next.auto_compact_scope = rawValue as PublicAiContextWindowPolicyOverrides["auto_compact_scope"]
-    }
-    props.onChange(Object.keys(next).length > 0 ? next : undefined)
-  }, [props])
-  return (
-    <fieldset disabled={props.disabled} className="space-y-3 rounded-lg border p-4">
-      <legend className="px-1 text-sm font-medium">{t("settings.contextWindowPolicy.title")}</legend>
-      <p className="text-xs text-muted-foreground">{t("settings.contextWindowPolicy.description")}</p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="grid gap-1 text-sm">
-          <span>{t("settings.contextWindowPolicy.effectivePercent")}</span>
-          <Input
-            inputMode="numeric"
-            max={100}
-            min={1}
-            onChange={(event) => updateNumber("effective_context_window_percent", event.target.value)}
-            type="number"
-            value={props.value?.effective_context_window_percent ?? ""}
-          />
-          {props.value?.effective_context_window_percent === undefined && props.inheritanceHints?.effective_context_window_percent ? <small className="text-muted-foreground">{props.inheritanceHints.effective_context_window_percent}</small> : null}
-        </label>
-        <label className="grid gap-1 text-sm">
-          <span>{t("settings.contextWindowPolicy.autoCompactPercent")}</span>
-          <Input
-            inputMode="numeric"
-            max={100}
-            min={1}
-            onChange={(event) => updateNumber("auto_compact_percent", event.target.value)}
-            type="number"
-            value={props.value?.auto_compact_percent ?? ""}
-          />
-          {props.value?.auto_compact_percent === undefined && props.inheritanceHints?.auto_compact_percent ? <small className="text-muted-foreground">{props.inheritanceHints.auto_compact_percent}</small> : null}
-        </label>
-        <label className="grid gap-1 text-sm">
-          <span>{t("settings.contextWindowPolicy.autoCompactTokenLimit")}</span>
-          <Input
-            inputMode="numeric"
-            min={1}
-            onChange={(event) => updateNumber("auto_compact_token_limit", event.target.value)}
-            type="number"
-            value={props.value?.auto_compact_token_limit ?? ""}
-          />
-          {props.value?.auto_compact_token_limit === undefined && props.inheritanceHints?.auto_compact_token_limit ? <small className="text-muted-foreground">{props.inheritanceHints.auto_compact_token_limit}</small> : null}
-        </label>
-        <label className="grid gap-1 text-sm">
-          <span>{t("settings.contextWindowPolicy.scope")}</span>
-          <Select
-            disabled={props.disabled}
-            onValueChange={(value) => updateScope(value === "inherit" ? "" : value)}
-            value={props.value?.auto_compact_scope ?? "inherit"}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="inherit">{t("settings.contextWindowPolicy.scopeInherit")}</SelectItem>
-              <SelectItem value="total">{t("settings.contextWindowPolicy.scopeTotal")}</SelectItem>
-              <SelectItem value="body_after_prefix">{t("settings.contextWindowPolicy.scopeBodyAfterPrefix")}</SelectItem>
-            </SelectContent>
-          </Select>
-          {props.value?.auto_compact_scope === undefined && props.inheritanceHints?.auto_compact_scope ? <small className="text-muted-foreground">{props.inheritanceHints.auto_compact_scope}</small> : null}
-        </label>
-        <label className="grid gap-1 text-sm">
-          <span>{t("settings.contextWindowPolicy.fallbackBuffer")}</span>
-          <Input
-            inputMode="numeric"
-            min={0}
-            onChange={(event) => updateNumber("fallback_buffer_tokens", event.target.value)}
-            type="number"
-            value={props.value?.fallback_buffer_tokens ?? ""}
-          />
-          {props.value?.fallback_buffer_tokens === undefined && props.inheritanceHints?.fallback_buffer_tokens ? <small className="text-muted-foreground">{props.inheritanceHints.fallback_buffer_tokens}</small> : null}
-        </label>
-      </div>
-      <Button
-        className="w-fit"
-        disabled={!props.value || Object.keys(props.value).length === 0}
-        onClick={() => props.onChange(undefined)}
-        type="button"
-        variant="outline"
-      >
-        {t("settings.contextWindowPolicy.clear")}
-      </Button>
-    </fieldset>
-  )
-}
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ModelCapabilityDialogProps identifies one model and its optional direct model-settings layer.
 // ModelCapabilityDialogProps 标识一个模型及其可选直接模型设置层。
@@ -401,12 +276,12 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
       }}
       open={props.open}
     >
-      <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="lg">
+      <DialogContent scrollMode="fixed-footer" size="lg">
         <DialogHeader>
           <DialogTitle>
             {props.scope === "provider" ? t("settings.modelCapabilities.providerDefaults") : t("settings.modelCapabilities.title")}
           </DialogTitle>
-          <DialogDescription className="flex flex-wrap items-center gap-2">
+          <DialogDescription className="vk-form-inline">
             <span>
               {props.providerDisplayName} · {props.scope === "provider" ? t("settings.modelCapabilities.allModels") : props.model?.display_name}
             </span>
@@ -419,8 +294,8 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
             </Badge>
           </DialogDescription>
         </DialogHeader>
-        <fieldset className="min-h-0 flex-1 space-y-4 overflow-y-auto" disabled={saving}>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <fieldset className="vk-fieldset vk-form-scroll" disabled={saving}>
+        <div className="vk-form-grid">
           <DirectModelNumberInput
             label={t("settings.modelCapabilities.contextLimit")}
             onChange={(value) => { markField("context_limit"); setContextLimit(value) }}
@@ -435,8 +310,8 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
         {isCustomProvider ? (
           <>
             <InputResourceEditor onChange={(value) => { markField("input_resources"); setInputResources(value) }} value={inputResources} />
-            <fieldset className="space-y-2 rounded-lg border p-4">
-              <legend className="px-1 text-sm font-medium">{t("settings.modelCapabilities.structuredOutput")}</legend>
+            <fieldset className="vk-form-group">
+              <legend>{t("settings.modelCapabilities.structuredOutput")}</legend>
               <Select
                 disabled={saving}
                 onValueChange={(value) => {
@@ -452,18 +327,18 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
                   <SelectItem value="unsupported">{t("settings.modelCapabilities.unsupported")}</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">{t("settings.modelCapabilities.treatedAsJsonObject")}</p>
+              <p className="vk-form-note">{t("settings.modelCapabilities.treatedAsJsonObject")}</p>
             </fieldset>
-            <fieldset className="rounded-lg border p-4">
-              <legend className="px-1 text-sm font-medium">{t("settings.customModels.output")}</legend>
-              <p className="text-sm font-medium">{t("settings.customModels.fixedTextOutput")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
+            <fieldset className="vk-form-group">
+              <legend>{t("settings.customModels.output")}</legend>
+              <p className="vk-form-strong">{t("settings.customModels.fixedTextOutput")}</p>
+              <p className="vk-form-note">
                 {t("settings.customModels.fixedTextOutputDescription")}
               </p>
             </fieldset>
-            <fieldset className="space-y-3 rounded-lg border p-4">
-              <legend className="px-1 text-sm font-medium">{t("settings.customModels.reasoning")}</legend>
-              <label className="flex items-center justify-between gap-3 text-sm">
+            <fieldset className="vk-form-group">
+              <legend>{t("settings.customModels.reasoning")}</legend>
+              <label className="vk-form-switch">
                 <span>{t(reasoningEnabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}</span>
                 <Switch
                   disabled={saving}
@@ -481,9 +356,9 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
                   }}
                 />
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="vk-form-checks">
                 {OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => (
-                  <label className="flex items-center gap-2 text-xs" key={effort}>
+                  <label className="vk-check-label" key={effort}>
                     <Checkbox
                       checked={reasoningEfforts.includes(effort)}
                       disabled={saving || !reasoningEnabled || (
@@ -510,19 +385,19 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
             />
           </>
         ) : null}
-        {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+        {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
         </fieldset>
-        <DialogFooter className="sm:justify-between">
+        <DialogFooter className="vk-form-spread">
           <Button disabled={saving || (!props.overrides && !dirty && !edited)} onClick={restore} type="button" variant="ghost">
-            <RotateCcw className="mr-2 size-4" />
+            <RotateCcw className="vk-icon" />
             {t("settings.modelCapabilities.restore")}
           </Button>
-          <div className="flex justify-end gap-2">
+          <div className="vk-form-acts">
             <Button disabled={saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">
               {t("memory.common.cancel")}
             </Button>
             <Button disabled={saving || (!dirty && !edited)} onClick={() => void persist(false)} type="button">
-              {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+              {saving ? <LoaderCircle className="vk-spin" /> : null}
               {t("memory.common.save")}
             </Button>
           </div>
@@ -676,21 +551,21 @@ export function ReasoningProjectionEditor(props: {
     })
   }, [props])
   return (
-    <fieldset className="space-y-3 rounded-lg border p-4">
-      <legend className="px-1 text-sm font-medium">{t("settings.modelCapabilities.rewriteRequestsPerReasoning")}</legend>
-      <p className="text-xs text-muted-foreground">
+    <fieldset className="vk-form-group">
+      <legend>{t("settings.modelCapabilities.rewriteRequestsPerReasoning")}</legend>
+      <p className="vk-form-note">
         {t("settings.modelCapabilities.addOrRemoveFields")}
       </p>
       {props.efforts.map((effort) => {
         const mutation = normalizedProjection.reasoning[effort] ?? { set: {}, delete: [] }
         const entries = Object.entries(mutation.set)
         return (
-          <div className="space-y-2 rounded-md border p-3" key={effort}>
-            <strong className="text-sm">{effort}</strong>
+          <div className="vk-form-box" key={effort}>
+            <strong className="vk-form-strong">{effort}</strong>
             {entries.map(([path, value], index) => (
               // The row index keeps the input DOM node stable while its editable path changes.
               // 使用行索引保持输入节点稳定，避免编辑字段路径时每个字符都重建输入框并丢失焦点。
-              <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]" key={`${effort}:set:${index}`}>
+              <div className="vk-form-cols3" key={`${effort}:set:${index}`}>
                 <Input
                   aria-label={`${effort} ${t("settings.modelCapabilities.fieldName")}`}
                   onChange={(event) => {
@@ -731,7 +606,7 @@ export function ReasoningProjectionEditor(props: {
             {mutation.delete.map((path, index) => (
               // Keep deletion rows stable while the field path is being typed.
               // 编辑删除路径时保持删除行稳定，避免输入焦点随字符变化而丢失。
-              <div className="grid gap-2 sm:grid-cols-[1fr_auto]" key={`${effort}:delete:${index}`}>
+              <div className="vk-form-cols2" key={`${effort}:delete:${index}`}>
                 <Input
                   aria-label={`${effort} ${t("settings.modelCapabilities.fieldToRemove")}`}
                   onChange={(event) => {
@@ -788,7 +663,7 @@ export function ReasoningProjectionEditor(props: {
 // DirectModelNumberInput 渲染一个可直接编辑的正整数模型设置。
 function DirectModelNumberInput(props: { label: string; onChange: (value: number) => void; value: number }) {
   return (
-    <label className="grid gap-2 text-sm font-medium">
+    <label className="vk-field">
       {props.label}
       <Input
         inputMode="numeric"
@@ -807,11 +682,11 @@ function InputResourceEditor(props: {
 }) {
   const { t } = useI18n()
   return (
-    <fieldset className="rounded-lg border p-4">
-      <legend className="px-1 text-sm font-medium">{t("settings.modelCapabilities.inputResources")}</legend>
-      <div className="grid grid-cols-4 gap-2 max-sm:grid-cols-2">
+    <fieldset className="vk-form-group">
+      <legend>{t("settings.modelCapabilities.inputResources")}</legend>
+      <div className="vk-form-checks">
         {INPUT_RESOURCE_KINDS.map((resource) => (
-          <label className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm" key={resource}>
+          <label className="vk-check-label vk-form-tile" key={resource}>
             <Checkbox
               checked={props.value.includes(resource)}
               onCheckedChange={(checked) => props.onChange(checked

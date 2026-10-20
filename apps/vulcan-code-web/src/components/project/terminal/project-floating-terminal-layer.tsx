@@ -5,9 +5,6 @@ import {
 } from "@/generated/protocol-limits";
 import {
   Check,
-  Maximize2,
-  Minus,
-  Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
@@ -18,8 +15,10 @@ import {
 } from "lucide-react";
 
 import { TerminalViewport } from "@/components/terminal/terminal-viewport";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { FloatingWindowHead } from "@/components/workspace/floating-window-head";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
 import { formatBytes } from "@/lib/display-format";
 import { useI18n, type TranslationKey, formatMessage, translateActive } from "@/i18n";
 import { acquireVisibleTerminalDisplayListener } from "@/components/terminal/terminal-display-listener";
@@ -38,8 +37,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+} from "@/ui-kit/primitives/alert-dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import {
   ProjectFloatingLayer,
   type ProjectFloatingLayerControls,
@@ -535,44 +534,26 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
   // Parameters: floatingControls exposes window commands owned by the floating layer; returns terminal identity and window-action React content.
   // 参数：floatingControls 暴露浮动层持有的窗口命令；返回终端身份与窗口操作的 React 内容。
   const header = (floatingControls: ProjectFloatingLayerControls) => (
-    <div className="project-terminal-header" data-workspace-input-preserve-owner="true">
-      <span
-        className="project-terminal-current-title"
-        title={selectedTerminal ? `${selectedTerminal.name} · ${project.path}` : project.path}
+    <FloatingWindowHead
+      actions={<button
+        aria-label={t(sidebarCollapsed ? "workspaceAudit.expandList" : "workspaceAudit.collapseList")}
+        className="vk-icon-btn"
+        data-size="sm"
+        onClick={() => setSidebarCollapsed((current) => !current)}
+        title={t(sidebarCollapsed ? "workspaceAudit.expandList" : "workspaceAudit.collapseList")}
+        type="button"
       >
-        <TerminalSquare size={15} />
-        <span className="project-terminal-current-title-copy">
-          <strong>{selectedTerminal?.name ?? t("workspaceAudit.terminal")}</strong>
-          <small>{project.name}</small>
-        </span>
-      </span>
-      <div className="project-terminal-header-actions">
-        <button
-          aria-label={t(sidebarCollapsed ? "workspaceAudit.expandList" : "workspaceAudit.collapseList")}
-          onClick={() => setSidebarCollapsed((current) => !current)}
-          title={t(sidebarCollapsed ? "workspaceAudit.expandList" : "workspaceAudit.collapseList")}
-          type="button"
-        >
-          {sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
-        </button>
-        <button
-          aria-label={t(floatingControls.maximized ? "workspaceAudit.restore" : "workspaceAudit.maximize")}
-          onClick={floatingControls.toggleMaximized}
-          title={t(floatingControls.maximized ? "workspaceAudit.restore" : "workspaceAudit.maximize")}
-          type="button"
-        >
-          {floatingControls.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-        </button>
-        <button
-          aria-label={t("workspaceAudit.minimize")}
-          onClick={minimizeProjectTerminal}
-          title={t("workspaceAudit.minimize")}
-          type="button"
-        >
-          <Minus size={14} />
-        </button>
-      </div>
-    </div>
+        {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+      </button>}
+      controls={floatingControls}
+      detail={project.name}
+      hoverTitle={selectedTerminal ? `${selectedTerminal.name} · ${project.path}` : project.path}
+      icon={<TerminalSquare />}
+      labels={{ maximize: t("workspaceAudit.maximize"), restore: t("workspaceAudit.restore"), minimize: t("workspaceAudit.minimize") }}
+      preserveInputOwner
+      title={selectedTerminal?.name ?? t("workspaceAudit.terminal")}
+      onMinimize={minimizeProjectTerminal}
+    />
   );
 
   const confirmationTerminal = terminalConfirmation?.projectId === project.id
@@ -588,14 +569,14 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
         minimizeAnchorRef={props.minimizeAnchorRef}
         projectId={project.id}
       >
-        <div className="project-terminal-body" data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}>
-          {error ? <div className="project-terminal-error" role="alert">{error}
+        <div className="vk-term-win" data-list={sidebarCollapsed ? "collapsed" : "open"}>
+          {error ? <div className="vk-term-error" role="alert"><span>{error}</span>
             {catalog ? <Button disabled={catalogLoading || busyAction !== null} size="sm" variant="outline"
               onClick={() => setCatalogReload((current) => current + 1)}>{t("workspaceAudit.retry")}</Button> : null}
           </div> : null}
           {!catalog ? (
-            <div className="project-terminal-placeholder" role="status">
-              {catalogLoading ? <StreamPlaceholder className="w-full max-w-sm" label={t("workspaceAudit.terminalLoading")} shape="rows" count={3} /> : (
+            <div className="vk-term-loading" role="status">
+              {catalogLoading ? <StreamPlaceholder label={t("workspaceAudit.terminalLoading")} shape="rows" count={3} /> : (
                 <Button size="sm" variant="outline" onClick={() => setCatalogReload((current) => current + 1)}>
                   {t("workspaceAudit.retry")}
                 </Button>
@@ -604,15 +585,14 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
           ) : (
             <>
               <aside
-                className="project-terminal-sidebar"
-                data-collapsed={sidebarCollapsed ? "true" : "false"}
+                className="vk-term-list"
                 data-workspace-input-preserve-owner="true"
               >
                 {sidebarCollapsed ? (
                   <div
                     aria-label={t("workspaceAudit.numberedList")}
                     aria-orientation="vertical"
-                    className="project-terminal-compact-session-list"
+                    className="vk-term-nums"
                     role="tablist"
                     onKeyDown={handleTerminalTabKeyDown}
                   >
@@ -621,7 +601,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                         aria-controls={`project-terminal-panel-${terminal.id}`}
                         aria-label={t("workspaceAudit.switchTerminal").replace("{index}", String(index + 1)).replace("{name}", terminal.name)}
                         aria-selected={terminal.id === selectedTerminalId}
-                        className="project-terminal-compact-session-button"
+                        className="vk-term-num"
                         data-active={terminal.id === selectedTerminalId ? "true" : "false"}
                         data-status={terminal.status}
                         disabled={busyAction !== null}
@@ -639,46 +619,44 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                   </div>
                 ) : (
                   <>
-                    <div className="project-terminal-sidebar-create">
-                  <Select
-                    disabled={catalog.shells.length === 0 || busyAction !== null}
-                    onValueChange={(value) => setSelectedShellId(value)}
-                    value={selectedShellId ?? undefined}
-                  >
-                    <SelectTrigger
-                      aria-label={t("workspaceAudit.chooseShell")}
-                      className="project-terminal-select-trigger"
-                      size="sm"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent data-workspace-input-preserve-owner="true" placement="top">
-                      {catalog.shells.map((shell) => (
-                        <SelectItem key={shell.id} value={shell.id}>{shell.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <button
-                    aria-label={t("workspaceAudit.create")}
-                    className="project-terminal-sidebar-add"
-                    disabled={!catalog.shells.some((shell) => shell.id === selectedShellId) || busyAction !== null}
-                    onClick={() => void handleCreateTerminal()}
-                    title={t("workspaceAudit.create")}
-                    type="button"
-                  >
-                    <Plus size={14} />
-                  </button>
+                    <div className="vk-term-create">
+                      <Select
+                        disabled={catalog.shells.length === 0 || busyAction !== null}
+                        onValueChange={(value) => setSelectedShellId(value)}
+                        value={selectedShellId ?? undefined}
+                      >
+                        <SelectTrigger aria-label={t("workspaceAudit.chooseShell")} size="sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent data-workspace-input-preserve-owner="true" placement="top">
+                          {catalog.shells.map((shell) => (
+                            <SelectItem key={shell.id} value={shell.id}>{shell.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <button
+                        aria-label={t("workspaceAudit.create")}
+                        className="vk-icon-btn"
+                        data-outline=""
+                        data-size="sm"
+                        disabled={!catalog.shells.some((shell) => shell.id === selectedShellId) || busyAction !== null}
+                        onClick={() => void handleCreateTerminal()}
+                        title={t("workspaceAudit.create")}
+                        type="button"
+                      >
+                        <Plus />
+                      </button>
                     </div>
                     <div
-                  aria-label={t("workspaceAudit.list")}
-                  aria-orientation="vertical"
-                  className="project-terminal-session-list"
-                  role="tablist"
-                  onKeyDown={handleTerminalTabKeyDown}
+                      aria-label={t("workspaceAudit.list")}
+                      aria-orientation="vertical"
+                      className="vk-term-rows"
+                      role="tablist"
+                      onKeyDown={handleTerminalTabKeyDown}
                     >
                       {catalog.terminals.map((terminal) => (
                     <div
-                      className="project-terminal-session-row"
+                      className="vk-term-row"
                       data-active={terminal.id === selectedTerminalId ? "true" : "false"}
                       data-status={terminal.status}
                       key={terminal.id}
@@ -687,7 +665,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                         <input
                           aria-label={t("workspaceAudit.name")}
                           autoFocus
-                          className="project-terminal-session-rename-input"
+                          className="vk-input vk-term-rename"
                           disabled={busyAction !== null}
                           id={`project-terminal-tab-${terminal.id}`}
                           maxLength={128}
@@ -711,7 +689,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                         <button
                           aria-controls={`project-terminal-panel-${terminal.id}`}
                           aria-selected={terminal.id === selectedTerminalId}
-                          className="project-terminal-session-select"
+                          className="vk-term-select"
                           disabled={busyAction !== null}
                           onClick={() => handleSelectTerminal(terminal.id)}
                           role="tab"
@@ -720,13 +698,15 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                           title={`${terminal.name} · ${terminal.shellId}`}
                           type="button"
                         >
-                          <span aria-hidden="true" className="project-terminal-session-status" />
-                          <span className="project-terminal-session-name">{terminal.name}</span>
+                          <span aria-hidden="true" className="vk-term-dot" />
+                          <span>{terminal.name}</span>
                         </button>
                       )}
-                      <div className="project-terminal-session-actions">
+                      <div className="vk-term-actions">
                         <button
                           aria-label={t(renamingTerminalId === terminal.id ? "workspaceAudit.saveName" : "workspaceAudit.editName").replace("{name}", terminal.name)}
+                          className="vk-icon-btn"
+                          data-size="sm"
                           disabled={busyAction !== null}
                           onClick={() => {
                             if (renamingTerminalId === terminal.id) {
@@ -739,10 +719,13 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                           title={t(renamingTerminalId === terminal.id ? "workspaceAudit.saveName" : "workspaceAudit.editName").replace("{name}", terminal.name)}
                           type="button"
                         >
-                          {renamingTerminalId === terminal.id ? <Check size={13} /> : <Pencil size={12} />}
+                          {renamingTerminalId === terminal.id ? <Check /> : <Pencil />}
                         </button>
                         <button
                           aria-label={t("workspaceAudit.stop").replace("{name}", terminal.name)}
+                          className="vk-icon-btn"
+                          data-action="stop"
+                          data-size="sm"
                           disabled={terminal.status !== "running" || busyAction !== null}
                           onClick={() => setTerminalConfirmation({
                             projectId: project.id,
@@ -752,10 +735,12 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                           title={t("workspaceAudit.stopTitle")}
                           type="button"
                         >
-                          <Square fill="currentColor" size={9} strokeWidth={0} />
+                          <Square fill="currentColor" strokeWidth={0} />
                         </button>
                         <button
                           aria-label={t("workspaceAudit.close").replace("{name}", terminal.name)}
+                          className="vk-icon-btn"
+                          data-size="sm"
                           disabled={busyAction !== null}
                           onClick={() => {
                             if (terminal.status === "running") {
@@ -771,7 +756,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                           title={t("workspaceAudit.closeTitle")}
                           type="button"
                         >
-                          <X size={12} />
+                          <X />
                         </button>
                       </div>
                     </div>
@@ -781,7 +766,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                 )}
               </aside>
               <div
-                className="project-terminal-stage"
+                className="vk-term-stage"
                 data-selected-terminal-id={selectedTerminal?.id}
               >
                 {selectedTerminal ? (
@@ -803,10 +788,12 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                     }}
                   />
                 ) : (
-                  <div className="project-terminal-empty">
-                    <TerminalSquare size={24} />
-                    <span>{t("workspaceAudit.empty")}</span>
-                  </div>
+                  <Empty>
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon"><TerminalSquare /></EmptyMedia>
+                      <EmptyTitle>{t("workspaceAudit.empty")}</EmptyTitle>
+                    </EmptyHeader>
+                  </Empty>
                 )}
               </div>
             </>
@@ -819,7 +806,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
           if (!open && !projectStates.current.get(project.id)?.busyAction) setTerminalConfirmation(null);
         }}
       >
-        <AlertDialogContent layerClassName="z-[1000]">
+        <AlertDialogContent layerClassName="vk-term-confirm">
           <AlertDialogHeader>
             <AlertDialogTitle>
               {t(terminalConfirmation?.action === "close" ? "workspaceAudit.closeConfirm" : "workspaceAudit.stopConfirm")}
@@ -830,7 +817,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
                 : t("workspaceAudit.stopDescription").replace("{name}", confirmationTerminal?.name ?? t("workspaceAudit.terminal"))}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {error ? <p className="text-destructive break-words" role="alert">{error}</p> : null}
+          {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busyAction !== null}>{t("workspaceAudit.cancel")}</AlertDialogCancel>
             <AlertDialogAction
@@ -1282,7 +1269,7 @@ function ProjectTerminalPane(props: {
   return (
     <div
       aria-labelledby={`project-terminal-tab-${props.terminal.id}`}
-      className="project-terminal-pane"
+      className="vk-term-pane"
       hidden={!props.visible}
       id={`project-terminal-panel-${props.terminal.id}`}
       role="tabpanel"
@@ -1305,10 +1292,10 @@ function ProjectTerminalPane(props: {
           || props.terminal.status !== "running"}
       />
       {props.visible && props.terminal.status === "running" && !displayAttached ? (
-        <div className="project-terminal-status" role="status">{t("workspaceAudit.connecting")}</div>
+        <div className="vk-term-status" role="status">{t("workspaceAudit.connecting")}</div>
       ) : null}
       {props.terminal.status !== "running" ? (
-        <div className="project-terminal-status" role="status">
+        <div className="vk-term-status" role="status">
           {projectTerminalStatusLabel(props.terminal, t)}
         </div>
       ) : null}

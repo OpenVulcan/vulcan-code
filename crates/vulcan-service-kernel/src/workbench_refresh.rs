@@ -80,6 +80,9 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// Canonical workspace snapshot being projected.
     /// 正在投影的规范工作区快照。
     pub(crate) workspace: &'a vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    /// Stored project tree, projected onto the visible projects and sessions of `workspace`.
+    /// 已保存的项目树，投影到 `workspace` 的可见项目与会话上。
+    pub(crate) project_tree: &'a vulcan_workspace_store::workspace_store::ProjectTree,
     /// Non-serializable pending-prompt compatibility mirrors owned by the kernel process.
     /// 由内核进程持有的不可序列化待发送提示词兼容镜像。
     pub(crate) pending_prompt_process_mirrors: &'a BTreeMap<SessionId, PendingPromptProcessMirror>,
@@ -353,6 +356,9 @@ async fn refresh_workbench_snapshot_with_selected_session(
             .as_ref()
             .map(|runtime| runtime.public_ai_runtime.as_ref()),
         workspace: &refreshed_snapshot,
+        project_tree: &vulcan_workspace_store::workspace_store::load_project_tree(
+            &controller_runtime,
+        )?,
         pending_prompt_process_mirrors: &pending_prompt_process_mirrors,
         vmm_session_states: &vmm_session_states,
         native_vmm_host_ai_status,
@@ -1029,6 +1035,97 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
     }
 }
 
+/// Projects the stored project tree onto the visible projects and sessions, keeping empty groups.
+/// 将已保存的项目树投影到可见项目与会话上，并保留空分组。
+///
+/// Archived members and pins stay in storage so a restored item returns to its place, but they are not shown.
+/// A project pin is owned by the project's pinned flag: pins of unpinned projects are dropped, and pinned
+/// projects the stored order does not name follow it in project order.
+/// 已归档的成员与置顶仍保留在存储中，使恢复的条目回到原位，但不会显示。项目置顶由项目的置顶标记持有：未置顶
+/// 项目的置顶会被丢弃，已保存顺序未包含的置顶项目按项目顺序排在其后。
+pub(crate) fn project_tree_summary(
+    tree: &vulcan_workspace_store::workspace_store::ProjectTree,
+    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+) -> vulcan_service_api::ProjectTreeSummary {
+    use vulcan_workspace_store::workspace_store::ProjectTreePinKind;
+    let visible = workspace
+        .task_projects
+        .iter()
+        .map(|project| project.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let pinned_projects = workspace
+        .task_projects
+        .iter()
+        .filter(|project| project.pinned)
+        .map(|project| project.id.as_str())
+        .collect::<Vec<_>>();
+    let sessions = workspace
+        .sessions
+        .iter()
+        .map(|session| session.id.to_string())
+        .collect::<BTreeSet<_>>();
+    let mut pins = tree
+        .pins
+        .iter()
+        .filter(|pin| match pin.kind {
+            ProjectTreePinKind::Session => sessions.contains(&pin.id),
+            ProjectTreePinKind::Project => pinned_projects.contains(&pin.id.as_str()),
+            ProjectTreePinKind::Group => true,
+        })
+        .map(|pin| vulcan_service_api::ProjectTreePinSummary {
+            kind: project_tree_item_kind(pin.kind),
+            id: pin.id.clone(),
+        })
+        .collect::<Vec<_>>();
+    for project_id in pinned_projects {
+        if !tree.is_pinned(ProjectTreePinKind::Project, project_id) {
+            pins.push(vulcan_service_api::ProjectTreePinSummary {
+                kind: vulcan_service_api::ProjectTreeItemKind::Project,
+                id: project_id.to_string(),
+            });
+        }
+    }
+    vulcan_service_api::ProjectTreeSummary {
+        groups: project_group_summaries(&tree.groups, &visible),
+        default_group_index: tree.default_group_index,
+        pins,
+    }
+}
+
+/// Converts a stored pin kind into its wire form.
+/// 将已保存的置顶种类转换为线协议形式。
+pub(crate) fn project_tree_item_kind(
+    kind: vulcan_workspace_store::workspace_store::ProjectTreePinKind,
+) -> vulcan_service_api::ProjectTreeItemKind {
+    use vulcan_workspace_store::workspace_store::ProjectTreePinKind;
+    match kind {
+        ProjectTreePinKind::Session => vulcan_service_api::ProjectTreeItemKind::Session,
+        ProjectTreePinKind::Project => vulcan_service_api::ProjectTreeItemKind::Project,
+        ProjectTreePinKind::Group => vulcan_service_api::ProjectTreeItemKind::Group,
+    }
+}
+
+/// Projects stored user groups onto the visible projects, keeping empty groups.
+/// 将已保存的用户分组投影到可见项目上，并保留空分组。
+fn project_group_summaries(
+    groups: &[vulcan_workspace_store::workspace_store::ProjectGroup],
+    visible: &BTreeSet<&str>,
+) -> Vec<vulcan_service_api::ProjectGroupSummary> {
+    groups
+        .iter()
+        .map(|group| vulcan_service_api::ProjectGroupSummary {
+            id: group.id.clone(),
+            name: group.name.clone(),
+            project_ids: group
+                .project_ids
+                .iter()
+                .filter(|project_id| visible.contains(project_id.as_str()))
+                .cloned()
+                .collect(),
+        })
+        .collect()
+}
+
 /// Converts runtime state into a WebUI workbench snapshot.
 /// 将运行时状态转换为 WebUI 工作台快照。
 pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> WorkbenchSnapshot {
@@ -1043,6 +1140,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         provider_configuration,
         public_ai_runtime,
         workspace,
+        project_tree,
         pending_prompt_process_mirrors,
         vmm_session_states,
         native_vmm_host_ai_status,
@@ -1218,6 +1316,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             })
             .collect(),
         expanded_project_ids: workspace.expanded_task_projects.iter().cloned().collect(),
+        project_tree: project_tree_summary(project_tree, workspace),
         project_settings_revisions: vulcan_service_api::ProjectSettingsRevisionSnapshot::default(),
         conversations: workspace
             .sessions

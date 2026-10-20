@@ -1,13 +1,13 @@
 import * as React from "react";
 import { PageEmptyState } from "@/components/page";
 import { RefreshCw, Settings2, Trash2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Button, IconButton } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { Switch } from "@/ui-kit/primitives/switch";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +15,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import { useI18n } from "@/i18n";
 import type {
   LuaSkillConfigDescriptor,
@@ -24,6 +24,7 @@ import type {
   LuaSkillSummary,
 } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // LuaSkillConfigDraftValue is one editable scalar retained only inside the active dialog.
 // LuaSkillConfigDraftValue 是仅保留在活动弹窗内的单个可编辑标量。
@@ -609,7 +610,7 @@ export function LuaSkillConfigDialog(props: {
             onValueChange={(value) => updateDraft(item.key, value === "preserve-secret" ? "" : value, true)}
             value={String(currentValue) || "preserve-secret"}
           >
-            <SelectTrigger className="w-full" id={fieldId}>
+            <SelectTrigger className="vk-fill" id={fieldId}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -631,7 +632,7 @@ export function LuaSkillConfigDialog(props: {
             onValueChange={(value) => updateDraft(item.key, value === "unset-enum" ? "" : value, item.sensitive)}
             value={String(currentValue) || "unset-enum"}
           >
-            <SelectTrigger className="w-full" id={fieldId}>
+            <SelectTrigger className="vk-fill" id={fieldId}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -692,18 +693,18 @@ export function LuaSkillConfigDialog(props: {
 
   return (
     <Dialog open={props.open && props.skill !== null} onOpenChange={(open) => { if (!mutationRef.current) props.onOpenChange(open); }}>
-      <DialogContent className="lua-skill-config-dialog grid-rows-[auto_minmax(0,1fr)_auto]" size="lg" scrollMode="fixed-footer">
+      <DialogContent className="lua-skill-config-dialog" size="lg" scrollMode="fixed-footer">
         <DialogHeader>
           <DialogTitle>{t("skills.luaConfig.title")}</DialogTitle>
           <DialogDescription>
             {props.skill ? `${props.skill.displayName} · ${props.skill.skillId}` : t("skills.luaConfig.description")}
           </DialogDescription>
         </DialogHeader>
-        <div className="lua-skill-config-body min-h-0">
+        <div className="lua-skill-config-body vk-dialog-body">
         {busy && !descriptor ? <StreamPlaceholder label={t("skills.luaConfig.loading")} shape="fields" count={4} /> : null}
         {!busy && !descriptor && !errorMessage ? <PageEmptyState title={t("skills.luaConfig.empty")} /> : null}
         {descriptor ? (
-          <div className="grid gap-3">
+          <div className="vk-form-stack">
             <div className="lua-skill-config-summary">
               <Badge variant={descriptor.complete ? "secondary" : "outline"}>
                 {descriptor.complete ? t("skills.luaConfig.complete") : t("skills.luaConfig.incomplete")}

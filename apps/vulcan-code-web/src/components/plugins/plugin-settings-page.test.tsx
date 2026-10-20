@@ -90,11 +90,11 @@ async function type(input: HTMLInputElement, value: string) {
 // 验证区块与行来自版面，保存时发送完整的已编辑配置。
 it("renders the layout through the page kit and saves the complete draft", async () => {
   const invoke = await mountPage({ fast: false, timeout: 30, mode: "selected", routes: [] });
-  expect([...host.querySelectorAll(".page-section h3")].map((heading) => heading.textContent)).toEqual(["msg:behavior", "msg:auth"]);
+  expect([...host.querySelectorAll(".vk-page-section h3")].map((heading) => heading.textContent)).toEqual(["msg:behavior", "msg:auth"]);
   // The checklist stays hidden until its controlling field selects "all".
   // 在控制字段选择 all 之前，清单保持隐藏。
   expect(host.textContent).not.toContain("msg:routes");
-  expect(button(en("plugins.settings.save")).disabled).toBe(true);
+  expect(host.querySelector('[data-slot="page-action-bar"]')).toBeNull();
   await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
   expect(host.textContent).toContain(en("plugins.settings.unsaved"));
   await act(async () => button(en("plugins.settings.save")).click());

@@ -8,7 +8,6 @@ export {
 } from "./composer-attachment-controls";
 export {
   ComposerAiCapabilityControl,
-  ComposerSelectControl,
   ContextUsageOrb,
 } from "./composer-capability-controls";
 export {

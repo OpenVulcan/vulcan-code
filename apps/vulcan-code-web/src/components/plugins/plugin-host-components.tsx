@@ -13,19 +13,19 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@/ui-kit/primitives/select";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 
 // HelpTooltipProps describes one host-rendered contextual-help icon for plugin interfaces.
 // HelpTooltipProps 描述插件界面使用的宿主渲染上下文帮助图标。
@@ -181,7 +181,7 @@ export interface TextDocumentDialogProps {
 export function TextDocumentDialog(props: TextDocumentDialogProps) {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="plugin-text-document-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
+      <DialogContent className="plugin-text-document-dialog" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{props.title}</DialogTitle>
           {props.description ? <DialogDescription>{props.description}</DialogDescription> : null}

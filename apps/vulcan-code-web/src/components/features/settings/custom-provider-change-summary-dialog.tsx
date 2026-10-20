@@ -1,3 +1,6 @@
+import * as React from "react"
+import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 import { LoaderCircle } from "lucide-react"
 
 import {
@@ -8,9 +11,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+} from "@/ui-kit/primitives/alert-dialog"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
 import { useI18n } from "@/i18n"
 
 // CustomProviderChangeSummaryItem describes one user-readable persisted change.
@@ -46,25 +49,25 @@ export function CustomProviderChangeSummaryDialog(props: {
           <AlertDialogTitle>{t("settings.customModels.changeSummaryTitle")}</AlertDialogTitle>
           <AlertDialogDescription>{props.description}</AlertDialogDescription>
         </AlertDialogHeader>
-        <dl className="grid gap-2 rounded-lg border bg-muted/20 p-3 text-sm">
+        <dl className="vk-facts vk-form-summary">
           {props.items.map((item) => (
-            <div className="grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-start" key={`${item.label}:${item.value}`}>
-              <dt className="text-muted-foreground">{item.label}</dt>
-              <dd className="min-w-0 break-words font-medium">
+            <React.Fragment key={`${item.label}:${item.value}`}>
+              <dt>{item.label}</dt>
+              <dd>
                 {item.warning ? <Badge variant="destructive">{item.value}</Badge> : item.value}
               </dd>
-            </div>
+            </React.Fragment>
           ))}
         </dl>
         {props.error ? (
-          <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          <p className="vk-form-fault" role="alert">
             {props.error}
           </p>
         ) : null}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={props.saving}>{t("memory.common.cancel")}</AlertDialogCancel>
           <Button disabled={props.saving} onClick={props.onConfirm} type="button">
-            {props.saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+            {props.saving ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : null}
             {t("settings.customModels.confirmChanges")}
           </Button>
         </AlertDialogFooter>

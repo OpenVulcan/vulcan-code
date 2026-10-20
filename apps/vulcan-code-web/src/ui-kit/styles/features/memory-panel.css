@@ -1,0 +1,50 @@
+/* Memory panel: one card. A search and refresh bar stays on top; below it the dynamic memories recalled */
+/* for the coming turns, then the static memory injected into every turn. Each memory is a row of text with */
+/* a quiet metadata line, and its actions appear on hover or focus. */
+/* 记忆面板：单张卡片。搜索与刷新栏固定在顶部；其下是为后续回合召回的动态记忆，再往下是每轮注入的静态记忆。 */
+/* 每条记忆是一行正文加一行安静的元数据，操作在悬停或聚焦时出现。 */
+.vk-mem { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; }
+.vk-mem-bar { display: flex; flex: none; align-items: center; gap: calc(var(--vk-u) * 1); padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-mem-bar > .vk-input-wrap { flex: 1 1 auto; }
+.vk-mem-bar .vk-input { width: 100%; }
+.vk-mem-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: calc(var(--vk-u) * 4); }
+
+.vk-mem-sec + .vk-mem-sec { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-mem-head { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 1.5); color: var(--vk-ink-2); }
+.vk-mem-head > .lucide { flex: none; align-self: center; color: var(--vk-ink-3); }
+.vk-mem-head > strong { color: var(--vk-ink); font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-mem-head > b { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 500; font-variant-numeric: tabular-nums; }
+.vk-mem-head > small { min-width: 0; margin-left: auto; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-mem-sec[data-kind="dynamic"] .vk-mem-head > .lucide { color: var(--vk-ember-ink); }
+
+.vk-mem-group { display: grid; min-width: 0; }
+.vk-mem-group + .vk-mem-group { margin-top: calc(var(--vk-u) * 2); }
+.vk-mem-sub { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 2); min-width: 0; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 0.5); }
+.vk-mem-sub > small { min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-mem-group[data-expired] { opacity: 0.72; }
+.vk-mem-group[data-expired] .vk-mem-sub > .vk-label { color: var(--vk-warn); }
+.vk-mem-dated > time { display: block; padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2.5) 0; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
+
+.vk-mem-item { position: relative; display: grid; gap: calc(var(--vk-u) * 0.5); min-width: 0; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5); transition: background-color var(--vk-t-fast) var(--vk-ease); }
+.vk-mem-item:hover,
+.vk-mem-item:focus-within { background: var(--vk-hover); }
+.vk-mem-item > p { margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); overflow-wrap: anywhere; white-space: pre-wrap; }
+.vk-mem-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
+.vk-mem-meta > span { color: var(--vk-tone, var(--vk-ink-3)); }
+.vk-mem-acts { position: absolute; top: calc(var(--vk-u) * 1); right: calc(var(--vk-u) * 1.5); display: flex; gap: 2px; background: var(--vk-hover); opacity: 0; transition: opacity var(--vk-t-fast) var(--vk-ease); }
+.vk-mem-item:hover > .vk-mem-acts,
+.vk-mem-item:focus-within > .vk-mem-acts { opacity: 1; }
+.vk-mem-acts > [data-action="delete"]:hover:not(:disabled) { color: var(--vk-bad); }
+@media (hover: none) { .vk-mem-acts { position: static; justify-self: end; background: transparent; opacity: 1; } }
+
+.vk-mem-none { margin: 0; padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-mem-scroll > .vk-page-notice,
+.vk-mem-sec > .vk-page-notice { width: auto; margin: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5); }
+
+/* Delete and lookup dialogs. */
+/* 删除与回查对话框。 */
+.vk-mem-preview { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-read); white-space: pre-wrap; }
+.vk-mem-turns { display: grid; gap: calc(var(--vk-u) * 2); }
+.vk-mem-turns > article { display: grid; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 2.5); border: var(--vk-bw) solid var(--vk-line); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-read); }
+.vk-mem-turns pre,
+.vk-mem-json { max-height: 240px; margin: 0; overflow: auto; padding: calc(var(--vk-u) * 2); background: var(--vk-sunken); color: var(--vk-ink); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.45; white-space: pre-wrap; }

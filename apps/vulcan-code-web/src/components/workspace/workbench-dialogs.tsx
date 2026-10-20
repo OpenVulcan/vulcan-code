@@ -1,8 +1,8 @@
 import React from "react";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { AskQuestionDialog } from "@/components/ask/ask-question-dialog";
-import { Button } from "@/components/ui/button";
-import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -10,7 +10,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import type { ProjectFolderPickerDialogProps } from "@/components/project/folder-picker-dialog";
 import {
   ArchiveProjectDialog,
@@ -63,7 +63,7 @@ function DeferredProjectFolderPicker(props: ProjectFolderPickerDialogProps) {
       <DialogHeader><DialogTitle>{props.title ?? t("projectFolderPicker.title")}</DialogTitle>
         <DialogDescription>{error ? t("workspace.dialogs.unableToLoadThe") : <InlineStreamPlaceholder label={t("workspaceFiles.loading")} />}</DialogDescription>
       </DialogHeader>
-      {error ? <details><summary>{t("toolPresentation.output.errorDetails")}</summary><pre className="whitespace-pre-wrap break-words">{error.message}</pre></details> : null}
+      {error ? <details><summary>{t("toolPresentation.output.errorDetails")}</summary><pre className="vk-wrap-pre">{error.message}</pre></details> : null}
       <DialogFooter>
         <Button variant="outline" onClick={() => props.onOpenChange(false)}>{t("conversation.action.cancel")}</Button>
         {error ? <Button onClick={() => setAttempt((value) => value + 1)}>{t("toolPresentation.output.retryLoad")}</Button> : null}
@@ -168,6 +168,9 @@ export interface WorkbenchDialogsProps {
   // Current pending ask-tool request.
   // 当前待处理的 ask 工具请求。
   pendingQuestion: PendingQuestionSnapshot | null;
+  // Child agent label of the pending request, when it is not the conversation's own.
+  // 待处理请求不属于会话自身时的子代理标签。
+  pendingQuestionRequester?: string | null;
   // Running agents that require a main-stop decision.
   // 需要主会话停止决策的运行中智能体。
   stopConversationAgents: StopConversationRunAgentPromptItem[] | null;
@@ -245,6 +248,7 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
       />
       <AskQuestionDialog
         request={props.pendingQuestion}
+        requester={props.pendingQuestionRequester}
         onReject={props.onRejectPendingQuestion}
         onSubmit={props.onSubmitPendingQuestion}
       />
@@ -286,14 +290,14 @@ function StopConversationRunDialog(props: {
             {t("conversation.stopWithAgents.description").replace("{count}", String(agents.length))}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-2 rounded-lg border bg-muted/30 p-3 text-sm">
+        <ul className="vk-agent-list">
           {agents.map((agent) => (
-            <div key={agent.taskId} className="flex min-w-0 items-center justify-between gap-3">
-              <span className="min-w-0 truncate font-medium">{agent.label}</span>
-              <code className="shrink-0 rounded bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground">{agent.taskId.slice(0, 8)}</code>
-            </div>
+            <li key={agent.taskId}>
+              <strong>{agent.label}</strong>
+              <code>{agent.taskId.slice(0, 8)}</code>
+            </li>
           ))}
-        </div>
+        </ul>
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={props.onCancel}>
             {t("conversation.action.cancel")}

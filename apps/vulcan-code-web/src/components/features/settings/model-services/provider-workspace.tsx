@@ -1,20 +1,19 @@
 import * as React from "react"
-import { ExternalLink, Info, KeyRound, ListTree, MoreHorizontal, Pencil, Stethoscope, Trash2, UserRound, WandSparkles } from "lucide-react"
+import { ExternalLink, Info, KeyRound, ListTree, MoreHorizontal, Pencil, Stethoscope, Trash2, WandSparkles } from "lucide-react"
 
-import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context"
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { protocolDisplayName } from "@/components/features/settings/provider-management-settings/protocol-display-name"
 import { ProviderModelCatalog } from "@/components/features/settings/provider-model-settings"
 import { isFunctionalProvider } from "@/components/features/settings/provider-ordering"
 import { localizedProviderDescription, localizedProviderName } from "@/components/features/settings/provider-presentation"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui-kit/primitives/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+} from "@/ui-kit/primitives/dropdown-menu"
 import { useI18n } from "@/i18n"
 import type {
   PublicAiAccountUsage,
@@ -28,6 +27,7 @@ import type { ProviderAlert } from "./provider-alerts"
 import { ConnectProgress, ProviderConnectPanel } from "./provider-connect"
 import { AffiliateChip, providerCategoryLabel, providerSignupUrl, ProviderTagChips } from "./provider-intro"
 import type { SnapshotMutations } from "./use-snapshot-mutations"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ProviderWorkspaceProps binds the selected provider to the page-owned state and dialogs.
 // ProviderWorkspaceProps 将选中的供应商绑定到页面持有的状态与弹窗。
@@ -89,7 +89,7 @@ export function ProviderWorkspace(props: ProviderWorkspaceProps) {
     : null
 
   return (
-    <div className="model-services-workspace">
+    <div className="vk-ms-workspace">
       <WorkspaceHeader {...props} onToggleDetails={() => setShowDetails((current) => !current)} showDetails={showDetails} />
 
       {accountCount === 0 ? (
@@ -109,14 +109,14 @@ export function ProviderWorkspace(props: ProviderWorkspaceProps) {
             />
           ) : null}
           {functional || (provider.service_tags ?? []).some((tag) => tag !== "model") ? (
-            <p className="model-services-note">
-              <WandSparkles aria-hidden="true" className="size-4 shrink-0" />
+            <p className="vk-ms-note">
+              <WandSparkles aria-hidden="true" className="vk-icon" />
               <span>{t(functional ? "settings.modelServices.functional.only" : "settings.modelServices.functional.also")}</span>
               <Button onClick={props.onOpenFunctions} size="xs" type="button" variant="link">{t("settings.modelServices.functional.open")}</Button>
             </p>
           ) : null}
-          <section className="model-services-section">
-            <h3 className="model-services-section-title">
+          <section className="vk-ms-section">
+            <h3 className="vk-ms-section-title">
               {t("settings.modelServices.section.accounts")}<small>{accountCount}</small>
             </h3>
             <ProviderAccounts
@@ -132,23 +132,23 @@ export function ProviderWorkspace(props: ProviderWorkspaceProps) {
             />
           </section>
           {!functional ? (
-            <section className="model-services-section model-services-models">
-              <div className="model-services-section-bar">
-                <h3 className="model-services-section-title">{t("settings.modelServices.section.models")}</h3>
+            <section className="vk-ms-section vk-ms-models">
+              <div className="vk-ms-section-bar">
+                <h3 className="vk-ms-section-title">{t("settings.modelServices.section.models")}</h3>
                 <Button disabled={busy} onClick={() => props.onManageDirectory(provider)} size="xs" type="button" variant="outline">
                   <ListTree aria-hidden="true" />{t("settings.customProviders.manageModels")}
                 </Button>
               </div>
               {accounts.length > 0 ? (
-                <div aria-label={t("settings.modelServices.scope.label")} className="model-services-scope" role="group">
+                <div aria-label={t("settings.modelServices.scope.label")} className="vk-ms-scope" role="group">
                   <span>{t("settings.modelServices.scope.label")}</span>
-                  <button aria-pressed={scope === null} className="model-services-tag-chip" onClick={() => setScopeId(null)} type="button">
+                  <button aria-pressed={scope === null} className="vk-ms-tag-chip" onClick={() => setScopeId(null)} type="button">
                     {t("settings.modelServices.scope.all")}
                   </button>
                   {accounts.map((connection) => (
                     <button
                       aria-pressed={scope?.id === connection.id}
-                      className="model-services-tag-chip"
+                      className="vk-ms-tag-chip"
                       key={connection.id}
                       onClick={() => setScopeId(connection.id)}
                       title={t("settings.modelServices.scope.hint")}
@@ -178,47 +178,39 @@ export function ProviderWorkspace(props: ProviderWorkspaceProps) {
 // WorkspaceHeader 显示供应商名称，并放置视图切换、主要操作及收纳其余操作的菜单。
 function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean; onToggleDetails: () => void }) {
   const { t } = useI18n()
-  const account = React.useContext(OpenVulcanAccountContext)
   const { provider } = props
   const name = localizedProviderName(provider.id, provider.display_name, t)
   const category = providerCategoryLabel(provider.category, t)
   const signupUrl = providerSignupUrl(provider)
   const busy = props.mutations.pendingKey !== null
-  const coreAccount = provider.credential_directory_visibility === "core_account"
   const protocols = Array.from(new Set(provider.service_entries.flatMap(
     (entry) => entry.protocol_routes.map((route) => protocolDisplayName(route.protocol_profile_id)),
   )))
   return (
     <>
-      <header className="model-services-head">
-        <ProviderIcon category={provider.category} className="size-9 shrink-0" providerId={provider.id} />
-        <div className="model-services-head-copy">
-          <div className="model-services-head-title">
+      <header className="vk-ms-head">
+        <ProviderIcon category={provider.category} size={36} providerId={provider.id} />
+        <div className="vk-ms-head-copy">
+          <div className="vk-ms-head-title">
             <h2>{name}</h2>
             <ProviderTagChips provider={provider} />
-            {category ? <span className="model-services-chip" data-variant="category">{category}</span> : null}
-            {provider.kind === "custom" ? <span className="model-services-chip" data-variant="category">{t("settings.modelServices.category.custom")}</span> : null}
+            {category ? <span className="vk-ms-chip" data-variant="category">{category}</span> : null}
+            {provider.kind === "custom" ? <span className="vk-ms-chip" data-variant="category">{t("settings.modelServices.category.custom")}</span> : null}
             <AffiliateChip provider={provider} />
           </div>
           <p>
             {localizedProviderDescription(provider.id, t)}
             {signupUrl ? (
               <a href={signupUrl} rel="noreferrer" target="_blank" title={provider.promotion ? t(provider.promotion.disclosure_key) : undefined}>
-                {t("settings.modelServices.signup")}<ExternalLink aria-hidden="true" className="size-3" />
+                {t("settings.modelServices.signup")}<ExternalLink aria-hidden="true" className="vk-icon" />
               </a>
             ) : null}
           </p>
         </div>
-        <div className="model-services-head-actions">
+        <div className="vk-ms-head-actions">
           {props.viewSwitch}
-          <Button
-            disabled={busy}
-            onClick={() => coreAccount ? account?.setOpen(true) : props.onAddAccount(provider.id)}
-            size="sm"
-            type="button"
-          >
-            {coreAccount ? <UserRound aria-hidden="true" /> : <KeyRound aria-hidden="true" />}
-            {coreAccount ? t("openvulcan.account.manage") : t("settings.providerOnboarding.addCredential")}
+          <Button disabled={busy} onClick={() => props.onAddAccount(provider.id)} size="sm" type="button">
+            <KeyRound aria-hidden="true" />{t("settings.providerOnboarding.addCredential")}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -243,14 +235,14 @@ function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean;
         </div>
       </header>
       {props.showDetails ? (
-        <dl className="model-services-head-facts">
-          <div><dt>{t("settings.modelServices.head.id")}</dt><dd className="font-mono">{provider.id}</dd></div>
+        <dl className="vk-ms-head-facts">
+          <div><dt>{t("settings.modelServices.head.id")}</dt><dd className="vk-mono">{provider.id}</dd></div>
           {protocols.length > 0 ? <div><dt>{t("settings.modelServices.head.protocols")}</dt><dd>{protocols.join(" · ")}</dd></div> : null}
           {provider.service_entries.length > 0 ? (
             <div><dt>{t("settings.modelServices.head.entries")}</dt><dd>{provider.service_entries.map((entry) => entry.display_name).join(" · ")}</dd></div>
           ) : null}
           {provider.kind === "custom" ? (
-            <div><dt>{t("settings.providers.table.endpoint")}</dt><dd className="font-mono break-all">{provider.service_entries.map((entry) => entry.base_url).join(" · ")}</dd></div>
+            <div><dt>{t("settings.providers.table.endpoint")}</dt><dd className="vk-mono vk-form-break">{provider.service_entries.map((entry) => entry.base_url).join(" · ")}</dd></div>
           ) : null}
         </dl>
       ) : null}

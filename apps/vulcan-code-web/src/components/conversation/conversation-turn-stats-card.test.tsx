@@ -98,7 +98,7 @@ describe("turn statistics hover card", () => {
       />,
     );
 
-    expect(markup).toContain("turn-stats-subagent-section");
+    expect(markup).toContain("data-turn-stats-subagent");
     expect(markup).toContain("智能体 Token");
     expect(markup).toContain("<strong>1.6K</strong>");
     expect(markup).toContain("<strong>266.5K</strong>");
@@ -198,7 +198,7 @@ describe("turn statistics hover card", () => {
     );
 
     expect(markup).toContain("子代理统计");
-    expect(markup).not.toContain("turn-stats-subagent-section");
+    expect(markup).not.toContain("data-turn-stats-subagent");
   });
 
   // Child feedback owns its child segments, unlike the same segments grouped under a parent user turn.
@@ -212,6 +212,6 @@ describe("turn statistics hover card", () => {
     } }} />);
     expect(markup).toContain("无缓存输入</span><strong>20</strong>");
     expect(markup).toContain('aria-valuenow="80"');
-    expect(markup).not.toContain("turn-stats-subagent-section");
+    expect(markup).not.toContain("data-turn-stats-subagent");
   });
 });

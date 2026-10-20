@@ -9,16 +9,15 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { IconButton } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import type { DiffPanelSnapshot } from "@/diff/types";
-import { cn } from "@/lib/utils";
 import {
   GeneratedMediaDetail,
   type GeneratedMediaAttachment,
@@ -230,30 +229,35 @@ export function ConversationDetailModal(props: {
   } satisfies DiffPanelSnapshot;
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className={cn("detail-modal sm:max-w-[min(1080px,96vw)]", props.detail.kind === "thinking" && "thinking-detail-modal")} showCloseButton={false}>
-        <header className="detail-modal-header">
-          <div className="detail-title-row">
-            <div className="detail-title-icon">
-              <DetailIcon size={18} />
-            </div>
-            <div className="detail-title-copy">
-              <span>{detailType}</span>
-              <DialogTitle>{props.detail.title}</DialogTitle>
-              <DialogDescription className={detailSubtitle ? undefined : "sr-only"}>
-                {detailSubtitle || detailType}
-              </DialogDescription>
-            </div>
+      <DialogContent
+        className="vk-detail"
+        data-kind={props.detail.kind}
+        layout="document"
+        scrollMode="content-scroll"
+        showCloseButton={false}
+        size="wide"
+      >
+        <header className="vk-viewer-head">
+          <span className="vk-viewer-mark">
+            <DetailIcon aria-hidden="true" />
+          </span>
+          <div className="vk-viewer-titles">
+            <span className="vk-viewer-eyebrow">{detailType}</span>
+            <DialogTitle>{props.detail.title}</DialogTitle>
+            <DialogDescription className={detailSubtitle ? undefined : "vk-sr-only"}>
+              {detailSubtitle || detailType}
+            </DialogDescription>
           </div>
-          <div className="detail-modal-actions">
-            <Button aria-label={t("conversation.detail.copy")} className="icon-button" onClick={() => void runConversationControlAction(() => props.onCopyText(fullBody), t("conversation.control.copyFailed"))} size="icon" type="button" variant="outline">
-              <Copy size={17} />
-            </Button>
-            <Button aria-label={t("conversation.detail.close")} className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
-              <X size={17} />
-            </Button>
+          <div className="vk-actions">
+            <IconButton aria-label={t("conversation.detail.copy")} onClick={() => void runConversationControlAction(() => props.onCopyText(fullBody), t("conversation.control.copyFailed"))} title={t("conversation.detail.copy")} type="button">
+              <Copy aria-hidden="true" />
+            </IconButton>
+            <IconButton aria-label={t("conversation.detail.close")} onClick={props.onClose} title={t("conversation.detail.close")} type="button">
+              <X aria-hidden="true" />
+            </IconButton>
           </div>
         </header>
-        <div className="detail-modal-body">
+        <div className="vk-viewer-body">
           {props.detail.mediaAttachments?.length ? (
             <GeneratedMediaDetail
               attachments={props.detail.mediaAttachments}
@@ -295,7 +299,7 @@ function DiffDetailPanelLoading() {
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   return (
-    <StreamPlaceholder className="w-full min-w-0 p-4" fill label={t("conversation.diff.loadingPanel")} shape="rows" />
+    <StreamPlaceholder fill label={t("conversation.diff.loadingPanel")} shape="rows" />
   );
 }
 

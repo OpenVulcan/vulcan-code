@@ -7,10 +7,13 @@ import type {
 } from "@/components/workspace/workspace-context-panel";
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
-import { SidebarTrigger } from "@/components/ui/sidebar";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { StageHead } from "@/components/shell/stage-head";
+import { ReadingWidthMenu } from "@/components/shell/app-chrome";
+import { conversationReservedWidth } from "@/components/shell/navigation-layout";
+import { useAppearance } from "@/ui-kit/appearance";
+import { conversationIsRunning } from "@/components/conversation/conversation-runtime";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar-types";
 import type {
   ComposerAttachmentSummary,
@@ -70,12 +73,19 @@ export const WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH = 420;
 // WORKSPACE_CONTEXT_PANEL_MIN_WIDTH stores the smallest manual docked panel width.
 // WORKSPACE_CONTEXT_PANEL_MIN_WIDTH 保存停靠面板手动调整时的最小宽度。
 const WORKSPACE_CONTEXT_PANEL_MIN_WIDTH = 320;
-// WORKSPACE_CONVERSATION_RESERVED_WIDTH preserves the 800px reading column, 72px padding, and 50px reasoning overflow.
-// WORKSPACE_CONVERSATION_RESERVED_WIDTH 保留 800px 阅读列、72px 内边距与 50px 思考内容外伸空间。
-export const WORKSPACE_CONVERSATION_RESERVED_WIDTH = 800 + 36 * 2 + 50;
-// WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH matches the dock separator's CSS width.
-// WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH 与停靠分隔条的 CSS 宽度一致。
+// WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH is the dock separator width; the stage passes it to CSS.
+// WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH 是停靠分隔条宽度；舞台将其传给 CSS。
 export const WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH = 9;
+// WORKSPACE_CONTEXT_FLOATING_GUTTER keeps a strip of the page visible beside the floating panel.
+// WORKSPACE_CONTEXT_FLOATING_GUTTER 在浮动面板旁保留一条可见的页面区域。
+const WORKSPACE_CONTEXT_FLOATING_GUTTER = 28;
+// STAGE_LAYOUT_STYLE hands the panel geometry and slide timing to the kit stage styles.
+// STAGE_LAYOUT_STYLE 将面板几何与滑动时长交给 kit 舞台样式。
+const STAGE_LAYOUT_STYLE = {
+  "--vk-context-resizer-w": `${WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH}px`,
+  "--vk-context-float-w": `min(${WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH}px, calc(100% - ${WORKSPACE_CONTEXT_FLOATING_GUTTER}px))`,
+  "--vk-context-slide": `${WORKSPACE_CONTEXT_PANEL_TRANSITION_MS}ms`,
+} as React.CSSProperties;
 
 // DraftConversationSelection describes a not-yet-persisted conversation opened from a project.
 // DraftConversationSelection 描述从项目打开但尚未持久化的草稿会话。
@@ -239,6 +249,9 @@ export function WorkspaceResizableBody(props: {
   // Runs one VMM memory action for the right context panel.
   // 为右侧上下文面板执行单个 VMM 记忆动作。
   onRunVmmAction: WorkspaceContextPanelProps["onRunVmmAction"];
+  // Opens the memory settings page from the memory tab.
+  // 从记忆标签页打开记忆设置页面。
+  onOpenMemorySettings?: WorkspaceContextPanelProps["onOpenMemorySettings"];
   // Loads one workspace diff snapshot for the right context panel.
   // 为右侧上下文面板载入单个工作区 diff 快照。
   loadWorkspaceDiffSnapshot: WorkspaceContextPanelProps["loadWorkspaceDiffSnapshot"];
@@ -343,7 +356,7 @@ export function WorkspaceResizableBody(props: {
   }, [props.rightPanelFloating, props.rightPanelOpen]);
   // rightPanelVisualState selects the transition class shared by docked and floating panels.
   // rightPanelVisualState 选择停靠与浮动面板共用的过渡类名。
-  const rightPanelVisualState = rightPanelTransition.visible ? "is-open" : "is-closed";
+  const rightPanelVisualState = rightPanelTransition.visible ? "open" : "closed";
   // renderedRightPanelFloating uses the preflight target while open and retains transition state only for exit.
   // renderedRightPanelFloating 在打开期间使用预判目标，仅在退出期间保留过渡状态。
   const renderedRightPanelFloating = props.rightPanelOpen
@@ -367,9 +380,12 @@ export function WorkspaceResizableBody(props: {
   // 参数：element 属于停靠外壳。返回保留会话区、思考留白与分隔条后的右侧可用宽度。
   const maximumDockedWidth = React.useCallback((element: HTMLElement): number => Math.max(
     WORKSPACE_CONTEXT_PANEL_MIN_WIDTH,
-    (element.closest(".workspace-resizable-body-shell")?.getBoundingClientRect().width ?? window.innerWidth)
-      - WORKSPACE_CONVERSATION_RESERVED_WIDTH - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
+    (element.closest(".vk-stage")?.getBoundingClientRect().width ?? window.innerWidth)
+      - conversationReservedWidth() - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
   ), []);
+  // appearance re-measures the docked bound when the reading width or text tier moves the reserve.
+  // appearance 在阅读宽度或文字档位改变预留宽度时重新测量停靠边界。
+  const appearance = useAppearance();
   React.useLayoutEffect(() => {
     const element = dockedLayoutRef.current;
     if (!element || !dockedPanelMounted) return;
@@ -387,7 +403,7 @@ export function WorkspaceResizableBody(props: {
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [dockedPanelMounted, maximumDockedWidth]);
+  }, [appearance.text, appearance.width, dockedPanelMounted, maximumDockedWidth]);
 
   // handleDockedResizeKeyDown provides directional resizing and bounded Home/End shortcuts.
   // handleDockedResizeKeyDown 提供方向键缩放和受边界约束的 Home/End 快捷键。
@@ -407,7 +423,7 @@ export function WorkspaceResizableBody(props: {
   // dockedLayoutStyle feeds the animated context width into CSS.
   // dockedLayoutStyle 将动画所需的上下文宽度传入 CSS。
   const dockedLayoutStyle = {
-    "--workspace-context-panel-width": dockedPanelOpen ? `${dockedPanelWidth}px` : "0px",
+    "--vk-context-w": dockedPanelOpen ? `${dockedPanelWidth}px` : "0px",
   } as React.CSSProperties;
   // handleDockedResizePointerDown starts manual resizing for the docked context panel.
   // handleDockedResizePointerDown 启动停靠上下文面板的手动调整宽度。
@@ -486,11 +502,11 @@ export function WorkspaceResizableBody(props: {
   // mainContent keeps the body content shape identical with or without a side panel.
   // mainContent 保持有无侧边面板时主体内容结构一致。
   const mainContent = (
-    <section className="workspace-main-shell" onClickCapture={props.onConversationLinkClickCapture}>
+    <section className="vk-stage-page" onClickCapture={props.onConversationLinkClickCapture}>
       {props.children}
       {workspaceMainPluginMounts.length > 0 ? (
-        <div className="workspace-plugin-main-mounts">
-          <React.Suspense fallback={<StreamPlaceholder fill className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
+        <div className="vk-plugin-mounts" data-slot="main">
+          <React.Suspense fallback={<StreamPlaceholder fill className="vk-stream-inset" shape="rows" label={t("skills.plugins.loadingPage")} />}>
             {workspaceMainPluginMounts.map(({ plugin, mount }) => (
               <DynamicPluginMountPanel
                 key={`${plugin.id}:${mount.id}`}
@@ -503,7 +519,7 @@ export function WorkspaceResizableBody(props: {
         </div>
       ) : null}
       {props.conversationNavigationShowLoading && (props.conversationNavigationPhase === "loading" || props.conversationNavigationPhase === "waiting-owner") ? (
-        <div className="conversation-navigation-progress"><ConversationLoadingCenter /></div>
+        <div className="vk-stage-progress"><ConversationLoadingCenter /></div>
       ) : null}
     </section>
   );
@@ -514,9 +530,6 @@ export function WorkspaceResizableBody(props: {
   const renderedMainContent = (props.toolPanels ?? [])
     .reduceRight<React.ReactNode>((content, panel) => (
       <AdaptiveToolPanel
-        className={panel.className}
-        contentClassName={panel.contentClassName}
-        contentShellClassName={panel.contentShellClassName}
         expanded={panel.expanded}
         forceOverlay={panel.forceOverlay}
         inlineGap={panel.inlineGap}
@@ -532,9 +545,15 @@ export function WorkspaceResizableBody(props: {
     ), mainContent);
 
   return (
-    <div ref={dockedLayoutRef} className={cn("workspace-resizable-body-shell", floatingContextLayoutActive && "has-floating-context", props.conversationNavigationPhase && `conversation-navigation-${props.conversationNavigationPhase}`)}>
+    <div
+      ref={dockedLayoutRef}
+      className="vk-stage"
+      data-activity={conversationIsRunning(props.selectedConversation) ? "" : undefined}
+      data-floating-context={floatingContextLayoutActive ? "" : undefined}
+      data-nav-phase={props.conversationNavigationPhase ?? undefined}
+      style={STAGE_LAYOUT_STYLE}
+    >
       <ConsoleHeader
-        className={props.headerTitle ? "workspace-custom-header" : undefined}
         draftConversation={props.selectedDraftConversation}
         conversation={props.selectedConversation}
         detail={props.headerDetail}
@@ -548,8 +567,8 @@ export function WorkspaceResizableBody(props: {
         onConversationMenuAction={props.onConversationMenuAction}
         onToggleLeftPanel={props.onToggleLeftPanel}
       />
-      <div className="workspace-resizable-body" style={dockedPanelMounted ? dockedLayoutStyle : undefined}>
-        <div className="workspace-main-panel">
+      <div className="vk-stage-body" style={dockedPanelMounted ? dockedLayoutStyle : undefined}>
+        <div className="vk-stage-main">
           {renderedMainContent}
         </div>
         {dockedPanelMounted ? (
@@ -560,7 +579,8 @@ export function WorkspaceResizableBody(props: {
               aria-valuemin={WORKSPACE_CONTEXT_PANEL_MIN_WIDTH}
               aria-valuemax={dockedPanelMaximum}
               aria-valuenow={dockedPanelWidth}
-              className={cn("workspace-context-resize-handle", rightPanelVisualState)}
+              className="vk-panel-resizer"
+              data-state={rightPanelVisualState}
               onPointerDown={handleDockedResizePointerDown}
               onKeyDown={handleDockedResizeKeyDown}
               role="separator"
@@ -570,15 +590,13 @@ export function WorkspaceResizableBody(props: {
         ) : null}
         {rightPanelMounted ? (
           <div
-            className={cn(
-              "workspace-context-panel",
-              rightPanelVisualState,
-              renderedRightPanelFloating && "is-floating",
-            )}
+            className="vk-panel-host"
+            data-floating={renderedRightPanelFloating ? "" : undefined}
+            data-state={rightPanelVisualState}
             id="workspaceContext"
             inert={!rightPanelTransition.visible}
           >
-            <React.Suspense fallback={<StreamPlaceholder fill className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
+            <React.Suspense fallback={<StreamPlaceholder fill className="vk-stream-inset" shape="rows" label={t("skills.plugins.loadingPage")} />}>
             <WorkspaceContextPanel
               aiBrowserAvailable={props.aiBrowserAvailable && Boolean(aiBrowserMount)}
               localBrowserAvailable={props.localBrowserAvailable}
@@ -610,6 +628,7 @@ export function WorkspaceResizableBody(props: {
               onStopCommandSession={props.onStopCommandSession}
               onStopSubagentTask={props.onStopSubagentTask}
               onRunVmmAction={props.onRunVmmAction}
+              onOpenMemorySettings={props.onOpenMemorySettings}
               resolveMediaSourceUrl={props.resolveMediaSourceUrl}
               loadWorkspaceFileDirectory={props.loadWorkspaceFileDirectory}
               loadWorkspaceFilePreview={props.loadWorkspaceFilePreview}
@@ -627,8 +646,8 @@ export function WorkspaceResizableBody(props: {
             />
             </React.Suspense>
             {otherPluginMounts.length > 0 ? (
-              <div className="conversation-plugin-right-mounts">
-                <React.Suspense fallback={<StreamPlaceholder fill className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
+              <div className="vk-plugin-mounts" data-slot="right">
+                <React.Suspense fallback={<StreamPlaceholder fill className="vk-stream-inset" shape="rows" label={t("skills.plugins.loadingPage")} />}>
                   {otherPluginMounts.map(({ plugin, mount }) => (
                     <DynamicPluginMountPanel
                       key={`${plugin.id}:${mount.id}:${props.selectedConversationId ?? "none"}`}
@@ -653,9 +672,6 @@ export function WorkspaceResizableBody(props: {
 // ConsoleHeader renders the inset title bar for the current conversation.
 // ConsoleHeader 渲染当前会话的 inset 标题栏。
 function ConsoleHeader(props: {
-  // Optional CSS class for specialized header layouts.
-  // 专用标题栏布局使用的可选 CSS 类。
-  className?: string;
   // Current selected conversation summary.
   // 当前选中会话摘要。
   conversation?: ConversationSummary;
@@ -704,40 +720,28 @@ function ConsoleHeader(props: {
   const titleMenuConversation = props.title || props.draftConversation ? undefined : props.conversation;
 
   return (
-    <header className={cn("console-header", props.className)}>
-      <div className="console-header-main">
-        <SidebarTrigger onClick={props.onToggleLeftPanel} />
-        <span className="console-header-separator" aria-hidden="true" />
-        <div
-          className="workspace-custom-header-title"
-        >
-          <div
-            className="workspace-header-title-text"
-            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-            onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
-          >
-            <h1>{headerTitle}</h1>
-            {props.detail ? <small>{props.detail}</small> : null}
-          </div>
-          <WorkspaceTitleMenu
-            conversation={titleMenuConversation}
-            isPinned={props.isConversationPinned}
-            title={headerTitle}
-            onConversationMenuAction={props.onConversationMenuAction}
-          />
-        </div>
-        <span
-          aria-hidden="true"
-          className="console-header-drag-fill"
-          data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-          onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
+    <StageHead
+      actions={props.headerActions || props.headerRightActions || !props.title ? (
+        <>
+          {props.headerActions}
+          {props.headerRightActions}
+          {props.title ? null : <ReadingWidthMenu />}
+        </>
+      ) : null}
+      chrome={props.chromeActions}
+      detail={props.detail}
+      onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+      onToggleSidebar={props.onToggleLeftPanel}
+      title={headerTitle}
+      titleMenu={(
+        <WorkspaceTitleMenu
+          conversation={titleMenuConversation}
+          isPinned={props.isConversationPinned}
+          title={headerTitle}
+          onConversationMenuAction={props.onConversationMenuAction}
         />
-      </div>
-      <div className="console-header-actions">
-        {props.headerActions}
-        {props.headerRightActions}
-        {props.chromeActions}
-      </div>
-    </header>
+      )}
+      titlebarDragRegion={props.titlebarDragRegion}
+    />
   );
 }

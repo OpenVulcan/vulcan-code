@@ -1,6 +1,6 @@
 import * as React from "react";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { PageEmptyState, PageHint, PageNotice, PageSection } from "@/components/page";
 import { useI18n } from "@/i18n";
 import { PluginDataBlockView } from "./plugin-data-blocks";

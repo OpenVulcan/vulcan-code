@@ -1,10 +1,10 @@
 import * as React from "react"
 import { LoaderCircle } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Textarea } from "@/components/ui/textarea"
+import { Button } from "@/ui-kit/primitives/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import { formatMessage, useI18n } from "@/i18n"
 import {
   loadSystemPromptSettings,
@@ -12,6 +12,7 @@ import {
   saveSystemPrompt,
 } from "@/service/settings-actions-service"
 import type { ProjectSummary, SystemPromptSettingsSnapshot, SystemPromptSource } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // USER_SCOPE_VALUE is the select value of the user-level scope; project scopes use their project id.
 // USER_SCOPE_VALUE 是用户级作用域的选择值；项目作用域使用其项目标识。
@@ -117,12 +118,12 @@ export function SystemPromptSettingsCard(props: { projects: ProjectSummary[] }) 
   const overridePath = snapshot ? (projectId ? snapshot.projectPath : snapshot.userPath) : null
 
   return (
-    <section className="space-y-3 rounded-xl border p-4">
+    <section className="vk-form-box">
       <div>
-        <h3 className="text-sm font-semibold">{t("settings.modelExperience.systemPrompt")}</h3>
-        <p className="text-xs text-muted-foreground">{t("settings.systemPrompt.description")}</p>
+        <h3 className="vk-form-title">{t("settings.modelExperience.systemPrompt")}</h3>
+        <p className="vk-form-note">{t("settings.systemPrompt.description")}</p>
       </div>
-      <label className="flex items-center gap-3 text-sm">
+      <label className="vk-form-inline">
         <span>{t("settings.systemPrompt.scope")}</span>
         <Select value={scopeValue} onValueChange={setScopeValue} disabled={busy}>
           <SelectTrigger><SelectValue /></SelectTrigger>
@@ -138,23 +139,23 @@ export function SystemPromptSettingsCard(props: { projects: ProjectSummary[] }) 
       </label>
       {snapshot ? (
         <>
-          <p className="text-xs text-muted-foreground" role="status">{t(SOURCE_LABEL_KEYS[snapshot.effectiveSource])}</p>
+          <p className="vk-form-note" role="status">{t(SOURCE_LABEL_KEYS[snapshot.effectiveSource])}</p>
           <Textarea
             aria-label={t("settings.systemPrompt.textLabel")}
-            className="font-mono text-xs"
+            className="vk-mono"
             rows={16}
             disabled={busy}
             onChange={(event) => { setDraft(event.currentTarget.value); setSaved(false) }}
             value={draft}
           />
-          {overridePath ? <p className="text-xs text-muted-foreground">{formatMessage(t("settings.systemPrompt.savedTo"), { path: overridePath })}</p> : null}
-          {empty ? <p className="text-sm text-destructive" role="alert">{t("settings.systemPrompt.empty")}</p> : null}
-          <p className="text-xs text-muted-foreground" role="status">
+          {overridePath ? <p className="vk-form-note">{formatMessage(t("settings.systemPrompt.savedTo"), { path: overridePath })}</p> : null}
+          {empty ? <p className="vk-field-error" role="alert">{t("settings.systemPrompt.empty")}</p> : null}
+          <p className="vk-form-note" role="status">
             {busy ? t("settings.systemPrompt.saving") : dirty ? t("settings.systemPrompt.dirty") : saved ? t("settings.systemPrompt.saved") : null}
           </p>
-          <div className="flex flex-wrap gap-2">
+          <div className="vk-form-chips">
             <Button disabled={busy || !dirty || empty} onClick={() => void run(() => saveSystemPrompt(scope, projectId, draft))} type="button">
-              {busy ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+              {busy ? <LoaderCircle className="vk-spin" /> : null}
               {t("settings.systemPrompt.save")}
             </Button>
             <Button disabled={busy || !overridePresent} onClick={() => void run(() => resetSystemPrompt(scope, projectId))} type="button" variant="outline">
@@ -163,7 +164,7 @@ export function SystemPromptSettingsCard(props: { projects: ProjectSummary[] }) 
           </div>
         </>
       ) : !error ? <StreamPlaceholder label={t("settings.systemPrompt.loading")} shape="fields" count={3} /> : null}
-      {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+      {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
     </section>
   )
 }

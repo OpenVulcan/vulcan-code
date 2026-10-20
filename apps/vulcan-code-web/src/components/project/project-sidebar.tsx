@@ -1,54 +1,57 @@
 import React from "react";
 import {
-  closestCenter,
-  DndContext,
-  PointerSensor,
-  KeyboardSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  SortableContext,
-  verticalListSortingStrategy,
-  sortableKeyboardCoordinates,
-} from "@dnd-kit/sortable";
-import {
-  Boxes,
+  ChevronsUpDown,
+  CodeXml,
   Folder,
   FolderPlus,
+  MessagesSquare,
   Pin,
+  Search,
   SquarePen,
+  UserCog,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/ui-kit/primitives/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import {
   Sidebar,
   SidebarContent,
-  SidebarGroup,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuButton,
   SidebarMenuItem,
   useSidebarNavigation,
-} from "@/components/ui/sidebar";
+} from "@/ui-kit/shell/sidebar";
 import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus";
-import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
-import type { ConversationSummary, ProjectSummary } from "@/types";
-import { ConversationTreeRow } from "./project-sidebar-conversation-row";
+import { useI18n, type TranslationKey } from "@/i18n";
+import type { ConversationSummary, ProjectSummary, ProjectTreeSummary } from "@/types";
+import { ConversationTreeRow, type ConversationRowVariant } from "./project-sidebar-conversation-row";
+import { EMPTY_PROJECT_TREE } from "./project-group-layout";
+import { ProjectTreeSection, type ProjectGroupAction, type ProjectRowPlacement } from "./project-sidebar-groups";
 import { SortableProjectRow } from "./project-sidebar-project-row";
+import type { SortableRowBinding } from "./project-sidebar-sortable";
+import { ProjectIcon } from "./project-icons";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
+import { setSidebarFlow, useSidebarFlow, type SidebarFlow } from "./sidebar-flow";
 
 export type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
+export type { ProjectGroupAction } from "./project-sidebar-groups";
 
-// ProjectSessionTreeProps describes the session tree shared by the session panel and the rail's session flyout.
-// ProjectSessionTreeProps 描述会话面板与轨道会话浮层共用的会话树。
+// ProjectSessionTreeProps describes the session navigation shared by the session panel and the rail's session flyout.
+// ProjectSessionTreeProps 描述会话面板与轨道会话浮层共用的会话导航。
 export type ProjectSessionTreeProps = {
   projects: ProjectSummary[];
   conversations: ConversationSummary[];
   expandedProjectIds?: string[];
+  // Project tree shown by the code flow: groups, the default group position and the pinned section.
+  // 代码流显示的项目树：分组、默认分组位置与置顶分区。
+  projectTree?: ProjectTreeSummary;
   pinnedConversationIds: Set<string>;
   selectedConversationId: string | null;
   // Explicit project that owns project-level floating tools.
@@ -56,18 +59,25 @@ export type ProjectSessionTreeProps = {
   activeProjectId: string | null;
   onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
   onCreateConversation: (project: ProjectSummary) => void;
-  onCreateProject: () => void;
+  // Opens a new draft preset to a dedicated assistant; the entry is hidden when absent.
+  // 打开预设为专职助手的新草稿；缺省时隐藏该入口。
+  onCreateDedicatedConversation?: (project: ProjectSummary) => void;
+  // Opens the add-project flow; a group id places the chosen folder in that group.
+  // 打开添加项目流程；给出分组标识时，所选文件夹放入该分组。
+  onCreateProject: (groupId?: string) => void;
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
-  onReorderProjects: (projectIds: string[]) => void;
+  // Persists one project-tree change; rejects with the service error.
+  // 持久化一次项目树变更；失败时以服务错误拒绝。
+  onProjectGroupAction: (action: ProjectGroupAction) => Promise<void>;
   // Selects one project without selecting a conversation.
   // 选择一个项目且不选择会话。
   onSelectProject: (projectId: string) => void;
   onSelectConversation: (conversationId: string) => void;
 };
 
-// ProjectSidebar renders the session panel: the brand strip above the shared session tree.
-// ProjectSidebar 渲染会话面板：品牌条及其下方的共用会话树。
+// ProjectSidebar renders the session panel: the brand strip with the flow switch above the shared navigation.
+// ProjectSidebar 渲染会话面板：带流切换的品牌条及其下方的共用导航。
 export function ProjectSidebar(props: ProjectSessionTreeProps & {
   // Always-visible activity rail rendered beside this panel.
   // 渲染在此面板旁、始终可见的活动轨道。
@@ -79,35 +89,372 @@ export function ProjectSidebar(props: ProjectSessionTreeProps & {
   // 处理标题栏双击最大化或还原行为。
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
-  const { t } = useI18n();
-  const { rail, titlebarDragRegion, onTitlebarDoubleClick, ...treeProps } = props;
+  const { rail, titlebarDragRegion, onTitlebarDoubleClick, ...navigationProps } = props;
   return (
     <Sidebar collapsible="offcanvas" rail={rail} variant="inset">
       <SidebarHeader>
         <SidebarBrandMenu
-          currentLabel={t("sidebar.console")}
+          actions={<SidebarFlowSwitch />}
           titlebarDragRegion={titlebarDragRegion}
           onTitlebarDoubleClick={onTitlebarDoubleClick}
         />
       </SidebarHeader>
       <SidebarContent>
-        <ProjectSessionTree {...treeProps} />
+        <NavigationPanelBody {...navigationProps} />
       </SidebarContent>
     </Sidebar>
   );
 }
 
-// ProjectSessionTree renders pinned conversations, projects, and their conversations with the panel's own rows,
-// icons and expansion, so every surface that lists sessions looks and behaves the same.
-// ProjectSessionTree 使用面板自身的行、图标与展开状态渲染置顶会话、项目及其会话，
-// 使所有列出会话的界面外观与行为一致。
-export function ProjectSessionTree(props: ProjectSessionTreeProps) {
+// SIDEBAR_FLOWS lists the flow switch buttons with their icon, label and hint keys.
+// SIDEBAR_FLOWS 列出流切换按钮及其图标、标签与提示键。
+const SIDEBAR_FLOWS: ReadonlyArray<{ flow: SidebarFlow; icon: React.ReactNode; label: TranslationKey; hint: TranslationKey }> = [
+  { flow: "session", icon: <MessagesSquare aria-hidden="true" />, label: "sidebar.flow.session", hint: "sidebar.flow.sessionHint" },
+  { flow: "code", icon: <CodeXml aria-hidden="true" />, label: "sidebar.flow.code", hint: "sidebar.flow.codeHint" },
+];
+
+// SidebarFlowSwitch toggles between the session flow and the code flow beside the wordmark.
+// SidebarFlowSwitch 在字标旁切换会话流与代码流。
+export function SidebarFlowSwitch() {
+  const { t } = useI18n();
+  const flow = useSidebarFlow();
+  return (
+    <div aria-label={t("sidebar.flow.label")} className="vk-flow-switch" role="group">
+      {SIDEBAR_FLOWS.map((entry) => (
+        <Tooltip key={entry.flow}>
+          <TooltipTrigger asChild>
+            <button
+              aria-label={t(entry.label)}
+              aria-pressed={flow === entry.flow}
+              onClick={() => setSidebarFlow(entry.flow)}
+              type="button"
+            >
+              {entry.icon}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t(entry.hint)}</TooltipContent>
+        </Tooltip>
+      ))}
+    </div>
+  );
+}
+
+// NavigationPanelBody renders the panel tools above the list of the chosen flow. The panel and the rail flyout
+// both mount it, so every surface that lists sessions looks and behaves the same.
+// NavigationPanelBody 在所选流的列表上方渲染面板工具。面板与轨道浮层都挂载它，使所有列出会话的界面外观与行为一致。
+export function NavigationPanelBody(props: ProjectSessionTreeProps) {
+  const { t } = useI18n();
+  const flow = useSidebarFlow();
+  const navigate = useSidebarNavigation();
+  // query filters the list by session title, and by project name in the code flow.
+  // query 按会话标题筛选列表；代码流中同时按项目名称筛选。
+  const [query, setQuery] = React.useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  // currentProject is the project the session flow lists and the new-session actions target.
+  // currentProject 是会话流所列出的项目，也是新建会话操作的目标。
+  const currentProject = resolveCurrentProject(props);
+  return (
+    <div className="vk-nav-flow" data-flow={flow}>
+      <div className="vk-nav-tools">
+        {flow === "session" && currentProject ? (
+          <ProjectSwitch
+            currentProject={currentProject}
+            onCreateProject={() => props.onCreateProject()}
+            onSelectProject={props.onSelectProject}
+            projects={props.projects}
+          />
+        ) : null}
+        {currentProject ? (
+          <div className="vk-sidebar-actions">
+            <Button onClick={() => navigate(props.onCreateConversation)(currentProject)} size="sm" type="button">
+              <SquarePen aria-hidden="true" />
+              {t("sidebar.newSession")}
+            </Button>
+            {props.onCreateDedicatedConversation ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <IconButton
+                    aria-label={t("sidebar.newDedicated")}
+                  data-action="new-dedicated"
+                    onClick={() => navigate(props.onCreateDedicatedConversation!)(currentProject)}
+                    variant="outline"
+                  >
+                    <UserCog aria-hidden="true" />
+                  </IconButton>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{t("sidebar.newDedicated")}</TooltipContent>
+              </Tooltip>
+            ) : null}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <IconButton
+                  aria-label={t("sidebar.newProject")}
+                  data-action="new-project"
+                  onClick={() => navigate(props.onCreateProject)()}
+                  variant="outline"
+                >
+                  <FolderPlus aria-hidden="true" />
+                </IconButton>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{t("sidebar.newProject")}</TooltipContent>
+            </Tooltip>
+          </div>
+        ) : null}
+        {props.projects.length > 0 ? (
+          <div className="vk-input-wrap">
+            <Search aria-hidden="true" />
+            <Input
+              aria-label={t(flow === "session" ? "sidebar.searchSessions" : "sidebar.searchTree")}
+              density="compact"
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && query) {
+                  event.stopPropagation();
+                  setQuery("");
+                }
+              }}
+              placeholder={t(flow === "session" ? "sidebar.searchSessions" : "sidebar.searchTree")}
+              type="search"
+              value={query}
+            />
+          </div>
+        ) : null}
+      </div>
+      <div className="vk-nav-list">
+        {props.projects.length === 0 ? (
+          <NoProjectsEntry onCreateProject={() => navigate(props.onCreateProject)()} />
+        ) : flow === "session" && currentProject ? (
+          <SessionFlowList {...props} currentProject={currentProject} query={normalizedQuery} />
+        ) : (
+          <ProjectSessionTree {...props} query={normalizedQuery} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// resolveCurrentProject picks the explicit active project, then the selected session's project, then the first project.
+// resolveCurrentProject 依次选取明确的活动项目、所选会话的项目、第一个项目。
+function resolveCurrentProject(props: ProjectSessionTreeProps): ProjectSummary | null {
+  const byId = (id: string | null | undefined) => (id ? props.projects.find((project) => project.id === id) : undefined);
+  const selected = props.conversations.find((conversation) => conversation.id === props.selectedConversationId);
+  return byId(props.activeProjectId) ?? byId(selected?.projectId) ?? props.projects[0] ?? null;
+}
+
+// ProjectSwitch shows the session flow's project and lists every project to switch to.
+// ProjectSwitch 显示会话流当前的项目，并列出可切换的全部项目。
+function ProjectSwitch(props: {
+  // Project the session flow currently lists.
+  // 会话流当前列出的项目。
+  currentProject: ProjectSummary;
+  // Every project available to switch to.
+  // 可切换到的全部项目。
+  projects: ProjectSummary[];
+  // Makes one project current.
+  // 将一个项目设为当前项目。
+  onSelectProject: (projectId: string) => void;
+  // Opens the add-project flow.
+  // 打开添加项目流程。
+  onCreateProject: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button aria-label={t("sidebar.switchProject")} className="vk-project-switch" title={props.currentProject.path} type="button">
+          <span className="vk-project-mark"><ProjectIcon project={props.currentProject} size={15} /></span>
+          <span className="vk-project-switch-text">
+            <strong>{props.currentProject.name}</strong>
+            <small>{props.currentProject.path}</small>
+          </span>
+          <ChevronsUpDown aria-hidden="true" className="vk-faint" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="vk-project-switch-menu">
+        {props.projects.map((project) => (
+          <DropdownMenuItem
+            data-current={project.id === props.currentProject.id ? "" : undefined}
+            key={project.id}
+            onSelect={() => props.onSelectProject(project.id)}
+          >
+            <ProjectIcon project={project} size={15} />
+            <span>{project.name}</span>
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={props.onCreateProject}>
+          <FolderPlus aria-hidden="true" />
+          <span>{t("sidebar.addProject")}</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// NoProjectsEntry is the actionable empty state shown before any project exists.
+// NoProjectsEntry 是尚无项目时显示的可操作空状态。
+function NoProjectsEntry(props: { onCreateProject: () => void }) {
+  const { t } = useI18n();
+  // WorkbenchApp mounts this panel only after the authoritative snapshot exists.
+  // WorkbenchApp 仅在权威快照存在后挂载此面板。
+  return (
+    <button className="vk-nav-start" onClick={props.onCreateProject} type="button">
+      <FolderPlus aria-hidden="true" />
+      <span>
+        <strong>{t("sidebar.noProjects")}</strong>
+        <small>{t("project.sidebar.addAFolderTo")}</small>
+      </span>
+    </button>
+  );
+}
+
+// useRelativeNow refreshes relative time labels once a minute without touching hover or confirmation state.
+// useRelativeNow 每分钟刷新一次相对时间标签，不触碰悬停或确认状态。
+function useRelativeNow(): number {
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+  return nowMs;
+}
+
+// listedConversationsOf excludes sessions floating as assistants; they live in the top-bar assistant dock.
+// listedConversationsOf 排除作为助手浮动的会话；它们位于顶部助手停靠中。
+function listedConversationsOf(conversations: ConversationSummary[]): ConversationSummary[] {
+  return conversations.filter((conversation) => !conversation.assistantName);
+}
+
+// matchesQuery reports whether a lower-cased query occurs in one text; an empty query matches everything.
+// matchesQuery 判断小写查询是否出现在文本中；空查询匹配所有内容。
+function matchesQuery(text: string, query: string): boolean {
+  return query === "" || text.toLocaleLowerCase().includes(query);
+}
+
+// TreeHead renders a quiet section heading with optional trailing actions.
+// TreeHead 渲染安静的分区标题及可选的尾部操作。
+function TreeHead(props: { icon: React.ReactNode; label: string; children?: React.ReactNode }) {
+  return (
+    <div className="vk-tree-head">
+      <span className="vk-label">{props.icon}{props.label}</span>
+      {props.children}
+    </div>
+  );
+}
+
+// SessionWhen names the recency buckets of the session flow, newest first.
+// SessionWhen 命名会话流的最近程度分组，按从新到旧排列。
+type SessionWhen = "today" | "yesterday" | "week" | "month" | "older";
+
+// SESSION_WHEN_ORDER fixes the bucket order and the catalog key of each heading.
+// SESSION_WHEN_ORDER 固定分组顺序及各标题的目录键。
+const SESSION_WHEN_ORDER: ReadonlyArray<[SessionWhen, TranslationKey]> = [
+  ["today", "sidebar.when.today"],
+  ["yesterday", "sidebar.when.yesterday"],
+  ["week", "sidebar.when.week"],
+  ["month", "sidebar.when.month"],
+  ["older", "sidebar.when.older"],
+];
+
+// sessionWhen places one conversation in a calendar bucket relative to local midnight; unknown times are older.
+// sessionWhen 以本地零点为基准将会话放入日历分组；时间未知的归入更早。
+export function sessionWhen(conversation: ConversationSummary, nowMs: number): SessionWhen {
+  const updatedAtMs = Number.parseInt(conversation.lastUpdatedAt ?? "", 10);
+  if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) return "older";
+  const midnight = new Date(nowMs);
+  midnight.setHours(0, 0, 0, 0);
+  const dayMs = 24 * 60 * 60 * 1000;
+  const startOfToday = midnight.getTime();
+  if (updatedAtMs >= startOfToday) return "today";
+  if (updatedAtMs >= startOfToday - dayMs) return "yesterday";
+  if (updatedAtMs >= startOfToday - 6 * dayMs) return "week";
+  if (updatedAtMs >= startOfToday - 29 * dayMs) return "month";
+  return "older";
+}
+
+// SessionFlowList lists the current project's sessions by recency, pinned ones first.
+// SessionFlowList 按最近程度列出当前项目的会话，置顶会话在前。
+function SessionFlowList(props: ProjectSessionTreeProps & {
+  // Project whose sessions are listed.
+  // 列出其会话的项目。
+  currentProject: ProjectSummary;
+  // Lower-cased title filter; empty lists everything.
+  // 小写标题筛选；为空时列出全部。
+  query: string;
+}) {
+  const { t, locale } = useI18n();
+  const navigate = useSidebarNavigation();
+  const nowMs = useRelativeNow();
+  const projectSessions = React.useMemo(
+    () => listedConversationsOf(props.conversations)
+      .filter((conversation) => conversation.projectId === props.currentProject.id && matchesQuery(conversation.title, props.query)),
+    [props.conversations, props.currentProject.id, props.query],
+  );
+  // pinOrder follows the service's pinned order, which the pin set preserves.
+  // pinOrder 遵循服务的置顶顺序，置顶集合保留了该顺序。
+  const pinOrder = [...props.pinnedConversationIds];
+  const pinned = projectSessions
+    .filter((conversation) => props.pinnedConversationIds.has(conversation.id))
+    .sort((left, right) => pinOrder.indexOf(left.id) - pinOrder.indexOf(right.id));
+  const buckets = new Map<SessionWhen, ConversationSummary[]>();
+  for (const conversation of projectSessions) {
+    if (props.pinnedConversationIds.has(conversation.id)) continue;
+    const when = sessionWhen(conversation, nowMs);
+    buckets.set(when, [...(buckets.get(when) ?? []), conversation]);
+  }
+  const renderRow = (conversation: ConversationSummary, variant: ConversationRowVariant) => (
+    <ConversationTreeRow
+      compactPinned={false}
+      conversation={conversation}
+      isPinned={props.pinnedConversationIds.has(conversation.id)}
+      isSelected={props.selectedConversationId === conversation.id}
+      key={conversation.id}
+      locale={locale}
+      nowMs={nowMs}
+      onAction={props.onConversationMenuAction}
+      onSelectConversation={navigate(props.onSelectConversation)}
+      variant={variant}
+    />
+  );
+  if (projectSessions.length === 0) {
+    return <div className="vk-tree-blank">{t(props.query ? "sidebar.noMatches" : "projectRow.noConversations")}</div>;
+  }
+  return (
+    <div className="vk-session-flow">
+      {pinned.length > 0 ? (
+        <section>
+          <TreeHead icon={<Pin aria-hidden="true" />} label={t("sidebar.pinned")} />
+          <SidebarMenu>{pinned.map((conversation) => renderRow(conversation, "flow"))}</SidebarMenu>
+        </section>
+      ) : null}
+      {SESSION_WHEN_ORDER.map(([when, label]) => {
+        const sessions = buckets.get(when);
+        if (!sessions?.length) return null;
+        return (
+          <section key={when}>
+            <div className="vk-session-group vk-label">{t(label)}</div>
+            <SidebarMenu>{sessions.map((conversation) => renderRow(conversation, "flow"))}</SidebarMenu>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+// ProjectSessionTree renders pinned conversations, projects and their conversations, and unlinked conversations.
+// ProjectSessionTree 渲染置顶会话、项目及其会话，以及未关联项目的会话。
+function ProjectSessionTree(props: ProjectSessionTreeProps & {
+  // Lower-cased filter over project names and session titles; empty lists everything.
+  // 对项目名称与会话标题的小写筛选；为空时列出全部。
+  query: string;
+}) {
   // t translates stable sidebar labels while project names remain user data.
   // t 翻译稳定侧栏标签，项目名称仍保留为用户数据。
   const { t, locale } = useI18n();
   // navigate preserves each destination action and closes phone navigation.
   // navigate 保留各导航动作并关闭手机导航。
   const navigate = useSidebarNavigation();
+  const nowMs = useRelativeNow();
   // openProjectIds stores the project folders currently expanded in the tree.
   // openProjectIds 保存当前在树中展开的项目文件夹。
   const [openProjectIds, setOpenProjectIds] = React.useState<Set<string>>(
@@ -116,34 +463,21 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
   // openProjectIdsRef lets event handlers serialize rapid toggles without reading state during an updater.
   // openProjectIdsRef 让事件处理器在不于 updater 中读取状态的情况下串行化快速切换。
   const openProjectIdsRef = React.useRef(openProjectIds);
-  // activeProjectDragId records when project sorting is active so hover-only UI can pause.
-  // activeProjectDragId 记录项目排序激活状态，以便暂停仅悬停显示的界面。
-  const [activeProjectDragId, setActiveProjectDragId] = React.useState<string | null>(null);
+  // sorting records when a project or group drag is active so hover-only UI can pause.
+  // sorting 记录项目或分组拖动是否进行中，以便暂停仅悬停显示的界面。
+  const [sorting, setSorting] = React.useState(false);
   // expandedConversationProjectIds stores project ids whose conversation list is fully expanded.
   // expandedConversationProjectIds 保存会话列表已完整展开的项目标识。
   const [expandedConversationProjectIds, setExpandedConversationProjectIds] = React.useState<Set<string>>(() => new Set());
-  // projectDragSensors admits pointer movement and keyboard sorting through the dedicated handle.
-  // projectDragSensors 通过专用手柄准入指针移动及键盘排序。
-  const projectDragSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
   // projectIds stores the explicit project identifiers available in this snapshot.
   // projectIds 保存当前快照中明确存在的项目标识。
   const projectIds = React.useMemo(() => new Set(props.projects.map((project) => project.id)), [props.projects]);
   // projectsById resolves conversation project icons without changing conversation data.
   // projectsById 在不改变会话数据的情况下解析会话所属项目图标。
-  const projectsById = React.useMemo(() => {
-    return new Map(props.projects.map((project) => [project.id, project]));
-  }, [props.projects]);
-  // listedConversations excludes sessions floating as assistants; they live in the top-bar assistant dock.
-  // listedConversations 排除作为助手浮动的会话；它们位于顶部助手停靠中。
-  const listedConversations = React.useMemo(
-    () => props.conversations.filter((conversation) => !conversation.assistantName),
-    [props.conversations],
-  );
-  // conversationsByProject groups conversations beneath their owning project folder.
-  // conversationsByProject 将会话归组到所属项目文件夹下。
+  const projectsById = React.useMemo(() => new Map(props.projects.map((project) => [project.id, project])), [props.projects]);
+  const listedConversations = React.useMemo(() => listedConversationsOf(props.conversations), [props.conversations]);
+  // conversationsByProject groups conversations beneath their owning project folder, in service recency order.
+  // conversationsByProject 按服务端最近活动顺序将会话归组到所属项目文件夹下。
   const conversationsByProject = React.useMemo(() => {
     return listedConversations.reduce<Record<string, ConversationSummary[]>>((groups, conversation) => {
       const projectId = conversation.projectId;
@@ -157,31 +491,11 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
   }, [projectIds, listedConversations]);
   // unlinkedConversations keeps conversations without a valid project owner in a diagnostic group.
   // unlinkedConversations 将没有有效项目归属的会话保留在诊断分组中。
-  const unlinkedConversations = React.useMemo(() => {
-    return listedConversations.filter((conversation) => {
-      if (props.pinnedConversationIds.has(conversation.id)) {
-        return false;
-      }
-      return !conversation.projectId || !projectIds.has(conversation.projectId);
-    });
-  }, [projectIds, listedConversations, props.pinnedConversationIds]);
-  // sortedConversationsByProject keeps the service-provided recency order for each project.
-  // sortedConversationsByProject 保留服务端提供的项目内最近活动顺序。
-  const sortedConversationsByProject = React.useMemo(() => {
-    return conversationsByProject;
-  }, [conversationsByProject]);
-  // pinnedConversations renders conversation pins in an independent section above pinned projects.
-  // pinnedConversations 将置顶会话渲染到置顶项目上方的独立分区。
-  const pinnedConversations = React.useMemo(() => {
-    return listedConversations.filter((conversation) => props.pinnedConversationIds.has(conversation.id));
-  }, [listedConversations, props.pinnedConversationIds]);
-  // nowMs refreshes relative time labels without touching hover or confirmation state.
-  // nowMs 刷新相对时间标签且不触碰悬停或确认状态。
-  const [nowMs, setNowMs] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    const intervalId = window.setInterval(() => setNowMs(Date.now()), 60_000);
-    return () => window.clearInterval(intervalId);
-  }, []);
+  const unlinkedConversations = listedConversations.filter((conversation) => (
+    !props.pinnedConversationIds.has(conversation.id)
+    && (!conversation.projectId || !projectIds.has(conversation.projectId))
+    && matchesQuery(conversation.title, props.query)
+  ));
   React.useEffect(() => {
     // next is the externally authoritative expansion projection for this render.
     // next 是本次渲染对应的外部权威展开投影。
@@ -196,21 +510,6 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
       return next.size === current.size ? current : next;
     });
   }, [props.projects]);
-  // handleProjectDragEnd persists one dnd-kit same-section reorder result.
-  // handleProjectDragEnd 持久化一次 dnd-kit 同分区项目排序结果。
-  const handleProjectDragEnd = React.useCallback((sectionProjects: ProjectSummary[], event: DragEndEvent) => {
-    setActiveProjectDragId(null);
-    if (!event.over || event.active.id === event.over.id) {
-      return;
-    }
-    const sectionIds = sectionProjects.map((project) => project.id);
-    const activeIndex = sectionIds.indexOf(String(event.active.id));
-    const overIndex = sectionIds.indexOf(String(event.over.id));
-    if (activeIndex < 0 || overIndex < 0) {
-      return;
-    }
-    props.onReorderProjects(arrayMove(sectionIds, activeIndex, overIndex));
-  }, [props]);
   // toggleProjectOpen toggles one project folder without changing the selected conversation.
   // toggleProjectOpen 切换单个项目文件夹展开状态且不改变当前会话选择。
   const toggleProjectOpen = React.useCallback((projectId: string) => {
@@ -241,67 +540,12 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
       return next;
     });
   }, []);
-  // renderProjectGroupLabel renders the pinned/project heading with optional actions.
-  // renderProjectGroupLabel 渲染置顶/项目标题，并按需显示操作入口。
-  // globalDraftProject opens a project-agnostic draft whose owner is then chosen from the composer chip.
-  // globalDraftProject 打开与项目无关的草稿，其归属随后由输入区标签选择。
-  const globalDraftProject = props.projects.find((project) => project.id === props.activeProjectId)
-    ?? props.projects[0]
-    ?? null;
-  const renderProjectGroupLabel = (label: string, icon: React.ReactNode, action?: React.ReactNode) => (
-    <SidebarGroupLabel className="project-group-label">
-      <span className="project-group-label-main">{icon}<span className="project-group-label-text">{label}</span></span>
-      {action}
-    </SidebarGroupLabel>
-  );
-  // renderProjectRows renders one project section while preserving the shared row behavior.
-  // renderProjectRows 渲染单个项目分区并保留共享项目行行为。
-  const renderProjectRows = (projects: ProjectSummary[]) => projects.map((project) => {
-    const projectConversations = (sortedConversationsByProject[project.id] ?? [])
-      .filter((conversation) => !props.pinnedConversationIds.has(conversation.id));
-    const projectConversationIds = new Set((sortedConversationsByProject[project.id] ?? []).map((conversation) => conversation.id));
-    return (
-      <SortableProjectRow
-        conversations={projectConversations}
-        hasSelectedConversation={props.selectedConversationId ? projectConversationIds.has(props.selectedConversationId) : false}
-        isActiveProject={props.activeProjectId === project.id}
-        isOpen={openProjectIds.has(project.id)}
-        isConversationListExpanded={expandedConversationProjectIds.has(project.id)}
-        isPinnedConversation={(conversationId) => props.pinnedConversationIds.has(conversationId)}
-        key={project.id}
-        onConversationMenuAction={props.onConversationMenuAction}
-        onCreateConversation={navigate(props.onCreateConversation)}
-        onProjectMenuAction={props.onProjectMenuAction}
-        renderConversationRow={renderConversationRow}
-        onSelectConversation={navigate(props.onSelectConversation)}
-        onSelectProject={props.onSelectProject}
-        onToggleConversationList={toggleProjectConversations}
-        onToggleOpen={toggleProjectOpen}
-        project={project}
-        selectedConversationId={props.selectedConversationId}
-      />
-    );
-  });
-  // renderSortableProjectSection renders one dnd-kit sortable project section.
-  // renderSortableProjectSection 渲染一个 dnd-kit 可排序项目分区。
-  const renderSortableProjectSection = (projects: ProjectSummary[]) => (
-    <DndContext
-      collisionDetection={closestCenter}
-      onDragCancel={() => setActiveProjectDragId(null)}
-      onDragEnd={(event) => handleProjectDragEnd(projects, event)}
-      onDragStart={(event) => setActiveProjectDragId(String(event.active.id))}
-      sensors={projectDragSensors}
-    >
-      <SortableContext items={projects.map((project) => project.id)} strategy={verticalListSortingStrategy}>
-        {renderProjectRows(projects)}
-      </SortableContext>
-    </DndContext>
-  );
-  // renderConversationRow renders a sidebar conversation row outside or inside one project folder.
-  // renderConversationRow 渲染项目内外复用的侧栏会话行。
-  const renderConversationRow = (conversation: ConversationSummary, compactPinned = false) => (
+  // renderConversationRow renders a conversation row outside or inside one project folder.
+  // renderConversationRow 渲染项目内外复用的会话行。
+  const renderConversationRow = (conversation: ConversationSummary, compactPinned = false, sortable?: SortableRowBinding) => (
     <ConversationTreeRow
       compactPinned={compactPinned}
+      sortable={sortable}
       conversation={conversation}
       isPinned={props.pinnedConversationIds.has(conversation.id)}
       isSelected={props.selectedConversationId === conversation.id}
@@ -313,71 +557,72 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
       project={conversation.projectId ? projectsById.get(conversation.projectId) : undefined}
     />
   );
+  // filtering keeps matching projects open and drops projects with neither a name nor a session match.
+  // 筛选时保持匹配项目展开，并去掉名称与会话均不匹配的项目。
+  const filtering = props.query !== "";
+  const isProjectVisible = (project: ProjectSummary) => !filtering
+    || matchesQuery(project.name, props.query)
+    || (conversationsByProject[project.id] ?? []).some((conversation) => matchesQuery(conversation.title, props.query));
+  // renderProjectRow renders one project row; placement offers its move-to-group entries.
+  // renderProjectRow 渲染一个项目行；placement 提供其“移动到分组”入口。
+  const renderProjectRow = (project: ProjectSummary, placement: ProjectRowPlacement | null, sortableId?: string) => {
+    const allConversations = conversationsByProject[project.id] ?? [];
+    const nameMatches = matchesQuery(project.name, props.query);
+    const projectConversations = allConversations
+      .filter((conversation) => !props.pinnedConversationIds.has(conversation.id))
+      .filter((conversation) => nameMatches || matchesQuery(conversation.title, props.query));
+    return (
+      <SortableProjectRow
+        conversations={projectConversations}
+        hasSelectedConversation={props.selectedConversationId ? allConversations.some((conversation) => conversation.id === props.selectedConversationId) : false}
+        isActiveProject={props.activeProjectId === project.id}
+        isOpen={filtering || openProjectIds.has(project.id)}
+        isConversationListExpanded={filtering || expandedConversationProjectIds.has(project.id)}
+        isPinnedConversation={(conversationId) => props.pinnedConversationIds.has(conversationId)}
+        key={project.id}
+        onConversationMenuAction={props.onConversationMenuAction}
+        onCreateConversation={navigate(props.onCreateConversation)}
+        onProjectMenuAction={props.onProjectMenuAction}
+        renderConversationRow={renderConversationRow}
+        onSelectConversation={navigate(props.onSelectConversation)}
+        onSelectProject={props.onSelectProject}
+        onToggleConversationList={toggleProjectConversations}
+        onToggleOpen={toggleProjectOpen}
+        placement={placement}
+        project={project}
+        selectedConversationId={props.selectedConversationId}
+        sortableId={sortableId}
+      />
+    );
+  };
 
   return (
-    <div className={cn("project-session-tree", activeProjectDragId && "project-drag-active")}>
-        {pinnedConversations.length > 0 ? (
-          <SidebarGroup className="project-section pinned-project-section">
-            {renderProjectGroupLabel(t("sidebar.pinned"), <Pin size={15} />)}
-            <SidebarMenu className="pinned-tree-list">
-              {pinnedConversations.map((conversation) => renderConversationRow(conversation, true))}
-            </SidebarMenu>
-          </SidebarGroup>
-        ) : null}
-        <SidebarGroup>
-            {renderProjectGroupLabel(t("sidebar.projects"), <Boxes size={15} />, (
-              <span className="inline-flex items-center gap-0.5">
-              {globalDraftProject ? (
-                <Button
-                  aria-label={t("sidebar.newSession")}
-                  className="project-add-button"
-                  onClick={() => props.onCreateConversation(globalDraftProject)}
-                  size="icon-sm"
-                  title={t("sidebar.newSession")}
-                  type="button"
-                  variant="ghost"
-                >
-                  <SquarePen size={15} />
-                </Button>
-              ) : null}
-              <Button
-                aria-label={t("sidebar.addProject")}
-                className="project-add-button"
-                onClick={props.onCreateProject}
-                size="icon-sm"
-                title={t("sidebar.addProject")}
-                type="button"
-                variant="ghost"
-              >
-                <FolderPlus size={15} />
-              </Button>
-              </span>
-            ))}
-            <SidebarMenu>
-              {renderSortableProjectSection(props.projects)}
-              {props.projects.length === 0 ? (
-                <SidebarMenuItem>
-                  {/* WorkbenchApp mounts this sidebar only after the authoritative snapshot exists. */}
-                  {/* WorkbenchApp 仅在权威快照存在后挂载此侧栏。 */}
-                  <SidebarMenuButton className="muted" tooltip={t("sidebar.addProject")} onClick={navigate(props.onCreateProject)}>
-                    <FolderPlus size={16} />
-                    <span className="vcn-sidebar-label">
-                      <strong>{t("sidebar.noProjects")}</strong>
-                      <small>{t("project.sidebar.addAFolderTo")}</small>
-                    </span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ) : null}
-            </SidebarMenu>
-          </SidebarGroup>
-        {unlinkedConversations.length > 0 ? (
-          <SidebarGroup className="project-section unlinked-conversation-section">
-            {renderProjectGroupLabel(t("sidebar.unlinkedConversations"), <Folder size={15} />)}
-            <SidebarMenu className="unlinked-conversation-list">
-              {unlinkedConversations.map((conversation) => renderConversationRow(conversation))}
-            </SidebarMenu>
-          </SidebarGroup>
-        ) : null}
+    <div className="vk-project-tree" data-sorting={sorting ? "" : undefined}>
+      <ProjectTreeSection
+        conversations={listedConversations}
+        emptyNotice={unlinkedConversations.length === 0
+          ? <SidebarMenuItem><div className="vk-tree-blank">{t("sidebar.noMatches")}</div></SidebarMenuItem>
+          : null}
+        filtering={filtering}
+        isConversationVisible={(conversation) => matchesQuery(conversation.title, props.query)}
+        isProjectVisible={isProjectVisible}
+        onCreateProject={(groupId) => navigate(props.onCreateProject)(groupId)}
+        onGroupAction={props.onProjectGroupAction}
+        onSortingChange={setSorting}
+        projectTree={props.projectTree ?? EMPTY_PROJECT_TREE}
+        projects={props.projects}
+        renderPinnedConversation={(conversation, sortable) => renderConversationRow(conversation, true, sortable)}
+        renderProjectRow={renderProjectRow}
+        sessionCount={(projectId) => conversationsByProject[projectId]?.length ?? 0}
+      />
+      {unlinkedConversations.length > 0 ? (
+        <section>
+          <TreeHead icon={<Folder aria-hidden="true" />} label={t("sidebar.unlinkedConversations")} />
+          <SidebarMenu>
+            {unlinkedConversations.map((conversation) => renderConversationRow(conversation))}
+          </SidebarMenu>
+        </section>
+      ) : null}
     </div>
   );
 }

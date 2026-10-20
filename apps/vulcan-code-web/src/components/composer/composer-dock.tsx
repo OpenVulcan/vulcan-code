@@ -17,14 +17,12 @@ import type {
   ComposerTraceCallback,
 } from "@/components/composer/composer-control-types";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
-import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
@@ -107,6 +105,11 @@ export function ComposerDock(props: {
   // Whether the dock is visually centered for an empty conversation.
   // 输入区浮层是否在空会话中居中显示。
   emptyMode: boolean;
+  // Start content of an empty conversation, stacked in the dock column around the composer so the opening
+  // heading, the draft controls and the composer can never overlap.
+  // 空会话的起始内容，叠放在停靠层列中输入区的上下方，使开场标题、草稿控件与输入区永不重叠。
+  startHero?: React.ReactNode;
+  startFooter?: React.ReactNode;
   // Slash commands projected by the shared workbench service.
   // 共享工作台服务投影出的 slash 指令。
   slashCommands: ComposerSlashCommandSummary[];
@@ -278,6 +281,7 @@ export function ComposerDock(props: {
   const draftOwner = props.conversationId === null ? draftContext : null;
   const [draftState, updateDraftState] = useDedicatedDraft(draftOwner?.draftId ?? null);
   const dedicatedWizardShown = draftOwner !== null && draftState.kind === "dedicated";
+  const startShown = props.emptyMode && !dedicatedWizardShown;
   const [dedicatedCreating, setDedicatedCreating] = React.useState(false);
   // dockRef measures only in-flow composer content; portaled and floating status controls stay outside this height.
   // dockRef 只测量布局流内的输入区内容；Portal 状态与浮动控件不参与该高度。
@@ -305,35 +309,30 @@ export function ComposerDock(props: {
 
   return (
     <div
-      className={cn(
-        "composer-dock",
-        // The wizard spans the conversation height instead of floating like the composer.
-        // 向导占满会话高度，而不像输入区那样悬浮。
-        dedicatedWizardShown ? "dedicated-wizard-mode" : props.emptyMode && "empty-mode",
-      )}
+      className="vk-dock"
+      // The wizard spans the conversation height instead of floating like the composer.
+      // 向导占满会话高度，而不像输入区那样悬浮。
+      data-mode={dedicatedWizardShown ? "wizard" : props.emptyMode ? "empty" : undefined}
       ref={dockRef}
     >
       {props.showScrollToBottom ? (
-        <div className="composer-floating-status-stack">
-          <div className="scroll-to-bottom-layer">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label={t("composer.scrollToBottom")}
-                  className="scroll-to-bottom-button"
-                  onClick={props.onScrollToBottom}
-                  size="icon"
-                  type="button"
-                  variant="outline"
-                >
-                  <ArrowDown size={18} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">{t("composer.scrollToBottom")}</TooltipContent>
-            </Tooltip>
-          </div>
+        <div className="vk-dock-float">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                aria-label={t("composer.scrollToBottom")}
+                className="vk-jump"
+                onClick={props.onScrollToBottom}
+                type="button"
+              >
+                <ArrowDown size={18} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{t("composer.scrollToBottom")}</TooltipContent>
+          </Tooltip>
         </div>
       ) : null}
+      {startShown ? props.startHero : null}
       {draftOwner ? (
         <DedicatedDraftStrip
           disabled={dedicatedCreating || draftOwner.submissionPending}
@@ -412,6 +411,7 @@ export function ComposerDock(props: {
       />
       </DedicatedComposerContext.Provider>
       )}
+      {startShown ? props.startFooter : null}
       {props.todolistStatusHost && visibleSessionTodolist
         ? createPortal(
           <ComposerSessionProgressCapsule
@@ -423,9 +423,9 @@ export function ComposerDock(props: {
         : null}
       {props.runtimeStatusHost && props.runtimeCue
         ? createPortal(
-          <div className="composer-runtime-cue" aria-live="polite" aria-busy="true">
-            <span className="shimmer">{props.runtimeCue.text}</span>
-          </div>,
+          <span className="vk-status-item" data-static="" aria-live="polite" aria-busy="true">
+            <span className="vk-shimmer-text">{props.runtimeCue.text}</span>
+          </span>,
           props.runtimeStatusHost,
         )
         : null}

@@ -25,15 +25,6 @@ export interface WorkspacePagePanelDescriptor {
   // Gap between the reserved panel and centered content.
   // 内联面板与居中内容之间的间距。
   inlineGap?: number;
-  // Additional root class name for page-specific layout hooks.
-  // 页面专用布局钩子使用的附加根类名。
-  className?: string;
-  // Additional content shell class name for scroll and padding rules.
-  // 滚动与留白规则使用的附加内容外壳类名。
-  contentShellClassName?: string;
-  // Additional content class name for page-specific inner sizing.
-  // 页面专用内部尺寸规则使用的附加内容类名。
-  contentClassName?: string;
   // Rendered panel body, including its own expanded and collapsed controls.
   // 渲染的面板主体，包含自身展开与折叠控件。
   panel: React.ReactNode;

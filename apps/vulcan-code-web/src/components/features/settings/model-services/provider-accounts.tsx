@@ -1,7 +1,6 @@
 import * as React from "react"
-import { Boxes, ExternalLink, KeyRound, ListChecks, MoreHorizontal, Pencil, RefreshCw, Star, Trash2, UserRound } from "lucide-react"
+import { Boxes, ExternalLink, KeyRound, ListChecks, MoreHorizontal, Pencil, RefreshCw, Star, Trash2 } from "lucide-react"
 
-import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context"
 import { CredentialModelAccessDialog } from "@/components/features/settings/credential-model-access-dialog"
 import {
   credentialSupportsModelSynchronization,
@@ -11,15 +10,15 @@ import {
 import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { PageEmptyState } from "@/components/page"
 import { credentialUsageIsNonPlanAccount, useCredentialUsageOverview } from "@/components/public-ai/credential-usage-overview"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui-kit/primitives/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Switch } from "@/components/ui/switch"
+} from "@/ui-kit/primitives/dropdown-menu"
+import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n } from "@/i18n"
 import {
   queryPublicAiConnectionUsage,
@@ -71,7 +70,7 @@ export function ProviderAccounts(props: ProviderAccountsProps) {
   return (
     <>
       {connections.length > 0 ? (
-        <div className="model-services-accounts">
+        <div className="vk-ms-accounts">
           {connections.map((connection) => (
             <AccountCard
               alerts={props.alerts.filter((alert) => alert.connectionId === connection.id)}
@@ -177,40 +176,38 @@ function AccountCard(props: AccountCardProps) {
   const catalogError = props.alerts.find((alert) => alert.kind === "catalog_error")?.detail
   const modelCount = snapshot.catalogs[connection.id]?.models.length ?? 0
   return (
-    <article className="model-services-account" data-state={health}>
-      <header className="model-services-account-top">
-        <span className="model-services-account-name">
-          {isDefault ? <Star aria-label={t("settings.credentials.currentDefault")} className="model-services-account-default" role="img" /> : null}
+    <article className="vk-ms-account" data-state={health}>
+      <header className="vk-ms-account-top">
+        <span className="vk-ms-account-name">
+          {isDefault ? <Star aria-label={t("settings.credentials.currentDefault")} className="vk-ms-account-default" role="img" /> : null}
           <strong title={connection.display_name}>{connection.display_name}</strong>
         </span>
         <AccountMenu {...props} isDefault={isDefault} profile={profile} toolsOnly={toolsOnly} />
       </header>
-      <div className="model-services-chip-row">
-        <span className="model-services-chip">{presentation.title}</span>
-        {presentation.tags.map((tag) => <span className="model-services-chip" key={tag}>{tag}</span>)}
+      <div className="vk-ms-chip-row">
+        <span className="vk-ms-chip">{presentation.title}</span>
+        {presentation.tags.map((tag) => <span className="vk-ms-chip" key={tag}>{tag}</span>)}
       </div>
       <AccountUsage connection={connection} profile={profile} signupUrl={providerSignupUrl(provider)} usage={props.usage} />
-      {catalogError ? <p className="model-services-account-error" title={catalogError}>{catalogError}</p> : null}
-      <footer className="model-services-account-foot">
-        <span className="model-services-status" data-state={health}>
+      {catalogError ? <p className="vk-ms-account-error" title={catalogError}>{catalogError}</p> : null}
+      <footer className="vk-ms-account-foot">
+        <span className="vk-ms-status" data-state={health}>
           <i aria-hidden="true" />
           {healthLabel(health, props.alerts, t)}
           {!toolsOnly && connection.enabled ? ` · ${t("settings.modelServices.connect.enabled").replace("{count}", String(modelCount))}` : null}
         </span>
-        <span className="model-services-account-controls">
+        <span className="vk-ms-account-controls">
           {!toolsOnly ? (
-            <Button aria-pressed={props.scoped} className="model-services-scope-button" onClick={props.onScope} size="xs" type="button" variant="ghost">
+            <Button aria-pressed={props.scoped} className="vk-ms-scope-button" onClick={props.onScope} size="xs" type="button" variant="ghost">
               {t("settings.modelServices.account.onlyThis")}
             </Button>
           ) : null}
-          {provider.credential_directory_visibility !== "core_account" ? (
-            <Switch
-              aria-label={connection.enabled ? t("settings.credentials.disable") : t("settings.credentials.enable")}
-              checked={connection.enabled}
-              disabled={props.busy}
-              onCheckedChange={props.onEnabledChange}
-            />
-          ) : null}
+          <Switch
+            aria-label={connection.enabled ? t("settings.credentials.disable") : t("settings.credentials.enable")}
+            checked={connection.enabled}
+            disabled={props.busy}
+            onCheckedChange={props.onEnabledChange}
+          />
         </span>
       </footer>
     </article>
@@ -234,9 +231,7 @@ function healthLabel(health: HealthState, alerts: readonly ProviderAlert[], t: R
 // AccountMenu 收纳无需一眼看到的账号操作。
 function AccountMenu(props: AccountCardProps & { isDefault: boolean; profile: PublicAiCredentialProfile | undefined; toolsOnly: boolean }) {
   const { t } = useI18n()
-  const account = React.useContext(OpenVulcanAccountContext)
   const { connection } = props
-  const core = props.provider.credential_directory_visibility === "core_account"
   const usageSupported = props.profile?.account_usage_query !== "unsupported"
     && (!connection.usage_requires_management_key || connection.has_management_key)
   const directoryKind = props.snapshot.connectionModelAccessPolicyRecords
@@ -253,11 +248,7 @@ function AccountMenu(props: AccountCardProps & { isDefault: boolean; profile: Pu
         ><MoreHorizontal /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        {core ? (
-          <DropdownMenuItem onSelect={() => account?.setOpen(true)}><UserRound />{t("openvulcan.account.manage")}</DropdownMenuItem>
-        ) : (
-          <DropdownMenuItem disabled={props.busy} onSelect={props.onEdit}><Pencil />{t("settings.credentials.edit")}</DropdownMenuItem>
-        )}
+        <DropdownMenuItem disabled={props.busy} onSelect={props.onEdit}><Pencil />{t("settings.credentials.edit")}</DropdownMenuItem>
         {usageSupported ? (
           <DropdownMenuItem disabled={props.busy || !connection.enabled} onSelect={props.onRefreshUsage}><RefreshCw />{t("settings.credentials.refreshUsage")}</DropdownMenuItem>
         ) : null}
@@ -270,12 +261,8 @@ function AccountMenu(props: AccountCardProps & { isDefault: boolean; profile: Pu
         {!props.isDefault ? (
           <DropdownMenuItem disabled={blocked} onSelect={props.onSetDefault}><Star />{t("settings.credentials.setDefault")}</DropdownMenuItem>
         ) : null}
-        {!core ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={props.busy} onSelect={props.onDelete} variant="destructive"><Trash2 />{t("settings.credentials.remove")}</DropdownMenuItem>
-          </>
-        ) : null}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled={props.busy} onSelect={props.onDelete} variant="destructive"><Trash2 />{t("settings.credentials.remove")}</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -295,23 +282,23 @@ function AccountUsage(props: {
   const balanceOnly = credentialUsageIsNonPlanAccount(props.profile)
   const { model } = overview
   return (
-    <div className="model-services-usage">
-      <div className="model-services-usage-facts">
+    <div className="vk-ms-usage">
+      <div className="vk-ms-usage-facts">
         <span>{model.planLabel}<b>{model.planValue}</b></span>
         {!unsupported ? <span>{model.balanceLabel}<b>{model.balanceValue}</b></span> : null}
       </div>
       {unsupported ? (
-        <p className="model-services-usage-note">
+        <p className="vk-ms-usage-note">
           {t("composer.accountCard.usageUnsupported")}
           {props.signupUrl ? (
             <a href={props.signupUrl} rel="noreferrer" target="_blank">
               {t("settings.modelServices.usage.officialSite")}
-              <ExternalLink aria-hidden="true" className="size-3" />
+              <ExternalLink aria-hidden="true" className="vk-icon" />
             </a>
           ) : null}
         </p>
       ) : balanceOnly ? null : (
-        <div className="model-services-usage-quota">{overview.quotaContent}</div>
+        <div className="vk-ms-usage-quota">{overview.quotaContent}</div>
       )}
     </div>
   )

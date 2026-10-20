@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client"
 import { afterAll, beforeAll, expect, it, vi } from "vitest"
 import "./vmm-native-select.test-fixture"
 import { I18nProvider } from "@/i18n"
-import { TooltipProvider } from "@/components/ui/tooltip"
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip"
 import { loadPublicAiSettings, savePublicAiInferenceRoute } from "@/service/settings-actions-service"
 import type { PublicAiInferenceRoute, PublicAiInternalInferenceCandidate, PublicAiSettingsSnapshot } from "@/types"
 import { VmmInferenceSettings } from "./vmm-inference-settings"
@@ -152,7 +152,7 @@ it("shows a compact success status and prioritizes a diagnostic in an accessible
     // status supports keyboard focus as well as pointer hover.
     // status 同时支持键盘聚焦与指针悬停。
     const status = failed.container.querySelector<HTMLButtonElement>('[aria-label="当前路由不可执行：credential rejected"]')!
-    expect(status.classList.contains("text-destructive")).toBe(true)
+    expect(status.getAttribute("data-tone")).toBe("bad")
     expect(status.querySelector("svg.lucide-circle-alert")).not.toBeNull()
     await act(async () => status.focus())
     expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("credential rejected")

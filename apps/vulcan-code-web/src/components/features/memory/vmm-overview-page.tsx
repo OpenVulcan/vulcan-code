@@ -11,16 +11,16 @@ import {
   UserRound,
 } from "lucide-react"
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription, AlertTitle } from "@/ui-kit/primitives/alert"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
+} from "@/ui-kit/primitives/card"
 import { useI18n } from "@/i18n"
 import type { TranslationKey } from "@/i18n-messages"
 import type {
@@ -33,6 +33,8 @@ import type {
   VmmSetupState,
 } from "@/types"
 import { formatDateTime } from "@/lib/display-format"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // VmmOverviewPageProps defines the structured snapshot and user actions for the status overview.
 // VmmOverviewPageProps 定义状态总览使用的结构化快照与用户操作。
@@ -76,22 +78,22 @@ function VmmOverviewPage({
 
   if (!configured) {
     return (
-      <div className="flex w-full min-w-0 flex-col gap-4">
+      <div className="vk-form-loose">
         <Card variant="outlined">
-          <CardHeader className="items-start gap-3 sm:flex-row">
-            <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-              <BrainCircuit className="size-5" aria-hidden="true" />
+          <CardHeader className="vk-mem-hero">
+            <div className="vk-mem-hero-mark">
+              <BrainCircuit className="vk-icon" aria-hidden="true" />
             </div>
-            <div className="space-y-1">
+            <div className="vk-form-tight">
               <CardTitle>{t("vmm.experience.quickSetup.title")}</CardTitle>
-              <CardDescription className="max-w-2xl">
+              <CardDescription className="vk-mem-measure">
                 {t("vmm.experience.quickSetup.description")}
               </CardDescription>
             </div>
           </CardHeader>
           <CardContent>
             <Button disabled={busy} onClick={onOpenSetup} type="button">
-              <Settings2 className="size-4" aria-hidden="true" />
+              <Settings2 className="vk-icon" aria-hidden="true" />
               {t("vmm.experience.quickSetup.action")}
             </Button>
           </CardContent>
@@ -102,19 +104,19 @@ function VmmOverviewPage({
   }
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-4">
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(18rem,0.7fr)]">
+    <div className="vk-form-loose">
+      <div className="vk-mem-overview">
         <Card>
           <CardHeader>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="space-y-1">
+            <div className="vk-mem-tile-head">
+              <div className="vk-form-tight">
                 <CardTitle>{t("vmm.experience.title")}</CardTitle>
                 <CardDescription>{t("vmm.experience.subtitle")}</CardDescription>
               </div>
               <VmmHealthBadge health={state.health} />
             </div>
           </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2">
+          <CardContent className="vk-form-grid">
             <VmmStateRow
               label={t("vmm.experience.deployment")}
               value={t(vmmDeploymentKey(state.deployment))}
@@ -134,19 +136,19 @@ function VmmOverviewPage({
             {externalIdentity ? (
               <>
                 <VmmStateRow
-                  icon={<FolderKanban className="size-4" aria-hidden="true" />}
+                  icon={<FolderKanban className="vk-icon" aria-hidden="true" />}
                   label={t("vmm.experience.currentProject")}
                   value={snapshot.displayIdentity.projectPath ?? t("vmm.experience.noProject")}
                 />
                 <VmmStateRow
-                  icon={<UserRound className="size-4" aria-hidden="true" />}
+                  icon={<UserRound className="vk-icon" aria-hidden="true" />}
                   label={t("vmm.experience.currentUser")}
                   value={snapshot.displayIdentity.userName ?? t("vmm.experience.noUser")}
                 />
               </>
             ) : (
               <VmmStateRow
-                icon={<Database className="size-4" aria-hidden="true" />}
+                icon={<Database className="vk-icon" aria-hidden="true" />}
                 label={t("vmm.experience.defaultMemoryMode")}
                 value={t(vmmNativeBindingModeKey(snapshot.globalDraft.nativeProjectBindingMode))}
               />
@@ -156,12 +158,12 @@ function VmmOverviewPage({
 
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="size-4" aria-hidden="true" />
+            <CardTitle className="vk-form-inline">
+              <Activity className="vk-icon" aria-hidden="true" />
               {t("vmm.experience.activity")}
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="vk-form-stack">
             <VmmStateRow
               label={t("vmm.experience.pendingWritebacks")}
               value={String(snapshot.recentActivity.pendingWritebacks)}
@@ -188,9 +190,9 @@ function VmmOverviewPage({
 
       <VmmCapabilityCard capabilities={snapshot.capabilities} />
 
-      <div className="flex flex-wrap gap-2">
+      <div className="vk-form-chips">
         <Button disabled={busy} onClick={onOpenSetup} type="button">
-          <Settings2 className="size-4" aria-hidden="true" />
+          <Settings2 className="vk-icon" aria-hidden="true" />
           {t("vmm.experience.reconfigure")}
         </Button>
         <Button
@@ -199,11 +201,11 @@ function VmmOverviewPage({
           type="button"
           variant="outline"
         >
-          <RefreshCw className="size-4" aria-hidden="true" />
+          <RefreshCw className="vk-icon" aria-hidden="true" />
           {t("vmm.experience.refresh")}
         </Button>
         <Button disabled={busy} onClick={onOpenAdvanced} type="button" variant="ghost">
-          <Settings2 className="size-4" aria-hidden="true" />
+          <Settings2 className="vk-icon" aria-hidden="true" />
           {t("vmm.experience.openAdvanced")}
         </Button>
       </div>
@@ -239,9 +241,9 @@ function VmmHealthBadge({ health }: { health: VmmHealthState }) {
   return (
     <Badge variant={healthy ? "default" : health === "unavailable" ? "destructive" : "secondary"}>
       {healthy ? (
-        <CheckCircle2 className="size-3.5" aria-hidden="true" />
+        <CheckCircle2 className="vk-icon" aria-hidden="true" />
       ) : (
-        <CircleAlert className="size-3.5" aria-hidden="true" />
+        <CircleAlert className="vk-icon" aria-hidden="true" />
       )}
       {t(vmmHealthKey(health))}
     </Badge>
@@ -260,7 +262,7 @@ function VmmPrerequisiteCard({ prerequisites }: { prerequisites: VmmPrerequisite
       <CardHeader>
         <CardTitle>{t("vmm.experience.prerequisites")}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-2">
+      <CardContent className="vk-form-stack">
         {prerequisites.map((prerequisite) => (
           <Alert key={prerequisite.id} variant={prerequisite.severity === "error" ? "destructive" : "default"}>
             <CircleAlert aria-hidden="true" />
@@ -268,7 +270,7 @@ function VmmPrerequisiteCard({ prerequisites }: { prerequisites: VmmPrerequisite
             <AlertDescription>
               {t(vmmPrerequisiteDescriptionKey(prerequisite.id))}
               {prerequisite.technicalDetail ? (
-                <span className="mt-1 block break-words font-mono text-xs">
+                <span className="vk-form-codeline vk-mem-block">
                   {prerequisite.technicalDetail}
                 </span>
               ) : null}
@@ -287,18 +289,18 @@ function VmmCapabilityCard({ capabilities }: { capabilities: VmmCapabilitySummar
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Database className="size-4" aria-hidden="true" />
+        <CardTitle className="vk-form-inline">
+          <Database className="vk-icon" aria-hidden="true" />
           {t("vmm.experience.capabilities")}
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <CardContent className="vk-mem-caps">
         {capabilities.map((capability) => (
           <div
-            className="flex items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2"
+            className="vk-mem-cap"
             key={capability.id}
           >
-            <span className="min-w-0 truncate text-sm">{t(vmmCapabilityKey(capability.id))}</span>
+            <span className="vk-truncate vk-form-sm">{t(vmmCapabilityKey(capability.id))}</span>
             <Badge variant={capability.available && capability.enabled ? "default" : "outline"}>
               {t(capability.available && capability.enabled
                 ? "vmm.experience.state.available"
@@ -323,12 +325,12 @@ function VmmStateRow({
   value: string
 }) {
   return (
-    <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2">
-      <span className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+    <div className="vk-mem-cap">
+      <span className="vk-form-inline vk-form-text">
         {icon}
-        <span className="truncate">{label}</span>
+        <span className="vk-truncate">{label}</span>
       </span>
-      <strong className="truncate text-sm font-medium">{value}</strong>
+      <strong className="vk-form-name">{value}</strong>
     </div>
   )
 }

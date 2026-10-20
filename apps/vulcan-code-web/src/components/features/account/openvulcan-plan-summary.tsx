@@ -1,6 +1,6 @@
 import * as React from "react";
 import { LoaderCircle, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import { PageEmptyState } from "@/components/page";
@@ -70,14 +70,14 @@ export function OpenVulcanPlanSummary(props: {
       <h3>{t("openvulcan.plan.title")}</h3>
       {tier ? <span className="openvulcan-plan-tier" data-tier={tier}>{TIER_LABELS[tier] ? t(TIER_LABELS[tier]) : tier}</span> : null}
       <Button variant="ghost" size="sm" disabled={busy} data-openvulcan-plan-refresh="" onClick={() => void read()}>
-        {busy ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : <RefreshCw aria-hidden="true" />}
+        {busy ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : <RefreshCw aria-hidden="true" />}
         {t("openvulcan.usage.refresh")}
       </Button>
     </header>
     {error ? <SettingsErrorNotice message={t("openvulcan.account.failed")} detail={error} /> : null}
     {remaining !== null ? <p className="openvulcan-plan-balance">
       <span>{t("openvulcan.plan.remaining")}</span>
-      <strong>{formatMicroPoints(remaining, locale)}</strong>
+      <strong>{formatMicroPoints(remaining, locale, "floor")}</strong>
     </p> : null}
     {usage && usage.quota_windows.length > 0 ? <ul className="openvulcan-plan-lots">
       {usage.quota_windows.map((lot) => {
@@ -87,7 +87,7 @@ export function OpenVulcanPlanSummary(props: {
           <div className="openvulcan-plan-lot-head">
             <span>{SOURCE_LABELS[source] ? t(SOURCE_LABELS[source]) : source}</span>
             <span>
-              {lot.remaining && lot.total ? `${formatPoints(lot.remaining, locale)} / ${formatPoints(lot.total, locale)}` : null}
+              {lot.remaining && lot.total ? `${formatPoints(lot.remaining, locale, "floor")} / ${formatPoints(lot.total, locale, "floor")}` : null}
             </span>
           </div>
           {share !== null ? <div className="openvulcan-plan-meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={share}>

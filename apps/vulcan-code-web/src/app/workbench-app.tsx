@@ -9,9 +9,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/alert-dialog";
+import { Toaster } from "@/ui-kit/primitives/toaster";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import {
   WorkbenchLayout,
   type WorkbenchDeltaSignal,
@@ -25,7 +25,7 @@ import {
   BROWSER_SERVICE_CONNECTION_EVENT,
   type BrowserServiceConnectionDetail,
 } from "@/service";
-import { createConversationEventWindowClient } from "@/service/conversation-event-window-client";
+import { createWorkbenchConversationEventWindowClient } from "@/service/preview-conversation-event-window-client";
 import { ConversationEventWindowController } from "@/service/conversation-event-window-controller";
 import {
   activateSelectedConversationRegistryDisposalLease,
@@ -59,7 +59,7 @@ import type {
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import "../styles.css";
 
 // STREAMING_DELTA_FLUSH_MS batches hot transcript deltas so React and GC are not driven at display-frame cadence.
@@ -143,7 +143,7 @@ export function WorkbenchApp(props: {
   const [conversationEventWindowRegistry] = React.useState(() =>
     new SelectedConversationEventWindowRegistry(
       () => new ConversationEventWindowController(
-        createConversationEventWindowClient(serviceClient),
+        createWorkbenchConversationEventWindowClient(),
         undefined,
         liveStreamStore,
       ),
@@ -868,7 +868,7 @@ export function WorkbenchApp(props: {
               </AlertDialogDescription>
             </AlertDialogHeader>
             {shutdownFailure ? (
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/50 p-3 text-xs text-destructive">
+              <pre className="vk-diag">
                 {shutdownFailure}
               </pre>
             ) : null}

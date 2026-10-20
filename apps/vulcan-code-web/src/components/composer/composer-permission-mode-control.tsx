@@ -11,8 +11,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Checkbox } from "@/components/ui/checkbox";
+} from "@/ui-kit/primitives/alert-dialog";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -26,7 +26,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";
 import { ComposerUnattendedDialog } from "./composer-unattended-dialog";
 import { PermissionJudgeEntryContext } from "./permission-judge-entry-context";
@@ -82,9 +82,9 @@ function PermissionCategoryItems(props: { projectId: string }) {
   const { snapshot } = policy;
   return (
     <>
-      <DropdownMenuLabel className="flex flex-col gap-0.5">
-        <span className="text-foreground">{t("settings.permissionJudge.policy.title")}</span>
-        <span className="leading-snug font-normal">{t("permissionMode.categoriesHint")}</span>
+      <DropdownMenuLabel className="vk-menu-label">
+        <span>{t("settings.permissionJudge.policy.title")}</span>
+        <small>{t("permissionMode.categoriesHint")}</small>
       </DropdownMenuLabel>
       {policy.loadError !== null ? (
         <DropdownMenuItem disabled>{t("projectSettings.permissionJudge.loadFailed")}</DropdownMenuItem>
@@ -162,21 +162,21 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
           <button
             aria-busy={saving}
             aria-label={t("permissionMode.label")}
-            className="composer-select-trigger capability inline-flex items-center"
+            className="vk-pick"
             data-permission-mode-trigger={mode ?? "loading"}
             data-unattended={unattendedOn ? "" : undefined}
             type="button"
           >
-            <span className="composer-select-icon" data-tone={fullAccess ? "warning" : undefined}>
+            <span className="vk-pick-icon" data-tone={fullAccess ? "warn" : undefined}>
               <CurrentIcon size={15} />
             </span>
-            <span className={fullAccess ? "text-xs text-(--vcn-content-warning)" : "text-xs"}>
+            <span data-tone={fullAccess ? "warn" : undefined}>
               {current ? t(current.label) : t("permissionMode.label")}
             </span>
-            {unattendedOn ? <span className="inline-flex items-center gap-0.5 text-xs text-muted-foreground" data-unattended-chip="">
+            {unattendedOn ? <span className="vk-pick-aside" data-unattended-chip="">
               <Bot aria-hidden="true" size={13} />{t("permissionMode.unattended.chip")}
             </span> : null}
-            <ChevronDown aria-hidden="true" className="composer-select-chevron" />
+            <ChevronDown aria-hidden="true" className="vk-pick-chevron" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" side="top" width="lg" aria-busy={saving}>
@@ -189,23 +189,18 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
               return (
                 <DropdownMenuRadioItem
                   key={option.value}
-                  className="items-start py-2"
                   value={option.value}
                   data-permission-mode={option.value}
                   data-needs-setup={greyed ? "" : undefined}
                   disabled={saving}
                   onSelect={(event) => choose(option.value, event)}
                 >
-                  <span className="composer-select-icon mt-0.5" data-tone={warning ? "warning" : undefined}>
+                  <span className="vk-pick-icon" data-tone={warning ? "warn" : undefined}>
                     <Icon size={14} />
                   </span>
-                  <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
-                    <span className={greyed ? "text-muted-foreground" : warning ? "text-(--vcn-content-warning)" : undefined}>
-                      {t(option.label)}
-                    </span>
-                    <span className="text-[11px] leading-snug font-normal text-muted-foreground">
-                      {t(greyed ? "permissionMode.autoApproveNeedsSetup" : option.hint)}
-                    </span>
+                  <span className="vk-menu-label" data-muted={greyed || undefined} data-tone={warning ? "warn" : undefined}>
+                    <span>{t(option.label)}</span>
+                    <small>{t(greyed ? "permissionMode.autoApproveNeedsSetup" : option.hint)}</small>
                   </span>
                 </DropdownMenuRadioItem>
               );
@@ -216,13 +211,13 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
               <DropdownMenuSeparator />
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger data-auto-approve-settings="">
-                  <span className="composer-select-icon"><SlidersHorizontal size={14} /></span>
-                  <span className="flex-1">{t("permissionMode.autoSettings")}</span>
-                  {unattendedOn ? <span className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground">
+                  <span className="vk-pick-icon"><SlidersHorizontal size={14} /></span>
+                  <span className="vk-menu-text">{t("permissionMode.autoSettings")}</span>
+                  {unattendedOn ? <span className="vk-pick-aside">
                     <Bot aria-hidden="true" size={12} />{t("permissionMode.unattended.chip")}
                   </span> : null}
                 </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="w-72" data-auto-approve-settings-menu="">
+                <DropdownMenuSubContent className="vk-pick-menu" data-size="wide" data-auto-approve-settings-menu="">
                   {props.projectId !== null && !needsSetup ? (
                     <>
                       <PermissionCategoryItems projectId={props.projectId} />
@@ -230,17 +225,14 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
                     </>
                   ) : null}
                   <DropdownMenuItem
-                    className="items-start py-2"
                     data-unattended-entry={unattendedOn ? "on" : "off"}
                     disabled={!unattended.available || unattended.saving}
                     onSelect={() => setEditingUnattended(true)}
                   >
-                    <span className="composer-select-icon mt-0.5"><Bot size={14} /></span>
-                    <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
+                    <span className="vk-pick-icon"><Bot size={14} /></span>
+                    <span className="vk-menu-label">
                       <span>{t(unattendedOn ? "permissionMode.unattended.menuOn" : "permissionMode.unattended.menuOff")}</span>
-                      <span className="text-[11px] leading-snug font-normal text-muted-foreground">
-                        {t(unattended.available ? "permissionMode.unattended.menuHint" : "permissionMode.unattended.draftHint")}
-                      </span>
+                      <small>{t(unattended.available ? "permissionMode.unattended.menuHint" : "permissionMode.unattended.draftHint")}</small>
                     </span>
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
@@ -256,7 +248,7 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
             <AlertDialogTitle>{t("permissionMode.fullAccessConfirmTitle")}</AlertDialogTitle>
             <AlertDialogDescription>{t("permissionMode.fullAccessConfirmBody")}</AlertDialogDescription>
           </AlertDialogHeader>
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <label className="vk-check-label">
             <Checkbox
               checked={acknowledged}
               data-full-access-acknowledge=""

@@ -20,10 +20,10 @@ import type {
   ProviderManifestCandidatePreview,
   ProviderSyncReport,
 } from "@/types"
-import { Badge } from "@/components/ui/badge"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Button } from "@/components/ui/button"
-import { DisclosureSection } from "@/components/ui/disclosure"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Button } from "@/ui-kit/primitives/button"
+import { DisclosureSection } from "@/ui-kit/primitives/disclosure"
 import {
   Table,
   TableBody,
@@ -31,8 +31,11 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table"
+} from "@/ui-kit/primitives/table"
+import { PageEmptyState } from "@/components/page"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/provider-manifest.css"
 import { formatDateTime, errorMessage } from "@/lib/display-format"
 
 
@@ -326,14 +329,14 @@ export function ProviderManifestStatusPanel() {
   const none = t("settings.manifest.none")
 
   return (
-    <section className="rounded-xl border p-4">
-      <div className="flex items-center justify-between gap-2">
+    <section className="vk-form-box vk-mf">
+      <div className="vk-form-head">
         <div>
-          <h3 className="flex items-center gap-2 text-sm font-semibold">
-            <ShieldCheck className="size-4" />
+          <h3 className="vk-mf-title">
+            <ShieldCheck aria-hidden="true" />
             {t("settings.manifest.title")}
           </h3>
-          <p className="text-xs text-muted-foreground">
+          <p>
             {t("settings.manifest.description")}
           </p>
         </div>
@@ -344,23 +347,23 @@ export function ProviderManifestStatusPanel() {
           size="sm"
           variant="outline"
         >
-          <RefreshCw className="size-3.5" />
+          <RefreshCw aria-hidden="true" />
           {t("settings.manifest.refresh")}
         </Button>
       </div>
 
       {error ? (
-        <div className="mt-3 rounded-lg border border-destructive/40 p-3 text-sm text-destructive" role="alert">
+        <div className="vk-form-fault" role="alert">
           {error}
         </div>
       ) : null}
 
       {!statuses ? (
-        <StreamPlaceholder className="mt-3" label={t("ui.loading")} shape="rows" count={3} />
+        <StreamPlaceholder label={t("ui.loading")} shape="rows" count={3} />
       ) : statuses.length === 0 ? (
-        <div className="mt-3 text-sm text-muted-foreground">{t("settings.manifest.empty")}</div>
+        <PageEmptyState title={t("settings.manifest.empty")} />
       ) : (
-        <div className="mt-3 overflow-x-auto">
+        <div className="vk-mf-body">
           <Table>
             <TableHeader>
               <TableRow>
@@ -369,108 +372,98 @@ export function ProviderManifestStatusPanel() {
                 <TableHead>{t("settings.manifest.column.revision")}</TableHead>
                 <TableHead>{t("settings.manifest.column.hash")}</TableHead>
                 <TableHead>{t("settings.manifest.column.sync")}</TableHead>
-                <TableHead className="text-right">{t("settings.manifest.column.actions")}</TableHead>
+                <TableHead className="vk-mf-end">{t("settings.manifest.column.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {statuses.map((status) => (
                 <TableRow key={status.provider_id}>
-                  <TableCell className="font-medium">
-                    <div>{status.provider_id}</div>
+                  <TableCell className="vk-mf-name">
+                    <strong>{status.provider_id}</strong>
                     {status.critical_error ? (
-                      <div
-                        className="mt-1 max-w-72 text-xs font-normal text-destructive"
-                        title={status.critical_error.message}
-                      >
+                      <small className="vk-mf-flag" data-tone="bad" title={status.critical_error.message}>
                         {formatMessage(t("settings.manifest.criticalError"), { kind: status.critical_error.failure_kind, message: status.critical_error.message })}
-                      </div>
+                      </small>
                     ) : status.status_error ? (
-                      <div
-                        className="mt-1 max-w-72 text-xs font-normal text-destructive"
-                        title={status.status_error.message}
-                      >
+                      <small className="vk-mf-flag" data-tone="bad" title={status.status_error.message}>
                         {formatMessage(t("settings.manifest.statusIncomplete"), { kind: status.status_error.failure_kind, message: status.status_error.message })}
-                      </div>
+                      </small>
                     ) : status.bundled_failure ? (
-                      <div
-                        className="mt-1 max-w-72 text-xs font-normal text-[var(--vcn-content-warning)]"
-                        title={status.bundled_failure.message}
-                      >
+                      <small className="vk-mf-flag" data-tone="warn" title={status.bundled_failure.message}>
                         {formatMessage(t("settings.manifest.bundledUnavailable"), { kind: status.bundled_failure.failure_kind })}
-                      </div>
+                      </small>
                     ) : null}
                   </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      <Badge variant={status.active?.layer === "bundled" ? "secondary" : "default"}>
-                        {status.active ? activeLayerLabel(status.active.layer) : "—"}
-                      </Badge>
-                      {status.active ? (
-                        <Badge variant="outline">
-                          {formatMessage(t("settings.manifest.engineBadge"), { engine: status.active.minimum_manifest_engine, provenance: manifestProvenanceStatusLabel(status.active.provenance_status, t), count: status.active.evidence_source_count })}
-                        </Badge>
-                      ) : null}
-                    </div>
+                  <TableCell className="vk-mf-name">
+                    <strong data-layer={status.active?.layer}>{status.active ? activeLayerLabel(status.active.layer) : "—"}</strong>
+                    {status.active ? (
+                      <small className="vk-mf-flag">
+                        {formatMessage(t("settings.manifest.engineBadge"), { engine: status.active.minimum_manifest_engine, provenance: manifestProvenanceStatusLabel(status.active.provenance_status, t), count: status.active.evidence_source_count })}
+                      </small>
+                    ) : null}
                   </TableCell>
                   <TableCell>
                     {status.active?.revision ?? status.bundled?.revision ?? "—"}
                     {status.previous ? formatMessage(t("settings.manifest.previousRevision"), { revision: status.previous.revision }) : ""}
                   </TableCell>
-                  <TableCell className="font-mono text-xs">
+                  <TableCell className="vk-mono vk-faint">
                     {shortHash(status.active?.sha256 ?? status.bundled?.sha256)}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="vk-mf-name vk-mf-sync">
                     {(() => {
                       const summary = syncStatusSummary(status, t, locale)
                       if (summary.kind === "unconfigured") {
-                        return <span className="text-xs text-muted-foreground">{summary.text}</span>
+                        return <small className="vk-mf-flag">{summary.text}</small>
                       }
                       if (summary.kind === "rejected") {
                         return (
-                          <span className="inline-flex items-center gap-1 text-xs text-destructive">
-                            <CircleAlert className="size-3" />
+                          <small className="vk-mf-flag" data-tone="bad">
+                            <CircleAlert aria-hidden="true" />
                             {summary.text}
-                          </span>
+                          </small>
                         )
                       }
-                      return <span className="text-xs text-muted-foreground">{summary.text}</span>
+                      return <small className="vk-mf-flag">{summary.text}</small>
                     })()}
                     {status.quarantine.length > 0 ? (
-                      <span className="ml-1 text-xs text-[var(--vcn-content-warning)]">
+                      <small className="vk-mf-flag" data-tone="warn">
                         {formatMessage(t("settings.manifest.quarantined"), { count: status.quarantine.length })}
-                      </span>
+                      </small>
                     ) : null}
                   </TableCell>
-                  <TableCell className="text-right">
-                    <div className="inline-flex gap-1">
+                  <TableCell className="vk-mf-end">
+                    <div className="vk-mf-acts">
+                      {/* Row actions are icon buttons named by their labels, so the table keeps room for its data columns. */}
+                      {/* 行操作为以标签命名的图标按钮，使表格为数据列保留空间。 */}
                       <Button
+                        aria-label={t("settings.manifest.preview")}
                         disabled={refreshing || busyProviderId !== null || !status.sync_configured}
                         onClick={() => void previewOne(status.provider_id)}
-                        size="sm"
+                        size="icon-sm"
                         variant="ghost"
                         title={status.sync_configured ? t("settings.manifest.previewHint") : t("settings.manifest.syncNotConfigured")}
                       >
-                        <Eye className="size-3" />
-                        {t("settings.manifest.preview")}
+                        <Eye aria-hidden="true" />
                       </Button>
                       <Button
+                        aria-label={t("settings.manifest.sync")}
                         disabled={refreshing || busyProviderId !== null}
                         onClick={() => void syncOne(status.provider_id)}
-                        size="sm"
+                        size="icon-sm"
                         variant="ghost"
+                        title={t("settings.manifest.sync")}
                       >
-                        <RefreshCw className="size-3" />
-                        {t("settings.manifest.sync")}
+                        <RefreshCw aria-hidden="true" />
                       </Button>
                       <Button
+                        aria-label={t("settings.manifest.rollback")}
                         disabled={refreshing || busyProviderId !== null || !status.previous}
                         onClick={() => void rollbackOne(status.provider_id)}
-                        size="sm"
+                        size="icon-sm"
                         variant="ghost"
                         title={status.previous ? t("settings.manifest.rollbackHint") : t("settings.manifest.noPrevious")}
                       >
-                        <RotateCcw className="size-3" />
-                        {t("settings.manifest.rollback")}
+                        <RotateCcw aria-hidden="true" />
                       </Button>
                     </div>
                   </TableCell>
@@ -479,27 +472,27 @@ export function ProviderManifestStatusPanel() {
             </TableBody>
           </Table>
           {statuses.some((status) => !status.sync_configured) ? (
-            <p className="mt-2 text-xs text-muted-foreground">
+            <p className="vk-field-hint">
               {t("settings.manifest.syncNotConfiguredNote")}
             </p>
           ) : null}
           {preview ? (
-            <div className="mt-3 rounded-lg border bg-muted/20 p-3 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">{formatMessage(t("settings.manifest.candidatePreview"), { provider: preview.provider_id })}</span>
+            <div className="vk-mf-preview">
+              <div className="vk-mf-entry-head">
+                <b>{formatMessage(t("settings.manifest.candidatePreview"), { provider: preview.provider_id })}</b>
                 <Badge variant={preview.executable ? "default" : "destructive"}>
                   {preview.outcome}
                 </Badge>
-                <span className="text-muted-foreground">
+                <code>
                   r{preview.current_revision ?? "—"} → r{preview.candidate_revision ?? "—"}
-                </span>
+                </code>
               </div>
               {preview.failure_kind ? (
-                <p className="mt-2 text-destructive">
+                <p className="vk-mf-flag" data-tone="bad">
                   {preview.failure_message ? formatMessage(t("settings.manifest.failureDetail"), { kind: preview.failure_kind, message: preview.failure_message }) : preview.failure_kind}
                 </p>
               ) : null}
-              <p className="mt-2 text-muted-foreground">
+              <p>
                 {formatMessage(t("settings.manifest.previewSummary"), {
                   bindings: preview.model_binding_change_total_count,
                   bindingsTruncated: preview.model_binding_changes_truncated ? t("settings.manifest.detailsTruncated") : "",
@@ -507,7 +500,7 @@ export function ProviderManifestStatusPanel() {
                   operationsTruncated: preview.operation_changes_truncated ? t("settings.manifest.detailsTruncated") : "",
                 })}
               </p>
-              <div className="mt-2 space-y-1">
+              <div className="vk-mf-lines">
                 {preview.model_binding_changes.slice(0, 20).map((delta, index) => {
                   // binding is whichever side owns the concrete identity for this delta.
                   // binding 是此差异中持有具体身份的任一侧。
@@ -531,10 +524,10 @@ export function ProviderManifestStatusPanel() {
               </div>
             </div>
           ) : null}
-          <p className="mt-2 text-xs text-muted-foreground">
+          <p className="vk-field-hint">
             {t("settings.manifest.activationNote")}
           </p>
-          <div className="mt-4 space-y-2">
+          <div className="vk-mf-providers">
             {statuses.map((status) => {
               // activeChangeByIdentity indexes backend-classified additions and changes for active rows.
               // activeChangeByIdentity 为 active 行索引后端分类的新增与变更。
@@ -559,9 +552,9 @@ export function ProviderManifestStatusPanel() {
                     : undefined}
                   title={status.provider_id}
                 >
-                <div className="space-y-2">
+                <div className="vk-mf-ledger">
                   {status.active_model_binding_change_baseline ? (
-                    <p className="text-xs text-muted-foreground">
+                    <p className="vk-field-hint">
                       {formatMessage(t("settings.manifest.changeBaseline"), {
                         layer: activeLayerLabel(status.active_model_binding_change_baseline.layer),
                         revision: status.active_model_binding_change_baseline.revision,
@@ -571,22 +564,23 @@ export function ProviderManifestStatusPanel() {
                     </p>
                   ) : null}
                   {status.model_rules.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">{t("settings.manifest.noRules")}</p>
+                    <p className="vk-field-hint">{t("settings.manifest.noRules")}</p>
                   ) : (
                     status.model_rules.map((rule) => (
                       <div
-                        className="rounded-md bg-muted/40 px-3 py-2 text-xs"
+                        className="vk-mf-entry"
+                        data-kind="rule"
                         key={`${rule.service_entry_id}:${rule.rule_id}`}
                       >
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="font-medium">{rule.matcher.kind}:{rule.matcher.value}</span>
-                          <span className="text-muted-foreground">{formatMessage(t("settings.manifest.ruleEntry"), { entry: rule.service_entry_id })}</span>
-                          <span>{rule.selected_protocol ?? t("settings.manifest.noEffectiveProtocol")}</span>
-                          <span className="text-muted-foreground">
+                        <div className="vk-mf-entry-head">
+                          <b>{rule.matcher.kind}:{rule.matcher.value}</b>
+                          <span>{formatMessage(t("settings.manifest.ruleEntry"), { entry: rule.service_entry_id })}</span>
+                          <code>{rule.selected_protocol ?? t("settings.manifest.noEffectiveProtocol")}</code>
+                          <span>
                             {ruleProvenanceSummary(rule.field_provenance.selected_protocol, t)}
                           </span>
                         </div>
-                        <div className="mt-1 text-muted-foreground">
+                        <div>
                           {formatMessage(t("settings.manifest.ruleCandidates"), {
                             protocols: rule.supported_protocols.join(", ") || none,
                             defaultState: rule.default_enabled ? t("settings.manifest.defaultEnabled") : t("settings.manifest.defaultDisabled"),
@@ -595,10 +589,10 @@ export function ProviderManifestStatusPanel() {
                             ? formatMessage(t("settings.manifest.ruleParameters"), { ids: rule.model_parameter_ids.join(", ") })
                             : ""}
                         </div>
-                        <div className="mt-1 text-muted-foreground">
+                        <div>
                           usage [{rule.usage_profile_refs.join(", ") || none}] · request [{rule.request_profile_refs.join(", ") || none}] · response [{rule.response_profile_refs.join(", ") || none}] · operation [{rule.operation_refs.join(", ") || none}]
                         </div>
-                        <div className="mt-1 text-muted-foreground">
+                        <div>
                           {formatMessage(t("settings.manifest.ruleEvidence"), { status: manifestProvenanceStatusLabel(rule.provenance.provenance_status, t), revision: rule.provenance.manifest_revision })}
                           {rule.provenance.provenance_ref ? ` · ${rule.provenance.provenance_ref}` : t("settings.manifest.inheritsManifestSource")}
                         </div>
@@ -611,24 +605,25 @@ export function ProviderManifestStatusPanel() {
                     const activeChange = activeChangeByIdentity.get(manifestModelBindingIdentity(binding))
                     return (
                       <div
-                        className="rounded-md border px-3 py-2 text-xs"
+                        className="vk-mf-entry"
+                        data-kind="binding"
                         key={`binding:${manifestModelBindingIdentity(binding)}`}
                       >
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="font-medium">{binding.display_name}</span>
-                          <span className="font-mono text-muted-foreground">{binding.model_id}</span>
+                        <div className="vk-mf-entry-head">
+                          <b>{binding.display_name}</b>
+                          <code>{binding.model_id}</code>
                           <Badge variant="outline">{manifestModelSourceLabel(binding.model_source, t)}</Badge>
                           {activeChange ? (
                             <Badge variant={activeChange === "added" ? "secondary" : "outline"}>
                               {manifestModelBindingChangeLabel(activeChange, t)}
                             </Badge>
                           ) : null}
-                          <span>{binding.effective_protocol ?? t("settings.manifest.notExecutable")}</span>
+                          <code>{binding.effective_protocol ?? t("settings.manifest.notExecutable")}</code>
                           <Badge variant={binding.executable ? "secondary" : "destructive"}>
                             {binding.executable ? t("settings.manifest.executable") : t("settings.manifest.blocked")}
                           </Badge>
                         </div>
-                        <div className="mt-1 text-muted-foreground">
+                        <div>
                           {formatMessage(t("settings.manifest.bindingScope"), {
                             entry: binding.service_entry_id,
                             profile: binding.credential_profile_id ?? t("settings.manifest.allProfiles"),
@@ -637,7 +632,7 @@ export function ProviderManifestStatusPanel() {
                             available: binding.available_protocols.join(", ") || t("settings.manifest.notObserved"),
                           })}
                         </div>
-                        <div className="mt-1 text-muted-foreground">
+                        <div>
                           {formatMessage(t("settings.manifest.bindingSource"), {
                             source: binding.binding_source ?? none,
                             rule: binding.binding_rule_id ?? t("settings.manifest.fieldSource.providerDefaults"),
@@ -647,7 +642,7 @@ export function ProviderManifestStatusPanel() {
                               : t("settings.manifest.notObserved"),
                           })}
                         </div>
-                        <div className="mt-1 text-muted-foreground">
+                        <div>
                           {formatMessage(t("settings.manifest.capabilities"), {
                             operations: binding.capabilities?.operations?.join(", ") || none,
                             inputs: binding.capabilities?.input_resources?.join(", ") || none,
@@ -658,7 +653,7 @@ export function ProviderManifestStatusPanel() {
                             fields: Object.keys(binding.capability_provenance).length,
                           })}
                         </div>
-                        <div className="mt-1 text-muted-foreground">
+                        <div>
                           operation [{binding.operation_refs.join(", ") || none}]
                           {binding.unavailable_reason ? ` · ${binding.unavailable_reason}` : ""}
                         </div>
@@ -666,7 +661,7 @@ export function ProviderManifestStatusPanel() {
                     )
                   })}
                   {status.model_binding_total_count > Math.min(status.model_bindings.length, 200) ? (
-                    <p className="text-xs text-muted-foreground">
+                    <p className="vk-field-hint">
                       {formatMessage(t("settings.manifest.renderedBindings"), {
                         shown: Math.min(status.model_bindings.length, 200),
                         returned: status.model_bindings.length,
@@ -676,20 +671,20 @@ export function ProviderManifestStatusPanel() {
                     </p>
                   ) : null}
                   {retiredChanges.length > 0 ? (
-                    <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs">
-                      <div className="mb-1 font-medium">{t("settings.manifest.retiredModels")}</div>
+                    <div className="vk-mf-entry" data-kind="retired">
+                      <b>{t("settings.manifest.retiredModels")}</b>
                       {retiredChanges.map((delta) => {
                         // retiredBinding is guaranteed by the filtered backend delta set above.
                         // retiredBinding 已由上方后端差异过滤保证存在。
                         const retiredBinding = delta.current!
                         return (
                           <div
-                            className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground"
+                            className="vk-mf-entry-head"
                             key={`retired:${manifestModelBindingIdentity(retiredBinding)}`}
                           >
                             <Badge variant="destructive">{manifestModelBindingChangeLabel(delta.change, t)}</Badge>
                             <span>{retiredBinding.display_name}</span>
-                            <span className="font-mono">{retiredBinding.model_id}</span>
+                            <code>{retiredBinding.model_id}</code>
                             <span>{retiredBinding.service_entry_id}</span>
                             <span>{retiredBinding.effective_protocol ?? t("settings.manifest.notExecutable")}</span>
                           </div>
@@ -699,7 +694,8 @@ export function ProviderManifestStatusPanel() {
                   ) : null}
                   {status.operations.map((operation) => (
                     <div
-                      className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground"
+                      className="vk-mf-entry"
+                      data-kind="operation"
                       key={`operation:${operation.operation_id}`}
                     >
                       <div>
@@ -712,7 +708,7 @@ export function ProviderManifestStatusPanel() {
                         })}
                       </div>
                       {operation.asynchronous ? (
-                        <div className="mt-1">
+                        <div>
                           {formatMessage(t("settings.manifest.operationPolling"), {
                             poll: operation.poll_interval_ms ?? t("settings.manifest.undeclared"),
                             backoff: operation.max_backoff_ms ?? t("settings.manifest.undeclared"),
@@ -720,7 +716,7 @@ export function ProviderManifestStatusPanel() {
                           })}
                         </div>
                       ) : null}
-                      <div className="mt-1">
+                      <div>
                         {formatMessage(t("settings.manifest.operationIo"), {
                           inputs: operation.input_resources.join(", ") || none,
                           inputMimes: operation.input_mime_types.join(", ") || none,
@@ -728,7 +724,7 @@ export function ProviderManifestStatusPanel() {
                           outputMimes: operation.output_mime_types.join(", ") || none,
                         })}
                       </div>
-                      <div className="mt-1">
+                      <div>
                         {formatMessage(t("settings.manifest.operationRefs"), {
                           uploads: operation.upload_channel_refs.join(", ") || none,
                           tools: operation.tool_target_refs.join(", ") || none,
@@ -741,7 +737,8 @@ export function ProviderManifestStatusPanel() {
                   ))}
                   {status.tool_target_template_instances.map((instance) => (
                     <div
-                      className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground"
+                      className="vk-mf-entry"
+                      data-kind="operation"
                       key={`template-instance:${instance.target_id}`}
                     >
                       {templateInstanceSummary(instance)}

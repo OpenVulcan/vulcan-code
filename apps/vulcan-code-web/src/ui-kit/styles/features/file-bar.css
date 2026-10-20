@@ -1,0 +1,56 @@
+/* File bar: one line that names the single file a panel shows and switches it. The picker opens a file */
+/* menu with a filter, a folder or flat view, and a footer that says how many files there are. */
+/* 文件栏：一行标明面板当前展示的单个文件并可切换。选择器打开带筛选、目录或平铺视图以及文件数页脚的文件菜单。 */
+.vk-filebar { display: flex; flex: none; align-items: center; gap: calc(var(--vk-u) * 1); min-width: 0; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2); border-bottom: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-panel); }
+.vk-filepick { display: flex; flex: 1 1 auto; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; height: var(--vk-h-md, 2rem); padding: 0 calc(var(--vk-u) * 2); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-raised); color: var(--vk-ink); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease); }
+.vk-filepick:hover { border-color: var(--vk-line-strong); }
+.vk-filepick[aria-expanded="true"] { border-color: var(--vk-ember); }
+.vk-filepick:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-filepick-name { display: flex; flex: 1 1 auto; align-items: baseline; gap: calc(var(--vk-u) * 2); min-width: 0; overflow: hidden; white-space: nowrap; }
+.vk-filepick-name > strong { flex: none; max-width: 100%; overflow: hidden; font-size: var(--vk-fs-sm); font-weight: 600; text-overflow: ellipsis; }
+.vk-filepick-name > small { min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-overflow: ellipsis; direction: rtl; text-align: left; }
+.vk-filebar-pos { flex: none; padding: 0 calc(var(--vk-u) * 1); color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+
+.vk-file-kind { display: inline-grid; flex: none; place-items: center; width: 1.1rem; height: 1.1rem; background: var(--vk-sunken); color: var(--vk-ink-2); font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs, 0.68rem); font-weight: 700; }
+.vk-file-kind[data-k="A"] { background: color-mix(in srgb, var(--vk-ok) 16%, transparent); color: var(--vk-ok); }
+.vk-file-kind[data-k="D"] { background: color-mix(in srgb, var(--vk-bad) 14%, transparent); color: var(--vk-bad); }
+.vk-file-kind[data-k="M"] { background: color-mix(in srgb, var(--vk-warn) 16%, transparent); color: var(--vk-warn); }
+.vk-file-kind[data-k="R"] { background: color-mix(in srgb, var(--vk-info) 16%, transparent); color: var(--vk-info); }
+.vk-filestat { display: inline-flex; flex: none; gap: calc(var(--vk-u) * 1.5); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+.vk-filestat > .vk-add { color: var(--vk-diff-add-ink, var(--vk-ok)); }
+.vk-filestat > .vk-del { color: var(--vk-diff-del-ink, var(--vk-bad)); }
+
+.vk-pop.vk-filemenu { display: flex; flex-direction: column; width: min(28rem, calc(100vw - 2rem)); max-height: min(30rem, 70vh); padding: 0; }
+.vk-filemenu-head { display: flex; flex: none; align-items: center; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 1.5); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-filemenu-head > .vk-input-wrap { flex: 1 1 auto; }
+.vk-filemenu-head .vk-input { width: 100%; }
+.vk-filemenu-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 1) 0; }
+.vk-filemenu-dir { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 0.5); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-filemenu-dir > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.vk-filemenu-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 2); width: 100%; min-height: var(--vk-h-sm); padding: 0 calc(var(--vk-u) * 2.5); border: 0; background: transparent; color: var(--vk-ink); font: inherit; font-size: var(--vk-fs-sm); text-align: left; cursor: pointer; }
+.vk-filemenu-item[data-nested] { padding-left: calc(var(--vk-u) * 6); }
+.vk-filemenu-item > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-filemenu-item:hover,
+.vk-filemenu-item:focus-visible { background: var(--vk-hover); outline: none; }
+.vk-filemenu-item[aria-selected="true"] { background: var(--vk-panel); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-filemenu-none { margin: 0; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 2.5); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-filemenu-foot { display: flex; flex: none; align-items: center; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-filemenu-foot > span:first-of-type { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Project tree: a filter row, folders that open in place and file rows, and a footer naming the rules that hide */
+/* files. It fills the files tab before a file is open and the file bar's menu after. */
+/* 项目目录树：筛选行、原地展开的目录与文件行，以及说明隐藏文件规则的页脚。打开文件前铺满文件标签页，之后位于文件栏菜单中。 */
+.vk-ftree { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
+.vk-ftree-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 1) 0; }
+.vk-ftree-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); width: 100%; min-height: var(--vk-h-sm); padding: 0 calc(var(--vk-u) * 2.5) 0 calc(var(--vk-u) * 2.5 + var(--vk-depth, 0) * var(--vk-u) * 4); border: 0; background: transparent; color: var(--vk-ink); font: inherit; font-size: var(--vk-fs-sm); text-align: left; cursor: pointer; }
+.vk-ftree-row > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-ftree-row > svg { flex: none; }
+.vk-ftree-row[data-kind="dir"] { color: var(--vk-ink-2); }
+.vk-ftree-row[data-kind="dir"] > svg:first-child { color: var(--vk-ink-3); }
+.vk-ftree-row[data-kind="file"] { padding-left: calc(var(--vk-u) * 6 + var(--vk-depth, 0) * var(--vk-u) * 4); }
+.vk-ftree-row:hover,
+.vk-ftree-row:focus-visible { background: var(--vk-hover); outline: none; }
+.vk-ftree-row[aria-current="true"] { background: var(--vk-panel); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-ftree-loading { padding-left: calc(var(--vk-u) * 8); }
+.vk-filebar > .vk-filepick .vk-badge { flex: none; }
+.workspace-files-panel > .vk-page-notice { width: auto; margin: calc(var(--vk-u) * 2); }

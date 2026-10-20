@@ -1,15 +1,15 @@
 import * as React from "react";
 import { MoreHorizontal, RefreshCw, SlidersHorizontal } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button, IconButton } from "@/components/ui/button";
-import { InlineDisclosure } from "@/components/ui/disclosure";
-import { Input } from "@/components/ui/input";
-import { Progress } from "@/components/ui/progress";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure";
+import { Input } from "@/ui-kit/primitives/input";
+import { Progress } from "@/ui-kit/primitives/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
+import { Field, FieldDescription, FieldLabel } from "@/ui-kit/primitives/field";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { PluginSummary } from "@/types";
 import { PLUGIN_CAPACITY_PURPOSES, type PluginCapacityPurpose, type PluginCapacityStatus } from "@/types/plugin-runtime";
@@ -119,7 +119,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
       <RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}>
       {state.busy && <PageHint role="status">{t("ui.loading")}</PageHint>}
     </PageToolbar>
-    {(state.error || formError) && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{state.error || formError}</span></PageNotice>}
+    {(state.error || formError) && <PageNotice tone="error"><span className="vk-wrap-pre">{state.error || formError}</span></PageNotice>}
     {!state.fresh && state.observation && !state.busy && <PageNotice tone="info">{t("pluginRuntime.staleRead")}</PageNotice>}
     {state.fresh && !runtime && <PageNotice tone="info">{t("pluginRuntime.noRuntime")}</PageNotice>}
     {state.pending && <PageNotice actions={<>
@@ -137,7 +137,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
         size="sm" type="button" variant={variant}>{t(label)}</Button>;
     })} tone={receipt.phase === "committed" ? "success" : receiptActive ? "warning" : "error"}>
       <p>{formatMessage(t(capacityReceiptLabels[receipt.phase]), { name: nameOf(receipt.request.pluginId), purpose: t(capacityPurposeLabels[receipt.request.purpose]) })}</p>
-      {(receipt.error || receipt.persistenceError) && <p className="whitespace-pre-wrap break-all">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
+      {(receipt.error || receipt.persistenceError) && <p className="vk-wrap-pre">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
       <TechnicalDetails entries={[["updateId", <code key="id">{receipt.request.updateId}</code>], ["phase", <code key="phase">{receipt.phase}</code>]]}
         extra={<pre>{JSON.stringify(receipt.request, null, 2)}</pre>} />
     </PageNotice>}
@@ -193,7 +193,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
         </DialogHeader>
         {draft && <div className="plugin-capacity-form">
           {!draftCurrent && <PageNotice tone="warning">{t("pluginRuntime.staleDraft")}</PageNotice>}
-          {formError && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{formError}</span></PageNotice>}
+          {formError && <PageNotice tone="error"><span className="vk-wrap-pre">{formError}</span></PageNotice>}
           <Field>
             <FieldLabel htmlFor={`${fieldPrefix}-kind`}>{t("pluginRuntime.kind")}</FieldLabel>
             <Select onValueChange={(kind) => setDraft({ ...draft, kind: kind as PluginCapacityDraft["kind"],

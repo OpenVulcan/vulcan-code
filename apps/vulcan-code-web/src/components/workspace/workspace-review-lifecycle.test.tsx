@@ -18,7 +18,7 @@ vi.mock("@/state/conversation-event-window-react", () => ({
   useSelectedConversationEventWindowSelector: (selector: (snapshot: { owner: null }) => unknown) => selector({ owner: null }),
 }));
 vi.mock("@/service/workbench-snapshot-service", () => ({ loadWorkspaceGitCatalog: vi.fn() }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 // The transport-free parser uses the same production parsing function without requiring a browser Worker.
 // 无传输解析器使用同一生产解析函数，不依赖浏览器 Worker。
 vi.mock("@/diff/diff-parse-worker-client", async () => {
@@ -49,7 +49,7 @@ function fixture(): React.ComponentProps<typeof WorkspaceReviewPanelHost> {
   vi.mocked(loadWorkspaceGitCatalog).mockResolvedValue(catalog);
   const rejectUnused = async (): Promise<never> => { throw new Error("Unexpected audit IO"); };
   return { workbench, selectedConversationId: path, selectedDraftConversation: null, reviewFocusRequest: { sequence: 0, repositoryKey: null }, onCopyRawDiff: rejectUnused,
-    loadWorkspaceDiffSnapshot: vi.fn(async () => ({ repositoryRoot: path, unifiedDiff: "", changedFiles: 0, additions: 0, deletions: 0 })),
+    loadWorkspaceDiffSnapshot: vi.fn(async () => ({ gitRepository: true, repositoryRoot: path, unifiedDiff: "", changedFiles: 0, additions: 0, deletions: 0 })),
     loadWorkspaceDiffFileDetail: rejectUnused, loadWorkspaceDiffSearch: rejectUnused, runWorkspaceGitFileAction: rejectUnused };
 }
 

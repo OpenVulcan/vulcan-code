@@ -1,5 +1,5 @@
 import { UserRound } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 
 // accountInitial returns the first user-perceived character of name, upper-cased for scripts with case,
 // or null when there is no name to show.
@@ -27,7 +27,7 @@ export function AccountAvatar(props: {
 }) {
   const initial = accountInitial(props.name);
   return (
-    <span aria-hidden="true" className={cn("account-avatar", props.className)} data-signed-in={initial ? "" : undefined}>
+    <span aria-hidden="true" className={cx("account-avatar", props.className)} data-signed-in={initial ? "" : undefined}>
       {initial ?? <UserRound size={16} />}
     </span>
   );

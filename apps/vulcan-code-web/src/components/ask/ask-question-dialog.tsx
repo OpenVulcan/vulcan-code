@@ -9,22 +9,21 @@ import {
   CornerDownLeft,
   Info,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/ui-kit/primitives/button";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type {
   PendingQuestionOptionSummary,
   PendingQuestionPromptSummary,
   PendingQuestionSnapshot,
 } from "@/types";
-import { ToolApprovalRequest } from "./tool-approval-bar";
+import { AskRequesterLine, ToolApprovalRequest } from "./tool-approval-bar";
 import { useAskAnchorStyle } from "./use-ask-anchor-style";
 
 // AskQuestionStage describes the lightweight question bar lifecycle.
@@ -37,6 +36,9 @@ interface AskQuestionDialogProps {
   // Pending request shown by the question bar.
   // question bar 展示的待处理请求。
   request: PendingQuestionSnapshot | null;
+  // Child agent label when the request comes from a subagent of the visible conversation.
+  // 请求来自当前可见会话的子代理时的子代理标签。
+  requester?: string | null;
   // Called when the user confirms abandoning the request.
   // 用户确认放弃请求时调用。
   onReject: (requestId: string) => Promise<void>;
@@ -436,101 +438,94 @@ function AskQuestionRequest(props: AskQuestionDialogProps) {
 
   return (
     <TooltipProvider>
-      <div
-        className="pointer-events-none fixed bottom-4 z-50 flex justify-center px-4"
-        style={overlayStyle}
-      >
+      <div className="vk-ask-layer" style={overlayStyle}>
         <section
           aria-describedby={descriptionId}
           aria-labelledby={titleId}
           aria-modal="false"
-          className="pointer-events-auto max-h-[min(420px,calc(100vh-2rem))] w-full max-w-[760px] overflow-hidden rounded-2xl border border-border/80 bg-popover p-0 text-[13px] text-popover-foreground shadow-2xl outline-none"
+          className="vk-ask"
+          data-kind="question"
           onKeyDown={handleDialogKeyDown}
           ref={questionBarRef}
           role="dialog"
           tabIndex={-1}
         >
-          <div className="flex max-h-[min(420px,calc(100vh-2rem))] min-h-0 flex-col gap-2.5 p-3.5">
-            <h2 className="sr-only" id={titleId}>{t("ask.title")}</h2>
-            <p className="sr-only" id={descriptionId}>
-              {t("ask.description")}
-            </p>
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1 text-sm leading-5 font-semibold text-popover-foreground">
-                {activeQuestion.question}
-              </div>
-              <AskQuestionProgress
-                activeIndex={safeActiveIndex}
-                disabled={busy}
-                onNext={() => moveQuestion(1)}
-                onPrevious={() => moveQuestion(-1)}
+          <h2 className="vk-sr-only" id={titleId}>{t("ask.title")}</h2>
+          <p className="vk-sr-only" id={descriptionId}>
+            {t("ask.description")}
+          </p>
+          <AskRequesterLine requester={props.requester} t={t} />
+          <div className="vk-ask-head">
+            <div className="vk-ask-title">
+              {activeQuestion.question}
+            </div>
+            <AskQuestionProgress
+              activeIndex={safeActiveIndex}
+              disabled={busy}
+              onNext={() => moveQuestion(1)}
+              onPrevious={() => moveQuestion(-1)}
+              t={t}
+              total={questionCount}
+            />
+          </div>
+          <div className="vk-ask-options">
+            {renderedOptions.map((descriptor, optionIndex) => (
+              <AskQuestionOptionRow
+                active={stage === "answering" && optionIndex === activeOptionIndex}
+                descriptor={descriptor}
+                disabled={busy || stage !== "answering"}
+                draft={activeDraft}
+                key={`${descriptor.custom ? "custom" : descriptor.label}-${optionIndex}`}
+                onCustomTextChange={(value) => updateDraft(safeActiveIndex, {
+                  ...activeDraft,
+                  customSelected: true,
+                  customText: value,
+                  selectedLabels: activeQuestion.options.length === 0 || activeQuestion.multiple
+                    ? activeDraft.selectedLabels
+                    : [],
+                })}
+                onSelect={() => toggleRenderedOption(optionIndex)}
+                onFocus={() => setActiveOptionIndex(optionIndex)}
+                optionIndex={optionIndex}
+                question={activeQuestion}
+                selected={askQuestionOptionIsSelected(activeQuestion, activeDraft, descriptor)}
                 t={t}
-                total={questionCount}
               />
+            ))}
+          </div>
+          {validationError ? (
+            <div role="alert" className="vk-ask-error">
+              {validationError}
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-              <div className="grid gap-0.5">
-                {renderedOptions.map((descriptor, optionIndex) => (
-                  <AskQuestionOptionRow
-                    active={stage === "answering" && optionIndex === activeOptionIndex}
-                    descriptor={descriptor}
-                    disabled={busy || stage !== "answering"}
-                    draft={activeDraft}
-                    key={`${descriptor.custom ? "custom" : descriptor.label}-${optionIndex}`}
-                    onCustomTextChange={(value) => updateDraft(safeActiveIndex, {
-                      ...activeDraft,
-                      customSelected: true,
-                      customText: value,
-                      selectedLabels: activeQuestion.options.length === 0 || activeQuestion.multiple
-                        ? activeDraft.selectedLabels
-                        : [],
-                    })}
-                    onSelect={() => toggleRenderedOption(optionIndex)}
-                    onFocus={() => setActiveOptionIndex(optionIndex)}
-                    optionIndex={optionIndex}
-                    question={activeQuestion}
-                    selected={askQuestionOptionIsSelected(activeQuestion, activeDraft, descriptor)}
-                    t={t}
-                  />
-                ))}
-              </div>
-            </div>
-            {validationError ? (
-              <div role="alert" className="max-h-24 overflow-y-auto break-words rounded-lg border border-destructive/25 bg-destructive/10 px-2.5 py-1.5 text-xs leading-5 text-destructive">
-                {validationError}
-              </div>
-            ) : null}
-            <AskQuestionConfirmPanel stage={stage} t={t} />
-            <div className="flex items-center justify-end gap-1.5">
-              <Button
-                className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
-                disabled={busy}
-                onClick={() => {
-                  if (mutationPending.current) return;
-                  if (stage === "answering") {
-                    setStage("rejectConfirm");
-                  } else {
-                    setStage("answering");
-                  }
-                }}
-                size="sm"
-                type="button"
-                variant="ghost"
-              >
-                <span>{stage === "answering" ? t("ask.action.ignore") : t("ask.action.backToEdit")}</span>
-                <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">ESC</span>
-              </Button>
-              <Button
-                className="h-8 gap-1.5 rounded-xl px-3 text-xs"
-                disabled={busy}
-                onClick={() => void primaryAction()}
-                size="sm"
-                type="button"
-              >
-                <span>{busy ? t("ask.action.processing") : primaryLabel}</span>
-                <CornerDownLeft className="size-3.5" />
-              </Button>
-            </div>
+          ) : null}
+          <AskQuestionConfirmPanel stage={stage} t={t} />
+          <div className="vk-ask-actions">
+            <Button
+              disabled={busy}
+              onClick={() => {
+                if (mutationPending.current) return;
+                if (stage === "answering") {
+                  setStage("rejectConfirm");
+                } else {
+                  setStage("answering");
+                }
+              }}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              <span>{stage === "answering" ? t("ask.action.ignore") : t("ask.action.backToEdit")}</span>
+              <kbd className="vk-kbd">ESC</kbd>
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() => void primaryAction()}
+              size="sm"
+              type="button"
+            >
+              <span>{busy ? t("ask.action.processing") : primaryLabel}</span>
+              <CornerDownLeft size={14} />
+            </Button>
           </div>
         </section>
       </div>
@@ -561,7 +556,7 @@ function AskQuestionProgress(props: {
   total: number;
 }) {
   return (
-    <div className="flex shrink-0 items-center gap-0.5 text-[11px] leading-4 text-muted-foreground">
+    <div className="vk-ask-progress">
       <Button
         aria-label={props.t("ask.progress.previous")}
         disabled={props.disabled || props.activeIndex <= 0}
@@ -570,9 +565,9 @@ function AskQuestionProgress(props: {
         type="button"
         variant="ghost"
       >
-        <ChevronLeft className="size-3" />
+        <ChevronLeft size={12} />
       </Button>
-      <span className="tabular-nums">{props.activeIndex + 1} / {props.total}</span>
+      <span>{props.activeIndex + 1} / {props.total}</span>
       <Button
         aria-label={props.t("ask.progress.next")}
         disabled={props.disabled || props.activeIndex >= props.total - 1}
@@ -581,7 +576,7 @@ function AskQuestionProgress(props: {
         type="button"
         variant="ghost"
       >
-        <ChevronRight className="size-3" />
+        <ChevronRight size={12} />
       </Button>
     </div>
   );
@@ -627,22 +622,18 @@ function AskQuestionOptionRow(props: {
   // showsInlineEditor indicates whether this row should render an embedded textarea.
   // showsInlineEditor 表示该行是否应渲染内嵌多行输入框。
   const showsInlineEditor = props.descriptor.custom && props.selected;
-  // rowClassName centralizes selected and active visual states.
-  // rowClassName 集中管理选中与高亮视觉状态。
-  const rowClassName = cn(
-    "grid grid-cols-[1.75rem_minmax(0,1fr)_auto] gap-2 rounded-xl px-2 text-left transition-colors",
-    showsInlineEditor ? "items-start py-1.5" : "min-h-8 items-center py-1.5",
-    props.selected || props.active ? "bg-muted/80" : "hover:bg-muted/45",
-  );
+  // activeMark exposes the keyboard highlight to the kit row style.
+  // activeMark 将键盘高亮状态交给 kit 行样式。
+  const activeMark = props.active ? "true" : undefined;
 
   if (showsInlineEditor) {
     return (
-      <div className={rowClassName}>
-        <span className="pt-px text-[13px] leading-5 tabular-nums text-muted-foreground/70">{props.optionIndex + 1}.</span>
+      <div className="vk-ask-option" data-active={activeMark} data-editor="true">
+        <span className="vk-ask-index">{props.optionIndex + 1}.</span>
         <Textarea
           aria-label={props.question.question}
           autoFocus
-          className="min-h-5 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-[13px] leading-5 shadow-none focus-visible:ring-0"
+          className="vk-ask-editor"
           disabled={props.disabled}
           onChange={(event) => props.onCustomTextChange(event.target.value)}
           placeholder={props.descriptor.label}
@@ -657,19 +648,20 @@ function AskQuestionOptionRow(props: {
   return (
     <button
       aria-pressed={props.selected}
-      className={rowClassName}
+      className="vk-ask-option"
+      data-active={activeMark}
       disabled={props.disabled}
       onClick={props.onSelect}
       onFocus={props.onFocus}
       type="button"
     >
-      <span className="text-[13px] leading-5 tabular-nums text-muted-foreground/70">{props.optionIndex + 1}.</span>
-      <span className="flex min-w-0 items-center gap-2">
-        <span className="break-words text-[13px] leading-5 font-medium">{props.descriptor.label}</span>
-        {props.descriptor.description ? <span className="sr-only">{props.descriptor.description}</span> : null}
+      <span className="vk-ask-index">{props.optionIndex + 1}.</span>
+      <span className="vk-ask-label-row">
+        <span className="vk-ask-label">{props.descriptor.label}</span>
+        {props.descriptor.description ? <span className="vk-sr-only">{props.descriptor.description}</span> : null}
         <AskQuestionInfoTooltip descriptor={props.descriptor} />
         {props.selected ? (
-          <span className="rounded-md bg-background px-1.5 py-0.5 text-[11px] leading-4 text-muted-foreground">
+          <span className="vk-badge">
             {props.t("ask.option.selected")}
           </span>
         ) : null}
@@ -695,13 +687,13 @@ function AskQuestionInfoTooltip(props: {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full border border-border text-[10px] text-muted-foreground">
-          <Info className="size-3" />
+        <span className="vk-ask-info">
+          <Info size={10} />
         </span>
       </TooltipTrigger>
-      <TooltipContent className="max-w-80 flex-col items-start whitespace-normal break-words text-left text-xs leading-5" side="top" sideOffset={6}>
-        <span className="font-medium">{props.descriptor.label}</span>
-        {tooltipDescription ? <span className="text-background/80">{tooltipDescription}</span> : null}
+      <TooltipContent className="vk-ask-tip" side="top" sideOffset={6}>
+        <span>{props.descriptor.label}</span>
+        {tooltipDescription ? <span>{tooltipDescription}</span> : null}
       </TooltipContent>
     </Tooltip>
   );
@@ -718,13 +710,13 @@ function AskQuestionRowTail(props: {
   selected: boolean;
 }) {
   if (!props.active) {
-    return <span className="w-7" />;
+    return <span className="vk-ask-tail" />;
   }
   return (
-    <span className="flex items-center gap-0.5 pt-1 text-muted-foreground/60">
-      {props.selected ? <CheckCircle2 className="mr-1 size-3.5 text-primary" /> : null}
-      <ArrowUp className="size-3" />
-      <ArrowDown className="size-3" />
+    <span className="vk-ask-tail">
+      {props.selected ? <CheckCircle2 data-selected="true" size={14} /> : null}
+      <ArrowUp size={12} />
+      <ArrowDown size={12} />
     </span>
   );
 }
@@ -747,11 +739,11 @@ function AskQuestionConfirmPanel(props: {
     ? props.t("ask.confirm.submitBody")
     : props.t("ask.confirm.rejectBody");
   return (
-    <div className="flex items-center gap-2.5 rounded-xl border border-border/70 bg-muted/45 px-2.5 py-1.5">
-      <CircleAlert className={cn("size-4 shrink-0", props.stage === "rejectConfirm" ? "text-destructive" : "text-muted-foreground")} />
-      <div className="min-w-0">
-        <div className="text-[13px] leading-5 font-medium">{confirmTitle}</div>
-        <div className="text-[11px] leading-4 text-muted-foreground">{confirmBody}</div>
+    <div className="vk-ask-confirm" data-tone={props.stage === "rejectConfirm" ? "bad" : undefined}>
+      <CircleAlert size={16} />
+      <div>
+        <strong>{confirmTitle}</strong>
+        <small>{confirmBody}</small>
       </div>
     </div>
   );

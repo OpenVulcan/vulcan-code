@@ -34,9 +34,20 @@ export function presetTimeRange(days, now = Date.now()) {
   return { startAtMs: start.getTime(), endAtMs: days === 0 ? null : now };
 }
 
-// CHART_COLORS maps stable model identities onto the inherited chart palette.
-// CHART_COLORS 将稳定模型身份映射到继承的图表调色板。
-const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)", "var(--muted-foreground)"];
+// CHART_COLORS is the inherited chart palette, handed to the series of one chart in order.
+// CHART_COLORS 是继承的图表调色板，按顺序分给同一图表的各序列。
+const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
+// OTHER_SERIES_COLOR marks the folded remainder, which is never a model of its own.
+// OTHER_SERIES_COLOR 标记折叠的剩余部分，它本身不是某个模型。
+const OTHER_SERIES_COLOR = "var(--muted-foreground)";
+
+// LATENCY_GRADES_MS holds the inclusive fast and medium upper bounds, in milliseconds, behind the latency grade;
+// anything above the medium bound is slow.
+// LATENCY_GRADES_MS 保存耗时分级的快速与中等上限（含，毫秒）；超过中等上限即为慢。
+const LATENCY_GRADES_MS = {
+  firstToken: [1500, 4000],
+  request: [1000, 3000],
+};
 
 // CHART_RANGE_DAYS keeps the restored daily trend aligned with the runtime projection window.
 // CHART_RANGE_DAYS 让恢复的每日趋势与运行时投影窗口保持一致。
@@ -329,18 +340,11 @@ export function createPluginPanel(sdk) {
     return output;
   }
 
-  // colorForSeries assigns one stable chart token to a series key.
-  // colorForSeries 为一个序列键分配稳定的图表 Token。
-  function colorForSeries(value) {
-    // hash is a deterministic unsigned FNV-1a projection of the series key.
-    // hash 是序列键的确定性无符号 FNV-1a 投影。
-    let hash = 2166136261;
-    // index advances over UTF-16 code units without locale-sensitive normalization.
-    // index 按 UTF-16 代码单元前进，不执行依赖语言环境的规范化。
-    for (let index = 0; index < value.length; index += 1) {
-      hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
-    }
-    return CHART_COLORS[(hash >>> 0) % CHART_COLORS.length];
+  // colorForSeries gives the series of one chart distinct palette colors in order; a hash of the key would let two
+  // models of the same chart share a color.
+  // colorForSeries 按顺序为同一图表的序列分配互不相同的调色板颜色；按键哈希会让同一图表的两个模型撞色。
+  function colorForSeries(id, position) {
+    return id === "other" ? OTHER_SERIES_COLOR : CHART_COLORS[position % CHART_COLORS.length];
   }
 
   // formatLocalDateKey converts one local Date into an ISO calendar key without UTC drift.
@@ -461,10 +465,13 @@ export function createPluginPanel(sdk) {
       const group = groups.get(row.seriesKey);
       group.values.set(row.date, numeric(row.value));
     }
+    // position counts model series only, so the folded remainder never consumes a palette color.
+    // position 只计模型序列，折叠的剩余部分不占用调色板颜色。
+    let position = 0;
     return Array.from(groups.entries()).map(([id, group]) => ({
       id,
       label: id === "other" ? text("other", "Other") : group.label,
-      color: colorForSeries(id),
+      color: colorForSeries(id, id === "other" ? 0 : position++),
       points: dates.map((date) => ({ key: date, value: group.values.get(date) ?? 0 })),
     }));
   }
@@ -579,6 +586,18 @@ export function createPluginPanel(sdk) {
       : `${formatInterval(Math.floor(seconds / 60), "minute", 0)} ${formatInterval(seconds % 60, "second", 2)}`;
   }
 
+  // Grade how fast a record answered: generation is judged by first-token latency, other operations by request
+  // duration. record is a schema-validated projection; tokenTiming selects the measure.
+  // Returns "fast", "medium" or "slow", or undefined when the judged measure was not recorded.
+  // 评定一条记录的响应快慢：生成类按首 Token 延迟评定，其他操作按请求耗时评定。record 是通过 Schema 校验的投影；
+  // tokenTiming 选择评定所用的测量值。返回 "fast"、"medium" 或 "slow"；所评定的测量值未记录时返回 undefined。
+  function latencySpeed(record, tokenTiming) {
+    const milliseconds = tokenTiming ? record.firstTokenLatencyMs : record.requestDurationMs;
+    if (milliseconds === null || milliseconds === undefined) return undefined;
+    const [fastUpTo, mediumUpTo] = tokenTiming ? LATENCY_GRADES_MS.firstToken : LATENCY_GRADES_MS.request;
+    return milliseconds <= fastUpTo ? "fast" : milliseconds <= mediumUpTo ? "medium" : "slow";
+  }
+
   // Render first-token latency and full request duration, with generation speed beside duration.
   // 渲染首 Token 延迟和完整请求耗时，在耗时旁展示生成速度。
   // record is a schema-validated attempt or daily projection; aggregate selects average labels.
@@ -592,7 +611,7 @@ export function createPluginPanel(sdk) {
     if (record.requestDurationMs === null && (!tokenTiming || record.firstTokenLatencyMs === null)) {
       return h("span", { className: "plugin-statistics-latency-unknown" }, text("timing.unrecorded", "Not recorded"));
     }
-    return h("div", { className: "plugin-statistics-latency" },
+    return h("div", { className: "plugin-statistics-latency", "data-speed": latencySpeed(record, tokenTiming) },
       tokenTiming ? h("div", null,
         h("span", null, text(aggregate ? "timing.averageFirstShort" : "timing.firstShort", "First token")),
         h("span", null, record.firstTokenLatencyMs === null ? text("timing.unrecorded", "Not recorded") : latencyDuration(record.firstTokenLatencyMs))) : null,

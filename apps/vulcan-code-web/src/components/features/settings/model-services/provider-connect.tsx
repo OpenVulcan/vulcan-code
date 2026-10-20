@@ -1,11 +1,10 @@
 import * as React from "react"
 import { CheckCircle2, CircleAlert, CircleDashed, ExternalLink, LoaderCircle, X } from "lucide-react"
 
-import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context"
 import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui-kit/primitives/button"
 import { useI18n } from "@/i18n"
-import { cn } from "@/lib/utils"
+import { cx } from "@/ui-kit/behavior/core";
 import { queryPublicAiConnectionUsage, syncPublicAiConnection } from "@/service/settings-actions-service"
 import type {
   PublicAiAccountUsage,
@@ -16,6 +15,7 @@ import type {
 
 import { billingLabel, ProviderIntroCard } from "./provider-intro"
 import type { SnapshotMutations } from "./use-snapshot-mutations"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ProviderConnectPanel is the workspace of a provider without accounts: its introduction beside a choice of entry.
 // ProviderConnectPanel 是尚无账号的供应商的工作区：介绍与接入方式选择并排。
@@ -27,26 +27,24 @@ export function ProviderConnectPanel(props: {
   onConnect: (entryId: string) => void
 }) {
   const { t } = useI18n()
-  const account = React.useContext(OpenVulcanAccountContext)
   const { provider } = props
   const [entryId, setEntryId] = React.useState(provider.service_entries[0]?.id ?? "")
   React.useEffect(() => setEntryId(provider.service_entries[0]?.id ?? ""), [provider.id, provider.service_entries])
-  const core = provider.credential_directory_visibility === "core_account"
   return (
-    <div className="model-services-connect-panel">
-      <section className="model-services-panel">
+    <div className="vk-ms-connect-panel">
+      <section className="vk-ms-panel">
         <ProviderIntroCard compact provider={provider} />
       </section>
-      <section className="model-services-panel">
+      <section className="vk-ms-panel">
         <h3>{t("settings.modelServices.connectPanel.entries")}</h3>
-        <div className="model-services-entries" role="radiogroup" aria-label={t("settings.modelServices.connectPanel.entries")}>
+        <div className="vk-ms-entries" role="radiogroup" aria-label={t("settings.modelServices.connectPanel.entries")}>
           {provider.service_entries.map((entry) => {
             const presentation = localizedServiceEntryPresentation(provider.id, entry, t)
             const billing = Array.from(new Set(entry.credential_profiles.map((profile) => profile.billing_kind)))
             return (
               <button
                 aria-checked={entry.id === entryId}
-                className="model-services-entry"
+                className="vk-ms-entry"
                 key={entry.id}
                 onClick={() => setEntryId(entry.id)}
                 role="radio"
@@ -58,13 +56,13 @@ export function ProviderConnectPanel(props: {
             )
           })}
         </div>
-        <p className="model-services-panel-hint">{t("settings.modelServices.connectPanel.hint")}</p>
+        <p className="vk-ms-panel-hint">{t("settings.modelServices.connectPanel.hint")}</p>
         <Button
-          className="self-end"
-          disabled={props.busy || (!core && !entryId)}
-          onClick={() => core ? account?.setOpen(true) : props.onConnect(entryId)}
+          className="vk-form-end"
+          disabled={props.busy || !entryId}
+          onClick={() => props.onConnect(entryId)}
           type="button"
-        >{core ? t("openvulcan.account.manage") : t("settings.modelServices.connectPanel.connect")}</Button>
+        >{t("settings.modelServices.connectPanel.connect")}</Button>
       </section>
     </div>
   )
@@ -159,8 +157,8 @@ export function ConnectProgress(props: ConnectProgressProps) {
         : connection.usage_capability !== "unsupported" ? t("settings.modelServices.connect.usageNeedsKey")
           : t("settings.modelServices.connect.usageUnsupported"),
       action: connection.usage_capability === "unsupported" && props.signupUrl ? (
-        <a className="model-services-official-link" href={props.signupUrl} rel="noreferrer" target="_blank">
-          <ExternalLink aria-hidden="true" className="size-3.5" />
+        <a className="vk-ms-official-link" href={props.signupUrl} rel="noreferrer" target="_blank">
+          <ExternalLink aria-hidden="true" className="vk-icon" />
           {t("settings.modelServices.usage.officialSite")}
         </a>
       ) : undefined,
@@ -168,16 +166,16 @@ export function ConnectProgress(props: ConnectProgressProps) {
   ]
 
   return (
-    <section aria-live="polite" className="model-services-connect">
-      <div className="model-services-connect-head">
+    <section aria-live="polite" className="vk-ms-connect">
+      <div className="vk-ms-connect-head">
         <strong>{t("settings.modelServices.connect.title").replace("{account}", connection.display_name)}</strong>
         <Button aria-label={t("settings.modelServices.connect.dismiss")} onClick={props.onDismiss} size="icon-xs" type="button" variant="ghost"><X /></Button>
       </div>
       <ol>
         {steps.map((step) => (
-          <li className={cn("model-services-connect-step")} data-state={step.state} key={step.key}>
+          <li className={cx("vk-ms-connect-step")} data-state={step.state} key={step.key}>
             <ConnectStepIcon state={step.state} />
-            <span className="model-services-connect-copy">
+            <span className="vk-ms-connect-copy">
               <span>{step.title}</span>
               {step.detail ? <small>{step.detail}</small> : null}
             </span>
@@ -193,10 +191,10 @@ export function ConnectProgress(props: ConnectProgressProps) {
 // ConnectStepIcon 渲染一个接入步骤的状态图标。
 function ConnectStepIcon(props: { state: ConnectStepState }) {
   switch (props.state) {
-    case "done": return <CheckCircle2 aria-hidden="true" className="size-4" />
-    case "running": return <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+    case "done": return <CheckCircle2 aria-hidden="true" className="vk-icon" />
+    case "running": return <LoaderCircle aria-hidden="true" className="vk-spin" />
     case "warning":
-    case "failed": return <CircleAlert aria-hidden="true" className="size-4" />
-    case "skipped": return <CircleDashed aria-hidden="true" className="size-4" />
+    case "failed": return <CircleAlert aria-hidden="true" className="vk-icon" />
+    case "skipped": return <CircleDashed aria-hidden="true" className="vk-icon" />
   }
 }

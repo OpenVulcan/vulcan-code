@@ -1,18 +1,20 @@
 import * as React from "react"
-import "@/styles/licenses-settings.css"
-import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react"
+import "@/ui-kit/styles/features/licenses-settings.css"
+import { ChevronLeft, ChevronRight, RefreshCw, ScrollText, SearchX } from "lucide-react"
 
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/ui-kit/primitives/dialog"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Button } from "@/ui-kit/primitives/button"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { PageEmptyState, PageNotice, PageToolbar } from "@/components/page"
 import { useI18n } from "@/i18n"
 import {
   loadLicenseBody, loadLicenseCatalog,
   type LicenseCatalog, type LicenseDependency, type LicenseGroup,
 } from "@/service/licenses-service"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // LICENSE_DEPENDENCY_PAGE_SIZE bounds each dependency table without dropping search results.
 // LICENSE_DEPENDENCY_PAGE_SIZE 限制每页依赖表大小，不丢弃搜索结果。
@@ -139,26 +141,28 @@ export function AboutLicensesSettingsArea(props: {
   }
 
   return (
-    <section className="settings-preferences-page settings-detail-panel settings-license-panel">
-      <div className="settings-license-summary">
-        <strong>Vulcan Code</strong><Badge variant="outline">{props.appVersion}</Badge>
-        {catalog && <span>{allGroups.length} {t("settings.licenses.types")} · {totalDependencies} {t("settings.licenses.dependencies")}</span>}
-      </div>
-      <p className="settings-hint">{t("settings.licenses.scope")}</p>
-      <div className="settings-license-toolbar">
+    <section className="settings-license-panel">
+      <header className="settings-license-summary">
+        <ScrollText aria-hidden="true" />
+        <div>
+          <strong>Vulcan Code <span className="vk-mono">{props.appVersion}</span></strong>
+          <p>{t("settings.licenses.scope")}</p>
+        </div>
+        {catalog && <span className="settings-license-totals">{allGroups.length} {t("settings.licenses.types")} · {totalDependencies} {t("settings.licenses.dependencies")}</span>}
+      </header>
+      <PageToolbar actions={<Button aria-label={t("settings.licenses.reload")} onClick={() => setReload((value) => value + 1)} size="icon-sm" title={t("settings.licenses.reload")} variant="ghost"><RefreshCw /></Button>}>
         <Input aria-label={t("settings.licenses.search")} placeholder={t("settings.licenses.search")} value={query}
           onChange={(event) => { setQuery(event.target.value); setPage(0) }} />
-        <Button variant="outline" onClick={() => setReload((value) => value + 1)}><RefreshCw size={14} />{t("settings.licenses.reload")}</Button>
-      </div>
-      {catalogError ? <div role="alert" className="settings-license-error"><strong>{t("settings.licenses.loadError")}</strong><p>{catalogError}</p></div>
+      </PageToolbar>
+      {catalogError ? <PageNotice actions={<Button onClick={() => setReload((value) => value + 1)} size="sm" variant="outline">{t("settings.licenses.reload")}</Button>} details={catalogError} tone="error">{t("settings.licenses.loadError")}</PageNotice>
         : !catalog ? <StreamPlaceholder fill label={t("settings.licenses.loading")} shape="rows" count={6} />
-        : filteredGroups.length === 0 ? <p role="status">{t("settings.licenses.emptySearch")}</p>
+        : filteredGroups.length === 0 ? <PageEmptyState icon={<SearchX />} title={t("settings.licenses.emptySearch")} />
         : <div className="settings-license-browser">
           <nav className="settings-license-directory" aria-label={t("settings.licenses.types")}>
-            {filteredGroups.map((group) => <Button key={group.id} variant={selectedGroup?.id === group.id ? "secondary" : "ghost"}
+            {filteredGroups.map((group) => <button className="settings-license-type" key={group.id} type="button"
               aria-current={selectedGroup?.id === group.id ? "page" : undefined} onClick={() => selectGroup(group.id)}>
-              <span className="settings-license-name"><span>{group.title || t("settings.licenses.unknown")}</span></span><Badge variant="outline">{collectLicenseDependencies([group]).length}</Badge>
-            </Button>)}
+              <span className="settings-license-name"><span>{group.title || t("settings.licenses.unknown")}</span></span><small>{collectLicenseDependencies([group]).length}</small>
+            </button>)}
           </nav>
           <div className="settings-license-content">
             <div className="settings-license-mobile-directory">
@@ -173,10 +177,10 @@ export function AboutLicensesSettingsArea(props: {
                 <span>{dependencies.length} {t("settings.licenses.dependencies")} · {selectedGroup.sections.length} {t("settings.licenses.variants")}</span>
               </div>
               <div className="settings-license-table-scroll"><table className="settings-license-table">
-                <caption className="sr-only">{selectedGroup.title || t("settings.licenses.unknown")} · {t("settings.licenses.dependencies")}</caption>
-                <thead><tr><th>{t("settings.licenses.dependency")}</th><th>{t("settings.licenses.version")}</th><th>{t("settings.licenses.source")}</th><th>{t("settings.licenses.view")}</th></tr></thead>
+                <caption className="vk-sr-only">{selectedGroup.title || t("settings.licenses.unknown")} · {t("settings.licenses.dependencies")}</caption>
+                <thead><tr><th>{t("settings.licenses.dependency")}</th><th>{t("settings.licenses.version")}</th><th>{t("settings.licenses.source")}</th><th><span className="vk-sr-only">{t("settings.licenses.view")}</span></th></tr></thead>
                 <tbody>{visibleDependencies.map((dependency) => <tr key={JSON.stringify([dependency.name, dependency.version, dependency.source])}>
-                  <td>{dependency.name}</td><td>{dependency.version}</td><td><span>{dependency.source}</span></td>
+                  <td>{dependency.name}</td><td className="vk-mono">{dependency.version}</td><td><span>{dependency.source}</span></td>
                   <td><Button variant="ghost" size="sm" onClick={() => {
                     setSectionId(dependency.sectionIds[0])
                     setViewedDependency(dependency)
@@ -185,13 +189,13 @@ export function AboutLicensesSettingsArea(props: {
               </table></div>
               {matchingDependencies.length > LICENSE_DEPENDENCY_PAGE_SIZE && <div className="settings-license-pagination">
                 <span>{currentPage * LICENSE_DEPENDENCY_PAGE_SIZE + 1}–{Math.min((currentPage + 1) * LICENSE_DEPENDENCY_PAGE_SIZE, matchingDependencies.length)} / {matchingDependencies.length}</span>
-                <Button variant="outline" size="sm" aria-label={t("settings.licenses.previous")} disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}><ChevronLeft size={14} /></Button>
-                <Button variant="outline" size="sm" aria-label={t("settings.licenses.next")} disabled={(currentPage + 1) * LICENSE_DEPENDENCY_PAGE_SIZE >= matchingDependencies.length} onClick={() => setPage(currentPage + 1)}><ChevronRight size={14} /></Button>
+                <Button variant="ghost" size="icon-sm" aria-label={t("settings.licenses.previous")} disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}><ChevronLeft /></Button>
+                <Button variant="ghost" size="icon-sm" aria-label={t("settings.licenses.next")} disabled={(currentPage + 1) * LICENSE_DEPENDENCY_PAGE_SIZE >= matchingDependencies.length} onClick={() => setPage(currentPage + 1)}><ChevronRight size={14} /></Button>
               </div>}
               <Dialog open={viewedDependency !== null} onOpenChange={(open) => { if (!open) setViewedDependency(null) }}>
-                <DialogContent size="xl" scrollMode="body-scroll" className="settings-license-dialog">
+                <DialogContent size="xl" scrollMode="body-scroll">
                   <DialogHeader>
-                    <DialogTitle>{viewedDependency?.name} <span className="text-muted-foreground font-normal">{viewedDependency?.version}</span></DialogTitle>
+                    <DialogTitle>{viewedDependency?.name} <span className="vk-form-note vk-form-inline-note">{viewedDependency?.version}</span></DialogTitle>
                     <DialogDescription>{selectedGroup.title || t("settings.licenses.unknown")}</DialogDescription>
                   </DialogHeader>
               {viewedDependency && viewedDependency.sectionIds.length > 1 && <div className="settings-license-body-heading"><h3>{t("settings.licenses.body")}</h3>
@@ -202,11 +206,11 @@ export function AboutLicensesSettingsArea(props: {
                   </SelectItem>)}</SelectContent>
                 </Select>
               </div>}
-              {viewedDependency && viewedDependency.sectionIds.length > 1 && <p className="settings-hint">{t("settings.licenses.variantHint")}</p>}
+              {viewedDependency && viewedDependency.sectionIds.length > 1 && <p className="vk-form-note">{t("settings.licenses.variantHint")}</p>}
               {body?.sectionId === requestedSectionId && body.revision === revision
-                ? body.error ? <div role="alert" className="settings-license-error"><p>{body.error}</p><Button variant="outline" onClick={() => setBodyRetry((value) => value + 1)}>{t("settings.licenses.retry")}</Button></div>
+                ? body.error ? <PageNotice actions={<Button onClick={() => setBodyRetry((value) => value + 1)} size="sm" variant="outline">{t("settings.licenses.retry")}</Button>} details={body.error} tone="error" />
                   : <pre className="settings-license-body" tabIndex={0}>{body.text}</pre>
-                : <StreamPlaceholder className="p-1" label={t("settings.licenses.loadingBody")} count={12} />}
+                : <StreamPlaceholder label={t("settings.licenses.loadingBody")} count={12} />}
                 </DialogContent>
               </Dialog>
             </>}

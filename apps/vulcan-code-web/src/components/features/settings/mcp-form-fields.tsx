@@ -1,8 +1,8 @@
 import * as React from "react"
-import { Button } from "@/components/ui/button"
-import { InlineDisclosure } from "@/components/ui/disclosure"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
+import { Button } from "@/ui-kit/primitives/button"
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
+import { Input } from "@/ui-kit/primitives/input"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import { parseMcpBulkPairs, validateMcpPairs } from "./mcp-form-model"
 import { useI18n, formatMessage } from "@/i18n"
 

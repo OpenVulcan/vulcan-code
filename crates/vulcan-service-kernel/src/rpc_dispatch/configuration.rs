@@ -102,6 +102,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_rebuild_public_ai_session_provider_tool_selections",
     "service_save_public_ai_default_connection",
     "service_save_git_commit_settings",
+    "service_save_default_command_shell",
     "service_generate_git_commit_message",
     "service_run_git_commit_action",
     "service_save_mcp_server_configuration",
@@ -723,6 +724,10 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "request")?,
             )
             .await,
+        ),
+        "service_save_default_command_shell" => rpc_json_result(
+            service_save_default_command_shell(app, state, rpc_required_param(params, "request")?)
+                .await,
         ),
         "service_save_git_commit_settings" => rpc_json_result(
             service_save_git_commit_settings(app, state, rpc_required_param(params, "request")?)

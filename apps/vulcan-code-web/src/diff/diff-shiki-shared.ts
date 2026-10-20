@@ -24,7 +24,7 @@ export type DiffShikiTheme = typeof DIFF_SHIKI_LIGHT_THEME | typeof DIFF_SHIKI_D
 // currentDiffShikiTheme returns the Shiki theme matching the active WebUI color mode.
 // currentDiffShikiTheme 返回与当前 WebUI 颜色模式匹配的 Shiki 主题。
 export function currentDiffShikiTheme(): DiffShikiTheme {
-  return document.documentElement.classList.contains("dark") ? DIFF_SHIKI_DARK_THEME : DIFF_SHIKI_LIGHT_THEME;
+  return document.documentElement.dataset.vkScheme === "dark" ? DIFF_SHIKI_DARK_THEME : DIFF_SHIKI_LIGHT_THEME;
 }
 
 // DIFF_SHIKI_LANGUAGE_IDS is the explicit WebUI review language allowlist.

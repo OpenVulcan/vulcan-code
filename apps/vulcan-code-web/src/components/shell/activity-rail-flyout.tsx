@@ -18,9 +18,9 @@ export type ActivityRailFlyoutAction = {
 // FLYOUT_CLOSE_DELAY_MS 让指针从触发器跨越间隙时浮层保持打开。
 const FLYOUT_CLOSE_DELAY_MS = 140;
 
-// FLYOUT_OVERLAY_SELECTOR matches menus, popovers and dialogs portaled out of the flyout content.
-// FLYOUT_OVERLAY_SELECTOR 匹配从浮层内容中传送出去的菜单、弹出层与对话框。
-const FLYOUT_OVERLAY_SELECTOR = "[data-radix-popper-content-wrapper], [role='dialog'], [role='alertdialog']";
+// FLYOUT_OVERLAY_SELECTOR matches the layer hosts of menus, popovers and dialogs portaled out of the flyout content.
+// FLYOUT_OVERLAY_SELECTOR 匹配从浮层内容中传送出去的菜单、弹出层与对话框的层宿主。
+const FLYOUT_OVERLAY_SELECTOR = "[data-vk-portal]";
 
 // hasOpenOverlayTrigger reports whether a menu or popover opened from inside the flyout is still open.
 // hasOpenOverlayTrigger 判断从浮层内部打开的菜单或弹出层是否仍处于打开状态。
@@ -47,6 +47,9 @@ export function ActivityRailFlyout(props: {
   // Accessible panel name and visible heading.
   // 面板的无障碍名称与可见标题。
   title: string;
+  // Optional controls shown at the end of the heading.
+  // 显示在标题末端的可选控件。
+  headerActions?: React.ReactNode;
   // Closes the flyout whenever this value changes, for example after a destination is chosen inside it.
   // 该值变化时关闭浮层，例如在其中选定目标之后。
   dismissKey?: unknown;
@@ -66,7 +69,7 @@ export function ActivityRailFlyout(props: {
   // open 将浮层放在轨道右边缘（不在轨道内时为锚点右边缘）；间距由 CSS 添加。
   const open = React.useCallback(() => {
     clearCloseTimer();
-    const edge = anchorRef.current?.closest(".activity-rail") ?? anchorRef.current;
+    const edge = anchorRef.current?.closest(".vk-rail") ?? anchorRef.current;
     const rect = edge?.getBoundingClientRect();
     if (rect) {
       setLeft(rect.right);
@@ -119,8 +122,8 @@ export function ActivityRailFlyout(props: {
   return (
     <>
       <div
-        className="activity-rail-flyout-anchor"
-        onBlur={(event) => { if (!(event.relatedTarget instanceof Element) || !event.relatedTarget.closest(".activity-rail-flyout")) scheduleClose(); }}
+        className="vk-rail-flyout-anchor"
+        onBlur={(event) => { if (!(event.relatedTarget instanceof Element) || !event.relatedTarget.closest(".vk-rail-flyout")) scheduleClose(); }}
         onFocus={open}
         onKeyDown={(event) => { if (event.key === "Escape") { close(); event.stopPropagation(); } }}
         onMouseEnter={open}
@@ -132,7 +135,7 @@ export function ActivityRailFlyout(props: {
       {isOpen ? (
         <div
           aria-label={props.title}
-          className="activity-rail-flyout"
+          className="vk-rail-flyout"
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget) && !(event.relatedTarget instanceof Element && event.relatedTarget.closest(FLYOUT_OVERLAY_SELECTOR))) scheduleClose();
           }}
@@ -146,21 +149,23 @@ export function ActivityRailFlyout(props: {
           role="region"
           style={{ left }}
         >
-          <div className="activity-rail-flyout-header">
-            <span className="activity-rail-flyout-title">{props.title}</span>
+          <div className="vk-rail-flyout-head">
+            <strong>{props.title}</strong>
+            {props.headerActions}
           </div>
-          <div className="activity-rail-flyout-body">
+          <div className="vk-rail-flyout-body">
             {props.content}
           </div>
           {props.footer ? (
-            <div className="activity-rail-flyout-footer">
+            <div className="vk-rail-flyout-foot">
               <button
-                className="activity-rail-flyout-item"
+                className="vk-nav-item"
+                data-density="compact"
                 onClick={() => { close(); props.footer?.onSelect(); }}
                 type="button"
               >
-                <span className="activity-rail-flyout-icon">{props.footer.icon}</span>
-                <span className="activity-rail-flyout-label">{props.footer.label}</span>
+                {props.footer.icon}
+                <span>{props.footer.label}</span>
               </button>
             </div>
           ) : null}

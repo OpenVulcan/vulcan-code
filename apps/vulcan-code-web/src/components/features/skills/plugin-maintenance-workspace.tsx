@@ -1,6 +1,6 @@
 import * as React from "react";
 import { RefreshCw, X } from "lucide-react";
-import { Button, IconButton } from "@/components/ui/button";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { PluginSummary, WorkbenchSnapshot } from "@/types";
 import type { PluginDiagnosticsSelection } from "@/types/plugin-resource-diagnostics";

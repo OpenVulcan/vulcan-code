@@ -9,21 +9,22 @@ import {
   SquareIcon,
   X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import { useI18n } from "@/i18n";
+import { PageEmptyState } from "@/components/page";
 import { MediaPathContextMenu } from "./media-path-context-menu";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import type {
   GeneratedMediaAttachment,
   GeneratedMediaImageOffset,
@@ -299,7 +300,7 @@ function GeneratedMediaPlayerContent(props: {
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogContent
-        className={cn(
+        className={cx(
           "generated-media-player-window",
           isMaximized && "maximized",
         )}
@@ -309,7 +310,7 @@ function GeneratedMediaPlayerContent(props: {
           <span className="generated-media-player-title">
             <MediaIcon size={18} />
             <DialogTitle title={props.attachment.fileName}>{props.attachment.fileName}</DialogTitle>
-            <DialogDescription className="sr-only">{t("media.player.viewGeneratedMediaAnd")}</DialogDescription>
+            <DialogDescription className="vk-sr-only">{t("media.player.viewGeneratedMediaAnd")}</DialogDescription>
           </span>
           {isImage ? (
             <GeneratedMediaImageZoomControl
@@ -341,17 +342,19 @@ function GeneratedMediaPlayerContent(props: {
           </span>
         </header>
         <MediaPathContextMenu locator={props.attachment.kind === "document" ? null : props.attachment.localPath}>
-        <div className={cn("generated-media-player-body", isImage && "image")}>
+        <div className={cx("generated-media-player-body", isImage && "image")}>
           {loadFailed || !source ? (
-            <div className="flex min-h-40 flex-col items-center justify-center gap-3 p-4 text-center" role="alert">
-              <p className="text-sm text-muted-foreground">{t("media.player.thisMediaFileCould")}</p>
-              {source ? <Button variant="outline" onClick={() => { setLoadFailed(false); setLoadAttempt((attempt) => attempt + 1); }}>
+            <PageEmptyState
+              role="alert"
+              size="panel"
+              title={t("media.player.thisMediaFileCould")}
+              action={source ? <Button variant="outline" onClick={() => { setLoadFailed(false); setLoadAttempt((attempt) => attempt + 1); }}>
                 {t("media.player.retry")}
               </Button> : null}
-            </div>
+            />
           ) : isImage ? (
             <div
-              className={cn("generated-media-image-viewer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring", isImageDragging && "dragging")}
+              className={cx("generated-media-image-viewer", isImageDragging && "dragging")}
               aria-label={t("media.player.imageViewerArrowKeys")}
               tabIndex={0}
               role="region"

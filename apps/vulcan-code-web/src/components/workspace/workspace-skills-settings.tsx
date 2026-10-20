@@ -1,4 +1,4 @@
-import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
+import { DirectoryRow, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react";
 import {
   BookMarked,
@@ -109,20 +109,11 @@ export function PluginWorkspaceMenu(props: {
   ];
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="vk-dir-groups">
     {[{ label: t("skills.navigation.builtins"), items: rows }, { label: t("skills.navigation.externalPlugins"), items: pluginRows }].map((group) => (
     <WorkspaceDirectoryMenu key={group.label} ariaLabel={group.label} heading={group.label}>
       {group.items.map((row) => (
-        <button
-          className={`workspace-tool-panel-menu-row ${props.activeSubArea === row.id ? "active" : ""}`}
-          key={row.id}
-          aria-current={props.activeSubArea === row.id ? "page" : undefined}
-          onClick={() => props.onSelectSubArea(row.id)}
-          type="button"
-        >
-          {row.icon}
-          <span>{row.label}</span>
-        </button>
+        <DirectoryRow active={props.activeSubArea === row.id} icon={row.icon} key={row.id} label={row.label} onSelect={() => props.onSelectSubArea(row.id)} />
       ))}
     </WorkspaceDirectoryMenu>
     ))}

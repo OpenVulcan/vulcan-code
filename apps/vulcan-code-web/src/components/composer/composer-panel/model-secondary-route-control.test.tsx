@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { ProviderModelSecondaryRouteSummary } from "@/types";
 import { ModelSecondaryRouteControl } from "./model-secondary-route-control";
 
@@ -11,7 +11,7 @@ vi.mock("@/i18n", async (importOriginal) => {
   const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
   return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
 });
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 // deferred exposes one controllable service response without contacting a provider.
 // deferred 暴露一个可控制的服务响应，不联系供应商。
 // No parameters; returns the promise and its explicit completion callbacks.
@@ -60,7 +60,7 @@ async function openMenu() { await key(trigger(), "Enter"); }
 // label 是精确标签；返回语义菜单项。
 function item(label: string) {
   return [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
-    .find((button) => button.querySelector(".model-picker-row-title")?.textContent?.startsWith(label))!;
+    .find((button) => button.querySelector(".vk-model-title")?.textContent?.startsWith(label))!;
 }
 
 it("ignores an old forced refresh after switching model and preserves the new loading state", async () => {

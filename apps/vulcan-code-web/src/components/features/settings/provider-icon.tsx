@@ -1,4 +1,4 @@
-import type { ReactElement } from "react"
+import type { CSSProperties, ReactElement } from "react"
 
 import antigravityIcon from "@/assets/provider-icons/provider-antigravity.svg"
 import agentSpaceIcon from "@/assets/provider-icons/provider-agentspace.png"
@@ -28,7 +28,8 @@ import tavilyIcon from "@/assets/provider-icons/provider-tavily.svg"
 import tokenRhythmIcon from "@/assets/provider-icons/provider-tokenrhythm.svg"
 import vertexIcon from "@/assets/provider-icons/provider-vertex.svg"
 import zhipuIcon from "@/assets/provider-icons/provider-zhipu.svg"
-import { cn } from "@/lib/utils"
+import { VulcanSymbol } from "@/components/shell/vulcan-symbol"
+import { cx } from "@/ui-kit/behavior/core"
 import type { PublicAiProviderCategory } from "@/types"
 
 // ProviderIconKey is the closed frontend-owned provider artwork set.
@@ -51,6 +52,7 @@ export type ProviderIconKey =
   | "minimax"
   | "opencode-go"
   | "open-design"
+  | "openvulcan"
   | "openrouter"
   | "qwen"
   | "qiniu"
@@ -60,9 +62,9 @@ export type ProviderIconKey =
   | "vertex"
   | "zhipu"
 
-// ProviderIconAsset stores theme-aware rendering metadata for one artwork entry.
-// ProviderIconAsset 保存一个图标项的主题感知渲染元数据。
-interface ProviderIconAsset {
+// ProviderIconImage stores theme-aware rendering metadata for one artwork file.
+// ProviderIconImage 保存一个图标文件的主题感知渲染元数据。
+interface ProviderIconImage {
   // Light-theme artwork.
   // 亮色主题图标。
   light: string
@@ -79,6 +81,18 @@ interface ProviderIconAsset {
   // 暗色主题是否需要反转一个通过外部资源加载的单色 SVG。
   monochrome?: boolean
 }
+
+// ProviderIconSymbol renders the OpenVulcan brand symbol inline from its locked master instead of a copied file,
+// so the provider logo always matches the app logo and its body follows the theme text color.
+// ProviderIconSymbol 从锁定母版内联渲染 OpenVulcan 品牌图标，而不是使用复制的图标文件，使供应商 Logo 始终与应用 Logo
+// 一致，且主体跟随主题文字颜色。
+interface ProviderIconSymbol {
+  symbol: "vulcan"
+}
+
+// ProviderIconAsset is one artwork entry: an image file or the inline brand symbol.
+// ProviderIconAsset 是一个图标项：图标文件或内联品牌图标。
+type ProviderIconAsset = ProviderIconImage | ProviderIconSymbol
 
 // providerIconLibrary is the immutable frontend artwork library.
 // providerIconLibrary 是不可变的前端图标库。
@@ -109,6 +123,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
   minimax: { light: miniMaxIcon },
   "opencode-go": { light: openCodeGoIcon, monochrome: true, transparent: true },
   "open-design": { light: openDesignIcon, monochrome: true, transparent: true },
+  openvulcan: { symbol: "vulcan" },
   openrouter: { light: openRouterIcon, transparent: true },
   qwen: { light: qwenIcon },
   qiniu: { light: qiniuIcon, transparent: true },
@@ -138,6 +153,7 @@ const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   openai: "compatibility",
   "opencode-go": "opencode-go",
   "open-design": "open-design",
+  openvulcan: "openvulcan",
   openrouter: "openrouter",
   qwen: "qwen",
   qiniu: "qiniu",
@@ -189,9 +205,12 @@ export function resolveProviderIconKey({
 // ProviderIconProps configures one decorative provider logo.
 // ProviderIconProps 配置一个装饰性供应商 Logo。
 interface ProviderIconProps extends ProviderIconIdentity {
-  // Caller-owned square display-box class.
-  // 调用方控制的方形展示框样式。
+  // Caller-owned extra class for the square display box.
+  // 调用方为方形展示框追加的样式类。
   className?: string
+  // Edge length of the square box in pixels; the artwork fills it.
+  // 方形展示框的边长（像素）；图标铺满该框。
+  size?: number
   // Provider category controls the independent relay marker overlay.
   // 供应商分类控制独立的中转站标识叠层。
   category?: PublicAiProviderCategory
@@ -203,6 +222,7 @@ export function ProviderIcon({
   providerId,
   serviceEntryId,
   className,
+  size,
   category,
 }: ProviderIconProps): ReactElement {
   // iconKey is resolved only from stable provider identities.
@@ -211,44 +231,45 @@ export function ProviderIcon({
   // asset is the complete theme-aware artwork entry.
   // asset 是完整的主题感知图标项。
   const asset = providerIconLibrary[iconKey]
+  // image is the artwork file entry, or null for the inline brand symbol.
+  // image 是图标文件项；内联品牌图标时为 null。
+  const image = "light" in asset ? asset : null
 
   return (
     <span
       aria-hidden={category === "relay" ? undefined : "true"}
       aria-label={category === "relay" ? "Relay provider / 中转站" : undefined}
-      className={cn(
-        "relative inline-flex size-[26px] shrink-0 items-center justify-center rounded-md bg-muted p-0.5",
-        asset.transparent ? "bg-transparent" : "",
-        asset.themeSurface ? "box-border rounded-md bg-black p-[5px] dark:bg-white" : "",
-        className,
-      )}
+      className={cx("vk-provider-icon", className)}
       data-provider-category={category}
+      data-surface={!image ? "none" : image.themeSurface ? "theme" : image.transparent ? "none" : undefined}
       data-provider-icon={iconKey}
       role={category === "relay" ? "img" : undefined}
+      style={size === undefined ? undefined : { "--vk-provider-size": `${size}px` } as CSSProperties}
       title={category === "relay" ? "Relay provider / 中转站" : undefined}
     >
-      <img
-        alt=""
-        className={cn(
-          "size-full object-contain",
-          asset.dark ? "dark:hidden" : "",
-          asset.monochrome ? "dark:invert" : "",
-        )}
-        draggable={false}
-        src={asset.light}
-      />
-      {asset.dark ? (
+      {image ? (
         <img
           alt=""
-          className="hidden size-full object-contain dark:block"
+          className="vk-provider-art"
+          data-mono={image.monochrome || undefined}
+          data-scheme={image.dark ? "light" : undefined}
           draggable={false}
-          src={asset.dark}
+          src={image.light}
+        />
+      ) : <VulcanSymbol className="vk-provider-art" />}
+      {image?.dark ? (
+        <img
+          alt=""
+          className="vk-provider-art"
+          data-scheme="dark"
+          draggable={false}
+          src={image.dark}
         />
       ) : null}
       {category === "relay" ? (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute -bottom-1 -right-1 inline-flex size-3.5 items-center justify-center rounded-full border border-background bg-[var(--vcn-status-warning-background)] text-[8px] font-bold leading-none text-[var(--vcn-content-warning)] shadow-sm"
+          className="vk-provider-relay"
         >
           R
         </span>

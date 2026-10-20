@@ -1,0 +1,177 @@
+/* Settings page frame: navigation lives in the sidebar, every page shares one header and scrolling body. */
+/* 设置页面框架：导航位于侧栏，所有页面共用同一页头与滚动正文。 */
+.settings-feature-content {
+  display: flex;
+  flex-direction: column;
+  container: settings-shell / inline-size;
+}
+
+/* Page frame: one header (title, description, actions) above a single scrolling body. */
+/* 页面框架：统一页头（标题、说明、操作）位于唯一滚动正文之上。 */
+.settings-page {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  margin: 0 auto;
+  animation: vcn-page-enter 240ms var(--vk-ease);
+}
+.settings-page-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 20px 24px 24px;
+}
+/* Routed pages fill the body; pages that own a scroll viewport keep it, others scroll with the body. */
+/* 路由页面填满正文；自带滚动视口的页面保留自身滚动，其余随正文滚动。 */
+.settings-page-body > * { flex: 1 1 auto; min-height: 0; }
+/* Page kit pages scroll with the body: stretching would squeeze their clipped cards and end the sticky save bar early. */
+/* 页面套件页面随正文滚动：拉伸会挤压其裁切的卡片，并使吸附保存栏提前失效。 */
+.settings-page-body > .vk-page { flex: none; }
+/* Master-detail directories read as one bordered panel inside the frame. */
+/* 主从目录在框架内呈现为一个带边框的面板。 */
+.settings-page-body > .vk-directory:has(> [data-navigation-mode="column"]) {
+  border: var(--vk-bw) solid var(--vk-line);
+}
+/* AI capabilities: one row per capability, editing happens in the drawer. */
+/* AI 能力：每项能力一行，编辑在抽屉中完成。 */
+.ai-capabilities-page { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+.ai-capabilities-page > .vk-page-tabs { flex-shrink: 0; }
+.ai-capabilities-panel { animation: vcn-fade-in var(--vk-t-med) var(--vk-ease); }
+.ai-capability-list {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: var(--vk-bw) solid var(--vk-line);
+  list-style: none;
+}
+.ai-capability-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1.3fr) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 64px;
+  padding: 12px 16px;
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
+}
+.ai-capability-row + .ai-capability-row { border-top: var(--vk-bw) solid var(--vk-line); }
+.ai-capability-row:hover { background: color-mix(in srgb, var(--vk-sunken) 45%, transparent); }
+.ai-capability-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  background: var(--vk-sunken);
+  color: var(--vk-ink);
+}
+.ai-capability-copy { display: grid; gap: 2px; min-width: 0; }
+.ai-capability-copy strong { font-size: var(--vk-fs-md); font-weight: 600; line-height: 20px; }
+.ai-capability-copy small {
+  overflow: hidden;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-capability-target {
+  overflow: hidden;
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-capability-target.empty { color: var(--vk-ink-2); }
+.ai-capability-status {
+  padding: 2px 8px;
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.ai-capability-status[data-enabled="true"] {
+  background: color-mix(in srgb, var(--vk-ok) 12%, transparent);
+  color: var(--vk-ok, var(--vk-ink));
+}
+.ai-capabilities-message { display: grid; justify-items: start; gap: 10px; padding: 16px 0; }
+.ai-capability-sheet-body { min-height: 0; overflow: auto; padding: 0 16px 24px; }
+
+/* Narrow panes tighten the frame gutter and fold capability rows onto two lines. */
+/* 窄面板收紧框架留白，并将能力行折为两行。 */
+@container settings-shell (max-width: 760px) {
+  .settings-page-body { padding: 14px 12px 16px; }
+  .ai-capability-row { grid-template-columns: 32px minmax(0, 1fr) auto; }
+  .ai-capability-target { grid-column: 2 / -1; grid-row: 2; }
+  .ai-capability-status { display: none; }
+}
+
+/* Form groups: a legend is a heading inside its group, never a caption cut into the border line. */
+/* 表单分组：legend 是分组内的标题，而不是嵌进边框线里的旧式标注。 */
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) fieldset > legend {
+  float: left;
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 0;
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
+  font-weight: 600;
+  line-height: 20px;
+}
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) fieldset > legend + * { clear: both; }
+
+/* Remaining native disclosures in settings read as quiet text toggles with a turning chevron, not a bare triangle. */
+/* 设置中剩余的原生折叠呈现为带旋转箭头的低调文字按钮，而不是裸露的三角形。 */
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 2px 0;
+  color: var(--vk-ink-2);
+  cursor: pointer;
+  font-size: var(--vk-fs-sm);
+  font-weight: 500;
+  list-style: none;
+}
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary::-webkit-details-marker { display: none; }
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  margin-top: -3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform var(--vk-t-fast) var(--vk-ease);
+}
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class])[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary:hover { color: var(--vk-ink); }
+
+/* Preference pages keep one centred reading column so labels and their controls stay within one glance. */
+/* 偏好类页面保持一条居中的阅读列，使标签与其控件处于同一视线范围。 */
+.settings-page[data-width="readable"] .settings-page-body > * { width: 100%; max-width: var(--vk-readable-w); margin-inline: auto; }
+
+/* Basic settings tab panels take the same corner tick and lift as page-kit sections. */
+/* 基础设置分页面板与页面套件分区一样带角标与浮起。 */
+.context-basics-tabs > section { position: relative; box-shadow: var(--vk-shadow-1); transition: border-color var(--vk-t-med) var(--vk-ease); }
+.context-basics-tabs > section::before { content: ""; position: absolute; top: -1px; left: -1px; width: var(--vk-tick-w); height: var(--vk-tick-h); background: var(--vk-ember); opacity: 0.8; }
+.context-basics-tabs > section:hover { border-color: var(--vk-line-strong); }
+
+/* Basic settings tabs render each tab as one framed panel, matching the page-kit sections. */
+/* 基础设置的每个分页呈现为一个带框面板，与页面套件分区一致。 */
+.context-basics-tabs > section {
+  padding: calc(var(--vk-u) * 5) calc(var(--vk-u) * 6) calc(var(--vk-u) * 6);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  animation: vcn-fade-in var(--vk-t-med) var(--vk-ease);
+}
+.context-basics-tabs > section.vk-form-prefs,
+.context-basics-tabs > section > :is(.context-basics-section, .vk-form-prefs) { max-width: none; }
+.context-basics-tabs .context-basics-rows { max-width: none; }

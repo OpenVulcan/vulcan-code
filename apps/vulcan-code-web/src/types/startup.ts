@@ -9,6 +9,7 @@ export type MainAreaId = "chat" | "browser" | "agent-skills" | "skills" | "agent
 // SettingsSubAreaId describes secondary settings pages exposed by the WebUI settings shell.
 // SettingsSubAreaId 描述 WebUI 设置壳暴露的设置二级页面。
 export type SettingsSubAreaId =
+  | "openvulcan-account"
   | "model-providers"
   | "credential-management"
   | "model-list"
@@ -32,6 +33,7 @@ export type SettingsSubAreaId =
   | "runtime-diagnostics"
   | "visual-lab"
   | "notifications"
+  | "appearance"
   | "git-commit"
   | "permission-judge"
   | "prompt-composer"

@@ -4,16 +4,18 @@ import * as React from "react"
 import { LoaderCircle } from "lucide-react"
 import { CustomProviderMutationContext } from "../custom-provider-mutation-context"
 import { shouldBlockManualModelSubmission } from "@/components/features/settings/custom-provider-models-state"
-import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Button } from "@/ui-kit/primitives/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { RadioGroup, RadioGroupItem } from "@/ui-kit/primitives/radio-group"
 import { useI18n } from "@/i18n"
 import { formatTokenCount } from "@/lib/usage-format"
 import { getPublicAiCustomModelTemplateSuggestions } from "@/service/settings-actions-service"
 import type { PublicAiCommonModelTemplateSuggestion, PublicAiCustomModelDefinition, PublicAiCustomProviderModelDefaults, PublicAiCustomModelTemplateDecision } from "@/types"
 import { errorMessage } from "@/lib/display-format"
 import { EMPTY_PROJECTION } from "./model-dialog-constants"
+import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // ManualModelDialog asks for a real model ID before any model object is created.
 // ManualModelDialog 在创建任何模型对象前要求输入真实模型 ID。
@@ -99,72 +101,72 @@ export function ManualModelDialog(props: {
 
   return (
     <Dialog onOpenChange={(open) => { if (!savingRef.current) props.onOpenChange(open) }} open={props.open}>
-      <DialogContent className="flex max-h-[calc(100vh-2rem)] max-w-xl flex-col overflow-hidden">
+      <DialogContent scrollMode="fixed-footer" size="md">
         <DialogHeader>
           <DialogTitle>{t("settings.customModels.addManual")}</DialogTitle>
           <DialogDescription>{t("settings.customModels.manualDescription")}</DialogDescription>
         </DialogHeader>
-        <fieldset disabled={saving} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto">
-          <label className="grid gap-2 text-sm font-medium">
+        <fieldset disabled={saving} className="vk-fieldset vk-form-scroll">
+          <label className="vk-field">
             {t("settings.customModels.modelId")}
             <Input autoFocus onChange={(event) => setModelId(event.target.value)} value={modelId} />
           </label>
-          <label className="grid gap-2 text-sm font-medium">
+          <label className="vk-field">
             {t("settings.customModels.displayName")}
             <Input onChange={(event) => setDisplayName(event.target.value)} placeholder={modelId.trim()} value={displayName} />
           </label>
-          <div className="rounded-lg border p-3">
-            <p className="mb-3 text-sm font-medium">{t("settings.customModels.templateChoice")}</p>
+          <fieldset className="vk-form-group">
+            <legend>{t("settings.customModels.templateChoice")}</legend>
             {suggestionLoading ? (
-              <p className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
-                <LoaderCircle className="size-3.5 animate-spin" />
+              <p className="vk-form-status">
+                <LoaderCircle aria-hidden="true" className="vk-spin" />
                 {t("settings.customModels.templateSearching")}
               </p>
             ) : null}
-            <RadioGroup onValueChange={setChoice} value={choice}>
-              <label className="flex items-start gap-3 rounded-md p-2 hover:bg-muted">
+            <RadioGroup className="vk-form-choices" onValueChange={setChoice} value={choice}>
+              <label className="vk-form-choice">
                 <RadioGroupItem value="defaults" />
                 <span>
-                  <span className="block text-sm font-medium">{t("settings.customModels.templateKeepDefaults")}</span>
-                  <span className="block text-xs text-muted-foreground">{t("settings.customModels.templateDefaultFallback")}</span>
+                  <strong>{t("settings.customModels.templateKeepDefaults")}</strong>
+                  <small>{t("settings.customModels.templateDefaultFallback")}</small>
                 </span>
               </label>
               {suggestions.map((suggestion) => (
-                <label className="flex items-start gap-3 rounded-md p-2 hover:bg-muted" key={suggestion.template_key}>
+                <label className="vk-form-choice" key={suggestion.template_key}>
                   <RadioGroupItem value={suggestion.template_key} />
                   <span>
-                    <span className="block text-sm font-medium">{suggestion.template_key}</span>
-                    <span className="block text-xs text-muted-foreground">
+                    <strong>{suggestion.template_key}</strong>
+                    <small>
                       {formatTokenCount(suggestion.context_limit)} Token · {t(`settings.customModels.templateMatch.${suggestion.match_kind}`)}
-                    </span>
+                    </small>
                   </span>
                 </label>
               ))}
             </RadioGroup>
-          </div>
-          <div className="rounded-lg border bg-muted/20 p-3">
-            <p className="mb-2 text-sm font-medium">{t("settings.customModels.changeSummaryTitle")}</p>
-            <dl className="grid gap-1 text-sm sm:grid-cols-[8rem_minmax(0,1fr)]">
-              <dt className="text-muted-foreground">{t("settings.customModels.summaryModel")}</dt>
-              <dd className="break-all font-medium">{modelId.trim() || t("settings.customModels.summaryNotEntered")}</dd>
-              <dt className="text-muted-foreground">{t("settings.customModels.summaryTemplate")}</dt>
-              <dd className="break-words font-medium">{summarySource}</dd>
-              <dt className="text-muted-foreground">{t("settings.customModels.summaryDefaults")}</dt>
-              <dd className="font-medium">
+          </fieldset>
+          <section className="vk-form-summary">
+            <span className="vk-label">{t("settings.customModels.changeSummaryTitle")}</span>
+            <dl className="vk-facts">
+              <dt>{t("settings.customModels.summaryModel")}</dt>
+              <dd className="vk-mono">{modelId.trim() || t("settings.customModels.summaryNotEntered")}</dd>
+              <dt>{t("settings.customModels.summaryTemplate")}</dt>
+              <dd>{summarySource}</dd>
+              <dt>{t("settings.customModels.summaryDefaults")}</dt>
+              <dd className="vk-num">
                 {formatTokenCount(props.defaults.context_limit)} / {formatTokenCount(props.defaults.output_limit)} Token
               </dd>
             </dl>
-          </div>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          </section>
+          {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
         </fieldset>
-        <DialogFooter className="shrink-0">
+        <DialogFooter>
           <Button disabled={saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.cancel")}</Button>
           <Button
             disabled={shouldBlockManualModelSubmission(saving, suggestionLoading)}
             onClick={() => void submit()}
             type="button"
           >
-            {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+            {saving ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : null}
             {t("settings.customModels.addManual")}
           </Button>
         </DialogFooter>

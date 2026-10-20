@@ -1,26 +1,28 @@
 import * as React from "react";
 import { Activity, Bot, ChartNoAxesCombined, Copy, Cpu, FileText, FolderOpen, Gauge, Hammer, History, Info, KeyRound, MessageSquareText, MessagesSquare, MoreHorizontal, Plus, Puzzle, RotateCcw, Route, ScrollText, Search, Server, ShieldCheck, Trash2, TriangleAlert, Webhook, Wrench, type LucideIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { InlineDisclosure } from "@/components/ui/disclosure";
-import { Button, IconButton } from "@/components/ui/button";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Checkbox } from "@/components/ui/checkbox";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
+import { Input } from "@/ui-kit/primitives/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { Switch } from "@/ui-kit/primitives/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { StatusPill } from "@/components/shared/status";
 import { formatMessage, useI18n } from "@/i18n";
 import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-browser-runtime-controls";
 import { ALL_PLUGINS_SCOPE, PluginMaintenanceDrawer, usePluginMaintenanceDrawer } from "./plugin-maintenance-drawer";
-import { PageEmptyState, PageNotice } from "@/components/page";
+import { PageEmptyState, PageNotice, PageToolbar } from "@/components/page";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group";
 import type { PluginUninstallUncertainty } from "./plugin-recovery-center";
 import type { PluginRuntimeErrorRecord, PluginSummary, VulcanPluginPermissionPreview, WorkbenchSnapshot } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 import { localizedPluginText, pluginDisplayName } from "./plugin-localized-text";
 import { usePluginEnvironmentTasks } from "./use-plugin-environment-tasks";
 import { InspectedPluginNotices } from "./plugin-permission-changes";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // VulcanPluginStatusFilter identifies the lifecycle subset shown in the Vulcan Plugin list.
 // VulcanPluginStatusFilter 标识 Vulcan 插件列表中显示的生命周期子集。
@@ -697,18 +699,24 @@ export function VulcanPluginsPanel(props: {
           </div>
         ) : null}
       </section>
-      <div className="agent-catalog-filter-row skill-list-filter-row plugin-skill-filter-row">
-        <label className="agent-catalog-search-input skill-list-search-input">
-          <Search size={15} />
-          <input
+      <PageToolbar
+        actions={<Button aria-controls={installPanelId} aria-expanded={installOpen} onClick={() => setInstallOpen(!installOpen)} size="sm" type="button"
+          variant={installOpen ? "secondary" : "outline"}>
+          <Plus aria-hidden="true" size={15} />{t("skills.plugins.installLocalPlugin")}
+        </Button>}
+        className="skill-list-toolbar"
+      >
+        <InputGroup className="agent-catalog-search">
+          <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+          <InputGroupInput
             aria-label={t("skills.filter.searchLabel")}
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder={t("skills.filter.searchPlaceholder")}
             value={searchQuery}
           />
-        </label>
+        </InputGroup>
         <Select onValueChange={(value) => setStatusFilter(value as VulcanPluginStatusFilter)} value={statusFilter}>
-          <SelectTrigger aria-label={t("skills.filter.statusLabel")} className="agent-catalog-status-select">
+          <SelectTrigger aria-label={t("skills.filter.statusLabel")} size="sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -718,11 +726,7 @@ export function VulcanPluginsPanel(props: {
             <SelectItem value="issues">{t("skills.filter.issues")}</SelectItem>
           </SelectContent>
         </Select>
-        <Button aria-controls={installPanelId} aria-expanded={installOpen} onClick={() => setInstallOpen(!installOpen)} size="sm" type="button"
-          variant={installOpen ? "secondary" : "outline"}>
-          <Plus aria-hidden="true" size={15} />{t("skills.plugins.installLocalPlugin")}
-        </Button>
-      </div>
+      </PageToolbar>
       {uninstallUncertainty !== null || (retainedUninstalls ?? 0) > 0 ? <PageNotice data-attention="plugin-maintenance" actions={
         <Button onClick={() => maintenance.open(ALL_PLUGINS_SCOPE, "recovery")} size="sm" type="button" variant="outline">
           {t("pluginMaintenance.attention.open")}
@@ -962,7 +966,7 @@ export function VulcanPluginsPanel(props: {
                 title={toggleLabel}
               />
               </div>
-              {installTask ? <div className="text-xs" role={installTask.state === "failed" ? "alert" : "status"}>
+              {installTask ? <div className="vk-form-note" role={installTask.state === "failed" ? "alert" : "status"}>
                 {installTask.state === "failed"
                   ? formatMessage(t("skills.plugins.runtimeInstallFailed"), { error: installTask.error ?? t("skills.plugins.unknownError") })
                   : installTask.state === "succeeded"
@@ -998,7 +1002,7 @@ export function VulcanPluginsPanel(props: {
                 ? (formatMessage(t("skills.plugins.resetConfigurationRestoresDefaults"), { name: pendingDestructive.plugin.name }))
                 : pendingDestructive ? (formatMessage(t("skills.plugins.deleteCredentialEnabledServers"), { secretKey: pendingDestructive.secretKey })) : ""}</AlertDialogDescription>
           </AlertDialogHeader>
-          {(pendingDestructive?.kind === "secret" ? secretError : installError) ? <p role="alert" className="text-sm text-destructive">{pendingDestructive?.kind === "secret" ? secretError : installError}</p> : null}
+          {(pendingDestructive?.kind === "secret" ? secretError : installError) ? <p role="alert" className="vk-field-error">{pendingDestructive?.kind === "secret" ? secretError : installError}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={mutationBusy}>{t("skills.plugins.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={mutationBusy} onClick={(event) => {

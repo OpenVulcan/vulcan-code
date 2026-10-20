@@ -1,7 +1,7 @@
 import React from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
-import "@/styles/answer-math.css";
+import "@/ui-kit/styles/answer-math.css";
 import type { AnswerComponent } from "./answer-component-model";
 
 // KaTeX typesetting for `ui-math` and inline `` $`…`$ `` spans. This module and KaTeX's stylesheet and fonts
@@ -37,21 +37,21 @@ function typeset(tex: string, display: boolean): { html: string } | { error: str
 export function MathFormula({ display = false, tex }: { display?: boolean; tex: string }) {
   const result = React.useMemo(() => typeset(tex, display), [display, tex]);
   if ("error" in result) {
-    return <code className="answer-math-source" data-display={display || undefined} title={result.error}>{tex}</code>;
+    return <code className="vk-a-math-source" data-display={display || undefined} title={result.error}>{tex}</code>;
   }
-  return <span className={display ? "answer-math-display" : "answer-math-inline"} dangerouslySetInnerHTML={{ __html: result.html }} />;
+  return <span className={display ? "vk-a-math-display" : "vk-a-math-inline"} dangerouslySetInnerHTML={{ __html: result.html }} />;
 }
 
 /** `ui-math`: optional title, displayed equations and a symbol legend. `ui-math`：可选标题、独立显示的公式及符号图例。 */
 export function AnswerMathView({ math }: { math: MathComponent }) {
   return (
-    <figure className="answer-math">
+    <figure className="vk-a-math">
       {math.title ? <figcaption>{math.title}</figcaption> : null}
-      <div className="answer-math-equations">
+      <div className="vk-a-math-equations">
         {math.equations.map((equation, index) => <MathFormula display key={index} tex={equation} />)}
       </div>
       {math.symbols.length > 0 ? (
-        <dl className="answer-math-legend">
+        <dl className="vk-a-math-legend">
           {math.symbols.map((symbol, index) => (
             <React.Fragment key={index}>
               <dt><MathFormula tex={symbol.symbol} /></dt>

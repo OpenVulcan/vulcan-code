@@ -1,4 +1,4 @@
-import type { ComboboxOption } from "@/components/ui/combobox";
+import type { ComboboxOption } from "@/ui-kit/primitives/combobox";
 import type { PublicAiInferenceRoute, PublicAiInternalInferenceCandidate } from "@/types";
 
 // Exact-identity helpers for every consumer-owned inference route picker.

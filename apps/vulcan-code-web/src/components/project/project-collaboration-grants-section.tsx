@@ -1,10 +1,10 @@
 import React from "react";
 import { LoaderCircle, ShieldCheck } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { toast } from "@/ui-kit/primitives/toast";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { ConversationSummary, WorkbenchSnapshot } from "@/types";
 import {
@@ -15,6 +15,7 @@ import {
   type CollaborationGrantAction,
   type CollaborationGrantRecord,
 } from "@/service/collaboration-grants-service";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 const GRANT_ACTIONS: CollaborationGrantAction[] = ["read", "ask", "steer", "start", "reply", "notify"];
 
@@ -273,17 +274,17 @@ export function ProjectCollaborationGrantsSection(props: {
         </div>
       </div>
       {sourceSessions.length === 0 ? (
-        <p className="text-muted-foreground">{labels.noSource}</p>
+        <p className="vk-form-text">{labels.noSource}</p>
       ) : (
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <span className="block text-xs font-medium" id={sourceLabelId}>{labels.source}</span>
+        <div className="vk-form-loose">
+          <div className="vk-field">
+            <span className="vk-field-label" id={sourceLabelId}>{labels.source}</span>
             <Select
               disabled={addBusy || busyGrantId !== null}
               onValueChange={setSourceSessionId}
               value={sourceSessionId || undefined}
             >
-              <SelectTrigger aria-labelledby={sourceLabelId} className="w-full">
+              <SelectTrigger aria-labelledby={sourceLabelId} className="vk-form-w-xl">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -291,14 +292,14 @@ export function ProjectCollaborationGrantsSection(props: {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1.5">
-            <span className="block text-xs font-medium" id={targetLabelId}>{labels.target}</span>
+          <div className="vk-field">
+            <span className="vk-field-label" id={targetLabelId}>{labels.target}</span>
             <Select
               disabled={addBusy || busyGrantId !== null || targetOptions.length === 0}
               onValueChange={setTargetSessionId}
               value={targetSessionId || undefined}
             >
-              <SelectTrigger aria-labelledby={targetLabelId} className="w-full">
+              <SelectTrigger aria-labelledby={targetLabelId} className="vk-form-w-xl">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -306,12 +307,12 @@ export function ProjectCollaborationGrantsSection(props: {
               </SelectContent>
             </Select>
           </div>
-          {targetOptions.length === 0 ? <p className="text-sm text-muted-foreground">{labels.noTarget}</p> : null}
-          <fieldset className="space-y-2">
-            <legend className="text-xs font-medium">{labels.capabilities}</legend>
-            <div className="grid gap-2 sm:grid-cols-2">
+          {targetOptions.length === 0 ? <p className="vk-form-text">{labels.noTarget}</p> : null}
+          <fieldset className="vk-form-stack">
+            <legend className="vk-field-label">{labels.capabilities}</legend>
+            <div className="vk-form-checks">
               {GRANT_ACTIONS.map((action) => (
-                <label className="flex items-center gap-2 text-sm" key={action}>
+                <label className="vk-check-label" key={action}>
                   <Checkbox
                     checked={selectedActions[action]}
                     disabled={addBusy || busyGrantId !== null}
@@ -322,32 +323,32 @@ export function ProjectCollaborationGrantsSection(props: {
               ))}
             </div>
           </fieldset>
-          <Button disabled={addBusy || busyGrantId !== null || !sourceSession || !targetSessionId} onClick={() => void submitGrant()} type="button">
-            {addBusy ? <LoaderCircle className="mr-1.5 animate-spin" size={14} /> : null}
+          <Button className="vk-form-fit" disabled={addBusy || busyGrantId !== null || !sourceSession || !targetSessionId} onClick={() => void submitGrant()} type="button">
+            {addBusy ? <LoaderCircle className="vk-spin" size={14} /> : null}
             {labels.save}
           </Button>
-          {pendingAdd ? <p className="text-xs text-muted-foreground">{labels.pending}</p> : null}
-          {mutationError ? <p className="break-words text-sm text-destructive" role="alert">{mutationError}</p> : null}
+          {pendingAdd ? <p className="vk-form-note">{labels.pending}</p> : null}
+          {mutationError ? <p className="vk-field-error vk-form-break" role="alert">{mutationError}</p> : null}
           {loading ? (
             <StreamPlaceholder label={labels.loading} shape="rows" count={3} />
           ) : loadError ? (
-            <div className="space-y-2" role="alert">
-              <p className="break-words text-sm text-destructive">{loadError}</p>
+            <div className="vk-form-stack" role="alert">
+              <p className="vk-field-error vk-form-break">{loadError}</p>
               <Button disabled={addBusy || busyGrantId !== null} onClick={() => void loadGrants()} size="sm" type="button" variant="outline">{labels.retry}</Button>
             </div>
           ) : grants.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{labels.empty}</p>
+            <p className="vk-form-text">{labels.empty}</p>
           ) : (
-            <div className="space-y-2">
+            <div className="vk-form-stack">
               {grants.map((grant) => (
-                <div className="flex items-center justify-between gap-3 rounded-md border border-border p-3" key={grant.grant_id}>
-                  <div className="min-w-0 space-y-1">
-                    <strong className="block truncate text-sm">
+                <div className="vk-form-item" key={grant.grant_id}>
+                  <div className="vk-form-fill vk-form-tight">
+                    <strong className="vk-form-name">
                       {allSessions.find((session) => session.id === grant.target_session_id)
                         ? sessionLabel(allSessions.find((session) => session.id === grant.target_session_id)!, props.workbench.projects)
                         : grant.target_session_id}
                     </strong>
-                    <span className="block text-xs text-muted-foreground">{grantActionSummary(grant, t, t("project.grants.listSeparator"))}</span>
+                    <span className="vk-field-hint">{grantActionSummary(grant, t, t("project.grants.listSeparator"))}</span>
                   </div>
                   <Button
                     disabled={addBusy || busyGrantId !== null}
@@ -356,7 +357,7 @@ export function ProjectCollaborationGrantsSection(props: {
                     type="button"
                     variant="outline"
                   >
-                    {busyGrantId === grant.grant_id ? <LoaderCircle className="mr-1.5 animate-spin" size={14} /> : null}
+                    {busyGrantId === grant.grant_id ? <LoaderCircle className="vk-spin" size={14} /> : null}
                     {pendingRemoves[grant.grant_id] ? t("project.grants.retryRevoke") : labels.revoke}
                   </Button>
                 </div>

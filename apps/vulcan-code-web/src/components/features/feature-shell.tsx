@@ -1,16 +1,17 @@
 import * as React from "react"
-import { toast } from "sonner"
+import { toast } from "@/ui-kit/primitives/toast"
 import {
   PackagePlus,
   RefreshCw,
 } from "lucide-react"
 
 import { FeatureContent as FeatureShellContent } from "@/components/features/feature-shell-content"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/ui-kit/primitives/button"
 import { FeatureSidebar, areaIconMap, pluginDetailMountIcon, primaryFeatureAreas } from "@/components/features/feature-shell-sidebar"
 import { activeAgentsHeaderSummary } from "@/components/features/agents/agent-area-header"
 import type { AgentActionProps } from "@/components/features/agents/agent-area-types"
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu"
+import { StageHead } from "@/components/shell/stage-head"
 import {
   activeSettingsHeaderSummary,
   settingsSubAreas,
@@ -27,15 +28,12 @@ import type { MemoryActionProps } from "@/components/features/memory/use-memory-
 import {
   SidebarInset,
   SidebarProvider,
-  SidebarTrigger,
-} from "@/components/ui/sidebar"
-import { navigationShellStyle } from "@/components/shell/navigation-layout"
+} from "@/ui-kit/shell/sidebar"
 import { useI18n } from "@/i18n"
 import type {
   FeatureAreaSummary,
   MainAreaId,
   SettingsSubAreaId,
-  StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types"
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor"
@@ -89,9 +87,6 @@ function FeatureShell(props: {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   settingsActions: SettingsActionProps
-  // Startup snapshot used by diagnostics.
-  // 诊断页面使用的启动快照。
-  startup: StartupSnapshot
   // Workbench snapshot used by feature pages.
   // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot
@@ -101,6 +96,9 @@ function FeatureShell(props: {
   // App-wide chrome actions rendered in the shared content header.
   // 渲染在共享内容标题栏中的应用级窗口控制区。
   chromeActions?: React.ReactNode
+  // Status bar pinned to the bottom edge of the page.
+  // 固定在页面底部边缘的状态栏。
+  footer?: React.ReactNode
   // Whether shared title bar empty space should be a native drag region.
   // 共享标题栏空白区域是否作为原生拖动区域。
   titlebarDragRegion?: boolean
@@ -175,7 +173,7 @@ function FeatureShell(props: {
         type="button"
         variant="secondary"
       >
-        <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
+        <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "vk-spin" : undefined} size={15} />
         <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
       </Button>
       <Button disabled={skillHeaderBusyAction !== null} onClick={() => setLuaInstallDialogOpen(true)} size="sm" type="button">
@@ -252,7 +250,6 @@ function FeatureShell(props: {
         agentActions={props.agentActions}
           luaSkillActions={props.luaSkillActions}
           agentSkillActions={props.agentSkillActions}
-        startup={props.startup}
         workbench={props.workbench}
       />
     ),
@@ -263,9 +260,8 @@ function FeatureShell(props: {
 
   return (
     <SidebarProvider
-      className="console-shell feature-shell"
+      className="feature-shell"
       collapsible={false}
-      style={navigationShellStyle()}
     >
       <FeatureSidebar
         activeArea={props.activeArea}
@@ -281,7 +277,7 @@ function FeatureShell(props: {
         workbench={props.workbench}
       />
       <SidebarInset>
-        <div className="feature-main-shell">
+        <div className="vk-stage-page">
           <FeatureHeader
             chromeActions={props.chromeActions}
             descriptor={pageDescriptor}
@@ -290,6 +286,7 @@ function FeatureShell(props: {
           />
           {pageDescriptor.content}
         </div>
+        {props.footer ? <div className="vk-status-frame">{props.footer}</div> : null}
         {luaInstallDialogOpen ? (
           <React.Suspense fallback={null}>
             <LazyLuaSkillInstallDialog
@@ -325,36 +322,20 @@ function FeatureHeader(props: {
   // headerTitle 保存可见功能页标题，用于展示与复制。
   const headerTitle = props.descriptor.title ?? t("sidebar.console")
   return (
-    <header className="console-header">
-      <div className="console-header-main">
-        <SidebarTrigger />
-        <span className="console-header-separator" aria-hidden="true" />
-        <div
-          className="workspace-custom-header-title"
-        >
-          <div
-            className="workspace-header-title-text"
-            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-            onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
-          >
-            <h1>{headerTitle}</h1>
-            {props.descriptor.detail ? <small>{props.descriptor.detail}</small> : null}
-          </div>
-          <WorkspaceTitleMenu title={headerTitle} />
-        </div>
-        <span
-          aria-hidden="true"
-          className="console-header-drag-fill"
-          data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-          onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
-        />
-      </div>
-      <div className="console-header-actions">
-        {props.descriptor.headerActions}
-        {props.descriptor.headerRightActions}
-        {props.chromeActions}
-      </div>
-    </header>
+    <StageHead
+      actions={props.descriptor.headerActions || props.descriptor.headerRightActions ? (
+        <>
+          {props.descriptor.headerActions}
+          {props.descriptor.headerRightActions}
+        </>
+      ) : null}
+      chrome={props.chromeActions}
+      detail={props.descriptor.detail}
+      onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+      title={headerTitle}
+      titleMenu={<WorkspaceTitleMenu title={headerTitle} />}
+      titlebarDragRegion={props.titlebarDragRegion}
+    />
   )
 }
 

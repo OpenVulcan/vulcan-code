@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type { SessionGoalStatus, SessionGoalSummary, SessionGoalUserStatusUpdate } from "@/types";
 import { ComposerGoalStrip } from "./goal-strip";
 import { ComposerGoalDetails } from "./goal-details";
@@ -99,7 +99,7 @@ describe("goal strip lifecycle actions", () => {
         inputTokens: 100, cachedInputTokens: 900, outputTokens: 50, reasoningTokens: 20, totalTokens: 1050 }} />
     </I18nProvider>);
     expect(detail).toContain("完整目标".repeat(200));
-    expect(detail).toContain("composer-goal-details-metrics");
+    expect(detail).toContain("data-goal-metrics");
     expect(detail).toContain("150 / 20K");
     expect(detail).toContain("90.0%");
     expect(detail).toContain("1.1K");

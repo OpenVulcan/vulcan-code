@@ -1,11 +1,14 @@
 import * as React from "react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { RefreshCw } from "lucide-react"
+import { Button } from "@/ui-kit/primitives/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { Label } from "@/ui-kit/primitives/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { useI18n } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeProfileLifetimes, VmmNativeProjectProfilePolicySummary, VmmNativeProjectSummary } from "@/types"
 import { VmmNativeDurationInput } from "./vmm-native-duration-input"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // Finite levels and complete formula keys match the closed native policy contract.
 // 有限等级及完整公式键与封闭原生策略契约一致。
@@ -68,11 +71,11 @@ export function VmmNativeProjectProfilePolicy({ projects, busy, onRunAction, sel
   const selected = projects.find((project) => String(project.projectId) === effectiveId)
   return <Card>
     <CardHeader><CardTitle>{t("memory.projectProfile.title")}</CardTitle><CardDescription>{t("memory.projectProfile.description")}</CardDescription></CardHeader>
-    <CardContent className="space-y-4">
+    <CardContent className="vk-form-loose">
       {selectedProjectId === undefined ? <>
       <Label htmlFor="profile-policy-project">{t("memory.projectRetention.select")}</Label>
       <Select disabled={busy} value={selected ? selectedId : ""} onValueChange={setSelectedId}>
-        <SelectTrigger id="profile-policy-project" className="w-full"><SelectValue placeholder={t("memory.projectRetention.select")} /></SelectTrigger>
+        <SelectTrigger id="profile-policy-project"><SelectValue placeholder={t("memory.projectRetention.select")} /></SelectTrigger>
         <SelectContent>{projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent>
       </Select></> : null}
       {selected ? <ProjectProfileEditor key={selected.projectId} projectId={selected.projectId} busy={busy} onRunAction={onRunAction} /> : null}
@@ -109,24 +112,26 @@ function ProjectProfileEditor({ projectId, busy, onRunAction }: Omit<Props, "pro
   const disabled = busy || pending
   const parsed = draft ? parseProjectProfileDraft(draft) : null
   const changed = parsed && policy && levels.some((level) => fields.some((field) => parsed[level][field] !== policy.effective[level][field]))
-  return <div className="space-y-4">
-    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-    <Button variant="outline" disabled={disabled} onClick={() => void execute("read")}>{t("memory.projectRetention.reload")}</Button>
+  return <div className="vk-form-loose">
+    {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
+    <div className="vk-form-bar">
+      <p className="vk-form-text">{policy ? t(policy.overrides === null ? "memory.projectProfile.inherited" : "memory.projectRetention.overridden") : null}</p>
+      <Button size="sm" variant="ghost" disabled={disabled} onClick={() => void execute("read")}><RefreshCw aria-hidden="true" className={pending ? "vk-spin" : undefined} />{t("memory.projectRetention.reload")}</Button>
+    </div>
     {policy && draft ? <>
-      <p className="text-sm text-muted-foreground">{t(policy.overrides === null ? "memory.projectProfile.inherited" : "memory.projectRetention.overridden")}</p>
-      {levels.map((level) => <fieldset key={level} disabled={disabled} className="grid gap-3 rounded-md border p-3 sm:grid-cols-3">
-        <legend className="px-1 text-sm">{t(`memory.profilePolicy.${level}`)}</legend>
-        {fields.map((field) => <div key={field} className="space-y-1">
+      {levels.map((level) => <fieldset key={level} disabled={disabled} className="vk-form-group vk-mem-three">
+        <legend>{t(`memory.profilePolicy.${level}`)}</legend>
+        {fields.map((field) => <div key={field} className="vk-form-tight">
           <Label htmlFor={`project-profile-${level}-${field}`}>{t(`memory.profilePolicy.${field}`)}</Label>
           <VmmNativeDurationInput id={`project-profile-${level}-${field}`} value={draft[level][field]} disabled={disabled}
             unitLabel={`${t(`memory.profilePolicy.${level}`)} · ${t(`memory.profilePolicy.${field}`)} · ${t("memory.policy.durationUnit")}`}
             onChange={(value) => { setDraft({ ...draft, [level]: { ...draft[level], [field]: value } }); setSaved(false) }} />
         </div>)}
       </fieldset>)}
-      <p className="text-xs text-muted-foreground">{t("memory.projectProfile.durationHint")}</p>
-      {!parsed ? <p role="alert" className="text-sm text-destructive">{t("memory.policy.invalidValues")}</p> : null}
+      <p className="vk-form-note">{t("memory.projectProfile.durationHint")}</p>
+      {!parsed ? <p role="alert" className="vk-field-error">{t("memory.policy.invalidValues")}</p> : null}
       {saved ? <p role="status">{t("memory.projectProfile.saved")}</p> : null}
-      <div className="flex flex-wrap gap-2">
+      <div className="vk-form-chips">
         <Button disabled={disabled || !parsed || (policy.overrides !== null && !changed)} onClick={() => { if (parsed) void execute("override", parsed) }}>{t("memory.projectRetention.save")}</Button>
         <Button variant="outline" disabled={disabled || policy.overrides === null} onClick={() => void execute("inherit")}>{t("memory.projectRetention.inherit")}</Button>
         <Button variant="outline" disabled={disabled} onClick={() => { setDraft(draftOf(policy.global)); setSaved(false) }}>{t("memory.projectRetention.fillGlobal")}</Button>

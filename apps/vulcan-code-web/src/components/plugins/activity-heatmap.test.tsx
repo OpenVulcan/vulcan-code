@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { ActivityHeatmap, type ActivityHeatmapCell } from "./plugin-host-components";
 
 // calendarCells creates a known ordered source range, including all zero-intensity dates unchanged.

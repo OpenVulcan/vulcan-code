@@ -355,15 +355,17 @@ async function runAcceptance(serviceExecutable, desktopRuntime, desktopEntry, re
         return {
           hostMarker: document.documentElement.dataset.vulcanHost ?? null,
           titlebar: read(document.querySelector('[data-tauri-drag-region]')),
-          controls: read(document.querySelector('.window-controls')),
-          noDragAction: read(document.querySelector('.app-chrome-actions')),
+          controls: read(document.querySelector('.vk-winctl')),
+          noDragAction: read(document.querySelector('.vk-stage-chrome')),
           buttonInsideTitlebar: read(document.querySelector('[data-tauri-drag-region] button')),
         };
       });
       // The title bar must drag while every control stays clickable.
       // 标题栏必须可拖动，同时每个控件保持可点击。
       const dragOk = regions.titlebar === 'drag';
-      const controlsOk = regions.controls === 'no-drag' || regions.controls === null;
+      // The desktop host always mounts its own window controls, so a missing control row is a failure.
+      // 桌面宿主总会挂载自有窗口控件，因此缺少控件行即为失败。
+      const controlsOk = regions.controls === 'no-drag';
       const actionOk = regions.noDragAction === 'no-drag' || regions.noDragAction === null;
       const nestedOk =
         regions.buttonInsideTitlebar === 'no-drag' || regions.buttonInsideTitlebar === null;

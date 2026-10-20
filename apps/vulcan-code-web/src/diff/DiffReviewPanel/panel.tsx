@@ -1,11 +1,13 @@
 import React from "react";
-import { FileText, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
+import { GitCompare, RefreshCw } from "lucide-react";
+import { PageEmptyState } from "@/components/page/page-feedback";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { toast } from "@/ui-kit/primitives/toast";
 
-import { WorkspaceDefaultFileIcon, WorkspaceFileTreeDrawer, WorkspaceFileTreeStats } from "@/components/workspace/workspace-file-tree-drawer";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { openProjectDirectoryPath } from "@/service/project-actions-service";
-import { DiffFileCard, DiffFileHeader, useDiffScrollState } from "../diff-file-card";
+import { DiffFileCard, useDiffScrollState } from "../diff-file-card";
 import { DiffPanelToolbar } from "../diff-review-toolbar";
 import { DIFF_SEARCH_DETAIL_PREFETCH_TARGET_MATCHES, DIFF_SEARCH_SUMMARY_FILE_MATCH_LIMIT, DIFF_SEARCH_SUMMARY_REQUEST_DEBOUNCE_MS } from "../limits";
 import type { DiffFile, DiffPanelSnapshot, DiffRenderPreferences, DiffReviewSelection, DiffViewMode, WorkspaceDiffSearchResponse, WorkspaceGitFileActionKind, WorkspaceGitRepositorySummary } from "../types";
@@ -15,10 +17,9 @@ import {
   EMPTY_DIFF_FILE_VIRTUAL_LAYOUT,
   buildDiffFileVirtualLayout,
   mountedDiffFiles,
-  stickyDiffFileItem,
 } from "../diff-render-index";
 import "../diffReview.css";
-import { buildDiffFileTree } from "./file-tree";
+import { DiffFileBar, diffFilesInFolderOrder } from "./file-bar";
 import { DiffReviewFloatingGitActions } from "./floating-git-actions";
 import { initialDiffRenderPreferences, initialDiffViewMode, persistDiffDisplayPreferences } from "./preferences";
 import {
@@ -30,7 +31,6 @@ import {
   diffCollapsedFileKeys,
   diffDetailHydrationRequestsWithoutDuplicates,
   diffReviewScrollResetKey,
-  diffRevealRelativePath,
   diffSearchDetailPrefetchCandidateForFile,
   diffSearchDetailPrefetchCandidates,
   diffSearchIndexForSummaryTarget,
@@ -125,8 +125,6 @@ export function DiffReviewPanel(props: {
   const [viewMode, setViewMode] = React.useState<DiffViewMode>(initialDiffViewMode);
   const [renderPreferences, setRenderPreferences] = React.useState<DiffRenderPreferences>(initialDiffRenderPreferences);
   const [expandedFileKey, setExpandedFileKey] = React.useState<string | null>(null);
-  const [fileTreeFilter, setFileTreeFilter] = React.useState("");
-  const [fileTreeDrawerPinnedOpen, setFileTreeDrawerPinnedOpen] = React.useState(true);
   // refreshPending stores the immediate local refresh lock before parent loading propagates.
   // refreshPending 保存父级 loading 传入前的本地即时刷新锁。
   const [refreshPending, setRefreshPending] = React.useState(false);
@@ -141,16 +139,16 @@ export function DiffReviewPanel(props: {
   // renderedSnapshot must not be narrowed by search because the diff body height must stay stable while typing.
   // renderedSnapshot 不能被搜索缩窄，因为输入搜索内容时 diff 主体高度必须保持稳定。
   const renderedSnapshot = snapshot;
-  // autoSelectedSingleFile uses the only rendered file directly instead of showing a directory landing page.
-  // autoSelectedSingleFile 在仅渲染一个文件时直接使用该文件，避免展示目录入口页。
-  const autoSelectedSingleFile = renderedSnapshot?.files.length === 1 ? renderedSnapshot.files[0] : null;
-  // effectiveExpandedFileKey keeps the single-file direct view expanded without mutating manual multi-file selection state.
-  // effectiveExpandedFileKey 让单文件直显保持展开，同时不污染多文件手动选择状态。
-  const effectiveExpandedFileKey = expandedFileKey ?? autoSelectedSingleFile?.key ?? null;
+  // orderedFiles is the order the file bar, its menu and Alt+Up/Down all walk.
+  // orderedFiles 是文件栏、其菜单与 Alt+上/下 共同遵循的顺序。
+  const orderedFiles = React.useMemo(() => diffFilesInFolderOrder(renderedSnapshot?.files ?? []), [renderedSnapshot]);
+  // The review always shows one file: the chosen one while it is still in the diff, otherwise the first file.
+  // 审核始终展示一个文件：所选文件仍在 diff 中时展示它，否则展示第一个文件。
   const selectedDiffFile = React.useMemo(
-    () => renderedSnapshot?.files.find((file) => file.key === effectiveExpandedFileKey) ?? null,
-    [effectiveExpandedFileKey, renderedSnapshot],
+    () => orderedFiles.find((file) => file.key === expandedFileKey) ?? orderedFiles[0] ?? null,
+    [expandedFileKey, orderedFiles],
   );
+  const effectiveExpandedFileKey = selectedDiffFile?.key ?? null;
   const selectedDiffSnapshot = React.useMemo(
     () => renderedSnapshot && selectedDiffFile
       ? { ...renderedSnapshot, files: [selectedDiffFile] }
@@ -189,18 +187,6 @@ export function DiffReviewPanel(props: {
     [selectedCollapsedFileKeys, selectedDiffSnapshot, viewMode],
   );
   const renderedFileCount = renderedSnapshot?.files.length ?? 0;
-  // isSingleFileReview marks any mode that is currently displaying one selected file body.
-  // isSingleFileReview 标记任何当前正在展示单个已选文件正文的模式。
-  const isSingleFileReview = Boolean(selectedDiffFile);
-  // shouldShowFileTree limits the navigation drawer to multi-file diffs.
-  // shouldShowFileTree 将导航目录限制在多文件 diff 场景。
-  const shouldShowFileTree = renderedFileCount > 1;
-  // renderedFileTree stores the review directory tree passed to the shared drawer.
-  // renderedFileTree 保存传递给共享抽屉的审核目录树。
-  const renderedFileTree = React.useMemo(
-    () => renderedSnapshot && shouldShowFileTree ? buildDiffFileTree(renderedSnapshot.files, fileTreeFilter) : null,
-    [fileTreeFilter, renderedSnapshot, shouldShowFileTree],
-  );
   // refreshBusy merges parent loading and the local refresh lock for button state.
   // refreshBusy 合并父级加载态与本地刷新锁，用于按钮状态。
   const refreshBusy = Boolean(props.loading || refreshPending);
@@ -232,22 +218,14 @@ export function DiffReviewPanel(props: {
     () => mountedDiffFiles(virtualLayout, scrollState.scrollTop, scrollState.clientHeight),
     [scrollState.clientHeight, scrollState.scrollTop, virtualLayout],
   );
-  const stickyFileItem = React.useMemo(
-    () => stickyDiffFileItem(virtualLayout, scrollState.scrollTop),
-    [scrollState.scrollTop, virtualLayout],
-  );
-  // floatingHeaderFile keeps the single-file title pinned even before regular sticky logic activates.
-  // floatingHeaderFile 让单文件标题在常规吸顶逻辑触发前也保持固定。
-  const floatingHeaderFile = isSingleFileReview ? selectedDiffFile : stickyFileItem?.file ?? null;
   const handleFileCollapsedChange = React.useCallback((fileKey: string, collapsed: boolean) => {
     setExpandedFileKey((current) => (collapsed ? (current === fileKey ? null : current) : fileKey));
     if (typeof window !== "undefined") {
       window.requestAnimationFrame(syncFileListScrollState);
     }
   }, [syncFileListScrollState]);
-  const handleFileTreeSelect = React.useCallback((file: DiffFile) => {
+  const handleSelectFile = React.useCallback((file: DiffFile) => {
     setExpandedFileKey(file.key);
-    setFileTreeDrawerPinnedOpen(false);
     if (shouldLoadDiffFileDetail(file)) {
       onLoadFileDetail?.(file);
     }
@@ -318,8 +296,6 @@ export function DiffReviewPanel(props: {
   }, [diffSourceScrollResetKey, syncFileListScrollState]);
   React.useEffect(() => {
     setExpandedFileKey(null);
-    setFileTreeDrawerPinnedOpen(true);
-    setFileTreeFilter("");
   }, [diffSourceScrollResetKey]);
   // Resyncs viewport state after virtual layout height changes.
   // 虚拟布局高度变化后重新同步视口状态。
@@ -500,25 +476,34 @@ export function DiffReviewPanel(props: {
   }, [backendSearchHydrationRequests, onLoadFileDetail]);
 
   if (!snapshot) {
-    return (
-      <section className="diff-review-panel empty">
-        <div className="diff-empty-state">
-          <FileText size={22} />
-          <strong>{props.emptyTitle ?? "Git Diff"}</strong>
-          <span>{props.emptyBody ?? t("diff.emptyBody")}</span>
-          {props.onRefresh ? (
-            <button className="diff-action-button" disabled={refreshBusy} onClick={handleRefreshClick} type="button">
-              <RefreshCw className={refreshBusy ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={14} />
-              <span>{refreshBusy ? t("diff.loading") : t("diff.refresh")}</span>
-            </button>
-          ) : null}
-        </div>
-      </section>
-    );
+    // The host is still reading the diff: show where it will appear rather than an empty verdict.
+    // 宿主仍在读取 diff：展示其将出现的位置，而不是空结论。
+    if (props.loading) {
+      return <section className="diff-review-panel empty"><StreamPlaceholder className="vk-stream-inset" count={6} label={t("diff.loading")} /></section>;
+    }
+    return <DiffReviewEmptyPanel body={props.emptyBody ?? t("diff.emptyBody")} refreshBusy={refreshBusy} title={props.emptyTitle ?? t("diff.cleanTitle")} onRefresh={props.onRefresh ? handleRefreshClick : undefined} />;
+  }
+  if (snapshot.gitRepository === false) {
+    // A directory outside Git has no review modes or Git actions; offer only a refresh for after `git init`.
+    // 不在 Git 中的目录没有审核模式与 Git 操作；只提供刷新，便于 `git init` 之后重新加载。
+    return <DiffReviewEmptyPanel body={t("diff.notRepositoryBody")} refreshBusy={refreshBusy} title={t("diff.notRepositoryTitle")} onRefresh={props.onRefresh ? handleRefreshClick : undefined} />;
   }
 
   return (
-    <section className={`diff-review-panel${shouldShowGitFileActions ? " has-floating-actions" : ""}`}>
+    <section
+      className={`diff-review-panel${shouldShowGitFileActions ? " has-floating-actions" : ""}`}
+      // Alt+Up and Alt+Down walk the changed files without leaving the keyboard.
+      // Alt+上与 Alt+下 无需离开键盘即可逐个切换变更文件。
+      onKeyDown={(event) => {
+        if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown") || !selectedDiffFile) return;
+        const at = orderedFiles.indexOf(selectedDiffFile);
+        const next = orderedFiles[at + (event.key === "ArrowDown" ? 1 : -1)];
+        if (next) {
+          event.preventDefault();
+          handleSelectFile(next);
+        }
+      }}
+    >
       <DiffPanelToolbar
         loading={refreshBusy}
         selection={selection}
@@ -548,53 +533,24 @@ export function DiffReviewPanel(props: {
         searchResultTruncated={searchIndex.truncated}
         viewMode={viewMode}
       />
+      {renderedSnapshot && selectedDiffFile ? (
+        <DiffFileBar activeKey={selectedDiffFile.key} files={orderedFiles} onSelect={handleSelectFile} />
+      ) : null}
       <div className={`diff-review-body${selectedDiffFile ? " has-selection" : " directory-only"}`}>
-        {renderedFileTree ? (
-          <WorkspaceFileTreeDrawer
-            activeFileKey={effectiveExpandedFileKey}
-            collapseOnSelect
-            emptyLabel={t("diff.noMatchingFiles")}
-            fileIconClassName={(node) => node.file?.status ?? "modified"}
-            fileKey={(file) => file.key}
-            fileTitle={(file, node) => diffRevealRelativePath(file) ?? node.name}
-            filter={fileTreeFilter}
-            lockedOpen={!selectedDiffFile}
-            pinnedOpen={fileTreeDrawerPinnedOpen}
-            renderFileIcon={(node) => (
-              <WorkspaceDefaultFileIcon name={node.name} warning={Boolean(node.file?.tooLargeToDisplay)} />
-            )}
-            renderFileTrailing={(node) => (
-              <WorkspaceFileTreeStats additions={node.additions ?? 0} deletions={node.deletions ?? 0} />
-            )}
-            tree={renderedFileTree}
-            onFilterChange={setFileTreeFilter}
-            onPinnedOpenChange={setFileTreeDrawerPinnedOpen}
-            onSelectFile={handleFileTreeSelect}
-          />
-        ) : null}
         <div
-          className={`diff-file-list ${viewMode === "split" ? "split-mode" : "unified-mode"}${virtualLayout.enabled ? " virtualized" : ""}${isSingleFileReview ? " single-file-floating-header" : ""}`}
+          className={`diff-file-list ${viewMode === "split" ? "split-mode" : "unified-mode"}${virtualLayout.enabled ? " virtualized" : ""}`}
           onScroll={handleFileListScroll}
           ref={fileListRef}
         >
           {selectedDiffFile ? (
             <>
-              {floatingHeaderFile ? (
-                <div className="diff-file-sticky-header-overlay">
-                  <DiffFileHeader
-                    className={isSingleFileReview ? "overlay glass" : "overlay"}
-                    collapsed={selectedCollapsedFileKeys.has(floatingHeaderFile.key)}
-                    file={floatingHeaderFile}
-                    onToggle={() => handleFileCollapsedChange(floatingHeaderFile.key, !selectedCollapsedFileKeys.has(floatingHeaderFile.key))}
-                  />
-                </div>
-              ) : null}
               {virtualLayout.enabled ? (
                 <div className="diff-file-list-virtual-canvas" style={virtualLayout.canvasStyle}>
                   {mountedFiles.map((item) => (
                     <div className="diff-file-list-virtual-item" key={item.file.key} style={item.style}>
                       <DiffFileCard
                         file={item.file}
+                        headerless
                         collapsed={selectedCollapsedFileKeys.has(item.file.key)}
                         scrollContainerRef={fileListRef}
                         scrollState={scrollState}
@@ -614,6 +570,7 @@ export function DiffReviewPanel(props: {
               ) : (
                 <DiffFileCard
                   file={selectedDiffFile}
+                  headerless
                   collapsed={selectedCollapsedFileKeys.has(selectedDiffFile.key)}
                   key={selectedDiffFile.key}
                   scrollContainerRef={fileListRef}
@@ -632,23 +589,54 @@ export function DiffReviewPanel(props: {
           ) : renderedFileCount ? (
             null
           ) : (
-            <div className="diff-empty-state in-list">
-              <FileText size={20} />
-              <strong>{props.emptyTitle ?? "Git Diff"}</strong>
-              <span>{snapshot.notice ?? props.emptyBody ?? t("diff.emptyBody")}</span>
-            </div>
+            <PageEmptyState
+              description={props.emptyBody ?? t(DIFF_CLEAN_BODY[selection.mode] ?? "diff.emptyBody")}
+              icon={<GitCompare />}
+              size="panel"
+              title={t("diff.cleanTitle")}
+            />
           )}
         </div>
       </div>
       {shouldShowGitFileActions && props.onGitFileAction ? (
         <DiffReviewFloatingGitActions
           busy={Boolean(props.gitFileActionPending || props.loading)}
+          fileCount={renderedFileCount}
           mode={selection.mode}
           selectedFile={selectedDiffFile}
           onAction={props.onGitFileAction}
+          onRevealFile={handleRevealFile}
         />
       ) : null}
     </section>
   );
 }
 
+// DIFF_CLEAN_BODY says what a review mode found nothing in when it has no changed files.
+// DIFF_CLEAN_BODY 说明某审核模式没有变更文件时，是在哪里没有找到修改。
+const DIFF_CLEAN_BODY: Partial<Record<DiffReviewSelection["mode"], TranslationKey>> = {
+  unstaged: "diff.cleanUnstaged",
+  staged: "diff.cleanStaged",
+};
+
+// DiffReviewEmptyPanel renders the whole-panel empty state with an optional refresh.
+// DiffReviewEmptyPanel 渲染整面板空状态，并可选提供刷新。
+function DiffReviewEmptyPanel(props: { title: string; body: string; refreshBusy: boolean; onRefresh?: () => void }) {
+  const { t } = useI18n();
+  return (
+    <section className="diff-review-panel empty">
+      <PageEmptyState
+        action={props.onRefresh ? (
+          <Button disabled={props.refreshBusy} onClick={props.onRefresh} size="sm" variant="outline">
+            <RefreshCw />
+            {props.refreshBusy ? t("diff.loading") : t("diff.refresh")}
+          </Button>
+        ) : null}
+        description={props.body}
+        icon={<GitCompare />}
+        size="panel"
+        title={props.title}
+      />
+    </section>
+  );
+}

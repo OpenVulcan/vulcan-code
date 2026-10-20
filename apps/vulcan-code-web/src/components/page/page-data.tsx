@@ -1,9 +1,9 @@
 import * as React from "react"
 import { Activity, Bot, Calendar, CheckCircle2, Clock3, Database, MessageSquareText, Network, User } from "lucide-react"
 
-import { InlineDisclosure } from "@/components/ui/disclosure"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { cn } from "@/lib/utils"
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/ui-kit/primitives/table"
+import { cx } from "@/ui-kit/behavior/core"
 
 // PageFact is one labelled value of a facts list.
 // PageFact 是事实列表中的一个带标签值。
@@ -31,7 +31,7 @@ export interface PageFactsProps extends Omit<React.ComponentProps<"dl">, "childr
 // PageFacts 以弱化标签和可换行数值渲染只读事实。
 export function PageFacts({ items, layout = "grid", className, ...props }: PageFactsProps) {
   return (
-    <dl className={cn("page-facts", className)} data-layout={layout} {...props}>
+    <dl className={cx("vk-page-facts", className)} data-layout={layout} {...props}>
       {items.map((item, index) => (
         <div data-tone={item.tone} key={item.key ?? index}>
           <dt>{item.label}</dt>
@@ -59,7 +59,7 @@ export interface PageDetailsProps {
 // PageDetails 收起时保持内容挂载，使标识仍可查找与复制。
 export function PageDetails(props: PageDetailsProps) {
   return (
-    <InlineDisclosure className={cn("page-details", props.className)} keepMounted label={props.label}>
+    <InlineDisclosure className={cx("vk-page-details", props.className)} keepMounted label={props.label}>
       {props.items && props.items.length > 0 ? <PageFacts items={props.items} layout="list" /> : null}
       {props.children}
     </InlineDisclosure>
@@ -113,13 +113,13 @@ function textTitle(value: React.ReactNode): string | undefined {
 export function MetricCard(props: MetricCardProps) {
   const Icon = props.icon ? METRIC_ICONS[props.icon] : null
   return (
-    <section aria-label={props.label} className="page-metric">
-      <div className="page-metric-header">
-        {Icon ? <Icon aria-hidden="true" size={14} /> : null}
-        <div className="page-metric-label" title={props.label}>{props.label}</div>
-      </div>
-      <div className="page-metric-value" title={textTitle(props.value)}>{props.value}</div>
-      <div className="page-metric-detail" title={textTitle(props.detail)}>{props.detail ?? " "}</div>
+    <section aria-label={props.label} className="vk-metric">
+      <header>
+        {Icon ? <Icon aria-hidden="true" /> : null}
+        <span title={props.label}>{props.label}</span>
+      </header>
+      <strong title={textTitle(props.value)}>{props.value}</strong>
+      <small title={textTitle(props.detail)}>{props.detail ?? " "}</small>
     </section>
   )
 }
@@ -127,7 +127,7 @@ export function MetricCard(props: MetricCardProps) {
 // MetricGrid flows metric cards into responsive equal columns.
 // MetricGrid 将指标卡片排入响应式等宽列。
 export function MetricGrid({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("page-metric-grid", className)} data-slot="metric-grid" {...props} />
+  return <div className={cx("vk-metric-grid", className)} data-slot="metric-grid" {...props} />
 }
 
 // PageItemListProps describes one list of rows, optionally headed when a section groups several lists.
@@ -142,8 +142,8 @@ export interface PageItemListProps extends React.ComponentProps<"div"> {
 // PageItemList 以分隔线堆叠 PageItem 行；没有行时自动收起。
 export function PageItemList({ heading, className, children, ...props }: PageItemListProps) {
   return (
-    <div className={cn("page-item-list", className)} data-slot="page-item-list" {...props}>
-      {heading ? <p className="page-item-list-heading">{heading}</p> : null}
+    <div className={cx("vk-page-items", className)} data-slot="page-item-list" {...props}>
+      {heading ? <p className="vk-label">{heading}</p> : null}
       {children}
     </div>
   )
@@ -168,21 +168,25 @@ export interface PageItemProps extends Omit<React.ComponentProps<"article">, "ti
   actions?: React.ReactNode
 }
 
+// ITEM_TONES maps the plugin-facing item tones onto the kit tone vocabulary; neutral carries no tone.
+// ITEM_TONES 将面向插件的列表项色调映射到套件色调词汇；neutral 不带色调。
+const ITEM_TONES = { neutral: undefined, attention: "warn", success: "ok", danger: "bad" } as const
+
 // PageItem renders icon, text and actions; children append details below the description.
 // PageItem 渲染图标、文字与操作；children 在说明下方追加详情。
 export function PageItem({ title, description, icon, meta, tone = "neutral", actions, className, children, ...props }: PageItemProps) {
   return (
-    <article className={cn("page-item", className)} data-slot="page-item" data-tone={tone} {...props}>
-      {icon ? <span aria-hidden="true" className="page-item-icon">{icon}</span> : null}
-      <div className="page-item-main">
-        <div className="page-item-heading">
-          <p className="page-item-title">{title}</p>
-          {meta ? <div className="page-item-meta">{meta}</div> : null}
-        </div>
-        {description ? <p className="page-item-description">{description}</p> : null}
+    <article className={cx("vk-page-item", className)} data-slot="page-item" data-tone={ITEM_TONES[tone]} {...props}>
+      {icon ? <span aria-hidden="true" className="vk-page-item-icon">{icon}</span> : null}
+      <div className="vk-page-item-main">
+        <header>
+          <strong>{title}</strong>
+          {meta ? <span>{meta}</span> : null}
+        </header>
+        {description ? <p>{description}</p> : null}
         {children}
       </div>
-      {actions ? <div className="page-item-actions">{actions}</div> : null}
+      {actions ? <div className="vk-page-actions">{actions}</div> : null}
     </article>
   )
 }
@@ -235,7 +239,7 @@ export function PageTable({ columns, rows, label, empty, layout = "auto", minWid
   if (rows.length === 0 && empty !== undefined) return <>{empty}</>
   const cellProps = (column: PageTableColumn) => ({ "data-numeric": column.numeric ? "" : undefined, "data-wrap": column.wrap ? "" : undefined })
   return (
-    <Table aria-label={label} className={cn("page-table", className)} data-layout={layout} data-slot="page-table" style={minWidth === undefined ? undefined : { minWidth }}>
+    <Table aria-label={label} className={cx("vk-page-table", className)} data-layout={layout} data-slot="page-table" style={minWidth === undefined ? undefined : { minWidth }}>
       <TableHeader>
         <TableRow>
           {columns.map((column) => <TableHead {...cellProps(column)} key={column.key} scope="col"

@@ -1,8 +1,8 @@
 import * as React from "react"
 import { CheckCircle2, CircleAlert, Clock3 } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
-import { cn } from "@/lib/utils"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { cx } from "@/ui-kit/behavior/core";
 import type { StartupStepStatus } from "@/types"
 
 // PanelTitle renders a section title with an icon.
@@ -59,7 +59,7 @@ function StatusPill(props: {
         ? "warning"
         : "outline"
 
-  return <Badge className={cn("status-pill", props.status)} variant={variant}>{props.label}</Badge>
+  return <Badge className={cx("status-pill", props.status)} variant={variant}>{props.label}</Badge>
 }
 
 export { PanelTitle, StatusIcon, StatusPill }

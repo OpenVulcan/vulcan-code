@@ -35,7 +35,7 @@ it("routes only ordinary transcript website/file clicks and preserves download, 
       if (destination) routed.push(destination.href);
       event.preventDefault();
     }}>
-      <div className="conversation-scroll-content">
+      <div className="vk-transcript-inner">
         <a id="website" href="https://example.com/"><span>Web</span></a>
         <a id="local" href="file:///C:/my%20files/page.html">Local</a>
         <a id="service" href={`${window.location.origin}/private`}>Workbench</a>

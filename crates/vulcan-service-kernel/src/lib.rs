@@ -290,7 +290,9 @@ use git::{
     service_run_git_commit_action, service_save_git_commit_settings,
 };
 use git_diff_services::*;
-use host_tools_settings::{host_tools_settings, host_tools_settings_with_native_tools};
+use host_tools_settings::{
+    host_tools_settings, host_tools_settings_with_native_tools, service_save_default_command_shell,
+};
 use knowledge_base_services::*;
 use mcp_settings::*;
 use media_upload::*;
@@ -314,6 +316,7 @@ pub use project_conversation_services::service_add_project_initial_directory;
 use project_conversation_services::*;
 pub use project_directories::service_add_project_from_path;
 use project_directories::service_browse_project_directories;
+use project_directories::visible_project_id_for_path;
 use project_terminals::*;
 use provider_settings::{
     provider_retry_settings, service_clear_selected_provider_api_trace_directory,

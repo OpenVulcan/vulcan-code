@@ -1,10 +1,10 @@
 import * as React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { PageNotice, PageRow, PageSection } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Combobox } from "@/components/ui/combobox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { Combobox } from "@/ui-kit/primitives/combobox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { inferenceRouteKey, inferenceRoutePickerOptions } from "@/components/features/inference-route-picker";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
@@ -15,6 +15,7 @@ import type {
   PublicAiReasoningEffort,
   PublicAiSettingsSnapshot,
 } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // The reviewer's consumer profile and its single LLM purpose, owned by the service kernel.
 // 复核器的消费者配置档及其唯一 LLM 用途，由服务内核持有。
@@ -154,7 +155,7 @@ export function PermissionReviewRouteSection(props: { children?: React.ReactNode
     {selected ? <PageRow label={t("settings.permissionJudge.review.reasoning")}>
       <Select disabled={busy} value={savedEffort ?? MODEL_DEFAULT_EFFORT}
         onValueChange={(effort) => void save(selected.route, effort)}>
-        <SelectTrigger aria-label={t("settings.permissionJudge.review.reasoning")} className="w-56"><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label={t("settings.permissionJudge.review.reasoning")} className="vk-form-w-lg"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value={MODEL_DEFAULT_EFFORT}>{t("settings.permissionJudge.review.reasoningDefault")}</SelectItem>
           {efforts.map((effort) => (

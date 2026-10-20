@@ -1,11 +1,13 @@
 import * as React from "react"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Button } from "@/ui-kit/primitives/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
+import { Input } from "@/ui-kit/primitives/input"
+import { Label } from "@/ui-kit/primitives/label"
 import { useI18n } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeProfilePolicySummary, VmmNativeRuntimePolicySummary } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // Exact contract keys determine both the editor and validation traversal.
 // 准确契约键同时决定编辑器与校验遍历。
@@ -126,33 +128,33 @@ export function VmmNativeProfilePolicy({ settings, defaults, busy, onRunAction, 
       if (mounted.current) setPending(false)
     }
   }
-  return <Card className="w-full min-w-0">
+  return <Card>
     <CardHeader><CardTitle>{t("memory.profilePolicy.title")}</CardTitle><CardDescription>{t("memory.profilePolicy.description")}</CardDescription></CardHeader>
-    <CardContent className="vmm-profile-policy-editor space-y-4">
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    <CardContent className="vmm-profile-policy-editor vk-form-loose">
+      {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
       {saved ? <p role="status">{t("memory.profilePolicy.saved")}</p> : null}
       {/* Keep semantic groups while using headings and dividers instead of nested frames. */}
       {/* 保留语义分组，通过标题与分隔线区分层级，避免边框层层嵌套。 */}
-      {roles.map((role) => <fieldset key={role} disabled={disabled} className="min-w-0 space-y-4 border-0 p-0">
-        <legend className="mb-3 font-medium">{t(`memory.profilePolicy.${role}`)}</legend>
+      {roles.map((role) => <fieldset key={role} disabled={disabled} className="vk-form-loose">
+        <legend className="vk-mem-legend">{t(`memory.profilePolicy.${role}`)}</legend>
         {levels.map((level) => <fieldset key={level} className="vmm-profile-lifetime-fields">
-          <legend className="pr-2 text-sm text-muted-foreground">{t(`memory.profilePolicy.${level}`)}</legend>
-          {fields.map((field) => <div key={field} className="min-w-0 space-y-1">
+          <legend className="vk-mem-sublegend">{t(`memory.profilePolicy.${level}`)}</legend>
+          {fields.map((field) => <div key={field} className="vk-form-tight">
             <Label htmlFor={`profile-${role}-${level}-${field}`}>{t(`memory.profilePolicy.${field}`)}</Label>
             <Input id={`profile-${role}-${level}-${field}`} type="number" min={field === "stepMs" ? 0 : 1} step={1}
               value={draft[role][level][field]} onChange={(event) => edit(role, level, { ...draft[role][level], [field]: event.target.value })} />
           </div>)}
-          <div className="col-span-full min-w-0 space-y-1"><Label htmlFor={`profile-${role}-${level}-unit`}>{t("memory.profilePolicy.unit")}</Label>
+          <div className="vk-form-tight vk-mem-span"><Label htmlFor={`profile-${role}-${level}-unit`}>{t("memory.profilePolicy.unit")}</Label>
             <Select disabled={disabled} value={String(draft[role][level].unit)}
               onValueChange={(value) => edit(role, level, { ...draft[role][level], unit: Number(value) })}>
-              <SelectTrigger id={`profile-${role}-${level}-unit`} className="w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger id={`profile-${role}-${level}-unit`}><SelectValue /></SelectTrigger>
               <SelectContent>{units.map(([factor, key]) => <SelectItem key={factor} value={String(factor)}>{t(key)}</SelectItem>)}</SelectContent>
             </Select></div>
         </fieldset>)}
       </fieldset>)}
-      <p className="text-xs text-muted-foreground">{t("memory.profilePolicy.hint")}</p>
-      {!parsed ? <p role="alert" className="text-sm text-destructive">{t("memory.policy.invalidValues")}</p> : null}
-      <div className="flex flex-wrap gap-2">
+      <p className="vk-form-note">{t("memory.profilePolicy.hint")}</p>
+      {!parsed ? <p role="alert" className="vk-field-error">{t("memory.policy.invalidValues")}</p> : null}
+      <div className="vk-form-chips">
         <Button disabled={disabled || !parsed || sameProfiles(parsed, settings)} onClick={() => void save()}>{t("memory.profilePolicy.save")}</Button>
         <Button variant="outline" disabled={disabled} onClick={() => { setDraft(profileDraft(defaults)); setSaved(false) }}>{t("memory.policy.resetDraft")}</Button>
       </div>

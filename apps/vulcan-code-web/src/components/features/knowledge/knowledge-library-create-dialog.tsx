@@ -1,9 +1,9 @@
 import * as React from "react";
 import { Coins, HardDrive } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Combobox } from "@/components/ui/combobox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { Combobox } from "@/ui-kit/primitives/combobox";
 import { useI18n } from "@/i18n";
 import { loadPublicAiSettings } from "@/service/settings-actions-service";
 import type { KnowledgeIndexMode, KnowledgeLibraryCreateRequest, KnowledgeLibrarySummary } from "@/types/knowledge-base";
@@ -108,7 +108,7 @@ export function KnowledgeLibraryCreateDialog({ library, busy, onClose, onSubmit 
         {library === null ? <>
           <label>{t("knowledge.name")}<Input aria-label={t("knowledge.name")} value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
           <label>{t("knowledge.purpose")}<Input aria-label={t("knowledge.purpose")} placeholder={t("knowledge.metadataDescription")} value={description} disabled={busy} onChange={(event) => setDescription(event.target.value)} /></label>
-        </> : <p className="font-medium">{library.name}</p>}
+        </> : <p><strong>{library.name}</strong></p>}
         <div className="knowledge-mode-grid" role="radiogroup" aria-label={t("knowledge.indexMode")}>
           {(Object.keys(KNOWLEDGE_MODE_COPY) as KnowledgeIndexMode[]).map((value) => {
             // Each card names its capability and whether it incurs background embedding calls.

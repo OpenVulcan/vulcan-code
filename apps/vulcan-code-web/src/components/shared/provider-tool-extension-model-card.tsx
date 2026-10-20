@@ -5,7 +5,7 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 
 /** Presentation contract shared by session and backend model-extension selectors.
  * 会话与后端模型扩展选择器共享的展示契约。 */
@@ -73,34 +73,32 @@ export function ProviderToolExtensionModelCard(
   return (
     <article
       aria-label={props.title}
-      className="provider-tool-extension-model-card"
+      className="vk-ext-card"
       data-disabled={props.checkboxDisabled ? "true" : undefined}
       onClick={handleCardClick}
     >
-      <label
-        className="provider-tool-extension-model-card-selection"
-        data-extension-card-selection
-      >
+      <label data-extension-card-selection>
         {/* The native checkbox owns keyboard selection; the account form retains independent semantics.
             原生复选框持有键盘选择；账号表单保留独立语义。 */}
         <input
           aria-label={props.title}
           checked={props.checked}
           disabled={props.checkboxDisabled}
+          className="vk-check"
           onChange={(event) => props.onCheckedChange(event.currentTarget.checked)}
           type="checkbox"
         />
       </label>
       <div
-        className="provider-tool-extension-model-card-content"
+        className="vk-ext-card-body"
         data-extension-card-content
       >
         <div
-          className="provider-tool-extension-model-card-header"
+          className="vk-ext-card-title"
           data-extension-card-row="title"
         >
           <strong title={props.title}>{props.title}</strong>
-          <span className="provider-tool-extension-model-card-tooltips">
+          <span className="vk-ext-card-hints">
             <ProviderToolExtensionProfileTooltip
               accessibleLabel={props.summary}
               icon={<Info aria-hidden="true" size={14} />}
@@ -126,18 +124,18 @@ export function ProviderToolExtensionModelCard(
           </span>
         </div>
         <div
-          className="provider-tool-extension-model-card-controls"
+          className="vk-ext-card-row"
           data-extension-card-row="controls"
         >
           <span
-            className="provider-tool-extension-model-card-identity"
+            className="vk-ext-card-id"
             data-extension-card-identity
             title={`${props.providerId}/${props.modelId}`}
           >
             {props.providerId}/{props.modelId}
           </span>
           <div
-            className="provider-tool-extension-model-card-account-control"
+            className="vk-ext-card-account"
             data-extension-card-section="account"
           >
             {props.accountControl}
@@ -180,7 +178,8 @@ function ProviderToolExtensionProfileTooltip(
       <TooltipTrigger asChild>
         <button
           aria-label={props.accessibleLabel}
-          className={`provider-tool-extension-model-card-tooltip ${props.kind}`}
+          className="vk-ext-card-hint"
+          data-kind={props.kind}
           data-extension-profile-tooltip={props.kind}
           type="button"
         >
@@ -188,7 +187,7 @@ function ProviderToolExtensionProfileTooltip(
         </button>
       </TooltipTrigger>
       <TooltipContent
-        className="provider-tool-extension-model-card-tooltip-content"
+        className="vk-ext-card-tip"
         side="top"
         sideOffset={6}
       >

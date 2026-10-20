@@ -10,7 +10,7 @@ export function resolveConversationLinkTarget(event: MouseEvent<HTMLElement>, or
   // Downloads, resource previews and adjacent controls retain their original handlers.
   // 下载、资源预览和相邻控件保留原来的处理器。
   const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
-  if (!anchor || !anchor.closest(".conversation-scroll-content") || !event.currentTarget.contains(anchor)
+  if (!anchor || !anchor.closest(".vk-transcript-inner") || !event.currentTarget.contains(anchor)
     || anchor.hasAttribute("download") || anchor.closest(".conversation-v1-resource")) return null;
   try {
     // An empty sanitized href must not turn into the current workbench URL.

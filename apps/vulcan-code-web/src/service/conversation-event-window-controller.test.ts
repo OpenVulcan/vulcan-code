@@ -352,6 +352,28 @@ describe("V1 conversation event window controller", () => {
     restored.dispose();
   });
 
+  it("installs the live subscription again when recovering after it failed during hydration", async () => {
+    // The first subscription fails because the event channel is down; recovery must not stay push-blind.
+    // 首次订阅因事件通道中断而失败；恢复后不能一直收不到推送。
+    const subscribeLive = vi.fn<ConversationEventWindowRpc["subscribeLive"]>()
+      .mockRejectedValueOnce(new Error("channel down"))
+      .mockResolvedValue(() => undefined);
+    const reconnect = vi.fn(async () => reconnectResponse([], { memory_revision: 1, durable_revision: 1 }));
+    const controller = new ConversationEventWindowController(rpcMock({
+      hydrate: async () => response([summary(1, userInput(1))]), subscribeLive, reconnect,
+    }));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await controller.hydrate(SESSION_ID);
+    await Promise.resolve();
+    expect(subscribeLive).toHaveBeenCalledOnce();
+
+    await controller.recoverConnection(false);
+
+    expect(subscribeLive).toHaveBeenCalledTimes(2);
+    expect(reconnect).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
   it("hydrates an immutable snapshot without opening the live subscription", () => {
     const subscribeLive = vi.fn(async () => () => undefined);
     const controller = new ConversationEventWindowController(rpcMock({ subscribeLive }));

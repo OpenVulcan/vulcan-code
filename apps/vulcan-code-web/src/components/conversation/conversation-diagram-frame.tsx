@@ -7,6 +7,7 @@ import {
 } from "@/components/conversation/conversation-file-type-icon";
 import { useI18n } from "@/i18n";
 import { runConversationControlAction } from "./conversation-control-feedback";
+import { IconButton } from "@/ui-kit/primitives/button";
 
 // MarkdownDiagramFrameProps describes one shared fenced-diagram presentation.
 // MarkdownDiagramFrameProps 描述一个共享的围栏图表展示框。
@@ -70,7 +71,7 @@ export function MarkdownDiagramFrame(props: MarkdownDiagramFrameProps) {
   const image = props.imageUrl ? (
     <img
       alt={props.alt}
-      className="markdown-diagram-image"
+      className="vk-diagram-image"
       draggable={false}
       onError={props.onImageError}
       src={props.imageUrl}
@@ -90,16 +91,16 @@ export function MarkdownDiagramFrame(props: MarkdownDiagramFrameProps) {
   return (
     <figure
       aria-busy={props.loading && !showSource ? "true" : undefined}
-      className="markdown-diagram-block"
+      className="vk-diagram"
     >
-      <figcaption className="markdown-code-header">
-        <span className="markdown-code-language">
+      <figcaption className="vk-codeblock-head">
+        <span className="vk-codeblock-lang">
           <FileTypeIcon icon={icon} />
           <span>{props.title}</span>
         </span>
-        <span className="markdown-code-actions">
+        <span className="vk-codeblock-actions">
           {props.source !== undefined ? (
-            <span className="markdown-diagram-modes" role="group" aria-label={t("markdown.diagramView")}>
+            <span className="vk-seg vk-diagram-modes" role="group" aria-label={t("markdown.diagramView")}>
               <button
                 aria-pressed={!showSource}
                 onClick={() => setShowSource(false)}
@@ -117,19 +118,19 @@ export function MarkdownDiagramFrame(props: MarkdownDiagramFrameProps) {
             </span>
           ) : null}
           {!showSource && props.onExpand && props.imageUrl ? (
-            <button
+            <IconButton
               aria-label={t("markdown.expandDiagram")}
-              className="markdown-code-action"
+              className="vk-codeblock-action" size="xs"
               onClick={props.onExpand}
               title={t("markdown.expandDiagram")}
               type="button"
             >
-              <Maximize2 size={14} />
-            </button>
+              <Maximize2 aria-hidden="true" />
+            </IconButton>
           ) : null}
-          <button
+          <IconButton
             aria-label={copied ? t("markdown.copied") : t("markdown.copyCode")}
-            className="markdown-code-action"
+            className="vk-codeblock-action" size="xs"
             onClick={() => {
               setCopied(false);
               void runConversationControlAction(
@@ -139,23 +140,19 @@ export function MarkdownDiagramFrame(props: MarkdownDiagramFrameProps) {
             title={copied ? t("markdown.copied") : t("markdown.copyCode")}
             type="button"
           >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-          </button>
+            {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+          </IconButton>
         </span>
       </figcaption>
       {showSource && props.source !== undefined ? (
-        <pre className="markdown-diagram-source"><code>{props.source}</code></pre>
+        <pre className="vk-diagram-source"><code>{props.source}</code></pre>
       ) : (
-        <div
-          className={props.loading
-            ? "markdown-diagram-stage markdown-diagram-loading"
-            : "markdown-diagram-stage"}
-        >
+        <div className="vk-diagram-stage" data-loading={props.loading || undefined}>
           {props.imageUrl ? (
             props.onExpand ? (
               <button
                 aria-label={t("markdown.expandDiagram")}
-                className="markdown-diagram-preview"
+                className="vk-diagram-preview"
                 onClick={props.onExpand}
                 title={t("markdown.expandDiagram")}
                 type="button"
@@ -164,7 +161,7 @@ export function MarkdownDiagramFrame(props: MarkdownDiagramFrameProps) {
               </button>
             ) : image
           ) : (
-            <div className="markdown-diagram-loading-bar" />
+            <div className="vk-diagram-bar" />
           )}
         </div>
       )}

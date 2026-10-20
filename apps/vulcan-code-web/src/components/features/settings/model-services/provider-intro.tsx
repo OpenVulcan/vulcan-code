@@ -97,47 +97,47 @@ export function ProviderIntroCard(props: ProviderIntroCardProps) {
   const facts = providerIntroFacts(provider, t)
   const signupUrl = providerSignupUrl(provider)
   return (
-    <div className="model-services-intro">
+    <div className="vk-ms-intro">
       {props.compact ? null : (
-        <div className="model-services-intro-head">
-          <ProviderIcon category={provider.category} className="size-8 shrink-0" providerId={provider.id} />
+        <div className="vk-ms-intro-head">
+          <ProviderIcon category={provider.category} size={32} providerId={provider.id} />
           <strong>{name}</strong>
-          {category ? <span className="model-services-chip" data-variant="category">{category}</span> : null}
+          {category ? <span className="vk-ms-chip" data-variant="category">{category}</span> : null}
         </div>
       )}
       <ProviderTagChips provider={provider} />
-      <p className="model-services-intro-description">{localizedProviderDescription(provider.id, t)}</p>
+      <p className="vk-ms-intro-description">{localizedProviderDescription(provider.id, t)}</p>
       {facts.length > 0 ? (
-        <div className="model-services-intro-section">
+        <div className="vk-ms-intro-section">
           <span>{t("settings.modelServices.intro.features")}</span>
           <ul>{facts.map((fact) => <li key={fact}>{fact}</li>)}</ul>
         </div>
       ) : null}
       {provider.service_entries.length > 0 ? (
-        <div className="model-services-intro-section">
+        <div className="vk-ms-intro-section">
           <span>{t("settings.modelServices.intro.entryList")}</span>
-          <div className="model-services-chip-row">
+          <div className="vk-ms-chip-row">
             {provider.service_entries.map((entry) => (
-              <span className="model-services-chip" key={entry.id}>{localizedServiceEntryPresentation(provider.id, entry, t).title}</span>
+              <span className="vk-ms-chip" key={entry.id}>{localizedServiceEntryPresentation(provider.id, entry, t).title}</span>
             ))}
           </div>
         </div>
       ) : null}
-      <p className="model-services-intro-note">
+      <p className="vk-ms-intro-note">
         {t(provider.category === "relay" ? "settings.modelServices.intro.relayDisclaimer" : "settings.modelServices.intro.disclaimer")}
       </p>
       {provider.promotion?.referral_url ? (
-        <p className="model-services-intro-affiliate">
+        <p className="vk-ms-intro-affiliate">
           <strong>{t("settings.modelServices.affiliate")}</strong>
           <span>{t(provider.promotion.disclosure_key)}</span>
         </p>
       ) : null}
       {signupUrl || props.action ? (
-        <div className="model-services-intro-foot">
+        <div className="vk-ms-intro-foot">
           {signupUrl ? (
             <a href={signupUrl} rel="noreferrer" target="_blank">
               {t("settings.modelServices.signup")}
-              <ExternalLink aria-hidden="true" className="size-3.5" />
+              <ExternalLink aria-hidden="true" className="vk-icon" />
             </a>
           ) : <span />}
           {props.action ?? null}
@@ -154,8 +154,8 @@ export function ProviderTagChips(props: { provider: Pick<PublicAiProviderDescrip
   const tags = props.provider.service_tags ?? []
   if (tags.length === 0) return null
   return (
-    <span className="model-services-chip-row" data-size={props.small ? "small" : undefined}>
-      {tags.map((tag) => <span className="model-services-chip" data-tag={tag} key={tag}>{serviceTagLabel(tag, t)}</span>)}
+    <span className="vk-ms-chip-row" data-size={props.small ? "small" : undefined}>
+      {tags.map((tag) => <span className="vk-ms-chip" data-tag={tag} key={tag}>{serviceTagLabel(tag, t)}</span>)}
     </span>
   )
 }
@@ -166,5 +166,5 @@ export function AffiliateChip(props: { provider: Pick<PublicAiProviderDescriptor
   const { t } = useI18n()
   const promotion = props.provider.promotion
   if (!promotion?.referral_url) return null
-  return <span className="model-services-chip" data-variant="affiliate" title={t(promotion.disclosure_key)}>{t("settings.modelServices.affiliate")}</span>
+  return <span className="vk-ms-chip" data-variant="affiliate" title={t(promotion.disclosure_key)}>{t("settings.modelServices.affiliate")}</span>
 }

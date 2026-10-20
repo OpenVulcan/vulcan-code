@@ -5,10 +5,10 @@ import {
   MetricCard, MetricGrid, PageActionBar, PageDetails, PageEmptyState, PageFacts, PageGuide, PageHint, PageItem, PageItemList,
   PageNotice, PageRow, PageSection, PageTable, PageToolbar, type PageFact, type PageTableColumn, type PageTableRow,
 } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button } from "@/ui-kit/primitives/button"
+import { Input } from "@/ui-kit/primitives/input"
+import { Switch } from "@/ui-kit/primitives/switch"
 
 import type { VisualLabDemoProps } from "./visual-lab-shared"
 
@@ -37,7 +37,7 @@ export function VisualLabPageKit({ text, onAction }: VisualLabDemoProps) {
     { key: "provider", label: text("供应商", "Provider"), width: "22%" },
     { key: "requests", label: text("调用", "Requests"), numeric: true, width: "16%" },
     { key: "note", label: text("备注", "Note"), wrap: true },
-    { key: "select", label: <span className="sr-only">{text("选择", "Select")}</span>, width: "88px" },
+    { key: "select", label: <span className="vk-sr-only">{text("选择", "Select")}</span>, width: "88px" },
   ]
   const rows: PageTableRow[] = [
     { key: "gpt", model: "GPT-5.6 Terra", provider: "OpenAI", requests: "8,920", note: text("长备注会在固定版式内换行，而不是撑破表格。", "Long notes wrap inside the fixed layout instead of stretching the table.") },

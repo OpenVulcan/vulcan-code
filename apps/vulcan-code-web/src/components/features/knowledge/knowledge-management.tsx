@@ -1,10 +1,10 @@
 import * as React from "react";
 import { BookMarked, FolderGit2, Link2, Plus, X } from "lucide-react";
 import { PageEmptyState } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Switch } from "@/ui-kit/primitives/switch";
 import { useI18n } from "@/i18n";
 import { listKnowledgeCustomWords, listKnowledgeProjectBindings } from "@/service/knowledge-base-service";
 import type { WorkbenchSnapshot } from "@/types";

@@ -7,6 +7,7 @@ import {
   GitCommitHorizontal,
   Info,
   Palette,
+  SwatchBook,
   ScrollText,
   ServerCog,
   ShieldCheck,
@@ -14,6 +15,7 @@ import {
   SlidersHorizontal,
   Stethoscope,
 } from "lucide-react";
+import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
 import { useI18n } from "@/i18n";
 import type { SettingsSubAreaId } from "@/types";
 
@@ -133,6 +135,7 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
       icon: <Settings size={16} />,
       items: [
         { id: "context-basics", label: t("settings.modelBasics"), icon: <SlidersHorizontal size={16} />, description: t("settings.modelBasics.description") },
+        { id: "appearance", label: t("settings.appearance"), icon: <SwatchBook size={16} />, description: t("settings.appearance.description") },
         { id: "notifications", label: t("settings.notifications"), icon: <Bell size={16} />, description: t("settings.notifications.description") },
         { id: "git-commit", label: t("settings.gitCommit"), icon: <GitCommitHorizontal size={16} />, description: t("settings.gitCommit.description") },
         { id: "permission-judge", label: t("settings.permissionJudge"), icon: <ShieldCheck size={16} />, description: t("settings.permissionJudge.description") },
@@ -143,6 +146,7 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
       label: t("settings.group.models"),
       icon: <Cpu size={16} />,
       items: [
+        { id: "openvulcan-account", label: t("settings.openvulcanAccount"), icon: <VulcanSymbol className="vk-nav-symbol" />, description: t("settings.openvulcanAccount.description") },
         { id: "model-providers", label: t("settings.modelProviders"), icon: <ServerCog size={16} />, description: t("settings.modelProviders.description") },
       ],
     },

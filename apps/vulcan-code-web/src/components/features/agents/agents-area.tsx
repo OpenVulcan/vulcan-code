@@ -1,18 +1,20 @@
 import * as React from "react"
-import { Bot, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react"
-import { toast } from "sonner"
+import { Bot, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Trash2, X } from "lucide-react"
+import { toast } from "@/ui-kit/primitives/toast"
 
 import { ModelPickerControl, modelPickerGroupKey } from "@/components/composer/model-picker-control"
 import { SourceOriginLink } from "@/components/features/source-origin-link"
-import { Badge } from "@/components/ui/badge"
-import { Button, IconButton } from "@/components/ui/button"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
-import { Checkbox } from "@/components/ui/checkbox"
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button, IconButton } from "@/ui-kit/primitives/button"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
+import { FilterChip, FilterChipGroup, SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group"
+import { PageEmptyState, PageToolbar } from "@/components/page"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import {
   Dialog,
   DialogContent,
@@ -20,8 +22,8 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
+} from "@/ui-kit/primitives/dialog"
+import { DirectoryRow, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, WorkbenchSnapshot } from "@/types"
 import type { AgentActionProps } from "./agent-area-types"
@@ -313,42 +315,41 @@ export function AgentsArea(props: {
   return (
     <section className="skill-management-surface agent-management-surface">
       <div className="skill-page-body agent-skill-page-body">
-        <section className="skill-toolbar agent-catalog-toolbar" aria-label={t("agents.agentCatalogActions")}>
-          <div className="agent-catalog-toolbar-heading">
-            <p>{t("agents.manageUserLevelAgent")}</p>
-            <div className="agent-catalog-toolbar-actions">
-              <IconButton aria-label={t("agents.newAgent")} disabled={catalogActionDisabled} onClick={() => { setActionError(null); setEditorDraft(emptyAgentDraft()) }} size="xs" title={t("agents.newAgent")} type="button">
-                <Plus size={15} />
-              </IconButton>
-              <IconButton aria-label={t("agents.openUserDirectory")} disabled={catalogActionDisabled} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} size="xs" title={t("agents.openUserDirectory")} type="button">
-                <FolderOpen size={15} />
-              </IconButton>
-              <IconButton aria-label={t("skills.action.refresh")} disabled={catalogActionDisabled} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} size="xs" title={t("skills.action.refresh")} type="button">
-                <RefreshCw className={busyAction === "refresh" ? "spin" : undefined} size={15} />
-              </IconButton>
-            </div>
-          </div>
-          <div className="agent-catalog-filter-row">
-            <input
+        <PageToolbar
+          actions={<>
+            <Button disabled={catalogActionDisabled} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} size="sm" type="button" variant="ghost">
+              <RefreshCw className={busyAction === "refresh" ? "vk-spin" : undefined} size={15} />
+              {t("skills.action.refresh")}
+            </Button>
+            <Button disabled={catalogActionDisabled} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} size="sm" type="button" variant="ghost">
+              <FolderOpen size={15} />
+              {t("agents.openUserDirectory")}
+            </Button>
+            <Button disabled={catalogActionDisabled} onClick={() => { setActionError(null); setEditorDraft(emptyAgentDraft()) }} size="sm" type="button">
+              <Plus size={15} />
+              {t("agents.newAgent")}
+            </Button>
+          </>}
+          aria-label={t("agents.agentCatalogActions")}
+          className="agent-catalog-toolbar"
+          role="toolbar"
+        >
+          <InputGroup className="agent-catalog-search">
+            <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+            <InputGroupInput
               aria-label={t("agents.searchAgents")}
-              className="agent-catalog-search-input"
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder={t("agents.searchAgents2")}
               type="search"
               value={searchQuery}
             />
-            <Select onValueChange={(value) => setStatusFilter(value as AgentStatusFilter)} value={statusFilter}>
-              <SelectTrigger aria-label={t("agents.enabledStateFilter")} className="agent-catalog-status-select">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{t("agents.all")}</SelectItem>
-                <SelectItem value="enabled">{t("agents.enabled")}</SelectItem>
-                <SelectItem value="disabled">{t("agents.disabled")}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </section>
+          </InputGroup>
+          <FilterChipGroup aria-label={t("agents.enabledStateFilter")}>
+            <FilterChip onClick={() => setStatusFilter("all")} selected={statusFilter === "all"}>{t("agents.all")}</FilterChip>
+            <FilterChip onClick={() => setStatusFilter("enabled")} selected={statusFilter === "enabled"}>{t("agents.enabled")}</FilterChip>
+            <FilterChip onClick={() => setStatusFilter("disabled")} selected={statusFilter === "disabled"}>{t("agents.disabled")}</FilterChip>
+          </FilterChipGroup>
+        </PageToolbar>
         <AgentCatalogIssues catalog={props.workbench.subagentCatalog} />
         {actionError && !editorDraft ? (
           <div role="alert" className="agent-catalog-issues">
@@ -358,15 +359,9 @@ export function AgentsArea(props: {
         ) : null}
         <div className="skill-card-list agent-skill-card-list">
           {props.workbench.subagentCatalog.definitions.length === 0 ? (
-            <article className="skill-empty-card">
-              <strong>{t("agents.noAgentDefinitions")}</strong>
-              <span>{t("agents.createAnAgentManually")}</span>
-            </article>
+            <PageEmptyState description={t("agents.createAnAgentManually")} icon={<Bot />} size="panel" title={t("agents.noAgentDefinitions")} />
           ) : visibleDefinitions.length === 0 ? (
-            <article className="skill-empty-card">
-              <strong>{t("agents.noMatchingAgents")}</strong>
-              <span>{t("agents.adjustTheCategoryEnabled")}</span>
-            </article>
+            <PageEmptyState description={t("agents.adjustTheCategoryEnabled")} size="panel" title={t("agents.noMatchingAgents")} />
           ) : visibleDefinitions.map((definition) => (
             <AgentDefinitionCard
               actions={props.actions}
@@ -411,7 +406,7 @@ export function AgentsArea(props: {
                 ? formatMessage(t("agents.removeTheUserOverride"), { value: localizedDefinitionName(definitionConfirmation.definition, locale) })
                 : formatMessage(t("agents.deleteTheUserDefinition"), { value: localizedDefinitionName(definitionConfirmation.definition, locale) }) : ""}</AlertDialogDescription>
             </AlertDialogHeader>
-            {actionError ? <p role="alert" className="max-h-24 overflow-auto break-words text-sm text-destructive">{actionError}</p> : null}
+            {actionError ? <p role="alert" className="vk-field-error vk-field-scroll">{actionError}</p> : null}
             <AlertDialogFooter>
               <AlertDialogCancel disabled={catalogActionDisabled}>{t("agents.cancel")}</AlertDialogCancel>
               <AlertDialogAction disabled={catalogActionDisabled} onClick={async (event) => {
@@ -459,27 +454,23 @@ export function AgentCategoryMenu(props: {
 
   return (
     <WorkspaceDirectoryMenu ariaLabel={t("agents.agentCategories")} heading={t("agents.categories")}>
-      <button
-        className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === "" ? "active" : ""}`}
-        aria-current={props.selectedCategoryId === "" ? "page" : undefined} onClick={() => props.onSelectCategory("")}
-        type="button"
-      >
-        <Bot size={15} />
-        <span>{t("agents.all")}</span>
-        <strong>{props.workbench.subagentCatalog.definitions.length}</strong>
-      </button>
+      <DirectoryRow
+        active={props.selectedCategoryId === ""}
+        count={props.workbench.subagentCatalog.definitions.length}
+        icon={<Bot />}
+        label={t("agents.all")}
+        onSelect={() => props.onSelectCategory("")}
+      />
       {categories.map((category) => (
-        <button
-          className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === category.categoryId ? "active" : ""}`}
+        <DirectoryRow
+          active={props.selectedCategoryId === category.categoryId}
+          count={countByCategory.get(category.categoryId) ?? 0}
           key={category.categoryId}
-          aria-current={props.selectedCategoryId === category.categoryId ? "page" : undefined} onClick={() => props.onSelectCategory(category.categoryId)}
+          label={localizedCategoryName(category, locale)}
+          onSelect={() => props.onSelectCategory(category.categoryId)}
+          swatch={{ glyph: category.emoji, color: colorSwatchValue(category.color) }}
           title={localizedCategoryDescription(category, locale) ?? category.categoryId}
-          type="button"
-        >
-          <span className="agent-category-floating-icon" style={{ backgroundColor: colorSwatchValue(category.color) }}>{category.emoji}</span>
-          <span>{localizedCategoryName(category, locale)}</span>
-          <strong>{countByCategory.get(category.categoryId) ?? 0}</strong>
-        </button>
+        />
       ))}
     </WorkspaceDirectoryMenu>
   )
@@ -645,7 +636,7 @@ function AgentEditorForm(props: {
               </label>
               <div className="wide agent-editor-model-field">
                 <span>{t("agents.model")}</span>
-                <div className="settings-card-actions">
+                <div className="vk-form-inline">
                   <ModelPickerControl
                     selectionScope="model"
                     ariaLabel={t("agents.chooseFixedAgentModel")}
@@ -674,11 +665,11 @@ function AgentEditorForm(props: {
                     <span>{t("agents.followSession")}</span>
                   </Button>
                 </div>
-                <small className="settings-muted-line">
+                <small className="vk-form-note">
                   {fixedModelValue ? `${t("agents.fixedModel")}: ${draft.fixedModelProviderId}/${draft.fixedModelId}` : t("agents.currentlyFollowsTheSession")}
                 </small>
                 {fixedModelUnavailable ? (
-                  <small className="settings-muted-line">{fixedModelUnavailableReason}</small>
+                  <small className="vk-form-note">{fixedModelUnavailableReason}</small>
                 ) : null}
               </div>
               <div className="wide">
@@ -724,9 +715,9 @@ function AgentEditorForm(props: {
             </div>
             <DialogFooter>
               {props.error ? (
-                <div role="alert" className="min-w-0 flex-1 text-destructive">
+                <div role="alert" className="vk-field-error vk-form-fill">
                   <strong>{t("agents.saveFailedYourDraft")}</strong>
-                  <details><summary>{t("agents.viewDetails")}</summary><p className="max-h-24 overflow-auto break-words">{props.error}</p></details>
+                  <details><summary>{t("agents.viewDetails")}</summary><p className="vk-diag">{props.error}</p></details>
                 </div>
               ) : null}
               <Button disabled={props.busy} onClick={props.onCancel} type="button" variant="secondary">
@@ -1126,7 +1117,7 @@ function AgentDefinitionDetailDialog(props: {
   const scopeLabel = definition ? localizedAgentScopeLabel(definition.scopeKey, t) : null
   return (
     <Dialog open={props.open && definition !== null} onOpenChange={props.onOpenChange}>
-      <DialogContent className="agent-skill-detail-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
+      <DialogContent className="agent-skill-detail-dialog" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{displayName ?? t("agents.agentDetails")}</DialogTitle>
           <DialogDescription>{scopeLabel ?? t("agents.inspectTheAgentDefinition")}</DialogDescription>
@@ -1841,4 +1832,5 @@ function localizedAgentScopeLabel(
 }
 // Directory-only rules follow this lazy owner; shared workbench and responsive rules remain global.
 // 目录专有规则随此懒加载归属载入；共用工作台与响应式规则保持全局。
-import "@/styles/skill-directory.css";
+import "@/ui-kit/styles/features/skill-directory.css";
+import "@/ui-kit/styles/features/settings-forms.css";

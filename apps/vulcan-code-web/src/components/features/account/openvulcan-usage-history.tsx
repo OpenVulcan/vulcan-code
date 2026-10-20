@@ -1,17 +1,19 @@
 import * as React from "react";
 import { ChevronRight, LoaderCircle, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { formatMessage, useI18n } from "@/i18n";
 import { PageEmptyState } from "@/components/page";
 import { errorMessage } from "@/lib/display-format";
 import { loadOpenVulcanUsagePage, type OpenVulcanUsagePage } from "@/service/openvulcan-account-service";
-import { formatCount, formatMicroPoints, formatUsageHour, sumCounts } from "./openvulcan-usage-format";
+import { formatCount, formatMicroPoints, formatUsageHour } from "./openvulcan-usage-format";
 
-// OpenVulcanUsageHistory reads the latest usage page when it mounts and pages back on request, dropping stale responses.
-// OpenVulcanUsageHistory 挂载时读取最新用量页，按需向前翻页，并丢弃过期响应。
-// The parent keys this component by connection ID; returns page totals and an hourly table.
-// 父组件按连接 ID 设置本组件 key；返回本页合计与小时用量表。
+// OpenVulcanUsageHistory is the call details view: it reads the latest hourly usage page when it mounts and
+// pages back on request, dropping stale responses. Totals live in the usage statistics panel.
+// OpenVulcanUsageHistory 是调用详情视图：挂载时读取最新的小时用量页，按需向前翻页，并丢弃过期响应；
+// 合计位于用量统计面板。
+// The parent keys this component by connection ID; returns the hourly table.
+// 父组件按连接 ID 设置本组件 key；返回小时用量表。
 export function OpenVulcanUsageHistory() {
   // t and locale own localized copy and number grouping; page, busy and error own the current bounded page.
   // t 与 locale 负责本地化文案与数字分组；page、busy 与 error 持有当前有界页面。
@@ -38,31 +40,16 @@ export function OpenVulcanUsageHistory() {
     void read("");
     return () => { version.current += 1; };
   }, [read]);
-  const totals = React.useMemo(() => page ? {
-    requests: sumCounts(page.usage.map((row) => row.request_count)),
-    failed: sumCounts(page.usage.map((row) => row.failed_requests)),
-    tokens: sumCounts(page.usage.map((row) => row.input_tokens)),
-    points: sumCounts(page.usage.map((row) => row.charged_micro_points)),
-  } : null, [page]);
   return <section className="openvulcan-usage" aria-busy={busy}>
     <header className="openvulcan-usage-header">
-      <h3>{t("openvulcan.usage.title")}</h3>
+      <h3>{t("openvulcan.calls.hourly")}</h3>
       {page ? <span>{formatMessage(t("openvulcan.usage.range"), { from: page.from_date, to: page.to_date })}</span> : null}
       <Button variant="ghost" size="sm" disabled={busy} data-openvulcan-usage-refresh="" onClick={() => void read("")}>
-        {busy ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : <RefreshCw aria-hidden="true" />}
+        {busy ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : <RefreshCw aria-hidden="true" />}
         {t("openvulcan.usage.refresh")}
       </Button>
     </header>
     {error ? <SettingsErrorNotice message={t("openvulcan.account.failed")} detail={error} /> : null}
-    {totals ? <dl className="openvulcan-usage-totals">
-      <div>
-        <dt>{t("openvulcan.usage.requests")}</dt>
-        <dd>{formatCount(totals.requests, locale)}</dd>
-        {totals.failed !== "0" ? <small>{formatMessage(t("openvulcan.usage.failed"), { count: formatCount(totals.failed, locale) })}</small> : null}
-      </div>
-      <div><dt>{t("openvulcan.usage.tokens")}</dt><dd>{formatCount(totals.tokens, locale)}</dd></div>
-      <div><dt>{t("openvulcan.usage.points")}</dt><dd>{formatMicroPoints(totals.points, locale)}</dd></div>
-    </dl> : null}
     {page && page.usage.length > 0 ? <div className="openvulcan-usage-table">
       <table>
         <thead><tr>

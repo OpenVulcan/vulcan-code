@@ -125,7 +125,7 @@ it("bounds large session-detail rendering and pages without another full record 
     const started = performance.now()
     await act(async () => button(view.container, "显示标题 0").click())
     const detail = view.container.querySelector(".vmm-session-detail")!
-    expect(detail.querySelectorAll('button.pl-10')).toHaveLength(30)
+    expect(detail.querySelectorAll('.vk-mem-pick > button.vk-mem-tile')).toHaveLength(30)
     expect(detail.textContent).toContain("1–30 / 5000")
     await act(async () => button(detail, "下一页").click())
     expect(detail.textContent).toContain("31–60 / 5000")
@@ -306,11 +306,7 @@ it("clears a bulk selection as soon as a filter changes, before submitting the n
   try {
     await act(async () => view.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click())
     expect(view.container.textContent).toContain("已选 20 个会话")
-    await act(async () => {
-      const select = view.container.querySelector<HTMLSelectElement>('select[name="status"]')!
-      select.value = "archived"
-      select.dispatchEvent(new Event("change", { bubbles: true }))
-    })
+    await chooseMemoryOption(view.container.querySelector<HTMLButtonElement>('[aria-label="会话状态"]')!, "已归档")
     expect(view.container.textContent).toContain("已选 0 个会话")
     expect(view.onRunAction).toHaveBeenCalledTimes(2)
   } finally { await view.dispose() }

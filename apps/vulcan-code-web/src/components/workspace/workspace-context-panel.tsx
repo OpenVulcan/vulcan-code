@@ -1,7 +1,7 @@
 import React from "react";
 import { ChildLifetimeUsageChip } from "@/components/conversation/session-lifetime-usage";
 import { useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   ArrowDown,
   Bot,
@@ -17,8 +17,10 @@ import {
 } from "lucide-react";
 import type { ConversationScrollSnapshot } from "@/components/conversation/chat-area-scroll";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
+import { PanelTab } from "@/ui-kit/primitives/panel-tab";
 import {
   Dialog,
   DialogContent,
@@ -26,7 +28,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/ui-kit/primitives/dialog";
 import { ConversationBranchWorkspaceV1 } from "@/components/conversation/conversation-branch-workspace-v1";
 import { TransientReasoningStatusLine } from "@/components/conversation/conversation-live-reasoning";
 import type {
@@ -39,7 +41,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import type {
   DiffReviewSelection,
   WorkspaceGitFileActionRequest,
@@ -51,7 +53,7 @@ import type {
   WorkspaceDiffSnapshotResponse,
   WorkspaceReviewFocusRequest,
 } from "@/diff/types";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
 import { useConversationSessionEventWindowOwnerV1 } from "@/state/conversation-session-event-window-owner-v1";
@@ -207,6 +209,9 @@ export interface WorkspaceContextPanelProps {
   // Runs one VMM memory management action.
   // 执行单个 VMM 记忆管理动作。
   onRunVmmAction: (request: VmmMemoryActionRequest) => Promise<VmmMemoryActionResult>;
+  // Opens the memory settings page from the memory tab.
+  // 从记忆标签页打开记忆设置页面。
+  onOpenMemorySettings?: () => void;
   // Opens one subagent transcript in the right context panel.
   // 在右侧上下文面板中打开单个子代理转录。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -359,9 +364,9 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
   }, [activeTab]);
 
   return (
-    <aside className={cn("context-panel-shell", props.floating && "floating")}>
+    <aside className="vk-panel vk-context-panel" data-floating={props.floating ? "" : undefined}>
       {activeTab ? (
-        <div className="context-dynamic-workspace">
+        <>
           <WorkspaceContextTabBar
             activeTabId={activeTab.id}
             tabs={visibleTabs}
@@ -389,7 +394,7 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
             subagentExpandedStates={subagentExpandedStates}
             subagentScrollSnapshots={subagentScrollSnapshots}
           />
-        </div>
+        </>
       ) : (
         <WorkspaceContextLauncher
           aiBrowserAvailable={props.aiBrowserAvailable === true}
@@ -450,7 +455,7 @@ function WorkspaceContextTabBar(props: {
     buttons[nextIndex].focus();
   };
   return (
-    <div className="context-dynamic-tabbar">
+    <div className="vk-panel-tabs">
       {props.tabs.length > 1 ? (
         <WorkspaceContextTabSwitcher
           activeTabId={props.activeTabId}
@@ -464,7 +469,7 @@ function WorkspaceContextTabBar(props: {
         localBrowserAvailable={props.localBrowserAvailable}
         onOpenTab={props.onOpenTab}
       />
-      <div className="context-dynamic-tab-strip" role="tablist" onKeyDown={handleTabKeyDown}>
+      <div className="vk-panel-tabs-scroll" role="tablist" onKeyDown={handleTabKeyDown}>
         {props.tabs.map((tab) => (
           <WorkspaceContextTabButton
             active={tab.id === props.activeTabId}
@@ -512,35 +517,16 @@ function WorkspaceContextTabButton(props: {
   // displayTitle 在渲染时按当前语言解析单例页签标题。
   const displayTitle = workspaceContextTabDisplayTitle(props.tab, t);
   return (
-    <div
-      className={cn("context-dynamic-tab", props.active && "active")}
+    <PanelTab
+      active={props.active}
+      closeLabel={t("workspaceContext.closeTab").replace("{title}", displayTitle)}
+      icon={workspaceContextTabIcon(props.tab.kind, 14)}
+      label={displayTitle}
       ref={props.tabRef}
-      role="presentation"
-    >
-      <span className="context-dynamic-tab-icon">{workspaceContextTabIcon(props.tab.kind, 14)}</span>
-      <button
-        aria-label={t("workspaceContext.closeTab").replace("{title}", displayTitle)}
-        className="context-dynamic-tab-close"
-        onClick={(event) => {
-          event.stopPropagation();
-          props.onCloseTab(props.tab);
-        }}
-        type="button"
-      >
-        <X size={13} />
-      </button>
-      <button
-        aria-selected={props.active}
-        className="context-dynamic-tab-label"
-        onClick={() => props.onActivateTab(props.tab.id)}
-        role="tab"
-        tabIndex={props.active ? 0 : -1}
-        title={displayTitle}
-        type="button"
-      >
-        <span>{displayTitle}</span>
-      </button>
-    </div>
+      title={displayTitle}
+      onClose={() => props.onCloseTab(props.tab)}
+      onSelect={() => props.onActivateTab(props.tab.id)}
+    />
   );
 }
 
@@ -573,15 +559,16 @@ function WorkspaceContextTabSwitcher(props: {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button aria-label={t("workspaceContext.switchTabs")} className="context-dynamic-icon-button" type="button">
-          <ChevronsDown size={15} />
+        <button aria-label={t("workspaceContext.switchTabs")} className="vk-icon-btn" data-size="sm" type="button">
+          <ChevronsDown />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="context-dynamic-tabs-menu">
-        <label className="context-dynamic-tabs-menu-search">
-          <Search size={13} />
+      <DropdownMenuContent align="start" className="vk-context-menu">
+        <label className="vk-menu-filter">
+          <Search />
           <input
             aria-label={t("workspaceContext.searchTabs")}
+            className="vk-input"
             onChange={(event) => setQuery(event.currentTarget.value)}
             onKeyDown={(event) => event.stopPropagation()}
             placeholder={t("workspaceContext.searchTabsPlaceholder")}
@@ -590,11 +577,12 @@ function WorkspaceContextTabSwitcher(props: {
           {query ? (
             <button
               aria-label={t("workspaceContext.clearTabSearch")}
-              className="context-dynamic-tabs-menu-search-clear"
+              className="vk-icon-btn"
+              data-size="sm"
               onClick={() => setQuery("")}
               type="button"
             >
-              <X size={12} />
+              <X />
             </button>
           ) : null}
         </label>
@@ -603,7 +591,7 @@ function WorkspaceContextTabSwitcher(props: {
           const displayTitle = workspaceContextTabDisplayTitle(tab, t);
           return (
             <DropdownMenuItem
-              className={cn("context-dynamic-tabs-menu-item", tab.id === props.activeTabId && "active")}
+              data-active={tab.id === props.activeTabId ? "" : undefined}
               key={tab.id}
               onClick={() => props.onActivateTab(tab.id)}
             >
@@ -643,11 +631,11 @@ function WorkspaceContextAddMenu(props: {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button aria-label={t("workspaceContext.openRightPage")} className="context-dynamic-icon-button add" type="button">
-          <Plus size={15} />
+        <button aria-label={t("workspaceContext.openRightPage")} className="vk-icon-btn" data-size="sm" type="button">
+          <Plus />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="context-dynamic-add-menu">
+      <DropdownMenuContent align="start" className="vk-context-menu">
         <DropdownMenuLabel>{t("workspaceContext.openPage")}</DropdownMenuLabel>
         <WorkspaceContextOpenMenuItem kind="files" onOpenTab={props.onOpenTab} />
         {availableKinds.length > 0 && <DropdownMenuSeparator />}
@@ -691,7 +679,7 @@ function WorkspaceContextLauncher(props: {
 }) {
   const { t } = useI18n();
   return (
-    <div className="context-launcher">
+    <div className="vk-panel-launch">
       <WorkspaceContextLauncherCard
         description={t("workspaceContext.launcher.filesDescription")}
         kind="files"
@@ -745,8 +733,8 @@ function WorkspaceContextLauncherCard(props: {
   onOpenTab: (kind: WorkspaceContextTabKind) => void;
 }) {
   return (
-    <button className="context-launcher-card" onClick={() => props.onOpenTab(props.kind)} type="button">
-      {workspaceContextTabIcon(props.kind, 22)}
+    <button className="vk-panel-launch-card" data-kind={props.kind} onClick={() => props.onOpenTab(props.kind)} type="button">
+      <span aria-hidden className="vk-panel-launch-glyph">{workspaceContextTabIcon(props.kind, 18)}</span>
       <strong>{props.title}</strong>
       <span>{props.description}</span>
     </button>
@@ -782,11 +770,11 @@ function WorkspaceContextTabContent(args: {
   }, [activeTabId, onFileTabTitleChange]);
 
   if (args.activeTab.kind === "browser") {
-    return <div className="context-tab-content browser-tab-content">{args.props.aiBrowserPanel}</div>;
+    return <div className="vk-panel-body" data-fill="">{args.props.aiBrowserPanel}</div>;
   }
 
   if (args.activeTab.kind === "local-browser") {
-    return <div className="context-tab-content browser-tab-content">
+    return <div className="vk-panel-body" data-fill="">
       {args.props.selectedConversationId ? <React.Suspense fallback={null}>
         <LazyClientBrowserArea key={args.props.selectedConversationId} ownerSessionId={args.props.selectedConversationId} />
       </React.Suspense> : null}
@@ -795,7 +783,7 @@ function WorkspaceContextTabContent(args: {
 
   if (args.activeTab.kind === "review") {
     return (
-      <div className="context-tab-content review-tab-content">
+      <div className="vk-panel-body" data-fill="">
         <React.Suspense fallback={<WorkspaceReviewPanelLoading />}>
           <LazyWorkspaceReviewPanelHost
             loadWorkspaceDiffFileDetail={args.props.loadWorkspaceDiffFileDetail}
@@ -821,19 +809,20 @@ function WorkspaceContextTabContent(args: {
   }
   if (args.activeTab.kind === "memory") {
     return (
-      <div className="context-tab-content memory-tab-content">
+      <div className="vk-panel-body" data-fill="">
         <WorkspaceMemoryPanel
           selectedConversationId={args.props.selectedConversationId}
           selectedProjectId={selectedContextProjectId(args.props)}
           snapshot={args.props.workbench.contextInjection ?? null}
           onRunVmmAction={args.props.onRunVmmAction}
+          onOpenSettings={args.props.onOpenMemorySettings}
         />
       </div>
     );
   }
   if (args.activeTab.kind === "subagent") {
     return (
-      <div className="context-tab-content subagent-tab-content">
+      <div className="vk-panel-body" data-fill="">
         <WorkspaceSubagentPanel
           key={args.activeTab.id}
           tab={args.activeTab}
@@ -845,7 +834,7 @@ function WorkspaceContextTabContent(args: {
     );
   }
   return (
-    <div className="context-tab-content files-tab-content">
+    <div className="vk-panel-body" data-fill="">
       <React.Suspense fallback={<WorkspaceFilesPanelLoading />}>
         <LazyWorkspaceFilesPanelHost
           instanceId={args.activeTab.id}
@@ -1061,7 +1050,7 @@ function WorkspaceSubagentPanel(args: {
   }
 
   return (
-    <div className="workspace-subagent-panel relative pt-10">
+    <div className="workspace-subagent-panel vk-subchat">
       <ChildLifetimeUsageChip bucket={rootUsage?.rootSessionId === parentConversationId
         ? rootUsage.childrenBySessionId[taskId]?.usage : undefined} />
       {transcriptOwner.error && transcriptHasEvents ? (
@@ -1103,7 +1092,7 @@ function WorkspaceSubagentPanel(args: {
         onScrollStateChange={subagentScrollController.handleScroll}
       />
       {transcriptOwner.loading && transcriptOwner.snapshot.events.length === 0 ? (
-        <StreamPlaceholder className="pointer-events-none absolute inset-0 p-5" fill label={t("conversation.subagent.loadingTranscript")} />
+        <StreamPlaceholder className="vk-stream-overlay" fill label={t("conversation.subagent.loadingTranscript")} />
       ) : null}
       {transcriptOwner.error && !transcriptHasEvents ? (
         <div className="workspace-subagent-loading" role="alert">
@@ -1114,7 +1103,7 @@ function WorkspaceSubagentPanel(args: {
       {!tailLocked ? (
         <Button
           aria-label={t("composer.scrollToBottom")}
-          className={cn("workspace-subagent-scroll-bottom", taskRunning || taskOpen ? "workspace-subagent-scroll-bottom-with-footer" : null)}
+          className={cx("workspace-subagent-scroll-bottom", taskRunning || taskOpen ? "workspace-subagent-scroll-bottom-with-footer" : null)}
           onClick={() => subagentScrollController.scrollToBottom()}
           size="icon"
           title={t("composer.scrollToBottom")}
@@ -1161,7 +1150,7 @@ function WorkspaceSubagentPanel(args: {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            {taskActionError ? <p role="alert" className="text-sm text-destructive">{taskActionError}</p> : null}
+            {taskActionError ? <p role="alert" className="vk-field-error">{taskActionError}</p> : null}
             <Button disabled={stopSubmitting} onClick={() => setStopConfirmOpen(false)} type="button" variant="outline">
               {t("conversation.action.cancel")}
             </Button>
@@ -1181,7 +1170,7 @@ function WorkspaceSubagentPanel(args: {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            {taskActionError ? <p role="alert" className="text-sm text-destructive">{taskActionError}</p> : null}
+            {taskActionError ? <p role="alert" className="vk-field-error">{taskActionError}</p> : null}
             <Button disabled={closeSubmitting} onClick={() => setCloseConfirmOpen(false)} type="button" variant="outline">
               {t("conversation.action.cancel")}
             </Button>
@@ -1204,10 +1193,12 @@ function WorkspaceSubagentEmptyState(props: {
   title: string;
 }) {
   return (
-    <div className="workspace-subagent-empty">
-      <Bot size={22} />
-      <span>{props.title}</span>
-    </div>
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon"><Bot /></EmptyMedia>
+        <EmptyTitle>{props.title}</EmptyTitle>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -1268,7 +1259,7 @@ function subagentWorkspacePath(workbench: WorkbenchSnapshot, parentConversationI
 function WorkspaceReviewPanelLoading() {
   const { t } = useI18n();
   return (
-    <StreamPlaceholder className="w-full min-w-0 p-3" fill label={t("workspaceContext.loadingReviewPanel")} shape="rows" />
+    <StreamPlaceholder className="vk-stream-inset" fill label={t("workspaceContext.loadingReviewPanel")} shape="rows" />
   );
 }
 
@@ -1277,6 +1268,6 @@ function WorkspaceReviewPanelLoading() {
 function WorkspaceFilesPanelLoading() {
   const { t } = useI18n();
   return (
-    <StreamPlaceholder className="w-full min-w-0 p-3" fill label={t("workspaceContext.loadingFilesPanel")} shape="rows" />
+    <StreamPlaceholder className="vk-stream-inset" fill label={t("workspaceContext.loadingFilesPanel")} shape="rows" />
   );
 }

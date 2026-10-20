@@ -43,7 +43,7 @@ it("moves a mounted anchor near the viewport top and hands ownership to the read
           element.getBoundingClientRect = () => ({ top: 100 }) as DOMRect;
         }
       }}>
-        <div className="conversation-scroll-content">
+        <div className="vk-transcript-inner">
           <section data-conversation-turn-shell="turn-2" ref={(element) => {
             if (element) element.getBoundingClientRect = () => ({ top: -1400 }) as DOMRect;
           }} />

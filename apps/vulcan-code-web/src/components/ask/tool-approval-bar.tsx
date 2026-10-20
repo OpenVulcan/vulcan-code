@@ -1,8 +1,7 @@
 import React from "react";
 import { CircleAlert, ShieldAlert } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type { PendingApprovalSnapshot, PendingQuestionSnapshot, PermissionModeKey } from "@/types";
 import { useAskAnchorStyle } from "./use-ask-anchor-style";
 
@@ -16,6 +15,9 @@ interface ToolApprovalRequestProps {
   // Pending request that owns the approval.
   // 拥有该审批的待处理请求。
   request: PendingQuestionSnapshot;
+  // Child agent label when the request comes from a subagent of the visible conversation.
+  // 请求来自当前可见会话的子代理时的子代理标签。
+  requester?: string | null;
   // Permission facts of the gated tool call.
   // 受管控工具调用的权限事实。
   approval: PendingApprovalSnapshot;
@@ -65,6 +67,13 @@ const REVIEW_VERDICT_KEYS: Record<string, TranslationKey> = {
   ask_user: "ask.approval.review.askUser",
   deny: "ask.approval.review.deny",
 };
+
+// AskRequesterLine names the child agent that raised the request; the conversation's own requests show nothing.
+// AskRequesterLine 标明发起请求的子代理；会话自身的请求不显示。
+export function AskRequesterLine(props: { requester?: string | null; t: (key: TranslationKey) => string }) {
+  if (!props.requester) return null;
+  return <p className="vk-ask-requester">{formatMessage(props.t("ask.requester.subagent"), { agent: props.requester })}</p>;
+}
 
 // ToolApprovalRequest renders one tool-call approval in the session Ask bar.
 // ToolApprovalRequest 在会话 Ask 面板中渲染一条工具调用审批。
@@ -154,104 +163,101 @@ export function ToolApprovalRequest(props: ToolApprovalRequestProps) {
   const modeKey = PERMISSION_MODE_KEYS[approval.permissionMode];
 
   return (
-    <div className="pointer-events-none fixed bottom-4 z-50 flex justify-center px-4" style={overlayStyle}>
+    <div className="vk-ask-layer" style={overlayStyle}>
       <section
         aria-describedby={descriptionId}
         aria-labelledby={titleId}
         aria-modal="false"
-        className="pointer-events-auto max-h-[min(420px,calc(100vh-2rem))] w-full max-w-[760px] overflow-hidden rounded-2xl border border-border/80 bg-popover p-0 text-[13px] text-popover-foreground shadow-2xl outline-none"
+        className="vk-ask"
         data-approval-request={request.id}
+        data-kind="approval"
+        data-risk={riskLabel ? "true" : undefined}
         onKeyDown={handleKeyDown}
         ref={barRef}
         role="dialog"
         tabIndex={-1}
       >
-        <div className="flex max-h-[min(420px,calc(100vh-2rem))] min-h-0 flex-col gap-2.5 p-3.5">
-          <h2 className="sr-only" id={titleId}>{t("ask.approval.title")}</h2>
-          <p className="sr-only" id={descriptionId}>{t("ask.approval.description")}</p>
-          <div className="flex items-start gap-2">
-            <ShieldAlert className={cn("mt-0.5 size-4 shrink-0", riskLabel ? "text-destructive" : "text-muted-foreground")} />
-            <div className="min-w-0 flex-1 text-sm leading-5 font-semibold">
-              {formatMessage(t(toolApprovalHeadlineKey(approval)), { tool: approval.toolName })}
-            </div>
+        <h2 className="vk-sr-only" id={titleId}>{t("ask.approval.title")}</h2>
+        <p className="vk-sr-only" id={descriptionId}>{t("ask.approval.description")}</p>
+        <AskRequesterLine requester={props.requester} t={t} />
+        <div className="vk-ask-head">
+          <ShieldAlert size={16} />
+          <div className="vk-ask-title">
+            {formatMessage(t(toolApprovalHeadlineKey(approval)), { tool: approval.toolName })}
           </div>
-          <ToolApprovalSubjectBody approval={approval} />
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px] leading-4">
-            <span className="rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground" data-permission-mode={approval.permissionMode}>
-              {formatMessage(t("ask.approval.mode"), { mode: modeKey ? t(modeKey) : approval.permissionMode })}
+        </div>
+        <ToolApprovalSubjectBody approval={approval} />
+        <div className="vk-ask-chips">
+          <span className="vk-badge" data-permission-mode={approval.permissionMode}>
+            {formatMessage(t("ask.approval.mode"), { mode: modeKey ? t(modeKey) : approval.permissionMode })}
+          </span>
+          {riskLabel ? (
+            <span className="vk-badge" data-high-risk={approval.highRisk ?? undefined} data-tone="bad">
+              {formatMessage(t("ask.approval.highRisk"), { category: riskLabel })}
             </span>
-            {riskLabel ? (
-              <span className="rounded-md bg-destructive/10 px-1.5 py-0.5 text-destructive" data-high-risk={approval.highRisk ?? undefined}>
-                {formatMessage(t("ask.approval.highRisk"), { category: riskLabel })}
-              </span>
-            ) : null}
-            {approval.judge ? <ToolApprovalJudgeChip judge={approval.judge} t={t} /> : null}
-            {approval.review ? <ToolApprovalReviewChip review={approval.review} t={t} /> : null}
-            {approval.deadlineUnixMs != null ? <ToolApprovalCountdown deadlineUnixMs={approval.deadlineUnixMs} t={t} /> : null}
+          ) : null}
+          {approval.judge ? <ToolApprovalJudgeChip judge={approval.judge} t={t} /> : null}
+          {approval.review ? <ToolApprovalReviewChip review={approval.review} t={t} /> : null}
+          {approval.deadlineUnixMs != null ? <ToolApprovalCountdown deadlineUnixMs={approval.deadlineUnixMs} t={t} /> : null}
+        </div>
+        {approval.review?.kind === "reviewed" && approval.review.reason ? (
+          <p className="vk-ask-reason" data-review-reason>{approval.review.reason}</p>
+        ) : null}
+        {error ? (
+          <div role="alert" className="vk-ask-error">
+            {error}
           </div>
-          {approval.review?.kind === "reviewed" && approval.review.reason ? (
-            <p className="text-xs leading-5 text-muted-foreground" data-review-reason>{approval.review.reason}</p>
-          ) : null}
-          {error ? (
-            <div role="alert" className="max-h-24 overflow-y-auto break-words rounded-lg border border-destructive/25 bg-destructive/10 px-2.5 py-1.5 text-xs leading-5 text-destructive">
-              {error}
-            </div>
-          ) : null}
-          {stage === "stopConfirm" ? <ToolApprovalStopConfirm t={t} /> : null}
-          <div className="flex items-center justify-end gap-1.5">
-            <Button
-              className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
-              data-approval-action={stage === "deciding" ? "stop" : "back"}
-              disabled={busy}
-              onClick={() => {
-                if (mutationPending.current) return;
-                setStage((current) => current === "deciding" ? "stopConfirm" : "deciding");
-              }}
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              <span>{stage === "deciding" ? t("ask.approval.stop") : t("ask.approval.back")}</span>
-              <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">ESC</span>
-            </Button>
-            {stage === "deciding" ? (
-              <>
-                <Button
-                  className="h-8 rounded-xl px-3 text-xs"
-                  data-approval-action="deny"
-                  disabled={busy}
-                  onClick={() => void reply(approval.denyLabel)}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  {t("ask.approval.deny")}
-                </Button>
-                <Button
-                  className="h-8 rounded-xl px-3 text-xs"
-                  data-approval-action="allow"
-                  disabled={busy}
-                  onClick={() => void reply(approval.allowLabel)}
-                  size="sm"
-                  type="button"
-                >
-                  {busy ? t("ask.action.processing") : t("ask.approval.allow")}
-                </Button>
-              </>
-            ) : (
+        ) : null}
+        {stage === "stopConfirm" ? <ToolApprovalStopConfirm t={t} /> : null}
+        <div className="vk-ask-actions">
+          <Button
+            data-approval-action={stage === "deciding" ? "stop" : "back"}
+            disabled={busy}
+            onClick={() => {
+              if (mutationPending.current) return;
+              setStage((current) => current === "deciding" ? "stopConfirm" : "deciding");
+            }}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            <span>{stage === "deciding" ? t("ask.approval.stop") : t("ask.approval.back")}</span>
+            <kbd className="vk-kbd">ESC</kbd>
+          </Button>
+          {stage === "deciding" ? (
+            <>
               <Button
-                className="h-8 rounded-xl px-3 text-xs"
-                data-approval-action="confirm-stop"
+                data-approval-action="deny"
                 disabled={busy}
-                onClick={() => void stop()}
+                onClick={() => void reply(approval.denyLabel)}
                 size="sm"
                 type="button"
-                variant="destructive"
+                variant="outline"
               >
-                {busy ? t("ask.action.processing") : t("ask.action.confirmReject")}
+                {t("ask.approval.deny")}
               </Button>
-            )}
-          </div>
+              <Button
+                data-approval-action="allow"
+                disabled={busy}
+                onClick={() => void reply(approval.allowLabel)}
+                size="sm"
+                type="button"
+              >
+                {busy ? t("ask.action.processing") : t("ask.approval.allow")}
+              </Button>
+            </>
+          ) : (
+            <Button
+              data-approval-action="confirm-stop"
+              disabled={busy}
+              onClick={() => void stop()}
+              size="sm"
+              type="button"
+              variant="destructive"
+            >
+              {busy ? t("ask.action.processing") : t("ask.action.confirmReject")}
+            </Button>
+          )}
         </div>
       </section>
     </div>
@@ -288,7 +294,7 @@ function ToolApprovalSubjectBody(props: {
     return null;
   }
   return (
-    <pre className="max-h-40 min-h-0 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/60 px-2.5 py-1.5 font-mono text-xs leading-5">
+    <pre className="vk-ask-subject">
       {lines.join("\n")}
     </pre>
   );
@@ -307,7 +313,7 @@ function ToolApprovalJudgeChip(props: {
   const { judge, t } = props;
   if (judge.kind === "unavailable") {
     return (
-      <span className="rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground" data-judge="unavailable" title={judge.reason}>
+      <span className="vk-badge" data-judge="unavailable" title={judge.reason}>
         {t("ask.approval.judge.unavailable")}
       </span>
     );
@@ -315,8 +321,9 @@ function ToolApprovalJudgeChip(props: {
   const key = Object.hasOwn(JUDGE_LABEL_KEYS, judge.label) ? JUDGE_LABEL_KEYS[judge.label] : undefined;
   return (
     <span
-      className={cn("rounded-md px-1.5 py-0.5", judge.label === "block" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground")}
+      className="vk-badge"
       data-judge={judge.label}
+      data-tone={judge.label === "block" ? "bad" : undefined}
     >
       {key ? t(key) : judge.label}
     </span>
@@ -336,14 +343,14 @@ function ToolApprovalReviewChip(props: {
   const { review, t } = props;
   if (review.kind === "unavailable") {
     return (
-      <span className="rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground" data-review="unavailable" title={review.reason}>
+      <span className="vk-badge" data-review="unavailable" title={review.reason}>
         {t("ask.approval.review.unavailable")}
       </span>
     );
   }
   const key = Object.hasOwn(REVIEW_VERDICT_KEYS, review.verdict) ? REVIEW_VERDICT_KEYS[review.verdict] : undefined;
   return (
-    <span className="rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground" data-review={review.verdict}>
+    <span className="vk-badge" data-review={review.verdict}>
       {key ? t(key) : review.verdict}
     </span>
   );
@@ -376,8 +383,9 @@ function ToolApprovalCountdown(props: {
   return (
     <span
       aria-live="off"
-      className={cn("rounded-md px-1.5 py-0.5 tabular-nums", seconds <= 10 ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground")}
+      className="vk-badge"
       data-approval-countdown={seconds}
+      data-tone={seconds <= 10 ? "bad" : undefined}
     >
       {formatMessage(props.t("ask.approval.countdown"), { seconds })}
     </span>
@@ -392,11 +400,11 @@ function ToolApprovalStopConfirm(props: {
   t: Translate;
 }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-xl border border-border/70 bg-muted/45 px-2.5 py-1.5">
-      <CircleAlert className="size-4 shrink-0 text-destructive" />
-      <div className="min-w-0">
-        <div className="text-[13px] leading-5 font-medium">{props.t("ask.confirm.rejectTitle")}</div>
-        <div className="text-[11px] leading-4 text-muted-foreground">{props.t("ask.approval.stopBody")}</div>
+    <div className="vk-ask-confirm" data-tone="bad">
+      <CircleAlert size={16} />
+      <div>
+        <strong>{props.t("ask.confirm.rejectTitle")}</strong>
+        <small>{props.t("ask.approval.stopBody")}</small>
       </div>
     </div>
   );

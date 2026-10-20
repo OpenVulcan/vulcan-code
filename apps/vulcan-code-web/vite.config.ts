@@ -1,6 +1,5 @@
 import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
@@ -27,7 +26,7 @@ export default defineConfig(({ mode }) => {
     // Unit tests also own a separate cache so their module graph cannot replace the browser's React singleton.
     // 单元测试也拥有独立缓存，避免其模块图替换浏览器中的 React 单例。
     cacheDir: path.resolve(__dirname, "node_modules", mode === "test" ? ".vite-workbench-test" : ".vite-workbench"),
-    plugins: [react(), tailwindcss(), vulcanServiceDiscoveryPlugin(userVulcanRootName)],
+    plugins: [react(), vulcanServiceDiscoveryPlugin(userVulcanRootName)],
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),

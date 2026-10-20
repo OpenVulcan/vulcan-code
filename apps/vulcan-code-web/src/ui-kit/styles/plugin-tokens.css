@@ -1,0 +1,24 @@
+/* Plugin theme vocabulary: the variables docs/contracts/plugin-ui-authoring.md lets plugin UI modules name.
+ * Host code reads --vk-* tokens directly; these aliases exist only so published plugins keep resolving. */
+/* 插件主题词汇：docs/contracts/plugin-ui-authoring.md 允许插件 UI 模块引用的变量。
+ * 宿主代码直接读取 --vk-* 令牌；这些别名只为已发布插件保持可解析。 */
+:root {
+  --background: var(--vk-ground);
+  --foreground: var(--vk-ink);
+  --card: var(--vk-panel);
+  --muted: var(--vk-sunken);
+  --muted-foreground: var(--vk-ink-2);
+  --primary: var(--vk-ink);
+  --destructive: var(--vk-bad);
+  --border: var(--vk-line);
+  --chart-1: var(--vk-data-1);
+  --chart-2: var(--vk-data-2);
+  --chart-3: var(--vk-data-3);
+  --chart-4: var(--vk-data-4);
+  --chart-5: var(--vk-data-5);
+  --vcn-font-size-xs: var(--vk-fs-xs);
+  --vcn-font-size-sm: var(--vk-fs-sm);
+  --vcn-font-size-md: var(--vk-fs-md);
+  --vcn-font-size-lg: var(--vk-fs-read);
+  --vcn-font-size-xl: var(--vk-fs-lg);
+}

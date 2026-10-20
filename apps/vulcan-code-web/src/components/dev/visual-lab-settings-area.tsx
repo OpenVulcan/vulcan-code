@@ -1,9 +1,9 @@
-import { WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
+import { DirectoryRow, WorkspaceDirectoryLayout, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
 import { Palette } from "lucide-react"
 import { useCallback, useState, type ComponentType } from "react"
 
 import { PageBody, PageHint, PageTabPanel, PageToolbar } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
+import { Badge } from "@/ui-kit/primitives/badge"
 import { useI18n } from "@/i18n"
 
 import { VisualLabContent, VisualLabNavigation } from "./visual-lab/visual-lab-content"
@@ -63,10 +63,7 @@ export function VisualLabSettingsArea() {
   return (
     <WorkspaceDirectoryLayout contentClassName="visual-lab" navigation={
       <WorkspaceDirectoryMenu ariaLabel={text("视觉实验室分类", "Visual lab categories")} heading={text("分类", "Categories")}>
-        {VISUAL_LAB_CATEGORIES.map((category) => <button key={category.id} type="button"
-          className={`workspace-tool-panel-menu-row ${activeCategory === category.id ? "active" : ""}`}
-          aria-current={activeCategory === category.id ? "page" : undefined}
-          onClick={() => setActiveCategory(category.id)}>{category.label(text)}</button>)}
+        {VISUAL_LAB_CATEGORIES.map((category) => <DirectoryRow active={activeCategory === category.id} key={category.id} label={category.label(text)} onSelect={() => setActiveCategory(category.id)} />)}
       </WorkspaceDirectoryMenu>
     }>
       <PageBody>

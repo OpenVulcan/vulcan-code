@@ -1,9 +1,9 @@
 import * as React from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
+import { Input } from "@/ui-kit/primitives/input";
+import { Switch } from "@/ui-kit/primitives/switch";
 import { HelpTooltip, SelectControl } from "@/components/plugins/plugin-host-components";
 import { PageRow } from "@/components/page";
 import { formatMessage, useI18n } from "@/i18n";
@@ -103,7 +103,7 @@ function SettingsChecklist(props: { field: PluginSettingsField; value: unknown; 
     {groups.map(({ group, visible }) => {
       if (visible.length === 0) return null;
       return <fieldset className="plugin-settings-checklist-group" disabled={props.disabled} key={group.id}>
-        <legend className="sr-only">{props.message(group.title_message_key)}</legend>
+        <legend className="vk-sr-only">{props.message(group.title_message_key)}</legend>
         <div aria-hidden className="plugin-settings-checklist-header">
           <strong>{props.message(group.title_message_key)}</strong>
         </div>

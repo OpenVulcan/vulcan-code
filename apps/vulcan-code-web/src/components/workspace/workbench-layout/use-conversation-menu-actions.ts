@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar";
 import { formatWorkbenchTranslation } from "@/components/workspace/workbench-layout/types";
@@ -9,6 +9,7 @@ import {
   deleteUnsupportedConversation,
   isUnsupportedSessionFormatError,
   openProjectDirectoryPath,
+  setProjectTreePinned,
 } from "@/service/project-actions-service";
 import { projectForConversation } from "@/state/workbench-selectors";
 import type { ConversationSummary, WorkbenchSnapshot } from "@/types";
@@ -70,9 +71,13 @@ export function useConversationMenuActions(options: ConversationMenuActionsOptio
     applyProjectActionSnapshot,
     applyLifecycleResponseSnapshot,
   } = options;
-  // pinnedConversationIds stores the locally pinned conversations until persistence is added.
-  // pinnedConversationIds 保存本地置顶的会话，直到后续接入持久化。
-  const [pinnedConversationIds, setPinnedConversationIds] = React.useState<Set<string>>(() => new Set());
+  // pinnedConversationIds lists the pinned sessions in the service's pinned order.
+  // pinnedConversationIds 按服务的置顶顺序列出已置顶会话。
+  const pins = workbenchState.projectTree?.pins;
+  const pinnedConversationIds = React.useMemo(
+    () => new Set((pins ?? []).filter((pin) => pin.kind === "session").map((pin) => pin.id)),
+    [pins],
+  );
   // conversationArchivePendingIdsRef blocks duplicate archive RPCs until failure or visible lifecycle convergence.
   // conversationArchivePendingIdsRef 在失败或可见生命周期收敛前阻止重复归档 RPC。
   const conversationArchivePendingIdsRef = React.useRef<Set<string>>(new Set());
@@ -90,17 +95,13 @@ export function useConversationMenuActions(options: ConversationMenuActionsOptio
         return;
       }
       if (action === "pin") {
-        setPinnedConversationIds((current) => {
-          const next = new Set(current);
-          if (next.has(conversation.id)) {
-            next.delete(conversation.id);
-            toast.success(formatWorkbenchTranslation(translate, "workbenchConversation.unpinned", { conversation: conversation.title }));
-          } else {
-            next.add(conversation.id);
-            toast.success(formatWorkbenchTranslation(translate, "workbenchConversation.pinned", { conversation: conversation.title }));
-          }
-          return next;
-        });
+        const pinned = !pinnedConversationIds.has(conversation.id);
+        applyProjectActionSnapshot(await setProjectTreePinned("session", conversation.id, pinned));
+        toast.success(formatWorkbenchTranslation(
+          translate,
+          pinned ? "workbenchConversation.pinned" : "workbenchConversation.unpinned",
+          { conversation: conversation.title },
+        ));
         return;
       }
       if (action === "archive") {
@@ -168,7 +169,7 @@ export function useConversationMenuActions(options: ConversationMenuActionsOptio
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, setRenameTarget, translate, workbenchState]);
+  }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, pinnedConversationIds, setRenameTarget, translate, workbenchState]);
 
   // Release committed archive request locks only after the authoritative active row is no longer visible.
   // 仅在权威活动行不再可见后释放已提交归档请求锁。

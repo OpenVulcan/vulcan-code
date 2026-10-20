@@ -1,14 +1,15 @@
 import React from "react";
 import { ShieldQuestion } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { toast } from "@/ui-kit/primitives/toast";
+import { Button } from "@/ui-kit/primitives/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { MODE_KEYS, OPTION_HINT_KEYS, OPTION_KEYS, label } from "@/components/features/settings/permission-judge-labels";
 import { formatMessage, useI18n } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import { loadProjectPermissionJudgePolicy, saveProjectPermissionJudgePolicy } from "@/service/permission-judge-service";
 import type { ProjectPermissionJudgePolicySnapshot } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // FOLLOW_DEFAULT is the select value that drops the project's choice; policy modes are plain words.
 // FOLLOW_DEFAULT 是移除项目选择的下拉值；策略档位都是普通单词。
@@ -112,31 +113,31 @@ export function ProjectPermissionJudgeSection(props: { projectId: string }) {
         </div>
       </div>
       {loadError ? (
-        <div role="alert" className="space-y-2">
-          <p className="break-words text-destructive">{t("projectSettings.permissionJudge.loadFailed")} {loadError}</p>
-          <Button type="button" variant="outline" onClick={() => void load()}>{t("composer.capability.retry")}</Button>
+        <div role="alert" className="vk-form-stack">
+          <p className="vk-field-error vk-form-break">{t("projectSettings.permissionJudge.loadFailed")} {loadError}</p>
+          <Button className="vk-form-fit" type="button" variant="outline" onClick={() => void load()}>{t("composer.capability.retry")}</Button>
         </div>
       ) : !snapshot ? (
         <StreamPlaceholder label={t("projectSettings.permissionJudge.loading")} shape="rows" count={3} />
       ) : (
-        <div className="space-y-4">
+        <div className="vk-form-loose">
           {snapshot.issue ? (
-            <p role="alert" className="break-words text-sm text-destructive">
+            <p role="alert" className="vk-field-error vk-form-break">
               {t("projectSettings.permissionJudge.issue")} {snapshot.issue.detail}
             </p>
           ) : null}
           {snapshot.options.length === 0 ? (
-            <p className="text-muted-foreground">{t("projectSettings.permissionJudge.empty")}</p>
+            <p className="vk-form-text">{t("projectSettings.permissionJudge.empty")}</p>
           ) : snapshot.options.map((option) => (
-            <div className="space-y-1.5" data-judge-option={option.key} key={option.key}>
-              <span className="block text-xs font-medium" id={`${labelId}-${option.key}`}>{label(t, OPTION_KEYS, option.key)}</span>
-              {Object.hasOwn(OPTION_HINT_KEYS, option.key) ? <span className="block text-xs text-muted-foreground">{t(OPTION_HINT_KEYS[option.key])}</span> : null}
+            <div className="vk-field" data-judge-option={option.key} key={option.key}>
+              <span className="vk-field-label" id={`${labelId}-${option.key}`}>{label(t, OPTION_KEYS, option.key)}</span>
+              {Object.hasOwn(OPTION_HINT_KEYS, option.key) ? <span className="vk-field-hint">{t(OPTION_HINT_KEYS[option.key])}</span> : null}
               <Select
                 disabled={saving !== null}
                 onValueChange={(mode) => void save(option.key, mode)}
                 value={option.chosenMode ?? FOLLOW_DEFAULT}
               >
-                <SelectTrigger aria-labelledby={`${labelId}-${option.key}`} className="w-full">
+                <SelectTrigger aria-labelledby={`${labelId}-${option.key}`} className="vk-form-w-xl">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -149,7 +150,7 @@ export function ProjectPermissionJudgeSection(props: { projectId: string }) {
             </div>
           ))}
           {unsupported.length > 0 ? (
-            <p className="text-sm text-muted-foreground">
+            <p className="vk-form-text">
               {formatMessage(t("projectSettings.permissionJudge.unsupported"), { options: unsupported.map((key) => label(t, OPTION_KEYS, key)).join(", ") })}
             </p>
           ) : null}

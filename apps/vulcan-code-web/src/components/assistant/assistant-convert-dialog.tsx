@@ -1,6 +1,6 @@
 import React from "react";
 import { dedicatedErrorMessage } from "@/components/composer/dedicated/dedicated-errors";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   Dialog,
   DialogContent,
@@ -8,9 +8,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
+} from "@/ui-kit/primitives/dialog";
+import { Input } from "@/ui-kit/primitives/input";
+import { Spinner } from "@/ui-kit/primitives/spinner";
 import { useI18n } from "@/i18n";
 
 /** Names a memory-locked dedicated session and turns it into a floating assistant.
@@ -69,13 +69,13 @@ export function AssistantConvertDialog(props: {
             placeholder={t("assistantDock.nameLabel")}
             value={name}
           />
-          {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+          {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
           <DialogFooter>
             <Button disabled={busy} onClick={() => props.onOpenChange(false)} type="button" variant="ghost">
               {t("conversation.action.cancel")}
             </Button>
             <Button disabled={busy || !name.trim()} type="submit">
-              {busy ? <Spinner className="size-4" /> : null}
+              {busy ? <Spinner /> : null}
               {t("assistantDock.convert")}
             </Button>
           </DialogFooter>

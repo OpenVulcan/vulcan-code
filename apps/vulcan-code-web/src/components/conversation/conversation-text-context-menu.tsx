@@ -1,12 +1,12 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { useI18n } from "@/i18n";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+} from "@/ui-kit/primitives/context-menu";
 
 // ConversationTextContextMenuProps binds text actions to the visible transcript, not the whole page.
 // ConversationTextContextMenuProps 将文本操作限定在可见会话转录，而不是整个页面。

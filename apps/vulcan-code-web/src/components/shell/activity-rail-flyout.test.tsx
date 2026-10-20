@@ -35,8 +35,8 @@ async function renderFlyout(props: { menuOpen?: boolean; dismissKey?: string; on
   ))
 }
 
-const panel = () => container.querySelector<HTMLElement>(".activity-rail-flyout")
-const trigger = () => container.querySelector<HTMLButtonElement>(".activity-rail-flyout-anchor button")!
+const panel = () => container.querySelector<HTMLElement>(".vk-rail-flyout")
+const trigger = () => container.querySelector<HTMLButtonElement>(".vk-rail-flyout-anchor button")!
 
 // Verifies keyboard entry shows the hosted content and Escape returns focus to the rail button.
 // 验证键盘进入会显示承载内容，且 Escape 将焦点交还轨道按钮。

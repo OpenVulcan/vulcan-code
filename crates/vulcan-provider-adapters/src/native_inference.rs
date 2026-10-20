@@ -566,6 +566,13 @@ impl ProviderExecutionClient {
         capabilities
             .validate_request(request)
             .map_err(pre_dispatch_failure)?;
+        // The model's declared input template wraps every input before any wire projection.
+        // 模型声明的输入模板在任何线协议投影之前包裹每条输入。
+        capabilities
+            .validate_input_templates()
+            .map_err(pre_dispatch_failure)?;
+        let templated = capabilities.apply_input_template(request);
+        let request: &EmbeddingRequest = &templated;
         let (native_route, endpoint, binding_id) =
             NativeInferenceRoute::embedding(route, model.id.as_str())?;
         if native_route.binding.projection == crate::NativeInferenceProjectionKind::OpenVulcan {
@@ -661,7 +668,9 @@ impl ProviderExecutionClient {
             fingerprint: EmbeddingSpaceFingerprint {
                 provider_id: route.provider.id.clone(),
                 service_entry_id: route.entry.id.clone(),
-                deployment_id: Some(route.connection.credential_id.clone()),
+                // A credential is not a deployment: every account of one service entry runs the same model.
+                // 凭据不是部署：同一服务入口的每个账号运行同一模型。
+                deployment_id: None,
                 secondary_route_id: secondary_route_id(&route.secondary_route),
                 model_id: model.id.clone(),
                 binding_id: binding_id.to_string(),
@@ -780,7 +789,9 @@ impl ProviderExecutionClient {
             fingerprint: RerankProfileFingerprint {
                 provider_id: route.provider.id.clone(),
                 service_entry_id: route.entry.id.clone(),
-                deployment_id: Some(route.connection.credential_id.clone()),
+                // A credential is not a deployment: every account of one service entry runs the same model.
+                // 凭据不是部署：同一服务入口的每个账号运行同一模型。
+                deployment_id: None,
                 secondary_route_id: secondary_route_id(&route.secondary_route),
                 model_id: model.id.clone(),
                 binding_id: binding_id.to_string(),

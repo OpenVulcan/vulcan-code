@@ -6,9 +6,9 @@ import {
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from "@/components/ui/accordion"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
-import { Button } from "@/components/ui/button"
+} from "@/ui-kit/primitives/accordion"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Button } from "@/ui-kit/primitives/button"
 import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import {
   Card,
@@ -16,18 +16,18 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
-import { Combobox } from "@/components/ui/combobox"
+} from "@/ui-kit/primitives/card"
+import { Combobox } from "@/ui-kit/primitives/combobox"
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from "@/components/ui/empty"
-import { Label } from "@/components/ui/label"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import { Textarea } from "@/components/ui/textarea"
+} from "@/ui-kit/primitives/empty"
+import { Label } from "@/ui-kit/primitives/label"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/ui-kit/primitives/dialog"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import { useI18n } from "@/i18n"
 import type {
   VmmMemoryActionResult,
@@ -39,6 +39,8 @@ import type {
   VmmProfileNodeActionValue,
 } from "@/types"
 import { formatDateTime } from "@/lib/display-format"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // NATIVE_FIXED_USER_TARGET is a UI-only identity for the single host-owned native memory user.
 // NATIVE_FIXED_USER_TARGET 是原生记忆唯一宿主用户的纯界面身份。
@@ -460,7 +462,7 @@ function VmmProfilePage({
   ])
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-4">
+    <div className="vk-form-loose">
       {/* The profile target is the page's primary view switch, so it uses the shared page tab strip.
           画像目标是本页的主视图切换，因此使用共享页面标签条。 */}
       <PageTabs
@@ -473,7 +475,7 @@ function VmmProfilePage({
             type="button"
             variant="outline"
           >
-            <RefreshCw className="size-4" aria-hidden="true" />
+            <RefreshCw className="vk-icon" aria-hidden="true" />
             {t("memory.profile.refresh")}
           </Button>
         </>}
@@ -494,20 +496,20 @@ function VmmProfilePage({
         value={target}
       />
 
-      {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
-      {readError ? <p role="alert" className="text-sm text-destructive">{readError}</p> : null}
-      {!profileCatalogReady && readState === "idle" ? <p role="status" className="text-sm text-muted-foreground">{t("memory.profile.createAnAvailableMemory")}</p> : null}
+      {notice ? <p role="status" className="vk-form-text">{notice}</p> : null}
+      {readError ? <p role="alert" className="vk-field-error">{readError}</p> : null}
+      {!profileCatalogReady && readState === "idle" ? <p role="status" className="vk-form-text">{t("memory.profile.createAnAvailableMemory")}</p> : null}
 
       <section className="vmm-profile-target" aria-label={t("memory.profile.target")}>
           {usesFixedNativeUser ? (
-            <div className="vmm-profile-identity space-y-1">
-              <p className="text-sm font-medium">{t("memory.profile.nativeUserName")}</p>
-              <p className="text-xs text-muted-foreground">
+            <div className="vmm-profile-identity vk-form-tight">
+              <p className="vk-form-strong">{t("memory.profile.nativeUserName")}</p>
+              <p className="vk-form-note">
                 {t("memory.profile.nativeUserDescription")}
               </p>
             </div>
           ) : (
-            <div className="vmm-profile-picker space-y-2">
+            <div className="vmm-profile-picker vk-form-stack">
               <Label>
                 {effectiveTarget === "user"
                   ? t("memory.profile.selectUser")
@@ -543,7 +545,7 @@ function VmmProfilePage({
               />
             </div>
           )}
-        {selectedTargetDescription && !isNative ? <p className="vmm-profile-target-description text-xs text-muted-foreground">{selectedTargetDescription}</p> : null}
+        {selectedTargetDescription && !isNative ? <p className="vmm-profile-target-description vk-form-note">{selectedTargetDescription}</p> : null}
       </section>
 
       {isNative && nativeStateCounts ? (
@@ -552,7 +554,7 @@ function VmmProfilePage({
             <CardTitle>{t("memory.profile.stateSummary")}</CardTitle>
             <CardDescription>{t("memory.profile.stateSummaryDescription")}</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <CardContent className="vk-mem-counts">
             <ProfileStateMetric label={t("memory.profile.stateActive")} value={nativeStateCounts.active} />
             <ProfileStateMetric label={t("memory.profile.statePending")} value={nativeStateCounts.pending} />
             <ProfileStateMetric label={t("memory.profile.stateScheduled")} value={nativeStateCounts.scheduled} />
@@ -563,9 +565,9 @@ function VmmProfilePage({
       ) : null}
 
       {readState === "loading" ? <StreamPlaceholder fill label={t("memory.resources.loading")} shape="rows" count={4} /> : nodes.length === 0 && readState !== "ready" ? null : nodes.length === 0 ? (
-        <Empty className="min-h-48" variant="outlined">
+        <Empty variant="outlined">
           <EmptyHeader>
-            <EmptyMedia variant="icon"><BrainCircuit className="size-5" /></EmptyMedia>
+            <EmptyMedia variant="icon"><BrainCircuit className="vk-icon" /></EmptyMedia>
             <EmptyTitle>{t("memory.profile.title")}</EmptyTitle>
             <EmptyDescription>{t("memory.profile.empty")}</EmptyDescription>
           </EmptyHeader>
@@ -579,23 +581,23 @@ function VmmProfilePage({
       )}
 
       <Dialog open={correctionOpen} onOpenChange={(open) => { if (!busy) setCorrectionOpen(open) }}>
-        <DialogContent className="sm:max-w-xl" onInteractOutside={(event) => { if (busy) event.preventDefault() }} onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}>
+        <DialogContent size="md" onInteractOutside={(event) => { if (busy) event.preventDefault() }} onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}>
         <DialogHeader>
           <DialogTitle>{t("memory.profile.instruction")}</DialogTitle>
           <DialogDescription>{t(effectiveTarget === "user" ? "memory.profile.user" : "memory.profile.project")} · {selectedTargetDescription}</DialogDescription>
         </DialogHeader>
-        {notice ? <p className="text-sm text-muted-foreground" role="status">{notice}</p> : null}
-        <div className="space-y-3">
+        {notice ? <p className="vk-form-text" role="status">{notice}</p> : null}
+        <div className="vk-form-stack">
           <Label htmlFor="vmm-profile-instruction">{t("memory.profile.instruction")}</Label>
           <Textarea
-            className="min-h-28"
+            className="vk-form-area"
             disabled={busy}
             id="vmm-profile-instruction"
             onChange={(event) => setInstruction(event.target.value)}
             placeholder={t("memory.profile.instructionPlaceholder")}
             value={instruction}
           />
-          <div className="flex justify-end">
+          <div className="vk-form-acts">
             <Button
               disabled={
                 busy
@@ -606,7 +608,7 @@ function VmmProfilePage({
               onClick={() => void applyInstruction()}
               type="button"
             >
-              <Send className="size-4" aria-hidden="true" />
+              <Send className="vk-icon" aria-hidden="true" />
               {t("memory.profile.applyInstruction")}
             </Button>
           </div>
@@ -614,18 +616,18 @@ function VmmProfilePage({
         </DialogContent>
       </Dialog>
 
-      {bundleModeError ? <p role="alert" className="text-sm text-destructive">{t("memory.profile.invalidBundleMode")}</p> : null}
+      {bundleModeError ? <p role="alert" className="vk-field-error">{t("memory.profile.invalidBundleMode")}</p> : null}
       {bundlePreview ? (
-        <Accordion className="rounded-xl border px-4" collapsible type="single">
+        <Accordion className="vk-form-frame vk-form-padx" collapsible type="single">
           <AccordionItem value="bundle">
             <AccordionTrigger>{t("memory.profile.preview")}</AccordionTrigger>
             <AccordionContent>
-              <p className="mb-3 text-sm text-muted-foreground">
+              <p className="vk-form-text vk-mem-gap">
                 {t(isNative
                   ? "memory.profile.nativePreviewDescription"
                   : "memory.profile.previewDescription")}
               </p>
-            <p className="whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-sm">
+            <p className="vk-form-well vk-form-prose">
               {bundlePreview}
             </p>
             </AccordionContent>
@@ -737,9 +739,9 @@ interface ProfileStateMetricProps {
 // ProfileStateMetric 渲染一个生命周期计数且不暴露传输细节。
 function ProfileStateMetric({ label, value }: ProfileStateMetricProps) {
   return (
-    <div className="rounded-lg border bg-muted/20 px-3 py-2.5">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
+    <div className="vk-mem-count">
+      <span>{label}</span>
+      <strong className="vk-num">{value}</strong>
     </div>
   )
 }

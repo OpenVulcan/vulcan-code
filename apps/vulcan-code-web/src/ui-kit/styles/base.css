@@ -1,13 +1,61 @@
 /* Base layer: document ground, scrollbars, focus, selection, shared helpers and motion. */
+/* Layered under the primitives so their own colours and borders win over the element reset; Tailwind
+ * preflight shares this layer and loads earlier, so the kit reset still wins over it. */
+@layer base {
 
-.vk-root,
-.vk-root *,
-.vk-root *::before,
-.vk-root *::after,
-.vk-layer,
-.vk-layer *,
-.vk-layer *::before,
-.vk-layer *::after {
+/* Element reset: every element starts with no margin, padding or border and inherits type, so native browser
+ * chrome never leaks into kit layouts. Lists, media and form controls lose their user-agent decoration. */
+/* 元素重置：所有元素起始无外边距、内边距与边框并继承字体，避免浏览器原生外观渗入套件布局；
+ * 列表、媒体与表单控件去除用户代理装饰。 */
+*, ::before, ::after, ::backdrop, ::file-selector-button {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0 solid;
+  border-color: var(--vk-line);
+}
+html, body, #root { width: 100%; height: 100%; }
+html { line-height: 1.5; -webkit-text-size-adjust: 100%; tab-size: 4; -webkit-tap-highlight-color: transparent; }
+body { min-width: 0; overflow: hidden; font-family: var(--vk-font-ui); background: var(--vk-ground); color: var(--vk-ink); }
+hr { height: 0; color: inherit; border-top-width: 1px; }
+h1, h2, h3, h4, h5, h6 { font-size: inherit; font-weight: inherit; }
+a { color: inherit; text-decoration: inherit; }
+b, strong { font-weight: bolder; }
+code, kbd, samp, pre { font-family: var(--vk-font-mono); font-size: 1em; }
+small { font-size: 80%; }
+sub, sup { position: relative; font-size: 75%; line-height: 0; vertical-align: baseline; }
+sub { bottom: -0.25em; }
+sup { top: -0.5em; }
+table { text-indent: 0; border-color: inherit; border-collapse: collapse; }
+progress { vertical-align: baseline; }
+summary { display: list-item; }
+ol, ul, menu { list-style: none; }
+img, svg, video, canvas, audio, iframe, embed, object { display: block; vertical-align: middle; }
+img, video { max-width: 100%; height: auto; }
+button, input, select, optgroup, textarea, ::file-selector-button {
+  font: inherit;
+  font-feature-settings: inherit;
+  font-variation-settings: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  border-radius: 0;
+  background-color: transparent;
+  opacity: 1;
+}
+button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; }
+::placeholder { opacity: 1; color: color-mix(in srgb, currentcolor 50%, transparent); }
+textarea { resize: vertical; }
+::-webkit-search-decoration { -webkit-appearance: none; }
+::-webkit-date-and-time-value { min-height: 1lh; text-align: inherit; }
+::-webkit-datetime-edit, ::-webkit-datetime-edit-fields-wrapper { padding: 0; }
+:-moz-ui-invalid { box-shadow: none; }
+button, input:where([type="button"], [type="reset"], [type="submit"]), ::file-selector-button { appearance: button; }
+::-webkit-inner-spin-button, ::-webkit-outer-spin-button { height: auto; }
+[hidden]:where(:not([hidden="until-found"])) { display: none !important; }
+
+/* Zero specificity: any component rule wins, so legacy round status dots keep their own radius. */
+:where(.vk-root, .vk-layer),
+:where(.vk-root, .vk-layer) :where(*, *::before, *::after) {
   box-sizing: border-box;
   border-radius: var(--vk-radius);
 }
@@ -125,8 +173,15 @@
   white-space: nowrap;
 }
 
+/* Raw diagnostic text keeps its line breaks and wraps long tokens. */
+.vk-wrap-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* A control that takes its container's full width instead of fitting its content. */
+.vk-fill { width: 100%; min-width: 0; }
+
+/* Only icons placed by kit components are sized here; legacy components keep their size props. */
 .vk-icon,
-:is(.vk-root, .vk-layer) svg.lucide {
+:where(.vk-root, .vk-layer) :where([class^="vk-"], [class*=" vk-"]) > svg.lucide {
   width: var(--vk-icon);
   height: var(--vk-icon);
   flex: none;
@@ -223,12 +278,14 @@
   to { transform: rotate(360deg); }
 }
 
-@keyframes vk-caret {
-  50% { opacity: 0.35; }
-}
-
 .vk-rise {
   animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
+}
+
+/* Busy icons (refresh, loader) turn in place while their work runs. */
+/* 忙碌图标（刷新、加载）在工作进行时原地旋转。 */
+.vk-spin {
+  animation: vk-spin 1s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -248,3 +305,8 @@
   animation-iteration-count: 1 !important;
   transition-duration: 1ms !important;
 }
+}
+
+/* Disclosure summaries read as controls. */
+/* 展开摘要呈现为可点击控件。 */
+summary { cursor: pointer; }

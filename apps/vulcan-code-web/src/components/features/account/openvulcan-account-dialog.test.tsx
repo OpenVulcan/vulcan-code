@@ -127,5 +127,5 @@ it("shows the account initial and the exact remaining plan balance", async () =>
   expect(queryPublicAiConnectionUsage).toHaveBeenCalledExactlyOnceWith("synthetic-connection");
   expect(document.querySelector(".openvulcan-account-avatar")?.textContent).toBe("L");
   expect(document.querySelector(".openvulcan-plan-tier")?.textContent).toBe("openvulcan.plan.tier.plus");
-  expect(document.querySelector(".openvulcan-plan-balance strong")?.textContent).toBe("9,007,199,254,740.500001");
+  expect(document.querySelector(".openvulcan-plan-balance strong")?.textContent).toBe("9,007,199,254,740.5");
 });

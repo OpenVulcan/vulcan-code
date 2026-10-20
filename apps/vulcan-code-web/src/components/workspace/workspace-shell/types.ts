@@ -8,7 +8,7 @@ import type { AgentActionProps } from "@/components/features/agents/agents-area"
 import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/skills-area";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { MemoryActionProps, MemorySubAreaId } from "@/components/features/memory/memory-area";
-import type { ConversationMenuAction, ProjectMenuAction } from "@/components/project/project-sidebar";
+import type { ConversationMenuAction, ProjectGroupAction, ProjectMenuAction } from "@/components/project/project-sidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type {
   DiffReviewSelection,
@@ -101,15 +101,6 @@ export interface WorkspaceShellProps {
   // Explicit project that owns project-level floating tools.
   // 持有项目级浮动工具的明确项目。
   activeProjectId: string | null;
-  // Ref attached to the top-bar button used as the terminal Genie animation anchor.
-  // 附加到顶部栏按钮的引用，用作终端精灵动画锚点。
-  projectTerminalButtonRef: React.Ref<HTMLButtonElement>;
-  // Count of running background terminals owned by the active project.
-  // 当前活动项目持有的运行中后台终端数量。
-  projectTerminalRunningCount: number;
-  // Toggles the terminal container owned by the active project.
-  // 切换当前活动项目持有的终端容器。
-  onToggleProjectTerminal: () => void;
   // Publishes the exact persisted transcript currently visible in this workspace shell.
   // 发布当前工作区壳中真实可见的持久化转录。
   onNotificationPresentationContextChange: (context: NotificationPresentationContext) => void;
@@ -124,9 +115,12 @@ export interface WorkspaceShellProps {
   // Creates a new conversation in one project.
   // 在单个项目中创建新会话。
   onCreateConversation: (project: ProjectSummary) => void;
+  // Opens a new draft preset to a dedicated assistant in one project.
+  // 在单个项目中打开预设为专职助手的新草稿。
+  onCreateDedicatedConversation: (project: ProjectSummary) => void;
   // Opens the create-project flow.
   // 打开创建项目流程。
-  onCreateProject: () => void;
+  onCreateProject: (groupId?: string) => void;
   // Opens the memory feature area from conversation prompts.
   // 从会话提示中打开记忆功能区。
   onOpenMemory: () => void;
@@ -156,7 +150,9 @@ export interface WorkspaceShellProps {
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   // Persists project order changes.
   // 持久化项目排序变化。
-  onReorderProjects: (projectIds: string[]) => void;
+  // Persists one project-group change; rejects with the service error.
+  // 持久化一次项目分组变更；失败时以服务错误拒绝。
+  onProjectGroupAction: (action: ProjectGroupAction) => Promise<void>;
   // Selects one persisted conversation.
   // 选择一个持久化会话。
   onSelectConversation: (conversationId: string) => void;

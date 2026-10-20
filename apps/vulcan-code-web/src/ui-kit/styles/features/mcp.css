@@ -1,0 +1,84 @@
+/* Page frame: a toolbar over a server rail and a detail pane that scroll independently. */
+/* 页面框架：工具栏位于服务器列表与详情窗格之上，二者独立滚动。 */
+.mcp-page { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+.mcp-toolbar { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 5); border-bottom: var(--vk-bw) solid var(--vk-line); }
+.mcp-toolbar > .mcp-search { width: min(100%, 17rem); }
+.mcp-toolbar > .vk-select { width: auto; min-width: 8rem; }
+.mcp-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); margin-left: auto; }
+.mcp-page > .mcp-page-banner { flex: none; margin: calc(var(--vk-u) * 3) calc(var(--vk-u) * 5) 0; }
+.mcp-workspace { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr); min-height: 0; overflow-y: auto; }
+@media (min-width: 900px) {
+  .mcp-workspace { grid-template-columns: 18rem minmax(0, 1fr); overflow: hidden; }
+  .mcp-workspace > .mcp-directory { overflow-y: auto; border-right: var(--vk-bw) solid var(--vk-line); }
+  .mcp-workspace > .mcp-detail { overflow-y: auto; }
+}
+
+/* Server rail: one selectable row per server, status colored by connection state. */
+/* 服务器列表：每个服务器一行可选条目，状态按连接情况着色。 */
+.mcp-directory { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 2); min-width: 0; padding: calc(var(--vk-u) * 3); background: var(--vk-ground-2); }
+.mcp-server-list { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 1.5); }
+.mcp-server-row { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 0.5); padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); text-align: left; cursor: pointer; overflow-wrap: anywhere; transition: background var(--vk-t-fast) var(--vk-ease), border-color var(--vk-t-fast) var(--vk-ease); }
+.mcp-server-row:hover { background: var(--vk-hover); }
+.mcp-server-row[data-active="true"] { border-color: var(--vk-signal); box-shadow: inset 2px 0 0 var(--vk-signal); background: var(--vk-select); }
+.mcp-server-row strong { font-size: var(--vk-fs-md); font-weight: 600; }
+.mcp-server-row span { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+.mcp-server-row .mcp-error { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mcp-server-row [data-status="connected"], .mcp-status[data-status="connected"] { color: var(--vk-ok); }
+.mcp-server-row [data-status="failed"], .mcp-status[data-status="failed"] { color: var(--vk-bad); }
+.mcp-server-row [data-status="connecting"], .mcp-server-row [data-status="awaiting_authorization"],
+.mcp-status[data-status="connecting"], .mcp-status[data-status="awaiting_authorization"] { color: var(--vk-warn); }
+
+/* Detail pane: identity header, then tabbed overview, tools, capabilities and diagnostics. */
+/* 详情窗格：身份标题，随后为概览、工具、能力与诊断标签页。 */
+.mcp-detail { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 4); min-width: 0; min-height: 0; padding: calc(var(--vk-u) * 5); }
+.mcp-detail-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: calc(var(--vk-u) * 3); }
+.mcp-detail-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: calc(var(--vk-u) * 1) calc(var(--vk-u) * 3); min-width: 0; }
+.mcp-detail-title h3 { font-size: var(--vk-fs-xl); font-weight: 600; }
+.mcp-detail-title small { flex-basis: 100%; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
+.mcp-status { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.mcp-detail-actions { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); }
+.mcp-tab-panel { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 3); min-width: 0; }
+.mcp-diagnostics-link { align-self: flex-start; }
+.mcp-detail-placeholder { display: grid; flex: 1; place-items: center; }
+.mcp-detail-placeholder > .vk-page-empty { width: min(100%, 28rem); }
+.mcp-rail-note { padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 2); color: var(--vk-ink-2); font-size: var(--vk-fs-sm); text-align: center; }
+.mcp-filter-row { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); }
+.mcp-filter-row > * { min-width: 0; }
+.mcp-error { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mcp-detail > header small { overflow-wrap: anywhere; }
+.mcp-server-row [data-status="connected"] { color: var(--vk-ink); font-weight: 600; }
+.mcp-error { color: var(--vk-bad); overflow-wrap: anywhere; }
+.mcp-overview { display: grid; grid-template-columns: minmax(7rem, auto) minmax(0, 1fr); gap: .6rem 1rem; }
+.mcp-overview dt { color: var(--vk-ink-2); }
+.mcp-overview dd { margin: 0; overflow-wrap: anywhere; }
+.mcp-schema { border: var(--vk-bw) solid var(--vk-line); padding: .7rem; margin-top: .6rem; }
+.mcp-tool { margin-top: .5rem; overflow-wrap: anywhere; }
+.mcp-tool [data-slot="disclosure-body"] { display: grid; gap: .5rem; font-size: .85rem; }
+.mcp-tool [data-slot="disclosure-body"] > .mcp-schema { margin-top: 0; }
+.mcp-logs { display: grid; gap: .4rem; }
+.mcp-logs h4, .mcp-form-section h3 { margin: 0; font-size: var(--vk-fs-md); font-weight: 600; }
+.mcp-form-section { display: flex; flex-direction: column; gap: .8rem; min-width: 0; }
+.mcp-bulk [data-slot="inline-disclosure-body"] { display: grid; gap: .5rem; }
+.mcp-bulk p { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.mcp-schema-raw [data-slot="inline-disclosure-body"] { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.mcp-schema-raw pre { flex-basis: 100%; }
+.mcp-detail pre, .mcp-form pre { max-height: 26rem; overflow: auto; padding: .6rem; background: var(--vk-sunken); font-size: .8rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-schema-fields { display: grid; gap: .7rem; }
+.mcp-schema-field { padding-left: .6rem; border-left: 2px solid var(--vk-line); overflow-wrap: anywhere; font-size: .85rem; }
+.mcp-schema-field > span { color: var(--vk-ink-2); }
+/* A normal flex child owns scrolling; fieldset's anonymous box must not paint across the fixed footer. */
+/* 普通弹性子元素持有滚动；fieldset 的匿名盒不得绘制到固定页脚内。 */
+.mcp-dialog-body { min-width: 0; min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; }
+.mcp-form { display: flex; flex-direction: column; gap: .8rem; min-width: 0; margin: 0; padding: 0; border: 0; }
+.mcp-form-rows { display: flex; flex-direction: column; align-items: stretch; gap: .5rem; min-width: 0; }
+.mcp-form-rows-header { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+.mcp-form-rows-header > strong { margin-right: auto; }
+.mcp-form-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .4rem; }
+.mcp-form-row.pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto; }
+@media (max-width: 560px) { .mcp-form-row.pair { grid-template-columns: minmax(0, 1fr); } .mcp-overview { grid-template-columns: minmax(0, 1fr); } }
+/* Identity row: name takes the slack, transport keeps a readable width, the enable switch sits on the control line. */
+/* 身份行：名称占据剩余宽度，传输保持可读宽度，启用开关与控件同一基线。 */
+.mcp-identity-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(10rem, 14rem) auto; align-items: end; gap: calc(var(--vk-u) * 3); }
+.mcp-identity-row .vk-select { width: 100%; }
+.mcp-identity-row > .vk-check-label { min-height: var(--vk-h-md); }
+@media (max-width: 560px) { .mcp-identity-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; } }

@@ -1,7 +1,7 @@
 import * as React from "react";
-import { PageNotice } from "@/components/page";
-import { Button } from "@/components/ui/button";
-import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
+import { PageNotice, PageRow, PageSection } from "@/components/page";
+import { Button } from "@/ui-kit/primitives/button";
+import { Combobox, type ComboboxOption } from "@/ui-kit/primitives/combobox";
 import {
   inferenceRouteKey,
   inferenceRoutePickerOptions,
@@ -251,16 +251,13 @@ export function LuaSkillsInferenceRoutes() {
     .find((route) => inferenceRouteKey(route) === key) ?? null;
 
   return (
-    <section className="lua-settings-section lua-inference-routes">
-      <h4>{t("skills.routes.internalModelRoutes")}</h4>
-      <p>{t("skills.routes.luaskillsBindsOneExact")}</p>
+    <PageSection className="lua-inference-routes" title={t("skills.routes.internalModelRoutes")} description={t("skills.routes.luaskillsBindsOneExact")} layout="rows">
       {error ? <PageNotice tone="error"><pre>{error}</pre></PageNotice> : null}
-      {notice ? <p role="status">{notice}</p> : null}
+      {notice ? <PageNotice tone="success" title={notice} /> : null}
       {llmUnavailable ? <PageNotice details={llmDiagnostic?.reason} detailsLabel={t("skills.lua.errorDetails")} role="alert" tone="warning">
         {t("skills.routes.theSavedTemporaryQuestion")}
       </PageNotice> : null}
-      <label className="lua-inference-route-row">
-        <span>{t("skills.routes.temporaryQuestionAnsweringTemporary")}</span>
+      <PageRow className="lua-inference-route-row" label={t("skills.routes.temporaryQuestionAnsweringTemporary")}>
         <Combobox
           ariaLabel={t("skills.routes.temporaryLlmRoute")}
           disabled={busy !== null || llmCandidates.length === 0}
@@ -274,18 +271,18 @@ export function LuaSkillsInferenceRoutes() {
           searchPlaceholder={t("skills.routes.searchModelOrConnection")}
           value={llmKey}
         />
-      </label>
-      <Button
-        disabled={busy !== null || !llmKey}
-        onClick={() => void save("llm", null)}
-        type="button"
-        variant="outline"
-      >{t("skills.routes.clearQuestionAnsweringRoute")}</Button>
+        <Button
+          disabled={busy !== null || !llmKey}
+          onClick={() => void save("llm", null)}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >{t("skills.routes.clearQuestionAnsweringRoute")}</Button>
+      </PageRow>
       {embeddingUnavailable ? <PageNotice details={embeddingDiagnostic?.reason} detailsLabel={t("skills.lua.errorDetails")} role="alert" tone="warning">
         {t("skills.routes.theSavedEmbeddingRoute")}
       </PageNotice> : null}
-      <label className="lua-inference-route-row">
-        <span>{t("skills.routes.embeddingsEmbeddingCreate")}</span>
+      <PageRow className="lua-inference-route-row" label={t("skills.routes.embeddingsEmbeddingCreate")}>
         <Combobox
           ariaLabel={t("skills.routes.embeddingRoute")}
           disabled={busy !== null || embeddingCandidates.length === 0}
@@ -299,13 +296,14 @@ export function LuaSkillsInferenceRoutes() {
           searchPlaceholder={t("skills.routes.searchModelOrConnection")}
           value={embeddingKey}
         />
-      </label>
-      <Button
-        disabled={busy !== null || !embeddingKey}
-        onClick={() => void save("embedding", null)}
-        type="button"
-        variant="outline"
-      >{t("skills.routes.clearEmbeddingRoute")}</Button>
-    </section>
+        <Button
+          disabled={busy !== null || !embeddingKey}
+          onClick={() => void save("embedding", null)}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >{t("skills.routes.clearEmbeddingRoute")}</Button>
+      </PageRow>
+    </PageSection>
   );
 }

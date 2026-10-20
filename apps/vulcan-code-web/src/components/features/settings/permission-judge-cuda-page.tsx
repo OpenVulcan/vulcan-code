@@ -1,12 +1,12 @@
 import * as React from "react";
 import { Cpu, Download, ExternalLink, FolderCheck, Library, MonitorCog } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { PageItem, PageNotice, PageRow, PageSection } from "@/components/page";
 import { StatusPill } from "@/components/shared/status";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/ui-kit/primitives/badge";
+import { Button } from "@/ui-kit/primitives/button";
+import { Input } from "@/ui-kit/primitives/input";
+import { Progress } from "@/ui-kit/primitives/progress";
 import { formatMessage, type Translate, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
 import { label } from "@/components/features/settings/permission-judge-labels";
@@ -16,6 +16,7 @@ import type {
   PermissionJudgeCudaInstall,
   PermissionJudgeCudaSnapshot,
 } from "@/types";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Labels of stable codes sent by the service; unknown codes render as themselves.
 // 服务发送的稳定代码对应的标签；未知代码按原样显示。
@@ -158,7 +159,7 @@ export function PermissionJudgeCudaPage(props: {
             ? `${formatBytes(install.completedBytes)} / ${formatBytes(install.totalBytes)}`
             : "",
         })}</p>
-        {progress !== null ? <Progress className="mt-2" value={progress} /> : null}
+        {progress !== null ? <Progress className="vk-form-after" value={progress} /> : null}
       </PageNotice> : install?.error ? <PageNotice tone="error" details={install.error} detailsLabel={t("settings.errors.showErrorDetails")}>
         {t("settings.permissionJudge.cuda.installFailed")}
       </PageNotice> : install ? <PageNotice tone="success">
@@ -183,8 +184,8 @@ export function PermissionJudgeCudaPage(props: {
             </Button>} />;
       })}
       <PageRow stacked label={t("settings.permissionJudge.cuda.customFolder")}>
-        <div className="flex w-full items-center gap-2">
-          <Input aria-label={t("settings.permissionJudge.cuda.customFolder")} className="min-w-0 flex-1"
+        <div className="vk-form-cols2">
+          <Input aria-label={t("settings.permissionJudge.cuda.customFolder")} className="vk-form-fill"
             placeholder={props.selectedDirectory ?? ""} value={custom} onChange={(event) => setCustom(event.target.value)} />
           <Button type="button" size="sm" variant="outline" disabled={props.busy !== null || custom.trim() === ""}
             onClick={() => props.onSelectDirectory(custom.trim())}>

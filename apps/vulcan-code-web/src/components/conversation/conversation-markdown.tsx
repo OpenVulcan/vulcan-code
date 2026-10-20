@@ -27,6 +27,7 @@ import {
 } from "@/diff/diff-shiki-shared";
 import { useI18n } from "@/i18n";
 import { localMediaSourceUrl } from "@/resources/localMedia";
+import { IconButton } from "@/ui-kit/primitives/button";
 
 // MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT caps Shiki work per fenced Markdown code block.
 // MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT 限制单个 Markdown 代码块触发的 Shiki 高亮行数。
@@ -183,7 +184,7 @@ export const MarkdownMessage = React.memo(function MarkdownMessage(props: {
     [props.content, props.streaming, workspacePath],
   );
   return (
-    <div className="markdown-message">
+    <div className="vk-md">
       {props.streaming ? (
         <StreamingMarkdownMessage
           content={props.content}
@@ -233,7 +234,7 @@ function StreamingMarkdownMessage(props: {
     <>
       {blocks.map((block, index) => (
         index === blocks.length - 1 && block.length > STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS ? (
-          <pre className="streaming-markdown-raw-preview" key={index}><code>{block}</code></pre>
+          <pre className="vk-md-raw" key={index}><code>{block}</code></pre>
         ) : (
           <StreamingMarkdownBlock
             content={block}
@@ -301,7 +302,7 @@ function MarkdownContentRenderer(props: {
   const components = React.useMemo(() => ({
     a: ({ children, href }: { children?: React.ReactNode; href?: string }) => (
       <a href={href} rel="noreferrer" target="_blank">
-        {href ? <Globe aria-hidden="true" className="markdown-link-icon" /> : null}{children}
+        {href ? <Globe aria-hidden="true" className="vk-md-link-icon" /> : null}{children}
       </a>
     ),
     code: ({ children, className, node }: { children?: React.ReactNode; className?: string } & ExtraProps) => {
@@ -309,13 +310,13 @@ function MarkdownContentRenderer(props: {
         // The source stays visible as code until KaTeX arrives.
         // KaTeX 到达前源码保持为代码显示。
         return (
-          <React.Suspense fallback={<code className="inline-code">{children}</code>}>
+          <React.Suspense fallback={<code className="vk-md-code">{children}</code>}>
             <LazyInlineMath tex={children} />
           </React.Suspense>
         );
       }
       const inline = !className;
-      return inline ? <code className="inline-code">{children}</code> : <code className={className}>{children}</code>;
+      return inline ? <code className="vk-md-code">{children}</code> : <code className={className}>{children}</code>;
     },
     img: ({ alt, src, title }: { alt?: string; src?: string; title?: string }) => {
       const width = markdownImageWidthFromTitle(title);
@@ -326,7 +327,7 @@ function MarkdownContentRenderer(props: {
         return (
           <MediaPathContextMenu locator={imageSource}>
           <button
-            className="markdown-image-button"
+            className="vk-md-image"
             onClick={() => props.onOpenMedia?.(imageAttachment)}
             style={imageStyle}
             type="button"
@@ -430,7 +431,7 @@ function MarkdownTable(props: { children?: React.ReactNode; node?: ExtraProps["n
   return (
     <MarkdownTableColumnsContext.Provider value={numeric}>
       <AnswerFrame copy={copy} host={markdownCopyHost}>
-        <div className="answer-table-scroll"><table className="answer-table">{props.children}</table></div>
+        <div className="vk-table-wrap"><table className="vk-table">{props.children}</table></div>
       </AnswerFrame>
     </MarkdownTableColumnsContext.Provider>
   );
@@ -619,7 +620,7 @@ function MarkdownCodeBlock(props: {
       code={code}
       defaultCodeWrap={props.defaultCodeWrap}
       header={(
-        <span className="markdown-code-language">
+        <span className="vk-codeblock-lang">
           <FileTypeIcon icon={icon} />
           <span>{displayLanguage}</span>
         </span>
@@ -680,22 +681,22 @@ function CodeBlockFigure(props: {
   }, [copied]);
 
   return (
-    <figure className="markdown-code-block">
-      <figcaption className="markdown-code-header">
+    <figure className="vk-codeblock">
+      <figcaption className="vk-codeblock-head">
         {props.header}
-        <span className="markdown-code-actions">
-          <button
+        <span className="vk-codeblock-actions">
+          <IconButton
             aria-label={wrapped ? t("markdown.wrap.disable") : t("markdown.wrap.enable")}
-            className="markdown-code-action"
+            className="vk-codeblock-action" size="xs"
             onClick={() => setWrapped((current) => !current)}
             title={wrapped ? t("markdown.wrap.disable") : t("markdown.wrap.enable")}
             type="button"
           >
-            {wrapped ? <Text size={14} /> : <TextWrap size={14} />}
-          </button>
-          <button
+            {wrapped ? <Text aria-hidden="true" /> : <TextWrap aria-hidden="true" />}
+          </IconButton>
+          <IconButton
             aria-label={copied ? t("markdown.copied") : t("markdown.copyCode")}
-            className="markdown-code-action"
+            className="vk-codeblock-action" size="xs"
             onClick={() => {
               setCopied(false);
               void runConversationControlAction(
@@ -705,26 +706,26 @@ function CodeBlockFigure(props: {
             title={copied ? t("markdown.copied") : t("markdown.copyCode")}
             type="button"
           >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-          </button>
+            {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+          </IconButton>
         </span>
       </figcaption>
-      <div className="markdown-code-scroll" data-wrap={wrapped ? "true" : "false"}>
-        <pre className="markdown-code-pre" data-numbered={firstLineNumber === undefined ? undefined : "true"}>
+      <div className="vk-codeblock-scroll" data-wrap={wrapped ? "true" : "false"}>
+        <pre className="vk-codeblock-pre" data-numbered={firstLineNumber === undefined ? undefined : "true"}>
           <code>
             {renderedLines.map((line, index) => {
               const html = { __html: line || "&#8203;" };
               if (firstLineNumber === undefined) {
-                return <span className="markdown-code-line" dangerouslySetInnerHTML={html} key={`${index}:${line.length}`} />;
+                return <span className="vk-codeblock-line" dangerouslySetInnerHTML={html} key={`${index}:${line.length}`} />;
               }
               const number = firstLineNumber + index;
               return (
                 <span
-                  className="markdown-code-line"
+                  className="vk-codeblock-line"
                   data-highlighted={highlightedLines?.has(number) || undefined}
                   key={`${index}:${line.length}`}
                 >
-                  <span aria-hidden="true" className="markdown-code-number">{number}</span>
+                  <span aria-hidden="true" className="vk-codeblock-num">{number}</span>
                   <span dangerouslySetInnerHTML={html} />
                 </span>
               );

@@ -1,6 +1,6 @@
 import * as React from "react";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { PageActionBar, PageBody, PageNotice, PageRow, PageSection, PageTabPanel, PageTabs, PageToolbar } from "@/components/page";
 import { useI18n } from "@/i18n";
 import { PluginDataSection } from "./plugin-data-section";
@@ -143,7 +143,7 @@ function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSch
   // renderItems renders the rows of a settings section once the configuration and credential statuses are known.
   // renderItems 在配置与凭据状态就绪后渲染设置区块的各行。
   function renderItems(section: PluginSettingsSection): React.ReactNode {
-    if (settingsPending) return <StreamPlaceholder className="w-full min-w-0" label={t("skills.plugins.loadingPage")} shape="fields" count={sectionFields(section).length || 2} />;
+    if (settingsPending) return <StreamPlaceholder className="vk-fill" label={t("skills.plugins.loadingPage")} shape="fields" count={sectionFields(section).length || 2} />;
     if (settingsFailed) return null;
     if (section.layout === "inline") {
       return <div className="plugin-settings-inline">
@@ -211,7 +211,7 @@ function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSch
   const headerActions = layout.header
     ? <PluginSettingsHeaderActions config={settingsPending ? "loading" : saved !== null ? "ready" : "unavailable"} header={layout.header} host={host} /> : null;
 
-  return <PageBody>
+  return <PageBody width="readable">
     {tabs.length > 0
       ? <PageTabs actions={headerActions} ariaLabel={t("plugins.settings.tabs")} onValueChange={setActiveTab}
         options={tabs.map((tab) => ({ value: tab.id, label: host.message(tab.title_message_key) }))} value={activeTab} />
@@ -221,7 +221,7 @@ function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSch
       ? tabs.map((tab) => <PageTabPanel active={tab.id === activeTab} key={tab.id}>{tab.sections.map((id) => renderSection(byId.get(id)!))}</PageTabPanel>)
       : layout.sections.map(renderSection)}
     {saveNotice && editable && <PageNotice details={saveNotice.details} detailsLabel={t("plugins.mount.errorDetails")} tone={saveNotice.tone}>{saveNotice.text}</PageNotice>}
-    {layout.config && draft !== null && editable && <PageActionBar actions={<>
+    {layout.config && draft !== null && editable && (dirty || busy === "config") && <PageActionBar actions={<>
       <Button disabled={!dirty || busy !== null} onClick={() => { setDraft(saved); setSaveNotice(null); }} size="sm" type="button" variant="ghost">
         {t("plugins.settings.discard")}</Button>
       <Button disabled={!dirty || invalid || busy !== null} onClick={() => void save()} size="sm" type="button">

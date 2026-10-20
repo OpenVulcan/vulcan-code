@@ -1,6 +1,6 @@
 import React from "react";
 import { ArrowUp, Check, Copy, Square } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { ComposerAttachmentStrip } from "@/components/composer/composer-attachment-controls";
 import { composerAttachmentMedia, inferComposerAttachmentKindFromFile } from "@/components/composer/composer-attachment-media";
 import { useComposerAttachments } from "@/components/composer/composer-attachments";
@@ -9,10 +9,10 @@ import { composerAttachmentForResource } from "@/components/conversation/convers
 import { runConversationControlAction } from "@/components/conversation/conversation-control-feedback";
 import { AnswerCodeSnapshotsProvider, MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
-import { Button } from "@/components/ui/button";
-import { InlineDisclosure } from "@/components/ui/disclosure";
-import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineDisclosure } from "@/ui-kit/primitives/disclosure";
+import { Spinner } from "@/ui-kit/primitives/spinner";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { copyText } from "@/components/workspace/workbench-layout/types";
 import { isElectronRuntime } from "@/host-shell";
 import { formatMessage, useI18n } from "@/i18n";
@@ -80,7 +80,7 @@ export function AssistantConversation(props: { assistant: AssistantEntry }) {
         {turn.steps.map((step) => <AssistantStep key={step.apiCallId} step={step} />)}
         {turn.error ? <p className="assistant-conversation-error">{turn.error}</p> : null}
         {(owner.loading && turn.prompt === null) || (running && turn.steps.length === 0) ? (
-          <Spinner className="size-4 text-muted-foreground" />
+          <Spinner />
         ) : null}
       </div>
       {turn.total ? (

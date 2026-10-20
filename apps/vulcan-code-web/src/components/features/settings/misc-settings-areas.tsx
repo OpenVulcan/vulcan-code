@@ -1,16 +1,17 @@
 import * as React from "react"
 import {
+  Archive,
   ChevronLeft,
   ChevronRight,
-  GitCommitHorizontal,
+  LoaderCircle,
   RotateCcw,
-  Save,
   Trash2,
 } from "lucide-react"
 
 import { ModelPickerControl, modelPickerGroupKey } from "@/components/composer/model-picker-control"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
+import { PageActionBar, PageBody, PageEmptyState, PageRow, PageSection, PageTable, PageToolbar } from "@/components/page"
+import { Button } from "@/ui-kit/primitives/button"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,10 +21,10 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
+} from "@/ui-kit/primitives/alert-dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
 import { formatMessage, pickBilingualText, useI18n } from "@/i18n"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
@@ -34,6 +35,7 @@ import type {
   WorkbenchSnapshot,
 } from "@/types"
 import type { GitCommitSummaryModelSelectionSaveRequest } from "@/components/features/settings/settings-action-types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // DEFAULT_COMMIT_BRANCH_PREFIX mirrors the service default for empty Git commit settings.
 // DEFAULT_COMMIT_BRANCH_PREFIX 对齐服务端空 Git 提交设置的默认值。
@@ -129,67 +131,64 @@ export function GitCommitSettingsArea(props: {
       savingRef.current = false
     }
   }
+  // saving locks the form while one immutable payload is persisted.
+  // saving 在持久化一个不可变载荷期间锁定表单。
+  const saving = saveState === "saving"
   return (
-    <section className="settings-detail-panel settings-preferences-page git-commit-settings-page">
-      <fieldset className="settings-preferences-fields" disabled={saveState === "saving"}>
-        <section className="settings-preferences-section">
-          <h2><GitCommitHorizontal size={16} />{t("settings.misc.whoWritesCommitMessages")}</h2>
-          <div className="settings-form-field">
-            <span>{t("settings.gitCommit.summaryModel")}</span>
-            <div className="settings-card-actions">
-              <ModelPickerControl
-                selectionScope="model"
-                ariaLabel={t("settings.gitCommit.chooseSummaryModel")}
-                fallbackLabel={t("settings.gitCommit.followSessionModel")}
-                unavailableValueLabel={fixedModelLabel}
-                filterPlaceholder={t("composer.modelPicker.filter")}
-                noMatchesLabel={t("composer.modelPicker.noMatches")}
-                providers={props.workbench.providers}
-                value={fixedModelValue}
-                disabled={saveState === "saving"}
-                onValueChange={(choice) => setDraft({ ...draft, summaryModel: { mode: "fixed", providerId: choice.providerId, modelId: choice.modelId } })}
-              />
-              {draft.summaryModel.mode === "fixed" ? <Button
-                variant="ghost"
-                onClick={() => setDraft({ ...draft, summaryModel: { mode: "session" } })}
-                type="button"
-              ><RotateCcw size={14} />{t("settings.gitCommit.followSessionModel")}</Button> : null}
-            </div>
-            <small className="settings-muted-line">{draft.summaryModel.mode === "session" ? t("settings.gitCommit.followSessionModelHelp") : t("settings.gitCommit.fixedSummaryModelHelp")}</small>
-            {fixedModelValue && !modelPickerChoiceExists(props.workbench.providers, fixedModelValue) ? (
-              <p role="status" className="settings-muted-line">{t("settings.gitCommit.fixedSummaryModelUnavailable")}</p>
-            ) : null}
-          </div>
-        </section>
-        <section className="settings-preferences-section">
-          <h2>{t("settings.misc.howCommitMessagesAre")}</h2>
-          <label className="settings-form-field">
-            <span>{t("settings.gitCommit.summaryExtraPrompt")}</span>
-            <Textarea rows={4} value={draft.summaryExtraPrompt}
+    <PageBody>
+      <fieldset className="vk-fieldset" disabled={saving}>
+        <PageSection layout="rows" title={t("settings.misc.whoWritesCommitMessages")}>
+          <PageRow label={t("settings.gitCommit.summaryModel")} description={<>
+            {draft.summaryModel.mode === "session" ? t("settings.gitCommit.followSessionModelHelp") : t("settings.gitCommit.fixedSummaryModelHelp")}
+            {fixedModelValue && !modelPickerChoiceExists(props.workbench.providers, fixedModelValue) ? <><br /><span className="vk-field-error" role="status">{t("settings.gitCommit.fixedSummaryModelUnavailable")}</span></> : null}
+          </>}>
+            {draft.summaryModel.mode === "fixed" ? <Button
+              onClick={() => setDraft({ ...draft, summaryModel: { mode: "session" } })}
+              size="sm"
+              type="button"
+              variant="ghost"
+            ><RotateCcw aria-hidden="true" />{t("settings.gitCommit.followSessionModel")}</Button> : null}
+            <ModelPickerControl
+              selectionScope="model"
+              ariaLabel={t("settings.gitCommit.chooseSummaryModel")}
+              fallbackLabel={t("settings.gitCommit.followSessionModel")}
+              unavailableValueLabel={fixedModelLabel}
+              filterPlaceholder={t("composer.modelPicker.filter")}
+              noMatchesLabel={t("composer.modelPicker.noMatches")}
+              providers={props.workbench.providers}
+              value={fixedModelValue}
+              disabled={saving}
+              onValueChange={(choice) => setDraft({ ...draft, summaryModel: { mode: "fixed", providerId: choice.providerId, modelId: choice.modelId } })}
+            />
+          </PageRow>
+        </PageSection>
+        <PageSection layout="rows" title={t("settings.misc.howCommitMessagesAre")}>
+          <PageRow htmlFor="git-commit-extra-prompt" label={t("settings.gitCommit.summaryExtraPrompt")} description={t("settings.gitCommit.summaryExtraPromptHelp")} stacked>
+            <Textarea id="git-commit-extra-prompt" rows={4} value={draft.summaryExtraPrompt}
               placeholder={t("settings.gitCommit.summaryExtraPromptPlaceholder")}
               onChange={(event) => setDraft({ ...draft, summaryExtraPrompt: event.currentTarget.value })} />
-            <small className="settings-muted-line">{t("settings.gitCommit.summaryExtraPromptHelp")}</small>
-          </label>
-        </section>
-        <section className="settings-preferences-section">
-          <h2>{t("settings.misc.branchNaming")}</h2>
-          <label className="settings-form-field">
-            <span>{t("settings.misc.newBranchNamePrefix")}</span>
-            <Input value={draft.newBranchPrefix} placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
+          </PageRow>
+        </PageSection>
+        <PageSection layout="rows" title={t("settings.misc.branchNaming")}>
+          <PageRow htmlFor="git-commit-branch-prefix" label={t("settings.misc.newBranchNamePrefix")} description={<>
+            {t("settings.misc.onlyAffectsNewBranches")}
+            <br />{t("settings.misc.example")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code>
+          </>}>
+            <Input className="vk-form-w-lg" id="git-commit-branch-prefix" value={draft.newBranchPrefix} placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
               onChange={(event) => setDraft({ ...draft, newBranchPrefix: event.currentTarget.value })} />
-            <small className="settings-muted-line">{t("settings.misc.example")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code></small>
-            <small className="settings-muted-line">{t("settings.misc.onlyAffectsNewBranches")}</small>
-          </label>
-        </section>
+          </PageRow>
+        </PageSection>
       </fieldset>
-      <div className="settings-preferences-footer">
-        <span role="status" className="settings-muted-line">{dirty ? t("settings.misc.unsavedChanges") : saveState === "saved" ? t("settings.misc.saved") : ""}</span>
-        <Button disabled={saveState === "saving" || !dirty} onClick={() => void saveDraft()} type="button">
-          <Save size={14} />{saveState === "saving" ? t("settings.misc.saving") : t("settings.misc.save")}
-        </Button>
-      </div>
-      {saveError ? <SettingsErrorNotice className="settings-save-error" detail={saveError} message={t("settings.misc.couldnTSaveYour")} /> : null}
-    </section>
+      {saveError ? <SettingsErrorNotice detail={saveError} message={t("settings.misc.couldnTSaveYour")} /> : null}
+      {dirty || saving ? (
+        <PageActionBar pending={dirty} actions={
+          <Button disabled={saving || !dirty} onClick={() => void saveDraft()} size="sm" type="button">
+            {saving ? <LoaderCircle className="vk-spin" aria-hidden="true" /> : null}
+            {t(saving ? "settings.misc.saving" : "settings.misc.save")}
+          </Button>
+        }>{t("settings.misc.unsavedChanges")}</PageActionBar>
+      ) : null}
+    </PageBody>
   )
 }
 
@@ -281,18 +280,18 @@ export function OutputStyleSettingsSection(props: {
     setOutputStyleId(nextId)
     if (nextId !== props.outputStyleCatalog.selectedId && props.outputStyleCatalog.entries.some((entry) => entry.id === nextId)) void saveOutputStyle(nextId)
   }
-  return <div className="settings-form-grid">
-    <label className="settings-form-field">
-      <span>{t("settings.misc.answerStyleForNew")}</span>
+  return <div className="vk-form-pref">
+    <div className="vk-form-pref-text">
+      <strong>{t("settings.misc.answerStyleForNew")}</strong>
+      <p className="vk-form-note">{t("settings.misc.takesEffectForNew")}</p>
+    </div>
       <Select disabled={saving} onValueChange={selectStyle} value={outputStyleId}>
-        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label={t("settings.misc.answerStyleForNew")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
         <SelectContent>{props.outputStyleCatalog.entries.map((entry) => (
           <SelectItem key={entry.id} value={entry.id}>{pickBilingualText(locale, entry.labelZh, entry.labelEn)}</SelectItem>
         ))}</SelectContent>
       </Select>
-    </label>
-    <p className="settings-muted-line">{t("settings.misc.takesEffectForNew")}</p>
-    {saving || saved ? <p className="settings-muted-line" role="status">{saving ? t("settings.misc.saving2") : t("settings.misc.saved")}</p> : null}
+    {saving || saved ? <p className="vk-form-note" role="status">{saving ? t("settings.misc.saving2") : t("settings.misc.saved")}</p> : null}
     {error ? <SettingsErrorNotice detail={error} message={t("settings.misc.couldnTSaveYour2")} /> : null}
   </div>
 }
@@ -335,20 +334,20 @@ export function AnswerModeSettingsSection(props: {
       setSaving(false)
     }
   }
-  return <div className="settings-form-grid">
-    <label className="settings-form-field">
-      <span>{t("answerMode.globalDefault")}</span>
+  return <div className="vk-form-pref">
+    <div className="vk-form-pref-text">
+      <strong>{t("answerMode.globalDefault")}</strong>
+      <p className="vk-form-note">{t(mode === "interactive" ? "answerMode.interactiveHint" : "answerMode.standardHint")}</p>
+      <p className="vk-form-note">{t("settings.misc.takesEffectForNew")}</p>
+    </div>
       <Select disabled={saving} onValueChange={(next) => void selectMode(next)} value={mode}>
-        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label={t("answerMode.globalDefault")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="standard">{t("answerMode.standard")}</SelectItem>
           <SelectItem value="interactive">{t("answerMode.interactive")}</SelectItem>
         </SelectContent>
       </Select>
-    </label>
-    <p className="settings-muted-line">{t(mode === "interactive" ? "answerMode.interactiveHint" : "answerMode.standardHint")}</p>
-    <p className="settings-muted-line">{t("settings.misc.takesEffectForNew")}</p>
-    {saving ? <p className="settings-muted-line" role="status">{t("settings.misc.saving2")}</p> : null}
+    {saving ? <p className="vk-form-note" role="status">{t("settings.misc.saving2")}</p> : null}
     {error ? <SettingsErrorNotice detail={error} message={t("answerMode.saveFailed")} /> : null}
   </div>
 }
@@ -446,31 +445,106 @@ export function ArchivedRestoreSettingsArea(props: {
     }
   }, [props.actions])
 
+  // Rows address their cells by column key; the selection column header carries the cross-page select-all box.
+  // 行按列键寻址单元格；选择列表头放置跨页全选复选框。
+  const projectName = (conversation: ConversationSummary) => conversation.projectId
+    ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? t("settings.misc.originalProjectUnavailable")
+    : t("settings.misc.standaloneConversation")
+  const rows = visibleConversations.map((conversation) => ({
+    key: conversation.id,
+    selected: selectedConversationIds.has(conversation.id),
+    cells: {
+      select: <Checkbox aria-label={formatMessage(t("settings.misc.selectConversation"), { title: conversation.title })}
+        checked={selectedConversationIds.has(conversation.id)} disabled={operation !== "idle"}
+        onCheckedChange={(checked) => toggleConversationSelection(conversation.id, checked === true)} />,
+      title: conversation.title,
+      project: <span className="vk-faint">{projectName(conversation)}</span>,
+      updated: <span className="vk-faint">{conversation.lastUpdatedLabel ?? "—"}</span>,
+      actions: <div className="vk-form-acts">
+        <Button aria-label={formatMessage(t("settings.misc.restoreConversation"), { title: conversation.title })} disabled={operation !== "idle"}
+          onClick={() => void runArchivedConversationAction("restore", [conversation.id])} size="icon-sm" title={t("settings.misc.restore")} variant="ghost"><RotateCcw /></Button>
+        <Button aria-label={formatMessage(t("settings.misc.deleteConversation"), { title: conversation.title })} disabled={operation !== "idle"}
+          onClick={() => setDeleteTargetIds([conversation.id])} size="icon-sm" title={t("settings.misc.delete")} variant="ghost"><Trash2 /></Button>
+      </div>,
+    },
+  }))
+
   return (
-    <section className="settings-preferences-page settings-detail-panel settings-archive-page">
-      <div className="settings-archive-toolbar">
-        <span className="settings-muted-line">{formatMessage(t("settings.misc.selected"), { selectedCount })}</span>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            disabled={selectedCount === 0 || operation !== "idle"}
-            onClick={() => void runArchivedConversationAction("restore", Array.from(selectedConversationIds))}
-            type="button"
-          >
-            <RotateCcw size={14} />
-            <span>{operation === "restoring" ? t("settings.misc.restoring") : t("settings.misc.restoreSelected")}</span>
-          </Button>
-          <Button
-            variant="destructive"
-            disabled={selectedCount === 0 || operation !== "idle"}
-            onClick={() => setDeleteTargetIds(Array.from(selectedConversationIds))}
-            type="button"
-          >
-            <Trash2 size={14} />
-            <span>{operation === "deleting" ? t("settings.misc.deleting") : t("settings.misc.deleteSelected")}</span>
-          </Button>
-        </div>
-      </div>
-      {actionError ? <SettingsErrorNotice detail={actionError} message={t("settings.misc.thatDidnTFinish")} /> : null}
+    <PageBody>
+      {archivedConversations.length === 0 ? (
+        <PageEmptyState description={t("settings.misc.noArchivedConversationsHint")} icon={<Archive />} title={t("settings.misc.noArchivedConversations")} />
+      ) : (
+        <>
+          <PageToolbar actions={<>
+            <Button
+              disabled={selectedCount === 0 || operation !== "idle"}
+              onClick={() => void runArchivedConversationAction("restore", Array.from(selectedConversationIds))}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {operation === "restoring" ? <LoaderCircle className="vk-spin" /> : <RotateCcw />}
+              <span>{operation === "restoring" ? t("settings.misc.restoring") : t("settings.misc.restoreSelected")}</span>
+            </Button>
+            <Button
+              disabled={selectedCount === 0 || operation !== "idle"}
+              onClick={() => setDeleteTargetIds(Array.from(selectedConversationIds))}
+              size="sm"
+              type="button"
+              variant="destructive"
+            >
+              <Trash2 />
+              <span>{operation === "deleting" ? t("settings.misc.deleting") : t("settings.misc.deleteSelected")}</span>
+            </Button>
+          </>}>
+            <span className="vk-form-note" role="status">{formatMessage(t("settings.misc.selected"), { selectedCount })}</span>
+          </PageToolbar>
+          {actionError ? <SettingsErrorNotice detail={actionError} message={t("settings.misc.thatDidnTFinish")} /> : null}
+          <PageTable
+            columns={[
+              { key: "select", label: <Checkbox
+                aria-label={t("settings.misc.selectAllArchivedConversations")}
+                checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
+                disabled={operation !== "idle"}
+                onCheckedChange={(checked) => toggleAllConversationSelection(checked === true)}
+              />, width: "40px" },
+              { key: "title", label: t("settings.misc.conversation"), wrap: true },
+              { key: "project", label: t("settings.misc.project"), width: "22%" },
+              { key: "updated", label: t("settings.misc.lastUpdated"), width: "18%" },
+              { key: "actions", label: <span className="vk-sr-only">{t("settings.misc.actions")}</span>, width: "84px" },
+            ]}
+            label={t("settings.misc.archivedConversations")}
+            layout="fixed"
+            rows={rows}
+          />
+          <div className="settings-pagination">
+            <span className="vk-form-note">{formatMessage(t("settings.misc.pageOf"), { currentPage, pageCount })}</span>
+            <div className="vk-form-inline">
+              <span className="vk-form-note">{currentPageSelected ? t("settings.misc.currentPageSelected") : t("settings.misc.selectionIsKeptAcross")}</span>
+              <Button
+                aria-label={t("settings.misc.previousPage")}
+                variant="ghost"
+                size="icon-sm"
+                disabled={currentPage <= 1 || operation !== "idle"}
+                onClick={() => setCurrentPage((current) => Math.max(1, current - 1))}
+                type="button"
+              >
+                <ChevronLeft />
+              </Button>
+              <Button
+                aria-label={t("settings.misc.nextPage")}
+                variant="ghost"
+                size="icon-sm"
+                disabled={currentPage >= pageCount || operation !== "idle"}
+                onClick={() => setCurrentPage((current) => Math.min(pageCount, current + 1))}
+                type="button"
+              >
+                <ChevronRight />
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
       <AlertDialog onOpenChange={(open) => { if (!open) setDeleteTargetIds([]) }} open={deleteTargetIds.length > 0}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -478,7 +552,7 @@ export function ArchivedRestoreSettingsArea(props: {
             <AlertDialogDescription>
               {formatMessage(t("settings.misc.permanentlyDeleteArchivedConversations2"), { length: deleteTargetIds.length })}
             </AlertDialogDescription>
-            <ul className="max-h-40 overflow-auto text-sm">{deleteTargetIds.map((id) => <li key={id}>{archivedConversations.find((conversation) => conversation.id === id)?.title}</li>)}</ul>
+            <ul className="vk-form-bullets vk-form-scroll-list">{deleteTargetIds.map((id) => <li key={id}>{archivedConversations.find((conversation) => conversation.id === id)?.title}</li>)}</ul>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("settings.misc.cancel")}</AlertDialogCancel>
@@ -488,70 +562,7 @@ export function ArchivedRestoreSettingsArea(props: {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <div className="settings-archive-table-scroll">
-        <table className="settings-archive-table">
-          <caption className="sr-only">{t("settings.misc.archivedConversations")}</caption>
-          <thead><tr>
-            <th className="settings-archive-selection"><label className="inline-flex items-center gap-2 whitespace-nowrap">
-            <Checkbox
-              aria-label={t("settings.misc.selectAllArchivedConversations")}
-              checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
-              disabled={archivedConversations.length === 0 || operation !== "idle"}
-              onCheckedChange={(checked) => toggleAllConversationSelection(checked === true)}
-            />
-              <span>{t("settings.misc.selectAll")}</span></label></th>
-            <th>{t("settings.misc.conversation")}</th>
-            <th>{t("settings.misc.project")}</th>
-            <th>{t("settings.misc.lastUpdated")}</th>
-            <th className="settings-archive-actions">{t("settings.misc.actions")}</th>
-          </tr></thead>
-          <tbody>{archivedConversations.length === 0 ? <tr><td colSpan={5} className="settings-archive-empty">{t("settings.misc.noArchivedConversations")}</td></tr>
-            : visibleConversations.map((conversation) => <tr key={conversation.id} data-selected={selectedConversationIds.has(conversation.id)}>
-              <td><Checkbox aria-label={formatMessage(t("settings.misc.selectConversation"), { title: conversation.title })}
-                checked={selectedConversationIds.has(conversation.id)} disabled={operation !== "idle"}
-                onCheckedChange={(checked) => toggleConversationSelection(conversation.id, checked === true)} /></td>
-              <td className="settings-archive-title">{conversation.title}</td>
-              <td>{conversation.projectId ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? t("settings.misc.originalProjectUnavailable") : t("settings.misc.standaloneConversation")}</td>
-              <td className="whitespace-nowrap text-muted-foreground">{conversation.lastUpdatedLabel}</td>
-              <td><div className="flex justify-end gap-2">
-                <Button size="sm" variant="outline" aria-label={formatMessage(t("settings.misc.restoreConversation"), { title: conversation.title })} disabled={operation !== "idle"}
-                  onClick={() => void runArchivedConversationAction("restore", [conversation.id])}><RotateCcw size={14} />{t("settings.misc.restore")}</Button>
-                <Button size="sm" variant="ghost" className="text-destructive" aria-label={formatMessage(t("settings.misc.deleteConversation"), { title: conversation.title })} disabled={operation !== "idle"}
-                  onClick={() => setDeleteTargetIds([conversation.id])}><Trash2 size={14} />{t("settings.misc.delete")}</Button>
-              </div></td>
-            </tr>)}
-          </tbody>
-        </table>
-      </div>
-      {archivedConversations.length > 0 ? (
-        <div className="settings-pagination">
-          <span className="settings-muted-line">{formatMessage(t("settings.misc.pageOf"), { currentPage, pageCount })}</span>
-          <div className="settings-card-actions">
-            <span className="settings-muted-line">{currentPageSelected ? t("settings.misc.currentPageSelected") : t("settings.misc.selectionIsKeptAcross")}</span>
-            <Button
-              aria-label={t("settings.misc.previousPage")}
-              variant="outline"
-              size="icon-sm"
-              disabled={currentPage <= 1 || operation !== "idle"}
-              onClick={() => setCurrentPage((current) => Math.max(1, current - 1))}
-              type="button"
-            >
-              <ChevronLeft size={14} />
-            </Button>
-            <Button
-              aria-label={t("settings.misc.nextPage")}
-              variant="outline"
-              size="icon-sm"
-              disabled={currentPage >= pageCount || operation !== "idle"}
-              onClick={() => setCurrentPage((current) => Math.min(pageCount, current + 1))}
-              type="button"
-            >
-              <ChevronRight size={14} />
-            </Button>
-          </div>
-        </div>
-      ) : null}
-    </section>
+    </PageBody>
   )
 }
 

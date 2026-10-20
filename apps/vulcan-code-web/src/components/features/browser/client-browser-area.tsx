@@ -1,14 +1,17 @@
 import * as React from "react";
 import { ArrowLeft, ArrowRight, Bug, ExternalLink, Globe, MonitorSmartphone, MoreHorizontal, Plus, RotateCw, X } from "lucide-react";
+import { PageEmptyState, PageNotice } from "@/components/page";
 
-import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Button } from "@/ui-kit/primitives/button";
+import { PanelTab } from "@/ui-kit/primitives/panel-tab";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
 import { useI18n, type Translate } from "@/i18n";
 import {
   readElectronLocalBrowserBridge,
   type ElectronLocalBrowserSnapshot,
   type ElectronLocalBrowserViewport,
 } from "@/host-shell/electron-bridge";
+import "@/ui-kit/styles/features/browser.css"
 
 // localBrowserAddress validates web destinations for the ordinary-browser fallback without a native file loader.
 // localBrowserAddress 为没有原生文件加载器的普通浏览器降级入口校验网页目标。
@@ -268,13 +271,21 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
     }
   }
 
-  return <div className="flex h-full min-h-0 min-w-0 w-full flex-col gap-2 p-2">
+  return <div className="vk-browser">
     {/* Keep the whole strip hidden until a real destination has been opened. */}
     {/* 打开实际网址前隐藏整行标签栏。 */}
-    {bridge && snapshot.tabs.some((tab) => tab.url !== "about:blank") && <div className="flex min-h-6 shrink-0 items-center gap-1 overflow-x-auto" role="tablist" onKeyDown={tabKeyDown}
+    {bridge && snapshot.tabs.some((tab) => tab.url !== "about:blank") && <div className="vk-tab-strip" role="tablist" onKeyDown={tabKeyDown}
       aria-label={t("browser.localBrowserTabs")}>
-      {snapshot.tabs.map((tab) => <div key={tab.id} draggable={ownerReady}
-        className={`context-dynamic-tab ${tab.id === snapshot.activeId ? "active" : ""} ${dropId === tab.id ? "local-browser-tab-drop" : ""}`}
+      {snapshot.tabs.map((tab) => <PanelTab key={tab.id} draggable={ownerReady}
+        active={tab.id === snapshot.activeId}
+        closeLabel={t("browser.closeLocalTab")}
+        disabled={!ownerReady}
+        dropTarget={dropId === tab.id}
+        icon={<LocalBrowserTabIcon key={tab.faviconUrl} faviconUrl={tab.faviconUrl} />}
+        label={<>{tab.loading ? "… " : ""}{localBrowserTabLabel(tab.title || tab.url, t)}</>}
+        title={tab.title || tab.url}
+        onClose={() => void bridge.close(tab.id).catch((reason: unknown) => setError(String(reason)))}
+        onSelect={() => void bridge.select(tab.id).catch((reason: unknown) => setError(String(reason)))}
         onDragStart={(event) => {
           draggedId.current = tab.id;
           event.dataTransfer.effectAllowed = "move";
@@ -294,73 +305,58 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
           draggedId.current = null;
           setDropId(null);
         }}
-        onDragEnd={() => { draggedId.current = null; setDropId(null); }}>
-        <span className="context-dynamic-tab-icon">
-          <LocalBrowserTabIcon key={tab.faviconUrl} faviconUrl={tab.faviconUrl} />
-        </span>
-        <button type="button"
-          role="tab" aria-selected={tab.id === snapshot.activeId} tabIndex={tab.id === snapshot.activeId ? 0 : -1}
-          className="context-dynamic-tab-label" title={tab.title || tab.url}
-          disabled={!ownerReady}
-          onClick={() => void bridge.select(tab.id).catch((reason: unknown) => setError(String(reason)))}>
-          <span className="max-w-28 truncate">{tab.loading ? "… " : ""}{localBrowserTabLabel(tab.title || tab.url, t)}</span>
-        </button>
-        <button type="button" className="context-dynamic-tab-close"
-          aria-label={t("browser.closeLocalTab")}
-          disabled={!ownerReady}
-          onClick={() => void bridge.close(tab.id).catch((reason: unknown) => setError(String(reason)))}><X size={12} /></button>
-      </div>)}
-      <button type="button" className="context-dynamic-icon-button"
+        onDragEnd={() => { draggedId.current = null; setDropId(null); }} />)}
+      <button type="button" className="vk-icon-btn" data-size="sm"
         aria-label={t("browser.newLocalTab")}
         disabled={!ownerReady}
-        onClick={() => void bridge.open("about:blank").catch((reason: unknown) => setError(String(reason)))}><Plus size={15} /></button>
+        onClick={() => void bridge.open("about:blank").catch((reason: unknown) => setError(String(reason)))}><Plus /></button>
     </div>}
-    <form onSubmit={(event) => void submit(event)} className="flex shrink-0 items-center gap-1">
+    <form onSubmit={(event) => void submit(event)} className="vk-browser-bar">
       {bridge && <>
-        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
+        <Button type="button" variant="ghost" size="icon-sm"
           title={t("browser.back")} aria-label={t("browser.back")}
-          disabled={!ownerReady || !activeTab?.canGoBack} onClick={() => void navigateHistory("back")}><ArrowLeft className="h-4 w-4" /></Button>
-        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
+          disabled={!ownerReady || !activeTab?.canGoBack} onClick={() => void navigateHistory("back")}><ArrowLeft /></Button>
+        <Button type="button" variant="ghost" size="icon-sm"
           title={t("browser.forward")} aria-label={t("browser.forward")}
-          disabled={!ownerReady || !activeTab?.canGoForward} onClick={() => void navigateHistory("forward")}><ArrowRight className="h-4 w-4" /></Button>
-        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
+          disabled={!ownerReady || !activeTab?.canGoForward} onClick={() => void navigateHistory("forward")}><ArrowRight /></Button>
+        <Button type="button" variant="ghost" size="icon-sm"
           title={activeTab?.loading ? t("browser.stopLoading") : t("browser.reload")}
           aria-label={activeTab?.loading ? t("browser.stopLoading") : t("browser.reload")}
           disabled={!ownerReady || !activeTab} onClick={() => void navigateHistory(activeTab?.loading ? "stop" : "reload")}>
-          {activeTab?.loading ? <X className="h-4 w-4" /> : <RotateCw className="h-4 w-4" />}
+          {activeTab?.loading ? <X /> : <RotateCw />}
         </Button>
       </>}
       <input ref={addressInput} value={address}
         onChange={(event) => setAddressDraft({ tabId: snapshot.activeId, value: event.target.value })}
         onKeyDown={(event) => { if (event.key === "Escape") { setAddressDraft(null); event.currentTarget.blur(); } }}
         aria-label={t("browser.localBrowserAddress")}
-        placeholder={t("browser.enterAUrl")} className="h-8 min-w-0 flex-1 rounded border bg-background px-2 text-sm" />
-      <Button type="submit" variant="outline" size="sm" className={bridge ? "sr-only" : ""} disabled={Boolean(bridge) && !ownerReady}
+        placeholder={t("browser.enterAUrl")} className="vk-browser-address" />
+      <Button type="submit" variant="outline" size="sm" className={bridge ? "vk-sr-only" : undefined} disabled={Boolean(bridge) && !ownerReady}
         aria-label={t("browser.openAddress")}>
-        {bridge ? <ArrowRight className="h-4 w-4" /> : <ExternalLink className="h-4 w-4" />}
+        {bridge ? <ArrowRight /> : <ExternalLink />}
       </Button>
       {bridge && <>
-        <Button type="button" variant={freeSize ? "secondary" : "ghost"} size="icon" className="h-7 w-7 shrink-0"
+        <Button type="button" variant={freeSize ? "secondary" : "ghost"} size="icon-sm"
           title={t(freeSize ? "browser.exitResponsiveMode" : "browser.responsiveMode")}
           aria-label={t(freeSize ? "browser.exitResponsiveMode" : "browser.responsiveMode")}
-          aria-pressed={freeSize} onClick={() => setFreeSize(!freeSize)}><MonitorSmartphone className="h-4 w-4" /></Button>
+          aria-pressed={freeSize} onClick={() => setFreeSize(!freeSize)}><MonitorSmartphone /></Button>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
-            aria-label={t("browser.browserMenu")} disabled={!ownerReady || !activeTab}><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon-sm"
+            aria-label={t("browser.browserMenu")} disabled={!ownerReady || !activeTab}><MoreHorizontal /></Button></DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
             <DropdownMenuItem disabled={!activeTab || !/^(?:https?|file):\/\//i.test(activeTab.url)} onSelect={() => {
               if (activeTab) void bridge.openExternal(activeTab.id).catch((reason: unknown) => setError(String(reason)));
-            }}><ExternalLink className="h-4 w-4" />{t("browser.openInDefaultBrowser")}</DropdownMenuItem>
+            }}><ExternalLink />{t("browser.openInDefaultBrowser")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => {
               if (activeTab) void bridge.openDeveloperTools(activeTab.id).catch((reason: unknown) => setError(String(reason)));
-            }}><Bug className="h-4 w-4" />{t("browser.openDeveloperTools")}</DropdownMenuItem>
+            }}><Bug />{t("browser.openDeveloperTools")}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </>}
     </form>
-    {bridge && freeSize && <div className="flex shrink-0 items-center justify-center gap-2 text-xs">
+    {bridge && freeSize && <div className="vk-browser-size">
       <input type="number" min={240} max={3840} step={1} defaultValue={deviceSize.width}
-        aria-label={t("browser.viewportWidth")} className="h-7 w-16 rounded border bg-background px-1 text-center"
+        aria-label={t("browser.viewportWidth")}
         onBlur={(event) => {
           // width is committed only after the complete numeric edit is valid.
           // width 仅在完整的数字编辑有效后提交。
@@ -370,7 +366,7 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
         }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
       <span>×</span>
       <input type="number" min={240} max={3840} step={1} defaultValue={deviceSize.height}
-        aria-label={t("browser.viewportHeight")} className="h-7 w-16 rounded border bg-background px-1 text-center"
+        aria-label={t("browser.viewportHeight")}
         onBlur={(event) => {
           // height follows the same explicit bounds as the native viewport contract.
           // height 遵循与原生视口契约相同的明确范围。
@@ -378,20 +374,17 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
           if (Number.isInteger(height) && height >= 240 && height <= 3840) setDeviceSize((size) => ({ ...size, height }));
           else event.currentTarget.value = String(deviceSize.height);
         }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
-      <span className="text-muted-foreground">{t("browser.fitToWindow")}</span>
+      <span>{t("browser.fitToWindow")}</span>
     </div>}
-    {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
-    {bridge ? <div ref={placeholder} className="min-h-0 w-full flex-1 overflow-hidden rounded bg-muted/20">
-      {!activeTab && <div className="flex h-full flex-col items-center justify-center gap-3 p-3 text-center text-sm text-muted-foreground">
-        <Globe className="h-12 w-12 opacity-50" />
-        <p>{t("browser.pasteOrEnterA")}</p>
-      </div>}
-    </div> : <div className="flex min-h-0 flex-1 flex-col gap-2 rounded border p-3 text-sm text-muted-foreground">
+    {error && <PageNotice tone="error">{error}</PageNotice>}
+    {bridge ? <div ref={placeholder} className="vk-browser-stage">
+      {!activeTab && <PageEmptyState size="panel" icon={<Globe aria-hidden="true" />} title={t("browser.pasteOrEnterA")} />}
+    </div> : <div className="vk-browser-fallback">
       <p>{t("browser.thisClientOpensTemporary")}</p>
       {(() => {
         try {
           const url = localBrowserAddress(address);
-          return <a href={url} target="_blank" rel="noopener noreferrer" className="break-all text-primary underline">
+          return <a href={url} target="_blank" rel="noopener noreferrer">
             {t("browser.openLinkDirectly")}: {url}
           </a>;
         } catch {

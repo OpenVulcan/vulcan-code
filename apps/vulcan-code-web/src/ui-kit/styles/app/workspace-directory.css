@@ -1,0 +1,44 @@
+/* Catalog pages (skills, agents) keep their own toolbar and scrolling list inside the directory body. */
+/* 目录页（技能、智能体）在目录正文内自行管理工具栏与滚动列表。 */
+.workspace-directory-catalog { container: workspace-page / inline-size; }
+.workspace-directory-catalog .skill-management-surface { overflow: visible; scrollbar-gutter: auto; }
+.workspace-directory-catalog .skill-page-body { width: 100%; max-width: none; }
+.workspace-directory-catalog .skill-card-list { width: 100%; padding-right: 0; }
+.workspace-directory-catalog :is(.lua-skill-page-body .skill-card-list, .agent-skill-card-list) { grid-template-columns: minmax(0, 1fr); }
+/* Catalogs own a fixed toolbar and a scrolling list, so the directory must not add a second viewport. */
+/* 目录页自行管理固定工具栏与滚动列表，外部目录壳不再增加第二个视口。 */
+.workspace-directory-catalog:has(> :is(.agent-management-surface, .agent-skills-management-surface)) {
+  padding: 0;
+  overflow: hidden;
+}
+.workspace-directory-catalog :is(.agent-management-surface, .agent-skills-management-surface) {
+  overflow: hidden;
+}
+.workspace-directory-catalog :is(.agent-management-surface, .agent-skills-management-surface) .skill-card-list {
+  padding: 0 0 20px;
+}
+
+
+/* Keep agent rows on one line while a tablet-width pane still has room. */
+/* 平板宽度面板仍有空间时，将智能体行保留在同一行。 */
+@container workspace-page (min-width: 480px) and (max-width: 720px) {
+  .agent-management-surface .agent-definition-row { grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; }
+  .agent-management-surface .agent-definition-row-actions { grid-column: auto; justify-content: flex-end; }
+}
+
+/* A page that opens with a tab strip starts close to the header: the tab rows already pad their labels, so the
+   scroll body's full top padding would leave a visibly taller gap than card-led pages. The chain follows first
+   children through page wrappers (memory pages nest five deep); a directory body under a tab strip keeps its own
+   spacing because that strip already divides it from the header. */
+/* 以标签条开头的页面紧贴标题栏：标签行本身已为文字留出内距，若滚动正文再保留完整顶部内距，间距会明显高于以卡片
+   开头的页面。选择器沿页面包装层的首个子元素向下匹配（记忆页嵌套五层）；位于标签条下方的目录正文已由标签条与
+   标题栏隔开，保留其原有间距。 */
+:is(.settings-page-body, .vk-directory-body:not([data-navigation-mode="tabs"] > *)):has(
+  > :is(.vk-page-tabs, [data-navigation-mode="tabs"]):first-child,
+  > :first-child > :is(.vk-page-tabs, [data-navigation-mode="tabs"]):first-child,
+  > :first-child > :first-child > :is(.vk-page-tabs, [data-navigation-mode="tabs"]):first-child,
+  > :first-child > :first-child > :first-child > :is(.vk-page-tabs, [data-navigation-mode="tabs"]):first-child,
+  > :first-child > :first-child > :first-child > :first-child > :is(.vk-page-tabs, [data-navigation-mode="tabs"]):first-child
+) {
+  padding-top: 8px;
+}

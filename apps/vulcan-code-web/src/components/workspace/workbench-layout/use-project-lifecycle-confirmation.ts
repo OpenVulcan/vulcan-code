@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { projectConversationCount } from "@/components/project/project-settings-utils";
 import { clearProjectTerminalInputBuffers } from "@/components/project/terminal/project-terminal-input-buffer";
 import { formatWorkbenchTranslation } from "@/components/workspace/workbench-layout/types";

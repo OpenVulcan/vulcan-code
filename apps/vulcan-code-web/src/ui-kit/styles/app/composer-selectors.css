@@ -1,0 +1,107 @@
+/* A hairline and a small gap keep the search field visually apart from the first row, so sweeping the pointer
+   down from the field never reads as one continuous block. */
+
+.model-picker-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 10px;
+  color: var(--vk-ink-2);
+}
+
+.model-picker-filter input {
+  height: 34px;
+  flex: 1 1 auto;
+}
+
+.model-picker-scroll {
+  max-height: 310px;
+}
+
+.model-picker-list {
+  display: grid;
+  gap: 1px;
+  padding-right: 4px;
+}
+
+.model-picker-empty {
+  height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-md);
+}
+
+.model-picker-row {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink);
+  text-align: left;
+  cursor: default;
+}
+
+/* Highlight (pointer or keyboard) is a neutral ink wash; the current choice is carried by the ember check alone. */
+/* 高亮（指针或键盘）使用中性墨色；当前选中项仅由余烬色对勾表达。 */
+.model-picker-row:hover,
+.model-picker-row:focus-visible,
+.model-picker-row[data-selected="true"] {
+  background: var(--vk-hover);
+  outline: none;
+}
+
+.model-picker-selected-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vk-ink);
+}
+
+.model-picker-row-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.model-picker-row-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--vk-fs-md);
+  font-weight: 600;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker-row-meta,
+.model-picker-row-id {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  line-height: 13px;
+}
+
+/* Keep secondary provider names inside the fixed desktop row; full text remains in its title and accessible name.
+   将次要供应商名称限制在桌面固定行内；完整文本保留在标题提示与无障碍名称中。 */
+.model-picker-row-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker-row-id {
+  font-family: var(--vk-font-mono, ui-monospace, monospace);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

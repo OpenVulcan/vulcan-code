@@ -1,9 +1,10 @@
 import * as React from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Button } from "@/ui-kit/primitives/button"
+import { Input } from "@/ui-kit/primitives/input"
 import { cancelMcpOAuth, finishMcpOAuth, loadMcpOAuthStatus, removeMcpOAuth, startMcpOAuth, type McpOAuthStatus } from "@/service/mcp-settings-service"
 import { openExternalUrl } from "@/service/project-actions-service"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // Poll interval while a sign-in flow waits for the browser or exchanges the code.
 // 登录流程等待浏览器或交换授权码期间的轮询间隔。
@@ -90,13 +91,13 @@ export function McpOAuthPanel(props: {
     <h4>{t("settings.mcp.oauthSignIn")}</h4>
     <p role="status">{status ? authStatusText(status, t) : t("settings.mcp.loading")}</p>
     {flow && flowActive && <>
-      <p className="settings-muted-line">{phase === "exchanging" ? t("settings.mcp.oauth.exchanging") : t("settings.mcp.oauth.waitingForBrowser")}</p>
-      <p className="settings-muted-line"><code className="break-all">{flow.authorizationUrl}</code></p>
+      <p className="vk-form-note">{phase === "exchanging" ? t("settings.mcp.oauth.exchanging") : t("settings.mcp.oauth.waitingForBrowser")}</p>
+      <p className="vk-form-note"><code className="vk-form-break">{flow.authorizationUrl}</code></p>
       {phase === "awaiting_callback" && flow.callbackMode === "manual" && <>
-        <label className="settings-form-field"><span>{t("settings.mcp.oauth.callbackUrl")}</span>
+        <label className="vk-field"><span>{t("settings.mcp.oauth.callbackUrl")}</span>
           <Input autoComplete="off" value={callbackUrl} disabled={busy} placeholder={flow.redirectUri} onChange={e => setCallbackUrl(e.target.value)} />
         </label>
-        <p className="settings-muted-line">{t("settings.mcp.oauth.manualHint")}</p>
+        <p className="vk-form-note">{t("settings.mcp.oauth.manualHint")}</p>
       </>}
       <div className="mcp-filter-row">
         {phase === "awaiting_callback" && flow.callbackMode === "manual" && <Button size="sm" disabled={busy || !callbackUrl.trim()} onClick={() => void run(() => finishMcpOAuth({ serverId: props.serverId, flowId: flow.flowId, callbackUrl }))}>{t("settings.mcp.oauth.finish")}</Button>}

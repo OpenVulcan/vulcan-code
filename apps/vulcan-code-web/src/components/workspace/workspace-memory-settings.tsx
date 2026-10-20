@@ -1,5 +1,5 @@
 import * as React from "react";
-import { PageTabs, WorkspaceDirectoryLayout } from "@/components/workspace/workspace-directory-layout";
+import { DirectoryRow, PageTabs, WorkspaceDirectoryLayout } from "@/components/workspace/workspace-directory-layout";
 import { localizedVmmManagementSection, vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections";
 import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
 import { useI18n } from "@/i18n";
@@ -41,7 +41,7 @@ export function WorkspaceMemorySettings(props: {
   // The section menu lives in the navigation panel beside the rail (MemoryWorkspaceNavigation).
   // 分区菜单位于轨道旁的导航面板中（MemoryWorkspaceNavigation）。
   return (
-    <WorkspaceDirectoryLayout contentClassName="vmm-workspace-body">
+    <WorkspaceDirectoryLayout contentClassName="vmm-workspace-body vk-atmosphere" pageKey={activeSubArea}>
       <MemoryServiceTabs activeSubArea={activeSubArea} onSelectSubArea={props.onSelectSubArea} workbench={workbench} />
       <React.Suspense fallback={null}>
         <LazyMemoryArea
@@ -99,9 +99,9 @@ export function MemoryWorkspaceNavigation(props: MemoryNavigationProps) {
     { label: t("memory.workspace.manage"), ids: ["identity_projects", "maintenance"] },
     { label: t("memory.workspace.settings"), ids: ["rules", "service", "resource_rules"] },
   ];
-  return <nav className="vmm-workspace-nav" aria-label={t("workspaceToolPanel.memorySettingsMenu")}>
-    {groups.map((group) => <div className="vmm-nav-group" key={group.label}>
-      <p className="vmm-nav-heading">{group.label}</p>
+  return <nav className="vk-dir" aria-label={t("workspaceToolPanel.memorySettingsMenu")}>
+    {groups.map((group) => <div className="vk-dir-group" key={group.label}>
+      <p className="vk-dir-head vk-label">{group.label}</p>
       {group.ids.map((id) => {
         // row resolves service navigation to the first supported destination.
         // row 将服务导航解析到首个受支持的目标。
@@ -112,10 +112,8 @@ export function MemoryWorkspaceNavigation(props: MemoryNavigationProps) {
         // active also highlights the parent when a service subpage is selected.
         // active 在服务子页面被选中时也高亮其父入口。
         const active = id === "service" ? serviceSections.includes(activeSubArea) : activeSubArea === id;
-        return <button key={id} type="button" className="vmm-nav-row" aria-current={active ? "page" : undefined}
-          onClick={() => props.onSelectSubArea(row.id)}>
-          {row.icon}<span>{id === "service" ? t("memory.workspace.service") : row.label}</span>
-        </button>;
+        return <DirectoryRow active={active} icon={row.icon} key={id} label={id === "service" ? t("memory.workspace.service") : row.label}
+          onSelect={() => props.onSelectSubArea(row.id)} />;
       })}
     </div>)}
   </nav>;

@@ -1,0 +1,361 @@
+/* Vulcan kit pickers: the quiet toolbar triggers of the composer and the model, reasoning, account and
+ * route pickers they open. The model list is shared by settings pages, so it lives here and not in the
+ * composer sheet.
+ * Vulcan 套件选择器：输入区工具栏的安静触发器，以及它们打开的模型、思考、账号与路由选择器。模型列表
+ * 也被设置页复用，因此放在这里而不是输入区样式表中。 */
+
+/* ---------- Toolbar triggers ---------- */
+/* Triggers stay muted until hovered or open, so the draft text keeps the focus. */
+/* 触发器在悬停或展开前保持弱化，让草稿文字始终是焦点。 */
+.vk-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+  min-width: 0;
+  height: var(--vk-h-md);
+  padding: 0 calc(var(--vk-u) * 2.5);
+  border: var(--vk-bw) solid transparent;
+  background: transparent;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease), border-color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-pick:hover,
+.vk-pick[data-state="open"],
+.vk-pick[aria-expanded="true"] { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-pick:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-pick:disabled { opacity: 0.5; cursor: default; }
+.vk-pick[data-kind="model"] { flex: 0 1 auto; max-width: 260px; overflow: hidden; }
+.vk-pick > span[data-tone] { color: var(--vk-tone); }
+.vk-pick-icon { display: inline-grid; place-items: center; flex: none; color: var(--vk-ink-3); }
+.vk-pick-icon > svg { width: 13px; height: 13px; }
+.vk-pick-icon[data-tone="warn"] { color: var(--vk-warn); }
+.vk-pick-label { min-width: 0; overflow: hidden; color: var(--vk-ink); font-weight: 600; text-overflow: ellipsis; }
+.vk-pick-level { flex: none; color: var(--vk-ink-3); font-weight: 500; }
+.vk-pick-aside { display: inline-flex; align-items: center; gap: 2px; flex: none; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-pick-count { min-width: 14px; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; font-weight: 600; text-align: center; }
+.vk-pick-alert { flex: none; color: var(--vk-warn); }
+.vk-pick-chevron { flex: none; width: 12px; height: 12px; color: var(--vk-ink-3); transition: transform var(--vk-t-med) var(--vk-ease); }
+.vk-pick[data-state="open"] .vk-pick-chevron,
+.vk-pick[aria-expanded="true"] .vk-pick-chevron { transform: rotate(180deg); }
+
+/* The add button is the one bordered square in the toolbar: it opens attachments and extensions. */
+/* 添加按钮是工具栏中唯一带边框的方块：用于打开附件与扩展。 */
+.vk-pick-add {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--vk-h-md);
+  height: var(--vk-h-md);
+  padding: 0;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: transparent;
+  color: var(--vk-ink-2);
+  cursor: pointer;
+  transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease), border-color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-pick-add:hover,
+.vk-pick-add[data-state="open"],
+.vk-pick-add[aria-expanded="true"] { border-color: var(--vk-line-strong); background: var(--vk-hover); color: var(--vk-ink); }
+.vk-pick-add:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-pick-add > svg { width: 15px; height: 15px; }
+
+/* A two-line tooltip: the control name, then its current values. */
+/* 两行提示：控件名称，随后是其当前取值。 */
+.vk-tooltip.vk-pick-tip { display: grid; align-items: start; gap: 2px; max-width: 280px; }
+.vk-pick-tip > strong { font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-pick-tip > span { color: color-mix(in srgb, currentColor 75%, transparent); font-size: var(--vk-fs-xs); }
+
+/* Menus opened from the toolbar keep their two-line labels readable. */
+/* 工具栏打开的菜单保持两行标签的可读性。 */
+.vk-pop.vk-pick-menu { min-width: 12rem; }
+.vk-pop.vk-pick-menu[data-size="wide"] { width: 18rem; }
+.vk-pop.vk-pick-menu[data-size="wider"] { width: 20rem; }
+.vk-menu-label { display: grid; flex: 1; gap: 1px; min-width: 0; text-align: left; }
+.vk-menu-label > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.35; }
+.vk-menu-label[data-tone="warn"] > span:first-child { color: var(--vk-warn); }
+.vk-menu-label[data-muted] > span:first-child { color: var(--vk-ink-3); }
+.vk-menu-item:has(> .vk-menu-label > small) { align-items: flex-start; padding-top: calc(var(--vk-u) * 1.5); padding-bottom: calc(var(--vk-u) * 1.5); }
+.vk-menu-item:has(> .vk-menu-label > small) > :is(svg, .vk-pick-icon) { margin-top: 2px; }
+.vk-menu-note { margin: 0; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2.5); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.4; }
+.vk-menu-note[data-tone="bad"] { color: var(--vk-bad); }
+pre.vk-menu-note { max-height: 8rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--vk-font-mono); }
+.vk-menu-title.vk-menu-label { padding-bottom: calc(var(--vk-u) * 1.5); }
+.vk-menu-title.vk-menu-label > span:first-child { color: var(--vk-ink); font-weight: 600; }
+.vk-menu-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- Model list ---------- */
+/* Rows carry the model name, its provider, and on the right its id and built-in capabilities. */
+/* 行内包含模型名与供应商，右侧为模型 ID 与内置能力。 */
+.vk-pop.vk-model-pop { width: 520px; max-width: min(520px, calc(100vw - 32px)); padding: calc(var(--vk-u) * 1.5); }
+.vk-model-pop .vk-command-search { margin: 0 0 calc(var(--vk-u) * 1.5); }
+.vk-model-filter { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); padding: 0 0 calc(var(--vk-u) * 1.5); color: var(--vk-ink-3); }
+.vk-model-filter > :is(input, .vk-input) { flex: 1; min-width: 0; }
+.vk-model-list { max-height: 310px; }
+.vk-model-rows { display: grid; gap: 1px; padding-right: calc(var(--vk-u) * 1); }
+.vk-model-none { display: grid; place-items: center; height: 160px; color: var(--vk-ink-3); font-size: var(--vk-fs-md); }
+.vk-model-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
+}
+button.vk-model-row { cursor: pointer; }
+.vk-model-row:hover,
+.vk-model-row:focus-visible,
+.vk-model-row[data-selected="true"] { background: var(--vk-hover); outline: none; }
+.vk-model-row:focus-visible { box-shadow: inset 2px 0 0 var(--vk-signal); }
+.vk-model-row[data-current] { box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-model-row[data-current] .vk-model-title { color: var(--vk-ink); }
+.vk-model-check { display: inline-grid; place-items: center; color: var(--vk-ember); }
+.vk-model-check > svg { width: 14px; height: 14px; }
+.vk-model-copy { display: grid; gap: 1px; min-width: 0; }
+.vk-model-title { min-width: 0; overflow: hidden; color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 600; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.vk-model-meta { min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.vk-model-side { display: grid; justify-items: end; align-content: center; gap: 2px; min-width: 0; }
+.vk-model-id { max-width: 180px; overflow: hidden; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.vk-model-caps { justify-content: flex-end; min-width: 14px; }
+.vk-model-caps .model-builtin-capability-icon { width: 14px; height: 14px; color: var(--vk-ink-2); }
+.vk-model-caps .model-builtin-capability-icon svg { width: 12px; height: 12px; }
+.vk-model-tag { margin-left: calc(var(--vk-u) * 1); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 400; }
+
+/* The secondary route trigger is a small tag next to the model: it names the endpoint serving it. */
+/* 二级路由触发器是模型旁的小标签：显示为其服务的端点。 */
+.vk-route-pick { height: var(--vk-h-sm); max-width: 120px; padding: 0 calc(var(--vk-u) * 2); border-color: var(--vk-line-soft); font-size: var(--vk-fs-xs); }
+.vk-route-pick > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vk-pop.vk-route-pop { display: flex; flex-direction: column; width: 440px; max-width: min(440px, calc(100vw - 32px)); min-height: 0; overflow: hidden; padding: calc(var(--vk-u) * 1.5); }
+.vk-route-pop .vk-model-row { grid-template-columns: 20px minmax(0, 1fr); }
+.vk-route-pop .vk-model-list { height: 260px; min-height: 0; flex: 0 1 auto; }
+.vk-route-failure { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); color: var(--vk-bad); font-size: var(--vk-fs-xs); }
+.vk-route-failure > pre { margin: calc(var(--vk-u) * 1) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--vk-font-mono); }
+
+/* ---------- Model and reasoning picker ---------- */
+/* One popover hosts the reasoning pane, the model list and the account pane; its width eases between them. */
+/* 同一浮层承载思考面板、模型列表与账号面板；宽度在三者之间平滑过渡。 */
+.vk-pop.vk-mr-pop { max-width: calc(100vw - 32px); transition: width var(--vk-t-med) var(--vk-ease); }
+.vk-pop.vk-mr-pop[data-view="reasoning"] { width: 320px; }
+.vk-pop.vk-mr-pop[data-view="account"] { width: 352px; }
+.vk-mr-pane { display: grid; gap: calc(var(--vk-u) * 1); min-width: 0; animation: vk-fade var(--vk-t-med) var(--vk-ease) both; }
+.vk-mr-back {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+  width: fit-content;
+  height: var(--vk-h-sm);
+  padding: 0 calc(var(--vk-u) * 2);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-3);
+  font-size: var(--vk-fs-xs);
+  font-weight: 500;
+  cursor: pointer;
+}
+.vk-mr-back:hover,
+.vk-mr-back:focus-visible { background: var(--vk-hover); color: var(--vk-ink); outline: none; }
+
+/* The model row is the pane's breadcrumb: it names the current model and steps into the list. */
+/* 模型行是面板的导航入口：显示当前模型，并可进入模型列表。 */
+.vk-mr-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2.5);
+  width: 100%;
+  min-width: 0;
+  padding: calc(var(--vk-u) * 1.25) calc(var(--vk-u) * 2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-mr-row:hover,
+.vk-mr-row:focus-visible { background: var(--vk-hover); outline: none; }
+.vk-mr-row:focus-visible { box-shadow: inset 2px 0 0 var(--vk-signal); }
+.vk-mr-row:disabled { cursor: default; }
+.vk-mr-row:disabled .vk-mr-chevron { visibility: hidden; }
+.vk-mr-row[data-kind="account"] small { font-variant-numeric: tabular-nums; }
+.vk-mr-row[data-attention] :is(.vk-mr-icon, small) { color: var(--vk-warn); }
+.vk-mr-icon { display: inline-grid; place-items: center; width: 24px; height: 24px; background: var(--vk-sunken); color: var(--vk-ink-3); }
+.vk-mr-copy { display: grid; gap: 1px; min-width: 0; }
+.vk-mr-copy > :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.25; }
+.vk-mr-copy > strong { color: var(--vk-ink); font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-mr-copy > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-mr-copy > small[data-attention] { color: var(--vk-warn); }
+.vk-mr-chevron { color: var(--vk-ink-3); transition: transform var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease); }
+.vk-mr-row:hover .vk-mr-chevron { transform: translateX(2px); color: var(--vk-ink); }
+
+.vk-mr-block { display: grid; gap: calc(var(--vk-u) * 1); margin-top: 2px; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2) calc(var(--vk-u) * 1); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-mr-block[data-tone] { padding-bottom: calc(var(--vk-u) * 1.5); }
+.vk-mr-head-row { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); }
+.vk-mr-heading { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; min-height: 24px; }
+.vk-mr-eyebrow { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 500; }
+.vk-mr-title { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); color: var(--vk-ink); font-size: var(--vk-fs-sm); font-weight: 650; line-height: 1.3; }
+.vk-mr-default { display: inline-flex; align-items: center; height: 16px; padding: 0 calc(var(--vk-u) * 1.5); background: var(--vk-sunken); color: var(--vk-ink-3); font-size: var(--vk-fs-2xs); font-weight: 600; }
+.vk-mr-reset { flex: none; width: 24px; height: 24px; color: var(--vk-ink-3); }
+.vk-mr-hint { margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.45; }
+
+/* Fixed states show a short bar: ember when reasoning is on, a quiet rule when it is off. */
+/* 固定状态显示短色条：思考开启时为余烬色，关闭时为安静的细线。 */
+.vk-mr-block[data-tone] .vk-mr-heading { position: relative; padding-left: 11px; }
+.vk-mr-block[data-tone] .vk-mr-heading::before { content: ""; position: absolute; top: 5px; bottom: 5px; left: 0; width: 3px; background: var(--vk-line-strong); }
+.vk-mr-block:is([data-tone="on"], [data-tone="adaptive"], [data-tone="level"]) .vk-mr-heading::before { background: linear-gradient(180deg, var(--vk-ember-2), var(--vk-ember)); }
+
+/* The slider reads cool to hot: the ember fill grows toward deeper reasoning. Every mark is square. */
+/* 滑杆从冷到热：余烬色填充随思考加深而延伸。所有标记都是方形。 */
+.vk-mr-slider { position: relative; height: 20px; margin: 0 calc(var(--vk-u) * 2); cursor: pointer; touch-action: none; outline: none; }
+.vk-mr-rail { position: absolute; top: 50%; left: 0; right: 0; height: 4px; background: var(--vk-sunken); box-shadow: inset 0 0 0 1px var(--vk-line-soft); transform: translateY(-50%); }
+.vk-mr-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--vk-ember-2), var(--vk-ember)); transition: width var(--vk-t-fast) var(--vk-ease); }
+.vk-mr-stop { position: absolute; top: 50%; width: 4px; height: 8px; background: var(--vk-line-strong); transform: translate(-50%, -50%); }
+.vk-mr-stop[data-reached] { background: color-mix(in srgb, var(--vk-ember-soft) 80%, white); }
+.vk-mr-thumb {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 16px;
+  border: 2px solid var(--vk-ember);
+  background: var(--vk-raised);
+  box-shadow: var(--vk-shadow-1);
+  transform: translate(-50%, -50%);
+  transition: left var(--vk-t-fast) var(--vk-ease), transform var(--vk-t-fast) var(--vk-ease), box-shadow var(--vk-t-fast) var(--vk-ease);
+}
+.vk-mr-slider:hover .vk-mr-thumb,
+.vk-mr-slider[data-dragging] .vk-mr-thumb { transform: translate(-50%, -50%) scale(1.12); box-shadow: var(--vk-glow); }
+.vk-mr-slider:focus-visible .vk-mr-thumb { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 2px; }
+.vk-mr-slider[data-dragging] :is(.vk-mr-fill, .vk-mr-thumb) { transition-duration: 60ms; }
+.vk-mr-labels { position: relative; height: 14px; margin: -3px calc(var(--vk-u) * 2) 0; }
+.vk-mr-label { position: absolute; top: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-2xs); font-weight: 500; line-height: 14px; white-space: nowrap; transform: translateX(-50%); cursor: pointer; transition: color var(--vk-t-fast) var(--vk-ease); }
+.vk-mr-label:hover,
+.vk-mr-label[data-current] { color: var(--vk-ink); }
+.vk-mr-label[data-current] { font-weight: 650; }
+/* The default level is underlined with dots so "restore default" has a visible target. */
+/* 默认档位以点状下划线标示，让“恢复默认”有可见的目标。 */
+.vk-mr-label[data-default] { text-decoration: underline dotted var(--vk-ink-3); text-underline-offset: 3px; }
+
+/* Account pane: the usage card, then the accounts that can serve the model. */
+/* 账号面板：用量卡片，随后是可服务该模型的账号。 */
+.vk-mr-accounts { display: grid; gap: 2px; padding: calc(var(--vk-u) * 2.5) 2px 2px; border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-mr-accounts > .vk-mr-eyebrow { padding: 0 calc(var(--vk-u) * 2) calc(var(--vk-u) * 1); }
+.vk-mr-account {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  min-width: 0;
+  height: var(--vk-h-lg);
+  padding: 0 calc(var(--vk-u) * 2);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.vk-mr-account > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-mr-account:hover,
+.vk-mr-account:focus-visible { background: var(--vk-hover); color: var(--vk-ink); outline: none; }
+.vk-mr-account[aria-pressed="true"] { color: var(--vk-ink); font-weight: 600; cursor: default; }
+.vk-mr-account[aria-pressed="true"] > svg:last-child { color: var(--vk-ember); }
+.vk-pop.vk-mr-usage-pop { width: 340px; max-width: calc(100vw - 24px); padding: calc(var(--vk-u) * 1.5); }
+
+/* The trigger's hover card is read-only: model, account, reasoning level and plan usage at a glance. */
+/* 触发器悬浮卡片为只读：一眼看到模型、账号、思考层级与方案用量。 */
+.vk-pop.vk-mr-summary { width: 300px; max-width: calc(100vw - 24px); padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); }
+.vk-mr-summary-body { display: grid; gap: calc(var(--vk-u) * 2.5); }
+.vk-mr-summary-head { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: calc(var(--vk-u) * 2.5); min-width: 0; }
+.vk-mr-summary-row { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 3); padding-top: calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-mr-summary-level { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-mr-summary-level > strong { color: var(--vk-ink); font-size: var(--vk-fs-sm); font-weight: 650; white-space: nowrap; }
+/* Pips mirror the slider: filled segments grow left to right with deeper reasoning. */
+/* 刻度块对应滑杆：填充段随思考加深从左到右增加。 */
+.vk-mr-pips { display: inline-flex; align-items: center; gap: 2px; }
+.vk-mr-pips > span { width: 10px; height: 4px; background: var(--vk-sunken); box-shadow: inset 0 0 0 1px var(--vk-line-soft); }
+.vk-mr-pips > span[data-on] { background: linear-gradient(90deg, var(--vk-ember-2), var(--vk-ember)); box-shadow: none; }
+.vk-mr-summary-usage { display: grid; gap: calc(var(--vk-u) * 1.5); padding-top: calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-mr-summary-foot { margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-2xs); line-height: 1.4; }
+
+/* ---------- Provider icon ---------- */
+/* A square tile around the provider artwork; logos drawn for one scheme sit on a theme-colored tile. */
+/* 包裹供应商图标的方形块；只为单一配色绘制的标志放在随主题变化的底块上。 */
+.vk-provider-icon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  box-sizing: border-box;
+  width: var(--vk-provider-size, 26px);
+  height: var(--vk-provider-size, 26px);
+  padding: 2px;
+  background: var(--vk-sunken);
+}
+.vk-provider-icon[data-surface="none"] { background: transparent; }
+.vk-provider-icon[data-surface="theme"] { padding: calc(var(--vk-provider-size, 26px) * 0.19); background: #000; }
+:root[data-vk-scheme="dark"] .vk-provider-icon[data-surface="theme"] { background: #fff; }
+.vk-provider-art { display: block; width: 100%; height: 100%; object-fit: contain; }
+.vk-provider-art[data-scheme="dark"] { display: none; }
+:root[data-vk-scheme="dark"] .vk-provider-art[data-scheme="light"] { display: none; }
+:root[data-vk-scheme="dark"] .vk-provider-art[data-scheme="dark"] { display: block; }
+:root[data-vk-scheme="dark"] .vk-provider-art[data-mono] { filter: invert(1); }
+.vk-provider-relay {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--vk-ground);
+  background: var(--vk-warn);
+  color: var(--vk-ink-inverse);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* ---------- Account usage card ---------- */
+.vk-account-card { display: grid; gap: calc(var(--vk-u) * 2.5); padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2) calc(var(--vk-u) * 1.5); }
+.vk-account-card-head { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 2.5); min-width: 0; }
+.vk-account-card-title { display: grid; gap: 2px; min-width: 0; }
+.vk-account-card-title > :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.25; }
+.vk-account-card-title > strong { color: var(--vk-ink); font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-account-card-title > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-account-card-fact { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 3); min-width: 0; padding-top: calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-account-card-fact > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-account-card-fact > strong { min-width: 0; overflow: hidden; color: var(--vk-ink); font-size: var(--vk-fs-xs); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.vk-account-card-note { margin: 0; padding: calc(var(--vk-u) * 2.5) 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-align: center; }
+.vk-account-card-error { margin: 0; color: var(--vk-bad); font-size: var(--vk-fs-xs); }
+
+/* The model trigger lives in the composer and follows the conversation stage; the model list is a portaled
+ * popover outside that container, so it follows the window instead. */
+@container vk-chat (max-width: 46em) {
+  .vk-pick[data-kind="model"] { max-width: 150px; }
+}
+@media (max-width: 46em) {
+  .vk-model-list { max-height: min(310px, 50dvh); }
+  .vk-model-row { grid-template-columns: 16px minmax(0, 1fr); }
+  .vk-model-side { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vk-pop.vk-mr-pop,
+  .vk-mr-pane,
+  .vk-mr-fill,
+  .vk-mr-thumb,
+  .vk-pick-chevron { transition: none; animation: none; }
+}

@@ -1,0 +1,52 @@
+.media-upload-progress-stack {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--composer-dock-height, 132px) + 18px);
+  z-index: 20;
+  width: min(520px, calc(100% - 40px));
+  display: grid;
+  gap: 8px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.media-upload-progress-panel {
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+padding: 12px 14px;
+border: 1px solid var(--vk-line);
+  background: color-mix(in srgb, var(--vk-panel) 94%, transparent);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 18%);
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+}
+
+.media-upload-progress-heading,
+.media-upload-progress-file {
+grid-column: 1 / -1;
+min-width: 0;
+}
+
+.media-upload-progress-heading {
+display: flex;
+justify-content: space-between;
+font-size: var(--vk-fs-sm);
+font-weight: 600;
+}
+
+.media-upload-progress-file {
+overflow: hidden;
+color: var(--vk-ink-2);
+font-size: var(--vk-fs-xs);
+text-overflow: ellipsis;
+white-space: nowrap;
+}
+
+.media-upload-progress-panel progress {
+width: 100%;
+height: 7px;
+align-self: center;
+}

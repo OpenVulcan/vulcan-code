@@ -57,7 +57,7 @@ async function drawn(ready: string) {
 // options returns the option buttons of the decision at `index`.
 // options 返回第 `index` 个决策的选项按钮。
 function options(index = 0): HTMLButtonElement[] {
-  return [...host.querySelectorAll(".answer-decision")[index].querySelectorAll<HTMLButtonElement>(".answer-decision-option")];
+  return [...host.querySelectorAll(".vk-a-decision")[index].querySelectorAll<HTMLButtonElement>(".vk-a-decision-option")];
 }
 
 // type sets a textarea value the way React observes user input.
@@ -73,7 +73,7 @@ async function type(textarea: HTMLTextAreaElement, value: string) {
 describe("answer replies", () => {
   it("records a single choice, toggles it off and keeps the recommendation", async () => {
     const store = new AnswerReplyStore();
-    await mount(DECISION, store, ".answer-decision");
+    await mount(DECISION, store, ".vk-a-decision");
     expect(options().map((option) => option.getAttribute("role"))).toEqual(["radio", "radio"]);
     expect(options()[0].hasAttribute("data-recommended")).toBe(true);
     await act(async () => options()[1].click());
@@ -87,7 +87,7 @@ describe("answer replies", () => {
 
   it("keeps multiple picks in option order", async () => {
     const store = new AnswerReplyStore();
-    await mount(MULTI, store, ".answer-decision");
+    await mount(MULTI, store, ".vk-a-decision");
     expect(options()[0].getAttribute("role")).toBe("checkbox");
     await act(async () => options()[2].click());
     await act(async () => options()[0].click());
@@ -95,21 +95,21 @@ describe("answer replies", () => {
   });
 
   it("shows decisions read-only where no reply can be composed", async () => {
-    await mount(DECISION, null, ".answer-decision");
+    await mount(DECISION, null, ".vk-a-decision");
     expect(options().every((option) => option.disabled)).toBe(true);
-    expect(host.querySelector(".answer-decision [aria-label='answerComponents.comment']")).toBeNull();
+    expect(host.querySelector(".vk-a-decision [aria-label='answerComponents.comment']")).toBeNull();
   });
 
   it("comments on a framed component and closes the editor once the reply is taken", async () => {
     const store = new AnswerReplyStore();
-    await mount(FINDINGS, store, ".answer-findings, .answer-frame");
-    const button = host.querySelector<HTMLButtonElement>(".answer-hover-actions [aria-label='answerComponents.comment']");
+    await mount(FINDINGS, store, ".answer-findings, .vk-figure");
+    const button = host.querySelector<HTMLButtonElement>(".vk-figure-hover [aria-label='answerComponents.comment']");
     expect(button).not.toBeNull();
     await act(async () => button!.click());
-    await type(host.querySelector<HTMLTextAreaElement>(".answer-note textarea")!, "Cap it first");
+    await type(host.querySelector<HTMLTextAreaElement>(".vk-a-note textarea")!, "Cap it first");
     expect(store.list()).toEqual([{ kind: "comment", subject: expect.stringMatching(/^ui-findings: high \| Unbounded map/u), note: "Cap it first" }]);
     await act(async () => store.clear());
-    expect(host.querySelector(".answer-note")).toBeNull();
+    expect(host.querySelector(".vk-a-note")).toBeNull();
   });
 
   it("appends the reply to the composer draft and empties the store, never replacing earlier text", async () => {
@@ -123,13 +123,13 @@ describe("answer replies", () => {
         <ComposerAnswerReplySlot disabled={false} setDraftInput={setDraftInput} textareaRef={{ current: null }} />
       </AnswerReplyContext.Provider>,
     ));
-    expect(host.querySelector(".answer-reply-tray")).toBeNull();
+    expect(host.querySelector(".vk-a-reply-tray")).toBeNull();
     await act(async () => store.set("fence", { kind: "comment", subject: "ui-kv: a | b", note: "Check" }));
-    await drawn(".answer-reply-tray");
-    await act(async () => host.querySelector<HTMLButtonElement>(".answer-reply-tray-insert")!.click());
+    await drawn(".vk-a-reply-tray");
+    await act(async () => host.querySelector<HTMLButtonElement>(".vk-a-reply-tray-insert")!.click());
     expect(draft.split("\n")).toEqual(["Earlier text", "", "**answerComponents.reply.comments**", "- ui-kv: a | b", "  > Check"]);
     expect(store.size()).toBe(0);
-    expect(host.querySelector(".answer-reply-tray")).toBeNull();
+    expect(host.querySelector(".vk-a-reply-tray")).toBeNull();
   });
 
   it("formats decisions before comments with notes as quotes", () => {

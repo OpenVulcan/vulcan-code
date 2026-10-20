@@ -4,7 +4,6 @@ import {
   Globe2,
   BookMarked,
   ChartNoAxesCombined,
-  ChevronDown,
   Hammer,
   PanelTopOpen,
   Plug,
@@ -39,7 +38,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebarNavigation,
-} from "@/components/ui/sidebar"
+} from "@/ui-kit/shell/sidebar"
 import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus"
 import { useI18n } from "@/i18n"
 import type {
@@ -173,7 +172,7 @@ function FeatureOverviewMenu(props: {
                 tooltip={row.label}
               >
                 {row.icon}
-                <span className="vcn-sidebar-label">
+                <span className="vk-side-text">
                   <strong>{row.label}</strong>
                   <small>{row.detail}</small>
                 </span>
@@ -186,15 +185,15 @@ function FeatureOverviewMenu(props: {
                 tooltip={row.label}
               >
                 {row.icon}
-                <span className="vcn-sidebar-label">
+                <span className="vk-side-text">
                   <strong>{row.label}</strong>
                   <small>{row.detail}</small>
                 </span>
               </SidebarMenuButton>
             ) : (
-              <div className="vcn-sidebar-static-item feature-sidebar-row">
+              <div className="vk-nav-item vk-side-button feature-sidebar-row" data-static="">
                 {row.icon}
-                <span className="vcn-sidebar-label">
+                <span className="vk-side-text">
                   <strong>{row.label}</strong>
                   <small>{row.detail}</small>
                 </span>
@@ -220,8 +219,8 @@ function SettingsSidebarMenu(props: {
   const { t } = useI18n()
   const groups = settingsSubAreaGroups(t)
   return (
-    <SidebarGroup className="settings-tree-section">
-      <SidebarMenu className="settings-tree-list">
+    <SidebarGroup className="vk-settings-nav">
+      <SidebarMenu>
         {groups.map((group) => (
           <SettingsSidebarGroupRow
             activeSettingsSubArea={props.activeSettingsSubArea}
@@ -235,8 +234,10 @@ function SettingsSidebarMenu(props: {
   )
 }
 
-// SettingsSidebarGroupRow renders one settings category with always-expanded children.
-// SettingsSidebarGroupRow 渲染单个设置分类及其默认展开的子菜单。
+// SettingsSidebarGroupRow renders one settings category as a quiet label over its pages. Settings has few pages,
+// so every page stays in view: there is nothing to collapse, and each row carries its own icon.
+// SettingsSidebarGroupRow 将单个设置分类渲染为一个低调标签及其下的页面。设置页面不多，因此所有页面始终可见：
+// 无需折叠，每一行都带有自身图标。
 function SettingsSidebarGroupRow(props: {
   // Selected settings sub page.
   // 当前设置二级页面。
@@ -248,43 +249,24 @@ function SettingsSidebarGroupRow(props: {
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
 }) {
-  // The category arrow controls disclosure rather than unexpectedly navigating to its first page.
-  // 分类箭头控制展开收起，不再意外跳转到分类中的第一页。
-  const [groupExpanded, setGroupExpanded] = React.useState(true)
+  const labelId = `settings-nav-${props.group.id}`
+  const active = normalizeSettingsSubArea(props.activeSettingsSubArea)
   return (
-    <SidebarMenuItem className="project-tree-item settings-tree-item">
-      <div className="project-folder-row settings-folder-row">
-        <SidebarMenuButton
-          aria-expanded={groupExpanded}
-          className="project-folder-button settings-folder-button"
-          onClick={() => setGroupExpanded((expanded) => !expanded)}
-          tooltip={props.group.label}
+    <SidebarMenuItem className="vk-nav-section" role="group" aria-labelledby={labelId}>
+      <div className="vk-nav-group vk-label" id={labelId}>{props.group.label}</div>
+      {props.group.items.map((area) => (
+        <button
+          aria-current={active === area.id ? "page" : undefined}
+          className="vk-nav-item"
+          key={area.id}
+          onClick={() => props.onSelectSettingsSubArea(area.id)}
+          title={area.description}
+          type="button"
         >
-          {props.group.icon}
-          <span className="vcn-sidebar-label project-folder-label">
-            <strong>{props.group.label}</strong>
-          </span>
-          <span className="project-folder-arrow" aria-hidden="true">
-            <ChevronDown className={groupExpanded ? undefined : "-rotate-90"} size={14} />
-          </span>
-        </SidebarMenuButton>
-      </div>
-      {groupExpanded ? <SidebarMenu className="project-conversation-list settings-subarea-list">
-        {props.group.items.map((area) => (
-          <SidebarMenuItem key={area.id}>
-            <SidebarMenuButton
-              active={normalizeSettingsSubArea(props.activeSettingsSubArea) === area.id}
-              className="conversation-tree-button settings-subarea-button"
-              onClick={() => props.onSelectSettingsSubArea(area.id)}
-              tooltip={area.label}
-            >
-              <span className="vcn-sidebar-label conversation-tree-label">
-                <strong>{area.label}</strong>
-              </span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        ))}
-      </SidebarMenu> : null}
+          {area.icon}
+          <span>{area.label}</span>
+        </button>
+      ))}
     </SidebarMenuItem>
   )
 }

@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { ComposerPanel } from "./composer-panel";
 import { DEFAULT_THINKING_DISPLAY_MODE } from "@/components/conversation/thinking-display";
 import type { ComposerAttachmentSummary, PendingPromptSummary } from "@/types";
@@ -178,10 +178,10 @@ it("returns keyboard focus to the actual textarea after confirmed removal of its
   await mount(composerProps({ isConversationRunning: false }));
   // remove is the real visible action; the assertion waits for cancellation and exact-set lease reconciliation.
   // remove 是真实可见操作；断言等待取消与精确集合租约协调。
-  const remove = host.querySelector<HTMLButtonElement>(".composer-attachment-remove")!;
+  const remove = host.querySelector<HTMLButtonElement>(".vk-attach-remove")!;
   expect(remove).not.toBeNull();
   await act(async () => { remove.focus(); remove.click(); });
-  expect(host.querySelector(".composer-attachment-strip")).toBeNull();
+  expect(host.querySelector(".vk-attach")).toBeNull();
   expect(document.activeElement).toBe(host.querySelector("textarea"));
   expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("draft remains");
 });

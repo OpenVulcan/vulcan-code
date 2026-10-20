@@ -1,8 +1,8 @@
 import React from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/ui-kit/primitives/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { Textarea } from "@/ui-kit/primitives/textarea";
 import { modelPickerChoicesFromProviders } from "@/components/composer/model-picker-control";
 import { useI18n } from "@/i18n";
 import { draftDedicatedPrompt, subscribeDedicatedPromptDraftProgress } from "@/service/dedicated-session-service";
@@ -105,16 +105,16 @@ export function DedicatedPromptGeneratorDialog(props: {
     }
   };
 
-  const busyIcon = (icon: React.ReactNode) => (busy ? <RefreshCw className="animate-spin" size={14} /> : icon);
+  const busyIcon = (icon: React.ReactNode) => (busy ? <RefreshCw className="vk-spin" size={14} /> : icon);
   return (
     <Dialog onOpenChange={(next) => { if (!busy) props.onOpenChange(next); }} open={props.open}>
       <DialogContent aria-busy={busy} scrollMode="body-scroll" size="lg">
         <DialogHeader>
           <DialogTitle>{t("composer.dedicated.generateTitle")}</DialogTitle>
         </DialogHeader>
-        <div className="dedicated-generator">
-          <label className="dedicated-generator-field">
-            <span>{t("composer.dedicated.requirement")}</span>
+        <div className="vk-gen">
+          <label className="vk-field">
+            <span className="vk-field-label">{t("composer.dedicated.requirement")}</span>
             <Textarea
               density="large"
               disabled={busy}
@@ -123,11 +123,11 @@ export function DedicatedPromptGeneratorDialog(props: {
               value={props.requirement}
             />
           </label>
-          <div className="dedicated-wizard-actions">
-            <span className="dedicated-wizard-hint">{t("composer.dedicated.generatorModel")}</span>
-            <span className="dedicated-generator-model">{activeChoice?.modelName ?? t("composer.modelPicker.placeholder")}</span>
+          <div className="vk-wiz-bar">
+            <span className="vk-wiz-hint">{t("composer.dedicated.generatorModel")}</span>
+            <span className="vk-gen-model">{activeChoice?.modelName ?? t("composer.modelPicker.placeholder")}</span>
             <DedicatedThinkingLevelControl disabled={busy} onChange={setChosenLevel} options={levelOptions} value={level} />
-            <span className="dedicated-wizard-actions-end">
+            <span className="vk-wiz-end">
               <Button
                 disabled={busy || !activeChoice || props.requirement.trim().length === 0}
                 onClick={() => void generate(false)}
@@ -142,11 +142,11 @@ export function DedicatedPromptGeneratorDialog(props: {
           <DedicatedThinkingPanel output={thinking.output} reasoning={thinking.reasoning} streaming={busy} />
           {draft.trim() ? (
             <>
-              <label className="dedicated-generator-field">
-                <span>{t("composer.dedicated.draftPreview")}</span>
+              <label className="vk-field">
+                <span className="vk-field-label">{t("composer.dedicated.draftPreview")}</span>
                 <Textarea density="large" disabled={busy} onChange={(event) => setDraft(event.target.value)} value={draft} />
               </label>
-              <div className="dedicated-generator-revision">
+              <div className="vk-gen-revision">
                 <Textarea
                   aria-label={t("composer.dedicated.revision")}
                   density="compact"
@@ -168,7 +168,7 @@ export function DedicatedPromptGeneratorDialog(props: {
               </div>
             </>
           ) : null}
-          {error ? <p className="dedicated-wizard-error" role="alert">{error}</p> : null}
+          {error ? <p className="vk-wiz-error" role="alert">{error}</p> : null}
         </div>
         <DialogFooter>
           <Button disabled={busy} onClick={() => props.onOpenChange(false)} type="button" variant="ghost">

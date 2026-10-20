@@ -1,29 +1,25 @@
 import React from "react";
-import "@/styles/workspace-files.css";
-import {
-  Copy,
-  FileText,
-  Folder,
-  MoreHorizontal,
-} from "lucide-react";
-import { toast } from "sonner";
+import "@/ui-kit/styles/features/workspace-files.css";
+import { ChevronsUpDown, Copy, FileText, Folder, Info, ListFilter, MoreHorizontal, X } from "lucide-react";
+import { toast } from "@/ui-kit/primitives/toast";
 import {
   activeWorkbenchSurfaceId,
   selectedConversationProjectId,
   selectedConversationWorkspacePath,
   type WorkspaceReviewDraftConversation,
 } from "@/diff/workspace-review-model";
-import {
-  WorkspaceFileTreeDrawer,
-  workspaceFileTreeExtensionLabel,
-  type WorkspaceFileTreeNode,
-} from "@/components/workspace/workspace-file-tree-drawer";
+import { WorkspaceFileTree, type WorkspaceFileTreeNode } from "@/components/workspace/workspace-file-tree";
+import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
+import { PageNotice } from "@/components/page/page-feedback";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
+import "@/ui-kit/styles/features/file-bar.css";
 import {
   WorkspaceFilePreview,
   workspaceFilePreviewErrorMessage,
 } from "@/components/workspace/workspace-files-preview";
 import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
-import { Button } from "@/components/ui/button";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -31,7 +27,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/ui-kit/primitives/dropdown-menu";
 import { DEFAULT_WORKSPACE_FILE_FILTERS } from "@/service/workbench-snapshot-service";
 import type {
   WorkbenchSnapshot,
@@ -40,7 +36,7 @@ import type {
   WorkspaceFileFilterOptions,
   WorkspaceFileReadResponse,
 } from "@/types";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import "@/diff/diffReview.css";
 
 // workspaceFilesPanelCacheLimit caps retained file panel states across rail collapse cycles.
@@ -73,9 +69,6 @@ interface WorkspaceFilesPanelCacheEntry {
   // Active filter text.
   // 当前过滤文本。
   filterText: string;
-  // Whether the directory drawer was pinned open.
-  // 目录抽屉是否被固定展开。
-  drawerPinnedOpen: boolean;
   // Cached directory listings keyed by absolute directory path.
   // 按绝对目录路径缓存的目录列表。
   directories: [string, WorkspaceFileDirectoryListing][];
@@ -177,11 +170,9 @@ export function WorkspaceFilesPanelHost(props: {
   // filterText stores the local file tree filter query.
   // filterText 保存本地文件树过滤查询。
   const [filterText, setFilterText] = React.useState(() => initialCache?.filterText ?? "");
-  // fileTreeDrawerPinnedOpen stores the shared drawer pin state for the file tab.
-  // fileTreeDrawerPinnedOpen 保存文件标签页共享抽屉的固定展开状态。
-  const [fileTreeDrawerPinnedOpen, setFileTreeDrawerPinnedOpen] = React.useState(() => (
-    initialCache?.drawerPinnedOpen ?? !initialCache?.selectedPath
-  ));
+  // pickerOpen says whether the file bar's tree menu is open.
+  // pickerOpen 表示文件栏的目录树菜单是否打开。
+  const [pickerOpen, setPickerOpen] = React.useState(false);
   // expandedPaths stores absolute directory paths expanded in the tree.
   // expandedPaths 保存文件树中已展开的绝对目录路径。
   const [expandedPaths, setExpandedPaths] = React.useState<Set<string>>(
@@ -326,7 +317,6 @@ export function WorkspaceFilesPanelHost(props: {
     setDirectories(new Map(nextCache?.directories ?? []));
     setSelectedPath(nextCache?.selectedPath ?? null);
     setSelectedEntrySnapshot(nextCache?.selectedEntry ?? null);
-    setFileTreeDrawerPinnedOpen(nextCache?.drawerPinnedOpen ?? !nextCache?.selectedPath);
     setPreview(null);
     setPreviewError(null);
     setMediaPermissionEntry(null);
@@ -360,7 +350,6 @@ export function WorkspaceFilesPanelHost(props: {
     }
     const cacheEntry: WorkspaceFilesPanelCacheEntry = {
       directories: Array.from(directories.entries()),
-      drawerPinnedOpen: fileTreeDrawerPinnedOpen,
       expandedPaths: Array.from(expandedPaths),
       filterText,
       listingFiltersKey,
@@ -369,7 +358,7 @@ export function WorkspaceFilesPanelHost(props: {
     };
     workspaceFilesPanelCache.set(cacheKey, cacheEntry);
     trimWorkspaceFilesPanelCache();
-  }, [cacheKey, directories, expandedPaths, fileTreeDrawerPinnedOpen, filterText, hydratedRequestScopeKey, listingFiltersKey, requestScopeKey, selectedEntrySnapshot, selectedPath]);
+  }, [cacheKey, directories, expandedPaths, filterText, hydratedRequestScopeKey, listingFiltersKey, requestScopeKey, selectedEntrySnapshot, selectedPath]);
 
   // rootListing stores the currently loaded root directory listing.
   // rootListing 保存当前已加载的根目录列表。
@@ -539,8 +528,8 @@ export function WorkspaceFilesPanelHost(props: {
       return next;
     });
   }, []);
-  // closePreviewAndShowTree clears the file preview and reopens the shared directory drawer.
-  // closePreviewAndShowTree 清空文件预览并重新打开共享目录抽屉。
+  // closePreviewAndShowTree closes the open file and returns the panel to the project tree.
+  // closePreviewAndShowTree 关闭已打开文件，使面板回到项目目录树。
   const closePreviewAndShowTree = React.useCallback(() => {
     requestOwnership.invalidatePreviewRequest();
     setSelectedPath(null);
@@ -549,78 +538,144 @@ export function WorkspaceFilesPanelHost(props: {
     setPreviewError(null);
     setMediaPermissionEntry(null);
     setPreviewLoading(false);
-    setFileTreeDrawerPinnedOpen(true);
     props.onTitleChange(t("workspaceFilePreview.openFile"));
   }, [props.onTitleChange, requestOwnership, t]);
 
   if (!workspacePath) {
     return (
       <section className="workspace-files-panel empty">
-        <div className="context-empty-state">
-          <Folder size={24} />
-          <strong>{t("contextPanel.files")}</strong>
-          <span>{t("workspaceFiles.noProjectDirectory")}</span>
-        </div>
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon"><Folder /></EmptyMedia>
+            <EmptyTitle>{t("contextPanel.files")}</EmptyTitle>
+            <EmptyDescription>{t("workspaceFiles.noProjectDirectory")}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       </section>
     );
   }
 
+  const renderTree = (inPicker: boolean) => (
+    <WorkspaceFileTree
+      activeFileKey={selectedPath}
+      autoFocusFilter={inPicker}
+      emptyLabel={rootListing ? t("workspaceFiles.noMatchedFiles") : t("workspaceFiles.noDisplayableFiles")}
+      extraFilterActions={<WorkspaceFilesFilterMenu filters={filters} onFilterChange={updateFilter} />}
+      fileKey={(entry) => entry.path}
+      fileTitle={(entry) => entry.relativePath || entry.name}
+      filter={filterText}
+      footer={<WorkspaceFileTreeFooter filters={filters} />}
+      loadingDirectoryLabel={t("workspaceFiles.loading")}
+      loadingDirectoryPaths={loadingDirectories}
+      openDirectoryPaths={expandedPaths}
+      tree={fileTree}
+      onDirectoryOpenStateChange={handleDirectoryOpenStateChange}
+      onFilterChange={setFilterText}
+      onOpenDirectoryPathsChange={handleOpenDirectoryPathsChange}
+      onSelectFile={(entry) => {
+        setPickerOpen(false);
+        void selectFile(entry);
+      }}
+    />
+  );
+
   return (
-    <section className="workspace-files-panel">
-      <div className={`workspace-files-body${selectedEntry ? " has-selection" : " directory-only"}`}>
-        <WorkspaceFileTreeDrawer
-          activeFileKey={selectedPath}
-          collapseOnSelect
-          emptyLabel={rootListing ? t("workspaceFiles.noMatchedFiles") : t("workspaceFiles.noDisplayableFiles")}
-          extraFilterActions={<WorkspaceFilesFilterMenu filters={filters} onFilterChange={updateFilter} />}
-          fileIconClassName={(node) => workspaceFileTreeIconClassName(node.file)}
-          fileKey={(entry) => entry.path}
-          fileTitle={(entry) => entry.relativePath || entry.name}
-          filter={filterText}
-          filterPlaceholder={t("workspaceFiles.filterPlaceholder")}
-          loadingDirectoryLabel={t("workspaceFiles.loading")}
-          loadingDirectoryPaths={loadingDirectories}
-          lockedOpen={!selectedEntry}
-          openDirectoryPaths={expandedPaths}
-          pinnedOpen={fileTreeDrawerPinnedOpen}
-          renderFileIcon={(node) => workspaceFileTreeIconLabel(node)}
-          renderFileTrailing={(node) => node.file ? (
-            <WorkspaceFileRowMenu
-              entry={node.file}
-              onCopyFileContent={copyFileContent}
-              onCopyText={props.onCopyText}
-            />
-          ) : null}
-          tree={fileTree}
-          onDirectoryOpenStateChange={handleDirectoryOpenStateChange}
-          onFilterChange={setFilterText}
-          onOpenDirectoryPathsChange={handleOpenDirectoryPathsChange}
-          onPinnedOpenChange={setFileTreeDrawerPinnedOpen}
-          onSelectFile={selectFile}
+    <section className="workspace-files-panel" data-open={selectedPath ? "file" : "tree"}>
+      {selectedPath ? (
+        <WorkspaceOpenFileBar
+          actions={selectedEntry ? <WorkspaceFileActionsMenu entry={selectedEntry} onCopyFileContent={copyFileContent} onCopyText={props.onCopyText} /> : null}
+          path={selectedEntry?.relativePath || selectedEntry?.name || selectedPath}
+          pickerOpen={pickerOpen}
+          tree={renderTree(true)}
+          truncated={Boolean(preview?.truncated)}
+          onClose={closePreviewAndShowTree}
+          onPickerOpenChange={setPickerOpen}
         />
-        {!rootListing && loadingDirectories.has(workspacePath) ? (
-          <div className="workspace-files-panel-notice">{t("workspaceFiles.loadingTree")}</div>
-        ) : null}
-        {panelError ? <div className="workspace-files-panel-notice error" role="alert">
-          <span>{panelError.message}</span>
-          <Button size="sm" variant="outline" onClick={() => void loadDirectory(panelError.directoryPath)}>
-            {t("workspaceAudit.retry")}
-          </Button>
-        </div> : null}
+      ) : null}
+      {!rootListing && loadingDirectories.has(workspacePath) ? (
+        <PageNotice tone="info">{t("workspaceFiles.loadingTree")}</PageNotice>
+      ) : null}
+      {panelError ? (
+        <PageNotice
+          actions={<Button size="sm" variant="outline" onClick={() => void loadDirectory(panelError.directoryPath)}>{t("workspaceAudit.retry")}</Button>}
+          tone="error"
+        >
+          {panelError.message}
+        </PageNotice>
+      ) : null}
+      {selectedPath ? (
         <WorkspaceFilePreview
           entry={selectedEntry}
           error={previewError}
           loading={previewLoading}
-          missingPath={selectedPath && !selectedEntry ? selectedPath : null}
+          missingPath={selectedEntry ? null : selectedPath}
           preview={preview}
           mediaPermissionEntry={mediaPermissionEntry}
           resolveMediaSourceUrl={props.resolveMediaSourceUrl}
           onAllowMediaPreview={allowMediaPreview}
-          onClosePreview={closePreviewAndShowTree}
           onRetryPreview={() => { if (selectedEntry) void loadFilePreview(selectedEntry, filters); }}
         />
-      </div>
+      ) : renderTree(false)}
     </section>
+  );
+}
+
+// WorkspaceOpenFileBar names the open file above its preview. Its picker opens the project tree as a menu to
+// switch files, next to the open file's actions and the button that closes it back to the tree.
+// WorkspaceOpenFileBar 在预览上方标明已打开的文件。其选择器以菜单形式打开项目目录树用于切换文件，旁边是该文件的操作与关闭回目录树的按钮。
+function WorkspaceOpenFileBar(props: {
+  // Project path of the open file.
+  // 已打开文件的项目路径。
+  path: string;
+  // Whether the preview shows only the start of the file.
+  // 预览是否只展示文件开头部分。
+  truncated: boolean;
+  pickerOpen: boolean;
+  onPickerOpenChange: (open: boolean) => void;
+  // The project tree shown inside the picker.
+  // 选择器中展示的项目目录树。
+  tree: React.ReactNode;
+  // The open file's actions menu.
+  // 已打开文件的操作菜单。
+  actions: React.ReactNode;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const [dir, name] = splitWorkspaceRelativePath(props.path);
+  return (
+    <div className="vk-filebar">
+      <Popover onOpenChange={props.onPickerOpenChange} open={props.pickerOpen}>
+        <PopoverTrigger aria-label={`${t("workspaceFiles.switchFile")} · ${props.path}`} className="vk-filepick" title={props.path} type="button">
+          <FileTypeIcon icon={resolveFileTypeIcon(name)} />
+          <span className="vk-filepick-name">
+            <strong>{name}</strong>
+            {dir ? <small>{dir}</small> : null}
+          </span>
+          {props.truncated ? <span className="vk-badge" data-tone="warn">{t("workspaceFilePreview.truncated")}</span> : null}
+          <ChevronsUpDown aria-hidden="true" className="vk-faint" size={13} />
+        </PopoverTrigger>
+        <PopoverContent align="start" className="vk-filemenu" sideOffset={2}>
+          {props.tree}
+        </PopoverContent>
+      </Popover>
+      {props.actions}
+      <IconButton aria-label={t("workspaceFiles.closeFile")} onClick={props.onClose} size="sm" title={t("workspaceFiles.closeFile")}>
+        <X size={14} />
+      </IconButton>
+    </div>
+  );
+}
+
+// WorkspaceFileTreeFooter says what the tree leaves out and that the panel shows one file at a time.
+// WorkspaceFileTreeFooter 说明目录树省略了哪些内容，以及面板一次只展示一个文件。
+function WorkspaceFileTreeFooter(props: { filters: WorkspaceFileFilterOptions }) {
+  const { t } = useI18n();
+  const activeRules = workspaceFileActiveRuleLabels(props.filters, t);
+  return (
+    <>
+      <Info aria-hidden="true" size={12} />
+      <span title={activeRules.join(" · ")}>{[...activeRules, t("workspaceFiles.oneFileAtATime")].join(" · ")}</span>
+    </>
   );
 }
 
@@ -638,9 +693,9 @@ function WorkspaceFilesFilterMenu(props: {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button aria-label={t("workspaceFiles.filterRules")} size="icon-sm" type="button" variant="ghost">
-          <MoreHorizontal size={16} />
-        </Button>
+        <IconButton aria-label={t("workspaceFiles.filterRules")} size="sm" title={t("workspaceFiles.filterRules")}>
+          <ListFilter size={14} />
+        </IconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="workspace-files-filter-menu">
         <DropdownMenuLabel>{t("workspaceFiles.hiddenRules")}</DropdownMenuLabel>
@@ -679,15 +734,12 @@ function WorkspaceFilesFilterMenu(props: {
   );
 }
 
-// WorkspaceFileRowMenu renders lightweight copy actions for one file tree row.
-// WorkspaceFileRowMenu 为单个文件树行渲染轻量复制动作。
-// Parameters: props supplies one file entry and awaiting clipboard actions. Returns its file-scoped dropdown.
-// 参数：props 提供一个文件条目及可等待的剪贴板动作。返回该文件的下拉菜单。
-// Parameters: props supplies one file entry and copy callbacks; returns contextual copy actions constrained by actual preview availability.
-// 参数：props 提供一个文件条目及复制回调；返回受实际预览可用性约束的上下文复制操作。
-function WorkspaceFileRowMenu(props: {
-  // File tree entry that owns the row menu.
-  // 拥有行菜单的文件树条目。
+// WorkspaceFileActionsMenu holds what can be done with the open file: copy its path, its path inside the
+// project, or its content when it is code.
+// WorkspaceFileActionsMenu 收纳对已打开文件的操作：复制其路径、项目内路径，或在其为代码时复制内容。
+function WorkspaceFileActionsMenu(props: {
+  // The open file.
+  // 已打开的文件。
   entry: WorkspaceFileEntrySummary;
   // Copies text using the host clipboard.
   // 使用宿主剪贴板复制文本。
@@ -713,11 +765,11 @@ function WorkspaceFileRowMenu(props: {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button aria-label={t("workspaceFiles.fileActions")} className="workspace-file-row-menu-trigger" size="icon-xs" type="button" variant="ghost">
-          <MoreHorizontal size={13} />
-        </Button>
+        <IconButton aria-label={t("workspaceFiles.fileActions")} data-action="file-actions" size="sm" title={t("workspaceFiles.fileActions")}>
+          <MoreHorizontal size={14} />
+        </IconButton>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="workspace-file-row-menu">
+      <DropdownMenuContent align="end">
         <DropdownMenuItem onClick={() => void copyPath(props.entry.path)}>
           <Copy size={14} />
           {t("workspaceFiles.copyPath")}
@@ -839,33 +891,25 @@ function workspaceFileTreeEntryMatchesQuery(entry: WorkspaceFileEntrySummary, qu
   return entry.name.toLowerCase().includes(query) || entry.relativePath.toLowerCase().includes(query);
 }
 
-// workspaceFileTreeIconLabel returns the compact icon text used by the shared tree row.
-// workspaceFileTreeIconLabel 返回共享目录树行使用的紧凑图标文本。
-function workspaceFileTreeIconLabel(
-  // Shared tree node being rendered.
-  // 正在渲染的共享目录树节点。
-  node: WorkspaceFileTreeNode<WorkspaceFileEntrySummary>,
-): string {
-  if (node.file?.kind === "image") {
-    return "IMG";
-  }
-  if (node.file?.kind === "video") {
-    return "VID";
-  }
-  return workspaceFileTreeExtensionLabel(node.name);
+// workspaceFileActiveRuleLabels names the filter rules that are on, in menu order.
+// workspaceFileActiveRuleLabels 按菜单顺序列出已开启的过滤规则名称。
+function workspaceFileActiveRuleLabels(filters: WorkspaceFileFilterOptions, t: (key: TranslationKey) => string): string[] {
+  const rules: Array<[boolean, TranslationKey]> = [
+    [filters.useGitignore, "workspaceFiles.useGitignoreRules"],
+    [filters.useIgnoreFiles, "workspaceFiles.useIgnoreRules"],
+    [filters.ignoreHidden, "workspaceFiles.ignoreHiddenFiles"],
+    [filters.ignoreDotNames, "workspaceFiles.ignoreDotNames"],
+    [filters.filterNonPreviewFiles, "workspaceFiles.filterNonPreviewFiles"],
+  ];
+  return rules.filter(([on]) => on).map(([, key]) => t(key));
 }
 
-// workspaceFileTreeIconClassName maps project file kinds into the shared review icon palette.
-// workspaceFileTreeIconClassName 将项目文件类型映射到共享审核图标色板。
-function workspaceFileTreeIconClassName(
-  // File entry for the rendered row.
-  // 当前渲染行对应的文件条目。
-  entry: WorkspaceFileEntrySummary | undefined,
-): string {
-  if (!entry) {
-    return "";
-  }
-  return entry.kind === "code" ? "modified" : "";
+// splitWorkspaceRelativePath splits a project path into its folder and file name.
+// splitWorkspaceRelativePath 将项目路径拆分为目录与文件名。
+function splitWorkspaceRelativePath(path: string): [string, string] {
+  const normalized = path.replace(/\\/g, "/");
+  const slash = normalized.lastIndexOf("/");
+  return slash < 0 ? ["", normalized] : [normalized.slice(0, slash), normalized.slice(slash + 1)];
 }
 
 // findWorkspaceFileEntry finds one loaded tree row by absolute path.

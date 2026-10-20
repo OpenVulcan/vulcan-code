@@ -22,7 +22,7 @@ pub(crate) fn startup_snapshot_with_phase(
                         "Waiting for Core Service to start",
                     ),
                     (
-                        "vldb",
+                        "data-store",
                         StartupStepStatus::Pending,
                         "Waiting for initialization",
                     ),
@@ -83,7 +83,7 @@ pub(crate) fn startup_steps_with_status(
 pub(crate) fn startup_step_label(id: &str) -> String {
     match id {
         "service-process" => "Core Service",
-        "vldb" => "VLDB",
+        "data-store" => "Data store",
         "luaskills" => "LuaSkills",
         "mcp" => "MCP Runtime",
         "plugins" => "Plugin Runtime",

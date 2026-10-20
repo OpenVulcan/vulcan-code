@@ -13,6 +13,12 @@
  */
 
 /* ---------- Size system: every length derives from the root text tier ---------- */
+/* The navigation widths and the conversation reserve are registered lengths so script reads them back as
+ * resolved pixels for width-based layout decisions (components/shell/navigation-layout.ts); these tokens stay
+ * their only source. */
+@property --vk-rail-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --vk-sidebar-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --vk-reserve-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
 :root {
   /* UI body size; the five tiers below only change this value. */
   font-size: 13px;
@@ -41,9 +47,29 @@
   /* Shell geometry, in units so it grows with the tier. */
   --vk-rail-w: calc(var(--vk-u) * 12);
   --vk-sidebar-w: calc(var(--vk-u) * 66);
+  /* Feature areas list a few short pages, so their navigation panel is narrower than the session tree. */
+  --vk-feature-sidebar-w: calc(var(--vk-u) * 54);
   --vk-panel-w: calc(var(--vk-u) * 94);
+  /* The "standard" reading measure; the width presets below move it. */
   --vk-read-w: 46rem;
+  /* The conversation column: the reading measure plus its side padding, or the whole stage at "full". */
+  --vk-column-pad: calc(var(--vk-u) * 8);
+  --vk-read-col: calc(var(--vk-read-w) + var(--vk-column-pad) * 2);
+  --vk-column-w: var(--vk-read-col);
+  /* Margin a full-width column keeps on each side of the stage, outside its own side padding. */
+  --vk-full-gutter: calc(var(--vk-u) * 12);
+  /* Width the stage keeps for the conversation before the context panel floats and the navigation folds:
+   * the limited column plus the reasoning overhang. "full" keeps the standard measure, so it reserves that. */
+  --vk-reserve-w: calc(var(--vk-read-col) + var(--vk-u) * 10);
   --vk-statusbar-h: calc(var(--vk-u) * 6);
+  --vk-titlebar-h: calc(var(--vk-u) * 12);
+  /* Preference and plugin settings pages read as one centred column of this width. */
+  /* 偏好页与插件设置页以此宽度呈现为一条居中的阅读列。 */
+  --vk-readable-w: 920px;
+  /* The ember corner tick that marks framed sections, cards and answer blocks. */
+  /* 标记带框分区、卡片与回答区块的余烬色角标。 */
+  --vk-tick-w: calc(var(--vk-u) * 7);
+  --vk-tick-h: 2px;
 
   /* Borders never scale. Corners are square by decision D2. */
   --vk-bw: 1px;
@@ -56,6 +82,8 @@
   --vk-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
   --vk-t-fast: 120ms;
   --vk-t-med: 180ms;
+  /* One beat between siblings that enter in sequence. */
+  --vk-stagger: 32ms;
 }
 
 :root[data-vk-text="xs"] { font-size: 12px; }
@@ -63,6 +91,14 @@
 :root[data-vk-text="m"] { font-size: 15px; }
 :root[data-vk-text="l"] { font-size: 17px; }
 :root[data-vk-text="xl"] { font-size: 19px; }
+
+/* Reading width presets for the conversation column (data-vk-width). "standard" is the :root default.
+ * "full" drops the cap (--vk-column-w) but keeps a margin on each side; the others only move the reading
+ * measure, so they scale with the text tier. */
+:root[data-vk-width="compact"] { --vk-read-w: 38rem; }
+:root[data-vk-width="wide"] { --vk-read-w: 58rem; }
+:root[data-vk-width="xwide"] { --vk-read-w: 72rem; }
+:root[data-vk-width="full"] { --vk-column-w: calc(100% - var(--vk-full-gutter) * 2); }
 
 /* ---------- Skin surface: light (default) ---------- */
 :root {
@@ -81,6 +117,8 @@
   --vk-ink-2: #4a515c;
   --vk-ink-3: #7b838e;
   --vk-ink-inverse: #ffffff;
+  /* Text on a solid danger fill (the window close button); the same in every theme. */
+  --vk-on-bad: #ffffff;
 
   --vk-ember: #e2511a;
   --vk-ember-2: #f5872e;
@@ -100,6 +138,16 @@
   --vk-chart-3: #9a6cc4;
   --vk-chart-4: #c8892e;
   --vk-chart-5: #cf5e6a;
+  /* Data palette for reply charts and plugin pages: ember leads and the rest are built from theme tokens, so every
+     theme and skin keeps it in tune without its own copy. Neighbouring series change hue, so two series never read
+     as two shades of orange. */
+  /* 回答图表与插件页面的数据色板：余烬色领先，其余由主题令牌构成，使每个主题与皮肤无需另备一份即保持协调。
+     相邻序列换色相，两条序列不会看成两种深浅的橙色。 */
+  --vk-data-1: var(--vk-ember);
+  --vk-data-2: color-mix(in srgb, var(--vk-signal) 62%, var(--vk-ink-3));
+  --vk-data-3: color-mix(in srgb, var(--vk-ok) 58%, var(--vk-ink-3));
+  --vk-data-4: color-mix(in srgb, color-mix(in srgb, var(--vk-signal) 55%, var(--vk-bad)) 72%, var(--vk-ink-3));
+  --vk-data-5: var(--vk-ember-2);
 
   --vk-code-bg: #f4f5f7;
   --vk-term-bg: #12151a;

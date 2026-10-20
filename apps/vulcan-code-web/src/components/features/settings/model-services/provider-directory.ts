@@ -13,9 +13,14 @@ export type ProviderTagFilter = "all" | PublicAiProviderServiceTag
 // PROVIDER_SERVICE_TAGS 按显示顺序列出封闭的服务类别。
 export const PROVIDER_SERVICE_TAGS: readonly PublicAiProviderServiceTag[] = ["model", "search", "analysis"]
 
-// ProviderDirectory splits providers into the user's configured list and the recommended add list.
-// ProviderDirectory 将供应商分为用户已配置列表与推荐可添加列表。
+// ProviderDirectory splits providers into the core accounts, the user's configured list and the
+// recommended add list.
+// ProviderDirectory 将供应商分为核心账号、用户已配置列表与推荐可添加列表。
 export interface ProviderDirectory {
+  // core account providers in recommended order, configured or not. They are managed on their own account
+  // settings page, so the provider rail never lists or reorders them.
+  // 按推荐顺序排列的核心账号供应商（无论是否已配置）。它们在独立的账户设置页管理，供应商目录不列出也不排序它们。
+  core: PublicAiProviderDescriptor[]
   // configured providers in the user's own order (priority first).
   // 按用户自定顺序（优先级优先）排列的已配置供应商。
   configured: PublicAiProviderDescriptor[]
@@ -37,17 +42,27 @@ export function providerIsConfigured(
     || snapshot.connections.some((connection) => connection.provider_id === provider.id)
 }
 
+// providerIsCoreAccount reports whether a provider is a core account managed on its own account page.
+// providerIsCoreAccount 报告供应商是否为在独立账户页管理的核心账号。
+export function providerIsCoreAccount(
+  provider: Pick<PublicAiProviderDescriptor, "credential_directory_visibility">,
+): boolean {
+  return provider.credential_directory_visibility === "core_account"
+}
+
 // directoryRank orders providers without a recommended rank after every ranked provider.
 // directoryRank 让没有推荐名次的供应商排在所有有名次的供应商之后。
 function directoryRank(provider: Pick<PublicAiProviderDescriptor, "directory_rank">): number {
   return provider.directory_rank ?? Number.MAX_SAFE_INTEGER
 }
 
-// buildProviderDirectory orders configured providers by user priority and the rest by recommendation.
-// buildProviderDirectory 按用户优先级排列已配置供应商，其余按推荐顺序排列。
-// Parameters: snapshot supplies providers, connections and sparse priorities. Returns both ordered lists;
-// ties keep the registry order.
-// 参数：snapshot 提供供应商、连接与稀疏优先级。返回两组有序列表；同级时保留注册表顺序。
+// buildProviderDirectory separates core accounts, orders configured providers by user priority and the
+// rest by recommendation.
+// buildProviderDirectory 分出核心账号，按用户优先级排列已配置供应商，其余按推荐顺序排列。
+// Parameters: snapshot supplies providers, connections and sparse priorities. Returns the three ordered
+// lists; ties keep the registry order. Priorities never apply to core accounts.
+// 参数：snapshot 提供供应商、连接与稀疏优先级。返回三组有序列表；同级时保留注册表顺序。
+// 优先级从不作用于核心账号。
 export function buildProviderDirectory(
   snapshot: Pick<PublicAiSettingsSnapshot, "providers" | "connections" | "providerPriorities">,
 ): ProviderDirectory {
@@ -56,7 +71,12 @@ export function buildProviderDirectory(
     left: { provider: PublicAiProviderDescriptor; index: number },
     right: { provider: PublicAiProviderDescriptor; index: number },
   ) => directoryRank(left.provider) - directoryRank(right.provider) || left.index - right.index
-  const configured = indexed
+  const core = indexed
+    .filter(({ provider }) => providerIsCoreAccount(provider))
+    .sort(byRecommendation)
+    .map(({ provider }) => provider)
+  const userOrdered = indexed.filter(({ provider }) => !providerIsCoreAccount(provider))
+  const configured = userOrdered
     .filter(({ provider }) => providerIsConfigured(snapshot, provider))
     .sort((left, right) => (
       providerPriority(snapshot.providerPriorities, right.provider.id)
@@ -64,11 +84,11 @@ export function buildProviderDirectory(
       || byRecommendation(left, right)
     ))
     .map(({ provider }) => provider)
-  const available = indexed
+  const available = userOrdered
     .filter(({ provider }) => !providerIsConfigured(snapshot, provider))
     .sort(byRecommendation)
     .map(({ provider }) => provider)
-  return { configured, available }
+  return { core, configured, available }
 }
 
 // providerMatchesFilter applies the tag chip and the free-text search to one provider.

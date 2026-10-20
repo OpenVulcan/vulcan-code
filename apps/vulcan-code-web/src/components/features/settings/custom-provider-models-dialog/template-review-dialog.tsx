@@ -1,17 +1,20 @@
 // Review dialog for applying common model templates to custom models.
 // 将通用模型模板应用到自定义模型的审阅弹窗。
 import * as React from "react"
-import { CheckCheck, LoaderCircle } from "lucide-react"
+import { CheckCheck, LoaderCircle, Sparkles } from "lucide-react"
 import { CustomProviderMutationContext } from "../custom-provider-mutation-context"
 import type { CustomProviderModelRow } from "@/components/features/settings/custom-provider-models-state"
-import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { Button } from "@/ui-kit/primitives/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/ui-kit/primitives/dialog"
+import { ScrollArea } from "@/ui-kit/primitives/scroll-area"
+import { PageEmptyState } from "@/components/page"
 import { useI18n } from "@/i18n"
 import { formatTokenCount } from "@/lib/usage-format"
 import { getPublicAiCustomModelTemplateSuggestionsBatch, savePublicAiCustomModelTemplateDecisionsBatch } from "@/service/settings-actions-service"
 import type { PublicAiCommonModelTemplateSuggestion, PublicAiCustomModelTemplateDecision, PublicAiCustomModelTemplateDecisionBatchItem, PublicAiCustomModelTemplateSuggestionsRecord, PublicAiSettingsSnapshot } from "@/types"
 import { errorMessage } from "@/lib/display-format"
+import "@/ui-kit/styles/features/provider-models.css"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // TemplateReviewDialog groups deterministic matches and unmatched offline capability records.
 // TemplateReviewDialog 对确定性命中与无命中的离线能力记录进行分组。
@@ -117,18 +120,21 @@ export function TemplateReviewDialog(props: {
 
   return (
     <Dialog onOpenChange={(open) => { if (!savingRef.current) props.onOpenChange(open) }} open={props.open}>
-      <DialogContent className="flex h-[min(760px,92vh)] w-[min(840px,94vw)] max-w-none flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b px-5 py-4">
-          <DialogTitle>{t("settings.customModels.reviewTemplatesTitle")}</DialogTitle>
-          <DialogDescription>{t("settings.customModels.reviewTemplatesDescription")}</DialogDescription>
-        </DialogHeader>
-        <div className="grid grid-cols-2 gap-3 border-b p-4">
-          <TemplateReviewCount label={t("settings.customModels.reviewExact")} value={exactRecords.length} />
-          <TemplateReviewCount label={t("settings.customModels.reviewMissing")} value={missingRecords.length} />
-        </div>
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="space-y-5 p-5">
-            {loading ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />{t("settings.customModels.templateSearching")}</p> : null}
+      <DialogContent className="vk-pm-review-dialog" layout="document" size="xl">
+        <header className="vk-viewer-head">
+          <span className="vk-viewer-mark"><Sparkles aria-hidden="true" /></span>
+          <div className="vk-viewer-titles">
+            <DialogTitle>{t("settings.customModels.reviewTemplatesTitle")}</DialogTitle>
+            <DialogDescription>{t("settings.customModels.reviewTemplatesDescription")}</DialogDescription>
+          </div>
+          <div className="vk-pm-counts">
+            <TemplateReviewCount label={t("settings.customModels.reviewExact")} value={exactRecords.length} />
+            <TemplateReviewCount label={t("settings.customModels.reviewMissing")} value={missingRecords.length} />
+          </div>
+        </header>
+        <ScrollArea>
+          <div className="vk-pm-detail-body">
+            {loading ? <p className="vk-form-status"><LoaderCircle aria-hidden="true" className="vk-spin" />{t("settings.customModels.templateSearching")}</p> : null}
             {!loading && exactRecords.length > 0 ? (
               <TemplateReviewSection title={t("settings.customModels.reviewExactDescription")}>
                 {exactRecords.map((record) => <TemplateReviewRow key={record.modelId} record={record} />)}
@@ -139,18 +145,18 @@ export function TemplateReviewDialog(props: {
                 {missingRecords.map((record) => <TemplateReviewRow key={record.modelId} record={record} />)}
               </TemplateReviewSection>
             ) : null}
-            {!loading && undecidedRecords.length === 0 ? <p className="py-12 text-center text-sm text-muted-foreground">{t("settings.customModels.reviewComplete")}</p> : null}
-            {error ? <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</p> : null}
+            {!loading && undecidedRecords.length === 0 ? <PageEmptyState title={t("settings.customModels.reviewComplete")} /> : null}
+            {error ? <p className="vk-form-fault" role="alert">{error}</p> : null}
           </div>
         </ScrollArea>
-        <DialogFooter className="border-t px-5 py-3">
+        <DialogFooter>
           <Button disabled={saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.close")}</Button>
           {exactRecords.length > 0 ? (
             <Button disabled={saving || loading} onClick={() => void saveDecisions(exactRecords.map((record) => ({
               modelId: record.modelId,
               decision: appliedTemplateDecision(record.suggestions[0]),
             })))} type="button">
-              {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : <CheckCheck className="mr-2 size-4" />}
+              {saving ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : <CheckCheck aria-hidden="true" />}
               {t("settings.customModels.applyAllExact").replace("{count}", String(exactRecords.length))}
             </Button>
           ) : null}
@@ -163,13 +169,13 @@ export function TemplateReviewDialog(props: {
 // TemplateReviewCount renders one compact suggestion group count.
 // TemplateReviewCount 渲染一个紧凑的建议分组计数。
 function TemplateReviewCount(props: { label: string; value: number }) {
-  return <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{props.label}</p><p className="mt-1 text-lg font-semibold">{props.value}</p></div>
+  return <div className="vk-pm-count"><strong className="vk-num">{props.value}</strong><span>{props.label}</span></div>
 }
 
 // TemplateReviewSection groups rows under one human-readable review instruction.
 // TemplateReviewSection 将多行按一项人类可读审查说明分组。
 function TemplateReviewSection(props: { children: React.ReactNode; title: string }) {
-  return <section className="space-y-2"><h3 className="text-sm font-semibold">{props.title}</h3><div className="space-y-2">{props.children}</div></section>
+  return <section className="vk-pm-review"><h3 className="vk-label">{props.title}</h3>{props.children}</section>
 }
 
 // TemplateReviewRow renders one model and its strongest offline suggestion.
@@ -178,14 +184,14 @@ function TemplateReviewRow(props: { actions?: React.ReactNode; record: PublicAiC
   const { t } = useI18n()
   const suggestion = props.record.suggestions[0]
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
-      <div className="min-w-0">
-        <p className="truncate font-mono text-sm font-medium">{props.record.modelId}</p>
-        <p className="mt-1 text-xs text-muted-foreground">
+    <div className="vk-pm-review-row">
+      <div>
+        <code>{props.record.modelId}</code>
+        <small>
           {suggestion
             ? `${suggestion.template_key} · ${formatTokenCount(suggestion.context_limit)} Token · ${t(`settings.customModels.templateMatch.${suggestion.match_kind}`)}`
             : t("settings.customModels.templateDefaultFallback")}
-        </p>
+        </small>
       </div>
       {props.actions}
     </div>

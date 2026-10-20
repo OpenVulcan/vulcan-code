@@ -6,12 +6,12 @@ import {
   type ProviderToolCapabilityGroupId,
 } from "@/components/shared/provider-tool-capability-groups";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
-import { Button } from "@/components/ui/button";
-import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/ui-kit/primitives/sheet";
 import { useI18n } from "@/i18n";
 import { isModelExtensionCapability } from "@/lib/provider-tool-capabilities";
-import { cn } from "@/lib/utils";
+import { cx } from "@/ui-kit/behavior/core";
 import { loadPublicAiSettings } from "@/service/settings-actions-service";
 import type {
   PublicAiProviderToolCapabilityKind,
@@ -23,6 +23,7 @@ import { PageTabs } from "@/components/workspace/workspace-directory-layout";
 
 import { ProviderTasksPanel } from "./provider-tasks-panel";
 import { ProviderToolSelectionSettingsArea } from "./provider-tool-selection-settings";
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // AiCapabilityDefinition binds one capability to its existing localized label and description keys.
 // AiCapabilityDefinition 将单项能力绑定到既有的本地化名称与说明键。
@@ -154,7 +155,7 @@ export function AiCapabilitiesSettingsArea(props: {
           }} />
         ) : error && !snapshot ? (
           <div className="ai-capabilities-message" role="alert">
-            <p className="settings-error-text">{error}</p>
+            <p className="vk-field-error">{error}</p>
             <Button onClick={() => setReloadVersion((value) => value + 1)} size="sm" type="button" variant="outline">
               {t("settings.modelExperience.retryLoad")}
             </Button>
@@ -172,7 +173,7 @@ export function AiCapabilitiesSettingsArea(props: {
                     <strong>{t(item.labelKey)}</strong>
                     <small>{t(item.descriptionKey)}</small>
                   </span>
-                  <span className={cn("ai-capability-target", !summary?.target && "empty")}>
+                  <span className={cx("ai-capability-target", !summary?.target && "empty")}>
                     {summary ? summary.target ?? t("settings.aiCapabilities.notConfigured") : <InlineStreamPlaceholder label={t("settings.providerTools.loading")} />}
                   </span>
                   <span className="ai-capability-status" data-enabled={summary?.enabled ? "true" : "false"}>
@@ -185,7 +186,7 @@ export function AiCapabilitiesSettingsArea(props: {
                     type="button"
                     variant="outline"
                   >
-                    <Settings2 className="size-3.5" />
+                    <Settings2 className="vk-icon" />
                     {t("settings.aiCapabilities.configure")}
                   </Button>
                 </li>
@@ -207,7 +208,7 @@ export function AiCapabilitiesSettingsArea(props: {
           {editing ? (
             <>
               <SheetHeader>
-                <SheetTitle className="flex items-center gap-2">
+                <SheetTitle className="vk-form-inline">
                   <ProviderToolCapabilityIcon capability={editing.capability} size={16} />
                   {t(editing.labelKey)}
                 </SheetTitle>

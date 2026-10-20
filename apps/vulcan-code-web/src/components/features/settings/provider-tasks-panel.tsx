@@ -1,9 +1,10 @@
 import * as React from "react";
 import { ListTodo, XCircle } from "lucide-react";
 
+import { PageEmptyState } from "@/components/page";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
-import { Button } from "@/components/ui/button";
-import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n } from "@/i18n";
 import { errorMessage, formatDateTime } from "@/lib/display-format";
 import { cancelProviderTask, listProviderTasks } from "@/service/settings-actions-service";
@@ -87,7 +88,7 @@ export function ProviderTasksPanel(props: {
   if (error && !tasks) {
     return (
       <div className="ai-capabilities-message" role="alert">
-        <p className="settings-error-text">{error}</p>
+        <p className="vk-field-error">{error}</p>
         <Button onClick={() => setReloadVersion((value) => value + 1)} size="sm" type="button" variant="outline">
           {t("settings.modelExperience.retryLoad")}
         </Button>
@@ -98,11 +99,11 @@ export function ProviderTasksPanel(props: {
     return <InlineStreamPlaceholder label={t("settings.providerTools.loading")} />;
   }
   if (tasks.length === 0) {
-    return <p className="ai-capabilities-message">{t("settings.providerTasks.empty")}</p>;
+    return <PageEmptyState description={t("settings.providerTasks.empty")} icon={<ListTodo />} title={t("settings.providerTasks.emptyTitle")} />;
   }
   return (
     <>
-      {error ? <p className="settings-error-text" role="alert">{error}</p> : null}
+      {error ? <p className="vk-field-error" role="alert">{error}</p> : null}
       <ul className="ai-capability-list">
         {tasks.map((task) => {
           const title = task.capability ? props.capabilityLabel(task.capability) : t("settings.providerTasks.untitled");
@@ -112,7 +113,7 @@ export function ProviderTasksPanel(props: {
           return (
             <li className="ai-capability-row" key={task.executionId}>
               <span className="ai-capability-icon" aria-hidden="true">
-                {task.capability ? <ProviderToolCapabilityIcon capability={task.capability} size={16} /> : <ListTodo className="size-4" />}
+                {task.capability ? <ProviderToolCapabilityIcon capability={task.capability} size={16} /> : <ListTodo className="vk-icon" />}
               </span>
               <span className="ai-capability-copy">
                 <strong>{title}</strong>
@@ -135,7 +136,7 @@ export function ProviderTasksPanel(props: {
                   type="button"
                   variant="outline"
                 >
-                  <XCircle className="size-3.5" />
+                  <XCircle className="vk-icon" />
                   {t("settings.providerTasks.cancel")}
                 </Button>
               ) : <span />}

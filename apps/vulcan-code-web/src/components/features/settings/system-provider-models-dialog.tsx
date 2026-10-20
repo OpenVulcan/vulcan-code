@@ -1,11 +1,11 @@
 import * as React from "react"
 import { ListTree, LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Button } from "@/ui-kit/primitives/button"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog"
+import { Input } from "@/ui-kit/primitives/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { OPENAI_DIRECT_REASONING_EFFORTS } from "@/components/features/settings/direct-provider-model-settings"
 import { useI18n } from "@/i18n"
 import { savePublicAiCustomModels } from "@/service/settings-actions-service"
@@ -16,6 +16,7 @@ import type {
   PublicAiServiceEntry,
   PublicAiSettingsSnapshot,
 } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // SystemModelDraft keeps incomplete form fields separate from persisted model definitions.
 // SystemModelDraft 将未完成的表单字段与持久化模型定义分开保存。
@@ -249,38 +250,38 @@ export function SystemProviderModelsDialog(props: SystemProviderModelsDialogProp
   }
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="vk-form-scrollable" size="lg">
         <DialogHeader>
           <DialogTitle>{t("settings.systemManualModels.title").replace("{provider}", props.provider.display_name)}</DialogTitle>
           <DialogDescription>{t("settings.systemManualModels.description")}</DialogDescription>
         </DialogHeader>
-        {error ? <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{error}</p> : null}
-        <div className="space-y-2">
+        {error ? <p className="vk-form-fault" role="alert">{error}</p> : null}
+        <div className="vk-form-stack">
           {models.map((model) => (
-            <div className="flex items-center justify-between gap-2 rounded-md border p-2" key={model.id}>
-              <div className="min-w-0"><p className="truncate font-medium">{model.display_name}</p><p className="truncate font-mono text-xs text-muted-foreground">{model.id} · {model.system_binding?.service_entry_id} · {model.system_binding?.protocol_profile_id}</p></div>
-              <div className="flex gap-1">
-                <Button aria-label={t("settings.systemManualModels.edit")} disabled={busy} onClick={() => { setEditingId(model.id); setDraft(draftFromModel(model)); setError(null) }} size="icon-sm" type="button" variant="outline"><Pencil className="size-4" /></Button>
-                <Button aria-label={t("settings.systemManualModels.remove")} disabled={busy} onClick={() => void persist(models.filter((item) => item.id !== model.id))} size="icon-sm" type="button" variant="outline"><Trash2 className="size-4" /></Button>
+            <div className="vk-form-row vk-form-framed" key={model.id}>
+              <div className="vk-form-cell"><p className="vk-form-name">{model.display_name}</p><p className="vk-form-id">{model.id} · {model.system_binding?.service_entry_id} · {model.system_binding?.protocol_profile_id}</p></div>
+              <div className="vk-form-inline">
+                <Button aria-label={t("settings.systemManualModels.edit")} disabled={busy} onClick={() => { setEditingId(model.id); setDraft(draftFromModel(model)); setError(null) }} size="icon-sm" type="button" variant="outline"><Pencil className="vk-icon" /></Button>
+                <Button aria-label={t("settings.systemManualModels.remove")} disabled={busy} onClick={() => void persist(models.filter((item) => item.id !== model.id))} size="icon-sm" type="button" variant="outline"><Trash2 className="vk-icon" /></Button>
               </div>
             </div>
           ))}
-          {models.length === 0 ? <p className="text-sm text-muted-foreground">{t("settings.systemManualModels.empty")}</p> : null}
+          {models.length === 0 ? <p className="vk-form-text">{t("settings.systemManualModels.empty")}</p> : null}
         </div>
-        {!draft ? <Button disabled={busy || entries.length === 0} onClick={() => { setEditingId(null); setDraft(emptyDraft(entries[0], props.snapshot.manualModelDefaults)); setError(null) }} type="button" variant="outline"><Plus className="mr-2 size-4" />{t("settings.customModels.addManual")}</Button> : (
-          <div className="space-y-3 rounded-md border p-3">
-            <div className="grid grid-cols-2 gap-3">
-              <label className="space-y-1 text-sm"><span>{t("settings.customModels.modelId")}</span><Input disabled={busy || editingId !== null} value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
-              <label className="space-y-1 text-sm"><span>{t("settings.customModels.displayName")}</span><Input disabled={busy} value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
-              <label className="space-y-1 text-sm"><span>{t("settings.systemManualModels.entry")}</span><Select value={draft.serviceEntryId} onValueChange={(entryId) => { const entry = entries.find((item) => item.id === entryId); setDraft({ ...draft, serviceEntryId: entryId, protocolProfileId: entry?.protocol_routes.find((route) => route.verified)?.protocol_profile_id ?? "", inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio"), reasoningEfforts: [] }) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{entries.map((entry) => <SelectItem key={entry.id} value={entry.id}>{entry.display_name}</SelectItem>)}</SelectContent></Select></label>
-              <label className="space-y-1 text-sm"><span>{t("settings.customModels.protocolSelect")}</span><Select value={draft.protocolProfileId} onValueChange={(protocolId) => setDraft({ ...draft, protocolProfileId: protocolId, inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio"), reasoningEfforts: [] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{selectedEntry?.protocol_routes.filter((route) => route.verified).map((route) => <SelectItem key={route.protocol_profile_id} value={route.protocol_profile_id}>{route.protocol_profile_id}</SelectItem>)}</SelectContent></Select></label>
-              <label className="space-y-1 text-sm"><span>{t("settings.customModels.contextLimit")}</span><Input disabled={busy} inputMode="numeric" value={draft.contextLimit} onChange={(event) => setDraft({ ...draft, contextLimit: event.target.value })} /></label>
-              <label className="space-y-1 text-sm"><span>{t("settings.customModels.outputLimit")}</span><Input disabled={busy} inputMode="numeric" value={draft.outputLimit} onChange={(event) => setDraft({ ...draft, outputLimit: event.target.value })} /></label>
+        {!draft ? <Button disabled={busy || entries.length === 0} onClick={() => { setEditingId(null); setDraft(emptyDraft(entries[0], props.snapshot.manualModelDefaults)); setError(null) }} type="button" variant="outline"><Plus className="vk-icon" />{t("settings.customModels.addManual")}</Button> : (
+          <div className="vk-form-box">
+            <div className="vk-form-grid">
+              <label className="vk-field"><span>{t("settings.customModels.modelId")}</span><Input disabled={busy || editingId !== null} value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
+              <label className="vk-field"><span>{t("settings.customModels.displayName")}</span><Input disabled={busy} value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
+              <label className="vk-field"><span>{t("settings.systemManualModels.entry")}</span><Select value={draft.serviceEntryId} onValueChange={(entryId) => { const entry = entries.find((item) => item.id === entryId); setDraft({ ...draft, serviceEntryId: entryId, protocolProfileId: entry?.protocol_routes.find((route) => route.verified)?.protocol_profile_id ?? "", inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio"), reasoningEfforts: [] }) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{entries.map((entry) => <SelectItem key={entry.id} value={entry.id}>{entry.display_name}</SelectItem>)}</SelectContent></Select></label>
+              <label className="vk-field"><span>{t("settings.customModels.protocolSelect")}</span><Select value={draft.protocolProfileId} onValueChange={(protocolId) => setDraft({ ...draft, protocolProfileId: protocolId, inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio"), reasoningEfforts: [] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{selectedEntry?.protocol_routes.filter((route) => route.verified).map((route) => <SelectItem key={route.protocol_profile_id} value={route.protocol_profile_id}>{route.protocol_profile_id}</SelectItem>)}</SelectContent></Select></label>
+              <label className="vk-field"><span>{t("settings.customModels.contextLimit")}</span><Input disabled={busy} inputMode="numeric" value={draft.contextLimit} onChange={(event) => setDraft({ ...draft, contextLimit: event.target.value })} /></label>
+              <label className="vk-field"><span>{t("settings.customModels.outputLimit")}</span><Input disabled={busy} inputMode="numeric" value={draft.outputLimit} onChange={(event) => setDraft({ ...draft, outputLimit: event.target.value })} /></label>
             </div>
-            <fieldset className="space-y-2"><legend className="text-sm font-medium">{t("settings.customModels.input")}</legend><div className="flex flex-wrap gap-4">{(["image", "audio", "video", "file"] as const).map((resource) => <label className="flex items-center gap-2 text-sm" key={resource}><Checkbox checked={draft.inputResources.includes(resource)} disabled={busy || (resource === "audio" && !audioEncoded) || (resource === "video" && !videoAvailable)} onCheckedChange={(checked) => toggleResource(resource, checked === true)} />{t(`settings.systemManualModels.input.${resource}`)}</label>)}</div></fieldset>
-            <fieldset className="space-y-2"><legend className="text-sm font-medium">{t("settings.customModels.reasoning")}</legend><div className="flex flex-wrap gap-3">{availableReasoningEfforts.map((effort) => <label className="flex items-center gap-2 text-sm" key={effort}><Checkbox checked={draft.reasoningEfforts.includes(effort)} disabled={busy} onCheckedChange={(checked) => setDraft({ ...draft, reasoningEfforts: checked ? [...draft.reasoningEfforts, effort] : draft.reasoningEfforts.filter((value) => value !== effort) })} />{effort}</label>)}</div></fieldset>
-            <label className="flex items-center gap-2 text-sm"><Checkbox checked={draft.enabled} disabled={busy} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked === true })} />{t("settings.customModels.enabled")}</label>
-            <div className="flex justify-end gap-2"><Button disabled={busy} onClick={() => { setDraft(null); setEditingId(null); setError(null) }} type="button" variant="outline">{t("settings.systemManualModels.cancel")}</Button><Button disabled={busy} onClick={saveDraft} type="button">{busy ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : <ListTree className="mr-2 size-4" />}{t("settings.customModels.save")}</Button></div>
+            <fieldset className="vk-form-stack"><legend className="vk-field-legend" data-variant="label">{t("settings.customModels.input")}</legend><div className="vk-form-checks">{(["image", "audio", "video", "file"] as const).map((resource) => <label className="vk-check-label" key={resource}><Checkbox checked={draft.inputResources.includes(resource)} disabled={busy || (resource === "audio" && !audioEncoded) || (resource === "video" && !videoAvailable)} onCheckedChange={(checked) => toggleResource(resource, checked === true)} />{t(`settings.systemManualModels.input.${resource}`)}</label>)}</div></fieldset>
+            <fieldset className="vk-form-stack"><legend className="vk-field-legend" data-variant="label">{t("settings.customModels.reasoning")}</legend><div className="vk-form-checks">{availableReasoningEfforts.map((effort) => <label className="vk-check-label" key={effort}><Checkbox checked={draft.reasoningEfforts.includes(effort)} disabled={busy} onCheckedChange={(checked) => setDraft({ ...draft, reasoningEfforts: checked ? [...draft.reasoningEfforts, effort] : draft.reasoningEfforts.filter((value) => value !== effort) })} />{effort}</label>)}</div></fieldset>
+            <label className="vk-check-label"><Checkbox checked={draft.enabled} disabled={busy} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked === true })} />{t("settings.customModels.enabled")}</label>
+            <div className="vk-form-acts"><Button disabled={busy} onClick={() => { setDraft(null); setEditingId(null); setError(null) }} type="button" variant="outline">{t("settings.systemManualModels.cancel")}</Button><Button disabled={busy} onClick={saveDraft} type="button">{busy ? <LoaderCircle className="vk-spin" /> : <ListTree className="vk-icon" />}{t("settings.customModels.save")}</Button></div>
           </div>
         )}
         <DialogFooter><Button disabled={busy} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("ui.close")}</Button></DialogFooter>

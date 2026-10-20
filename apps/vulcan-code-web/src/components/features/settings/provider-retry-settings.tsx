@@ -1,15 +1,16 @@
 import * as React from "react"
-import { RefreshCw } from "lucide-react"
+import { LoaderCircle } from "lucide-react"
 
 import type { ProviderRetrySettingsSaveRequest, SettingsActionProps } from "@/components/features/settings/settings-action-types"
-import { PanelTitle } from "@/components/shared/status"
-import { Button } from "@/components/ui/button"
-import { DisclosureSection } from "@/components/ui/disclosure"
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
+import { PageActionBar, PageNotice } from "@/components/page"
+import { Button } from "@/ui-kit/primitives/button"
+import { DisclosureSection } from "@/ui-kit/primitives/disclosure"
+import { Input } from "@/ui-kit/primitives/input"
+import { Switch } from "@/ui-kit/primitives/switch"
+import { toast } from "@/ui-kit/primitives/toast"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type { ProviderRetrySettingsSummary } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
 
 // DEFAULT_PROVIDER_RETRY_SETTINGS mirrors the service API compatibility default.
 // DEFAULT_PROVIDER_RETRY_SETTINGS 对齐 Service API 的兼容默认值。
@@ -101,18 +102,14 @@ interface ProviderRetryNumberFieldProps {
   onChange: (value: string) => void
 }
 
-// ProviderRetryNumberField renders one number input with its exact backend constraints.
-// ProviderRetryNumberField 渲染一个带精确后台约束的数字输入。
+// ProviderRetryNumberField renders one label-left, input-right row with its exact backend constraints.
+// ProviderRetryNumberField 渲染一行标签在左、输入在右的字段，并带精确后台约束。
 function ProviderRetryNumberField(props: ProviderRetryNumberFieldProps) {
-  // inputId binds the shared label and description to this exact numeric control.
-  // inputId 将统一标签和说明绑定到当前数字控件。
-  const inputId = React.useId()
-
   return (
-    <Field>
-      <FieldLabel htmlFor={inputId}>{props.label}</FieldLabel>
+    <label className="vk-form-pref">
+      <span className="vk-form-pref-text"><strong>{props.label}</strong><small className="vk-form-note">{props.help}</small></span>
       <Input
-        id={inputId}
+        className="vk-form-w-sm"
         max={props.max}
         min={props.min}
         onChange={(event) => props.onChange(event.currentTarget.value)}
@@ -120,8 +117,18 @@ function ProviderRetryNumberField(props: ProviderRetryNumberFieldProps) {
         type="number"
         value={props.value}
       />
-      <FieldDescription>{props.help}</FieldDescription>
-    </Field>
+    </label>
+  )
+}
+
+// ProviderRetrySwitchRow renders one label-left, switch-right toggle row.
+// ProviderRetrySwitchRow 渲染一行标签在左、开关在右的切换行。
+function ProviderRetrySwitchRow(props: { label: string; help: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+  return (
+    <label className="vk-form-pref">
+      <span className="vk-form-pref-text"><strong>{props.label}</strong><small className="vk-form-note">{props.help}</small></span>
+      <Switch checked={props.checked} onCheckedChange={props.onCheckedChange} />
+    </label>
   )
 }
 
@@ -136,9 +143,6 @@ export function ProviderRetrySettingsArea(props: {
   // Current retry settings projected by the service.
   // 服务端投影出的当前重试设置。
   settings?: ProviderRetrySettingsSummary
-  // Embedded removes the standalone full-height sizing when this panel is grouped with other settings.
-  // Embedded 在与其他设置组合时移除独立页面的全高尺寸约束。
-  embedded?: boolean
 }) {
   const { t } = useI18n()
   const settings = props.settings ?? DEFAULT_PROVIDER_RETRY_SETTINGS
@@ -184,6 +188,7 @@ export function ProviderRetrySettingsArea(props: {
       await props.actions.onSaveProviderRetrySettings(retrySettingsRequest(draft))
       setBaselineDraft(draft)
       setSaveState("saved")
+      toast.success(t("settings.retry.saved"))
     } catch (errorValue) {
       setSaveState("idle")
       setSaveError(errorValue instanceof Error ? errorValue.message : t("settings.retry.couldnTSaveYour"))
@@ -192,66 +197,65 @@ export function ProviderRetrySettingsArea(props: {
     }
   }, [dirty, draft, props.actions, sourceChanged, t])
 
+  // saving locks the editor while one complete policy is persisted.
+  // saving 在持久化一份完整策略期间锁定编辑器。
+  const saving = saveState === "saving"
   return (
-    <section className={props.embedded ? "settings-retry-section min-w-0 space-y-4" : "panel full-height settings-detail-panel"}>
-      <PanelTitle icon={<RefreshCw size={17} />} title={t("settings.retry.retries")} />
-      <fieldset disabled={saveState === "saving"} className="settings-form-grid min-w-0">
-        <article className="space-y-3">
-          <strong>{t("settings.retry.networkOrServerErrors")}</strong>
-          <label className="settings-check-row settings-retry-toggle">
-            <span><span className="block">{t("settings.retry.retryAutomatically")}</span>
-              <small>{t("settings.retry.tryAgainAFew")}</small></span>
-            <Switch checked={draft.enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, enabled: checked }))} />
-          </label>
-          <label className="settings-check-row settings-retry-toggle">
-            <span><span className="block">{t("settings.retry.waitAsLongAs")}</span>
-              <small>{t("settings.retry.whenTheProviderSays")}</small></span>
-            <Switch checked={draft.respectRetryAfter} onCheckedChange={(checked) => setDraft((current) => ({ ...current, respectRetryAfter: checked }))} />
-          </label>
+    <section className="context-basics-section">
+      <header className="context-basics-head"><div><h3>{t("settings.retry.retries")}</h3></div></header>
+      <fieldset className="context-basics-rows" disabled={saving}>
+        <fieldset className="context-basics-group">
+          <legend>{t("settings.retry.networkOrServerErrors")}</legend>
+          <div className="vk-form-prefs">
+            <ProviderRetrySwitchRow checked={draft.enabled} help={t("settings.retry.tryAgainAFew")} label={t("settings.retry.retryAutomatically")} onCheckedChange={(checked) => setDraft((current) => ({ ...current, enabled: checked }))} />
+            <ProviderRetrySwitchRow checked={draft.respectRetryAfter} help={t("settings.retry.whenTheProviderSays")} label={t("settings.retry.waitAsLongAs")} onCheckedChange={(checked) => setDraft((current) => ({ ...current, respectRetryAfter: checked }))} />
+          </div>
           <DisclosureSection
             description={formatMessage(t("settings.retry.upToRetriesS"), { maxRetries: draft.maxRetries, initialDelaySeconds: draft.initialDelaySeconds, maxDelaySeconds: draft.maxDelaySeconds })}
             title={t("settings.retry.retryCountAndSpacing")}
           >
-          <div className="settings-form-grid two">
-            <ProviderRetryNumberField help={t("settings.retry.notCountingTheFirst")} label={t("settings.retry.maximumRetries")} max={100} min={0} onChange={(value) => setDraft((current) => ({ ...current, maxRetries: value }))} step={1} value={draft.maxRetries} />
-            <ProviderRetryNumberField help={t("settings.retry.waitBeforeTheFirst")} label={t("settings.retry.firstWaitSeconds")} max={MAX_SAFE_DELAY_SECONDS} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, initialDelaySeconds: value }))} step={0.001} value={draft.initialDelaySeconds} />
-            <ProviderRetryNumberField help={t("settings.retry.waitsNeverGrowPast")} label={t("settings.retry.longestWaitSeconds")} max={MAX_SAFE_DELAY_SECONDS} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, maxDelaySeconds: value }))} step={0.001} value={draft.maxDelaySeconds} />
-            <ProviderRetryNumberField help={t("settings.retry.eachWaitIsMultiplied")} label={t("settings.retry.waitGrowth")} max={8} min={1} onChange={(value) => setDraft((current) => ({ ...current, backoffFactor: value }))} step={0.001} value={draft.backoffFactor} />
-            <ProviderRetryNumberField help={t("settings.retry.addsALittleRandomness")} label={t("settings.retry.randomVariation")} max={80} min={0} onChange={(value) => setDraft((current) => ({ ...current, jitterPercent: value }))} step={1} value={draft.jitterPercent} />
-          </div>
+            <div className="vk-form-prefs">
+              <ProviderRetryNumberField help={t("settings.retry.notCountingTheFirst")} label={t("settings.retry.maximumRetries")} max={100} min={0} onChange={(value) => setDraft((current) => ({ ...current, maxRetries: value }))} step={1} value={draft.maxRetries} />
+              <ProviderRetryNumberField help={t("settings.retry.waitBeforeTheFirst")} label={t("settings.retry.firstWaitSeconds")} max={MAX_SAFE_DELAY_SECONDS} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, initialDelaySeconds: value }))} step={0.001} value={draft.initialDelaySeconds} />
+              <ProviderRetryNumberField help={t("settings.retry.waitsNeverGrowPast")} label={t("settings.retry.longestWaitSeconds")} max={MAX_SAFE_DELAY_SECONDS} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, maxDelaySeconds: value }))} step={0.001} value={draft.maxDelaySeconds} />
+              <ProviderRetryNumberField help={t("settings.retry.eachWaitIsMultiplied")} label={t("settings.retry.waitGrowth")} max={8} min={1} onChange={(value) => setDraft((current) => ({ ...current, backoffFactor: value }))} step={0.001} value={draft.backoffFactor} />
+              <ProviderRetryNumberField help={t("settings.retry.addsALittleRandomness")} label={t("settings.retry.randomVariation")} max={80} min={0} onChange={(value) => setDraft((current) => ({ ...current, jitterPercent: value }))} step={1} value={draft.jitterPercent} />
+            </div>
           </DisclosureSection>
-        </article>
+        </fieldset>
 
-        <article className="space-y-3">
-          <strong>{t("settings.retry.tooManyRequestsRate")}</strong>
-          <label className="settings-check-row settings-retry-toggle">
-            <span><span className="block">{t("settings.retry.waitAndRetryWhen")}</span>
-              <small>{t("settings.retry.whenTheProviderSays2")}</small></span>
-            <Switch checked={draft.retry429} onCheckedChange={(checked) => setDraft((current) => ({ ...current, retry429: checked }))} />
-          </label>
+        <fieldset className="context-basics-group">
+          <legend>{t("settings.retry.tooManyRequestsRate")}</legend>
+          <div className="vk-form-prefs">
+            <ProviderRetrySwitchRow checked={draft.retry429} help={t("settings.retry.whenTheProviderSays2")} label={t("settings.retry.waitAndRetryWhen")} onCheckedChange={(checked) => setDraft((current) => ({ ...current, retry429: checked }))} />
+          </div>
           <DisclosureSection
             description={formatMessage(t("settings.retry.upToRetriesS2"), { rateLimitMaxRetries: draft.rateLimitMaxRetries, rateLimitInitialDelaySeconds: draft.rateLimitInitialDelaySeconds, rateLimitMaxDelaySeconds: draft.rateLimitMaxDelaySeconds })}
             title={t("settings.retry.waitCountAndSpacing")}
           >
-          <div className="settings-form-grid two">
-            <ProviderRetryNumberField help={t("settings.retry.n1To100000")} label={t("settings.retry.maximumRetries")} max={100000} min={1} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxRetries: value }))} step={1} value={draft.rateLimitMaxRetries} />
-            <ProviderRetryNumberField help={t("settings.retry.waitBeforeTheFirst2")} label={t("settings.retry.firstWaitSeconds")} max={1800} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, rateLimitInitialDelaySeconds: value }))} step={0.001} value={draft.rateLimitInitialDelaySeconds} />
-            <ProviderRetryNumberField help={t("settings.retry.waitsNeverGrowPast2")} label={t("settings.retry.longestWaitSeconds")} max={1800} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxDelaySeconds: value }))} step={0.001} value={draft.rateLimitMaxDelaySeconds} />
-            <ProviderRetryNumberField help={t("settings.retry.eachWaitIsMultiplied")} label={t("settings.retry.waitGrowth")} max={8} min={1} onChange={(value) => setDraft((current) => ({ ...current, rateLimitBackoffFactor: value }))} step={0.001} value={draft.rateLimitBackoffFactor} />
-          </div>
+            <div className="vk-form-prefs">
+              <ProviderRetryNumberField help={t("settings.retry.n1To100000")} label={t("settings.retry.maximumRetries")} max={100000} min={1} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxRetries: value }))} step={1} value={draft.rateLimitMaxRetries} />
+              <ProviderRetryNumberField help={t("settings.retry.waitBeforeTheFirst2")} label={t("settings.retry.firstWaitSeconds")} max={1800} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, rateLimitInitialDelaySeconds: value }))} step={0.001} value={draft.rateLimitInitialDelaySeconds} />
+              <ProviderRetryNumberField help={t("settings.retry.waitsNeverGrowPast2")} label={t("settings.retry.longestWaitSeconds")} max={1800} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxDelaySeconds: value }))} step={0.001} value={draft.rateLimitMaxDelaySeconds} />
+              <ProviderRetryNumberField help={t("settings.retry.eachWaitIsMultiplied")} label={t("settings.retry.waitGrowth")} max={8} min={1} onChange={(value) => setDraft((current) => ({ ...current, rateLimitBackoffFactor: value }))} step={0.001} value={draft.rateLimitBackoffFactor} />
+            </div>
           </DisclosureSection>
-        </article>
-
-        {validationError || saveError ? <p className="settings-validation-error" role="alert">{validationError ?? saveError}</p> : null}
-        {sourceChanged && <div className="space-y-2" role="status"><p>{t("settings.retry.theseSettingsWereJust")}</p>
-          <Button type="button" variant="outline" onClick={() => { setDraft(sourceDraft); setBaselineDraft(sourceDraft); setSaveState("idle"); setSaveError(null) }}>{t("settings.retry.reload")}</Button></div>}
-        <div className="settings-card-actions">
-          <Button disabled={!dirty || sourceChanged || Boolean(validationError) || saveState === "saving"} onClick={() => void saveDraft()} type="button">
-            {saveState === "saving" ? t("settings.retry.saving") : saveState === "saved" && !dirty ? t("settings.retry.saved") : t("settings.retry.save")}
-          </Button>
-          {dirty ? <span className="settings-muted-line">{t("settings.retry.unsavedChanges")}</span> : null}
-        </div>
+        </fieldset>
       </fieldset>
+      {validationError || saveError ? <p className="vk-field-error" role="alert">{validationError ?? saveError}</p> : null}
+      {sourceChanged ? (
+        <PageNotice tone="warning" title={t("settings.retry.theseSettingsWereJust")} actions={
+          <Button onClick={() => { setDraft(sourceDraft); setBaselineDraft(sourceDraft); setSaveState("idle"); setSaveError(null) }} size="sm" type="button" variant="outline">{t("settings.retry.reload")}</Button>
+        } />
+      ) : null}
+      {dirty || saving ? (
+        <PageActionBar pending={dirty} actions={
+          <Button disabled={!dirty || sourceChanged || Boolean(validationError) || saving} onClick={() => void saveDraft()} size="sm" type="button">
+            {saving ? <LoaderCircle className="vk-spin" /> : null}
+            {t(saving ? "settings.retry.saving" : "settings.retry.save")}
+          </Button>
+        }>{t("settings.retry.unsavedChanges")}</PageActionBar>
+      ) : null}
     </section>
   )
 }

@@ -1,0 +1,438 @@
+/* Project settings: a fixed-header two-pane dialog. The section nav follows the directory-row convention */
+/* (panel tile plus ember rule), sections stack headings, quiet panels and divided lists. */
+/* 项目设置：固定标题的双栏对话框。分区导航沿用目录行约定（面板底块加余烬色竖线）， */
+/* 各分区由标题、安静的面板与分隔列表组成。 */
+.project-settings-dialog {
+  width: min(1120px, calc(100vw - 32px));
+  height: min(760px, calc(100dvh - 32px));
+  max-width: min(1120px, calc(100vw - 32px)) !important;
+  max-height: calc(100dvh - 32px);
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.project-settings-dialog-header {
+  padding: 18px 48px 16px 24px;
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+}
+
+.project-settings-dialog [data-slot="dialog-description"] {
+  line-height: 1.55;
+}
+
+.project-settings-layout {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 0;
+}
+
+.project-settings-nav {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  overflow: auto;
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 2);
+  border-right: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-ground-2);
+}
+
+.project-settings-nav-button {
+  width: 100%;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
+}
+
+.project-settings-nav-button:hover {
+  background: var(--vk-hover);
+  color: var(--vk-ink);
+}
+
+.project-settings-nav-button.active,
+.project-settings-nav-button.active:hover {
+  background: var(--vk-panel);
+  box-shadow: inset 2px 0 0 var(--vk-ember);
+  color: var(--vk-ink);
+}
+
+.project-settings-nav-button svg {
+  color: var(--vk-ink-3);
+}
+
+.project-settings-nav-button.active svg {
+  color: var(--vk-ember);
+}
+
+.project-settings-nav-button span,
+.project-settings-nav-button strong,
+.project-settings-nav-button small {
+  min-width: 0;
+  display: block;
+}
+
+.project-settings-nav-button strong {
+  overflow: hidden;
+  font-size: var(--vk-fs-md);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-settings-nav-button small {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--vk-ink-3);
+  font-size: var(--vk-fs-xs);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-settings-content {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  padding: 20px 24px 24px;
+  scrollbar-gutter: stable;
+}
+
+.project-settings-section {
+  min-height: 100%;
+  display: grid;
+  align-content: start;
+  gap: calc(var(--vk-u) * 3);
+}
+
+.project-settings-heading,
+.project-settings-summary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.project-settings-heading > svg {
+  color: var(--vk-ember);
+}
+
+.project-settings-heading strong,
+.project-settings-summary strong {
+  display: block;
+  font-size: var(--vk-fs-lg);
+}
+
+/* Description spacing must not leak into nested controls such as switch thumbs. */
+/* 说明文字间距不能影响开关滑块等嵌套控件。 */
+.project-settings-heading > div > span,
+.project-settings-summary > div > span {
+  display: block;
+  margin-top: 3px;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.project-settings-panel {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 11px;
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-ground-2);
+}
+
+.project-settings-panel.compact {
+  align-items: start;
+}
+
+.project-settings-panel strong {
+  font-size: var(--vk-fs-md);
+}
+
+.project-settings-panel p {
+  margin: 0;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.project-settings-toggle-row,
+.project-settings-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-settings-toggle-row {
+  padding: 10px;
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-ground-2);
+}
+
+.project-settings-toggle-row span,
+.project-settings-toggle-row strong,
+.project-settings-toggle-row small {
+  min-width: 0;
+  display: block;
+}
+
+.project-settings-toggle-row strong {
+  font-size: var(--vk-fs-md);
+}
+
+.project-settings-toggle-row small {
+  margin-top: 2px;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  line-height: 1.4;
+}
+
+.project-settings-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.project-settings-form-grid.disabled {
+  opacity: 0.68;
+}
+
+/* Cleanup filters: the cutoff date then the attachment kinds as plain check labels on one baseline. */
+/* 清理筛选：截止日期之后是同一基线上的附件类型复选标签。 */
+.project-settings-cleanup-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: calc(var(--vk-u) * 3) calc(var(--vk-u) * 6);
+}
+
+.project-settings-cleanup-grid > .project-settings-field {
+  width: min(100%, 14rem);
+}
+
+.project-settings-field {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.project-settings-field.wide {
+  grid-column: 1 / -1;
+}
+
+.project-settings-field span {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.project-settings-field textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.project-settings-kind-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 5);
+  min-height: var(--vk-h-md);
+}
+
+.project-settings-kind-chip {
+  font-size: var(--vk-fs-md);
+  cursor: pointer;
+}
+
+.project-settings-kind-chip:has(:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* One plain-language line replaces the old count card: how many skills load here and whether this project deviates. */
+/* 用一行通俗文字取代旧的计数卡片：此项目会加载多少技能、是否有单独设置。 */
+.project-settings-skill-summary {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-md);
+  line-height: 1.5;
+}
+
+.project-settings-skill-summary strong {
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
+  font-weight: 600;
+}
+
+.project-settings-skill-summary-issue {
+  color: var(--vk-warn);
+}
+
+/* Skills sit in one bordered list; each row carries only its name, a one-line description and the control. */
+/* 技能放进一个带边框的分隔列表；每行只保留名称、一行说明和控件。 */
+.project-settings-skill-list {
+  display: grid;
+  gap: 0;
+  padding: 0 12px;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+}
+
+.project-settings-skill-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 11px 0;
+  border-top: var(--vk-bw) solid var(--vk-line-soft);
+}
+
+.project-settings-skill-row:first-child {
+  border-top: 0;
+}
+
+/* A small ember square marks skills this project sets differently from the global default. */
+/* 小余烬色方块标记本项目单独设置、不跟随全局的技能。 */
+.project-settings-skill-row[data-overridden] strong::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 7px;
+  background: var(--vk-ember);
+  vertical-align: 2px;
+}
+
+.project-settings-skill-row span,
+.project-settings-skill-row strong,
+.project-settings-skill-row small {
+  min-width: 0;
+  display: block;
+}
+
+.project-settings-skill-row strong {
+  overflow: hidden;
+  font-size: var(--vk-fs-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-settings-skill-row small {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-settings-segmented {
+  flex-shrink: 0;
+}
+
+.project-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.project-settings-actions button {
+  gap: 7px;
+}
+
+.project-settings-muted {
+  margin: 0;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  line-height: 1.55;
+}
+
+/* Phones: the nav becomes a scrolling strip and grids collapse to one column. */
+/* 手机：导航变为横向滚动条，网格折叠为单列。 */
+@media (max-width: 720px) {
+  .project-settings-dialog {
+    width: calc(100vw - 24px);
+    height: calc(100dvh - 24px);
+    max-width: calc(100vw - 24px) !important;
+  }
+
+  .project-settings-dialog-header {
+    padding: 16px 44px 14px 16px;
+  }
+
+  .project-settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .project-settings-nav {
+    height: auto;
+    display: flex;
+    overflow-x: auto;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: var(--vk-bw) solid var(--vk-line);
+  }
+
+  .project-settings-nav-button {
+    width: auto;
+    min-height: 36px;
+    flex: 0 0 auto;
+  }
+
+  .project-settings-nav-button.active,
+  .project-settings-nav-button.active:hover {
+    box-shadow: inset 0 -2px 0 var(--vk-ember);
+  }
+
+  .project-settings-nav-button small {
+    display: none;
+  }
+
+  .project-settings-content {
+    max-height: none;
+    padding: 16px;
+  }
+
+  .project-settings-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .project-settings-skill-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  .project-settings-skill-row .status-pill {
+    width: fit-content;
+  }
+
+  .project-settings-segmented {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
+  }
+}

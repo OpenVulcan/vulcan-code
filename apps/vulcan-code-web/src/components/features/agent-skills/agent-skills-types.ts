@@ -1,5 +1,35 @@
-import type { AgentSkillCategorySaveRequest, AgentSkillSaveRequest, AgentSkillsCatalogSummary } from "@/types"
-import { formatMessage, type Translate } from "@/i18n"
+import type { AgentSkillCategorySaveRequest, AgentSkillCategorySummary, AgentSkillSaveRequest, AgentSkillsCatalogSummary } from "@/types"
+import { formatMessage, type Translate, type TranslationKey } from "@/i18n"
+
+// BUILTIN_CATEGORY_NAME_KEYS names each built-in category through the interface catalog; the service ships only
+// English names for them, so the catalog is the one place their translations live.
+// BUILTIN_CATEGORY_NAME_KEYS 通过界面目录命名每个内置分类；服务只提供其英文名称，因此目录是其译文的唯一所在。
+const BUILTIN_CATEGORY_NAME_KEYS: Readonly<Record<string, TranslationKey>> = {
+  general: "agentSkills.builtinCategory.general",
+  engineering: "agentSkills.builtinCategory.engineering",
+  quality: "agentSkills.builtinCategory.quality",
+  operations: "agentSkills.builtinCategory.operations",
+  data: "agentSkills.builtinCategory.data",
+  documents: "agentSkills.builtinCategory.documents",
+  design: "agentSkills.builtinCategory.design",
+  research: "agentSkills.builtinCategory.research",
+  security: "agentSkills.builtinCategory.security",
+  integrations: "agentSkills.builtinCategory.integrations",
+  plugins: "agentSkills.builtinCategory.plugins",
+  uncategorized: "agentSkills.builtinCategory.uncategorized",
+}
+
+// localizedAgentSkillCategoryName names a category in the interface language: built-in categories come from the
+// catalog, user categories from their own exact-then-language-prefix locale entries, then their stored name.
+// localizedAgentSkillCategoryName 以界面语言命名分类：内置分类取自目录，用户分类按精确语言再语言前缀取其自身
+// 语言条目，最后回落到其存储名称。
+export function localizedAgentSkillCategoryName(category: AgentSkillCategorySummary, locale: string, t: Translate): string {
+  const builtinKey = category.builtin ? BUILTIN_CATEGORY_NAME_KEYS[category.categoryId] : undefined
+  if (builtinKey) return t(builtinKey)
+  return category.locales[locale]?.name
+    ?? Object.entries(category.locales).find(([candidate]) => candidate.split("-")[0] === locale.split("-")[0])?.[1].name
+    ?? category.name
+}
 
 // agentSkillsCatalogSummary builds the plain-language catalog sentence shown by Agent Skills surfaces.
 // It leads with how many skills are usable and mentions user, plugin and error counts only when they are non-zero.

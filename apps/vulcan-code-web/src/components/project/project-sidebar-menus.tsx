@@ -2,6 +2,8 @@ import React from "react";
 import {
   Archive,
   Copy,
+  FolderInput,
+  FolderPlus,
   FileText,
   FolderCog,
   FolderOpen,
@@ -17,11 +19,17 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+} from "@/ui-kit/primitives/context-menu";
 import { useI18n } from "@/i18n";
 import type { ConversationSummary, ProjectSummary } from "@/types";
+import type { ProjectRowPlacement } from "./project-sidebar-groups";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 
 // ProjectContextMenu renders project-level right-click commands.
@@ -30,6 +38,9 @@ export function ProjectContextMenu(props: {
   // Project that receives the selected action.
   // 接收所选操作的项目。
   project: ProjectSummary;
+  // Move-to-group entries; null hides the submenu.
+  // “移动到分组”入口；为 null 时隐藏该子菜单。
+  placement?: ProjectRowPlacement | null;
   // Trigger element wrapped by the context menu.
   // 由右键菜单包裹的触发元素。
   children: React.ReactNode;
@@ -48,6 +59,7 @@ export function ProjectContextMenu(props: {
           <PinOff size={15} />
           <span>{props.project.pinned ? t("projectMenu.unpin") : t("projectMenu.pin")}</span>
         </ContextMenuItem>
+        {props.placement ? <MoveToGroupSubmenu placement={props.placement} /> : null}
         <ContextMenuItem onSelect={() => props.onAction("open-directory", props.project)}>
           <FolderOpen size={15} />
           <span>{t("projectMenu.openDirectory")}</span>
@@ -80,6 +92,33 @@ export function ProjectContextMenu(props: {
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+// MoveToGroupSubmenu lists every group a project can move to, the default group included, and a new group.
+// MoveToGroupSubmenu 列出项目可移入的每个分组（含默认分组）以及新建分组。
+function MoveToGroupSubmenu(props: { placement: ProjectRowPlacement }) {
+  const { t } = useI18n();
+  const { placement } = props;
+  return (
+    <ContextMenuSub>
+      <ContextMenuSubTrigger>
+        <FolderInput size={15} />
+        <span>{t("projectMenu.moveToGroup")}</span>
+      </ContextMenuSubTrigger>
+      <ContextMenuSubContent>
+        <ContextMenuRadioGroup onValueChange={placement.onMove} value={placement.currentGroupId}>
+          {placement.groups.map((group) => (
+            <ContextMenuRadioItem key={group.id} value={group.id}>{group.name}</ContextMenuRadioItem>
+          ))}
+        </ContextMenuRadioGroup>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={placement.onMoveToNewGroup}>
+          <FolderPlus size={15} />
+          <span>{t("projectMenu.moveToNewGroup")}</span>
+        </ContextMenuItem>
+      </ContextMenuSubContent>
+    </ContextMenuSub>
   );
 }
 

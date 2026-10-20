@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { DiffReviewPanel } from "@/diff/diff-review-panel";
 import {
   activeWorkbenchSurfaceId,
@@ -809,8 +809,7 @@ export function WorkspaceReviewPanelHost(props: {
     <DiffReviewPanel
       emptyBody={lastTurnMode
         ? t("workspaceReview.lastTurnEmpty")
-        : workspaceReviewError ?? gitRepositoryCatalogError ?? t("contextPanel.reviewEmpty")}
-      emptyTitle={t("contextPanel.review")}
+        : workspaceReviewError ?? gitRepositoryCatalogError ?? undefined}
       loading={workspaceReviewLoading}
       selection={diffReviewSelection}
       repositories={enabledGitRepositories}

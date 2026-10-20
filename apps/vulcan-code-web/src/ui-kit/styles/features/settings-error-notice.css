@@ -1,0 +1,33 @@
+/* Error presentation belongs to the component, including onboarding before settings are ever loaded. */
+/* 错误展示样式归属于组件，覆盖从未加载设置页时的首次引导。 */
+.settings-error-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-bad) 28%, var(--vk-line));
+  background: color-mix(in srgb, var(--vk-bad) 6%, var(--vk-panel));
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-md);
+  font-weight: 400;
+}
+.settings-error-notice-icon { flex-shrink: 0; margin-top: 2px; color: var(--vk-bad); }
+.settings-error-notice-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; flex: 1 1 auto; }
+.settings-error-notice-body > p { margin: 0; color: var(--vk-ink); line-height: 20px; }
+.settings-error-notice pre {
+  min-width: 0;
+  max-width: 100%;
+  max-height: 180px;
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  overflow: auto;
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+  font-family: var(--vk-font-mono, ui-monospace, monospace);
+  font-size: var(--vk-fs-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.settings-error-notice-action { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

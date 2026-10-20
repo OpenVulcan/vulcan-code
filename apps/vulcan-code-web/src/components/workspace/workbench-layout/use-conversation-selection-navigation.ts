@@ -1,5 +1,5 @@
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import type { SkillSubAreaId } from "@/components/features/skills/skills-area";
 import type { WorkspaceMainView } from "@/components/workspace/workspace-shell/types";
 import { markConversationRead, selectConversation } from "@/service/project-actions-service";

@@ -1,4 +1,4 @@
-import { CircleAlert } from "lucide-react";
+import { ArrowLeftRight } from "lucide-react";
 import type { ConversationEventSummary } from "@/service/conversation-event-window-store";
 import type { ProviderSummary } from "@/types";
 
@@ -34,9 +34,8 @@ export function modelSwitchRouteLabel(config: RequestConfig, providers: readonly
 // 返回值：不含账号 ID、展开卡片或详情弹窗的紧凑提示。
 export function ModelSwitchNotice(props: { summary: string; seq?: number }) {
   return (
-    <div className="conversation-model-switch" role="note" data-event-kind="request_config_changed" data-seq={props.seq}>
-      <CircleAlert size={14} aria-hidden="true" />
-      <span className="conversation-model-switch-label">{props.summary}</span>
+    <div className="vk-divider" data-plain="" role="note" data-event-kind="request_config_changed" data-seq={props.seq}>
+      <span><ArrowLeftRight aria-hidden="true" />{props.summary}</span>
     </div>
   );
 }

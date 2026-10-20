@@ -1,7 +1,7 @@
 import { WorkspaceDirectoryLayout } from "@/components/workspace/workspace-directory-layout";
 import { FeatureLoadBoundary } from "@/components/features/feature-shell-content";
 import React from "react";
-import { toast } from "sonner";
+import { toast } from "@/ui-kit/primitives/toast";
 import { ChatArea } from "@/components/conversation/chat-area";
 import {
   ConversationSessionCommitDialog,
@@ -16,8 +16,7 @@ import { agentSkillsCatalogSummary } from "@/components/features/agent-skills/ag
 import {
   ProjectSidebar,
 } from "@/components/project/project-sidebar";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/ui-kit/primitives/button";
 import {
   PluginWorkspaceMenu,
   skillSubAreaLabel,
@@ -29,13 +28,12 @@ import {
   WorkspaceMemorySettings,
 } from "@/components/workspace/workspace-memory-settings";
 import { WorkspaceFeaturePanel } from "@/components/workspace/workspace-feature-panel";
-import { SidebarInset, SidebarProvider, useSidebar, useSidebarNavigation } from "@/components/ui/sidebar";
-import { navigationShellStyle } from "@/components/shell/navigation-layout";
+import { SidebarInset, SidebarProvider, useSidebar, useSidebarNavigation } from "@/ui-kit/shell/sidebar";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/ui-kit/primitives/tooltip";
 import {
   WorkspaceResizableBody,
   selectConversationRightPluginMounts,
@@ -59,13 +57,12 @@ import { hasServiceRuntime } from "@/service/webui-service-runtime";
 import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
-import { useI18n, formatMessage } from "@/i18n";
+import { useI18n } from "@/i18n";
 import {
   PanelRightClose,
   PanelRightOpen,
   PackagePlus,
   RefreshCw,
-  TerminalSquare,
 } from "lucide-react";
 
 import {
@@ -105,8 +102,8 @@ const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent
 // LazyAgentSkillCategoryMenu defers prompt-skill directory navigation.
 // LazyAgentSkillCategoryMenu 延迟提示词技能目录导航。
 const LazyAgentSkillCategoryMenu = React.lazy(() => import("@/components/features/agent-skills/agent-skills-area").then((module) => ({ default: module.AgentSkillCategoryMenu })));
-// WorkspaceShell renders the shadcn dashboard-like fused sidebar and inset console area.
-// WorkspaceShell 渲染类似 shadcn dashboard 的融合侧栏与 inset 控制台区域。
+// WorkspaceShell renders the fused sidebar and the inset console area.
+// WorkspaceShell 渲染融合侧栏与内嵌控制台区域。
 // selectEventWindowOwnerSessionId reads the selected V1 owner id with a stable selector identity.
 // selectEventWindowOwnerSessionId 以稳定的选择器身份读取选中的 V1 归属 id。
 function selectEventWindowOwnerSessionId(snapshot: ConversationEventWindowControllerSnapshot): string | null {
@@ -119,9 +116,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
   const collapsible = props.mainView === "chat";
   return (
     <SidebarProvider
-      className="console-shell"
       collapsible={collapsible}
-      style={navigationShellStyle()}
       open={!collapsible || props.sidebarOpen}
       onOpenChange={props.onSidebarOpenChange}
     >
@@ -654,44 +649,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     || visibleSessionSubagentTaskCount > 0
   ));
 
-  // activeTerminalProject is the project-level terminal owner selected by the workbench.
-  // activeTerminalProject 是工作台选中的项目级终端归属项目。
-  const activeTerminalProject = props.workbench.projects.find(
-    (project) => project.id === props.activeProjectId,
-  ) ?? null;
-  // projectTerminalLabel describes the active project's top-bar terminal toggle action.
-  // projectTerminalLabel 描述当前活动项目的顶部栏终端切换操作。
-  const projectTerminalLabel = activeTerminalProject
-    ? props.projectTerminalRunningCount > 0
-      ? formatMessage(t("workspace.terminalToggle.withRunning"), { name: activeTerminalProject.name, count: props.projectTerminalRunningCount })
-      : formatMessage(t("workspace.terminalToggle.named"), { name: activeTerminalProject.name })
-    : t("workspace.terminalToggle.generic");
-  // projectTerminalAction anchors the floating terminal immediately left of the context-panel toggle.
-  // projectTerminalAction 将浮动终端入口锚定在上下文面板切换按钮左侧。
-  const projectTerminalAction = activeTerminalProject ? (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          ref={props.projectTerminalButtonRef}
-          aria-haspopup="dialog"
-          aria-label={projectTerminalLabel}
-          className="icon-button project-terminal-launch-button"
-          onClick={props.onToggleProjectTerminal}
-          size={props.projectTerminalRunningCount > 0 ? "sm" : "icon-sm"}
-          type="button"
-          variant="ghost"
-        >
-          <TerminalSquare size={16} />
-          {props.projectTerminalRunningCount > 0 ? (
-            <Badge aria-hidden="true" variant="secondary">
-              {props.projectTerminalRunningCount}
-            </Badge>
-          ) : null}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{projectTerminalLabel}</TooltipContent>
-    </Tooltip>
-  ) : null;
   // rightPanelLabel describes the page-registered context panel toggle action.
   // rightPanelLabel 描述页面注册的上下文面板切换动作。
   const rightPanelLabel = effectiveRightPanelOpen ? t("contextPanel.close") : t("contextPanel.open");
@@ -737,7 +694,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
             type="button"
             variant="secondary"
           >
-            <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
+            <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "vk-spin" : undefined} size={15} />
             <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
           </Button>
           <Button onClick={() => setLuaInstallDialogOpen(true)} size="sm" type="button">
@@ -795,7 +752,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // pageDescriptor 注册页面专用标题、按钮、内容与自适应侧边面板。
   const pageDescriptor: WorkspacePageDescriptor = props.mainView === "skills" ? {
     content: (
-      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog">
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog vk-atmosphere" pageKey={props.activeSkillSubArea}>
         <WorkspaceSkillsSettings
           activeSubArea={props.activeSkillSubArea}
           luaInstallDialogOpen={luaInstallDialogOpen}
@@ -814,7 +771,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     title: skillSubAreaLabel(props.activeSkillSubArea, props.workbench, locale, t),
   } : props.mainView === "agent-skills" ? {
     content: (
-      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog">
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog vk-atmosphere">
         <React.Suspense fallback={null}>
           <LazyAgentSkillsArea
             actions={props.agentSkillActions}
@@ -830,7 +787,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     title: t("area.agentSkills"),
   } : props.mainView === "agents" ? {
     content: (
-      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog">
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog vk-atmosphere">
         <React.Suspense fallback={null}>
           <LazyAgentsArea
             actions={props.agentActions}
@@ -868,6 +825,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         selectedDraftConversation={props.selectedDraftConversation}
         selectedConversationId={props.selectedConversationId}
         sessionReviewSummary={sessionReviewSummary}
+        onOpenReviewChanges={reviewFocus.openReviewChanges}
         runtimeStatusHost={props.runtimeStatusHost}
         todolistStatusHost={props.todolistStatusHost}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
@@ -919,13 +877,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     ),
     headerRightActions: <>
       <AssistantDockButton />
-      {projectTerminalAction}
       {hasSelectedChatConversation ? contextPanelToggleAction : null}
     </>,
     toolPanels: [{
-      className: "conversation-session-tool-adaptive-panel",
-      contentClassName: "conversation-session-tool-content",
-      contentShellClassName: "conversation-session-tool-content-shell",
       expanded: sessionToolPanelVisible && sessionToolExpanded,
       forceOverlay: effectiveRightPanelOpen && rightPanelFloating,
       inlineGap: 52,
@@ -977,10 +931,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   };
 
   return (
-    <div className={`workspace-panel-shell${props.mainView === "memory" ? " vmm-workspace-host" : ""}`} ref={shellRef}>
+    <div className="vk-shell-frame" ref={shellRef}>
       {featureArea ? (
         <WorkspaceFeaturePanel
           navigation={featureNavigation}
+          nested={props.mainView === "skills" || props.mainView === "memory"}
           rail={props.rail}
           title={t(featureArea.label)}
           titlebarDragRegion={props.titlebarDragRegion}
@@ -991,21 +946,23 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         projects={props.workbench.projects}
         conversations={props.workbench.conversations}
         expandedProjectIds={props.workbench.expandedProjectIds}
+        projectTree={props.workbench.projectTree}
         pinnedConversationIds={props.pinnedConversationIds}
         selectedConversationId={sidebarNavigationTargetId ?? props.selectedConversationId}
         onConversationMenuAction={props.onConversationMenuAction}
         onCreateConversation={props.onCreateConversation}
+        onCreateDedicatedConversation={props.onCreateDedicatedConversation}
         onCreateProject={props.onCreateProject}
         rail={props.rail}
         titlebarDragRegion={props.titlebarDragRegion}
         onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
         onProjectMenuAction={props.onProjectMenuAction}
-        onReorderProjects={props.onReorderProjects}
+        onProjectGroupAction={props.onProjectGroupAction}
         onSelectProject={props.onSelectProject}
         onSelectConversation={props.onSelectConversation}
       />}
-      <SidebarInset className="workspace-inset">
+      <SidebarInset>
         <TurnChangeReviewActionsContext.Provider value={reviewFocus.turnChangeReviewActions}>
         <WorkspaceResizableBody
           aiBrowserAvailable={aiBrowserAvailable}
@@ -1056,6 +1013,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onWorkspaceGitStateChanged={refreshProjectGitSummary}
           onSelectGitRepository={setSelectedGitRepositoryKey}
           onRunVmmAction={props.memoryActions.onRunVmmAction}
+          onOpenMemorySettings={props.onOpenMemory}
           onTrace={props.onTrace}
           gitCommitActionBusy={Boolean(gitCommitBusyState)}
           gitCommitActionDisabled={!sessionGitCommitActionAvailable}
@@ -1071,7 +1029,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           )}
         </WorkspaceResizableBody>
         {props.footer ? (
-          <div className="workspace-statusbar-host">
+          <div className="vk-status-frame">
             {props.footer}
           </div>
         ) : null}

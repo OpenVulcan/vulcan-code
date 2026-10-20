@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Boxes, CircleCheck, Rows3, Stethoscope, WandSparkles } from "lucide-react"
+import { Boxes, CircleCheck, Rows3 } from "lucide-react"
 
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context"
 import { AiCapabilitiesSettingsArea } from "@/components/features/settings/ai-capabilities-settings"
@@ -11,9 +11,9 @@ import { isFunctionalProvider } from "@/components/features/settings/provider-or
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
 import { SystemProviderModelsDialog } from "@/components/features/settings/system-provider-models-dialog"
-import { PageEmptyState } from "@/components/page"
-import { Button } from "@/components/ui/button"
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
+import { PageEmptyState, PageTabs } from "@/components/page"
+import { Button } from "@/ui-kit/primitives/button"
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
 import { useI18n } from "@/i18n"
 import { errorMessage } from "@/lib/display-format"
 import { loadPublicAiSettings, savePublicAiProviderPriority } from "@/service/settings-actions-service"
@@ -26,7 +26,13 @@ import type {
 
 import { ModelServicesDiagnostics } from "./model-services-diagnostics"
 import { alertSeverity, collectProviderAlerts, providerHealth, type ProviderAlert } from "./provider-alerts"
-import { buildProviderDirectory, priorityWritesForOrder, type ProviderTagFilter } from "./provider-directory"
+import {
+  buildProviderDirectory,
+  priorityWritesForOrder,
+  providerIsConfigured,
+  providerIsCoreAccount,
+  type ProviderTagFilter,
+} from "./provider-directory"
 import { ProviderRail } from "./provider-rail"
 import { ProviderRemovalDialog } from "./provider-removal-dialog"
 import { ProviderWorkspace } from "./provider-workspace"
@@ -124,15 +130,19 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
   }, [snapshot])
   // The selection falls back to the first configured provider, then the first recommendation.
   // 选择回退到第一个已配置供应商，其次是第一个推荐供应商。
-  const selected = snapshot?.providers.find((provider) => provider.id === selectedId)
+  const selected = snapshot?.providers.find((provider) => provider.id === selectedId && !providerIsCoreAccount(provider))
     ?? directory?.configured[0]
     ?? directory?.available[0]
     ?? null
-  // modelProviderIds lists configured model providers in the user's order for the model-led view.
-  // modelProviderIds 按用户顺序列出已配置的模型供应商，用于以模型为主的视图。
+  // modelProviderIds lists configured model providers, signed-in core accounts first, for the model-led view.
+  // modelProviderIds 列出已配置的模型供应商（已登录的核心账号在前），用于以模型为主的视图。
   const modelProviderIds = React.useMemo(
-    () => directory?.configured.filter((provider) => !isFunctionalProvider(provider)).map((provider) => provider.id) ?? [],
-    [directory],
+    () => (snapshot && directory
+      ? [...directory.core.filter((provider) => providerIsConfigured(snapshot, provider)), ...directory.configured]
+        .filter((provider) => !isFunctionalProvider(provider))
+        .map((provider) => provider.id)
+      : []),
+    [directory, snapshot],
   )
 
   const onUsage = React.useCallback((connectionId: string, usage: PublicAiAccountUsage) => {
@@ -180,8 +190,15 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
   }
 
   // showProvider leads with the provider view on that provider; rail rows and alerts use it.
+  // A core account opens its own account page instead, since the rail never lists it.
   // showProvider 切换到以供应商为主的视图并选中该供应商；目录行与提醒使用它。
+  // 核心账号改为打开其独立账户页，因为目录从不列出它。
   const showProvider = (providerId: string) => {
+    const provider = snapshot?.providers.find((candidate) => candidate.id === providerId)
+    if (provider && providerIsCoreAccount(provider)) {
+      account?.openDetails?.()
+      return
+    }
     setView("provider")
     setSelectedId(providerId)
   }
@@ -190,13 +207,13 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
     return provider ? localizedProviderName(provider.id, provider.display_name, t) : providerId
   }
 
-  const tabs: { value: ModelServicesTab; label: string; icon: React.ReactNode; count?: number }[] = [
-    { value: "providers", label: t("settings.modelServices.tabs.providers"), icon: <Boxes aria-hidden="true" /> },
-    { value: "functions", label: t("settings.modelServices.tabs.functions"), icon: <WandSparkles aria-hidden="true" /> },
-    { value: "diagnostics", label: t("settings.modelServices.tabs.diagnostics"), icon: <Stethoscope aria-hidden="true" />, count: snapshot?.customProviderManifestFailureTotalCount || undefined },
+  const tabs: { value: ModelServicesTab; label: string; count?: number }[] = [
+    { value: "providers", label: t("settings.modelServices.tabs.providers") },
+    { value: "functions", label: t("settings.modelServices.tabs.functions") },
+    { value: "diagnostics", label: t("settings.modelServices.tabs.diagnostics"), count: snapshot?.customProviderManifestFailureTotalCount || undefined },
   ]
   const viewSwitch = (
-    <div className="model-services-view-switch" role="group" aria-label={t("settings.modelServices.view.label")}>
+    <div className="vk-ms-view-switch" role="group" aria-label={t("settings.modelServices.view.label")}>
       <button aria-pressed={view === "provider"} onClick={() => setView("provider")} type="button">
         <Boxes aria-hidden="true" />{t("settings.modelServices.view.provider")}
       </button>
@@ -207,23 +224,8 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
   )
 
   return (
-    <div className="model-services-page">
-      <div className="model-services-tabs" role="tablist" aria-label={t("settings.modelProviders")}>
-        {tabs.map((option) => (
-          <button
-            aria-selected={tab === option.value}
-            className="model-services-tab"
-            key={option.value}
-            onClick={() => selectTab(option.value)}
-            role="tab"
-            type="button"
-          >
-            {option.icon}
-            <span>{option.label}</span>
-            {option.count ? <small>{option.count}</small> : null}
-          </button>
-        ))}
-      </div>
+    <div className="vk-ms-page">
+      <PageTabs ariaLabel={t("settings.modelProviders")} onValueChange={selectTab} options={tabs} value={tab} />
 
       {mutations.error ? (
         <SettingsErrorNotice
@@ -241,9 +243,9 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
       ) : null}
 
       {tab === "providers" ? (
-        <div className="model-services-shell">
+        <div className="vk-ms-shell">
           {snapshot ? <AlertStrip alerts={alerts} onSelect={showProvider} providerName={providerName} /> : null}
-          <div className="model-services-body">
+          <div className="vk-ms-body">
             <ProviderRail
               accountCounts={accountCounts}
               directory={directory}
@@ -260,7 +262,7 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
               selectedId={view === "provider" ? selected?.id ?? null : null}
               tag={tag}
             />
-            <div className="model-services-main">
+            <div className="vk-ms-main">
               {!snapshot ? (
                 <StreamPlaceholder decorative shape="rows" count={6} />
               ) : view === "model" ? (
@@ -378,9 +380,9 @@ function AlertStrip(props: {
     }
   }
   return (
-    <section aria-label={t("settings.modelServices.alerts.title")} className="model-services-alerts">
+    <section aria-label={t("settings.modelServices.alerts.title")} className="vk-ms-alerts">
       {props.alerts.length === 0 ? (
-        <span className="model-services-alert" data-severity="ok">
+        <span className="vk-ms-alert" data-severity="ok">
           <CircleCheck aria-hidden="true" />{t("settings.modelServices.alerts.allOk")}
         </span>
       ) : (
@@ -389,13 +391,13 @@ function AlertStrip(props: {
             {props.alerts.map((alert) => (
               <li key={`${alert.connectionId}:${alert.kind}`}>
                 <button
-                  className="model-services-alert"
+                  className="vk-ms-alert"
                   data-severity={alertSeverity(alert.kind)}
                   onClick={() => props.onSelect(alert.providerId)}
                   title={alert.detail}
                   type="button"
                 >
-                  <i aria-hidden="true" className="model-services-dot" data-state={alertSeverity(alert.kind)} />
+                  <i aria-hidden="true" className="vk-ms-dot" data-state={alertSeverity(alert.kind)} />
                   <strong>{props.providerName(alert.providerId)}</strong>
                   <span>{alert.connectionName}</span>
                   <span>{label(alert)}</span>
@@ -432,13 +434,13 @@ function ModelLedView(props: {
     props.onFilter(next)
   }
   return (
-    <div className="model-services-workspace">
-      <header className="model-services-head">
-        <div className="model-services-head-copy">
-          <div className="model-services-head-title"><h2>{t("settings.modelServices.view.allModels")}</h2></div>
+    <div className="vk-ms-workspace">
+      <header className="vk-ms-head">
+        <div className="vk-ms-head-copy">
+          <div className="vk-ms-head-title"><h2>{t("settings.modelServices.view.allModels")}</h2></div>
           <p>{t("settings.modelServices.view.allModelsHint")}</p>
         </div>
-        <div className="model-services-head-actions">{props.viewSwitch}</div>
+        <div className="vk-ms-head-actions">{props.viewSwitch}</div>
       </header>
       {props.providerIds.length === 0 ? (
         <PageEmptyState
@@ -448,12 +450,12 @@ function ModelLedView(props: {
         />
       ) : (
         <>
-          <div aria-label={t("settings.modelServices.view.providerFilter")} className="model-services-scope" role="group">
+          <div aria-label={t("settings.modelServices.view.providerFilter")} className="vk-ms-scope" role="group">
             <span>{t("settings.modelServices.view.providerFilter")}</span>
             {props.providerIds.map((providerId) => (
               <button
                 aria-pressed={props.filter.has(providerId)}
-                className="model-services-tag-chip"
+                className="vk-ms-tag-chip"
                 key={providerId}
                 onClick={() => toggle(providerId)}
                 type="button"

@@ -3,8 +3,8 @@ import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { expect, it, vi } from "vitest"
 import { I18nProvider } from "@/i18n"
-import { TooltipProvider } from "@/components/ui/tooltip"
-import { ComposerSettingsMenu } from "./composer-attachment-controls"
+import { TooltipProvider } from "@/ui-kit/primitives/tooltip"
+import { ComposerSettingsMenu } from "./composer-session-settings"
 
 // React's concurrent test environment explicitly supports act for this isolated DOM harness.
 // 为独立 DOM 测试明确启用 React 并发测试环境的 act 支持。
@@ -46,15 +46,12 @@ it.each([false, true])("keeps settings reachable when policy editing is %s", asy
       projectId={null} conversationId={null} onOpenKnowledge={() => {}}
       outputStyleCatalog={{ defaultId: "default", selectedId: "default", entries: [] }} onOutputStyleChange={() => {}}
     /></TooltipProvider></I18nProvider>))
-    // Keyboard activation opens the same accessible menu used by real users.
-    // 键盘激活打开真实用户使用的同一个可访问菜单。
-    const trigger = container.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!
-    await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })))
-    const memoryMenu = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) => item.textContent === "记忆选项")!
-    expect(memoryMenu).toBeDefined()
-    await act(async () => memoryMenu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })))
+    // The status-bar entry opens the same session settings panel used by real users.
+    // 状态栏入口打开真实用户使用的同一个会话设置面板。
+    const trigger = container.querySelector<HTMLButtonElement>('[data-action="session-settings"]')!
+    await act(async () => trigger.click())
     expect(document.body.textContent).toContain(enabled ? "记忆尚未就绪，仍可配置会话策略" : "当前作用域未启用记忆")
-    const settings = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) => item.textContent === "设置")!
+    const settings = Array.from(document.querySelectorAll<HTMLButtonElement>(".vk-ss button")).find((item) => item.textContent === "设置")!
     expect(settings).toBeDefined()
     await act(async () => settings.click())
     expect(navigate).toHaveBeenCalledTimes(1)

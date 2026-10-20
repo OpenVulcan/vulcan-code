@@ -1,13 +1,12 @@
 import React from "react";
 import { Check, RefreshCw, Route, Search } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { toast } from "@/ui-kit/primitives/toast";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
+import { Input } from "@/ui-kit/primitives/input";
+import { ScrollArea } from "@/ui-kit/primitives/scroll-area";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type { ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary } from "@/types";
 
 // secondaryRouteIdentity returns the stable identity used to reconcile optimistic and authoritative selections.
@@ -215,20 +214,19 @@ export function ModelSecondaryRouteControl(props: {
       setOpen(nextOpen);
     }}>
       <DropdownMenuTrigger asChild>
-        <Button
+        <button
           aria-label={t("composer.secondaryRoute.select")}
           aria-busy={saving}
           disabled={saving}
           title={selectionError || selectedLabel}
-          className="composer-secondary-route-trigger"
+          className="vk-pick vk-route-pick"
           type="button"
-          variant="outline"
         >
           <Route size={14} />
           <span>{selectedLabel}</span>
-        </Button>
+        </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent ref={menuRef} align="start" className="model-picker-content secondary-route-picker-content flex min-h-0 flex-col overflow-hidden" sideOffset={8}
+      <DropdownMenuContent ref={menuRef} align="start" className="vk-route-pop" sideOffset={8}
         onKeyDown={(event) => {
           if (event.key !== "Tab") return;
           event.preventDefault();
@@ -238,7 +236,7 @@ export function ModelSecondaryRouteControl(props: {
           const index = controls.indexOf(document.activeElement as HTMLElement);
           controls[(index + (event.shiftKey ? controls.length - 1 : 1)) % controls.length]?.focus();
         }}>
-        <div className="model-picker-filter shrink-0">
+        <div className="vk-model-filter">
           <Search size={14} />
           <Input
             aria-label={t("composer.secondaryRoute.search")}
@@ -264,32 +262,33 @@ export function ModelSecondaryRouteControl(props: {
             type="button"
             variant="ghost"
           >
-            <RefreshCw className={cn(loading && "animate-spin")} size={14} />
+            <RefreshCw className={loading ? "vk-spin" : undefined} size={14} />
           </Button>
         </div>
-        <ScrollArea className="model-picker-scroll min-h-0 shrink">
-        {loadError || selectionError ? <details role="alert" className="px-3 py-2 text-xs text-destructive">
+        <ScrollArea className="vk-model-list">
+        {loadError || selectionError ? <details role="alert" className="vk-route-failure">
           <summary>{t("composer.secondaryRoute.routeActionFailedRetry")}</summary>
-          <pre className="whitespace-pre-wrap break-words">{loadError || selectionError}</pre>
+          <pre>{loadError || selectionError}</pre>
         </details> : null}
         {loading ? <StreamPlaceholder label={t("composer.secondaryRoute.loading")} shape="rows" count={3} /> : null}
-          <div className="model-picker-list">
+          <div className="vk-model-rows">
             <DropdownMenuItem asChild onSelect={() => void chooseRoute(null)} textValue="Auto">
-            <Button variant="ghost"
-              className={cn("model-picker-row", !effectiveSelectedRoute && "selected")}
+            <button
+              className="vk-model-row"
+              data-current={!effectiveSelectedRoute || undefined}
               role="menuitemradio" aria-checked={!effectiveSelectedRoute}
               disabled={saving}
               type="button"
             >
-              <span className="model-picker-selected-slot">{!effectiveSelectedRoute ? <Check size={15} /> : null}</span>
-              <span className="model-picker-row-copy">
-                <span className="model-picker-row-title">Auto</span>
-                <span className="model-picker-row-meta">{t("composer.secondaryRoute.autoEndpoint")}</span>
+              <span className="vk-model-check">{!effectiveSelectedRoute ? <Check size={15} /> : null}</span>
+              <span className="vk-model-copy">
+                <span className="vk-model-title">Auto</span>
+                <span className="vk-model-meta">{t("composer.secondaryRoute.autoEndpoint")}</span>
               </span>
-            </Button>
+            </button>
             </DropdownMenuItem>
             {filteredRoutes.length === 0 ? (
-              !loading && !loadError ? <div role="status" className="model-picker-empty">{filter.trim() ? t("composer.secondaryRoute.noMatches") : t("composer.secondaryRoute.noSecondaryProvidersAre")}</div> : null
+              !loading && !loadError ? <div role="status" className="vk-model-none">{filter.trim() ? t("composer.secondaryRoute.noMatches") : t("composer.secondaryRoute.noSecondaryProvidersAre")}</div> : null
             ) : (
               filteredRoutes.map((route) => {
                 // selected identifies the route currently visible to the user, including optimistic state.
@@ -297,21 +296,22 @@ export function ModelSecondaryRouteControl(props: {
                 const selected = secondaryRouteIdentity(route) === secondaryRouteIdentity(effectiveSelectedRoute);
                 return (
                   <DropdownMenuItem asChild key={route.routeId} textValue={route.label} onSelect={() => void chooseRoute(route)}>
-                  <Button variant="ghost"
-                    className={cn("model-picker-row", selected && "selected")}
+                  <button
+                    className="vk-model-row"
+                    data-current={selected || undefined}
                     role="menuitemradio" aria-checked={selected}
                     disabled={saving}
                     type="button"
                   >
-                    <span className="model-picker-selected-slot">{selected ? <Check size={15} /> : null}</span>
-                    <span className="model-picker-row-copy">
-                      <span className="model-picker-row-title">
+                    <span className="vk-model-check">{selected ? <Check size={15} /> : null}</span>
+                    <span className="vk-model-copy">
+                      <span className="vk-model-title">
                         {route.label}
-                        {route.tag ? <span className="secondary-route-title-tag">（{route.tag}）</span> : null}
+                        {route.tag ? <span className="vk-model-tag">（{route.tag}）</span> : null}
                       </span>
-                      <span className="model-picker-row-meta">{route.subtitle}</span>
+                      <span className="vk-model-meta">{route.subtitle}</span>
                     </span>
-                  </Button>
+                  </button>
                   </DropdownMenuItem>
                 );
               })

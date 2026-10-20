@@ -1,8 +1,10 @@
 import * as React from "react"
-import { Button } from "@/components/ui/button"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
+import { Button } from "@/ui-kit/primitives/button"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/ui-kit/primitives/alert-dialog"
 import { useI18n } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeMemorySessionSummary, VmmNativeSessionRestartPreview } from "@/types"
+import "@/ui-kit/styles/features/settings-forms.css"
+import "@/ui-kit/styles/features/memory.css"
 
 // Defines exact native targets and parent-owned operation occupancy for restart.
 // 定义重新启用的准确原生目标及父级拥有的操作占用状态。
@@ -83,14 +85,14 @@ export function VmmNativeSessionRestart({ projectId, sessions, busy, onBusyChang
   }
 
   if (!eligible) return null
-  return <AlertDialog open={visiblePreview !== null} onOpenChange={(open) => { if (!open && !pending) setPreview(null) }}><div className="space-y-2">
+  return <AlertDialog open={visiblePreview !== null} onOpenChange={(open) => { if (!open && !pending) setPreview(null) }}><div className="vk-form-stack">
     <AlertDialogTrigger asChild><Button type="button" variant="outline" disabled={busy || pending} onClick={() => void prepare()}>{t("memory.sessionRestart.action")}</Button></AlertDialogTrigger>
-    {error ? <p role="alert" className="text-sm text-destructive">{t("memory.sessionRestart.failed")}</p> : null}
+    {error ? <p role="alert" className="vk-field-error">{t("memory.sessionRestart.failed")}</p> : null}
       <AlertDialogContent>
         <AlertDialogHeader><AlertDialogTitle>{t("memory.sessionRestart.action")}</AlertDialogTitle><AlertDialogDescription>{t("memory.sessionRestart.description")}</AlertDialogDescription></AlertDialogHeader>
-        <ul className="max-h-64 space-y-2 overflow-y-auto">{visiblePreview?.selection.sessionSourceIds.map((id) => <li key={id}>
-          <p className="break-all text-sm">{sessions.find((session) => session.sessionSourceId === id)?.displayTitle ?? id}</p>
-          <p className="break-all font-mono text-xs text-muted-foreground">{id}</p>
+        <ul className="vk-mem-scroll-list vk-form-stack">{visiblePreview?.selection.sessionSourceIds.map((id) => <li key={id}>
+          <p className="vk-form-break vk-form-sm">{sessions.find((session) => session.sessionSourceId === id)?.displayTitle ?? id}</p>
+          <p className="vk-form-codeline vk-faint">{id}</p>
         </li>)}</ul>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy || pending}>{t("memory.common.cancel")}</AlertDialogCancel>

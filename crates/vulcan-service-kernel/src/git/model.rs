@@ -136,6 +136,9 @@ pub(crate) struct GitCommitActionResponse {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WebuiWorkspaceDiffSnapshot {
+    /// Whether the workspace resolved to a Git repository; false means every Git field is empty.
+    /// 工作区是否解析到 Git 仓库；为 false 时所有 Git 字段均为空。
+    pub(crate) git_repository: bool,
     /// Repository root used for the Git command.
     /// Git 命令使用的仓库根目录。
     pub(crate) repository_root: String,

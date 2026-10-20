@@ -1,26 +1,27 @@
-import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
+import { DirectoryRow, WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react"
 import { Copy, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Search, Tags, Trash2 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-import { agentSkillsCatalogSummary, type AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
+import { localizedAgentSkillCategoryName, type AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
 import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "@/components/features/agent-skills/agent-skill-management-dialogs"
 import { hasLinkedGitHubSourceOrigin, SourceOriginLink } from "@/components/features/source-origin-link"
-import { PageEmptyState } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
-import { Button, IconButton } from "@/components/ui/button"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
-import { FilterChip, FilterChipGroup } from "@/components/ui/choice-controls"
+import { PageEmptyState, PageToolbar } from "@/components/page"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group"
+import { Badge } from "@/ui-kit/primitives/badge"
+import { Button, IconButton } from "@/ui-kit/primitives/button"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog"
+import { FilterChip, FilterChipGroup } from "@/ui-kit/primitives/choice-controls"
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
+} from "@/ui-kit/primitives/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
+import { Switch } from "@/ui-kit/primitives/switch"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type {
   AgentSkillCategorySummary,
@@ -227,55 +228,36 @@ export function AgentSkillsArea(props: {
   return (
     <section className="skill-management-surface agent-management-surface agent-skills-management-surface">
       <div className="skill-page-body agent-skill-page-body">
-        <div className="agent-catalog-toolbar">
-          <div className="agent-catalog-toolbar-main">
-            <div className="agent-catalog-toolbar-heading">
-              <h2>{t("agentSkills.skills")}</h2>
-              <p>{agentSkillsCatalogSummary(props.workbench.agentSkills, t)}</p>
-            </div>
-            <div className="agent-catalog-toolbar-actions">
-              <Button disabled={pageBusy} onClick={() => openEditor(null)}>
-                <Plus size={15} />
-                {t("agentSkills.createSkill")}
-              </Button>
-              <Button
-                disabled={pageBusy}
-                onClick={() => {
-                  setCategoryDialogOpen(true)
-                }}
-                variant="outline"
-              >
-                <Tags size={15} />
-                {t("agentSkills.manageCategories")}
-              </Button>
-              <Button
-                disabled={pageBusy}
-                onClick={() => void runCatalogAction("open-directory", props.actions.onOpenAgentSkillsUserDirectory)}
-                variant="outline"
-              >
-                <FolderOpen size={15} />
-                {t("agentSkills.skillDirectory")}
-              </Button>
-              <Button
-                disabled={pageBusy}
-                onClick={() => void runCatalogAction("refresh", props.actions.onRefreshAgentSkills)}
-                variant="outline"
-              >
-                <RefreshCw size={15} />
-                {t("agentSkills.refreshCatalog")}
-              </Button>
-            </div>
-          </div>
-          <div className="agent-catalog-filter-row">
-            <label className="agent-catalog-search-input">
-              <Search size={15} />
-              <input
+        <PageToolbar
+          actions={<>
+            <Button disabled={pageBusy} onClick={() => void runCatalogAction("refresh", props.actions.onRefreshAgentSkills)} size="sm" variant="ghost">
+              <RefreshCw size={15} />
+              {t("agentSkills.refreshCatalog")}
+            </Button>
+            <Button disabled={pageBusy} onClick={() => void runCatalogAction("open-directory", props.actions.onOpenAgentSkillsUserDirectory)} size="sm" variant="ghost">
+              <FolderOpen size={15} />
+              {t("agentSkills.skillDirectory")}
+            </Button>
+            <Button disabled={pageBusy} onClick={() => setCategoryDialogOpen(true)} size="sm" variant="ghost">
+              <Tags size={15} />
+              {t("agentSkills.manageCategories")}
+            </Button>
+            <Button disabled={pageBusy} onClick={() => openEditor(null)} size="sm">
+              <Plus size={15} />
+              {t("agentSkills.createSkill")}
+            </Button>
+          </>}
+          className="agent-catalog-toolbar"
+        >
+            <InputGroup className="agent-catalog-search">
+              <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
+              <InputGroupInput
                 aria-label={t("agentSkills.searchSkills")}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder={t("agentSkills.searchNamesDescriptionsTags")}
                 value={searchQuery}
               />
-            </label>
+            </InputGroup>
             <FilterChipGroup aria-label={t("agentSkills.filterSkillsByState")}>
               <FilterChip onClick={() => setStatusFilter("all")} selected={statusFilter === "all"}>{t("agentSkills.all")}</FilterChip>
               <FilterChip onClick={() => setStatusFilter("enabled")} selected={statusFilter === "enabled"}>{t("agentSkills.enabled")}</FilterChip>
@@ -283,7 +265,7 @@ export function AgentSkillsArea(props: {
               <FilterChip onClick={() => setStatusFilter("issues")} selected={statusFilter === "issues"}>{t("agentSkills.issues")}</FilterChip>
             </FilterChipGroup>
             <Select onValueChange={(value) => setSourceFilter(value as AgentSkillSourceFilter)} value={sourceFilter}>
-              <SelectTrigger aria-label={t("agentSkills.filterSkillsBySource")} className="agent-catalog-status-select">
+              <SelectTrigger aria-label={t("agentSkills.filterSkillsBySource")} size="sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -294,8 +276,7 @@ export function AgentSkillsArea(props: {
                 <SelectItem value="overrides">{t("agentSkills.overrides")}</SelectItem>
               </SelectContent>
             </Select>
-          </div>
-        </div>
+        </PageToolbar>
 
         {props.workbench.agentSkills.errors.length > 0 ? (
           <div className="agent-catalog-issues">
@@ -398,7 +379,7 @@ export function AgentSkillsArea(props: {
               ? (formatMessage(t("agentSkills.removeTheUserOverride"), { value: localizedAgentSkillName(pendingMutation.record, locale) }))
               : (formatMessage(t("agentSkills.deleteUserSkillAnd"), { value: localizedAgentSkillName(pendingMutation.record, locale) }))) : ""}</AlertDialogDescription>
           </AlertDialogHeader>
-          {actionError ? <p role="alert" className="text-sm text-destructive">{actionError}</p> : null}
+          {actionError ? <p role="alert" className="vk-field-error">{actionError}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={pageBusy}>{t("agentSkills.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={pageBusy} onClick={(event) => {
@@ -448,19 +429,16 @@ export function AgentSkillCategoryMenu(props: {
 
   return (
     <WorkspaceDirectoryMenu ariaLabel={t("agentSkills.skillCategories")} heading={t("agentSkills.categories")}>
-      <button className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === "" ? "active" : ""}`} aria-current={props.selectedCategoryId === "" ? "page" : undefined} onClick={() => props.onSelectCategory("")} type="button">
-        <Tags size={15} />
-        <span>{t("agentSkills.all")}</span>
-        <strong>{effectiveRecords.length}</strong>
-      </button>
+      <DirectoryRow active={props.selectedCategoryId === ""} count={effectiveRecords.length} icon={<Tags />} label={t("agentSkills.all")} onSelect={() => props.onSelectCategory("")} />
       {props.workbench.agentSkills.categories.map((category) => (
-        <div className={`workspace-tool-panel-menu-row agent-skill-category-floating-row ${props.selectedCategoryId === category.categoryId ? "active" : ""}`} key={category.categoryId}>
-          <button className="agent-skill-category-floating-main" aria-current={props.selectedCategoryId === category.categoryId ? "page" : undefined} onClick={() => props.onSelectCategory(category.categoryId)} type="button">
-            <span className="agent-category-floating-icon" style={{ backgroundColor: category.color }}>{category.emoji}</span>
-            <span>{localizedAgentSkillCategory(category, locale, t)}</span>
-            <strong>{countByCategory.get(category.categoryId) ?? 0}</strong>
-          </button>
-        </div>
+        <DirectoryRow
+          active={props.selectedCategoryId === category.categoryId}
+          count={countByCategory.get(category.categoryId) ?? 0}
+          key={category.categoryId}
+          label={localizedAgentSkillCategory(category, locale, t)}
+          onSelect={() => props.onSelectCategory(category.categoryId)}
+          swatch={{ glyph: category.emoji, color: category.color }}
+        />
       ))}
     </WorkspaceDirectoryMenu>
   )
@@ -489,7 +467,7 @@ function AgentSkillDetailDialog(props: {
   const category = record ? props.categories.find((item) => item.categoryId === record.categoryId) : undefined
   return (
     <Dialog onOpenChange={props.onOpenChange} open={record !== null}>
-      <DialogContent className="agent-skill-detail-dialog grid-rows-[auto_minmax(0,1fr)]" size="lg" scrollMode="content-scroll">
+      <DialogContent className="agent-skill-detail-dialog" size="lg" scrollMode="content-scroll">
         <DialogHeader>
           <DialogTitle>{record ? localizedAgentSkillName(record, props.locale) : "Agent Skill"}</DialogTitle>
           <DialogDescription>{record ? localizedAgentSkillScope(record, t) : ""}</DialogDescription>
@@ -547,9 +525,7 @@ function localizedAgentSkillCategory(category: AgentSkillCategorySummary | undef
   if (!category) {
     return t("agentSkills.uncategorized")
   }
-  return category.locales[locale]?.name
-    ?? Object.entries(category.locales).find(([candidate]) => candidate.split("-")[0] === locale.split("-")[0])?.[1].name
-    ?? category.name
+  return localizedAgentSkillCategoryName(category, locale, t)
 }
 
 // localizedAgentSkillOrigin resolves host-known provenance kinds without rewriting third-party labels.
@@ -599,4 +575,4 @@ function agentSkillMatchesSearch(record: AgentSkillRecordSummary, query: string)
 }
 // Directory-only rules follow this lazy owner; shared workbench and responsive rules remain global.
 // 目录专有规则随此懒加载归属载入；共用工作台与响应式规则保持全局。
-import "@/styles/skill-directory.css";
+import "@/ui-kit/styles/features/skill-directory.css";

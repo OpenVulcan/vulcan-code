@@ -1,76 +1,400 @@
-/* Page kit: the host components behind sdk.components (PageBody, PageTabs, PageToolbar, PageSection,
- * MetricGrid, PageTable, charts...) and the declarative kind: settings renderer. Plugin authors keep
- * the same component names and props; only this implementation and look change. */
+/* Page kit: the host components behind sdk.components (PageBody, PageTabs, PageToolbar, PageSection, MetricGrid,
+ * PageTable...) and the directory frame that hosts feature pages. Plugin authors keep the same component names and
+ * props; only this implementation and look change. */
+/* 页面套件：sdk.components 背后的宿主组件（PageBody、PageTabs、PageToolbar、PageSection、MetricGrid、PageTable 等）
+ * 以及承载功能页的目录外壳。插件作者沿用相同组件名与属性，只有实现与外观改变。 */
 
-.vk-page { display: grid; gap: calc(var(--vk-u) * 5); min-width: 0; }
+/* ---------- Page frame ---------- */
+.vk-page { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 4); min-width: 0; }
+.vk-page[data-width="readable"] { width: 100%; max-width: var(--vk-readable-w); margin-inline: auto; }
+.vk-page > .vk-page-tabs { margin-bottom: calc(var(--vk-u) * -1); }
+/* A fieldset that locks a whole editable page while it saves keeps the page rhythm between its sections. */
+/* 保存期间锁定整个可编辑页面的字段组，在其区块之间保持页面节奏。 */
+.vk-page > .vk-fieldset { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 4); }
 
-.vk-page-tabs {
+.vk-page-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); min-width: 0; }
+.vk-page-toolbar-start { display: flex; flex: 1 1 280px; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; }
+/* Toolbar search and filter inputs share one width so pages and plugins never size them individually. */
+/* 工具栏搜索与筛选输入框共用同一宽度，页面与插件不再各自设定尺寸。 */
+.vk-page-toolbar-start > :is(.vk-input, .vk-input-wrap) { width: min(320px, 100%); }
+.vk-page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-page-toolbar > .vk-page-actions { margin-left: auto; }
+
+.vk-page-panel { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 4); min-width: 0; }
+.vk-page-panel[hidden] { display: none; }
+
+/* The commit bar sticks to the scrolling page bottom; unsaved changes lift it with the ember edge. */
+/* 提交栏吸附在滚动页面底部；存在未保存更改时以余烬色边缘抬起。 */
+.vk-page-actionbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   display: flex;
-  align-items: stretch;
-  gap: calc(var(--vk-u) * 3);
-  border-bottom: var(--vk-bw) solid var(--vk-line);
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3);
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-raised);
+  transition: box-shadow var(--vk-t-med) var(--vk-ease), border-color var(--vk-t-med) var(--vk-ease);
 }
-.vk-page-tabs > .vk-tabs { flex: 1; }
-.vk-page-tabs > .vk-actions { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); flex: none; }
+.vk-page-actionbar[data-pending] { border-color: var(--vk-line-strong); box-shadow: inset 2px 0 0 var(--vk-ember), var(--vk-shadow-2); }
+.vk-page-actionbar-status { min-width: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.vk-page-actionbar > .vk-page-actions { margin-left: auto; }
 
-.vk-page-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
-.vk-page-toolbar > .vk-input-wrap { width: min(18rem, 100%); }
-.vk-page-toolbar > .vk-actions { margin-left: auto; display: flex; gap: calc(var(--vk-u) * 1.5); align-items: center; }
+/* ---------- Page atmosphere ---------- */
+/* A faint drafting grid fades down from the top of every settings, plugin and data page, with one ember horizon line,
+   so the pages read as one console instead of a bare form; it sits behind the content and never takes pointer input. */
+/* 每个设置、插件与数据页面顶部向下淡出一层浅制图网格，并有一条余烬色地平线，使各页读作同一控制台而非空白表单；
+   它位于内容之后，从不接收指针输入。 */
+.vk-atmosphere { position: relative; isolation: isolate; }
+.vk-atmosphere::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--vk-line-soft) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--vk-line-soft) 1px, transparent 1px);
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(130% 60% at 50% 0%, #000 0%, transparent 72%);
+  mask-image: radial-gradient(130% 60% at 50% 0%, #000 0%, transparent 72%);
+}
+.vk-atmosphere::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: -1;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--vk-ember) 55%, transparent) 22%, transparent 64%);
+}
 
-.vk-page-section { display: grid; min-width: 0; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); backdrop-filter: blur(var(--vk-panel-blur)); }
-.vk-page-section-head { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
-.vk-page-section-head > div { flex: 1; min-width: min(100%, 12rem); }
-.vk-page-section-head h3 { font-size: var(--vk-fs-md); font-weight: 600; }
-.vk-page-section-head p { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
-.vk-page-section-head > .vk-actions { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); align-items: center; }
-.vk-page-section-body { padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 4) calc(var(--vk-u) * 3); min-width: 0; }
-.vk-page-section-body[data-flush] { padding: 0; }
-.vk-page-section-body[data-pad] { padding: calc(var(--vk-u) * 4); }
-.vk-page-section-foot { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4); border-top: var(--vk-bw) solid var(--vk-line-soft); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
-.vk-page-section-foot > .vk-actions { margin-left: auto; display: flex; gap: calc(var(--vk-u) * 1); }
-.vk-page-links { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4); border-top: var(--vk-bw) solid var(--vk-line-soft); font-size: var(--vk-fs-sm); }
-.vk-page-links a { color: var(--vk-signal); display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1); text-decoration: none; }
+/* ---------- Sections: one square panel per concern ---------- */
+.vk-page-section {
+  container: vk-page-section / inline-size;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+}
+.vk-page-section-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--vk-u);
+  padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4) 0;
+}
+.vk-page-section-head:has(> .vk-page-actions) { grid-template-columns: minmax(0, 1fr) auto; }
+.vk-page-section-head > .vk-page-actions { grid-column: 2; grid-row: 1 / span 2; align-self: start; justify-content: flex-end; }
+.vk-page-section-title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vk-u) calc(var(--vk-u) * 2); min-width: 0; }
+.vk-page-section-title > :is(h2, h3, h4) { margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-lg); font-weight: 600; line-height: var(--vk-lh-tight); }
+.vk-page-section-head > p { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+.vk-page-section-guide { margin: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4) 0; }
+.vk-page-section-body { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4) calc(var(--vk-u) * 4); }
+/* Rows layout makes rows and items flush with dividers. */
+/* rows 布局使行与列表项贴边并以分隔线排列。 */
+.vk-page-section[data-layout="rows"] > .vk-page-section-body { gap: 0; padding: calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 1); }
+.vk-page-section[data-layout="rows"] > .vk-page-section-body > :is(.vk-page-row, .vk-page-item) { padding-inline: calc(var(--vk-u) * 4); }
 
-.vk-page-hint { display: flex; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
-.vk-page-guide { display: grid; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4); border: var(--vk-bw) dashed var(--vk-line-strong); }
-.vk-page-guide ol { padding-left: 1.2em; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+/* Every page frames its sections the same way: a running index before the title, an ember corner tick, a slight lift
+   and rows that answer the pointer. Sections nested in another section, or shown inside a dialog or sheet, stay plain. */
+/* 每个页面以同一方式呈现分区：标题前的顺序编号、余烬色角标、轻微浮起，行会响应指针。
+   嵌套在其他分区内或显示在对话框、抽屉中的分区保持朴素。 */
+:is(.vk-page, .settings-page-body) { counter-reset: vk-page-section; }
+.vk-page-section { position: relative; box-shadow: var(--vk-shadow-1); counter-increment: vk-page-section; transition: border-color var(--vk-t-med) var(--vk-ease); }
+.vk-page-section::before { content: ""; position: absolute; top: -1px; left: -1px; width: var(--vk-tick-w); height: var(--vk-tick-h); background: var(--vk-ember); opacity: 0.8; pointer-events: none; }
+.vk-page-section:hover { border-color: var(--vk-line-strong); }
+.vk-page-section-title::before {
+  content: counter(vk-page-section, decimal-leading-zero);
+  padding: 0 calc(var(--vk-u) * 1.25);
+  border: var(--vk-bw) solid var(--vk-line);
+  color: var(--vk-ink-3);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-2xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+}
+.vk-page-section[data-layout="rows"] > .vk-page-section-body > .vk-page-row { transition: background-color var(--vk-t-fast) var(--vk-ease); }
+.vk-page-section[data-layout="rows"] > .vk-page-section-body > .vk-page-row:hover { background: color-mix(in srgb, var(--vk-sunken) 70%, transparent); }
+:is(.vk-page-section, [data-slot="dialog-content"], [data-slot="sheet-content"]) .vk-page-section { counter-increment: none; box-shadow: none; }
+:is(.vk-page-section, [data-slot="dialog-content"], [data-slot="sheet-content"]) .vk-page-section::before,
+.vk-page-section .vk-page-section .vk-page-section-title::before,
+:is([data-slot="dialog-content"], [data-slot="sheet-content"]) .vk-page-section-title::before { content: none; }
+/* Top-level panel cards on atmosphere pages take the same tick and lift, so card-built pages match section-built ones. */
+/* 氛围页面上的顶层面板卡片带同样的角标与浮起，使以卡片构成的页面与以分区构成的页面一致。 */
+.vk-atmosphere .vk-panel-card:not(.vk-panel-card .vk-panel-card) { position: relative; overflow: visible; box-shadow: var(--vk-shadow-1); transition: border-color var(--vk-t-med) var(--vk-ease); }
+.vk-atmosphere .vk-panel-card:not(.vk-panel-card .vk-panel-card)::before { content: ""; position: absolute; top: -1px; left: -1px; width: var(--vk-tick-w); height: var(--vk-tick-h); background: var(--vk-ember); opacity: 0.8; pointer-events: none; }
+.vk-atmosphere .vk-panel-card:not(.vk-panel-card .vk-panel-card):hover { border-color: var(--vk-line-strong); }
+.vk-page-section[data-layout="rows"] > .vk-page-section-body > * + :is(.vk-page-row, .vk-page-item) { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-page-section[data-layout="rows"] > .vk-page-section-body > :is(.vk-alert, .vk-empty) { width: auto; margin: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 4) calc(var(--vk-u) * 3); }
+.vk-page-section-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4);
+  padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 4);
+  border-top: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+.vk-page-section-foot[data-align="start"] { justify-content: flex-start; }
 
-.vk-page-actionbar { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 3) 0; border-top: var(--vk-bw) solid var(--vk-line); background: color-mix(in srgb, var(--vk-ground) 88%, transparent); backdrop-filter: blur(8px); }
-.vk-page-actionbar > .vk-faint { margin-right: auto; font-size: var(--vk-fs-sm); }
+/* ---------- Rows: name and explanation on the start side, controls on the end ---------- */
+.vk-page-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 5); min-width: 0; padding-block: calc(var(--vk-u) * 3); }
+.vk-page-row[data-stacked] { flex-direction: column; align-items: stretch; }
+.vk-page-row-text { display: grid; flex: 1 1 260px; gap: 2px; min-width: 0; }
+/* In a column the text basis would become a height, so stacked rows size the text to its content. */
+/* 纵向排列时文字的伸缩基准会变成高度，因此堆叠行让文字按内容定高。 */
+.vk-page-row[data-stacked] > .vk-page-row-text { flex: none; }
+.vk-page-row-label { color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 500; }
+.vk-page-row-text > p,
+.vk-page-item-main > p { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+.vk-page-row > .vk-page-actions { justify-content: flex-end; }
+.vk-page-row[data-stacked] > .vk-page-actions { justify-content: flex-start; }
 
-/* Declarative settings: inline layout packs compact checkboxes side by side. */
-.vk-inline-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 11rem), 1fr)); gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4); padding: calc(var(--vk-u) * 3) 0; }
-.vk-checklist-group { display: grid; gap: calc(var(--vk-u) * 1.5); }
-.vk-checklist-group + .vk-checklist-group { margin-top: calc(var(--vk-u) * 3); }
-.vk-credential { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); justify-content: flex-end; }
-.vk-credential > .vk-input { width: 14rem; max-width: 100%; }
+.vk-page-hint { margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: var(--vk-lh-ui); }
 
-/* Heatmap. */
-.vk-heatmap { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 1fr); gap: 2px; overflow-x: auto; padding-bottom: calc(var(--vk-u) * 1); }
-.vk-heatmap > i { width: 0.78rem; height: 0.78rem; background: var(--vk-line-soft); }
-.vk-heatmap > i[data-l="1"] { background: color-mix(in srgb, var(--vk-chart-2) 30%, var(--vk-line-soft)); }
-.vk-heatmap > i[data-l="2"] { background: color-mix(in srgb, var(--vk-chart-2) 55%, var(--vk-line-soft)); }
-.vk-heatmap > i[data-l="3"] { background: color-mix(in srgb, var(--vk-chart-2) 80%, var(--vk-line-soft)); }
-.vk-heatmap > i[data-l="4"] { background: var(--vk-chart-2); }
-.vk-heat-legend { display: flex; align-items: center; gap: 2px; font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
-.vk-heat-legend > i { width: 0.7rem; height: 0.7rem; }
+/* The guide answers "when / how / effect" in a dashed box so it reads as help, not content. */
+/* 说明以虚线框回答「何时 / 如何 / 效果」，使其读作帮助而非内容。 */
+.vk-page-guide {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4);
+  margin: 0;
+  padding: calc(var(--vk-u) * 3);
+  border: var(--vk-bw) dashed var(--vk-line-strong);
+  font-size: var(--vk-fs-sm);
+}
+.vk-page-guide dt { color: var(--vk-ink); font-weight: 600; }
+.vk-page-guide dd { margin: 2px 0 0; color: var(--vk-ink-2); line-height: var(--vk-lh-ui); }
 
-/* Charts drawn as SVG from data; text and marks take theme tokens. */
-.vk-chart { width: 100%; height: auto; display: block; overflow: visible; }
-.vk-chart text { fill: var(--vk-ink-3); font-size: 10px; font-family: var(--vk-font-ui); }
-.vk-chart .grid { stroke: var(--vk-line-soft); stroke-width: 1; }
-.vk-chart .bar { fill: var(--vk-chart-1); }
-.vk-chart .bar:hover { fill: var(--vk-signal); }
-.vk-chart .bar[data-last] { fill: var(--vk-ember); }
-.vk-chart .l1 { stroke: var(--vk-chart-1); fill: none; stroke-width: 1.6; }
-.vk-chart .l2 { stroke: var(--vk-chart-2); fill: none; stroke-width: 1.6; }
-.vk-chart .a1 { fill: color-mix(in srgb, var(--vk-chart-1) 12%, transparent); }
-.vk-chart .end { fill: var(--vk-chart-1); stroke: var(--vk-panel); stroke-width: 2; }
-.vk-legend { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 3); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
-.vk-legend > span { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); }
-.vk-legend > span > i { width: 0.7rem; height: 2px; background: var(--c); }
+/* ---------- Feedback ---------- */
+.vk-page-notice .vk-alert-description { white-space: pre-line; }
+.vk-page-notice pre,
+.vk-page-details pre,
+.vk-diag {
+  max-height: 200px;
+  margin: calc(var(--vk-u) * 1.5) 0 0;
+  padding: calc(var(--vk-u) * 2);
+  overflow: auto;
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-sunken);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-2xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.vk-diag { margin: 0; color: var(--vk-bad); }
+.vk-region-fault { margin: calc(var(--vk-u) * 4); }
+.vk-region-wait { display: flex; min-height: 8rem; align-items: center; justify-content: center; }
+.vk-page-notice-details { margin-top: var(--vk-u); }
+.vk-page-notice > .vk-page-actions { margin-top: calc(var(--vk-u) * 1.5); }
+.vk-page-notice:has(> svg) > .vk-page-actions { grid-column: 2; }
+.vk-page-empty[data-size="inline"] { flex: 0 0 auto; padding: calc(var(--vk-u) * 5) calc(var(--vk-u) * 4); }
+.vk-page-empty[data-size="panel"] { min-height: 220px; }
 
-/* Plugin load state rows (extension loading). */
-.vk-load-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: calc(var(--vk-u) * 3); align-items: center; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
-.vk-load-row:last-child { border-bottom: 0; }
-.vk-load-row .vk-progress { margin-top: calc(var(--vk-u) * 1.5); }
+/* ---------- Data: facts, metrics, details ---------- */
+.vk-page-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4); min-width: 0; margin: 0; font-size: var(--vk-fs-sm); }
+.vk-page-facts[data-layout="list"] { grid-template-columns: minmax(0, 1fr); }
+.vk-page-facts[data-layout="list"] > div { display: grid; grid-template-columns: minmax(96px, 30%) minmax(0, 1fr); gap: calc(var(--vk-u) * 3); }
+.vk-page-facts[data-layout="tiles"] { grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: calc(var(--vk-u) * 2); }
+.vk-page-facts[data-layout="tiles"] > div { display: grid; gap: 2px; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); }
+.vk-page-facts[data-layout="tiles"] dt { font-size: var(--vk-fs-xs); }
+.vk-page-facts[data-layout="tiles"] dd { font-size: var(--vk-fs-lg); font-weight: 650; font-variant-numeric: tabular-nums; }
+.vk-page-facts[data-layout="tiles"] > div[data-tone="attention"] { box-shadow: inset 2px 0 0 var(--vk-warn); }
+.vk-page-facts > div[data-tone="attention"] dd { color: var(--vk-warn); }
+.vk-page-facts dt { color: var(--vk-ink-3); }
+.vk-page-facts dd { min-width: 0; margin: 0; color: var(--vk-ink); overflow-wrap: anywhere; }
+
+.vk-metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: calc(var(--vk-u) * 2.5); min-width: 0; }
+.vk-metric {
+  position: relative;
+  display: grid;
+  grid-template-rows: 18px minmax(28px, 1fr) 16px;
+  min-width: 0;
+  height: 96px;
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3.5);
+  overflow: hidden;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  container-type: inline-size;
+}
+.vk-metric::before { content: ""; position: absolute; top: 0; left: 0; width: calc(var(--vk-u) * 5); height: 2px; background: var(--vk-ember); opacity: 0.7; }
+.vk-metric > header { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; color: var(--vk-ink-3); }
+.vk-metric > header > svg { flex: none; width: 14px; height: 14px; }
+.vk-metric > header > span,
+.vk-metric > small { min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+/* Values scale with the card width and wrap to a second line before they would be cut off. */
+/* 数值随卡片宽度缩放，在被截断前换到第二行。 */
+.vk-metric > strong { display: -webkit-box; align-self: center; min-width: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--vk-ink); font-size: clamp(15px, 10cqi, 25px); font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.15; overflow-wrap: anywhere; }
+.vk-metric > small { align-self: end; font-size: var(--vk-fs-xs); }
+
+.vk-page-details { font-size: var(--vk-fs-xs); }
+
+/* ---------- PageTable: compact rows inside a section ---------- */
+.vk-page-table { font-size: var(--vk-fs-sm); }
+.vk-page-table th { padding: calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); }
+.vk-page-table td { padding: calc(var(--vk-u) * 2); vertical-align: middle; }
+.vk-page-table[data-layout="fixed"] { table-layout: fixed; }
+.vk-page-table :is(th, td)[data-wrap] { white-space: normal; overflow-wrap: anywhere; }
+.vk-page-table tr[aria-selected="true"] > td:first-child { box-shadow: inset 2px 0 0 var(--vk-ember); }
+
+/* ---------- Item lists: findings, rules, resources ---------- */
+.vk-page-items { display: flex; flex-direction: column; min-width: 0; }
+.vk-page-items:empty { display: none; }
+.vk-page-items > .vk-alert { margin-block: calc(var(--vk-u) * 2); }
+.vk-page-items + .vk-page-items { margin-top: calc(var(--vk-u) * 2); }
+.vk-page-items > .vk-label { padding-bottom: var(--vk-u); border-bottom: var(--vk-bw) solid var(--vk-line); }
+.vk-page-items > .vk-page-item + .vk-page-item,
+.vk-page-section[data-layout="padded"] > .vk-page-section-body > .vk-page-item + .vk-page-item { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-page-item { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 3); min-width: 0; padding-block: calc(var(--vk-u) * 3); }
+.vk-page-item-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: calc(var(--vk-u) * 7);
+  height: calc(var(--vk-u) * 7);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-sunken);
+  color: var(--vk-tone, var(--vk-ink-3));
+}
+.vk-page-item[data-tone] > .vk-page-item-icon { border-color: color-mix(in srgb, var(--vk-tone) 35%, var(--vk-line)); background: color-mix(in srgb, var(--vk-tone) 8%, var(--vk-sunken)); }
+.vk-page-item-icon svg { width: 16px; height: 16px; }
+.vk-page-item-main { display: flex; flex: 1 1 auto; flex-direction: column; gap: var(--vk-u); min-width: 0; }
+.vk-page-item-main > header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vk-u) calc(var(--vk-u) * 2); min-width: 0; }
+.vk-page-item-main > header > strong { color: var(--vk-ink); font-size: var(--vk-fs-md); font-weight: 500; overflow-wrap: anywhere; }
+.vk-page-item-main > header > span { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vk-u) calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-page-item > .vk-page-actions { flex: none; justify-content: flex-end; }
+
+/* Narrow sections, including drawers, move row actions under the text. */
+/* 窄区块（含抽屉）将行操作移到文字下方。 */
+@container vk-page-section (max-width: 560px) {
+  .vk-page-item { flex-wrap: wrap; }
+  .vk-page-item > .vk-page-actions { width: 100%; justify-content: flex-start; }
+}
+
+/* ---------- Page tabs: underlined strip with one sliding ember indicator ---------- */
+.vk-page-tabs { display: flex; align-items: stretch; gap: calc(var(--vk-u) * 3); min-width: 0; border-bottom: var(--vk-bw) solid var(--vk-line); }
+.vk-page-tabs > .vk-tabstrip { flex: 1 1 auto; border-bottom: 0; }
+.vk-page-tabs > .vk-page-actions { flex: none; justify-content: flex-end; padding-bottom: var(--vk-u); }
+.vk-tabstrip {
+  position: relative;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  scrollbar-width: none;
+}
+.vk-tabstrip :is(.vk-dir-head) { display: none; }
+.vk-tabstrip :is(.vk-dir, .vk-dir-list, .vk-dir-group) { display: flex; flex-wrap: nowrap; gap: 2px; padding: 0; }
+.vk-tabstrip .vk-dir-row {
+  flex: none;
+  width: auto;
+  min-height: calc(var(--vk-h-lg) + 2px);
+  padding: 0 calc(var(--vk-u) * 3);
+  background: transparent;
+  box-shadow: none;
+  white-space: nowrap;
+}
+.vk-tabstrip .vk-dir-row:hover { background: var(--vk-hover); }
+.vk-tabstrip .vk-dir-row[aria-current="page"] { background: transparent; box-shadow: none; color: var(--vk-ink); font-weight: 600; }
+/* One shared underline slides between tabs; the strip owner measures the active row and supplies its offset and width. */
+/* 一条共享下划线在标签间滑动；标签条持有者测量当前行并提供其偏移与宽度。 */
+.vk-tabstrip-ink {
+  --vk-ink-inset: calc(var(--vk-u) * 3);
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: calc(var(--tab-indicator-width, 0px) - var(--vk-ink-inset) * 2);
+  height: 2px;
+  background: var(--vk-ember);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--vk-ember) 55%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(calc(var(--tab-indicator-x, 0px) + var(--vk-ink-inset)));
+}
+.vk-tabstrip-ink[data-visible="true"] { opacity: 1; }
+.vk-tabstrip-ink[data-animate="true"] { transition: transform 240ms var(--vk-ease), width 240ms var(--vk-ease), opacity var(--vk-t-fast) var(--vk-ease); }
+
+/* ---------- Directory menus: feature-owned section lists ---------- */
+.vk-dir { display: grid; gap: 1px; min-width: 0; }
+.vk-dir-groups { display: grid; align-content: start; gap: calc(var(--vk-u) * 5); min-width: 0; }
+.vk-dir + .vk-dir,
+.vk-dir-group + .vk-dir-group { margin-top: calc(var(--vk-u) * 4); }
+.vk-dir-group { display: grid; gap: 1px; min-width: 0; }
+.vk-dir-list { display: grid; gap: 1px; min-width: 0; }
+.vk-dir-head { margin: 0; padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2) var(--vk-u); }
+.vk-dir-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2.5);
+  width: 100%;
+  min-width: 0;
+  min-height: var(--vk-h-lg);
+  padding: 0 calc(var(--vk-u) * 2.5);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-dir-row:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-dir-row[aria-current="page"] { background: var(--vk-panel); color: var(--vk-ink); font-weight: 600; box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-dir-row:disabled { opacity: 0.45; cursor: not-allowed; }
+.vk-dir-row:disabled:hover { background: transparent; color: var(--vk-ink-2); }
+.vk-dir-row:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
+.vk-dir-row > svg { flex: none; width: 1rem; height: 1rem; color: var(--vk-ink-3); }
+.vk-dir-row[aria-current="page"] > svg { color: var(--vk-ember); }
+.vk-dir-row > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-dir-row > small { flex: none; margin-left: auto; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); font-weight: 400; font-variant-numeric: tabular-nums; }
+.vk-dir-row > .vk-dir-swatch {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  background: color-mix(in srgb, var(--vk-dir-swatch, var(--vk-ink-3)) 26%, transparent);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+/* ---------- Directory frame: a column or tab strip beside the page body ---------- */
+.vk-directory { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; container: vk-directory / inline-size; }
+.vk-directory-grid { display: grid; grid-template-columns: 200px minmax(0, 1fr); height: 100%; min-height: 0; }
+.vk-directory-grid[data-navigation-mode="none"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.vk-directory-grid[data-navigation-mode="tabs"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+.vk-directory-nav { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 2.5); border-right: var(--vk-bw) solid var(--vk-line); background: var(--vk-ground-2); }
+.vk-directory-grid[data-navigation-mode="tabs"] > .vk-directory-nav { padding: 0; border-right: 0; background: transparent; }
+.vk-directory-body { width: 100%; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 5.5) calc(var(--vk-u) * 6); }
+.vk-directory-grid[data-navigation-mode="tabs"] > .vk-directory-body { padding: calc(var(--vk-u) * 5) 0 0; }
+/* A full-bleed page (master-detail tools that own their toolbar and scroll regions) fills the body edge to edge;
+   wrappers between the body and the page pass the height through. */
+/* 满幅页面（自带工具栏与滚动区的主从工具）贴边填满正文；正文与页面之间的包装层向下传递高度。 */
+.vk-directory-body:has(.vk-bleed) { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.vk-directory-body:has(.vk-bleed) :has(> .vk-bleed) { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+
+/* Narrow panes keep categories in one horizontally scrollable row so navigation cannot consume the body. */
+/* 窄面板将分类放入单行横向滚动菜单，避免导航占据大半正文。 */
+@container vk-directory (max-width: 720px) {
+  .vk-directory-grid[data-navigation-mode="column"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .vk-directory-grid[data-navigation-mode="column"] > .vk-directory-nav { max-height: 76px; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); border-right: 0; border-bottom: var(--vk-bw) solid var(--vk-line); scrollbar-width: none; }
+  .vk-directory-grid[data-navigation-mode="column"] :is(.vk-dir, .vk-dir-list, .vk-dir-group) { display: flex; flex-wrap: nowrap; gap: calc(var(--vk-u) * 1.5); }
+  .vk-directory-grid[data-navigation-mode="column"] .vk-dir-head { display: none; }
+  .vk-directory-grid[data-navigation-mode="column"] .vk-dir-row { flex: none; width: auto; white-space: nowrap; }
+  .vk-directory-body { padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 3); }
+}
+
+/* Feature menus in the navigation panel beside the rail. */
+/* 轨道旁导航面板中的功能菜单。 */
+.vk-feature-nav { padding: calc(var(--vk-u) * 0.5) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); }
+.vk-feature-nav .vk-dir-row { min-height: var(--vk-h-md); padding: 0 calc(var(--vk-u) * 2); font-size: var(--vk-fs-sm); }

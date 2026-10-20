@@ -12,10 +12,9 @@ import {
 } from "@/diff/diff-highlight";
 import { escapeHtml, tokenSpansToHtml } from "@/diff/diff-shiki-shared";
 import type { DiffFile, DiffLine } from "@/diff/types";
-import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
-import { workspaceFileTreeExtensionLabel } from "@/components/workspace/workspace-file-tree-drawer";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceFileEntrySummary, WorkspaceFileReadResponse } from "@/types";
 
@@ -52,9 +51,6 @@ export function WorkspaceFilePreview(props: {
   // Grants media display permission and opens the selected media file.
   // 授权媒体展示并打开已选中的媒体文件。
   onAllowMediaPreview: (entry: WorkspaceFileEntrySummary) => void;
-  // Closes the current preview and opens the directory drawer.
-  // 关闭当前预览并打开目录抽屉。
-  onClosePreview: () => void;
   // Reloads the exact selected file after a failed read.
   // 读取失败后重新加载精确选中的文件。
   onRetryPreview: () => void;
@@ -77,7 +73,7 @@ export function WorkspaceFilePreview(props: {
     );
   }
   if (props.loading) {
-    return <div className="workspace-file-preview"><StreamPlaceholder className="p-4" label={t("workspaceFilePreview.loading")} count={8} /></div>;
+    return <div className="workspace-file-preview"><StreamPlaceholder className="vk-stream-inset" label={t("workspaceFilePreview.loading")} count={8} /></div>;
   }
   if (props.error) {
     return <div className="workspace-file-preview empty error" role="alert">
@@ -108,7 +104,6 @@ export function WorkspaceFilePreview(props: {
   if (props.preview.kind === "image") {
     return (
       <div className="workspace-file-preview media">
-        <WorkspaceFilePreviewHeader preview={props.preview} onClosePreview={props.onClosePreview} />
         <MediaPathContextMenu locator={props.preview.path}>
           <img alt={props.preview.relativePath} decoding="async" src={props.resolveMediaSourceUrl(props.preview.path)} />
         </MediaPathContextMenu>
@@ -118,7 +113,6 @@ export function WorkspaceFilePreview(props: {
   if (props.preview.kind === "video") {
     return (
       <div className="workspace-file-preview media">
-        <WorkspaceFilePreviewHeader preview={props.preview} onClosePreview={props.onClosePreview} />
         <MediaPathContextMenu locator={props.preview.path}>
           <video aria-label={props.preview.relativePath} controls preload="metadata" src={props.resolveMediaSourceUrl(props.preview.path)} />
         </MediaPathContextMenu>
@@ -128,7 +122,6 @@ export function WorkspaceFilePreview(props: {
   if (props.entry.extension === "md") {
     return (
       <div className="workspace-file-preview markdown">
-        <WorkspaceFilePreviewHeader preview={props.preview} onClosePreview={props.onClosePreview} />
         <div className="workspace-file-preview-markdown">
           <MarkdownImageWorkspacePathProvider value={props.preview.workspacePath}>
             <MarkdownMessage content={props.preview.content ?? ""} eager />
@@ -139,7 +132,6 @@ export function WorkspaceFilePreview(props: {
   }
   return (
     <div className="workspace-file-preview code">
-      <WorkspaceFilePreviewHeader preview={props.preview} onClosePreview={props.onClosePreview} />
       <WorkspaceHighlightedCodePreview preview={props.preview} />
     </div>
   );
@@ -188,37 +180,6 @@ function WorkspaceMediaPermissionPrompt(props: {
   );
 }
 
-// WorkspaceFilePreviewHeader renders the glass overlay title used to reopen the directory drawer.
-// WorkspaceFilePreviewHeader 渲染用于重新打开目录抽屉的玻璃覆盖标题。
-// Parameters: props identifies the preview title/path and directory action; returns the named control for reopening its directory.
-// 参数：props 标识预览标题和路径及目录操作；返回具有名称的重新打开目录控件。
-function WorkspaceFilePreviewHeader(props: {
-  // Loaded preview response shown by the header.
-  // 标题展示的已加载预览响应。
-  preview: WorkspaceFileReadResponse;
-  // Closes the current preview and opens the directory drawer.
-  // 关闭当前预览并打开目录抽屉。
-  onClosePreview: () => void;
-}) {
-  const { t } = useI18n();
-  // iconLabel stores the same compact file-type label used by the shared tree row.
-  // iconLabel 保存与共享目录树行一致的紧凑文件类型标签。
-  const iconLabel = workspaceFilePreviewIconLabel(props.preview);
-  // iconClassName stores the same file-kind palette used by the shared tree row.
-  // iconClassName 保存与共享目录树行一致的文件类型色板。
-  const iconClassName = workspaceFilePreviewIconClassName(props.preview);
-  return (
-    <button className="workspace-file-preview-header" onClick={props.onClosePreview} type="button"
-      aria-label={t("workspaceAudit.openDirectory").replace("{path}", props.preview.relativePath)}>
-      <span className={`diff-file-tree-file-icon workspace-file-preview-format-icon ${iconClassName}`}>
-        {iconLabel}
-      </span>
-      <span className="workspace-file-preview-title-text">{props.preview.relativePath}</span>
-      {props.preview.truncated ? <small>{t("workspaceFilePreview.truncated")}</small> : null}
-    </button>
-  );
-}
-
 // WorkspaceHighlightedCodePreview renders a read-only code preview through the review Shiki pipeline.
 // WorkspaceHighlightedCodePreview 通过审核 Shiki 管线渲染只读代码预览。
 function WorkspaceHighlightedCodePreview(props: {
@@ -248,32 +209,6 @@ function WorkspaceHighlightedCodePreview(props: {
     [diffFile, highlightEnabled, highlightRevision, language],
   );
   return <div className="workspace-file-preview-code-lines">{rows}</div>;
-}
-
-// workspaceFilePreviewIconLabel returns the compact file-type label for the preview title.
-// workspaceFilePreviewIconLabel 返回预览标题使用的紧凑文件类型标签。
-function workspaceFilePreviewIconLabel(
-  // Loaded preview response shown by the title.
-  // 标题展示的已加载预览响应。
-  preview: WorkspaceFileReadResponse,
-): string {
-  if (preview.kind === "image") {
-    return "IMG";
-  }
-  if (preview.kind === "video") {
-    return "VID";
-  }
-  return workspaceFileTreeExtensionLabel(preview.relativePath || preview.path);
-}
-
-// workspaceFilePreviewIconClassName maps preview kinds into the shared review icon palette.
-// workspaceFilePreviewIconClassName 将预览类型映射到共享审核图标色板。
-function workspaceFilePreviewIconClassName(
-  // Loaded preview response shown by the title.
-  // 标题展示的已加载预览响应。
-  preview: WorkspaceFileReadResponse,
-): string {
-  return preview.kind === "code" ? "modified" : "";
 }
 
 // workspacePreviewDiffFile builds a synthetic context-only diff file for code preview highlighting.
