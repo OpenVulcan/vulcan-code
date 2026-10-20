@@ -1,0 +1,36 @@
+/* Review toolbar: the first row picks the repository and the source of the changes with their totals, then the */
+/* view, search, commit, refresh and display options; branch comparison and search add rows under it. */
+/* 审核工具栏：第一行选择仓库与变更来源及其合计，然后是视图、搜索、提交、刷新与显示选项；分支对比与搜索在其下增加行。 */
+.vk-diffbar { position: relative; z-index: 140; display: flex; flex: none; flex-direction: column; min-width: 0; border-bottom: var(--vk-bw) solid var(--vk-line); background: var(--vk-ground); }
+.vk-diffbar-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; min-height: calc(var(--vk-u) * 10); padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2); }
+.vk-diffbar-row + .vk-diffbar-row { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-diffbar-row[data-row="search"] > .vk-input-wrap { flex: 1 1 auto; min-width: 0; }
+.vk-diffbar-row[data-row="search"] .vk-input { width: 100%; }
+.vk-diffbar-acts { display: flex; flex: none; align-items: center; gap: calc(var(--vk-u) * 0.5); margin-left: auto; }
+.vk-diffbar-acts > .vk-btn[data-active] { color: var(--vk-ember); }
+
+.vk-diffbar-pick,
+.vk-diffbar-branch { display: inline-flex; flex: 0 1 auto; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; height: var(--vk-h-sm); padding: 0 calc(var(--vk-u) * 2); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-raised); color: var(--vk-ink); font: inherit; font-size: var(--vk-fs-sm); font-weight: 600; white-space: nowrap; cursor: pointer; transition: border-color var(--vk-t-fast) var(--vk-ease); }
+.vk-diffbar-pick > span:first-of-type,
+.vk-diffbar-branch > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vk-diffbar-pick > svg,
+.vk-diffbar-branch > svg { flex: none; color: var(--vk-ink-3); }
+.vk-diffbar-pick:hover,
+.vk-diffbar-branch:hover { border-color: var(--vk-line-strong); }
+.vk-diffbar-pick[aria-expanded="true"],
+.vk-diffbar-branch[aria-expanded="true"] { border-color: var(--vk-ember); }
+.vk-diffbar-pick[data-kind="repo"] { max-width: 40%; font-weight: 500; }
+.vk-diffbar-branch { font-weight: 500; }
+.vk-diffbar-branch[data-readonly] { border-style: dashed; background: transparent; color: var(--vk-ink-2); cursor: default; }
+.vk-diffbar-count { flex: none; padding: 0 calc(var(--vk-u) * 1.25); background: var(--vk-sunken); color: var(--vk-ink-2); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.vk-diffbar-title { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+
+.vk-pop.vk-diffbar-menu,
+.vk-diffbar-menu { min-width: 12rem; max-width: min(24rem, calc(100vw - 2rem)); }
+.vk-diffbar-menu[data-kind="commits"],
+.vk-diffbar-menu[data-kind="branches"] { max-height: min(24rem, 60vh); overflow-y: auto; }
+.vk-diffbar-menu-main { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-diffbar-menu small { flex: none; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-diffbar-check { flex: none; margin-left: auto; color: var(--vk-ember); }
+.vk-diffbar-menu-search { margin: calc(var(--vk-u) * 1); }
+.vk-diffbar-menu-search .vk-input { width: 100%; }

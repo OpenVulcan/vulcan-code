@@ -67,11 +67,6 @@
   white-space: nowrap;
 }
 
-.diff-empty-state.in-list {
-  min-height: 180px;
-  margin: auto;
-}
-
 .diff-file-card {
   min-width: 0;
   border: 0;
@@ -209,4 +204,27 @@
 
 .diff-hunk:first-child {
   border-top: 0;
+}
+
+/* A file header's added and removed line counts. */
+/* 文件头部的新增与删除行数。 */
+.diff-file-meta {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.diff-stat {
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-2xs);
+  font-weight: 600;
+}
+
+.diff-stat.added {
+  color: var(--vk-diff-add-ink);
+}
+
+.diff-stat.removed {
+  color: var(--vk-bad);
 }

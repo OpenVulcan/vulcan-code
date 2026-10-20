@@ -809,8 +809,7 @@ export function WorkspaceReviewPanelHost(props: {
     <DiffReviewPanel
       emptyBody={lastTurnMode
         ? t("workspaceReview.lastTurnEmpty")
-        : workspaceReviewError ?? gitRepositoryCatalogError ?? t("contextPanel.reviewEmpty")}
-      emptyTitle={t("contextPanel.review")}
+        : workspaceReviewError ?? gitRepositoryCatalogError ?? undefined}
       loading={workspaceReviewLoading}
       selection={diffReviewSelection}
       repositories={enabledGitRepositories}

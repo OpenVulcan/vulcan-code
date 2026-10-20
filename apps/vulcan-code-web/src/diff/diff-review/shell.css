@@ -12,39 +12,7 @@
 .diff-review-panel.empty {
   min-height: 180px;
   justify-content: center;
-}
-
-.diff-empty-state {
-  display: grid;
-  place-items: center;
-  gap: 8px;
-  padding: 24px;
-  color: var(--vk-ink-2);
-  text-align: center;
-}
-
-.diff-empty-state strong {
-  color: var(--vk-ink);
-  font-size: var(--vk-fs-read);
-}
-
-.diff-empty-state span {
-  font-size: var(--vk-fs-sm);
-  line-height: 1.6;
-}
-
-.diff-panel-header {
-  position: relative;
-  z-index: 140;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-  min-height: 29px;
-  padding: 6px 8px 6px;
-  border-bottom: 1px solid var(--vk-line);
+  padding: calc(var(--vk-u) * 3);
 }
 
 /* The review's actions float over the bottom edge of the diff: the shown file's actions first, then the */

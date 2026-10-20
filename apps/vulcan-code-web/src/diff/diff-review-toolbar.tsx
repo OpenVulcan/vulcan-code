@@ -1,17 +1,22 @@
 import React from "react";
 import { toast } from "@/ui-kit/primitives/toast";
-import { Check, ChevronDown, ChevronUp, Columns2, Copy, Diff, GitBranch, GitCommitHorizontal, GitCompareArrows, ListCollapse, LoaderCircle, MoreHorizontal, RefreshCw, Rows3, Search, SquarePlus, WrapText } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Columns2, Copy, FolderGit2, GitBranch, GitCommitHorizontal, MoreHorizontal, RefreshCw, Rows3, Search } from "lucide-react";
 
+import { IconButton } from "@/ui-kit/primitives/button";
+import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/ui-kit/primitives/dropdown-menu";
+import "@/ui-kit/styles/features/diff-toolbar.css";
 import { useI18n } from "@/i18n";
 import type { TranslationKey } from "@/i18n-messages";
 
@@ -50,8 +55,11 @@ interface BranchSelectorOption {
   searchText: string;
 }
 
-// DiffPanelToolbar renders the diff source selector and aggregate actions.
-// DiffPanelToolbar 渲染 diff 来源选择器与聚合操作。
+// DiffPanelToolbar says what the review compares and how it is shown. The first row picks the repository and
+// the source of the changes (unstaged, staged, a commit, a branch or the last turn) with their totals, then
+// the view, search, commit, refresh and display options; branch comparison and search each add a row below.
+// DiffPanelToolbar 说明审核比较的内容与展示方式。第一行选择仓库与变更来源（未暂存、已暂存、提交、分支或上一轮）及其合计，
+// 然后是视图、搜索、提交、刷新与显示选项；分支对比与搜索各自在下方增加一行。
 export function DiffPanelToolbar(props: {
   // Parsed diff snapshot to render.
   // 要渲染的已解析 diff 快照。
@@ -127,131 +135,138 @@ export function DiffPanelToolbar(props: {
   onSelectionChange?: (selection: DiffReviewSelection) => void;
 }) {
   const { t } = useI18n();
+  const [searchOpen, setSearchOpen] = React.useState(false);
+  const searchTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const selectedCommit = selectedDiffCommit(props.snapshot.recentCommits ?? [], props.selection.commitHash ?? props.snapshot.selectedCommitHash);
   const selectedRepositoryKey = props.selection.repositoryKey
     ?? props.repositories?.find((repository) => repository.isPrimary)?.repositoryKey
     ?? props.repositories?.[0]?.repositoryKey;
   const baseBranch = props.selection.baseBranch ?? props.snapshot.selectedBaseBranch ?? props.snapshot.currentBranch ?? "";
   const compareBranch = props.selection.compareBranch ?? props.snapshot.selectedCompareBranch ?? props.snapshot.defaultBranch ?? "";
-  const titleText = props.selection.mode === "commit" && selectedCommit
-    ? selectedCommit.subject
-    : null;
+  const titleText = props.selection.mode === "commit" && selectedCommit ? selectedCommit.subject : null;
+  const closeSearch = () => {
+    setSearchOpen(false);
+    searchTriggerRef.current?.focus();
+  };
   return (
-    <header className="diff-panel-header">
-      <div className="diff-panel-main">
-        <div className="diff-panel-title-row">
-          {props.repositories && props.repositories.length > 1 ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="diff-review-repository-trigger" type="button">
-                  <span className="diff-review-repository-trigger-label">
-                    {props.repositories.find((repository) => repository.repositoryKey === selectedRepositoryKey)?.name
-                      ?? props.repositories[0]?.name
-                      ?? "Git"}
-                  </span>
-                  <ChevronDown size={12} />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="diff-review-repository-menu">
-                {props.repositories.map((repository) => (
-                  <DropdownMenuItem
-                    className="diff-review-repository-menu-item"
-                    key={repository.repositoryKey}
-                    onSelect={() => props.onSelectionChange?.({
-                      ...props.selection,
-                      repositoryKey: repository.repositoryKey,
-                    })}
-                  >
-                    {repository.repositoryKey === selectedRepositoryKey ? <Check size={13} /> : <span className="diff-review-repository-check-spacer" />}
-                    <span className="diff-review-repository-name">{repository.name}</span>
-                    {repository.relativePath !== repository.name ? <small className="diff-review-repository-path">{repository.relativePath}</small> : null}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-          <DiffModeMenu
-            changedFileCount={props.snapshot.stats.files}
-            commits={props.snapshot.recentCommits ?? []}
-            selection={props.selection}
-            onSelectionChange={props.onSelectionChange}
-          />
-          {titleText ? <span className="diff-panel-title-text">{titleText}</span> : null}
-          <span className="diff-stat added">+{props.snapshot.stats.additions}</span>
-          <span className="diff-stat removed">-{props.snapshot.stats.deletions}</span>
-        </div>
-        {props.selection.mode === "branch" ? (
-          <div className="diff-branch-compare-row">
-            <BranchReadOnlyDisplay
-              branches={props.snapshot.branches ?? []}
-              fallbackLabel={baseBranch || t("diff.branch.current")}
-              value={baseBranch}
-            />
-            <span className="diff-branch-arrow">→</span>
-            <BranchSelector
-              branches={props.snapshot.branches ?? []}
-              fallbackLabel={compareBranch || t("diff.branch.main")}
-              value={compareBranch}
-              onChange={(branch) => props.onSelectionChange?.({ ...props.selection, compareBranch: branch || null })}
-            />
-          </div>
+    <header className="vk-diffbar">
+      <div className="vk-diffbar-row">
+        {props.repositories && props.repositories.length > 1 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button aria-label={t("diff.repository")} className="vk-diffbar-pick" data-kind="repo" type="button">
+                <FolderGit2 aria-hidden="true" size={13} />
+                <span>
+                  {props.repositories.find((repository) => repository.repositoryKey === selectedRepositoryKey)?.name
+                    ?? props.repositories[0]?.name
+                    ?? "Git"}
+                </span>
+                <ChevronDown aria-hidden="true" size={12} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="vk-diffbar-menu">
+              {props.repositories.map((repository) => (
+                <DropdownMenuItem
+                  key={repository.repositoryKey}
+                  onSelect={() => props.onSelectionChange?.({ ...props.selection, repositoryKey: repository.repositoryKey })}
+                >
+                  <FolderGit2 size={13} />
+                  <span className="vk-diffbar-menu-main">{repository.name}</span>
+                  {repository.relativePath !== repository.name ? <small>{repository.relativePath}</small> : null}
+                  {repository.repositoryKey === selectedRepositoryKey ? <Check className="vk-diffbar-check" size={13} /> : null}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         ) : null}
-      </div>
-      <div className="diff-panel-actions">
-        <DiffMoreMenu
-          preferences={props.renderPreferences}
-          rawDiff={props.snapshot.rawDiff}
-          onCopyRaw={props.onCopyRaw}
-          onPreferencesChange={props.onRenderPreferencesChange}
+        <DiffModeMenu
+          changedFileCount={props.snapshot.stats.files}
+          commits={props.snapshot.recentCommits ?? []}
+          selection={props.selection}
+          onSelectionChange={props.onSelectionChange}
         />
-        <button
-          className="diff-icon-button"
-          onClick={() => props.onViewModeChange(props.viewMode === "split" ? "unified" : "split")}
-          title={props.viewMode === "split" ? t("diff.view.toUnified") : t("diff.view.toSplit")}
-          type="button"
-        >
-          {props.viewMode === "split" ? <Rows3 size={12} /> : <Columns2 size={12} />}
-        </button>
-        {props.onOpenGitCommitAction ? (
-          <button
-            className="diff-icon-button"
-            disabled={Boolean(props.gitCommitActionBusy || props.gitCommitActionDisabled)}
-            onClick={props.onOpenGitCommitAction}
-            title={props.gitCommitActionLabel}
-            type="button"
-          >
-            {props.gitCommitActionBusy ? (
-              <LoaderCircle className="diff-refresh-icon loading" size={12} />
-            ) : (
-              <GitCommitHorizontal size={12} />
-            )}
-          </button>
-        ) : null}
-        {props.onSearchQueryChange ? (
-          <DiffSearchControl
-            canSearchNext={Boolean(props.canSearchNext)}
-            canSearchPrevious={Boolean(props.canSearchPrevious)}
-            query={props.searchQuery ?? ""}
-            resultLabel={props.searchResultLabel ?? ""}
-            resultTruncated={Boolean(props.searchResultTruncated)}
-            onNext={props.onSearchNext}
-            onPrevious={props.onSearchPrevious}
-            onQueryChange={props.onSearchQueryChange}
-            onSearchSubmit={props.onSearchSubmit}
+        {titleText ? <span className="vk-diffbar-title" title={titleText}>{titleText}</span> : null}
+        <span className="vk-filestat">
+          <span className="vk-add">+{props.snapshot.stats.additions}</span>
+          <span className="vk-del">−{props.snapshot.stats.deletions}</span>
+        </span>
+        <div className="vk-diffbar-acts">
+          <SegmentedControl aria-label={t("diff.view.label")} onValueChange={(value) => props.onViewModeChange(value === "split" ? "split" : "unified")} value={props.viewMode}>
+            <SegmentedControlItem aria-label={t("diff.view.unified")} title={t("diff.view.unified")} value="unified"><Rows3 size={13} /></SegmentedControlItem>
+            <SegmentedControlItem aria-label={t("diff.view.split")} title={t("diff.view.split")} value="split"><Columns2 size={13} /></SegmentedControlItem>
+          </SegmentedControl>
+          {props.onSearchQueryChange ? (
+            <IconButton
+              aria-expanded={searchOpen}
+              aria-label={t("diff.search.open")}
+              data-active={props.searchQuery ? "" : undefined}
+              onClick={() => setSearchOpen((open) => !open)}
+              ref={searchTriggerRef}
+              size="sm"
+              title={t("diff.search.label")}
+            >
+              <Search size={14} />
+            </IconButton>
+          ) : null}
+          {props.onOpenGitCommitAction ? (
+            <IconButton
+              aria-label={props.gitCommitActionLabel}
+              disabled={Boolean(props.gitCommitActionBusy || props.gitCommitActionDisabled)}
+              onClick={props.onOpenGitCommitAction}
+              size="sm"
+              title={props.gitCommitActionLabel}
+            >
+              <GitCommitHorizontal className={props.gitCommitActionBusy ? "vk-spin" : undefined} size={14} />
+            </IconButton>
+          ) : null}
+          {props.onRefresh ? (
+            <IconButton aria-label={t("diff.refresh")} disabled={props.loading} onClick={() => props.onRefresh?.()} size="sm" title={t("diff.refresh")}>
+              <RefreshCw className={props.loading ? "vk-spin" : undefined} size={14} />
+            </IconButton>
+          ) : null}
+          <DiffMoreMenu
+            preferences={props.renderPreferences}
+            rawDiff={props.snapshot.rawDiff}
+            onCopyRaw={props.onCopyRaw}
+            onPreferencesChange={props.onRenderPreferencesChange}
           />
-        ) : null}
-        {props.onRefresh ? (
-          <button className="diff-icon-button" disabled={props.loading} onClick={() => props.onRefresh?.()} title={t("diff.refresh")} type="button">
-            <RefreshCw className={props.loading ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={12} />
-          </button>
-        ) : null}
+        </div>
       </div>
+      {props.selection.mode === "branch" ? (
+        <div className="vk-diffbar-row" data-row="branch">
+          <span className="vk-diffbar-branch" data-readonly="" title={baseBranch || t("diff.branch.current")}>
+            <GitBranch aria-hidden="true" size={13} />
+            <span>{baseBranch ? branchDisplayName(baseBranch, props.snapshot.branches ?? []) : t("diff.branch.current")}</span>
+          </span>
+          <span aria-hidden="true" className="vk-faint">→</span>
+          <BranchSelector
+            branches={props.snapshot.branches ?? []}
+            fallbackLabel={compareBranch || t("diff.branch.main")}
+            value={compareBranch}
+            onChange={(branch) => props.onSelectionChange?.({ ...props.selection, compareBranch: branch || null })}
+          />
+        </div>
+      ) : null}
+      {searchOpen && props.onSearchQueryChange ? (
+        <DiffSearchRow
+          canSearchNext={Boolean(props.canSearchNext)}
+          canSearchPrevious={Boolean(props.canSearchPrevious)}
+          query={props.searchQuery ?? ""}
+          resultLabel={props.searchResultLabel ?? ""}
+          resultTruncated={Boolean(props.searchResultTruncated)}
+          onClose={closeSearch}
+          onNext={props.onSearchNext}
+          onPrevious={props.onSearchPrevious}
+          onQueryChange={props.onSearchQueryChange}
+          onSearchSubmit={props.onSearchSubmit}
+        />
+      ) : null}
     </header>
   );
 }
 
-// DiffMoreMenu renders secondary diff actions and target display switches.
-// DiffMoreMenu 渲染 diff 次级操作与目标显示开关。
+// DiffMoreMenu holds copying the raw diff and the display options, each shown as on or off.
+// DiffMoreMenu 收纳复制原始 diff 与各项显示选项，每项以开或关呈现。
 function DiffMoreMenu(props: {
   // Current target-compatible rendering preferences.
   // 当前目标兼容渲染偏好。
@@ -284,70 +299,46 @@ function DiffMoreMenu(props: {
       setCopying(false);
     }
   }, [props]);
-  const toggleInlineDiff = React.useCallback(() => {
-    props.onPreferencesChange({ ...props.preferences, inlineDiff: !props.preferences.inlineDiff });
-  }, [props]);
-  const toggleOverflowMode = React.useCallback(() => {
-    props.onPreferencesChange({
-      ...props.preferences,
-      overflowMode: props.preferences.overflowMode === "wrap" ? "scroll" : "wrap",
-    });
-  }, [props]);
-  const toggleHunkSeparatorStyle = React.useCallback(() => {
-    props.onPreferencesChange({
-      ...props.preferences,
-      hunkSeparatorStyle: props.preferences.hunkSeparatorStyle === "line-info" ? "simple" : "line-info",
-    });
-  }, [props]);
-  const toggleIndicatorStyle = React.useCallback(() => {
-    props.onPreferencesChange({
-      ...props.preferences,
-      indicatorStyle: props.preferences.indicatorStyle === "bars" ? "classic" : "bars",
-    });
-  }, [props]);
+  const set = (patch: Partial<DiffRenderPreferences>) => props.onPreferencesChange({ ...props.preferences, ...patch });
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="diff-icon-button" title={t("diff.moreActions")} type="button">
-          <MoreHorizontal size={12} />
-        </button>
+        <IconButton aria-label={t("diff.moreActions")} size="sm" title={t("diff.moreActions")}>
+          <MoreHorizontal size={14} />
+        </IconButton>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="diff-style-menu" sideOffset={4}>
+      <DropdownMenuContent align="end" className="vk-diffbar-menu" sideOffset={4}>
         {props.onCopyRaw ? (
           <>
-            <DropdownMenuItem className="diff-style-toggle-item" disabled={copying} onSelect={() => void copyRawDiff()}>
+            <DropdownMenuItem disabled={copying} onSelect={() => void copyRawDiff()}>
               <Copy size={13} />
               <span>{t("diff.copyRaw")}</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
           </>
         ) : null}
-        <DropdownMenuItem className="diff-style-toggle-item" onSelect={toggleInlineDiff}>
-          <Diff size={13} />
-          <span>{props.preferences.inlineDiff ? t("diff.inline.disable") : t("diff.inline.enable")}</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem className="diff-style-toggle-item" onSelect={toggleOverflowMode}>
-          <WrapText size={13} />
-          <span>{props.preferences.overflowMode === "wrap" ? t("diff.wrap.disable") : t("diff.wrap.enable")}</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem className="diff-style-toggle-item" onSelect={toggleHunkSeparatorStyle}>
-          {props.preferences.hunkSeparatorStyle === "line-info" ? <Rows3 size={13} /> : <ListCollapse size={13} />}
-          <span>{props.preferences.hunkSeparatorStyle === "line-info" ? t("diff.contextControls.hide") : t("diff.contextControls.show")}</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem className="diff-style-toggle-item" onSelect={toggleIndicatorStyle}>
-          {props.preferences.indicatorStyle === "bars" ? <SquarePlus size={13} /> : <GitCompareArrows size={13} />}
-          <span>{props.preferences.indicatorStyle === "bars" ? t("diff.indicator.useClassic") : t("diff.indicator.useBars")}</span>
-        </DropdownMenuItem>
+        <DropdownMenuLabel>{t("diff.pref.title")}</DropdownMenuLabel>
+        <DropdownMenuCheckboxItem checked={props.preferences.inlineDiff} onCheckedChange={(on) => set({ inlineDiff: Boolean(on) })}>
+          {t("diff.pref.inline")}
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem checked={props.preferences.overflowMode === "wrap"} onCheckedChange={(on) => set({ overflowMode: on ? "wrap" : "scroll" })}>
+          {t("diff.pref.wrap")}
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem checked={props.preferences.hunkSeparatorStyle === "line-info"} onCheckedChange={(on) => set({ hunkSeparatorStyle: on ? "line-info" : "simple" })}>
+          {t("diff.pref.contextControls")}
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem checked={props.preferences.indicatorStyle === "bars"} onCheckedChange={(on) => set({ indicatorStyle: on ? "bars" : "classic" })}>
+          {t("diff.pref.bars")}
+        </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-// DiffSearchControl renders compact in-panel diff search controls.
-// DiffSearchControl 渲染紧凑的面板内 diff 搜索控件。
-function DiffSearchControl(props: {
-  // Current search query.
-  // 当前搜索查询。
+// DiffSearchRow searches the diff from a row under the toolbar: Enter goes to the next match, Shift+Enter to
+// the previous one, and Escape closes the row and returns focus to the search button.
+// DiffSearchRow 在工具栏下方一行中搜索 diff：Enter 跳到下一处，Shift+Enter 跳到上一处，Escape 关闭该行并将焦点还给搜索按钮。
+function DiffSearchRow(props: {
   query: string;
   // Compact result label.
   // 紧凑结果标签。
@@ -355,116 +346,65 @@ function DiffSearchControl(props: {
   // Whether result count was capped.
   // 结果数量是否被截断。
   resultTruncated: boolean;
-  // Whether previous navigation is enabled.
-  // 是否启用上一条导航。
   canSearchPrevious: boolean;
-  // Whether next navigation is enabled.
-  // 是否启用下一条导航。
   canSearchNext: boolean;
-  // Query change handler.
-  // 查询变更处理器。
   onQueryChange: (query: string) => void;
-  // Previous result handler.
-  // 上一条结果处理器。
   onPrevious?: () => void;
-  // Next result handler.
-  // 下一条结果处理器。
   onNext?: () => void;
   // Search submit handler used by Enter navigation.
   // Enter 导航使用的搜索提交处理器。
   onSearchSubmit?: () => void;
+  onClose: () => void;
 }) {
   const { t } = useI18n();
-  const [open, setOpen] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
-  // Restore keyboard focus when Escape removes the transient search input.
-  // Escape 移除临时搜索输入时还原键盘焦点。
-  const triggerRef = React.useRef<HTMLButtonElement | null>(null);
   React.useEffect(() => {
-    if (!open || typeof window === "undefined") {
-      return undefined;
-    }
     const frameId = window.requestAnimationFrame(() => inputRef.current?.focus());
     return () => window.cancelAnimationFrame(frameId);
-  }, [open]);
-  const handleBlur = React.useCallback((event: React.FocusEvent<HTMLDivElement>) => {
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-      setOpen(false);
-    }
   }, []);
-  const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      setOpen(false);
-      triggerRef.current?.focus();
+      props.onClose();
       return;
     }
     if (event.key === "Enter" && event.target === inputRef.current) {
       event.preventDefault();
-      if (event.shiftKey) {
-        props.onPrevious?.();
-      } else {
-        props.onSearchSubmit?.();
-      }
+      if (event.shiftKey) props.onPrevious?.();
+      else props.onSearchSubmit?.();
     }
-  }, [props]);
+  };
   return (
-    <div className="diff-panel-search-anchor" onBlur={handleBlur} onKeyDown={handleKeyDown}>
-      <button
-        aria-expanded={open}
-        aria-label={t("diff.search.open")}
-        className={`diff-icon-button diff-search-toggle${props.query ? " active" : ""}`}
-        onClick={() => setOpen((current) => !current)}
-        ref={triggerRef}
-        title={t("diff.search.label")}
-        type="button"
-      >
-        <Search size={12} />
-      </button>
-      {open ? (
-        <div className="diff-panel-search-popover">
-          <div className="diff-panel-search">
-            <Search size={13} />
-            <input
-              aria-label={t("diff.search.label")}
-              onChange={(event) => props.onQueryChange(event.currentTarget.value)}
-              placeholder={t("diff.search.label")}
-              ref={inputRef}
-              value={props.query}
-            />
-            {props.query ? (
-              <span className="diff-search-count" title={props.resultTruncated ? t("diff.search.truncated") : undefined}>
-                {props.resultLabel}
-              </span>
-            ) : null}
-            <button
-              className="diff-search-step"
-              disabled={!props.canSearchPrevious}
-              onClick={() => props.onPrevious?.()}
-              title={t("diff.search.previous")}
-              type="button"
-            >
-              <ChevronUp size={13} />
-            </button>
-            <button
-              className="diff-search-step"
-              disabled={!props.canSearchNext}
-              onClick={() => props.onNext?.()}
-              title={t("diff.search.next")}
-              type="button"
-            >
-              <ChevronDown size={13} />
-            </button>
-          </div>
-        </div>
+    <div className="vk-diffbar-row" data-row="search" onKeyDown={handleKeyDown}>
+      <div className="vk-input-wrap">
+        <Search aria-hidden="true" size={13} />
+        <input
+          aria-label={t("diff.search.label")}
+          autoComplete="off"
+          className="vk-input"
+          data-size="sm"
+          onChange={(event) => props.onQueryChange(event.currentTarget.value)}
+          placeholder={t("diff.search.label")}
+          ref={inputRef}
+          value={props.query}
+        />
+      </div>
+      {props.query ? (
+        <span className="vk-diffbar-count" title={props.resultTruncated ? t("diff.search.truncated") : undefined}>{props.resultLabel}</span>
       ) : null}
+      <IconButton aria-label={t("diff.search.previous")} disabled={!props.canSearchPrevious} onClick={() => props.onPrevious?.()} size="sm" title={t("diff.search.previous")}>
+        <ChevronUp size={14} />
+      </IconButton>
+      <IconButton aria-label={t("diff.search.next")} disabled={!props.canSearchNext} onClick={() => props.onNext?.()} size="sm" title={t("diff.search.next")}>
+        <ChevronDown size={14} />
+      </IconButton>
     </div>
   );
 }
 
-// DiffModeMenu renders the primary diff source dropdown.
-// DiffModeMenu 渲染主要 diff 来源下拉菜单。
+// DiffModeMenu picks where the reviewed changes come from and shows how many files that source changes.
+// DiffModeMenu 选择所审核变更的来源，并展示该来源变更的文件数。
 function DiffModeMenu(props: {
   // Current Git review source selection.
   // 当前 Git 审核来源选择。
@@ -480,44 +420,42 @@ function DiffModeMenu(props: {
   onSelectionChange?: (selection: DiffReviewSelection) => void;
 }) {
   const { t } = useI18n();
-  const selectMode = React.useCallback((mode: DiffReviewMode) => {
-    props.onSelectionChange?.({ ...props.selection, mode });
-  }, [props]);
+  const selectMode = (mode: DiffReviewMode) => props.onSelectionChange?.({ ...props.selection, mode });
   const selectedCommitHash = props.selection.commitHash ?? props.commits[0]?.hash ?? null;
-  const shouldShowFileCount = props.selection.mode !== "commit";
+  const mark = (mode: DiffReviewMode) => props.selection.mode === mode ? <Check className="vk-diffbar-check" size={13} /> : null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="diff-mode-trigger" type="button">
+        <button aria-label={t("diff.source")} className="vk-diffbar-pick" data-kind="mode" type="button">
           <span>{t(DIFF_REVIEW_MODE_LABEL_KEYS[props.selection.mode])}</span>
-          {shouldShowFileCount ? <span className="diff-mode-count">{props.changedFileCount}</span> : null}
-          <ChevronDown size={13} />
+          {props.selection.mode !== "commit" ? <span className="vk-diffbar-count">{props.changedFileCount}</span> : null}
+          <ChevronDown aria-hidden="true" size={12} />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="diff-mode-menu" sideOffset={4}>
+      <DropdownMenuContent align="start" className="vk-diffbar-menu" sideOffset={4}>
         <DropdownMenuItem onSelect={() => selectMode("unstaged")}>
-          <span>{t("diff.mode.unstaged")}</span>
-          {props.selection.mode === "unstaged" ? <Check size={14} /> : null}
+          <span className="vk-diffbar-menu-main">{t("diff.mode.unstaged")}</span>
+          {mark("unstaged")}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => selectMode("staged")}>
-          <span>{t("diff.mode.staged")}</span>
-          {props.selection.mode === "staged" ? <Check size={14} /> : null}
+          <span className="vk-diffbar-menu-main">{t("diff.mode.staged")}</span>
+          {mark("staged")}
         </DropdownMenuItem>
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger className="diff-mode-sub-trigger">
-            <span>{t("diff.mode.commit")}</span>
-            {props.selection.mode === "commit" ? <Check size={14} /> : null}
+          <DropdownMenuSubTrigger>
+            <span className="vk-diffbar-menu-main">{t("diff.mode.commit")}</span>
+            {mark("commit")}
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="diff-commit-menu" sideOffset={8}>
+          <DropdownMenuSubContent className="vk-diffbar-menu" data-kind="commits" sideOffset={8}>
             {props.commits.length ? props.commits.map((commit) => (
               <DropdownMenuItem
-                className="diff-commit-menu-item"
                 key={commit.hash}
                 onSelect={() => props.onSelectionChange?.({ ...props.selection, commitHash: commit.hash, mode: "commit" })}
               >
-                <span>{commit.subject}</span>
+                <GitCommitHorizontal size={13} />
+                <span className="vk-diffbar-menu-main">{commit.subject}</span>
                 <small>{commit.relativeTime}</small>
-                {selectedCommitHash === commit.hash ? <Check size={14} /> : null}
+                {selectedCommitHash === commit.hash ? <Check className="vk-diffbar-check" size={13} /> : null}
               </DropdownMenuItem>
             )) : (
               <DropdownMenuItem disabled>{t("diff.commit.none")}</DropdownMenuItem>
@@ -525,39 +463,16 @@ function DiffModeMenu(props: {
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuItem onSelect={() => selectMode("branch")}>
-          <span>{t("diff.mode.branch")}</span>
-          {props.selection.mode === "branch" ? <Check size={14} /> : null}
+          <span className="vk-diffbar-menu-main">{t("diff.mode.branch")}</span>
+          {mark("branch")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => selectMode("last_turn")}>
-          <span>{t("diff.mode.lastTurn")}</span>
-          {props.selection.mode === "last_turn" ? <Check size={14} /> : null}
+          <span className="vk-diffbar-menu-main">{t("diff.mode.lastTurn")}</span>
+          {mark("last_turn")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-// BranchReadOnlyDisplay renders the immutable left side of branch comparisons.
-// BranchReadOnlyDisplay 渲染分支对比中不可修改的左侧分支。
-function BranchReadOnlyDisplay(props: {
-  // Branches available for display disambiguation.
-  // 用于展示消歧的可用分支列表。
-  branches: DiffBranchSummary[];
-  // Currently selected branch name.
-  // 当前选中的分支名称。
-  value: string;
-  // Fallback label used before metadata is available.
-  // 元数据可用前使用的回退标签。
-  fallbackLabel: string;
-}) {
-  const label = props.value
-    ? branchDisplayName(props.value, props.branches)
-    : props.fallbackLabel;
-  return (
-    <span className="diff-branch-trigger diff-branch-trigger-readonly" title={props.value || props.fallbackLabel}>
-      <span>{label}</span>
-    </span>
   );
 }
 
@@ -579,50 +494,39 @@ function BranchSelector(props: {
 }) {
   const { t } = useI18n();
   const [query, setQuery] = React.useState("");
-  const branchOptions = React.useMemo(
-    () => buildBranchSelectorOptions(props.branches, props.value),
-    [props.branches, props.value],
-  );
+  const branchOptions = React.useMemo(() => buildBranchSelectorOptions(props.branches, props.value), [props.branches, props.value]);
   const filteredBranches = React.useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) {
-      return branchOptions;
-    }
-    return branchOptions.filter((option) => option.searchText.includes(normalizedQuery));
+    return normalizedQuery ? branchOptions.filter((option) => option.searchText.includes(normalizedQuery)) : branchOptions;
   }, [branchOptions, query]);
   const label = props.value ? branchDisplayName(props.value, props.branches) : props.fallbackLabel;
   return (
-    <DropdownMenu onOpenChange={(open) => {
-      if (!open) {
-        setQuery("");
-      }
-    }}>
+    <DropdownMenu onOpenChange={(open) => { if (!open) setQuery(""); }}>
       <DropdownMenuTrigger asChild>
-        <button className="diff-branch-trigger" type="button">
+        <button className="vk-diffbar-branch" title={props.value || props.fallbackLabel} type="button">
+          <GitBranch aria-hidden="true" size={13} />
           <span>{label}</span>
-          <ChevronDown size={12} />
+          <ChevronDown aria-hidden="true" size={12} />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="diff-branch-menu" sideOffset={5}>
-        <div className="diff-branch-search" onKeyDown={(event) => event.stopPropagation()}>
-          <Search size={13} />
+      <DropdownMenuContent align="start" className="vk-diffbar-menu" data-kind="branches" sideOffset={5}>
+        <div className="vk-input-wrap vk-diffbar-menu-search" onKeyDown={(event) => event.stopPropagation()}>
+          <Search aria-hidden="true" size={13} />
           <input
             aria-label={t("diff.branch.search")}
+            className="vk-input"
+            data-size="sm"
             onChange={(event) => setQuery(event.currentTarget.value)}
             placeholder={t("diff.branch.search")}
             value={query}
           />
         </div>
-        <div className="diff-branch-menu-label">{t("diff.branch.label")}</div>
+        <DropdownMenuLabel>{t("diff.branch.label")}</DropdownMenuLabel>
         {filteredBranches.length ? filteredBranches.map((option) => (
-          <DropdownMenuItem
-            className="diff-branch-menu-item"
-            key={option.branch.name}
-            onSelect={() => props.onChange(option.branch.name)}
-          >
+          <DropdownMenuItem key={option.branch.name} onSelect={() => props.onChange(option.branch.name)}>
             <GitBranch size={13} />
-            <span>{option.label}</span>
-            {branchNamesEquivalent(props.value, option.branch.name) ? <Check size={14} /> : null}
+            <span className="vk-diffbar-menu-main">{option.label}</span>
+            {branchNamesEquivalent(props.value, option.branch.name) ? <Check className="vk-diffbar-check" size={13} /> : null}
           </DropdownMenuItem>
         )) : (
           <DropdownMenuItem disabled>{t("diff.branch.noMatches")}</DropdownMenuItem>

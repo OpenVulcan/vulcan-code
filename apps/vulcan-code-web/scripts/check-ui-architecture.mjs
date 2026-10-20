@@ -115,7 +115,7 @@ const feedbackShellPattern = /^(?!vk-page-)[a-z0-9-]+-(?:empty-state|empty|notic
 // legacyFeedbackShells 是页面套件之前遗留的自定义反馈外壳棘轮表，只能缩减。
 // 新页面使用 PageEmptyState 与 PageNotice；确实无法使用的行内控件须在评审中说明理由后再新增条目。
 const legacyFeedbackShells = new Set([
-  "diff-empty-state", "knowledge-empty",
+  "knowledge-empty",
   "model-picker-empty", "project-folder-picker-empty",
   "project-folder-picker-notice",
   "settings-error-notice",

@@ -1,8 +1,11 @@
 import React from "react";
-import { FileText, RefreshCw } from "lucide-react";
+import { GitCompare, RefreshCw } from "lucide-react";
+import { PageEmptyState } from "@/components/page/page-feedback";
+import { Button } from "@/ui-kit/primitives/button";
+import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { toast } from "@/ui-kit/primitives/toast";
 
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { openProjectDirectoryPath } from "@/service/project-actions-service";
 import { DiffFileCard, useDiffScrollState } from "../diff-file-card";
 import { DiffPanelToolbar } from "../diff-review-toolbar";
@@ -473,7 +476,12 @@ export function DiffReviewPanel(props: {
   }, [backendSearchHydrationRequests, onLoadFileDetail]);
 
   if (!snapshot) {
-    return <DiffReviewEmptyPanel body={props.emptyBody ?? t("diff.emptyBody")} refreshBusy={refreshBusy} title={props.emptyTitle ?? "Git Diff"} onRefresh={props.onRefresh ? handleRefreshClick : undefined} />;
+    // The host is still reading the diff: show where it will appear rather than an empty verdict.
+    // 宿主仍在读取 diff：展示其将出现的位置，而不是空结论。
+    if (props.loading) {
+      return <section className="diff-review-panel empty"><StreamPlaceholder className="vk-stream-inset" count={6} label={t("diff.loading")} /></section>;
+    }
+    return <DiffReviewEmptyPanel body={props.emptyBody ?? t("diff.emptyBody")} refreshBusy={refreshBusy} title={props.emptyTitle ?? t("diff.cleanTitle")} onRefresh={props.onRefresh ? handleRefreshClick : undefined} />;
   }
   if (snapshot.gitRepository === false) {
     // A directory outside Git has no review modes or Git actions; offer only a refresh for after `git init`.
@@ -581,11 +589,12 @@ export function DiffReviewPanel(props: {
           ) : renderedFileCount ? (
             null
           ) : (
-            <div className="diff-empty-state in-list">
-              <FileText size={20} />
-              <strong>{props.emptyTitle ?? "Git Diff"}</strong>
-              <span>{snapshot.notice ?? props.emptyBody ?? t("diff.emptyBody")}</span>
-            </div>
+            <PageEmptyState
+              description={props.emptyBody ?? t(DIFF_CLEAN_BODY[selection.mode] ?? "diff.emptyBody")}
+              icon={<GitCompare />}
+              size="panel"
+              title={t("diff.cleanTitle")}
+            />
           )}
         </div>
       </div>
@@ -603,23 +612,31 @@ export function DiffReviewPanel(props: {
   );
 }
 
+// DIFF_CLEAN_BODY says what a review mode found nothing in when it has no changed files.
+// DIFF_CLEAN_BODY 说明某审核模式没有变更文件时，是在哪里没有找到修改。
+const DIFF_CLEAN_BODY: Partial<Record<DiffReviewSelection["mode"], TranslationKey>> = {
+  unstaged: "diff.cleanUnstaged",
+  staged: "diff.cleanStaged",
+};
+
 // DiffReviewEmptyPanel renders the whole-panel empty state with an optional refresh.
 // DiffReviewEmptyPanel 渲染整面板空状态，并可选提供刷新。
 function DiffReviewEmptyPanel(props: { title: string; body: string; refreshBusy: boolean; onRefresh?: () => void }) {
   const { t } = useI18n();
   return (
     <section className="diff-review-panel empty">
-      <div className="diff-empty-state">
-        <FileText size={22} />
-        <strong>{props.title}</strong>
-        <span>{props.body}</span>
-        {props.onRefresh ? (
-          <button className="diff-action-button" disabled={props.refreshBusy} onClick={props.onRefresh} type="button">
-            <RefreshCw className={props.refreshBusy ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={14} />
-            <span>{props.refreshBusy ? t("diff.loading") : t("diff.refresh")}</span>
-          </button>
+      <PageEmptyState
+        action={props.onRefresh ? (
+          <Button disabled={props.refreshBusy} onClick={props.onRefresh} size="sm" variant="outline">
+            <RefreshCw />
+            {props.refreshBusy ? t("diff.loading") : t("diff.refresh")}
+          </Button>
         ) : null}
-      </div>
+        description={props.body}
+        icon={<GitCompare />}
+        size="panel"
+        title={props.title}
+      />
     </section>
   );
 }
