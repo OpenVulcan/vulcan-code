@@ -1,5 +1,5 @@
 import React from "react";
-import { Ellipsis, MessagesSquare, PanelLeftOpen, Pin, Settings } from "lucide-react";
+import { Command, Ellipsis, MessagesSquare, PanelLeftOpen, Pin, Settings } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 
 import {
@@ -61,6 +61,9 @@ export function ActivityRail(props: {
   // Opens the settings area.
   // 打开设置区域。
   onSelectSettings: () => void;
+  // Opens the command palette.
+  // 打开命令面板。
+  onOpenCommandPalette: () => void;
   // The session panel's own tree, shown in the flyout while the session area is open with its panel collapsed.
   // 会话面板自身的会话树；处于会话区域且面板已折叠时显示在浮层中。
   sessionTree: React.ReactNode;
@@ -225,6 +228,12 @@ export function ActivityRail(props: {
         </DropdownMenu>
       </div>
       <div className="vk-rail-group" data-end="">
+        <ActivityRailButton
+          active={false}
+          icon={<Command size={18} />}
+          label={`${t("palette.title")}  Ctrl K`}
+          onClick={props.onOpenCommandPalette}
+        />
         <ActivityRailButton
           active={props.settingsActive}
           icon={<Settings size={18} />}

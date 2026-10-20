@@ -11,6 +11,7 @@ import {
   primaryFeatureAreas as buildPrimaryFeatureAreas,
 } from "@/components/features/feature-shell";
 import { ActivityRail, type ActivityRailEntry } from "@/components/shell/activity-rail";
+import { CommandPalette } from "@/components/shell/command-palette";
 import { WorkbenchStatusBar } from "@/components/shell/workbench-status-bar";
 import { StartupOverlay } from "@/components/shell/startup-screen";
 import {
@@ -832,6 +833,9 @@ export function WorkbenchLayout(props: {
     applyLifecycleResponseSnapshot,
   });
 
+  // commandPaletteOpen says whether the command palette (Ctrl+K) is shown.
+  // commandPaletteOpen 表示命令面板（Ctrl+K）是否显示。
+  const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false);
   // railEntries lists built-in areas first, then every enabled plugin detail page from the live catalog.
   // railEntries 先列出内置区域，再列出实时目录中每个已启用的插件详情页。
   const railEntries = React.useMemo<ActivityRailEntry[]>(() => {
@@ -865,8 +869,22 @@ export function WorkbenchLayout(props: {
   // activityRail is shared by the workspace and settings shells so navigation stays put across areas.
   // activityRail 由工作台与设置外壳共用，使导航在区域切换时保持不动。
   const activityRail = (
+    <>
+    <CommandPalette
+      areas={railEntries}
+      onNewConversation={activeProject ? () => handleCreateConversationForProject(activeProject) : undefined}
+      onOpenChange={setCommandPaletteOpen}
+      onOpenSessions={handleOpenWorkspaceChat}
+      onOpenSettingsPage={(page) => {
+        setActiveSettingsSubArea(page);
+        handleSelectTopFeatureArea("settings");
+      }}
+      open={commandPaletteOpen}
+      slashCommands={workbenchState.composerSlashCommands ?? []}
+    />
     <ActivityRail
       entries={railEntries}
+      onOpenCommandPalette={() => setCommandPaletteOpen(true)}
       sessionsActive={activeArea === "chat" && workspaceMainView === "chat"}
       settingsActive={activeArea === "settings"}
       onSelectSessions={handleOpenWorkspaceChat}
@@ -897,6 +915,7 @@ export function WorkbenchLayout(props: {
       titlebarDragRegion={windowDragRegionEnabled}
       onTitlebarDoubleClick={handleTitlebarDoubleClick}
     />
+    </>
   );
 
   React.useEffect(() => {

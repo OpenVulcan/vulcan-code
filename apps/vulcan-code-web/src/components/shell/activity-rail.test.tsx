@@ -42,6 +42,7 @@ async function renderRail(props: {
       entries={props.entries}
       onSelectSessions={props.onSelectSessions ?? vi.fn()}
       onSelectSettings={vi.fn()}
+      onOpenCommandPalette={vi.fn()}
       selectedConversationId={null}
       sessionTree={props.sessionTree ?? null}
       sessionsActive={props.sessionsActive}
