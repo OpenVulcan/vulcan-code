@@ -17,6 +17,9 @@ export function WorkspaceFeaturePanel(props: {
   // Feature-owned menu; null means the feature has no panel and only the rail is shown.
   // 功能自有菜单；null 表示该功能没有面板，只显示轨道。
   navigation: React.ReactNode | null;
+  // Whether the menu lists sections of one area, which sit indented under their group labels.
+  // 菜单是否列出同一区域的分区；分区缩进在其分组标签之下。
+  nested?: boolean;
   // Whether the header should be a native window drag region.
   // 标题是否作为原生窗口拖动区域。
   titlebarDragRegion?: boolean;
@@ -25,7 +28,7 @@ export function WorkspaceFeaturePanel(props: {
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
   return (
-    <Sidebar collapsible="offcanvas" panel={props.navigation !== null} rail={props.rail} variant="inset">
+    <Sidebar className="vk-feature-panel" collapsible="offcanvas" panel={props.navigation !== null} rail={props.rail} variant="inset">
       <SidebarHeader>
         <SidebarBrandMenu
           currentLabel={props.title}
@@ -34,7 +37,7 @@ export function WorkspaceFeaturePanel(props: {
         />
       </SidebarHeader>
       <SidebarContent>
-        <div className="vk-feature-nav">{props.navigation}</div>
+        <div className="vk-feature-nav" data-nested={props.nested ? "" : undefined}>{props.navigation}</div>
       </SidebarContent>
     </Sidebar>
   );

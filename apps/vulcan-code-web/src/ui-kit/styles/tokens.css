@@ -47,6 +47,8 @@
   /* Shell geometry, in units so it grows with the tier. */
   --vk-rail-w: calc(var(--vk-u) * 12);
   --vk-sidebar-w: calc(var(--vk-u) * 66);
+  /* Feature areas list a few short pages, so their navigation panel is narrower than the session tree. */
+  --vk-feature-sidebar-w: calc(var(--vk-u) * 54);
   --vk-panel-w: calc(var(--vk-u) * 94);
   /* The "standard" reading measure; the width presets below move it. */
   --vk-read-w: 46rem;

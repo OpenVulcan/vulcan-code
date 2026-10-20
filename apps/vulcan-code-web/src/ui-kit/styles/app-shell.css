@@ -108,6 +108,12 @@
 .vk-brand-drag[data-tauri-drag-region] > * { pointer-events: none; }
 .vk-brand-drag > small { margin-left: auto; padding-left: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); white-space: nowrap; }
 
+/* Feature areas use the narrower feature panel. Pages that are sections of one area sit indented under their
+ * group label; category lists stay flush with it. */
+.feature-shell, .vk-sidebar.vk-feature-panel { --vk-sidebar-w: var(--vk-feature-sidebar-w); }
+.vk-settings-nav .vk-nav-section > .vk-nav-item,
+.vk-feature-nav[data-nested] .vk-dir-row { padding-left: calc(var(--vk-u) * 5.5); }
+
 /* Navigation groups used by the feature areas (settings, plugins, memory) beside the rail. */
 .vk-side-group { display: grid; gap: calc(var(--vk-u) * 0.5); padding: calc(var(--vk-u) * 1) 0; }
 .vk-side-label {

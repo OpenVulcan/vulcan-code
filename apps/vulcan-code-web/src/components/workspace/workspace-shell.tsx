@@ -935,6 +935,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       {featureArea ? (
         <WorkspaceFeaturePanel
           navigation={featureNavigation}
+          nested={props.mainView === "skills" || props.mainView === "memory"}
           rail={props.rail}
           title={t(featureArea.label)}
           titlebarDragRegion={props.titlebarDragRegion}
