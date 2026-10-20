@@ -82,6 +82,9 @@ let host: HTMLDivElement;
 let root: Root;
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.clearAllMocks();
+  // Navigation timers read the stylesheet's motion tokens; declare them so transitions keep real durations.
+  // 导航计时器读取样式表动效标记；在此声明，使过渡保持真实时长。
+  document.documentElement.style.setProperty("--vk-t-fast", "120ms"); document.documentElement.style.setProperty("--vk-t-med", "180ms");
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
   vi.mocked(serviceClient.request).mockResolvedValue(null);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);

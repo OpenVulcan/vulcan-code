@@ -6,6 +6,7 @@ import { markConversationRead, selectConversation } from "@/service/project-acti
 import type { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
 import { markConversationLocallyRead, type WorkbenchMergeOptions } from "@/state/workbench-state";
 import type { MainAreaId, WorkbenchSnapshot } from "@/types";
+import { motionTokenMs } from "@/lib/motion-tokens";
 
 // ConversationNavigationState owns visual feedback while the authoritative route remains on its previous session.
 // ConversationNavigationState 在权威路由仍属于原会话期间管理视觉反馈。
@@ -131,8 +132,8 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
     }
   }, [conversationNavigation, selectedConversationId]);
 
-  // handleConversationNavigationReady starts the 200 ms reveal only for the current target owner.
-  // handleConversationNavigationReady 仅为当前目标归属启动 200 毫秒入场。
+  // handleConversationNavigationReady starts the stage reveal only for the current target owner.
+  // handleConversationNavigationReady 仅为当前目标归属启动舞台入场。
   const handleConversationNavigationReady = React.useCallback((conversationId: string) => {
     const requestVersion = conversationSelectionRequestVersionRef.current;
     setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "waiting-owner"
@@ -142,7 +143,7 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
       if (conversationSelectionRequestVersionRef.current === requestVersion) {
         setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "entering" ? null : current);
       }
-    }, 200);
+    }, motionTokenMs("--vk-t-med"));
   }, []);
 
   // handleSelectConversation selects a conversation with immediate sidebar feedback and exact-owner reveal.
@@ -166,7 +167,7 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
             : current);
         }
         resolve();
-      }, 200);
+      }, motionTokenMs("--vk-t-fast"));
     });
     void selectConversation(conversationId)
       .then(async (snapshot) => {
@@ -211,7 +212,7 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
             if (conversationSelectionRequestVersionRef.current === requestVersion) {
               setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "entering" ? null : current);
             }
-          }, 200);
+          }, motionTokenMs("--vk-t-med"));
         }
         if (!conversationNeedsReadMarker(snapshot, conversationId)) {
           return null;
@@ -246,7 +247,7 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
           if (conversationSelectionRequestVersionRef.current === requestVersion) {
             setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "entering" ? null : current);
           }
-        }, 200);
+        }, motionTokenMs("--vk-t-med"));
         const message = error instanceof Error ? error.message : String(error);
         toast.error(message);
       });
