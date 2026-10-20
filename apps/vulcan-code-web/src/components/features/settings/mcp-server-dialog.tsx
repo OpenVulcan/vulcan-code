@@ -152,7 +152,7 @@ export function McpServerDialog(props: {
         </> : <>
           <label className="vk-field"><span>{t("settings.mcp.serverUrl")}</span><Input placeholder="https://example.com/mcp" value={draft.url} onChange={e => change("url", e.target.value)} /></label>
           <section className="mcp-form-section"><h3>{t("settings.mcp.headersAndAuthentication")}</h3>
-            <label className="vk-field"><span>Bearer Token</span><Input autoComplete="off" type="password" value={draft.bearerToken} onChange={e => change("bearerToken", e.target.value)} /></label>
+            <label className="vk-field"><span>{t("settings.mcp.bearerToken")}</span><Input autoComplete="off" type="password" value={draft.bearerToken} onChange={e => change("bearerToken", e.target.value)} /></label>
             <McpKeyValueRows headers label={t("settings.mcp.fixedHeaders")} values={draft.headers} onChange={value => change("headers", value)} secret />
             <McpKeyValueRows headers label={t("settings.mcp.headersReadFromEnvironment")} values={draft.headersFromEnv} onChange={value => change("headersFromEnv", value)} valuePlaceholder="ACCESS_TOKEN" />
             <p className="vk-form-note">{t("settings.mcp.headerNameOnThe")}</p>
@@ -162,10 +162,10 @@ export function McpServerDialog(props: {
             <label className="vk-check-label"><Switch checked={draft.oauthEnabled} disabled={busy} onCheckedChange={value => change("oauthEnabled", value)} />{t("settings.mcp.oauth.enable")}</label>
             {draft.oauthEnabled && <>
             <p className="vk-form-note">{t("settings.mcp.oauth.dynamicRegistrationHint")}</p>
-            <label className="vk-field"><span>Client ID</span><Input value={draft.oauthClientId} onChange={e => change("oauthClientId", e.target.value)} /></label>
-            <label className="vk-field"><span>Client secret</span><Input autoComplete="off" type="password" value={draft.oauthClientSecret} onChange={e => change("oauthClientSecret", e.target.value)} /></label>
-            <McpStringRows label="OAuth scopes" values={draft.oauthScopes} onChange={value => change("oauthScopes", value)} placeholder="read" />
-            <label className="vk-field"><span>Redirect URI</span><Input value={draft.oauthRedirectUri} onChange={e => change("oauthRedirectUri", e.target.value)} /></label>
+            <label className="vk-field"><span>{t("settings.mcp.oauth.clientId")}</span><Input value={draft.oauthClientId} onChange={e => change("oauthClientId", e.target.value)} /></label>
+            <label className="vk-field"><span>{t("settings.mcp.oauth.clientSecret")}</span><Input autoComplete="off" type="password" value={draft.oauthClientSecret} onChange={e => change("oauthClientSecret", e.target.value)} /></label>
+            <McpStringRows label={t("settings.mcp.oauth.scopes")} values={draft.oauthScopes} onChange={value => change("oauthScopes", value)} placeholder="read" />
+            <label className="vk-field"><span>{t("settings.mcp.oauth.redirectUri")}</span><Input value={draft.oauthRedirectUri} onChange={e => change("oauthRedirectUri", e.target.value)} /></label>
             </>}
             </div>
           </DisclosureSection>
