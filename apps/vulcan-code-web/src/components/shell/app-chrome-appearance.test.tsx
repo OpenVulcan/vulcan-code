@@ -75,6 +75,23 @@ it("sets the text tier and the reduced-motion switch from the app menu", async (
   expect(document.documentElement.dataset.vkMotion).toBe("reduce");
 });
 
+it("steps the text tier with Ctrl+= and Ctrl+-, stops at either end, and restores the default with Ctrl+0", async () => {
+  await render(<GlobalActions startup={{ ready: true, phase: "ready", steps: [], recentLogs: [] }} locale="en-US" onChangeLocale={() => {}} />);
+  const press = async (key: string) => {
+    const event = new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, cancelable: true });
+    await act(async () => { document.body.dispatchEvent(event); });
+    return event.defaultPrevented;
+  };
+  const tier = () => document.documentElement.dataset.vkText;
+  expect(await press("=")).toBe(true);
+  expect(tier()).toBe("m");
+  for (let index = 0; index < 5; index += 1) await press("-");
+  expect(tier()).toBe("xs");
+  await press("0");
+  expect(tier()).toBe(DEFAULT_APPEARANCE.text);
+  expect(await press("k")).toBe(false);
+});
+
 it("switches the conversation reading width from the title strip", async () => {
   await render(<ReadingWidthMenu />);
   await openTrigger();

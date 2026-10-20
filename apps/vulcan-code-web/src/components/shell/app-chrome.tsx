@@ -22,6 +22,8 @@ import {
   APPEARANCE_TEXT_TIERS,
   APPEARANCE_THEMES,
   APPEARANCE_WIDTHS,
+  DEFAULT_APPEARANCE,
+  getAppearance,
   setAppearance,
   useAppearance,
   type AppearancePreferences,
@@ -120,6 +122,25 @@ export function GlobalActions(props: {
       event.preventDefault();
     }
   }, []);
+  // Ctrl+= and Ctrl+- (Cmd on macOS) step the text tier and Ctrl+0 restores the default. The tier scales the whole
+  // layout, so it stands in for page zoom, which the desktop window has no menu shortcut for.
+  // Ctrl+= 与 Ctrl+-（macOS 为 Cmd）逐档调整字号，Ctrl+0 恢复默认。字号档位等比缩放整个版面，因此替代页面缩放；
+  // 桌面窗口没有提供缩放的菜单快捷键。
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const step = event.key === "=" || event.key === "+" ? 1 : event.key === "-" || event.key === "_" ? -1 : event.key === "0" ? 0 : null;
+      if (step === null) return;
+      event.preventDefault();
+      const index = APPEARANCE_TEXT_TIERS.indexOf(getAppearance().text);
+      const next = step === 0
+        ? DEFAULT_APPEARANCE.text
+        : APPEARANCE_TEXT_TIERS[Math.min(Math.max(index + step, 0), APPEARANCE_TEXT_TIERS.length - 1)];
+      if (next !== getAppearance().text) choose("text", next);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [choose]);
   // subProps keeps pointer and keyboard tracking on every submenu surface.
   // subProps 在每个子菜单表面上保持鼠标与键盘追踪。
   const subProps = { onKeyDownCapture: markMenuKeyboardInteraction, onPointerDownCapture: markMenuPointerInteraction };
