@@ -248,7 +248,7 @@ pub(crate) fn build_memory_write_tool() -> Arc<NativeToolDefinition> {
                             "section": {"type": "string", "description": format!("create/move: become a child of this section, by key or H1 title. New files start with the preset sections: {}.", preset_section_keys())},
                             "newSection": {"type": "boolean", "description": "create/move: become a new H1 section. Give exactly one of parentId, section, newSection."},
                             "title": {"type": "string", "description": "create/rename: heading text."},
-                            "body": {"type": "string", "description": "create/replace: Markdown body."},
+                            "body": {"type": "string", "description": "create/replace: Markdown body. replace keeps the title; change it with rename."},
                             "text": {"type": "string", "description": "append: Markdown appended after a blank line."},
                             "withChildren": {"type": "boolean", "description": "delete: also delete child nodes."}
                         },

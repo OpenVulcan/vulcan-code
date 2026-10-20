@@ -222,7 +222,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
         &state,
         selected_session_id,
         model_target.context_compaction_policy,
-        "The current session has no history context to compact yet.",
+        "Nothing to compact yet: the whole history still fits in the recent turns that compaction keeps verbatim.",
     )?;
 
     let budget_note = context_compaction_budget_note_from_state(&state, selected_session_id);

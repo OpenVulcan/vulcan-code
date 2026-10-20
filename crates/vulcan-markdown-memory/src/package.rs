@@ -491,9 +491,9 @@ impl MarkdownMemoryStore {
             ))
         })?;
         let bytes = write_archive(&manifest, &entries)?;
-        let stamp: String = now.chars().filter(char::is_ascii_digit).collect();
         let path = destination_directory.join(format!(
-            "vulcan-memory-{stamp}-{}.zip",
+            "vulcan-memory-{}-{}.zip",
+            file_stamp(&now),
             &uuid::Uuid::new_v4().simple().to_string()[..6]
         ));
         let mut file = std::fs::OpenOptions::new()
@@ -729,9 +729,9 @@ impl MarkdownMemoryStore {
         if replaced.is_empty() {
             return Ok(None);
         }
-        let stamp: String = now.chars().filter(char::is_ascii_digit).collect();
         let directory = markdown.join(BACKUP_DIRECTORY).join(format!(
-            "import-{stamp}-{}",
+            "import-{}-{}",
+            file_stamp(now),
             &uuid::Uuid::new_v4().simple().to_string()[..6]
         ));
         for file in replaced {
@@ -1193,6 +1193,13 @@ fn read_package(archive: &Path) -> Result<Package, MemoryError> {
         space,
         projects,
     })
+}
+
+/// Turns a UTC metadata timestamp such as `2026-10-20T15:59Z` into a file-name stamp such as
+/// `20261020T1559Z`; the trailing `Z` keeps the stamp readable as UTC.
+/// 将 `2026-10-20T15:59Z` 这类 UTC 元数据时间转为 `20261020T1559Z` 这类文件名时间戳；结尾的 `Z` 表明其为 UTC。
+fn file_stamp(now: &str) -> String {
+    now.chars().filter(char::is_ascii_alphanumeric).collect()
 }
 
 #[cfg(test)]
