@@ -28,9 +28,16 @@ function useHoverCard(): HoverCardContextValue {
   return context;
 }
 
+// HOVER_CARD_OPEN_DELAY_MS is how long the pointer rests before a peek card opens; every hover peek shares it.
+// HOVER_CARD_OPEN_DELAY_MS 是指针停留多久后打开预览卡；所有悬停预览共用该值。
+export const HOVER_CARD_OPEN_DELAY_MS = 450;
+// HOVER_CARD_CLOSE_DELAY_MS bridges the pointer's trip from the trigger into the card before it closes.
+// HOVER_CARD_CLOSE_DELAY_MS 容许指针从触发器移入卡片，之后才关闭。
+export const HOVER_CARD_CLOSE_DELAY_MS = 150;
+
 // HoverCard holds the open state and the hover delays.
 // HoverCard 保存打开状态与悬停延迟。
-export function HoverCard({ open: controlled, defaultOpen = false, onOpenChange, openDelay = 700, closeDelay = 300, children }: {
+export function HoverCard({ open: controlled, defaultOpen = false, onOpenChange, openDelay = HOVER_CARD_OPEN_DELAY_MS, closeDelay = HOVER_CARD_CLOSE_DELAY_MS, children }: {
   open?: boolean;
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;

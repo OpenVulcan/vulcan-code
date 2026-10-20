@@ -36,7 +36,7 @@ export function AssistantDockButton() {
   if (!dock || dock.assistants.length === 0) return null;
   const shownCount = dock.state.windows.reduce((count, window) => count + window.assistantIds.length, 0);
   return (
-    <HoverCard closeDelay={180} onOpenChange={setOpen} open={open} openDelay={60}>
+    <HoverCard onOpenChange={setOpen} open={open} openDelay={60}>
       <HoverCardTrigger asChild>
         <Button
           ref={dock.buttonRef}

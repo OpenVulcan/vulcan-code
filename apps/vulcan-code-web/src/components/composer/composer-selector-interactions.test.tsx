@@ -2,6 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { HOVER_CARD_OPEN_DELAY_MS } from "@/ui-kit/primitives/hover-card";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
 import type { PublicAiSettingsSnapshot, ProviderSummary } from "@/types";
@@ -182,7 +183,7 @@ it("shows a read-only model, reasoning and plan usage summary until the popover 
   vi.mocked(loadPublicAiSettings).mockResolvedValue(settings());
   await render(<MergedHarness effort="low" options={["none", "low", "high"]} />);
   await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="Model"]')!.focus(); });
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 500)); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, HOVER_CARD_OPEN_DELAY_MS + 50)); });
   // summary is the mounted hover card; it must not contain any interactive selection control.
   // summary 是已挂载的悬浮卡片；其中不得包含任何交互式选择控件。
   const summary = document.querySelector(".vk-mr-summary");
@@ -511,7 +512,7 @@ it("opens the capability dialog from the hover summary footer action", async () 
   vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), conflicts: [] });
   await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="c" />);
   await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="Capabilities"]')!.focus(); });
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, HOVER_CARD_OPEN_DELAY_MS + 50)); });
   // configure is the footer action rendered by the mounted hover summary.
   // configure 是已挂载悬浮摘要渲染的底部操作。
   const configure = document.querySelector<HTMLButtonElement>(".vk-cap-sum-action");

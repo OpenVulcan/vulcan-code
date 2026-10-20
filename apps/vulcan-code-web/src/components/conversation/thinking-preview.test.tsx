@@ -3,13 +3,14 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
+import { HOVER_CARD_CLOSE_DELAY_MS, HOVER_CARD_OPEN_DELAY_MS } from "@/ui-kit/primitives/hover-card";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { StreamingThinkingOverlay } from "./conversation-live-reasoning";
 import { ThinkingPopupContext, ThinkingPreview } from "./thinking-preview";
 
 // Verify delayed hover, cancellation, immediate clicks, and stale-timer cleanup through real DOM events.
 // 通过真实 DOM 事件验证延迟悬停、取消、立即点击与过期定时器清理。
-it("waits 500ms for hover while clicks bypass and cancel the pending delay", async () => {
+it("waits the shared hover delay while clicks bypass and cancel the pending delay", async () => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // host and root own the isolated trigger; the actual Radix content renders into its portal.
@@ -24,18 +25,18 @@ it("waits 500ms for hover while clicks bypass and cancel the pending delay", asy
     const trigger = host.querySelector<HTMLButtonElement>("button");
     if (!trigger) throw new Error("Missing thinking trigger");
     await React.act(async () => trigger.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
-    await React.act(async () => vi.advanceTimersByTime(499));
+    await React.act(async () => vi.advanceTimersByTime(HOVER_CARD_OPEN_DELAY_MS - 1));
     expect(document.querySelector(".vk-think-pop")).toBeNull();
     await React.act(async () => vi.advanceTimersByTime(1));
     expect(document.querySelector(".vk-think-pop-body")?.textContent).toBe("完整思考");
     await React.act(async () => trigger.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })));
-    await React.act(async () => vi.advanceTimersByTime(180));
+    await React.act(async () => vi.advanceTimersByTime(HOVER_CARD_CLOSE_DELAY_MS));
     expect(document.querySelector(".vk-think-pop")).toBeNull();
 
     await React.act(async () => trigger.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
-    await React.act(async () => vi.advanceTimersByTime(200));
+    await React.act(async () => vi.advanceTimersByTime(HOVER_CARD_OPEN_DELAY_MS / 2));
     await React.act(async () => trigger.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })));
-    await React.act(async () => vi.advanceTimersByTime(500));
+    await React.act(async () => vi.advanceTimersByTime(HOVER_CARD_OPEN_DELAY_MS));
     expect(document.querySelector(".vk-think-pop")).toBeNull();
 
     await React.act(async () => trigger.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Sparkles } from "lucide-react";
+import { HOVER_CARD_CLOSE_DELAY_MS, HOVER_CARD_OPEN_DELAY_MS } from "@/ui-kit/primitives/hover-card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
 import { useI18n } from "@/i18n";
 import { useStreamingThinkingViewport } from "./use-streaming-thinking-viewport";
@@ -51,13 +52,13 @@ export function ThinkingPreview(props: { children: React.ReactNode; streaming?: 
   const enter = () => {
     cancelHoverTimers();
     if (open) return;
-    openTimer.current = setTimeout(() => { openTimer.current = null; setOpen(true); }, 500);
+    openTimer.current = setTimeout(() => { openTimer.current = null; setOpen(true); }, HOVER_CARD_OPEN_DELAY_MS);
   };
   // leave bridges the trigger-to-portal pointer gap without closing pinned content.
   // leave 容许指针穿过入口与 Portal 间隙，不关闭已固定的内容。
   const leave = () => {
     cancelHoverTimers();
-    closeTimer.current = setTimeout(() => { if (!pinned.current) setOpen(false); }, 180);
+    closeTimer.current = setTimeout(() => { if (!pinned.current) setOpen(false); }, HOVER_CARD_CLOSE_DELAY_MS);
   };
   if (liveOverlayOwned) {
     return <span aria-hidden="true" className="vk-think-tag" data-indicator="" data-compact={props.compact ? "" : undefined}>

@@ -331,7 +331,6 @@ export function ModelReasoningPickerControl(props: {
       }}
     >
       <HoverCard
-        closeDelay={120}
         onOpenChange={(nextOpen) => {
           if (nextOpen && (popoverOpen || summarySuppressedRef.current)) {
             return;
@@ -342,7 +341,6 @@ export function ModelReasoningPickerControl(props: {
           }
         }}
         open={summaryOpen && !popoverOpen}
-        openDelay={450}
       >
         <HoverCardTrigger asChild>
           <PopoverTrigger asChild>
@@ -480,7 +478,7 @@ export function ModelReasoningPickerControl(props: {
               <ChevronRight aria-hidden="true" className="vk-mr-chevron" size={16} />
             </button>
             {props.accounts.length > 0 ? (
-              <HoverCard closeDelay={150} openDelay={250}>
+              <HoverCard>
                 <HoverCardTrigger asChild>
                   <button
                     aria-label={props.accountAriaLabel}

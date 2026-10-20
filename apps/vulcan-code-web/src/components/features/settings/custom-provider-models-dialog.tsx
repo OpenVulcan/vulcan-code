@@ -934,7 +934,7 @@ function ModelListPane(props: {
           <InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon>
           <InputGroupInput onChange={(event) => props.onQueryChange(event.target.value)} placeholder={t("settings.customModels.search")} value={props.query} />
         </InputGroup>
-        <Tooltip delayDuration={500}>
+        <Tooltip>
           <TooltipTrigger asChild>
             <IconButton aria-label={t("settings.customModels.addManual")} onClick={props.onAdd} size="md" type="button" variant="default">
               <Plus aria-hidden="true" />

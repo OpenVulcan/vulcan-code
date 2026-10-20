@@ -26,7 +26,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/ui-kit/primitives/dialog";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
+import { HOVER_CARD_CLOSE_DELAY_MS, HOVER_CARD_OPEN_DELAY_MS, HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
 import { groupProviderToolCapabilities } from "@/components/shared/provider-tool-capability-groups";
 import {
   ComposerCapabilitySummary,
@@ -137,7 +137,7 @@ export function ContextUsageOrb(props: {
     hoverTimer.current = setTimeout(() => {
       hoverTimer.current = null;
       if (openedByHover.current) setStatisticsOpen(false);
-    }, 220);
+    }, HOVER_CARD_CLOSE_DELAY_MS);
   }, [cancelHoverOpen]);
   React.useEffect(() => cancelHoverOpen, [cancelHoverOpen]);
   if (!props.snapshot) {
@@ -202,7 +202,7 @@ export function ContextUsageOrb(props: {
               hoverTimer.current = null;
               openedByHover.current = true;
               setStatisticsOpen(true);
-            }, 500);
+            }, HOVER_CARD_OPEN_DELAY_MS);
           }}
           onPointerLeave={(event) => {
             if (event.pointerType === "mouse" && statisticsOpen) scheduleHoverClose();
@@ -573,13 +573,11 @@ function AiCapabilityControlEditor(props: ComposerAiCapabilityControlProps) {
       else summarySuppressed.current = true;
     }}>
       <HoverCard
-        closeDelay={150}
         onOpenChange={(nextOpen) => {
           if (nextOpen && (open || summarySuppressed.current)) return;
           setSummaryOpen(nextOpen);
         }}
         open={summaryOpen}
-        openDelay={300}
       >
         <HoverCardTrigger asChild>
           <DialogTrigger asChild>

@@ -787,7 +787,7 @@ export function ComposerPanel(props: {
   useComposerTypingRedirect(composerTextareaRef, pendingPromptEditRef, appendGlobalInput);
 
   return (
-    <TooltipProvider delayDuration={500}>
+    <TooltipProvider>
       {props.pendingPrompts.length ? (
         <PendingPromptQueueStrip
           disabled={isPendingPromptEditing}

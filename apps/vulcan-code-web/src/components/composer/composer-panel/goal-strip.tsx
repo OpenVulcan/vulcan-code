@@ -42,7 +42,7 @@ export function ComposerGoalStrip(props: {
     <div className="vk-goal">
       <Target size={15} />
       <span className="vk-goal-status">{composerGoalStatusLabel(props.goal.status, t)}</span>
-      <TooltipProvider delayDuration={500} skipDelayDuration={0}>
+      <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="vk-goal-text" tabIndex={0}>{props.goal.objective}</span>

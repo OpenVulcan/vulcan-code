@@ -41,15 +41,21 @@ interface ProviderContextValue {
   lastClosedAt: React.RefObject<number>;
 }
 
+// TOOLTIP_DELAY_MS and TOOLTIP_SKIP_DELAY_MS are the one tooltip timing: the first open waits, and a neighbour
+// opened within the skip window shows at once.
+// TOOLTIP_DELAY_MS 与 TOOLTIP_SKIP_DELAY_MS 是唯一的提示计时：首次打开需等待，跳过窗口内打开的相邻提示立即显示。
+const TOOLTIP_DELAY_MS = 400;
+const TOOLTIP_SKIP_DELAY_MS = 300;
+
 // DEFAULT_PROVIDER applies when no TooltipProvider wraps a tooltip.
 // DEFAULT_PROVIDER 在提示外层没有 TooltipProvider 时使用。
-const DEFAULT_PROVIDER: ProviderContextValue = { delayDuration: 400, skipDelayDuration: 300, lastClosedAt: { current: 0 } };
+const DEFAULT_PROVIDER: ProviderContextValue = { delayDuration: TOOLTIP_DELAY_MS, skipDelayDuration: TOOLTIP_SKIP_DELAY_MS, lastClosedAt: { current: 0 } };
 
 const ProviderContext = React.createContext<ProviderContextValue>(DEFAULT_PROVIDER);
 
 // TooltipProvider sets the hover delay for the tooltips inside it.
 // TooltipProvider 为其内部的提示设置悬停延迟。
-export function TooltipProvider({ delayDuration = 400, skipDelayDuration = 300, children }: {
+export function TooltipProvider({ delayDuration = TOOLTIP_DELAY_MS, skipDelayDuration = TOOLTIP_SKIP_DELAY_MS, children }: {
   delayDuration?: number;
   skipDelayDuration?: number;
   disableHoverableContent?: boolean;

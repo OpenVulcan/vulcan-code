@@ -229,7 +229,7 @@ function RailRowButton(props: {
     props.onSelect()
   }
   return (
-    <HoverCard closeDelay={80} onOpenChange={(next) => { if (!next || !pressed.current) setOpen(next) }} open={open} openDelay={450}>
+    <HoverCard onOpenChange={(next) => { if (!next || !pressed.current) setOpen(next) }} open={open}>
       <HoverCardTrigger asChild>
         <button
           aria-current={props.active ? "page" : undefined}

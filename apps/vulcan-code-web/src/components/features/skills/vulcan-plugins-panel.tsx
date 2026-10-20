@@ -741,7 +741,7 @@ export function VulcanPluginsPanel(props: {
       {secretError ? <PageNotice details={secretError} detailsLabel={t("skills.plugins.errorDetails")} tone="error">
         {t("skills.plugins.credentialActionFailedTry")}
       </PageNotice> : null}
-      <TooltipProvider delayDuration={300}>
+      <TooltipProvider>
       <div className="skill-card-list agent-skill-card-list">
         {visiblePlugins.length === 0 ? (
           <PageEmptyState size="panel" title={vulcanPlugins.length === 0 ? t("skills.plugins.emptyDetail") : t("skills.filter.empty")} />
