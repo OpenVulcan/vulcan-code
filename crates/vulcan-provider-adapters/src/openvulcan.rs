@@ -104,6 +104,24 @@ struct PublicDecision {
     max_images: u32,
 }
 
+/// Projects published exact widths: an unbroken run of integers becomes the equivalent inclusive range,
+/// so a model accepting every width from 32 to 4096 is not listed as thousands of discrete choices;
+/// any gap keeps the exact set.
+/// 投影已发布的精确维度：连续整数序列转为等价的包含式范围，使接受 32 至 4096 全部维度的模型
+/// 不会被列为数千个离散选项；存在缺口时保留精确集合。
+/// Returns (discrete set, minimum, maximum); exactly one of the set or the range is populated.
+/// 返回（离散集合，最小值，最大值）；集合与范围只填充其一。
+fn project_dimensions(allowed: BTreeSet<u32>) -> (BTreeSet<u32>, Option<u32>, Option<u32>) {
+    match (allowed.first().copied(), allowed.last().copied()) {
+        (Some(minimum), Some(maximum))
+            if minimum < maximum && u64::from(maximum - minimum) + 1 == allowed.len() as u64 =>
+        {
+            (BTreeSet::new(), Some(minimum), Some(maximum))
+        }
+        _ => (allowed, None, None),
+    }
+}
+
 /// Parses body for connection_id/generation, preserving the catalog's exact native capabilities.
 /// 为 connection_id/generation 解析 body，并保留目录的准确原生能力。
 pub(crate) fn parse_catalog(
@@ -176,6 +194,8 @@ pub(crate) fn parse_catalog(
                 {
                     continue;
                 }
+                let (dimensions, minimum_dimensions, maximum_dimensions) =
+                    project_dimensions(published.allowed_dimensions);
                 capabilities.operations = vec![AiOperation::EmbeddingCreate];
                 capabilities.context_limit = Some(published.max_input_tokens_per_item);
                 capabilities.embedding = Some(EmbeddingCapabilities {
@@ -183,9 +203,9 @@ pub(crate) fn parse_catalog(
                     input_resources: BTreeSet::new(),
                     output_kinds,
                     encodings: BTreeSet::from([EmbeddingEncoding::Float]),
-                    dimensions: published.allowed_dimensions,
-                    minimum_dimensions: None,
-                    maximum_dimensions: None,
+                    dimensions,
+                    minimum_dimensions,
+                    maximum_dimensions,
                     default_dimensions: Some(published.default_dimensions),
                     maximum_inputs: Some(published.max_batch_size),
                     maximum_tokens_per_input: Some(published.max_input_tokens_per_item),
@@ -536,6 +556,24 @@ mod tests {
         assert!(secret.execution_secret().is_err());
     }
 
+    /// An unbroken width run becomes the equivalent range; a single width or a gap stays exact.
+    /// 连续维度序列转为等价范围；单一维度或存在缺口时保持精确集合。
+    #[test]
+    fn openvulcan_dimension_runs_become_ranges() {
+        assert_eq!(
+            project_dimensions((32..=4096).collect()),
+            (BTreeSet::new(), Some(32), Some(4096))
+        );
+        assert_eq!(
+            project_dimensions(BTreeSet::from([1024])),
+            (BTreeSet::from([1024]), None, None)
+        );
+        assert_eq!(
+            project_dimensions(BTreeSet::from([256, 512, 1024])),
+            (BTreeSet::from([256, 512, 1024]), None, None)
+        );
+    }
+
     /// Dynamic catalog parsing preserves native capabilities and cannot invent chat or dimensions.
     /// 动态目录解析保留原生能力，不能虚构聊天或维度。
     #[test]
@@ -567,6 +605,10 @@ mod tests {
         assert_eq!(
             vector.capabilities.embedding.as_ref().unwrap().tasks,
             BTreeSet::from([EmbeddingTask::Query, EmbeddingTask::Document])
+        );
+        assert_eq!(
+            vector.capabilities.embedding.as_ref().unwrap().dimensions,
+            BTreeSet::from([3, 6])
         );
         let decision = parsed
             .models
