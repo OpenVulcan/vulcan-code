@@ -4018,7 +4018,10 @@ mod tests {
         let original = generation("account-a", "revision-1", "model");
         assert_eq!(original, generation("account-b", "revision-1", "model"));
         assert_eq!(original, generation("account-a", "revision-2", "model"));
-        assert_ne!(original, generation("account-a", "revision-1", "other-model"));
+        assert_ne!(
+            original,
+            generation("account-a", "revision-1", "other-model")
+        );
     }
 
     /// Verifies a query-only input template keeps the generation, while a document template changes it.
@@ -4046,8 +4049,14 @@ mod tests {
                 .1
         };
         let plain = generation(&[]);
-        assert_eq!(plain, generation(&[(EmbeddingTask::Query, "Instruct: find\nQuery:{input}")]));
-        assert_ne!(plain, generation(&[(EmbeddingTask::Document, "Passage: {input}")]));
+        assert_eq!(
+            plain,
+            generation(&[(EmbeddingTask::Query, "Instruct: find\nQuery:{input}")])
+        );
+        assert_ne!(
+            plain,
+            generation(&[(EmbeddingTask::Document, "Passage: {input}")])
+        );
     }
 
     /// Verifies query and document calls of one paired route lock the same space fingerprint.
