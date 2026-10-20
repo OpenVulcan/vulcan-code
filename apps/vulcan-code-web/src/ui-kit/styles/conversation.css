@@ -317,7 +317,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-think-pop-body .vk-md { min-width: 0; max-width: none; font-size: var(--vk-fs-md); overflow-wrap: anywhere; }
 
 /* Measured collapse: height animates between the measured content height and the collapsed height. */
-.vk-collapse { min-width: 0; overflow: hidden; transition: height 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+.vk-collapse { min-width: 0; overflow: hidden; transition: height var(--vk-t-med) cubic-bezier(0.22, 1, 0.36, 1); }
 .vk-collapse[data-open] { overflow: visible; }
 .vk-collapse-inner { min-width: 0; }
 

@@ -6,10 +6,13 @@ import {
   dispatchConversationManualViewportInteraction,
 } from "@/components/conversation/conversation-layout-events";
 import { cx } from "@/ui-kit/behavior/core";
+import { motionTokenMs } from "@/lib/motion-tokens";
 
-// CONVERSATION_MEASURED_COLLAPSE_MS matches the transcript fold animation duration.
-// CONVERSATION_MEASURED_COLLAPSE_MS 对齐会话折叠动画时长。
-const CONVERSATION_MEASURED_COLLAPSE_MS = 180;
+// collapseDurationMs is the fold animation length, read from the --vk-t-med token that .vk-collapse transitions on.
+// collapseDurationMs 是折叠动画时长，读取 .vk-collapse 过渡所用的 --vk-t-med 标记。
+function collapseDurationMs(): number {
+  return motionTokenMs("--vk-t-med");
+}
 
 // ConversationMeasuredCollapseMap stores collapse memory by stable collapse id.
 // ConversationMeasuredCollapseMap 按稳定折叠标识保存折叠记忆。
@@ -331,7 +334,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
     if (fallbackTimerRef.current !== null) {
       window.clearTimeout(fallbackTimerRef.current);
     }
-    fallbackTimerRef.current = window.setTimeout(finishTransition, CONVERSATION_MEASURED_COLLAPSE_MS + 80);
+    fallbackTimerRef.current = window.setTimeout(finishTransition, collapseDurationMs() + 80);
   }, [finishTransition]);
 
   React.useLayoutEffect(() => {
@@ -465,7 +468,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
         if (event.currentTarget !== event.target || event.propertyName !== "height") {
           return;
         }
-        if (Date.now() - transitionStartedAtRef.current < CONVERSATION_MEASURED_COLLAPSE_MS - 20) {
+        if (Date.now() - transitionStartedAtRef.current < collapseDurationMs() - 20) {
           return;
         }
         // expectedHeight verifies this transitionend belongs to the latest retargeted geometry.

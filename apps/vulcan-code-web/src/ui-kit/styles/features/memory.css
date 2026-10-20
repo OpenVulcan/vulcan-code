@@ -255,7 +255,7 @@
 /* 记忆记录浏览器：可选择的记录卡、紧凑计数与来源抽屉。 */
 .vk-mem-pick { position: relative; min-width: 0; }
 .vk-mem-pick > [role="checkbox"] { position: absolute; top: calc(var(--vk-u) * 4); left: calc(var(--vk-u) * 3); z-index: 1; }
-.vk-mem-tile { display: grid; align-content: start; gap: calc(var(--vk-u) * 2); width: 100%; min-width: 0; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color 120ms ease, border-color 120ms ease; }
+.vk-mem-tile { display: grid; align-content: start; gap: calc(var(--vk-u) * 2); width: 100%; min-width: 0; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color var(--vk-t-fast) var(--vk-ease), border-color var(--vk-t-fast) var(--vk-ease); }
 .vk-mem-pick > .vk-mem-tile { padding-left: calc(var(--vk-u) * 10); }
 .vk-mem-tile:hover:not(:disabled) { border-color: var(--vk-line-strong); background: var(--vk-hover); }
 .vk-mem-tile:focus-visible, .vk-mem-link:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
