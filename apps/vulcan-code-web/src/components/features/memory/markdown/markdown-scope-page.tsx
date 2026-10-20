@@ -287,7 +287,9 @@ function MemoryNodeRow(props: {
     <div className="vk-mm-node-head">
       <strong>{nodeTitle(node)}</strong>
       {node.level === 1 && node.section === "base" ? <Badge variant="outline">{t("memory.markdown.node.base")}</Badge> : null}
-      {node.source ? <Badge variant="ghost" title={node.session ?? undefined}>
+      {/* Sections are containers, preset ones included, so only notes carry an author badge. */}
+      {/* 分区（含预置分区）只是容器，因此只有笔记显示作者徽章。 */}
+      {node.source && node.level > 1 ? <Badge variant="ghost" title={node.session ?? undefined}>
         {t(node.source === "user" ? "memory.markdown.node.sourceUser" : "memory.markdown.node.sourceAi")}</Badge> : null}
       {updated ? <small>{formatMessage(t("memory.markdown.node.updated"), { time: updated })}</small> : null}
       <span className="vk-mm-node-acts">
