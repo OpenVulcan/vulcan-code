@@ -129,8 +129,8 @@ export function CommandPalette(props: {
                   value={`conversation:${conversation.id}`}
                 >
                   <MessageSquare />
-                  <span className="vk-palette-cmd">{conversation.title}</span>
-                  {conversation.projectName ? <span className="vk-palette-desc">{conversation.projectName}</span> : null}
+                  <span className="vk-palette-title">{conversation.title}</span>
+                  {conversation.projectName ? <span className="vk-palette-project">{conversation.projectName}</span> : null}
                 </CommandItem>
               ))}
             </CommandGroup>
