@@ -1,0 +1,17 @@
+schema_version: 3
+interface:
+  display_name: "Memory Curator"
+  short_description: "Tidy long-term Markdown memory: merge, re-scope, slim the base, sharpen titles"
+  emoji: "🗂️"
+  color: "#0F766E"
+  locales:
+    zh-CN:
+      display_name: "记忆整理"
+      short_description: "整理 Markdown 长期记忆：合并重复、纠正分层、精简基础区、改写标题"
+catalog:
+  category_id: "general"
+  tags: ["memory", "maintenance"]
+origin:
+  kind: "builtin"
+  label: "VulcanCode"
+  managed: true

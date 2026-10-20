@@ -54,9 +54,7 @@ pub(crate) fn append_markdown_memory_block(
     } else {
         SystemPromptHookPhase::FirstSession
     };
-    if let Some(block) = markdown_memory_block(&access, phase)? {
-        blocks.push(block);
-    }
+    blocks.push(markdown_memory_block(&access, phase)?);
     Ok(())
 }
 
@@ -66,26 +64,32 @@ pub(crate) fn remove_markdown_memory_block(blocks: &mut Vec<SystemPromptHookBloc
     blocks.retain(|block| block.tag != MARKDOWN_MEMORY_SYSTEM_PROMPT_TAG);
 }
 
-/// Builds the snapshot block, or `None` when every scope is empty.
-/// 构建快照块；全部层为空时返回 `None`。
+/// Builds the block: the writing guide followed by the snapshot, or a note that memory is empty.
+/// 构建快照块：写入守则后接快照；记忆为空时附说明。
 pub(crate) fn markdown_memory_block(
     access: &MarkdownMemoryAccess,
     phase: SystemPromptHookPhase,
-) -> Result<Option<SystemPromptHookBlock>, String> {
+) -> Result<SystemPromptHookBlock, String> {
     let documents = access
         .store
         .load_scopes(&access.context)
         .map_err(|error| error.to_string())?;
     let snapshot = build_injection_snapshot(&documents, &access.settings.budget);
-    if snapshot.content.trim().is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(SystemPromptHookBlock {
+    let memory = if snapshot.content.trim().is_empty() {
+        String::from("Memory is empty so far.")
+    } else {
+        snapshot.content
+    };
+    let content = format!(
+        "{}\n\n{memory}",
+        crate::runtime_assets::MARKDOWN_MEMORY_GUIDE_MD.trim()
+    );
+    Ok(SystemPromptHookBlock {
         tag: MARKDOWN_MEMORY_SYSTEM_PROMPT_TAG.to_string(),
         description: String::from(
             "Long-term memory captured when this conversation started or was last compacted. Changes written since then are not shown here; use memory_search for the current text.",
         ),
-        content: snapshot.content,
+        content,
         source: Some(String::from("Markdown memory")),
         phase,
         baseline_provenance: Some(SystemPromptHookBaselineProvenance::new(
@@ -93,7 +97,7 @@ pub(crate) fn markdown_memory_block(
             MARKDOWN_MEMORY_BASELINE_NODE_ID,
             MARKDOWN_MEMORY_BASELINE_SOURCE_ID,
         )),
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -105,8 +109,8 @@ mod tests {
         ProjectContext, WriteOperation,
     };
 
-    /// The snapshot block carries memory-profile provenance and appears only with content.
-    /// 快照块带有记忆画像来源，且只在有内容时出现。
+    /// The block carries memory-profile provenance and the snapshot once memory has content.
+    /// 快照块带有记忆画像来源，记忆有内容后包含快照。
     #[test]
     fn snapshot_block_is_a_locked_memory_profile_segment() {
         let root = tempfile::tempdir().expect("temp root");
@@ -120,11 +124,9 @@ mod tests {
         let access = resolve_markdown_memory_access_in(root.path(), None, None)
             .expect("resolve")
             .expect("active");
-        assert!(
-            markdown_memory_block(&access, SystemPromptHookPhase::FirstSession)
-                .expect("block")
-                .is_none()
-        );
+        let empty = markdown_memory_block(&access, SystemPromptHookPhase::FirstSession)
+            .expect("empty block");
+        assert!(!empty.content.contains("Backend engineer."));
 
         let operation: WriteOperation = serde_json::from_value(serde_json::json!({
             "action": "create", "scope": "user", "section": "identity",
@@ -140,9 +142,8 @@ mod tests {
                 vec![operation],
             )
             .expect("write");
-        let block = markdown_memory_block(&access, SystemPromptHookPhase::FirstSession)
-            .expect("block")
-            .expect("content");
+        let block =
+            markdown_memory_block(&access, SystemPromptHookPhase::FirstSession).expect("block");
         assert_eq!(block.tag, MARKDOWN_MEMORY_SYSTEM_PROMPT_TAG);
         assert!(block.content.contains("Backend engineer."));
         let provenance = block.baseline_provenance.clone().expect("provenance");

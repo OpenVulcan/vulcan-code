@@ -630,6 +630,11 @@ pub const CAPABILITY_GUIDE_MD: &str =
 /// 隐式 LuaSkills 调度使用的规范编译期指引。
 pub const CALL_LUASKILL_USAGE_MD: &str = include_str!("../resources/tool-guides/call-luaskill.md");
 
+/// Long-term Markdown memory writing guide injected with the memory snapshot.
+/// 与记忆快照一同注入的 Markdown 长期记忆写入守则。
+pub const MARKDOWN_MEMORY_GUIDE_MD: &str =
+    include_str!("../resources/tool-guides/markdown-memory.md");
+
 /// Interactive answer mode guidance; capacity placeholders are filled from session Core.
 /// 互动回答模式指引；容量占位符由会话 Core 填充。
 pub const ANSWER_MODE_INTERACTIVE_MD: &str =
