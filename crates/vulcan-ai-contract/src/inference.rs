@@ -1598,7 +1598,11 @@ impl EmbeddingCapabilities {
                     "Embedding input template targets undeclared task {task:?}."
                 ));
             }
-            if template.matches(EMBEDDING_INPUT_TEMPLATE_PLACEHOLDER).count() != 1 {
+            if template
+                .matches(EMBEDDING_INPUT_TEMPLATE_PLACEHOLDER)
+                .count()
+                != 1
+            {
                 return Err(format!(
                     "Embedding input template for {task:?} must contain `{EMBEDDING_INPUT_TEMPLATE_PLACEHOLDER}` exactly once."
                 ));
@@ -2019,7 +2023,10 @@ mod tests {
             capabilities
                 .input_templates
                 .insert(EmbeddingTask::Query, String::from(template));
-            assert!(capabilities.validate_input_templates().is_err(), "{template}");
+            assert!(
+                capabilities.validate_input_templates().is_err(),
+                "{template}"
+            );
         }
         capabilities.input_templates =
             BTreeMap::from([(EmbeddingTask::Clustering, String::from("Cluster: {input}"))]);

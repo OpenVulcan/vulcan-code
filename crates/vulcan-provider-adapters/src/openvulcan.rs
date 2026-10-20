@@ -486,7 +486,10 @@ mod tests {
         .expect("templated catalog");
         assert_eq!(
             embedding.input_templates,
-            BTreeMap::from([(EmbeddingTask::Query, String::from("Instruct: find\nQuery:{input}"))])
+            BTreeMap::from([(
+                EmbeddingTask::Query,
+                String::from("Instruct: find\nQuery:{input}")
+            )])
         );
         let failure = templated(serde_json::json!({"retrieval_query": "no placeholder"}))
             .expect_err("template without placeholder");

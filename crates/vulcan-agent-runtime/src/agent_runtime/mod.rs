@@ -9,6 +9,7 @@ pub mod events;
 pub mod execution_models;
 pub mod execution_preparation;
 pub mod extension_generation;
+pub(crate) mod markdown_memory_hooks;
 pub mod prompt_compaction;
 pub mod prompt_composer_runtime;
 pub mod provider;
@@ -70,7 +71,6 @@ pub(crate) mod tool_request_argument_assembler;
 pub mod tool_request_stream;
 pub(crate) mod tool_result_media;
 pub mod tool_runtime_bridge;
-pub(crate) mod markdown_memory_hooks;
 pub mod vmm_hooks;
 pub mod vulcan_plugin_hooks;
 
