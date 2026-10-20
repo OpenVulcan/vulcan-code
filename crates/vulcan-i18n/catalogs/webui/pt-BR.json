@@ -3436,6 +3436,7 @@
   "settings.modelServices.rail.title": "Provedores",
   "settings.modelServices.rail.search": "Pesquisar provedores",
   "settings.modelServices.rail.tagFilter": "Filtrar por serviço",
+  "settings.modelServices.rail.pinned": "Fixados",
   "settings.modelServices.rail.configured": "Configurados",
   "settings.modelServices.rail.available": "Disponíveis para adicionar",
   "settings.modelServices.rail.reorderHint": "Arraste ou pressione Alt+↑/↓ para reordenar. Provedores mais acima têm preferência.",

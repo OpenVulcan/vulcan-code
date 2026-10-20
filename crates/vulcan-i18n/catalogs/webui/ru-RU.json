@@ -3436,6 +3436,7 @@
   "settings.modelServices.rail.title": "Провайдеры",
   "settings.modelServices.rail.search": "Поиск провайдеров",
   "settings.modelServices.rail.tagFilter": "Фильтр по сервису",
+  "settings.modelServices.rail.pinned": "Закреплённые",
   "settings.modelServices.rail.configured": "Настроенные",
   "settings.modelServices.rail.available": "Можно добавить",
   "settings.modelServices.rail.reorderHint": "Перетащите или нажмите Alt+↑/↓, чтобы изменить порядок. Провайдеры выше в списке используются в первую очередь.",

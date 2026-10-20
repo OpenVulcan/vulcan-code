@@ -3436,6 +3436,7 @@
   "settings.modelServices.rail.title": "Anbieter",
   "settings.modelServices.rail.search": "Anbieter suchen",
   "settings.modelServices.rail.tagFilter": "Nach Dienst filtern",
+  "settings.modelServices.rail.pinned": "Angeheftet",
   "settings.modelServices.rail.configured": "Eingerichtet",
   "settings.modelServices.rail.available": "Hinzufügbar",
   "settings.modelServices.rail.reorderHint": "Ziehen oder Alt+↑/↓ drücken, um die Reihenfolge zu ändern. Weiter oben stehende Anbieter werden bevorzugt.",

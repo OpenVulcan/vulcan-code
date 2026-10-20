@@ -26,7 +26,12 @@ import type {
 
 import { ModelServicesDiagnostics } from "./model-services-diagnostics"
 import { alertSeverity, collectProviderAlerts, providerHealth, type ProviderAlert } from "./provider-alerts"
-import { buildProviderDirectory, priorityWritesForOrder, type ProviderTagFilter } from "./provider-directory"
+import {
+  buildProviderDirectory,
+  priorityWritesForOrder,
+  providerIsConfigured,
+  type ProviderTagFilter,
+} from "./provider-directory"
 import { ProviderRail } from "./provider-rail"
 import { ProviderRemovalDialog } from "./provider-removal-dialog"
 import { ProviderWorkspace } from "./provider-workspace"
@@ -122,17 +127,22 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
     }
     return counts
   }, [snapshot])
-  // The selection falls back to the first configured provider, then the first recommendation.
-  // 选择回退到第一个已配置供应商，其次是第一个推荐供应商。
+  // The selection falls back to the pinned core account, the first configured provider, then the first recommendation.
+  // 选择依次回退到置顶核心账号、第一个已配置供应商、第一个推荐供应商。
   const selected = snapshot?.providers.find((provider) => provider.id === selectedId)
+    ?? directory?.pinned[0]
     ?? directory?.configured[0]
     ?? directory?.available[0]
     ?? null
-  // modelProviderIds lists configured model providers in the user's order for the model-led view.
-  // modelProviderIds 按用户顺序列出已配置的模型供应商，用于以模型为主的视图。
+  // modelProviderIds lists configured model providers, pinned core accounts first, for the model-led view.
+  // modelProviderIds 列出已配置的模型供应商（置顶核心账号在前），用于以模型为主的视图。
   const modelProviderIds = React.useMemo(
-    () => directory?.configured.filter((provider) => !isFunctionalProvider(provider)).map((provider) => provider.id) ?? [],
-    [directory],
+    () => (snapshot && directory
+      ? [...directory.pinned.filter((provider) => providerIsConfigured(snapshot, provider)), ...directory.configured]
+        .filter((provider) => !isFunctionalProvider(provider))
+        .map((provider) => provider.id)
+      : []),
+    [directory, snapshot],
   )
 
   const onUsage = React.useCallback((connectionId: string, usage: PublicAiAccountUsage) => {

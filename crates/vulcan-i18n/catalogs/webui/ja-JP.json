@@ -3436,6 +3436,7 @@
   "settings.modelServices.rail.title": "プロバイダー",
   "settings.modelServices.rail.search": "プロバイダーを検索",
   "settings.modelServices.rail.tagFilter": "サービスで絞り込む",
+  "settings.modelServices.rail.pinned": "固定",
   "settings.modelServices.rail.configured": "設定済み",
   "settings.modelServices.rail.available": "追加できるもの",
   "settings.modelServices.rail.reorderHint": "ドラッグするか Alt+↑/↓ で並べ替えます。上にあるプロバイダーほど優先されます。",

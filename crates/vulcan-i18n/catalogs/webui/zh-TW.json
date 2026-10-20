@@ -3436,6 +3436,7 @@
   "settings.modelServices.rail.title": "供應商",
   "settings.modelServices.rail.search": "搜尋供應商",
   "settings.modelServices.rail.tagFilter": "依服務篩選",
+  "settings.modelServices.rail.pinned": "置頂",
   "settings.modelServices.rail.configured": "已設定",
   "settings.modelServices.rail.available": "可新增",
   "settings.modelServices.rail.reorderHint": "拖曳或按 Alt+↑/↓ 調整順序；越前面的供應商越優先使用。",

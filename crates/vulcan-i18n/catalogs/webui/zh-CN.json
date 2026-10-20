@@ -3436,6 +3436,7 @@
   "settings.modelServices.rail.title": "供应商",
   "settings.modelServices.rail.search": "搜索供应商",
   "settings.modelServices.rail.tagFilter": "按服务筛选",
+  "settings.modelServices.rail.pinned": "置顶",
   "settings.modelServices.rail.configured": "已配置",
   "settings.modelServices.rail.available": "可添加",
   "settings.modelServices.rail.reorderHint": "拖动或按 Alt+↑/↓ 调整顺序；越靠前的供应商越优先使用。",

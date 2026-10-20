@@ -234,6 +234,9 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 }
 
 .vk-ms-rail-grip[data-hidden="true"] { display: none; }
+/* A pinned core account shows a fixed pin in place of the drag grip. */
+/* 置顶核心账号以固定图钉代替拖动手柄。 */
+.vk-ms-rail-grip[data-pinned="true"] { color: var(--vk-ember); opacity: 0.7; cursor: default; }
 .vk-ms-rail-item:hover .vk-ms-rail-grip { opacity: 0.8; }
 
 /* Two-line row: the logo beside a full-width name, then chips with health and counts on the second line. */
