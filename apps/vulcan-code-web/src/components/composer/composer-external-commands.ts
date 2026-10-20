@@ -11,21 +11,25 @@ const COMPOSER_COMMAND_EVENT = "vulcan:composer-command";
 const NEW_CONVERSATION_EVENT = "vulcan:new-conversation";
 
 // ComposerExternalCommand is one thing another surface can ask the composer to do: open its model picker,
-// run one of its slash commands by id exactly as if it were chosen in the slash list, or insert text into
-// the draft without sending it.
+// run one of its slash commands by id exactly as if it were chosen in the slash list, or insert text, and
+// optionally attach files, into the draft without sending it.
 // ComposerExternalCommand 是其他界面可请求输入区执行的一件事：打开模型选择器；按 id 运行某个 slash 指令，效果与在
-// slash 列表中选择相同；或向草稿插入文本但不发送。
-export type ComposerExternalCommand = { kind: "model" } | { kind: "slash"; id: string } | { kind: "insert"; text: string };
+// slash 列表中选择相同；或向草稿插入文本并可附带文件，但不发送。
+export type ComposerExternalCommand = { kind: "model" } | { kind: "slash"; id: string } | { kind: "insert"; text: string; files?: readonly File[] };
 
-// pendingInsert holds text requested before a composer was mounted; the next mounted composer takes it.
-// pendingInsert 保存输入区挂载前请求插入的文本；下一个挂载的输入区会取走它。
-let pendingInsert: string | null = null;
+// PendingInsert is text, with any files, waiting for the next composer to take it.
+// PendingInsert 是等待下一个输入区取走的文本及其附带文件。
+type PendingInsert = { text: string; files: readonly File[] };
+
+// pendingInsert holds an insert requested before a composer was mounted; the next mounted composer takes it.
+// pendingInsert 保存输入区挂载前请求的插入；下一个挂载的输入区会取走它。
+let pendingInsert: PendingInsert | null = null;
 
 // requestComposerCommand asks the mounted composer to run a command; nothing happens when no composer is
 // shown, except that inserted text waits for the next composer.
 // requestComposerCommand 请求已挂载的输入区执行指令；没有显示输入区时不产生任何效果，但插入的文本会等待下一个输入区。
 export function requestComposerCommand(command: ComposerExternalCommand): void {
-  if (command.kind === "insert") pendingInsert = command.text;
+  if (command.kind === "insert") pendingInsert = { text: command.text, files: command.files ?? [] };
   window.dispatchEvent(new CustomEvent<ComposerExternalCommand>(COMPOSER_COMMAND_EVENT, { detail: command }));
 }
 
@@ -33,7 +37,7 @@ export function requestComposerCommand(command: ComposerExternalCommand): void {
 // draft for the user to review and send.
 // requestNewConversationWithText 在当前项目中打开新会话，并把 `text` 留在其草稿中，由用户检查后发送。
 export function requestNewConversationWithText(text: string): void {
-  pendingInsert = text;
+  pendingInsert = { text, files: [] };
   window.dispatchEvent(new CustomEvent(NEW_CONVERSATION_EVENT));
 }
 
@@ -56,7 +60,7 @@ export function useComposerExternalCommands(
   openModelPicker: () => void,
   slashCommands: readonly ComposerSlashCommandSummary[],
   activateSlashCommand: (command: ComposerSlashCommandSummary) => void,
-  insertText: (text: string) => void,
+  insertText: (text: string, files: readonly File[]) => void,
 ): void {
   const handler = (command: ComposerExternalCommand) => {
     const slash = command.kind === "slash" ? slashCommands.find((entry) => entry.id === command.id) : null;
@@ -73,15 +77,15 @@ export function useComposerExternalCommands(
     window.addEventListener(COMPOSER_COMMAND_EVENT, listener);
     // Text requested while no composer was mounted lands in this one.
     // 没有输入区挂载时请求的文本落入本输入区。
-    takePendingInsert((text) => latestInsert.current(text));
+    takePendingInsert((text, files) => latestInsert.current(text, files));
     return () => window.removeEventListener(COMPOSER_COMMAND_EVENT, listener);
   }, []);
 }
 
-// takePendingInsert hands the waiting text to `insert` once and clears it.
-// takePendingInsert 将等待中的文本交给 `insert` 一次并清除。
-function takePendingInsert(insert: (text: string) => void): void {
-  const text = pendingInsert;
+// takePendingInsert hands the waiting text and files to `insert` once and clears them.
+// takePendingInsert 将等待中的文本与文件交给 `insert` 一次并清除。
+function takePendingInsert(insert: (text: string, files: readonly File[]) => void): void {
+  const pending = pendingInsert;
   pendingInsert = null;
-  if (text !== null) insert(text);
+  if (pending !== null) insert(pending.text, pending.files);
 }

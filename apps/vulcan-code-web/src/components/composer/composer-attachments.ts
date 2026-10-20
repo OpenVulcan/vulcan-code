@@ -81,6 +81,9 @@ export interface UseComposerAttachmentsState {
   // handleComposerPaste gives file and image clipboard payloads priority over plain text.
   // handleComposerPaste 让文件与图片剪贴板载荷优先于普通文本处理。
   handleComposerPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void;
+  // stageComposerFiles validates and stages files another surface hands to the composer.
+  // stageComposerFiles 校验并暂存其他界面交给输入区的文件。
+  stageComposerFiles: (files: File[]) => Promise<void>;
   // handleComposerDragOver highlights the composer only when dragged files are acceptable.
   // handleComposerDragOver 仅在拖入文件可接受时高亮输入区。
   handleComposerDragOver: (event: React.DragEvent<HTMLElement>) => void;
@@ -342,6 +345,7 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     openAttachmentPicker,
     handleAttachmentInputChange,
     handleComposerPaste,
+    stageComposerFiles,
     handleComposerDragOver,
     handleComposerDrop,
     removeComposerAttachment,

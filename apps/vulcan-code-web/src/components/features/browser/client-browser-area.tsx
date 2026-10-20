@@ -1,5 +1,6 @@
 import * as React from "react";
-import { ArrowLeft, ArrowRight, Bug, ExternalLink, Globe, MonitorSmartphone, MoreHorizontal, Plus, RotateCw, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bug, Crosshair, ExternalLink, Globe, MonitorSmartphone, MoreHorizontal, Plus, RotateCw, X } from "lucide-react";
+import { useBrowserElementPick } from "@/components/features/browser/use-browser-element-pick";
 import { PageEmptyState, PageNotice } from "@/components/page";
 
 import { Button } from "@/ui-kit/primitives/button";
@@ -139,6 +140,7 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
   // activeTab is this GUI's selected temporary page, not the selected AI automation target.
   // activeTab 是当前 GUI 选中的临时页面，不是 AI 自动化目标。
   const activeTab = snapshot.tabs.find((tab) => tab.id === snapshot.activeId) ?? null;
+  const elementPick = useBrowserElementPick(bridge, activeTab?.id ?? null, t, setError);
   // address displays a real edit or the latest committed page URL, even when the input has focus.
   // address 显示真实编辑草稿或最新已提交页面地址，即使输入框仍有焦点也能更新。
   const address = addressDraft?.tabId === snapshot.activeId ? addressDraft.value
@@ -336,6 +338,10 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
         {bridge ? <ArrowRight /> : <ExternalLink />}
       </Button>
       {bridge && <>
+        {elementPick.available && <Button type="button" variant={elementPick.picking ? "secondary" : "ghost"} size="icon-sm"
+          title={t(elementPick.picking ? "browser.cancelElementPick" : "browser.pickElement")}
+          aria-label={t(elementPick.picking ? "browser.cancelElementPick" : "browser.pickElement")}
+          aria-pressed={elementPick.picking} disabled={!ownerReady || !activeTab} onClick={elementPick.toggle}><Crosshair /></Button>}
         <Button type="button" variant={freeSize ? "secondary" : "ghost"} size="icon-sm"
           title={t(freeSize ? "browser.exitResponsiveMode" : "browser.responsiveMode")}
           aria-label={t(freeSize ? "browser.exitResponsiveMode" : "browser.responsiveMode")}

@@ -36,6 +36,12 @@ export const LOCAL_BROWSER_CHANNELS = {
   // Opens page DevTools in a detached window.
   // 在独立窗口打开页面开发者工具。
   openDeveloperTools: 'vulcan:local-browser:devtools',
+  // Lets the user point at one page element and returns it with an annotated screenshot.
+  // 让用户指向一个页面元素，并返回该元素及带标注的截图。
+  pickElement: 'vulcan:local-browser:pick-element',
+  // Ends a running element pick.
+  // 结束进行中的元素选择。
+  cancelElementPick: 'vulcan:local-browser:cancel-element-pick',
   // Opens the actual page URL in the default browser.
   // 在默认浏览器打开实际页面地址。
   openExternal: 'vulcan:local-browser:external',

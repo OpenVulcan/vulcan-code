@@ -282,6 +282,7 @@ export function ComposerPanel(props: {
     openAttachmentPicker,
     handleAttachmentInputChange,
     handleComposerPaste,
+    stageComposerFiles,
     handleComposerDragOver,
     handleComposerDrop,
     removeComposerAttachment,
@@ -775,6 +776,7 @@ export function ComposerPanel(props: {
     onOpenSettings: slashSession.openSettings,
     onSend: handleComposerSend,
     textareaRef: composerTextareaRef,
+    onAttachFiles: (files) => void stageComposerFiles(files),
   });
 
   React.useLayoutEffect(() => {

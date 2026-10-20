@@ -339,6 +339,8 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
   handle(LOCAL_BROWSER_CHANNELS.history, (_event, id: string, action: 'back' | 'forward' | 'reload' | 'stop') => localBrowser.history(id, action));
   handle(LOCAL_BROWSER_CHANNELS.move, (_event, id: string, targetId: string) => localBrowser.move(id, targetId));
   handle(LOCAL_BROWSER_CHANNELS.openDeveloperTools, (_event, id: string) => localBrowser.openDeveloperTools(id));
+  handle(LOCAL_BROWSER_CHANNELS.pickElement, (_event, id: string) => localBrowser.pickElement(id));
+  handle(LOCAL_BROWSER_CHANNELS.cancelElementPick, (_event, id: string) => localBrowser.cancelElementPick(id));
   handle(LOCAL_BROWSER_CHANNELS.openExternal, (_event, id: string) => localBrowser.openExternal(id));
   handle(LOCAL_BROWSER_CHANNELS.openExternalUrl, (_event, url: string) => localBrowser.openExternalUrl(url));
   handle(LOCAL_BROWSER_CHANNELS.select, (_event, id: string) => localBrowser.select(id));

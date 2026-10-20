@@ -111,6 +111,29 @@ export interface ElectronLocalBrowserSnapshot {
   tabs: ElectronLocalBrowserTab[];
 }
 
+// ElectronLocalBrowserElementPick is one page element the user pointed at, measured in the page's CSS pixels.
+// ElectronLocalBrowserElementPick 是用户指向的一个页面元素，以页面 CSS 像素度量。
+export interface ElectronLocalBrowserElementPick {
+  // url and title identify the page at the moment of the pick.
+  // url 与 title 标识选中时的页面。
+  url: string;
+  title: string;
+  // selector matched exactly this element when it was picked.
+  // selector 在选中时恰好匹配此元素。
+  selector: string;
+  // tag is the lower-case element name; text is a short excerpt of its visible text.
+  // tag 是小写元素名；text 是其可见文本的简短摘录。
+  tag: string;
+  text: string;
+  // rect is the element's border box relative to a page viewport of `viewport` size.
+  // rect 是元素边框盒相对于尺寸为 `viewport` 的页面视口的位置。
+  rect: { x: number; y: number; width: number; height: number };
+  viewport: { width: number; height: number };
+  // screenshot is a PNG of the visible page with the element outlined.
+  // screenshot 是可见页面的 PNG，已标出该元素。
+  screenshot: Uint8Array;
+}
+
 // ElectronLocalBrowserViewport maps one DOM placeholder to the native view bounds.
 // ElectronLocalBrowserViewport 将一个 DOM 占位区域映射到原生视图边界。
 export interface ElectronLocalBrowserViewport {
@@ -161,6 +184,13 @@ export interface ElectronLocalBrowserBridge {
   // Opens id's inspector in a separate native window; resolves after opening.
   // 在独立原生窗口打开 id 的检查器；打开后完成。
   openDeveloperTools: (id: string) => Promise<void>;
+  // Lets the user point at one element of id's page; resolves with it, or null when cancelled. Absent on
+  // preloads without element picking.
+  // 让用户指向 id 页面中的一个元素；返回该元素，取消时返回 null。不支持元素选择的预加载没有此方法。
+  pickElement?: (id: string) => Promise<ElectronLocalBrowserElementPick | null>;
+  // Ends a running element pick on id's page; resolves after the page is told.
+  // 结束 id 页面上进行中的元素选择；通知页面后完成。
+  cancelElementPick?: (id: string) => Promise<void>;
   // Opens id's actual website or file URL externally; resolves after the OS request.
   // 在外部打开 id 的实际网页或文件地址；操作系统请求后完成。
   openExternal: (id: string) => Promise<void>;

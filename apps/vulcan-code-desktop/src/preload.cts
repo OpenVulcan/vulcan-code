@@ -46,6 +46,8 @@ const LOCAL_BROWSER_CHANNELS = {
   history: 'vulcan:local-browser:history',
   move: 'vulcan:local-browser:move',
   openDeveloperTools: 'vulcan:local-browser:devtools',
+  pickElement: 'vulcan:local-browser:pick-element',
+  cancelElementPick: 'vulcan:local-browser:cancel-element-pick',
   openExternal: 'vulcan:local-browser:external',
   // Matches the validated conversation URL opener in the main process.
   // 与主进程中经过校验的会话 URL 打开器一致。
@@ -167,6 +169,12 @@ const localBrowser = {
   // openDeveloperTools opens the given page's detached inspector; resolves after dispatch.
   // openDeveloperTools 打开指定页面的独立检查器；派发后完成。
   openDeveloperTools: (id: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.openDeveloperTools, id),
+  // pickElement lets the user point at one element of the given page; resolves with it or null when cancelled.
+  // pickElement 让用户指向指定页面的一个元素；返回该元素，取消时返回 null。
+  pickElement: (id: string): Promise<unknown> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.pickElement, id),
+  // cancelElementPick ends a running pick on the given page; resolves after the page is told.
+  // cancelElementPick 结束指定页面上进行中的选择；通知页面后完成。
+  cancelElementPick: (id: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.cancelElementPick, id),
   // openExternal uses the given page's native URL; resolves after the OS request.
   // openExternal 使用指定页面的原生地址；操作系统请求后完成。
   openExternal: (id: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.openExternal, id),

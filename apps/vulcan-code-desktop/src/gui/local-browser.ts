@@ -3,6 +3,11 @@
 import { randomUUID } from 'node:crypto';
 import { BrowserWindow, WebContentsView, session, shell } from 'electron';
 import { isAllowedLocalBrowserUrl, normalizeLocalBrowserUrl, validateExternalBrowserUrl } from './local-browser-url.js';
+import {
+  cancelLocalBrowserElementPick,
+  pickLocalBrowserElement,
+  type LocalBrowserElementPick,
+} from './local-browser-element-picker.js';
 
 // Bounds native views created by user actions and untrusted page popups in one GUI window.
 // 限制单个 GUI 窗口由用户操作或不受信任页面弹窗创建的原生视图数量。
@@ -317,6 +322,20 @@ export class LocalBrowserManager {
   // id 属于当前会话；打开开发者工具后无返回值。
   openDeveloperTools(id: string): void {
     this.requireCurrentTab(id).view.webContents.openDevTools({ mode: 'detach', activate: true });
+  }
+
+  // pickElement lets the user point at one element of the requested page.
+  // pickElement 让用户在请求页面中指向一个元素。
+  // id belongs to the current conversation; resolves with the pick, or null when cancelled.
+  // id 属于当前会话；返回选择结果，取消时返回 null。
+  pickElement(id: string): Promise<LocalBrowserElementPick | null> {
+    return pickLocalBrowserElement(this.requireCurrentTab(id).view.webContents);
+  }
+
+  // cancelElementPick ends a running pick on the requested page; resolves after the page is told.
+  // cancelElementPick 结束请求页面上进行中的选择；通知页面后完成。
+  cancelElementPick(id: string): Promise<void> {
+    return cancelLocalBrowserElementPick(this.requireCurrentTab(id).view.webContents);
   }
 
   // openExternal opens the actual committed website or file address externally.

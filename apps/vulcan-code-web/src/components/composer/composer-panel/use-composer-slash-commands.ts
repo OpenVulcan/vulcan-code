@@ -48,6 +48,9 @@ export interface UseComposerSlashCommandsOptions {
   // Receives the caret at the end of the draft after another surface inserted text into it.
   // 其他界面向草稿插入文本后，在此输入框中将光标放到草稿末尾。
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  // Stages files another surface attached together with its inserted text, under the composer's own checks.
+  // 按输入区自身的校验暂存其他界面随插入文本一并附带的文件。
+  onAttachFiles: (files: File[]) => void;
 }
 
 // ComposerSlashCommandsController exposes slash panel state and keyboard actions to ComposerPanel.
@@ -230,9 +233,10 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
   }, []);
   // The command palette and Ctrl+M reach the model picker and slash commands through these same handlers.
   // 命令面板与 Ctrl+M 通过这些相同的处理器打开模型选择器并运行 slash 指令。
-  const insertText = React.useCallback((text: string) => {
+  const insertText = React.useCallback((text: string, files: readonly File[]) => {
     options.setInput((current) => (current.trim() === "" ? text : `${current}
 ${text}`));
+    if (files.length) options.onAttachFiles([...files]);
     // The caret lands only after the inserted draft has rendered.
     // 光标只在插入后的草稿渲染完成后落下。
     window.requestAnimationFrame(() => {
@@ -241,7 +245,7 @@ ${text}`));
       textarea.focus({ preventScroll: true });
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     });
-  }, [options.setInput, options.textareaRef]);
+  }, [options.setInput, options.onAttachFiles, options.textareaRef]);
   useComposerExternalCommands(options.onOpenModelPicker, options.commands, activateCommand, insertText);
 
   return {
