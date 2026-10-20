@@ -252,7 +252,6 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
               health={health}
               modelCounts={modelCounts}
               onAddCustom={() => setCustomEditor({ provider: null })}
-              onOpenDiagnostics={() => selectTab("diagnostics")}
               onQuery={setQuery}
               onReorder={reorder}
               onSelect={showProvider}

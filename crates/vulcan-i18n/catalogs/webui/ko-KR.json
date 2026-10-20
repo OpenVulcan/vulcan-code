@@ -3577,7 +3577,6 @@
   "settings.modelServices.rail.recommended": "추천 순서",
   "settings.modelServices.rail.accounts": "계정 {count}개",
   "settings.modelServices.rail.modelsInUse": "모델 {count}개 사용 중",
-  "settings.modelServices.rail.diagnostics": "매니페스트 및 진단",
   "settings.modelServices.tag.all": "전체",
   "settings.modelServices.tag.model": "모델",
   "settings.modelServices.tag.search": "검색",

@@ -3577,7 +3577,6 @@
   "settings.modelServices.rail.recommended": "рекомендуемый порядок",
   "settings.modelServices.rail.accounts": "Аккаунтов: {count}",
   "settings.modelServices.rail.modelsInUse": "Моделей в работе: {count}",
-  "settings.modelServices.rail.diagnostics": "Манифесты и диагностика",
   "settings.modelServices.tag.all": "Все",
   "settings.modelServices.tag.model": "Модели",
   "settings.modelServices.tag.search": "Поиск",

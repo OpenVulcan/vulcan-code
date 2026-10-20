@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Stethoscope } from "lucide-react"
+import { ChevronDown, ChevronUp, GripVertical, Plus, Search } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
@@ -48,7 +48,6 @@ export interface ProviderRailProps {
   // onReorder 接收完整的新已配置顺序。
   onReorder: (order: string[]) => void
   onAddCustom: () => void
-  onOpenDiagnostics: () => void
 }
 
 // ProviderRail is the left directory: configured providers first (user order), then recommendations.
@@ -200,10 +199,6 @@ export function ProviderRail(props: ProviderRailProps) {
         <Button onClick={props.onAddCustom} size="sm" type="button" variant="outline">
           <Plus aria-hidden="true" />
           {t("settings.modelServices.rail.addCustom")}
-        </Button>
-        <Button onClick={props.onOpenDiagnostics} size="xs" type="button" variant="ghost">
-          <Stethoscope aria-hidden="true" />
-          {t("settings.modelServices.rail.diagnostics")}
         </Button>
       </div>
     </nav>

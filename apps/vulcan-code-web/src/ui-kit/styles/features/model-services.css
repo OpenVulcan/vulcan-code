@@ -311,8 +311,6 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
   border-top: var(--vk-bw) solid var(--vk-line);
 }
 
-.vk-ms-rail-foot > button:last-child { align-self: flex-start; color: var(--vk-ink-2); }
-
 /* Chips: service tags in their own colors, category, entry and the affiliate mark. */
 /* 标签胶囊：服务标签使用各自颜色，另有类别、入口与邀请标记。 */
 .vk-ms-chip-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }

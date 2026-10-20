@@ -3577,7 +3577,6 @@
   "settings.modelServices.rail.recommended": "推薦順序",
   "settings.modelServices.rail.accounts": "{count} 個帳戶",
   "settings.modelServices.rail.modelsInUse": "{count} 個模型使用中",
-  "settings.modelServices.rail.diagnostics": "清單與診斷",
   "settings.modelServices.tag.all": "全部",
   "settings.modelServices.tag.model": "模型",
   "settings.modelServices.tag.search": "搜尋",

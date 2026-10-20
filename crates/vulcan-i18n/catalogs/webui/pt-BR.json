@@ -3577,7 +3577,6 @@
   "settings.modelServices.rail.recommended": "ordem recomendada",
   "settings.modelServices.rail.accounts": "{count} contas",
   "settings.modelServices.rail.modelsInUse": "{count} modelos em uso",
-  "settings.modelServices.rail.diagnostics": "Manifestos e diagnóstico",
   "settings.modelServices.tag.all": "Todos",
   "settings.modelServices.tag.model": "Modelos",
   "settings.modelServices.tag.search": "Pesquisa",
