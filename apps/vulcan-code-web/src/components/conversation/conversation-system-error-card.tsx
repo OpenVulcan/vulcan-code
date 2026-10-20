@@ -429,6 +429,9 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
     );
   }
 
+  // The card is transcript history that remounts on every conversation switch, so it carries no live-region role
+  // (which would also replace the native disclosure semantics of <details>).
+  // 该卡片属于转录历史，每次切换会话都会重新挂载，因此不带实时区域角色（该角色还会覆盖 <details> 原生的展开语义）。
   return (
     <details
       aria-label={reconciliationPending
@@ -436,7 +439,6 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
         : t("conversation.systemError.title")}
       className="vk-error-card"
       data-pending={reconciliationPending || undefined}
-      role={reconciliationPending ? "status" : "alert"}
     >
       <summary className="vk-error-summary">
         <CircleAlert aria-hidden="true" className="vk-error-icon" />

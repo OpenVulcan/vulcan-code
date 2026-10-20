@@ -224,10 +224,12 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
     >
       <div className="vk-term-readonly">
         {attachmentError !== null ? (
-          <details role="alert">
-            <summary>{t("conversation.control.detailFailed")}</summary>
-            <pre>{attachmentError}</pre>
-          </details>
+          <div role="alert">
+            <details>
+              <summary>{t("conversation.control.detailFailed")}</summary>
+              <pre>{attachmentError}</pre>
+            </details>
+          </div>
         ) : null}
         <div className="vk-term-pane">
           <TerminalViewport
