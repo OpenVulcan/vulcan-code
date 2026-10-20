@@ -11,9 +11,10 @@ import { OpenVulcanUsageStatsPanel } from "./openvulcan-usage-stats-panel";
 import "./openvulcan-account.css";
 
 // OpenVulcanAccountDialog is the quick account view: one optional sign-in, or the current globally shared
-// account with its plan and usage statistics. Hourly call records live on the account settings page.
-// OpenVulcanAccountDialog 是快捷账户视图：可跳过的登录，或当前全局共享账户及其套餐与用量统计；
-// 小时调用明细位于账户设置页。
+// account with its plan and usage totals. The daily trend, model split and hourly call records live on the
+// account settings page.
+// OpenVulcanAccountDialog 是快捷账户视图：可跳过的登录，或当前全局共享账户及其套餐与用量合计；
+// 每日趋势、按模型分布与小时调用明细位于账户设置页。
 // Returns no dialog outside the application account context; credentials never enter this component.
 // 应用账户上下文之外不返回弹窗；凭据绝不进入本组件。
 export default function OpenVulcanAccountDialog() {
@@ -37,7 +38,7 @@ export default function OpenVulcanAccountDialog() {
             <OpenVulcanIdentity account={account} signedIn={signedIn} />
             {signedIn.connected && signedIn.connectionId ? <>
               <OpenVulcanPlanSummary key={`plan:${signedIn.connectionId}`} connectionId={signedIn.connectionId} />
-              <OpenVulcanUsageStatsPanel key={signedIn.connectionId} />
+              <OpenVulcanUsageStatsPanel key={signedIn.connectionId} totalsOnly />
             </> : null}
           </div>
         ) : (

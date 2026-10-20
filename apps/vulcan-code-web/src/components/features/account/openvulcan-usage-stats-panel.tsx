@@ -31,9 +31,11 @@ function formatDay(date: string, locale: string): string {
 // Hourly records stay on the account page's call details tab.
 // OpenVulcanUsageStatsPanel 显示折叠后的用量统计：合计、每日趋势与按模型分布；
 // 小时明细保留在账户页的调用详情标签中。
+// Parameters: totalsOnly keeps just the totals for the quick dialog; the trend and model split stay on the page.
+// 参数：totalsOnly 仅保留合计，用于快捷弹窗；趋势与按模型分布保留在账户页。
 // The parent keys this component by connection ID so a replaced account never shows stale statistics.
 // 父组件按连接 ID 设置本组件 key，使替换后的账户不会显示过期统计。
-export function OpenVulcanUsageStatsPanel() {
+export function OpenVulcanUsageStatsPanel(props: { totalsOnly?: boolean }) {
   // t and locale own copy and number formatting; stats, busy and error own the latest read.
   // t 与 locale 负责文案与数字格式；stats、busy 与 error 持有最近一次读取。
   const { locale, t } = useI18n();
@@ -94,7 +96,7 @@ export function OpenVulcanUsageStatsPanel() {
     </dl> : null}
     {stats?.partial ? <p className="openvulcan-stats-note">{formatMessage(t("openvulcan.stats.partial"), { from: stats.days.find((day) => day.counters.requests > 0n)?.date ?? stats.fromDate })}</p> : null}
     {stats && stats.models.length === 0 ? <PageEmptyState title={t("openvulcan.usage.empty")} /> : null}
-    {stats && stats.models.length > 0 ? <>
+    {stats && stats.models.length > 0 && !props.totalsOnly ? <>
       <div className="openvulcan-stats-block">
         <div className="openvulcan-stats-block-head">
           <h4>{t("openvulcan.stats.daily")}</h4>
