@@ -124,13 +124,23 @@ it.each(["other", "cleared", "missing", "rejected"] as const)("preserves diagnos
 });
 
 it("opens chat only after exact service confirmation and sends only the original owner ID", async () => {
-  vi.mocked(serviceClient.request).mockResolvedValueOnce({ ...workbench, revision: workbench.revision + 1, selectedConversationId: "conversation-original" });
+  vi.mocked(serviceClient.request).mockResolvedValueOnce({ ...workbench, revision: workbench.revision + 1, selectedConversationId: "conversation-original",
+    conversations: workbench.conversations.map((conversation) => conversation.id === "conversation-original" ? { ...conversation, unread: true } : conversation) });
   await click(readLocaleMessage("en-US", "pluginDiagnostics.locate"));
   expect(serviceClient.request).toHaveBeenNthCalledWith(1, "service_select_conversation", { conversationId: "conversation-original" });
   expect(host.querySelector('[data-main-view="chat"]')).not.toBeNull();
   expect(host.querySelector('[data-selected-owner]')?.getAttribute("data-selected-owner")).toBe("conversation-original");
   expect(stream.resetForWorkbenchSnapshot).toHaveBeenCalledTimes(1);
   expect(serviceClient.request).toHaveBeenCalledWith("service_mark_conversation_read", { conversationId: "conversation-original" });
+});
+
+it("does not persist a read marker for an owner the selection reply already shows as read", async () => {
+  vi.mocked(serviceClient.request).mockResolvedValueOnce({ ...workbench, revision: workbench.revision + 1, selectedConversationId: "conversation-original",
+    conversations: workbench.conversations.map((conversation) => conversation.id === "conversation-original" ? { ...conversation, unread: false } : conversation) });
+  await click(readLocaleMessage("en-US", "pluginDiagnostics.locate"));
+  expect(host.querySelector('[data-main-view="chat"]')).not.toBeNull();
+  expect(serviceClient.request).toHaveBeenCalledWith("service_select_conversation", { conversationId: "conversation-original" });
+  expect(serviceClient.request).not.toHaveBeenCalledWith("service_mark_conversation_read", expect.anything());
 });
 
 it.each(["leave", "collapse"] as const)("does not reopen chat after %s invalidates a pending exact owner reply", async (navigation) => {
