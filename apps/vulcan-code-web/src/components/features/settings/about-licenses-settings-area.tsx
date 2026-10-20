@@ -161,7 +161,7 @@ export function AboutLicensesSettingsArea(props: {
           <nav className="settings-license-directory" aria-label={t("settings.licenses.types")}>
             {filteredGroups.map((group) => <button className="settings-license-type" key={group.id} type="button"
               aria-current={selectedGroup?.id === group.id ? "page" : undefined} onClick={() => selectGroup(group.id)}>
-              <span className="settings-license-name"><span>{group.title || t("settings.licenses.unknown")}</span></span><small>{collectLicenseDependencies([group]).length}</small>
+              <span className="settings-license-name" title={group.title || undefined}><span>{group.title || t("settings.licenses.unknown")}</span></span><small>{collectLicenseDependencies([group]).length}</small>
             </button>)}
           </nav>
           <div className="settings-license-content">
