@@ -267,6 +267,11 @@ fn build_task_runtime_preparation_with_history(
 /// `request` 是正在改写为子智能体请求的父级请求克隆。
 fn clear_parent_request_runtime_state_for_task_session(request: &mut ExecutionPreparationRequest) {
     request.conversation_hook_turn_id = None;
+    // A manual Continue and a restart continuation bind only the parent turn; a child that inherited
+    // them would claim a Continue its own history never requested.
+    // 手动 Continue 与重启续接只绑定父回合；子代理若继承它们，会声明其自身历史从未请求过的 Continue。
+    request.continuation_action_id = None;
+    request.provider_request_continuation = None;
     // A newly delegated child captures its own tools; a restored parent's ceiling belongs only to that parent.
     // 新委派子代理捕获自己的工具；恢复父代理的权限上限仅属于该父代理。
     request.captured_child_tool_admission = None;

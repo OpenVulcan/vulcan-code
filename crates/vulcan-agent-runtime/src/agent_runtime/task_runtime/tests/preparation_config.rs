@@ -1120,6 +1120,10 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
     // 恢复父代理具有自己的捕获权限上限；首次委派必须捕获新子代理的工具。
     parent_request.captured_child_tool_admission = Some(BTreeMap::new());
     parent_request.connection_id_override = Some(String::from("parent-connection"));
+    // A child launched while the parent turn runs a manual Continue must not inherit that action.
+    // 父回合执行手动 Continue 期间启动的子代理不得继承该动作。
+    parent_request.continuation_action_id =
+        Some(vulcan_session_core::v1::ids::ClientActionId::try_new("parent-continue").unwrap());
     parent_request.provider_route_lease_identity =
         Some(vulcan_workbench_model::SessionProviderRouteLeaseIdentity {
             schema_version: 1,
@@ -1178,6 +1182,7 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
     assert_eq!(child_request.connection_id_override, None);
     assert_eq!(child_request.provider_route_lease_identity, None);
     assert!(child_request.captured_child_tool_admission.is_none());
+    assert!(child_request.continuation_action_id.is_none());
 }
 
 /// Verifies ordinary child-agent execution hides parent-session tools by default.
