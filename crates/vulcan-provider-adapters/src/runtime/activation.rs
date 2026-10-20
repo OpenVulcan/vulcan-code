@@ -1295,6 +1295,7 @@ impl PublicAiRuntime {
             activated_effective_catalogs: effective.clone(),
             source_catalogs,
             usage_cache,
+            activated_catalog_revisions: super::CatalogRevisionMemo::default(),
         });
         // Every fallible write guard is acquired before the first assignment. The immutable
         // generation is assigned last, making configuration, manifests, and effective catalogs

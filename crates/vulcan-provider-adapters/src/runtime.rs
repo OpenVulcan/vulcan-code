@@ -225,6 +225,24 @@ struct ResolvedProviderGeneration {
     /// Account usage facts that influenced plan-scoped model membership at this activation.
     /// 在本次激活中影响套餐作用域模型成员关系的账号用量事实。
     usage_cache: BTreeMap<String, AccountUsageSnapshot>,
+    /// Content revisions of `activated_effective_catalogs`, computed at most once per connection.
+    /// `activated_effective_catalogs` 的内容修订号，每个连接最多计算一次。
+    activated_catalog_revisions: CatalogRevisionMemo,
+}
+
+/// Lazily filled connection-to-revision memo owned by exactly one generation value.
+/// 由单个代际值独占、按需填充的连接到修订号缓存。
+///
+/// A clone starts empty, so a copied generation whose catalogs are then replaced can never
+/// reuse a revision computed for different content.
+/// 克隆从空缓存开始，因此复制后又替换目录的代际绝不会复用为不同内容计算的修订号。
+#[derive(Default)]
+struct CatalogRevisionMemo(StdMutex<BTreeMap<String, String>>);
+
+impl Clone for CatalogRevisionMemo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
 }
 
 /// Opaque exact before-image for one runtime Manifest/catalog activation transaction.
@@ -344,6 +362,7 @@ impl PublicAiRuntime {
                 activated_effective_catalogs: RuntimeConnectionCatalogs::default(),
                 source_catalogs: RuntimeConnectionCatalogs::default(),
                 usage_cache: BTreeMap::new(),
+                activated_catalog_revisions: CatalogRevisionMemo::default(),
             })));
         Ok(Self {
             execution_client: ProviderExecutionClient::new(http.clone(), Arc::clone(&protocols)),
@@ -645,5 +664,21 @@ mod tests {
 
         assert!(error.contains("Provider fixture"));
         assert!(error.contains("frozen total execution timeout"));
+    }
+
+    /// Verifies a copied generation never inherits catalog revisions computed for its source.
+    /// 验证复制的代际绝不继承为来源计算的目录修订号。
+    #[test]
+    fn catalog_revision_memo_clone_starts_empty() {
+        let memo = CatalogRevisionMemo::default();
+        memo.0
+            .lock()
+            .expect("memo lock")
+            .insert(String::from("connection"), String::from("sha256:source"));
+
+        let copied = memo.clone();
+
+        assert!(copied.0.lock().expect("memo lock").is_empty());
+        assert_eq!(memo.0.lock().expect("memo lock").len(), 1);
     }
 }

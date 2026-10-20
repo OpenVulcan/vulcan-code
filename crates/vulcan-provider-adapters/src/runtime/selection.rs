@@ -96,6 +96,33 @@ fn exact_active_connection(
     Ok(connection)
 }
 
+impl ResolvedProviderGeneration {
+    /// Returns the content revision of `catalog`, the activated catalog of `connection_id`.
+    /// 返回 `catalog`（即 `connection_id` 的已激活目录）的内容修订号。
+    ///
+    /// The generation is immutable, so each connection is hashed once instead of once per
+    /// model selection; building every picker row would otherwise rehash the whole catalog.
+    /// 代际不可变，因此每个连接只计算一次，而不是每次模型选择都计算；否则构建全部选择器行
+    /// 会反复对整个目录求哈希。
+    fn activated_catalog_revision(
+        &self,
+        connection_id: &str,
+        catalog: &crate::ConnectionModelCatalog,
+    ) -> Result<String, String> {
+        let mut revisions = self
+            .activated_catalog_revisions
+            .0
+            .lock()
+            .map_err(|_| String::from("The AI catalog revision memo lock is poisoned."))?;
+        if let Some(revision) = revisions.get(connection_id) {
+            return Ok(revision.clone());
+        }
+        let revision = effective_model_catalog_content_revision(catalog)?;
+        revisions.insert(connection_id.to_owned(), revision.clone());
+        Ok(revision)
+    }
+}
+
 impl PublicAiRuntime {
     /// Resolves public model and route metadata without reading secret material.
     /// 在不读取秘密材料的情况下解析公共模型与路由元数据。
@@ -374,8 +401,7 @@ impl PublicAiRuntime {
             // 选择只读取最近一次显式激活边界冻结的有效目录；未激活配置变更与可变目录保持不可见。
             let activated = catalog_snapshot
                 .activated_effective_catalogs
-                .get(connection.id.as_str())
-                .cloned();
+                .get(connection.id.as_str());
             let source_has_connection = catalog_snapshot
                 .source_catalogs
                 .get(connection.id.as_str())
@@ -406,7 +432,8 @@ impl PublicAiRuntime {
                         model_id, connection.id
                     )
                 })?;
-            let catalog_revision = effective_model_catalog_content_revision(&catalog)?;
+            let catalog_revision =
+                catalog_snapshot.activated_catalog_revision(connection.id.as_str(), catalog)?;
             (model, catalog_revision)
         };
         let provider = ProviderRegistry::effective_from_system(
