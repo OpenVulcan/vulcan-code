@@ -213,6 +213,9 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
             }
           }, 200);
         }
+        if (!conversationNeedsReadMarker(snapshot, conversationId)) {
+          return null;
+        }
         // Read-marker persistence is ancillary and must never turn a successful navigation into an error toast.
         // 已读标记持久化属于附属操作，绝不能把成功导航变成错误提示。
         return markConversationRead(conversationId).catch((error) => {
@@ -294,7 +297,9 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
     setConversationNavigation({ sourceId, targetId: conversationId, phase: "waiting-owner", showLoading: !isConversationInitialized(conversationId) });
     // Read persistence is ancillary; a later marker snapshot must not change the exact navigation decision.
     // 已读持久化属于附属操作；迟到标记快照不得改变精确导航决定。
-    void markConversationRead(conversationId).catch((error) => console.warn("[workbench] conversation read marker update failed", error));
+    if (conversationNeedsReadMarker(snapshot, conversationId)) {
+      void markConversationRead(conversationId).catch((error) => console.warn("[workbench] conversation read marker update failed", error));
+    }
     return true;
   }, [acceptServiceWorkbenchSnapshot, handleOpenWorkspaceChat, liveStreamStore, mergeWorkbenchWithLocalCaches, isConversationInitialized]);
 
@@ -304,4 +309,13 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
     handleSelectConversation,
     handleSelectPluginResourceOwner,
   };
+}
+
+// conversationNeedsReadMarker reports whether selecting a conversation must persist its read marker. The selection
+// snapshot is authoritative, so an already-read conversation skips the call and its full workbench reply; browser
+// preview has no snapshot and keeps its local-only call.
+// conversationNeedsReadMarker 返回选中会话后是否需要持久化已读标记。选择快照具有权威性，已读会话跳过该调用及其完整
+// 工作台响应；浏览器预览没有快照，保留其本地调用。
+function conversationNeedsReadMarker(snapshot: WorkbenchSnapshot | null, conversationId: string): boolean {
+  return snapshot === null || snapshot.conversations.some((conversation) => conversation.id === conversationId && conversation.unread === true);
 }
