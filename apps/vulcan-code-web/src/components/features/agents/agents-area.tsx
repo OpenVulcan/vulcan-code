@@ -197,7 +197,7 @@ export function AgentsArea(props: {
   const editorPromptSkillOptions = React.useMemo(() => buildAgentPromptSkillPolicyOptions(props.workbench, editorDraft, t), [editorDraft, locale, props.workbench])
   // categoryRows sorts catalog categories for the filter menu.
   // categoryRows 对目录分类排序以供筛选菜单使用。
-  const categoryRows = React.useMemo(() => sortedAgentCategories(props.workbench.subagentCatalog.categories, locale), [locale, props.workbench.subagentCatalog.categories])
+  const categoryRows = React.useMemo(() => sortedAgentCategories(props.workbench.subagentCatalog.categories, locale, t), [locale, props.workbench.subagentCatalog.categories, t])
   // categoryById resolves localized category metadata for definition cards.
   // categoryById 为定义卡片解析本地化分类元数据。
   const categoryById = React.useMemo(() => new Map(categoryRows.map((category) => [category.categoryId, category])), [categoryRows])
@@ -441,7 +441,7 @@ export function AgentCategoryMenu(props: {
   const { locale, t } = useI18n()
   // categories stores sorted category rows for the menu.
   // categories 保存菜单使用的已排序分类行。
-  const categories = React.useMemo(() => sortedAgentCategories(props.workbench.subagentCatalog.categories, locale), [locale, props.workbench.subagentCatalog.categories])
+  const categories = React.useMemo(() => sortedAgentCategories(props.workbench.subagentCatalog.categories, locale, t), [locale, props.workbench.subagentCatalog.categories, t])
   // countByCategory stores visible definition counts keyed by category id.
   // countByCategory 按分类标识保存可见定义数量。
   const countByCategory = React.useMemo(() => {
@@ -467,7 +467,7 @@ export function AgentCategoryMenu(props: {
           active={props.selectedCategoryId === category.categoryId}
           count={countByCategory.get(category.categoryId) ?? 0}
           key={category.categoryId}
-          label={localizedCategoryName(category, locale)}
+          label={localizedCategoryName(category, locale, t)}
           onSelect={() => props.onSelectCategory(category.categoryId)}
           swatch={{ glyph: category.emoji, color: colorSwatchValue(category.color) }}
           title={localizedCategoryDescription(category, locale) ?? category.categoryId}
@@ -1022,7 +1022,7 @@ function AgentDefinitionCard(props: {
   const displayName = localizedDefinitionName(definition, locale)
   const displayDescription = localizedDefinitionDescription(definition, locale)
   const category = definition.categoryId ? props.categoryById.get(definition.categoryId) : undefined
-  const categoryLabel = category ? localizedCategoryName(category, locale) : definition.categoryId
+  const categoryLabel = category ? localizedCategoryName(category, locale, t) : definition.categoryId
   const fallbackIcon = definition.emoji?.trim() || displayName.trim().charAt(0).toUpperCase() || "*"
   const toolAccessLabel = agentDefinitionToolAccessLabel(definition, t)
   const fixedModelSelector = agentDefinitionFixedModelSelector(definition)
@@ -1590,14 +1590,14 @@ function normalizedAgentToolSelectorKey(value: string): string {
 
 // sortedAgentCategories returns stable category rows for the filter menu.
 // sortedAgentCategories 返回用于筛选菜单的稳定分类行。
-function sortedAgentCategories(categories: SubagentCategorySummary[], locale: string): SubagentCategorySummary[] {
+function sortedAgentCategories(categories: SubagentCategorySummary[], locale: string, t: Translate): SubagentCategorySummary[] {
   return [...categories].sort((left, right) => {
     const leftOrder = left.order ?? Number.MAX_SAFE_INTEGER
     const rightOrder = right.order ?? Number.MAX_SAFE_INTEGER
     if (leftOrder !== rightOrder) {
       return leftOrder - rightOrder
     }
-    return localizedCategoryName(left, locale).localeCompare(localizedCategoryName(right, locale))
+    return localizedCategoryName(left, locale, t).localeCompare(localizedCategoryName(right, locale, t))
       || left.categoryId.localeCompare(right.categoryId)
   })
 }
@@ -1763,9 +1763,15 @@ function localizedDefinitionText(definition: SubagentDefinitionSummary, locale: 
   return localizedMetadataText(locales, locale, field)
 }
 
+// PLUGIN_AGENT_CATEGORY_ID is the host-owned category holding every plugin-contributed agent. No category file
+// describes it, so the interface catalog names it in every language.
+// PLUGIN_AGENT_CATEGORY_ID 是容纳全部插件贡献智能体的宿主分类。它没有分类文件描述，因此由界面目录为各语言命名。
+const PLUGIN_AGENT_CATEGORY_ID = "plugins"
+
 // localizedCategoryName resolves the category name for the active locale.
 // localizedCategoryName 解析当前语言下的分类名称。
-function localizedCategoryName(category: SubagentCategorySummary, locale: string): string {
+function localizedCategoryName(category: SubagentCategorySummary, locale: string, t: Translate): string {
+  if (category.categoryId === PLUGIN_AGENT_CATEGORY_ID) return t("agentSkills.builtinCategory.plugins")
   const localizedName = localizedCategoryText(category, locale, "name")
   if (localizedName) {
     return localizedName
