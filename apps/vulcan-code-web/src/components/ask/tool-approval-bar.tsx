@@ -15,6 +15,9 @@ interface ToolApprovalRequestProps {
   // Pending request that owns the approval.
   // 拥有该审批的待处理请求。
   request: PendingQuestionSnapshot;
+  // Child agent label when the request comes from a subagent of the visible conversation.
+  // 请求来自当前可见会话的子代理时的子代理标签。
+  requester?: string | null;
   // Permission facts of the gated tool call.
   // 受管控工具调用的权限事实。
   approval: PendingApprovalSnapshot;
@@ -64,6 +67,13 @@ const REVIEW_VERDICT_KEYS: Record<string, TranslationKey> = {
   ask_user: "ask.approval.review.askUser",
   deny: "ask.approval.review.deny",
 };
+
+// AskRequesterLine names the child agent that raised the request; the conversation's own requests show nothing.
+// AskRequesterLine 标明发起请求的子代理；会话自身的请求不显示。
+export function AskRequesterLine(props: { requester?: string | null; t: (key: TranslationKey) => string }) {
+  if (!props.requester) return null;
+  return <p className="vk-ask-requester">{formatMessage(props.t("ask.requester.subagent"), { agent: props.requester })}</p>;
+}
 
 // ToolApprovalRequest renders one tool-call approval in the session Ask bar.
 // ToolApprovalRequest 在会话 Ask 面板中渲染一条工具调用审批。
@@ -169,6 +179,7 @@ export function ToolApprovalRequest(props: ToolApprovalRequestProps) {
       >
         <h2 className="vk-sr-only" id={titleId}>{t("ask.approval.title")}</h2>
         <p className="vk-sr-only" id={descriptionId}>{t("ask.approval.description")}</p>
+        <AskRequesterLine requester={props.requester} t={t} />
         <div className="vk-ask-head">
           <ShieldAlert size={16} />
           <div className="vk-ask-title">

@@ -1662,6 +1662,7 @@
   "ask.confirm.submitBody": "Enter で送信、Esc で編集に戻ります。",
   "ask.confirm.rejectBody": "停止すると、待機中の ask ツール呼び出しは失敗として終了します。Esc で編集に戻ります。",
   "ask.approval.title": "許可が必要です",
+  "ask.requester.subagent": "サブエージェント {agent}",
   "ask.approval.description": "ツール呼び出しが実行前にあなたの許可を待っています。",
   "ask.approval.command": "{tool} がこのコマンドを実行しようとしています",
   "ask.approval.shell": "{tool} が対話型シェルを起動しようとしています",

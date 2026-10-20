@@ -168,6 +168,9 @@ export interface WorkbenchDialogsProps {
   // Current pending ask-tool request.
   // 当前待处理的 ask 工具请求。
   pendingQuestion: PendingQuestionSnapshot | null;
+  // Child agent label of the pending request, when it is not the conversation's own.
+  // 待处理请求不属于会话自身时的子代理标签。
+  pendingQuestionRequester?: string | null;
   // Running agents that require a main-stop decision.
   // 需要主会话停止决策的运行中智能体。
   stopConversationAgents: StopConversationRunAgentPromptItem[] | null;
@@ -245,6 +248,7 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
       />
       <AskQuestionDialog
         request={props.pendingQuestion}
+        requester={props.pendingQuestionRequester}
         onReject={props.onRejectPendingQuestion}
         onSubmit={props.onSubmitPendingQuestion}
       />

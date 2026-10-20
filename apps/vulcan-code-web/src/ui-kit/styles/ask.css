@@ -40,6 +40,7 @@
 .vk-ask[data-kind="approval"] { --vk-ask-tone: var(--vk-warn); }
 .vk-ask[data-kind="approval"][data-risk] { --vk-ask-tone: var(--vk-bad); }
 
+.vk-ask-requester { margin: 0 0 calc(var(--vk-u) * 1.5); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 600; letter-spacing: 0.02em; }
 .vk-ask-head { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 2.5); }
 .vk-ask-head > svg { flex: none; margin-top: 2px; color: var(--vk-ask-tone); }
 .vk-ask-title { flex: 1; min-width: 0; font-size: var(--vk-fs-md); font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }

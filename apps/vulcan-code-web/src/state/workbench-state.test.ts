@@ -356,3 +356,41 @@ describe("conversation archive selection", () => {
     expect(next.selectedConversationId).toBeNull();
   });
 });
+
+// Verifies a child agent's blocked request reaches the parent conversation, which is the only place it can be seen.
+// 验证子代理的阻塞请求进入父会话，那是唯一能看到它的地方。
+describe("child agent pending requests", () => {
+  // question builds one approval request owned by the given session.
+  // question 构建一条由指定会话持有的审批请求。
+  function question(id: string, sessionId: string, sequence: number) {
+    return sessionId === "child"
+      ? { id, sessionId, sequence, questions: [], ownerConversationId: "parent-conversation", requesterLabel: "Child" }
+      : { id, sessionId, sequence, questions: [] };
+  }
+
+  it("shows the child's request in the parent and names the child", () => {
+    const next = applyWorkbenchDelta(subagentLifecycleWorkbench("running"), {
+      generation: 8,
+      delta: {
+        kind: "pendingQuestionChanged",
+        payload: { conversationId: "child", pendingQuestion: question("q-child", "child", 1), pendingQuestions: [question("q-child", "child", 1)] },
+      },
+    });
+    expect(next.pendingQuestion?.id).toBe("q-child");
+    expect(next.pendingQuestionRequester).toBe("Child");
+    expect(next.conversations.find((conversation) => conversation.id === "parent-conversation")?.attention?.kind).toBe("ask");
+  });
+
+  it("keeps the parent's own request ahead of the child's", () => {
+    const pending = [question("q-child", "child", 1), question("q-parent", "parent-conversation", 2)];
+    const next = applyWorkbenchDelta(subagentLifecycleWorkbench("running"), {
+      generation: 8,
+      delta: {
+        kind: "pendingQuestionChanged",
+        payload: { conversationId: "child", pendingQuestion: pending[0], pendingQuestions: pending },
+      },
+    });
+    expect(next.pendingQuestion?.id).toBe("q-parent");
+    expect(next.pendingQuestionRequester).toBeNull();
+  });
+});

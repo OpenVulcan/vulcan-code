@@ -272,6 +272,26 @@ impl TaskRuntime {
         )
     }
 
+    /// Returns the root conversation and display title of one child task session, or `None` when the
+    /// session is not a child task; clients route a child's blocked requests to that root conversation.
+    /// 返回一个子任务会话的根会话与展示标题；该会话不是子任务时返回 `None`；客户端据此把子代理的
+    /// 阻塞请求路由到根会话。
+    pub fn child_task_owner(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Option<(SessionId, String)>, String> {
+        Ok(self
+            .sessions
+            .read()
+            .map_err(|_| {
+                String::from(
+                    "The task-session registry is locked and cannot resolve the task owner.",
+                )
+            })?
+            .get(&session_id)
+            .map(|record| (record.origin_session_id, record.display_title.clone())))
+    }
+
     /// Returns whether one child task still owns an in-flight abort handle, which the WebUI can treat as the source of truth for active-running state.
     /// 返回某个子任务当前是否仍持有活动中的中止句柄，供WebUI将其视作真实运行态事实源。
     pub fn is_task_running(&self, task_id: SessionId) -> Result<bool, String> {

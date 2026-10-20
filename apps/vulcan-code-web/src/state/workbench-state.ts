@@ -156,9 +156,6 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
   // subagentNavigationByConversation 删除常规父会话已不活动的导航树。
   const subagentNavigationByConversation = (workbench.subagentNavigationByConversation ?? [])
     .filter((navigation) => liveParentConversationIds.has(navigation.parentConversationId));
-  const pendingQuestion = selectedConversationId
-    ? (workbench.pendingQuestions ?? []).find((question) => question.sessionId === selectedConversationId) ?? null
-    : null;
   const pendingPrompts = selectedConversationId
     ? workbench.pendingPromptsByConversation?.find((entry) => entry.conversationId === selectedConversationId)?.pendingPrompts ?? []
     : [];
@@ -171,12 +168,28 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
   const subagentNavigation = selectedConversationId
     ? subagentNavigationByConversation.find((navigation) => navigation.parentConversationId === selectedConversationId) ?? null
     : null;
+  // A child agent has no conversation of its own in the workbench, so its blocked request surfaces in the root
+  // conversation the backend names, after that conversation's own request; otherwise the child would wait for an
+  // approval nobody can see.
+  // 子代理在工作台中没有自己的会话，其阻塞请求在后端指明的根会话中、排在该会话自身请求之后显示；否则子代理会等待无人可见的审批。
+  const pendingQuestions = workbench.pendingQuestions ?? [];
+  const ownPendingQuestion = selectedConversationId
+    ? pendingQuestions.find((question) => question.sessionId === selectedConversationId) ?? null
+    : null;
+  const pendingQuestion = ownPendingQuestion
+    ?? (selectedConversationId
+      ? pendingQuestions.find((question) => question.ownerConversationId === selectedConversationId) ?? null
+      : null);
+  const pendingQuestionRequester = pendingQuestion && pendingQuestion !== ownPendingQuestion
+    ? pendingQuestion.requesterLabel ?? null
+    : null;
   const contextInjectionEntry = selectedConversationId
     ? workbench.contextInjectionByConversation?.find((entry) => entry.conversationId === selectedConversationId) ?? null
     : null;
   return {
     ...workbench,
     pendingQuestion,
+    pendingQuestionRequester,
     pendingPrompts,
     sessionGoal: sessionAddons?.sessionGoal ?? null,
     sessionTodolist: sessionAddons?.sessionTodolist ?? null,
@@ -362,11 +375,20 @@ function upsertSubagentNavigationForConversation(
 
 // applyPendingQuestionAttention updates sidebar ask markers from the normalized ask queue.
 // applyPendingQuestionAttention 根据归一化 ask 队列更新侧栏提问标记。
+// A child agent's request marks its root conversation, since the child has no sidebar row of its own.
+// 子代理的请求标记其根会话，因为子代理在侧栏中没有自己的行。
 function applyPendingQuestionAttention(
   conversations: ConversationSummary[],
   pendingQuestions: PendingQuestionSnapshot[],
 ): ConversationSummary[] {
-  const pendingBySession = new Map(pendingQuestions.map((question) => [question.sessionId, question]));
+  const pendingBySession = new Map<string, PendingQuestionSnapshot>();
+  for (const question of pendingQuestions) {
+    if (!pendingBySession.has(question.sessionId)) pendingBySession.set(question.sessionId, question);
+  }
+  for (const question of pendingQuestions) {
+    const ownerId = question.ownerConversationId;
+    if (ownerId && !pendingBySession.has(ownerId)) pendingBySession.set(ownerId, question);
+  }
   return conversations.map((conversation) => {
     const pendingQuestion = pendingBySession.get(conversation.id);
     if (pendingQuestion) {

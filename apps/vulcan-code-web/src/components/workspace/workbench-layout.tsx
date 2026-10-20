@@ -1350,6 +1350,7 @@ export function WorkbenchLayout(props: {
         archiveProjectSubmitting={archiveProjectSubmitting}
         archiveProjectTarget={archiveProjectTarget}
         pendingQuestion={workbenchState.pendingQuestion ?? null}
+        pendingQuestionRequester={workbenchState.pendingQuestionRequester ?? null}
         projectFolderPickerOpen={projectFolderPickerOpen}
         projectIconTarget={projectIconTarget}
         projectSettingsRevision={projectSettingsTarget

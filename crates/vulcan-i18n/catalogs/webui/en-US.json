@@ -1662,6 +1662,7 @@
   "ask.confirm.submitBody": "Press Enter to submit, or Esc to return to editing.",
   "ask.confirm.rejectBody": "Stopping will fail the waiting ask tool call. Press Esc to return to editing.",
   "ask.approval.title": "Permission needed",
+  "ask.requester.subagent": "Subagent {agent}",
   "ask.approval.description": "A tool call is waiting for your permission before it runs.",
   "ask.approval.command": "{tool} wants to run this command",
   "ask.approval.shell": "{tool} wants to start an interactive shell",

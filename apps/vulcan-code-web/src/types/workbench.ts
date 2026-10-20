@@ -268,6 +268,9 @@ export interface WorkbenchSnapshot {
   // Oldest pending ask-tool request waiting for a user reply.
   // 当前等待用户回复的最早 ask 工具请求。
   pendingQuestion?: PendingQuestionSnapshot | null;
+  // Child agent label when the pending request belongs to a subagent of the selected conversation.
+  // 待处理请求属于当前会话的子代理时的子代理标签。
+  pendingQuestionRequester?: string | null;
   // Pending ask-tool questions grouped by their owning conversation.
   // 按所属会话保留的 ask 工具待回答问题。
   pendingQuestions?: PendingQuestionSnapshot[];

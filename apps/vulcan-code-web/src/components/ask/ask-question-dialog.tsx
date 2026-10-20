@@ -23,7 +23,7 @@ import type {
   PendingQuestionPromptSummary,
   PendingQuestionSnapshot,
 } from "@/types";
-import { ToolApprovalRequest } from "./tool-approval-bar";
+import { AskRequesterLine, ToolApprovalRequest } from "./tool-approval-bar";
 import { useAskAnchorStyle } from "./use-ask-anchor-style";
 
 // AskQuestionStage describes the lightweight question bar lifecycle.
@@ -36,6 +36,9 @@ interface AskQuestionDialogProps {
   // Pending request shown by the question bar.
   // question bar 展示的待处理请求。
   request: PendingQuestionSnapshot | null;
+  // Child agent label when the request comes from a subagent of the visible conversation.
+  // 请求来自当前可见会话的子代理时的子代理标签。
+  requester?: string | null;
   // Called when the user confirms abandoning the request.
   // 用户确认放弃请求时调用。
   onReject: (requestId: string) => Promise<void>;
@@ -451,6 +454,7 @@ function AskQuestionRequest(props: AskQuestionDialogProps) {
           <p className="vk-sr-only" id={descriptionId}>
             {t("ask.description")}
           </p>
+          <AskRequesterLine requester={props.requester} t={t} />
           <div className="vk-ask-head">
             <div className="vk-ask-title">
               {activeQuestion.question}

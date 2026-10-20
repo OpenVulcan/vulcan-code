@@ -68,6 +68,12 @@ export interface PendingQuestionSnapshot {
   // Runtime sequence used to order concurrent ask requests.
   // 用于排序并发 ask 请求的运行时序号。
   sequence: number;
+  // Root conversation that surfaces the request when sessionId is a child agent; absent for a conversation's own.
+  // sessionId 是子代理时展示该请求的根会话；会话自身的请求不带此字段。
+  ownerConversationId?: string | null;
+  // Display title of the child agent that raised the request; absent for a conversation's own.
+  // 发起请求的子代理展示标题；会话自身的请求不带此字段。
+  requesterLabel?: string | null;
   // Ordered prompts shown in the ask modal.
   // ask 弹窗中按顺序展示的问题提示。
   questions: PendingQuestionPromptSummary[];

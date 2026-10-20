@@ -1662,6 +1662,7 @@
   "ask.confirm.submitBody": "按 Enter 确认提交，按 Esc 返回修改。",
   "ask.confirm.rejectBody": "终止后等待中的 ask 工具调用会失败结束，按 Esc 返回修改。",
   "ask.approval.title": "需要权限确认",
+  "ask.requester.subagent": "子代理 {agent}",
   "ask.approval.description": "一个工具调用正在等待你的许可后才会执行。",
   "ask.approval.command": "{tool} 要执行这条命令",
   "ask.approval.shell": "{tool} 要启动交互式终端",

@@ -1662,6 +1662,7 @@
   "ask.confirm.submitBody": "Appuyez sur Entrée pour envoyer ou sur Échap pour revenir à la modification.",
   "ask.confirm.rejectBody": "L’arrêt fera échouer l’appel d’outil ask en attente. Appuyez sur Échap pour revenir à la modification.",
   "ask.approval.title": "Autorisation requise",
+  "ask.requester.subagent": "Sous-agent {agent}",
   "ask.approval.description": "Un appel d’outil attend votre autorisation avant de s’exécuter.",
   "ask.approval.command": "{tool} veut exécuter cette commande",
   "ask.approval.shell": "{tool} veut démarrer un shell interactif",
