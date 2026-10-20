@@ -60,11 +60,14 @@ function actionSet(): GrantActionSet {
   return { read: true, ask: false, steer: false, start: false, reply: false, notify: false };
 }
 
-// sessionLabel returns a stable human label while retaining the exact session id for actions.
-// sessionLabel 返回稳定的人类可读名称，同时保留动作使用的精确会话 ID。
+// sessionLabel returns a stable human label while retaining the exact session id for actions; a project name
+// shared by several projects also shows its path so the sessions can be told apart.
+// sessionLabel 返回稳定的人类可读名称，同时保留动作使用的精确会话 ID；多个项目同名时附上路径以便区分会话。
 function sessionLabel(session: ConversationSummary, projects: WorkbenchSnapshot["projects"]): string {
   const project = projects.find((candidate) => candidate.id === session.projectId);
-  return project ? `${project.name} / ${session.title}` : session.title;
+  if (!project) return session.title;
+  const sharedName = projects.some((candidate) => candidate.id !== project.id && candidate.name === project.name);
+  return `${sharedName ? `${project.name} (${project.path})` : project.name} / ${session.title}`;
 }
 
 // grantActionLabel returns the localized display label for one capability.
