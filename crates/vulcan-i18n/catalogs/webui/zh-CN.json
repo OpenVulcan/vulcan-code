@@ -1619,6 +1619,7 @@
   "workspaceFiles.noProjectDirectory": "当前会话没有关联项目目录。",
   "workspaceFiles.noMatchedFiles": "没有匹配的文件。",
   "workspaceFiles.noDisplayableFiles": "暂无可显示文件。",
+  "workspaceFiles.rootUnavailable": "无法读取项目目录",
   "workspaceFiles.filterPlaceholder": "筛选文件...",
   "workspaceFiles.loading": "正在加载。",
   "workspaceFiles.loadingTree": "正在加载文件树。",

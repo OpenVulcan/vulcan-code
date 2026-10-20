@@ -1619,6 +1619,7 @@
   "workspaceFiles.noProjectDirectory": "A conversa atual não está vinculada a um diretório de projeto.",
   "workspaceFiles.noMatchedFiles": "Nenhum arquivo correspondente.",
   "workspaceFiles.noDisplayableFiles": "Nenhum arquivo para exibir.",
+  "workspaceFiles.rootUnavailable": "Não é possível ler o diretório do projeto",
   "workspaceFiles.filterPlaceholder": "Filtrar arquivos...",
   "workspaceFiles.loading": "Carregando.",
   "workspaceFiles.loadingTree": "Carregando a árvore de arquivos.",

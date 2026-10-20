@@ -1619,6 +1619,7 @@
   "workspaceFiles.noProjectDirectory": "現在の会話はプロジェクトディレクトリにリンクされていません。",
   "workspaceFiles.noMatchedFiles": "一致するファイルはありません。",
   "workspaceFiles.noDisplayableFiles": "表示できるファイルはありません。",
+  "workspaceFiles.rootUnavailable": "プロジェクトディレクトリを読み取れません",
   "workspaceFiles.filterPlaceholder": "ファイルを絞り込む...",
   "workspaceFiles.loading": "読み込んでいます。",
   "workspaceFiles.loadingTree": "ファイルツリーを読み込んでいます。",

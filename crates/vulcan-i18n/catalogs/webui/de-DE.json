@@ -1619,6 +1619,7 @@
   "workspaceFiles.noProjectDirectory": "Die aktuelle Unterhaltung ist mit keinem Projektverzeichnis verknüpft.",
   "workspaceFiles.noMatchedFiles": "Keine passenden Dateien.",
   "workspaceFiles.noDisplayableFiles": "Keine anzeigbaren Dateien.",
+  "workspaceFiles.rootUnavailable": "Das Projektverzeichnis kann nicht gelesen werden",
   "workspaceFiles.filterPlaceholder": "Dateien filtern...",
   "workspaceFiles.loading": "Wird geladen.",
   "workspaceFiles.loadingTree": "Dateibaum wird geladen.",

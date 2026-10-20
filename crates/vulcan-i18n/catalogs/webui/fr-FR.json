@@ -1619,6 +1619,7 @@
   "workspaceFiles.noProjectDirectory": "La conversation actuelle n’est liée à aucun répertoire de projet.",
   "workspaceFiles.noMatchedFiles": "Aucun fichier correspondant.",
   "workspaceFiles.noDisplayableFiles": "Aucun fichier à afficher.",
+  "workspaceFiles.rootUnavailable": "Impossible de lire le dossier du projet",
   "workspaceFiles.filterPlaceholder": "Filtrer les fichiers...",
   "workspaceFiles.loading": "Chargement.",
   "workspaceFiles.loadingTree": "Chargement de l’arborescence des fichiers.",

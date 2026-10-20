@@ -1619,6 +1619,7 @@
   "workspaceFiles.noProjectDirectory": "The current conversation is not linked to a project directory.",
   "workspaceFiles.noMatchedFiles": "No matching files.",
   "workspaceFiles.noDisplayableFiles": "No displayable files.",
+  "workspaceFiles.rootUnavailable": "Cannot read the project directory",
   "workspaceFiles.filterPlaceholder": "Filter files...",
   "workspaceFiles.loading": "Loading.",
   "workspaceFiles.loadingTree": "Loading file tree.",

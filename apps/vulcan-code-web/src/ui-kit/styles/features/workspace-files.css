@@ -15,6 +15,16 @@
   place-items: center;
 }
 
+.workspace-files-panel > [data-slot="empty"] {
+  flex: 1 1 auto;
+}
+
+/* The service error names the unreadable root path, which must wrap inside the narrow panel. */
+/* 服务错误包含无法读取的根路径，必须在窄面板内换行。 */
+.workspace-files-root-error {
+  overflow-wrap: anywhere;
+}
+
 .workspace-files-filter-menu {
   width: max-content;
   min-width: 190px;

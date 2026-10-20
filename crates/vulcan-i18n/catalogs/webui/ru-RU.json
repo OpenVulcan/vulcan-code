@@ -1619,6 +1619,7 @@
   "workspaceFiles.noProjectDirectory": "Текущая беседа не связана с каталогом проекта.",
   "workspaceFiles.noMatchedFiles": "Подходящих файлов нет.",
   "workspaceFiles.noDisplayableFiles": "Нет файлов для отображения.",
+  "workspaceFiles.rootUnavailable": "Не удаётся прочитать каталог проекта",
   "workspaceFiles.filterPlaceholder": "Фильтр файлов...",
   "workspaceFiles.loading": "Загрузка.",
   "workspaceFiles.loadingTree": "Загрузка дерева файлов.",

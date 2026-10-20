@@ -1619,6 +1619,7 @@
   "workspaceFiles.noProjectDirectory": "현재 대화가 프로젝트 디렉터리에 연결되어 있지 않습니다.",
   "workspaceFiles.noMatchedFiles": "일치하는 파일이 없습니다.",
   "workspaceFiles.noDisplayableFiles": "표시할 파일이 없습니다.",
+  "workspaceFiles.rootUnavailable": "프로젝트 디렉터리를 읽을 수 없습니다",
   "workspaceFiles.filterPlaceholder": "파일 필터...",
   "workspaceFiles.loading": "불러오는 중.",
   "workspaceFiles.loadingTree": "파일 트리를 불러오는 중.",

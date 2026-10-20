@@ -1,6 +1,6 @@
 import React from "react";
 import "@/ui-kit/styles/features/workspace-files.css";
-import { ChevronsUpDown, Copy, FileText, Folder, Info, ListFilter, MoreHorizontal, X } from "lucide-react";
+import { ChevronsUpDown, Copy, FileText, Folder, FolderX, Info, ListFilter, MoreHorizontal, X } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import {
   activeWorkbenchSurfaceId,
@@ -19,7 +19,7 @@ import {
 } from "@/components/workspace/workspace-files-preview";
 import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
 import { Button, IconButton } from "@/ui-kit/primitives/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -555,6 +555,12 @@ export function WorkspaceFilesPanelHost(props: {
     );
   }
 
+  // rootUnavailable marks a project root that could not be listed (for example a moved or deleted directory);
+  // the tree, its filter and its empty label would only repeat that failure.
+  // rootUnavailable 标记无法列出的项目根目录（例如目录被移动或删除）；目录树、过滤框与空提示只会重复这一失败。
+  const rootUnavailable = !rootListing && panelError?.directoryPath === null;
+  const retryPanelLoad = () => { if (panelError) void loadDirectory(panelError.directoryPath); };
+
   const renderTree = (inPicker: boolean) => (
     <WorkspaceFileTree
       activeFileKey={selectedPath}
@@ -595,9 +601,9 @@ export function WorkspaceFilesPanelHost(props: {
       {!rootListing && loadingDirectories.has(workspacePath) ? (
         <PageNotice tone="info">{t("workspaceFiles.loadingTree")}</PageNotice>
       ) : null}
-      {panelError ? (
+      {panelError && !rootUnavailable ? (
         <PageNotice
-          actions={<Button size="sm" variant="outline" onClick={() => void loadDirectory(panelError.directoryPath)}>{t("workspaceAudit.retry")}</Button>}
+          actions={<Button size="sm" variant="outline" onClick={retryPanelLoad}>{t("workspaceAudit.retry")}</Button>}
           tone="error"
         >
           {panelError.message}
@@ -615,8 +621,29 @@ export function WorkspaceFilesPanelHost(props: {
           onAllowMediaPreview={allowMediaPreview}
           onRetryPreview={() => { if (selectedEntry) void loadFilePreview(selectedEntry, filters); }}
         />
+      ) : rootUnavailable ? (
+        <WorkspaceFilesRootUnavailable message={panelError?.message ?? ""} onRetry={retryPanelLoad} />
       ) : renderTree(false)}
     </section>
+  );
+}
+
+// WorkspaceFilesRootUnavailable replaces the project tree when the project root cannot be listed, keeping the
+// service error (which names the path) and a retry.
+// WorkspaceFilesRootUnavailable 在项目根目录无法列出时替代目录树，保留服务错误（其中包含路径）与重试入口。
+function WorkspaceFilesRootUnavailable(props: { message: string; onRetry: () => void }) {
+  const { t } = useI18n();
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon"><FolderX /></EmptyMedia>
+        <EmptyTitle>{t("workspaceFiles.rootUnavailable")}</EmptyTitle>
+        <EmptyDescription className="workspace-files-root-error">{props.message}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button size="sm" variant="outline" onClick={props.onRetry}>{t("workspaceAudit.retry")}</Button>
+      </EmptyContent>
+    </Empty>
   );
 }
 

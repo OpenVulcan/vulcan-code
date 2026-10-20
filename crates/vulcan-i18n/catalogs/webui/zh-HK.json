@@ -1619,6 +1619,7 @@
   "workspaceFiles.noProjectDirectory": "目前對話沒有關聯項目目錄。",
   "workspaceFiles.noMatchedFiles": "沒有相符的檔案。",
   "workspaceFiles.noDisplayableFiles": "暫無可顯示的檔案。",
+  "workspaceFiles.rootUnavailable": "無法讀取項目目錄",
   "workspaceFiles.filterPlaceholder": "篩選檔案...",
   "workspaceFiles.loading": "正在載入。",
   "workspaceFiles.loadingTree": "正在載入檔案樹。",
