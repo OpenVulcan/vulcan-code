@@ -8,7 +8,7 @@ import type { AgentActionProps } from "@/components/features/agents/agents-area"
 import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/skills-area";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { MemoryActionProps, MemorySubAreaId } from "@/components/features/memory/memory-area";
-import type { ConversationMenuAction, ProjectMenuAction } from "@/components/project/project-sidebar";
+import type { ConversationMenuAction, ProjectGroupAction, ProjectMenuAction } from "@/components/project/project-sidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type {
   DiffReviewSelection,
@@ -151,6 +151,9 @@ export interface WorkspaceShellProps {
   // Persists project order changes.
   // 持久化项目排序变化。
   onReorderProjects: (projectIds: string[]) => void;
+  // Persists one project-group change; rejects with the service error.
+  // 持久化一次项目分组变更；失败时以服务错误拒绝。
+  onProjectGroupAction: (action: ProjectGroupAction) => Promise<void>;
   // Selects one persisted conversation.
   // 选择一个持久化会话。
   onSelectConversation: (conversationId: string) => void;

@@ -80,6 +80,9 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// Canonical workspace snapshot being projected.
     /// 正在投影的规范工作区快照。
     pub(crate) workspace: &'a vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    /// Stored project groups, projected onto the visible projects of `workspace`.
+    /// 已保存的项目分组，投影到 `workspace` 的可见项目上。
+    pub(crate) project_groups: &'a [vulcan_workspace_store::workspace_store::ProjectGroup],
     /// Non-serializable pending-prompt compatibility mirrors owned by the kernel process.
     /// 由内核进程持有的不可序列化待发送提示词兼容镜像。
     pub(crate) pending_prompt_process_mirrors: &'a BTreeMap<SessionId, PendingPromptProcessMirror>,
@@ -353,6 +356,9 @@ async fn refresh_workbench_snapshot_with_selected_session(
             .as_ref()
             .map(|runtime| runtime.public_ai_runtime.as_ref()),
         workspace: &refreshed_snapshot,
+        project_groups: &vulcan_workspace_store::workspace_store::load_project_groups(
+            &controller_runtime,
+        )?,
         pending_prompt_process_mirrors: &pending_prompt_process_mirrors,
         vmm_session_states: &vmm_session_states,
         native_vmm_host_ai_status,
@@ -1029,6 +1035,35 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
     }
 }
 
+/// Projects stored project groups onto the visible projects, keeping empty groups.
+/// 将已保存的项目分组投影到可见项目上，并保留空分组。
+///
+/// Archived members stay in storage so a restored project returns to its group, but they are not shown.
+/// 已归档成员仍保留在存储中，使恢复的项目回到原分组，但不会显示。
+pub(crate) fn project_group_summaries(
+    groups: &[vulcan_workspace_store::workspace_store::ProjectGroup],
+    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+) -> Vec<vulcan_service_api::ProjectGroupSummary> {
+    let visible = workspace
+        .task_projects
+        .iter()
+        .map(|project| project.id.as_str())
+        .collect::<BTreeSet<_>>();
+    groups
+        .iter()
+        .map(|group| vulcan_service_api::ProjectGroupSummary {
+            id: group.id.clone(),
+            name: group.name.clone(),
+            project_ids: group
+                .project_ids
+                .iter()
+                .filter(|project_id| visible.contains(project_id.as_str()))
+                .cloned()
+                .collect(),
+        })
+        .collect()
+}
+
 /// Converts runtime state into a WebUI workbench snapshot.
 /// 将运行时状态转换为 WebUI 工作台快照。
 pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> WorkbenchSnapshot {
@@ -1043,6 +1078,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         provider_configuration,
         public_ai_runtime,
         workspace,
+        project_groups,
         pending_prompt_process_mirrors,
         vmm_session_states,
         native_vmm_host_ai_status,
@@ -1218,6 +1254,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             })
             .collect(),
         expanded_project_ids: workspace.expanded_task_projects.iter().cloned().collect(),
+        project_groups: project_group_summaries(project_groups, workspace),
         project_settings_revisions: vulcan_service_api::ProjectSettingsRevisionSnapshot::default(),
         conversations: workspace
             .sessions

@@ -12,6 +12,7 @@ import { useI18n, formatMessage } from "@/i18n";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 
 import { ProjectIcon } from "./project-icons";
+import type { ProjectRowPlacement } from "./project-sidebar-groups";
 import { ProjectContextMenu } from "./project-sidebar-menus";
 import { useVerticalSortableItem } from "./project-sidebar-sortable";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
@@ -22,6 +23,9 @@ export function SortableProjectRow(props: {
   // Project represented by this sortable row.
   // 当前可排序行代表的项目。
   project: ProjectSummary;
+  // Move-to-group entries; null for pinned projects, which stay outside groups.
+  // “移动到分组”入口；置顶项目不在分组中，因此为 null。
+  placement: ProjectRowPlacement | null;
   // Conversations that belong to the project.
   // 归属于当前项目的会话列表。
   conversations: ConversationSummary[];
@@ -112,7 +116,7 @@ ${props.project.path}`}
       style={sortable.sortableStyle}
     >
       <div className="vk-tree-item" data-kind="project">
-        <ProjectContextMenu project={props.project} onAction={props.onProjectMenuAction}>
+        <ProjectContextMenu placement={props.placement} project={props.project} onAction={props.onProjectMenuAction}>
           {projectFolderButton}
         </ProjectContextMenu>
         <span className="vk-tree-actions">

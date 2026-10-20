@@ -6,15 +6,19 @@ import type { AgentSkillActionProps } from "@/components/features/agent-skills/a
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import { normalizeProjectIconSelection, type ProjectIconDialogTarget, type ProjectIconSelection } from "@/components/project/project-icons";
 import { type ProjectAgentSkillState, type ProjectSettingsDialogTarget } from "@/components/project/project-settings-dialog";
-import type { ProjectMenuAction } from "@/components/project/project-sidebar";
+import type { ProjectGroupAction, ProjectMenuAction } from "@/components/project/project-sidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type { AgentSkillsCatalogUpdate, LuaSkillsCatalogUpdate, ProjectSummary, SubagentCatalogUpdate, VmmConfigDraftSummary, WorkbenchSnapshot } from "@/types";
 import {
   addProjectFromPath,
+  createProjectGroup,
+  deleteProjectGroup,
   openProjectDirectory,
+  renameProjectGroup,
   reorderProjects,
   resetProjectIcon,
   setExpandedTaskProjects,
+  setProjectGroupsLayout,
   setProjectIcon,
   toggleProjectPinned,
 } from "@/service/project-actions-service";
@@ -468,6 +472,22 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     }
   }, [acceptServiceWorkbenchSnapshot, locale, mergeWorkbenchWithLocalCaches, setWorkbenchState]);
 
+  // handleProjectGroupAction persists one project-group change and applies the authoritative snapshot; it rejects
+  // with the service error so the caller can show it where the change was made.
+  // handleProjectGroupAction 持久化一次项目分组变更并应用权威快照；失败时以服务错误拒绝，使调用方在发起变更处显示错误。
+  const handleProjectGroupAction = React.useCallback(async (action: ProjectGroupAction) => {
+    const snapshot = action.kind === "create"
+      ? await createProjectGroup(action.name, action.projectIds)
+      : action.kind === "rename"
+        ? await renameProjectGroup(action.groupId, action.name)
+        : action.kind === "dissolve"
+          ? await deleteProjectGroup(action.groupId)
+          : await setProjectGroupsLayout(action.layout.groups, action.layout.ungroupedProjectIds);
+    if (acceptServiceWorkbenchSnapshot(snapshot)) {
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+    }
+  }, [acceptServiceWorkbenchSnapshot, mergeWorkbenchWithLocalCaches, setWorkbenchState]);
+
   // handleExpandedProjectIdsChange persists project folder expansion without reapplying stale snapshots.
   // handleExpandedProjectIdsChange 持久化项目文件夹展开状态，但不重新套用可能过期的快照。
   const handleExpandedProjectIdsChange = React.useCallback((projectIds: string[]) => {
@@ -497,6 +517,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     handleCreateProject,
     handleConfirmProjectFolder,
     handleReorderProjects,
+    handleProjectGroupAction,
     handleExpandedProjectIdsChange,
   };
 }

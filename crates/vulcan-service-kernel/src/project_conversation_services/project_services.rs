@@ -22,13 +22,13 @@ fn current_project_lifecycle_unix_millis() -> Result<i64, String> {
 /// Minimal retained project state needed to validate and persist one layout mutation.
 /// 校验并持久化单次布局变更所需的最小保留项目状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct RetainedProjectLayoutEntry {
+pub(super) struct RetainedProjectLayoutEntry {
     /// Exact active project identity retained by the workspace snapshot.
     /// 工作区快照保留的精确活动项目身份。
-    id: String,
+    pub(super) id: String,
     /// Current persisted pinned section retained by the workspace snapshot.
     /// 工作区快照保留的当前持久化置顶分区。
-    pinned: bool,
+    pub(super) pinned: bool,
 }
 
 /// Complete ordered identities for both active project sections.
@@ -746,7 +746,7 @@ fn project_removal_default_project_effect_from_snapshot(
 /// 返回值
 /// Returns the controller runtime and active projects in current persisted display order.
 /// 返回控制器运行时以及按当前持久化展示顺序排列的活动项目。
-fn controller_runtime_and_project_layout_from_state(
+pub(super) fn controller_runtime_and_project_layout_from_state(
     state: &SharedServiceBridgeState,
 ) -> Result<(HostRuntimeHandle, Vec<RetainedProjectLayoutEntry>), String> {
     // guard provides one coherent read of the runtime and retained workspace projection.

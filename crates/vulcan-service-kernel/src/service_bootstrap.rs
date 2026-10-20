@@ -1811,6 +1811,10 @@ fn run_service_bootstrap(
             provider_configuration: &selected_provider_configuration,
             public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
             workspace: &workspace_snapshot,
+            project_groups: &vulcan_workspace_store::workspace_store::load_project_groups(
+                &controller_runtime,
+            )
+            .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?,
             pending_prompt_process_mirrors: &guard.pending_prompt_process_mirrors,
             vmm_session_states: &vmm_session_states,
             native_vmm_host_ai_status: native_vmm_maintenance

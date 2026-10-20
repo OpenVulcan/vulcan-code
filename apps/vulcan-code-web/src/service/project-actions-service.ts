@@ -1,5 +1,6 @@
 import type {
   ProjectDirectoryListing,
+  ProjectGroupLayoutEntry,
   WorkbenchSnapshot,
 } from "@/types";
 import {
@@ -104,6 +105,45 @@ export async function setExpandedTaskProjects(projectIds: string[]): Promise<Wor
     throw new Error("Service runtime is unavailable; project expansion was not saved.");
   }
   return serviceClient.request<WorkbenchSnapshot>("service_set_expanded_task_projects", { projectIds });
+}
+
+// createProjectGroup creates a named group at the end of the list and moves the given projects into it.
+// createProjectGroup 在列表末尾创建命名分组，并把给定项目移入其中。
+export async function createProjectGroup(name: string, projectIds: string[]): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Service runtime is unavailable; the project group was not created.");
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_create_project_group", { name, projectIds });
+}
+
+// renameProjectGroup renames one existing project group.
+// renameProjectGroup 重命名一个已存在的项目分组。
+export async function renameProjectGroup(groupId: string, name: string): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Service runtime is unavailable; the project group was not renamed.");
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_rename_project_group", { groupId, name });
+}
+
+// deleteProjectGroup dissolves one group; its projects become ungrouped.
+// deleteProjectGroup 解散一个分组；其项目变为未分组。
+export async function deleteProjectGroup(groupId: string): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Service runtime is unavailable; the project group was not dissolved.");
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_delete_project_group", { groupId });
+}
+
+// setProjectGroupsLayout saves the complete unpinned layout: group order, members, and ungrouped order.
+// setProjectGroupsLayout 保存完整的未置顶布局：分组顺序、成员以及未分组顺序。
+export async function setProjectGroupsLayout(
+  groups: ProjectGroupLayoutEntry[],
+  ungroupedProjectIds: string[],
+): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Service runtime is unavailable; the project group layout was not saved.");
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_set_project_groups_layout", { groups, ungroupedProjectIds });
 }
 
 // archiveProjectConversations asks the desktop shell to archive all conversations under one project.

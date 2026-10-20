@@ -37,6 +37,7 @@ describe("ProjectSidebar", () => {
             onExpandedProjectIdsChange={noop}
             onProjectMenuAction={noop}
             onReorderProjects={noop}
+            onProjectGroupAction={async () => undefined}
             onSelectConversation={noop}
             onSelectProject={noop}
             pinnedConversationIds={new Set()}
@@ -114,6 +115,7 @@ describe("ProjectSidebar", () => {
             setExpandedProjectIds(next);
           }}
           onProjectMenuAction={noop}
+          onProjectGroupAction={async () => undefined}
           onReorderProjects={noop}
           onSelectConversation={noop}
           onSelectProject={noop}

@@ -243,6 +243,35 @@ pub struct ProjectSummary {
     pub icon_key: Option<String>,
 }
 
+/// Summarizes one user-named project group shown in the WebUI sidebar.
+/// 汇总 WebUI 侧栏中显示的一个用户命名项目分组。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectGroupSummary {
+    /// Stable group identifier.
+    /// 稳定分组标识。
+    pub id: String,
+    /// Group display name.
+    /// 分组显示名称。
+    pub name: String,
+    /// Visible member project identifiers in display order.
+    /// 按显示顺序排列的可见成员项目标识。
+    pub project_ids: Vec<String>,
+}
+
+/// Places one group's members in a requested project-group layout.
+/// 在请求的项目分组布局中放置一个分组的成员。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectGroupLayoutEntry {
+    /// Existing group identifier.
+    /// 已存在的分组标识。
+    pub group_id: String,
+    /// Visible member project identifiers in display order.
+    /// 按显示顺序排列的可见成员项目标识。
+    pub project_ids: Vec<String>,
+}
+
 /// Summarizes one filesystem directory row returned to WebUI folder pickers.
 /// 汇总一条返回给 WebUI 文件夹选择器的文件系统目录行。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

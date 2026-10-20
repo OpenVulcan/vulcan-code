@@ -5,6 +5,7 @@ use super::*;
 
 mod collaboration_grants;
 mod conversation_services;
+mod project_group_services;
 mod project_services;
 
 pub(super) use collaboration_grants::{
@@ -17,6 +18,10 @@ pub(super) use conversation_services::{
     service_delete_unsupported_conversation, service_mark_conversation_read,
     service_rename_conversation, service_restore_archived_conversations,
     service_select_conversation, sync_selected_conversation_fields_for_retained_workbench,
+};
+pub(super) use project_group_services::{
+    service_create_project_group, service_delete_project_group, service_rename_project_group,
+    service_set_project_groups_layout,
 };
 pub use project_services::service_add_project_initial_directory;
 pub(super) use project_services::{

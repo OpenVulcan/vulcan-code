@@ -53,6 +53,10 @@ pub struct WorkbenchSnapshot {
     /// 侧栏树中当前展开的项目标识集合。
     #[serde(default)]
     pub expanded_project_ids: Vec<String>,
+    /// User-named project groups in display order, projected onto visible projects.
+    /// 按显示顺序排列、投影到可见项目上的用户命名项目分组。
+    #[serde(default)]
+    pub project_groups: Vec<ProjectGroupSummary>,
     /// Authoritative invalidation revisions for independently loaded project settings.
     /// 独立加载项目设置所使用的权威失效版本。
     pub project_settings_revisions: ProjectSettingsRevisionSnapshot,

@@ -19,6 +19,31 @@ export interface ProjectSummary {
   iconKey?: string | null;
 }
 
+// ProjectGroupSummary describes one user-named project group in display order.
+// ProjectGroupSummary 描述一个按显示顺序排列的用户命名项目分组。
+export interface ProjectGroupSummary {
+  // Stable group identifier.
+  // 稳定分组标识。
+  id: string;
+  // Group display name.
+  // 分组显示名称。
+  name: string;
+  // Visible member project identifiers in display order.
+  // 按显示顺序排列的可见成员项目标识。
+  projectIds: string[];
+}
+
+// ProjectGroupLayoutEntry places one group's members in a requested project-group layout.
+// ProjectGroupLayoutEntry 在请求的项目分组布局中放置一个分组的成员。
+export interface ProjectGroupLayoutEntry {
+  // Existing group identifier.
+  // 已存在的分组标识。
+  groupId: string;
+  // Visible member project identifiers in display order.
+  // 按显示顺序排列的可见成员项目标识。
+  projectIds: string[];
+}
+
 // ProjectDirectoryEntrySummary describes one child directory returned by the service.
 // ProjectDirectoryEntrySummary 描述服务返回的单个子目录。
 export interface ProjectDirectoryEntrySummary {

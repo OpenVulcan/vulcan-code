@@ -17,6 +17,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_set_project_icon",
     "service_reset_project_icon",
     "service_set_expanded_task_projects",
+    "service_create_project_group",
+    "service_rename_project_group",
+    "service_delete_project_group",
+    "service_set_project_groups_layout",
     "service_archive_project_conversations",
     "service_remove_project",
     "service_rename_conversation",
@@ -100,6 +104,37 @@ pub(super) async fn dispatch(
         "service_set_expanded_task_projects" => rpc_json_result(
             service_set_expanded_task_projects(state, rpc_required_param(params, "projectIds")?)
                 .await,
+        ),
+        "service_create_project_group" => rpc_json_result(
+            service_create_project_group(
+                app,
+                state,
+                rpc_required_param(params, "name")?,
+                rpc_required_param(params, "projectIds")?,
+            )
+            .await,
+        ),
+        "service_rename_project_group" => rpc_json_result(
+            service_rename_project_group(
+                app,
+                state,
+                rpc_required_param(params, "groupId")?,
+                rpc_required_param(params, "name")?,
+            )
+            .await,
+        ),
+        "service_delete_project_group" => rpc_json_result(
+            service_delete_project_group(app, state, rpc_required_param(params, "groupId")?)
+                .await,
+        ),
+        "service_set_project_groups_layout" => rpc_json_result(
+            service_set_project_groups_layout(
+                app,
+                state,
+                rpc_required_param(params, "groups")?,
+                rpc_required_param(params, "ungroupedProjectIds")?,
+            )
+            .await,
         ),
         "service_archive_project_conversations" => rpc_json_result(
             service_archive_project_conversations(

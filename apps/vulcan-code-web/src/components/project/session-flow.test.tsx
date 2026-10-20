@@ -52,6 +52,7 @@ async function mount(onCreateDedicatedConversation = vi.fn()) {
         onExpandedProjectIdsChange={noop}
         onProjectMenuAction={noop}
         onReorderProjects={noop}
+        onProjectGroupAction={async () => undefined}
         onSelectConversation={noop}
         onSelectProject={noop}
         pinnedConversationIds={new Set()}

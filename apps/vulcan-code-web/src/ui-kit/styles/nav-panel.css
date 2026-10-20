@@ -91,6 +91,42 @@
 .vk-project-tree[data-sorting] .vk-tree-row:hover,
 .vk-project-tree[data-sorting] .vk-tree-session:hover { background: transparent; }
 
+/* ---------- Project groups ---------- */
+/* A group heading is a quiet label row with a rule running to the edge, so groups read as sections of one tree
+ * rather than as another level of folders; its projects keep the project rows' own alignment. */
+/* 分组标题是一条安静的标签行，横线延伸到边缘，使分组读作同一棵树的分节而非另一层文件夹；其项目保持项目行自身的对齐。 */
+.vk-tree-group { display: grid; position: relative; }
+.vk-group-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+  width: 100%;
+  min-height: var(--vk-h-sm);
+  margin-top: calc(var(--vk-u) * 1);
+  padding: 0 calc(var(--vk-u) * 2) 0 calc(var(--vk-u) * 1);
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-3);
+  text-align: left;
+  cursor: pointer;
+}
+.vk-group-row > .vk-tree-caret { width: 0.8rem; height: 0.8rem; transition: transform var(--vk-t-fast) var(--vk-ease); }
+.vk-group-row[aria-expanded="true"] > .vk-tree-caret { transform: rotate(90deg); }
+.vk-group-row > .vk-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-group-row > .vk-num { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; font-size: var(--vk-fs-xs); color: var(--vk-ink-3); white-space: nowrap; }
+.vk-group-row > .vk-num::after { content: ""; flex: 1; height: 1px; background: var(--vk-line-soft); }
+.vk-group-row:hover { color: var(--vk-ink-2); }
+.vk-group-row:hover > .vk-label { color: var(--vk-ink); }
+.vk-tree-item[data-kind="group"] > .vk-tree-actions { top: calc(var(--vk-u) * 1); --vk-actions-bg: var(--vk-ground-2); }
+.vk-group-body { display: grid; margin: 0; padding: 0; list-style: none; }
+.vk-group-body > .vk-tree-blank { margin: 0 0 calc(var(--vk-u) * 1) calc(var(--vk-u) * 1); padding: calc(var(--vk-u) * 2); border: var(--vk-bw) dashed var(--vk-line); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-align: center; }
+/* A group being dragged lifts like a project row; a group a project is dragged over takes the signal outline. */
+/* 正在拖动的分组像项目行一样浮起；有项目拖到其上的分组显示信号色轮廓。 */
+.vk-tree-group[data-dragging] { z-index: 20; background: var(--vk-raised); box-shadow: var(--vk-shadow-2); opacity: 1; }
+.vk-tree-group[data-drop] { background: var(--vk-signal-soft); box-shadow: inset 2px 0 0 var(--vk-signal); }
+.vk-tree-group[data-drop] > .vk-tree-item > .vk-group-row { color: var(--vk-signal); }
+
 /* ---------- Project rows ---------- */
 .vk-tree-project { display: grid; }
 .vk-tree-project[data-dragging] { position: relative; z-index: 20; }

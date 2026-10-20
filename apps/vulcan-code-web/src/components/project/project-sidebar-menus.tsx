@@ -2,6 +2,8 @@ import React from "react";
 import {
   Archive,
   Copy,
+  FolderInput,
+  FolderPlus,
   FileText,
   FolderCog,
   FolderOpen,
@@ -17,11 +19,17 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/ui-kit/primitives/context-menu";
 import { useI18n } from "@/i18n";
 import type { ConversationSummary, ProjectSummary } from "@/types";
+import type { ProjectRowPlacement } from "./project-sidebar-groups";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 
 // ProjectContextMenu renders project-level right-click commands.
@@ -30,6 +38,9 @@ export function ProjectContextMenu(props: {
   // Project that receives the selected action.
   // 接收所选操作的项目。
   project: ProjectSummary;
+  // Move-to-group entries; null hides the submenu.
+  // “移动到分组”入口；为 null 时隐藏该子菜单。
+  placement?: ProjectRowPlacement | null;
   // Trigger element wrapped by the context menu.
   // 由右键菜单包裹的触发元素。
   children: React.ReactNode;
@@ -48,6 +59,7 @@ export function ProjectContextMenu(props: {
           <PinOff size={15} />
           <span>{props.project.pinned ? t("projectMenu.unpin") : t("projectMenu.pin")}</span>
         </ContextMenuItem>
+        {props.placement ? <MoveToGroupSubmenu placement={props.placement} /> : null}
         <ContextMenuItem onSelect={() => props.onAction("open-directory", props.project)}>
           <FolderOpen size={15} />
           <span>{t("projectMenu.openDirectory")}</span>
@@ -80,6 +92,44 @@ export function ProjectContextMenu(props: {
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+// MoveToGroupSubmenu lists the groups a project can move to, the ungrouped bucket, and a new group.
+// MoveToGroupSubmenu 列出项目可移入的分组、未分组区以及新建分组。
+function MoveToGroupSubmenu(props: { placement: ProjectRowPlacement }) {
+  const { t } = useI18n();
+  const { placement } = props;
+  // UNGROUPED_VALUE stands for "outside every group" in the radio group; group ids are UUIDs.
+  // UNGROUPED_VALUE 在单选组中代表“不在任何分组中”；分组标识为 UUID。
+  const UNGROUPED_VALUE = "";
+  return (
+    <ContextMenuSub>
+      <ContextMenuSubTrigger>
+        <FolderInput size={15} />
+        <span>{t("projectMenu.moveToGroup")}</span>
+      </ContextMenuSubTrigger>
+      <ContextMenuSubContent>
+        {placement.groups.length > 0 ? (
+          <>
+            <ContextMenuRadioGroup
+              onValueChange={(value) => placement.onMove(value === UNGROUPED_VALUE ? null : value)}
+              value={placement.currentGroupId ?? UNGROUPED_VALUE}
+            >
+              {placement.groups.map((group) => (
+                <ContextMenuRadioItem key={group.id} value={group.id}>{group.name}</ContextMenuRadioItem>
+              ))}
+              <ContextMenuRadioItem value={UNGROUPED_VALUE}>{t("sidebar.group.ungrouped")}</ContextMenuRadioItem>
+            </ContextMenuRadioGroup>
+            <ContextMenuSeparator />
+          </>
+        ) : null}
+        <ContextMenuItem onSelect={placement.onMoveToNewGroup}>
+          <FolderPlus size={15} />
+          <span>{t("projectMenu.moveToNewGroup")}</span>
+        </ContextMenuItem>
+      </ContextMenuSubContent>
+    </ContextMenuSub>
   );
 }
 
