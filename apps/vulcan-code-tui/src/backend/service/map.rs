@@ -193,7 +193,12 @@ pub fn effort(value: &str) -> Option<ReasoningEffort> {
 
 /// Maps one pending question and its exact request identity.
 /// 映射一个待回复提问及其准确请求身份。
-pub fn pending_question(question: &api::PendingQuestionSnapshot) -> PendingQuestion {
+/// `requester` names the child agent when the request is surfaced in its root conversation.
+/// `requester` 在请求展示于根会话时标明发起的子代理。
+pub fn pending_question(
+    question: &api::PendingQuestionSnapshot,
+    requester: Option<String>,
+) -> PendingQuestion {
     PendingQuestion {
         id: question.id.clone(),
         questions: question
@@ -214,6 +219,7 @@ pub fn pending_question(question: &api::PendingQuestionSnapshot) -> PendingQuest
             })
             .collect(),
         approval: question.approval.as_ref().map(pending_approval),
+        requester,
     }
 }
 

@@ -132,6 +132,7 @@ mod tests {
                 },
             ],
             approval: None,
+            requester: None,
         }
     }
 

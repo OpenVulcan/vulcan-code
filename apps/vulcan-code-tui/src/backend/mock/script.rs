@@ -304,6 +304,7 @@ pub fn build_turn(
                         },
                     ],
                     approval: None,
+                    requester: None,
                 },
             },
         );
@@ -642,6 +643,7 @@ pub fn ask_seed_turn(script: &mut Script) {
                     multiple: false,
                 }],
                 approval: None,
+                requester: None,
             },
         },
     );

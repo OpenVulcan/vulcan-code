@@ -287,6 +287,9 @@ pub struct PendingQuestion {
     /// Permission facts when the request is a tool-call approval instead of an ask.
     /// 当请求是工具调用审批而非提问时的权限事实。
     pub approval: Option<PendingApproval>,
+    /// Child agent title when a subagent of the shown conversation raised the request.
+    /// 请求由所显示会话的子代理发起时的子代理标题。
+    pub requester: Option<String>,
 }
 
 /// Permission facts of one gated tool call (`PendingApprovalSnapshot`).

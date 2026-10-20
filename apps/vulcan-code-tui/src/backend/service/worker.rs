@@ -814,7 +814,7 @@ impl Worker {
         let mut ids: Vec<String> = wb
             .pending_questions
             .iter()
-            .map(|question| question.session_id.clone())
+            .flat_map(question_targets)
             .collect();
         ids.extend(self.selected.clone());
         ids.sort();
@@ -866,16 +866,23 @@ impl Worker {
         Some(row)
     }
 
-    /// Finds the service-owned pending question of the exact conversation.
-    /// 查找准确会话中由服务持有的待回复提问。
+    /// Finds the pending question shown in the exact conversation: its own first, then one a child
+    /// agent raised. A child agent has no conversation here, so its request surfaces in the root
+    /// conversation the service names; otherwise it would wait for an approval nobody can see.
+    /// 查找准确会话中显示的待回复提问：先取会话自身的，再取子代理发起的。子代理在此没有自己的会话，
+    /// 其请求在服务指明的根会话中显示；否则子代理会等待无人可见的审批。
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
     fn question_of(&self, id: &str) -> Option<&api::PendingQuestionSnapshot> {
-        self.wb
-            .as_ref()?
-            .pending_questions
+        let questions = &self.wb.as_ref()?.pending_questions;
+        questions
             .iter()
             .find(|question| question.session_id == id)
+            .or_else(|| {
+                questions
+                    .iter()
+                    .find(|question| question.owner_conversation_id.as_deref() == Some(id))
+            })
     }
 
     /// Session add-ons of the exact conversation.
@@ -905,9 +912,17 @@ impl Worker {
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
     fn emit_question(&self, id: &str) {
+        let question = self.question_of(id).map(|question| {
+            let requester = if question.session_id == id {
+                None
+            } else {
+                question.requester_label.clone()
+            };
+            map::pending_question(question, requester)
+        });
         self.emit(BackendEvent::PendingQuestion {
             conversation_id: id.to_string(),
-            question: self.question_of(id).map(map::pending_question),
+            question,
         });
     }
 
@@ -1341,7 +1356,7 @@ impl Worker {
                     .pending_questions
                     .iter()
                     .chain(&delta.pending_questions)
-                    .map(|question| question.session_id.clone())
+                    .flat_map(question_targets)
                     .chain(delta.conversation_id)
                     .collect();
                 wb.pending_questions = delta.pending_questions;
@@ -2453,6 +2468,13 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// Conversations that show one pending question: the raising session and, for a child agent, its
+/// root conversation.
+/// 显示某个待回复提问的会话：发起会话，以及子代理所属的根会话。
+fn question_targets(question: &api::PendingQuestionSnapshot) -> impl Iterator<Item = String> {
+    std::iter::once(question.session_id.clone()).chain(question.owner_conversation_id.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::RpcServer;
@@ -2848,6 +2870,60 @@ mod tests {
         let wb = worker.wb.as_ref().unwrap();
         assert!(wb.conversations.iter().all(|row| row.id != "a"));
         assert!(wb.archived_conversations.iter().any(|row| row.id == "a"));
+        server.thread.join().unwrap();
+    }
+
+    /// A child agent's request reaches its root conversation with the requester, after the
+    /// conversation's own request.
+    /// 子代理的请求连同请求者到达其根会话，排在该会话自身请求之后。
+    #[test]
+    fn child_agent_questions_surface_in_the_root_conversation() {
+        let server = RpcServer::start(0, |_| Value::Null);
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        let snapshot = serde_json::from_value(json!({
+            "revision": 1, "appVersion": "", "modules": [], "projects": [],
+            "projectSettingsRevisions": api::ProjectSettingsRevisionSnapshot::default(),
+            "conversations": [{"id": "root", "title": "root", "status": "idle", "runPhase": "idle",
+                "lastUpdatedLabel": "", "lastUpdatedAt": "", "unread": false}],
+            "toolCalls": [], "plugins": [], "settings": [], "providers": [], "memories": [],
+            "commandSessions": [], "logs": []
+        }))
+        .expect("synthetic snapshot matches the shared DTO");
+        worker.apply_snapshot(snapshot);
+        let question = |id: &str, session: &str, owner: Option<&str>| {
+            json!({"id": id, "sessionId": session, "sequence": 1, "ownerConversationId": owner,
+                "requesterLabel": owner.map(|_| "Explorer"),
+                "questions": [{"question": "Go?", "header": "Go", "multiple": false}]})
+        };
+        let shown = |worker: &mut Worker, generation: u64, pending: Value| {
+            let delta = serde_json::from_value(json!({"generation": generation, "delta": {
+                "kind": "pendingQuestionChanged", "payload": {"pendingQuestions": pending}}}))
+            .expect("synthetic delta matches the shared DTO");
+            events.try_iter().for_each(drop);
+            worker.service_event(api::ServiceEvent::WorkbenchDelta(Box::new(delta)));
+            events
+                .try_iter()
+                .find_map(|event| match event {
+                    BackendEvent::PendingQuestion {
+                        conversation_id,
+                        question,
+                    } if conversation_id == "root" => Some(question),
+                    _ => None,
+                })
+                .expect("the root conversation receives the pending question")
+                .map(|question| (question.id, question.requester))
+        };
+        let child = question("child-q", "child", Some("root"));
+        assert_eq!(
+            shown(&mut worker, 2, json!([child.clone()])),
+            Some(("child-q".into(), Some("Explorer".into())))
+        );
+        let own = question("own-q", "root", None);
+        assert_eq!(
+            shown(&mut worker, 3, json!([child, own])),
+            Some(("own-q".into(), None))
+        );
+        assert_eq!(shown(&mut worker, 4, json!([])), None);
         server.thread.join().unwrap();
     }
 

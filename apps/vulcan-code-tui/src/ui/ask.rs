@@ -414,6 +414,12 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
     } else {
         tr!("ask.title")
     };
+    // A child agent's request names it beside the title; the conversation's own shows nothing.
+    // 子代理的请求在标题旁标明该子代理；会话自身的请求不显示。
+    let requester = pending
+        .requester
+        .as_deref()
+        .map(|agent| format!("· {} ", tr!("ask.requester.subagent", agent = agent)));
     let hints = if approval.is_some() && focused && app.ask.confirm_reject {
         format!(
             " Enter {} · Esc {} ",
@@ -454,6 +460,7 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
                 format!(" {} ", title),
                 Style::new().fg(theme.warning).add_modifier(Modifier::BOLD),
             ),
+            Span::styled(requester.unwrap_or_default(), theme.muted_text()),
         ]))
         .title_bottom(Line::from(Span::styled(hints, theme.muted_text())).right_aligned());
     let inner = block.inner(area);

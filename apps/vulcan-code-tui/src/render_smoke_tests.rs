@@ -1299,6 +1299,7 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
             allow_label: "allow-label".into(),
             deny_label: "deny-label".into(),
         }),
+        requester: None,
     };
     let show = |h: &mut Harness, question: PendingQuestion| {
         h.app.apply(BackendEvent::PendingQuestion {
@@ -1376,6 +1377,11 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
     }
     show(&mut h, reviewed);
     assert!(buffer_text(h.wide.backend().buffer()).contains("outside the project"));
+
+    let mut delegated = approval("delegated", ApprovalSubject::Opaque, None);
+    delegated.requester = Some("Explorer".into());
+    show(&mut h, delegated);
+    assert!(buffer_text(h.wide.backend().buffer()).contains("Explorer"));
 
     show(&mut h, approval("stop", ApprovalSubject::Opaque, None));
     input::handle_event(&mut h.app, key(KeyCode::Char('x'), KeyModifiers::NONE));
