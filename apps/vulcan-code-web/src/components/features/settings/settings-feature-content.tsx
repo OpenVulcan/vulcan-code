@@ -65,7 +65,7 @@ export interface SettingsFeatureContentProps {
 
 // READABLE_SETTINGS_PAGES are preference pages that read as one centred column; work surfaces fill the pane.
 // READABLE_SETTINGS_PAGES 是以居中单列阅读的偏好类页面；工作界面铺满面板。
-const READABLE_SETTINGS_PAGES: ReadonlySet<SettingsSubAreaId> = new Set(["context-basics", "appearance", "notifications", "git-commit", "about-licenses"]);
+const READABLE_SETTINGS_PAGES: ReadonlySet<SettingsSubAreaId> = new Set(["context-basics", "appearance", "notifications", "git-commit", "permission-judge", "about-licenses"]);
 
 // SettingsFeatureContent frames every settings page; the feature header shows its title and navigation stays in the sidebar.
 // SettingsFeatureContent 包裹每个设置页面；功能页头显示其标题，导航保留在侧栏。

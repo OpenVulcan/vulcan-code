@@ -752,7 +752,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // pageDescriptor 注册页面专用标题、按钮、内容与自适应侧边面板。
   const pageDescriptor: WorkspacePageDescriptor = props.mainView === "skills" ? {
     content: (
-      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog" pageKey={props.activeSkillSubArea}>
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog vk-atmosphere" pageKey={props.activeSkillSubArea}>
         <WorkspaceSkillsSettings
           activeSubArea={props.activeSkillSubArea}
           luaInstallDialogOpen={luaInstallDialogOpen}
@@ -771,7 +771,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     title: skillSubAreaLabel(props.activeSkillSubArea, props.workbench, locale, t),
   } : props.mainView === "agent-skills" ? {
     content: (
-      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog">
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog vk-atmosphere">
         <React.Suspense fallback={null}>
           <LazyAgentSkillsArea
             actions={props.agentSkillActions}
@@ -787,7 +787,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     title: t("area.agentSkills"),
   } : props.mainView === "agents" ? {
     content: (
-      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog">
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog vk-atmosphere">
         <React.Suspense fallback={null}>
           <LazyAgentsArea
             actions={props.agentActions}

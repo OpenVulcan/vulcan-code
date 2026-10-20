@@ -8,13 +8,13 @@
 .vk-md {
   /* Chart series palette; its length matches ANSWER_CHART_MAX_SERIES. */
   /* 图表系列色板；数量与 ANSWER_CHART_MAX_SERIES 一致。 */
-  --vk-a-series-1: var(--vk-chart-1);
-  --vk-a-series-2: var(--vk-chart-2);
-  --vk-a-series-3: var(--vk-chart-3);
-  --vk-a-series-4: var(--vk-chart-4);
-  --vk-a-series-5: var(--vk-chart-5);
-  --vk-a-series-6: color-mix(in srgb, var(--vk-chart-2) 55%, var(--vk-chart-1));
-  --vk-a-series-7: color-mix(in srgb, var(--vk-chart-3) 60%, var(--vk-chart-5));
+  --vk-a-series-1: var(--vk-data-1);
+  --vk-a-series-2: var(--vk-data-2);
+  --vk-a-series-3: var(--vk-data-3);
+  --vk-a-series-4: var(--vk-data-4);
+  --vk-a-series-5: var(--vk-data-5);
+  --vk-a-series-6: color-mix(in srgb, var(--vk-data-3) 55%, var(--vk-data-4));
+  --vk-a-series-7: color-mix(in srgb, var(--vk-data-2) 50%, var(--vk-data-5));
   --vk-a-series-8: var(--vk-ink-3);
   /* The surface a reply is read on; labels laid over lifelines mask them with it. */
   --vk-a-ground: var(--vk-ground);
@@ -294,3 +294,55 @@ button.vk-a-gallery-media:focus-visible { outline: 2px solid var(--vk-signal); o
 .vk-a-code-missing[data-pending] p { animation: vk-pulse 1.6s ease-in-out infinite; }
 /* Replies read inside a dialog or a side panel sit on that surface instead of the workbench ground. */
 .vk-dialog .vk-md { --vk-a-ground: var(--vk-raised); }
+
+/* ---------- Ambience ---------- */
+/* Answer blocks share the workbench's section motif: an ember corner tick and a slight lift on framed surfaces, a
+ * warm wash on tinted ones, and ember for marks that carry no state of their own. State colours (tones, marks,
+ * selection) keep their meaning; only neutral defaults turn warm. */
+/* 回答区块沿用工作台的分区母题：带框表面带余烬色角标与轻微浮起，着色表面带暖色晕染，自身不表示状态的标记
+ * 使用余烬色。状态色（色调、增删标记、选中）保持原义，只有中性默认值转为暖色。 */
+.vk-md :is(.vk-a-card, .vk-a-metric, .vk-a-details, .vk-a-kv, .vk-a-columns section) { position: relative; }
+.vk-md :is(.vk-a-card, .vk-a-details, .vk-a-kv)::before,
+.vk-md .vk-a-columns section::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: var(--vk-tick-w);
+  height: var(--vk-tick-h);
+  background: var(--vk-ember);
+  opacity: 0.8;
+  pointer-events: none;
+}
+.vk-md .vk-a-columns section::before { top: -2px; left: 0; }
+
+.vk-md .vk-a-card {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--vk-ember) 5%, var(--vk-panel)), var(--vk-panel) calc(var(--vk-u) * 14));
+  box-shadow: var(--vk-shadow-1);
+  transition: border-color var(--vk-t-med) var(--vk-ease);
+}
+.vk-md .vk-a-card:hover { border-color: var(--vk-line-strong); }
+
+.vk-md .vk-a-metric {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--vk-tone, var(--vk-ember)) 7%, var(--vk-panel)), var(--vk-panel) 70%);
+  box-shadow: var(--vk-shadow-1);
+}
+.vk-md .vk-a-metric:not([data-tone]):not([data-over]) { border-top-color: color-mix(in srgb, var(--vk-ember) 75%, var(--vk-line-strong)); }
+.vk-md .vk-a-metric:not([data-tone]):not([data-over]) .vk-a-meter > i { background: var(--vk-ember); }
+
+/* Key-value facts hang off a rail whose head is the ember tick. */
+/* 键值事实挂在一条竖轨上，轨首即余烬色角标。 */
+.vk-md .vk-a-kv { padding-inline-start: calc(var(--vk-u) * 3.5); border-inline-start: var(--vk-tick-h) solid var(--vk-line); }
+.vk-md .vk-a-kv::before { top: 0; left: calc(var(--vk-tick-h) * -1); width: var(--vk-tick-h); height: var(--vk-tick-w); }
+.vk-md .vk-a-kv dt { font-size: var(--vk-fs-sm); letter-spacing: 0.02em; }
+
+.vk-md .vk-a-callout { background: linear-gradient(90deg, color-mix(in srgb, var(--vk-tone) 10%, transparent), color-mix(in srgb, var(--vk-tone) 3%, transparent)); }
+
+.vk-md .vk-a-details { box-shadow: var(--vk-shadow-1); }
+.vk-md .vk-a-details[open] > summary { border-bottom: var(--vk-bw) solid var(--vk-line-soft); margin-bottom: calc(var(--vk-u) * 2); }
+
+.vk-a-timeline-dot::before { background: var(--vk-ember); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vk-ember) 15%, transparent); }
+.vk-a-timeline li:not(:last-child) .vk-a-timeline-dot::after { background: linear-gradient(180deg, color-mix(in srgb, var(--vk-ember) 45%, var(--vk-line)), var(--vk-line)); }
+.vk-a-steps li:not(:last-child)::before { background: linear-gradient(180deg, var(--vk-line-strong), var(--vk-line)); }
+
+.vk-a-sequence-actor { box-shadow: inset 0 calc(var(--vk-tick-h) * -1) 0 var(--vk-ember); }

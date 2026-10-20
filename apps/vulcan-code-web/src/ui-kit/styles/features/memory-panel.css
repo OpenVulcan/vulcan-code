@@ -39,7 +39,7 @@
 
 .vk-mem-none { margin: 0; padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
 .vk-mem-scroll > .vk-page-notice,
-.vk-mem-sec > .vk-page-notice { margin: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5); }
+.vk-mem-sec > .vk-page-notice { width: auto; margin: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5); }
 
 /* Delete and lookup dialogs. */
 /* 删除与回查对话框。 */

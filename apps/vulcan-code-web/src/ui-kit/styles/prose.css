@@ -87,7 +87,10 @@
 /* ---------- Framed data ---------- */
 /* Reusable data (tables, findings, comparisons, charts, file lists) sits in one frame with an optional head
  * strip; its actions sit in the head, or float in the corner on hover when there is no head. */
-.vk-figure { position: relative; max-width: 100%; overflow: hidden; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); }
+.vk-figure { position: relative; max-width: 100%; overflow: hidden; border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); box-shadow: var(--vk-shadow-1); }
+/* The frame carries the workbench's ember corner tick just inside its top edge, above whatever it frames. */
+/* 外框在顶边内侧带工作台的余烬色角标，位于所框内容之上。 */
+.vk-figure::after { content: ""; position: absolute; top: 0; left: 0; z-index: 1; width: var(--vk-tick-w); height: var(--vk-tick-h); background: var(--vk-ember); opacity: 0.8; pointer-events: none; }
 .vk-figure-head { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2.5); min-height: calc(var(--vk-u) * 8); padding: 0 calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line-soft); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
 .vk-figure-label { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vk-figure-label strong { color: var(--vk-ink); font-weight: 600; }

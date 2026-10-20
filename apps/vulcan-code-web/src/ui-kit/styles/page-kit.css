@@ -6,7 +6,7 @@
 
 /* ---------- Page frame ---------- */
 .vk-page { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 4); min-width: 0; }
-.vk-page[data-width="readable"] { max-width: 880px; }
+.vk-page[data-width="readable"] { width: 100%; max-width: var(--vk-readable-w); margin-inline: auto; }
 .vk-page > .vk-page-tabs { margin-bottom: calc(var(--vk-u) * -1); }
 /* A fieldset that locks a whole editable page while it saves keeps the page rhythm between its sections. */
 /* 保存期间锁定整个可编辑页面的字段组，在其区块之间保持页面节奏。 */
@@ -43,6 +43,37 @@
 .vk-page-actionbar-status { min-width: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
 .vk-page-actionbar > .vk-page-actions { margin-left: auto; }
 
+/* ---------- Page atmosphere ---------- */
+/* A faint drafting grid fades down from the top of every settings, plugin and data page, with one ember horizon line,
+   so the pages read as one console instead of a bare form; it sits behind the content and never takes pointer input. */
+/* 每个设置、插件与数据页面顶部向下淡出一层浅制图网格，并有一条余烬色地平线，使各页读作同一控制台而非空白表单；
+   它位于内容之后，从不接收指针输入。 */
+.vk-atmosphere { position: relative; isolation: isolate; }
+.vk-atmosphere::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--vk-line-soft) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--vk-line-soft) 1px, transparent 1px);
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(130% 60% at 50% 0%, #000 0%, transparent 72%);
+  mask-image: radial-gradient(130% 60% at 50% 0%, #000 0%, transparent 72%);
+}
+.vk-atmosphere::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: -1;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--vk-ember) 55%, transparent) 22%, transparent 64%);
+}
+
 /* ---------- Sections: one square panel per concern ---------- */
 .vk-page-section {
   container: vk-page-section / inline-size;
@@ -69,8 +100,39 @@
 /* rows 布局使行与列表项贴边并以分隔线排列。 */
 .vk-page-section[data-layout="rows"] > .vk-page-section-body { gap: 0; padding: calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 1); }
 .vk-page-section[data-layout="rows"] > .vk-page-section-body > :is(.vk-page-row, .vk-page-item) { padding-inline: calc(var(--vk-u) * 4); }
+
+/* Every page frames its sections the same way: a running index before the title, an ember corner tick, a slight lift
+   and rows that answer the pointer. Sections nested in another section, or shown inside a dialog or sheet, stay plain. */
+/* 每个页面以同一方式呈现分区：标题前的顺序编号、余烬色角标、轻微浮起，行会响应指针。
+   嵌套在其他分区内或显示在对话框、抽屉中的分区保持朴素。 */
+:is(.vk-page, .settings-page-body) { counter-reset: vk-page-section; }
+.vk-page-section { position: relative; box-shadow: var(--vk-shadow-1); counter-increment: vk-page-section; transition: border-color var(--vk-t-med) var(--vk-ease); }
+.vk-page-section::before { content: ""; position: absolute; top: -1px; left: -1px; width: var(--vk-tick-w); height: var(--vk-tick-h); background: var(--vk-ember); opacity: 0.8; pointer-events: none; }
+.vk-page-section:hover { border-color: var(--vk-line-strong); }
+.vk-page-section-title::before {
+  content: counter(vk-page-section, decimal-leading-zero);
+  padding: 0 calc(var(--vk-u) * 1.25);
+  border: var(--vk-bw) solid var(--vk-line);
+  color: var(--vk-ink-3);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-2xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+}
+.vk-page-section[data-layout="rows"] > .vk-page-section-body > .vk-page-row { transition: background-color var(--vk-t-fast) var(--vk-ease); }
+.vk-page-section[data-layout="rows"] > .vk-page-section-body > .vk-page-row:hover { background: color-mix(in srgb, var(--vk-sunken) 70%, transparent); }
+:is(.vk-page-section, [data-slot="dialog-content"], [data-slot="sheet-content"]) .vk-page-section { counter-increment: none; box-shadow: none; }
+:is(.vk-page-section, [data-slot="dialog-content"], [data-slot="sheet-content"]) .vk-page-section::before,
+.vk-page-section .vk-page-section .vk-page-section-title::before,
+:is([data-slot="dialog-content"], [data-slot="sheet-content"]) .vk-page-section-title::before { content: none; }
+/* Top-level panel cards on atmosphere pages take the same tick and lift, so card-built pages match section-built ones. */
+/* 氛围页面上的顶层面板卡片带同样的角标与浮起，使以卡片构成的页面与以分区构成的页面一致。 */
+.vk-atmosphere .vk-panel-card:not(.vk-panel-card .vk-panel-card) { position: relative; overflow: visible; box-shadow: var(--vk-shadow-1); transition: border-color var(--vk-t-med) var(--vk-ease); }
+.vk-atmosphere .vk-panel-card:not(.vk-panel-card .vk-panel-card)::before { content: ""; position: absolute; top: -1px; left: -1px; width: var(--vk-tick-w); height: var(--vk-tick-h); background: var(--vk-ember); opacity: 0.8; pointer-events: none; }
+.vk-atmosphere .vk-panel-card:not(.vk-panel-card .vk-panel-card):hover { border-color: var(--vk-line-strong); }
 .vk-page-section[data-layout="rows"] > .vk-page-section-body > * + :is(.vk-page-row, .vk-page-item) { border-top: var(--vk-bw) solid var(--vk-line-soft); }
-.vk-page-section[data-layout="rows"] > .vk-page-section-body > :is(.vk-alert, .vk-empty) { margin: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 4) calc(var(--vk-u) * 3); }
+.vk-page-section[data-layout="rows"] > .vk-page-section-body > :is(.vk-alert, .vk-empty) { width: auto; margin: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 4) calc(var(--vk-u) * 3); }
 .vk-page-section-foot {
   display: flex;
   flex-wrap: wrap;

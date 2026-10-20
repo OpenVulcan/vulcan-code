@@ -63,6 +63,13 @@
   --vk-reserve-w: calc(var(--vk-read-col) + var(--vk-u) * 10);
   --vk-statusbar-h: calc(var(--vk-u) * 6);
   --vk-titlebar-h: calc(var(--vk-u) * 12);
+  /* Preference and plugin settings pages read as one centred column of this width. */
+  /* 偏好页与插件设置页以此宽度呈现为一条居中的阅读列。 */
+  --vk-readable-w: 920px;
+  /* The ember corner tick that marks framed sections, cards and answer blocks. */
+  /* 标记带框分区、卡片与回答区块的余烬色角标。 */
+  --vk-tick-w: calc(var(--vk-u) * 7);
+  --vk-tick-h: 2px;
 
   /* Borders never scale. Corners are square by decision D2. */
   --vk-bw: 1px;
@@ -131,6 +138,14 @@
   --vk-chart-3: #9a6cc4;
   --vk-chart-4: #c8892e;
   --vk-chart-5: #cf5e6a;
+  /* Data palette for reply charts and plugin pages: ember leads and the rest are built from theme tokens, so every
+     theme and skin keeps it in tune without its own copy. */
+  /* 回答图表与插件页面的数据色板：余烬色领先，其余由主题令牌构成，使每个主题与皮肤无需另备一份即保持协调。 */
+  --vk-data-1: var(--vk-ember);
+  --vk-data-2: var(--vk-ember-2);
+  --vk-data-3: color-mix(in srgb, var(--vk-signal) 62%, var(--vk-ink-3));
+  --vk-data-4: color-mix(in srgb, var(--vk-ok) 58%, var(--vk-ink-3));
+  --vk-data-5: color-mix(in srgb, var(--vk-ember) 40%, var(--vk-ink-2));
 
   --vk-code-bg: #f4f5f7;
   --vk-term-bg: #12151a;

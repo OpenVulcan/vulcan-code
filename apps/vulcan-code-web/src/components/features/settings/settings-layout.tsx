@@ -15,7 +15,7 @@ export function SettingsPage(props: {
   width?: "full" | "readable";
 }) {
   return (
-    <section className="settings-page" data-width={props.width ?? "full"}>
+    <section className="settings-page vk-atmosphere" data-width={props.width ?? "full"}>
       <div className="settings-page-body">{props.children}</div>
     </section>
   );

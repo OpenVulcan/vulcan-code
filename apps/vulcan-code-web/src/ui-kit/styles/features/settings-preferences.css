@@ -18,6 +18,7 @@
 @container settings-shell (max-width: 980px) {
   .diagnostics-page { grid-template-columns: minmax(0, 1fr); grid-template-areas: "trace" "console"; }
   .diagnostics-trace { position: static; }
+  .diagnostics-page .diagnostic-log-list { height: auto; max-height: 68vh; }
 }
 
 .diagnostics-count,
@@ -70,7 +71,9 @@
 /* 诊断日志以终端方式呈现：紧凑等宽行，起始边带级别色条，消息自动换行。 */
 .diagnostics-console > .vk-page-section-body { padding-bottom: 0; }
 .diagnostic-log-list {
-  max-height: min(68vh, 720px);
+  /* The console reaches the bottom of the pane so the page never ends in a blank band; stacked layouts cap it. */
+  /* 控制台延伸到面板底部，使页面不以空白带结尾；堆叠布局时设上限。 */
+  height: max(320px, calc(100dvh - 240px));
   margin: 0;
   padding: calc(var(--vk-u) * 1.5) 0;
   overflow: auto;

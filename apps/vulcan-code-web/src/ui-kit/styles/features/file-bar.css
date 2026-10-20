@@ -53,4 +53,4 @@
 .vk-ftree-row[aria-current="true"] { background: var(--vk-panel); box-shadow: inset 2px 0 0 var(--vk-ember); }
 .vk-ftree-loading { padding-left: calc(var(--vk-u) * 8); }
 .vk-filebar > .vk-filepick .vk-badge { flex: none; }
-.workspace-files-panel > .vk-page-notice { margin: calc(var(--vk-u) * 2); }
+.workspace-files-panel > .vk-page-notice { width: auto; margin: calc(var(--vk-u) * 2); }
