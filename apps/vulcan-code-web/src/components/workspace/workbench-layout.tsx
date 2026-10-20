@@ -1,5 +1,5 @@
 import React from "react";
-import { ComposerSettingsHostContext } from "@/components/composer/composer-settings-host";
+import { ComposerAccountHostContext, ComposerSettingsHostContext } from "@/components/composer/composer-settings-host";
 import { DraftComposerContext, type DraftComposerContextValue } from "@/components/composer/dedicated/draft-composer-context";
 import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-collapse-preferences";
 import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
@@ -212,6 +212,9 @@ export function WorkbenchLayout(props: {
   // settingsHost moves the active composer's menu into the footer without moving state ownership.
   // settingsHost 将当前输入区菜单显示到底栏，不迁移状态归属。
   const [settingsHost, setSettingsHost] = React.useState<HTMLDivElement | null>(null);
+  // accountHost receives the active composer's model account item in the footer.
+  // accountHost 在底栏中接收当前输入区的模型账号项。
+  const [accountHost, setAccountHost] = React.useState<HTMLDivElement | null>(null);
   // todolistStatusHost stores the footer node immediately following the settings entry.
   // todolistStatusHost 保存紧跟设置入口的底栏 Todo 节点。
   const [todolistStatusHost, setTodolistStatusHost] = React.useState<HTMLDivElement | null>(null);
@@ -513,6 +516,15 @@ export function WorkbenchLayout(props: {
     setActiveSettingsSubArea("runtime-diagnostics");
     handleSelectTopFeatureArea("settings");
   }, [handleSelectTopFeatureArea]);
+  // accountHostValue lets the composer's account item open the model services page.
+  // accountHostValue 让输入区的账号项打开模型服务页面。
+  const accountHostValue = React.useMemo(() => ({
+    host: accountHost,
+    onOpenSettings: () => {
+      setActiveSettingsSubArea("model-providers");
+      handleSelectTopFeatureArea("settings");
+    },
+  }), [accountHost, handleSelectTopFeatureArea]);
   // handleOpenPermissionJudgeSettings opens the application-wide permission judge settings page.
   // handleOpenPermissionJudgeSettings 打开应用全局的权限判定设置页。
   const handleOpenPermissionJudgeSettings = React.useCallback(() => {
@@ -605,7 +617,7 @@ export function WorkbenchLayout(props: {
   const statusBar = (
     <WorkbenchStatusBar
       appVersion={props.workbench.appVersion}
-      hosts={{ settings: setSettingsHost, todolist: setTodolistStatusHost, runtime: setRuntimeStatusHost }}
+      hosts={{ settings: setSettingsHost, todolist: setTodolistStatusHost, runtime: setRuntimeStatusHost, account: setAccountHost }}
       plugins={workbenchState.plugins}
       startup={props.startup}
       terminal={activeProject ? {
@@ -1121,6 +1133,7 @@ export function WorkbenchLayout(props: {
       saveDefault: handleSaveToolCollapseDefault,
     }}>
     <ComposerSettingsHostContext.Provider value={settingsHost}>
+    <ComposerAccountHostContext.Provider value={accountHostValue}>
     <DraftComposerContext.Provider value={draftComposerContext}>
     <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
     <div className="vk-workbench" data-window={showWindowControls ? "native" : "browser"}>
@@ -1353,6 +1366,7 @@ export function WorkbenchLayout(props: {
     </div>
     </ComposerMediaUploadProgressContext.Provider>
     </DraftComposerContext.Provider>
+    </ComposerAccountHostContext.Provider>
     </ComposerSettingsHostContext.Provider>
     </ToolCollapsePreferencesContext.Provider>
     </ThinkingDisplaySystemContext.Provider>

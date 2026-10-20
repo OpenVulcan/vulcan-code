@@ -240,7 +240,34 @@
 .vk-status-item > .vk-count { padding: 0 calc(var(--vk-u) * 1); background: var(--vk-ember-soft); color: var(--vk-ember-ink); font-variant-numeric: tabular-nums; }
 .vk-status-item .added { color: var(--vk-ok); }
 .vk-status-item .removed { color: var(--vk-bad); }
+.vk-status-item > .vk-status-plan { color: var(--vk-ink-3); font-variant-numeric: tabular-nums; }
+.vk-status-item > .lucide + span, .vk-status-item > svg + span { max-width: 14rem; }
+/* Status peek: the card a status item shows on hover or press — a heading with the way to settings over facts. */
+/* 状态预览：状态项在悬停或按下时显示的卡片——标题与前往设置的入口位于事实上方。 */
+.vk-peek { width: 18rem; max-width: calc(100vw - var(--vk-u) * 6); padding: 0; }
+.vk-peek-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3.5); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-peek-head > div { display: grid; flex: 1; min-width: 0; }
+.vk-peek-head strong { color: var(--vk-ink); font-size: var(--vk-fs-sm); font-weight: 600; }
+.vk-peek-head small { overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-peek-head > .vk-btn { flex: none; }
+.vk-peek-body { max-height: min(22rem, var(--vk-available-height, 60vh)); overflow-y: auto; padding: calc(var(--vk-u) * 1.5) 0; }
+.vk-peek-body > .vk-account-card { padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3.5); }
+.vk-peek-facts { display: grid; margin: 0; }
+.vk-peek-facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 1.25) calc(var(--vk-u) * 3.5); }
+.vk-peek-facts dt { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-peek-facts dd { margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-sm); font-variant-numeric: tabular-nums; text-align: right; }
+.vk-peek-facts dd[data-tone="ok"], .vk-peek-list small[data-tone="ok"] { color: var(--vk-ok); }
+.vk-peek-facts dd[data-tone="warn"], .vk-peek-list small[data-tone="warn"] { color: var(--vk-warn); }
+.vk-peek-facts dd[data-tone="bad"], .vk-peek-list small[data-tone="bad"] { color: var(--vk-bad); }
+.vk-peek-list small[data-tone="ember"] { color: var(--vk-ember-ink); }
+.vk-peek-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.vk-peek-list > li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 2.5); min-height: var(--vk-h-sm); padding: 0 calc(var(--vk-u) * 3.5); font-size: var(--vk-fs-sm); }
+.vk-peek-list > li > span:nth-child(2) { overflow: hidden; color: var(--vk-ink); text-overflow: ellipsis; white-space: nowrap; }
+.vk-peek-list > li > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-peek-list .vk-dot:not([data-tone]) { background: var(--vk-line-strong); }
+.vk-peek-list .vk-dot[data-tone="ember"] { background: var(--vk-ember); }
 @media (max-width: 640px) {
+  .vk-status-host > [data-optional],
   .vk-status > [data-optional],
   .vk-status > a.vk-status-item { display: none; }
 }

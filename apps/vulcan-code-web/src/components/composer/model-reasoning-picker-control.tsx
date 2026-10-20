@@ -16,6 +16,7 @@ import {
 } from "@/components/composer/model-picker-control";
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
+import { ComposerAccountStatus } from "./composer-account-status";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
 import { Button } from "@/ui-kit/primitives/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
@@ -315,6 +316,8 @@ export function ModelReasoningPickerControl(props: {
   };
 
   return (
+    <>
+    <ComposerAccountStatus account={account} />
     <Popover
       open={popoverOpen}
       onOpenChange={(nextOpen) => {
@@ -525,6 +528,7 @@ export function ModelReasoningPickerControl(props: {
         )}
       </PopoverContent>
     </Popover>
+    </>
   );
 }
 

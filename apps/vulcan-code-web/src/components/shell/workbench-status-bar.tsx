@@ -3,10 +3,32 @@ import { Brain, Puzzle, RadioTower, SquareTerminal } from "lucide-react";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { PluginSummary, StartupSnapshot, VmmMemorySnapshot } from "@/types";
 import { RepositoryLink } from "./app-chrome";
+import { StatusPeek, StatusPeekFacts, type StatusPeekTone } from "./status-peek";
 
 // StatusTone is the tone a status item takes; undefined keeps the neutral bar color.
 // StatusTone 是状态项的色调；undefined 保持状态栏的中性颜色。
-type StatusTone = "ok" | "warn" | "bad" | "ember" | undefined;
+type StatusTone = StatusPeekTone;
+
+// PluginLoadState is how one installed plugin stands right now.
+// PluginLoadState 是单个已安装插件当前的状态。
+type PluginLoadState = "loaded" | "loading" | "off" | "unavailable";
+
+// pluginLoadState reads one plugin's standing from the user's choice and the runtime's availability.
+// pluginLoadState 根据用户选择与运行时可用性读取单个插件的状态。
+function pluginLoadState(plugin: PluginSummary): PluginLoadState {
+  if (!plugin.desiredEnabled) return "off";
+  if (!plugin.available) return "unavailable";
+  return plugin.enabled ? "loaded" : "loading";
+}
+
+const PLUGIN_STATE_TONE: Record<PluginLoadState, StatusTone> = { loaded: "ok", loading: "ember", off: undefined, unavailable: "bad" };
+// PLUGIN_STATE_ORDER lists plugins needing attention first.
+// PLUGIN_STATE_ORDER 让需要关注的插件排在前面。
+const PLUGIN_STATE_ORDER: Record<PluginLoadState, number> = { unavailable: 0, loading: 1, loaded: 2, off: 3 };
+
+// camelSetupState maps a VMM setup state to its catalog key segment.
+// camelSetupState 将 VMM 配置状态映射为其目录键片段。
+const camelSetupState = (state: string) => state.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 
 // WorkbenchStatusBarHosts are the nodes other surfaces portal their own status into.
 // WorkbenchStatusBarHosts 是其他界面以传送门方式放入自身状态的节点。
@@ -20,13 +42,17 @@ export interface WorkbenchStatusBarHosts {
   // Receives the composer runtime cue.
   // 接收输入区运行提示。
   runtime: (node: HTMLDivElement | null) => void;
+  // Receives the composer's model account item.
+  // 接收输入区的模型账号项。
+  account: (node: HTMLDivElement | null) => void;
 }
 
 // WorkbenchStatusBar renders the bottom status strip: core connection, the session hosts and the project
-// terminal on the left; plugins, memory, the repository link and the version on the right. Every item opens
-// the place that owns its state; display preferences live only in the title-bar app menu.
-// WorkbenchStatusBar 渲染底部状态条：左侧为内核连接、会话宿主节点与项目终端；右侧为插件、记忆、仓库链接与版本。
-// 每一项都打开持有其状态的位置；显示偏好只在标题栏应用菜单中提供。
+// terminal on the left; the model account, plugins, memory, the repository link and the version on the right.
+// Plugins and memory are read in place: their cards show the common states and carry the way to settings.
+// Display preferences live only in the title-bar app menu.
+// WorkbenchStatusBar 渲染底部状态条：左侧为内核连接、会话宿主节点与项目终端；右侧为模型账号、插件、记忆、仓库链接与版本。
+// 插件与记忆就地查看：其卡片显示常见状态并提供前往设置的入口。显示偏好只在标题栏应用菜单中提供。
 export function WorkbenchStatusBar(props: {
   // Application version shown at the right end.
   // 显示在最右端的应用版本。
@@ -72,7 +98,7 @@ export function WorkbenchStatusBar(props: {
   // 打开或隐藏当前项目的终端窗口。
   onToggleTerminal: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
 
   const preview = props.startup.phase === "browser-preview";
   const kernelTone: StatusTone = preview ? "warn" : props.startup.ready ? "ok" : "ember";
@@ -89,9 +115,22 @@ export function WorkbenchStatusBar(props: {
   const memoryTone: StatusTone = memoryDisabled ? undefined
     : memoryState.health === "unavailable" ? "bad"
       : memoryState.health === "degraded" ? "warn" : undefined;
-  const memoryLabel = formatMessage(t("status.memory"), {
-    state: t(memoryDisabled ? "vmm.experience.deployment.disabled" : `vmm.experience.health.${memoryState.health}` as TranslationKey),
-  });
+  const memoryStateLabel = t(memoryDisabled ? "vmm.experience.deployment.disabled" : `vmm.experience.health.${memoryState.health}` as TranslationKey);
+  const memoryLabel = formatMessage(t("status.memory"), { state: memoryStateLabel });
+  const activity = props.vmmMemory.recentActivity;
+  const memoryFacts = [
+    { label: t("vmm.experience.deployment"), value: t(`vmm.experience.deployment.${memoryState.deployment}` as TranslationKey) },
+    ...(memoryDisabled ? [] : [
+      { label: t("vmm.experience.setup"), value: t(`vmm.experience.setup.${camelSetupState(memoryState.setup)}` as TranslationKey), tone: memoryState.setup === "ready" ? "ok" as const : memoryState.setup === "blocked" ? "bad" as const : undefined },
+      { label: t("vmm.experience.lifecycle"), value: t(`vmm.experience.lifecycle.${memoryState.lifecycle}` as TranslationKey), tone: memoryState.lifecycle === "failed" ? "bad" as const : undefined },
+      { label: t("vmm.experience.health"), value: memoryStateLabel, tone: memoryTone ?? (memoryState.health === "healthy" ? "ok" as const : undefined) },
+      { label: t("vmm.experience.pendingWritebacks"), value: activity.pendingWritebacks.toLocaleString(locale) },
+      { label: t("vmm.experience.completedTurns"), value: activity.completedTurns.toLocaleString(locale) },
+    ]),
+  ];
+  const pluginRows = [...props.plugins]
+    .map((plugin) => ({ plugin, state: pluginLoadState(plugin) }))
+    .sort((left, right) => PLUGIN_STATE_ORDER[left.state] - PLUGIN_STATE_ORDER[right.state]);
 
   const terminal = props.terminal;
   const terminalLabel = terminal === null ? "" : terminal.runningCount > 0
@@ -123,16 +162,45 @@ export function WorkbenchStatusBar(props: {
         </button>
       ) : null}
       <div className="vk-status-host" data-grow="" ref={props.hosts.runtime} />
+      <div className="vk-status-host" ref={props.hosts.account} />
       {props.plugins.length > 0 ? (
-        <button className="vk-status-item" data-optional="" data-tone={pluginTone} onClick={props.onOpenPlugins} title={t("status.plugins.open")} type="button">
+        <StatusPeek
+          card={(
+            <ul className="vk-peek-list">
+              {pluginRows.map(({ plugin, state }) => (
+                <li key={plugin.id}>
+                  <span className="vk-dot" data-tone={PLUGIN_STATE_TONE[state]} />
+                  <span>{plugin.nameByLocale[locale] ?? plugin.name}</span>
+                  <small data-tone={PLUGIN_STATE_TONE[state]}>{t(`status.plugin.${state}` as TranslationKey)}</small>
+                </li>
+              ))}
+            </ul>
+          )}
+          label={t("status.plugins.title")}
+          onOpenSettings={props.onOpenPlugins}
+          optional
+          settingsLabel={t("status.plugins.open")}
+          summary={formatMessage(t("status.plugins"), { loaded: loadedPlugins.length, total: wantedPlugins.length })}
+          title={t("status.plugins.title")}
+          tone={pluginTone}
+        >
           <Puzzle />
           <span>{formatMessage(t("status.plugins"), { loaded: loadedPlugins.length, total: wantedPlugins.length })}</span>
-        </button>
+        </StatusPeek>
       ) : null}
-      <button className="vk-status-item" data-optional="" data-tone={memoryTone} onClick={props.onOpenMemory} title={t("status.memory.open")} type="button">
+      <StatusPeek
+        card={<StatusPeekFacts facts={memoryFacts} />}
+        label={memoryLabel}
+        onOpenSettings={props.onOpenMemory}
+        optional
+        settingsLabel={t("status.memory.open")}
+        summary={memoryStateLabel}
+        title={t("vmm.experience.title")}
+        tone={memoryTone}
+      >
         <Brain />
         <span>{memoryLabel}</span>
-      </button>
+      </StatusPeek>
       <RepositoryLink onOpenExternalUrl={props.onOpenExternalUrl} />
       <span className="vk-status-item" data-optional="" data-static="">v{props.appVersion}</span>
     </footer>
