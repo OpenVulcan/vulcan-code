@@ -299,7 +299,7 @@ pub(super) fn loaders(app: &App, page: PageId) -> Vec<ServiceCall> {
 pub(super) fn libraries(app: &App) -> Vec<Row> {
     // These actions collect explicit inputs before any write.
     // 这些动作在任何写入前收集明确输入。
-    let mut rows = vec![note(tr!("knowledge.managedDescription"), Tone::Muted)];
+    let mut rows = vec![note(tr!("tui.knowledge.managedDescription"), Tone::Muted)];
     if !ready(app, Slot::KnowledgeLibraries, &mut rows) {
         return rows;
     }

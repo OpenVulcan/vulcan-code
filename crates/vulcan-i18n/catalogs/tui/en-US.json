@@ -288,6 +288,7 @@
   "tui.inspector.thinking": "Thinking",
   "tui.inspector.title": "Inspector",
   "tui.knowledge.catalog": "Manage libraries",
+  "tui.knowledge.managedDescription": "Manage library access and settings. AI maintains all document and folder content.",
   "tui.knowledge.chunks": "Chunks",
   "tui.knowledge.document": "Read document",
   "tui.knowledge.documents": "Documents",

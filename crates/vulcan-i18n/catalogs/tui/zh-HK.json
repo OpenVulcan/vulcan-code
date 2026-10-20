@@ -288,6 +288,7 @@
   "tui.inspector.thinking": "思考過程",
   "tui.inspector.title": "詳情",
   "tui.knowledge.catalog": "管理知識庫",
+  "tui.knowledge.managedDescription": "管理知識庫授權與設定，全部文件和目錄內容由 AI 維護。",
   "tui.knowledge.chunks": "切片",
   "tui.knowledge.document": "閲讀文檔",
   "tui.knowledge.documents": "文檔",

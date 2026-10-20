@@ -288,6 +288,7 @@
   "tui.inspector.thinking": "思考过程",
   "tui.inspector.title": "详情",
   "tui.knowledge.catalog": "管理知识库",
+  "tui.knowledge.managedDescription": "管理知识库授权与设置，全部文档和目录内容由 AI 维护。",
   "tui.knowledge.chunks": "切片",
   "tui.knowledge.document": "阅读文档",
   "tui.knowledge.documents": "文档",
