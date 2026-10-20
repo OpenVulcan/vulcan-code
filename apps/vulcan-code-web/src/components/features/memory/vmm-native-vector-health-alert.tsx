@@ -5,6 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/ui-kit/primitives/alert"
 import { Button } from "@/ui-kit/primitives/button"
 import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
 import { useI18n } from "@/i18n"
+import { useServiceReconnected } from "@/components/shell/use-service-connection-status"
 import { nativeVectorRouteCause } from "./vmm-native-vector-status"
 import type { VmmMemoryActionRequest, VmmMemoryActionResult, VmmNativeVectorStatusSummary } from "@/types"
 import "@/ui-kit/styles/features/settings-forms.css"
@@ -83,6 +84,9 @@ export function VmmNativeVectorHealthAlert({
     queueMicrotask(() => { if (active) void loadStatus() })
     return () => { active = false; requestGeneration.current += 1 }
   }, [loadStatus])
+  // A status read that failed while the service was away is retried once it is back.
+  // 服务断开期间失败的状态读取在恢复后重试。
+  useServiceReconnected(() => { if (error !== null) void loadStatus() })
 
   if (loading && status === null && error === null) return null
   if (!error && status?.configured && status.rebuildRequiredMemoryCount === 0) return null

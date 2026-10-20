@@ -7,6 +7,7 @@ import { Button } from "@/ui-kit/primitives/button"
 import { PageSection } from "@/components/page"
 import { Input } from "@/ui-kit/primitives/input"
 import { useI18n, type TranslationKey } from "@/i18n"
+import { useServiceReconnected } from "@/components/shell/use-service-connection-status"
 import { runVmmMemoryAction } from "@/service/memory-actions-service"
 import type { VmmMemoryActionResult, VmmMemorySnapshot, VmmNativeProjectCatalogSummary, VmmNativeSessionListPage, VmmNativeSessionListQuery } from "@/types"
 import { nativeProjectOwnerId, VmmNativeMemoryRecords } from "./vmm-native-memory-records"
@@ -279,6 +280,12 @@ function NativeSessionList({ busy, snapshot, onRunAction, onCheckUpdates = check
     startedRef.current = true
     void initialize()
   }, [busy, initialize])
+  // A read that failed while the service was away is retried once it is back; a healthy list keeps its place.
+  // 服务断开期间失败的读取在恢复后重试；正常的列表保持当前位置。
+  useServiceReconnected(() => {
+    if (error === null || occupied) return
+    void (query ? load({ ...query, expectedStorageVersion: null }) : initialize())
+  })
 
   // Applies visible form fields as one fresh query; date upper bounds include the entire chosen day.
   // 将可见表单字段作为一次全新查询应用；日期上界包含所选整天。
