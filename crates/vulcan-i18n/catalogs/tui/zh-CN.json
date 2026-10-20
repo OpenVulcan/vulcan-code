@@ -258,7 +258,7 @@
   "tui.hint.ask": "↑↓ 选择 · Space 切换 · Enter 确认 · ←→ 切换问题 · x 停止 · Esc 返回",
   "tui.hint.approval": "a 允许本次 · d 拒绝 · x 停止 · Esc 返回",
   "tui.hint.composer": "Enter 发送 · Alt/Ctrl+Enter 或 \\+Enter 换行 · Alt+V 粘贴内容 · / 命令 · Tab 焦点 · Ctrl+P 命令面板",
-  "tui.hint.nav": "↑↓ 页面 · Enter 打开 · / 搜索 · Esc 返回对话",
+  "tui.hint.nav": "↑↓ 页面 · Enter 打开 · / 搜索 · Esc 返回会话",
   "tui.hint.page": "↑↓ 行 · Enter/Space 修改 · ←→ 调整 · / 搜索 · Esc 返回",
   "tui.hint.panel": "←→ 标签 · ↑↓ 文件 · Enter diff · s 暂存 · c 提交 · b 分支 · p 推送",
   "tui.hint.sidebar": "↑↓ 会话 · Enter 打开 · n 新建 · z 全部折叠 · Ctrl+B 窄栏 · Esc 返回",
