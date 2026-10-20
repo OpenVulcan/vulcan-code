@@ -143,11 +143,16 @@ export function KnowledgeBaseArea({ projects }: KnowledgeBaseAreaProps) {
     {registry.loading && registry.value === null ? <StreamPlaceholder label={t("knowledge.librariesLoading")} /> : null}
     {registry.value !== null ? <div className="knowledge-workspace">
       <aside className="knowledge-rail">
-        {registry.value.length === 0 ? <PageEmptyState icon={<Library />} title={t("knowledge.empty")} /> : null}
+        {registry.value.length === 0 ? <p className="knowledge-rail-note">{t("knowledge.empty")}</p> : null}
         {registry.value.length > 0 && visible.length === 0 ? <p className="knowledge-rail-note">{t("knowledge.filterEmpty")}</p> : null}
         <ul className="knowledge-rail-list">{visible.map((library) => <li key={library.id}><KnowledgeLibraryCard library={library} t={t} selected={library.id === selectedId} disabled={busy} onSelect={() => setSelectedId(library.id)} /></li>)}</ul>
       </aside>
-      {selected === undefined ? <section className="knowledge-detail knowledge-detail-placeholder"><PageEmptyState icon={<Library />} title={t("knowledge.selectLibrary")} description={t("knowledge.content.readOnly")} /></section> : <section className="knowledge-detail">
+      {selected === undefined ? <section className="knowledge-detail knowledge-detail-placeholder">{registry.value.length === 0
+        ? <PageEmptyState icon={<Library />} title={t("knowledge.empty")} description={t("knowledge.emptyStart")} action={<div className="knowledge-empty-actions">
+          <Button size="sm" disabled={!writable} onClick={() => setPolicy({ kind: "create" })}><Plus size={15} />{t("knowledge.create")}</Button>
+          <Button size="sm" variant="outline" disabled={!writable} onClick={() => setPickingPackage(true)}><Upload size={15} />{t("knowledge.package.import")}</Button>
+        </div>} />
+        : <PageEmptyState icon={<Library />} title={t("knowledge.selectLibrary")} description={t("knowledge.content.readOnly")} />}</section> : <section className="knowledge-detail">
         <KnowledgeLibraryHero library={selected} t={t} locale={locale} actions={<>
           {knowledgeLibraryReadable(selected) ? <><Button size="sm" variant="outline" disabled={!writable} onClick={() => setMetadata(selected)}><PencilLine size={14} />{t("knowledge.metadata")}</Button><Button size="sm" variant="outline" disabled={!writable} onClick={() => setPolicy({ kind: "mode", library: selected })}><Settings2 size={14} />{t("knowledge.indexMode")}</Button><Button size="sm" variant="outline" disabled={!writable} onClick={() => setExporting(selected)}><Download size={14} />{t("knowledge.package.export")}</Button></> : null}
           <Button size="sm" variant="outline" disabled={!writable} onClick={() => { setDeleteError(null); setDeleting(selected); }}><Trash2 size={14} />{t("knowledge.delete")}</Button>

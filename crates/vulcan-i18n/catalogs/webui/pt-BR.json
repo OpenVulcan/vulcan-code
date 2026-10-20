@@ -6042,6 +6042,7 @@
   "openvulcan.plan.empty": "Nenhuma cota ativa.",
   "knowledge.filter": "Filtrar bibliotecas",
   "knowledge.empty": "Ainda não há bibliotecas.",
+  "knowledge.emptyStart": "Crie ou importe uma biblioteca. Depois, a IA grava os documentos pelas ferramentas de conhecimento.",
   "knowledge.documentCount": "{count} documentos",
   "knowledge.selectLibrary": "Selecione uma biblioteca para ver conteúdo e configurações.",
   "knowledge.unavailable": "Indisponível",

@@ -6042,6 +6042,7 @@
   "openvulcan.plan.empty": "Kein aktives Kontingent.",
   "knowledge.filter": "Bibliotheken filtern",
   "knowledge.empty": "Noch keine Wissensbibliotheken.",
+  "knowledge.emptyStart": "Erstellen oder importieren Sie eine Bibliothek. Danach schreibt die KI Dokumente über die Wissenswerkzeuge.",
   "knowledge.documentCount": "{count} Dokumente",
   "knowledge.selectLibrary": "Bibliothek auswählen, um Inhalt und Einstellungen anzuzeigen.",
   "knowledge.unavailable": "Nicht verfügbar",

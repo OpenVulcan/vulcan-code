@@ -160,6 +160,7 @@
 }
 .knowledge-detail-placeholder { display: grid; place-items: center; padding: calc(var(--vk-u) * 12) calc(var(--vk-u) * 4); background: transparent; }
 .knowledge-detail-placeholder > .vk-page-empty { width: min(100%, 28rem); }
+.knowledge-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: calc(var(--vk-u) * 2); }
 
 .knowledge-hero { display: grid; gap: 14px; padding: 20px 22px 18px; border-bottom: 1px solid var(--vk-line-soft); }
 .knowledge-hero-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }

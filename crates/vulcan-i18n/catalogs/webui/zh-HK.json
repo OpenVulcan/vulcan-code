@@ -6042,6 +6042,7 @@
   "openvulcan.plan.empty": "暫無生效額度。",
   "knowledge.filter": "篩選知識庫",
   "knowledge.empty": "尚無知識庫。",
+  "knowledge.emptyStart": "建立一個知識庫，或匯入完整庫。之後由 AI 透過知識庫工具寫入文件。",
   "knowledge.documentCount": "{count} 份文件",
   "knowledge.selectLibrary": "選擇知識庫以查看內容與設定。",
   "knowledge.unavailable": "無法使用",

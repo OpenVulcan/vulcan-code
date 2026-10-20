@@ -6042,6 +6042,7 @@
   "openvulcan.plan.empty": "활성 할당량이 없습니다.",
   "knowledge.filter": "라이브러리 필터",
   "knowledge.empty": "지식 라이브러리가 없습니다.",
+  "knowledge.emptyStart": "라이브러리를 만들거나 가져오세요. 이후 AI가 지식 도구로 문서를 작성합니다.",
   "knowledge.documentCount": "문서 {count}개",
   "knowledge.selectLibrary": "라이브러리를 선택하여 내용과 설정을 확인하세요.",
   "knowledge.unavailable": "사용 불가",

@@ -6042,6 +6042,7 @@
   "openvulcan.plan.empty": "有効な利用枠はありません。",
   "knowledge.filter": "ライブラリを絞り込み",
   "knowledge.empty": "ライブラリはまだありません。",
+  "knowledge.emptyStart": "ライブラリを作成またはインポートしてください。その後は AI がナレッジツールで文書を書き込みます。",
   "knowledge.documentCount": "文書 {count} 件",
   "knowledge.selectLibrary": "ライブラリを選択して内容と設定を表示します。",
   "knowledge.unavailable": "利用不可",
