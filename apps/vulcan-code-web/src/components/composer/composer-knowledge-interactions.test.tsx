@@ -3,7 +3,6 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ComposerKnowledgeControl, type ComposerKnowledgeControlProps } from "./composer-knowledge-control";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
 import type { KnowledgeLibrarySummary, SessionKnowledgeLibrarySelectionSummary } from "@/types";
 
 // services isolate asynchronous selection ownership from real libraries and conversations.
@@ -41,33 +40,31 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
-// render mounts the actual submenu primitives; props select the exact draft or durable owner.
-// render 挂载真实子菜单原语；props 选择精确草稿或持久会话归属。
+// render mounts the knowledge checklist as the settings panel shows it; props select the exact draft or durable owner.
+// render 按设置面板中的形式挂载知识库勾选列表；props 选择精确草稿或持久会话归属。
 // Returns after React has applied the current service reads.
 // 在 React 应用当前服务读取后返回。
 async function render(props: Partial<ComposerKnowledgeControlProps> = {}): Promise<void> {
-  await act(async () => root.render(<DropdownMenu defaultOpen><DropdownMenuTrigger>Plus</DropdownMenuTrigger><DropdownMenuContent>
-    <ComposerKnowledgeControl projectId="project-a" conversationId="session-a" onOpenKnowledge={vi.fn()} {...props} />
-  </DropdownMenuContent></DropdownMenu>));
+  await act(async () => root.render(
+    <ComposerKnowledgeControl projectId="project-a" conversationId="session-a" onOpenKnowledge={vi.fn()} {...props} />,
+  ));
 }
-// openSubmenu opens the real knowledge submenu using its standard keyboard action.
-// openSubmenu 使用标准键盘动作打开真实知识库子菜单。
-// Returns after the submenu is mounted and its explicit refresh settles.
-// 子菜单挂载且其显式刷新结束后返回。
-async function openSubmenu(): Promise<void> {
-  await act(async () => { document.querySelector('[aria-label="knowledge.composer.aria"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+// settle lets the reads started by mounting the checklist finish.
+// settle 等待挂载勾选列表时发起的读取完成。
+async function settle(): Promise<void> {
+  await act(async () => {});
 }
-// item finds one exact menu label; label is visible copy, returning its current element.
-// item 查找精确菜单文案；label 为可见文案，返回当前元素。
+// item finds one exact checklist row or action by its label; label is visible copy, returning its current element.
+// item 按标签查找精确的勾选行或操作；label 为可见文案，返回当前元素。
 function item(label: string): HTMLElement {
-  const match = [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find((entry) => entry.textContent?.trim() === label);
-  expect(match, `Missing menu item: ${label}`).toBeDefined();
+  const match = [...document.querySelectorAll<HTMLElement>("button")].find((entry) => entry.textContent?.trim() === label);
+  expect(match, `Missing checklist entry: ${label}`).toBeDefined();
   return match!;
 }
 
 it("restores project defaults after an explicit session override through the same menu", async () => {
   services.selection.mockResolvedValue({ mode: "explicit", libraryIds: ["library-b"], effectiveLibraryIds: ["library-b"] });
-  await render(); await openSubmenu();
+  await render(); await settle();
   expect(item("knowledge.composer.inherit").getAttribute("aria-checked")).toBe("false");
   services.selection.mockResolvedValue(inherited);
   await act(async () => item("knowledge.composer.inherit").click());
@@ -78,7 +75,7 @@ it("restores project defaults after an explicit session override through the sam
 
 it("keeps draft inheritance and explicit library choices local without session RPCs", async () => {
   const change = vi.fn();
-  await render({ conversationId: null, onDraftSelectionChange: change }); await openSubmenu();
+  await render({ conversationId: null, onDraftSelectionChange: change }); await settle();
   await act(async () => item("Library B").click());
   expect(change).toHaveBeenLastCalledWith({ mode: "explicit", libraryIds: ["library-a", "library-b"] });
   await act(async () => item("knowledge.composer.inherit").click());
@@ -88,11 +85,11 @@ it("keeps draft inheritance and explicit library choices local without session R
 });
 
 it("clears the old project count while the new owner is loading and reports failure instead of emptiness", async () => {
-  await render(); await openSubmenu();
+  await render(); await settle();
   let reject!: (reason: Error) => void;
   services.libraries.mockImplementation(() => new Promise((_, fail) => { reject = fail; }));
   await render({ projectId: "project-b", conversationId: "session-b" });
-  expect(document.querySelector('[aria-label="knowledge.composer.aria"]')?.textContent).toBe("knowledge.composer.label");
+  expect(document.querySelector(".vk-ss-count")).toBeNull();
   expect(document.body.textContent).not.toContain("Library A");
   expect(document.body.textContent).toContain("knowledge.composer.loading");
   await act(async () => reject(new Error("library read failed")));
@@ -102,7 +99,7 @@ it("clears the old project count while the new owner is loading and reports fail
 });
 
 it("serializes writes and refreshes the new owner after an old session write completes", async () => {
-  await render(); await openSubmenu();
+  await render(); await settle();
   let finish!: () => void;
   services.save.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
   await act(async () => { item("Library B").click(); item("Library B").click(); });
@@ -117,7 +114,7 @@ it("serializes writes and refreshes the new owner after an old session write com
 });
 
 it("retries only reads after a committed write whose authoritative reload failed", async () => {
-  await render(); await openSubmenu();
+  await render(); await settle();
   services.selection.mockRejectedValueOnce(new Error("refresh failed after write"));
   await act(async () => item("Library B").click());
   expect(services.save).toHaveBeenCalledTimes(1);
@@ -133,22 +130,22 @@ it("retries only reads after a committed write whose authoritative reload failed
 
 it("keeps management accessible without a project", async () => {
   const manage = vi.fn();
-  await render({ projectId: null, conversationId: null, onOpenKnowledge: manage }); await openSubmenu();
+  await render({ projectId: null, conversationId: null, onOpenKnowledge: manage }); await settle();
   await act(async () => item("knowledge.composer.manage").click());
   expect(manage).toHaveBeenCalledOnce(); expect(services.save).not.toHaveBeenCalled();
 });
 
 it("disables a draft that has no callback rather than pretending it was persisted", async () => {
-  await render({ conversationId: null }); await openSubmenu();
-  expect(item("Library B").getAttribute("aria-disabled")).toBe("true");
-  expect(item("knowledge.composer.inherit").getAttribute("aria-disabled")).toBe("true");
+  await render({ conversationId: null }); await settle();
+  expect(item("Library B").hasAttribute("disabled")).toBe(true);
+  expect(item("knowledge.composer.inherit").hasAttribute("disabled")).toBe(true);
   await act(async () => item("Library B").click());
   expect(services.save).not.toHaveBeenCalled();
   expect(item("Library B").getAttribute("aria-checked")).toBe("false");
 });
 
 it("keeps current effective libraries when inheritance is turned off", async () => {
-  await render(); await openSubmenu();
+  await render(); await settle();
   services.selection.mockResolvedValue({ mode: "explicit", libraryIds: ["library-a"], effectiveLibraryIds: ["library-a"] });
   await act(async () => item("knowledge.composer.inherit").click());
   expect(services.save).toHaveBeenCalledExactlyOnceWith({ projectId: "project-a", conversationId: "session-a", mode: "explicit", libraryIds: ["library-a"] });
@@ -157,7 +154,7 @@ it("keeps current effective libraries when inheritance is turned off", async () 
 });
 
 it("rejects a stale read after switching conversations and recovers a rejected write by reads only", async () => {
-  await render(); await openSubmenu();
+  await render(); await settle();
   let oldRead!: (value: SessionKnowledgeLibrarySelectionSummary) => void;
   services.selection.mockImplementationOnce(() => new Promise((resolve) => { oldRead = resolve; }));
   await render({ conversationId: "old-slow" });
@@ -174,7 +171,7 @@ it("rejects a stale read after switching conversations and recovers a rejected w
 });
 
 it("does not start deferred or confirmation reads after a menu owner unmounts", async () => {
-  await render(); await openSubmenu();
+  await render(); await settle();
   let finish!: () => void;
   services.save.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
   await act(async () => item("Library B").click());

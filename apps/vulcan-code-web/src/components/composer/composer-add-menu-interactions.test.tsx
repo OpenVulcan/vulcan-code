@@ -41,18 +41,29 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); footer.remove(); vi.unstubAllGlobals(); });
 
-/** Mounts controlled production props and opens one menu through keyboard activation.
- * 挂载受控生产属性，通过键盘激活打开一个菜单。
- * Parameter kind selects footer settings or composer add; returns after focus effects commit.
- * 参数 kind 选择底栏设置或输入区添加；焦点副作用提交后返回。
+/** Mounts controlled production props.
+ * 挂载受控生产属性。
  */
-async function openMenu(kind: "settings" | "add" = "settings") {
+async function mount() {
   await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider>
     <ToolCollapsePreferencesContext.Provider value={{ defaultEnabled: true, activeConversationId: props.conversationId }}>
       <ComposerSettingsHostContext.Provider value={footer}><ComposerAttachmentMenu {...props} /></ComposerSettingsHostContext.Provider>
     </ToolCollapsePreferencesContext.Provider>
   </TooltipProvider></I18nProvider>));
-  await act(async () => (kind === "settings" ? footer : host).querySelector<HTMLButtonElement>("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+}
+
+/** Mounts the props and opens either the footer settings panel (by click) or the composer add menu (by keyboard).
+ * 挂载属性并打开底栏设置面板（点击）或输入区添加菜单（键盘）。
+ * Parameter kind selects footer settings or composer add; returns after focus effects commit.
+ * 参数 kind 选择底栏设置或输入区添加；焦点副作用提交后返回。
+ */
+async function openMenu(kind: "settings" | "add" = "settings") {
+  await mount();
+  if (kind === "settings") {
+    if (!document.querySelector(".vk-ss")) await act(async () => footer.querySelector<HTMLButtonElement>("button")!.click());
+    return;
+  }
+  await act(async () => host.querySelector<HTMLButtonElement>("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
 }
 
 /** Finds an exact visible menu entry and opens its real submenu using ArrowRight.
@@ -68,14 +79,48 @@ async function openSubmenu(label: string) {
   await act(async () => { trigger.focus(); trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
 }
 
+/** Returns the radios of one settings choice group, named by its section id or its accessible label.
+ * 返回某个设置选择组中的单选项，以区块标识或无障碍标签指定该组。
+ */
+function radios(name: string): HTMLElement[] {
+  const group = document.querySelector(`[data-ss-section="${name}"] [role="radiogroup"], [role="radiogroup"][aria-label="${name}"]`);
+  expect(group, `Missing choice group: ${name}`).not.toBeNull();
+  return Array.from(group!.querySelectorAll<HTMLElement>('[role="radio"]'));
+}
+
+/** Returns the value of the checked radio in one settings choice group.
+ * 返回某个设置选择组中已选中单选项的值。
+ */
+function checkedChoice(name: string): string | null | undefined {
+  return radios(name).find((choice) => choice.getAttribute("aria-checked") === "true")?.getAttribute("value");
+}
+
+/** Returns the values of every radio in one settings choice group, in order.
+ * 按顺序返回某个设置选择组中每个单选项的值。
+ */
+function choiceValues(name: string): Array<string | null> {
+  return radios(name).map((choice) => choice.getAttribute("value"));
+}
+
+/** Returns the output-style select trigger.
+ * 返回输出风格选择框的触发器。
+ */
+function styleTrigger(): HTMLButtonElement {
+  const trigger = document.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="输出风格"]');
+  expect(trigger, "Missing output-style select").not.toBeNull();
+  return trigger!;
+}
+
 it.each([null, "structured"])("exposes the exact draft output-style selection %s without implying immediate activation", async (style) => {
   props.draftOutputStyleId = style;
-  await openMenu(); await openSubmenu("输出风格");
-  // choices are mutually exclusive radio entries exposed to keyboard and assistive navigation.
-  // choices 是提供给键盘与辅助导航的互斥单选菜单项。
-  const choices = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
+  await openMenu();
+  expect(styleTrigger().textContent).toBe(style === null ? "继承全局" : "严格结构");
+  await act(async () => styleTrigger().click());
+  // choices are the inherited choice followed by every catalog style.
+  // choices 依次为继承选项与目录中的每种风格。
+  const choices = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'));
   expect(choices).toHaveLength(3);
-  expect(choices.map((choice) => choice.getAttribute("aria-checked"))).toEqual(style === null ? ["true", "false", "false"] : ["false", "false", "true"]);
+  expect(choices.map((choice) => choice.getAttribute("aria-selected"))).toEqual(style === null ? ["true", "false", "false"] : ["false", "false", "true"]);
   await act(async () => choices[style === null ? 2 : 0].click());
   expect(props.onOutputStyleChange).toHaveBeenCalledWith(style === null ? "structured" : null);
 });
@@ -84,35 +129,34 @@ it("shows an existing session's pending style rather than selecting a different 
   props.conversationId = "synthetic-session";
   props.draftOutputStyleId = "balanced";
   props.sessionOutputStyle = { overrideStyleId: "structured", desiredStyleId: "structured", appliedStyleId: "balanced", pendingActivation: true };
-  await openMenu(); await openSubmenu("输出风格");
-  expect(document.querySelector('[role="menuitemradio"][aria-checked="true"]')?.textContent).toContain("严格结构");
-  expect(document.querySelector('[role="status"]')?.textContent).toBe("已保存，在新会话或上下文压缩后生效。");
+  await openMenu();
+  expect(styleTrigger().textContent).toBe("严格结构");
+  expect(document.querySelector(".vk-ss")?.textContent).toContain("已保存，在新会话或上下文压缩后生效。");
   expect(props.onOutputStyleChange).not.toHaveBeenCalled();
 });
 
 it("exposes thinking choices as radios and preserves the exact typed selection", async () => {
   props.conversationId = "thinking-inherit-menu";
-  await openMenu(); await openSubmenu("思考弹窗");
+  await openMenu();
   // Inheritance is a distinct choice even when the global value currently enables popups.
   // 即使全局值当前开启弹窗，继承仍是独立选择。
-  const choices = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
-  expect(choices).toHaveLength(3);
-  expect(choices.map((choice) => choice.textContent)).toEqual(["开启", "关闭", "继承系统"]);
-  expect(choices.map((choice) => choice.getAttribute("aria-checked"))).toEqual(["false", "false", "true"]);
-  await act(async () => choices[1].click());
+  const choices = radios("thinking");
+  expect(choiceValues("thinking")).toEqual(["inherit", "popup_only", "inline_output"]);
+  expect(checkedChoice("thinking")).toBe("inherit");
+  await act(async () => choices[2].click());
   expect(props.onThinkingDisplayModeChange).toHaveBeenCalledWith("inline_output");
 });
 
 it.each([
-  ["回答前回忆", "precheck", ["false", "true", "false"]],
-  ["回答后记住", "writeback", ["false", "false", "true"]],
+  ["回答前回忆", "precheck", "enabled"],
+  ["回答后记住", "writeback", "disabled"],
 ] as const)("retains editable %s policy while memory is not ready", async (label, policy, checked) => {
-  await openMenu(); await openSubmenu("记忆选项"); await openSubmenu(label);
+  await openMenu();
+  expect(document.querySelector(".vk-ss")?.textContent).toContain("记忆尚未就绪");
   // choices retain inherit/enabled/disabled as separate, source-declared policy states.
   // choices 保留源码声明的继承、启用与关闭三种独立策略状态。
-  const choices = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
-  expect(choices.map((choice) => choice.getAttribute("aria-checked"))).toEqual(checked);
-  await act(async () => choices[0].click());
+  expect(checkedChoice(label)).toBe(checked);
+  await act(async () => radios(label)[0].click());
   expect(props.onVmmPolicyChange).toHaveBeenCalledWith(policy, "inherit");
 });
 
@@ -159,38 +203,31 @@ it("switches only the active conversation's tool folding and can restore the sys
   // 存储归测试所有，不使用用户真实浏览器配置。
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
   props.conversationId = "footer-folding-a";
-  await openMenu(); await openSubmenu("工具折叠");
-  // choices use a nested radio group, not an independent toggle and reset command.
-  // choices 使用嵌套单选组，而非独立开关和重置命令。
-  const choices = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
-  expect(choices.map((item) => item.textContent)).toEqual(["关闭折叠", "开启折叠", "继承系统"]);
-  expect(choices.map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "false", "true"]);
-  await act(async () => choices[0].click());
-  await openMenu(); await openSubmenu("工具折叠");
-  expect(document.querySelector('[role="menuitemradio"][aria-checked="true"]')?.textContent).toBe("关闭折叠");
-  await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await openMenu();
+  expect(choiceValues("tools")).toEqual(["inherit", "enabled", "disabled"]);
+  expect(checkedChoice("tools")).toBe("inherit");
+  await act(async () => radios("tools")[2].click());
+  expect(checkedChoice("tools")).toBe("disabled");
+  // Each owner change remounts the panel closed, so it is reopened for the next owner.
+  // 每次归属变化都会让面板重新挂载并关闭，因此为下一个归属重新打开。
   props.conversationId = "footer-folding-b";
-  await openMenu(); await openSubmenu("工具折叠");
-  expect(document.querySelector('[role="menuitemradio"][aria-checked="true"]')?.textContent).toBe("继承系统");
-  await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await openMenu();
+  expect(checkedChoice("tools")).toBe("inherit");
   props.conversationId = "footer-folding-a";
-  await openMenu(); await openSubmenu("工具折叠");
-  expect(document.querySelector('[role="menuitemradio"][aria-checked="true"]')?.textContent).toBe("关闭折叠");
+  await openMenu();
+  expect(checkedChoice("tools")).toBe("disabled");
   // reset removes this session's explicit override.
   // reset 移除此会话的明确覆盖值。
-  const reset = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
-    .find((item) => item.textContent === "继承系统")!;
-  await act(async () => reset.click());
-  await openMenu(); await openSubmenu("工具折叠");
-  expect(document.querySelector('[role="menuitemradio"][aria-checked="true"]')?.textContent).toBe("继承系统");
+  await act(async () => radios("tools")[0].click());
+  expect(checkedChoice("tools")).toBe("inherit");
 });
 
-it("closes relocated options when the active session changes and uses the new controlled selection", async () => {
-  await openMenu(); await openSubmenu("输出风格");
+it("closes the panel when the active session changes and uses the new controlled selection", async () => {
+  await openMenu();
   props.conversationId = "new-owner";
   props.sessionOutputStyle = { overrideStyleId: "structured", desiredStyleId: "structured", appliedStyleId: "structured", pendingActivation: false };
-  await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ComposerSettingsHostContext.Provider value={footer}><ComposerAttachmentMenu {...props} /></ComposerSettingsHostContext.Provider></TooltipProvider></I18nProvider>));
-  expect(document.querySelector('[role="menu"]')).toBeNull();
-  await openMenu(); await openSubmenu("输出风格");
-  expect(document.querySelector('[role="menuitemradio"][aria-checked="true"]')?.textContent).toContain("严格结构");
+  await mount();
+  expect(document.querySelector(".vk-ss")).toBeNull();
+  await openMenu();
+  expect(styleTrigger().textContent).toBe("严格结构");
 });

@@ -4,7 +4,7 @@
   "apps/vulcan-code-tui/src/ui/text.rs": 3,
   "apps/vulcan-code-web/src/app/render-error-boundary.test.tsx": 5,
   "apps/vulcan-code-web/src/components/ask/ask-question-dialog.test.tsx": 18,
-  "apps/vulcan-code-web/src/components/composer/composer-add-menu-interactions.test.tsx": 12,
+  "apps/vulcan-code-web/src/components/composer/composer-add-menu-interactions.test.tsx": 8,
   "apps/vulcan-code-web/src/components/composer/composer-attachment-controls.test.tsx": 3,
   "apps/vulcan-code-web/src/components/composer/composer-memory-menu.test.tsx": 1,
   "apps/vulcan-code-web/src/components/composer/composer-panel/goal-strip.test.tsx": 4,

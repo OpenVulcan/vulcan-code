@@ -1,0 +1,39 @@
+/* Session settings panel: a head, then two sections, each opened by a label line that says when its settings */
+/* apply. A row puts the name and a short explanation on the left and the control on the right; list blocks */
+/* (knowledge, memory) carry a sub-heading with a count and a go-to action, followed by whole-line check rows. */
+/* 会话设置面板：标题之后是两个区块，每个区块以说明生效时机的标签行开头。设置行左侧为名称与简短说明、右侧为控件； */
+/* 列表块（知识库、记忆）带有含计数与前往操作的小标题，下方为整行可勾选的行。 */
+.vk-pop.vk-ss { display: flex; flex-direction: column; width: 34rem; max-width: min(34rem, calc(100vw - 24px)); max-height: min(36rem, var(--vk-available-height, 80dvh)); overflow: hidden; padding: 0; }
+.vk-ss-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2) calc(var(--vk-u) * 2) calc(var(--vk-u) * 3.5); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-ss-head > h3 { flex: 1 1 auto; margin: 0; font-size: var(--vk-fs-md); font-weight: 600; }
+.vk-ss-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.vk-ss-sec { display: grid; gap: calc(var(--vk-u) * 0.5); padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 3); }
+.vk-ss-sec + .vk-ss-sec { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-ss-title { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); margin-bottom: var(--vk-u); font-family: var(--vk-label-font); font-size: var(--vk-fs-xs); font-weight: 500; letter-spacing: var(--vk-label-track); text-transform: var(--vk-label-case); color: var(--vk-ink-2); }
+.vk-ss-title > svg { flex: none; color: var(--vk-ember); }
+.vk-ss-title > span { margin-left: auto; color: var(--vk-ink-3); letter-spacing: normal; text-transform: none; }
+
+.vk-ss-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 3); min-height: calc(var(--vk-u) * 10); padding: var(--vk-u) 0; }
+.vk-ss-row > div:first-child { display: grid; flex: 1 1 auto; gap: 2px; min-width: 0; }
+.vk-ss-row strong { font-size: var(--vk-fs-md); font-weight: 500; }
+.vk-ss-row small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.4; }
+.vk-ss-row > .vk-seg, .vk-ss-row > button { flex: none; }
+.vk-ss-row > button[data-slot="select-trigger"] { max-width: 11rem; }
+.vk-ss-row:focus-within > div:first-child > strong { color: var(--vk-ember); }
+
+.vk-ss-block { display: grid; gap: 2px; padding-top: calc(var(--vk-u) * 1.5); }
+.vk-ss-sub { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-height: calc(var(--vk-u) * 7); font-size: var(--vk-fs-md); font-weight: 500; }
+.vk-ss-sub > svg { flex: none; color: var(--vk-ink-3); }
+.vk-ss-count { padding: 0 calc(var(--vk-u) * 1.5); color: var(--vk-ember); background: color-mix(in srgb, var(--vk-ember) 12%, transparent); font-size: var(--vk-fs-xs); }
+.vk-ss-sub > .vk-ss-sub-action { margin-left: auto; }
+.vk-ss-checks { display: grid; gap: 1px; }
+.vk-ss-check { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); width: 100%; min-height: calc(var(--vk-u) * 7.5); padding: 0 calc(var(--vk-u) * 1.5); border: 0; color: var(--vk-ink); background: transparent; font: inherit; font-size: var(--vk-fs-md); text-align: left; cursor: pointer; }
+.vk-ss-check:hover:not(:disabled) { background: var(--vk-hover); }
+.vk-ss-check:disabled { color: var(--vk-ink-3); cursor: default; }
+.vk-ss-check > .vk-check { flex: none; pointer-events: none; }
+.vk-ss-check > svg { flex: none; color: var(--vk-ink-3); }
+.vk-ss-check[aria-checked="true"] > svg { color: var(--vk-ember); }
+.vk-ss-check-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-ss-note { margin: 0; padding: calc(var(--vk-u) * 0.5) calc(var(--vk-u) * 1.5); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-ss-note[data-tone="bad"] { color: var(--vk-bad); }
+.vk-ss-actions { display: flex; gap: var(--vk-u); padding: 0 calc(var(--vk-u) * 1.5); }

@@ -62,21 +62,14 @@ import type {
 
 import type { ComposerAttachmentPreviewMedia } from "./composer-control-types";
 import type { ComposerKnowledgeSelectionSnapshot } from "./composer-model";
-import { ComposerKnowledgeControl } from "./composer-knowledge-control";
-import {
-  ComposerSettingsRequestContext,
-  RequestedSettingsSub,
-  type ComposerSettingsRequest,
-  type ComposerSettingsSection,
-} from "./composer-settings-request";
+import type { ComposerSettingsRequest } from "./composer-settings-request";
+import { ComposerSettingsMenu } from "./composer-session-settings";
 import { useDedicatedComposer } from "./dedicated/dedicated-session-controls";
 import type { ComposerAnswerModeController } from "./composer-panel/use-composer-answer-mode";
 
-// ComposerAttachmentMenu renders the plus button and attachment submenu.
-// ComposerAttachmentMenu 渲染加号按钮与附件子菜单。
-// Parameters: props supplies attachment capabilities, output styles and selection callbacks; returns the accessible add menu.
-// 参数：props 提供附件能力、输出风格与选择回调；返回可访问的添加菜单。
-export function ComposerAttachmentMenu(props: {
+// ComposerAttachmentMenuProps carries attachment capabilities, session settings state and their callbacks.
+// ComposerAttachmentMenuProps 携带附件能力、会话设置状态及其回调。
+export type ComposerAttachmentMenuProps = {
   // Owner-scoped answer mode for the current conversation or draft.
   // 当前会话或草稿的按归属限定回答模式。
   answerMode: ComposerAnswerModeController;
@@ -149,7 +142,11 @@ export function ComposerAttachmentMenu(props: {
   // Latest slash-command request to open the settings menu, optionally at one submenu.
   // 最近一次由 slash 指令发起的设置菜单打开请求，可指定子菜单。
   settingsRequest?: ComposerSettingsRequest | null;
-}) {
+};
+
+// ComposerAttachmentMenu renders the plus button and portals the session settings entry into the status bar.
+// ComposerAttachmentMenu 渲染加号按钮，并将会话设置入口传送到状态栏。
+export function ComposerAttachmentMenu(props: ComposerAttachmentMenuProps) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
@@ -226,264 +223,6 @@ export function ComposerAttachmentMenu(props: {
     </>
   );
 }
-
-/** Renders the relocated settings menu using the original composer's controlled state and callbacks.
- * 使用原输入区的受控状态和回调渲染迁移后的设置菜单。
- * Parameter props carries the active conversation or draft options; returns the conversation settings menu.
- * 参数 props 携带当前会话或草稿选项；返回会话设置菜单。
- */
-export function ComposerSettingsMenu(props: React.ComponentProps<typeof ComposerAttachmentMenu>) {
-  // t keeps the footer entry and its options aligned with the active locale.
-  // t 使底栏入口及其选项与当前语言一致。
-  const { t } = useI18n();
-  // The provider identifies the selected draft as well as persisted conversations.
-  // Provider 同时标识当前草稿和持久化会话。
-  const toolCollapse = useToolCollapsePreference();
-  // Explicit selection stays distinct from the effective global value.
-  // 明确选择始终与实际生效的全局值区分。
-  const thinkingPreference = useThinkingDisplayPreference(toolCollapse.scope, props.thinkingDisplayMode);
-  // Settings frozen with a dedicated session (style, answer mode, knowledge, memory) are hidden.
-  // 随专职会话冻结的设置（风格、回答模式、知识库、记忆）不再显示。
-  const dedicated = useDedicatedComposer();
-  // Slash commands open this menu, optionally at one submenu; closing it clears the request.
-  // slash 指令可打开本菜单并直接展开某个子菜单；关闭菜单即清除该请求。
-  const [menuOpen, setMenuOpen] = React.useState(false);
-  const [requestedSection, setRequestedSection] = React.useState<ComposerSettingsSection | null>(null);
-  React.useEffect(() => {
-    if (props.settingsRequest) {
-      setRequestedSection(props.settingsRequest.section);
-      setMenuOpen(true);
-    }
-  }, [props.settingsRequest]);
-  return <DropdownMenu open={menuOpen} onOpenChange={(open) => {
-    setMenuOpen(open);
-    if (!open) setRequestedSection(null);
-  }}>
-    <DropdownMenuTrigger asChild>
-      <button aria-label={t("composer.sessionSettings")} className="vk-status-item" data-action="session-settings" type="button"><Settings /><span>{t("composer.sessionSettings")}</span></button>
-    </DropdownMenuTrigger>
-    <ComposerSettingsRequestContext.Provider value={requestedSection}>
-    <DropdownMenuContent align="start" className="vk-pick-menu" side="top" sideOffset={8}>
-        {dedicated ? null : <>
-        <OutputStyleSubMenu
-          catalog={props.outputStyleCatalog}
-          conversationId={props.conversationId}
-          draftStyleId={props.draftOutputStyleId}
-          onChange={props.onOutputStyleChange}
-          sessionOutputStyle={props.sessionOutputStyle}
-        />
-        <AnswerModeSubMenu controller={props.answerMode} />
-        <ComposerKnowledgeControl
-          conversationId={props.conversationId}
-          draftSelection={props.draftKnowledgeSelection}
-          onDraftSelectionChange={props.onDraftKnowledgeSelectionChange}
-          onOpenKnowledge={props.onOpenKnowledge}
-          projectId={props.projectId}
-        />
-        </>}
-        <RequestedSettingsSub section="tools">
-          <DropdownMenuSubTrigger><Workflow size={15} /><span>{t("composer.collapseTools")}</span></DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="vk-pick-menu">
-            <DropdownMenuRadioGroup value={toolCollapse.override === undefined ? "inherit" : toolCollapse.override ? "enabled" : "disabled"}>
-              <DropdownMenuRadioItem value="disabled" disabled={toolCollapse.scope === null} onSelect={() => {
-                if (toolCollapse.scope !== null) setConversationToolCollapseOverride(toolCollapse.scope, false);
-              }}>{t("composer.collapseToolsDisabled")}</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="enabled" disabled={toolCollapse.scope === null} onSelect={() => {
-                if (toolCollapse.scope !== null) setConversationToolCollapseOverride(toolCollapse.scope, true);
-              }}>{t("composer.collapseToolsEnabled")}</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="inherit" disabled={toolCollapse.scope === null} onSelect={() => {
-                if (toolCollapse.scope !== null) setConversationToolCollapseOverride(toolCollapse.scope, null);
-              }}>{t("composer.inheritSystem")}</DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuSubContent>
-        </RequestedSettingsSub>
-        <RequestedSettingsSub section="thinking">
-          <DropdownMenuSubTrigger>
-            {/* Same sparkle as the conversation's thinking trigger. */}
-            {/* 与对话中思考入口相同的闪光星形图标。 */}
-            <Sparkles size={15} />
-            <span>{t("composer.thinkingProcess")}</span>
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="vk-pick-menu">
-            <DropdownMenuRadioGroup value={thinkingPreference.override === undefined ? "inherit" : thinkingPreference.override ? "popup_only" : "inline_output"}>
-            {THINKING_DISPLAY_MODE_OPTIONS.map((option) => (
-              <DropdownMenuRadioItem key={option.value} value={option.value} disabled={toolCollapse.scope === null} onSelect={() => props.onThinkingDisplayModeChange(option.value)}>
-                <span className="vk-menu-label">
-                  <span>{t(option.labelKey)}</span>
-                </span>
-              </DropdownMenuRadioItem>
-            ))}
-            <DropdownMenuRadioItem value="inherit" disabled={toolCollapse.scope === null} onSelect={() => {
-              if (toolCollapse.scope !== null) setConversationThinkingPopupOverride(toolCollapse.scope, null);
-            }}>{t("composer.inheritSystem")}</DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuSubContent>
-        </RequestedSettingsSub>
-        {!dedicated && (props.vmmAvailable || props.onOpenMemorySettings) ? (
-          <RequestedSettingsSub section="memory">
-            <DropdownMenuSubTrigger>
-              {/* Same brain as the memory area in the activity rail. */}
-              {/* 与活动栏记忆区域相同的大脑图标。 */}
-              <MemoryBrainIcon size={15} />
-              <span>{t("composer.vmmMemory")}</span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="vk-pick-menu">
-              {props.vmmStatus ? <p className="vk-menu-note">{t(`memory.workspace.${props.vmmStatus}`)}</p> : null}
-              {props.vmmAvailable ? <>
-              <VmmPolicySubMenu
-                label={t("composer.vmm.precheckInjection")}
-                policy="precheck"
-                selectedMode={props.sessionVmmPolicy?.precheckMode ?? "inherit"}
-                onChange={props.onVmmPolicyChange}
-              />
-              <VmmPolicySubMenu
-                label={t("composer.vmm.memoryWriteback")}
-                policy="writeback"
-                selectedMode={props.sessionVmmPolicy?.memoryWritebackMode ?? "inherit"}
-                onChange={props.onVmmPolicyChange}
-              />
-              </> : null}
-              {props.onOpenMemorySettings ? <DropdownMenuItem onSelect={props.onOpenMemorySettings}>{t("memory.workspace.settings")}</DropdownMenuItem> : null}
-            </DropdownMenuSubContent>
-          </RequestedSettingsSub>
-        ) : null}
-    </DropdownMenuContent>
-    </ComposerSettingsRequestContext.Provider>
-  </DropdownMenu>;
-}
-
-// OutputStyleSubMenu renders the selectable prompt-style variants and their persistence cost.
-// OutputStyleSubMenu 渲染可选择的提示词风格变体及其持久化成本。
-function OutputStyleSubMenu(props: {
-  catalog: OutputStyleCatalogSummary;
-  conversationId: string | null;
-  draftStyleId?: string | null;
-  sessionOutputStyle?: SessionOutputStyleSummary | null;
-  onChange: (styleId: string | null) => void;
-}) {
-  const { locale, t } = useI18n();
-  const selectedId = props.conversationId
-    ? props.sessionOutputStyle?.overrideStyleId ?? null
-    : props.draftStyleId ?? null;
-  const globalEntry = props.catalog.entries.find((entry) => entry.id === props.catalog.selectedId);
-  const globalLabel = globalEntry
-    ? pickBilingualText(locale, globalEntry.labelZh, globalEntry.labelEn)
-    : props.catalog.selectedId;
-  return (
-    <RequestedSettingsSub section="style">
-      <DropdownMenuSubTrigger>
-        <Palette size={15} />
-        <span>{t("composer.outputStyle.menuTitle")}</span>
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="vk-pick-menu">
-        <DropdownMenuRadioGroup value={selectedId === null ? "inherit" : `style:${selectedId}`}>
-        <DropdownMenuRadioItem value="inherit" onSelect={() => props.onChange(null)}>
-          <span className="vk-menu-label">
-            <span>{t("composer.outputStyle.inheritGlobal")}</span>
-            <small>
-              {formatMessage(t("composer.outputStyle.useSystemSetting"), { label: globalLabel })}
-            </small>
-          </span>
-        </DropdownMenuRadioItem>
-        {props.catalog.entries.map((entry) => (
-          <DropdownMenuRadioItem key={entry.id} value={`style:${entry.id}`} onSelect={() => props.onChange(entry.id)}>
-            <span className="vk-menu-label">
-              <span>{pickBilingualText(locale, entry.labelZh, entry.labelEn)}</span>
-              <small>{formatMessage(t("composer.outputStyle.promptCharacters"), { count: entry.promptCharCount.toLocaleString(locale) })}</small>
-            </span>
-          </DropdownMenuRadioItem>
-        ))}
-        </DropdownMenuRadioGroup>
-        {props.conversationId && props.sessionOutputStyle?.pendingActivation ? <p role="status" className="vk-menu-note">
-          {t("composer.outputStyle.savedPending")}
-        </p> : null}
-      </DropdownMenuSubContent>
-    </RequestedSettingsSub>
-  );
-}
-
-// AnswerModeSubMenu chooses whether answers may use native answer components.
-// AnswerModeSubMenu 选择回答是否可使用原生回答组件。
-function AnswerModeSubMenu(props: { controller: ComposerAnswerModeController }) {
-  const { t } = useI18n();
-  const { mode, saving, available, awaitingRequest, select } = props.controller;
-  const options = [
-    { value: "standard", label: "answerMode.standard", hint: "answerMode.standardHint" },
-    { value: "interactive", label: "answerMode.interactive", hint: "answerMode.interactiveHint" },
-  ] as const;
-  return (
-    <RequestedSettingsSub section="answer">
-      <DropdownMenuSubTrigger disabled={!available}>
-        <LayoutPanelTop size={15} />
-        <span>{t("answerMode.label")}</span>
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="vk-pick-menu" aria-busy={saving}>
-        <DropdownMenuRadioGroup value={mode ?? ""}>
-          {options.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} disabled={saving} onSelect={() => select(option.value)}>
-              <span className="vk-menu-label">
-                <span>{t(option.label)}</span>
-                <small>{t(option.hint)}</small>
-              </span>
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-        {awaitingRequest ? <p role="status" className="vk-menu-note">
-          {t("answerMode.pending")}
-        </p> : null}
-      </DropdownMenuSubContent>
-    </RequestedSettingsSub>
-  );
-}
-
-// VmmPolicySubMenu renders one VMM policy's tri-state choice menu.
-// VmmPolicySubMenu 渲染单个 VMM 策略的三态选择菜单。
-function VmmPolicySubMenu(props: {
-  // User-facing VMM policy label.
-  // 面向用户的 VMM 策略标签。
-  label: string;
-  // Backend VMM policy key.
-  // 后端 VMM 策略键。
-  policy: string;
-  // Currently selected tri-state mode.
-  // 当前选中的三态模式。
-  selectedMode: string;
-  // Applies one selected policy mode.
-  // 应用单个选中的策略模式。
-  onChange: (policy: string, mode: string) => void;
-}) {
-  // t resolves stable WebUI copy keys for the active language.
-  // t 根据当前语言解析稳定的 WebUI 文案键。
-  const { t } = useI18n();
-  return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger>
-        <span>{props.label}</span>
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent>
-        <DropdownMenuRadioGroup value={props.selectedMode}>
-        {VMM_POLICY_MODE_OPTIONS.map((option) => (
-          <DropdownMenuRadioItem
-            key={option.mode}
-            value={option.mode}
-            onSelect={() => props.onChange(props.policy, option.mode)}
-          >
-            <span>{t(option.labelKey)}</span>
-          </DropdownMenuRadioItem>
-        ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
-  );
-}
-
-// VMM_POLICY_MODE_OPTIONS lists the session-level VMM policy modes.
-// VMM_POLICY_MODE_OPTIONS 列出会话级 VMM 策略模式。
-const VMM_POLICY_MODE_OPTIONS: Array<{ mode: string; labelKey: TranslationKey }> = [
-  { mode: "inherit", labelKey: "composer.vmm.mode.inheritProject" },
-  { mode: "enabled", labelKey: "composer.vmm.mode.enabled" },
-  { mode: "disabled", labelKey: "composer.vmm.mode.disabled" },
-];
 
 // composerAttachmentKindLabelKey returns the localized label key for one attachment kind.
 // composerAttachmentKindLabelKey 返回单个附件类型的本地化标签键。
