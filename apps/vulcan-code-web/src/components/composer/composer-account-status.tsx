@@ -31,6 +31,7 @@ export function ComposerAccountStatus(props: { account: ModelAccountDetails }) {
       optional
       settingsLabel={t("settings.modelProviders")}
       title={t("status.account.title")}
+      wide
     >
       <ProviderIcon
         category={account.provider?.category}

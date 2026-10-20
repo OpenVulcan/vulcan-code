@@ -61,9 +61,17 @@
 .vk-usage-hint[data-tone="bad"] { color: var(--vk-bad); }
 .vk-usage-windows { display: grid; gap: calc(var(--vk-u) * 2); width: 100%; font-size: var(--vk-fs-2xs); }
 .vk-usage-windows :is(.vk-usage-name, .vk-usage-value) { font-size: inherit; }
-.vk-usage-windows .vk-usage-row { gap: calc(var(--vk-u) * 0.75) var(--vk-u); min-width: 0; }
+/* Compact windows take two lines: the name, its reset time and the figure, then the meter. */
+.vk-usage-windows .vk-usage-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "name reset value" "bar bar bar";
+  align-items: baseline;
+  gap: calc(var(--vk-u) * 0.75) calc(var(--vk-u) * 2);
+  min-width: 0;
+}
+.vk-usage-windows .vk-usage-row[data-note] { grid-template-areas: "name reset value"; }
 .vk-usage-windows .vk-meter { height: 0.38rem; gap: 1px; }
-.vk-usage-windows .vk-usage-reset { font-size: inherit; text-align: right; }
+.vk-usage-windows .vk-usage-reset { overflow: hidden; font-size: inherit; text-overflow: ellipsis; white-space: nowrap; }
 .vk-usage-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--vk-u) * 2); }
 .vk-usage-bucket { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: var(--vk-u); }
 .vk-usage-bucket > span:first-child { font-weight: 500; }

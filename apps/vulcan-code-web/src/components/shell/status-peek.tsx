@@ -40,6 +40,9 @@ export function StatusPeek(props: {
   // Called whenever the card opens, so its owner can read fresh state.
   // 每次卡片打开时调用，使其持有者读取最新状态。
   onOpen?: () => void;
+  // Widens the card for bodies with side-by-side figures, such as account quota windows.
+  // 为并排显示数值的正文（如账号额度窗口）加宽卡片。
+  wide?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   // pinned marks a card opened by pressing the item or the card; hover leaving never closes a pinned card.
@@ -94,6 +97,7 @@ export function StatusPeek(props: {
       <PopoverContent
         align="end"
         className="vk-peek"
+        data-wide={props.wide ? "" : undefined}
         onCloseAutoFocus={(event) => event.preventDefault()}
         onOpenAutoFocus={(event) => { if (!pinned.current) event.preventDefault(); }}
         onPointerDown={() => { pinned.current = true; cancel(); }}
