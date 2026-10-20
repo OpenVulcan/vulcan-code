@@ -167,7 +167,7 @@ pub(crate) fn hydrate_vmm_default_identity(snapshot: &mut VmmMemorySnapshot) {
 /// 返回值
 /// The independent deployment, setup, lifecycle, and health dimensions.
 /// 返回相互独立的部署、设置、生命周期和健康维度。
-fn vmm_experience_state(
+pub(super) fn vmm_experience_state(
     effective: &vulcan_vmm::VmmEffectiveConfig,
     global_layer: &vulcan_vmm::VmmConfigLayer,
     runtime: &VmmRuntimeSummary,
@@ -192,7 +192,11 @@ fn vmm_experience_state(
     let health = if !required_configuration_ready {
         VmmHealthState::Unavailable
     } else if runtime.process_ready {
-        if optional_capability_failed {
+        // A scope blocker (such as stale vector generations) stops every memory capability at once.
+        // 作用域阻断（如旧向量代次）会同时停止全部记忆能力。
+        if runtime.scope_error.is_some() {
+            VmmHealthState::Unavailable
+        } else if optional_capability_failed {
             VmmHealthState::Degraded
         } else {
             VmmHealthState::Healthy
@@ -742,6 +746,7 @@ pub(crate) fn vmm_runtime_summary(
         },
         backend_error,
         scope_ready,
+        scope_error: vector_rebuild_error.clone(),
         precheck_ready: scope_ready && effective.precheck_enabled,
         precheck_error: effective
             .precheck_enabled

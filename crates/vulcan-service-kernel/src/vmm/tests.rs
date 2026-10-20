@@ -813,15 +813,12 @@ fn hydrate_vmm_default_identity_uses_exact_catalog_keys() {
 fn native_runtime_summary_requires_validated_host_ai() {
     // effective enables the native backend with its host-owned default identity.
     // effective 使用宿主持有的默认身份启用原生后端。
-    let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
-        &vulcan_vmm::VmmConfigLayer {
-            backend_mode: Some(vulcan_vmm::VmmBackendMode::Native),
-            enabled: Some(true),
-            ..vulcan_vmm::VmmConfigLayer::default()
-        },
-        None,
-        None,
-    );
+    let layer = vulcan_vmm::VmmConfigLayer {
+        backend_mode: Some(vulcan_vmm::VmmBackendMode::Native),
+        enabled: Some(true),
+        ..vulcan_vmm::VmmConfigLayer::default()
+    };
+    let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&layer, None, None);
     // unchecked proves an allocated native runtime cannot impersonate validated AI readiness.
     // unchecked 证明已分配的原生运行时不能冒充已校验的 AI 就绪状态。
     let unchecked = crate::native_vmm::NativeVmmHostAiStatus::default();
@@ -860,6 +857,7 @@ fn native_runtime_summary_requires_validated_host_ai() {
     assert!(ready.rerank_ready);
     assert_eq!(ready.backend_state, "ready");
     assert!(ready.backend_error.is_none());
+    assert!(ready.scope_error.is_none());
     assert!(ready.precheck_error.is_none());
     assert!(ready.postaction_error.is_none());
 
@@ -872,10 +870,19 @@ fn native_runtime_summary_requires_validated_host_ai() {
     let stale = vmm_runtime_summary(None, &effective, Some(&stale_vectors));
     assert!(stale.process_ready);
     assert!(!stale.scope_ready);
+    assert!(stale.scope_error.is_some());
     assert!(!stale.precheck_ready);
     assert!(!stale.postaction_ready);
     assert!(stale.precheck_error.is_some());
     assert!(stale.postaction_error.is_some());
+    assert_eq!(
+        vmm_experience_state(&effective, &layer, &ready).health,
+        VmmHealthState::Degraded
+    );
+    assert_eq!(
+        vmm_experience_state(&effective, &layer, &stale).health,
+        VmmHealthState::Unavailable
+    );
 }
 
 /// Verifies project rows use the canonical structured path for actions and display.
