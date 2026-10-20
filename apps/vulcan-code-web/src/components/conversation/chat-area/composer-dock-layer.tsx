@@ -90,6 +90,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       attachmentCapabilities={workbench.composerAttachmentCapabilities ?? []}
       projectId={props.projectId}
       conversationId={props.conversationId}
+      workspacePath={workbench.projects.find((project) => project.id === props.projectId)?.path ?? null}
       slashCommands={workbench.composerSlashCommands ?? []}
       contextUsage={props.isEmptyConversation ? null : workbench.contextUsage ?? null}
       sessionProviderUsage={props.isEmptyConversation ? null : workbench.sessionProviderUsage ?? null}

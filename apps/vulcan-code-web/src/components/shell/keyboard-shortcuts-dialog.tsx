@@ -30,6 +30,7 @@ const SHORTCUT_GROUPS: readonly { title: TranslationKey; rows: readonly Shortcut
       { combos: [["Shift", "⏎"]], label: "palette.shortcuts.newline" },
       { combos: [["↑"], ["↓"]], label: "palette.shortcuts.recall" },
       { combos: [["/"]], label: "palette.shortcuts.slash" },
+      { combos: [["@"]], label: "palette.shortcuts.mention" },
     ],
   },
   {

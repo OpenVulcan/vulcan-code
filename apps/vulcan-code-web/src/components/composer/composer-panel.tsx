@@ -60,7 +60,7 @@ import {
 import { useComposerModelSelection } from "@/components/composer/composer-panel/use-composer-model-selection";
 import { useComposerSlashCommands } from "@/components/composer/composer-panel/use-composer-slash-commands";
 import { useComposerTypingRedirect } from "@/components/composer/composer-panel/use-composer-typing-redirect";
-import { recordSentPrompt, usePromptRecall } from "@/components/composer/composer-panel/use-composer-prompt-recall";
+import { recordSentPrompt } from "@/components/composer/composer-panel/use-composer-prompt-recall";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
 import { useComposerSessionSettings } from "@/components/composer/composer-panel/use-composer-answer-mode";
@@ -71,6 +71,8 @@ import { useComposerAttachmentPreparation } from "@/components/composer/composer
 import { useComposerAttachmentRemoval } from "@/components/composer/composer-panel/use-composer-attachment-removal";
 import { useComposerAttachmentSubmissionGate } from "@/components/composer/composer-panel/attachment-submission-gate";
 import { useComposerSlashSession } from "@/components/composer/composer-panel/use-composer-slash-session";
+import { useComposerTextareaKeys } from "@/components/composer/composer-panel/use-composer-textarea-keys";
+import { ComposerPathMentionPanel } from "@/components/composer/composer-panel/composer-path-mention-panel";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
@@ -95,6 +97,9 @@ export function ComposerPanel(props: {
   // Owning conversation id used for attachment staging.
   // 附件暂存使用的所属会话标识。
   conversationId: string | null;
+  // Project folder whose files the @ path mention offers; null without a project.
+  // @ 路径提及所提供文件所在的项目文件夹；没有项目时为 null。
+  workspacePath?: string | null;
   // Context usage snapshot shown by the composer orb.
   // 输入区圆盘展示的上下文占用快照。
   contextUsage: ContextUsageSnapshot | null;
@@ -791,19 +796,12 @@ export function ComposerPanel(props: {
     onAttachFiles: (files) => void stageComposerFiles(files),
   });
 
-  const recallPrompt = usePromptRecall({
-    scope: promptRecallScope,
-    slotKey: draftSlotKey,
-    input: draftInput,
-    setInput: setDraftInput,
-    textareaRef: composerTextareaRef,
+  const { pathMention, handleKeyDown: handleTextareaKeyDown } = useComposerTextareaKeys({
+    input: draftInput, setInput: setDraftInput, textareaRef: composerTextareaRef,
+    recallScope: promptRecallScope, slotKey: draftSlotKey,
+    workspacePath: props.workspacePath ?? null, projectId: props.projectId, conversationId: props.conversationId,
+    slashPanelVisible, onKeyDown: handleComposerKeyDown,
   });
-  // handleTextareaKeyDown lets an open slash menu keep the arrows, then offers them to prompt recall.
-  // handleTextareaKeyDown 让打开的 slash 菜单保留方向键，其余情况交给提示词召回。
-  const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (!slashPanelVisible && recallPrompt(event)) return;
-    handleComposerKeyDown(event);
-  };
 
   React.useLayoutEffect(() => {
     resetSlashCommands();
@@ -873,6 +871,7 @@ export function ComposerPanel(props: {
             onHighlight={setSlashHighlightedIndex}
           />
         ) : null}
+        {pathMention.visible && !isPendingPromptEditing ? <ComposerPathMentionPanel mention={pathMention} /> : null}
         <ComposerTextContextMenu
           disabled={isPendingPromptEditing}
           enabled={isElectronRuntime()}
@@ -884,8 +883,9 @@ export function ComposerPanel(props: {
           <Textarea
             aria-label={t("composer.aria.input")}
             disabled={isPendingPromptEditing}
-            onChange={(event) => handleDraftInputChange(event.currentTarget.value)}
+            onChange={(event) => { handleDraftInputChange(event.currentTarget.value); pathMention.trackCaret(event.currentTarget); }}
             onKeyDown={handleTextareaKeyDown}
+            onSelect={(event) => pathMention.trackCaret(event.currentTarget)}
             onPaste={isPendingPromptEditing ? undefined : handleComposerPaste}
             placeholder={placeholder}
             ref={composerTextareaRef}

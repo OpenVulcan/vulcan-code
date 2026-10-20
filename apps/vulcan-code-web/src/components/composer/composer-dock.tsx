@@ -90,6 +90,9 @@ export function ComposerDock(props: {
   // Owning conversation id used for attachment staging.
   // 附件暂存使用的所属会话标识。
   conversationId: string | null;
+  // Project folder whose files the @ path mention offers; null without a project.
+  // @ 路径提及所提供文件所在的项目文件夹；没有项目时为 null。
+  workspacePath: string | null;
   // Context usage snapshot shown by the composer orb.
   // 输入区圆盘展示的上下文占用快照。
   contextUsage: ContextUsageSnapshot | null;
@@ -364,6 +367,7 @@ export function ComposerDock(props: {
         attachmentCapabilities={props.attachmentCapabilities}
         projectId={props.projectId}
         conversationId={props.conversationId}
+        workspacePath={props.workspacePath}
         contextUsage={props.contextUsage}
         sessionProviderUsage={props.sessionProviderUsage}
         contextCompactionWindowNodes={props.contextCompactionWindowNodes}

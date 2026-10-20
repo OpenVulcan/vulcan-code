@@ -233,6 +233,11 @@
 .vk-slash-row[aria-selected="true"] { border-left-color: var(--vk-ember); }
 .vk-slash-cmd { overflow: hidden; font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .vk-slash-desc { overflow: hidden; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+/* Path mention rows: a file or folder glyph, then the name. */
+/* 路径提及行：文件或文件夹图标，然后是名称。 */
+.vk-slash[data-kind="path"] .vk-slash-row { grid-template-columns: 14px minmax(0, 1fr); }
+.vk-slash[data-kind="path"] .vk-slash-row > svg { width: 14px; height: 14px; color: var(--vk-ink-3); }
+.vk-slash[data-kind="path"] .vk-slash-cmd { font-weight: 500; }
 
 /* ---------- Strips docked on the composer ---------- */
 /* Queued prompts and the session goal sit on the composer's top edge, slightly narrower than it. */
