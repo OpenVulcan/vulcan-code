@@ -3,6 +3,7 @@ import {
   ChevronsDown,
   ChevronsUp,
   GripVertical,
+  Plus,
   SquarePen,
 } from "lucide-react";
 
@@ -140,9 +141,10 @@ ${props.project.path}`}
           </button>
         </span>
       </div>
-      {/* Empty projects show the placeholder once, on the active project only, so long project lists stay quiet. */}
-      {/* 空项目只在当前项目上显示一次占位行，避免长项目列表中重复出现。 */}
-      {props.isOpen && (props.conversations.length > 0 || props.isActiveProject) ? (
+      {/* An open folder always shows what it holds, so an open empty project never reads as closed; its empty row
+          is the shortcut to its first session. */}
+      {/* 打开的文件夹始终显示其内容，使打开的空项目不会被误读为已关闭；其空行即是创建首个会话的快捷入口。 */}
+      {props.isOpen ? (
         <SidebarMenu className="vk-tree-children">
           {props.conversations.length > 0 ? (
             <>
@@ -163,8 +165,17 @@ ${props.project.path}`}
               ) : null}
             </>
           ) : (
-            <SidebarMenuItem>
-              <div className="vk-tree-blank">{t("projectRow.noConversations")}</div>
+            <SidebarMenuItem className="vk-tree-item">
+              <button
+                className="vk-tree-session vk-tree-start"
+                onClick={() => props.onCreateConversation(props.project)}
+                title={t("projectMenu.newConversation")}
+                type="button"
+              >
+                <span className="vk-tree-lead"><Plus aria-hidden="true" /></span>
+                <span className="vk-tree-title"><span>{t("projectRow.noConversations")}</span></span>
+                <small className="vk-tree-time">{t("projectMenu.newConversation")}</small>
+              </button>
             </SidebarMenuItem>
           )}
         </SidebarMenu>
