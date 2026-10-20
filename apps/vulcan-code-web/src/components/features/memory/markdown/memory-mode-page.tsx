@@ -16,6 +16,7 @@ import {
   saveMemorySettings,
 } from "@/service/markdown-memory-service";
 import type { MarkdownMemoryProject, MemoryBudgetPart, MemoryInjectionBudget, MemoryMode } from "@/types";
+import { MemoryTransferSection } from "./markdown-memory-transfer";
 import { publishMemorySettings, useMemorySettings } from "./memory-mode-store";
 
 // MODE_OPTIONS lists the modes with their label and explanation keys.
@@ -103,7 +104,17 @@ export function MemoryModePage() {
         </PageRow>
       </> : null}
     </PageSection>
-    {settings.mode === "markdown" ? <MemoryProjectsSection /> : null}
+    {settings.mode === "markdown" ? <MarkdownMemorySections /> : null}
+  </>;
+}
+
+// MarkdownMemorySections shows the memory projects and the import/export tools; an import reloads the projects.
+// MarkdownMemorySections 显示记忆项目与导入导出工具；导入后重新加载项目。
+function MarkdownMemorySections() {
+  const [generation, setGeneration] = React.useState(0);
+  return <>
+    <MemoryProjectsSection key={generation} />
+    <MemoryTransferSection onImported={() => setGeneration((value) => value + 1)} />
   </>;
 }
 

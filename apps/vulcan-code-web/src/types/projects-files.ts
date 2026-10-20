@@ -121,6 +121,31 @@ export interface ProjectDirectoryListing {
   notice?: string | null;
 }
 
+// PackageFileSummary is one selectable package file of a browsed directory.
+// PackageFileSummary 是已浏览目录中单个可选的套件文件。
+export interface PackageFileSummary {
+  // Visible file name.
+  // 可见文件名。
+  name: string;
+  // Absolute native path.
+  // 原生绝对路径。
+  path: string;
+  // File size in bytes.
+  // 文件字节大小。
+  byteSize: number;
+}
+
+// PackageFileListing is directory navigation with the selectable package files of one kind.
+// PackageFileListing 是包含某一类可选套件文件的目录导航。
+export interface PackageFileListing {
+  // Shared native directory navigation.
+  // 共享原生目录导航。
+  directory: ProjectDirectoryListing;
+  // Ordinary files of the package kind in the directory.
+  // 目录中该套件类型的普通文件。
+  packages: PackageFileSummary[];
+}
+
 // WorkspaceFileEntryKind describes the file families rendered by the workspace file panel.
 // WorkspaceFileEntryKind 描述工作区文件面板渲染的文件类别。
 export type WorkspaceFileEntryKind = "directory" | "code" | "image" | "video" | "other";

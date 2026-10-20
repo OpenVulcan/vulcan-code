@@ -1,4 +1,4 @@
-import type { ProjectDirectoryListing } from "./projects-files";
+import type { PackageFileListing, PackageFileSummary } from "./projects-files";
 
 // Declared library modes are the sole search policy.
 // 声明的库模式为唯一检索策略。
@@ -1064,30 +1064,13 @@ export interface KnowledgePackageImportRequest {
   expectedSha256: string;
 }
 
-// One selectable ordinary package file.
-// 单个可选普通套件文件。
-export interface KnowledgePackageFileSummary {
-  // Visible file name.
-  // 可见文件名。
-  name: string;
-  // Absolute native path.
-  // 原生绝对路径。
-  path: string;
-  // Compressed package size.
-  // 压缩套件大小。
-  byteSize: number;
-}
+// One selectable .vkb knowledge package file.
+// 单个可选 .vkb 知识库套件文件。
+export type KnowledgePackageFileSummary = PackageFileSummary;
 
-// Directory navigation with selectable package files.
-// 包含可选套件文件的目录导航。
-export interface KnowledgePackageFileListing {
-  // Shared native directory navigation.
-  // 共享原生目录导航。
-  directory: ProjectDirectoryListing;
-  // Ordinary .vkb files in the directory.
-  // 目录中的普通 .vkb 文件。
-  packages: KnowledgePackageFileSummary[];
-}
+// Directory navigation with selectable .vkb knowledge packages.
+// 包含可选 .vkb 知识库套件的目录导航。
+export type KnowledgePackageFileListing = PackageFileListing;
 
 // Persists only a session's library selection, never a retrieval policy.
 // 仅持久化会话库选择，绝不持久化检索策略。

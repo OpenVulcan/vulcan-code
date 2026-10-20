@@ -1,15 +1,22 @@
 import { serviceClient } from "@/service/webui-service-runtime";
 import type {
+  MarkdownMemoryConflictResolution,
+  MarkdownMemoryExportRequest,
+  MarkdownMemoryExportedPackage,
   MarkdownMemoryFile,
+  MarkdownMemoryImportPreview,
+  MarkdownMemoryImportReport,
   MarkdownMemoryOperation,
   MarkdownMemoryOverview,
   MarkdownMemoryProject,
   MarkdownMemoryProjectAction,
+  MarkdownMemoryProjectMapping,
   MarkdownMemoryScope,
   MarkdownMemoryTarget,
   MemoryInjectionBudget,
   MemoryMode,
   MemorySettingsView,
+  PackageFileListing,
 } from "@/types";
 
 // loadMemorySettings reads the global memory mode and injection budget.
@@ -79,6 +86,40 @@ export async function applyMarkdownMemoryProjectAction(
   return serviceClient.request<MarkdownMemoryProject[]>("service_apply_markdown_memory_project_action", {
     request: action,
   });
+}
+
+// exportMarkdownMemory writes an export package of the chosen scopes into an existing directory.
+// exportMarkdownMemory 将所选层的导出包写入既有目录。
+export async function exportMarkdownMemory(request: MarkdownMemoryExportRequest): Promise<MarkdownMemoryExportedPackage> {
+  return serviceClient.request<MarkdownMemoryExportedPackage>("service_export_markdown_memory", { request });
+}
+
+// browseMarkdownMemoryPackages lists a directory with its .zip export packages.
+// browseMarkdownMemoryPackages 列出目录及其中的 .zip 导出包。
+export async function browseMarkdownMemoryPackages(path: string | null): Promise<PackageFileListing> {
+  return serviceClient.request<PackageFileListing>("service_browse_markdown_memory_packages", { path });
+}
+
+// previewMarkdownMemoryImport merges a package against the local files without writing anything.
+// previewMarkdownMemoryImport 将导出包与本地文件合并预览，不写入任何内容。
+export async function previewMarkdownMemoryImport(
+  archivePath: string,
+  projects: MarkdownMemoryProjectMapping[],
+): Promise<MarkdownMemoryImportPreview> {
+  return serviceClient.request<MarkdownMemoryImportPreview>("service_preview_markdown_memory_import", {
+    request: { archivePath, projects },
+  });
+}
+
+// importMarkdownMemory applies the reviewed import; replaced files are backed up first.
+// importMarkdownMemory 应用已审阅的导入；被替换的文件会先备份。
+export async function importMarkdownMemory(request: {
+  archivePath: string;
+  expectedSha256: string;
+  projects: MarkdownMemoryProjectMapping[];
+  resolutions: MarkdownMemoryConflictResolution[];
+}): Promise<MarkdownMemoryImportReport> {
+  return serviceClient.request<MarkdownMemoryImportReport>("service_import_markdown_memory", { request });
 }
 
 // markdownMemoryTargetRequest drops empty selections; the service DTO rejects unknown fields only.
