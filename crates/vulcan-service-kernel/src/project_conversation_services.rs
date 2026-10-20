@@ -21,8 +21,8 @@ pub(super) use conversation_services::{
 };
 pub(super) use project_group_services::{
     service_add_project_to_group, service_create_project_group, service_delete_project_group,
-    service_rename_project_group, service_set_project_groups_layout, service_set_project_tree_pinned,
-    service_set_project_tree_pins_order,
+    service_rename_project_group, service_set_project_groups_layout,
+    service_set_project_tree_pinned, service_set_project_tree_pins_order,
 };
 pub use project_services::service_add_project_initial_directory;
 pub(super) use project_services::{
