@@ -10,6 +10,7 @@
   "serviceReady": "O serviço está pronto (processo {pid}).",
   "launchFailed": "Não foi possível iniciar o serviço em segundo plano: {error}",
   "exitedBeforeReady": "O processo do serviço foi encerrado antes de ficar pronto (código de saída {code}).",
+  "signaledBeforeReady": "O sinal {signal} encerrou o processo do serviço antes que ficasse pronto.",
   "serviceUnavailable": "O serviço em segundo plano ainda não está disponível. Status atual: {status}.",
   "readyTimeout": "O serviço não publicou o documento de descoberta em {seconds} segundos: {path}",
   "workbenchLoadFailed": "Não foi possível carregar o ambiente de trabalho {url}: {error}",

@@ -10,6 +10,7 @@
   "serviceReady": "The service is ready (process {pid}).",
   "launchFailed": "Unable to start the background service: {error}",
   "exitedBeforeReady": "The service process exited before becoming ready (exit code {code}).",
+  "signaledBeforeReady": "The service process was terminated by signal {signal} before becoming ready.",
   "serviceUnavailable": "The background service is not available yet. Current status: {status}.",
   "readyTimeout": "The service did not publish its ready discovery document within {seconds} seconds: {path}",
   "workbenchLoadFailed": "Unable to load the workbench {url}: {error}",

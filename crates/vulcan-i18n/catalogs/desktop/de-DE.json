@@ -10,6 +10,7 @@
   "serviceReady": "Der Dienst ist bereit (Prozess {pid}).",
   "launchFailed": "Der Hintergrunddienst kann nicht gestartet werden: {error}",
   "exitedBeforeReady": "Der Dienstprozess wurde beendet, bevor er bereit war (Exitcode {code}).",
+  "signaledBeforeReady": "Der Dienstprozess wurde vor der Bereitschaft durch das Signal {signal} beendet.",
   "serviceUnavailable": "Der Hintergrunddienst ist noch nicht verfügbar. Aktueller Status: {status}.",
   "readyTimeout": "Der Dienst hat sein Discovery-Dokument nicht innerhalb von {seconds} Sekunden veröffentlicht: {path}",
   "workbenchLoadFailed": "Die Arbeitsumgebung {url} kann nicht geladen werden: {error}",

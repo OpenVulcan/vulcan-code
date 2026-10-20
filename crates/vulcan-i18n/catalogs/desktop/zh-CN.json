@@ -10,6 +10,7 @@
   "serviceReady": "服务已就绪（进程 {pid}）。",
   "launchFailed": "无法启动后台服务：{error}",
   "exitedBeforeReady": "服务进程在就绪前退出，退出码 {code}。",
+  "signaledBeforeReady": "服务进程在就绪前被信号 {signal} 终止。",
   "serviceUnavailable": "后台服务尚不可用，当前状态：{status}。",
   "readyTimeout": "服务在 {seconds} 秒内未发布就绪发现文档：{path}",
   "workbenchLoadFailed": "无法加载工作台 {url}：{error}",

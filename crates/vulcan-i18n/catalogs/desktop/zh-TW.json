@@ -10,6 +10,7 @@
   "serviceReady": "服務已就緒（處理程序 {pid}）。",
   "launchFailed": "無法啟動背景服務：{error}",
   "exitedBeforeReady": "服務處理程序在就緒前結束，結束代碼 {code}。",
+  "signaledBeforeReady": "服務處理程序在就緒前被訊號 {signal} 終止。",
   "serviceUnavailable": "背景服務尚無法使用，目前狀態：{status}。",
   "readyTimeout": "服務未在 {seconds} 秒內發布就緒探索文件：{path}",
   "workbenchLoadFailed": "無法載入工作台 {url}：{error}",

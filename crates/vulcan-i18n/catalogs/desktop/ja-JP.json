@@ -10,6 +10,7 @@
   "serviceReady": "サービスの準備ができました（プロセス {pid}）。",
   "launchFailed": "バックグラウンドサービスを起動できません：{error}",
   "exitedBeforeReady": "サービスプロセスが準備完了前に終了しました（終了コード {code}）。",
+  "signaledBeforeReady": "サービスプロセスが準備完了前にシグナル {signal} で終了しました。",
   "serviceUnavailable": "バックグラウンドサービスはまだ利用できません。現在の状態：{status}。",
   "readyTimeout": "サービスが {seconds} 秒以内に準備完了の検出ドキュメントを公開しませんでした：{path}",
   "workbenchLoadFailed": "ワークベンチ {url} を読み込めません：{error}",

@@ -265,7 +265,7 @@ export async function ensureServiceInstance(
       // A non-zero exit before readiness is a real failure; a zero exit means another owner won.
       // 就绪前非零退出是真实失败；退出码为零表示另一个所有者胜出。
       if (code === null) {
-        exitDiagnostic = `服务进程在就绪前被信号 ${signal ?? '未知'} 终止。`;
+        exitDiagnostic = formatDesktopText(text.signaledBeforeReady, { signal: String(signal) });
       } else if (code !== 0) {
         exitDiagnostic = formatDesktopText(text.exitedBeforeReady, { code: String(code) });
       }

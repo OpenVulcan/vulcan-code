@@ -10,6 +10,7 @@
   "serviceReady": "Le service est prêt (processus {pid}).",
   "launchFailed": "Impossible de démarrer le service en arrière-plan : {error}",
   "exitedBeforeReady": "Le processus du service s’est arrêté avant d’être prêt (code de sortie {code}).",
+  "signaledBeforeReady": "Le signal {signal} a arrêté le processus du service avant qu’il soit prêt.",
   "serviceUnavailable": "Le service en arrière-plan n’est pas encore disponible. État actuel : {status}.",
   "readyTimeout": "Le service n’a pas publié son document de découverte en {seconds} secondes : {path}",
   "workbenchLoadFailed": "Impossible de charger l’espace de travail {url} : {error}",

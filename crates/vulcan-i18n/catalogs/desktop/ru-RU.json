@@ -10,6 +10,7 @@
   "serviceReady": "Служба готова (процесс {pid}).",
   "launchFailed": "Не удалось запустить фоновую службу: {error}",
   "exitedBeforeReady": "Процесс службы завершился до готовности (код выхода {code}).",
+  "signaledBeforeReady": "Процесс службы был завершён сигналом {signal} до готовности.",
   "serviceUnavailable": "Фоновая служба пока недоступна. Текущее состояние: {status}.",
   "readyTimeout": "Служба не опубликовала документ обнаружения за {seconds} с: {path}",
   "workbenchLoadFailed": "Не удалось загрузить рабочую среду {url}: {error}",

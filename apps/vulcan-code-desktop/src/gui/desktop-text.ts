@@ -49,6 +49,9 @@ export interface DesktopText {
   // Launcher failure: the process exited before readiness, `{code}`.
   // 启动器失败：进程在就绪前退出，`{code}`。
   exitedBeforeReady: string;
+  // Launcher failure: a signal terminated the process before readiness, `{signal}`.
+  // 启动器失败：进程在就绪前被信号终止，`{signal}`。
+  signaledBeforeReady: string;
   // Launcher failure: the service reported an unusable status, `{status}`.
   // 启动器失败：服务报告了不可用状态，`{status}`。
   serviceUnavailable: string;
@@ -93,7 +96,7 @@ export interface DesktopText {
 const DESKTOP_TEXT_FIELDS: Readonly<Record<keyof DesktopText, true>> = {
   startupTitle: true, closeWindow: true, preparing: true, startupFailed: true, checkingInstance: true,
   reusingInstance: true, startingService: true, awaitingReady: true, serviceReady: true, launchFailed: true,
-  exitedBeforeReady: true, serviceUnavailable: true, readyTimeout: true, workbenchLoadFailed: true,
+  exitedBeforeReady: true, signaledBeforeReady: true, serviceUnavailable: true, readyTimeout: true, workbenchLoadFailed: true,
   rendererFailureTitle: true, rendererFailureMessage: true, rendererFailureDetail: true, reloadWorkbench: true,
   closeBrowserTitle: true, closeBrowserMessage: true, closeBrowserDetail: true, cancel: true, closeAll: true,
 };
