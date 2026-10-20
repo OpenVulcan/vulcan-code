@@ -91,7 +91,7 @@ it("keeps the internal route pickers outside the runtime-settings form", async (
   const routes = host.querySelector(".lua-inference-routes");
   expect(routes, "the internal route section must be mounted in the settings panel").toBeTruthy();
   expect(routes?.getAttribute("data-slot")).toBe("page-section");
-  expect(routes?.querySelector(":scope > header h3")).not.toBeNull();
+  expect(routes?.querySelector(":scope > header :is(h2, h3, h4)")).not.toBeNull();
   // A picker the operator cannot reach is the failure this placement prevents.
   // 操作者够不到的选择器正是该放置所要防止的失败。
   expect(host.querySelectorAll('[role="combobox"]').length).toBeGreaterThan(0);

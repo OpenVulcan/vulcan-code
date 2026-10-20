@@ -1,6 +1,7 @@
 import * as React from "react"
 
 import { cx } from "@/ui-kit/behavior/core"
+import { HeadingLevelContext, nestedHeadingLevel, useHeadingLevel, type HeadingLevel } from "@/ui-kit/behavior/heading-level"
 import { InlineDisclosure } from "@/ui-kit/primitives/disclosure"
 
 // PageSectionProps describes one titled card section, the shared block of every Vulcan page.
@@ -33,21 +34,23 @@ export interface PageSectionProps extends Omit<React.ComponentProps<"div">, "tit
   // layout "rows" makes PageRow/PageItem children flush with dividers; "padded" keeps free content padded.
   // layout 为 "rows" 时 PageRow/PageItem 子项贴边并以分隔线排列；"padded" 为自由内容保留内边距。
   layout?: "padded" | "rows"
-  // headingLevel keeps the document outline correct when sections nest under a page heading.
-  // headingLevel 在区块嵌套于页面标题下时保持文档大纲正确。
-  headingLevel?: 2 | 3 | 4
+  // headingLevel overrides the level, which otherwise follows the enclosing page, dialog or section heading.
+  // headingLevel 覆盖层级；否则层级跟随外层页面、对话框或区块的标题。
+  headingLevel?: HeadingLevel
 }
 
 // PageSection renders one square panel with a labelled header, optional guide, body and footer.
 // PageSection 渲染一个方形面板，含带标签标题栏、可选说明、正文与页脚。
 export function PageSection({
-  title, description, status, actions, guide, guideLabel, guideCollapsed, footer, layout = "padded", headingLevel = 3,
+  title, description, status, actions, guide, guideLabel, guideCollapsed, footer, layout = "padded", headingLevel,
   className, children, ...props
 }: PageSectionProps) {
   // headingId labels the region for assistive technology.
   // headingId 为辅助技术标注区域。
   const headingId = React.useId()
-  const Heading = `h${headingLevel}` as const
+  const inherited = useHeadingLevel()
+  const level = headingLevel ?? inherited
+  const Heading = `h${level}` as const
   return (
     <section aria-labelledby={headingId} className={cx("vk-page-section", className)} data-layout={layout} data-slot="page-section" role="region" {...props}>
       <header className="vk-page-section-head">
@@ -63,7 +66,9 @@ export function PageSection({
         <InlineDisclosure className="vk-page-section-guide" label={guideLabel}>{guide}</InlineDisclosure>
       ) : null}
       {children === undefined || children === null || children === false ? null : (
-        <div className="vk-page-section-body">{children}</div>
+        <HeadingLevelContext.Provider value={nestedHeadingLevel(level)}>
+          <div className="vk-page-section-body">{children}</div>
+        </HeadingLevelContext.Provider>
       )}
       {footer ? <footer className="vk-page-section-foot">{footer}</footer> : null}
     </section>

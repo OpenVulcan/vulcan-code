@@ -24,7 +24,7 @@ async function settle() {
 // region resolves one page section by its exact heading text.
 // region 按精确标题文字解析一个页面分区。
 function region(title: string): HTMLElement {
-  const found = Array.from(document.querySelectorAll<HTMLElement>('[role="region"]')).find((item) => item.querySelector("h3")?.textContent === title && !item.closest("[hidden]"));
+  const found = Array.from(document.querySelectorAll<HTMLElement>('[role="region"]')).find((item) => item.querySelector(":is(h2, h3, h4)")?.textContent === title && !item.closest("[hidden]"));
   if (!found) throw new Error(`Missing page section: ${title}; the heading may have changed`);
   return found;
 }

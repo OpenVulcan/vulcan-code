@@ -42,7 +42,7 @@ const tabLabels = () => tabs().map((tab) => tab.textContent);
 const label = (tab: "recovery" | "capacity" | "prewarm") => readLocaleMessage("en-US", `pluginMaintenance.tab.${tab}`);
 // headings lists the rendered maintenance block titles.
 // headings 列出已渲染的维护区块标题。
-const headings = () => [...host.querySelectorAll(".vk-page-section h3")].map((heading) => heading.textContent);
+const headings = () => [...host.querySelectorAll(".vk-page-section-title > :is(h2, h3, h4)")].map((heading) => heading.textContent);
 
 it("mounts each maintenance tab on first visit and keeps it alive afterwards", async () => {
   await act(async () => root.render(<PluginMaintenancePage actions={{} as SkillActionProps} conversations={[]} plugins={[plugin]} />));
@@ -75,7 +75,7 @@ function DrawerHarness(props: { scope: string }) {
 it("shows recovery and usage but no runtime resources for a plugin without a Lua runtime", async () => {
   await act(async () => root.render(<DrawerHarness scope={plugin.id} />));
   const visible = host.querySelector<HTMLElement>('.plugin-maintenance-drawer-body > div:not([hidden])')!;
-  expect([...visible.querySelectorAll(".vk-page-section h3")].map((heading) => heading.textContent)).toEqual([
+  expect([...visible.querySelectorAll(".vk-page-section-title > :is(h2, h3, h4)")].map((heading) => heading.textContent)).toEqual([
     readLocaleMessage("en-US", "pluginMaintenance.recovery.title"),
     readLocaleMessage("en-US", "pluginMaintenance.usage.title"),
   ]);

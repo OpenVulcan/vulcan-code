@@ -2,6 +2,7 @@ import * as React from "react";
 import { XIcon } from "lucide-react";
 import { composeHandlers, cx, useComposedRefs, useControllableState, useStableId } from "../behavior/core";
 import { useFocusScope } from "../behavior/focus-scope";
+import { HeadingLevelContext } from "../behavior/heading-level";
 import { LayerDepth, LayerPortal, useDismissable, type DismissOptions } from "../behavior/layer";
 import { Slot } from "../behavior/slot";
 import { Button } from "./button";
@@ -181,7 +182,9 @@ export function ModalSurface({
           {...layer.handlers}
           {...props}
         >
-          <LayerDepth value={layer.depth}>{children}</LayerDepth>
+          {/* The dialog title is an h2, so headings inside the dialog start at h3. */}
+          {/* 对话框标题是 h2，因此对话框内的标题从 h3 开始。 */}
+          <LayerDepth value={layer.depth}><HeadingLevelContext.Provider value={3}>{children}</HeadingLevelContext.Provider></LayerDepth>
         </div>
       </div>
     </LayerPortal>

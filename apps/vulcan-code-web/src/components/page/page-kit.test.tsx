@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 
 import { PageEmptyState, PageFacts, PageItem, PageNotice, PageRow, PageSection, PageTabPanel } from "@/components/page"
+import { Dialog, DialogContent, DialogTitle } from "@/ui-kit/primitives/dialog"
 
 let root: Root
 let container: HTMLDivElement
@@ -45,6 +46,19 @@ it("renders a labelled section with header actions and flush rows", () => {
 
 // Verifies a collapsed guide stays reachable behind its disclosure label.
 // 验证收起的说明仍可通过展开标签访问。
+// Section headings follow the enclosing title: h2 under a page, one level deeper per nested section, h3 in a dialog.
+// 区块标题跟随外层标题：页面下为 h2，每层嵌套区块加深一级，对话框内为 h3。
+it("derives heading levels from the enclosing page, section or dialog", () => {
+  render(
+    <>
+      <PageSection title="Outer"><PageSection title="Inner">body</PageSection></PageSection>
+      <Dialog open><DialogContent><DialogTitle>Dialog</DialogTitle><PageSection title="InDialog">body</PageSection></DialogContent></Dialog>
+    </>,
+  )
+  const level = (title: string) => [...document.querySelectorAll(".vk-page-section-title > *")].find((node) => node.textContent === title)?.tagName
+  expect([level("Outer"), level("Inner"), level("InDialog")]).toEqual(["H2", "H3", "H3"])
+})
+
 it("folds the guide behind its label when collapsed", () => {
   render(<PageSection guide={<p>guide body</p>} guideCollapsed guideLabel="How it works" title="Capacity" />)
   expect(container.textContent).toContain("How it works")

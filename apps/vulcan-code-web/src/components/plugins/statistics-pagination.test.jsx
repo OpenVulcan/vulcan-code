@@ -72,7 +72,7 @@ async function click(label, scope = host) {
 // section returns the visible page-kit region titled label.
 // section 返回标题为 label 的可见页面套件区域。
 function section(label) {
-  const region = [...host.querySelectorAll('[role="region"]')].find((entry) => entry.querySelector("h3")?.textContent === label && !entry.closest("[hidden]"));
+  const region = [...host.querySelectorAll('[role="region"]')].find((entry) => entry.querySelector(":is(h2, h3, h4)")?.textContent === label && !entry.closest("[hidden]"));
   expect(region).toBeTruthy();
   return region;
 }

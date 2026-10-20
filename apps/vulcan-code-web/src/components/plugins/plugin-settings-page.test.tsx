@@ -90,7 +90,7 @@ async function type(input: HTMLInputElement, value: string) {
 // 验证区块与行来自版面，保存时发送完整的已编辑配置。
 it("renders the layout through the page kit and saves the complete draft", async () => {
   const invoke = await mountPage({ fast: false, timeout: 30, mode: "selected", routes: [] });
-  expect([...host.querySelectorAll(".vk-page-section h3")].map((heading) => heading.textContent)).toEqual(["msg:behavior", "msg:auth"]);
+  expect([...host.querySelectorAll(".vk-page-section-title > :is(h2, h3, h4)")].map((heading) => heading.textContent)).toEqual(["msg:behavior", "msg:auth"]);
   // The checklist stays hidden until its controlling field selects "all".
   // 在控制字段选择 all 之前，清单保持隐藏。
   expect(host.textContent).not.toContain("msg:routes");
