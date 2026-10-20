@@ -534,7 +534,17 @@ export function WorkbenchLayout(props: {
   }, [handleSelectTopFeatureArea]);
   // account owns installation-wide onboarding before the existing optional setup guide.
   // account 在既有可选初始化引导之前持有整个安装的账户引导。
-  const account = useOpenVulcanAccount(props.startup.ready, props.serviceInstanceEpoch);
+  const accountController = useOpenVulcanAccount(props.startup.ready, props.serviceInstanceEpoch);
+  // account adds the shell's way to the account settings page, closing the quick dialog first.
+  // account 加入外壳打开账户设置页的方式，并先关闭快捷弹窗。
+  const account = React.useMemo(() => ({
+    ...accountController,
+    openDetails: () => {
+      if (accountController.open) accountController.setOpen(false);
+      setActiveSettingsSubArea("openvulcan-account");
+      handleSelectTopFeatureArea("settings");
+    },
+  }), [accountController, handleSelectTopFeatureArea]);
   const setupGuide = useSetupGuide(workbenchState.permissionJudgeBackend, props.startup.ready && account.initialized && !account.open);
   const permissionJudgeEntry = React.useMemo<PermissionJudgeEntry>(() => ({
     backend: workbenchState.permissionJudgeBackend ?? null,

@@ -80,12 +80,6 @@ export function formatExpiryDate(value: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 }
 
-// sumCounts adds exact integer strings; values that are not integers are skipped.
-// sumCounts 累加精确整数字符串；非整数值被跳过。
-export function sumCounts(values: readonly string[]): string {
-  return values.reduce((total, value) => total + (parseCount(value) ?? 0n), 0n).toString();
-}
-
 // formatUsageHour shows a UTC hour start in the viewer's local time, or the raw text when it is not a date.
 // formatUsageHour 以查看者本地时间显示 UTC 小时起点；不是日期时原样返回。
 export function formatUsageHour(value: string, locale: string): string {

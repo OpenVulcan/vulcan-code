@@ -1,7 +1,6 @@
 import * as React from "react"
-import { Boxes, ExternalLink, KeyRound, ListChecks, MoreHorizontal, Pencil, RefreshCw, Star, Trash2, UserRound } from "lucide-react"
+import { Boxes, ExternalLink, KeyRound, ListChecks, MoreHorizontal, Pencil, RefreshCw, Star, Trash2 } from "lucide-react"
 
-import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context"
 import { CredentialModelAccessDialog } from "@/components/features/settings/credential-model-access-dialog"
 import {
   credentialSupportsModelSynchronization,
@@ -203,14 +202,12 @@ function AccountCard(props: AccountCardProps) {
               {t("settings.modelServices.account.onlyThis")}
             </Button>
           ) : null}
-          {provider.credential_directory_visibility !== "core_account" ? (
-            <Switch
-              aria-label={connection.enabled ? t("settings.credentials.disable") : t("settings.credentials.enable")}
-              checked={connection.enabled}
-              disabled={props.busy}
-              onCheckedChange={props.onEnabledChange}
-            />
-          ) : null}
+          <Switch
+            aria-label={connection.enabled ? t("settings.credentials.disable") : t("settings.credentials.enable")}
+            checked={connection.enabled}
+            disabled={props.busy}
+            onCheckedChange={props.onEnabledChange}
+          />
         </span>
       </footer>
     </article>
@@ -234,9 +231,7 @@ function healthLabel(health: HealthState, alerts: readonly ProviderAlert[], t: R
 // AccountMenu 收纳无需一眼看到的账号操作。
 function AccountMenu(props: AccountCardProps & { isDefault: boolean; profile: PublicAiCredentialProfile | undefined; toolsOnly: boolean }) {
   const { t } = useI18n()
-  const account = React.useContext(OpenVulcanAccountContext)
   const { connection } = props
-  const core = props.provider.credential_directory_visibility === "core_account"
   const usageSupported = props.profile?.account_usage_query !== "unsupported"
     && (!connection.usage_requires_management_key || connection.has_management_key)
   const directoryKind = props.snapshot.connectionModelAccessPolicyRecords
@@ -253,11 +248,7 @@ function AccountMenu(props: AccountCardProps & { isDefault: boolean; profile: Pu
         ><MoreHorizontal /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        {core ? (
-          <DropdownMenuItem onSelect={() => account?.setOpen(true)}><UserRound />{t("openvulcan.account.manage")}</DropdownMenuItem>
-        ) : (
-          <DropdownMenuItem disabled={props.busy} onSelect={props.onEdit}><Pencil />{t("settings.credentials.edit")}</DropdownMenuItem>
-        )}
+        <DropdownMenuItem disabled={props.busy} onSelect={props.onEdit}><Pencil />{t("settings.credentials.edit")}</DropdownMenuItem>
         {usageSupported ? (
           <DropdownMenuItem disabled={props.busy || !connection.enabled} onSelect={props.onRefreshUsage}><RefreshCw />{t("settings.credentials.refreshUsage")}</DropdownMenuItem>
         ) : null}
@@ -270,12 +261,8 @@ function AccountMenu(props: AccountCardProps & { isDefault: boolean; profile: Pu
         {!props.isDefault ? (
           <DropdownMenuItem disabled={blocked} onSelect={props.onSetDefault}><Star />{t("settings.credentials.setDefault")}</DropdownMenuItem>
         ) : null}
-        {!core ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={props.busy} onSelect={props.onDelete} variant="destructive"><Trash2 />{t("settings.credentials.remove")}</DropdownMenuItem>
-          </>
-        ) : null}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled={props.busy} onSelect={props.onDelete} variant="destructive"><Trash2 />{t("settings.credentials.remove")}</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

@@ -15,6 +15,7 @@ import {
   SlidersHorizontal,
   Stethoscope,
 } from "lucide-react";
+import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
 import { useI18n } from "@/i18n";
 import type { SettingsSubAreaId } from "@/types";
 
@@ -145,6 +146,7 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
       label: t("settings.group.models"),
       icon: <Cpu size={16} />,
       items: [
+        { id: "openvulcan-account", label: t("settings.openvulcanAccount"), icon: <VulcanSymbol className="vk-nav-symbol" />, description: t("settings.openvulcanAccount.description") },
         { id: "model-providers", label: t("settings.modelProviders"), icon: <ServerCog size={16} />, description: t("settings.modelProviders.description") },
       ],
     },

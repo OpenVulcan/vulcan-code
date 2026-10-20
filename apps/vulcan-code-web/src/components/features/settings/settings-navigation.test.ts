@@ -24,13 +24,14 @@ describe("settingsSubAreaGroups", () => {
     }
   });
 
-  // Providers, accounts, models and function routing share one merged model services page.
-  // 供应商、账号、模型与功能分配共用一个合并后的模型服务页。
-  it("shows one model services page in the models group", () => {
+  // The OpenVulcan account has its own page; other providers, accounts, models and function routing share one
+  // merged model services page.
+  // OpenVulcan 账户拥有独立页面；其他供应商、账号、模型与功能分配共用一个合并后的模型服务页。
+  it("shows the OpenVulcan account page and one model services page in the models group", () => {
     const groups = settingsSubAreaGroups(testTranslator);
     const models = groups.find((group) => group.id === "models");
 
-    expect(models?.items.map((item) => item.id)).toEqual(["model-providers"]);
+    expect(models?.items.map((item) => item.id)).toEqual(["openvulcan-account", "model-providers"]);
   });
 
   // Exposes the visible acceptance surface from the about group.

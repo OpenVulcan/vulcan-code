@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ChevronDown, ChevronUp, GripVertical, Pin, Plus, Search, Stethoscope } from "lucide-react"
+import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Stethoscope } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
@@ -51,18 +51,13 @@ export interface ProviderRailProps {
   onOpenDiagnostics: () => void
 }
 
-// RailRowKind decides a row's controls: pinned core accounts and recommendations never move.
-// RailRowKind 决定目录项的控件：置顶核心账号与推荐供应商均不可移动。
-type RailRowKind = "pinned" | "configured" | "available"
-
-// ProviderRail is the left directory: pinned core accounts, configured providers (user order), then recommendations.
-// ProviderRail 是左侧目录：先显示置顶核心账号，再显示已配置供应商（用户顺序），最后显示推荐供应商。
+// ProviderRail is the left directory: configured providers first (user order), then recommendations.
+// ProviderRail 是左侧目录：先显示已配置供应商（用户顺序），再显示推荐供应商。
 export function ProviderRail(props: ProviderRailProps) {
   const { t } = useI18n()
   const [dragId, setDragId] = React.useState<string | null>(null)
   const name = (provider: PublicAiProviderDescriptor) => localizedProviderName(provider.id, provider.display_name, t)
   const matches = (provider: PublicAiProviderDescriptor) => providerMatchesFilter(provider, name(provider), props.tag, props.query)
-  const pinned = props.directory?.pinned.filter(matches) ?? []
   const configured = props.directory?.configured.filter(matches) ?? []
   const available = props.directory?.available.filter(matches) ?? []
   const configuredIds = props.directory?.configured.map((provider) => provider.id) ?? []
@@ -80,11 +75,7 @@ export function ProviderRail(props: ProviderRailProps) {
     return configured[index + offset]?.id
   }
 
-  const row = (provider: PublicAiProviderDescriptor, kind: RailRowKind) => {
-    const reorderable = kind === "configured"
-    // A pinned core account shows its account summary once it has an account.
-    // 置顶核心账号在拥有账号后显示账号摘要。
-    const summary = reorderable || (kind === "pinned" && (props.accountCounts[provider.id] ?? 0) > 0)
+  const row = (provider: PublicAiProviderDescriptor, reorderable: boolean) => {
     const above = reorderable ? neighbour(provider.id, -1) : undefined
     const below = reorderable ? neighbour(provider.id, 1) : undefined
     return (
@@ -106,14 +97,10 @@ export function ProviderRail(props: ProviderRailProps) {
           setDragId(null)
         }}
       >
-        {kind === "pinned" ? (
-          <Pin aria-hidden="true" className="vk-ms-rail-grip" data-pinned="true" />
-        ) : (
-          <GripVertical aria-hidden="true" className="vk-ms-rail-grip" data-hidden={reorderable ? undefined : "true"} />
-        )}
+        <GripVertical aria-hidden="true" className="vk-ms-rail-grip" data-hidden={reorderable ? undefined : "true"} />
         <RailRowButton
           active={props.selectedId === provider.id}
-          configured={summary}
+          configured={reorderable}
           name={name(provider)}
           onKeyDown={(event) => {
             if (!reorderable || props.reorderDisabled || !event.altKey) return
@@ -125,7 +112,7 @@ export function ProviderRail(props: ProviderRailProps) {
           onSelect={() => props.onSelect(provider.id)}
           provider={provider}
         >
-          {summary ? (
+          {reorderable ? (
             <span className="vk-ms-rail-meta">
               <span><i aria-hidden="true" className="vk-ms-dot" data-state={props.health[provider.id] ?? "ok"} />
                 {t("settings.modelServices.rail.accounts").replace("{count}", String(props.accountCounts[provider.id] ?? 0))}</span>
@@ -186,18 +173,13 @@ export function ProviderRail(props: ProviderRailProps) {
       </div>
       {!props.directory ? <StreamPlaceholder decorative shape="rows" count={6} /> : (
         <div className="vk-ms-rail-sections">
-          {pinned.length > 0 ? (
-            <section aria-label={t("settings.modelServices.rail.pinned")}>
-              <ul>{pinned.map((provider) => row(provider, "pinned"))}</ul>
-            </section>
-          ) : null}
           {configured.length > 0 ? (
             <section>
               <p className="vk-ms-rail-heading" title={t("settings.modelServices.rail.reorderHint")}>
                 <span>{t("settings.modelServices.rail.configured")} · {configured.length}</span>
                 <small>{t("settings.modelServices.rail.dragHint")}</small>
               </p>
-              <ul>{configured.map((provider) => row(provider, "configured"))}</ul>
+              <ul>{configured.map((provider) => row(provider, true))}</ul>
             </section>
           ) : null}
           {available.length > 0 ? (
@@ -206,10 +188,10 @@ export function ProviderRail(props: ProviderRailProps) {
                 <span>{t("settings.modelServices.rail.available")} · {available.length}</span>
                 <small>{t("settings.modelServices.rail.recommended")}</small>
               </p>
-              <ul>{available.map((provider) => row(provider, "available"))}</ul>
+              <ul>{available.map((provider) => row(provider, false))}</ul>
             </section>
           ) : null}
-          {pinned.length === 0 && configured.length === 0 && available.length === 0 ? (
+          {configured.length === 0 && available.length === 0 ? (
             <PageEmptyState icon={<Search />} title={t("settings.modelExperience.noProviders")} />
           ) : null}
         </div>

@@ -30,6 +30,7 @@ import {
   buildProviderDirectory,
   priorityWritesForOrder,
   providerIsConfigured,
+  providerIsCoreAccount,
   type ProviderTagFilter,
 } from "./provider-directory"
 import { ProviderRail } from "./provider-rail"
@@ -127,18 +128,17 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
     }
     return counts
   }, [snapshot])
-  // The selection falls back to the pinned core account, the first configured provider, then the first recommendation.
-  // 选择依次回退到置顶核心账号、第一个已配置供应商、第一个推荐供应商。
-  const selected = snapshot?.providers.find((provider) => provider.id === selectedId)
-    ?? directory?.pinned[0]
+  // The selection falls back to the first configured provider, then the first recommendation.
+  // 选择回退到第一个已配置供应商，其次是第一个推荐供应商。
+  const selected = snapshot?.providers.find((provider) => provider.id === selectedId && !providerIsCoreAccount(provider))
     ?? directory?.configured[0]
     ?? directory?.available[0]
     ?? null
-  // modelProviderIds lists configured model providers, pinned core accounts first, for the model-led view.
-  // modelProviderIds 列出已配置的模型供应商（置顶核心账号在前），用于以模型为主的视图。
+  // modelProviderIds lists configured model providers, signed-in core accounts first, for the model-led view.
+  // modelProviderIds 列出已配置的模型供应商（已登录的核心账号在前），用于以模型为主的视图。
   const modelProviderIds = React.useMemo(
     () => (snapshot && directory
-      ? [...directory.pinned.filter((provider) => providerIsConfigured(snapshot, provider)), ...directory.configured]
+      ? [...directory.core.filter((provider) => providerIsConfigured(snapshot, provider)), ...directory.configured]
         .filter((provider) => !isFunctionalProvider(provider))
         .map((provider) => provider.id)
       : []),
@@ -190,8 +190,15 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
   }
 
   // showProvider leads with the provider view on that provider; rail rows and alerts use it.
+  // A core account opens its own account page instead, since the rail never lists it.
   // showProvider 切换到以供应商为主的视图并选中该供应商；目录行与提醒使用它。
+  // 核心账号改为打开其独立账户页，因为目录从不列出它。
   const showProvider = (providerId: string) => {
+    const provider = snapshot?.providers.find((candidate) => candidate.id === providerId)
+    if (provider && providerIsCoreAccount(provider)) {
+      account?.openDetails?.()
+      return
+    }
     setView("provider")
     setSelectedId(providerId)
   }

@@ -16,6 +16,7 @@ import {
 } from "@/components/features/settings/misc-settings-areas";
 import { AboutLicensesSettingsArea } from "@/components/features/settings/about-licenses-settings-area";
 import { ModelServicesArea } from "@/components/features/settings/model-services/model-services-area";
+import { OpenVulcanAccountArea } from "@/components/features/account/openvulcan-account-area";
 import { ContextBasicsSettingsArea } from "@/components/features/settings/context-basics-settings";
 import { SettingsPage } from "@/components/features/settings/settings-layout";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
@@ -89,6 +90,9 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
   );
   if (providerToolCapability || props.activeSettingsSubArea === "ai-capabilities") {
     return <ModelServicesArea initialCapability={providerToolCapability} initialTab="functions" />;
+  }
+  if (props.activeSettingsSubArea === "openvulcan-account") {
+    return <OpenVulcanAccountArea />;
   }
   if (props.activeSettingsSubArea === "model-list") {
     return <ModelServicesArea initialView="model" />;

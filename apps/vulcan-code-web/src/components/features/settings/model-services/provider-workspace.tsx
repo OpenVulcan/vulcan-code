@@ -1,7 +1,6 @@
 import * as React from "react"
-import { ExternalLink, Info, KeyRound, ListTree, MoreHorizontal, Pencil, Stethoscope, Trash2, UserRound, WandSparkles } from "lucide-react"
+import { ExternalLink, Info, KeyRound, ListTree, MoreHorizontal, Pencil, Stethoscope, Trash2, WandSparkles } from "lucide-react"
 
-import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context"
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { protocolDisplayName } from "@/components/features/settings/provider-management-settings/protocol-display-name"
 import { ProviderModelCatalog } from "@/components/features/settings/provider-model-settings"
@@ -179,13 +178,11 @@ export function ProviderWorkspace(props: ProviderWorkspaceProps) {
 // WorkspaceHeader 显示供应商名称，并放置视图切换、主要操作及收纳其余操作的菜单。
 function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean; onToggleDetails: () => void }) {
   const { t } = useI18n()
-  const account = React.useContext(OpenVulcanAccountContext)
   const { provider } = props
   const name = localizedProviderName(provider.id, provider.display_name, t)
   const category = providerCategoryLabel(provider.category, t)
   const signupUrl = providerSignupUrl(provider)
   const busy = props.mutations.pendingKey !== null
-  const coreAccount = provider.credential_directory_visibility === "core_account"
   const protocols = Array.from(new Set(provider.service_entries.flatMap(
     (entry) => entry.protocol_routes.map((route) => protocolDisplayName(route.protocol_profile_id)),
   )))
@@ -212,14 +209,8 @@ function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean;
         </div>
         <div className="vk-ms-head-actions">
           {props.viewSwitch}
-          <Button
-            disabled={busy}
-            onClick={() => coreAccount ? account?.setOpen(true) : props.onAddAccount(provider.id)}
-            size="sm"
-            type="button"
-          >
-            {coreAccount ? <UserRound aria-hidden="true" /> : <KeyRound aria-hidden="true" />}
-            {coreAccount ? t("openvulcan.account.manage") : t("settings.providerOnboarding.addCredential")}
+          <Button disabled={busy} onClick={() => props.onAddAccount(provider.id)} size="sm" type="button">
+            <KeyRound aria-hidden="true" />{t("settings.providerOnboarding.addCredential")}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

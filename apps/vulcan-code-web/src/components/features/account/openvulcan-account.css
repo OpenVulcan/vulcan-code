@@ -331,3 +331,234 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Signed-out entry block shared by the dialog and the account page. */
+/* 弹窗与账户页共用的未登录入口块。 */
+.openvulcan-account-signin {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Usage statistics: four totals, a daily bar trend and the per-model split. */
+/* 用量统计：四项合计、每日柱状趋势与按模型分布。 */
+.openvulcan-usage-totals[data-count="4"] {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.openvulcan-usage-totals small[data-tone="bad"] {
+  color: var(--vk-bad);
+}
+
+.openvulcan-stats-note {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+}
+
+.openvulcan-stats-block {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.openvulcan-stats-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.openvulcan-stats-block-head h4 {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  font-weight: 600;
+}
+
+.openvulcan-stats-metric {
+  display: inline-flex;
+  border: 1px solid var(--vk-line);
+}
+
+.openvulcan-stats-metric button {
+  padding: 2px 8px;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
+}
+
+.openvulcan-stats-metric button:hover {
+  color: var(--vk-ink);
+}
+
+.openvulcan-stats-metric button[aria-pressed="true"] {
+  background: var(--vk-sunken);
+  color: var(--vk-ink);
+  font-weight: 500;
+}
+
+.openvulcan-stats-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 72px;
+  padding: 6px 0 0;
+  border-bottom: 1px solid var(--vk-line);
+}
+
+.openvulcan-stats-bars li {
+  display: flex;
+  flex: 1 1 0;
+  align-items: flex-end;
+  height: 100%;
+  min-width: 0;
+}
+
+.openvulcan-stats-bars i {
+  display: block;
+  width: 100%;
+  background: color-mix(in srgb, var(--vk-ember) 70%, transparent);
+  transition: background-color var(--vk-t-fast) var(--vk-ease), height var(--vk-t-med) var(--vk-ease);
+}
+
+.openvulcan-stats-bars li:hover i {
+  background: var(--vk-ember);
+}
+
+.openvulcan-stats-axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--vk-ink-3);
+  font-size: var(--vk-fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.openvulcan-stats-models {
+  display: grid;
+  border: 1px solid var(--vk-line);
+  font-size: var(--vk-fs-xs);
+}
+
+.openvulcan-stats-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(4.5rem, auto));
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--vk-line);
+  font-variant-numeric: tabular-nums;
+}
+
+.openvulcan-stats-model-row:last-child {
+  border-bottom: 0;
+}
+
+.openvulcan-stats-model-row > span:not(:first-child) {
+  text-align: right;
+}
+
+.openvulcan-stats-model-row[data-head] {
+  color: var(--vk-ink-2);
+  font-weight: 500;
+}
+
+.openvulcan-stats-model-row small {
+  display: block;
+  color: var(--vk-bad);
+}
+
+.openvulcan-stats-model-name {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.openvulcan-stats-model-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openvulcan-stats-model-name .openvulcan-plan-meter {
+  height: 3px;
+}
+
+.openvulcan-stats-model-name .openvulcan-plan-meter i {
+  background: color-mix(in srgb, var(--vk-ember) 70%, transparent);
+}
+
+/* Account settings page: the account (or its sign-in) first, then the overview, model and call tabs. */
+/* 账户设置页：先显示账户（或其登录入口），再显示概览、模型与调用标签。 */
+.openvulcan-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+}
+
+.openvulcan-page-signin {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 28px 16px;
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
+  text-align: center;
+}
+
+.openvulcan-page-signin > p {
+  max-width: 34rem;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.openvulcan-page-signin .openvulcan-account-signin {
+  width: min(100%, 22rem);
+}
+
+.openvulcan-page-note {
+  margin-top: -8px;
+  color: var(--vk-ink-3);
+  font-size: var(--vk-fs-xs);
+}
+
+.openvulcan-page-overview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.openvulcan-page-overview > .openvulcan-plan {
+  flex: 1 1 18rem;
+  max-width: 28rem;
+}
+
+.openvulcan-page-overview > .openvulcan-stats {
+  flex: 3 1 30rem;
+  min-width: 0;
+}
+
+.openvulcan-page .openvulcan-usage-table {
+  max-height: none;
+}
+
+@media (max-width: 720px) {
+  .openvulcan-usage-totals[data-count="4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .openvulcan-page-overview > .openvulcan-plan {
+    max-width: none;
+  }
+
+  /* The identity keeps its line; the account actions wrap below it. */
+  /* 身份信息保留整行，账户操作换到下一行。 */
+  .openvulcan-page .openvulcan-account-profile {
+    flex-wrap: wrap;
+  }
+
+  .openvulcan-page .openvulcan-account-identity {
+    flex-basis: calc(100% - 52px);
+  }
+}

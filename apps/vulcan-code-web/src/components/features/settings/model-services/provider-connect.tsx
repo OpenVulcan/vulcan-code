@@ -1,7 +1,6 @@
 import * as React from "react"
 import { CheckCircle2, CircleAlert, CircleDashed, ExternalLink, LoaderCircle, X } from "lucide-react"
 
-import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context"
 import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { Button } from "@/ui-kit/primitives/button"
 import { useI18n } from "@/i18n"
@@ -28,11 +27,9 @@ export function ProviderConnectPanel(props: {
   onConnect: (entryId: string) => void
 }) {
   const { t } = useI18n()
-  const account = React.useContext(OpenVulcanAccountContext)
   const { provider } = props
   const [entryId, setEntryId] = React.useState(provider.service_entries[0]?.id ?? "")
   React.useEffect(() => setEntryId(provider.service_entries[0]?.id ?? ""), [provider.id, provider.service_entries])
-  const core = provider.credential_directory_visibility === "core_account"
   return (
     <div className="vk-ms-connect-panel">
       <section className="vk-ms-panel">
@@ -62,10 +59,10 @@ export function ProviderConnectPanel(props: {
         <p className="vk-ms-panel-hint">{t("settings.modelServices.connectPanel.hint")}</p>
         <Button
           className="vk-form-end"
-          disabled={props.busy || (!core && !entryId)}
-          onClick={() => core ? account?.setOpen(true) : props.onConnect(entryId)}
+          disabled={props.busy || !entryId}
+          onClick={() => props.onConnect(entryId)}
           type="button"
-        >{core ? t("openvulcan.account.manage") : t("settings.modelServices.connectPanel.connect")}</Button>
+        >{t("settings.modelServices.connectPanel.connect")}</Button>
       </section>
     </div>
   )
