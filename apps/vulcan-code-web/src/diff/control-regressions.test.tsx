@@ -80,8 +80,8 @@ it("restores search focus on Escape and does not route button Enter to the next 
 it("locks floating Git actions until rejection and then permits retry", async () => {
   let reject!: (error: Error) => void;
   const action = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
-  await render(<DiffReviewFloatingGitActions mode="unstaged" selectedFile={snapshot.files[0]} busy={false} onAction={action} />);
-  const stage = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Stage all")!;
+  await render(<DiffReviewFloatingGitActions fileCount={1} mode="unstaged" selectedFile={snapshot.files[0]} busy={false} onAction={action} />);
+  const stage = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Stage this file")!;
   await act(async () => { stage.click(); stage.click(); });
   expect(action).toHaveBeenCalledTimes(1);
   expect(stage.disabled).toBe(true);

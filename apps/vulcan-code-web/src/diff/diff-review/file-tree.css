@@ -7,10 +7,6 @@
   overflow: hidden;
 }
 
-.diff-review-body.has-selection {
-  padding-right: 11px;
-}
-
 .diff-file-tree-drawer {
   position: absolute;
   inset: 0 0 0 auto;

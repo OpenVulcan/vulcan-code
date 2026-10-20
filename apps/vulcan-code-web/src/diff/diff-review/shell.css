@@ -47,74 +47,25 @@
   border-bottom: 1px solid var(--vk-line);
 }
 
-.diff-review-floating-actions {
+/* The review's actions float over the bottom edge of the diff: the shown file's actions first, then the */
+/* more menu for the whole repository. */
+/* 审核操作浮于 diff 底边：先是当前文件的操作，再是整库操作的更多菜单。 */
+.vk-float-actions {
   position: absolute;
-  right: 50%;
-  bottom: 14px;
+  bottom: calc(var(--vk-u) * 4);
+  left: 50%;
   z-index: 520;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  max-width: calc(100% - 28px);
-  padding: 3px;
-  border: 1px solid var(--vk-line);
-  background: color-mix(in oklab, var(--vk-ground) 94%, transparent);
-  transform: translateX(50%);
+  gap: calc(var(--vk-u) * 1);
+  max-width: calc(100% - calc(var(--vk-u) * 8));
+  padding: calc(var(--vk-u) * 1);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: color-mix(in oklab, var(--vk-raised) 92%, transparent);
+  box-shadow: var(--vk-shadow-2);
+  transform: translateX(-50%);
   -webkit-backdrop-filter: blur(12px) saturate(1.14);
   backdrop-filter: blur(12px) saturate(1.14);
-}
-
-.diff-review-floating-action-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  height: 26px;
-  min-width: 0;
-  padding: 0 11px;
-  border: 0;
-  background: transparent;
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-  line-height: 1;
   white-space: nowrap;
-  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
-}
-
-.diff-review-floating-action-button svg {
-  flex: 0 0 auto;
-}
-
-.diff-review-floating-action-button.icon-only {
-  width: 26px;
-  padding: 0;
-}
-
-.diff-review-floating-action-button span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.diff-review-floating-action-button:not(:disabled):hover {
-  background: color-mix(in oklab, var(--vk-sunken) 72%, transparent);
-  color: var(--vk-ink);
-}
-
-.diff-review-floating-action-button:disabled {
-  cursor: default;
-  opacity: 0.46;
-}
-
-.diff-floating-action-menu {
-  min-width: 150px;
-}
-
-.diff-floating-action-menu [data-slot="dropdown-menu-item"] {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  font-size: var(--vk-fs-md);
 }
 

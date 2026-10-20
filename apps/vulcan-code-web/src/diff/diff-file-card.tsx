@@ -120,6 +120,9 @@ interface DiffFileCardProps {
   // Optional host action that reveals this file in the system file manager.
   // 可选的宿主动作，用于在系统文件管理器中定位该文件。
   onRevealFile?: (file: DiffFile) => void;
+  // Leaves out the file-name header when the surrounding panel already names the file.
+  // 外层面板已标明文件时省略文件名头部。
+  headerless?: boolean;
   // Optional backend search hit shown before full detail hydration finishes.
   // 完整详情水合完成前展示的可选后端搜索命中。
   summarySearchMatch?: WorkspaceDiffSearchFileMatch;
@@ -187,7 +190,7 @@ export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCard
   }, [props.file, props.onLoadFileDetail]);
   return (
     <article className={`diff-file-card ${props.file.status}`}>
-      <DiffFileHeader collapsed={props.collapsed} file={props.file} onToggle={handleToggle} />
+      {props.headerless ? null : <DiffFileHeader collapsed={props.collapsed} file={props.file} onToggle={handleToggle} />}
       {!props.collapsed ? (
         <div className="diff-file-body">
           {props.file.isBinary ? (
@@ -458,6 +461,7 @@ function areDiffFileCardPropsEqual(previous: DiffFileCardProps, next: DiffFileCa
     || previous.renderPreferences !== next.renderPreferences
     || previous.virtualHostTop !== next.virtualHostTop
     || previous.collapsed !== next.collapsed
+    || previous.headerless !== next.headerless
     || previous.searchLineKeys !== next.searchLineKeys
     || previous.activeSearchLineKey !== next.activeSearchLineKey
     || previous.onLoadFileDetail !== next.onLoadFileDetail
