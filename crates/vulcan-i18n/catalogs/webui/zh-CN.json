@@ -883,7 +883,7 @@
   "diff.file.binary": "二进制文件已变更，不显示内容。",
   "diff.file.gitlink": "子模块指针变更，未渲染文本内容。",
   "diff.file.renamedNoChanges": "文件已重命名，内容无变更",
-  "diff.file.noContent": "No content",
+  "diff.file.noContent": "没有内容",
   "diff.render.changedLinesSkipped": "变更行超过 {limit}，高亮细节已按轻量策略省略",
   "diff.render.skipped": "高亮细节已按轻量策略省略",
   "diff.render.rowsLightweight": "{count} 行按轻量模式渲染",
