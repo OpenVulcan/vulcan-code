@@ -1,5 +1,6 @@
 import * as React from "react";
 import { loadMemorySettings } from "@/service/markdown-memory-service";
+import { errorMessage } from "@/lib/display-format";
 import type { MemoryMode, MemorySettingsView } from "@/types";
 
 // MARKDOWN_MEMORY_SECTIONS are the memory page sections shown in Markdown mode, one per scope.
@@ -32,6 +33,9 @@ export function memorySectionForMode(section: string, mode: MemoryMode | null): 
 // current is the last settings read or saved in this window; listeners re-render on change.
 // current 是本窗口最近读取或保存的设置；listeners 在变化时重新渲染。
 let current: MemorySettingsView | null = null;
+// loadError is the last failed read while no settings are known; it clears on the next attempt.
+// loadError 是尚无设置时最近一次读取失败的原因；下一次尝试时清除。
+let loadError: string | null = null;
 let pending: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 
@@ -39,18 +43,45 @@ const listeners = new Set<() => void>();
 // publishMemorySettings 记录服务返回的设置并通知全部读取方。
 export function publishMemorySettings(settings: MemorySettingsView): void {
   current = settings;
+  loadError = null;
+  notify();
+}
+
+// notify re-renders every reader.
+// notify 重新渲染全部读取方。
+function notify(): void {
   for (const listener of listeners) listener();
 }
 
-// ensureMemorySettingsLoaded starts one read; a failed read stays null and is retried by the next reader.
-// ensureMemorySettingsLoaded 发起一次读取；失败时保持 null，由下一个读取方重试。
+// ensureMemorySettingsLoaded starts one read; a failed read keeps the settings null, records the reason,
+// and is retried by the next reader or by retryMemorySettings.
+// ensureMemorySettingsLoaded 发起一次读取；失败时设置保持 null 并记录原因，由下一个读取方或 retryMemorySettings 重试。
 function ensureMemorySettingsLoaded(): void {
   if (current !== null || pending !== null) return;
+  if (loadError !== null) {
+    loadError = null;
+    notify();
+  }
   pending = loadMemorySettings()
-    .then(publishMemorySettings, () => undefined)
+    .then(publishMemorySettings, (error: unknown) => {
+      loadError = errorMessage(error);
+      notify();
+    })
     .finally(() => {
       pending = null;
     });
+}
+
+// retryMemorySettings reads the settings again after a failed read.
+// retryMemorySettings 在读取失败后重新读取设置。
+export function retryMemorySettings(): void {
+  ensureMemorySettingsLoaded();
+}
+
+// useMemorySettingsLoadError returns why the settings could not be read, or null while none failed.
+// useMemorySettingsLoadError 返回设置无法读取的原因；没有失败时为 null。
+export function useMemorySettingsLoadError(): string | null {
+  return React.useSyncExternalStore(subscribe, () => loadError, () => loadError);
 }
 
 // subscribe registers a listener for the external store.

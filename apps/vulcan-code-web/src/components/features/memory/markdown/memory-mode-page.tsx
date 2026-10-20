@@ -17,7 +17,7 @@ import {
 } from "@/service/markdown-memory-service";
 import type { MarkdownMemoryProject, MemoryBudgetPart, MemoryInjectionBudget, MemoryMode } from "@/types";
 import { MemoryTransferSection } from "./markdown-memory-transfer";
-import { publishMemorySettings, useMemorySettings } from "./memory-mode-store";
+import { publishMemorySettings, retryMemorySettings, useMemorySettings, useMemorySettingsLoadError } from "./memory-mode-store";
 
 // MODE_OPTIONS lists the modes with their label and explanation keys.
 // MODE_OPTIONS 列出各模式及其标签与说明键。
@@ -42,6 +42,7 @@ export const BUDGET_PARTS: ReadonlyArray<{ label: TranslationKey; part: MemoryBu
 export function MemoryModePage() {
   const { t } = useI18n();
   const settings = useMemorySettings();
+  const loadError = useMemorySettingsLoadError();
   const [mode, setMode] = React.useState<MemoryMode | null>(null);
   const [budget, setBudget] = React.useState<Record<MemoryBudgetPart, string> | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -53,6 +54,12 @@ export function MemoryModePage() {
     setBudget(budgetDraft(settings.budget));
   }, [settings]);
 
+  if (!settings && loadError) {
+    return <PageNotice tone="error" details={loadError} detailsLabel={t("settings.errors.showErrorDetails")}
+      actions={<Button type="button" size="sm" variant="outline" onClick={retryMemorySettings}>{t("composer.capability.retry")}</Button>}>
+      {t("memory.markdown.loadFailed")}
+    </PageNotice>;
+  }
   if (!settings || mode === null || budget === null) {
     return <StreamPlaceholder label={t("memory.markdown.loading")} shape="rows" count={3} />;
   }
