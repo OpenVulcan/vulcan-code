@@ -59,7 +59,7 @@ pub enum MemoryError {
     },
     /// One operation of a multi-operation write failed; nothing was written.
     /// 多操作写入中的某个操作失败；未写入任何内容。
-    #[error("Operation {index} failed, so no change was written: {source}")]
+    #[error("Operation #{index} (counting from 1) failed, so no change was written: {source}")]
     Operation {
         /// One-based operation index.
         /// 从一开始的操作序号。

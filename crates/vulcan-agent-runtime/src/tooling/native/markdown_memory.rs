@@ -4,9 +4,9 @@
 use super::*;
 use vulcan_markdown_memory::{
     MAX_NODE_LEVEL, MAX_OPERATIONS_PER_WRITE, MAX_SEARCH_LIMIT, MAX_SEARCH_PATTERNS,
-    MarkdownMemorySettings, MarkdownMemoryStore, MemoryMode, NodeSource, OutlineRequest,
-    ProjectContext, SearchRequest, WriteOperation, render_outline, render_search_page,
-    search_nodes,
+    MarkdownMemorySettings, MarkdownMemoryStore, MemoryMode, MemoryScope, NodeSource,
+    OutlineRequest, ProjectContext, SearchRequest, WriteOperation, preset_sections, render_outline,
+    render_search_page, search_nodes,
 };
 
 /// Stable identifier of the memory heading-tree tool.
@@ -197,6 +197,23 @@ pub(crate) fn build_memory_search_tool() -> Arc<NativeToolDefinition> {
     )
 }
 
+/// Lists the preset section keys of every scope for the write tool schema.
+/// 为写入工具 Schema 列出各层的预置分区键。
+fn preset_section_keys() -> String {
+    MemoryScope::ALL
+        .iter()
+        .map(|scope| {
+            let keys = preset_sections(*scope)
+                .iter()
+                .map(|(key, _)| *key)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{} ({keys})", scope.key())
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// Builds the write tool; hidden in Plan mode and forbidden for subagents.
 /// 构建写入工具；计划模式隐藏，子代理禁用。
 pub(crate) fn build_memory_write_tool() -> Arc<NativeToolDefinition> {
@@ -205,7 +222,7 @@ pub(crate) fn build_memory_write_tool() -> Arc<NativeToolDefinition> {
             id: MEMORY_WRITE_TOOL_ID.into(),
             name: MEMORY_WRITE_TOOL_ID.into(),
             description: format!(
-                "Change long-term memory with 1 to {MAX_OPERATIONS_PER_WRITE} operations applied all-or-nothing: create, replace, append, rename, move (across scopes and sections too) and delete. Every action except create needs the node's current expectedRevision from memory_search or memory_outline. Scopes: `user` describes who the user is; `space` holds rules and environment that hold for every project; `project` holds facts, decisions and constraints of this project only. The `base` section of space and project is injected in full every session, so keep it to a few critical, stable rules and put the rest in other sections. Write when the user asks you to remember something, corrects your approach, or a decision is made that the repository does not show. Make titles state the fact itself; bodies cannot contain H1-H4 headings."
+                "Change long-term memory with 1 to {MAX_OPERATIONS_PER_WRITE} operations applied all-or-nothing: create, replace, append, rename, move (across scopes and sections too) and delete. create needs a scope and exactly one of parentId, section or newSection. Every action except create needs the node's current expectedRevision from memory_search or memory_outline. Scopes: `user` describes who the user is; `space` holds rules and environment that hold for every project; `project` holds facts, decisions and constraints of this project only. The `base` section of space and project is injected in full every session, so keep it to a few critical, stable rules and put the rest in other sections. Write when the user asks you to remember something, corrects your approach, or a decision is made that the repository does not show. Make titles state the fact itself; bodies cannot contain H1-H4 headings."
             ),
             help_text: None,
             ai_visible: true,
@@ -228,7 +245,7 @@ pub(crate) fn build_memory_write_tool() -> Arc<NativeToolDefinition> {
                             "expectedRevision": {"type": "string", "description": "Revision last read; every action except create."},
                             "scope": {"type": "string", "enum": ["user", "space", "project"], "description": "Destination scope; required for create, optional for move."},
                             "parentId": {"type": "string", "description": "create/move: become the last child of this node."},
-                            "section": {"type": "string", "description": "create/move: become a child of this section (key or H1 title)."},
+                            "section": {"type": "string", "description": format!("create/move: become a child of this section, by key or H1 title. New files start with the preset sections: {}.", preset_section_keys())},
                             "newSection": {"type": "boolean", "description": "create/move: become a new H1 section. Give exactly one of parentId, section, newSection."},
                             "title": {"type": "string", "description": "create/rename: heading text."},
                             "body": {"type": "string", "description": "create/replace: Markdown body."},
