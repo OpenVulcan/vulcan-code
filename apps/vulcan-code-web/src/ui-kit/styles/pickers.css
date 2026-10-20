@@ -140,7 +140,7 @@ button.vk-model-row { cursor: pointer; }
 .vk-route-pop .vk-model-row { grid-template-columns: 20px minmax(0, 1fr); }
 .vk-route-pop .vk-model-list { height: 260px; min-height: 0; flex: 0 1 auto; }
 .vk-route-failure { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); color: var(--vk-bad); font-size: var(--vk-fs-xs); }
-.vk-route-failure > pre { margin: calc(var(--vk-u) * 1) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--vk-font-mono); }
+.vk-route-failure pre { margin: calc(var(--vk-u) * 1) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--vk-font-mono); }
 
 /* ---------- Model and reasoning picker ---------- */
 /* One popover hosts the reasoning pane, the model list and the account pane; its width eases between them. */

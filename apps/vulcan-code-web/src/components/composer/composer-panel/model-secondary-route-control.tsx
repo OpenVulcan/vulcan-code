@@ -266,10 +266,10 @@ export function ModelSecondaryRouteControl(props: {
           </Button>
         </div>
         <ScrollArea className="vk-model-list">
-        {loadError || selectionError ? <details role="alert" className="vk-route-failure">
+        {loadError || selectionError ? <div role="alert" className="vk-route-failure"><details>
           <summary>{t("composer.secondaryRoute.routeActionFailedRetry")}</summary>
           <pre>{loadError || selectionError}</pre>
-        </details> : null}
+        </details></div> : null}
         {loading ? <StreamPlaceholder label={t("composer.secondaryRoute.loading")} shape="rows" count={3} /> : null}
           <div className="vk-model-rows">
             <DropdownMenuItem asChild onSelect={() => void chooseRoute(null)} textValue="Auto">
