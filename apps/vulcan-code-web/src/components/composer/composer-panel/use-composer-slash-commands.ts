@@ -227,7 +227,11 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
   }, []);
   // The command palette and Ctrl+M reach the model picker and slash commands through these same handlers.
   // 命令面板与 Ctrl+M 通过这些相同的处理器打开模型选择器并运行 slash 指令。
-  useComposerExternalCommands(options.onOpenModelPicker, options.commands, activateCommand);
+  const insertText = React.useCallback((text: string) => {
+    options.setInput((current) => (current.trim() === "" ? text : `${current}
+${text}`));
+  }, [options.setInput]);
+  useComposerExternalCommands(options.onOpenModelPicker, options.commands, activateCommand, insertText);
 
   return {
     visibleCommands,

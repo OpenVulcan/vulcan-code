@@ -12,6 +12,7 @@ import {
 } from "@/components/features/feature-shell";
 import { ActivityRail, type ActivityRailEntry } from "@/components/shell/activity-rail";
 import { CommandPalette } from "@/components/shell/command-palette";
+import { useNewConversationRequests } from "@/components/composer/composer-external-commands";
 import { WorkbenchStatusBar } from "@/components/shell/workbench-status-bar";
 import { StartupOverlay } from "@/components/shell/startup-screen";
 import {
@@ -877,6 +878,13 @@ export function WorkbenchLayout(props: {
     }));
     return [...builtIns, ...pluginPages];
   }, [activeArea, activeWorkbenchSkillSubArea, handleSelectTopFeatureArea, i18n, workbenchState.plugins, workspaceMainView]);
+  // Other surfaces, such as the memory page, open a prefilled conversation in the active project, or the
+  // first project when none is active.
+  // 其他界面（如记忆页）在当前项目（没有当前项目时为第一个项目）中打开预填的会话。
+  useNewConversationRequests(() => {
+    const project = activeProject ?? workbenchState.projects[0];
+    if (project) handleCreateConversationForProject(project);
+  });
   // activityRail is shared by the workspace and settings shells so navigation stays put across areas.
   // activityRail 由工作台与设置外壳共用，使导航在区域切换时保持不动。
   const activityRail = (

@@ -1,5 +1,6 @@
 import * as React from "react";
-import { FilePenLine, MoveRight, Pencil, Plus, Trash2 } from "lucide-react";
+import { FilePenLine, MoveRight, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { requestNewConversationWithText } from "@/components/composer/composer-external-commands";
 import { PageEmptyState, PageHint, PageNotice, PageSection } from "@/components/page";
 import {
   AlertDialog,
@@ -204,7 +205,10 @@ export function MarkdownScopePage(props: { scope: MarkdownMemoryScope; workbench
     {scope === "project" && shownProject && !shownProject.memoryEnabled
       ? <PageNotice tone="warning">{t("memory.markdown.project.disabled")}</PageNotice> : null}
 
-    {usage.length ? <PageSection title={t("memory.markdown.usage.title")} data-memory-usage="">
+    {usage.length ? <PageSection title={t("memory.markdown.usage.title")} data-memory-usage=""
+      actions={<Button type="button" size="sm" variant="outline" title={t("memory.markdown.usage.curateTitle")} data-memory-curate=""
+        onClick={() => requestNewConversationWithText(t("memory.markdown.usage.curatePrompt"))}>
+        <Sparkles size={14} />{t("memory.markdown.usage.curate")}</Button>}>
       <div className="vk-mm-usage">
         {usage.map((row) => {
           const percent = row.budget > 0 ? Math.round((row.tokens * 100) / row.budget) : 0;
