@@ -38,6 +38,14 @@ export function presetTimeRange(days, now = Date.now()) {
 // CHART_COLORS 将稳定模型身份映射到继承的图表调色板。
 const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)", "var(--muted-foreground)"];
 
+// LATENCY_GRADES_MS holds the inclusive fast and medium upper bounds, in milliseconds, behind the latency grade;
+// anything above the medium bound is slow.
+// LATENCY_GRADES_MS 保存耗时分级的快速与中等上限（含，毫秒）；超过中等上限即为慢。
+const LATENCY_GRADES_MS = {
+  firstToken: [1500, 4000],
+  request: [1000, 3000],
+};
+
 // CHART_RANGE_DAYS keeps the restored daily trend aligned with the runtime projection window.
 // CHART_RANGE_DAYS 让恢复的每日趋势与运行时投影窗口保持一致。
 
@@ -579,6 +587,18 @@ export function createPluginPanel(sdk) {
       : `${formatInterval(Math.floor(seconds / 60), "minute", 0)} ${formatInterval(seconds % 60, "second", 2)}`;
   }
 
+  // Grade how fast a record answered: generation is judged by first-token latency, other operations by request
+  // duration. record is a schema-validated projection; tokenTiming selects the measure.
+  // Returns "fast", "medium" or "slow", or undefined when the judged measure was not recorded.
+  // 评定一条记录的响应快慢：生成类按首 Token 延迟评定，其他操作按请求耗时评定。record 是通过 Schema 校验的投影；
+  // tokenTiming 选择评定所用的测量值。返回 "fast"、"medium" 或 "slow"；所评定的测量值未记录时返回 undefined。
+  function latencySpeed(record, tokenTiming) {
+    const milliseconds = tokenTiming ? record.firstTokenLatencyMs : record.requestDurationMs;
+    if (milliseconds === null || milliseconds === undefined) return undefined;
+    const [fastUpTo, mediumUpTo] = tokenTiming ? LATENCY_GRADES_MS.firstToken : LATENCY_GRADES_MS.request;
+    return milliseconds <= fastUpTo ? "fast" : milliseconds <= mediumUpTo ? "medium" : "slow";
+  }
+
   // Render first-token latency and full request duration, with generation speed beside duration.
   // 渲染首 Token 延迟和完整请求耗时，在耗时旁展示生成速度。
   // record is a schema-validated attempt or daily projection; aggregate selects average labels.
@@ -592,7 +612,7 @@ export function createPluginPanel(sdk) {
     if (record.requestDurationMs === null && (!tokenTiming || record.firstTokenLatencyMs === null)) {
       return h("span", { className: "plugin-statistics-latency-unknown" }, text("timing.unrecorded", "Not recorded"));
     }
-    return h("div", { className: "plugin-statistics-latency" },
+    return h("div", { className: "plugin-statistics-latency", "data-speed": latencySpeed(record, tokenTiming) },
       tokenTiming ? h("div", null,
         h("span", null, text(aggregate ? "timing.averageFirstShort" : "timing.firstShort", "First token")),
         h("span", null, record.firstTokenLatencyMs === null ? text("timing.unrecorded", "Not recorded") : latencyDuration(record.firstTokenLatencyMs))) : null,

@@ -211,7 +211,7 @@ function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSch
   const headerActions = layout.header
     ? <PluginSettingsHeaderActions config={settingsPending ? "loading" : saved !== null ? "ready" : "unavailable"} header={layout.header} host={host} /> : null;
 
-  return <PageBody>
+  return <PageBody width="readable">
     {tabs.length > 0
       ? <PageTabs actions={headerActions} ariaLabel={t("plugins.settings.tabs")} onValueChange={setActiveTab}
         options={tabs.map((tab) => ({ value: tab.id, label: host.message(tab.title_message_key) }))} value={activeTab} />

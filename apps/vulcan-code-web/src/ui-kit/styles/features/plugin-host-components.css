@@ -96,9 +96,9 @@
 .plugin-statistics-token-lines > div:empty { display: none; }
 .plugin-statistics-token-value { display: inline-flex; gap: 3px; align-items: center; font-variant-numeric: tabular-nums; }
 .plugin-statistics-token-value svg { flex-shrink: 0; }
-.plugin-statistics-token-value[data-kind="input"] svg { color: var(--vk-chart-2); }
-.plugin-statistics-token-value[data-kind="output"] svg { color: var(--vk-chart-4); }
-.plugin-statistics-token-value:is([data-kind="cache"], [data-kind="write"]) { color: var(--vk-chart-3); }
+.plugin-statistics-token-value[data-kind="input"] svg { color: var(--vk-ember); }
+.plugin-statistics-token-value[data-kind="output"] svg { color: var(--vk-ember-2); }
+.plugin-statistics-token-value:is([data-kind="cache"], [data-kind="write"]) { color: var(--vk-ink-2); }
 .plugin-statistics-estimate-cell > span { white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .plugin-statistics-model-identity, .plugin-statistics-time { display: grid; gap: 3px; }
 .plugin-statistics-model-identity { white-space: normal; overflow-wrap: anywhere; }
@@ -182,11 +182,11 @@
   background: color-mix(in srgb, var(--vk-sunken) 84%, var(--vk-ground));
 }
 
-.plugin-activity-cell[data-intensity="1"] { background: color-mix(in srgb, var(--vk-chart-2) 24%, var(--vk-sunken)); }
-.plugin-activity-cell[data-intensity="2"] { background: color-mix(in srgb, var(--vk-chart-2) 42%, var(--vk-sunken)); }
-.plugin-activity-cell[data-intensity="3"] { background: color-mix(in srgb, var(--vk-chart-2) 60%, var(--vk-sunken)); }
-.plugin-activity-cell[data-intensity="4"] { background: color-mix(in srgb, var(--vk-chart-2) 78%, var(--vk-sunken)); }
-.plugin-activity-cell[data-intensity="5"] { background: var(--vk-chart-2); }
+.plugin-activity-cell[data-intensity="1"] { background: color-mix(in srgb, var(--vk-ember) 24%, var(--vk-sunken)); }
+.plugin-activity-cell[data-intensity="2"] { background: color-mix(in srgb, var(--vk-ember) 42%, var(--vk-sunken)); }
+.plugin-activity-cell[data-intensity="3"] { background: color-mix(in srgb, var(--vk-ember) 60%, var(--vk-sunken)); }
+.plugin-activity-cell[data-intensity="4"] { background: color-mix(in srgb, var(--vk-ember) 78%, var(--vk-sunken)); }
+.plugin-activity-cell[data-intensity="5"] { background: var(--vk-ember); }
 
 .plugin-activity-legend {
   display: inline-flex;
@@ -306,8 +306,8 @@
 .plugin-statistics-token-values strong { font-size: var(--vk-fs-lg); font-variant-numeric: tabular-nums; }
 .plugin-statistics-token-share { align-self: center; font-size: var(--vk-fs-sm); color: var(--vk-ink-2); }
 .plugin-statistics-token-bar { display: flex; height: 8px; overflow: hidden; background: var(--vk-sunken); }
-.plugin-statistics-token-bar > span:first-child { background: var(--vk-chart-1); }
-.plugin-statistics-token-bar > span:last-child { background: var(--vk-chart-2); }
+.plugin-statistics-token-bar > span:first-child { background: var(--vk-ember); }
+.plugin-statistics-token-bar > span:last-child { background: var(--vk-ember-2); }
 .plugin-statistics-cache-facts { font-size: var(--vk-fs-sm); }
 
 /* Price editor: shared Input controls in a responsive grid inside the host dialog. */
@@ -333,19 +333,24 @@
 .plugin-statistics-consumer-operation { display: grid; gap: var(--vk-u); }
 .plugin-statistics-consumer-operation > span:last-child { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
 
-/* Timing labels and values stay aligned on two lines, matching the adjacent Token cell density. */
-/* 计时标签和值保持双行对齐，与相邻 Token 单元格保持一致的信息密度。 */
+/* Timing labels and values stay aligned on two lines, matching the adjacent Token cell density. The start stripe
+   carries the speed grade the plugin reports: fast, medium or slow; an ungraded record keeps a neutral stripe. */
+/* 计时标签和值保持双行对齐，与相邻 Token 单元格保持一致的信息密度。起始色条表示插件报告的快慢分级：
+   快、中等或慢；未分级的记录保持中性色条。 */
 .plugin-statistics-latency {
   display: grid;
   gap: var(--vk-u);
-  border-inline-start: 3px solid var(--vk-chart-2);
+  border-inline-start: 3px solid var(--vk-line-strong);
   padding-inline-start: calc(var(--vk-u) * 2);
   font-size: var(--vk-fs-xs);
   font-variant-numeric: tabular-nums;
 }
 .plugin-statistics-latency > div { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 2); }
 .plugin-statistics-latency > div > span:first-child { color: var(--vk-ink-2); min-width: 42px; }
-.plugin-statistics-latency > div > span:last-child { color: var(--vk-chart-2); }
+.plugin-statistics-latency > div > span:last-child { color: var(--vk-ink); }
+.plugin-statistics-latency[data-speed="fast"] { border-inline-start-color: var(--vk-ok); }
+.plugin-statistics-latency[data-speed="medium"] { border-inline-start-color: var(--vk-warn); }
+.plugin-statistics-latency[data-speed="slow"] { border-inline-start-color: var(--vk-bad); }
 .plugin-statistics-latency-unknown { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
 
 .plugin-chart-point {
@@ -361,7 +366,7 @@
   stroke-width: 2;
 }
 
-.plugin-statistics-status[data-status="succeeded"] { color: var(--vk-chart-2); }
+.plugin-statistics-status[data-status="succeeded"] { color: var(--vk-ok); }
 .plugin-statistics-status[data-status="failed"] { color: var(--vk-bad); }
 
 @media (max-width: 480px) {
@@ -468,7 +473,7 @@
   overflow: hidden;
   background: color-mix(in srgb, var(--vk-ink-2) 16%, transparent);
 }
-.plugin-data-bar > span { min-width: 4px; border-radius: inherit; background: var(--vk-chart-2); }
+.plugin-data-bar > span { min-width: 4px; border-radius: inherit; background: var(--vk-ember); }
 
 /* Bar chart: one column per period, value bars grow from the baseline with the period label below. */
 /* 柱状图：每个周期一列，数值柱从基线向上生长，周期标签在下方。 */
@@ -492,7 +497,7 @@
 .plugin-bar-chart-column > span {
   width: min(100%, 20px);
   min-height: 3px;
-  background: var(--vk-chart-2);
+  background: var(--vk-ember);
 }
 .plugin-bar-chart-column > small {
   max-width: 100%;

@@ -11,11 +11,11 @@
   --primary: var(--vk-ink);
   --destructive: var(--vk-bad);
   --border: var(--vk-line);
-  --chart-1: var(--vk-chart-1);
-  --chart-2: var(--vk-chart-2);
-  --chart-3: var(--vk-chart-3);
-  --chart-4: var(--vk-chart-4);
-  --chart-5: var(--vk-chart-5);
+  --chart-1: var(--vk-data-1);
+  --chart-2: var(--vk-data-2);
+  --chart-3: var(--vk-data-3);
+  --chart-4: var(--vk-data-4);
+  --chart-5: var(--vk-data-5);
   --vcn-font-size-xs: var(--vk-fs-xs);
   --vcn-font-size-sm: var(--vk-fs-sm);
   --vcn-font-size-md: var(--vk-fs-md);
