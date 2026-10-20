@@ -84,6 +84,39 @@ pub(in crate::agent_collaboration) async fn recover_terminal_returns(
                     repaired += 1;
                     continue;
                 }
+                // A closed parent turn can no longer receive any result; stop instead of retrying forever.
+                // 已闭合的父回合无法再接收任何结果；改为停止，而非永久重试。
+                let stopped_at_ms = now_ms()?;
+                let orphan = parent
+                    .mutate_durable_if_changed(
+                        SessionMutationAdmission::ControlPlane,
+                        SessionFlushReason::SubagentReturned,
+                        |document| {
+                            document
+                                .stop_child_task_of_closed_parent_turn(
+                                    &current.execution_id,
+                                    stopped_at_ms,
+                                )
+                                .map(|stopped| match stopped {
+                                    Some(IdempotentMutation::Committed(_)) => {
+                                        SessionMutationChange::Changed(true)
+                                    }
+                                    Some(IdempotentMutation::Idempotent(_)) => {
+                                        SessionMutationChange::Unchanged(true)
+                                    }
+                                    None => SessionMutationChange::Unchanged(false),
+                                })
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
+                if orphan.value {
+                    tracing::warn!(
+                        execution_id = current.execution_id.as_str(),
+                        "Stopped a child task whose parent turn had already closed"
+                    );
+                    repaired += usize::from(orphan.changed);
+                    continue;
+                }
                 // Resolve the original root action and business terminal from full durable source history.
                 // 从完整可靠来源历史解析原根动作与业务终态。
                 let request = child

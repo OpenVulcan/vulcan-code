@@ -395,14 +395,8 @@ impl SessionDocument {
             .cloned()
             .collect::<Vec<_>>();
         for task in open_tasks {
-            // The reservation identity keeps the stop idempotent and distinct from a later completion.
-            // 预留身份使停止保持幂等，并与之后的完成区分。
-            let operation_id = CollaborationOperationId::try_new(format!(
-                "{}:terminal:stopped",
-                task.reservation_operation_id.as_str()
-            ))?;
             self.terminal_child_task(TerminalChildTaskInput {
-                operation_id,
+                operation_id: super::collaboration::child_task_stop_operation_id(&task)?,
                 execution_id: task.execution_id,
                 task_id: task.task_id,
                 outcome: CollaborationChildTaskTerminalOutcome::Stopped,

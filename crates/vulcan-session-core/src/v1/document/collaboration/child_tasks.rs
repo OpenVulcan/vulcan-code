@@ -408,6 +408,65 @@ impl SessionDocument {
             CollaborationChildTaskReceipt { task, event_seq },
         ))
     }
+
+    /// Stops an open child task whose parent turn already closed, since nothing can receive its result.
+    /// 停止父回合已闭合的开放子任务，因为已无任何对象能接收其结果。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `execution_id` names the parent reservation; `now_ms` is the stop observation time.
+    /// `execution_id` 指定父侧预留；`now_ms` 是停止观测时间。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `None` when the task is missing, terminal, from another generation, or its parent turn is still open.
+    /// 任务缺失、已终结、属于其他代次或父回合仍开放时返回 `None`。
+    pub fn stop_child_task_of_closed_parent_turn(
+        &mut self,
+        execution_id: &CollaborationExecutionId,
+        now_ms: i64,
+    ) -> Result<Option<IdempotentMutation<CollaborationChildTaskReceipt>>, DomainError> {
+        let Some(task) = self
+            .collaboration_state()
+            .child_tasks
+            .get(execution_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let open = matches!(
+            task.state,
+            CollaborationChildTaskState::Reserved | CollaborationChildTaskState::Active
+        );
+        let parent_turn_open = self
+            .active_turn()
+            .is_some_and(|turn| !turn.closed && turn.turn_id == task.parent_turn_id);
+        if !open
+            || parent_turn_open
+            || task.parent_segment_generation != self.metadata.segment_generation
+        {
+            return Ok(None);
+        }
+        self.terminal_child_task(TerminalChildTaskInput {
+            operation_id: child_task_stop_operation_id(&task)?,
+            execution_id: task.execution_id,
+            task_id: task.task_id,
+            outcome: CollaborationChildTaskTerminalOutcome::Stopped,
+            terminal_at_ms: now_ms,
+        })
+        .map(Some)
+    }
+}
+
+/// Derives the stop operation from the reservation, keeping it idempotent and distinct from completion.
+/// 由预留派生停止操作，使其保持幂等并与完成区分。
+pub(in crate::v1::document) fn child_task_stop_operation_id(
+    task: &CollaborationChildTaskRecord,
+) -> Result<CollaborationOperationId, DomainError> {
+    CollaborationOperationId::try_new(format!(
+        "{}:terminal:stopped",
+        task.reservation_operation_id.as_str()
+    ))
 }
 
 #[cfg(test)]

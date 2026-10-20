@@ -13,6 +13,7 @@ mod child_result_projection;
 mod child_results;
 mod child_tasks;
 pub use child_results::ChildTaskNonSuccessInput;
+pub(in crate::v1::document) use child_tasks::child_task_stop_operation_id;
 mod continuation;
 #[cfg(test)]
 mod execution_failure_tests;
