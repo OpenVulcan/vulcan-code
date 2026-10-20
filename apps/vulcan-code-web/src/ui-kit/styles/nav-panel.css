@@ -97,6 +97,17 @@
 .vk-tree-project[data-dragging] > .vk-tree-item { background: var(--vk-raised); box-shadow: var(--vk-shadow-2); }
 .vk-tree-row { grid-template-columns: auto auto minmax(0, 1fr); min-height: var(--vk-h-md); padding-right: calc(var(--vk-u) * 2); }
 .vk-tree-row > .vk-tree-caret { width: 0.85rem; height: 0.85rem; }
+/* A project row has no caret: its open or closed folder icon already shows the state, and the child rule runs
+ * straight down from that icon's centre. */
+/* 项目行没有展开箭头：打开或关闭的文件夹图标已表明状态，子级竖线从该图标中心垂直向下。 */
+.vk-tree-project .vk-tree-row { grid-template-columns: auto minmax(0, 1fr); }
+/* The rule sits under the folder icon (row padding + border + half the 1rem icon); session rows then start their
+ * lead icon under the project name. */
+/* 竖线位于文件夹图标下方（行内边距 + 边框 + 半个 1rem 图标）；会话行的前导图标随后对齐项目名称。 */
+.vk-tree-project > .vk-tree-children.vk-side-menu {
+  margin: 0 0 calc(var(--vk-u) * 1) calc(var(--vk-u) + 0.5rem);
+  padding-left: calc(var(--vk-u) * 2);
+}
 .vk-tree-row strong { font-weight: 500; }
 .vk-tree-row strong > small { font-family: var(--vk-font-mono); }
 .vk-tree-icon { display: grid; place-items: center; width: 1rem; height: 1rem; color: var(--vk-ink-3); }
@@ -140,9 +151,6 @@
 .vk-tree-session[data-state="ask"] > .vk-tree-meta,
 .vk-tree-session[data-state="plan"] > .vk-tree-meta { color: var(--vk-ink-2); }
 
-/* ---------- Settings navigation reuses the tree rows ---------- */
-.vk-settings-tree .vk-tree-children { margin-left: calc(var(--vk-u) * 3.5); }
-.vk-settings-tree .vk-tree-session { grid-template-columns: minmax(0, 1fr); }
 
 @media (prefers-reduced-motion: reduce) {
   .vk-tree-item > .vk-tree-actions { transition: none; }

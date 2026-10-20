@@ -369,6 +369,13 @@ a.vk-status-item { text-decoration: none; }
 .vk-nav-item[aria-current="page"] { background: var(--vk-panel); color: var(--vk-ink); box-shadow: inset 2px 0 0 var(--vk-ember), 0 0 0 1px var(--vk-line); }
 .vk-nav-item > .vk-menu-meta { margin-left: auto; font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
 .vk-nav-item[data-depth="1"] { padding-left: calc(var(--vk-u) * 8); font-size: var(--vk-fs-sm); }
+.vk-nav-item > .lucide { flex: none; width: 1rem; height: 1rem; color: var(--vk-ink-3); }
+.vk-nav-item[aria-current="page"] > .lucide { color: var(--vk-ember); }
+/* A navigation section is a quiet group label over its rows; the first label sits close to the panel top. */
+/* 导航分区是其行上方的低调分组标签；第一个标签贴近面板顶部。 */
+.vk-nav-section { display: grid; gap: 1px; }
+.vk-nav-group { padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 2) calc(var(--vk-u) * 1.5); color: var(--vk-ink-3); }
+.vk-nav-section:first-child > .vk-nav-group { padding-top: calc(var(--vk-u) * 1.5); }
 
 /* ---------- Drawers: side panels that no longer fit become overlays ---------- */
 .vk-drawer-scrim { display: none; }

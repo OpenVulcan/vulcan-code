@@ -1,6 +1,5 @@
 import React from "react";
 import {
-  ChevronRight,
   ChevronsDown,
   ChevronsUp,
   GripVertical,
@@ -97,7 +96,6 @@ export function SortableProjectRow(props: {
 ${props.project.path}`}
       type="button"
     >
-      <ChevronRight aria-hidden="true" className="vk-tree-caret" />
       <span className="vk-tree-icon"><ProjectIcon isOpen={props.isOpen} project={props.project} size={15} /></span>
       <strong>
         {props.project.name}

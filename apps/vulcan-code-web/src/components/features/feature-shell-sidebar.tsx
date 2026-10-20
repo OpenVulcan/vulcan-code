@@ -4,7 +4,6 @@ import {
   Globe2,
   BookMarked,
   ChartNoAxesCombined,
-  ChevronRight,
   Hammer,
   PanelTopOpen,
   Plug,
@@ -220,7 +219,7 @@ function SettingsSidebarMenu(props: {
   const { t } = useI18n()
   const groups = settingsSubAreaGroups(t)
   return (
-    <SidebarGroup className="vk-settings-tree">
+    <SidebarGroup className="vk-settings-nav">
       <SidebarMenu>
         {groups.map((group) => (
           <SettingsSidebarGroupRow
@@ -235,8 +234,10 @@ function SettingsSidebarMenu(props: {
   )
 }
 
-// SettingsSidebarGroupRow renders one settings category with always-expanded children.
-// SettingsSidebarGroupRow 渲染单个设置分类及其默认展开的子菜单。
+// SettingsSidebarGroupRow renders one settings category as a quiet label over its pages. Settings has few pages,
+// so every page stays in view: there is nothing to collapse, and each row carries its own icon.
+// SettingsSidebarGroupRow 将单个设置分类渲染为一个低调标签及其下的页面。设置页面不多，因此所有页面始终可见：
+// 无需折叠，每一行都带有自身图标。
 function SettingsSidebarGroupRow(props: {
   // Selected settings sub page.
   // 当前设置二级页面。
@@ -248,39 +249,24 @@ function SettingsSidebarGroupRow(props: {
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
 }) {
-  // The category arrow controls disclosure rather than unexpectedly navigating to its first page.
-  // 分类箭头控制展开收起，不再意外跳转到分类中的第一页。
-  const [groupExpanded, setGroupExpanded] = React.useState(true)
+  const labelId = `settings-nav-${props.group.id}`
+  const active = normalizeSettingsSubArea(props.activeSettingsSubArea)
   return (
-    <SidebarMenuItem className="vk-tree-project">
-      <div className="vk-tree-item">
+    <SidebarMenuItem className="vk-nav-section" role="group" aria-labelledby={labelId}>
+      <div className="vk-nav-group vk-label" id={labelId}>{props.group.label}</div>
+      {props.group.items.map((area) => (
         <button
-          aria-expanded={groupExpanded}
-          className="vk-tree-row"
-          onClick={() => setGroupExpanded((expanded) => !expanded)}
-          title={props.group.label}
+          aria-current={active === area.id ? "page" : undefined}
+          className="vk-nav-item"
+          key={area.id}
+          onClick={() => props.onSelectSettingsSubArea(area.id)}
+          title={area.description}
           type="button"
         >
-          <ChevronRight aria-hidden="true" className="vk-tree-caret" />
-          <span className="vk-tree-icon">{props.group.icon}</span>
-          <strong>{props.group.label}</strong>
+          {area.icon}
+          <span>{area.label}</span>
         </button>
-      </div>
-      {groupExpanded ? <SidebarMenu className="vk-tree-children">
-        {props.group.items.map((area) => (
-          <SidebarMenuItem className="vk-tree-item" key={area.id}>
-            <button
-              aria-current={normalizeSettingsSubArea(props.activeSettingsSubArea) === area.id ? "true" : undefined}
-              className="vk-tree-session"
-              onClick={() => props.onSelectSettingsSubArea(area.id)}
-              title={area.label}
-              type="button"
-            >
-              <span className="vk-tree-title"><span>{area.label}</span></span>
-            </button>
-          </SidebarMenuItem>
-        ))}
-      </SidebarMenu> : null}
+      ))}
     </SidebarMenuItem>
   )
 }
