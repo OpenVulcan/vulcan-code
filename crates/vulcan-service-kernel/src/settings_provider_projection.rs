@@ -10,7 +10,7 @@ pub(crate) fn settings() -> Vec<SettingSectionSummary> {
         setting_section(
             "runtime",
             "Runtime",
-            "Startup and status settings of Core Service, LuaSkills, VLDB and MCP",
+            "Startup and status settings of Core Service, LuaSkills, the data store and MCP",
             &[
                 "Startup mode",
                 "Runtime directory",

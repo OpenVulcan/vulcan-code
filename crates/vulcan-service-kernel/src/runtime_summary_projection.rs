@@ -95,8 +95,8 @@ pub(crate) fn runtime_modules(
             "Core Service running",
         ),
         runtime_module(
-            "vldb",
-            "VLDB",
+            "data-store",
+            "Data store",
             StartupStepStatus::Ready,
             &format!("In-process engine · {}", controller.sqlite_path.display()),
         ),

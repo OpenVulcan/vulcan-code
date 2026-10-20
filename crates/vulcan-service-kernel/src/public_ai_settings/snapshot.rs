@@ -4,7 +4,9 @@
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{AccountUsageSnapshot, PromptCachePolicy};
-use vulcan_context::{ContextCompactionWindowNodeId, ContextWindowPolicyOverrides};
+use vulcan_context::{
+    ContextCompactionWindowNodeId, ContextWindowPolicy, ContextWindowPolicyOverrides,
+};
 use vulcan_provider_adapters::{
     AccountUsageQueryKind, ActiveAiModelSelection, CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT,
     CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT, CatalogDiscoveryStatus, ConnectionModelCatalog,
@@ -62,6 +64,9 @@ pub(crate) struct PublicAiSettingsSnapshot {
     /// System-level sparse Codex context-window policy inherited by every route.
     /// 所有路由继承的系统级稀疏 Codex 上下文窗口策略。
     context_window_policy_overrides: ContextWindowPolicyOverrides,
+    /// Built-in values every route uses for a policy field nobody overrides.
+    /// 无人覆盖的策略字段在所有路由上使用的内置值。
+    context_window_policy_defaults: ContextWindowPolicy,
     /// Fixed system context-compaction window nodes in immutable display order.
     /// 按不可变展示顺序排列的固定系统上下文压缩窗口节点。
     context_compaction_window_nodes: ContextCompactionWindowConfiguration,
@@ -755,6 +760,7 @@ pub(super) fn build_public_ai_settings_snapshot(
         },
         media_delivery: PublicAiMediaDeliverySettingsSnapshot::from_configuration(configuration)?,
         context_window_policy_overrides: configuration.context_window_policy_overrides,
+        context_window_policy_defaults: ContextWindowPolicy::default(),
         context_compaction_window_nodes: configuration.context_compaction_window_nodes.clone(),
         new_session_context_compaction_window_node_id: configuration
             .new_session_context_compaction_window_node_id,

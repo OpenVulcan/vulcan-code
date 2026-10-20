@@ -290,7 +290,9 @@ use git::{
     service_run_git_commit_action, service_save_git_commit_settings,
 };
 use git_diff_services::*;
-use host_tools_settings::{host_tools_settings, host_tools_settings_with_native_tools};
+use host_tools_settings::{
+    host_tools_settings, host_tools_settings_with_native_tools, service_save_default_command_shell,
+};
 use knowledge_base_services::*;
 use mcp_settings::*;
 use media_upload::*;

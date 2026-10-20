@@ -471,43 +471,49 @@ fn run_service_bootstrap(
         guard.startup.ui_locale = provider_configuration.ui_locale.clone();
         guard.workbench.ui_locale = provider_configuration.ui_locale.clone();
     }
-    update_startup(state, event_emitter, "bootstrapping-vldb", &logs, |now| {
-        startup_steps_with_status(
-            now,
-            &[
-                (
-                    "service-process",
-                    StartupStepStatus::Ready,
-                    "Core Service started",
-                ),
-                (
-                    "vldb",
-                    StartupStepStatus::Running,
-                    "Initializing the VLDB/controller data plane",
-                ),
-                (
-                    "luaskills",
-                    StartupStepStatus::Pending,
-                    "Waiting for VLDB to be ready",
-                ),
-                (
-                    "mcp",
-                    StartupStepStatus::Pending,
-                    "Waiting for LuaSkills to be ready",
-                ),
-                (
-                    "plugins",
-                    StartupStepStatus::Pending,
-                    "Waiting for the plugin catalog initialization",
-                ),
-                (
-                    "workspace",
-                    StartupStepStatus::Pending,
-                    "Waiting for the workspace database to load",
-                ),
-            ],
-        )
-    });
+    update_startup(
+        state,
+        event_emitter,
+        "bootstrapping-data-store",
+        &logs,
+        |now| {
+            startup_steps_with_status(
+                now,
+                &[
+                    (
+                        "service-process",
+                        StartupStepStatus::Ready,
+                        "Core Service started",
+                    ),
+                    (
+                        "data-store",
+                        StartupStepStatus::Running,
+                        "Opening the application data store",
+                    ),
+                    (
+                        "luaskills",
+                        StartupStepStatus::Pending,
+                        "Waiting for the data store to be ready",
+                    ),
+                    (
+                        "mcp",
+                        StartupStepStatus::Pending,
+                        "Waiting for LuaSkills to be ready",
+                    ),
+                    (
+                        "plugins",
+                        StartupStepStatus::Pending,
+                        "Waiting for the plugin catalog initialization",
+                    ),
+                    (
+                        "workspace",
+                        StartupStepStatus::Pending,
+                        "Waiting for the workspace database to load",
+                    ),
+                ],
+            )
+        },
+    );
 
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
@@ -535,8 +541,8 @@ fn run_service_bootstrap(
     let data_plane_started_at = start_bootstrap_stage("controller_data_plane");
     let controller_report = bootstrap_step(
         runtime.block_on(vulcan_workspace_store::data_plane::bootstrap_application_data_plane()),
-        "vldb",
-        "VLDB",
+        "data-store",
+        "Data store",
     )?;
     trace_bootstrap_stage(
         "controller_data_plane",
@@ -544,7 +550,7 @@ fn run_service_bootstrap(
         "result=ready",
     );
     logs.push(format!(
-        "[webui-service] vldb ready: {}",
+        "[webui-service] data store ready: {}",
         controller_report.handle.sqlite_path.display()
     ));
     let controller_runtime = controller_report.handle;
@@ -567,9 +573,9 @@ fn run_service_bootstrap(
                         "Core Service started",
                     ),
                     (
-                        "vldb",
+                        "data-store",
                         StartupStepStatus::Ready,
-                        "VLDB/controller data plane ready",
+                        "Application data store ready",
                     ),
                     (
                         "luaskills",
@@ -742,9 +748,9 @@ fn run_service_bootstrap(
                     "Core Service started",
                 ),
                 (
-                    "vldb",
+                    "data-store",
                     StartupStepStatus::Ready,
-                    "VLDB/controller data plane ready",
+                    "Application data store ready",
                 ),
                 (
                     "luaskills",
@@ -789,9 +795,9 @@ fn run_service_bootstrap(
                         "Core Service started",
                     ),
                     (
-                        "vldb",
+                        "data-store",
                         StartupStepStatus::Ready,
-                        "VLDB/controller data plane ready",
+                        "Application data store ready",
                     ),
                     (
                         "luaskills",
@@ -961,9 +967,9 @@ fn run_service_bootstrap(
                         "Core Service started",
                     ),
                     (
-                        "vldb",
+                        "data-store",
                         StartupStepStatus::Ready,
-                        "VLDB/controller data plane ready",
+                        "Application data store ready",
                     ),
                     (
                         "luaskills",
@@ -1604,9 +1610,9 @@ fn run_service_bootstrap(
                     "Core Service started",
                 ),
                 (
-                    "vldb",
+                    "data-store",
                     StartupStepStatus::Ready,
-                    "VLDB/controller data plane ready",
+                    "Application data store ready",
                 ),
                 (
                     "luaskills",
@@ -1737,9 +1743,9 @@ fn run_service_bootstrap(
                     "Core Service started",
                 ),
                 (
-                    "vldb",
+                    "data-store",
                     StartupStepStatus::Ready,
-                    "VLDB/controller data plane ready",
+                    "Application data store ready",
                 ),
                 (
                     "luaskills",
@@ -1862,8 +1868,8 @@ fn run_service_bootstrap(
             state,
             event_emitter,
         )),
-        "vldb",
-        "VLDB",
+        "data-store",
+        "Data store",
     )?;
     trace_bootstrap_stage(
         "knowledge_job_recovery",

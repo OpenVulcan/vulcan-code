@@ -20,8 +20,8 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
                 "Service is starting",
             ),
             runtime_module(
-                "vldb",
-                "VLDB",
+                "data-store",
+                "Data store",
                 StartupStepStatus::Pending,
                 "Waiting for the real startup flow",
             ),
