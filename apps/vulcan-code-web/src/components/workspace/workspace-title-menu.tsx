@@ -2,12 +2,8 @@ import React from "react";
 import {
   Archive,
   Copy,
-  ExternalLink,
   FileText,
   FolderOpen,
-  GitBranch,
-  Link,
-  MailOpen,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -107,10 +103,6 @@ export function WorkspaceTitleMenu(props: {
           <Archive size={15} />
           <span>{t("conversationMenu.archive")}</span>
         </DropdownMenuItem>
-        <DropdownMenuItem disabled>
-          <MailOpen size={15} />
-          <span>{t("conversationMenu.markUnread")}</span>
-        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => runConversationAction("open-directory")}>
           <FolderOpen size={15} />
@@ -123,24 +115,6 @@ export function WorkspaceTitleMenu(props: {
         <DropdownMenuItem onSelect={() => runConversationAction("copy-session-id")}>
           <FileText size={15} />
           <span>{t("conversationMenu.copySessionId")}</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem disabled>
-          <Link size={15} />
-          <span>{t("conversationMenu.copyDeepLink")}</span>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem disabled>
-          <GitBranch size={15} />
-          <span>{t("conversationMenu.forkLocal")}</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem disabled>
-          <GitBranch size={15} />
-          <span>{t("conversationMenu.forkWorktree")}</span>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem disabled>
-          <ExternalLink size={15} />
-          <span>{t("conversationMenu.openNewWindow")}</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
