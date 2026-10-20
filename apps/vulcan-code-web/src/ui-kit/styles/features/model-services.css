@@ -337,7 +337,7 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 .vk-ms-chip[data-tag="search"] { --vk-tone: var(--vk-ok); }
 .vk-ms-chip[data-tag="analysis"] { --vk-tone: var(--vk-warn); }
 .vk-ms-chip[data-variant="category"] { border: var(--vk-bw) solid var(--vk-line); background: transparent; }
-.vk-ms-chip[data-variant="affiliate"] { --vk-tone: var(--vk-ember); font-weight: 700; }
+.vk-ms-chip[data-variant="affiliate"] { --vk-tone: var(--vk-ember); color: var(--vk-ember-ink); font-weight: 700; }
 
 /* Hover intro card. */
 /* 悬停介绍卡。 */

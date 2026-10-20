@@ -118,9 +118,11 @@
   --vk-line-strong: #c3c9d1;
   --vk-line-soft: #eaecef;
 
+  /* Every text tone keeps 4.5:1 against every surface of its theme, hover and selection included. */
+  /* 每种文字色在其主题的所有表面（含悬停与选中）上保持 4.5:1 对比度。 */
   --vk-ink: #14171c;
   --vk-ink-2: #4a515c;
-  --vk-ink-3: #7b838e;
+  --vk-ink-3: #626973;
   --vk-ink-inverse: #ffffff;
   /* Text on a solid danger fill (the window close button); the same in every theme. */
   --vk-on-bad: #ffffff;
@@ -133,10 +135,10 @@
   --vk-signal: #2e58cc;
   --vk-signal-soft: #e4eafa;
 
-  --vk-ok: #1b8653;
-  --vk-warn: #a3660a;
-  --vk-bad: #c7313e;
-  --vk-info: #2d68c4;
+  --vk-ok: #18774a;
+  --vk-warn: #945d09;
+  --vk-bad: #c3303d;
+  --vk-info: #2d67c2;
 
   --vk-chart-1: #4f7fc9;
   --vk-chart-2: #2e9c86;
@@ -193,7 +195,7 @@
     --vk-line-soft: #1a1e24;
     --vk-ink: #e6e9ed;
     --vk-ink-2: #a2aab5;
-    --vk-ink-3: #6b737e;
+    --vk-ink-3: #848c97;
     --vk-ink-inverse: #0c0e11;
     --vk-ember: #ff6a2b;
     --vk-ember-2: #ff9a40;
@@ -242,7 +244,7 @@
   --vk-line-soft: #1a1e24;
   --vk-ink: #e6e9ed;
   --vk-ink-2: #a2aab5;
-  --vk-ink-3: #6b737e;
+  --vk-ink-3: #848c97;
   --vk-ink-inverse: #0c0e11;
   --vk-ember: #ff6a2b;
   --vk-ember-2: #ff9a40;
@@ -292,7 +294,7 @@
   --vk-line-soft: #0c2230;
   --vk-ink: #d8f3ff;
   --vk-ink-2: #8cb2c3;
-  --vk-ink-3: #4f7385;
+  --vk-ink-3: #6d92a3;
   --vk-ink-inverse: #03060b;
   --vk-ember: #ff7a2f;
   --vk-ember-2: #ffb24a;

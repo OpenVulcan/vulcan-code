@@ -310,7 +310,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-think-tag:hover,
 .vk-think-tag[aria-expanded="true"] { background: var(--vk-hover); color: var(--vk-ink); }
 /* While the floating window owns live reasoning, the tag only marks the spot. */
-.vk-think-tag[data-indicator] { color: var(--vk-ember); cursor: default; pointer-events: none; }
+.vk-think-tag[data-indicator] { color: var(--vk-ember-ink); cursor: default; pointer-events: none; }
 .vk-think-tag[data-indicator] > svg { animation: vk-pulse 1.6s var(--vk-ease) infinite; }
 .vk-pop.vk-think-pop { width: min(37.5rem, calc(100vw - 32px)); max-width: min(calc(100vw - 32px), var(--vk-available-width, 100vw)); max-height: min(26rem, 70dvh, var(--vk-available-height, 70dvh)); overflow: hidden; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4); background: color-mix(in srgb, var(--vk-raised) 88%, transparent); backdrop-filter: blur(16px) saturate(1.15); }
 .vk-think-pop-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; color: var(--vk-ink-2); font-size: var(--vk-fs-md); }
@@ -495,7 +495,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tools-head:hover { background: var(--vk-hover); border-color: var(--vk-line-soft); }
 .vk-tools-head:focus-visible { outline-offset: -2px; }
 .vk-tools-head b { color: var(--vk-ink-2); font-weight: 600; }
-.vk-tools-head[data-active] b { color: var(--vk-ember); }
+.vk-tools-head[data-active] b { color: var(--vk-ember-ink); }
 .vk-tools-chev { width: 0.8rem; height: 0.8rem; flex: none; transition: transform var(--vk-t-fast); }
 .vk-tools-head[aria-expanded="true"] .vk-tools-chev { transform: rotate(90deg); }
 .vk-tools-families { display: inline-flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2.5); font-variant-numeric: tabular-nums; }
@@ -564,7 +564,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tool-meta { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .vk-tool-meta .vk-add { color: var(--vk-diff-add-ink); }
 .vk-tool-meta .vk-del { color: var(--vk-diff-del-ink); }
-.vk-tool-request[data-phase] { color: var(--vk-ember); }
+.vk-tool-request[data-phase] { color: var(--vk-ember-ink); }
 .vk-tool-request[data-phase="receiving"] { animation: vk-pulse 1.6s var(--vk-ease) infinite; }
 .vk-tool-chev { width: 0.9rem; height: 0.9rem; color: var(--vk-ink-3); transition: transform var(--vk-t-fast); }
 .vk-tool[data-open] .vk-tool-chev { transform: rotate(90deg); }
@@ -723,7 +723,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-param-head > code { color: var(--vk-ink); font-family: var(--vk-font-mono); font-weight: 600; }
 .vk-param-type { color: var(--vk-chart-1); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
 .vk-param-req { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
-.vk-param-req[data-required] { color: var(--vk-ember); }
+.vk-param-req[data-required] { color: var(--vk-ember-ink); }
 .vk-param-values { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1); }
 .vk-param-values > code,
 .vk-param-default > code { padding: 0 calc(var(--vk-u) * 1.25); background: var(--vk-code-bg); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
@@ -753,7 +753,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-step:last-child { border-bottom: 0; }
 .vk-step-mark { display: grid; place-items: center; width: 1.25rem; height: 1.25rem; border: var(--vk-bw) solid var(--vk-line-strong); font-size: var(--vk-fs-2xs); font-family: var(--vk-font-mono); color: var(--vk-ink-3); }
 .vk-step[data-state="done"] .vk-step-mark { background: var(--vk-ok); border-color: var(--vk-ok); color: var(--vk-ink-inverse); }
-.vk-step[data-state="active"] .vk-step-mark { border-color: var(--vk-ember); color: var(--vk-ember); box-shadow: 0 0 0 3px var(--vk-ember-soft); }
+.vk-step[data-state="active"] .vk-step-mark { border-color: var(--vk-ember); color: var(--vk-ember-ink); box-shadow: 0 0 0 3px var(--vk-ember-soft); }
 .vk-step[data-state="done"] .vk-step-text { color: var(--vk-ink-3); text-decoration: line-through; text-decoration-color: var(--vk-line-strong); }
 .vk-step small { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
 
