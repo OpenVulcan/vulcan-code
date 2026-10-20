@@ -3,7 +3,11 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-pub use vulcan_markdown_memory::{InjectionBudget, MemoryMode};
+pub use vulcan_markdown_memory::{
+    ConflictChoice, ConflictResolution, ExportedPackage, ImportPreview, ImportReport,
+    InjectionBudget, MemoryMode, NewerSide, NodeConflict, NodeSide, NodeSummary, PackageProject,
+    PackageProjectPreview, ProjectCandidate, ProjectMapping, ProjectTarget, ScopeMergePreview,
+};
 
 /// Saved memory settings plus the limits the editor needs.
 /// 已保存的记忆设置及编辑器所需的上限。
@@ -330,4 +334,59 @@ pub enum MarkdownMemoryProjectAction {
         /// 新显示名。
         name: String,
     },
+}
+
+/// Writes an export package of the chosen scopes into an existing directory.
+/// 将所选层的导出包写入既有目录。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarkdownMemoryExportRequest {
+    /// Existing native destination directory.
+    /// 已有原生目标目录。
+    pub destination_directory: String,
+    /// Whether the user scope is exported.
+    /// 是否导出用户层。
+    pub user: bool,
+    /// Whether the space scope is exported.
+    /// 是否导出空间层。
+    pub space: bool,
+    /// Memory projects whose project scope is exported.
+    /// 导出其项目层的记忆项目。
+    #[serde(default)]
+    pub memory_project_ids: Vec<String>,
+}
+
+/// Previews importing a package; projects without a mapping are only listed.
+/// 预览导入导出包；未指定去向的项目只列出。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarkdownMemoryImportPreviewRequest {
+    /// Exact native package path.
+    /// 精确原生导出包路径。
+    pub archive_path: String,
+    /// Chosen targets of packaged projects so far.
+    /// 目前已为包内项目选择的去向。
+    #[serde(default)]
+    pub projects: Vec<ProjectMapping>,
+}
+
+/// Applies a previewed import with a target for every packaged project and a resolution for
+/// every conflict.
+/// 应用已预览的导入：每个包内项目都有去向，每个冲突都有解决方式。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarkdownMemoryImportRequest {
+    /// Exact native package path.
+    /// 精确原生导出包路径。
+    pub archive_path: String,
+    /// SHA-256 returned by the preview.
+    /// 预览返回的 SHA-256。
+    pub expected_sha256: String,
+    /// Target of every packaged project.
+    /// 每个包内项目的去向。
+    pub projects: Vec<ProjectMapping>,
+    /// Resolution of every conflict.
+    /// 每个冲突的解决方式。
+    #[serde(default)]
+    pub resolutions: Vec<ConflictResolution>,
 }

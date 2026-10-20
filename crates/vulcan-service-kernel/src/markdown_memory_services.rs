@@ -12,12 +12,14 @@ use crate::runtime_workspace_helpers::workspace_task_project_for_project_id;
 use crate::vmm_hooks::refresh_guard_vmm_hook_snapshot;
 use std::path::Path;
 use vulcan_markdown_memory::{
-    BUDGET_WARNING_PERCENT, InjectionBudget, MarkdownMemorySettings, MarkdownMemoryStore,
-    MemoryDocument, MemoryError, MemoryProject, MemoryScope, NodeSource, NodeView, ProjectContext,
-    ScopeDocuments, WriteOperation, build_injection_snapshot, now_utc_minute, preset_sections,
+    BUDGET_WARNING_PERCENT, ExportSelection, InjectionBudget, MarkdownMemorySettings,
+    MarkdownMemoryStore, MemoryDocument, MemoryError, MemoryProject, MemoryScope, NodeSource,
+    NodeView, ProjectContext, ScopeDocuments, WriteOperation, build_injection_snapshot,
+    now_utc_minute, preset_sections,
 };
 use vulcan_service_api::{
-    MarkdownMemoryFileReplaceRequest, MarkdownMemoryFileRequest, MarkdownMemoryFileView,
+    MarkdownMemoryExportRequest, MarkdownMemoryFileReplaceRequest, MarkdownMemoryFileRequest,
+    MarkdownMemoryFileView, MarkdownMemoryImportPreviewRequest, MarkdownMemoryImportRequest,
     MarkdownMemoryNodeView, MarkdownMemoryOrphanView, MarkdownMemoryOverview,
     MarkdownMemoryProjectAction, MarkdownMemoryProjectView, MarkdownMemoryScopeRequest,
     MarkdownMemorySectionView, MarkdownMemoryUsageView, MarkdownMemoryWriteRequest,
@@ -218,6 +220,62 @@ pub(crate) fn service_apply_markdown_memory_project_action(
     let projects = apply_project_action(&memory_store()?, host.as_ref(), action)
         .map_err(|error| error.to_string())?;
     to_service_value(&projects)
+}
+
+/// File extension of Markdown memory export packages.
+/// Markdown 记忆导出包的文件扩展名。
+const PACKAGE_EXTENSION: &str = "zip";
+
+/// Writes an export package of the chosen scopes into an existing directory.
+/// 将所选层的导出包写入既有目录。
+pub(crate) fn service_export_markdown_memory(
+    request: MarkdownMemoryExportRequest,
+) -> Result<Value, String> {
+    let selection = ExportSelection {
+        user: request.user,
+        space: request.space,
+        memory_project_ids: request.memory_project_ids,
+    };
+    let exported = memory_store()?
+        .export_package(&selection, Path::new(&request.destination_directory))
+        .map_err(|error| error.to_string())?;
+    to_service_value(&exported)
+}
+
+/// Lists a directory with its export packages for the import picker.
+/// 为导入选择器列出目录及其中的导出包。
+pub(crate) fn service_browse_markdown_memory_packages(
+    state: SharedServiceBridgeState,
+    path: Option<String>,
+) -> Result<Value, String> {
+    to_service_value(&browse_package_files(state, path, PACKAGE_EXTENSION)?)
+}
+
+/// Previews importing a package without writing anything.
+/// 预览导入导出包，不写入任何内容。
+pub(crate) fn service_preview_markdown_memory_import(
+    request: MarkdownMemoryImportPreviewRequest,
+) -> Result<Value, String> {
+    let preview = memory_store()?
+        .preview_import(Path::new(&request.archive_path), &request.projects)
+        .map_err(|error| error.to_string())?;
+    to_service_value(&preview)
+}
+
+/// Applies a previewed import; replaced files are backed up first.
+/// 应用已预览的导入；被替换的文件会先备份。
+pub(crate) fn service_import_markdown_memory(
+    request: MarkdownMemoryImportRequest,
+) -> Result<Value, String> {
+    let report = memory_store()?
+        .apply_import(
+            Path::new(&request.archive_path),
+            &request.expected_sha256,
+            &request.projects,
+            &request.resolutions,
+        )
+        .map_err(|error| error.to_string())?;
+    to_service_value(&report)
 }
 
 /// Parses a stable scope key.

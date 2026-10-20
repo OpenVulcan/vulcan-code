@@ -90,3 +90,18 @@
 导出范围可选用户层、空间层、指定项目或全部，产物为带 `manifest.json` 的压缩包。导入先预览后应用，
 不调用 LLM：包内每个项目必须由用户指定匹配、新建或忽略；节点按 ID 与标题路径合并，相同跳过、冲突由用户
 选择；应用前备份当前文件，整批原子写入。同一包重复导入时所有节点判为相同并跳过。
+
+- 包结构（实现：`vulcan-markdown-memory/src/package.rs`）：zip 内只允许 `manifest.json`、`user.md`、`space.md`、
+  `projects/<记忆项目ID>.md`；清单 `format` 固定为 `vulcan-markdown-memory`，`version` 即
+  `EXPORT_FORMAT_VERSION`。项目数上限 `MAX_PACKAGE_PROJECTS`，包体上限 `MAX_PACKAGE_BYTES`，每个条目受
+  `MAX_FILE_BYTES` 约束并须为 UTF-8；任何多余条目、超限或版本不符都明确拒绝。
+- 导出写入用户所选的既有目录，文件名为新生成的 `vulcan-memory-<时间>-<随机>.zip`，从不覆盖已有文件。
+- 预览不写入。候选关联按 `same_path`、`same_first_commit`、`same_directory_name` 给出，只作提示、不预选；
+  未指定去向的项目只列出，不参与合并预览。H1 分区按分区键匹配，其余节点按 ID 匹配；冲突的 `newer` 取自
+  双方元数据的 `updated`，界面以较新一侧为默认选择，无法判断时默认保留本地。
+- 应用时必须携带预览返回的 SHA-256，包字节变化即拒绝；每个包内项目都要有去向，每个冲突都要有且只有一个
+  解决方式。被替换的文件先复制到 `<记忆根>/backups/import-<时间>-<随机>/`，再与注册表一起整批提交。
+  “新建”产生不绑定宿主项目的记忆项目，之后可在项目页关联。
+- 服务与 RPC：`service_export_markdown_memory`、`service_browse_markdown_memory_packages`（列出 `.zip`，与
+  知识库 `.vkb` 浏览共用 `browse_package_files`）、`service_preview_markdown_memory_import`、
+  `service_import_markdown_memory`。

@@ -10,6 +10,7 @@
 mod document;
 mod error;
 mod operations;
+mod package;
 mod registry;
 mod scope;
 mod search;
@@ -22,6 +23,11 @@ pub use document::{MemoryDocument, MemoryNode, NodeMeta, NodeSource, NodeView};
 pub use error::MemoryError;
 pub use operations::{
     DuplicateHint, NodePlacement, WriteOperation, WriteOperationReceipt, WriteReceipt,
+};
+pub use package::{
+    ConflictChoice, ConflictResolution, ExportSelection, ExportedPackage, ImportPreview,
+    ImportReport, NewerSide, NodeConflict, NodeSide, NodeSummary, PackageProject,
+    PackageProjectPreview, ProjectCandidate, ProjectMapping, ProjectTarget, ScopeMergePreview,
 };
 pub use registry::{MemoryProject, MemoryRegistry, OrphanCandidate};
 pub use scope::{MemoryScope, preset_sections};
@@ -89,6 +95,14 @@ pub const REGISTRY_FORMAT_VERSION: u32 = 1;
 /// Format version of `settings.json`.
 /// `settings.json` 的格式版本。
 pub const SETTINGS_FORMAT_VERSION: u32 = 1;
+
+/// Most projects one export package can hold.
+/// 单个导出包最多可容纳的项目数。
+pub const MAX_PACKAGE_PROJECTS: usize = 256;
+
+/// Largest export package accepted for import: the manifest and every scope file at their limit.
+/// 导入可接受的最大导出包：清单与每个层文件均达到上限。
+pub const MAX_PACKAGE_BYTES: usize = (MAX_PACKAGE_PROJECTS + 3) * MAX_FILE_BYTES;
 
 /// Format version of an export package manifest.
 /// 导出包清单的格式版本。

@@ -8,8 +8,8 @@ use std::{
 };
 
 use vulcan_service_api::{
-    ProjectDirectoryEntrySummary, ProjectDirectoryListing, ProjectDirectoryRootSummary,
-    WorkbenchSnapshot,
+    PackageFileListing, PackageFileSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
+    ProjectDirectoryRootSummary, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::TaskProjectSummary;
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
@@ -98,6 +98,59 @@ pub(super) fn service_browse_project_directories(
         can_select: true,
         entries,
         notice: None,
+    })
+}
+
+/// Browses one host directory and lists its ordinary files with `extension` for a package picker.
+/// 浏览一个宿主目录，并为套件选择器列出其中扩展名为 `extension` 的普通文件。
+///
+/// # Parameters
+/// 参数
+/// `state` and `path` follow [`service_browse_project_directories`]; `extension` is compared
+/// without its dot and ignoring ASCII case.
+/// `state` 与 `path` 同 [`service_browse_project_directories`]；`extension` 不含点号，比较时忽略
+/// ASCII 大小写。
+///
+/// # Returns
+/// 返回值
+/// The directory navigation plus the matching files sorted by name.
+/// 目录导航以及按名称排序的匹配文件。
+pub(crate) fn browse_package_files(
+    state: SharedServiceBridgeState,
+    path: Option<String>,
+    extension: &str,
+) -> Result<PackageFileListing, String> {
+    let directory = service_browse_project_directories(state, path)?;
+    let mut packages = fs::read_dir(PathBuf::from(&directory.path))
+        .map_err(|error| format!("Failed to read the package directory: {error}"))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let metadata = fs::symlink_metadata(entry.path()).ok()?;
+            if !metadata.is_file()
+                || entry
+                    .path()
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_none_or(|value| !value.eq_ignore_ascii_case(extension))
+            {
+                return None;
+            }
+            Some(PackageFileSummary {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                path: normalized_workspace_path_text_from_path(&entry.path()),
+                byte_size: metadata.len(),
+            })
+        })
+        .collect::<Vec<_>>();
+    packages.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(PackageFileListing {
+        directory,
+        packages,
     })
 }
 

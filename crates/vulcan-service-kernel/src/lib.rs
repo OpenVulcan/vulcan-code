@@ -316,6 +316,7 @@ use plugin_services::{
 };
 pub use project_conversation_services::service_add_project_initial_directory;
 use project_conversation_services::*;
+use project_directories::browse_package_files;
 pub use project_directories::service_add_project_from_path;
 use project_directories::service_browse_project_directories;
 use project_directories::visible_project_id_for_path;

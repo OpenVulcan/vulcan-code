@@ -492,11 +492,19 @@ pub struct KnowledgePackageImportRequest {
     pub expected_sha256: String,
 }
 
-/// One selectable ordinary package file.
-/// 单个可选普通套件文件。
+/// A selectable knowledge package file.
+/// 可选的知识库套件文件。
+pub type KnowledgePackageFileSummary = PackageFileSummary;
+
+/// Directory navigation with selectable `.vkb` knowledge packages.
+/// 包含可选 `.vkb` 知识库套件的目录导航。
+pub type KnowledgePackageFileListing = PackageFileListing;
+
+/// One selectable package file of a native directory.
+/// 原生目录中单个可选的套件文件。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct KnowledgePackageFileSummary {
+pub struct PackageFileSummary {
     /// Visible file name.
     /// 可见文件名。
     pub name: String,
@@ -508,17 +516,17 @@ pub struct KnowledgePackageFileSummary {
     pub byte_size: u64,
 }
 
-/// Directory navigation with selectable package files.
-/// 包含可选套件文件的目录导航。
+/// Directory navigation with the selectable package files of one kind.
+/// 包含某一类可选套件文件的目录导航。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct KnowledgePackageFileListing {
+pub struct PackageFileListing {
     /// Shared native directory navigation.
     /// 共享原生目录导航。
     pub directory: crate::ProjectDirectoryListing,
-    /// Ordinary .vkb files in the directory.
-    /// 目录中的普通 .vkb 文件。
-    pub packages: Vec<KnowledgePackageFileSummary>,
+    /// Ordinary files of the package kind in the directory.
+    /// 目录中该套件类型的普通文件。
+    pub packages: Vec<PackageFileSummary>,
 }
 
 /// Persists only a session's library selection, never a retrieval policy.

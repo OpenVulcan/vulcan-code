@@ -179,12 +179,7 @@ impl MemoryRegistry {
         now: &str,
     ) -> String {
         self.unbind_host(host_project_id);
-        let id = loop {
-            let candidate = format!("p-{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
-            if self.project(&candidate).is_none() {
-                break candidate;
-            }
-        };
+        let id = self.unused_project_id();
         self.projects.push(MemoryProject {
             id: id.clone(),
             name: directory_name(root_path),
@@ -198,6 +193,41 @@ impl MemoryRegistry {
         self.ignored_host_project_ids
             .retain(|ignored| ignored != host_project_id);
         id
+    }
+
+    /// Creates a memory project bound to no host project, such as one restored from an export
+    /// package, and returns its id; it can be linked to a host project later.
+    /// 创建不绑定任何宿主项目的记忆项目（例如从导出包恢复的项目）并返回其标识；之后可再关联宿主项目。
+    pub(crate) fn create_unbound(
+        &mut self,
+        name: &str,
+        paths: Vec<String>,
+        first_commit: Option<String>,
+        now: &str,
+    ) -> String {
+        let id = self.unused_project_id();
+        self.projects.push(MemoryProject {
+            id: id.clone(),
+            name: name.to_string(),
+            host_project_ids: Vec::new(),
+            paths,
+            first_commit,
+            memory_enabled: true,
+            created: now.to_string(),
+            updated: now.to_string(),
+        });
+        id
+    }
+
+    /// Generates a memory project id not used by any project.
+    /// 生成未被任何项目使用的记忆项目标识。
+    fn unused_project_id(&self) -> String {
+        loop {
+            let candidate = format!("p-{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
+            if self.project(&candidate).is_none() {
+                break candidate;
+            }
+        }
     }
 
     /// Binds a host project to an existing memory project and records the path.
@@ -346,7 +376,7 @@ fn candidate_score(candidate: &OrphanCandidate) -> u8 {
 
 /// Returns the last path component, accepting both separators.
 /// 返回最后一个路径组件，兼容两种分隔符。
-fn directory_name(path: &str) -> String {
+pub(crate) fn directory_name(path: &str) -> String {
     path.trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\'])
         .next()

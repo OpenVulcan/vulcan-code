@@ -5,7 +5,7 @@ use super::*;
 use crate::session_goal_lifecycle::{current_v1_goal_unix_millis, session_v1_handle_from_state};
 use crate::session_request_config_v1::set_knowledge_library_selection_v1;
 use serde::Serialize;
-use std::{collections::BTreeSet, fs, path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 use vulcan_ai_contract::{
     AiOperation, EmbeddingEncoding, EmbeddingOutputKind, EmbeddingTask, HostAiPort,
     InferenceUsageScope,
@@ -614,39 +614,9 @@ pub(super) fn service_browse_knowledge_packages(
     state: SharedServiceBridgeState,
     path: Option<String>,
 ) -> Result<Value, String> {
-    let directory = service_browse_project_directories(state, path)?;
-    let mut packages = fs::read_dir(PathBuf::from(&directory.path))
-        .map_err(|error| format!("Failed to read the knowledge package directory: {error}"))?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let metadata = fs::symlink_metadata(entry.path()).ok()?;
-            if !metadata.is_file()
-                || entry
-                    .path()
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_none_or(|extension| !extension.eq_ignore_ascii_case("vkb"))
-            {
-                return None;
-            }
-            Some(KnowledgePackageFileSummary {
-                name: entry.file_name().to_string_lossy().into_owned(),
-                path: normalized_workspace_path_text_from_path(&entry.path()),
-                byte_size: metadata.len(),
-            })
-        })
-        .collect::<Vec<_>>();
-    packages.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-            .then_with(|| left.name.cmp(&right.name))
-    });
-    serde_json::to_value(KnowledgePackageFileListing {
-        directory,
-        packages,
-    })
-    .map_err(|error| format!("serialize knowledge package file listing: {error}"))
+    let listing: KnowledgePackageFileListing = browse_package_files(state, path, "vkb")?;
+    serde_json::to_value(listing)
+        .map_err(|error| format!("serialize knowledge package file listing: {error}"))
 }
 
 /// Requires exact library_id authorization for project_id in runtime; returns an explicit refusal.

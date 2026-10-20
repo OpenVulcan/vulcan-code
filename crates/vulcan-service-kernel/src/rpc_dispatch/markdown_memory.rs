@@ -14,6 +14,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_read_markdown_memory_file",
     "service_replace_markdown_memory_file",
     "service_apply_markdown_memory_project_action",
+    "service_export_markdown_memory",
+    "service_browse_markdown_memory_packages",
+    "service_preview_markdown_memory_import",
+    "service_import_markdown_memory",
 ];
 
 /// Dispatches one exact memory RPC.
@@ -45,6 +49,18 @@ pub(super) async fn dispatch(
                 state,
                 rpc_required_param(params, "request")?,
             )
+        }
+        "service_export_markdown_memory" => {
+            service_export_markdown_memory(rpc_required_param(params, "request")?)
+        }
+        "service_browse_markdown_memory_packages" => {
+            service_browse_markdown_memory_packages(state, rpc_optional_param(params, "path")?)
+        }
+        "service_preview_markdown_memory_import" => {
+            service_preview_markdown_memory_import(rpc_required_param(params, "request")?)
+        }
+        "service_import_markdown_memory" => {
+            service_import_markdown_memory(rpc_required_param(params, "request")?)
         }
         _ => return Ok(ServiceRpcDispatch::Unknown),
     };

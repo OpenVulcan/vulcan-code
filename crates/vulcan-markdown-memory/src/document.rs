@@ -177,6 +177,22 @@ impl MemoryNode {
         }
     }
 
+    /// Copies this node without children for insertion into another document: the heading and
+    /// metadata lines are regenerated at `level` and the body uses that document's line terminator.
+    /// 复制本节点（不含子节点）以插入另一文档：标题与元数据行按 `level` 重新生成，正文使用该文档的
+    /// 行终止符。
+    pub(crate) fn detached(&self, level: u8, eol: &str) -> Self {
+        Self {
+            level,
+            title: self.title.clone(),
+            heading_raw: None,
+            meta: self.meta.clone(),
+            meta_raw: None,
+            body: stored_body(&self.body_text(), eol),
+            children: Vec::new(),
+        }
+    }
+
     /// Returns the raw own body.
     /// 返回原始自身正文。
     pub fn raw_body(&self) -> &str {
