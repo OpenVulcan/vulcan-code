@@ -90,9 +90,10 @@ export function ProjectSidebar(props: ProjectSessionTreeProps & {
   // 处理标题栏双击最大化或还原行为。
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
+  const { t } = useI18n();
   const { rail, titlebarDragRegion, onTitlebarDoubleClick, ...navigationProps } = props;
   return (
-    <Sidebar collapsible="offcanvas" rail={rail} variant="inset">
+    <Sidebar aria-label={t("activityRail.conversations")} collapsible="offcanvas" rail={rail} variant="inset">
       <SidebarHeader>
         <SidebarBrandMenu
           actions={<SidebarFlowSwitch />}

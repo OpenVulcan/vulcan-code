@@ -28,7 +28,7 @@ export function WorkspaceFeaturePanel(props: {
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
   return (
-    <Sidebar className="vk-feature-panel" collapsible="offcanvas" panel={props.navigation !== null} rail={props.rail} variant="inset">
+    <Sidebar aria-label={props.title} className="vk-feature-panel" collapsible="offcanvas" panel={props.navigation !== null} rail={props.rail} variant="inset">
       <SidebarHeader>
         <SidebarBrandMenu
           currentLabel={props.title}

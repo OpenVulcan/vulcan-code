@@ -97,7 +97,7 @@ function FeatureSidebar(props: {
   const headerLabel = props.activeArea === "settings" ? t("settings.systemSettings") : feature?.label ?? t("sidebar.console")
 
   return (
-    <Sidebar collapsible="offcanvas" rail={props.rail} variant="inset">
+    <Sidebar aria-label={headerLabel} collapsible="offcanvas" rail={props.rail} variant="inset">
       <SidebarHeader>
         <SidebarBrandMenu
           currentLabel={headerLabel}
