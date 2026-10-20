@@ -6,7 +6,6 @@ import {
   ConversationLoadingCenter,
   ConversationSubmissionStatus,
   DraftSubmissionTranscript,
-  EmptyConversationPrompt,
 } from "@/components/conversation/conversation-chrome";
 import {
   ConversationBranchWorkspaceV1,
@@ -402,11 +401,8 @@ export function ChatArea(props: ChatAreaProps) {
   const {
     visibleThinkingBlock: visibleStreamingThinkingOverlayBlock,
     thinkingOverlayLeaving: streamingThinkingOverlayLeaving,
-    emptyPromptVisible,
-    emptyPromptLeaving,
   } = useConversationVisualTransitions({
     surfaceKey: visualSurfaceKey,
-    isEmptyConversation,
     displayedThinkingBlock: displayedStreamingReasoningBlock,
   });
   // reasoningDisplaySignature is a stable scroll-restoration marker for V1 reasoning filtering.
@@ -560,6 +556,7 @@ export function ChatArea(props: ChatAreaProps) {
       projectId={selectedProject?.id ?? props.selectedDraftConversation?.projectId ?? null}
       conversationId={selectedConversation?.id ?? null}
       isEmptyConversation={isEmptyConversation}
+      startProjectName={emptyProjectName}
       isConversationRunning={isConversationRunning}
       showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}
       runtimeCue={runtimeCue}
@@ -591,12 +588,6 @@ export function ChatArea(props: ChatAreaProps) {
   // conversationSurfaceContent 将转录、浮层与输入区保留在同一个自适应内容坐标空间内。
   const conversationSurfaceContent = (
     <>
-      {emptyPromptVisible ? (
-        <EmptyConversationPrompt
-          leaving={emptyPromptLeaving}
-          projectName={emptyProjectName}
-        />
-      ) : null}
       {selectedConversation ? (
         <ConversationBranchWorkspaceV1
           collaborationNavigation={{

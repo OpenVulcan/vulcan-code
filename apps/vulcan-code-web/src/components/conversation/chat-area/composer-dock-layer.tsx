@@ -4,6 +4,7 @@ import {
   composerAttachmentMedia,
 } from "@/components/composer/composer-dock";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
+import { ConversationStartFooter, ConversationStartHero } from "@/components/conversation/conversation-start";
 
 type ComposerDockProps = React.ComponentProps<typeof ComposerDock>;
 type ThinkingDisplayMode = ComposerDockProps["thinkingDisplayMode"];
@@ -23,6 +24,9 @@ export interface ChatAreaComposerDockLayerProps {
   // Whether the selected conversation is empty.
   // 当前选中会话是否为空。
   isEmptyConversation: boolean;
+  // Project named by the start page of an empty conversation.
+  // 空会话起始页中显示的项目名称。
+  startProjectName: string;
   // Whether the active conversation is currently running.
   // 当前活动会话是否正在运行。
   isConversationRunning: boolean;
@@ -66,6 +70,7 @@ export interface ChatAreaComposerDockLayerProps {
 export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps) {
   const chatAreaProps = props.chatAreaProps;
   const workbench = chatAreaProps.workbench;
+  const draft = chatAreaProps.selectedDraftConversation;
   // Resolve visibility from the local session/project; another client may own the shared snapshot selection.
   // 从本地会话/项目解析可见性；共享快照的选择可能由另一客户端持有。
   const memoryEnabled = props.conversationId
@@ -91,6 +96,26 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
         props.conversationId ? workbench.sessionContextCompactionWindowNodeId ?? null : null
       }
       emptyMode={props.isEmptyConversation}
+      startHero={props.isEmptyConversation ? (
+        <ConversationStartHero
+          branchName={chatAreaProps.sessionReviewSummary?.branchName ?? null}
+          projectName={props.startProjectName}
+          showLead={Boolean(draft)}
+        />
+      ) : null}
+      // Only an unsent draft offers ways to begin; a persisted empty session keeps just its heading.
+      // 只有未发送草稿提供开始方式；已持久化的空会话只保留标题。
+      startFooter={props.isEmptyConversation && draft ? (
+        <ConversationStartFooter
+          conversations={workbench.conversations}
+          onOpenKnowledge={chatAreaProps.onOpenKnowledge}
+          onOpenMemory={chatAreaProps.onOpenMemorySettings}
+          onOpenReviewChanges={chatAreaProps.onOpenReviewChanges}
+          onSelectConversation={chatAreaProps.onSelectConversation}
+          projectId={draft.projectId}
+          reviewSummary={chatAreaProps.sessionReviewSummary}
+        />
+      ) : null}
       onScrollToBottom={props.onScrollToBottom}
       onSelectWorkbenchModel={chatAreaProps.onSelectWorkbenchModel}
       onListWorkbenchModelSecondaryRoutes={chatAreaProps.onListWorkbenchModelSecondaryRoutes}

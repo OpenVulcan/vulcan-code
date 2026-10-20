@@ -86,26 +86,3 @@ export function DraftSubmissionTranscript(props: {
     </section>
   );
 }
-// EmptyConversationPrompt renders the blank-chat prompt above the shared composer dock.
-// EmptyConversationPrompt 在共享输入区上方渲染空会话提示。
-export function EmptyConversationPrompt(props: {
-  // Whether the prompt is playing its exit animation.
-  // 当前提示是否正在播放退出动画。
-  leaving: boolean;
-  // Project name used by the empty-state prompt.
-  // 空状态提示使用的项目名称。
-  projectName: string;
-}) {
-  // t translates the empty conversation prompt while projectName remains user data.
-  // t 翻译空会话引导语，projectName 仍保留为用户数据。
-  const { t } = useI18n();
-  // promptText inserts the selected project name into the localized empty prompt.
-  // promptText 将当前项目名称插入本地化空会话提示。
-  const promptText = t("console.emptyPrompt").replace("{projectName}", props.projectName);
-
-  return (
-    <section className="vk-empty-prompt" data-leaving={props.leaving ? "" : undefined} aria-hidden={props.leaving}>
-      <h2 title={promptText}>{promptText}</h2>
-    </section>
-  );
-}

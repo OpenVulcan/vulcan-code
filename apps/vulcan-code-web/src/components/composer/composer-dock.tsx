@@ -105,6 +105,11 @@ export function ComposerDock(props: {
   // Whether the dock is visually centered for an empty conversation.
   // 输入区浮层是否在空会话中居中显示。
   emptyMode: boolean;
+  // Start content of an empty conversation, stacked in the dock column around the composer so the opening
+  // heading, the draft controls and the composer can never overlap.
+  // 空会话的起始内容，叠放在停靠层列中输入区的上下方，使开场标题、草稿控件与输入区永不重叠。
+  startHero?: React.ReactNode;
+  startFooter?: React.ReactNode;
   // Slash commands projected by the shared workbench service.
   // 共享工作台服务投影出的 slash 指令。
   slashCommands: ComposerSlashCommandSummary[];
@@ -276,6 +281,7 @@ export function ComposerDock(props: {
   const draftOwner = props.conversationId === null ? draftContext : null;
   const [draftState, updateDraftState] = useDedicatedDraft(draftOwner?.draftId ?? null);
   const dedicatedWizardShown = draftOwner !== null && draftState.kind === "dedicated";
+  const startShown = props.emptyMode && !dedicatedWizardShown;
   const [dedicatedCreating, setDedicatedCreating] = React.useState(false);
   // dockRef measures only in-flow composer content; portaled and floating status controls stay outside this height.
   // dockRef 只测量布局流内的输入区内容；Portal 状态与浮动控件不参与该高度。
@@ -326,6 +332,7 @@ export function ComposerDock(props: {
           </Tooltip>
         </div>
       ) : null}
+      {startShown ? props.startHero : null}
       {draftOwner ? (
         <DedicatedDraftStrip
           disabled={dedicatedCreating || draftOwner.submissionPending}
@@ -404,6 +411,7 @@ export function ComposerDock(props: {
       />
       </DedicatedComposerContext.Provider>
       )}
+      {startShown ? props.startFooter : null}
       {props.todolistStatusHost && visibleSessionTodolist
         ? createPortal(
           <ComposerSessionProgressCapsule

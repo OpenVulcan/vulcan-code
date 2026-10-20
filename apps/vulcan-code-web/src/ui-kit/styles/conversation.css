@@ -97,13 +97,6 @@
 .vk-chat-loading-card > span { font-size: var(--vk-fs-sm); }
 /* First submission while the session is being created: a quiet chip above the composer. */
 .vk-submit-status { position: absolute; z-index: 3; left: 50%; bottom: calc(var(--vk-dock-h) + var(--vk-u) * 4.5); display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); min-height: var(--vk-h-sm); padding: 0 calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-raised); box-shadow: var(--vk-shadow-1); color: var(--vk-ink-2); font-size: var(--vk-fs-sm); pointer-events: none; transform: translateX(-50%); }
-/* Blank conversation: the greeting sits just above the composer, which centers vertically. */
-.vk-empty-prompt { position: absolute; z-index: 4; top: calc(50% - 104px); left: calc(var(--vk-u) * 6); right: calc(var(--vk-u) * 6); display: grid; justify-items: center; pointer-events: none; transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))); transition: opacity 360ms var(--vk-ease), transform 360ms var(--vk-ease); }
-.vk-empty-prompt[data-leaving] { opacity: 0; transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))) translateY(calc(var(--vk-u) * -4)); }
-.vk-empty-prompt h2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; min-width: 0; max-width: min(56rem, calc(100% - var(--vk-u) * 12)); margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-2xl); font-weight: 500; letter-spacing: -0.01em; line-height: var(--vk-lh-tight); overflow-wrap: anywhere; text-align: center; }
-/* The full greeting shows on hover, while a leaving heading never intercepts the composer. */
-.vk-empty-prompt:not([data-leaving]) h2 { pointer-events: auto; }
-@media (max-width: 720px) { .vk-empty-prompt h2 { max-width: 100%; font-size: var(--vk-fs-xl); } }
 
 /* History loader: older turns load on demand when the reader scrolls to the top. */
 .vk-history {

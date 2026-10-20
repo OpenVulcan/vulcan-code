@@ -38,7 +38,7 @@ function project(workbench: WorkbenchSnapshot, id: string | null, empty: boolean
   // 此处仅检查 workbench；所有父层回调只被转发，不会调用。
   const chatAreaProps = { workbench } as ChatAreaComposerDockLayerProps["chatAreaProps"];
   return ChatAreaComposerDockLayer({ chatAreaProps, projectId: "preview", conversationId: id,
-    isEmptyConversation: empty, isConversationRunning: false, showScrollToBottom: false,
+    isEmptyConversation: empty, startProjectName: "project", isConversationRunning: false, showScrollToBottom: false,
     runtimeCue: null, runtimeStatusHost: null, todolistStatusHost: null, sessionTodolist: null,
     thinkingDisplayMode: DEFAULT_THINKING_DISPLAY_MODE, sessionReviewSummary: null, onComposerDockHeightChange: vi.fn(),
     onScrollToBottom: vi.fn(), onThinkingDisplayModeChange: vi.fn(), onSubmitPrompt: vi.fn(),

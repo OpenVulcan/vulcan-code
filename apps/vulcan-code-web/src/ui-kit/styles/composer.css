@@ -24,15 +24,54 @@
   transition: bottom 360ms var(--vk-ease), transform 260ms var(--vk-ease);
   will-change: bottom, transform;
 }
-/* An empty conversation lifts the composer to the middle, under the start heading. */
-/* 空会话把输入区抬到中部，位于起始标题下方。 */
-.vk-dock[data-mode="empty"] { bottom: calc(50% - 94px); }
+/* An empty conversation stacks the start page in the dock column — heading, draft controls, composer, start
+ * cards and recent sessions — and centers that column on its own measured height. A column taller than the
+ * stage scrolls inside the dock, and sending the first prompt slides the composer down to its resting place.
+ * 空会话在停靠层列中叠放起始页：标题、草稿控件、输入区、起始卡片与最近会话，并按其自身测得的高度垂直居中。
+ * 高于舞台的列在停靠层内滚动；发送首条提示后输入区滑到常驻位置。 */
+.vk-dock[data-mode="empty"] {
+  bottom: max(calc(var(--vk-u) * 4), calc(50% - var(--vk-dock-h, 132px) / 2));
+  max-height: calc(100% - var(--vk-u) * 8);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  gap: calc(var(--vk-u) * 3);
+}
 /* The dedicated wizard spans the conversation height so a tall step scrolls inside it. */
 /* 专职向导占满会话高度，较高的步骤在其内部滚动。 */
 .vk-dock[data-mode="wizard"] { top: calc(var(--vk-u) * 4); justify-content: center; }
-.vk-chat[data-empty]:has(> .vk-dock[data-mode="wizard"]) > .vk-empty-prompt {
-  opacity: 0;
-  transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))) translateY(-16px);
+
+/* ---------- Start page ---------- */
+/* 起始页 */
+.vk-start-hero { display: grid; justify-items: center; gap: calc(var(--vk-u) * 2); width: 100%; padding: 0 calc(var(--vk-u) * 4) calc(var(--vk-u) * 2); text-align: center; animation: vk-start-in 360ms var(--vk-ease) both; }
+.vk-start-hero > .vk-label { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); max-width: 100%; color: var(--vk-ink-3); }
+.vk-start-hero > .vk-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-start-hero > .vk-label > svg { flex: none; width: 0.875rem; height: 0.875rem; }
+.vk-start-hero > .vk-label > svg:first-of-type { margin-left: calc(var(--vk-u) * 1.5); }
+.vk-start-hero h1 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; max-width: 100%; margin: 0; color: var(--vk-ink); font-size: var(--vk-fs-2xl); font-weight: 500; letter-spacing: -0.01em; line-height: var(--vk-lh-tight); overflow-wrap: anywhere; text-wrap: balance; }
+.vk-start-hero h1 em { color: var(--vk-ember); font-style: normal; }
+.vk-start-hero p { max-width: 34rem; margin: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); text-wrap: pretty; }
+.vk-dock[data-mode="empty"] > .vk-draft-strip { align-self: stretch; justify-content: center; }
+.vk-start-more { display: grid; gap: calc(var(--vk-u) * 5); width: 100%; padding-top: calc(var(--vk-u) * 3); pointer-events: auto; animation: vk-start-in 420ms var(--vk-ease) 60ms both; }
+.vk-start-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: calc(var(--vk-u) * 2); }
+.vk-start-card { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: calc(var(--vk-u) * 2.5); row-gap: 2px; align-items: center; min-width: 0; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3.5); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-raised); color: var(--vk-ink); text-align: left; cursor: pointer; transition: border-color 140ms var(--vk-ease), background 140ms var(--vk-ease), box-shadow 140ms var(--vk-ease); }
+.vk-start-card > svg { grid-row: 1 / span 2; width: 1.125rem; height: 1.125rem; color: var(--vk-ink-3); transition: color 140ms var(--vk-ease); }
+.vk-start-card > strong { min-width: 0; overflow: hidden; font-size: var(--vk-fs-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vk-start-card > small { min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-start-card:hover { border-color: var(--vk-line-strong); background: var(--vk-panel); box-shadow: inset 2px 0 0 var(--vk-ember); }
+.vk-start-card:hover > svg { color: var(--vk-ember); }
+.vk-start-card:focus-visible { outline: 2px solid var(--vk-signal); outline-offset: 1px; }
+.vk-start-recent { display: grid; gap: 1px; }
+.vk-start-recent > h3 { margin: 0 0 calc(var(--vk-u) * 1.5); padding: 0 calc(var(--vk-u) * 1); color: var(--vk-ink-3); }
+.vk-start-session { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 3); min-width: 0; padding: calc(var(--vk-u) * 1.75) calc(var(--vk-u) * 2.5); border: 0; background: transparent; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); text-align: left; cursor: pointer; }
+.vk-start-session > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-start-session > small { flex: none; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
+.vk-start-session:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-start-session:focus-visible { outline: 2px solid var(--vk-signal); outline-offset: -2px; }
+@keyframes vk-start-in { from { opacity: 0; transform: translateY(calc(var(--vk-u) * 2)); } }
+@container vk-app (max-width: 46em) {
+  .vk-start-hero h1 { font-size: var(--vk-fs-xl); }
+  .vk-start-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Floating aids above the dock: jump to the latest output. */
@@ -396,5 +435,6 @@ button.vk-attach-warn { right: 6px; bottom: 6px; color: var(--vk-warn); }
 }
 @media (prefers-reduced-motion: reduce) {
   .vk-dock { transition: none; }
+  .vk-start-hero, .vk-start-more { animation: none; }
   .vk-attach-progress > svg[data-spin] { animation: none; }
 }
