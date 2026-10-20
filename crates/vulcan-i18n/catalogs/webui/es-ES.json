@@ -5229,7 +5229,7 @@
   "settings.mcp.enabledStateUnavailable": "Activado · Estado no disponible",
   "settings.mcp.tools": "{length} herramientas",
   "settings.mcp.noMatches": "Sin coincidencias",
-  "settings.mcp.noServers": "Aún no hay servidores MCP.",
+  "settings.mcp.noServers": "Aún no hay servidores MCP",
   "settings.mcp.addAServerTo": "Añade un servidor para inspeccionar su conexión y sus herramientas.",
   "settings.mcp.refreshing": "Actualizando",
   "settings.mcp.refreshStatus": "Actualizar estado",

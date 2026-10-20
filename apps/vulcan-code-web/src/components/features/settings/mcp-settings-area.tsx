@@ -95,22 +95,28 @@ export function McpSettingsArea(props: {
     && (status === "all" || (row.runtime ? row.runtime.state.status : row.config?.enabled === false ? "disabled" : "unknown") === status)
     && (row.name + " " + row.id).toLowerCase().includes(search.toLowerCase()))
   const selected = rows.find(row => row.id === selectedId)
+  // empty drops the filters and the list/detail split until a first server exists; one empty state offers adding it.
+  // empty 在首个服务器出现前去掉筛选与列表/详情分栏；由单个空状态提供添加入口。
+  const empty = loaded && rows.length === 0
+  const addButton = <Button size="sm" onClick={() => setCreating(true)}><Plus size={15} aria-hidden="true" />{t("settings.mcp.add")}</Button>
   React.useEffect(() => {
     if (!rows.some(row => row.id === selectedId)) setSelectedId(rows[0]?.id ?? null)
   }, [props.servers, catalog, selectedId])
   React.useEffect(() => { setTab("overview"); setConfirmDelete(false); setActionError("") }, [selectedId])
   return <div className="mcp-page vk-bleed">
     <header className="mcp-toolbar">
+      {empty ? null : <>
       <InputGroup className="mcp-search"><InputGroupAddon align="inline-start"><Search aria-hidden="true" /></InputGroupAddon><InputGroupInput aria-label={t("settings.mcp.searchMcp")} placeholder={t("settings.mcp.searchNameOrId")} value={search} onChange={e => setSearch(e.target.value)} /></InputGroup>
       <Select value={source} onValueChange={setSource}><SelectTrigger size="sm" aria-label={t("settings.mcp.source")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("settings.mcp.allSources")}</SelectItem><SelectItem value="user">{t("settings.mcp.user")}</SelectItem><SelectItem value="plugin">{t("settings.mcp.plugin")}</SelectItem></SelectContent></Select>
       <Select value={status} onValueChange={setStatus}><SelectTrigger size="sm" aria-label={t("settings.mcp.connectionState")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("settings.mcp.allStates")}</SelectItem>{Object.entries(statusLabels).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}<SelectItem value="unknown">{t("settings.mcp.unknown")}</SelectItem></SelectContent></Select>
+      </>}
       <div className="mcp-toolbar-actions">
         <Button disabled={refreshing} size="sm" variant="ghost" onClick={() => setRefreshKey(key => key + 1)}><RefreshCw className={refreshing ? "vk-spin" : undefined} size={15} aria-hidden="true" />{refreshing ? t("settings.mcp.refreshing") : t("settings.mcp.refreshStatus")}</Button>
-        <Button size="sm" onClick={() => setCreating(true)}><Plus size={15} aria-hidden="true" />{t("settings.mcp.add")}</Button>
+        {empty ? null : addButton}
       </div>
     </header>
     {error && <PageNotice tone="error" title={t("settings.mcp.previousSnapshotRetainedCurrent")} className="mcp-page-banner">{error}</PageNotice>}
-    <div className="mcp-workspace">
+    {empty ? <div className="mcp-detail-placeholder"><PageEmptyState size="panel" icon={<Server />} title={t("settings.mcp.noServers")} description={t("settings.mcp.addAServerTo")} action={addButton} /></div> : <div className="mcp-workspace">
     <aside className="mcp-directory" aria-label={t("settings.mcp.servers")}>
       <div className="mcp-server-list">{filtered.map(row => <button type="button" disabled={removing} className="mcp-server-row" data-active={selectedId === row.id} key={row.id} onClick={() => setSelectedId(row.id)}>
         <strong>{row.name}</strong><span>{row.transport} · {row.source === "plugin" ? t("settings.mcp.plugin") : t("settings.mcp.user2")}</span>
@@ -119,7 +125,7 @@ export function McpSettingsArea(props: {
         {row.runtime?.state.lastError && <span className="mcp-error">{row.runtime.state.lastError}</span>}
       </button>)}</div>
       {!filtered.length && !loaded && <StreamPlaceholder label={t("settings.mcp.loading")} shape="rows" count={4} />}
-      {!filtered.length && loaded && <p className="mcp-rail-note">{t(rows.length > 0 ? "settings.mcp.noMatches" : "settings.mcp.noServers")}</p>}
+      {!filtered.length && loaded && <p className="mcp-rail-note">{t("settings.mcp.noMatches")}</p>}
     </aside>
     <section className="mcp-detail">
       {selected ? <>
@@ -167,9 +173,9 @@ export function McpSettingsArea(props: {
           {props.onOpenDiagnostics && <Button size="sm" variant="outline" className="mcp-diagnostics-link" onClick={props.onOpenDiagnostics}>{t("settings.mcp.openRuntimeDiagnostics")}</Button>}
         </TabsContent>
         </Tabs>
-      </> : loaded ? <div className="mcp-detail-placeholder">{rows.length ? <PageEmptyState size="panel" icon={<Server />} title={t("settings.mcp.selectAnMcpServer")} /> : <PageEmptyState size="panel" icon={<Server />} title={t("settings.mcp.addAServerTo")} action={<Button size="sm" onClick={() => setCreating(true)}><Plus size={15} aria-hidden="true" />{t("settings.mcp.add")}</Button>} />}</div> : <StreamPlaceholder fill label={t("settings.mcp.loading")} />}
+      </> : loaded ? <div className="mcp-detail-placeholder"><PageEmptyState size="panel" icon={<Server />} title={t("settings.mcp.selectAnMcpServer")} /></div> : <StreamPlaceholder fill label={t("settings.mcp.loading")} />}
     </section>
-    </div>
+    </div>}
     <McpServerDialog actions={props.actions} open={creating || editing !== null} server={editing} onOpenChange={open => { if (!open) { setCreating(false); setEditing(null); setRefreshKey(key => key + 1) } }} />
   </div>
 }

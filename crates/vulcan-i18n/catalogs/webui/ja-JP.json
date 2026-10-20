@@ -5229,7 +5229,7 @@
   "settings.mcp.enabledStateUnavailable": "有効 · 状態を取得できません",
   "settings.mcp.tools": "{length} 個のツール",
   "settings.mcp.noMatches": "一致するものはありません",
-  "settings.mcp.noServers": "MCP サーバーはまだありません。",
+  "settings.mcp.noServers": "MCP サーバーはまだありません",
   "settings.mcp.addAServerTo": "サーバーを追加すると、接続とツールを確認できます。",
   "settings.mcp.refreshing": "更新中",
   "settings.mcp.refreshStatus": "状態を更新",

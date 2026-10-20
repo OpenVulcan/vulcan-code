@@ -5229,7 +5229,7 @@
   "settings.mcp.enabledStateUnavailable": "已启用 · 未取得连接状态",
   "settings.mcp.tools": "{length} 个工具",
   "settings.mcp.noMatches": "没有匹配的服务器",
-  "settings.mcp.noServers": "尚无 MCP 服务器。",
+  "settings.mcp.noServers": "尚无 MCP 服务器",
   "settings.mcp.addAServerTo": "添加服务器后，在这里查看连接与工具。",
   "settings.mcp.refreshing": "正在刷新",
   "settings.mcp.refreshStatus": "刷新状态",
