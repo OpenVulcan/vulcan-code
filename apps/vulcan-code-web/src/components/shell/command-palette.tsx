@@ -1,11 +1,12 @@
 import React from "react";
-import { ChevronRight, Cpu, MessageSquare, MessagesSquare, Palette, Slash, SquarePen } from "lucide-react";
+import { ChevronRight, Cpu, Keyboard, MessageSquare, MessagesSquare, Palette, Slash, SquarePen } from "lucide-react";
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/ui-kit/primitives/command";
 import { APPEARANCE_THEMES, setAppearance, useAppearance, type AppearanceTheme } from "@/ui-kit/appearance";
 import { requestComposerCommand } from "@/components/composer/composer-external-commands";
 import { composerSlashCommandDescriptionKey } from "@/components/composer/composer-model";
 import { settingsSubAreas } from "@/components/features/settings/settings-navigation";
 import type { ActivityRailEntry } from "@/components/shell/activity-rail";
+import { KeyboardShortcutsDialog } from "@/components/shell/keyboard-shortcuts-dialog";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { ComposerSlashCommandSummary, SettingsSubAreaId } from "@/types";
 import "@/ui-kit/styles/features/command-palette.css";
@@ -52,6 +53,9 @@ export function CommandPalette(props: {
   // query is kept here so sessions are listed only once something is typed, not as a wall of rows on open.
   // query 保存在此，使会话只在输入内容后列出，而不是打开时铺满整列。
   const [query, setQuery] = React.useState("");
+  // shortcutsOpen shows the keyboard shortcut list, which the palette opens after closing itself.
+  // shortcutsOpen 显示键盘快捷键列表；面板先关闭自身再打开它。
+  const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
   React.useEffect(() => {
     if (!props.open) setQuery("");
   }, [props.open]);
@@ -86,6 +90,7 @@ export function CommandPalette(props: {
   };
   const nextTheme = APPEARANCE_THEMES[(APPEARANCE_THEMES.indexOf(theme) + 1) % APPEARANCE_THEMES.length];
   return (
+    <>
     <CommandDialog className="vk-palette" description={t("palette.placeholder")} onOpenChange={onOpenChange} open={props.open} title={t("palette.title")}>
       <Command label={t("palette.title")} loop>
         <CommandInput autoFocus onValueChange={setQuery} placeholder={t("palette.placeholder")} value={query} />
@@ -108,6 +113,10 @@ export function CommandPalette(props: {
               <Palette />
               <span>{t("palette.cycleTheme")}</span>
               <CommandShortcut>{t(THEME_LABEL[theme])} → {t(THEME_LABEL[nextTheme])}</CommandShortcut>
+            </CommandItem>
+            <CommandItem onSelect={run(() => setShortcutsOpen(true))} value="keyboard-shortcuts" keywords={[t("palette.shortcuts")]}>
+              <Keyboard />
+              <span>{t("palette.shortcuts")}</span>
             </CommandItem>
           </CommandGroup>
           {props.slashCommands.length ? (
@@ -170,5 +179,7 @@ export function CommandPalette(props: {
         </CommandList>
       </Command>
     </CommandDialog>
+    <KeyboardShortcutsDialog onOpenChange={setShortcutsOpen} open={shortcutsOpen} />
+    </>
   );
 }

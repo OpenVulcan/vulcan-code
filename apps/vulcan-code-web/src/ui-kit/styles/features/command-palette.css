@@ -13,3 +13,12 @@
 .vk-palette .vk-command-item > .vk-palette-project { flex: none; max-width: 40%; margin-left: auto; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
 .vk-palette .vk-command-item > .vk-palette-go { margin-left: auto; color: var(--vk-ink-3); }
 .vk-palette .vk-command-item[data-selected] { box-shadow: inset 2px 0 0 var(--vk-ember); }
+
+/* Keyboard shortcut list: one group per place a shortcut works, each row an action with its key caps at the end. */
+/* 键盘快捷键列表：按快捷键生效位置分组，每行一项操作，键帽位于行尾。 */
+.vk-shortcuts-group + .vk-shortcuts-group { margin-top: calc(var(--vk-u) * 4); }
+.vk-shortcuts-group > h3 { margin: 0 0 calc(var(--vk-u) * 1.5); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 600; }
+.vk-shortcuts { display: grid; gap: calc(var(--vk-u) * 1.5); margin: 0; }
+.vk-shortcuts > div { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 3); }
+.vk-shortcuts dt { min-width: 0; color: var(--vk-ink-2); }
+.vk-shortcuts dd { display: inline-flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: var(--vk-u); margin: 0; }
