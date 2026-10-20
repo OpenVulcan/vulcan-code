@@ -1098,6 +1098,9 @@ impl ProviderRequestTelemetryTracker {
         self.reject_prepared_request();
         let context = self.context.as_ref()?;
         let active_request = self.active_request.take()?;
+        // A successful request ends its retry sequence; the next physical request is a new generation.
+        // 成功请求结束其重试序列；下一次真实请求是新的生成。
+        self.retry_count = 0;
         Some(build_completed_event(
             context,
             active_request,
@@ -3116,6 +3119,17 @@ mod tests {
         assert_eq!(events[1].payload["retry_number"], 1);
         let next_started = start_confirmed_request(&mut tracker, &test_request_snapshot());
         assert_eq!(next_started.payload["retry_count"], 1);
+        // Once the retried request succeeds, the following request starts a new sequence.
+        // 重试请求成功后，后续请求开始新的序列。
+        tracker
+            .complete_success(
+                None,
+                crate::agent_runtime::provider_v1_bridge::test_provider_v1_source_input(),
+                0,
+            )
+            .expect("the retried request completes");
+        let following = start_confirmed_request(&mut tracker, &test_request_snapshot());
+        assert_eq!(following.payload["retry_count"], 0);
     }
 
     /// Verifies a failed physical request retains usage reported before its terminal error.
