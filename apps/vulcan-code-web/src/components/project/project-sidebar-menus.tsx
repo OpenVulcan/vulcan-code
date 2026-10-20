@@ -11,6 +11,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  ScrollText,
   TerminalSquare,
   Trash2,
 } from "lucide-react";
@@ -175,6 +176,10 @@ export function ConversationContextMenu(props: {
         <ContextMenuItem onSelect={() => props.onAction("copy-workdir", props.conversation)}>
           <Copy size={15} />
           <span>{t("conversationMenu.copyWorkspace")}</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("copy-markdown", props.conversation)}>
+          <ScrollText size={15} />
+          <span>{t("conversationMenu.copyMarkdown")}</span>
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("copy-session-id", props.conversation)}>
           <FileText size={15} />

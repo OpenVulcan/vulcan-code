@@ -12,6 +12,7 @@ import {
   setProjectTreePinned,
 } from "@/service/project-actions-service";
 import { projectForConversation } from "@/state/workbench-selectors";
+import { conversationMarkdown, loadConversationEvents } from "@/service/conversation-markdown-export";
 import type { ConversationSummary, WorkbenchSnapshot } from "@/types";
 
 // ConversationMenuActionsOptions supplies the workbench state and appliers used by conversation-tree commands.
@@ -159,6 +160,15 @@ export function useConversationMenuActions(options: ConversationMenuActionsOptio
       if (action === "copy-title") {
         await navigator.clipboard.writeText(conversation.title);
         toast.success(translate("workbenchConversation.copiedTitle"));
+        return;
+      }
+      if (action === "copy-markdown") {
+        const events = await loadConversationEvents(conversation.id);
+        await navigator.clipboard.writeText(conversationMarkdown(conversation.title, events, {
+          user: translate("conversation.export.user"),
+          assistant: translate("conversation.export.assistant"),
+        }));
+        toast.success(translate("workbenchConversation.copiedMarkdown"));
         return;
       }
       if (action === "copy-session-id") {

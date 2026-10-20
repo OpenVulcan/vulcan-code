@@ -7,6 +7,7 @@ import {
   MoreHorizontal,
   Pencil,
   Pin,
+  ScrollText,
 } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 
@@ -111,6 +112,10 @@ export function WorkspaceTitleMenu(props: {
         <DropdownMenuItem onSelect={() => runConversationAction("copy-workdir")}>
           <Copy size={15} />
           <span>{t("conversationMenu.copyWorkspace")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => runConversationAction("copy-markdown")}>
+          <ScrollText size={15} />
+          <span>{t("conversationMenu.copyMarkdown")}</span>
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => runConversationAction("copy-session-id")}>
           <FileText size={15} />

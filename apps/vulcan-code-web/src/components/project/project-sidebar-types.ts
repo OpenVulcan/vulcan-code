@@ -10,5 +10,6 @@ export type ConversationMenuAction =
   | "archive"
   | "open-directory"
   | "copy-title"
+  | "copy-markdown"
   | "copy-workdir"
   | "copy-session-id";
