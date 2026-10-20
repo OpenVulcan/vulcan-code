@@ -806,7 +806,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
           if (!open && !projectStates.current.get(project.id)?.busyAction) setTerminalConfirmation(null);
         }}
       >
-        <AlertDialogContent layerClassName="vk-term-confirm">
+        <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
               {t(terminalConfirmation?.action === "close" ? "workspaceAudit.closeConfirm" : "workspaceAudit.stopConfirm")}

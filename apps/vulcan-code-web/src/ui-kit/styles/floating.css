@@ -8,7 +8,9 @@
   right: 0;
   bottom: var(--vk-statusbar-h);
   left: 0;
-  z-index: 42;
+  /* Each window's activation rank lifts it inside 42–49, always below the dialog and menu layer (.vk-layer, 50). */
+  /* 每个窗口的激活排名使其在 42–49 区间内抬升，始终低于对话框与菜单层（.vk-layer，50）。 */
+  z-index: calc(42 + min(var(--vk-float-rank, 0), 7));
   overflow: hidden;
   pointer-events: none;
 }
@@ -93,7 +95,6 @@
 .vk-term-stage > .vk-empty .vk-empty-title { color: color-mix(in srgb, var(--vk-term-ink) 75%, transparent); font-weight: 400; font-size: var(--vk-fs-sm); }
 .vk-term-loading { position: absolute; inset: 0; display: grid; place-items: center; padding: calc(var(--vk-u) * 4); }
 .vk-term-loading > [data-slot="stream-placeholder"] { width: 100%; max-width: 24rem; }
-.vk-term-confirm { z-index: 1000; }
 .vk-term-status {
   position: absolute;
   right: calc(var(--vk-u) * 3);

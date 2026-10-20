@@ -5,8 +5,10 @@ import {
   createDefaultProjectFloatingLayout,
   createProjectFloatingGenieKeyframes,
   floatingVisibilityTransitionDirection,
+  dropFloatingLayer,
+  floatingLayerRank,
   maximizedFloatingLayout,
-  nextProjectFloatingLayerStackOrder,
+  raiseFloatingLayer,
   settledFloatingLayerState,
 } from "@/components/workspace/project-floating-layer";
 
@@ -88,13 +90,24 @@ describe("project floating layer geometry", () => {
 
   // Verifies independently mounted terminal windows can raise the most recently activated surface.
   // 验证独立挂载的终端窗口可将最近激活的表面提升到最前方。
-  it("assigns monotonically increasing floating window stack order", () => {
-    // firstOrder captures one activation before a second overlapping terminal is selected.
-    // firstOrder 捕获第二个重叠终端被选择前的一次激活。
-    const firstOrder = nextProjectFloatingLayerStackOrder();
-    // secondOrder captures the next window activation and must be visually above the first.
-    // secondOrder 捕获下一次窗口激活，并且必须在视觉上高于第一个窗口。
-    const secondOrder = nextProjectFloatingLayerStackOrder();
-    expect(secondOrder).toBeGreaterThan(firstOrder);
+  it("ranks the most recently activated floating window in front", () => {
+    raiseFloatingLayer("first");
+    raiseFloatingLayer("second");
+    expect(floatingLayerRank("second")).toBeGreaterThan(floatingLayerRank("first"));
+    raiseFloatingLayer("first");
+    expect(floatingLayerRank("first")).toBeGreaterThan(floatingLayerRank("second"));
+    dropFloatingLayer("first");
+    dropFloatingLayer("second");
+  });
+
+  // Verifies ranks stay bounded by the number of open windows however often they are activated, so the stylesheet
+  // band below dialogs is never exceeded by repeated clicks.
+  // 验证无论激活多少次，排名都受打开窗口数量限制，因此反复点击不会越过样式表中位于对话框之下的区间。
+  it("keeps ranks bounded by the open window count across repeated activation", () => {
+    for (let index = 0; index < 100; index += 1) raiseFloatingLayer(index % 2 ? "first" : "second");
+    expect([floatingLayerRank("first"), floatingLayerRank("second")].sort()).toEqual([0, 1]);
+    dropFloatingLayer("second");
+    expect(floatingLayerRank("first")).toBe(0);
+    dropFloatingLayer("first");
   });
 });

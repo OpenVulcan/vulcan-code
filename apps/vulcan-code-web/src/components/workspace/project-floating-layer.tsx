@@ -282,13 +282,15 @@ function floatingLayerRect(rect: Pick<DOMRectReadOnly, "left" | "top" | "width" 
 // PROJECT_FLOATING_LAYER_LEGACY_TOP_INSET_PX 在浮层移到 46px 会话标题栏下方后，从 v3 之前的坐标中扣除。
 const PROJECT_FLOATING_LAYER_LEGACY_TOP_INSET_PX = 46;
 
-// PROJECT_FLOATING_LAYER_BASE_STACK_ORDER keeps floating terminals above ordinary workspace overlays.
-// PROJECT_FLOATING_LAYER_BASE_STACK_ORDER 使浮动终端保持在普通工作区覆盖层之上。
-const PROJECT_FLOATING_LAYER_BASE_STACK_ORDER = 42;
+// floatingLayerActivation lists the mounted floating windows from back to front; a window's rank is its index, and
+// the stylesheet turns that rank into a z-index inside a fixed band below dialogs and menus.
+// floatingLayerActivation 按从后到前列出已挂载的浮动窗口；窗口的排名即其下标，样式表再把排名换算为位于对话框与菜单
+// 之下固定区间内的层级。
+const floatingLayerActivation: string[] = [];
 
-// projectFloatingLayerStackSequence assigns the most recently activated floating window to the front.
-// projectFloatingLayerStackSequence 将最近激活的浮动窗口分配到最前方。
-let projectFloatingLayerStackSequence = PROJECT_FLOATING_LAYER_BASE_STACK_ORDER;
+// floatingLayerListeners re-render every mounted window whenever the activation order changes.
+// floatingLayerListeners 在激活顺序变化时重新渲染每个已挂载窗口。
+const floatingLayerListeners = new Set<() => void>();
 
 // projectFloatingWindowStateCache preserves geometry across React remounts in the same desktop session.
 // projectFloatingWindowStateCache 在同一桌面会话的 React 重挂载之间保留几何状态。
@@ -328,9 +330,16 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
   const [animationState, setAnimationState] = React.useState<FloatingLayerAnimationState>(
     props.expanded ? "open" : "closed",
   );
-  // stackOrder keeps independently mounted terminal windows selectable when their rectangles overlap.
-  // stackOrder 使独立挂载的终端窗口在矩形重叠时仍可按激活顺序选择。
-  const [stackOrder, setStackOrder] = React.useState(nextProjectFloatingLayerStackOrder);
+  // layerId names this window in the shared activation order; a new window opens in front of the others.
+  // layerId 在共享激活顺序中标识当前窗口；新窗口打开时位于其他窗口之前。
+  const layerId = React.useId();
+  React.useLayoutEffect(() => {
+    raiseFloatingLayer(layerId);
+    return () => dropFloatingLayer(layerId);
+  }, [layerId]);
+  // stackRank keeps independently mounted windows selectable in activation order when their rectangles overlap.
+  // stackRank 使独立挂载的窗口在矩形重叠时仍可按激活顺序选择。
+  const stackRank = React.useSyncExternalStore(subscribeFloatingLayers, () => floatingLayerRank(layerId));
   // windowState stores project-scoped normal geometry, maximized geometry, and restore geometry.
   // windowState 保存项目级普通几何、最大化几何与还原几何。
   const [windowState, setWindowState] = React.useState<ProjectFloatingWindowState>(
@@ -353,9 +362,7 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
 
   // bringToFront raises only this floating window without changing terminal visibility or ownership.
   // bringToFront 仅提升当前浮动窗口，不改变终端可见性或所有权。
-  const bringToFront = React.useCallback(() => {
-    setStackOrder(nextProjectFloatingLayerStackOrder());
-  }, []);
+  const bringToFront = React.useCallback(() => raiseFloatingLayer(layerId), [layerId]);
 
   // Load project geometry before paint so a project switch never shows the previous project's size for one frame.
   // 在绘制前加载项目几何，避免项目切换时出现一帧上一个项目的尺寸。
@@ -716,8 +723,8 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
       ref={layerRef}
       className="vk-float-layer"
       data-project-id={props.projectId}
-      data-stack-order={stackOrder}
-      style={{ zIndex: stackOrder }}
+      data-stack-rank={stackRank}
+      style={{ "--vk-float-rank": stackRank } as React.CSSProperties}
     >
       {surfaceMounted ? (
         <section
@@ -752,15 +759,36 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
   );
 }
 
-// nextProjectFloatingLayerStackOrder returns one monotonically increasing activation order.
-// nextProjectFloatingLayerStackOrder 返回一个单调递增的激活顺序。
-//
-// Returns / 返回值:
-// Returns the next z-index reserved for a newly mounted or activated floating window.
-// 返回为新挂载或新激活浮动窗口保留的下一个层级。
-export function nextProjectFloatingLayerStackOrder(): number {
-  projectFloatingLayerStackSequence += 1;
-  return projectFloatingLayerStackSequence;
+// raiseFloatingLayer moves one window to the front of the activation order.
+// raiseFloatingLayer 将一个窗口移到激活顺序的最前方。
+export function raiseFloatingLayer(id: string): void {
+  const index = floatingLayerActivation.indexOf(id);
+  if (index >= 0 && index === floatingLayerActivation.length - 1) return;
+  if (index >= 0) floatingLayerActivation.splice(index, 1);
+  floatingLayerActivation.push(id);
+  floatingLayerListeners.forEach((listener) => listener());
+}
+
+// dropFloatingLayer removes an unmounted window so the remaining ranks stay contiguous.
+// dropFloatingLayer 移除已卸载的窗口，使其余排名保持连续。
+export function dropFloatingLayer(id: string): void {
+  const index = floatingLayerActivation.indexOf(id);
+  if (index < 0) return;
+  floatingLayerActivation.splice(index, 1);
+  floatingLayerListeners.forEach((listener) => listener());
+}
+
+// floatingLayerRank returns how many mounted windows sit behind this one.
+// floatingLayerRank 返回位于该窗口之后的已挂载窗口数量。
+export function floatingLayerRank(id: string): number {
+  return Math.max(0, floatingLayerActivation.indexOf(id));
+}
+
+// subscribeFloatingLayers follows activation order changes for useSyncExternalStore.
+// subscribeFloatingLayers 为 useSyncExternalStore 跟随激活顺序的变化。
+function subscribeFloatingLayers(listener: () => void): () => void {
+  floatingLayerListeners.add(listener);
+  return () => floatingLayerListeners.delete(listener);
 }
 
 // projectFloatingPositionStorageKey returns the exact project-scoped layout key.
