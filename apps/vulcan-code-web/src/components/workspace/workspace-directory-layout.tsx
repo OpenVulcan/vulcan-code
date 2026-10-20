@@ -1,9 +1,27 @@
-import { useLayoutEffect, useRef, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { cx } from "@/ui-kit/behavior/core";
+import { moveInList } from "@/ui-kit/behavior/roving";
 
 // ACTIVE_TAB_ROW_SELECTOR matches the directory row that marks the current tab.
 // ACTIVE_TAB_ROW_SELECTOR 匹配标记当前标签的目录行。
 const ACTIVE_TAB_ROW_SELECTOR = '.vk-dir-row[aria-current="page"]';
+
+// TAB_ROW_SELECTOR matches the tab strip entries that Left and Right step through.
+// TAB_ROW_SELECTOR 匹配左右键逐项经过的标签条条目。
+const TAB_ROW_SELECTOR = ".vk-dir-row:not(:disabled)";
+
+// TAB_STRIP_KEYS maps the strip's horizontal keys onto list movement.
+// TAB_STRIP_KEYS 将标签条的横向按键映射为列表移动。
+const TAB_STRIP_KEYS: Record<string, string> = { ArrowRight: "ArrowDown", ArrowLeft: "ArrowUp", Home: "Home", End: "End" };
+
+// moveInTabStrip lets Left, Right, Home and End move focus between tabs; Enter or Space then opens the focused tab.
+// moveInTabStrip 让左右键、Home 与 End 在标签之间移动焦点；随后按回车或空格打开该标签。
+function moveInTabStrip(event: KeyboardEvent<HTMLDivElement>): void {
+  const key = TAB_STRIP_KEYS[event.key];
+  if (!key || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (!(event.target instanceof HTMLElement) || !event.target.matches(TAB_ROW_SELECTOR)) return;
+  moveInList({ key, preventDefault: () => event.preventDefault() }, event.currentTarget, TAB_ROW_SELECTOR);
+}
 
 // WorkspaceDirectoryLayoutProps separates persistent navigation from the flexible content pane.
 // WorkspaceDirectoryLayoutProps 将固定导航与弹性内容面板分离。
@@ -41,7 +59,7 @@ export function WorkspaceDirectoryLayout(props: WorkspaceDirectoryLayoutProps) {
   return <div className="vk-directory">
     <div className="vk-directory-grid" data-navigation-mode={navigationMode}>
       {navigationMode === "none" ? null : (
-        <div className={cx("vk-directory-nav", navigationMode === "tabs" && "vk-tabstrip")} ref={navigationRef}>
+        <div className={cx("vk-directory-nav", navigationMode === "tabs" && "vk-tabstrip")} onKeyDown={navigationMode === "tabs" ? moveInTabStrip : undefined} ref={navigationRef}>
           {props.navigation}
           {navigationMode === "tabs" ? <span aria-hidden className="vk-tabstrip-ink" ref={indicatorRef} /> : null}
         </div>
@@ -198,7 +216,7 @@ export function PageTabs<Value extends string>(props: {
   useSlidingTabIndicator(stripRef, indicatorRef, true);
   useTabStripOverflow(stripRef, true);
   return <div className={cx("vk-page-tabs", props.className)}>
-    <div className="vk-tabstrip" ref={stripRef}>
+    <div className="vk-tabstrip" onKeyDown={moveInTabStrip} ref={stripRef}>
       <nav aria-label={props.ariaLabel} className="vk-dir-list">
         {props.options.map((option) => <DirectoryRow
           active={option.value === props.value}
