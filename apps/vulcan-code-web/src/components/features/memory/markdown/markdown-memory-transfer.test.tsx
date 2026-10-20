@@ -59,7 +59,14 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-// Finds a button by its catalog key or file name; fails naming the missing label.
+// Finds a listbox option by its visible name; fails naming the missing label.
+function option(label: string): HTMLElement {
+  const found = [...document.querySelectorAll<HTMLElement>("[role=\"option\"]")].find((entry) => entry.textContent?.startsWith(label));
+  if (found === undefined) throw new Error("Missing option: " + label);
+  return found;
+}
+
+// Finds a button by its catalog key; fails naming the missing label.
 // 按目录键或文件名查找按钮；缺失时报出该标签。
 function button(label: string): HTMLButtonElement {
   const found = [...document.querySelectorAll("button")].find((entry) => entry.textContent?.startsWith(label));
@@ -72,7 +79,7 @@ function button(label: string): HTMLButtonElement {
 async function openImport(): Promise<void> {
   await act(async () => root.render(<MemoryTransferSection onImported={() => undefined} />));
   await act(async () => button("memory.markdown.transfer.import").click());
-  await act(async () => button("memory.zip").click());
+  await act(async () => option("memory.zip").click());
   await act(async () => button("memory.markdown.transfer.preview").click());
 }
 

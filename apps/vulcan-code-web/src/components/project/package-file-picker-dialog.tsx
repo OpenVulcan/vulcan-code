@@ -1,6 +1,6 @@
 import * as React from "react";
 import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
-import { ArrowUp, Check, ChevronRight, FileArchive, Folder, FolderOpen, HardDrive, RefreshCw } from "lucide-react";
+import { ArrowRight, ArrowUp, Check, ChevronRight, FileArchive, Folder, RefreshCw } from "lucide-react";
 import { Button } from "@/ui-kit/primitives/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
 import { Input } from "@/ui-kit/primitives/input";
@@ -8,6 +8,7 @@ import { Spinner } from "@/ui-kit/primitives/spinner";
 import { useI18n } from "@/i18n";
 import type { PackageFileListing } from "@/types";
 import { formatBytes } from "@/lib/display-format";
+import { FolderPickerSidebar } from "./folder-picker-dialog";
 import "@/ui-kit/styles/features/project-folder-picker.css";
 
 // Parameters: path is a native directory identity. Returns its comparison key for the host-declared root list.
@@ -141,12 +142,18 @@ export function PackageFilePickerDialog(props: PackageFilePickerDialogProps) {
   // handleConfirm hands the selected package over before closing the picker.
   // handleConfirm 在关闭选择器前交出选中的套件。
   async function handleConfirm(): Promise<void> {
-    if (!selectedPath || submittingRef.current) return;
+    if (selectedPath) await confirmPath(selectedPath);
+  }
+
+  // confirmPath hands one package over; a double click confirms without waiting for the state update.
+  // confirmPath 交出一个套件；双击时无需等待状态更新即可确认。
+  async function confirmPath(path: string): Promise<void> {
+    if (submittingRef.current) return;
     submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     try {
-      await props.onSelect(selectedPath);
+      await props.onSelect(path);
       props.onOpenChange(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -156,41 +163,70 @@ export function PackageFilePickerDialog(props: PackageFilePickerDialogProps) {
     }
   }
 
+  // busy blocks navigation while a directory loads or the package is being handled.
+  // busy 在目录加载或套件处理期间阻止导航。
+  const busy = loading || submitting;
+  const directory = listing?.directory ?? null;
+  const currentKey = directory ? packagePathKey(directory.path) : null;
+  // visibleEntries keeps dot folders out of the way, as the folder picker does by default.
+  // visibleEntries 与目录选择器默认行为一致，隐藏以点开头的目录。
+  const visibleEntries = directory?.entries.filter((entry) => !entry.hidden) ?? [];
+
   return (
     <Dialog open={props.open} onOpenChange={(open) => !submittingRef.current && props.onOpenChange(open)}>
-      <DialogContent className="project-folder-picker-dialog package-file-picker-dialog" showCloseButton={!submitting}>
+      <DialogContent className="project-folder-picker-dialog" size="xl" scrollMode="content-scroll" showCloseButton={!submitting}>
         <DialogHeader><DialogTitle>{props.title}</DialogTitle></DialogHeader>
-        <form className="project-folder-picker-path-row" onSubmit={handlePathSubmit}>
-          <Input aria-label={t("projectFolderPicker.pathAria")} disabled={loading || submitting} onChange={(event) => setPathInput(event.target.value)} value={pathInput} />
-          <Button aria-label={t("projectFolderPicker.openPath")} disabled={loading || submitting} size="icon" type="submit" variant="outline">{loading ? <Spinner /> : <ChevronRight size={16} />}</Button>
-        </form>
-        <div className="project-folder-picker-toolbar">
-          <Button disabled={!listing?.directory.parentPath || loading || submitting} onClick={() => void loadDirectory(listing?.directory.parentPath ?? null)} size="sm" type="button" variant="outline"><ArrowUp size={15} />{t("projectFolderPicker.parent")}</Button>
-          <Button disabled={!listing || loading || submitting} onClick={() => void loadDirectory(listing?.directory.path ?? null)} size="sm" type="button" variant="outline"><RefreshCw size={15} />{t("skills.action.refresh")}</Button>
+        <div className="project-folder-picker-nav">
+          <Button aria-label={t("projectFolderPicker.parent")} title={t("projectFolderPicker.parent")} disabled={!directory?.parentPath || busy}
+            onClick={() => void loadDirectory(directory?.parentPath ?? null)} size="icon-sm" type="button" variant="ghost">
+            <ArrowUp size={15} />
+          </Button>
+          <form className="project-folder-picker-path-form" onSubmit={handlePathSubmit}>
+            <Input aria-label={t("projectFolderPicker.pathAria")} className="project-folder-picker-path-input" disabled={submitting}
+              onChange={(event) => setPathInput(event.target.value)} value={pathInput} />
+            <Button aria-label={t("projectFolderPicker.openPath")} title={t("projectFolderPicker.openPath")} disabled={busy} size="icon-sm" type="submit" variant="ghost">
+              <ArrowRight size={15} />
+            </Button>
+          </form>
+          <Button aria-label={t("skills.action.refresh")} title={t("skills.action.refresh")} disabled={!directory || busy}
+            onClick={() => void loadDirectory(directory?.path ?? null)} size="icon-sm" type="button" variant="ghost">
+            {loading ? <Spinner /> : <RefreshCw size={14} />}
+          </Button>
         </div>
         <div className="project-folder-picker-browser">
-          <aside aria-label={t("projectFolderPicker.rootsAria")} className="project-folder-picker-roots">
-            {roots.map((root) => (
-              <button className={root.path === activeRootPath ? "project-folder-picker-root active" : "project-folder-picker-root"} disabled={loading || submitting} key={root.path} onClick={() => void loadDirectory(root.path)} type="button"><HardDrive size={16} /><span>{root.label}</span></button>
-            ))}
-          </aside>
+          <FolderPickerSidebar activeRootPath={activeRootPath} busy={busy} currentKey={currentKey} loaded={listing !== null}
+            onOpen={(path) => void loadDirectory(path)} places={[]} roots={roots} />
           <section className="project-folder-picker-directory">
-            <div className="project-folder-picker-current"><FolderOpen size={16} /><span>{listing?.directory.path ?? <InlineStreamPlaceholder label={t("workspaceFiles.loading")} />}</span></div>
-            <div className="project-folder-picker-list" role="list">
-              {listing?.directory.entries.map((entry) => (
-                <button className="project-folder-picker-row" disabled={loading || submitting} key={entry.path} onClick={() => void loadDirectory(entry.path)} type="button"><Folder size={16} /><span>{entry.name}</span></button>
+            <div aria-busy={loading} aria-label={directory?.path} className="project-folder-picker-list" role="listbox">
+              {listing === null && loading ? <div className="project-folder-picker-empty"><InlineStreamPlaceholder label={t("workspaceFiles.loading")} /></div> : null}
+              {visibleEntries.map((entry) => (
+                <div aria-selected={false} className="project-folder-picker-row" key={entry.path} role="option"
+                  onClick={() => !busy && void loadDirectory(entry.path)}>
+                  <Folder size={15} />
+                  <span className="project-folder-picker-row-name">{entry.name}</span>
+                  <ChevronRight className="project-folder-picker-enter" size={15} />
+                </div>
               ))}
               {listing?.packages.map((file) => (
-                <button className={`project-folder-picker-row package-file${selectedPath === file.path ? " selected" : ""}`} disabled={loading || submitting} key={file.path} onClick={() => setSelectedPath(file.path)} type="button"><FileArchive size={16} /><span>{file.name}</span><small>{formatBytes(file.byteSize)}</small></button>
+                <div aria-selected={selectedPath === file.path} className="project-folder-picker-row" key={file.path} role="option"
+                  onClick={() => !busy && setSelectedPath(file.path)}
+                  onDoubleClick={() => { if (!busy) { setSelectedPath(file.path); void confirmPath(file.path); } }}>
+                  <FileArchive size={15} />
+                  <span className="project-folder-picker-row-name">{file.name}</span>
+                  <small>{formatBytes(file.byteSize)}</small>
+                </div>
               ))}
-              {listing && listing.directory.entries.length === 0 && listing.packages.length === 0 ? <div className="project-folder-picker-empty">{props.emptyLabel}</div> : null}
+              {listing && visibleEntries.length === 0 && listing.packages.length === 0 ? <div className="project-folder-picker-empty">{props.emptyLabel}</div> : null}
             </div>
           </section>
         </div>
-        {error ? <div className="project-folder-picker-error">{error}</div> : null}
-        <DialogFooter>
+        {error ? <div role="alert" className="project-folder-picker-error">{error}</div> : null}
+        <DialogFooter className="project-folder-picker-footer">
+          <div className="project-folder-picker-selection">
+            {selectedPath ? <><span>{t("projectFolderPicker.selected")}</span><strong title={selectedPath}>{selectedPath}</strong></> : null}
+          </div>
           <Button disabled={submitting} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("conversation.action.cancel")}</Button>
-          <Button disabled={!selectedPath || submitting || loading} onClick={() => void handleConfirm()} type="button">{submitting ? <Spinner /> : <Check size={16} />}{submitting ? props.busyLabel : props.confirmLabel}</Button>
+          <Button disabled={!selectedPath || busy} onClick={() => void handleConfirm()} type="button">{submitting ? <Spinner /> : <Check size={16} />}{submitting ? props.busyLabel : props.confirmLabel}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

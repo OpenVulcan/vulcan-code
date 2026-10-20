@@ -110,7 +110,7 @@ export function projectFolderPickerPlaces(projectPaths: readonly string[]): Proj
 // FolderPickerSidebar lists the quick places above the drives; the place or drive owning the browsed
 // directory is highlighted.
 // FolderPickerSidebar 在磁盘上方列出常用位置；拥有当前浏览目录的位置或磁盘会高亮。
-function FolderPickerSidebar(props: {
+export function FolderPickerSidebar(props: {
   places: readonly ProjectFolderPickerCrumb[];
   roots: readonly ProjectFolderPickerCrumb[];
   currentKey: string | null;
