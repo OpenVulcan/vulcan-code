@@ -293,6 +293,11 @@
   border-bottom: var(--vk-bw) solid var(--vk-line);
   scrollbar-width: none;
 }
+/* Edge fades mark tabs hidden past an edge; the strip owner sets the flags from its scroll position. */
+.vk-tabstrip { --vk-tabstrip-fade: calc(var(--vk-u) * 8); }
+.vk-tabstrip[data-overflow-end] { mask-image: linear-gradient(to right, #000 calc(100% - var(--vk-tabstrip-fade)), transparent); }
+.vk-tabstrip[data-overflow-start] { mask-image: linear-gradient(to right, transparent, #000 var(--vk-tabstrip-fade)); }
+.vk-tabstrip[data-overflow-start][data-overflow-end] { mask-image: linear-gradient(to right, transparent, #000 var(--vk-tabstrip-fade), #000 calc(100% - var(--vk-tabstrip-fade)), transparent); }
 .vk-tabstrip :is(.vk-dir-head) { display: none; }
 .vk-tabstrip :is(.vk-dir, .vk-dir-list, .vk-dir-group) { display: flex; flex-wrap: nowrap; gap: 2px; padding: 0; }
 .vk-tabstrip .vk-dir-row {

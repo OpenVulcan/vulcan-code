@@ -37,6 +37,7 @@ export function WorkspaceDirectoryLayout(props: WorkspaceDirectoryLayoutProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { if (bodyRef.current) bodyRef.current.scrollTop = 0; }, [props.pageKey]);
   useSlidingTabIndicator(navigationRef, indicatorRef, navigationMode === "tabs");
+  useTabStripOverflow(navigationRef, navigationMode === "tabs");
   return <div className="vk-directory">
     <div className="vk-directory-grid" data-navigation-mode={navigationMode}>
       {navigationMode === "none" ? null : (
@@ -48,6 +49,52 @@ export function WorkspaceDirectoryLayout(props: WorkspaceDirectoryLayoutProps) {
       <div className={cx("vk-directory-body", props.contentClassName)} ref={bodyRef}>{props.children}</div>
     </div>
   </div>;
+}
+
+// useTabStripOverflow makes a strip wider than its pane discoverable: edge flags drive a fade where tabs are hidden,
+// a vertical wheel scrolls the strip sideways, and the active tab is scrolled into view when it changes.
+// useTabStripOverflow 让宽于面板的标签条可被发现：边缘标记驱动被遮住一侧的渐隐，竖向滚轮横向滚动标签条，
+// 当前标签变化时滚动到可见范围。
+// Parameters: the scrolling strip and whether tabs mode is active. Returns nothing.
+// 参数：可滚动标签条及是否处于标签模式。无返回值。
+function useTabStripOverflow(stripRef: RefObject<HTMLDivElement | null>, enabled: boolean) {
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    if (!enabled || !strip) return;
+    let activeRow: Element | null = null;
+    const update = () => {
+      const row = strip.querySelector<HTMLElement>(ACTIVE_TAB_ROW_SELECTOR);
+      if (row && row !== activeRow) {
+        const stripRect = strip.getBoundingClientRect();
+        const rowRect = row.getBoundingClientRect();
+        if (rowRect.left < stripRect.left) strip.scrollLeft += rowRect.left - stripRect.left;
+        else if (rowRect.right > stripRect.right) strip.scrollLeft += rowRect.right - stripRect.right;
+      }
+      activeRow = row;
+      const overflowStart = strip.scrollLeft > 1;
+      const overflowEnd = strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1;
+      strip.toggleAttribute("data-overflow-start", overflowStart);
+      strip.toggleAttribute("data-overflow-end", overflowEnd);
+    };
+    const wheel = (event: WheelEvent) => {
+      if (strip.scrollWidth <= strip.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      event.preventDefault();
+      strip.scrollLeft += event.deltaY;
+    };
+    update();
+    strip.addEventListener("scroll", update, { passive: true });
+    strip.addEventListener("wheel", wheel, { passive: false });
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    resizeObserver?.observe(strip);
+    const mutationObserver = new MutationObserver(update);
+    mutationObserver.observe(strip, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-current"] });
+    return () => {
+      strip.removeEventListener("scroll", update);
+      strip.removeEventListener("wheel", wheel);
+      resizeObserver?.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, [enabled, stripRef]);
 }
 
 // useSlidingTabIndicator keeps one shared underline aligned with the active tab so selection changes slide instead of jumping.
@@ -149,6 +196,7 @@ export function PageTabs<Value extends string>(props: {
   const stripRef = useRef<HTMLDivElement>(null);
   const indicatorRef = useRef<HTMLSpanElement>(null);
   useSlidingTabIndicator(stripRef, indicatorRef, true);
+  useTabStripOverflow(stripRef, true);
   return <div className={cx("vk-page-tabs", props.className)}>
     <div className="vk-tabstrip" ref={stripRef}>
       <nav aria-label={props.ariaLabel} className="vk-dir-list">
