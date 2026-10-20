@@ -278,6 +278,11 @@ export function WorkspaceReviewPanelHost(props: {
       ? workspaceReviewSnapshot
       : null;
   const activeReviewSnapshot = conversationSnapshots.lastTurn ?? activeWorkspaceReviewSnapshot ?? conversationSnapshots.latestChangeSet;
+  // reviewSnapshotShownRef tells a failed refresh whether the panel still shows a diff; without one the panel
+  // already displays the failure, so a toast would only repeat it.
+  // reviewSnapshotShownRef 告诉失败的刷新面板是否仍显示 diff；没有 diff 时面板已展示该失败，toast 只会重复。
+  const reviewSnapshotShownRef = React.useRef(false);
+  reviewSnapshotShownRef.current = activeReviewSnapshot !== null && activeReviewSnapshot !== undefined;
 
   React.useLayoutEffect(() => {
     // Project route changes synchronously release loading flags owned by invalidated requests.
@@ -395,7 +400,9 @@ export function WorkspaceReviewPanelHost(props: {
       // message 归一化服务与解析失败，供面板状态和用户反馈使用。
       const message = error instanceof Error ? error.message : String(error);
       setWorkspaceReviewError(message);
-      toast.error(formatWorkspaceReviewTranslation(t, "workspaceReview.refreshGitDiffFailed", { error: message }));
+      if (reviewSnapshotShownRef.current) {
+        toast.error(formatWorkspaceReviewTranslation(t, "workspaceReview.refreshGitDiffFailed", { error: message }));
+      }
     } finally {
       if (requestOwnership.finishRefreshRequest(ownedRequest)) {
         setWorkspaceReviewLoading(false);
