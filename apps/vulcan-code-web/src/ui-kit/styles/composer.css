@@ -69,7 +69,7 @@
 .vk-start-session:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-start-session:focus-visible { outline: 2px solid var(--vk-signal); outline-offset: -2px; }
 @keyframes vk-start-in { from { opacity: 0; transform: translateY(calc(var(--vk-u) * 2)); } }
-@container vk-app (max-width: 46em) {
+@container vk-chat (max-width: 46em) {
   .vk-start-hero h1 { font-size: var(--vk-fs-xl); }
   .vk-start-grid { grid-template-columns: minmax(0, 1fr); }
 }
@@ -426,7 +426,7 @@ button.vk-attach-warn { right: 6px; bottom: 6px; color: var(--vk-warn); }
 .vk-progress-row[data-status="completed"] > span { color: var(--vk-ink-3); text-decoration: line-through; }
 
 /* ---------- Narrow stages ---------- */
-@container vk-app (max-width: 46em) {
+@container vk-chat (max-width: 46em) {
   .vk-dock { bottom: calc(var(--vk-u) * 2.5); max-width: calc(100% - var(--vk-u) * 5); }
   .vk-composer-bar { flex-wrap: wrap; gap: 4px; padding: 6px; }
   .vk-composer-tools { display: contents; }

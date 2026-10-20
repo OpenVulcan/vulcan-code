@@ -859,13 +859,13 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 
 /* ---------- New session start page ---------- */
 
+/* Narrow conversation stages: tighter column padding, and no prompt navigator beside a column that has no
+ * room for it. The stage is the vk-chat container, so these follow the stage rather than the window. */
 @container vk-chat (max-width: 50em) {
   .vk-chat > * { --vk-col-pad: calc(var(--vk-u) * 5); }
-}
-@container vk-app (max-width: 72em) {
   .vk-prompt-nav { display: none; }
 }
-@container vk-app (max-width: 46em) {
+@container vk-chat (max-width: 46em) {
   .vk-chat > * { --vk-col-pad: 16px; }
   .vk-tool-meta > :not(:last-child) { display: none; }
 }

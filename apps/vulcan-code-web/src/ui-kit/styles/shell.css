@@ -1,6 +1,6 @@
 /* Application shell: activity rail, session sidebar, main stage, context panel and status bar.
- * Breakpoints are container queries in em, so a larger text tier collapses side panels into drawers
- * instead of squeezing the reading column. */
+ * Folding the sidebar, floating the context panel and the phone drawer are layout decisions made in
+ * workspace-shell/use-workspace-panel-layout.ts and ui-kit/shell/sidebar.tsx, not breakpoints here. */
 
 /* ---------- Activity rail ---------- */
 .vk-rail {
@@ -376,56 +376,3 @@ a.vk-status-item { text-decoration: none; }
 .vk-nav-section { display: grid; gap: 1px; }
 .vk-nav-group { padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 2) calc(var(--vk-u) * 1.5); color: var(--vk-ink-3); }
 .vk-nav-section:first-child > .vk-nav-group { padding-top: calc(var(--vk-u) * 1.5); }
-
-/* ---------- Drawers: side panels that no longer fit become overlays ---------- */
-.vk-drawer-scrim { display: none; }
-
-@container vk-app (max-width: 100em) {
-  .vk-panel {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: var(--vk-statusbar-h);
-    width: min(var(--vk-panel-w), 92%);
-    box-shadow: var(--vk-shadow-2);
-    transform: translateX(105%);
-    transition: transform var(--vk-t-med) var(--vk-ease);
-  }
-}
-
-@container vk-app (max-width: 72em) {
-  .vk-sidebar {
-    position: absolute;
-    top: 0;
-    left: var(--vk-rail-w);
-    bottom: var(--vk-statusbar-h);
-    width: min(var(--vk-sidebar-w), 86%);
-    box-shadow: var(--vk-shadow-2);
-    transform: translateX(-110%);
-    transition: transform var(--vk-t-med) var(--vk-ease);
-  }
-  .vk-nav-item { width: auto; flex: none; white-space: nowrap; }
-  .vk-nav-item[data-depth="1"] { padding-left: calc(var(--vk-u) * 2); }
-}
-
-/* Phone width: the rail becomes a bottom bar. */
-@container vk-app (max-width: 46em) {
-  .vk-rail {
-    grid-area: nav;
-    flex-direction: row;
-    justify-content: space-around;
-    padding: 0 max(8px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(8px, env(safe-area-inset-left, 0px));
-    border-right: 0;
-    border-top: var(--vk-bw) solid var(--vk-line);
-    overflow-x: auto;
-  }
-  .vk-rail-logo,
-  .vk-rail-group[data-end] > :not([data-keep]) { display: none; }
-  .vk-rail-group { flex-direction: row; }
-  .vk-rail-group[data-end] { margin-top: 0; }
-  .vk-rail-btn[aria-current="page"]::before { left: 20%; right: 20%; top: auto; bottom: -1px; width: auto; height: 2px; }
-  .vk-status { display: none; }
-  .vk-sidebar { left: 0; bottom: 0; }
-  .vk-panel { bottom: 0; }
-  .vk-stage-head { padding: 0 calc(var(--vk-u) * 3); }
-}

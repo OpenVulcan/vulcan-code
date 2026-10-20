@@ -341,8 +341,12 @@ button.vk-model-row { cursor: pointer; }
 .vk-account-card-note { margin: 0; padding: calc(var(--vk-u) * 2.5) 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-align: center; }
 .vk-account-card-error { margin: 0; color: var(--vk-bad); font-size: var(--vk-fs-xs); }
 
-@container vk-app (max-width: 46em) {
+/* The model trigger lives in the composer and follows the conversation stage; the model list is a portaled
+ * popover outside that container, so it follows the window instead. */
+@container vk-chat (max-width: 46em) {
   .vk-pick[data-kind="model"] { max-width: 150px; }
+}
+@media (max-width: 46em) {
   .vk-model-list { max-height: min(310px, 50dvh); }
   .vk-model-row { grid-template-columns: 16px minmax(0, 1fr); }
   .vk-model-side { display: none; }
