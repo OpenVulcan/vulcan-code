@@ -38,6 +38,7 @@ import { SortableProjectRow } from "./project-sidebar-project-row";
 import type { SortableRowBinding } from "./project-sidebar-sortable";
 import { ProjectIcon } from "./project-icons";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
+import { handleSessionTreeKey } from "./session-tree-keys";
 import { setSidebarFlow, useSidebarFlow, type SidebarFlow } from "./sidebar-flow";
 
 export type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
@@ -220,7 +221,7 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
           </div>
         ) : null}
       </div>
-      <div className="vk-nav-list">
+      <div className="vk-nav-list" onKeyDown={(event) => { handleSessionTreeKey(event); }}>
         {props.projects.length === 0 ? (
           <NoProjectsEntry onCreateProject={() => navigate(props.onCreateProject)()} />
         ) : flow === "session" && currentProject ? (
