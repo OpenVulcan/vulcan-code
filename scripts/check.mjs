@@ -24,15 +24,19 @@ const steps = [
   ['node', ['scripts/test-home-isolation.mjs']],
 ];
 
-// pnpm is a .cmd shim on Windows, which only a shell can launch.
-// pnpm 在 Windows 上是 .cmd 包装脚本，只能通过 shell 启动。
+// pnpm is a .cmd shim on Windows, which only a shell can launch. The shell receives one command line (the
+// fixed step arguments contain no spaces or quotes), since passing an argument list with a shell is deprecated.
+// pnpm 在 Windows 上是 .cmd 包装脚本，只能通过 shell 启动。shell 接收一整行命令（固定步骤参数不含空格或引号），
+// 因为在 shell 模式下传入参数列表已被弃用。
 const useShell = process.platform === 'win32';
 
 const failed = [];
 for (const [command, args] of steps) {
   const label = [command, ...args].join(' ');
   console.log(`\n==> ${label}`);
-  const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', shell: useShell && command === 'pnpm' });
+  const result = useShell && command === 'pnpm'
+    ? spawnSync(label, { cwd: root, stdio: 'inherit', shell: true })
+    : spawnSync(command, args, { cwd: root, stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) failed.push(label);
 }
