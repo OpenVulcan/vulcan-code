@@ -18,7 +18,7 @@ mod turn_details;
 pub(crate) use client::NativeVmmClient;
 pub(crate) use driver::{
     NativeVmmCoreRuntime, NativeVmmEmbeddingRouteIssue, NativeVmmHostAiStatus,
-    native_vmm_embedding_shape,
+    native_vmm_embedding_shape, native_vmm_vector_rebuild_required_message,
 };
 pub(crate) use maintenance::{
     NativeVmmClearPreview, NativeVmmClearResult, NativeVmmMaintenance, NativeVmmMemoryLevelCounts,

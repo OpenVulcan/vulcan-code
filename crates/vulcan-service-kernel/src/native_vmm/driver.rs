@@ -258,6 +258,12 @@ pub(crate) struct NativeVmmHostAiStatus {
     /// Controlled validation error for user-facing readiness diagnostics.
     /// 用于面向用户就绪诊断的受控校验错误。
     pub(crate) error: Option<String>,
+    /// Vector generation derived from the last successful validation, used to count stale memories.
+    /// 最近一次成功校验派生的向量代次，用于统计旧代次记忆。
+    pub(crate) vector_space_id: Option<VectorSpaceId>,
+    /// Active memories whose vectors belong to another generation, counted when the status is read.
+    /// 向量属于其他代次的活动记忆数量，在读取状态时统计。
+    pub(crate) active_vector_rebuild_required_memory_count: u64,
 }
 
 impl NativeVmmHostAiStatus {
@@ -292,6 +298,8 @@ impl NativeVmmHostAiStatus {
             rerank_ready: rerank.0,
             rerank_error: rerank.1,
             error: None,
+            vector_space_id: None,
+            active_vector_rebuild_required_memory_count: 0,
         }
     }
 
@@ -316,6 +324,8 @@ impl NativeVmmHostAiStatus {
             rerank_ready: false,
             rerank_error: None,
             error: Some(error.to_string()),
+            vector_space_id: None,
+            active_vector_rebuild_required_memory_count: 0,
         }
     }
 }
@@ -748,22 +758,16 @@ impl NativeVmmCoreRuntime {
         &self,
         current: &VectorSpaceId,
     ) -> Result<(), String> {
-        let snapshot = self.storage_snapshot()?;
-        let rebuild_required = snapshot
-            .dataset
-            .memories
-            .iter()
-            .filter(|memory| {
-                memory.state == MemoryState::Active
-                    && memory.vector_space_id.as_ref() != Some(current)
-            })
-            .count();
+        let storage = self
+            .host
+            .storage
+            .read()
+            .map_err(|_| String::from("The native VMM storage read lock is poisoned"))?;
+        let rebuild_required = active_memories_outside_vector_space(&storage, current);
         if rebuild_required == 0 {
             return Ok(());
         }
-        Err(format!(
-            "The current embedding route disagrees with the vector generation of {rebuild_required} active memories. Finish the vector rebuild under Internal maintenance in the memory settings before reading or writing memories."
-        ))
+        Err(native_vmm_vector_rebuild_required_message(rebuild_required))
     }
 
     /// Returns the latest Host AI readiness snapshot without triggering provider work.
@@ -774,10 +778,21 @@ impl NativeVmmCoreRuntime {
     /// The last completed validation state, or the initial unchecked state before validation.
     /// 返回最近完成的校验状态；首次校验前返回初始未校验状态。
     pub(crate) fn host_ai_status(&self) -> NativeVmmHostAiStatus {
-        self.host_ai_status
+        let mut status = self
+            .host_ai_status
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .clone();
+        if let Some(current) = status.vector_space_id.as_ref() {
+            let storage = self
+                .host
+                .storage
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            status.active_vector_rebuild_required_memory_count =
+                active_memories_outside_vector_space(&storage, current);
+        }
+        status
     }
 
     /// Lists the native embedded-resource catalog and exact user override state.
@@ -1375,16 +1390,23 @@ impl NativeVmmCoreRuntime {
     > {
         let _gate = self.config_gate.lock().await;
         let result = self.activate_host_ai_config(host_project_id, profile_project_id);
+        let result = result.and_then(|(handle, snapshot)| {
+            let descriptor = vector_space_descriptor_from_capability(&handle)?;
+            Ok((handle, descriptor, snapshot))
+        });
         let status = match result.as_ref() {
-            Ok((handle, _)) => NativeVmmHostAiStatus::ready(handle),
+            Ok((handle, descriptor, _)) => NativeVmmHostAiStatus {
+                vector_space_id: Some(descriptor.vector_space_id.clone()),
+                ..NativeVmmHostAiStatus::ready(handle)
+            },
             Err(error) => NativeVmmHostAiStatus::failed(error),
         };
         *self
             .host_ai_status
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = status;
-        let (handle, snapshot) = result?;
-        Ok((vector_space_descriptor_from_capability(&handle)?, snapshot))
+        let (_, descriptor, snapshot) = result?;
+        Ok((descriptor, snapshot))
     }
 
     /// Refreshes capability truth and activates the matching Core vector-space configuration.
@@ -3033,6 +3055,46 @@ fn command_requires_ai_configuration(command: &CoreCommand) -> bool {
         | CoreCommand::MemoryDetailsBatch(_)
         | CoreCommand::MemoryDeleteBatch(_) => false,
     }
+}
+
+/// Counts active memories whose vectors belong to a generation other than `current`.
+/// 统计向量属于 `current` 以外代次的活动记忆数量。
+///
+/// # Parameters
+/// 参数
+/// `storage` is the borrowed authoritative store and `current` the route-derived generation.
+/// `storage` 是借用的权威存储，`current` 是由路由派生的代次。
+///
+/// # Returns
+/// 返回值
+/// The number of active memories that must be rebuilt before vector-dependent commands may run.
+/// 返回向量相关命令运行前必须重建的活动记忆数量。
+fn active_memories_outside_vector_space(storage: &InMemoryStorage, current: &VectorSpaceId) -> u64 {
+    let count = storage
+        .memory_records()
+        .filter(|memory| {
+            memory.state == MemoryState::Active && memory.vector_space_id.as_ref() != Some(current)
+        })
+        .count();
+    u64::try_from(count).unwrap_or(u64::MAX)
+}
+
+/// Names the vector-rebuild blocker shared by command rejection and readiness projection.
+/// 命令拒绝与就绪投影共用的向量重建阻断说明。
+///
+/// # Parameters
+/// 参数
+/// `count` is the number of active memories that still use another vector generation.
+/// `count` 是仍在使用其他向量代次的活动记忆数量。
+///
+/// # Returns
+/// 返回值
+/// The bounded English diagnostic shown to the model and in technical details.
+/// 返回展示给模型与技术细节的有界英文诊断。
+pub(crate) fn native_vmm_vector_rebuild_required_message(count: u64) -> String {
+    format!(
+        "The current embedding route disagrees with the vector generation of {count} active memories. Finish the vector rebuild under Internal maintenance in the memory settings before reading or writing memories."
+    )
 }
 
 /// Rejects a vector-bearing command when its caller-observed generation differs from the freshly activated route.

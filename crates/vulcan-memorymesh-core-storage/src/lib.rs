@@ -952,6 +952,14 @@ impl InMemoryStorage {
         self.memories.get(memory_id)
     }
 
+    /// Borrows every active-store memory in stable identity order without copying embeddings.
+    /// 按稳定身份顺序借用全部活动存储记忆，不复制嵌入。
+    /// Returns records of any lifecycle state; callers filter by state themselves.
+    /// 返回任意生命周期状态的记录；调用方自行按状态过滤。
+    pub fn memory_records(&self) -> impl Iterator<Item = &MemoryRecord> {
+        self.memories.values()
+    }
+
     /// Borrows one stored profile node by exact identity without scanning or copying the dataset.
     /// 按准确身份借用一个已存储画像节点，不扫描或复制数据集。
     /// Takes a canonical node ID; returns the stored node, whose state and visibility still require validation.

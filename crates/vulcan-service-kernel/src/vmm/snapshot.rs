@@ -701,9 +701,20 @@ pub(crate) fn vmm_runtime_summary(
 ) -> VmmRuntimeSummary {
     let native = effective.backend_mode == vulcan_vmm::VmmBackendMode::Native;
     let native_ready = native_host_ai_status.is_some_and(|status| status.ready);
+    // Stale vector generations block every recall, writeback and memory tool until rebuilt.
+    // 旧向量代次在重建前阻断全部召回、回写与记忆工具。
+    let vector_rebuild_error = native
+        .then(|| {
+            native_host_ai_status
+                .map(|status| status.active_vector_rebuild_required_memory_count)
+                .filter(|count| *count > 0)
+                .map(crate::native_vmm::native_vmm_vector_rebuild_required_message)
+        })
+        .flatten();
     let scope_ready = effective.enabled
         && effective.diagnose_memory_flow(native) == vulcan_vmm::VmmConfigDiagnostic::Ready
-        && (!native || native_ready);
+        && (!native || native_ready)
+        && vector_rebuild_error.is_none();
     let native_backend_state = match native_host_ai_status {
         Some(status) if status.ready => "ready",
         Some(status) if status.checked => "unavailable",
@@ -732,7 +743,15 @@ pub(crate) fn vmm_runtime_summary(
         backend_error,
         scope_ready,
         precheck_ready: scope_ready && effective.precheck_enabled,
+        precheck_error: effective
+            .precheck_enabled
+            .then(|| vector_rebuild_error.clone())
+            .flatten(),
         postaction_ready: scope_ready && effective.memory_writeback_enabled,
+        postaction_error: effective
+            .memory_writeback_enabled
+            .then(|| vector_rebuild_error.clone())
+            .flatten(),
         profile_instruction_ready: scope_ready
             && (!native
                 || native_host_ai_status.is_some_and(|status| status.profile_instruction_ready)),

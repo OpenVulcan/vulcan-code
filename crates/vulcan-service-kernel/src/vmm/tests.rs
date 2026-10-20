@@ -843,6 +843,7 @@ fn native_runtime_summary_requires_validated_host_ai() {
         rerank_ready: true,
         rerank_error: None,
         error: None,
+        ..crate::native_vmm::NativeVmmHostAiStatus::default()
     };
     // ready is the product projection after the same runtime completes validation.
     // ready 是同一运行时完成校验后的产品投影。
@@ -859,6 +860,22 @@ fn native_runtime_summary_requires_validated_host_ai() {
     assert!(ready.rerank_ready);
     assert_eq!(ready.backend_state, "ready");
     assert!(ready.backend_error.is_none());
+    assert!(ready.precheck_error.is_none());
+    assert!(ready.postaction_error.is_none());
+
+    // stale proves validated routes cannot report healthy memory while vectors need a rebuild.
+    // stale 证明向量待重建时，已校验的路由不能报告记忆健康。
+    let stale_vectors = crate::native_vmm::NativeVmmHostAiStatus {
+        active_vector_rebuild_required_memory_count: 3,
+        ..validated
+    };
+    let stale = vmm_runtime_summary(None, &effective, Some(&stale_vectors));
+    assert!(stale.process_ready);
+    assert!(!stale.scope_ready);
+    assert!(!stale.precheck_ready);
+    assert!(!stale.postaction_ready);
+    assert!(stale.precheck_error.is_some());
+    assert!(stale.postaction_error.is_some());
 }
 
 /// Verifies project rows use the canonical structured path for actions and display.
