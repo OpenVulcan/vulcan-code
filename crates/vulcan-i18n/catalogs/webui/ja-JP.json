@@ -5856,6 +5856,7 @@
   "projectSidebar.time.weeks": "{value}週",
   "projectSidebar.time.months": "{value}か月",
   "projectSidebar.time.years": "{value}年",
+  "projectSidebar.time.updatedAt": "更新: {time}",
   "conversation.planArtifact.executeWithNote": "{action}：{note}",
   "answerMode.label": "回答モード",
   "answerMode.standard": "標準",

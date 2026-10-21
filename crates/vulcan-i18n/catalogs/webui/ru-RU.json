@@ -5856,6 +5856,7 @@
   "projectSidebar.time.weeks": "{value} нед",
   "projectSidebar.time.months": "{value} мес",
   "projectSidebar.time.years": "{value} г",
+  "projectSidebar.time.updatedAt": "Обновлено {time}",
   "conversation.planArtifact.executeWithNote": "{action}: {note}",
   "answerMode.label": "Режим ответа",
   "answerMode.standard": "Стандартный",

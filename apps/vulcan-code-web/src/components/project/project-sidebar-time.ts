@@ -15,6 +15,15 @@ export function formatConversationRelativeTime(
   return compactPersistedRelativeLabel(conversation.lastUpdatedLabel || conversation.status, locale);
 }
 
+// formatConversationUpdatedAt returns the full local date and time of the last update, or null without a timestamp.
+// formatConversationUpdatedAt 返回最后更新的完整本地日期与时间；没有时间戳时返回 null。
+export function formatConversationUpdatedAt(conversation: ConversationSummary, locale: LocaleCode): string | null {
+  const updatedAtMs = Number.parseInt(conversation.lastUpdatedAt ?? "", 10);
+  if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) return null;
+  const time = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(updatedAtMs);
+  return formatMessage(readLocaleMessage(locale, "projectSidebar.time.updatedAt"), { time });
+}
+
 // formatCompactRelativeTime converts one elapsed duration into the compact tree label.
 // formatCompactRelativeTime 将经过时长转换为紧凑树标签。
 function formatCompactRelativeTime(elapsedMs: number, locale: LocaleCode): string {

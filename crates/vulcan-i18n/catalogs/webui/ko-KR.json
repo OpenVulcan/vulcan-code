@@ -5856,6 +5856,7 @@
   "projectSidebar.time.weeks": "{value}주",
   "projectSidebar.time.months": "{value}개월",
   "projectSidebar.time.years": "{value}년",
+  "projectSidebar.time.updatedAt": "업데이트: {time}",
   "conversation.planArtifact.executeWithNote": "{action}: {note}",
   "answerMode.label": "답변 모드",
   "answerMode.standard": "표준",

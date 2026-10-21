@@ -16,7 +16,7 @@ import type { ConversationSummary, ProjectSummary } from "@/types";
 import { ConversationContextMenu } from "./project-sidebar-menus";
 import type { ConversationMenuAction } from "./project-sidebar-types";
 import type { SortableRowBinding } from "./project-sidebar-sortable";
-import { formatConversationRelativeTime } from "./project-sidebar-time";
+import { formatConversationRelativeTime, formatConversationUpdatedAt } from "./project-sidebar-time";
 
 // ConversationRowVariant selects the compact tree line or the two-line session-flow entry.
 // ConversationRowVariant 选择紧凑树行或两行的会话流条目。
@@ -74,6 +74,9 @@ export function ConversationTreeRow(props: {
   const dedicated = props.conversation.dedicated === true;
   const kindLabel = dedicated ? t("composer.draft.kindDedicated") : null;
   const time = formatConversationRelativeTime(props.conversation, props.nowMs, props.locale);
+  // updatedAt spells out the compact time label in the row tooltip.
+  // updatedAt 在行提示中写出紧凑时间标签对应的完整时间。
+  const updatedAt = formatConversationUpdatedAt(props.conversation, props.locale);
   const metaParts = [kindLabel, stateLabel].filter(Boolean);
   return (
     <SidebarMenuItem
@@ -97,7 +100,7 @@ export function ConversationTreeRow(props: {
           data-state={state ?? undefined}
           data-variant={variant}
           onClick={() => props.onSelectConversation(props.conversation.id)}
-          title={[props.conversation.title, kindLabel, stateLabel].filter(Boolean).join("\n")}
+          title={[props.conversation.title, kindLabel, stateLabel, updatedAt].filter(Boolean).join("\n")}
           type="button"
         >
           <span className="vk-tree-lead">

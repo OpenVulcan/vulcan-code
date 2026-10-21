@@ -5856,6 +5856,7 @@
   "projectSidebar.time.weeks": "{value} sem",
   "projectSidebar.time.months": "{value} mois",
   "projectSidebar.time.years": "{value} an",
+  "projectSidebar.time.updatedAt": "Mis à jour {time}",
   "conversation.planArtifact.executeWithNote": "{action} : {note}",
   "answerMode.label": "Mode de réponse",
   "answerMode.standard": "Standard",
