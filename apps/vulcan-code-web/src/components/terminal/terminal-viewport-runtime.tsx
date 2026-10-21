@@ -4,7 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import type { TerminalViewportProps } from "./terminal-viewport";
-import { terminalPathLinks } from "./terminal-path-links";
+import { TERMINAL_LINK_MAX_ROWS, terminalPathLinks, type TerminalPathOpener } from "./terminal-path-links";
 
 // TerminalViewportRuntime owns one stable xterm instance and event-driven ResizeObserver fitting.
 // TerminalViewportRuntime 持有一个稳定 xterm 实例，并使用事件驱动的 ResizeObserver 拟合。
@@ -121,8 +121,20 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
     });
     const linkDisposable = terminal.registerLinkProvider({
       provideLinks: (y, callback) => {
-        const line = callbacksRef.current.onOpenPath ? terminal.buffer.active.getLine(y - 1) : undefined;
-        callback(line ? terminalPathLinks(line, y, (path, lines) => callbacksRef.current.onOpenPath?.(path, lines)) : undefined);
+        if (!callbacksRef.current.onOpenPath) return callback(undefined);
+        // rows is the logical line through row y: the rows wrapped into it above and below.
+        // rows 是经过第 y 行的逻辑行：其上下由折行连接的各行。
+        const buffer = terminal.buffer.active;
+        let first = y - 1;
+        while (first > 0 && y - 1 - first < TERMINAL_LINK_MAX_ROWS && buffer.getLine(first)?.isWrapped) first -= 1;
+        const rows = [];
+        for (let index = first; rows.length < TERMINAL_LINK_MAX_ROWS; index += 1) {
+          const line = buffer.getLine(index);
+          if (!line || (index > first && !line.isWrapped)) break;
+          rows.push(line);
+        }
+        const open: TerminalPathOpener = (path, lines) => callbacksRef.current.onOpenPath?.(path, lines);
+        callback(terminalPathLinks(rows, first + 1, open).filter((link) => link.range.start.y <= y && link.range.end.y >= y));
       },
     });
     if (fixedGrid) {
