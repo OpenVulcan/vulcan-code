@@ -24,6 +24,7 @@
 // 终端过窄时面板同样如此。宽度连窄栏都放不下时，侧栏只以抽屉形式出现。
 
 mod activity;
+pub mod age;
 mod answer_components;
 mod ask;
 pub mod brand;

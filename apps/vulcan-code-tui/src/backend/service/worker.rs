@@ -1298,7 +1298,10 @@ impl Worker {
                         row.status = status;
                     }
                     if let Some(label) = delta.last_updated_label {
+                        // The kernel stamps the update time together with the label.
+                        // 内核在写入标签的同时记录更新时间。
                         row.last_updated_label = label;
+                        row.last_updated_at = crate::model::now_unix_ms().to_string();
                     }
                 });
             }
@@ -2376,6 +2379,7 @@ fn draft_row(id: &str, draft: &Draft) -> ConversationSummary {
         project_id: draft.project_id.clone(),
         run_phase: RunPhase::Idle,
         last_updated_label: String::new(),
+        last_updated_at_ms: None,
         unread: false,
         attention: false,
         dedicated: false,

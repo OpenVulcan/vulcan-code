@@ -109,6 +109,7 @@ fn dedicated_knowledge_selection_is_read_only_without_hiding_enabled_libraries()
         project_id: Some("project".into()),
         run_phase: crate::model::RunPhase::Completed,
         last_updated_label: String::new(),
+        last_updated_at_ms: None,
         unread: false,
         attention: false,
         dedicated: false,

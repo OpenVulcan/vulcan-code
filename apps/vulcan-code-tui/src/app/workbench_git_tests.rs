@@ -37,6 +37,7 @@ fn workbench(ids: &[&str], selected: Option<&str>) -> BackendEvent {
                 project_id: None,
                 run_phase: RunPhase::Idle,
                 last_updated_label: String::new(),
+                last_updated_at_ms: None,
                 unread: false,
                 attention: false,
                 dedicated: false,

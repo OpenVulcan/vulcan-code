@@ -29,28 +29,36 @@ pub fn projects() -> Vec<Project> {
 }
 
 pub fn conversations() -> Vec<ConversationSummary> {
-    let row = |id: &str, title: &str, project: Option<&str>, label: &str| ConversationSummary {
-        id: id.into(),
-        title: title.into(),
-        project_id: project.map(Into::into),
-        run_phase: RunPhase::Idle,
-        last_updated_label: label.into(),
-        unread: false,
-        attention: false,
-        dedicated: false,
-    };
+    let now = now_unix_ms();
+    let row =
+        |id: &str, title: &str, project: Option<&str>, minutes_ago: i64| ConversationSummary {
+            id: id.into(),
+            title: title.into(),
+            project_id: project.map(Into::into),
+            run_phase: RunPhase::Idle,
+            last_updated_label: String::new(),
+            last_updated_at_ms: Some(now - minutes_ago * crate::ui::age::MINUTE_MS),
+            unread: false,
+            attention: false,
+            dedicated: false,
+        };
     let mut list = vec![
-        row("c-tui", "TUI 框架與顯示 demo", Some("p-tui"), "now"),
-        row("c-git", "Git 側欄在終端中的呈現", Some("p-tui"), "3m"),
-        row("c-ask", "Ask 流程與焦點規則", Some("p-core"), "12m"),
+        row("c-tui", "TUI 框架與顯示 demo", Some("p-tui"), 0),
+        row("c-git", "Git 側欄在終端中的呈現", Some("p-tui"), 3),
+        row("c-ask", "Ask 流程與焦點規則", Some("p-core"), 12),
         row(
             "c-provider",
             "Provider manifest 簽名檢查",
             Some("p-core"),
-            "1h",
+            60,
         ),
-        row("c-skill", "技能配置 Schema 升級", Some("p-lua"), "2d"),
-        row("c-scratch", "隨手筆記", None, "5d"),
+        row(
+            "c-skill",
+            "技能配置 Schema 升級",
+            Some("p-lua"),
+            2 * 24 * 60,
+        ),
+        row("c-scratch", "隨手筆記", None, 5 * 24 * 60),
     ];
     list[3].unread = true;
     list

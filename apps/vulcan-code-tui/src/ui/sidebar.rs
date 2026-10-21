@@ -8,6 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
+use super::age::conversation_age;
 use super::text::{spinner, truncate, width_of};
 use super::theme::mix;
 use crate::app::action::UiAction;
@@ -231,6 +232,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
                 }
             }
             SidebarRow::Conversation(id) => {
+                let now_ms = crate::model::now_unix_ms();
                 let Some(conversation) = app.conversations.iter().find(|c| &c.id == id) else {
                     continue;
                 };
@@ -250,7 +252,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
                 let tail = if is_cursor {
                     " ⋯ ".to_string()
                 } else {
-                    format!(" {} ", conversation.last_updated_label)
+                    format!(" {} ", conversation_age(conversation, now_ms))
                 };
                 // Dedicated sessions lead their title with a kind glyph, mirroring the WebUI mark.
                 // 专职会话在标题前带有种类符号，与 WebUI 标记一致。

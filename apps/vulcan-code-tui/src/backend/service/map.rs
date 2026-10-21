@@ -75,6 +75,12 @@ pub fn conversation(conversation: &api::ConversationSummary) -> ConversationSumm
         project_id: conversation.project_id.clone(),
         run_phase: run_phase(&conversation.run_phase, &conversation.status),
         last_updated_label: conversation.last_updated_label.clone(),
+        last_updated_at_ms: conversation
+            .last_updated_at
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|ms| *ms > 0),
         unread: conversation.unread,
         attention: conversation.attention.is_some(),
         dedicated: conversation.dedicated,

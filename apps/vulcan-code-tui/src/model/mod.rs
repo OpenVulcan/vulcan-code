@@ -70,6 +70,14 @@ pub struct Project {
     pub pinned: bool,
 }
 
+/// Returns the current wall-clock time as Unix milliseconds.
+/// 返回当前挂钟时间（Unix 毫秒）。
+pub fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
 #[derive(Debug, Clone)]
 pub struct ConversationSummary {
     pub id: ConversationId,
@@ -77,6 +85,9 @@ pub struct ConversationSummary {
     pub project_id: Option<String>,
     pub run_phase: RunPhase,
     pub last_updated_label: String,
+    /// Last update as Unix milliseconds; the sidebar age is computed from it when present.
+    /// 最后更新时间（Unix 毫秒）；存在时侧栏时长由它计算。
+    pub last_updated_at_ms: Option<i64>,
     pub unread: bool,
     /// A pending question or failure needs the user.
     /// 有等待中的提问或失败需要用户处理。

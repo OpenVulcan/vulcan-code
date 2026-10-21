@@ -826,6 +826,7 @@ impl World {
         {
             row.run_phase = phase;
             row.last_updated_label = "now".into();
+            row.last_updated_at_ms = Some(crate::model::now_unix_ms());
             if !phase.is_active() {
                 row.attention = false;
             }
@@ -1099,6 +1100,7 @@ impl World {
                     project_id,
                     run_phase: RunPhase::Idle,
                     last_updated_label: "now".into(),
+                    last_updated_at_ms: Some(crate::model::now_unix_ms()),
                     unread: false,
                     attention: false,
                     dedicated: false,

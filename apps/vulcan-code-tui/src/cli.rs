@@ -110,12 +110,20 @@ fn run() -> Result<()> {
 
 fn event_loop(terminal: &mut ConsoleTerminal, app: &mut App) -> Result<()> {
     let mut dirty = true;
+    // Sidebar ages count whole minutes, so an idle screen redraws when the minute turns.
+    // 侧栏时长按整分钟计，因此空闲画面在分钟变化时重绘。
+    let mut drawn_minute = crate::model::now_unix_ms() / crate::ui::age::MINUTE_MS;
     loop {
         while let Ok(event) = app.backend.events.try_recv() {
             app.apply(event);
             dirty = true;
         }
         app.tick(Instant::now());
+        let minute = crate::model::now_unix_ms() / crate::ui::age::MINUTE_MS;
+        if minute != drawn_minute {
+            drawn_minute = minute;
+            dirty = true;
+        }
         if dirty || app.animating() {
             terminal.draw(|frame| ui::draw(frame, app))?;
             dirty = false;
