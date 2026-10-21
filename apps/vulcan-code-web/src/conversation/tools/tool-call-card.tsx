@@ -4,6 +4,7 @@ import * as React from "react";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import { AgentCard, agentToolSpec } from "./cards/agent-card";
 import { AskCard } from "./cards/ask-card";
+import { CodeModeCard, toolCallIsCodeMode } from "./cards/code-mode-card";
 import { ShellCommandCard, TerminalSessionCard, toolCallIsShellCommand } from "./cards/command-card";
 import { FileChangeCard, FileInspectCard, FileReadCard, MediaReadCard } from "./cards/file-cards";
 import { DocumentCard, documentToolSpec } from "./cards/document-card";
@@ -56,6 +57,7 @@ export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   if (toolCallIsShellCommand(call)) return { Card: ShellCommandCard, family: "run" };
   if (call.name === "terminal_session" || call.host?.kind === "terminal_session") return { Card: TerminalSessionCard, family: "run" };
   if (LUA_TOOLS.has(call.name)) return { Card: LuaCard, family: "run" };
+  if (toolCallIsCodeMode(call)) return { Card: CodeModeCard, family: "run" };
   if (call.name === "todolist") return { Card: TodoCard, family: "plan" };
   if (GOAL_TOOLS.has(call.name)) return { Card: GoalCard, family: "plan" };
   if (call.name === "submit_plan") return { Card: PlanCard, family: "plan" };

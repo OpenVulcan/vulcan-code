@@ -762,6 +762,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-media-path > code { color: var(--vk-ink-2); font-family: var(--vk-font-mono); overflow-wrap: anywhere; user-select: all; }
 .vk-media-path > em { font-style: normal; color: var(--vk-warn); }
 .vk-media-result > .vk-tool-note + .vk-media-list { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-media-item > img { max-width: 100%; max-height: 24rem; object-fit: contain; justify-self: start; }
 
 /* ---------- Conversation function cards ---------- */
 
