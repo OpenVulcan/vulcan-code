@@ -63,7 +63,7 @@ export function DiffFileLoadStateNote(props: {
         ) : null}
         {canReveal ? (
           <button className="diff-file-load-retry" onClick={() => props.onRevealFile?.(props.file)} type="button">
-            {t("diff.load.reveal")}
+            {t("workspaceFiles.revealInFolder")}
           </button>
         ) : null}
       </div>

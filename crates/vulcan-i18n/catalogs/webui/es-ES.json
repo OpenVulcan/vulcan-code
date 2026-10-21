@@ -917,7 +917,6 @@
   "diff.large.fileMaxLineBytes": "El tamaño de una sola línea supera {limit}",
   "diff.load.rowsPending": "{rows} filas pendientes, unos {hunks} bloques",
   "diff.load.retry": "Reintentar",
-  "diff.load.reveal": "Abrir la ubicación",
   "diff.load.matchCount": "{count} coincidencias",
   "diff.load.backendMatchFallback": "El diff completo del backend coincidió con este archivo.",
   "diff.load.loadingDetail": "Cargando los detalles del diff del archivo.",

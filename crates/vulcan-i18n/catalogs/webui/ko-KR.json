@@ -917,7 +917,6 @@
   "diff.large.fileMaxLineBytes": "한 줄 크기가 {limit}을(를) 초과함",
   "diff.load.rowsPending": "대기 중인 행 {rows}개, 약 {hunks}개 헝크",
   "diff.load.retry": "다시 시도",
-  "diff.load.reveal": "위치 열기",
   "diff.load.matchCount": "일치 {count}개",
   "diff.load.backendMatchFallback": "백엔드 전체 diff에서 이 파일이 일치했습니다.",
   "diff.load.loadingDetail": "파일 diff 세부 정보를 불러오는 중입니다.",

@@ -917,7 +917,6 @@
   "diff.large.fileMaxLineBytes": "单行体积超过 {limit}",
   "diff.load.rowsPending": "{rows} 行待加载，约 {hunks} 个 hunk",
   "diff.load.retry": "重试",
-  "diff.load.reveal": "打开位置",
   "diff.load.matchCount": "{count} 条命中",
   "diff.load.backendMatchFallback": "后端完整 diff 命中该文件。",
   "diff.load.loadingDetail": "正在加载文件 diff 详情。",

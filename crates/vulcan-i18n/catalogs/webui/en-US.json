@@ -917,7 +917,6 @@
   "diff.large.fileMaxLineBytes": "Single-line size exceeds {limit}",
   "diff.load.rowsPending": "{rows} rows pending, about {hunks} hunks",
   "diff.load.retry": "Retry",
-  "diff.load.reveal": "Open location",
   "diff.load.matchCount": "{count} matches",
   "diff.load.backendMatchFallback": "The full backend diff matched this file.",
   "diff.load.loadingDetail": "Loading file diff details.",

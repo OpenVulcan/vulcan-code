@@ -917,7 +917,6 @@
   "diff.large.fileMaxLineBytes": "1 行のサイズが {limit} を超えています",
   "diff.load.rowsPending": "{rows} 行が保留中、約 {hunks} 個のハンク",
   "diff.load.retry": "再試行",
-  "diff.load.reveal": "場所を開く",
   "diff.load.matchCount": "{count} 件一致",
   "diff.load.backendMatchFallback": "バックエンドの完全な差分がこのファイルに一致しました。",
   "diff.load.loadingDetail": "ファイルの差分の詳細を読み込んでいます。",

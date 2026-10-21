@@ -917,7 +917,6 @@
   "diff.large.fileMaxLineBytes": "單行大小超過 {limit}",
   "diff.load.rowsPending": "{rows} 行待載入，約 {hunks} 個 hunk",
   "diff.load.retry": "重試",
-  "diff.load.reveal": "開啟位置",
   "diff.load.matchCount": "{count} 筆相符",
   "diff.load.backendMatchFallback": "後端完整 diff 命中此檔案。",
   "diff.load.loadingDetail": "正在載入檔案 diff 詳細資訊。",

@@ -917,7 +917,6 @@
   "diff.large.fileMaxLineBytes": "Größe einer einzelnen Zeile überschreitet {limit}",
   "diff.load.rowsPending": "{rows} Zeilen ausstehend, etwa {hunks} Hunks",
   "diff.load.retry": "Erneut versuchen",
-  "diff.load.reveal": "Ort öffnen",
   "diff.load.matchCount": "{count} Treffer",
   "diff.load.backendMatchFallback": "Der vollständige Backend-Diff hat diese Datei gefunden.",
   "diff.load.loadingDetail": "Diff-Details der Datei werden geladen.",

@@ -78,7 +78,7 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
     }
   };
   const reveal = file && props.onRevealFile ? (
-    <IconButton aria-label={t("diff.load.reveal")} disabled={busy} onClick={() => props.onRevealFile?.(file)} size="sm" title={t("diff.load.reveal")}>
+    <IconButton aria-label={t("workspaceFiles.revealInFolder")} disabled={busy} onClick={() => props.onRevealFile?.(file)} size="sm" title={t("workspaceFiles.revealInFolder")}>
       <FolderOpen size={14} />
     </IconButton>
   ) : null;

@@ -917,7 +917,6 @@
   "diff.large.fileMaxLineBytes": "Размер одной строки превышает {limit}",
   "diff.load.rowsPending": "Ожидает строк: {rows}, около {hunks} блоков",
   "diff.load.retry": "Повторить",
-  "diff.load.reveal": "Открыть расположение",
   "diff.load.matchCount": "Совпадений: {count}",
   "diff.load.backendMatchFallback": "Полный diff на сервере содержит этот файл.",
   "diff.load.loadingDetail": "Загрузка подробностей diff файла.",
