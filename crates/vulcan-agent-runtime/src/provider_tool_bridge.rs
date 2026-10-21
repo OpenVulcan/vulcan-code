@@ -33,6 +33,7 @@ use vulcan_tools_manager::{
 };
 
 mod result_markdown;
+pub(crate) mod standalone;
 
 /// Maximum generated image or generic file size accepted by the host.
 /// 宿主接受的生成图片或通用文件最大字节数。

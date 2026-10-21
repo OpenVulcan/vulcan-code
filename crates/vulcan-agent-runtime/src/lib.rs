@@ -60,6 +60,10 @@ pub use agent_runtime::{
     stream_runtime_run_with_intervention_and_plugins,
     stream_runtime_run_with_intervention_plugins_and_public_ai,
 };
+pub use provider_tool_bridge::standalone::{
+    SavedProviderToolOutput, SavedProviderToolResult, model_extension_parameters_markdown,
+    model_extension_public_model_id, save_provider_tool_result_to_directory,
+};
 pub use tooling::bridge as vulcan_tools_bridge;
 pub use vulcan_host_tools::project_temp_maintenance;
 pub use vulcan_host_tools::result_format as tool_result_format;
