@@ -81,6 +81,7 @@ hydration 的 `session_config.unattended`，只在当前为自动审批时出现
 | AI 能力 | 选择服务公开的能力目标、启用能力；供应商异步任务列表与取消，仍有未终结任务时每 5 秒重读 | PublicAiSettings、ProviderTasks |
 | 子代理模型 | 系统清单与所选已保存会话清单：每个条目可编辑备注、上移、下移、移除，“添加模型”从可用模型中选择（已列出的不重复添加），满额时说明；会话切换“本会话”时以系统清单为起点，关闭时跟随系统清单；草稿与专职会话说明不可用；每次修改保存完整清单 | SubagentModels、SessionSubagentModels |
 | MCP | stdio/http/sse 配置表单（含 OAuth 开关）、移除、运行态与能力检查；启用 OAuth 或等待授权的服务器可登录、打开授权页、手动完成、取消与退出，流程进行中每 2 秒重读 | Workbench.mcpServers、McpRuntime、McpCapabilities、McpOAuth |
+| MCP 服务 | 端点开关与地址、审批与视图说明；每个客户端的授权摘要、令牌末位与最近使用，可切换启用及读取/发送/新建/停止/回答（遵守读取依赖），以项目选择器加入或移除授权项目（移除最后一个项目被拒绝，扩大范围须显式选择全部项目），以媒体选择器切换媒体授权（含已不可用项），重命名与确认后删除；新建客户端与轮换令牌只在 WebUI 进行，因为终端从不显示令牌 | McpService |
 | 已归档会话 | 恢复与删除 | Workbench.archivedConversations |
 | 诊断 | 重试配置、完整请求追踪和会话错误独立记录开关、打开及清理追踪目录、模块与日志 | Workbench |
 | 关于 | 应用版本、许可证目录与按哈希读取正文 | Workbench、Licenses、LicenseBody |
@@ -269,6 +270,10 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `subagent_models::save_subagent_models` | saveSubagentModels | `service_save_subagent_models` |
 | `subagent_models::load_session_subagent_models` | loadSessionSubagentModels | `service_session_subagent_models` |
 | `subagent_models::save_session_subagent_models` | saveSessionSubagentModels | `service_save_session_subagent_models` |
+| `mcp_service::load_mcp_service` | loadMcpService | `service_mcp_service_snapshot` |
+| `mcp_service::set_mcp_service_enabled` | setMcpServiceEnabled | `service_set_mcp_service_enabled` |
+| `mcp_service::update_mcp_client` | updateMcpClient | `service_update_mcp_client` |
+| `mcp_service::delete_mcp_client` | deleteMcpClient | `service_delete_mcp_client` |
 | `settings_actions::save_public_ai_provider_tool_selection` | savePublicAiProviderToolSelection | `service_save_public_ai_provider_tool_selection` |
 | `settings_actions::save_public_ai_provider_tool_capability_enabled` | savePublicAiProviderToolCapabilityEnabled | `service_save_public_ai_provider_tool_capability_enabled` |
 | `settings_actions::list_provider_tasks` | listProviderTasks | `service_list_provider_tasks` |

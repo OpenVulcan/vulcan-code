@@ -13,6 +13,7 @@ mod catalog;
 mod inference;
 mod knowledge;
 mod markdown_memory;
+mod mcp_service;
 mod memory;
 mod models;
 mod navigation;
@@ -180,6 +181,7 @@ impl Area {
                     Some(tr!("settings.group.models")),
                     vec![Providers, Credentials, Models, Capabilities, SubagentModels],
                 ),
+                (Some(tr!("settings.group.connections")), vec![McpService]),
                 (Some(tr!("settings.group.data")), vec![Archived]),
                 (Some(tr!("settings.group.about")), vec![Diagnostics, About]),
             ],
@@ -224,6 +226,9 @@ pub enum PageId {
     /// 子代理可使用的模型：系统清单与所选会话的自有清单。
     SubagentModels,
     Mcp,
+    /// The MCP service other AI tools connect to: the endpoint switch and each client's grants.
+    /// 供其他 AI 工具连接的 MCP 服务：端点开关与各客户端的授权。
+    McpService,
     Archived,
     Diagnostics,
     About,
@@ -312,6 +317,7 @@ impl PageId {
             PageId::Capabilities => tr!("settings.aiCapabilities"),
             PageId::SubagentModels => tr!("settings.subagentModels"),
             PageId::Mcp => tr!("tui.settings.mcp"),
+            PageId::McpService => tr!("settings.mcpService"),
             PageId::Archived => tr!("settings.misc.archivedConversations"),
             PageId::Diagnostics => tr!("settings.diagnostics"),
             PageId::About => tr!("settings.group.about"),
@@ -464,6 +470,7 @@ impl PageId {
                     ));
                 }
             }
+            Self::McpService => calls.push(api::mcp_service::load_mcp_service()),
             Self::SubagentModels => {
                 calls.push(api::subagent_models::load_subagent_models());
                 if let Some(conversation) = subagent_models::saved_conversation(app) {
@@ -1115,6 +1122,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::Capabilities => settings::capabilities(app),
         PageId::SubagentModels => subagent_models::rows(app),
         PageId::Mcp => settings::mcp(app),
+        PageId::McpService => mcp_service::rows(app),
         PageId::Archived => settings::archived(app),
         PageId::Diagnostics => settings::diagnostics(app),
         PageId::About => settings::about(app),

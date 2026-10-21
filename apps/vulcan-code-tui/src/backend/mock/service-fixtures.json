@@ -1604,6 +1604,53 @@
       "systemPrompt": "Ask me before anything touches the release branch.",
       "maxChars": 4000
     },
+    "service_mcp_service_snapshot": {
+      "enabled": true,
+      "endpointUrl": "http://127.0.0.1:17600/mcp",
+      "clients": [
+        {
+          "id": "mcp-client-demo",
+          "name": "Claude Code on the laptop",
+          "tokenHint": "q7Zx",
+          "createdAtMs": 1767225600000,
+          "enabled": true,
+          "sessions": {
+            "read": true,
+            "send": true,
+            "create": false,
+            "stop": true,
+            "answerQuestions": false,
+            "projects": {
+              "mode": "all"
+            }
+          },
+          "mediaTargets": [
+            {
+              "connectionId": "demo-openai",
+              "targetId": "gpt-image-2"
+            }
+          ],
+          "lastUsedAtMs": 1767229200000,
+          "callCount": 42
+        }
+      ],
+      "mediaCandidates": [
+        {
+          "connectionId": "demo-openai",
+          "targetId": "gpt-image-2",
+          "capability": "image_generate",
+          "model": "gpt-image-2",
+          "displayName": "GPT Image 2",
+          "accountName": "Demo OpenAI"
+        }
+      ],
+      "limits": {
+        "maxClients": 16,
+        "maxNameChars": 64,
+        "maxProjects": 64,
+        "maxMediaTargets": 32
+      }
+    },
     "service_subagent_models": {
       "models": [
         {

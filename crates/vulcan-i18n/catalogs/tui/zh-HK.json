@@ -381,5 +381,6 @@
   "tui.transcript.revealed": "全部展開",
   "tui.turn.abandoned": "本輪已放棄",
   "tui.web.mock": "模擬模式：WebUI 將在 {url} 打開",
-  "tui.session.dedicatedNoSubagents": "專職對話不啟動子代理。"
+  "tui.session.dedicatedNoSubagents": "專職對話不啟動子代理。",
+  "tui.mcpService.webuiOnly": "新增客戶端與簽發新權杖請在 WebUI 中進行：權杖只顯示一次，而終端機從不顯示權杖。"
 }

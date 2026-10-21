@@ -981,6 +981,30 @@ impl FakeService {
                 self.loads["service_session_subagent_models"]["models"] =
                     required(params, "/request/models")?.clone();
             }
+            "service_set_mcp_service_enabled" => {
+                self.loads["service_mcp_service_snapshot"]["enabled"] =
+                    required(params, "/enabled")?.clone();
+            }
+            "service_update_mcp_client" => {
+                // The demo replaces the client's grants and keeps its token and usage.
+                // 演示替换客户端的授权，保留其令牌与使用情况。
+                let request = required(params, "/request")?;
+                let client = self.loads["service_mcp_service_snapshot"]["clients"]
+                    .as_array_mut()
+                    .ok_or("MCP clients")?
+                    .iter_mut()
+                    .find(|client| client.get("id") == request.get("clientId"))
+                    .ok_or("Unknown MCP client")?;
+                for field in ["name", "enabled", "sessions", "mediaTargets"] {
+                    client[field] = required(request, &format!("/{field}"))?.clone();
+                }
+            }
+            "service_delete_mcp_client" => {
+                self.loads["service_mcp_service_snapshot"]["clients"]
+                    .as_array_mut()
+                    .ok_or("MCP clients")?
+                    .retain(|client| client.get("id") != params.get("clientId"));
+            }
             "service_save_review_prompt_system_default" => {
                 // The demo keeps one system prompt; a session that follows it shows the new text.
                 // 演示保留一份系统提示词；跟随它的会话显示新文本。

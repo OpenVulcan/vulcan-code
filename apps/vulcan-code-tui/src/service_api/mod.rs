@@ -19,6 +19,7 @@ pub mod knowledge_base;
 mod knowledge_contract_tests;
 pub mod licenses;
 pub mod markdown_memory;
+pub mod mcp_service;
 pub mod mcp_settings;
 pub mod memory_actions;
 pub mod permission_judge;
@@ -253,6 +254,9 @@ pub enum Slot {
     /// `loadSessionSubagentModels` of the selected saved session.
     /// 所选已保存会话的 `loadSessionSubagentModels`。
     SessionSubagentModels,
+    /// `loadMcpService`: the endpoint switch, its clients and the grantable media models.
+    /// 端点开关、其客户端与可授权媒体模型的 `loadMcpService`。
+    McpService,
     /// `loadWorkspaceFileDirectory` of the folder the composer's `@` path mention lists.
     /// 输入框 `@` 路径提及所列文件夹的 `loadWorkspaceFileDirectory`。
     PathMentionDirectory,
