@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import type { TerminalViewportProps } from "./terminal-viewport";
+import { terminalPathLinks } from "./terminal-path-links";
 
 // TerminalViewportRuntime owns one stable xterm instance and event-driven ResizeObserver fitting.
 // TerminalViewportRuntime 持有一个稳定 xterm 实例，并使用事件驱动的 ResizeObserver 拟合。
@@ -118,6 +119,12 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
     const binaryDisposable = terminal.onBinary((data) => {
       if (!callbacksRef.current.readOnly) callbacksRef.current.onBinary?.(data);
     });
+    const linkDisposable = terminal.registerLinkProvider({
+      provideLinks: (y, callback) => {
+        const line = callbacksRef.current.onOpenPath ? terminal.buffer.active.getLine(y - 1) : undefined;
+        callback(line ? terminalPathLinks(line, y, (path, lines) => callbacksRef.current.onOpenPath?.(path, lines)) : undefined);
+      },
+    });
     if (fixedGrid) {
       terminal.refresh(0, fixedGrid.rows - 1);
     } else {
@@ -133,6 +140,7 @@ export function TerminalViewportRuntime(props: TerminalViewportProps) {
       if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
       dataDisposable.dispose();
       binaryDisposable.dispose();
+      linkDisposable.dispose();
       terminal.dispose();
       terminalRef.current = null;
       lastRenderedSeqRef.current = 0;

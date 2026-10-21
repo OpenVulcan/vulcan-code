@@ -74,6 +74,40 @@ export function useWorkspaceFileOpener(): WorkspaceFileOpener | null {
   return React.useContext(WorkspaceFileOpenContext);
 }
 
+// publishedOpener is the opener the workbench offers to surfaces rendered outside its provider, such as the
+// floating project terminals; publishedOpenerListeners re-render them when it changes.
+// publishedOpener 是工作台提供给其 Provider 之外界面（如浮动项目终端）的打开动作；
+// publishedOpenerListeners 在其变化时使这些界面重新渲染。
+let publishedOpener: WorkspaceFileOpener | null = null;
+const publishedOpenerListeners = new Set<() => void>();
+
+// setPublishedOpener replaces the published opener and notifies its readers.
+// setPublishedOpener 替换已发布的打开动作并通知读取方。
+function setPublishedOpener(opener: WorkspaceFileOpener | null): void {
+  publishedOpener = opener;
+  for (const listener of publishedOpenerListeners) listener();
+}
+
+// usePublishWorkspaceFileOpener offers `opener` to surfaces outside the provider while the caller is mounted.
+// usePublishWorkspaceFileOpener 在调用方挂载期间将 `opener` 提供给 Provider 之外的界面。
+export function usePublishWorkspaceFileOpener(opener: WorkspaceFileOpener | null): void {
+  React.useEffect(() => {
+    setPublishedOpener(opener);
+    return () => {
+      if (publishedOpener === opener) setPublishedOpener(null);
+    };
+  }, [opener]);
+}
+
+// usePublishedWorkspaceFileOpener returns the opener the workbench published, or null when none is offered.
+// usePublishedWorkspaceFileOpener 返回工作台发布的打开动作；未提供时返回 null。
+export function usePublishedWorkspaceFileOpener(): WorkspaceFileOpener | null {
+  return React.useSyncExternalStore((listener) => {
+    publishedOpenerListeners.add(listener);
+    return () => { publishedOpenerListeners.delete(listener); };
+  }, () => publishedOpener);
+}
+
 // requestWorkspaceFileOpen asks the files panel of tab `tabId` to open `path` at `lines`, now or once it mounts.
 // requestWorkspaceFileOpen 请求 `tabId` 页签的文件面板立即或在挂载后打开 `path` 并定位到 `lines`。
 export function requestWorkspaceFileOpen(tabId: string, path: string, lines: WorkspaceFileLines | null = null): void {

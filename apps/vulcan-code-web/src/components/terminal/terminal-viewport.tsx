@@ -2,6 +2,7 @@ import React from "react";
 import { useI18n } from "@/i18n";
 
 import type { TerminalDisplayChunk } from "@/types";
+import type { TerminalPathOpener } from "./terminal-path-links";
 
 // TerminalViewportProps defines the generic xterm renderer without project or session ownership.
 // TerminalViewportProps 定义不包含项目或会话归属的通用 xterm 渲染器。
@@ -48,6 +49,9 @@ export interface TerminalViewportProps {
   // Called after xterm accepts every newly delivered chunk through one sequence.
   // xterm 接受截至某一序号的全部新交付分片后调用。
   onChunksRendered?: (lastRenderedSeq: number) => void;
+  // Opens a file location the output printed when it is Ctrl/Cmd+clicked; without it no locations are links.
+  // 按 Ctrl/Cmd+点击输出中的文件位置时打开它；未提供时文件位置不成为链接。
+  onOpenPath?: TerminalPathOpener;
 }
 
 // LazyTerminalViewportRuntime keeps xterm outside the workbench startup chunk until a terminal is visible.

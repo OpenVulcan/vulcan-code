@@ -14,6 +14,7 @@ vi.mock("@xterm/xterm", () => ({ Terminal: class {
   open() {} refresh() {} blur() {} write() {}
   onData() { return { dispose: vi.fn() }; }
   onBinary() { return { dispose: vi.fn() }; }
+  registerLinkProvider() { return { dispose: vi.fn() }; }
 } }));
 
 describe("terminal theme", () => {

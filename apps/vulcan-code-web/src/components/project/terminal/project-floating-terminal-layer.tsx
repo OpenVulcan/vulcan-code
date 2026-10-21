@@ -16,6 +16,8 @@ import {
 
 import { TerminalViewport } from "@/components/terminal/terminal-viewport";
 import { FloatingWindowHead } from "@/components/workspace/floating-window-head";
+import { usePublishedWorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
+import { terminalPathFrom } from "@/conversation/tools/views/terminal-paths";
 import { Button } from "@/ui-kit/primitives/button";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
@@ -900,6 +902,9 @@ function ProjectTerminalPane(props: {
   onError: (message: string | null) => void;
 }) {
   const { t } = useI18n();
+  // openFile shows a printed file location in the files panel; relative paths resolve against the start directory.
+  // openFile 在文件面板中显示输出的文件位置；相对路径以终端启动目录解析。
+  const openFile = usePublishedWorkspaceFileOpener();
   // connectionState detaches display delivery during interruption and forces a new checkpoint after recovery.
   // connectionState 在中断期间解除显示交付，并在恢复后强制获取新检查点。
   const { connectionAvailable, connectionEpoch } = useTerminalDisplayConnectionState();
@@ -1292,6 +1297,7 @@ function ProjectTerminalPane(props: {
         onChunksRendered={(lastRenderedSeq) => {
           setChunks((current) => retainRenderedTerminalCursor(current, lastRenderedSeq));
         }}
+        onOpenPath={openFile ? (path, lines) => openFile(terminalPathFrom(props.terminal.cwd, path), lines) : undefined}
         onResize={handleResize}
         readOnly={!props.visible
           || !displayAttached

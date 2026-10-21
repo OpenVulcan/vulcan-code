@@ -43,7 +43,7 @@ import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import { LocalBrowserCloseDialog } from "@/components/features/browser/local-browser-close-dialog";
 import { readConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import { resolveConversationLinkTarget } from "@/components/conversation/conversation-link-navigation";
-import { requestWorkspaceFileOpen, WorkspaceFileOpenContext, type WorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
+import { requestWorkspaceFileOpen, usePublishWorkspaceFileOpener, WorkspaceFileOpenContext, type WorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
 import {
   type WorkspaceContextTabKind,
 } from "@/components/workspace/workspace-context-panel";
@@ -466,6 +466,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     openRightContextPanel();
   };
   const openWorkspaceFile = React.useCallback<WorkspaceFileOpener>((path, lines) => openWorkspaceFileLatest.current(path, lines), []);
+  // The floating project terminals render outside this shell, so they reach the same action through publication.
+  // 浮动项目终端渲染在本外壳之外，因此通过发布取得同一动作。
+  usePublishWorkspaceFileOpener(hasSelectedChatConversation ? openWorkspaceFile : null);
   // updateFileContextTabTitle updates one file tab title after selection changes.
   // updateFileContextTabTitle 在文件选择变化后更新单个文件页签标题。
   const updateFileContextTabTitle = React.useCallback((tabId: string, title: string) => {
