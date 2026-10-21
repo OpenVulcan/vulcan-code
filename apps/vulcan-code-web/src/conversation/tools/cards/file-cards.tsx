@@ -126,7 +126,7 @@ export function FileInspectCard(props: ToolCardProps) {
             <div data-dir={entry.directory ? "" : undefined} key={entry.path}>
               {entry.directory ? <Folder aria-hidden="true" /> : <File aria-hidden="true" />}
               {openFile && !entry.directory
-                ? <button className="vk-tree-open" onClick={() => openFile(entry.path)} title={showLabel} type="button">{entry.path}</button>
+                ? <button className="vk-path-open" onClick={() => openFile(entry.path)} title={showLabel} type="button">{entry.path}</button>
                 : <span>{entry.path}</span>}
               {entry.size !== null ? <small>{formatBytes(entry.size)}</small> : null}
             </div>
@@ -180,6 +180,7 @@ export function FileChangeCard(props: ToolCardProps) {
     ? single.change === "rename" && single.old_path ? `${single.old_path} → ${fileDisplayPath(single)}` : fileDisplayPath(single)
     : files.length > 1 ? files.map(fileDisplayPath).join(", ") : textOf(call.input.path) ?? previewPaths.join(", ");
   const previewStat = preview ? requestPreviewStat(preview) : null;
+  const openFile = useWorkspaceFileOpener();
   return (
     <ToolFrame
       {...props}
@@ -203,7 +204,10 @@ export function FileChangeCard(props: ToolCardProps) {
               {files.length > 1 ? (
                 <div className="vk-diff-file">
                   <span className="vk-file-kind" data-k={file.change[0].toUpperCase()}>{file.change[0].toUpperCase()}</span>
-                  <code className="vk-mono vk-truncate">{fileDisplayPath(file)}</code>
+                  {openFile && file.change !== "delete" ? (
+                    <button className="vk-path-open vk-mono vk-truncate" onClick={() => openFile(fileDisplayPath(file), fileFirstEditLines(file))}
+                      title={t("workspaceFiles.showInFilesPanel")} type="button">{fileDisplayPath(file)}</button>
+                  ) : <code className="vk-mono vk-truncate">{fileDisplayPath(file)}</code>}
                   <span className="vk-tool-meta">{fileLineCounts(file) ? <DiffStat {...fileLineCounts(file)!} /> : null}</span>
                 </div>
               ) : null}
