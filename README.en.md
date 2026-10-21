@@ -65,6 +65,7 @@ The project has been developed and debugged internally for a long time and is no
 - **Prompt skills** (`SKILL.md`): capture how your team works and reuse it next time
 - **LuaSkills**: package common actions into configurable, installable programmatic capability packs
 - **MCP**: local-process and HTTP MCP servers, with connection diagnostics and tool schema inspection
+- **MCP service**: Vulcan is an MCP server too. Other AI tools such as Claude Code and Codex can, as granted, list projects and sessions, send a message and wait for the reply, start sessions, stop runs and answer questions, and call separately granted image and video models; each tool gets its own token, and permission approvals always stay in Vulcan
 - **Plugin system**: plugins can provide tools and mount their own UI. Built-in plugins: Context7 docs lookup, AI browser, RTK command-output compression, usage statistics, CDP/DAP debugging tools
 
 ### ⚙️ Models and providers

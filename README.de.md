@@ -65,6 +65,7 @@ Das Projekt wurde lange intern entwickelt und getestet und ist jetzt unter der *
 - **Prompt-Skills** (`SKILL.md`): die Arbeitsweise Ihres Teams festhalten und beim nächsten Mal wiederverwenden
 - **LuaSkills**: häufige Abläufe als konfigurierbare, installierbare programmatische Fähigkeitspakete bündeln
 - **MCP**: MCP-Server als lokaler Prozess oder über HTTP, mit Verbindungsdiagnose und Einsicht in Tool-Schemas
+- **MCP-Dienst**: Vulcan ist auch selbst ein MCP-Server. Andere KI-Werkzeuge wie Claude Code und Codex können je nach Freigabe Projekte und Sitzungen auflisten, Nachrichten senden und auf die Antwort warten, Sitzungen starten, Läufe stoppen und Fragen beantworten sowie gesondert freigegebene Bild- und Videomodelle aufrufen; jedes Werkzeug erhält ein eigenes Token, und Berechtigungsfreigaben bleiben immer in Vulcan
 - **Plugin-System**: Plugins können Tools bereitstellen und eigene Oberflächen einbinden. Integrierte Plugins: Context7-Dokumentationssuche, KI-Browser, RTK-Komprimierung der Befehlsausgabe, Nutzungsstatistik, CDP/DAP-Debugging-Tools
 
 ### ⚙️ Modelle und Anbieter

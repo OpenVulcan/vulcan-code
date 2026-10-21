@@ -65,6 +65,7 @@ O projeto foi desenvolvido e depurado internamente por um longo período e agora
 - **Skills de prompt** (`SKILL.md`): registre a forma de trabalhar da sua equipe e reutilize na próxima vez
 - **LuaSkills**: empacote ações frequentes em pacotes de capacidades programáveis, configuráveis e instaláveis
 - **MCP**: servidores MCP por processo local ou HTTP, com diagnóstico de conexão e inspeção de schemas de ferramentas
+- **Serviço MCP**: o Vulcan também é um servidor MCP. Outras ferramentas de IA, como Claude Code e Codex, podem, conforme a permissão, listar projetos e sessões, enviar uma mensagem e aguardar a resposta, iniciar sessões, interromper execuções e responder perguntas, além de chamar modelos de imagem e vídeo liberados à parte; cada ferramenta tem o próprio token, e as aprovações de permissão ficam sempre no Vulcan
 - **Sistema de plugins**: plugins podem fornecer ferramentas e montar sua própria interface. Plugins integrados: busca de documentação Context7, navegador de IA, compressão da saída de comandos RTK, estatísticas de uso, ferramentas de depuração CDP/DAP
 
 ### ⚙️ Modelos e provedores
