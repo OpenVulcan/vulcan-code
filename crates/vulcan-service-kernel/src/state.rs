@@ -963,6 +963,9 @@ pub struct ServiceBridgeState {
     /// Shared Core browser session manager owned by this service process.
     /// 本服务进程拥有的共享 Core 浏览器会话管理器。
     pub(crate) browser_manager: crate::browser::BrowserManager,
+    /// MCP server shared by the `/mcp` route and the settings RPCs once the HTTP bridge runs.
+    /// HTTP 桥运行后由 `/mcp` 路由与设置 RPC 共享的 MCP 服务器。
+    pub(crate) mcp_server: Option<Arc<vulcan_mcp_service::McpServer>>,
 }
 
 impl Drop for ServiceBridgeState {

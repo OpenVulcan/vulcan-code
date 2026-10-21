@@ -178,6 +178,7 @@ mod luaskills_install_progress;
 mod luaskills_model;
 mod markdown_memory_services;
 mod mcp_oauth;
+mod mcp_service;
 mod mcp_settings;
 mod media_upload;
 mod native_plugin_shutdown;
@@ -489,6 +490,7 @@ pub fn create_service_bridge_state(
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         browser_manager: crate::browser::BrowserManager::new(),
+        mcp_server: None,
     }))
 }
 

@@ -185,6 +185,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         project_admission_reservations: BTreeMap::new(),
         vmm_controller_registry: Default::default(),
         browser_manager: crate::browser::BrowserManager::new(),
+        mcp_server: None,
     }));
     let report = ExecutionRunReport {
         session_id: task_session_id,

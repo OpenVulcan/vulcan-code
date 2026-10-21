@@ -264,6 +264,7 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         project_admission_reservations: BTreeMap::new(),
         vmm_controller_registry: Default::default(),
         browser_manager: crate::browser::BrowserManager::new(),
+        mcp_server: None,
     };
     let task_states = vec![cached_navigation_test_state(
         parent_session_id,

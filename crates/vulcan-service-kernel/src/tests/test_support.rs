@@ -407,6 +407,7 @@ pub(crate) fn test_service_state_with_parent_session(
         project_admission_reservations: BTreeMap::new(),
         vmm_controller_registry: Default::default(),
         browser_manager: crate::browser::BrowserManager::new(),
+        mcp_server: None,
     }
 }
 

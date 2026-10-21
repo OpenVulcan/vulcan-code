@@ -275,6 +275,7 @@ mod conversation_submission_preflight_tests;
 mod conversation_submission_queue_tests;
 mod detached_subagent_tests;
 mod goal_todolist_tests;
+mod mcp_service_endpoint_tests;
 mod mcp_settings_tests;
 mod pending_question_projection_tests;
 mod prompt_runtime_state_tests;

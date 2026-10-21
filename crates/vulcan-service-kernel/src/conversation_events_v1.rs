@@ -513,6 +513,119 @@ async fn resolve_exact_locator_and_registry(
     Ok((session_id, locator, registry))
 }
 
+/// Authoritative events after one sequence number, read for clients outside the WebUI event window.
+/// 为 WebUI 事件窗口之外的客户端读取的某个序号之后的权威事件。
+pub(crate) struct SessionEventTail {
+    /// Contiguous events in ascending seq order.
+    /// 按 seq 升序排列的连续事件。
+    pub(crate) events: Vec<ConversationEvent>,
+    /// The seq the next new event will receive, across persisted and resident views.
+    /// 跨持久化视图与驻留视图，下一个新事件将获得的 seq。
+    pub(crate) next_seq: u64,
+}
+
+/// Reads at most `max_events` events with seq greater than `after_seq`, merging the persisted
+/// stream with the resident owner's events that are not saved yet.
+/// 读取 seq 大于 `after_seq` 的至多 `max_events` 个事件，并合并持久化事件流与驻留 owner
+/// 尚未保存的事件。
+///
+/// # Returns
+/// 返回值
+/// The events and the authoritative next seq, or an error for an unknown or damaged session.
+/// 返回事件与权威下一个 seq；会话未知或损坏时返回错误。
+pub(crate) async fn read_session_events_after(
+    state: &SharedServiceBridgeState,
+    raw_session_id: &str,
+    after_seq: u64,
+    max_events: usize,
+) -> Result<SessionEventTail, String> {
+    let (session_id, locator, registry) =
+        resolve_exact_locator_and_registry(state, raw_session_id).await?;
+    let persisted_state = locator
+        .event_window_state()
+        .map_err(|error| format!("failed to read V1 event frontier: {error}"))?;
+    let persisted_latest = persisted_state
+        .next_seq
+        .checked_sub(1)
+        .filter(|value| *value >= 1);
+    let from = after_seq.saturating_add(1).max(1);
+    // The resident view is filtered inside the read so polling never clones a whole session.
+    // 驻留视图在读取内部过滤，轮询绝不会克隆整个会话。
+    let resident = optional_registered_handle(&registry, session_id)?
+        .map(|handle| {
+            handle
+                .read(|document| {
+                    let resident_latest = document.events().last().map(|event| event.seq.value());
+                    let latest = persisted_latest.into_iter().chain(resident_latest).max();
+                    let through = tail_read_through(latest, from, max_events);
+                    let events = through
+                        .map(|through| {
+                            document
+                                .events()
+                                .iter()
+                                .filter(|event| (from..=through).contains(&event.seq.value()))
+                                .cloned()
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    (
+                        resident_latest,
+                        ResidentEventSnapshot {
+                            window_generation: document.segment_generation(),
+                            memory_revision: document.memory_revision(),
+                            durable_revision: document.durable_revision(),
+                            events,
+                            open_turn_id: document.active_turn().map(|turn| turn.turn_id),
+                            open_turn_start_seq: document.active_turn().map(|turn| turn.start_seq),
+                            config: document.metadata.config.clone(),
+                        },
+                    )
+                })
+                .map_err(|error| format!("failed to read authoritative V1 session handle: {error}"))
+        })
+        .transpose()?;
+    let resident_latest = resident.as_ref().and_then(|(latest, _)| *latest);
+    let latest = persisted_latest.into_iter().chain(resident_latest).max();
+    let next_seq = latest.map_or(1, |latest| latest.saturating_add(1));
+    let Some(through) = tail_read_through(latest, from, max_events) else {
+        return Ok(SessionEventTail {
+            events: Vec::new(),
+            next_seq,
+        });
+    };
+    let mut persisted_events = Vec::new();
+    if let Some(persisted_latest) = persisted_latest
+        && from <= persisted_latest
+    {
+        let range = locator
+            .load_event_range(
+                checked_seq(from, "fromSeq")?,
+                checked_seq(persisted_latest.min(through), "throughSeq")?,
+            )
+            .map_err(|error| format!("failed to load V1 event range: {error}"))?;
+        require_window_generation(
+            persisted_state.segment_generation,
+            range.state.segment_generation,
+        )?;
+        persisted_events = range.events;
+    }
+    let (_, events, _, _, _) = merge_persisted_with_resident(
+        persisted_state,
+        persisted_events,
+        resident.map(|(_, snapshot)| snapshot),
+        "tail read",
+    )?;
+    Ok(SessionEventTail { events, next_seq })
+}
+
+/// Returns the last seq a tail read covers, or `None` when nothing lies after `from`.
+/// 返回尾部读取覆盖的最后一个 seq；`from` 之后没有内容时返回 `None`。
+fn tail_read_through(latest: Option<u64>, from: u64, max_events: usize) -> Option<u64> {
+    latest
+        .map(|latest| latest.min(from.saturating_add(max_events as u64).saturating_sub(1)))
+        .filter(|through| max_events > 0 && *through >= from)
+}
+
 /// Returns the unique registered handle, treating only the explicit
 /// not-registered state as an inactive session.
 /// 返回唯一已注册句柄，仅把显式未注册状态视为非活动会话。
@@ -921,5 +1034,16 @@ mod tests {
         )
         .expect_err("mismatched open Turn cursors must fail");
         assert!(error.contains("open Turn start mismatch"));
+    }
+
+    /// Tail reads stop at the requested window and at the latest event.
+    /// 尾部读取在请求窗口与最新事件处停止。
+    #[test]
+    fn tail_reads_cover_at_most_the_requested_window() {
+        assert_eq!(tail_read_through(Some(10), 4, 3), Some(6));
+        assert_eq!(tail_read_through(Some(5), 4, 50), Some(5));
+        assert_eq!(tail_read_through(Some(3), 4, 5), None);
+        assert_eq!(tail_read_through(None, 1, 5), None);
+        assert_eq!(tail_read_through(Some(10), 4, 0), None);
     }
 }

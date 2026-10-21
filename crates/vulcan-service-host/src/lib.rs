@@ -76,6 +76,11 @@ pub type WebuiSessionResourceResolver = Arc<
 pub type WebuiBrowserDownloadResolver =
     Arc<dyn Fn(String, String, bool) -> WebuiSessionResourceFuture + Send + Sync + 'static>;
 
+/// Answers one MCP POST from its `Authorization` header value and raw JSON body.
+/// 根据 `Authorization` 标头值与原始 JSON 请求体应答一次 MCP POST。
+pub type WebuiMcpEndpoint =
+    Arc<dyn Fn(Option<String>, Vec<u8>) -> WebuiSessionResourceFuture + Send + Sync + 'static>;
+
 /// Cleans client-owned display subscriptions when one browser event socket disconnects.
 /// 在浏览器事件套接字断开时清理客户端持有的显示订阅。
 pub type WebuiServiceClientDisconnected = Arc<dyn Fn(Uuid) + Send + Sync + 'static>;
@@ -137,6 +142,10 @@ pub type SharedWebuiServiceDiscoverySnapshot = Arc<Mutex<WebuiServiceDiscoverySn
 /// Maximum JSON body size accepted by the browser-facing RPC endpoint.
 /// 浏览器侧 RPC 端点允许接收的最大 JSON 请求体大小。
 const WEBUI_SERVICE_RPC_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+
+/// Maximum JSON-RPC body accepted by the MCP endpoint; tool arguments are small JSON documents.
+/// MCP 端点允许接收的最大 JSON-RPC 请求体；工具参数都是小型 JSON 文档。
+const WEBUI_SERVICE_MCP_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 
 /// Service event sink that forwards events into the browser WebSocket bus.
 /// 将服务事件转发到浏览器 WebSocket 总线的事件接收器。
@@ -314,6 +323,9 @@ pub struct WebuiServiceHttpConfig {
     /// Kernel-owned resolver for authenticated Core browser downloads.
     /// 用于经过鉴权的 Core 浏览器下载的内核自有解析器。
     pub browser_download_resolver: Option<WebuiBrowserDownloadResolver>,
+    /// Kernel-owned MCP endpoint; `None` answers `/mcp` with `404`.
+    /// 内核拥有的 MCP 端点；为 `None` 时 `/mcp` 返回 `404`。
+    pub mcp_endpoint: Option<WebuiMcpEndpoint>,
 }
 
 /// State captured by the browser-facing HTTP/WebSocket service host.
@@ -350,6 +362,9 @@ struct WebuiServiceHttpState {
     /// Kernel-owned resolver for authenticated Core browser downloads.
     /// 用于经过鉴权的 Core 浏览器下载的内核自有解析器。
     browser_download_resolver: Option<WebuiBrowserDownloadResolver>,
+    /// Kernel-owned MCP endpoint.
+    /// 内核拥有的 MCP 端点。
+    mcp_endpoint: Option<WebuiMcpEndpoint>,
     /// Latest event-socket generation for each browser lifetime.
     /// 每个浏览器生命周期的最新事件套接字代次。
     client_connections: Arc<Mutex<HashMap<Uuid, Uuid>>>,
@@ -398,6 +413,7 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         status_provider: config.status_provider,
         browser_stream: config.browser_stream,
         browser_download_resolver: config.browser_download_resolver,
+        mcp_endpoint: config.mcp_endpoint,
         client_connections: Arc::new(Mutex::new(HashMap::new())),
     };
     let cors = CorsLayer::new()
@@ -426,6 +442,13 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
             "/rpc",
             post(webui_service_rpc_http_handler)
                 .layer(DefaultBodyLimit::max(WEBUI_SERVICE_RPC_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/mcp",
+            post(webui_service_mcp_http_handler)
+                .get(webui_service_mcp_method_not_allowed)
+                .delete(webui_service_mcp_method_not_allowed)
+                .layer(DefaultBodyLimit::max(WEBUI_SERVICE_MCP_BODY_LIMIT_BYTES)),
         )
         .route("/events", get(webui_service_events_ws_handler))
         .route(
@@ -1718,6 +1741,72 @@ fn webui_service_asset_http_response(
     axum_response_from_service_media_response(response)
 }
 
+/// Serves one MCP Streamable HTTP POST; the kernel endpoint authenticates the bearer token.
+/// 提供一次 MCP Streamable HTTP POST；内核端点负责校验 Bearer 令牌。
+///
+/// # Returns
+/// 返回值
+/// `403` for any browser Origin (DNS-rebinding defence), `404` without an endpoint, otherwise the
+/// endpoint's answer.
+/// 带任何浏览器 Origin 时返回 `403`（防御 DNS 重绑定）；没有端点时返回 `404`；否则返回端点应答。
+async fn webui_service_mcp_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    headers: AxumHeaderMap,
+    body: axum::body::Bytes,
+) -> AxumResponse {
+    if headers.contains_key(axum::http::header::ORIGIN) {
+        return mcp_plain_text_response(
+            AxumStatusCode::FORBIDDEN,
+            "Browser origins cannot call the MCP endpoint.",
+        );
+    }
+    let Some(endpoint) = server_state.mcp_endpoint else {
+        return mcp_plain_text_response(
+            AxumStatusCode::NOT_FOUND,
+            "The MCP endpoint is not available.",
+        );
+    };
+    let authorization = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    match endpoint(authorization, body.to_vec()).await {
+        Ok(response) => axum_response_from_service_media_response(response),
+        Err(error) => mcp_plain_text_response(AxumStatusCode::INTERNAL_SERVER_ERROR, &error),
+    }
+}
+
+/// Rejects the optional SSE stream and session deletion; this server is stateless.
+/// 拒绝可选的 SSE 流与会话删除；本服务器无状态。
+async fn webui_service_mcp_method_not_allowed() -> AxumResponse {
+    let mut response = mcp_plain_text_response(
+        AxumStatusCode::METHOD_NOT_ALLOWED,
+        "The MCP endpoint accepts POST only.",
+    );
+    response.headers_mut().insert(
+        axum::http::header::ALLOW,
+        axum::http::HeaderValue::from_static("POST"),
+    );
+    response
+}
+
+/// Builds one uncached plain-text MCP transport response.
+/// 构建一个不缓存的纯文本 MCP 传输响应。
+fn mcp_plain_text_response(status: AxumStatusCode, message: &str) -> AxumResponse {
+    (
+        status,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            ),
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+        ],
+        message.to_string(),
+    )
+        .into_response()
+}
+
 /// Converts the shared media response into an Axum response body.
 /// 将共享媒体响应转换为 Axum 响应体。
 fn axum_response_from_service_media_response(response: ServiceMediaResponse) -> AxumResponse {
@@ -2519,6 +2608,7 @@ mod tests {
             status_provider: None,
             browser_stream: None,
             browser_download_resolver: None,
+            mcp_endpoint: None,
         })
     }
 
@@ -2926,6 +3016,12 @@ mod tests {
     /// Builds a status-enabled test router sharing the minimal test RPC surface.
     /// 构建共享最小测试 RPC 的带状态测试路由。
     fn status_test_router() -> Router {
+        build_webui_service_router(status_test_router_config())
+    }
+
+    /// Builds the configuration behind `status_test_router`.
+    /// 构建 `status_test_router` 背后的配置。
+    fn status_test_router_config() -> WebuiServiceHttpConfig {
         let (event_bus, _) = broadcast::channel(8);
         let dispatcher: WebuiServiceRpcDispatcher = Arc::new(|method, params| {
             Box::pin(async move {
@@ -2935,7 +3031,7 @@ mod tests {
                 }))
             })
         });
-        build_webui_service_router(WebuiServiceHttpConfig {
+        WebuiServiceHttpConfig {
             discovery: Arc::new(Mutex::new(webui_service_ready_discovery_snapshot(
                 WEBUI_SERVICE_HTTP_PORT,
                 42,
@@ -2960,7 +3056,8 @@ mod tests {
             status_provider: Some(test_status_provider()),
             browser_stream: None,
             browser_download_resolver: None,
-        })
+            mcp_endpoint: None,
+        }
     }
 
     /// Browser stream releases recorded by the test facade as `(session, subscription)` pairs.
@@ -2989,6 +3086,7 @@ mod tests {
             status_provider: None,
             browser_stream: None,
             browser_download_resolver: None,
+            mcp_endpoint: None,
         };
         config.browser_stream = Some(WebuiServiceBrowserStream {
             issue_ticket: Arc::new(|session_id, owner_session_id| {
@@ -3313,5 +3411,85 @@ mod tests {
         assert_eq!(payload["lifecycle"], "ready");
         assert_eq!(payload["revision"], 7);
         assert_eq!(payload["activeWork"]["activeStreamTasks"], 0);
+    }
+
+    /// Builds a router whose MCP endpoint echoes the authorization header and body length.
+    /// 构建一个 MCP 端点回显授权标头与请求体长度的路由。
+    fn mcp_test_router() -> Router {
+        let mut router_config = status_test_router_config();
+        router_config.mcp_endpoint = Some(Arc::new(|authorization, body| {
+            Box::pin(async move {
+                Ok(ServiceMediaResponse {
+                    status: 200,
+                    headers: vec![(
+                        String::from("content-type"),
+                        String::from("application/json"),
+                    )],
+                    body: serde_json::to_vec(&json!({
+                        "authorization": authorization,
+                        "length": body.len(),
+                    }))
+                    .expect("echo body"),
+                })
+            })
+        }));
+        build_webui_service_router(router_config)
+    }
+
+    /// Sends one request to the MCP route.
+    /// 向 MCP 路由发送一个请求。
+    async fn mcp_request(
+        router: Router,
+        method: &str,
+        origin: Option<&str>,
+    ) -> axum::http::Response<Body> {
+        let mut request = axum::http::Request::builder()
+            .method(method)
+            .uri("/mcp")
+            .header("authorization", "Bearer vmcp_test");
+        if let Some(origin) = origin {
+            request = request.header("origin", origin);
+        }
+        router
+            .oneshot(
+                request
+                    .body(Body::from("{}"))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond")
+    }
+
+    /// Verifies the MCP route forwards POST bodies and the bearer header to the kernel endpoint.
+    /// 验证 MCP 路由把 POST 请求体与 Bearer 标头转交给内核端点。
+    #[tokio::test]
+    async fn mcp_route_forwards_posts_to_the_endpoint() {
+        let response = mcp_request(mcp_test_router(), "POST", None).await;
+        assert_eq!(response.status(), AxumStatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body should read");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(payload["authorization"], "Bearer vmcp_test");
+        assert_eq!(payload["length"], 2);
+    }
+
+    /// Verifies browser origins, other methods, and a missing endpoint are refused.
+    /// 验证浏览器来源、其他方法与缺失端点都会被拒绝。
+    #[tokio::test]
+    async fn mcp_route_refuses_browsers_other_methods_and_absent_endpoints() {
+        let response = mcp_request(mcp_test_router(), "POST", Some("http://127.0.0.1:17601")).await;
+        assert_eq!(response.status(), AxumStatusCode::FORBIDDEN);
+        let response = mcp_request(mcp_test_router(), "GET", None).await;
+        assert_eq!(response.status(), AxumStatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::ALLOW)
+                .and_then(|value| value.to_str().ok()),
+            Some("POST")
+        );
+        let response = mcp_request(status_test_router(), "POST", None).await;
+        assert_eq!(response.status(), AxumStatusCode::NOT_FOUND);
     }
 }

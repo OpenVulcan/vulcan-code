@@ -149,6 +149,12 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_subagent_models",
     "service_session_subagent_models",
     "service_save_session_subagent_models",
+    "service_mcp_service_snapshot",
+    "service_set_mcp_service_enabled",
+    "service_create_mcp_client",
+    "service_update_mcp_client",
+    "service_rotate_mcp_client_token",
+    "service_delete_mcp_client",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -980,6 +986,44 @@ pub(super) async fn dispatch(
             crate::subagent_models::service_save_session_subagent_models(
                 state,
                 rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_mcp_service_snapshot" => {
+            rpc_json_result(crate::mcp_service::service_mcp_service_snapshot(state))
+        }
+        "service_set_mcp_service_enabled" => rpc_json_result(
+            crate::mcp_service::service_set_mcp_service_enabled(
+                state,
+                rpc_required_param(params, "enabled")?,
+            )
+            .await,
+        ),
+        "service_create_mcp_client" => rpc_json_result(
+            crate::mcp_service::service_create_mcp_client(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_update_mcp_client" => rpc_json_result(
+            crate::mcp_service::service_update_mcp_client(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_rotate_mcp_client_token" => rpc_json_result(
+            crate::mcp_service::service_rotate_mcp_client_token(
+                state,
+                rpc_required_param(params, "clientId")?,
+            )
+            .await,
+        ),
+        "service_delete_mcp_client" => rpc_json_result(
+            crate::mcp_service::service_delete_mcp_client(
+                state,
+                rpc_required_param(params, "clientId")?,
             )
             .await,
         ),

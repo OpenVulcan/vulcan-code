@@ -362,6 +362,7 @@ pub(crate) async fn run_webui_service_http_bridge(
     let status_state = state.clone();
     let browser_download_state = state.clone();
     let static_root = webui_static_root(manifest_static_root);
+    let mcp_server = crate::mcp_service::install_mcp_server(event_emitter.clone(), &state)?;
     let service_config = WebuiServiceHttpConfig {
         discovery: shared_discovery,
         service_token,
@@ -406,6 +407,19 @@ pub(crate) async fn run_webui_service_http_bridge(
                         ),
                     ],
                     body: if is_head { Vec::new() } else { bytes },
+                })
+            })
+        })),
+        // The MCP endpoint authenticates its own per-client bearer tokens inside the server.
+        // MCP 端点在服务器内部校验其逐客户端 Bearer 令牌。
+        mcp_endpoint: Some(Arc::new(move |authorization, body| {
+            let server = Arc::clone(&mcp_server);
+            Box::pin(async move {
+                let response = server.handle_post(authorization.as_deref(), &body).await;
+                Ok(vulcan_service_api::ServiceMediaResponse {
+                    status: response.status,
+                    headers: response.headers,
+                    body: response.body,
                 })
             })
         })),
