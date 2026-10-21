@@ -135,6 +135,7 @@ pub(super) async fn verify(
         ttl_turns: 4,
         injection_tag: "vmm".to_owned(),
         injection_description: "memory".to_owned(),
+        queries: Vec::new(),
         items: vec![vulcan_vmm::ContextItem {
             memory_id: written.items[0].memory_id,
             text: memory.summary.clone(),

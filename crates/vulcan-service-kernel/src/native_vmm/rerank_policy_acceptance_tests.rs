@@ -132,6 +132,7 @@ async fn search(client: &NativeVmmClient, project_id: u64, host: &str) -> Vec<Me
             host_project_id: host.to_owned(),
             queries: vec!["PolicyNeedle".to_owned()],
             top_k: 3,
+            min_score: None,
         })
         .await
         .expect("actual rerank search");

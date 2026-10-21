@@ -102,6 +102,7 @@ impl ConversationEvent {
             EventBody::ToolCall(tool) => tool.api_call_id.value().max(tool.tool_call_id.value()),
             EventBody::ApiStats(stats) => stats.api_call_id.value(),
             EventBody::DisplayNote(note) => note.api_call_id.map_or(0, ApiCallId::value),
+            EventBody::MemoryRecall(_) => 0,
             EventBody::RequestConfigChanged(_) => 0,
             EventBody::ExecutionControl(control) => control.api_call_id.map_or(0, ApiCallId::value),
             EventBody::Collaboration(_) => 0,
@@ -191,6 +192,9 @@ pub enum EventBody {
     /// Permanent UI timeline fact: errors, interruptions, retries, resume.
     /// 永久 UI 时间线事实：错误、中断、重试、恢复等。
     DisplayNote(DisplayNoteEvent),
+    /// UI-only record of the long-term memory recall that ran for one user message.
+    /// 针对一条用户消息执行的长期记忆召回的仅 UI 记录。
+    MemoryRecall(MemoryRecallEvent),
     /// Exact non-secret request transition at one admitted user or Continue boundary.
     /// 一次已准入用户输入或 Continue 边界上的精确非秘密请求配置转换。
     RequestConfigChanged(RequestConfigChangedEvent),
@@ -222,6 +226,7 @@ impl EventBody {
             Self::TurnStats(_) => "turn_stats",
             Self::SubagentReturn(_) => "subagent_return",
             Self::DisplayNote(_) => "display_note",
+            Self::MemoryRecall(_) => "memory_recall",
             Self::RequestConfigChanged(_) => "request_config_changed",
             Self::ExecutionControl(_) => "execution_control",
             Self::Collaboration(_) => "collaboration",
@@ -1334,6 +1339,55 @@ pub struct DisplayNoteEvent {
     /// 适用的必要重试上限。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_limit: Option<u32>,
+}
+
+/// Result of one memory recall that actually searched long-term memory.
+/// 一次实际检索了长期记忆的召回结果。
+/// A recall that decided memory was not needed is never recorded.
+/// 判定无需记忆的召回从不记录。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryRecallOutcome {
+    /// Memories were injected into the model context.
+    /// 记忆已注入模型上下文。
+    Matched,
+    /// The search ran and found no relevant memory.
+    /// 检索已执行但未找到相关记忆。
+    NoMatch,
+    /// Retrieval failed; relevant memory may still exist.
+    /// 检索失败；相关记忆仍可能存在。
+    Failed,
+}
+
+/// One memory injected by a matched recall, as the model received it.
+/// 命中召回注入的一条记忆，与模型收到的内容一致。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryRecallItem {
+    /// Durable memory id; zero when the memory has no durable identity.
+    /// 长期记忆标识；记忆没有长期身份时为零。
+    pub memory_id: u64,
+    /// Memory text injected into the model context.
+    /// 注入模型上下文的记忆正文。
+    pub text: String,
+}
+
+/// UI-only disclosure of what long-term memory recall did for one user message.
+/// 一条用户消息的长期记忆召回所做之事的仅 UI 披露。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryRecallEvent {
+    /// What the recall found.
+    /// 召回的结果。
+    pub outcome: MemoryRecallOutcome,
+    /// Search queries the memory service ran; empty when it failed before forming them.
+    /// 记忆服务执行的检索词；在生成检索词前失败时为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<String>,
+    /// Newly injected memories; empty unless matched.
+    /// 新注入的记忆；仅命中时非空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memories: Vec<MemoryRecallItem>,
 }
 
 /// Exact before/after request configuration rendered as one permanent UI fact.

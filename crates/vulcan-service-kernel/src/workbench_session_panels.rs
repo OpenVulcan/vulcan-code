@@ -1236,6 +1236,7 @@ mod tests {
             ttl_turns: 1,
             injection_tag: String::from("VMM_MEMORY"),
             injection_description: String::from("Relevant memories."),
+            queries: Vec::new(),
             items: vec![ContextItem {
                 text: String::from("expired-memory"),
                 memory_id: 7,
@@ -1257,6 +1258,7 @@ mod tests {
             ttl_turns: 3,
             injection_tag: String::from("VMM_MEMORY"),
             injection_description: String::from("Relevant memories."),
+            queries: Vec::new(),
             items: vec![ContextItem {
                 text: String::from("active-memory"),
                 memory_id: 8,

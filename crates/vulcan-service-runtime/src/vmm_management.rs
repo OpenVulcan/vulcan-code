@@ -775,6 +775,7 @@ async fn run_vmm_search_memory_events(
             host_project_id: host_project_id.to_owned(),
             queries,
             top_k: top_k.max(1),
+            min_score: None,
         })
         .await
         .map_err(|error| error.to_string())?;

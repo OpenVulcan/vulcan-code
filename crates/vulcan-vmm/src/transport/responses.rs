@@ -11,10 +11,10 @@ use crate::protocol::{
     DeleteUserResponse, EnsureProjectResponse, GetProfileBundleResponse, GetProfileNodesResponse,
     GetTurnDetailsResponse, ListProjectsResponse, ListUsersResponse, MemorySearchGroupResult,
     MemorySearchHit, MigrateProjectResponse, PostActionTimelineItem, PostActionTimelineType,
-    PreCheckResponse, ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind, ProfileTarget,
-    ProjectEntry, ResolveProjectResponse, ResolveUserResponse, RetiredProfileNodeEntry,
-    SearchMemoryEventsResponse, SessionMemoryStatus, TurnDetailEntry, UserEntry,
-    WriteMemoriesResponse, WriteMemoryResultItem,
+    PreCheckRecallOutcome, PreCheckResponse, ProfileBundleMode, ProfileNodeEntry,
+    ProfileNodeSourceKind, ProfileTarget, ProjectEntry, ResolveProjectResponse,
+    ResolveUserResponse, RetiredProfileNodeEntry, SearchMemoryEventsResponse, SessionMemoryStatus,
+    TurnDetailEntry, UserEntry, WriteMemoriesResponse, WriteMemoryResultItem,
 };
 
 /// Converts a generated protobuf profile-bundle mode into protocol enum.
@@ -348,7 +348,30 @@ pub(super) fn protocol_precheck_response(
         degraded: response.degraded,
         trace_id: response.trace_id,
         session_memory_status: protocol_session_memory_status(response.session_memory_status)?,
+        recall_outcome: protocol_precheck_recall_outcome(response.recall_outcome)?,
+        recall_queries: response.recall_queries,
     })
+}
+
+/// Converts one generated recall outcome and rejects unspecified or unknown values.
+/// 将生成的召回结果转换为协议枚举，并拒绝未指定或未知的值。
+/// A server that predates the field reports unspecified; it is rejected rather than read as "not searched".
+/// 早于该字段的服务会报告未指定；直接拒绝，而不是当作“未检索”。
+pub(super) fn protocol_precheck_recall_outcome(
+    outcome: i32,
+) -> Result<PreCheckRecallOutcome, VmmClientError> {
+    match crate::grpc::PreCheckRecallOutcome::try_from(outcome) {
+        Ok(crate::grpc::PreCheckRecallOutcome::NotSearched) => {
+            Ok(PreCheckRecallOutcome::NotSearched)
+        }
+        Ok(crate::grpc::PreCheckRecallOutcome::Matched) => Ok(PreCheckRecallOutcome::Matched),
+        Ok(crate::grpc::PreCheckRecallOutcome::NoMatch) => Ok(PreCheckRecallOutcome::NoMatch),
+        Ok(crate::grpc::PreCheckRecallOutcome::Failed) => Ok(PreCheckRecallOutcome::Failed),
+        Ok(crate::grpc::PreCheckRecallOutcome::Unspecified) | Err(_) => Err(VmmClientError::new(
+            "incompatible_precheck_recall_outcome",
+            format!("VMM returned unsupported PreCheck recall outcome {outcome}"),
+        )),
+    }
 }
 
 /// Converts one generated lifecycle integer and rejects unspecified or unknown protocol values.
@@ -370,10 +393,21 @@ pub(super) fn protocol_session_memory_status(
 
 /// Converts generated protobuf SearchMemoryEvents response into protocol shape.
 /// 将生成的 protobuf SearchMemoryEvents 响应转换为协议结构。
+/// The applied threshold must lie in `(0, 1]`; a server that predates it echoes zero and is rejected.
+/// 所应用阈值必须位于 `(0, 1]`；早于该字段的服务回显零值，直接拒绝。
 pub(super) fn protocol_search_memory_events_response(
     response: crate::grpc::SearchMemoryEventsResponse,
-) -> SearchMemoryEventsResponse {
-    SearchMemoryEventsResponse {
+) -> Result<SearchMemoryEventsResponse, VmmClientError> {
+    if !(response.min_score > 0.0 && response.min_score <= 1.0) {
+        return Err(VmmClientError::new(
+            "incompatible_memory_search_threshold",
+            format!(
+                "VMM returned unsupported memory search threshold {}",
+                response.min_score
+            ),
+        ));
+    }
+    Ok(SearchMemoryEventsResponse {
         results: response
             .results
             .into_iter()
@@ -393,10 +427,12 @@ pub(super) fn protocol_search_memory_events_response(
                         retrieval: None,
                     })
                     .collect(),
+                below_threshold_count: group.below_threshold_count,
             })
             .collect(),
         trace_id: response.trace_id,
-    }
+        min_score: response.min_score,
+    })
 }
 
 /// Converts generated protobuf GetTurnDetails response into protocol shape.

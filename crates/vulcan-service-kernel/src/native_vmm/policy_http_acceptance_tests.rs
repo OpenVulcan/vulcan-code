@@ -347,6 +347,7 @@ pub(in crate::native_vmm) async fn verify(
             runtime_session_id: None,
             queries: vec![format!("{PROBE} network-search")],
             top_k: 2,
+            min_score: None,
         })
         .await
         .expect("HTTP inherited public search");

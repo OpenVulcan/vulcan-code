@@ -3,7 +3,7 @@
 
 use crate::algorithms::{normalize_text, simple_lowercase};
 use crate::retrieval_kernel::{
-    normalize_context_key, normalize_context_value, normalized_rank_score, tokenize_context_query,
+    normalize_context_key, normalize_context_value, review_score, tokenize_context_query,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -220,11 +220,12 @@ pub fn accumulate_review_group(
             ));
         }
         let original = hit.final_score.clamp(0.0, 1.0);
-        let score = if hit.rerank_score.is_some() {
-            original.max(normalized_rank_score(index + 1, total))
-        } else {
-            original
-        };
+        let score = review_score(
+            hit.final_score,
+            hit.rerank_score.is_some(),
+            index + 1,
+            total,
+        );
         if score < policy.min_review_score {
             continue;
         }

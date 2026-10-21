@@ -323,6 +323,7 @@ pub(super) async fn verify(
             runtime_session_id: Some("nonempty-session".to_owned()),
             queries: vec!["PostgreSQL".to_owned()],
             top_k: 4,
+            min_score: None,
         })
         .await
         .expect("restored client recall");
@@ -368,6 +369,7 @@ async fn verify_publication_barrier(
         ttl_turns: 3,
         injection_tag: "vmm".to_owned(),
         injection_description: "memory".to_owned(),
+        queries: Vec::new(),
         items: vec![vulcan_vmm::ContextItem {
             memory_id: parse_core_numeric_id(&memory.id, "vmm-memory-").expect("memory identity"),
             text: memory.summary.clone(),

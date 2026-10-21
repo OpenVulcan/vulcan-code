@@ -120,6 +120,7 @@ pub(in crate::native_vmm) async fn verify(
             runtime_session_id: None,
             queries: vec!["PostgreSQL".to_owned()],
             top_k: 4,
+            min_score: None,
         })
         .await
         .expect("compaction memory search");

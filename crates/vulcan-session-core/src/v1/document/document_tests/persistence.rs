@@ -414,3 +414,37 @@ fn revision_receipts_separate_logical_patches_from_full_tail_flushes() -> Result
     assert!(update_candidate.tail_events.len() > update_candidate.changed_event_seqs.len());
     Ok(())
 }
+
+/// A turn keeps one UI-only memory recall record, and the record survives serialization.
+/// 一个回合只保留一条仅 UI 的记忆召回记录，且该记录可经序列化往返。
+#[test]
+fn memory_recall_is_recorded_once_per_turn() {
+    use crate::v1::{MemoryRecallEvent, MemoryRecallItem, MemoryRecallOutcome};
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("a", Vec::new(), T0).unwrap();
+    let turn_id = doc.active_turn().expect("active turn").turn_id;
+    let recall = MemoryRecallEvent {
+        outcome: MemoryRecallOutcome::Matched,
+        queries: vec!["deploy steps".to_owned()],
+        memories: vec![MemoryRecallItem {
+            memory_id: 7,
+            text: "memory body".to_owned(),
+        }],
+    };
+    assert!(
+        doc.append_memory_recall(turn_id, recall.clone(), T0 + 1)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        doc.append_memory_recall(turn_id, recall.clone(), T0 + 2)
+            .unwrap()
+            .is_none(),
+        "a replayed continuation must not record the recall twice"
+    );
+    let event = doc.events().last().expect("recall event");
+    assert_eq!(event.visibility, EventVisibility::UiOnly);
+    let restored: EventBody =
+        serde_json::from_value(serde_json::to_value(&event.event).unwrap()).unwrap();
+    assert_eq!(restored, EventBody::MemoryRecall(recall));
+}

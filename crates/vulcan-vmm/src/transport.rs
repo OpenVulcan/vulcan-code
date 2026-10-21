@@ -561,9 +561,7 @@ impl VmmClient for TonicVmmClient {
             )?)
             .await
             .map_err(status_error)?;
-        Ok(protocol_search_memory_events_response(
-            response.into_inner(),
-        ))
+        protocol_search_memory_events_response(response.into_inner())
     }
 
     /// Calls VMM GetTurnDetails.
@@ -769,6 +767,7 @@ fn grpc_search_memory_events_request(
         project_id: request.project_id,
         queries: request.queries,
         top_k: request.top_k,
+        min_score: request.min_score,
     }
 }
 
@@ -900,6 +899,40 @@ mod tests {
 
     /// Verifies exact local source retention for empty and non-empty responses and rejects missing provenance.
     /// 验证空与非空响应均保留准确本地来源，并拒绝缺失来源的响应。
+    /// Rejects responses from a server that predates the recall outcome or search threshold fields.
+    /// 拒绝来自早于召回结果或检索阈值字段的服务的响应。
+    #[test]
+    fn responses_without_recall_outcome_or_threshold_are_rejected() {
+        let source = crate::VmmMemoryReadSource::new(
+            crate::VmmMemorySource::native(1).expect("owner"),
+            vec![1],
+        )
+        .expect("source");
+        let precheck = protocol_precheck_response(
+            crate::grpc::PreCheckResponse {
+                session_memory_status: crate::grpc::SessionMemoryStatus::Active as i32,
+                ..Default::default()
+            },
+            source,
+        )
+        .expect_err("an unspecified recall outcome must not read as not searched");
+        assert_eq!(precheck.kind, "incompatible_precheck_recall_outcome");
+        let search = protocol_search_memory_events_response(Default::default())
+            .expect_err("a missing threshold must not read as no filtering");
+        assert_eq!(search.kind, "incompatible_memory_search_threshold");
+        let accepted =
+            protocol_search_memory_events_response(crate::grpc::SearchMemoryEventsResponse {
+                min_score: 0.75,
+                results: vec![crate::grpc::MemorySearchGroupResult {
+                    below_threshold_count: 2,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .expect("threshold echoed");
+        assert_eq!(accepted.results[0].below_threshold_count, 2);
+    }
+
     /// Uses synthetic transport configuration only; returns after conversion and serialization assertions.
     /// 仅使用合成传输配置；完成转换与序列化断言后返回。
     #[test]
@@ -934,6 +967,7 @@ mod tests {
                         Vec::new()
                     },
                     session_memory_status: crate::grpc::SessionMemoryStatus::Active as i32,
+                    recall_outcome: crate::grpc::PreCheckRecallOutcome::NoMatch as i32,
                     ..Default::default()
                 },
                 source.clone(),

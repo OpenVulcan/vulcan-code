@@ -454,6 +454,7 @@ mod tests {
                     ttl_turns: 3,
                     injection_tag: String::from("VMM_MEMORY"),
                     injection_description: String::from("Relevant memories."),
+                    queries: Vec::new(),
                     items: vec![ContextItem {
                         text: String::from("retained-but-not-rendered"),
                         memory_id: 7,
@@ -491,6 +492,7 @@ mod tests {
                     ttl_turns: 1,
                     injection_tag: String::from("VMM_MEMORY"),
                     injection_description: String::from("Relevant memories."),
+                    queries: Vec::new(),
                     items: vec![ContextItem {
                         text: String::from("cache-stable-memory"),
                         memory_id: 7,
@@ -567,6 +569,7 @@ mod tests {
                     ttl_turns: 3,
                     injection_tag: String::from("memory"),
                     injection_description: String::from("memory"),
+                    queries: Vec::new(),
                     items: vec![ContextItem {
                         memory_id: 7,
                         text: String::from("live-compacted-memory"),
@@ -662,6 +665,7 @@ mod tests {
                             ttl_turns,
                             injection_tag: String::from("memory"),
                             injection_description: String::from("memory"),
+                            queries: Vec::new(),
                             items: vec![ContextItem {
                                 memory_id,
                                 text: text.to_owned(),

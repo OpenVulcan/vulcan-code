@@ -16,6 +16,7 @@ pub use vulcan_memorymesh_core_config::{
 pub use vulcan_memorymesh_core_contracts::*;
 pub use vulcan_memorymesh_core_engine::{
     decayed_score, deduplicate_by_content, estimate_text_tokens, mmr_select, normalize_text,
+    review_score,
 };
 pub use vulcan_memorymesh_core_storage::{
     InMemoryStorage, StorageManualRecycleSelection, StorageMemorySession, StoragePort,

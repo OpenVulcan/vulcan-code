@@ -10,9 +10,9 @@ use crate::agent_runtime::conversation_hooks::{
     HOOK_CONVERSATION_COMPACTED, HOOK_CONVERSATION_PROFILE_PREPARE,
     HOOK_CONVERSATION_TURN_COMPLETED, HOOK_CONVERSATION_TURN_PRECHECK,
     HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT, HOOK_METADATA_VMM_RECALL_BATCH_EFFECT,
-    HOOK_METADATA_VMM_SESSION_STATUS_EFFECT, HOOK_METADATA_VMM_WRITEBACK_EFFECTS,
-    VmmProfileSyncHookEffect, VmmRecallBatchHookEffect, VmmSessionStatusHookEffect,
-    VmmWritebackHookEffect,
+    HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT, HOOK_METADATA_VMM_SESSION_STATUS_EFFECT,
+    HOOK_METADATA_VMM_WRITEBACK_EFFECTS, VmmProfileSyncHookEffect, VmmRecallBatchHookEffect,
+    VmmSessionStatusHookEffect, VmmWritebackHookEffect,
 };
 use crate::model::{SessionId, VmmProfileSyncState, VmmWritebackOutboxEntry};
 use serde_json::{Value, json};
@@ -23,14 +23,15 @@ use vulcan_context_injection::{
     InjectionCompactionPolicy, InjectionInsert, InjectionInsertItem, InjectionKind,
 };
 use vulcan_hooks::{
-    FnHookHandler, HookCapability, HookDispatcher, HookError, HookFailurePolicy, HookInvocation,
-    HookMode, HookRegistration, HookResult, HookScope, SystemPromptHookBaselineKind,
-    SystemPromptHookBaselineProvenance, SystemPromptHookBlock, SystemPromptHookPhase,
+    FnHookHandler, HookCapability, HookDiagnostic, HookDiagnosticSeverity, HookDispatcher,
+    HookError, HookFailurePolicy, HookInvocation, HookMode, HookRegistration, HookResult,
+    HookScope, SystemPromptHookBaselineKind, SystemPromptHookBaselineProvenance,
+    SystemPromptHookBlock, SystemPromptHookPhase,
 };
 use vulcan_vmm::{
     GetProfileNodesRequest, ProfileNodeEntry, ProfileTarget, TonicVmmClient, VmmBackendMode,
     VmmClient, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmRecallBatch,
-    VmmTransportConfig, chat_compact_request_from_payload,
+    VmmRecallNotice, VmmTransportConfig, chat_compact_request_from_payload,
     post_action_request_from_completed_payload, precheck_request_from_payload,
 };
 
@@ -937,22 +938,10 @@ async fn handle_vmm_precheck(
     if !should_run_vmm_precheck(&config) {
         return Ok(HookResult::default());
     }
-    ensure_vmm_ready(&config)?;
-    let client = resolve_vmm_client(&runtime, &config).await?;
-    let request = precheck_request_from_payload(&invocation.payload.value, &config)
-        .map_err(|error| HookError::handler(error.to_string()))?;
-    eprintln!(
-        "[webui-service][vmm-precheck] stage=request session={} project={} operation={}",
-        request.session_id, request.host_project_id, request.operation_id,
-    );
-    let response = client.pre_check(request).await.map_err(|error| {
-        eprintln!(
-            "[webui-service][vmm-precheck] stage=response session={:?} result=error kind={}",
-            invocation_session_id(&invocation),
-            error.kind,
-        );
-        HookError::handler(error.to_string())
-    })?;
+    let response = match request_vmm_precheck(&runtime, &invocation, &config).await {
+        Ok(response) => response,
+        Err(error) => return vmm_precheck_failure_result(&config, error),
+    };
     eprintln!(
         "[webui-service][vmm-precheck] stage=response session={:?} result=ok context_items={} should_inject={} degraded={}",
         invocation_session_id(&invocation),
@@ -977,8 +966,64 @@ async fn handle_vmm_precheck(
             }),
         );
     }
+    if let Some(notice) = VmmRecallNotice::from_precheck_response(&response, &config) {
+        metadata.insert(
+            HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT.to_string(),
+            json!(notice),
+        );
+    }
     Ok(HookResult {
         metadata,
+        ..HookResult::default()
+    })
+}
+
+/// Connects to the resolved VMM backend and runs one PreCheck request for the hook payload.
+/// 连接已解析的 VMM 后端，并为 hook 载荷执行一次 PreCheck 请求。
+async fn request_vmm_precheck(
+    runtime: &VmmHookRuntimeHandle,
+    invocation: &HookInvocation,
+    config: &VmmEffectiveConfig,
+) -> Result<vulcan_vmm::PreCheckResponse, HookError> {
+    ensure_vmm_ready(config)?;
+    let client = resolve_vmm_client(runtime, config).await?;
+    let request = precheck_request_from_payload(&invocation.payload.value, config)
+        .map_err(|error| HookError::handler(error.to_string()))?;
+    eprintln!(
+        "[webui-service][vmm-precheck] stage=request session={} project={} operation={}",
+        request.session_id, request.host_project_id, request.operation_id,
+    );
+    client.pre_check(request).await.map_err(|error| {
+        eprintln!(
+            "[webui-service][vmm-precheck] stage=response session={:?} result=error kind={}",
+            invocation_session_id(invocation),
+            error.kind,
+        );
+        HookError::handler(error.to_string())
+    })
+}
+
+/// Turns a failed PreCheck into a disclosed failure, so the model never reads it as absent memory.
+/// 将失败的 PreCheck 转为已披露的失败，使模型绝不把它读作没有记忆。
+/// The error stays an error diagnostic; without implicit injection the hook fails as before.
+/// 错误仍作为错误诊断保留；未启用隐式注入时 hook 照旧失败。
+fn vmm_precheck_failure_result(
+    config: &VmmEffectiveConfig,
+    error: HookError,
+) -> Result<HookResult, HookError> {
+    let Some(notice) = VmmRecallNotice::request_failed(config) else {
+        return Err(error);
+    };
+    Ok(HookResult {
+        metadata: BTreeMap::from([(
+            HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT.to_string(),
+            json!(notice),
+        )]),
+        diagnostics: vec![HookDiagnostic {
+            severity: HookDiagnosticSeverity::Error,
+            message: error.to_string(),
+            hook_id: None,
+        }],
         ..HookResult::default()
     })
 }
@@ -1389,6 +1434,9 @@ pub(crate) fn reconcile_vmm_precheck_publication(
         report
             .metadata
             .remove(HOOK_METADATA_VMM_RECALL_BATCH_EFFECT);
+        report
+            .metadata
+            .remove(HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT);
         report
             .metadata
             .remove(HOOK_METADATA_VMM_SESSION_STATUS_EFFECT);
@@ -2032,6 +2080,29 @@ fn invocation_vmm_runtime_ready(invocation: &HookInvocation) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies a failed PreCheck is disclosed while injection is on and stays a hook failure otherwise.
+    /// 验证失败的 PreCheck 在启用注入时被披露，否则仍为 hook 失败。
+    #[test]
+    fn failed_precheck_is_disclosed_only_while_injection_is_on() {
+        let mut config = VmmEffectiveConfig {
+            implicit_memory_turns: 3,
+            injection_tag: String::from("VMM_MEMORY"),
+            ..Default::default()
+        };
+        let result = vmm_precheck_failure_result(&config, HookError::handler("unreachable"))
+            .expect("failure is disclosed");
+        let notice: VmmRecallNotice =
+            serde_json::from_value(result.metadata[HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT].clone())
+                .expect("typed notice");
+        assert_eq!(notice.outcome, vulcan_vmm::VmmRecallNoticeOutcome::Failed);
+        assert_eq!(
+            result.diagnostics[0].severity,
+            HookDiagnosticSeverity::Error
+        );
+        config.implicit_memory_turns = 0;
+        assert!(vmm_precheck_failure_result(&config, HookError::handler("unreachable")).is_err());
+    }
 
     /// Verifies a disabled VMM panel read does not require a client or seed prompt state.
     /// 验证 VMM 关闭时侧栏读取无需客户端，也不会预置提示词状态。

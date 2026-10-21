@@ -267,6 +267,7 @@ pub(super) async fn verify(
                     ttl_turns: 3,
                     injection_tag: "VMM_MEMORY".to_owned(),
                     injection_description: "Relevant memories.".to_owned(),
+                    queries: Vec::new(),
                     items: vec![vulcan_vmm::ContextItem {
                         memory_id: memory.memory_id,
                         text: memory.abstract_text.clone(),

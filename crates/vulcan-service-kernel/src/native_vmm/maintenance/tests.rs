@@ -2069,6 +2069,88 @@ fn recycle_records_preserve_families_and_versioned_ownership() {
     assert!(recycle_records::build_page(&snapshot, query).is_err());
 }
 
+/// Verifies a recall whose every hit became invisible is still disclosed as a search without a match.
+/// 验证全部命中均已不可见的召回仍被披露为未命中的检索。
+#[test]
+fn recall_publication_discloses_an_emptied_recall_as_no_match() {
+    use vulcan_agent_runtime::agent_runtime::conversation_hooks::{
+        ConversationPrecheckOutcome, HOOK_METADATA_VMM_RECALL_BATCH_EFFECT,
+        VmmRecallBatchHookEffect, vmm_recall_batch_effect_from_report,
+        vmm_recall_notice_effect_from_report,
+    };
+    use vulcan_vmm::{ContextItem, VmmRecallBatch, VmmRecallNoticeOutcome, VmmSessionMemoryState};
+    let session_id = uuid::Uuid::nil();
+    let access = ScopeAccess {
+        write_scope: project_scope(2).expect("owner"),
+        visible_scopes: vec![project_scope(2).expect("owner")],
+    };
+    // Memory 3 belongs to an inaccessible project; memory 5 no longer exists.
+    // 记忆 3 属于不可访问项目；记忆 5 已不存在。
+    let mut snapshot = empty_snapshot(1);
+    snapshot.dataset.memories.push(memory(
+        "vmm-memory-3",
+        4,
+        &session_id.to_string(),
+        None,
+        MemorySourceKind::Direct,
+        MemoryLevel::Persistent,
+    ));
+    let source =
+        crate::native_vmm::client::memory_read_source_from_access(&access).expect("source");
+    let mut state = VmmSessionMemoryState::new(session_id.to_string(), "1").expect("state");
+    let mut report = vulcan_hooks::HookDispatchReport::empty(vulcan_hooks::HookPayload {
+        value: serde_json::json!({}),
+    });
+    report.metadata.insert(
+        HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_owned(),
+        vec![serde_json::json!(VmmRecallBatchHookEffect {
+            read_source: source,
+            batch: VmmRecallBatch {
+                ttl_turns: 3,
+                injection_tag: "vmm".to_owned(),
+                injection_description: "memory".to_owned(),
+                queries: vec!["deploy steps".to_owned()],
+                items: [3, 5]
+                    .into_iter()
+                    .map(|id| ContextItem {
+                        memory_id: id,
+                        text: format!("memory-{id}"),
+                        ..Default::default()
+                    })
+                    .collect(),
+            },
+        })],
+    );
+    let mut outcome = ConversationPrecheckOutcome {
+        session_id,
+        turn_id: "turn".to_owned(),
+        report: Ok(report),
+    };
+    let storage =
+        vulcan_memorymesh_core::InMemoryStorage::from_snapshot(snapshot).expect("storage");
+    recall_publication::reconcile_recall(
+        &storage,
+        &native_vmm_subject_id().expect("subject"),
+        &access,
+        &SessionSourceId::new(session_id.to_string()).expect("session"),
+        &mut state,
+        Some(&mut outcome),
+        "2",
+    )
+    .expect("reconcile");
+    let report = outcome.report.as_ref().expect("report");
+    assert!(
+        vmm_recall_batch_effect_from_report(report)
+            .expect("typed recall")
+            .is_none()
+    );
+    let notice = vmm_recall_notice_effect_from_report(report)
+        .expect("typed notice")
+        .expect("emptied recall is disclosed");
+    assert_eq!(notice.outcome, VmmRecallNoticeOutcome::NoMatch);
+    assert_eq!(notice.queries, ["deploy steps"]);
+}
+
 /// Verifies delayed native recall and persisted leases use current visibility without touching unrelated hooks.
 /// 验证迟到原生召回及持久租约使用当前可见性，不触及无关 Hook。
 #[test]
@@ -2111,6 +2193,7 @@ fn recall_publication_reconciles_resident_and_delayed_sources() {
         ttl_turns: 3,
         injection_tag: "vmm".to_owned(),
         injection_description: "memory".to_owned(),
+        queries: Vec::new(),
         items: (1..=5)
             .map(|id| ContextItem {
                 memory_id: id,

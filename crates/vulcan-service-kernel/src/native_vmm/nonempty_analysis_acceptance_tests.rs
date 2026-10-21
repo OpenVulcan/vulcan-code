@@ -495,6 +495,7 @@ pub(in crate::native_vmm) async fn verify_nonempty_analysis(
             runtime_session_id: Some("nonempty-session".to_owned()),
             queries: vec!["PostgreSQL".to_owned()],
             top_k: 4,
+            min_score: None,
         })
         .await
         .expect("native search with provenance");
@@ -916,6 +917,7 @@ async fn verify_paused_session_intake(
                 user_id: 1,
                 queries: vec!["PostgreSQL".to_owned()],
                 top_k: 1,
+                min_score: None,
             })
             .await
             .expect_err("paused search");

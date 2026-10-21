@@ -145,6 +145,7 @@ async fn assert_paused(
             runtime_session_id: Some(session_id.to_owned()),
             queries: vec!["PostgreSQL".to_owned()],
             top_k: 1,
+            min_score: None,
         })
         .await
         .expect_err("paused tool search");

@@ -777,6 +777,31 @@ impl SessionDocument {
         )
     }
 
+    /// Records the memory recall of the active turn at most once.
+    /// 为活动回合最多记录一次记忆召回。
+    /// Returns None when the turn already carries its recall record.
+    /// 回合已带有召回记录时返回 None。
+    pub fn append_memory_recall(
+        &mut self,
+        turn_id: TurnId,
+        recall: MemoryRecallEvent,
+        now_ms: i64,
+    ) -> Result<Option<Seq>, DomainError> {
+        let recorded = self.events.iter().any(|event| {
+            event.turn_id == Some(turn_id) && matches!(event.event, EventBody::MemoryRecall(_))
+        });
+        if recorded {
+            return Ok(None);
+        }
+        self.append_event(
+            Some(turn_id),
+            EventVisibility::UiOnly,
+            EventBody::MemoryRecall(recall),
+            now_ms,
+        )
+        .map(Some)
+    }
+
     /// Verifies that an all-or-nothing transition can allocate its complete
     /// contiguous seq and local-id range before performing any mutation.
     /// 在执行任何修改前，校验全有或全无转换能够分配完整连续 seq 与本地 id 范围。

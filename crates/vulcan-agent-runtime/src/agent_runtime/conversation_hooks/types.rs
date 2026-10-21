@@ -233,6 +233,30 @@ pub fn vmm_recall_batch_effect_from_report(
     Ok(Some(effect))
 }
 
+/// Extracts the unique VMM recall notice from one hook dispatch report.
+/// 从单次 hook 调度报告中提取唯一的 VMM 召回通知。
+/// Returns absence, the notice, or an explicit malformed/ambiguous metadata error.
+/// 返回缺失、通知，或明确的畸形/歧义 metadata 错误。
+pub fn vmm_recall_notice_effect_from_report(
+    report: &HookDispatchReport,
+) -> Result<Option<vulcan_vmm::VmmRecallNotice>, String> {
+    let Some(values) = report
+        .metadata
+        .get(super::HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT)
+    else {
+        return Ok(None);
+    };
+    let [value] = values.as_slice() else {
+        return Err(format!(
+            "VMM recall notice metadata requires exactly one typed effect, found {}.",
+            values.len()
+        ));
+    };
+    serde_json::from_value(value.clone())
+        .map(Some)
+        .map_err(|error| format!("Invalid typed VMM recall notice metadata: {error}"))
+}
+
 /// Extracts the unique authoritative VMM session status from one hook dispatch report.
 /// 从单次 hook 调度报告中提取唯一的 VMM 权威会话状态。
 ///

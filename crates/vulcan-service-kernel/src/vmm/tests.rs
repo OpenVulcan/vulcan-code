@@ -81,6 +81,7 @@ async fn dynamic_memory_panel_read_restores_persisted_lease_after_restart() {
                 ttl_turns: 2,
                 injection_tag: String::from("VMM_MEMORY"),
                 injection_description: String::from("Relevant memories."),
+                queries: Vec::new(),
                 items: vec![vulcan_vmm::ContextItem {
                     text: String::from("restored dynamic memory"),
                     memory_id: 901,

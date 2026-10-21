@@ -9,7 +9,7 @@ use vulcan_vmm::{MemorySearchHit, SearchMemoryEventsResponse};
 fn search_retrieval_round_trip_preserves_optional_facts() {
     // payload is the exact service response shape, including one native and one external hit.
     // payload 是准确服务响应形状，包含一条原生命中及一条外置命中。
-    let payload = serde_json::json!({ "trace_id": "test", "results": [{"query_index": 0, "query": "西瓜", "hits": [
+    let payload = serde_json::json!({ "trace_id": "test", "min_score": 0.75, "results": [{"query_index": 0, "query": "西瓜", "below_threshold_count": 3, "hits": [
         {"memory_id": 1, "source_turn_id": 0, "abstract_text": "", "details_preview": "", "category": "", "created_datetime": "",
         "retrieval": { "source_kind": "direct", "origin": "vector_search", "origin_label": "Vector Recall",
           "origin_explanation": "Vector only.", "final_score": 0.8, "context_observed": false,

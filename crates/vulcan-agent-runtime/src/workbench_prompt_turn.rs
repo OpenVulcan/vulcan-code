@@ -14,7 +14,9 @@ use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
 };
 use vulcan_session_core::SessionNodeId;
-use vulcan_session_core::v1::ClientActionId;
+use vulcan_session_core::v1::{
+    ClientActionId, MemoryRecallEvent, MemoryRecallItem, MemoryRecallOutcome,
+};
 use vulcan_vmm::{VmmConfigDiagnostic, VmmEffectiveConfig};
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionRunPhase, SessionRuntimeStateEntry,
@@ -32,7 +34,7 @@ use crate::{
             ConversationHookRuntime, ConversationPrecheckOutcome, ConversationPrecheckRequest,
             ConversationProfileOutcome, ConversationProfileRequest, ConversationUserEventRequest,
             vmm_profile_sync_effect_from_report, vmm_recall_batch_effect_from_report,
-            vmm_session_status_effect_from_report,
+            vmm_recall_notice_effect_from_report, vmm_session_status_effect_from_report,
         },
         execution_models::ExecutionTurnStartMode,
         markdown_memory_hooks::append_markdown_memory_block,
@@ -263,6 +265,9 @@ pub struct SharedPromptTurnContinuation {
     /// Profile preparation failure detail that does not suppress the persisted baseline.
     /// 不会抑制持久化基线的画像准备失败详情。
     pub profile_failure_detail: Option<String>,
+    /// Memory recall applied to this turn, for the shell to record in the timeline.
+    /// 应用于本回合的记忆召回，供外壳记录到时间线。
+    pub memory_recall: Option<MemoryRecallEvent>,
 }
 
 /// Input required to begin one shared prompt turn.
@@ -1014,6 +1019,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     let mut system_prompt_hook_blocks = Vec::new();
     let mut precheck_failure_detail = None;
     let mut profile_failure_detail = None;
+    let mut memory_recall = None;
     // vmmDomainActive requires both the feature policy and the host-owned live service fact.
     // vmmDomainActive 同时要求功能策略开启以及宿主持有的服务实时就绪事实成立。
     let feature_policy = vulcan_vmm::VmmRuntimeFeaturePolicy::from_env();
@@ -1176,6 +1182,49 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                 )?;
                 vmm_session_memory.register_active_turn(&expected_turn_id, &now)?;
                 runtime_state.updated_at = now;
+                memory_recall = Some(MemoryRecallEvent {
+                    outcome: MemoryRecallOutcome::Matched,
+                    queries: effect.batch.queries,
+                    memories: effect
+                        .batch
+                        .items
+                        .into_iter()
+                        .filter(|item| !item.text.trim().is_empty())
+                        .map(|item| MemoryRecallItem {
+                            memory_id: item.memory_id,
+                            text: item.text,
+                        })
+                        .collect(),
+                });
+            }
+            if vmm_domain_active
+                && let Some(notice) = vmm_recall_notice_effect_from_report(&report)?
+            {
+                let target_message_id = input
+                    .start
+                    .canonical_user_message_id
+                    .as_deref()
+                    .ok_or_else(|| {
+                        String::from(
+                            "VMM recall notice requires the exact canonical user-message id created before precheck.",
+                        )
+                    })?;
+                let now = current_unix_millis_text();
+                vmm_session_memory.apply_recall_notice(
+                    &session_id.to_string(),
+                    target_message_id,
+                    &notice,
+                    &now,
+                )?;
+                runtime_state.updated_at = now;
+                memory_recall = Some(MemoryRecallEvent {
+                    outcome: match notice.outcome {
+                        vulcan_vmm::VmmRecallNoticeOutcome::NoMatch => MemoryRecallOutcome::NoMatch,
+                        vulcan_vmm::VmmRecallNoticeOutcome::Failed => MemoryRecallOutcome::Failed,
+                    },
+                    queries: notice.queries,
+                    memories: Vec::new(),
+                });
             }
             if let Some(rewritten_prompt) = report
                 .payload
@@ -1383,6 +1432,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         request,
         precheck_failure_detail,
         profile_failure_detail,
+        memory_recall,
     })
 }
 

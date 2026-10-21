@@ -48,16 +48,18 @@ pub use protocol::{
     HealthzResponse, ListProjectsResponse, ListUsersResponse, MemorySearchGroupResult,
     MemorySearchHit, MemorySearchRetrieval, MigrateProjectRequest, MigrateProjectResponse,
     PostActionRequest, PostActionResponse, PostActionTimelineItem, PostActionTimelineType,
-    PreCheckRecallMode, PreCheckRequest, PreCheckResponse, ProfileBundleMode, ProfileNodeEntry,
-    ProfileNodeSourceKind, ProfileTarget, ProjectEntry, ResolveProjectRequest,
-    ResolveProjectResponse, ResolveUserRequest, ResolveUserResponse, RetiredProfileNodeEntry,
-    SearchMemoryEventsRequest, SearchMemoryEventsResponse, SessionMemoryStatus, TurnDetailEntry,
-    UserEntry, WriteMemoriesRequest, WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
+    PreCheckRecallMode, PreCheckRecallOutcome, PreCheckRequest, PreCheckResponse,
+    ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind, ProfileTarget, ProjectEntry,
+    ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest, ResolveUserResponse,
+    RetiredProfileNodeEntry, SearchMemoryEventsRequest, SearchMemoryEventsResponse,
+    SessionMemoryStatus, TurnDetailEntry, UserEntry, WriteMemoriesRequest, WriteMemoriesResponse,
+    WriteMemoryItem, WriteMemoryResultItem,
 };
 pub use session_state::{
     VMM_SESSION_MEMORY_MAX_BYTES, VMM_SESSION_MEMORY_SCHEMA_VERSION, VmmCacheEpoch,
     VmmCachePressure, VmmLeaseTransitionReport, VmmMemoryLease, VmmPendingPromptEvent,
-    VmmPromptAnchor, VmmPromptAnchorKind, VmmRecallBatch, VmmSessionMemoryState,
+    VmmPromptAnchor, VmmPromptAnchorKind, VmmRecallBatch, VmmRecallNotice, VmmRecallNoticeOutcome,
+    VmmSessionMemoryState,
 };
 pub use source::{VmmMemoryReadSource, VmmMemorySource};
 pub use transport::{TonicVmmClient, VmmTransportConfig};

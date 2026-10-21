@@ -24,6 +24,16 @@ pub(super) fn search(response: &SearchMemoryEventsResponse) -> String {
         if group.hits.is_empty() {
             output.push_str("\nNo matches.\n");
         }
+        // The note precedes the memory headings so it never reads as part of a memory body.
+        // 该说明位于记忆标题之前，避免被读作某条记忆的正文。
+        if group.below_threshold_count > 0 {
+            output.push_str(&format!(
+                "\n{} hit(s) below relevance threshold {} omitted; lower `min_score` (minimum {}) to widen the search.\n",
+                group.below_threshold_count,
+                response.min_score,
+                super::VMM_MEMORY_SEARCH_MIN_SCORE_FLOOR
+            ));
+        }
         for hit in &group.hits {
             output.push_str(&memory_hit(hit));
         }
@@ -201,6 +211,35 @@ mod tests {
             );
         }
         assert!(!memory_hit(&MemorySearchHit::default()).contains("Source turn"));
+    }
+
+    /// Confirms omitted weak hits are counted ahead of the memories, outside every memory page.
+    /// 确认被省略的弱命中计数位于记忆之前，不落入任何记忆分页。
+    #[test]
+    fn counts_hits_below_threshold_ahead_of_memories() {
+        let group = |below_threshold_count| vulcan_vmm::MemorySearchGroupResult {
+            query_index: 1,
+            query: "deploy steps".into(),
+            hits: vec![MemorySearchHit {
+                memory_id: 7,
+                ..Default::default()
+            }],
+            below_threshold_count,
+        };
+        let body = search(&SearchMemoryEventsResponse {
+            results: vec![group(3)],
+            trace_id: String::new(),
+            min_score: 0.75,
+        });
+        let note = body.find("min_score").expect("omitted hits are reported");
+        assert!(note < body.find("### Memory 7").expect("memory heading"));
+        assert!(body.contains('3') && body.contains("0.75"));
+        let silent = search(&SearchMemoryEventsResponse {
+            results: vec![group(0)],
+            trace_id: String::new(),
+            min_score: 0.75,
+        });
+        assert!(!silent.contains("min_score"));
     }
 
     /// Checks partial deletion does not imply every requested memory was removed.

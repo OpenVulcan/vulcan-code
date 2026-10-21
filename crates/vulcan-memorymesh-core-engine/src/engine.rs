@@ -48,13 +48,13 @@ use vulcan_memorymesh_core_contracts::{
     PlannedMemoryRef, PlannedProfileNodeRef, PlannedSessionRef, PlannedTrashBatchRef,
     PlannedVectorGcRef, PostActionAcceptedResult, PostActionAnalysisResult,
     PostActionAnalyzePendingTurnCommand, PostActionDirectWrite, PostActionIntakeCommand,
-    PostActionReferenceTurn, PreCheckCommand, PreCheckResult, PreCheckReviewCandidate,
-    PreCheckTurnContext, ProfileBundle, ProfileCandidate, ProfileInstructionCommand,
-    ProfileInstructionResult, ProfileLevel, ProfileNode, ProfileNodeId, ProfileNodeState,
-    ProfileQueryCommand, ProfileSectionBundle, ProfileSourceId, ProfileSourceKind,
-    ProfileViewSection, RecallMode, ReinforcementResult, RerankEffect, RetentionCommand,
-    RetentionPlanSet, RetentionReasonCode, RetiredProfileNode, Role, ScopeAccess, ScopeId,
-    SearchHit, SectionRole, SessionRecallBoundary, StorageQuery, StorageQueryResult,
+    PostActionReferenceTurn, PreCheckCommand, PreCheckRecallOutcome, PreCheckResult,
+    PreCheckReviewCandidate, PreCheckTurnContext, ProfileBundle, ProfileCandidate,
+    ProfileInstructionCommand, ProfileInstructionResult, ProfileLevel, ProfileNode, ProfileNodeId,
+    ProfileNodeState, ProfileQueryCommand, ProfileSectionBundle, ProfileSourceId,
+    ProfileSourceKind, ProfileViewSection, RecallMode, ReinforcementResult, RerankEffect,
+    RetentionCommand, RetentionPlanSet, RetentionReasonCode, RetiredProfileNode, Role, ScopeAccess,
+    ScopeId, SearchHit, SectionRole, SessionRecallBoundary, StorageQuery, StorageQueryResult,
     StructuredOutputContractId, SubjectId, TimelineItem, Turn, TurnId, TurnStatus, VectorSpaceId,
 };
 
@@ -1547,6 +1547,7 @@ fn advance(record: &mut CommandRecord, result: HostEffectResult) -> Result<Comma
                     crate::precheck::assemble_context(&pending.accepted);
                 Ok(CommandResult::PreCheck(PreCheckResult {
                     should_inject: !context_items.is_empty(),
+                    recall_outcome: injected_recall_outcome(&context_items),
                     context_text,
                     context_items,
                     candidates: review_candidate_views(&pending.candidates),
@@ -2455,17 +2456,28 @@ fn degrade(
         // injecting every candidate.
         // PreCheck L1 意图/嵌入或 L2 审核失败返回空的不注入结果；VMM 将 selectedCandidates
         // 置空并标记结果降级，而非注入全部候选。
-        FlowState::PreCheckIntent { .. } => {
-            complete_precheck_without_adoption(record, Vec::new(), Vec::new())
-        }
-        FlowState::PreCheckEmbedding { queries, .. } => {
-            complete_precheck_without_adoption(record, queries, Vec::new())
-        }
+        FlowState::PreCheckIntent { .. } => complete_precheck_without_adoption(
+            record,
+            Vec::new(),
+            Vec::new(),
+            PreCheckRecallOutcome::Failed,
+        ),
+        FlowState::PreCheckEmbedding { queries, .. } => complete_precheck_without_adoption(
+            record,
+            queries,
+            Vec::new(),
+            PreCheckRecallOutcome::Failed,
+        ),
         FlowState::PreCheckReview {
             queries,
             candidates,
             ..
-        } => complete_precheck_without_adoption(record, queries, candidates),
+        } => complete_precheck_without_adoption(
+            record,
+            queries,
+            candidates,
+            PreCheckRecallOutcome::Failed,
+        ),
         // PreCheck reinforcement failure keeps the selected context but reports the
         // reinforcement write as failed instead of losing the recalled context.
         // PreCheck 强化失败保留已选上下文，但将强化写入报告为失败而非丢失召回上下文。
@@ -2481,6 +2493,7 @@ fn degrade(
                 record,
                 CommandResult::PreCheck(PreCheckResult {
                     should_inject: !context_items.is_empty(),
+                    recall_outcome: injected_recall_outcome(&context_items),
                     context_text,
                     context_items,
                     candidates: review_candidate_views(&pending.candidates),
@@ -2767,6 +2780,7 @@ fn initialize_precheck(
                 candidates: Vec::new(),
                 degraded: record.degraded,
                 queries: Vec::new(),
+                recall_outcome: PreCheckRecallOutcome::NotSearched,
                 reinforcement: None,
             }),
         ),
@@ -2839,6 +2853,7 @@ fn advance_precheck_intent(
                         candidates: Vec::new(),
                         degraded: record.degraded,
                         queries: Vec::new(),
+                        recall_outcome: PreCheckRecallOutcome::NotSearched,
                         reinforcement: None,
                     }),
                 );
@@ -2852,7 +2867,12 @@ fn advance_precheck_intent(
                 command.max_search_queries as usize,
             );
             if queries.is_empty() {
-                return complete_precheck_without_adoption(record, queries, Vec::new());
+                return complete_precheck_without_adoption(
+                    record,
+                    queries,
+                    Vec::new(),
+                    PreCheckRecallOutcome::NotSearched,
+                );
             }
             record.state = FlowState::PreCheckEmbedding {
                 command: command.clone(),
@@ -2974,7 +2994,12 @@ fn advance_pipeline_to_precheck(
         &record.snapshot.pii_scrubber,
     )?;
     if hits.is_empty() {
-        return complete_precheck_without_adoption(record, queries, Vec::new());
+        return complete_precheck_without_adoption(
+            record,
+            queries,
+            Vec::new(),
+            PreCheckRecallOutcome::NoMatch,
+        );
     }
     // Load the authoritative L2 review prompt from the frozen snapshot.
     // 从冻结快照加载权威 L2 审核 Prompt。
@@ -3000,10 +3025,13 @@ fn advance_pipeline_to_precheck(
 
 /// Finishes without injection while retaining already observed query and candidate facts.
 /// 在不注入上下文的同时保留已观察到的查询与候选事实，避免降级抹去审计来源。
+/// The caller names the recall outcome because only it knows whether the search ran or failed.
+/// 召回结果由调用方指定，因为只有它知道检索是否执行或失败。
 fn complete_precheck_without_adoption(
     record: &mut CommandRecord,
     queries: Vec<String>,
     candidates: Vec<ReviewCandidateState>,
+    recall_outcome: PreCheckRecallOutcome,
 ) -> Result<CommandStep, CoreError> {
     complete(
         record,
@@ -3017,9 +3045,20 @@ fn complete_precheck_without_adoption(
                 .collect(),
             degraded: record.degraded,
             queries,
+            recall_outcome,
             reinforcement: None,
         }),
     )
+}
+
+/// Classifies a completed recall by whether any accepted context survived assembly.
+/// 按是否有已接受上下文在组装后保留来归类一次已完成的召回。
+fn injected_recall_outcome(context_items: &[PreCheckReviewCandidate]) -> PreCheckRecallOutcome {
+    if context_items.is_empty() {
+        PreCheckRecallOutcome::NoMatch
+    } else {
+        PreCheckRecallOutcome::Matched
+    }
 }
 
 /// Completes `PreCheck` from accepted L2 memory identities.
@@ -3092,6 +3131,7 @@ fn advance_precheck_review(
                         candidates: review_candidate_views(&candidates),
                         degraded: record.degraded,
                         queries,
+                        recall_outcome: PreCheckRecallOutcome::NoMatch,
                         reinforcement: None,
                     }),
                 );
@@ -7022,11 +7062,8 @@ fn review_similar_memories(
     let total = hits.len();
     for (index, hit) in hits.iter_mut().enumerate() {
         let score = hit.final_score.clamp(0.0, 1.0);
-        hit.final_score = if hit.rerank_score.is_some() {
-            score.max(retrieval_kernel::normalized_rank_score(index + 1, total))
-        } else {
-            score
-        };
+        hit.final_score =
+            retrieval_kernel::review_score(score, hit.rerank_score.is_some(), index + 1, total);
         if let Some(explanation) = &mut hit.explanation {
             explanation.pre_review_score = Some(score);
             explanation.final_score = hit.final_score;

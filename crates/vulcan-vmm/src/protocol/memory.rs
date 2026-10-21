@@ -40,6 +40,25 @@ pub enum SessionMemoryStatus {
     Forgotten,
 }
 
+/// How one PreCheck recall ended, so callers can tell "not searched" from "searched, nothing found".
+/// 一次 PreCheck 召回的结束方式，使调用方能区分“未检索”与“已检索但未找到”。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreCheckRecallOutcome {
+    /// Memory was not needed or not allowed, so nothing was searched.
+    /// 无需或不允许使用记忆，因此未执行检索。
+    NotSearched,
+    /// The search ran and at least one memory was selected for injection.
+    /// 检索已执行，且至少选中一条待注入记忆。
+    Matched,
+    /// The search ran but no candidate passed the threshold or review.
+    /// 检索已执行，但没有候选通过阈值或审核。
+    NoMatch,
+    /// Intent analysis, search or review failed, so the absence of memories is unknown.
+    /// 意图分析、检索或审核失败，因此无法判断是否存在相关记忆。
+    Failed,
+}
+
 impl SessionMemoryStatus {
     /// Returns whether recall and writeback are allowed in this lifecycle state.
     /// 返回当前生命周期状态是否允许召回与写回。
@@ -134,6 +153,13 @@ pub struct PreCheckResponse {
     /// VMM 返回的权威生命周期状态。
     #[serde(default)]
     pub session_memory_status: SessionMemoryStatus,
+    /// How recall ended; required, because a missing outcome cannot be told apart from a skipped search.
+    /// 召回的结束方式；必填，因为缺失的结果无法与跳过检索区分。
+    pub recall_outcome: PreCheckRecallOutcome,
+    /// Search queries actually run; empty when nothing was searched.
+    /// 实际执行的检索词；未检索时为空。
+    #[serde(default)]
+    pub recall_queries: Vec<String>,
 }
 
 /// VMM timeline item role accepted by PostAction.
@@ -277,7 +303,7 @@ pub struct ChatCompactResponse {
 
 /// Request body for VMM SearchMemoryEvents.
 /// VMM SearchMemoryEvents 请求体。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SearchMemoryEventsRequest {
     /// Identifies the invoking native runtime session; None explicitly denotes a management query.
     /// 标识发起调用的原生运行时会话；None 明确表示管理查询。
@@ -302,6 +328,10 @@ pub struct SearchMemoryEventsRequest {
     /// Maximum hit count per query.
     /// 每条查询的最大命中数量。
     pub top_k: u32,
+    /// Reviewer-facing relevance floor in `[0, 1]`; None applies the service's PreCheck recall threshold.
+    /// 面向审核的相关度下限，取值 `[0, 1]`；None 表示使用服务自身的 PreCheck 召回阈值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_score: Option<f64>,
 }
 
 /// One AI-facing memory search hit returned by VMM.
@@ -393,6 +423,10 @@ pub struct MemorySearchGroupResult {
     /// 该查询产生的命中列表。
     #[serde(default)]
     pub hits: Vec<MemorySearchHit>,
+    /// Ranked hits dropped because their reviewer-facing score fell below the applied threshold.
+    /// 因面向审核的评分低于所应用阈值而被略去的已排名命中数。
+    #[serde(default)]
+    pub below_threshold_count: u32,
 }
 
 /// Response body for VMM SearchMemoryEvents.
@@ -407,6 +441,9 @@ pub struct SearchMemoryEventsResponse {
     /// VMM 返回的追踪标识。
     #[serde(default)]
     pub trace_id: String,
+    /// Reviewer-facing threshold actually applied, echoed so omitted hits can be explained.
+    /// 实际应用的面向审核阈值，回显以便说明被略去的命中。
+    pub min_score: f64,
 }
 
 /// Request body for VMM GetTurnDetails.

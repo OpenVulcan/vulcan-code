@@ -95,6 +95,7 @@ fn global_memory_mode_clears_resident_and_retained_caches_without_hydration() {
                     ttl_turns: 3,
                     injection_tag: "vmm".to_owned(),
                     injection_description: "memory".to_owned(),
+                    queries: Vec::new(),
                     items: vec![vulcan_vmm::ContextItem {
                         memory_id: 1,
                         text: "old memory".to_owned(),

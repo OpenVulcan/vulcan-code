@@ -738,6 +738,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
     // 主会话请求在构建前消费 V1 配置，包括目标续跑和排队续跑，不能再次从全局选择或旧镜像取模型。
     let handle =
         crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
+    persist_memory_recall(handle.as_ref(), continuation.memory_recall)?;
     let runtime_state = workspace_snapshot
         .session_runtime_state
         .get_mut(&session_id)
@@ -1709,6 +1710,47 @@ fn apply_dedicated_session_shaping(
     request.runtime_policy.memory_recall_enabled = false;
     request.runtime_policy.memory_writeback_enabled = false;
     Ok(())
+}
+
+/// Records what long-term memory recall did for the active turn, once, as a UI-only timeline fact.
+/// 将长期记忆召回为活动回合所做之事作为仅 UI 时间线事实记录一次。
+/// Takes the recall applied by the shared continuation; a turn without one records nothing.
+/// 接收共享续接所应用的召回；没有召回的回合不记录任何内容。
+fn persist_memory_recall(
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
+    recall: Option<vulcan_session_core::v1::MemoryRecallEvent>,
+) -> Result<(), String> {
+    use crate::session_runtime_registry_v1::{
+        SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
+    };
+    use vulcan_session_core::v1::errors::DomainError;
+
+    let Some(recall) = recall else {
+        return Ok(());
+    };
+    let now_ms = crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
+    handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                let turn_id = document
+                    .active_turn()
+                    .filter(|turn| !turn.closed)
+                    .map(|turn| turn.turn_id)
+                    .ok_or(DomainError::NoActiveTurn)?;
+                // A replayed continuation finds the record already present and leaves it unchanged.
+                // 重放的续接会发现记录已存在并保持不变。
+                Ok(
+                    match document.append_memory_recall(turn_id, recall, now_ms)? {
+                        Some(_) => SessionMutationChange::Changed(()),
+                        None => SessionMutationChange::Unchanged(()),
+                    },
+                )
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| format!("Failed to persist the memory recall record: {error}"))
 }
 
 #[cfg(test)]

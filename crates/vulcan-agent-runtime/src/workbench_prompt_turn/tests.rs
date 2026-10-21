@@ -13,7 +13,8 @@ use vulcan_workbench_model::{
 use crate::{
     agent_runtime::conversation_hooks::{
         ConversationHookRuntime, HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT,
-        HOOK_METADATA_VMM_RECALL_BATCH_EFFECT, VmmProfileSyncHookEffect, VmmRecallBatchHookEffect,
+        HOOK_METADATA_VMM_RECALL_BATCH_EFFECT, HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT,
+        VmmProfileSyncHookEffect, VmmRecallBatchHookEffect,
     },
     conversation_protocol::{SessionConversationPayload, append_user_text_message},
 };
@@ -490,6 +491,7 @@ fn precheck_publication_rejects_stale_recall_and_lifecycle_together() {
                         ttl_turns: 2,
                         injection_tag: "vmm".to_owned(),
                         injection_description: "memory".to_owned(),
+                        queries: Vec::new(),
                         items: vec![ContextItem {
                             memory_id: 17,
                             text: "source-fenced-memory".to_owned(),
@@ -593,6 +595,7 @@ fn ordinary_admission_reconciles_context_after_edit_rebind_and_mode_change() {
                     ttl_turns: 3,
                     injection_tag: "VMM_MEMORY".to_owned(),
                     injection_description: "Relevant memories.".to_owned(),
+                    queries: Vec::new(),
                     items: vec![ContextItem {
                         memory_id: 17,
                         text: "resident-body".to_owned(),
@@ -972,6 +975,7 @@ fn typed_vmm_recall_targets_visible_canonical_user_message() {
                 ttl_turns: 2,
                 injection_tag: String::from("VMM_MEMORY"),
                 injection_description: String::from("Relevant memories."),
+                queries: Vec::new(),
                 items: vec![ContextItem {
                     text: String::from("stable recalled memory"),
                     memory_id: 17,
@@ -1034,6 +1038,95 @@ fn typed_vmm_recall_targets_visible_canonical_user_message() {
     assert_eq!(canonical_target_count, 1);
 }
 
+/// Verifies recall batches and notices both anchor to the canonical message and leave a timeline record.
+/// 验证召回批次与通知都锚定到规范消息，并留下时间线记录。
+#[test]
+fn recall_effects_anchor_their_queries_and_report_the_turn_record() {
+    let read_source = vulcan_vmm::VmmMemoryReadSource::new(
+        vulcan_vmm::VmmMemorySource::native(1).expect("owner"),
+        vec![1],
+    )
+    .expect("read source");
+    let queries = vec![String::from("deploy steps")];
+    for case in ["matched", "no_match"] {
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let start = begin_user_prompt(&mut runtime_state);
+        let target_message_id = start.canonical_user_message_id.clone().expect("user");
+        let mut precheck_outcome = start.precheck_request.clone().skip();
+        let profile_outcome = start.profile_request.clone().skip();
+        let report = precheck_outcome.report.as_mut().expect("report");
+        if case == "matched" {
+            report.metadata.insert(
+                HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_string(),
+                vec![serde_json::json!(VmmRecallBatchHookEffect {
+                    read_source: read_source.clone(),
+                    batch: VmmRecallBatch {
+                        ttl_turns: 2,
+                        injection_tag: String::from("VMM_MEMORY"),
+                        injection_description: String::from("Relevant memories."),
+                        queries: queries.clone(),
+                        items: vec![ContextItem {
+                            text: String::from("stable recalled memory"),
+                            memory_id: 17,
+                            ..ContextItem::default()
+                        }],
+                    },
+                })],
+            );
+        } else {
+            report.metadata.insert(
+                HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT.to_string(),
+                vec![serde_json::json!(vulcan_vmm::VmmRecallNotice {
+                    injection_tag: String::from("VMM_MEMORY"),
+                    outcome: vulcan_vmm::VmmRecallNoticeOutcome::NoMatch,
+                    queries: queries.clone(),
+                })],
+            );
+        }
+        let mut vmm_session_memory = test_vmm_session_memory(start.session_id);
+        let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+            &mut runtime_state,
+            &mut vmm_session_memory,
+            SharedPromptTurnContinueInput {
+                vmm_context_epoch: Some(
+                    vulcan_vmm::VmmContextEpoch::new(1, None).expect("fixture context epoch"),
+                ),
+                vmm_profile_read_source: Some(read_source.clone()),
+                start,
+                precheck_outcome,
+                profile_outcome,
+                project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+                runtime_reasoning_effort: None,
+                provider_reasoning_effort: None,
+                patch_visible_user_prompt_record: true,
+            },
+        )
+        .expect(case);
+        let anchors = &continuation
+            .request
+            .context_injection
+            .as_ref()
+            .expect("recall reaches the provider")
+            .anchored_prefixes;
+        assert!(
+            anchors
+                .iter()
+                .any(|anchor| anchor.target_message_id == target_message_id
+                    && anchor.prefix.contains("deploy steps")),
+            "{case}"
+        );
+        let record = continuation.memory_recall.expect(case);
+        assert_eq!(record.queries, queries, "{case}");
+        if case == "matched" {
+            assert_eq!(record.outcome, MemoryRecallOutcome::Matched);
+            assert_eq!(record.memories[0].memory_id, 17);
+        } else {
+            assert_eq!(record.outcome, MemoryRecallOutcome::NoMatch);
+            assert!(record.memories.is_empty());
+        }
+    }
+}
+
 /// Verifies a stopped VMM service cannot enter local state, recall, profile, or anchor paths.
 /// 验证已停止的 VMM 服务不能进入本地状态、召回、画像或锚点链路。
 #[test]
@@ -1078,6 +1171,7 @@ fn stopped_vmm_service_bypasses_every_memory_path_without_canonical_user_id() {
                 ttl_turns: 2,
                 injection_tag: String::from("VMM_MEMORY"),
                 injection_description: String::from("Historical memory."),
+                queries: Vec::new(),
                 items: vec![ContextItem {
                     text: String::from("must not be recalled while stopped"),
                     memory_id: 99,
@@ -1841,6 +1935,7 @@ fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn()
                 ttl_turns: 1,
                 injection_tag: String::from("VMM_MEMORY"),
                 injection_description: String::from("Relevant memories."),
+                queries: Vec::new(),
                 items: vec![ContextItem {
                     text: String::from("expiring memory"),
                     memory_id: 7,

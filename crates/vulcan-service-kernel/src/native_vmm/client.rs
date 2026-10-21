@@ -1174,6 +1174,8 @@ impl VmmClient for NativeVmmClient {
                 degraded: false,
                 trace_id: native_trace_id("precheck"),
                 session_memory_status: session_status,
+                recall_outcome: vulcan_vmm::PreCheckRecallOutcome::NotSearched,
+                recall_queries: Vec::new(),
             });
         }
         let (memory_policy, vector_space_id, snapshot_id) = self
@@ -1259,6 +1261,8 @@ impl VmmClient for NativeVmmClient {
             degraded: result.degraded,
             trace_id: native_trace_id("precheck"),
             session_memory_status: session_status,
+            recall_outcome: native_recall_outcome(result.recall_outcome),
+            recall_queries: result.queries,
         })
     }
 
@@ -1395,14 +1399,20 @@ impl VmmClient for NativeVmmClient {
             &access.write_scope,
             request.runtime_session_id.as_deref(),
         )?;
-        let vector_space_id = self
+        // One activation supplies both the vector generation and the PreCheck threshold used by default.
+        // 一次激活同时提供向量代次与默认使用的 PreCheck 阈值。
+        let (memory_policy, vector_space_id, snapshot_id) = self
             .runtime
-            .current_vector_space_id()
+            .active_memory_context(&request.host_project_id)
             .await
             .map_err(native_runtime_error)?;
+        let min_score = match request.min_score {
+            Some(score) => validate_search_min_score(score)?,
+            None => memory_policy.precheck_policy.min_review_score,
+        };
         let result = self
             .runtime
-            .run_for_host_project(
+            .run_with_snapshot(
                 CoreCommand::MemorySearchBatch(MemorySearchBatchCommand {
                     subject_id: subject,
                     scope_access: access.clone(),
@@ -1418,7 +1428,7 @@ impl VmmClient for NativeVmmClient {
                     },
                     now_ns: now_ns()?,
                 }),
-                &request.host_project_id,
+                snapshot_id,
             )
             .await
             .map_err(core_client_error)?;
@@ -1428,20 +1438,36 @@ impl VmmClient for NativeVmmClient {
         let results = groups
             .into_iter()
             .map(|group| {
+                // Rank is judged within the returned group, exactly as PreCheck reviews its candidates.
+                // 名次在返回分组内评定，与 PreCheck 审核候选的方式完全一致。
+                let total = group.hits.len();
+                let mut hits = Vec::with_capacity(total);
+                let mut below_threshold_count = 0_u32;
+                for (index, hit) in group.hits.iter().enumerate() {
+                    let score = vulcan_memorymesh_core::review_score(
+                        hit.final_score,
+                        hit.rerank_score.is_some(),
+                        index + 1,
+                        total,
+                    );
+                    if score < min_score {
+                        below_threshold_count += 1;
+                    } else {
+                        hits.push(memory_search_hit(hit)?);
+                    }
+                }
                 Ok(MemorySearchGroupResult {
                     query_index: group.query_index,
                     query: group.query,
-                    hits: group
-                        .hits
-                        .iter()
-                        .map(memory_search_hit)
-                        .collect::<Result<Vec<_>, _>>()?,
+                    hits,
+                    below_threshold_count,
                 })
             })
             .collect::<Result<Vec<_>, VmmClientError>>()?;
         Ok(SearchMemoryEventsResponse {
             results,
             trace_id: native_trace_id("memory-search"),
+            min_score,
         })
     }
 
@@ -2527,6 +2553,40 @@ fn precheck_turn_context(turn: Turn) -> Result<PreCheckTurnContext, VmmClientErr
         content_type: PreCheckTurnContentType::RawTurn,
         content: super::dialogue::escape_business_json(content),
     })
+}
+
+/// Accepts a caller threshold on the reviewer-facing unit scale.
+/// 接受位于面向审核单位尺度上的调用方阈值。
+fn validate_search_min_score(score: f64) -> Result<f64, VmmClientError> {
+    if score.is_finite() && (0.0..=1.0).contains(&score) {
+        Ok(score)
+    } else {
+        Err(VmmClientError::new(
+            "invalid_memory_search_threshold",
+            format!("min_score must be a number in [0, 1], got {score}"),
+        ))
+    }
+}
+
+/// Projects the Core recall outcome onto the service protocol one-to-one.
+/// 将 Core 召回结果一一投影到服务协议。
+fn native_recall_outcome(
+    outcome: vulcan_memorymesh_core::PreCheckRecallOutcome,
+) -> vulcan_vmm::PreCheckRecallOutcome {
+    match outcome {
+        vulcan_memorymesh_core::PreCheckRecallOutcome::NotSearched => {
+            vulcan_vmm::PreCheckRecallOutcome::NotSearched
+        }
+        vulcan_memorymesh_core::PreCheckRecallOutcome::Matched => {
+            vulcan_vmm::PreCheckRecallOutcome::Matched
+        }
+        vulcan_memorymesh_core::PreCheckRecallOutcome::NoMatch => {
+            vulcan_vmm::PreCheckRecallOutcome::NoMatch
+        }
+        vulcan_memorymesh_core::PreCheckRecallOutcome::Failed => {
+            vulcan_vmm::PreCheckRecallOutcome::Failed
+        }
+    }
 }
 
 /// Converts one Core search hit into the AI-facing VMM result projection.

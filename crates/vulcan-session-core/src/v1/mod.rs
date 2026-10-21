@@ -78,11 +78,12 @@ pub use event::{
     AssistantReasoningEvent, AssistantSemanticStatus, AssistantTextEvent, ContinuationEligibility,
     ConversationEvent, DisplayNoteEvent, DisplayNoticeKind, EventBody, EventVisibility,
     ExecutionControlEvent, ExecutionControlKind, ExternalResourceKind, ExternalResourceRef,
-    NoticeSeverity, ProviderProjectionProof, ProviderSource, ProviderSourceInput,
-    QueuedInputResolutionEvent, QueuedInputResolutionKind, RedactedApiError, SubagentReturnEvent,
-    SystemContextEvent, SystemContextOperation, SystemContextScope, SystemRoleHint, ToolCallEvent,
-    ToolCallStatus, ToolPayload, TurnBoundaryEvent, TurnBoundaryPurpose, TurnClosureReason,
-    TurnOutcome, TurnStatsEvent, UserInputEvent, UserInputSource,
+    MemoryRecallEvent, MemoryRecallItem, MemoryRecallOutcome, NoticeSeverity,
+    ProviderProjectionProof, ProviderSource, ProviderSourceInput, QueuedInputResolutionEvent,
+    QueuedInputResolutionKind, RedactedApiError, SubagentReturnEvent, SystemContextEvent,
+    SystemContextOperation, SystemContextScope, SystemRoleHint, ToolCallEvent, ToolCallStatus,
+    ToolPayload, TurnBoundaryEvent, TurnBoundaryPurpose, TurnClosureReason, TurnOutcome,
+    TurnStatsEvent, UserInputEvent, UserInputSource,
 };
 pub use ids::{
     ApiCallId, CLIENT_ACTION_ID_MAX_BYTES, ClientActionId, CompactionId, IdAllocator,

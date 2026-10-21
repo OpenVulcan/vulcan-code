@@ -875,9 +875,31 @@ pub struct PreCheckResult {
     /// Carries the deterministic search queries used by the command.
     /// 携带命令使用的确定性搜索查询。
     pub queries: Vec<String>,
+    /// States how recall ended, so a host can tell "not searched" from "searched, nothing found".
+    /// 表示召回如何结束，使宿主能区分“未检索”与“已检索但未找到”。
+    pub recall_outcome: PreCheckRecallOutcome,
     /// Carries the durable adoption reinforcement outcome when recall accepted memories.
     /// 在召回接受记忆时携带持久采纳强化结果。
     pub reinforcement: Option<ReinforcementResult>,
+}
+
+/// Classifies how one `PreCheck` recall ended.
+/// 归类一次 `PreCheck` 召回的结束方式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreCheckRecallOutcome {
+    /// Recall was disabled or intent analysis decided memory is not needed; nothing was searched.
+    /// 召回被禁用，或意图分析判定无需记忆；未执行检索。
+    NotSearched,
+    /// The search ran and review accepted at least one memory for injection.
+    /// 检索已执行，且审核至少接受了一条待注入记忆。
+    Matched,
+    /// The search ran but no candidate passed the threshold or review.
+    /// 检索已执行，但没有候选通过阈值或审核。
+    NoMatch,
+    /// Intent analysis, embedding or review failed, so the absence of memories is unknown.
+    /// 意图分析、嵌入或审核失败，因此无法判断是否存在相关记忆。
+    Failed,
 }
 
 /// Identifies which Core-owned admission path produced the final Noise decision.

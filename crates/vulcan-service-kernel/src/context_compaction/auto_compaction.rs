@@ -1257,6 +1257,7 @@ mod tests {
                     ttl_turns: 3,
                     injection_tag: "vmm".to_owned(),
                     injection_description: "memory".to_owned(),
+                    queries: Vec::new(),
                     items: vec![vulcan_vmm::ContextItem {
                         memory_id: 11,
                         text: "old recalled body".to_owned(),

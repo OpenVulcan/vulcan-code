@@ -826,6 +826,7 @@ fn project_items_with_policy(
             | EventBody::TurnBoundary(_)
             | EventBody::TurnStats(_)
             | EventBody::DisplayNote(_)
+            | EventBody::MemoryRecall(_)
             | EventBody::RequestConfigChanged(_)
             | EventBody::ExecutionControl(_)
             | EventBody::Collaboration(_)

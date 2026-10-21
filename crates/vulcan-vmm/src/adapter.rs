@@ -859,6 +859,8 @@ mod tests {
             degraded: false,
             trace_id: String::new(),
             session_memory_status: crate::SessionMemoryStatus::Active,
+            recall_outcome: crate::PreCheckRecallOutcome::Matched,
+            recall_queries: Vec::new(),
         };
 
         let insert = injection_from_precheck_response(&response, &ready_config()).expect("insert");
@@ -920,6 +922,8 @@ mod tests {
             degraded: false,
             trace_id: String::new(),
             session_memory_status: crate::SessionMemoryStatus::Active,
+            recall_outcome: crate::PreCheckRecallOutcome::Matched,
+            recall_queries: Vec::new(),
         };
         state.apply_insert_for_turn(
             injection_from_precheck_response(&response, &ready_config()).expect("insert"),

@@ -148,19 +148,40 @@ async fn search(
     host: &str,
     top_k: u32,
 ) -> Vec<MemorySearchHit> {
-    // The declared management path carries no runtime-session context.
-    // 声明的管理路径不携带运行时会话上下文。
+    // The declared management path carries no runtime-session context; a zero threshold exposes
+    // the full physical ranking under test.
+    // 声明的管理路径不携带运行时会话上下文；零阈值暴露待测的完整物理排序。
+    let request = |min_score| SearchMemoryEventsRequest {
+        runtime_session_id: None,
+        user_id: 1,
+        project_id,
+        host_project_id: host.to_owned(),
+        queries: vec![QUERY.to_owned()],
+        top_k,
+        min_score,
+    };
     let response = client
-        .search_memory_events(SearchMemoryEventsRequest {
-            runtime_session_id: None,
-            user_id: 1,
-            project_id,
-            host_project_id: host.to_owned(),
-            queries: vec![QUERY.to_owned()],
-            top_k,
-        })
+        .search_memory_events(request(Some(0.0)))
         .await
         .expect("actual hybrid search");
+    // The default PreCheck threshold only partitions the same ranking into kept and counted hits.
+    // 默认 PreCheck 阈值只把同一排序划分为保留命中与计数命中。
+    let gated = client
+        .search_memory_events(request(None))
+        .await
+        .expect("default-threshold hybrid search");
+    let gated_group = &gated.results[0];
+    assert_eq!(
+        gated_group.hits.len() + gated_group.below_threshold_count as usize,
+        top_k as usize
+    );
+    let full = ids(&response.results[0].hits);
+    assert!(
+        ids(&gated_group.hits)
+            .iter()
+            .all(|kept| full.contains(kept)),
+        "kept hits must come from the same ranking"
+    );
     assert_eq!(response.results.len(), 1);
     assert_eq!(response.results[0].query_index, 0);
     assert_eq!(response.results[0].query, QUERY);

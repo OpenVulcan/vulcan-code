@@ -32,6 +32,9 @@ pub const HOOK_METADATA_VMM_RECALL_BATCH_EFFECT: &str = "vmm_recall_batch_effect
 /// Metadata key used by the built-in VMM precheck hook to return authoritative session status.
 /// 内置 VMM precheck hook 用于返回权威会话状态的 metadata 键。
 pub const HOOK_METADATA_VMM_SESSION_STATUS_EFFECT: &str = "vmm_session_status_effect";
+/// Metadata key used by the built-in VMM precheck hook to disclose a searched recall that injects no memory.
+/// 内置 VMM precheck hook 用于披露已检索但未注入记忆之召回的 metadata 键。
+pub const HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT: &str = "vmm_recall_notice_effect";
 
 /// Hook point fired to prepare persistent session profile context independently from user recall.
 /// 独立于用户召回、用于准备持久会话画像上下文的 Hook 点位。
@@ -99,7 +102,8 @@ pub use types::{
     CanonicalInTurnHookInput, ConversationTimelineItem, ConversationTurnCompletionStatus,
     VmmProfileSyncHookEffect, VmmRecallBatchHookEffect, VmmSessionStatusHookEffect,
     VmmWritebackHookEffect, vmm_profile_sync_effect_from_report,
-    vmm_recall_batch_effect_from_report, vmm_session_status_effect_from_report,
+    vmm_recall_batch_effect_from_report, vmm_recall_notice_effect_from_report,
+    vmm_session_status_effect_from_report,
 };
 
 use helpers::*;

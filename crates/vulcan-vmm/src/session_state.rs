@@ -5,7 +5,7 @@ use crate::adapter::{
     render_vmm_context_item_detail, render_vmm_context_item_model, render_vmm_context_item_panel,
 };
 use crate::config::VmmEffectiveConfig;
-use crate::protocol::{ContextItem, PreCheckResponse, SessionMemoryStatus};
+use crate::protocol::{ContextItem, PreCheckRecallOutcome, PreCheckResponse, SessionMemoryStatus};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,6 +47,10 @@ pub struct VmmRecallBatch {
     /// Provider-visible grouping description configured for this recall.
     /// 为本次召回配置的 Provider 可见分组说明。
     pub injection_description: String,
+    /// Search queries VMM actually ran, disclosed to the model beside the recalled memories.
+    /// VMM 实际执行的检索词，随召回记忆一并告知模型。
+    #[serde(default)]
+    pub queries: Vec<String>,
     /// Structured context items selected by VMM.
     /// VMM 选出的结构化上下文项。
     pub items: Vec<ContextItem>,
@@ -87,6 +91,7 @@ impl VmmRecallBatch {
             ttl_turns: config.implicit_memory_turns,
             injection_tag: config.injection_tag.clone(),
             injection_description: config.injection_description.clone(),
+            queries: response.recall_queries.clone(),
             items,
         })
     }
@@ -97,6 +102,84 @@ impl VmmRecallBatch {
         self.items
             .iter()
             .all(|item| render_vmm_context_item_model(item).is_empty())
+    }
+}
+
+/// Why a recall disclosed no newly injected memory to the model.
+/// 召回未向模型注入新记忆的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VmmRecallNoticeOutcome {
+    /// The search ran but no memory passed the threshold or review.
+    /// 检索已执行，但没有记忆通过阈值或审核。
+    NoMatch,
+    /// Intent analysis, search or review failed, so the absence of memories is unknown.
+    /// 意图分析、检索或审核失败，因此无法判断是否存在相关记忆。
+    Failed,
+}
+
+/// Tells the model that memory was consulted for one message even though no memory body is injected.
+/// 告知模型某条消息已查询过记忆，即使没有注入任何记忆正文。
+/// A recall that decided memory was not needed produces no notice at all.
+/// 判定无需记忆的召回不产生任何通知。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VmmRecallNotice {
+    /// Provider-visible grouping tag shared with recalled memories.
+    /// 与召回记忆共用的 Provider 可见分组标签。
+    pub injection_tag: String,
+    /// Why no memory body accompanies this notice.
+    /// 本通知不附带记忆正文的原因。
+    pub outcome: VmmRecallNoticeOutcome,
+    /// Search queries actually run; empty when the failure happened before any query existed.
+    /// 实际执行的检索词；失败发生在生成检索词之前时为空。
+    pub queries: Vec<String>,
+}
+
+impl VmmRecallNotice {
+    /// Builds the notice for a precheck that searched but injects nothing.
+    /// 为已检索但不注入任何内容的 precheck 构建通知。
+    /// Returns None when memory was not searched, is paused, implicit injection is off,
+    /// or the response yields a recall batch that discloses its own queries.
+    /// 未检索、记忆已暂停、隐式注入关闭，或响应产生自带检索词的召回批次时返回 None。
+    pub fn from_precheck_response(
+        response: &PreCheckResponse,
+        config: &VmmEffectiveConfig,
+    ) -> Option<Self> {
+        if !response.session_memory_status.allows_runtime_memory()
+            || config.implicit_memory_turns == 0
+        {
+            return None;
+        }
+        let outcome = match response.recall_outcome {
+            PreCheckRecallOutcome::NotSearched => return None,
+            PreCheckRecallOutcome::Failed => VmmRecallNoticeOutcome::Failed,
+            PreCheckRecallOutcome::NoMatch => VmmRecallNoticeOutcome::NoMatch,
+            // A matched response whose items all render empty injects nothing, which reads as no match.
+            // 条目全部渲染为空的命中响应不注入任何内容，对模型而言即为未命中。
+            PreCheckRecallOutcome::Matched => {
+                if VmmRecallBatch::from_precheck_response(response, config).is_some() {
+                    return None;
+                }
+                VmmRecallNoticeOutcome::NoMatch
+            }
+        };
+        Some(Self {
+            injection_tag: config.injection_tag.clone(),
+            outcome,
+            queries: response.recall_queries.clone(),
+        })
+    }
+
+    /// Builds the failure notice for a precheck call that never produced a response.
+    /// 为未能得到响应的 precheck 调用构建失败通知。
+    /// Returns None when implicit injection is off, since nothing would have been injected anyway.
+    /// 隐式注入关闭时返回 None，因为本来也不会注入任何内容。
+    pub fn request_failed(config: &VmmEffectiveConfig) -> Option<Self> {
+        (config.implicit_memory_turns != 0).then(|| Self {
+            injection_tag: config.injection_tag.clone(),
+            outcome: VmmRecallNoticeOutcome::Failed,
+            queries: Vec::new(),
+        })
     }
 }
 
@@ -114,6 +197,9 @@ pub enum VmmPromptAnchorKind {
     /// Active-memory baseline created after a context compaction epoch reset.
     /// 上下文压缩纪元重置后创建的活动记忆基线。
     Baseline,
+    /// Memory-free statement that recall was consulted for the message, with its queries and outcome.
+    /// 不含记忆正文的声明，说明该消息已执行召回及其检索词与结果。
+    RecallNotice,
 }
 
 impl VmmPromptAnchorKind {
@@ -124,6 +210,7 @@ impl VmmPromptAnchorKind {
             Self::Memory => "memory",
             Self::Revocation => "revocation",
             Self::Baseline => "baseline",
+            Self::RecallNotice => "notice",
         }
     }
 }
@@ -1075,10 +1162,102 @@ impl VmmSessionMemoryState {
                 }
             }
             report.appended_anchor_count += 1;
+        } else if self.stable_anchor_rendering_enabled
+            && report.refreshed_lease_count > 0
+            && !batch.queries.is_empty()
+        {
+            // Every match is already resident, so only the queries are new to the model; replays
+            // without queries add nothing and stay silent.
+            // 所有命中均已驻留，因此对模型而言只有检索词是新的；不带检索词的重放没有新信息，保持静默。
+            let prefix = render_recall_notice_prefix(
+                &batch.injection_tag,
+                RecallNoticeText::AlreadyInContext,
+                &batch.queries,
+            );
+            self.append_anchor(
+                target_message_id,
+                VmmPromptAnchorKind::RecallNotice,
+                prefix,
+                Vec::new(),
+                updated_at,
+            );
+            report.appended_anchor_count += 1;
         }
         if report.changed {
             self.mark_changed(updated_at)?;
         }
+        if let Err(error) = self.validate_capacity_limits() {
+            *self = previous_state;
+            return Err(error);
+        }
+        Ok(report)
+    }
+
+    /// Anchors one memory-free recall notice to the exact user message it describes.
+    /// 将一条不含记忆正文的召回通知锚定到其描述的精确用户消息。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `target_message_id` is the canonical user message the recall ran for.
+    /// `target_message_id` 是执行召回所针对的规范用户消息。
+    /// `notice` carries the outcome and queries to disclose.
+    /// `notice` 携带需要告知的结果与检索词。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Transition counters; paused memory or disabled anchor rendering leaves the state unchanged.
+    /// 返回转换计数；记忆暂停或锚点渲染关闭时状态保持不变。
+    pub fn apply_recall_notice(
+        &mut self,
+        session_id: &str,
+        target_message_id: &str,
+        notice: &VmmRecallNotice,
+        updated_at: &str,
+    ) -> Result<VmmLeaseTransitionReport, String> {
+        if !self.session_memory_status.allows_runtime_memory()
+            || !self.stable_anchor_rendering_enabled
+        {
+            return Ok(VmmLeaseTransitionReport::default());
+        }
+        if target_message_id.trim().is_empty() {
+            return Err(String::from(
+                "VMM recall notice requires an exact canonical user-message id.",
+            ));
+        }
+        validate_mutation_timestamp(updated_at)?;
+        self.next_revision()?;
+        // previous_state restores the exact durable state if a capacity invariant rejects the notice.
+        // previous_state 在容量不变量拒绝通知时恢复精确的持久化状态。
+        let previous_state = self.clone();
+        self.ensure_owner(session_id, updated_at)?;
+        let mut report = VmmLeaseTransitionReport {
+            changed: true,
+            ..VmmLeaseTransitionReport::default()
+        };
+        // Pending state binds first so this message keeps the same anchor order as a recall batch.
+        // 先绑定待处理状态，使该消息的锚点顺序与召回批次保持一致。
+        let anchor_revision_before_pending = self.cache_epoch.anchor_revision;
+        if self.bind_pending_prompt_events(target_message_id, updated_at) {
+            report.appended_anchor_count +=
+                usize::from(self.cache_epoch.anchor_revision > anchor_revision_before_pending);
+        }
+        if self.bind_active_baseline_if_needed(target_message_id, updated_at) {
+            report.appended_anchor_count += 1;
+        }
+        let text = match notice.outcome {
+            VmmRecallNoticeOutcome::NoMatch => RecallNoticeText::NoMatch,
+            VmmRecallNoticeOutcome::Failed => RecallNoticeText::Failed,
+        };
+        let prefix = render_recall_notice_prefix(&notice.injection_tag, text, &notice.queries);
+        self.append_anchor(
+            target_message_id,
+            VmmPromptAnchorKind::RecallNotice,
+            prefix,
+            Vec::new(),
+            updated_at,
+        );
+        report.appended_anchor_count += 1;
+        self.mark_changed(updated_at)?;
         if let Err(error) = self.validate_capacity_limits() {
             *self = previous_state;
             return Err(error);
@@ -2124,7 +2303,81 @@ fn semantic_content_hash(memory_key: &str, item: &ContextItem) -> String {
 /// One immutable XML-like provider prefix.
 /// 返回一段不可变类 XML Provider 前缀。
 fn render_recall_anchor_prefix(batch: &VmmRecallBatch, items: &[ContextItem]) -> String {
-    render_grouped_memory_prefix(&batch.injection_tag, &batch.injection_description, items)
+    let description = batch.injection_description.trim();
+    if batch.queries.is_empty() {
+        return render_grouped_memory_prefix(&batch.injection_tag, description, items);
+    }
+    // The query line follows the configured description so a reader sees what was searched first.
+    // 检索词行紧随配置说明，使读者先看到检索了什么。
+    let queries = format!(
+        "Retrieved for this message with search queries {}.",
+        quoted_queries(&batch.queries)
+    );
+    let description = if description.is_empty() {
+        queries
+    } else {
+        format!("{description}\n{queries}")
+    };
+    render_grouped_memory_prefix(&batch.injection_tag, &description, items)
+}
+
+/// Statement rendered by one memory-free recall notice.
+/// 一条不含记忆正文的召回通知所渲染的声明。
+#[derive(Debug, Clone, Copy)]
+enum RecallNoticeText {
+    /// The search ran and found nothing relevant.
+    /// 检索已执行但未找到相关内容。
+    NoMatch,
+    /// Recall failed before any trustworthy answer existed.
+    /// 召回在得到可信结果前失败。
+    Failed,
+    /// Every match was already introduced earlier in this context.
+    /// 所有命中都已在本上下文更早处引入。
+    AlreadyInContext,
+}
+
+/// Renders one memory-free recall notice under the shared memory tag.
+/// 在共享记忆标签下渲染一条不含记忆正文的召回通知。
+///
+/// # Parameters
+/// 参数
+/// `tag` is the provider-visible memory grouping tag.
+/// `tag` 是 Provider 可见的记忆分组标签。
+/// `text` selects the statement; `queries` are the search queries actually run.
+/// `text` 选择声明内容；`queries` 是实际执行的检索词。
+///
+/// # Returns
+/// 返回值
+/// One frozen provider-visible block.
+/// 返回一段冻结的 Provider 可见文本块。
+fn render_recall_notice_prefix(tag: &str, text: RecallNoticeText, queries: &[String]) -> String {
+    let with_queries = if queries.is_empty() {
+        String::new()
+    } else {
+        format!(" with search queries {}", quoted_queries(queries))
+    };
+    let statement = match text {
+        RecallNoticeText::NoMatch => format!(
+            "Long-term memory was searched for this message{with_queries}; no relevant memory was found."
+        ),
+        RecallNoticeText::Failed => format!(
+            "Long-term memory retrieval for this message failed{with_queries}; this does not mean that no relevant memory exists."
+        ),
+        RecallNoticeText::AlreadyInContext => format!(
+            "Long-term memory was searched for this message{with_queries}; the relevant memories are already in context above."
+        ),
+    };
+    format!("<{tag}>\n{statement}\n</{tag}>")
+}
+
+/// Joins search queries as quoted single-line phrases.
+/// 将检索词拼接为带引号的单行短语。
+fn quoted_queries(queries: &[String]) -> String {
+    queries
+        .iter()
+        .map(|query| format!("\"{}\"", collapse_text(query)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Renders structured memory items under one exact XML-like tag and description.
@@ -2448,6 +2701,139 @@ mod tests {
         }
     }
 
+    /// Builds one PreCheck response carrying only the recall facts under test.
+    /// 构建只携带待测召回事实的 PreCheck 响应。
+    fn precheck_response(
+        recall_outcome: PreCheckRecallOutcome,
+        context_items: Vec<ContextItem>,
+    ) -> PreCheckResponse {
+        PreCheckResponse {
+            read_source: crate::VmmMemoryReadSource::new(
+                crate::VmmMemorySource::native(1).expect("owner"),
+                vec![1],
+            )
+            .expect("source"),
+            should_inject: !context_items.is_empty(),
+            context_items,
+            degraded: false,
+            trace_id: String::new(),
+            session_memory_status: SessionMemoryStatus::Active,
+            recall_outcome,
+            recall_queries: vec![String::from("deploy steps")],
+        }
+    }
+
+    /// Builds one effective configuration with implicit injection enabled.
+    /// 构建启用隐式注入的生效配置。
+    fn injecting_config() -> VmmEffectiveConfig {
+        VmmEffectiveConfig::resolve(
+            &crate::config::VmmConfigLayer {
+                grpc_target: Some(String::from("127.0.0.1:50051")),
+                user_id: Some(1),
+                project_id: Some(2),
+                implicit_memory_turns: Some(5),
+                ..crate::config::VmmConfigLayer::default()
+            },
+            None,
+            None,
+        )
+    }
+
+    /// Verifies only a searched recall without new memory produces a notice, and only when injection is on.
+    /// 验证只有已检索且无新记忆的召回才产生通知，且仅在启用注入时。
+    #[test]
+    fn recall_notice_is_derived_only_for_searched_recalls_without_memory() {
+        let config = injecting_config();
+        let notice = |outcome, items| {
+            VmmRecallNotice::from_precheck_response(&precheck_response(outcome, items), &config)
+                .map(|notice| notice.outcome)
+        };
+        assert_eq!(notice(PreCheckRecallOutcome::NotSearched, Vec::new()), None);
+        assert_eq!(
+            notice(PreCheckRecallOutcome::NoMatch, Vec::new()),
+            Some(VmmRecallNoticeOutcome::NoMatch)
+        );
+        assert_eq!(
+            notice(PreCheckRecallOutcome::Failed, Vec::new()),
+            Some(VmmRecallNoticeOutcome::Failed)
+        );
+        let matched = vec![memory_item(7, "memory body", 0.9)];
+        assert_eq!(
+            notice(PreCheckRecallOutcome::Matched, matched.clone()),
+            None
+        );
+        let batch = VmmRecallBatch::from_precheck_response(
+            &precheck_response(PreCheckRecallOutcome::Matched, matched),
+            &config,
+        )
+        .expect("matched recall batch");
+        assert_eq!(batch.queries, vec![String::from("deploy steps")]);
+
+        let mut silent = config.clone();
+        silent.implicit_memory_turns = 0;
+        assert!(
+            VmmRecallNotice::from_precheck_response(
+                &precheck_response(PreCheckRecallOutcome::NoMatch, Vec::new()),
+                &silent,
+            )
+            .is_none()
+        );
+        assert!(VmmRecallNotice::request_failed(&silent).is_none());
+    }
+
+    /// Verifies a notice anchors to its message without leases and keeps the state valid.
+    /// 验证通知锚定到其消息、不产生租约，且状态保持有效。
+    #[test]
+    fn recall_notice_anchors_queries_without_memory_leases() {
+        let mut state =
+            VmmSessionMemoryState::new("session-a", "1").expect("valid owned VMM session state");
+        let notice = VmmRecallNotice {
+            injection_tag: String::from("VMM_MEMORY"),
+            outcome: VmmRecallNoticeOutcome::Failed,
+            queries: vec![String::from("deploy steps")],
+        };
+        let report = state
+            .apply_recall_notice("session-a", "user-1", &notice, "2")
+            .expect("apply recall notice");
+
+        assert_eq!(report.appended_anchor_count, 1);
+        assert!(state.active_leases.is_empty());
+        let anchor = state.cache_epoch.anchors.last().expect("notice anchor");
+        assert_eq!(anchor.kind, VmmPromptAnchorKind::RecallNotice);
+        assert_eq!(anchor.target_message_id, "user-1");
+        assert!(anchor.memory_keys.is_empty());
+        assert!(anchor.prefix.starts_with("<VMM_MEMORY>"));
+        assert!(anchor.prefix.contains("\"deploy steps\""));
+        state
+            .validate("session-a")
+            .expect("notice keeps the state valid");
+    }
+
+    /// Verifies recalled memories disclose their queries, and an all-resident repeat discloses them alone.
+    /// 验证召回记忆附带其检索词，全部已驻留的重复召回只单独告知检索词。
+    #[test]
+    fn recall_batch_discloses_queries_once_memories_are_resident() {
+        let mut state =
+            VmmSessionMemoryState::new("session-a", "1").expect("valid owned VMM session state");
+        let mut batch = recall_batch(3, vec![memory_item(7, "memory body", 0.9)]);
+        batch.queries = vec![String::from("deploy steps")];
+        state
+            .apply_recall_batch("session-a", "user-1", &batch, "2")
+            .expect("first recall");
+        let memory = state.cache_epoch.anchors.last().expect("memory anchor");
+        assert_eq!(memory.kind, VmmPromptAnchorKind::Memory);
+        assert!(memory.prefix.contains("\"deploy steps\""));
+
+        state
+            .apply_recall_batch("session-a", "user-2", &batch, "3")
+            .expect("resident recall");
+        let notice = state.cache_epoch.anchors.last().expect("notice anchor");
+        assert_eq!(notice.kind, VmmPromptAnchorKind::RecallNotice);
+        assert_eq!(notice.target_message_id, "user-2");
+        assert!(!notice.prefix.contains("memory body"));
+        state.validate("session-a").expect("state stays valid");
+    }
+
     /// Builds one deterministic typed recall batch for state-machine tests.
     /// 为状态机测试构建一批确定性的类型化召回结果。
     fn recall_batch(ttl_turns: u32, items: Vec<ContextItem>) -> VmmRecallBatch {
@@ -2455,6 +2841,7 @@ mod tests {
             ttl_turns,
             injection_tag: String::from("VMM_MEMORY"),
             injection_description: String::from("Relevant memories."),
+            queries: Vec::new(),
             items,
         }
     }

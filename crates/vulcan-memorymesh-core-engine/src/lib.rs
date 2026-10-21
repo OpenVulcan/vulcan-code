@@ -18,5 +18,5 @@ pub use algorithms::{decayed_score, deduplicate_by_content, mmr_select, normaliz
 pub use engine::{CommandEngine, estimate_text_tokens};
 pub use retrieval_kernel::{
     ContextScore, context_score, hard_duplicate_similarity, normalized_rank_score,
-    passes_threshold, rrf_fusion, weibull_multiplier,
+    passes_threshold, review_score, rrf_fusion, weibull_multiplier,
 };

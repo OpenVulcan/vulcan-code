@@ -416,6 +416,7 @@ fn regular_execution_report_ignores_stale_vmm_owner_without_active_hook() {
                 ttl_turns: 1,
                 injection_tag: String::from("VMM_MEMORY"),
                 injection_description: String::from("Relevant memories."),
+                queries: Vec::new(),
                 items: vec![vulcan_vmm::ContextItem {
                     text: String::from("terminal ownership memory"),
                     memory_id: 901,

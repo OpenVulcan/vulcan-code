@@ -4,11 +4,14 @@
 use super::*;
 use vulcan_agent_runtime::agent_runtime::conversation_hooks::{
     ConversationPrecheckOutcome, HOOK_METADATA_VMM_RECALL_BATCH_EFFECT,
-    HOOK_METADATA_VMM_SESSION_STATUS_EFFECT, VmmSessionStatusHookEffect,
-    vmm_recall_batch_effect_from_report, vmm_session_status_effect_from_report,
+    HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT, HOOK_METADATA_VMM_SESSION_STATUS_EFFECT,
+    VmmSessionStatusHookEffect, vmm_recall_batch_effect_from_report,
+    vmm_session_status_effect_from_report,
 };
 use vulcan_memorymesh_core::{InMemoryStorage, StorageSessionStatus};
-use vulcan_vmm::{SessionMemoryStatus, VmmSessionMemoryState};
+use vulcan_vmm::{
+    SessionMemoryStatus, VmmRecallNotice, VmmRecallNoticeOutcome, VmmSessionMemoryState,
+};
 
 /// Holds the native mutation barrier until the host finishes publishing its exact session command.
 /// 持有原生变更屏障，直至宿主完成发布准确会话命令。
@@ -364,17 +367,39 @@ pub(super) fn reconcile_recall(
                 .map_err(|error| error.to_string())?,
             ],
         );
-        if let Some(effect) = recall.filter(|effect| !effect.batch.items.is_empty()) {
-            report.metadata.insert(
-                HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_owned(),
-                vec![serde_json::to_value(effect).map_err(|error| error.to_string())?],
-            );
-        } else {
-            // A paused or now-empty recall must not trigger the shared runtime's recall admission at all.
-            // 暂停或已为空的召回不能触发共享运行时的召回准入。
-            report
-                .metadata
-                .remove(HOOK_METADATA_VMM_RECALL_BATCH_EFFECT);
+        match recall {
+            Some(effect) if !effect.batch.items.is_empty() => {
+                report.metadata.insert(
+                    HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_owned(),
+                    vec![serde_json::to_value(effect).map_err(|error| error.to_string())?],
+                );
+            }
+            emptied => {
+                // A paused or now-empty recall must not trigger the shared runtime's recall admission at all.
+                // 暂停或已为空的召回不能触发共享运行时的召回准入。
+                report
+                    .metadata
+                    .remove(HOOK_METADATA_VMM_RECALL_BATCH_EFFECT);
+                if !status.allows_runtime_memory() {
+                    // Paused memory discloses nothing, exactly as a paused PreCheck would.
+                    // 暂停的记忆不披露任何内容，与暂停时的 PreCheck 完全一致。
+                    report
+                        .metadata
+                        .remove(HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT);
+                } else if let Some(effect) = emptied {
+                    // The search still ran; every hit it found has since become invisible.
+                    // 检索确已执行；其找到的命中此后均已不可见。
+                    let notice = VmmRecallNotice {
+                        injection_tag: effect.batch.injection_tag,
+                        outcome: VmmRecallNoticeOutcome::NoMatch,
+                        queries: effect.batch.queries,
+                    };
+                    report.metadata.insert(
+                        HOOK_METADATA_VMM_RECALL_NOTICE_EFFECT.to_owned(),
+                        vec![serde_json::to_value(notice).map_err(|error| error.to_string())?],
+                    );
+                }
+            }
         }
     }
     Ok(())

@@ -340,6 +340,21 @@ pub fn normalized_rank_score(rank: usize, total: usize) -> f64 {
     (1.0 - (rank.saturating_sub(1) as f64 / (total.saturating_mul(2) as f64))).clamp(0.0, 1.0)
 }
 
+/// Projects one ranked hit onto VMM's reviewer-facing score, the scale its recall thresholds use.
+/// 将一条已排名命中投影为 VMM 面向审核的评分，即其召回阈值所用的尺度。
+/// Rerank scores are model-specific, so a reranked hit is floored by its normalized rank;
+/// other scores are only clamped to `[0, 1]`.
+/// 重排分由模型自定义尺度，因此已重排命中以其归一化名次分为下限；其他评分仅截断到 `[0, 1]`。
+#[must_use]
+pub fn review_score(final_score: f64, reranked: bool, rank: usize, total: usize) -> f64 {
+    let score = final_score.clamp(0.0, 1.0);
+    if reranked {
+        score.max(normalized_rank_score(rank, total))
+    } else {
+        score
+    }
+}
+
 /// Applies the authoritative Weibull survival decay to one memory.
 /// 对一条记忆应用权威 Weibull 生存衰减。
 #[must_use]

@@ -3,6 +3,19 @@
 
 use super::*;
 
+/// Hit count per query when the model does not choose one.
+/// 模型未指定时每条查询的命中数量。
+const VMM_MEMORY_SEARCH_DEFAULT_TOP_K: u32 = 5;
+/// Largest hit count per query the model may request.
+/// 模型可请求的每条查询最大命中数量。
+const VMM_MEMORY_SEARCH_MAX_TOP_K: u32 = 20;
+/// Lowest relevance threshold the model may request; weaker hits carry no useful reference value.
+/// 模型可请求的最低相关度阈值；更弱的命中不具参考价值。
+const VMM_MEMORY_SEARCH_MIN_SCORE_FLOOR: f64 = 0.5;
+/// Highest relevance threshold on the reviewer-facing unit scale.
+/// 面向审核单位尺度上的最高相关度阈值。
+const VMM_MEMORY_SEARCH_MIN_SCORE_CEILING: f64 = 1.0;
+
 /// Builds the VMM memory-search native tool.
 /// 构建 VMM 记忆检索原生工具。
 pub(crate) fn build_vmm_memory_search_tool(
@@ -12,7 +25,7 @@ pub(crate) fn build_vmm_memory_search_tool(
         id: String::from("vmm_memory_search"),
         name: String::from("vmm_memory_search"),
         description: String::from(
-            "Search durable VulcanMemoryMesh memories for the current session's configured user and project. Use this when recalled context is insufficient and you need targeted memory lookup.",
+            "Search durable VulcanMemoryMesh memories for the current session's configured user and project. Use this when recalled context is insufficient and you need targeted memory lookup. Hits below the relevance threshold are omitted and counted; lower `min_score` to widen the search when nothing relevant is returned.",
         ),
         help_text: None,
         ai_visible: true,
@@ -118,6 +131,9 @@ struct VmmMemorySearchToolArgs {
     /// Optional maximum hits per query.
     /// 每条查询可选的最大命中数量。
     top_k: Option<u32>,
+    /// Optional relevance threshold; omitted means the service's PreCheck recall threshold.
+    /// 可选相关度阈值；省略时使用服务的 PreCheck 召回阈值。
+    min_score: Option<f64>,
 }
 
 /// One typed argument payload accepted by `vmm_turn_details`.
@@ -196,8 +212,18 @@ fn vmm_memory_search_args_schema() -> Value {
             "top_k": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 20,
-                "description": "Optional maximum hit count per query. Default: 5."
+                "maximum": VMM_MEMORY_SEARCH_MAX_TOP_K,
+                "description": format!(
+                    "Optional maximum hit count per query. Default: {VMM_MEMORY_SEARCH_DEFAULT_TOP_K}."
+                )
+            },
+            "min_score": {
+                "type": "number",
+                "minimum": VMM_MEMORY_SEARCH_MIN_SCORE_FLOOR,
+                "maximum": VMM_MEMORY_SEARCH_MIN_SCORE_CEILING,
+                "description": format!(
+                    "Optional relevance threshold from {VMM_MEMORY_SEARCH_MIN_SCORE_FLOOR:.1} to {VMM_MEMORY_SEARCH_MIN_SCORE_CEILING:.1}; hits scoring below it are omitted. When omitted, the memory service's PreCheck recall threshold applies (0.75 by default). Lower it only to widen a search that found nothing relevant; hits below {VMM_MEMORY_SEARCH_MIN_SCORE_FLOOR:.1} carry no useful reference value."
+                )
             }
         },
         "required": ["queries"],
@@ -351,7 +377,20 @@ fn parse_vmm_memory_search_arguments(
             "The `queries` argument for vmm_memory_search cannot be empty.",
         ));
     }
-    parsed.top_k = Some(parsed.top_k.unwrap_or(5).clamp(1, 20));
+    parsed.top_k = Some(
+        parsed
+            .top_k
+            .unwrap_or(VMM_MEMORY_SEARCH_DEFAULT_TOP_K)
+            .clamp(1, VMM_MEMORY_SEARCH_MAX_TOP_K),
+    );
+    if let Some(min_score) = parsed.min_score
+        && !(VMM_MEMORY_SEARCH_MIN_SCORE_FLOOR..=VMM_MEMORY_SEARCH_MIN_SCORE_CEILING)
+            .contains(&min_score)
+    {
+        return Err(NativeToolError::new(format!(
+            "The `min_score` argument for vmm_memory_search must be between {VMM_MEMORY_SEARCH_MIN_SCORE_FLOOR:.1} and {VMM_MEMORY_SEARCH_MIN_SCORE_CEILING:.1}, got {min_score}."
+        )));
+    }
     Ok(parsed)
 }
 
@@ -550,7 +589,8 @@ async fn execute_vmm_memory_search_tool(
             project_id: config.project_id.unwrap_or_default(),
             host_project_id: request.host_project_id.clone().unwrap_or_default(),
             queries: parsed_args.queries,
-            top_k: parsed_args.top_k.unwrap_or(5),
+            top_k: parsed_args.top_k.unwrap_or(VMM_MEMORY_SEARCH_DEFAULT_TOP_K),
+            min_score: parsed_args.min_score,
         })
         .await
         .map_err(|error| NativeToolError::new(error.to_string()))?;
@@ -672,6 +712,45 @@ fn vmm_memory_delete_native_error(error: vulcan_vmm::VmmClientError) -> NativeTo
     } else {
         NativeToolError::new(error.to_string())
     }
+}
+
+/// Verifies the search threshold is optional and rejected, never clamped, outside the tool range.
+/// 验证检索阈值可省略，且超出工具范围时被拒绝而不是被钳制。
+#[cfg(test)]
+#[test]
+fn vmm_memory_search_min_score_is_bounded_by_the_tool_range() {
+    let parse = |min_score: Value| {
+        parse_vmm_memory_search_arguments(serde_json::json!({
+            "queries": ["deploy steps"],
+            "min_score": min_score,
+        }))
+    };
+    let omitted = parse_vmm_memory_search_arguments(serde_json::json!({"queries": ["q"]}))
+        .expect("threshold may be omitted");
+    assert_eq!(omitted.min_score, None);
+    assert_eq!(omitted.top_k, Some(VMM_MEMORY_SEARCH_DEFAULT_TOP_K));
+    for accepted in [
+        VMM_MEMORY_SEARCH_MIN_SCORE_FLOOR,
+        VMM_MEMORY_SEARCH_MIN_SCORE_CEILING,
+    ] {
+        assert_eq!(
+            parse(serde_json::json!(accepted))
+                .expect("bounds are inclusive")
+                .min_score,
+            Some(accepted)
+        );
+    }
+    for rejected in [
+        VMM_MEMORY_SEARCH_MIN_SCORE_FLOOR - 0.01,
+        VMM_MEMORY_SEARCH_MIN_SCORE_CEILING + 0.01,
+    ] {
+        assert!(parse(serde_json::json!(rejected)).is_err(), "{rejected}");
+    }
+    let schema = vmm_memory_search_args_schema();
+    assert_eq!(
+        schema["properties"]["min_score"]["minimum"],
+        serde_json::json!(VMM_MEMORY_SEARCH_MIN_SCORE_FLOOR)
+    );
 }
 
 /// Verifies memory tool arguments reject undeclared fields, including inside write items.

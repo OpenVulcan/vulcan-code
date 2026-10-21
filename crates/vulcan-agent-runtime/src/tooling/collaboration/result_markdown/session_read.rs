@@ -141,6 +141,22 @@ pub(super) fn project(output: Value) -> Result<VulcanToolInvocationResult, Strin
                     section.push_str(&format!("\n\n{}", fenced_code(detail)));
                 }
             }
+            // Recalled memory bodies stay out; the outcome and queries say what the turn was given.
+            // 召回的记忆正文不输出；结果与检索词说明该回合获得了什么。
+            EventBody::MemoryRecall(recall) => {
+                section.push_str(&format!(
+                    "Memory recall: {}; {} memories",
+                    state_name(&recall.outcome),
+                    recall.memories.len()
+                ));
+                for query in &recall.queries {
+                    section.push_str(&format!(
+                        "
+Query: {}",
+                        inline_code(query)
+                    ));
+                }
+            }
             EventBody::ExecutionControl(control) => section.push_str(&format!(
                 "Execution control: {}",
                 state_name(&control.control_kind)

@@ -21,10 +21,10 @@ use vulcan_memorymesh_core::{
     MemorySourceKind, MemoryStability, MemoryState, MemoryWriteBatchCommand, MemoryWriteBatchItem,
     MemoryWriteCommand, Mutation, MutationBatch, MutationIdentity, MutationOutcome,
     MutationSourceKind, OperationId, PostActionAnalyzePendingTurnCommand, PostActionIntakeCommand,
-    PostActionReferenceTurn, PreCheckCommand, ProfileCandidate, ProfileInstructionCommand,
-    ProfileLevel, ProfileNode, ProfileNodeId, ProfileNodeState, ProfileQueryCommand,
-    ProfileSourceKind, ProfileView, ProfileViewMode, ProfileViewSection, RecallMode,
-    RetentionColdTurnCandidateFact, RetentionColdTurnJobFact, RetentionCommand,
+    PostActionReferenceTurn, PreCheckCommand, PreCheckRecallOutcome, ProfileCandidate,
+    ProfileInstructionCommand, ProfileLevel, ProfileNode, ProfileNodeId, ProfileNodeState,
+    ProfileQueryCommand, ProfileSourceKind, ProfileView, ProfileViewMode, ProfileViewSection,
+    RecallMode, RetentionColdTurnCandidateFact, RetentionColdTurnJobFact, RetentionCommand,
     RetentionIdleSessionFact, RetentionMemoryFact, RetentionPlanSet, RetentionPolicy,
     RetentionReasonCode, RetentionScanFacts, RetentionTrashBatchFact, RetentionVectorGcJobFact,
     Role, ScopeAccess, ScopeId, SectionRole, SessionRecallMode, SessionSourceId, StoragePort,
@@ -2564,6 +2564,7 @@ fn public_facade_runs_the_complete_function_set() {
     assert!(precheck.should_inject);
     assert!(precheck.context_text.contains("Rust"));
     assert_eq!(precheck.queries, vec!["What do I prefer for systems work?"]);
+    assert_eq!(precheck.recall_outcome, PreCheckRecallOutcome::Matched);
     assert_eq!(
         precheck
             .reinforcement
@@ -4254,6 +4255,11 @@ fn precheck_review_failure_returns_empty_degraded_context() {
     assert!(
         !precheck.candidates.is_empty(),
         "review failure must retain non-adopted candidates for audit"
+    );
+    assert_eq!(
+        precheck.recall_outcome,
+        PreCheckRecallOutcome::Failed,
+        "a failed review must not read as a search that found nothing"
     );
     assert_eq!(precheck.queries, vec!["What do I prefer for systems work?"]);
     assert_eq!(

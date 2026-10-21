@@ -96,6 +96,7 @@ async fn search(
             host_project_id: host.to_owned(),
             queries: vec![precheck_policy::QUERIES[0].to_owned()],
             top_k,
+            min_score: None,
         })
         .await
         .expect("actual decay search");
