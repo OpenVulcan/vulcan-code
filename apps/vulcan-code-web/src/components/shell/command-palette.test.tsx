@@ -3,7 +3,7 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { CommandPalette } from "./command-palette";
+import { CommandPalette, recentPaletteConversations, type PaletteConversation } from "./command-palette";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -22,16 +22,17 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 
 // Harness owns the palette's open state the way the workbench does, behind a button that opens it.
 // Harness 以工作台的方式持有面板的打开状态，并提供打开它的按钮。
-function Harness() {
+function Harness(props: { conversations?: PaletteConversation[]; openConversationId?: string | null }) {
   const [open, setOpen] = React.useState(false);
   return (
     <I18nProvider initialLocale="en-US">
       <button onClick={() => setOpen(true)} type="button">open</button>
       <CommandPalette
         areas={[]}
-        conversations={[]}
+        conversations={props.conversations ?? []}
         onOpenChange={setOpen}
         onOpenConversation={() => {}}
+        openConversationId={props.openConversationId ?? null}
         onOpenSessions={() => {}}
         onOpenSettingsPage={() => {}}
         open={open}
@@ -66,4 +67,32 @@ it("opens the keyboard shortcut list from the palette and returns focus to the o
   await act(async () => dialog!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(document.activeElement).toBe(opener);
+});
+
+// session builds one palette session with the given last activity.
+// session 构建一个具有指定最后活动时间的面板会话。
+function session(id: string, updatedAtMs: number): PaletteConversation {
+  return { id, title: `Session ${id}`, projectName: null, updatedAtMs };
+}
+
+it("leads with the most recently active other sessions until something is typed", async () => {
+  const conversations = [session("a", 10), session("b", 30), session("open", 40), session("c", 20), session("unknown", 0)];
+  await act(async () => root.render(<Harness conversations={conversations} openConversationId="open" />));
+  await act(async () => host.querySelector("button")!.click());
+  const values = () => [...document.querySelectorAll<HTMLElement>("[cmdk-item]")].map((item) => item.dataset.value);
+  expect(values().slice(0, 3)).toEqual(["recent:b", "recent:c", "recent:a"]);
+  expect(values()).not.toContain("recent:open");
+  expect(values()).not.toContain("recent:unknown");
+  const input = document.querySelector<HTMLInputElement>("[cmdk-input]")!;
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => { setValue.call(input, "Session"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+  expect(values().some((value) => value?.startsWith("recent:"))).toBe(false);
+  expect(values()).toContain("conversation:open");
+});
+
+it("keeps at most a few recent sessions", () => {
+  const many = Array.from({ length: 20 }, (_, index) => session(String(index), index + 1));
+  const recent = recentPaletteConversations(many, null);
+  expect(recent.length).toBeLessThan(many.length);
+  expect(recent[0].id).toBe("19");
 });

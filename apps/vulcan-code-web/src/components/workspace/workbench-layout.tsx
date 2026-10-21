@@ -900,6 +900,7 @@ export function WorkbenchLayout(props: {
       id: conversation.id,
       title: conversation.title,
       projectName: conversation.projectId ? projectNames.get(conversation.projectId) ?? null : null,
+      updatedAtMs: Number.parseInt(conversation.lastUpdatedAt ?? "", 10) || 0,
     }));
   }, [workbenchState.conversations, workbenchState.projects]);
   // commandPalette is mounted with the workbench itself, not with the rail: narrow windows show the rail only in
@@ -910,6 +911,7 @@ export function WorkbenchLayout(props: {
       areas={railEntries}
       conversations={paletteConversations}
       onOpenConversation={handleSelectConversation}
+      openConversationId={selectedConversationId}
       onNewConversation={activeProject ? () => handleCreateConversationForProject(activeProject) : undefined}
       onOpenChange={setCommandPaletteOpen}
       onOpenSessions={handleOpenWorkspaceChat}

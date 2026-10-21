@@ -813,6 +813,7 @@
   "palette.shortcuts.close": "關閉對話框或選單",
   "palette.actions": "操作",
   "palette.conversations": "對話",
+  "palette.recent": "最近對話",
   "palette.slash": "斜線命令",
   "palette.go": "前往",
   "palette.settings": "設定",

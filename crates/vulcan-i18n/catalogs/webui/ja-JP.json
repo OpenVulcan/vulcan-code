@@ -813,6 +813,7 @@
   "palette.shortcuts.close": "ダイアログやメニューを閉じる",
   "palette.actions": "操作",
   "palette.conversations": "会話",
+  "palette.recent": "最近の会話",
   "palette.slash": "スラッシュコマンド",
   "palette.go": "移動",
   "palette.settings": "設定",

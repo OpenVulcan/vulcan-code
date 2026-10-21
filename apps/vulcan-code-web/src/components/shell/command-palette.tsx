@@ -20,13 +20,39 @@ const THEME_LABEL: Record<AppearanceTheme, TranslationKey> = {
   command: "appChrome.theme.command",
 };
 
+// PALETTE_RECENT_LIMIT bounds the recently active sessions listed before anything is typed.
+// PALETTE_RECENT_LIMIT 限制输入内容前列出的最近活动会话数量。
+const PALETTE_RECENT_LIMIT = 5;
+
+// PaletteConversation is one session the palette can open.
+// PaletteConversation 是命令面板可打开的一个会话。
+export interface PaletteConversation {
+  id: string;
+  title: string;
+  projectName: string | null;
+  // updatedAtMs is the session's last activity, or 0 when unknown.
+  // updatedAtMs 是会话最后活动时间，未知时为 0。
+  updatedAtMs: number;
+}
+
+// recentPaletteConversations picks the most recently active sessions other than the open one.
+// recentPaletteConversations 选出除当前打开会话外最近活动的会话。
+export function recentPaletteConversations(conversations: readonly PaletteConversation[], openConversationId: string | null): PaletteConversation[] {
+  return conversations
+    .filter((conversation) => conversation.id !== openConversationId && conversation.updatedAtMs > 0)
+    .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+    .slice(0, PALETTE_RECENT_LIMIT);
+}
+
 // CommandPalette is one searchable list of everything the workbench can do from anywhere: start a session,
-// switch the model or theme, run a slash command in the composer, go to any area or settings page, and, once
-// something is typed, open a session by its title or project.
+// switch the model or theme, run a slash command in the composer, go to any area or settings page, and open a
+// session: the few most recently active ones lead the list before anything is typed, so Ctrl+K then Enter
+// returns to the last other session, and once something is typed any session matches by title or project.
 // Ctrl+K (Cmd+K) toggles it, Ctrl+M (Cmd+M) opens the composer's model picker directly and Ctrl+Shift+O
 // (Cmd+Shift+O) starts a new session in the current project.
 // CommandPalette 是可在任何位置使用的工作台全部操作的可搜索列表：新建会话、切换模型或主题、在输入区运行 slash 指令，
-// 前往任意区域或设置页，并在输入内容后按标题或项目打开会话。Ctrl+K（Cmd+K）切换其显示，Ctrl+M（Cmd+M）直接打开输入区的模型选择器，
+// 前往任意区域或设置页，以及打开会话：输入内容前列表以最近活动的少数会话开头，使 Ctrl+K 后按 Enter 即回到上一个其他会话；
+// 输入内容后可按标题或项目匹配任意会话。Ctrl+K（Cmd+K）切换其显示，Ctrl+M（Cmd+M）直接打开输入区的模型选择器，
 // Ctrl+Shift+O（Cmd+Shift+O）在当前项目中新建会话。
 export function CommandPalette(props: {
   open: boolean;
@@ -44,7 +70,10 @@ export function CommandPalette(props: {
   onNewConversation?: () => void;
   // Sessions that can be opened, each with the name of its project when it has one.
   // 可打开的会话，有所属项目时附带项目名称。
-  conversations: readonly { id: string; title: string; projectName: string | null }[];
+  conversations: readonly PaletteConversation[];
+  // The open session, left out of the recent ones.
+  // 当前打开的会话，不计入最近会话。
+  openConversationId: string | null;
   onOpenConversation: (conversationId: string) => void;
 }) {
   const { t } = useI18n();
@@ -89,6 +118,19 @@ export function CommandPalette(props: {
     window.requestAnimationFrame(action);
   };
   const nextTheme = APPEARANCE_THEMES[(APPEARANCE_THEMES.indexOf(theme) + 1) % APPEARANCE_THEMES.length];
+  const recent = query.trim() ? [] : recentPaletteConversations(props.conversations, props.openConversationId);
+  const conversationItem = (conversation: PaletteConversation, group: string) => (
+    <CommandItem
+      key={conversation.id}
+      keywords={[conversation.title, conversation.projectName ?? ""]}
+      onSelect={run(() => props.onOpenConversation(conversation.id))}
+      value={`${group}:${conversation.id}`}
+    >
+      <MessageSquare />
+      <span className="vk-palette-title">{conversation.title}</span>
+      {conversation.projectName ? <span className="vk-palette-project">{conversation.projectName}</span> : null}
+    </CommandItem>
+  );
   return (
     <>
     <CommandDialog className="vk-palette" description={t("palette.placeholder")} onOpenChange={onOpenChange} open={props.open} title={t("palette.title")}>
@@ -96,6 +138,9 @@ export function CommandPalette(props: {
         <CommandInput autoFocus onValueChange={setQuery} placeholder={t("palette.placeholder")} value={query} />
         <CommandList label={t("palette.title")}>
           <CommandEmpty>{t("palette.empty")}</CommandEmpty>
+          {recent.length ? (
+            <CommandGroup heading={t("palette.recent")}>{recent.map((conversation) => conversationItem(conversation, "recent"))}</CommandGroup>
+          ) : null}
           <CommandGroup heading={t("palette.actions")}>
             {props.onNewConversation ? (
               <CommandItem onSelect={run(props.onNewConversation)} value="new-conversation" keywords={[t("palette.newConversation")]}>
@@ -141,18 +186,7 @@ export function CommandPalette(props: {
           ) : null}
           {query.trim() && props.conversations.length ? (
             <CommandGroup heading={t("palette.conversations")}>
-              {props.conversations.map((conversation) => (
-                <CommandItem
-                  key={conversation.id}
-                  keywords={[conversation.title, conversation.projectName ?? ""]}
-                  onSelect={run(() => props.onOpenConversation(conversation.id))}
-                  value={`conversation:${conversation.id}`}
-                >
-                  <MessageSquare />
-                  <span className="vk-palette-title">{conversation.title}</span>
-                  {conversation.projectName ? <span className="vk-palette-project">{conversation.projectName}</span> : null}
-                </CommandItem>
-              ))}
+              {props.conversations.map((conversation) => conversationItem(conversation, "conversation"))}
             </CommandGroup>
           ) : null}
           <CommandGroup heading={t("palette.go")}>

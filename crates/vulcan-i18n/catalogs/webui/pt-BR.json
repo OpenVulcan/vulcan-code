@@ -813,6 +813,7 @@
   "palette.shortcuts.close": "Fechar uma caixa de diálogo ou menu",
   "palette.actions": "Ações",
   "palette.conversations": "Conversas",
+  "palette.recent": "Conversas recentes",
   "palette.slash": "Comandos de barra",
   "palette.go": "Ir para",
   "palette.settings": "Configurações",
