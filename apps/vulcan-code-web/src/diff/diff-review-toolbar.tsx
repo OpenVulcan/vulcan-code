@@ -18,6 +18,7 @@ import {
 } from "@/ui-kit/primitives/dropdown-menu";
 import "@/ui-kit/styles/features/diff-toolbar.css";
 import { useI18n } from "@/i18n";
+import { formatCompactRelativeTime, formatLocalDateTime } from "@/components/project/project-sidebar-time";
 import type { TranslationKey } from "@/i18n-messages";
 
 import type {
@@ -419,7 +420,8 @@ function DiffModeMenu(props: {
   // 可选选择变更处理器。
   onSelectionChange?: (selection: DiffReviewSelection) => void;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
+  const nowMs = Date.now();
   const selectMode = (mode: DiffReviewMode) => props.onSelectionChange?.({ ...props.selection, mode });
   const selectedCommitHash = props.selection.commitHash ?? props.commits[0]?.hash ?? null;
   const mark = (mode: DiffReviewMode) => props.selection.mode === mode ? <Check className="vk-diffbar-check" size={13} /> : null;
@@ -454,7 +456,9 @@ function DiffModeMenu(props: {
               >
                 <GitCommitHorizontal size={13} />
                 <span className="vk-diffbar-menu-main">{commit.subject}</span>
-                <small>{commit.relativeTime}</small>
+                {Number.isFinite(commit.committedAtMs) ? (
+                  <small title={formatLocalDateTime(commit.committedAtMs, locale)}>{formatCompactRelativeTime(nowMs - commit.committedAtMs, locale)}</small>
+                ) : null}
                 {selectedCommitHash === commit.hash ? <Check className="vk-diffbar-check" size={13} /> : null}
               </DropdownMenuItem>
             )) : (

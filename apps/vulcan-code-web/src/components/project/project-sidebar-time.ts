@@ -20,13 +20,18 @@ export function formatConversationRelativeTime(
 export function formatConversationUpdatedAt(conversation: ConversationSummary, locale: LocaleCode): string | null {
   const updatedAtMs = Number.parseInt(conversation.lastUpdatedAt ?? "", 10);
   if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) return null;
-  const time = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(updatedAtMs);
-  return formatMessage(readLocaleMessage(locale, "projectSidebar.time.updatedAt"), { time });
+  return formatMessage(readLocaleMessage(locale, "projectSidebar.time.updatedAt"), { time: formatLocalDateTime(updatedAtMs, locale) });
 }
 
-// formatCompactRelativeTime converts one elapsed duration into the compact tree label.
-// formatCompactRelativeTime 将经过时长转换为紧凑树标签。
-function formatCompactRelativeTime(elapsedMs: number, locale: LocaleCode): string {
+// formatLocalDateTime names one instant as a full local date and time in the active language.
+// formatLocalDateTime 以当前语言将一个时刻写成完整的本地日期与时间。
+export function formatLocalDateTime(timestampMs: number, locale: LocaleCode): string {
+  return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(timestampMs);
+}
+
+// formatCompactRelativeTime converts one elapsed duration into the compact age label sidebars and lists share.
+// formatCompactRelativeTime 将经过时长转换为侧栏与列表共用的紧凑时长标签。
+export function formatCompactRelativeTime(elapsedMs: number, locale: LocaleCode): string {
   const safeElapsedMs = Math.max(0, elapsedMs);
   const minuteMs = 60_000;
   const hourMs = 60 * minuteMs;

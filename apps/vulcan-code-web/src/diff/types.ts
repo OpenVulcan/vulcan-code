@@ -77,9 +77,9 @@ export interface DiffCommitSummary {
   // Commit subject line.
   // 提交标题行。
   subject: string;
-  // Human-readable relative commit time.
-  // 人类可读的相对提交时间。
-  relativeTime: string;
+  // Commit time in Unix milliseconds; the WebUI names it in the active language.
+  // Unix 毫秒提交时间；WebUI 以当前语言显示。
+  committedAtMs: number;
 }
 
 // DiffReviewSelection stores the current Git diff source selection.

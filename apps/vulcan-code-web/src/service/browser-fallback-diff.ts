@@ -183,8 +183,8 @@ export async function loadBrowserFallbackWorkspaceDiffSnapshot(
       { name: "feature/large-review", current: false, remote: false },
     ],
     recentCommits: [
-      { hash: "f00dbabe", shortHash: "f00dbab", subject: "Preview high-performance WebUI diff rendering", relativeTime: "now" },
-      { hash: "c0ffee42", shortHash: "c0ffee4", subject: "Complete summary/detail review data", relativeTime: "1 hour" },
+      { hash: "f00dbabe", shortHash: "f00dbab", subject: "Preview high-performance WebUI diff rendering", committedAtMs: Date.now() },
+      { hash: "c0ffee42", shortHash: "c0ffee4", subject: "Complete summary/detail review data", committedAtMs: Date.now() - 3_600_000 },
     ],
   };
 }

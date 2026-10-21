@@ -604,9 +604,9 @@ pub(crate) struct WebuiGitCommitSummary {
     /// Commit subject.
     /// 提交标题。
     pub(crate) subject: String,
-    /// Relative commit time.
-    /// 相对提交时间。
-    pub(crate) relative_time: String,
+    /// Committer time in Unix milliseconds; clients name it in their own language.
+    /// Unix 毫秒提交者时间；客户端以各自语言显示。
+    pub(crate) committed_at_ms: i64,
 }
 
 /// Compact identity for one Git commit used by action completion notices.

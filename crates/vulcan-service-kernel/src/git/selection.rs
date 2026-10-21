@@ -146,7 +146,7 @@ mod tests {
                 hash: String::from("abc123"),
                 short_hash: String::from("abc123"),
                 subject: String::from("Initial commit"),
-                relative_time: String::from("1 minute ago"),
+                committed_at_ms: 0,
             }],
         );
 
@@ -168,7 +168,7 @@ mod tests {
             hash: String::from("unpushed123"),
             short_hash: String::from("unpushed"),
             subject: String::from("Unpushed commit"),
-            relative_time: String::from("now"),
+            committed_at_ms: 0,
         };
         // Resolve a request carrying a hash that is absent from the unpushed source list.
         // 解析一个携带未出现在未推送来源列表中的哈希请求。

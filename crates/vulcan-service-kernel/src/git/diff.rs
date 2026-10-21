@@ -692,7 +692,7 @@ pub(crate) fn load_webui_unpushed_commits(
     };
     // Keep formatting arguments before revisions and intentionally omit a count limit so all unpushed commits are returned.
     // 将格式参数放在修订范围之前，并刻意不限制数量，从而返回全部未推送提交。
-    let mut args = vec!["log", "--pretty=format:%H%x1f%h%x1f%s%x1f%cr%x1e"];
+    let mut args = vec!["log", "--pretty=format:%H%x1f%h%x1f%s%x1f%ct%x1e"];
     args.extend_from_slice(&revision_args);
     // Execute the exact unpushed revision query selected for the current branch state.
     // 执行为当前分支状态选定的精确未推送修订查询。
@@ -713,10 +713,25 @@ pub(crate) fn load_webui_unpushed_commits(
             hash: fields[0].trim().to_string(),
             short_hash: fields[1].trim().to_string(),
             subject: fields[2].trim().to_string(),
-            relative_time: fields[3].trim().to_string(),
+            committed_at_ms: commit_time_millis(fields[3])?,
         });
     }
     Ok(commits)
+}
+
+/// Converts one `%ct` committer timestamp (Unix seconds) into milliseconds.
+/// 将一个 `%ct` 提交者时间戳（Unix 秒）转换为毫秒。
+///
+/// # Returns
+/// 返回值
+/// The timestamp in milliseconds, or an error naming the value Git printed.
+/// 毫秒时间戳；无法解析时返回带有 Git 输出值的错误。
+fn commit_time_millis(field: &str) -> Result<i64, String> {
+    field
+        .trim()
+        .parse::<i64>()
+        .map(|seconds| seconds.saturating_mul(1000))
+        .map_err(|error| format!("git log printed an invalid commit time {field:?}: {error}"))
 }
 
 /// Loads the current HEAD commit identity for Git action completion notices.
