@@ -1987,7 +1987,6 @@
   "conversation.collaboration.cancel": "Отозвать вопрос совместной работы",
   "conversation.collaboration.detail.question": "Вопрос",
   "conversation.collaboration.detail.answer": "Ответ",
-  "conversation.collaboration.detail.originalTask": "Исходная задача",
   "conversation.collaboration.detail.notification": "Уведомление об этапе",
   "conversation.collaboration.detail.arguments": "Технические подробности",
   "conversation.collaboration.detail.output": "Подтверждение инструмента",

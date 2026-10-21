@@ -186,11 +186,12 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
     : null;
   const body = isAnswer ? answer?.body ?? null
     : event.event_kind === "child_task_non_success_projected" ? null : collaborationBody(afterState);
-  // Cancellation diagnostics belong to their own event, never the original question or answer body.
-  // 撤销诊断属于自身事件，绝不混入原问题或答案正文。
+  // Cancellation diagnostics belong to their own event, never the original question or answer body. Task results
+  // never repeat the original task: its sending tool card or received message card is in the same conversation.
+  // 撤销诊断属于自身事件，绝不混入原问题或答案正文。任务结果不重复原任务：其发送工具卡片或收到的消息卡片位于同一会话。
   const secondaryBody = event.event_kind === "question_cancelled" && afterState.kind === "question" && afterState.question.cancellation
     ? { label: "conversation.collaboration.detail.cancellationReason" as const, body: afterState.question.cancellation.reason }
-    : collaborationSecondaryBody(afterState);
+    : null;
   return (
     <CollaborationToolCard
       id={taskMessageId !== null ? `collaboration:task-message:${taskMessageId}`
@@ -445,30 +446,6 @@ function collaborationBody(afterState: CollaborationAfterState): string | null {
     case "generation_ownership_cleared":
       return null;
   }
-}
-
-/** Returns answer details or the original task reference, respecting result disclosure.
- * 返回回答详情或原任务引用，并遵守结果披露约束。 */
-function collaborationSecondaryBody(
-  afterState: CollaborationAfterState,
-): { label: TranslationKey; body: string } | null {
-  // Results retain their request context; revoked receipts cannot disclose either body.
-  // 结果保留原请求语境；撤权回执不得披露任何正文。
-  if (afterState.kind === "received_task_result") {
-    return afterState.acceptance.disclosure === "authorization_revoked" ? null : {
-      label: "conversation.collaboration.detail.originalTask",
-      body: afterState.acceptance.result.acceptance.message.body,
-    };
-  }
-  if (afterState.kind === "task_result") {
-    return {
-      label: "conversation.collaboration.detail.originalTask",
-      body: afterState.result.acceptance.message.body,
-    };
-  }
-  // Question and answer bodies have independent cards; neither duplicates the other's text.
-  // 问题与答案正文各有独立卡片，互不重复对方文本。
-  return null;
 }
 
 /** Maps one typed event kind to localized timeline copy.

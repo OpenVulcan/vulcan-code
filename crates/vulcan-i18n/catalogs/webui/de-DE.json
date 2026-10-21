@@ -1987,7 +1987,6 @@
   "conversation.collaboration.cancel": "Kollaborationsfrage zurückziehen",
   "conversation.collaboration.detail.question": "Frage",
   "conversation.collaboration.detail.answer": "Antwort",
-  "conversation.collaboration.detail.originalTask": "Ursprüngliche Aufgabe",
   "conversation.collaboration.detail.notification": "Phasenbenachrichtigung",
   "conversation.collaboration.detail.arguments": "Technische Details",
   "conversation.collaboration.detail.output": "Tool-Bestätigung",

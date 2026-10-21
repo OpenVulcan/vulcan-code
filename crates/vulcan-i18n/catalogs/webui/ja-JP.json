@@ -1987,7 +1987,6 @@
   "conversation.collaboration.cancel": "協調の質問を取り消す",
   "conversation.collaboration.detail.question": "質問",
   "conversation.collaboration.detail.answer": "回答",
-  "conversation.collaboration.detail.originalTask": "元のタスク",
   "conversation.collaboration.detail.notification": "フェーズ通知",
   "conversation.collaboration.detail.arguments": "技術的な詳細",
   "conversation.collaboration.detail.output": "ツールの受領",

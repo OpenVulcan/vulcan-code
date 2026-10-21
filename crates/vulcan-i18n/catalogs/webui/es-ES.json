@@ -1987,7 +1987,6 @@
   "conversation.collaboration.cancel": "Cancelar la pregunta de colaboración",
   "conversation.collaboration.detail.question": "Pregunta",
   "conversation.collaboration.detail.answer": "Respuesta",
-  "conversation.collaboration.detail.originalTask": "Tarea original",
   "conversation.collaboration.detail.notification": "Aviso de fase",
   "conversation.collaboration.detail.arguments": "Detalles técnicos",
   "conversation.collaboration.detail.output": "Acuse de la herramienta",

@@ -1987,7 +1987,6 @@
   "conversation.collaboration.cancel": "撤銷協作問題",
   "conversation.collaboration.detail.question": "問題",
   "conversation.collaboration.detail.answer": "回答",
-  "conversation.collaboration.detail.originalTask": "原工作",
   "conversation.collaboration.detail.notification": "階段通知",
   "conversation.collaboration.detail.arguments": "技術詳細資訊",
   "conversation.collaboration.detail.output": "工具回執",

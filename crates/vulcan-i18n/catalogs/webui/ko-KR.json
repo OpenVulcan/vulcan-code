@@ -1987,7 +1987,6 @@
   "conversation.collaboration.cancel": "협업 질문 취소",
   "conversation.collaboration.detail.question": "질문",
   "conversation.collaboration.detail.answer": "답변",
-  "conversation.collaboration.detail.originalTask": "원래 작업",
   "conversation.collaboration.detail.notification": "단계 알림",
   "conversation.collaboration.detail.arguments": "기술 세부 정보",
   "conversation.collaboration.detail.output": "도구 수신 확인",
