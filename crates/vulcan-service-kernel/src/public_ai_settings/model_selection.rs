@@ -282,27 +282,20 @@ pub(crate) async fn service_select_public_ai_model(
         .map(|handle| -> Result<_, String> {
             let next_request =
                 crate::session_request_config_v1::capture_next_request_config_v1(handle.as_ref())?;
-            let Some(current_reasoning) = next_request
+            let current_reasoning = next_request
                 .thinking_level
                 .as_deref()
                 .map(|level| {
                     crate::workspace_persistence_versions::parse_reasoning_effort(level)
                         .ok_or_else(|| format!("Invalid V1 reasoning level: {level}"))
                 })
-                .transpose()?
-            else {
-                return Ok(None);
-            };
-            if current_reasoning
-                == vulcan_agent_runtime::provider_config::ReasoningEffortLevel::Off
-            {
-                return Ok(None);
-            }
-            let resolved_reasoning = vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
-                &selected_model.model.capabilities,
-                Some(current_reasoning),
-            );
-            Ok((resolved_reasoning != current_reasoning).then_some(resolved_reasoning))
+                .transpose()?;
+            Ok(
+                crate::session_request_config_v1::next_request_reasoning_correction(
+                    &selected_model.model.capabilities,
+                    current_reasoning,
+                ),
+            )
         })
         .transpose()?
         .flatten();

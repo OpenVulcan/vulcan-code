@@ -369,15 +369,14 @@ pub(crate) fn reconcile_pending_reasoning_for_next_user_boundary_v1(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
 ) -> Result<ActiveRequestConfig, String> {
     let mut next_request = capture_next_request_config_v1(handle)?;
-    let Some(stored_reasoning) = next_request.thinking_level.as_deref() else {
-        return Ok(next_request);
-    };
-    let current_reasoning =
-        crate::workspace_persistence_versions::parse_reasoning_effort(stored_reasoning)
-            .ok_or_else(|| format!("Invalid V1 reasoning level: {stored_reasoning}"))?;
-    if current_reasoning == ReasoningEffortLevel::Off {
-        return Ok(next_request);
-    }
+    let current_reasoning = next_request
+        .thinking_level
+        .as_deref()
+        .map(|level| {
+            crate::workspace_persistence_versions::parse_reasoning_effort(level)
+                .ok_or_else(|| format!("Invalid V1 reasoning level: {level}"))
+        })
+        .transpose()?;
     let selection = match (
         next_request.provider.as_deref(),
         next_request.connection_id.as_deref(),
@@ -403,15 +402,48 @@ pub(crate) fn reconcile_pending_reasoning_for_next_user_boundary_v1(
             ));
         }
     };
-    let resolved_reasoning =
-        vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
-            &selection.model.capabilities,
-            Some(current_reasoning),
-        );
-    if resolved_reasoning != current_reasoning {
-        next_request.thinking_level = Some(reasoning_effort_level_key(resolved_reasoning));
+    if let Some(corrected) =
+        next_request_reasoning_correction(&selection.model.capabilities, current_reasoning)
+    {
+        next_request.thinking_level = Some(reasoning_effort_level_key(corrected));
     }
     Ok(next_request)
+}
+
+/// Corrects a session's next-request reasoning level for the model it will run on.
+/// 按下一请求将使用的模型校正会话的思考档位。
+///
+/// # Parameters / 参数
+/// `capabilities` is the target model contract; `current` is the stored level, where absent and
+/// `Off` both mean no explicit level.
+/// `capabilities` 是目标模型契约；`current` 是已存储档位，缺失与 `Off` 都表示没有显式档位。
+///
+/// # Returns / 返回值
+/// The level to store instead, or `None` when the stored one stands. An explicit level the model
+/// does not support becomes its nearest supported one. A missing level on a model with selectable
+/// levels becomes the model's default, so no request to such a model leaves its level to chance;
+/// it stays missing only where the model has nothing to select (fixed on, fixed off, unsupported).
+/// 应改存的档位；保持已存储档位时返回 `None`。模型不支持的显式档位改为最接近的受支持档位。
+/// 可选档位模型上缺失的档位改为该模型的默认档位，使发往此类模型的请求不会让档位听任默认；
+/// 只有模型没有可选内容（固定开启、固定关闭、不支持）时才保持缺失。
+pub(crate) fn next_request_reasoning_correction(
+    capabilities: &vulcan_ai_contract::ModelCapabilities,
+    current: Option<ReasoningEffortLevel>,
+) -> Option<ReasoningEffortLevel> {
+    let explicit = current.filter(|level| *level != ReasoningEffortLevel::Off);
+    let resolved =
+        vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
+            capabilities,
+            explicit,
+        );
+    match explicit {
+        Some(level) => (resolved != level).then_some(resolved),
+        None => (!matches!(
+            resolved,
+            ReasoningEffortLevel::Off | ReasoningEffortLevel::None
+        ))
+        .then_some(resolved),
+    }
 }
 
 /// Persists a capability-driven reasoning correction after a user boundary was accepted.
@@ -1097,29 +1129,6 @@ mod tests {
         assert_eq!(pending.thinking_level, None);
     }
 
-    /// Verifies provider-default Meta remains unchanged without consulting model capabilities.
-    /// 验证供应商默认 Meta 保持不变，并且不会查询模型能力。
-    #[test]
-    fn provider_default_reasoning_skips_capability_reconciliation() {
-        let active_request = ActiveRequestConfig {
-            provider: Some(String::from("provider-a")),
-            connection_id: Some(String::from("connection-a")),
-            model: Some(String::from("model-a")),
-            thinking_level: None,
-            temperature: None,
-        };
-        let (handle, _) =
-            request_config_handle(SessionId::from_u128(0x6207), active_request.clone());
-        let runtime = vulcan_provider_adapters::PublicAiRuntime::unavailable()
-            .expect("unavailable runtime should construct");
-
-        assert_eq!(
-            reconcile_pending_reasoning_for_next_user_boundary_v1(handle.as_ref(), &runtime)
-                .expect("provider-default reasoning should not require capability resolution"),
-            active_request
-        );
-    }
-
     /// Exercises changed providers, models and accounts through the same V1 promotion and API validation used by dispatch.
     /// 使用分发采用的同一 V1 提升与 API 校验，验证供应商、模型和账号变化。
     /// Returns nothing; each case proves the old mirror fails and the synchronized selection starts with one switch record.
@@ -1653,5 +1662,57 @@ mod tests {
         assert_eq!(persisted_vmm.precheck_enabled, Some(false));
         assert_eq!(persisted_vmm.memory_writeback_enabled, Some(true));
         assert_eq!(backend.flush_count.load(Ordering::SeqCst), 3);
+    }
+    /// Verifies an unset level becomes the model default only where the model has levels to select.
+    /// 验证未设置的档位只在模型有可选档位时改为模型默认档位。
+    #[test]
+    fn next_request_reasoning_correction_fills_unset_levels_on_selectable_models() {
+        use vulcan_ai_contract::{
+            CapabilitySupport, ModelCapabilities, ReasoningControlMode, ReasoningEffort,
+        };
+        let model = |control, efforts: Vec<ReasoningEffort>| ModelCapabilities {
+            reasoning: CapabilitySupport::Native,
+            reasoning_control: control,
+            reasoning_efforts: efforts,
+            ..ModelCapabilities::default()
+        };
+        let selectable = model(
+            ReasoningControlMode::EffortSelection,
+            vec![
+                ReasoningEffort::None,
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+            ],
+        );
+        for unset in [None, Some(ReasoningEffortLevel::Off)] {
+            let corrected = next_request_reasoning_correction(&selectable, unset);
+            assert!(
+                corrected.is_some_and(|level| !matches!(
+                    level,
+                    ReasoningEffortLevel::Off | ReasoningEffortLevel::None
+                )),
+                "an unset level on a selectable model must become an enabled model level: {corrected:?}"
+            );
+            for fixed in [
+                ReasoningControlMode::FixedOn,
+                ReasoningControlMode::FixedOff,
+            ] {
+                assert_eq!(
+                    next_request_reasoning_correction(&model(fixed, Vec::new()), unset),
+                    None
+                );
+            }
+        }
+        assert_eq!(
+            next_request_reasoning_correction(&selectable, Some(ReasoningEffortLevel::High)),
+            None
+        );
+        assert_eq!(
+            next_request_reasoning_correction(&selectable, Some(ReasoningEffortLevel::None)),
+            None
+        );
+        let unsupported =
+            next_request_reasoning_correction(&selectable, Some(ReasoningEffortLevel::Max));
+        assert!(unsupported.is_some_and(|level| level != ReasoningEffortLevel::Max));
     }
 }
