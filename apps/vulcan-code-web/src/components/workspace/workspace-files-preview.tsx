@@ -129,15 +129,7 @@ export function WorkspaceFilePreview(props: {
     );
   }
   if (props.entry.extension === "md") {
-    return (
-      <div className="workspace-file-preview markdown">
-        <div className="workspace-file-preview-markdown">
-          <MarkdownImageWorkspacePathProvider value={props.preview.workspacePath}>
-            <MarkdownMessage content={props.preview.content ?? ""} eager />
-          </MarkdownImageWorkspacePathProvider>
-        </div>
-      </div>
-    );
+    return <WorkspaceMarkdownPreview preview={props.preview} />;
   }
   return (
     <div className="workspace-file-preview code" data-find-scope="">
@@ -185,6 +177,25 @@ function WorkspaceMediaPermissionPrompt(props: {
       <Button size="sm" type="button" onClick={() => props.onAllowMediaPreview(props.entry)}>
         {t("workspaceFilePreview.allowMedia").replace("{media}", mediaLabel)}
       </Button>
+    </div>
+  );
+}
+
+// WorkspaceMarkdownPreview renders a Markdown file as it reads, with Ctrl+F finding text in it like the code preview.
+// WorkspaceMarkdownPreview 按阅读形态渲染 Markdown 文件，并像代码预览一样支持 Ctrl+F 查找其中的文本。
+function WorkspaceMarkdownPreview(props: { preview: WorkspaceFileReadResponse }) {
+  const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  const revealMatch = React.useCallback((range: Range) => {
+    range.startContainer.parentElement?.scrollIntoView({ block: "center" });
+  }, []);
+  return (
+    <div className="workspace-file-preview markdown" data-find-scope="">
+      <div className="workspace-file-preview-markdown" ref={bodyRef} tabIndex={0}>
+        <MarkdownImageWorkspacePathProvider value={props.preview.workspacePath}>
+          <MarkdownMessage content={props.preview.content ?? ""} eager />
+        </MarkdownImageWorkspacePathProvider>
+      </div>
+      <ConversationFindBar highlight="vk-file-find" key={props.preview.path} label="workspaceFiles.find" onReveal={revealMatch} scoped scrollRef={bodyRef} />
     </div>
   );
 }
