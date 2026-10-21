@@ -57,9 +57,8 @@ pub(super) fn stage_native_fixture_model(runtime: &vulcan_provider_adapters::Pub
     rule["rule_id"] = NATIVE_MODEL.into();
     rule["matcher"]["value"] = NATIVE_MODEL.into();
     rule["display_name"] = "Native compaction fixture".into();
-    rule["codex_behavior"] = serde_json::json!({
-        "wire_dialect": "standard", "tool_mode": "direct"
-    });
+    rule["codex_behavior"] = serde_json::json!({ "wire_dialect": "standard" });
+    rule["tool_mode"] = "direct".into();
     manifest["model_rules"].as_array_mut().unwrap().push(rule);
     // Compile and stage through the same validated manifest publication boundary as production.
     // 通过与生产相同的已验证清单发布边界编译并暂存。

@@ -244,10 +244,10 @@ fn custom_model_route_status_exposes_model_specific_protocol_block() {
     );
 }
 
-/// Verifies a code-mode-only Codex route exposes its exact behavior and missing host primitive.
-/// 验证仅代码模式的 Codex 路由公开其精确行为与缺失宿主原语。
+/// Verifies a Codex route with a frozen behavior stays executable and exposes that exact behavior.
+/// 验证带冻结行为的 Codex 路由保持可执行，并公开该精确行为。
 #[test]
-fn codex_code_mode_route_reports_missing_runtime_primitive() {
+fn codex_route_with_frozen_behavior_is_executable() {
     let mut configuration = PersistedAiConfiguration::default();
     let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../vulcan-runtime-assets/resources/provider-manifests/manifests/openai.json");
@@ -292,7 +292,6 @@ fn codex_code_mode_route_reports_missing_runtime_primitive() {
     };
     let behavior = vulcan_provider_adapters::CodexModelBehavior {
         wire_dialect: vulcan_provider_adapters::CodexWireDialect::Lite,
-        tool_mode: vulcan_provider_adapters::CodexToolMode::CodeModeOnly,
         ..Default::default()
     };
     let protocol_id = String::from(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID);
@@ -338,23 +337,14 @@ fn codex_code_mode_route_reports_missing_runtime_primitive() {
 
     assert_eq!(records.len(), 1);
     let record = &records[0];
-    assert!(!record.executable);
-    assert_eq!(
-        record.required_runtime_primitive.as_deref(),
-        Some(vulcan_provider_adapters::CODEX_JAVASCRIPT_HOST_PRIMITIVE_ID)
-    );
+    assert!(record.executable, "{:?}", record.unavailable_reason);
+    assert_eq!(record.unavailable_reason, None);
     assert_eq!(
         record
             .codex_behavior
             .as_ref()
-            .map(|behavior| behavior.tool_mode),
-        Some(vulcan_provider_adapters::CodexToolMode::CodeModeOnly)
-    );
-    assert!(
-        record
-            .unavailable_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("codex_javascript_host_v1"))
+            .map(|behavior| behavior.wire_dialect),
+        Some(vulcan_provider_adapters::CodexWireDialect::Lite)
     );
 }
 

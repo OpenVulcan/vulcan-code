@@ -117,6 +117,7 @@ fn signed_model_identity_rejects_colliding_manual_definition() {
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: Some(crate::SystemManualModelBinding {
                     service_entry_id: String::from("public-api"),
                     protocol_profile_id: OPENAI_RESPONSES_PROFILE_ID.to_string(),
@@ -615,6 +616,7 @@ fn credential_free_manual_model_accepts_direct_capability_settings() {
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         )]),
@@ -762,6 +764,7 @@ fn connection_catalog_membership_tracks_manual_definition_removal() {
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         );
@@ -817,6 +820,7 @@ fn connection_catalog_membership_retains_discovered_model_after_overlay_removal(
                 capabilities: ModelCapabilities::default(),
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         );
@@ -867,6 +871,7 @@ fn runtime_model_is_enabled_follows_manifest_first_precedence() {
                 capabilities: ModelCapabilities::default(),
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         )]),

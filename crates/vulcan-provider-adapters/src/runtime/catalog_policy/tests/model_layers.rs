@@ -400,6 +400,7 @@ fn direct_model_settings_outrank_provider_reasoning_settings() {
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         )]),
@@ -517,6 +518,7 @@ fn discovered_custom_model_applies_only_manual_advanced_declarations() {
                     ..crate::CustomModelRequestProjection::default()
                 },
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         );

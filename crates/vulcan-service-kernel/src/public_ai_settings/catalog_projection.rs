@@ -85,10 +85,6 @@ pub(crate) struct PublicAiModelRouteRecord {
     /// 由匹配模型规则冻结的精确封闭 Codex 行为。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) codex_behavior: Option<CodexModelBehavior>,
-    /// Stable runtime primitive required before this route can execute.
-    /// 当前路由可执行前所需的稳定运行时原语。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) required_runtime_primitive: Option<String>,
     /// Activated provider-manifest revision that owns the binding.
     /// 持有绑定的已激活供应商 Manifest 修订。
     pub(super) manifest_revision: u64,
@@ -435,21 +431,10 @@ pub(super) fn build_public_ai_model_route_records(
                         .copied()
                 })
                 .unwrap_or_default();
-            // requiredRuntimePrimitive is derived only from the exact frozen behavior.
-            // requiredRuntimePrimitive 只从精确冻结行为派生。
-            let required_runtime_primitive = binding
-                .and_then(|binding| binding.codex_behavior.as_ref())
-                .and_then(CodexModelBehavior::missing_runtime_primitive)
-                .map(str::to_string);
             // unavailableReason is computed from the same captured provider/catalog generation.
             // unavailableReason 从同一捕获供应商/目录代际计算。
             let unavailable_reason = if let Some(limit_issue) = limit_issue {
                 Some(limit_issue)
-            } else if let Some(required_primitive) = required_runtime_primitive.as_deref() {
-                Some(format!(
-                    "Model '{}' requires runtime primitive '{}', which is not registered by this build.",
-                    model.id, required_primitive
-                ))
             } else {
                 match protocol_id.as_deref() {
                     Some(bound_protocol)
@@ -493,7 +478,6 @@ pub(super) fn build_public_ai_model_route_records(
                     .map(|binding| binding.rule_id.clone())
                     .filter(|rule_id| !rule_id.is_empty()),
                 codex_behavior: binding.and_then(|binding| binding.codex_behavior.clone()),
-                required_runtime_primitive,
                 manifest_revision,
                 executable,
                 unavailable_reason,

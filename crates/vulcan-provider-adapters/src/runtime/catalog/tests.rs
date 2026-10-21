@@ -204,6 +204,7 @@ fn manual_custom_model_builds_catalog_without_provider_discovery() {
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         );
@@ -273,6 +274,7 @@ fn activated_custom_catalog_publishes_discovery_and_manual_union() {
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         );

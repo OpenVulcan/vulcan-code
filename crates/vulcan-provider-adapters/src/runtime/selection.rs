@@ -655,42 +655,33 @@ impl PublicAiRuntime {
         // Codex behavior is copied from the exact frozen binding and never inferred from a model name.
         // Codex 行为从精确冻结绑定复制，绝不根据模型名称推断。
         route.codex_behavior = protocol_binding.codex_behavior.clone();
-        if let Some(required_primitive) = route
-            .codex_behavior
-            .as_ref()
-            .and_then(crate::provider_manifest::CodexModelBehavior::missing_runtime_primitive)
-        {
-            return Err(format!(
-                "Model '{model_id}' requires runtime primitive '{required_primitive}', which is not registered by this build."
-            ));
-        }
-        // toolSchemaProjection is resolved only from the active system Manifest or the exact
-        // custom-model advanced setting. Protocol and model-name heuristics are intentionally absent.
-        // toolSchemaProjection 只从活动系统 Manifest 或精确自定义模型高级设置解析。
+        // toolSchemaProjection and toolMode are resolved only from the active system Manifest or
+        // the exact custom-model advanced settings. Protocol and model-name heuristics are
+        // intentionally absent.
+        // toolSchemaProjection 与 toolMode 只从活动系统 Manifest 或精确自定义模型高级设置解析。
         // 此处刻意不存在协议或模型名猜测。
-        route.tool_schema_projection = match route.provider.kind {
+        (route.tool_schema_projection, route.tool_mode) = match route.provider.kind {
             crate::ProviderKind::System => {
                 let manifest = active_manifest.as_ref().ok_or_else(|| {
                     format!(
                         "Provider `{provider_id}` has no active system manifest for tool-schema projection."
                     )
                 })?;
-                manifest
-                    .rule_for_model(
-                        entry.id.as_str(),
-                        Some(connection.credential_profile_id.as_str()),
-                        model_id,
-                    )
-                    .map(|rule| rule.tool_schema_projection)
-                    .unwrap_or(
-                        manifest
-                            .model_defaults_for_entry(entry.id.as_str())?
-                            .tool_schema_projection,
-                    )
+                match manifest.rule_for_model(
+                    entry.id.as_str(),
+                    Some(connection.credential_profile_id.as_str()),
+                    model_id,
+                ) {
+                    Some(rule) => (rule.tool_schema_projection, rule.tool_mode),
+                    None => {
+                        let defaults = manifest.model_defaults_for_entry(entry.id.as_str())?;
+                        (defaults.tool_schema_projection, defaults.tool_mode)
+                    }
+                }
             }
             crate::ProviderKind::Custom => configuration
                 .custom_model(provider_id, model_id)
-                .map(|definition| definition.tool_schema_projection)
+                .map(|definition| (definition.tool_schema_projection, definition.tool_mode))
                 .unwrap_or_default(),
         };
         // A matching model rule's inherited profile refs replace the route default chain for

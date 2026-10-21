@@ -670,6 +670,37 @@ impl ToolSchemaProjectionMode {
     }
 }
 
+/// Selects how one model route invokes the frozen tool inventory.
+/// 选择单条模型路由调用冻结工具目录的方式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolMode {
+    /// Exposes the authorized tools directly.
+    /// 直接暴露已授权工具。
+    #[default]
+    Direct,
+    /// Exposes the code-mode tools and falls back to direct tools when the code-mode host is
+    /// unavailable.
+    /// 暴露代码模式工具；代码模式宿主不可用时回退为直接工具。
+    CodeMode,
+    /// Requires the code-mode host and fails closed instead of falling back to direct tools.
+    /// 强制使用代码模式宿主，不可用时直接失败而不回退为直接工具。
+    CodeModeOnly,
+}
+
+impl ToolMode {
+    /// Reports whether this value is the implicit direct-tool default.
+    /// 判断当前值是否为隐含的直接工具默认值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only for direct tool exposure.
+    /// 仅直接工具暴露返回 `true`。
+    pub const fn is_direct(&self) -> bool {
+        matches!(self, Self::Direct)
+    }
+}
+
 /// Provider-level default capabilities and model policy.
 /// 供应商级默认能力与模型策略。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -706,6 +737,10 @@ pub struct ModelDefaults {
         skip_serializing_if = "ToolSchemaProjectionMode::is_lightweight"
     )]
     pub tool_schema_projection: ToolSchemaProjectionMode,
+    /// Default tool mode; omission intentionally means direct tools.
+    /// 默认工具模式；省略时明确表示直接工具。
+    #[serde(default, skip_serializing_if = "ToolMode::is_direct")]
+    pub tool_mode: ToolMode,
     /// Default usage-extraction profile references.
     /// 默认 usage 提取 Profile 引用。
     #[serde(default)]
@@ -822,23 +857,6 @@ pub enum CodexWireDialect {
     Lite,
 }
 
-/// Selects how a Codex model may invoke the frozen tool inventory.
-/// 选择 Codex 模型调用冻结工具目录的方式。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CodexToolMode {
-    /// Exposes the authorized tools directly.
-    /// 直接暴露已授权工具。
-    #[default]
-    Direct,
-    /// Allows either direct tools or the isolated code-mode host.
-    /// 允许直接工具或隔离代码模式宿主。
-    CodeMode,
-    /// Requires the isolated code-mode host and never falls back to direct exposure.
-    /// 强制使用隔离代码模式宿主且绝不回退到直接暴露。
-    CodeModeOnly,
-}
-
 /// Selects the provider-visible Apply Patch input representation.
 /// 选择 Provider 可见的 Apply Patch 输入表示。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -942,10 +960,6 @@ pub struct CodexModelBehavior {
     /// 最终原生 Responses 线路方言。
     #[serde(default)]
     pub wire_dialect: CodexWireDialect,
-    /// Frozen tool exposure mode.
-    /// 冻结的工具暴露模式。
-    #[serde(default)]
-    pub tool_mode: CodexToolMode,
     /// Apply Patch wire representation.
     /// Apply Patch 线路表示。
     #[serde(default)]
@@ -1036,27 +1050,6 @@ pub struct CodexModelBehavior {
     pub supports_experimental_context: bool,
 }
 
-/// Stable runtime primitive required by Codex code-mode tool exposure.
-/// Codex 代码模式工具暴露所需的稳定运行时原语。
-pub const CODEX_JAVASCRIPT_HOST_PRIMITIVE_ID: &str = "codex_javascript_host_v1";
-
-impl CodexModelBehavior {
-    /// Returns the runtime primitive still missing for this behavior in the current build.
-    /// 返回当前构建为此行为仍缺失的运行时原语。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The JavaScript host primitive for code-mode behaviors; direct-tool behaviors need none.
-    /// 代码模式行为返回 JavaScript 宿主原语；直接工具行为不需要额外原语。
-    pub fn missing_runtime_primitive(&self) -> Option<&'static str> {
-        matches!(
-            self.tool_mode,
-            CodexToolMode::CodeMode | CodexToolMode::CodeModeOnly
-        )
-        .then_some(CODEX_JAVASCRIPT_HOST_PRIMITIVE_ID)
-    }
-}
-
 /// One Exact/Prefix model rule with scoped overrides.
 /// 单条 Exact/Prefix 模型规则与作用域覆盖。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1096,6 +1089,10 @@ pub struct ModelRule {
     /// 可选工具 Schema 投影覆盖，优先于供应商默认值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_schema_projection: Option<ToolSchemaProjectionMode>,
+    /// Optional tool-mode override inherited over the provider default.
+    /// 可选工具模式覆盖，优先于供应商默认值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_mode: Option<ToolMode>,
     /// Protocol-scoped capability patches keyed by protocol profile id.
     /// 按协议 Profile 标识索引的协议作用域能力补丁。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

@@ -895,6 +895,9 @@
             "strict"
           ]
         },
+        "tool_mode": {
+          "enum": ["direct", "code_mode", "code_mode_only"]
+        },
         "default_usage_profile_refs": {
           "type": "array",
           "items": {
@@ -1007,6 +1010,9 @@
               "passthrough",
               "strict"
             ]
+          },
+          "tool_mode": {
+            "enum": ["direct", "code_mode", "code_mode_only"]
           },
           "protocol_capabilities": {
             "type": "object",
@@ -2493,9 +2499,6 @@
       "properties": {
         "wire_dialect": {
           "enum": ["standard", "lite"]
-        },
-        "tool_mode": {
-          "enum": ["direct", "code_mode", "code_mode_only"]
         },
         "apply_patch_tool_type": {
           "enum": ["function", "freeform"]

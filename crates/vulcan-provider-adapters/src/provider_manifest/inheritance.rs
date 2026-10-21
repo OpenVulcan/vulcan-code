@@ -214,6 +214,9 @@ pub struct ResolvedRuleInstance {
     /// Inherited tool-schema projection contract.
     /// 继承后的工具 Schema 投影契约。
     pub tool_schema_projection: super::ToolSchemaProjectionMode,
+    /// Inherited tool mode.
+    /// 继承后的工具模式。
+    pub tool_mode: super::ToolMode,
     /// Inherited protocol-independent capability template.
     /// 继承后的协议无关能力模板。
     pub capabilities: Option<ModelCapabilities>,
@@ -317,6 +320,9 @@ fn resolve_rule_for_entry(
     let tool_schema_projection = rule
         .tool_schema_projection
         .unwrap_or(defaults.tool_schema_projection);
+    // toolMode follows the same authority; omission inherits the provider default.
+    // toolMode 遵循相同的权威；省略时继承供应商默认值。
+    let tool_mode = rule.tool_mode.unwrap_or(defaults.tool_mode);
 
     // Exact and longest-prefix provenance classification shared by every capability field
     // written by this rule.
@@ -545,6 +551,14 @@ fn resolve_rule_for_entry(
             provider_provenance()
         },
     );
+    field_provenance.insert(
+        String::from("tool_mode"),
+        if rule.tool_mode.is_some() {
+            provenance_with_overridden(rule_provenance(), vec![provider_provenance()])
+        } else {
+            provider_provenance()
+        },
+    );
     for (field, overridden) in [
         ("usage_profile_refs", rule.usage_profile_refs.is_some()),
         ("request_profile_refs", rule.request_profile_refs.is_some()),
@@ -597,6 +611,7 @@ fn resolve_rule_for_entry(
         selected_protocol,
         codex_behavior: rule.codex_behavior.clone(),
         tool_schema_projection,
+        tool_mode,
         capabilities,
         capability_provenance,
         field_provenance,

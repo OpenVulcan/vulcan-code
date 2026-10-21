@@ -869,6 +869,14 @@ CDN 或存储桶变更不需要软件更新。`https_url` 只接受 HTTPS，`pub
 模型一律省略字段并继承轻量模式。自定义模型只在高级设置中提供三档选择，默认同样为轻量模式。
 不得把 Gemini 的严格关键字过滤扩散到其他模型，也不得按供应商或模型名称硬编码单个工具修复。
 
+工具暴露方式由冻结路由中的 `tool_mode` 唯一决定，枚举为 `direct`、`code_mode`、
+`code_mode_only`，可在 `model_defaults` 与精确模型规则上声明，规则值覆盖默认值，均省略即为
+`direct`。它与协议无关，任何经过验证需要 JavaScript 代码模式的模型都通过同一字段配置，不按
+供应商或模型名称硬编码。`code_mode` 在独立的 `vulcan-code-mode-host` 沙盒进程中向模型提供
+`exec`/`wait`，宿主不可用时退回直接工具并只提示一次；`code_mode_only` 不退回，宿主不可用时
+本回合失败关闭。系统手工模型不能覆盖签名清单的工具模式；自定义模型可在高级设置中选择三档，
+默认 `direct`。档位随路由修订指纹冻结，重试与续跑不得重新推断。
+
 `apply_patch` 默认与其他宿主工具使用标准函数调用契约：输入为含必填字符串 `patch` 的 JSON
 对象，补丁语法由工具说明与宿主执行器校验。只有精确模型规则的 `codex_behavior` 明确声明
 `apply_patch_tool_type: freeform` 时，原生 Codex Responses 路由才把它编码为带已注册 Lark Grammar
@@ -880,17 +888,17 @@ custom 历史只按其原始配对重放，不得借此向无声明的新请求�
 ### 7.1 Codex 模型行为与 Responses 路由特性
 
 `model_rules[].codex_behavior` 是精确模型规则拥有的封闭契约，只能用于
-`openai-codex-responses.v1`。它冻结 wire 方言、工具模式、补丁/终端/搜索工具形态、并行调用、
+`openai-codex-responses.v1`。它冻结 wire 方言、补丁/终端/搜索工具形态、并行调用、
 图片细节、verbosity、多智能体版本、说明注入、Node 审核、压缩哈希、工具输出截断、WebSocket 偏好
 和实验上下文。解析结果随模型绑定进入路由修订指纹；重试、续跑和热更新不能按同名模型重新推断。
 第三方供应商即使提供 `gpt-6-astra` 等相同模型 ID，也不会自动继承 OpenAI 的 Lite 或 code-mode
-行为，除非其自身精确规则具有独立验证证据并显式声明。
+行为，除非其自身精确规则具有独立验证证据并显式声明。工具模式不属于该对象，而是规则级
+`tool_mode`（见上文）；Codex 订阅中需要代码模式的模型在其精确规则上声明 `code_mode_only`。
 
 `wire_dialect: lite` 使用稳定 UUIDv5 前缀项、`additional_tools` 命名空间目录、
 `reasoning.context: all_turns`、`parallel_tool_calls: false` 和专用内部请求头；顶层
 `instructions` 与 `tools` 省略。HTTP、WebSocket 首包/增量包与独立压缩请求共享同一最终头投影。
-`code_mode` 或 `code_mode_only` 需要宿主注册 `codex_javascript_host_v1`；缺失时该精确模型在
-目录诊断中标记不可执行，选择阶段失败关闭，不把它降级为 direct 工具。由 Codex 宿主持久化的
+由 Codex 宿主持久化的
 `configuration_update` 还要求可信的宿主来源和版本化私有历史；没有该宿主时不得伪造普通输入项。
 
 `protocol_routes[].responses_features` 持有传输和恢复契约：

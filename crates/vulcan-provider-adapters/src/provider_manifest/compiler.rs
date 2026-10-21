@@ -115,6 +115,9 @@ pub struct ResolvedEntryModelDefaults {
     /// Effective tool-schema projection inherited by unmatched models and rules.
     /// 未匹配模型与规则继承的生效工具 Schema 投影。
     pub tool_schema_projection: super::ToolSchemaProjectionMode,
+    /// Effective tool mode inherited by unmatched models and rules.
+    /// 未匹配模型与规则继承的生效工具模式。
+    pub tool_mode: super::ToolMode,
     /// Complete compiled provider capability snapshot inherited by unmatched models.
     /// 未匹配模型继承的完整已编译供应商能力快照。
     pub capabilities: Option<vulcan_ai_contract::ModelCapabilities>,
@@ -1224,6 +1227,7 @@ pub fn compile_manifest_with_layer(
                     supported_protocols,
                     selected_protocol,
                     tool_schema_projection: manifest.model_defaults.tool_schema_projection,
+                    tool_mode: manifest.model_defaults.tool_mode,
                     capabilities: default_capabilities.clone(),
                     usage_profile_refs: manifest.model_defaults.default_usage_profile_refs.clone(),
                     request_profile_refs: manifest

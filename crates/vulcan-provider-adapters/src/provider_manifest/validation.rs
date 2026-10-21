@@ -2543,7 +2543,10 @@ fn validate_model_rule(
             "rule must declare supported_protocols or selected_protocol",
         ));
     }
-    validate_codex_model_behavior(rule, index, errors);
+    // The effective mode includes the provider default the rule inherits when it omits its own.
+    // 生效模式包含规则未声明时继承的供应商默认值。
+    let effective_tool_mode = rule.tool_mode.unwrap_or(manifest.model_defaults.tool_mode);
+    validate_codex_model_behavior(rule, effective_tool_mode, index, errors);
 
     if let Some(capabilities) = &rule.capabilities {
         validate_capabilities(capabilities, &path(".capabilities"), errors);
@@ -2724,10 +2727,12 @@ fn validate_model_rule(
 ///
 /// # Parameters
 /// 参数
-/// The rule owns the declaration, the index identifies its JSON path, and errors receives every violation.
-/// 规则持有声明，索引标识其 JSON 路径，errors 接收全部违规项。
+/// The rule owns the declaration, effective_tool_mode is the rule's inherited tool mode, the index
+/// identifies its JSON path, and errors receives every violation.
+/// 规则持有声明，effective_tool_mode 是规则继承后的工具模式，索引标识其 JSON 路径，errors 接收全部违规项。
 fn validate_codex_model_behavior(
     rule: &ModelRule,
+    effective_tool_mode: crate::provider_manifest::ToolMode,
     index: usize,
     errors: &mut Vec<ManifestValidationError>,
 ) {
@@ -2768,12 +2773,7 @@ fn validate_codex_model_behavior(
         ));
     }
     if behavior.node_repl_disabled
-        && (behavior.node_repl_auto_review_required
-            || matches!(
-                behavior.tool_mode,
-                crate::provider_manifest::CodexToolMode::CodeMode
-                    | crate::provider_manifest::CodexToolMode::CodeModeOnly
-            ))
+        && (behavior.node_repl_auto_review_required || !effective_tool_mode.is_direct())
     {
         errors.push(ManifestValidationError::new(
             "codex_code_mode_disabled_conflict",

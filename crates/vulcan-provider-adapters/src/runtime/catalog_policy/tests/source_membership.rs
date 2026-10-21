@@ -33,6 +33,7 @@ fn custom_discovery_catalog_unions_absent_manual_model_unless_explicitly_disable
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         );
@@ -91,6 +92,7 @@ fn empty_custom_discovery_catalog_retains_manual_model_unless_explicitly_disable
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         );
@@ -248,6 +250,7 @@ fn model_source_policies_control_runtime_identity_union() {
                         },
                         request_projection: Default::default(),
                         tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                        tool_mode: crate::ToolMode::Direct,
                         system_binding: Some(crate::SystemManualModelBinding {
                             service_entry_id: String::from("public-api"),
                             protocol_profile_id: OPENAI_CHAT_PROFILE_ID.to_string(),
