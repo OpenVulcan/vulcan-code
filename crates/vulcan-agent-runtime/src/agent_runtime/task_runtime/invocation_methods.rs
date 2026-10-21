@@ -1515,10 +1515,8 @@ pub(super) fn agent_orchestration_info_models(
     // Only selectors that spawn_agent accepts are listed: enabled conversation models on enabled accounts.
     // 只列出 spawn_agent 接受的选择器：已启用账号上已启用的会话模型。
     let available_selectors = runtime.available_model_selectors(&configuration)?;
-    let session_selector = configuration
-        .active
-        .as_ref()
-        .map(|active| format!("{}/{}", active.provider_id, active.model_id));
+    let session_selector = agent_orchestration_session_route(model_context, &configuration)
+        .map(|(provider_id, model_id, _)| format!("{provider_id}/{model_id}"));
     let fixed_selector =
         agent_fixed_model.map(|(provider_id, model_id)| format!("{provider_id}/{model_id}"));
     let mut rows = BTreeMap::<String, Value>::new();
@@ -1585,19 +1583,54 @@ fn agent_orchestration_session_model(
         .public_ai_runtime()
         .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
     let configuration = runtime.configuration_snapshot()?;
-    let Some(active) = configuration.active.as_ref() else {
+    let Some((provider_id, model_id, connection_id)) =
+        agent_orchestration_session_route(model_context, &configuration)
+    else {
         return Ok(None);
     };
-    let available = runtime.model_is_available(
-        &configuration,
-        active.provider_id.as_str(),
-        active.model_id.as_str(),
-    )?;
+    let available = runtime.model_is_available(&configuration, &provider_id, &model_id)?;
     Ok(Some(json!({
-        "provider_id": active.provider_id,
-        "model_id": active.model_id,
-        "connection_id": active.connection_id,
-        "selector": format!("{}/{}", active.provider_id, active.model_id),
+        "selector": format!("{provider_id}/{model_id}"),
+        "provider_id": provider_id,
+        "model_id": model_id,
+        "connection_id": connection_id,
         "available": available,
     })))
+}
+
+/// Resolves the model the calling session actually runs, which inheriting children reuse.
+/// 解析调用会话实际运行的模型，继承型子代理复用同一模型。
+///
+/// # Parameters
+/// 参数
+/// `model_context` carries the parent request template; `configuration` supplies the fallback.
+/// `model_context` 携带父请求模板；`configuration` 提供回退值。
+///
+/// # Returns
+/// 返回值
+/// `(provider_id, model_id, connection_id)` from the request's frozen session selection, or the
+/// global active model only when the request names none.
+/// 来自请求冻结会话选择的 `(provider_id, model_id, connection_id)`；仅当请求未指定时回退到全局激活模型。
+fn agent_orchestration_session_route(
+    model_context: &TaskExecutionRuntimeContext,
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+) -> Option<(String, String, Option<String>)> {
+    let request = &model_context.request_template;
+    if let (Some(provider_id), Some(model_id)) = (
+        request.provider_id_override.as_ref(),
+        request.model_id_override.as_ref(),
+    ) {
+        return Some((
+            provider_id.clone(),
+            model_id.clone(),
+            request.connection_id_override.clone(),
+        ));
+    }
+    configuration.active.as_ref().map(|active| {
+        (
+            active.provider_id.clone(),
+            active.model_id.clone(),
+            Some(active.connection_id.clone()),
+        )
+    })
 }

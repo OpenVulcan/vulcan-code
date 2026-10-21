@@ -2402,3 +2402,35 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
     assert_eq!(outcome.tool_calls_processed, 1);
     assert!(outcome.usage_segments.is_empty());
 }
+
+/// Verifies orchestration info reports the session's own model, not the global active model.
+/// 验证调度信息报告会话自身的模型，而非全局激活模型。
+#[tokio::test]
+async fn orchestration_info_reports_the_session_route_as_session_model() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let session_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    // The test foundation's global active model is openrouter/openai/gpt-5.6-sol.
+    // 测试基础架构的全局激活模型为 openrouter/openai/gpt-5.6-sol。
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
+        &provider_config,
+    );
+    let mut request = test_parent_execution_request(session_id);
+    request.provider_id_override = Some(String::from("openrouter"));
+    request.model_id_override = Some(String::from("vendor/session-model"));
+    let context =
+        TaskExecutionRuntimeContext::new(provider_config, Arc::new(foundation), None, request);
+    let _guard = task_runtime
+        .install_execution_context(session_id, context)
+        .expect("execution context should install");
+
+    let result = task_runtime
+        .invoke_agent_orchestration_info(session_id, json!({ "sections": ["models"] }))
+        .await
+        .expect("orchestration info should resolve the session model");
+
+    assert_eq!(
+        result.model_output["session_model"]["selector"],
+        "openrouter/vendor/session-model"
+    );
+}
