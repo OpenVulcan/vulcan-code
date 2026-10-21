@@ -885,6 +885,9 @@ function applyUpdateConversationRunPhaseDelta(
             runPhase: delta.runPhase,
             status: delta.status ?? conversation.status,
             lastUpdatedLabel: delta.lastUpdatedLabel ?? conversation.lastUpdatedLabel,
+            // The kernel stamps the update time together with the label, and the row age reads the timestamp.
+            // 内核在写入标签的同时记录更新时间，行内时长读取的是时间戳。
+            lastUpdatedAt: delta.lastUpdatedLabel ? String(Date.now()) : conversation.lastUpdatedAt,
           }
         : conversation
     )),

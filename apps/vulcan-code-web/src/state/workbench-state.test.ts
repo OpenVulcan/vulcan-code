@@ -207,6 +207,22 @@ describe("subagent navigation lifecycle authority", () => {
     },
   );
 
+  it("moves a row's update time forward only when the phase delta carries an update label", () => {
+    const current = subagentLifecycleWorkbench("completed");
+    const before = current.conversations.find((conversation) => conversation.id === "parent-conversation")?.lastUpdatedAt;
+    const phaseOnly = applyWorkbenchDelta(current, {
+      generation: 8,
+      delta: { kind: "updateConversationRunPhase", payload: { conversationId: "parent-conversation", runPhase: "running" } },
+    });
+    expect(phaseOnly.conversations.find((conversation) => conversation.id === "parent-conversation")?.lastUpdatedAt).toBe(before);
+    const startedAt = Date.now();
+    const labelled = applyWorkbenchDelta(current, {
+      generation: 8,
+      delta: { kind: "updateConversationRunPhase", payload: { conversationId: "parent-conversation", runPhase: "running", lastUpdatedLabel: "now" } },
+    });
+    expect(Number(labelled.conversations.find((conversation) => conversation.id === "parent-conversation")?.lastUpdatedAt)).toBeGreaterThanOrEqual(startedAt);
+  });
+
   it("still updates the execution phase of an unclosed child", () => {
     // next proves the archive guard does not suppress legitimate new work on an open child.
     // next 证明归档保护不会抑制未关闭子任务的合法新执行。
