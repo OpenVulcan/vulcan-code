@@ -195,6 +195,8 @@ Vulcan Code repose sur de nombreux excellents projets open source. Merci à leur
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp) : pilote et outils du navigateur IA
 - [LuaSkills](https://github.com/LuaSkills/luaskills) : runtime LuaSkills
 - [ripgrep](https://github.com/BurntSushi/ripgrep) et [ast-grep](https://github.com/ast-grep/ast-grep) : outils fournis de recherche textuelle et d'arbre syntaxique
+- [OpenAI Codex](https://github.com/openai/codex) Code Mode : le bac à sable JavaScript du mode code (runtime V8, processus hôte, protocole gRPC et client) est repris directement de Codex (Apache-2.0) ; les modifications locales sont signalées dans le code source et listées dans le `NOTICE.md` de chaque crate (`crates/vulcan-code-mode*/`, `native/code-mode-host/*/`)
+- [rusty_v8](https://github.com/denoland/rusty_v8) : liaisons Rust du moteur V8 utilisé par le bac à sable du mode code
 
 **Bureau et interface**
 
@@ -217,7 +219,7 @@ Vulcan Code repose sur de nombreux excellents projets open source. Merci à leur
 
 **Références de conception et d'implémentation**
 
-- [OpenAI Codex](https://github.com/openai/codex) : référence pour le transport du protocole Responses, les nouvelles tentatives et la compaction du contexte
+- [OpenAI Codex](https://github.com/openai/codex) : référence pour le transport du protocole Responses, les nouvelles tentatives et la compaction du contexte ; la grammaire et l'analyseur en flux d'Apply Patch sont adaptés de Codex
 - [cc-switch](https://github.com/farion1231/cc-switch) : référence pour la conversion multi-protocoles, les appels d'outils en streaming et les données de tarification des modèles
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) : référence pour le protocole Gemini et la conversion de compatibilité
 - [OpenCode](https://github.com/anomalyco/opencode) : référence pour les catalogues de fournisseurs et les prompts système

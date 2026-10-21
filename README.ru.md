@@ -195,6 +195,8 @@ Vulcan Code построен на множестве замечательных 
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp): драйвер и инструменты ИИ-браузера
 - [LuaSkills](https://github.com/LuaSkills/luaskills): среда выполнения LuaSkills
 - [ripgrep](https://github.com/BurntSushi/ripgrep) и [ast-grep](https://github.com/ast-grep/ast-grep): поставляемые инструменты текстового поиска и поиска по синтаксическому дереву
+- [OpenAI Codex](https://github.com/openai/codex) Code Mode: JavaScript-песочница режима кода (среда выполнения V8, хост-процесс, протокол gRPC и клиент) перенесена непосредственно из Codex (Apache-2.0); локальные изменения отмечены в исходном коде и перечислены в `NOTICE.md` каждого crate (`crates/vulcan-code-mode*/`, `native/code-mode-host/*/`)
+- [rusty_v8](https://github.com/denoland/rusty_v8): Rust-привязки движка V8, используемого песочницей режима кода
 
 **Настольное приложение и интерфейс**
 
@@ -217,7 +219,7 @@ Vulcan Code построен на множестве замечательных 
 
 **Референсы для проектирования и реализации**
 
-- [OpenAI Codex](https://github.com/openai/codex): референс для транспорта протокола Responses, повторных попыток и сжатия контекста
+- [OpenAI Codex](https://github.com/openai/codex): референс для транспорта протокола Responses, повторных попыток и сжатия контекста; грамматика Apply Patch и потоковый парсер адаптированы из Codex
 - [cc-switch](https://github.com/farion1231/cc-switch): референс для мультипротокольного преобразования, потоковых вызовов инструментов и данных о ценах моделей
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI): референс для протокола Gemini и совместимых преобразований
 - [OpenCode](https://github.com/anomalyco/opencode): референс для каталогов провайдеров и системных промптов
