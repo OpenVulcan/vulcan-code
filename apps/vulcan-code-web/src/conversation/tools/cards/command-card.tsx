@@ -42,6 +42,7 @@ export function ShellCommandCard(props: ToolCardProps) {
       {call.state === "running" && !output ? null : (
         <>
           <TerminalView
+            cwd={textOf(run?.cwd)}
             emptyText={t("toolPresentation.output.empty")}
             prompt={`$ ${command}${effective && effective !== command ? `\n→ ${effective}` : ""}`}
             text={output}

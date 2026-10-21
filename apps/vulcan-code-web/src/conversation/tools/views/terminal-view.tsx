@@ -2,7 +2,9 @@
 // Long output opens on its tail, because the end of a run is where its result is.
 // 终端记录视图：一行提示符后接输出，ANSI 颜色映射到套件终端色板。长输出默认显示末尾，因为运行结果在末尾。
 import * as React from "react";
+import { useWorkspaceFileOpener, type WorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
 import { useI18n } from "@/i18n";
+import { splitTerminalPaths, terminalPathFrom } from "./terminal-paths";
 
 // TERMINAL_TAIL_LINES is how many trailing lines a long output shows before the reader asks for all of it.
 // TERMINAL_TAIL_LINES 是长输出在读者要求全部显示前展示的末尾行数。
@@ -66,12 +68,14 @@ export function parseTerminalText(source: string): TerminalSpan[] {
   return spans;
 }
 
-/** Renders one terminal transcript.
- * 渲染一段终端记录。
+/** Renders one terminal transcript. File paths in the output open in the files panel when the workbench offers
+ * one, resolved against cwd (the directory the command ran in) when it is known.
+ * 渲染一段终端记录。工作台提供文件面板时，输出中的文件路径可在其中打开；已知 cwd（命令运行目录）时以其解析。
  * prompt is the first line (a command after "$", sent input after ">"); text is the combined output.
  * prompt 是首行（"$" 后为命令，">" 后为发送的输入）；text 是合并后的输出。 */
-export function TerminalView(props: { prompt?: string; text: string; emptyText: string }) {
+export function TerminalView(props: { prompt?: string; text: string; emptyText: string; cwd?: string | null }) {
   const { t } = useI18n();
+  const openFile = useWorkspaceFileOpener();
   const [showAll, setShowAll] = React.useState(false);
   const lines = React.useMemo(() => props.text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n"), [props.text]);
   const hidden = showAll ? 0 : Math.max(0, lines.length - TERMINAL_TAIL_LINES);
@@ -87,9 +91,21 @@ export function TerminalView(props: { prompt?: string; text: string; emptyText: 
       ) : null}
       {props.text.trim()
         ? spans.map((span, index) => (
-            <span className={[span.tone, span.bold ? "t-b" : null].filter(Boolean).join(" ") || undefined} key={index}>{span.text}</span>
+            <span className={[span.tone, span.bold ? "t-b" : null].filter(Boolean).join(" ") || undefined} key={index}>
+              {openFile ? <TerminalPathText cwd={props.cwd} openFile={openFile} text={span.text} title={t("workspaceFiles.showInFilesPanel")} /> : span.text}
+            </span>
           ))
         : <span className="t-dim">{props.emptyText}</span>}
     </pre>
   );
+}
+
+// TerminalPathText renders one run of output with the file locations in it as buttons that open them.
+// TerminalPathText 渲染一段输出，其中的文件位置显示为可打开对应文件的按钮。
+function TerminalPathText(props: { text: string; cwd?: string | null; openFile: WorkspaceFileOpener; title: string }) {
+  return splitTerminalPaths(props.text).map((piece, index) => typeof piece === "string" ? piece : (
+    <button className="vk-path-open" key={index} onClick={() => props.openFile(terminalPathFrom(props.cwd, piece.path), piece.lines)} title={props.title} type="button">
+      {piece.text}
+    </button>
+  ));
 }
