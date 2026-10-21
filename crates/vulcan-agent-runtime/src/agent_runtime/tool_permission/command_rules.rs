@@ -4,83 +4,254 @@
 //! Both lists are conservative text rules, not a shell parser. A command is read-only only
 //! when every segment is a known read-only command with no write redirection or command
 //! substitution; anything unrecognised is simply "not read-only" and goes through the
-//! permission pipeline. The high-risk list marks commands a judge model may never allow alone.
+//! permission pipeline. A bare grouping `(...)` whose content is itself read-only, optionally
+//! followed by property access such as `.Count`, counts as a read-only value.
+//! The high-risk list marks commands a judge model may never allow alone.
 //! 两份清单都是保守的文本规则，而不是 shell 解析器。只有每个片段都是已知只读命令、且不含写入
-//! 重定向或命令替换时才算只读；无法识别的命令仅视为“非只读”并进入权限管线。高风险清单标记
-//! 判定模型不能单独放行的命令。
+//! 重定向或命令替换时才算只读；无法识别的命令仅视为“非只读”并进入权限管线。内容本身只读的
+//! 裸分组 `(...)`（可后接 `.Count` 等属性访问）视为只读值。高风险清单标记判定模型不能单独放行的命令。
 
 /// Redirection targets that discard or merge output and therefore write nothing.
 /// 丢弃或合并输出、因而不写入任何内容的重定向目标。
 const HARMLESS_REDIRECTION_TARGETS: &[&str] = &["&1", "&2", "$null", "/dev/null", "nul"];
 
+/// Placeholder word for a read-only grouping; the NUL prefix keeps it apart from typed words.
+/// 只读分组的占位词；NUL 前缀使其不会与输入的词混淆。
+const READ_ONLY_GROUP_WORD: &str = "\u{0}group";
+
 /// Commands that only read, whatever their arguments.
 /// 无论参数如何都只读的命令。
 const ALWAYS_READ_ONLY: &[&str] = &[
+    // POSIX and GNU text and system tools.
+    // POSIX 与 GNU 文本及系统工具。
+    "[",
+    "basename",
+    "cal",
     "cat",
+    "cd",
     "cmp",
+    "column",
+    "comm",
     "cut",
-    "date",
     "df",
     "diff",
-    "dir",
     "dirname",
-    "basename",
     "du",
     "echo",
     "egrep",
+    "expand",
+    "expr",
+    "false",
     "fgrep",
-    "file",
-    "findstr",
+    "fmt",
+    "fold",
+    "free",
     "grep",
+    "groups",
     "head",
-    "hostname",
+    "hexdump",
+    "id",
     "jq",
+    "locale",
     "ls",
+    "lsof",
     "md5sum",
+    "netstat",
     "nl",
+    "nproc",
+    "numfmt",
+    "od",
+    "paste",
+    "pgrep",
+    "pr",
     "printenv",
+    "printf",
+    "ps",
     "pwd",
+    "readlink",
     "realpath",
+    "rev",
+    "seq",
     "sha1sum",
     "sha256sum",
+    "sha512sum",
+    "sleep",
     "stat",
+    "strings",
+    "tac",
     "tail",
-    "tree",
+    "test",
+    "tr",
+    "true",
+    "tsort",
     "type",
     "uname",
+    "unexpand",
+    "uptime",
     "wc",
-    "where",
     "which",
     "whoami",
+    // Windows console tools.
+    // Windows 控制台工具。
+    "dir",
+    "findstr",
+    "systeminfo",
+    "tasklist",
+    "ver",
+    "vol",
+    "where",
+    // PowerShell cmdlets that only read state or reshape pipeline objects.
+    // 只读取状态或整理管道对象的 PowerShell cmdlet。
+    "compare-object",
+    "convertfrom-csv",
+    "convertfrom-json",
+    "convertto-csv",
+    "convertto-json",
     "format-list",
     "format-table",
+    "format-wide",
+    "get-acl",
+    "get-alias",
     "get-childitem",
+    "get-ciminstance",
     "get-command",
+    "get-computerinfo",
     "get-content",
+    "get-culture",
     "get-date",
+    "get-executionpolicy",
     "get-filehash",
+    "get-host",
     "get-item",
     "get-itemproperty",
+    "get-itempropertyvalue",
     "get-location",
+    "get-member",
+    "get-module",
+    "get-netipaddress",
+    "get-nettcpconnection",
     "get-process",
+    "get-psdrive",
+    "get-psprovider",
     "get-service",
+    "get-timezone",
+    "get-unique",
+    "get-uptime",
+    "get-variable",
+    "get-winevent",
+    "group-object",
+    "import-csv",
+    "join-path",
     "measure-object",
+    "out-host",
     "out-string",
+    "pop-location",
+    "push-location",
     "resolve-path",
     "select-object",
     "select-string",
+    "select-xml",
+    "set-location",
     "sort-object",
+    "split-path",
+    "start-sleep",
+    "test-json",
     "test-path",
     "where-object",
     "write-host",
     "write-output",
-    "gci",
+    // PowerShell aliases of the cmdlets above.
+    // 上述 cmdlet 的 PowerShell 别名。
+    "chdir",
+    "fl",
+    "ft",
+    "fw",
+    "gal",
     "gc",
+    "gci",
     "gcm",
+    "gdr",
     "gi",
     "gl",
+    "gm",
+    "gp",
+    "gps",
+    "gpv",
+    "group",
+    "gsv",
+    "gu",
+    "gv",
+    "measure",
+    "popd",
+    "pushd",
+    "rvpa",
+    "select",
+    "sl",
     "sls",
 ];
+
+/// Commands that only read unless given one of the listed options, which write a file, change
+/// system state, or run another program. A short option (`-o`) also matches inside a bundle
+/// (`-uo`), a long option (`--output`) matches any abbreviation, and a slash option (`/o`) matches
+/// case-insensitively by prefix.
+/// 除非带有所列选项（写入文件、改变系统状态或运行其他程序），否则只读的命令。短选项（`-o`）
+/// 也匹配合并写法（`-uo`），长选项（`--output`）匹配任意缩写，斜杠选项（`/o`）不区分大小写按
+/// 前缀匹配。
+const READ_ONLY_UNLESS: &[(&str, &[&str])] = &[
+    ("base64", &["-o", "--output"]),
+    ("file", &["-C", "--compile"]),
+    ("sort", &["-o", "--output", "--compress-program", "/o"]),
+    ("ss", &["-K", "--kill"]),
+    ("tree", &["-o", "-R"]),
+];
+
+/// Options under which `date` only formats or reads the clock; anything else may set it.
+/// `date` 只格式化或读取时钟的选项；其他选项可能设置时钟。
+const DATE_READ_OPTIONS: &[&str] = &[
+    "-u",
+    "--utc",
+    "--universal",
+    "-R",
+    "--rfc-email",
+    "-I",
+    "--iso-8601",
+    "--rfc-3339",
+    "-d",
+    "--date",
+    "-r",
+    "--reference",
+];
+
+/// Options under which `hostname` only reports names and addresses.
+/// `hostname` 只报告名称与地址的选项。
+const HOSTNAME_READ_OPTIONS: &[&str] = &[
+    "-a",
+    "--alias",
+    "-A",
+    "--all-fqdns",
+    "-d",
+    "--domain",
+    "-f",
+    "--fqdn",
+    "--long",
+    "-i",
+    "--ip-address",
+    "-I",
+    "--all-ip-addresses",
+    "-s",
+    "--short",
+    "-y",
+    "--yp",
+    "--nis",
+    "-V",
+    "--version",
+    "-h",
+    "--help",
+];
+
+/// `docker` subcommands that only report state when given no global options.
+/// 未带全局选项时只报告状态的 `docker` 子命令。
+const DOCKER_READ_ONLY_SUBCOMMANDS: &[&str] = &["images", "info", "ps", "version"];
 
 /// Git subcommands that only read repository state.
 /// 只读取仓库状态的 Git 子命令。
@@ -460,6 +631,24 @@ fn segment_is_read_only(words: &[String]) -> bool {
     let Some(first) = words.first() else {
         return true;
     };
+    // A read-only grouping only yields a value; anything after it would be a new command.
+    // 只读分组只产生一个值；其后的任何内容都会成为新的命令。
+    if first == READ_ONLY_GROUP_WORD {
+        return words.len() == 1;
+    }
+    // PowerShell variables: a lone `$name.Property` only yields its value, and `$name = <read-only>`
+    // stores one; preference and scope-qualified variables change how later commands run.
+    // PowerShell 变量：单独的 `$name.Property` 只产生其值，`$name = <只读命令>` 只保存一个值；
+    // 偏好变量与带作用域的变量会改变之后命令的运行方式。
+    if let Some(name) = first.strip_prefix('$') {
+        if words.len() == 1 {
+            return !name.contains('=');
+        }
+        return words[1] == "="
+            && words.len() > 2
+            && plain_variable_name(name)
+            && segment_is_read_only(&words[2..]);
+    }
     // `NAME=value cmd` changes the environment of an arbitrary program; never read-only.
     // `NAME=value cmd` 改变任意程序的环境；绝不视为只读。
     if first.contains('=') {
@@ -476,8 +665,98 @@ fn segment_is_read_only(words: &[String]) -> bool {
             .iter()
             .any(|arg| ["-x", "-X", "--exec", "--exec-batch"].contains(&arg.as_str())),
         "rg" => !args.iter().any(|arg| arg.starts_with("--pre")),
-        program => ALWAYS_READ_ONLY.contains(&program),
+        "date" => date_is_read_only(args),
+        // Any operand, or an option outside the reporting set, sets the host name.
+        // 任何操作数或报告集合以外的选项都会设置主机名。
+        "hostname" => args
+            .iter()
+            .all(|arg| HOSTNAME_READ_OPTIONS.contains(&arg.as_str())),
+        // A second operand names the output file.
+        // 第二个操作数指定输出文件。
+        "uniq" => uniq_operand_count(args) <= 1,
+        "ipconfig" => args.iter().all(|arg| arg.eq_ignore_ascii_case("/all")),
+        "docker" => args
+            .first()
+            .is_some_and(|subcommand| DOCKER_READ_ONLY_SUBCOMMANDS.contains(&subcommand.as_str())),
+        program => {
+            if let Some((_, write_options)) =
+                READ_ONLY_UNLESS.iter().find(|(name, _)| *name == program)
+            {
+                return !args
+                    .iter()
+                    .any(|arg| write_options.iter().any(|option| option_given(arg, option)));
+            }
+            ALWAYS_READ_ONLY.contains(&program)
+        }
     }
+}
+
+/// Returns whether `name` is an ordinary PowerShell variable whose assignment affects no command.
+/// 返回 `name` 是否为赋值不影响任何命令的普通 PowerShell 变量。
+fn plain_variable_name(name: &str) -> bool {
+    let lowered = name.to_ascii_lowercase();
+    name.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !lowered.ends_with("preference")
+        && !lowered.starts_with("ps")
+}
+
+/// Returns whether `arg` passes `option` in the conventions of [`READ_ONLY_UNLESS`].
+/// 按 [`READ_ONLY_UNLESS`] 的约定返回 `arg` 是否传入了 `option`。
+fn option_given(arg: &str, option: &str) -> bool {
+    if let Some(long) = option.strip_prefix("--") {
+        let Some(name) = arg.strip_prefix("--") else {
+            return false;
+        };
+        let name = name.split('=').next().unwrap_or(name);
+        return !name.is_empty() && long.starts_with(name);
+    }
+    if let Some(short) = option.strip_prefix('-') {
+        return !arg.starts_with("--")
+            && arg
+                .strip_prefix('-')
+                .is_some_and(|bundle| short.chars().all(|flag| bundle.contains(flag)));
+    }
+    arg.to_ascii_lowercase()
+        .starts_with(option.to_ascii_lowercase().as_str())
+}
+
+/// Returns whether one `date` call only prints: `+FORMAT` operands and reporting options only.
+/// 返回一次 `date` 调用是否只打印：只含 `+FORMAT` 操作数与报告类选项。
+fn date_is_read_only(args: &[String]) -> bool {
+    let mut words = args.iter();
+    while let Some(arg) = words.next() {
+        if arg.starts_with('+') {
+            continue;
+        }
+        let name = arg.split('=').next().unwrap_or(arg);
+        if !DATE_READ_OPTIONS.contains(&name) {
+            return false;
+        }
+        // `-d`, `--date`, `-r` and `--reference` take a value as the next word.
+        // `-d`、`--date`、`-r` 与 `--reference` 以下一个词作为取值。
+        if !arg.contains('=') && ["-d", "--date", "-r", "--reference"].contains(&name) {
+            words.next();
+        }
+    }
+    true
+}
+
+/// Counts the file operands of one `uniq` call, skipping the values of `-f`, `-s` and `-w`.
+/// 统计一次 `uniq` 调用的文件操作数，跳过 `-f`、`-s` 与 `-w` 的取值。
+fn uniq_operand_count(args: &[String]) -> usize {
+    let mut count = 0;
+    let mut words = args.iter();
+    while let Some(arg) = words.next() {
+        if ["-f", "-s", "-w"].contains(&arg.as_str()) {
+            words.next();
+        } else if arg == "-" || !arg.starts_with('-') {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Returns whether one `git` invocation only reads repository state.
@@ -582,6 +861,64 @@ fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Returns the index just past a bare grouping that opens at `open` when its content is a known
+/// read-only command and only property access (`.Count`) follows before the word ends.
+/// 当从 `open` 开始的裸分组内容为已知只读命令、且词结束前只跟属性访问（`.Count`）时，返回紧随
+/// 该分组之后的下标。
+///
+/// Any other shape, such as a method call, an index, or an unmatched bracket, returns `None` so the
+/// caller keeps treating the text as nested code.
+/// 其他形态（方法调用、索引或括号不匹配）返回 `None`，调用方继续将该文本视为嵌套代码。
+fn read_only_group_end(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut close = None;
+    for (offset, current) in chars[open..].iter().enumerate() {
+        if let Some(open_quote) = quote {
+            if *current == open_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match current {
+            '\'' | '"' => quote = Some(*current),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + offset);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
+    let inner: String = chars[open + 1..close].iter().collect();
+    if !is_known_read_only(&inner) {
+        return None;
+    }
+    let mut end = close + 1;
+    while chars.get(end) == Some(&'.')
+        && chars
+            .get(end + 1)
+            .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+    {
+        end += 1;
+        while chars
+            .get(end)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+        {
+            end += 1;
+        }
+    }
+    match chars.get(end) {
+        None => Some(end),
+        Some(c) if c.is_whitespace() || "|;&".contains(*c) => Some(end),
+        Some(_) => None,
+    }
+}
+
 /// Splits `command` at unquoted separators and records redirections and substitutions.
 /// 在未加引号的分隔符处切分 `command`，并记录重定向与命令替换。
 fn scan_command(command: &str) -> CommandScan {
@@ -618,6 +955,14 @@ fn scan_command(command: &str) -> CommandScan {
         }
         match current {
             '\'' | '"' => quote = Some(current),
+            '(' if word.is_empty() => {
+                if let Some(end) = read_only_group_end(&chars, index) {
+                    words.push(String::from(READ_ONLY_GROUP_WORD));
+                    index = end;
+                    continue;
+                }
+                scan.has_substitution = true;
+            }
             // Backticks, `$(...)`, `<(...)`, and PowerShell `(...)`, `@(...)`, and `{...}` all
             // run nested code that the word rules cannot see.
             // 反引号、`$(...)`、`<(...)` 以及 PowerShell 的 `(...)`、`@(...)`、`{...}` 都会运行

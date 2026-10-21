@@ -59,6 +59,10 @@
 - “工作区内”不含 Git 元数据：路径在工作区根目录之下任意深度含 `.git` 组件（规范化已存在部分后比较，忽略
   大小写与结尾的点或空格）时按工作区外处理，因为 Git 会运行其中配置的命令（`core.fsmonitor`、钩子、差异
   驱动），写入后再执行“只读”的 `git status` 即可运行任意程序。
+- 已知只读命令清单唯一定义在 `tool_permission/command_rules.rs`：命令带有写入文件、改变系统状态或运行其他
+  程序的选项（如 `sort -o`、`date -s`、`uniq` 的输出文件、`tree -o`）时不是只读；PowerShell 中内容本身只读的
+  裸分组 `(...)`（可后接 `.Count` 等属性访问）与普通变量赋值 `$name = <只读命令>` 视为只读，`$env:`、偏好变量
+  与 `PS` 前缀变量的赋值不是只读。
 - 已知只读的 `git` 只接受不改变配置与所运行程序的全局选项（`-C`、`--no-pager`、`-P`、`--no-optional-locks`、
   各类 pathspec 选项、`--no-replace-objects`）；带 `-c`、`--config-env`、`--git-dir`、`--work-tree`、`--bare`、
   `--exec-path` 或其他全局选项的调用不是只读。`git grep -O`/`--open-files-in-pager` 与
