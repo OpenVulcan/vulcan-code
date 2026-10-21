@@ -34,18 +34,16 @@ pub(super) fn search(response: &SearchMemoryEventsResponse) -> String {
     output
 }
 
-/// Renders one hit as identity, relevance, provenance and readable content only.
-/// 只把一条命中渲染为身份、相关度、来源与可读内容。
-/// Retrieval-stage evidence stays in the service response; the model only needs what it can act on.
-/// 检索阶段证据保留在服务响应中；模型只需要可据以行动的信息。
+/// Renders one hit as identity, provenance and readable content only, in rank order.
+/// 只把一条命中按排名顺序渲染为身份、来源与可读内容。
+/// Scores and retrieval-stage evidence stay in the service response, as in VMM's own search
+/// result: rerank scores are model-specific, so a raw number would read as a false relevance.
+/// 评分与检索阶段证据保留在服务响应中，与 VMM 自身搜索结果一致：重排分由模型自定义尺度，
+/// 原始数值会被误读为相关度。
 pub(super) fn memory_hit(hit: &MemorySearchHit) -> String {
     // The heading line is the format the WebUI memory card pages by; keep it in sync with that parser.
     // 标题行是 WebUI 记忆卡分页所依据的格式；须与该解析器保持一致。
-    let mut output = format!("\n### Memory {}", hit.memory_id);
-    if let Some(relevance) = reranked_relevance(hit) {
-        output.push_str(&format!(" · relevance {relevance:.2}"));
-    }
-    output.push('\n');
+    let mut output = format!("\n### Memory {}\n", hit.memory_id);
     // Zero source-turn IDs explicitly mean the memory cannot be expanded through turn details.
     // 来源轮次为零明确表示无法通过轮次详情展开该记忆。
     let mut facts = Vec::new();
@@ -68,15 +66,6 @@ pub(super) fn memory_hit(hit: &MemorySearchHit) -> String {
     }
     section(&mut output, "Details preview", &hit.details_preview);
     output
-}
-
-/// Returns the score only when a rerank model judged the hit; rank-derived scores carry no relevance.
-/// 仅当重排模型评判过该命中时返回评分；按名次得出的评分不含相关度。
-fn reranked_relevance(hit: &MemorySearchHit) -> Option<f64> {
-    hit.retrieval
-        .as_ref()
-        .filter(|evidence| evidence.origin.contains("rerank"))
-        .map(|evidence| evidence.final_score)
 }
 
 /// Renders canonical dialogue and independent analysis without dropping distinct content.
@@ -184,48 +173,33 @@ fn id_list(output: &mut String, label: &str, ids: &[u64]) {
 mod tests {
     use super::*;
 
-    /// Confirms a hit keeps its identity, reranked relevance and content but no stage evidence.
-    /// 确认命中保留身份、重排相关度与内容，但不含阶段证据。
+    /// Confirms a hit keeps its identity and content but neither its score nor stage evidence.
+    /// 确认命中保留身份与内容，但不含评分与阶段证据。
     #[test]
-    fn renders_relevance_heading_without_stage_evidence() {
-        let evidence =
-            |origin: &str| {
-                Some(serde_json::from_value(serde_json::json!({
-                "source_kind": "direct", "origin": origin, "origin_label": "Lexical + Rerank",
-                "origin_explanation": "Both recorded stages executed.", "final_score": 0.875,
-                "context_observed": true, "support_count": 9, "rebuttal_count": 5,
-                "matched_context_values": ["fruit=melon"], "matched_context_support_count": 2,
-                "matched_context_rebuttal_count": 1, "matched_context_score_delta": -0.01
-            })).expect("closed evidence contract"))
-            };
+    fn renders_identity_and_content_without_scores_or_stage_evidence() {
         let hit = MemorySearchHit {
             memory_id: 7,
             source_turn_id: 2,
             abstract_text: "Unique summary".into(),
-            retrieval: evidence("lexical_rerank"),
+            retrieval: Some(serde_json::from_value(serde_json::json!({
+                "source_kind": "direct", "origin": "lexical_rerank", "origin_label": "Lexical + Rerank",
+                "origin_explanation": "Both recorded stages executed.", "final_score": 0.875,
+                "context_observed": true, "support_count": 9, "rebuttal_count": 5,
+                "matched_context_values": ["fruit=melon"], "matched_context_support_count": 2,
+                "matched_context_rebuttal_count": 1, "matched_context_score_delta": -0.01
+            })).expect("closed evidence contract")),
             ..Default::default()
         };
         let body = memory_hit(&hit);
-        assert!(
-            body.starts_with("\n### Memory 7 · relevance 0.88\n"),
-            "{body}"
-        );
+        assert!(body.starts_with("\n### Memory 7\n"), "{body}");
         assert!(body.contains("Source turn: 2"));
         assert_eq!(body.matches("Unique summary").count(), 1);
-        for evidence_only in ["lexical_rerank", "9/5", "fruit=melon", "-0.01"] {
+        for evidence_only in ["0.875", "lexical_rerank", "9/5", "fruit=melon", "-0.01"] {
             assert!(
                 !body.contains(evidence_only),
-                "stage evidence leaked: {evidence_only}"
+                "score or stage evidence leaked: {evidence_only}"
             );
         }
-        // Rank-only scores and missing evidence leave the heading without a relevance.
-        // 仅有名次评分或缺失证据时，标题不带相关度。
-        let rank_only = MemorySearchHit {
-            memory_id: 3,
-            retrieval: evidence("lexical_search"),
-            ..Default::default()
-        };
-        assert!(memory_hit(&rank_only).starts_with("\n### Memory 3\n"));
         assert!(!memory_hit(&MemorySearchHit::default()).contains("Source turn"));
     }
 
