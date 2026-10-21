@@ -88,6 +88,14 @@ export function collaborationEventIsUserVisible(event: CollaborationEvent): bool
     && event.event_kind !== "child_task_terminal";
 }
 
+/** Returns the notification identity shared by one notification's lifecycle snapshots, on either side.
+ * 返回一条通知在任一侧的生命周期快照共享的通知身份。
+ * Other collaboration kinds return null. */
+export function collaborationNotificationId(state: CollaborationEvent["after_state"]): string | null {
+  return state.kind === "outbound_notification" || state.kind === "inbound_notification"
+    ? state.notification.notification_id : null;
+}
+
 /** Returns the immutable delivery identity shared by task-message lifecycle snapshots.
  * 返回任务消息生命周期快照共享的不可变投递身份。
  * Other collaboration kinds return null and retain independent timeline semantics.

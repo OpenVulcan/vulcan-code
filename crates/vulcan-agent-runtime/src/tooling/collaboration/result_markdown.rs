@@ -21,10 +21,13 @@ pub(super) fn project(tool: &str, output: Value) -> Result<VulcanToolInvocationR
     if tool != WAIT_AGENTS_RESULT_TOOL_ID {
         if let Some(body) = receipts::render(tool, &output)? {
             let mut payload = json!({"format":"markdown"});
-            // The returned question identity joins the existing live collaboration state.
-            // 返回的问题身份用于关联既有实时协作状态。
-            if let Some(question_id) = output.get("question_id") {
-                payload["question_id"] = question_id.clone();
+            // The returned question, delivery and notification identities join the existing live
+            // collaboration state, so the tool card carries their delivery status.
+            // 返回的问题、投递与通知身份用于关联既有实时协作状态，使工具卡承载其投递状态。
+            for key in ["question_id", "delivery_id", "notification_id"] {
+                if let Some(value) = output.get(key).filter(|value| value.is_string()) {
+                    payload[key] = value.clone();
+                }
             }
             return Ok(
                 VulcanToolInvocationResult::from_model_output(Value::String(body))
@@ -290,6 +293,23 @@ fn wait_markdown(snapshot: &WaitSnapshot) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The receipt keeps the delivery and notification identities that join the card to its live
+    /// delivery state.
+    /// 回执保留将工具卡关联到实时投递状态的投递与通知身份。
+    #[test]
+    fn receipts_carry_the_identities_that_join_live_delivery_state() {
+        let output = json!({"operation_id":"op","notification_id":"n1","delivery_id":"d1",
+            "revision":1,"status":"accepted",
+            "notification":{"target":{"session_id":"s1"},"state":"accepted"},
+            "delivery_error":null});
+        let result = project(super::super::SEND_NOTIFICATION_TOOL_ID, output).unwrap();
+        let host = result.host_result.expect("collaboration receipt");
+        assert_eq!(host.kind, "collaboration_receipt_v1");
+        assert_eq!(host.payload["notification_id"], "n1");
+        assert_eq!(host.payload["delivery_id"], "d1");
+        assert!(host.payload.get("question_id").is_none());
+    }
 
     /// Verifies stopped work, unknown liveness and reply actions survive the public projection.
     /// 验证已停止工作、未知存活状态及回复操作经过公开投影后仍保留。

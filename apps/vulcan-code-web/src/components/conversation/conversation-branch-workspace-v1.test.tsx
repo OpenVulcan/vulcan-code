@@ -19,6 +19,7 @@ vi.mock("./conversation-measured-collapse", async (importOriginal) => {
 });
 
 import { I18nProvider } from "@/i18n";
+import { loadedLocaleCatalog } from "@/i18n-catalogs";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { SelectedConversationEventWindowCommands } from "@/service/selected-conversation-event-window-registry";
@@ -772,6 +773,45 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(container.querySelector('[data-seq="3"]')).toBeNull();
     expect(container.querySelectorAll("details")).toHaveLength(0);
     expect([...cards].every((card) => card.textContent?.includes("相同消息正文"))).toBe(true);
+  });
+
+  it("merges notification lifecycles and shows sent ones on their sending tool card", () => {
+    // A received notification keeps one bubble at its first position with the latest state.
+    // 收到的通知在首个位置保留一个气泡，并显示最新状态。
+    const source = { session_id: "source", root_session_id: "source", project_id: "p", segment_generation: 1 };
+    const target = { session_id: "target", root_session_id: "target", project_id: "p", segment_generation: 1 };
+    const received = (seq: number, state: "accepted" | "projected"): ConversationEventSummary => eventSummary(seq, {
+      kind: "collaboration", version: 1, operation_id: `receive-${seq}`, event_kind: "notification_progress",
+      after_state: { kind: "inbound_notification", notification: { notification_id: "notice-in", delivery_id: "notice-in-delivery",
+        source_operation_id: "send", operation_id: `receive-${seq}`, source, target, body: "received stage notice", state,
+        target_revision: seq, accepted_at_ms: 1001, updated_at_ms: 1000 + seq } },
+    }, "host_only");
+    // A sent notification whose tool receipt names it is shown by that tool card alone.
+    // 工具回执指明的已发通知只由该工具卡展示。
+    const sent = (seq: number, state: "recorded" | "accepted" | "projected"): ConversationEventSummary => eventSummary(seq, {
+      kind: "collaboration", version: 1, operation_id: `notify-${seq}`, event_kind: "notification_progress",
+      after_state: { kind: "outbound_notification", notification: { notification_id: "notice-out", delivery_id: "notice-out-delivery",
+        operation_id: "notify", source: target, target: source, body: "sent stage notice", state, created_at_ms: 1003, updated_at_ms: 1000 + seq } },
+    }, "host_only");
+    const tool = eventSummary(3, {
+      kind: "tool_call", api_call_id: 1, tool_call_id: 3, tool_name: "send_notification",
+      input: { session_id: "source", message: "sent stage notice" }, request_stream_id: "notify-3", status: "completed",
+      output: { model_output: "Notification recorded", host_result: { kind: "collaboration_receipt_v1",
+        payload: { format: "markdown", notification_id: "notice-out", delivery_id: "notice-out-delivery" } } },
+    });
+    const markup = renderWorkspace([received(1, "accepted"), received(2, "projected"), tool, sent(4, "recorded"), sent(5, "accepted"), sent(6, "projected")]);
+    const container = document.createElement("div");
+    container.innerHTML = markup;
+    const notifications = container.querySelectorAll('[data-collaboration-card-kind="notification"]');
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].getAttribute("data-seq")).toBe("1");
+    // Both the merged card and the tool card name the latest, projected, state.
+    // 合并后的卡片与工具卡都显示最新的已投影状态。
+    const projected = loadedLocaleCatalog("zh-CN")?.["conversation.collaboration.status.projected"];
+    expect(projected).toBeTruthy();
+    expect(notifications[0].querySelector(".vk-collab-badge")?.textContent).toBe(projected);
+    expect(container.querySelector("[data-collaboration-attached-status]")?.textContent).toBe(projected);
+    expect(container.textContent?.match(/sent stage notice/g)).toHaveLength(1);
   });
 
   it("attaches result receipts to their exact card", () => {

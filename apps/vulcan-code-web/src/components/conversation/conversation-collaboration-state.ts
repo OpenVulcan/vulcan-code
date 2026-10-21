@@ -28,12 +28,15 @@ export interface ConversationCollaborationState {
   /** Result transport progress keyed by the original task delivery, separate from business outcomes.
    * 按原任务投递索引的结果传输进度，与业务结果分离。 */
   taskResultProgress: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "task_result_acknowledgement" | "task_result_projection" }>>;
+  /** Latest lifecycle snapshot of each notification, indexed by notification ID.
+   * 按通知身份索引的每条通知最新生命周期快照。 */
+  notifications: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "outbound_notification" | "inbound_notification" }>>;
 }
 
 /** Shares the exact mounted session's facts with both tool and message cards.
  * 向工具与消息卡片共享精确已挂载会话的事实。 */
 export const ConversationCollaborationStateContext = React.createContext<ConversationCollaborationState>({
-  questions: new Map(), answerDeliveries: new Map(), questionExecutions: new Map(), deliveries: new Map(), tasks: new Map(), taskMessages: new Map(), taskMessageEffects: new Map(), taskResultProgress: new Map(),
+  questions: new Map(), answerDeliveries: new Map(), questionExecutions: new Map(), deliveries: new Map(), tasks: new Map(), taskMessages: new Map(), taskMessageEffects: new Map(), taskResultProgress: new Map(), notifications: new Map(),
 });
 
 /** Folds canonical event order into latest snapshots without modifying persisted history.
@@ -59,6 +62,9 @@ export function projectConversationCollaborationState(events: readonly Conversat
   // Receipts enrich their result card; they never replace the final text or task outcome.
   // 回执补充所属结果卡，绝不替换最终正文或任务结局。
   const taskResultProgress = new Map<string, Extract<CollaborationAfterState, { kind: "task_result_acknowledgement" | "task_result_projection" }>>();
+  // Accepted and projected snapshots of one notification update its first card.
+  // 同一通知的已接纳与已投影快照更新其首张卡片。
+  const notifications = new Map<string, Extract<CollaborationAfterState, { kind: "outbound_notification" | "inbound_notification" }>>();
   for (const summary of events) {
     if (summary.event.kind !== "collaboration") continue;
     // The discriminant fixes ownership; no chronological-neighbor or name matching is permitted.
@@ -103,7 +109,11 @@ export function projectConversationCollaborationState(events: readonly Conversat
       case "child_task":
         tasks.set(state.task.execution_id, state);
         break;
+      case "outbound_notification":
+      case "inbound_notification":
+        notifications.set(state.notification.notification_id, state);
+        break;
     }
   }
-  return { questions, answerDeliveries, questionExecutions, deliveries, tasks, taskMessages, taskMessageEffects, taskResultProgress };
+  return { questions, answerDeliveries, questionExecutions, deliveries, tasks, taskMessages, taskMessageEffects, taskResultProgress, notifications };
 }

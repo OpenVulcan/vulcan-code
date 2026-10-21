@@ -14,13 +14,16 @@ import {
   type ConversationRenderItemsProjector,
 } from "@/components/conversation/conversation-transcript";
 import type {
+  CollaborationAfterState,
   ConversationEventBody,
   ConversationEventSummary,
   ResourceId,
   StatBucket,
 } from "@/service/conversation-event-window-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
-import { collaborationEventIsUserVisible, collaborationTaskMessageId, requestConfigChangeKind } from "@/service/conversation-event-display-projection";
+import {
+  collaborationEventIsUserVisible, collaborationNotificationId, collaborationTaskMessageId, requestConfigChangeKind,
+} from "@/service/conversation-event-display-projection";
 import { projectCollaborationTurnLayout } from "@/service/conversation-collaboration-turn-layout";
 import { decodeAgentQuestionInput } from "@/service/conversation-agent-question-input";
 import { projectTurnUsageCoverage, type TurnUsageCoverage } from "@/service/conversation-usage-coverage";
@@ -180,7 +183,11 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     // Only an actually loaded outbound question card can replace its successful ask-tool receipt.
     // 只有实际加载的发出提问卡，才能替代对应的成功提问工具回执。
     const visibleQuestionIds = new Set<string>();
+    // Deliveries and notifications whose sending tool card is loaded show their status on that card.
+    // 发送它们的工具卡已加载时，投递与通知在该卡上显示状态。
+    const claimed: CollaborationReceiptClaims = { deliveryIds: new Set(), notificationIds: new Set() };
     for (const summary of events) {
+      if (summary.event.kind === "tool_call") claimCollaborationReceipt(summary.event, claimed);
       if (summary.event.kind === "collaboration" && summary.event.event_kind === "question_created"
         && summary.event.after_state.kind === "question") {
         visibleQuestionIds.add(summary.event.after_state.question.question_id);
@@ -208,16 +215,23 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     const messages: ConversationMessage[] = [];
     // Source and target receipts update the first card for the exact same delivery.
     // 来源与目标回执更新同一精确投递的首张卡片。
-    const taskMessageIds = new Set<string>();
+    // Notification lifecycle snapshots likewise update the first card of the same notification.
+    // 通知生命周期快照同样更新同一通知的首张卡片。
+    const mergedIds = new Set<string>();
     for (const summary of projectCollaborationTurnLayout(events)) {
       // Filter before consulting the event cache so pagination and live question arrival remain reversible.
       // 读取事件缓存前过滤，使分页及实时问题到达后的显示切换保持可逆。
       if (summary.event.kind === "tool_call" && questionCardReplacesToolReceipt(summary.event, visibleQuestionIds)) continue;
       if (summary.event.kind === "collaboration") {
-        const deliveryId = collaborationTaskMessageId(summary.event.after_state);
-        if (deliveryId !== null) {
-          if (taskMessageIds.has(deliveryId)) continue;
-          taskMessageIds.add(deliveryId);
+        const state = summary.event.after_state;
+        if (sendingCardShowsCollaboration(state, claimed)) continue;
+        const deliveryId = collaborationTaskMessageId(state);
+        const notificationId = collaborationNotificationId(state);
+        const mergeId = deliveryId !== null ? `task-message:${deliveryId}`
+          : notificationId !== null ? `notification:${notificationId}` : null;
+        if (mergeId !== null) {
+          if (mergedIds.has(mergeId)) continue;
+          mergedIds.add(mergeId);
         }
       }
       const rootInput = summary.turn_id === null ? undefined : rootInputByTurn.get(summary.turn_id);
@@ -261,6 +275,38 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
       renderItems: projectRenderItems(projectedMessages),
     };
   };
+}
+
+/** Delivery and notification identities claimed by loaded sending tool cards.
+ * 已加载的发送工具卡所认领的投递与通知身份。 */
+interface CollaborationReceiptClaims {
+  deliveryIds: Set<string>;
+  notificationIds: Set<string>;
+}
+
+/** Records the delivery and notification identities one collaboration tool receipt carries.
+ * 记录一条协作工具回执携带的投递与通知身份。 */
+function claimCollaborationReceipt(event: ToolCallBody, claimed: CollaborationReceiptClaims): void {
+  const result = toolHostResult(event);
+  if (result?.kind !== "collaboration_receipt_v1") return;
+  const payload = result.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+  const { delivery_id: deliveryId, notification_id: notificationId } = payload as Record<string, unknown>;
+  if (typeof notificationId === "string") claimed.notificationIds.add(notificationId);
+  else if (typeof deliveryId === "string") claimed.deliveryIds.add(deliveryId);
+}
+
+/** Returns whether a sent message or notification is already shown by its sending tool card.
+ * 返回发出的消息或通知是否已由其发送工具卡展示。
+ * Only the sender's own records qualify; received messages and results keep their own cards.
+ * 只有发送方自身的记录符合条件；收到的消息与结果保留各自的卡片。 */
+function sendingCardShowsCollaboration(state: CollaborationAfterState, claimed: CollaborationReceiptClaims): boolean {
+  switch (state.kind) {
+    case "outbound_task_message": return claimed.deliveryIds.has(state.record.message.delivery_id);
+    case "task_message_effect": return claimed.deliveryIds.has(state.effect.delivery_id);
+    case "outbound_notification": return claimed.notificationIds.has(state.notification.notification_id);
+    default: return false;
+  }
 }
 
 /** Returns whether a completed ask receipt already has its exact outbound question card in this window.

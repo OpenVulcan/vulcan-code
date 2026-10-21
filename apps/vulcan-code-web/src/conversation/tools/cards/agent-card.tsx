@@ -87,7 +87,9 @@ export function AgentCard(props: ToolCardProps) {
         <>
           {agentCount !== null ? <span>{t("toolCard.agent.count").replace("{count}", String(agentCount))}</span> : null}
           <ConversationCollaborationStatus
+            deliveryId={textOf(receipt.delivery_id)}
             executionId={textOf(receipt.execution_id)}
+            notificationId={textOf(receipt.notification_id)}
             questionId={textOf(receipt.question_id) ?? textOf(call.input.question_id)}
           />
         </>

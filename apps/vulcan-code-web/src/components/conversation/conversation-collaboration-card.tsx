@@ -4,7 +4,7 @@ import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "
 import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { ConversationCollaborationStateContext } from "./conversation-collaboration-state";
-import { collaborationTaskMessageId } from "@/service/conversation-event-display-projection";
+import { collaborationNotificationId, collaborationTaskMessageId } from "@/service/conversation-event-display-projection";
 import { decodeAgentQuestionInput, type ConversationAgentQuestionInput } from "@/service/conversation-agent-question-input";
 import { MarkdownMessage } from "./conversation-markdown";
 import type { ConversationAgentInteraction } from "@/types/conversation";
@@ -129,9 +129,13 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
   // Task delivery IDs bind status changes to the original content and stable fold identity.
   // 任务投递身份将状态变化绑定到原正文与稳定折叠身份。
   const taskMessageId = collaborationTaskMessageId(event.after_state);
+  // Notification IDs likewise bind later lifecycle snapshots to the first card.
+  // 通知身份同样将后续生命周期快照绑定到首张卡片。
+  const notificationId = collaborationNotificationId(event.after_state);
   const afterState = event.after_state.kind === "question"
     ? collaborationState.questions.get(event.after_state.question.question_id) ?? event.after_state
-    : taskMessageId !== null ? collaborationState.taskMessages.get(taskMessageId) ?? event.after_state : event.after_state;
+    : taskMessageId !== null ? collaborationState.taskMessages.get(taskMessageId) ?? event.after_state
+      : notificationId !== null ? collaborationState.notifications.get(notificationId) ?? event.after_state : event.after_state;
   // The original event selects question versus reply; later snapshots update status, never change that identity.
   // 原始事件决定提问还是回复；后续快照只更新状态，绝不改变此身份。
   const isAnswer = event.event_kind === "question_answered" && afterState.kind === "question";
@@ -189,7 +193,8 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
     : collaborationSecondaryBody(afterState);
   return (
     <CollaborationToolCard
-      id={taskMessageId !== null ? `collaboration:task-message:${taskMessageId}` : `collaboration:${event.operation_id}:${props.seq}`} seq={props.seq}
+      id={taskMessageId !== null ? `collaboration:task-message:${taskMessageId}`
+        : notificationId !== null ? `collaboration:notification:${notificationId}` : `collaboration:${event.operation_id}:${props.seq}`} seq={props.seq}
       eventKind="collaboration" collaborationEventKind={event.event_kind}
       cardKind={isTaskResult ? "task-result" : isNotification ? "notification" : isTaskMessage ? "task-message" : "interaction"}
       title={title} status={status} incoming={incoming}
@@ -224,9 +229,15 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
 
 /** Renders delivery and lifecycle status inside its owning tool card, never as a timeline entry.
  * 在所属工具卡内部渲染投递与生命周期状态，绝不成为独立时间线条目。
- * Exact question/execution identities select current snapshots; absent facts render nothing.
- * 精确问题或执行身份选择当前快照；没有事实时不渲染。 */
-export function ConversationCollaborationStatus(props: { questionId?: string | null; executionId?: string | null }) {
+ * Exact question, execution, task-message delivery or notification identities select current snapshots;
+ * absent facts render nothing.
+ * 精确的问题、执行、任务消息投递或通知身份选择当前快照；没有事实时不渲染。 */
+export function ConversationCollaborationStatus(props: {
+  questionId?: string | null;
+  executionId?: string | null;
+  deliveryId?: string | null;
+  notificationId?: string | null;
+}) {
   // Context belongs to the mounted session, so identical foreign IDs cannot leak across panes.
   // 上下文归已挂载会话所有，避免其他面板的身份串入。
   const state = React.useContext(ConversationCollaborationStateContext);
@@ -234,7 +245,12 @@ export function ConversationCollaborationStatus(props: { questionId?: string | n
   const question = props.questionId ? state.questions.get(props.questionId) : undefined;
   const delivery = props.questionId ? state.deliveries.get(props.questionId) : undefined;
   const task = props.executionId ? state.tasks.get(props.executionId) : undefined;
-  const labels = [delivery, question, task].flatMap((fact) => fact ? [collaborationStatus(fact, t)] : []).filter(Boolean);
+  // A task message shows how the target applied it once known, else its delivery.
+  // 任务消息在已知时显示目标的应用结果，否则显示其投递状态。
+  const taskMessage = props.deliveryId
+    ? state.taskMessageEffects.get(props.deliveryId) ?? state.taskMessages.get(props.deliveryId) : undefined;
+  const notification = props.notificationId ? state.notifications.get(props.notificationId) : undefined;
+  const labels = [delivery, question, task, taskMessage, notification].flatMap((fact) => fact ? [collaborationStatus(fact, t)] : []).filter(Boolean);
   if (labels.length === 0) return null;
   return <span className="vk-collab-attached" data-collaboration-attached-status>{labels.join(" · ")}</span>;
 }
