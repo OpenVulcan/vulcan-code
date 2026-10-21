@@ -3,7 +3,14 @@ import { RefreshCw } from "lucide-react";
 import { IconButton } from "@/ui-kit/primitives/button";
 import { useI18n } from "@/i18n";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
-import type { ConversationRunSettledEvent, WorkspaceFileDirectoryListing, WorkspaceGitChangedEvent } from "@/types";
+import type { WorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
+import type {
+  ConversationRunSettledEvent,
+  WorkspaceFileDirectoryListing,
+  WorkspaceFileEntrySummary,
+  WorkspaceFileReadResponse,
+  WorkspaceGitChangedEvent,
+} from "@/types";
 
 // WORKSPACE_FILES_AUTO_REFRESH_DELAY_MS coalesces a burst of change events into one tree refresh.
 // WORKSPACE_FILES_AUTO_REFRESH_DELAY_MS 将一串变更事件合并为一次目录树刷新。
@@ -30,12 +37,36 @@ export interface WorkspaceFilesRefreshOptions {
   // Replaces the loaded listings.
   // 替换已加载的目录列表。
   setDirectories: React.Dispatch<React.SetStateAction<Map<string, WorkspaceFileDirectoryListing>>>;
+  // The open file whose shown text a refresh rereads.
+  // 刷新时重新读取其所示文本的已打开文件。
+  openFile: WorkspaceFilesOpenFile;
 }
 
-// useWorkspaceFilesRefresh reloads every loaded directory still reachable from the root, keeping expansion, and
-// drops listings of directories that disappeared. It runs on demand and after a run in the project settles or Git
+// WorkspaceFilesOpenFile names the previewed file and how to reread it in place.
+// WorkspaceFilesOpenFile 指明正在预览的文件以及原位重新读取它的方式。
+export interface WorkspaceFilesOpenFile {
+  // The open file, or null when no text preview is shown.
+  // 已打开的文件；未显示文本预览时为 null。
+  entry: WorkspaceFileEntrySummary | null;
+  // The preview on screen.
+  // 当前显示的预览。
+  preview: WorkspaceFileReadResponse | null;
+  // Preview ownership, so choosing or closing a file cancels a reread.
+  // 预览所有权，使选择或关闭文件时取消重新读取。
+  ownership: WorkspaceFilesRequestOwnership;
+  // Reads the file's preview.
+  // 读取文件预览。
+  load: (entry: WorkspaceFileEntrySummary) => Promise<WorkspaceFileReadResponse>;
+  // Shows a new preview.
+  // 显示新的预览。
+  setPreview: (preview: WorkspaceFileReadResponse) => void;
+}
+
+// useWorkspaceFilesRefresh reloads every loaded directory still reachable from the root, keeping expansion,
+// drops listings of directories that disappeared, and rereads the open file's text in place. It runs on demand and after a run in the project settles or Git
 // reports a change in the workspace, so files created outside the panel show up while it stays open.
-// useWorkspaceFilesRefresh 重新加载从根目录仍可到达的每个已加载目录并保留展开状态，同时丢弃已消失目录的列表。
+// useWorkspaceFilesRefresh 重新加载从根目录仍可到达的每个已加载目录并保留展开状态，丢弃已消失目录的列表，
+// 并原位重新读取已打开文件的文本。
 // 它按需运行，也会在项目中的运行结束或 Git 报告工作区变化后运行，使面板保持打开时也能显示在面板外新建的文件。
 // Returns whether a refresh is running and the function that starts one.
 // 返回是否正在刷新以及启动刷新的函数。
@@ -63,6 +94,7 @@ export function useWorkspaceFilesRefresh(options: WorkspaceFilesRefreshOptions):
         do {
           state.queued = false;
           await refreshLoadedDirectories(latest.current);
+          await rereadOpenFile(latest.current.openFile);
         } while (state.queued && latest.current.enabled);
       } finally {
         state.running = false;
@@ -140,6 +172,29 @@ async function refreshLoadedDirectories(options: WorkspaceFilesRefreshOptions): 
     for (const path of stale) next.delete(path);
     return next;
   });
+}
+
+// rereadOpenFile replaces the open file's text preview only when the file changed, so an unchanged file keeps
+// its scroll position and nothing flashes. A failed reread keeps what is shown; the preview's retry stays available.
+// rereadOpenFile 仅在文件变化时替换已打开文件的文本预览，使未变化的文件保持滚动位置且不闪烁。重新读取失败时保留当前
+// 显示内容，预览的重试入口仍然可用。
+async function rereadOpenFile(openFile: WorkspaceFilesOpenFile): Promise<void> {
+  const { entry, preview } = openFile;
+  if (!entry || !preview || typeof preview.content !== "string") return;
+  const request = openFile.ownership.beginPreviewRequest();
+  if (!request) return;
+  try {
+    const next = await openFile.load(entry);
+    if (!openFile.ownership.ownsPreviewRequest(request)) return;
+    if (next.content !== preview.content || next.truncated !== preview.truncated || next.sizeBytes !== preview.sizeBytes) {
+      openFile.setPreview(next);
+    }
+  } catch {
+    // Keep the shown preview; a deleted or unreadable file surfaces when the user reopens it.
+    // 保留当前预览；文件被删除或不可读时会在用户重新打开时显示。
+  } finally {
+    openFile.ownership.finishPreviewRequest(request);
+  }
 }
 
 // comparableWorkspacePath folds separator style, trailing separators and case so host path spellings compare equal.

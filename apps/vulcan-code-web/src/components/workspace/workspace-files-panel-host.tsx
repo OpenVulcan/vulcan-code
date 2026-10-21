@@ -382,9 +382,10 @@ export function WorkspaceFilesPanelHost(props: {
   // handleOpenDirectoryPathsChange mirrors the shared drawer expansion state into panel cache state.
   // handleOpenDirectoryPathsChange 将共享抽屉展开状态同步到面板缓存状态。
   const handleOpenDirectoryPathsChange = React.useCallback((paths: ReadonlySet<string>) => setExpandedPaths(new Set(paths)), []);
-  // treeRefresh reloads the loaded tree on demand and after the project's runs or Git changes.
-  // treeRefresh 按需以及在项目运行结束或 Git 变化后重新加载已加载的目录树。
-  const treeRefresh = useWorkspaceFilesRefresh({ workspacePath, projectId: workspaceProjectId, enabled: hydratedRequestScopeKey === requestScopeKey, directories, loadDirectory, setDirectories });
+  // treeRefresh reloads the loaded tree and the open file's text on demand and after the project's runs or Git changes.
+  // treeRefresh 按需以及在项目运行结束或 Git 变化后重新加载已加载的目录树与已打开文件的文本。
+  const treeRefresh = useWorkspaceFilesRefresh({ workspacePath, projectId: workspaceProjectId, enabled: hydratedRequestScopeKey === requestScopeKey, directories, loadDirectory, setDirectories,
+    openFile: { entry: previewLoading ? null : selectedEntry, preview, ownership: requestOwnership, setPreview, load: (entry) => props.loadWorkspaceFilePreview(workspacePath ?? "", workspaceProjectId, props.selectedConversationId, entry.path, filters) } });
   // handleDirectoryOpenStateChange lazily loads children when the shared drawer opens a directory.
   // handleDirectoryOpenStateChange 在共享抽屉展开目录时懒加载子项。
   const handleDirectoryOpenStateChange = React.useCallback((path: string, open: boolean) => {
