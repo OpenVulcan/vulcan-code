@@ -164,7 +164,11 @@ export interface UseComposerSessionDraftState extends Omit<UseComposerAttachment
 const sessionDraftWriteCoordinatorV1 = new SessionDraftWriteCoordinatorV1(sessionDraftClientV1);
 // A page that is going away writes any draft still waiting for the coalescing interval.
 // 即将离开的页面会写入仍在等待合并间隔的草稿。
-if (typeof window !== "undefined") window.addEventListener("pagehide", () => sessionDraftWriteCoordinatorV1.writeAllNow());
+const writeDraftsOnPageHide = () => sessionDraftWriteCoordinatorV1.writeAllNow();
+if (typeof window !== "undefined") window.addEventListener("pagehide", writeDraftsOnPageHide);
+// A hot replacement brings its own coordinator, so the replaced module's listener leaves with it.
+// 热替换会带来新的协调器，因此被替换模块的监听器随之移除。
+import.meta.hot?.dispose(() => window.removeEventListener("pagehide", writeDraftsOnPageHide));
 
 /** Creates a detached attachment array for refs, state, and transport ownership.
  * 为 ref、状态与传输所有权创建脱离引用的附件数组。
