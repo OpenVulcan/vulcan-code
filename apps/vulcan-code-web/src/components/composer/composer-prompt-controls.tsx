@@ -30,6 +30,7 @@ import {
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { ComposerSlashCommandSummary, PendingPromptSummary } from "@/types";
 import { composerSlashCommandDescriptionKey } from "@/components/composer/composer-model";
+import { composerListOptionId } from "@/components/composer/composer-panel/use-composer-textarea-keys";
 
 import type { ComposerTraceCallback } from "./composer-control-types";
 import { useVerticalSortableItem } from "./composer-sortable";
@@ -248,6 +249,9 @@ function formatPendingPromptTranslation(
 // ComposerSlashCommandPanel renders the WebUI-style slash command candidate list.
 // ComposerSlashCommandPanel 渲染对齐 WebUI 的 slash 指令候选列表。
 export function ComposerSlashCommandPanel(props: {
+  // id names the list for the textarea that drives it.
+  // id 为驱动该列表的文本框命名列表。
+  id: string;
   // Visible commands after prefix filtering.
   // 前缀过滤后的可见指令。
   commands: ComposerSlashCommandSummary[];
@@ -263,13 +267,14 @@ export function ComposerSlashCommandPanel(props: {
 }) {
   const { t } = useI18n();
   return (
-    <div className="vk-slash" role="listbox" aria-label={t("composer.slash.panel")}>
+    <div className="vk-slash" id={props.id} role="listbox" aria-label={t("composer.slash.panel")}>
       {props.commands.map((command, index) => {
         const descriptionKey = composerSlashCommandDescriptionKey(command);
         return (
         <button
           aria-selected={index === props.highlightedIndex}
           className="vk-slash-row"
+          id={composerListOptionId(props.id, index)}
           key={command.id || command.command}
           onClick={() => props.onActivate(command)}
           onMouseEnter={() => props.onHighlight(index)}

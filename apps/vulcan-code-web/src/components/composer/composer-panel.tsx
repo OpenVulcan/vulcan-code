@@ -796,11 +796,11 @@ export function ComposerPanel(props: {
     onAttachFiles: (files) => void stageComposerFiles(files),
   });
 
-  const { pathMention, handleKeyDown: handleTextareaKeyDown } = useComposerTextareaKeys({
+  const { pathMention, handleKeyDown: handleTextareaKeyDown, listboxIds, textareaListbox } = useComposerTextareaKeys({
     input: draftInput, setInput: setDraftInput, textareaRef: composerTextareaRef,
     recallScope: promptRecallScope, slotKey: draftSlotKey,
     workspacePath: props.workspacePath ?? null, projectId: props.projectId, conversationId: props.conversationId,
-    slashPanelVisible, onKeyDown: handleComposerKeyDown,
+    slashPanelVisible, slashActiveIndex: Math.min(slashHighlightedIndex, visibleSlashCommands.length - 1), onKeyDown: handleComposerKeyDown,
   });
 
   React.useLayoutEffect(() => {
@@ -865,13 +865,14 @@ export function ComposerPanel(props: {
         />
         {slashPanelVisible && !isPendingPromptEditing ? (
           <ComposerSlashCommandPanel
+            id={listboxIds.slash}
             commands={visibleSlashCommands}
             highlightedIndex={Math.min(slashHighlightedIndex, visibleSlashCommands.length - 1)}
             onActivate={activateSlashCommand}
             onHighlight={setSlashHighlightedIndex}
           />
         ) : null}
-        {pathMention.visible && !isPendingPromptEditing ? <ComposerPathMentionPanel mention={pathMention} /> : null}
+        {pathMention.visible && !isPendingPromptEditing ? <ComposerPathMentionPanel id={listboxIds.path} mention={pathMention} /> : null}
         <ComposerTextContextMenu
           disabled={isPendingPromptEditing}
           enabled={isElectronRuntime()}
@@ -881,6 +882,7 @@ export function ComposerPanel(props: {
           value={draftInput}
         >
           <Textarea
+            {...textareaListbox}
             aria-label={t("composer.aria.input")}
             disabled={isPendingPromptEditing}
             onChange={(event) => { handleDraftInputChange(event.currentTarget.value); pathMention.trackCaret(event.currentTarget); }}
