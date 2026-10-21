@@ -1064,7 +1064,7 @@
   "conversation.stats.totalTokens": "{count} Token",
   "conversation.stats.cachedTokens": "缓存命中 {count}",
   "conversation.stats.cachedTokensCompact": "缓存 {count} Token",
-  "conversation.stats.outputSpeed": "{speed} Token/s",
+  "conversation.stats.outputSpeed": "{speed} t/s",
   "conversation.stats.group.regular": "常规 {count} Token",
   "conversation.stats.group.subagent": "智能体 {count} Token",
   "conversation.stats.group.contextCompaction": "压缩 {count} Token",

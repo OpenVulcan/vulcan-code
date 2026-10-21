@@ -1064,7 +1064,7 @@
   "conversation.stats.totalTokens": "{count} Tokens",
   "conversation.stats.cachedTokens": "Cache-Treffer {count}",
   "conversation.stats.cachedTokensCompact": "Cache {count} Tokens",
-  "conversation.stats.outputSpeed": "{speed} Tokens/s",
+  "conversation.stats.outputSpeed": "{speed} t/s",
   "conversation.stats.group.regular": "Regulär {count} Tokens",
   "conversation.stats.group.subagent": "Agent {count} Tokens",
   "conversation.stats.group.contextCompaction": "Komprimierung {count} Tokens",

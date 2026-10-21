@@ -1064,7 +1064,7 @@
   "conversation.stats.totalTokens": "토큰 {count}개",
   "conversation.stats.cachedTokens": "캐시 적중 {count}",
   "conversation.stats.cachedTokensCompact": "캐시 토큰 {count}개",
-  "conversation.stats.outputSpeed": "초당 토큰 {speed}개",
+  "conversation.stats.outputSpeed": "{speed} t/s",
   "conversation.stats.group.regular": "일반 토큰 {count}개",
   "conversation.stats.group.subagent": "에이전트 토큰 {count}개",
   "conversation.stats.group.contextCompaction": "압축 토큰 {count}개",

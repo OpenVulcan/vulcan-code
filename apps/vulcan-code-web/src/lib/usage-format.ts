@@ -63,13 +63,13 @@ export function formatTokenSpeedValue(tokensPerSecond: number): string {
   return normalized > 0 && normalized < 0.1 ? "<0.1" : normalized.toFixed(1);
 }
 
-// formatTokenSpeed renders a full output speed label such as "343.8 Token/s" or "343.8 tokens/s".
-// formatTokenSpeed 渲染完整输出速度文本，例如 "343.8 Token/s" 或 "343.8 tokens/s"。
+// formatTokenSpeed renders a compact output speed label such as "343.8 t/s", the same unit in every language.
+// formatTokenSpeed 渲染紧凑的输出速度文本，例如 "343.8 t/s"，各语言使用同一单位。
 //
 // Parameters:
-// 参数：tokensPerSecond 是每秒 Token 数，locale 是当前界面语言。
-// Returns the speed with the locale token unit per second.
-// 返回带当前语言 Token 单位的每秒速度文本。
-export function formatTokenSpeed(tokensPerSecond: number, locale: string): string {
-  return `${formatTokenSpeedValue(tokensPerSecond)} ${tokenUnitLabel(locale)}/s`;
+// 参数：tokensPerSecond 是每秒 Token 数。
+// Returns the speed in tokens per second.
+// 返回以每秒 Token 计的速度文本。
+export function formatTokenSpeed(tokensPerSecond: number): string {
+  return `${formatTokenSpeedValue(tokensPerSecond)} t/s`;
 }

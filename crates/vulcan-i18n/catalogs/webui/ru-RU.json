@@ -1064,7 +1064,7 @@
   "conversation.stats.totalTokens": "Токенов: {count}",
   "conversation.stats.cachedTokens": "Попаданий в кеш: {count}",
   "conversation.stats.cachedTokensCompact": "Кеш: {count} токенов",
-  "conversation.stats.outputSpeed": "{speed} токенов/с",
+  "conversation.stats.outputSpeed": "{speed} t/s",
   "conversation.stats.group.regular": "Обычные: {count} токенов",
   "conversation.stats.group.subagent": "Агент: {count} токенов",
   "conversation.stats.group.contextCompaction": "Сжатие: {count} токенов",

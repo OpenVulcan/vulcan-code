@@ -1064,7 +1064,7 @@
   "conversation.stats.totalTokens": "{count} Token",
   "conversation.stats.cachedTokens": "快取命中 {count}",
   "conversation.stats.cachedTokensCompact": "快取 {count} Token",
-  "conversation.stats.outputSpeed": "{speed} Token/s",
+  "conversation.stats.outputSpeed": "{speed} t/s",
   "conversation.stats.group.regular": "一般 {count} Token",
   "conversation.stats.group.subagent": "代理 {count} Token",
   "conversation.stats.group.contextCompaction": "壓縮 {count} Token",

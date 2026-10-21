@@ -74,7 +74,7 @@ describe("turn statistics hover card", () => {
     );
 
     expect(markup).toContain("本轮统计");
-    expect(markup).toContain("平均 8.4 Token/s");
+    expect(markup).toContain("平均 8.4 t/s");
     expect(markup).toContain("总请求次数");
     expect(markup).toContain("工具调用次数");
     expect(markup).toContain("缓存 Token");

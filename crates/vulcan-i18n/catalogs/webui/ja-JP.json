@@ -1064,7 +1064,7 @@
   "conversation.stats.totalTokens": "{count} トークン",
   "conversation.stats.cachedTokens": "キャッシュヒット {count}",
   "conversation.stats.cachedTokensCompact": "キャッシュ {count} トークン",
-  "conversation.stats.outputSpeed": "{speed} トークン/秒",
+  "conversation.stats.outputSpeed": "{speed} t/s",
   "conversation.stats.group.regular": "通常 {count} トークン",
   "conversation.stats.group.subagent": "エージェント {count} トークン",
   "conversation.stats.group.contextCompaction": "圧縮 {count} トークン",

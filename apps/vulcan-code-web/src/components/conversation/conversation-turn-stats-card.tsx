@@ -88,7 +88,7 @@ export function TurnStatsTooltipCard(props: {
   // speedLabel keeps the average speed compact in the card header.
   // speedLabel 在卡片标题中紧凑展示平均速度。
   const speedLabel = speed != null && Number.isFinite(speed) && speed >= 0
-    ? formatTokenSpeed(speed, props.locale)
+    ? formatTokenSpeed(speed)
     : "-";
 
   return (

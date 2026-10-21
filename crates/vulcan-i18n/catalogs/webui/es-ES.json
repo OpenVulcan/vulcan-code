@@ -1064,7 +1064,7 @@
   "conversation.stats.totalTokens": "{count} tokens",
   "conversation.stats.cachedTokens": "Aciertos de caché {count}",
   "conversation.stats.cachedTokensCompact": "Caché {count} tokens",
-  "conversation.stats.outputSpeed": "{speed} tokens/s",
+  "conversation.stats.outputSpeed": "{speed} t/s",
   "conversation.stats.group.regular": "Normal {count} tokens",
   "conversation.stats.group.subagent": "Agente {count} tokens",
   "conversation.stats.group.contextCompaction": "Compresión {count} tokens",

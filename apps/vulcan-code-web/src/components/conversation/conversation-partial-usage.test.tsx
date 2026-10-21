@@ -38,7 +38,7 @@ describe("partial usage display from old persisted V1 events", () => {
     const metadata = branch.messages.find((message) => message.recordKind === "turn-stats")!.metadata;
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
     expect(markup).toContain("平均 -");
-    expect(markup).not.toContain("53.0 Token/s");
+    expect(markup).not.toContain("53.0 t/s");
     expect(markup).toContain("缺少配对的首 Token 时间与输出用量");
   });
 

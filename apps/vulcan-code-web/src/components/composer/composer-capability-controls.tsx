@@ -229,6 +229,7 @@ export function ContextUsageOrb(props: {
         align="end"
         aria-label={title}
         className="vk-stats"
+        data-width="wide"
         collisionPadding={12}
         ref={contentRef}
         onOpenAutoFocus={(event) => { event.preventDefault(); if (!openedByHover.current) contentRef.current?.focus(); }}

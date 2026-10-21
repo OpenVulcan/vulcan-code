@@ -38,10 +38,9 @@ describe("formatDurationSeconds", () => {
 
 describe("formatTokenSpeed", () => {
   it("uses one decimal and the locale token unit", () => {
-    expect(formatTokenSpeed(343.84, "zh-CN")).toBe("343.8 Token/s");
-    expect(formatTokenSpeed(343.84, "en-US")).toBe("343.8 tokens/s");
-    expect(formatTokenSpeed(0.04, "zh-CN")).toBe("<0.1 Token/s");
-    expect(formatTokenSpeed(0, "en-US")).toBe("0.0 tokens/s");
+    expect(formatTokenSpeed(343.84)).toBe("343.8 t/s");
+    expect(formatTokenSpeed(0.04)).toBe("<0.1 t/s");
+    expect(formatTokenSpeed(0)).toBe("0.0 t/s");
     expect(tokenUnitLabel("zh-CN")).toBe("Token");
   });
 });
