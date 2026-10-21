@@ -3,10 +3,9 @@
 
 use crate::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, INTERNAL_RESOURCE_PART_TYPE,
-    LlmCoreError, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
-    OPENAI_RESPONSES_PROFILE_ID,
+    GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
+    GOOGLE_CODE_ASSIST_PROFILE_ID, INTERNAL_RESOURCE_PART_TYPE, LlmCoreError,
+    OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 use serde_json::Value;
 
@@ -28,8 +27,7 @@ pub fn validate_target_media_projection(
         | GEMINI_INTERACTIONS_PROFILE_ID => ("/input", "content"),
         OPENAI_CHAT_PROFILE_ID
         | ANTHROPIC_MESSAGES_PROFILE_ID
-        | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-        | CLAUDE_CODE_MESSAGES_PROFILE_ID => ("/messages", "content"),
+        | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => ("/messages", "content"),
         GEMINI_GENERATE_CONTENT_PROFILE_ID => ("/contents", "parts"),
         GOOGLE_CODE_ASSIST_PROFILE_ID => ("/request/contents", "parts"),
         _ => {
@@ -108,13 +106,12 @@ fn validate_media_part_type(profile_id: &str, part: &Value) -> Result<(), LlmCor
             "Standard Responses has no registered audio/video input shape.",
         ));
     }
-    if matches!(
-        profile_id,
-        ANTHROPIC_MESSAGES_PROFILE_ID | CLAUDE_CODE_MESSAGES_PROFILE_ID
-    ) && matches!(
-        kind,
-        Some("video" | "audio" | "input_audio" | "input_video")
-    ) {
+    if matches!(profile_id, ANTHROPIC_MESSAGES_PROFILE_ID)
+        && matches!(
+            kind,
+            Some("video" | "audio" | "input_audio" | "input_video")
+        )
+    {
         return Err(LlmCoreError::new(
             "The selected standard Anthropic profile cannot consume audio/video extensions.",
         ));

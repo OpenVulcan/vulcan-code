@@ -532,30 +532,27 @@ mod tests {
     /// 验证入口级默认值可防止订阅路由继承其他入口的协议。
     #[test]
     fn default_binding_uses_exact_service_entry_override() {
-        let manifest = compile_manifest_text(&bundled_text("anthropic"), ManifestOwnership::System)
-            .expect("anthropic manifest must compile");
+        let manifest = compile_manifest_text(&bundled_text("openai"), ManifestOwnership::System)
+            .expect("openai manifest must compile");
         let public_binding = resolve_system_model_protocol_binding(
             &manifest,
             "public-api",
             Some("api-key"),
-            "claude-future-public",
+            "gpt-future-public",
         )
         .expect("public unknown model must use the public entry default");
-        assert_eq!(
-            public_binding.protocol_profile_id,
-            ANTHROPIC_MESSAGES_PROFILE_ID
-        );
+        assert_eq!(public_binding.protocol_profile_id, OPENAI_CHAT_PROFILE_ID);
 
         let subscription_binding = resolve_system_model_protocol_binding(
             &manifest,
-            "claude-code-subscription",
-            Some("claude-code-oauth"),
-            "claude-future-subscription",
+            "codex-subscription",
+            Some("codex-oauth"),
+            "gpt-future-subscription",
         )
         .expect("subscription unknown model must use the subscription entry default");
         assert_eq!(
             subscription_binding.protocol_profile_id,
-            "claude-code-messages.v1"
+            OPENAI_CODEX_RESPONSES_PROFILE_ID
         );
     }
 

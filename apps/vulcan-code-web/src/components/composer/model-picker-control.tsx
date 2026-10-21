@@ -373,7 +373,6 @@ export function modelAccountProtocolDisplayName(protocolId: string): string {
   const labels: Record<string, string> = {
     "anthropic-messages.v1": "Anthropic Messages",
     "anthropic-messages-video.v1": "Anthropic Messages + Video",
-    "claude-code-messages.v1": "Claude Code Messages",
     "openai-chat-completions.v1": "OpenAI Chat Completions",
     "openai-codex-responses.v1": "OpenAI Codex Responses",
     "openai-responses.v1": "OpenAI Responses",

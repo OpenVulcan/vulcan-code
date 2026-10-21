@@ -10,9 +10,9 @@ use std::collections::BTreeSet;
 use vulcan_llm_core::UpstreamProtocol;
 use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
-    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+    GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
+    GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID,
 };
 
 /// Immutable route selected before an execution starts.
@@ -289,9 +289,9 @@ pub(crate) fn upstream_protocol_for_profile_id(profile_id: &str) -> Option<Upstr
             Some(UpstreamProtocol::OpenAiResponses)
         }
         OPENAI_CHAT_PROFILE_ID => Some(UpstreamProtocol::OpenAiChatCompletions),
-        ANTHROPIC_MESSAGES_PROFILE_ID
-        | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-        | CLAUDE_CODE_MESSAGES_PROFILE_ID => Some(UpstreamProtocol::AnthropicMessages),
+        ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
+            Some(UpstreamProtocol::AnthropicMessages)
+        }
         GEMINI_GENERATE_CONTENT_PROFILE_ID => Some(UpstreamProtocol::GeminiGenerateContent),
         GEMINI_INTERACTIONS_PROFILE_ID => Some(UpstreamProtocol::GeminiInteractions),
         GOOGLE_CODE_ASSIST_PROFILE_ID => Some(UpstreamProtocol::GoogleCodeAssist),

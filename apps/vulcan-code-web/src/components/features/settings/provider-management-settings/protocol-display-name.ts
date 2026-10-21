@@ -12,7 +12,6 @@ export function protocolDisplayName(profileId: string): string {
 // protocolDisplayNames 是首批已注册 Profile 的完整用户可见名称映射。
 const protocolDisplayNames: Readonly<Record<string, string>> = {
   "anthropic-messages.v1": "Anthropic Messages",
-  "claude-code-messages.v1": "Claude Code",
   "gemini-interactions.v1": "Gemini Interactions",
   "google.code_assist.generate_content.v1": "Google Code Assist",
   "google.gemini.generate_content": "Gemini Generate Content",

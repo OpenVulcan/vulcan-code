@@ -10,10 +10,9 @@ use vulcan_ai_contract::{
 };
 use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
-    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolProfile,
-    ProtocolRegistry,
+    GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
+    GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID, ProtocolProfile, ProtocolRegistry,
 };
 
 /// Builds an offline client exercising the same encoder as HTTP and WebSocket dispatch.
@@ -57,7 +56,6 @@ fn production_multimodal_projection_matches_source_capability_registry() {
         OPENAI_CHAT_PROFILE_ID,
         ANTHROPIC_MESSAGES_PROFILE_ID,
         ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-        CLAUDE_CODE_MESSAGES_PROFILE_ID,
         GEMINI_GENERATE_CONTENT_PROFILE_ID,
         GEMINI_INTERACTIONS_PROFILE_ID,
         GOOGLE_CODE_ASSIST_PROFILE_ID,
@@ -142,12 +140,6 @@ fn production_multimodal_projection_covers_all_target_families() {
             "/messages/0/content/1",
             false,
             true,
-        ),
-        (
-            CLAUDE_CODE_MESSAGES_PROFILE_ID,
-            "/messages/0/content/1",
-            false,
-            false,
         ),
         (
             GEMINI_GENERATE_CONTENT_PROFILE_ID,
@@ -240,9 +232,7 @@ fn production_multimodal_projection_covers_all_target_families() {
                         );
                     }
                 }
-                ANTHROPIC_MESSAGES_PROFILE_ID
-                | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-                | CLAUDE_CODE_MESSAGES_PROFILE_ID => {
+                ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
                     assert_eq!(
                         part["type"],
                         match kind {

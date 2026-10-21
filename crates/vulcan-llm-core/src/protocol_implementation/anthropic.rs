@@ -22,29 +22,6 @@ pub const ANTHROPIC_MESSAGES_PROFILE_ID: &str = "anthropic-messages.v1";
 /// Stable Anthropic-compatible profile identifier with a registered video block extension.
 /// 带已注册视频内容块扩展的稳定 Anthropic 兼容 Profile 标识。
 pub const ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID: &str = "anthropic-messages-video.v1";
-/// Stable Claude Code subscription Messages profile identifier.
-/// 稳定的 Claude Code 订阅 Messages Profile 标识。
-pub const CLAUDE_CODE_MESSAGES_PROFILE_ID: &str = "claude-code-messages.v1";
-
-/// Exact lowercase-to-Claude-Code tool names reviewed against CLIProxyAPI.
-/// 对照 CLIProxyAPI 审核后的精确小写到 Claude Code 工具名映射。
-const CLAUDE_CODE_TOOL_NAME_PAIRS: [(&str, &str); 14] = [
-    ("bash", "Bash"),
-    ("read", "Read"),
-    ("write", "Write"),
-    ("edit", "Edit"),
-    ("glob", "Glob"),
-    ("grep", "Grep"),
-    ("task", "Task"),
-    ("webfetch", "WebFetch"),
-    ("todowrite", "TodoWrite"),
-    ("question", "Question"),
-    ("skill", "Skill"),
-    ("ls", "LS"),
-    ("todoread", "TodoRead"),
-    ("notebookedit", "NotebookEdit"),
-];
-
 /// Encodes public requests as Anthropic Messages requests.
 /// 将公共请求编码为 Anthropic Messages 请求。
 #[derive(Debug, Default)]
@@ -78,7 +55,7 @@ impl ProtocolProfile for AnthropicMessagesProfile {
         execution_id: String,
         _request: &AiExecutionRequest,
     ) -> Box<dyn ProtocolStreamDecoder> {
-        Box::new(AnthropicStreamDecoder::new(execution_id, BTreeMap::new()))
+        Box::new(AnthropicStreamDecoder::new(execution_id))
     }
 }
 
@@ -117,137 +94,8 @@ impl ProtocolProfile for AnthropicMessagesVideoProfile {
         execution_id: String,
         _request: &AiExecutionRequest,
     ) -> Box<dyn ProtocolStreamDecoder> {
-        Box::new(AnthropicStreamDecoder::new(execution_id, BTreeMap::new()))
+        Box::new(AnthropicStreamDecoder::new(execution_id))
     }
-}
-
-/// Encodes public requests through the isolated Claude Code Messages identity.
-/// 通过隔离的 Claude Code Messages 身份编码公共请求。
-#[derive(Debug, Default)]
-pub struct ClaudeCodeMessagesProfile;
-
-impl ProtocolProfile for ClaudeCodeMessagesProfile {
-    /// Returns the stable Claude Code profile identifier.
-    /// 返回稳定的 Claude Code Profile 标识。
-    fn id(&self) -> &'static str {
-        CLAUDE_CODE_MESSAGES_PROFILE_ID
-    }
-
-    /// Returns the bounded Claude Code SSE transport declaration.
-    /// 返回有界 Claude Code SSE 传输声明。
-    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
-        crate::ProtocolTransportProfile::bounded_sse()
-    }
-
-    /// Encodes one request while retaining Claude Code-specific route identity.
-    /// 在保留 Claude Code 专用路由身份的情况下编码一个请求。
-    fn encode(
-        &self,
-        request: &AiExecutionRequest,
-    ) -> Result<EncodedWireRequest, ProtocolConversionError> {
-        crate::shared::require_no_native_tools(request, self.id())?;
-        let (forward_names, _) = claude_code_tool_name_maps(request);
-        let mut encoded = encode_anthropic_request(request, false, self.id())?;
-        remap_claude_code_request_tool_names(&mut encoded.body, &forward_names)?;
-        Ok(encoded)
-    }
-
-    /// Creates one isolated Claude Code stream decoder.
-    /// 创建一个隔离的 Claude Code 流解码器。
-    fn create_stream_decoder(
-        &self,
-        execution_id: String,
-        request: &AiExecutionRequest,
-    ) -> Box<dyn ProtocolStreamDecoder> {
-        let (_, reverse_names) = claude_code_tool_name_maps(request);
-        Box::new(AnthropicStreamDecoder::new(execution_id, reverse_names))
-    }
-}
-
-/// Builds request-scoped forward and reverse Claude Code tool-name maps.
-/// 构建请求作用域的 Claude Code 工具名前向与反向映射。
-///
-/// # Parameters
-/// 参数
-/// `request` supplies the exact model-visible tool set for this execution.
-/// `request` 提供本次执行精确的模型可见工具集合。
-///
-/// # Returns
-/// 返回值
-/// Public-to-upstream and upstream-to-public maps containing only names actually rewritten.
-/// 返回仅包含实际改写名称的公共到上游及上游到公共映射。
-fn claude_code_tool_name_maps(
-    request: &AiExecutionRequest,
-) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
-    let registered = request
-        .tools
-        .iter()
-        .map(|tool| tool.name.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut forward = BTreeMap::new();
-    let mut reverse = BTreeMap::new();
-    for (public_name, upstream_name) in CLAUDE_CODE_TOOL_NAME_PAIRS {
-        if registered.contains(public_name) {
-            forward.insert(public_name.to_string(), upstream_name.to_string());
-            reverse
-                .entry(upstream_name.to_string())
-                .or_insert_with(|| public_name.to_string());
-        }
-    }
-    (forward, reverse)
-}
-
-/// Rewrites exact request-scoped tool definitions and historical tool uses for Claude Code OAuth.
-/// 为 Claude Code OAuth 改写精确请求作用域工具定义与历史工具调用。
-///
-/// # Parameters
-/// 参数
-/// `body` is the already encoded Anthropic request and `forward_names` contains only verified
-/// tool names declared by this request.
-/// `body` 是已编码 Anthropic 请求，`forward_names` 仅包含该请求声明的已验证工具名。
-///
-/// # Returns
-/// 返回值
-/// Success after deterministic in-place rewriting, or a structural protocol failure.
-/// 确定性原地改写后返回成功，结构异常时返回协议错误。
-fn remap_claude_code_request_tool_names(
-    body: &mut Value,
-    forward_names: &BTreeMap<String, String>,
-) -> Result<(), ProtocolConversionError> {
-    if forward_names.is_empty() {
-        return Ok(());
-    }
-    if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
-        for tool in tools {
-            let name = tool.get("name").and_then(Value::as_str).ok_or_else(|| {
-                ProtocolConversionError::new("Claude Code tool definition is missing `name`.")
-            })?;
-            if let Some(upstream_name) = forward_names.get(name) {
-                tool["name"] = Value::String(upstream_name.clone());
-            }
-        }
-    }
-    if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
-        for message in messages {
-            let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) else {
-                continue;
-            };
-            for block in content {
-                if block.get("type").and_then(Value::as_str) != Some("tool_use") {
-                    continue;
-                }
-                let name = block.get("name").and_then(Value::as_str).ok_or_else(|| {
-                    ProtocolConversionError::new(
-                        "Claude Code historical tool-use block is missing `name`.",
-                    )
-                })?;
-                if let Some(upstream_name) = forward_names.get(name) {
-                    block["name"] = Value::String(upstream_name.clone());
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Rejects native tools that have no exact Anthropic Messages projection.
@@ -524,9 +372,6 @@ struct AnthropicStreamDecoder {
     /// Open content blocks keyed by Anthropic index.
     /// 按 Anthropic 索引保存的打开内容块。
     blocks: BTreeMap<u32, AnthropicBlock>,
-    /// Request-scoped upstream-to-public tool names produced by the Claude Code profile.
-    /// Claude Code Profile 产生的请求作用域上游到公共工具名映射。
-    tool_names: BTreeMap<String, String>,
 }
 
 /// Tracks one Anthropic content block.
@@ -584,14 +429,13 @@ impl AnthropicStreamDecoder {
     /// 返回值
     /// A fresh decoder with no observed wire state.
     /// 返回尚未观察任何 Wire 状态的新解码器。
-    fn new(execution_id: String, tool_names: BTreeMap<String, String>) -> Self {
+    fn new(execution_id: String) -> Self {
         Self {
             execution_id,
             started: false,
             terminal: false,
             message_id: None,
             blocks: BTreeMap::new(),
-            tool_names,
         }
     }
 
@@ -695,12 +539,7 @@ impl AnthropicStreamDecoder {
             }
             "tool_use" => {
                 let call_id = required_string_from_map(block, "id")?;
-                let upstream_tool_name = required_string_from_map(block, "name")?;
-                let tool_name = self
-                    .tool_names
-                    .get(upstream_tool_name.as_str())
-                    .cloned()
-                    .unwrap_or(upstream_tool_name);
+                let tool_name = required_string_from_map(block, "name")?;
                 self.blocks.insert(
                     index,
                     AnthropicBlock::Tool {
@@ -1668,52 +1507,11 @@ mod tests {
         assert!(AnthropicMessagesProfile.encode(&public_request).is_err());
     }
 
-    /// Verifies Claude Code rewrites only actually declared lowercase names and restores responses.
-    /// 验证 Claude Code 仅改写实际声明的小写名称并恢复响应名称。
-    #[test]
-    fn claude_code_tool_names_are_request_scoped_and_reversible() {
-        let mut public_request = request(PromptCachePolicy::ProviderDefault);
-        public_request.tools = vec![
-            vulcan_ai_contract::ToolDefinition {
-                name: String::from("skill"),
-                description: String::from("Loads one skill."),
-                input_schema: json!({"type": "object"}),
-                input_format: Default::default(),
-                strict: false,
-            },
-            vulcan_ai_contract::ToolDefinition {
-                name: String::from("Bash"),
-                description: String::from("Already title-cased."),
-                input_schema: json!({"type": "object"}),
-                input_format: Default::default(),
-                strict: false,
-            },
-        ];
-        let encoded = ClaudeCodeMessagesProfile
-            .encode(&public_request)
-            .expect("Claude Code request should encode");
-        assert_eq!(encoded.body["tools"][0]["name"], "Skill");
-        assert_eq!(encoded.body["tools"][1]["name"], "Bash");
-
-        let mut decoder = ClaudeCodeMessagesProfile
-            .create_stream_decoder(String::from("execution"), &public_request);
-        let started = decoder
-            .push_sse(
-                Some("content_block_start"),
-                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call","name":"Skill","input":{}}}"#,
-            )
-            .expect("Claude Code tool should start");
-        assert!(started.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ToolCallStarted { tool_name, .. } if tool_name == "skill"
-        )));
-    }
-
     /// Verifies Anthropic publishes the immutable upstream message identifier.
     /// 验证 Anthropic 会发布不可变的上游消息标识。
     #[test]
     fn message_start_publishes_message_identifier() {
-        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"), BTreeMap::new());
+        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"));
         let events = decoder
             .push_sse(
                 Some("message_start"),
@@ -1731,7 +1529,7 @@ mod tests {
     /// 验证分片 Anthropic 工具 JSON 在内容块完成前始终保持增量状态。
     #[test]
     fn fragmented_tool_json_completes_only_at_block_stop() {
-        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"), BTreeMap::new());
+        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"));
         let started = decoder
             .push_sse(
                 Some("content_block_start"),
@@ -1788,7 +1586,7 @@ mod tests {
     /// 验证截断的 Anthropic 工具 JSON 转换为受控的工具中止事件。
     #[test]
     fn truncated_tool_json_is_aborted_at_block_stop() {
-        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"), BTreeMap::new());
+        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"));
         decoder
             .push_sse(
                 Some("content_block_start"),
@@ -1843,7 +1641,7 @@ mod tests {
     /// 验证 message_stop 后的网关传输哨兵不会使已完成输出失效。
     #[test]
     fn gateway_done_after_message_stop_is_ignored() {
-        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"), BTreeMap::new());
+        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"));
         let completed = decoder
             .push_sse(Some("message_stop"), r#"{"type":"message_stop"}"#)
             .expect("message_stop should complete the stream");
@@ -1864,7 +1662,7 @@ mod tests {
                 .is_empty()
         );
 
-        let mut premature = AnthropicStreamDecoder::new(String::from("premature"), BTreeMap::new());
+        let mut premature = AnthropicStreamDecoder::new(String::from("premature"));
         assert!(premature.push_sse(Some("done"), "[DONE]").is_err());
     }
 
@@ -1872,7 +1670,7 @@ mod tests {
     /// 验证 DeepSeek 服务端搜索内容块不会进入宿主工具循环。
     #[test]
     fn server_side_search_blocks_are_consumed_without_host_tool_events() {
-        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"), BTreeMap::new());
+        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"));
         let started = decoder
             .push_sse(
                 Some("content_block_start"),

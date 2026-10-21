@@ -35,10 +35,6 @@ const OPENAI_CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_CODEX_AUTHORIZATION_URL: &str = "https://auth.openai.com/oauth/authorize";
 const OPENAI_CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const OPENAI_CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
-const CLAUDE_CODE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const CLAUDE_CODE_AUTHORIZATION_URL: &str = "https://claude.ai/oauth/authorize";
-const CLAUDE_CODE_TOKEN_URL: &str = "https://api.anthropic.com/v1/oauth/token";
-const CLAUDE_CODE_REDIRECT_URI: &str = "http://localhost:54545/callback";
 const GOOGLE_AUTHORIZATION_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_CODE_ASSIST_LOAD_URL: &str =
@@ -86,9 +82,6 @@ pub enum OAuthProviderKind {
     /// OpenAI Codex subscription authorization.
     /// OpenAI Codex 订阅授权。
     OpenAiCodex,
-    /// Claude Code subscription authorization.
-    /// Claude Code 订阅授权。
-    ClaudeCode,
     /// Google Code Assist authorization using a user-owned desktop OAuth client.
     /// 使用用户自有桌面 OAuth 客户端的 Google Code Assist 授权。
     GoogleCodeAssist,
@@ -272,13 +265,6 @@ struct OAuthFlow {
     state: String,
     verifier: String,
     scopes: BTreeSet<String>,
-    token_body_kind: OAuthTokenBodyKind,
-}
-
-#[derive(Clone, Copy)]
-enum OAuthTokenBodyKind {
-    Form,
-    JsonWithState,
 }
 
 #[derive(Deserialize)]
@@ -1129,7 +1115,6 @@ impl OAuthAuthorizationRuntime {
                 let token = refresh_oauth_token(
                     &self.client,
                     OPENAI_CODEX_TOKEN_URL,
-                    OAuthTokenBodyKind::Form,
                     OPENAI_CODEX_CLIENT_ID,
                     None,
                     tokens,
@@ -1155,20 +1140,6 @@ impl OAuthAuthorizationRuntime {
                     account_id: refreshed_account_id,
                 })
             }
-            CredentialSecretMaterial::ClaudeCodeOAuth { tokens } => {
-                let token = refresh_oauth_token(
-                    &self.client,
-                    CLAUDE_CODE_TOKEN_URL,
-                    OAuthTokenBodyKind::JsonWithState,
-                    CLAUDE_CODE_CLIENT_ID,
-                    None,
-                    tokens,
-                )
-                .await?;
-                Ok(CredentialSecretMaterial::ClaudeCodeOAuth {
-                    tokens: merge_refreshed_token_set(tokens, &token)?,
-                })
-            }
             CredentialSecretMaterial::GoogleOAuth {
                 tokens,
                 client_id,
@@ -1179,7 +1150,6 @@ impl OAuthAuthorizationRuntime {
                 let token = refresh_oauth_token(
                     &self.client,
                     GOOGLE_TOKEN_URL,
-                    OAuthTokenBodyKind::Form,
                     client_id,
                     client_secret.as_deref(),
                     tokens,
@@ -2556,7 +2526,6 @@ async fn write_browser_callback_preflight(
 async fn bind_callback_listener(provider_kind: OAuthProviderKind) -> Result<TcpListener, String> {
     let address = match provider_kind {
         OAuthProviderKind::OpenAiCodex => "127.0.0.1:1455",
-        OAuthProviderKind::ClaudeCode => "127.0.0.1:54545",
         OAuthProviderKind::GoogleCodeAssist | OAuthProviderKind::GoogleGemini => "127.0.0.1:0",
         OAuthProviderKind::MiniMaxGlobalTokenPlan | OAuthProviderKind::MiniMaxChinaTokenPlan => {
             return Err(String::from(
@@ -2584,7 +2553,6 @@ fn callback_redirect_uri(
 ) -> Result<String, String> {
     match provider_kind {
         OAuthProviderKind::OpenAiCodex => Ok(String::from(OPENAI_CODEX_REDIRECT_URI)),
-        OAuthProviderKind::ClaudeCode => Ok(String::from(CLAUDE_CODE_REDIRECT_URI)),
         OAuthProviderKind::GoogleCodeAssist | OAuthProviderKind::GoogleGemini => {
             let port = listener
                 .local_addr()
@@ -2615,86 +2583,62 @@ fn build_oauth_flow(
     verifier: String,
 ) -> Result<OAuthFlow, String> {
     let challenge = build_pkce_challenge(verifier.as_str());
-    let (
-        client_id,
-        client_secret,
-        project_id,
-        authorization_endpoint,
-        token_url,
-        scopes,
-        body_kind,
-    ) = match provider_kind {
-        OAuthProviderKind::OpenAiCodex => (
-            String::from(OPENAI_CODEX_CLIENT_ID),
-            None,
-            None,
-            OPENAI_CODEX_AUTHORIZATION_URL,
-            OPENAI_CODEX_TOKEN_URL,
-            BTreeSet::from([
-                String::from("openid"),
-                String::from("email"),
-                String::from("profile"),
-                String::from("offline_access"),
-            ]),
-            OAuthTokenBodyKind::Form,
-        ),
-        OAuthProviderKind::ClaudeCode => (
-            String::from(CLAUDE_CODE_CLIENT_ID),
-            None,
-            None,
-            CLAUDE_CODE_AUTHORIZATION_URL,
-            CLAUDE_CODE_TOKEN_URL,
-            BTreeSet::from([
-                String::from("user:profile"),
-                String::from("user:inference"),
-                String::from("user:sessions:claude_code"),
-                String::from("user:mcp_servers"),
-                String::from("user:file_upload"),
-            ]),
-            OAuthTokenBodyKind::JsonWithState,
-        ),
-        OAuthProviderKind::GoogleCodeAssist => (
-            required_client_id(client.client_id)?,
-            normalized_optional_secret(client.client_secret)?,
-            None,
-            GOOGLE_AUTHORIZATION_URL,
-            GOOGLE_TOKEN_URL,
-            BTreeSet::from([
-                String::from("openid"),
-                String::from("email"),
-                String::from("https://www.googleapis.com/auth/cloud-platform"),
-            ]),
-            OAuthTokenBodyKind::Form,
-        ),
-        OAuthProviderKind::GoogleGemini => (
-            required_client_id(client.client_id)?,
-            normalized_optional_secret(client.client_secret)?,
-            Some(required_google_project_id(client.project_id)?),
-            GOOGLE_AUTHORIZATION_URL,
-            GOOGLE_TOKEN_URL,
-            BTreeSet::from([
-                String::from("openid"),
-                String::from("email"),
-                String::from("https://www.googleapis.com/auth/cloud-platform"),
-                String::from("https://www.googleapis.com/auth/generative-language.retriever"),
-            ]),
-            OAuthTokenBodyKind::Form,
-        ),
-        OAuthProviderKind::MiniMaxGlobalTokenPlan | OAuthProviderKind::MiniMaxChinaTokenPlan => {
-            return Err(String::from(
-                "MiniMax Device Flow must be constructed by its dedicated runtime.",
-            ));
-        }
-        OAuthProviderKind::OpenVulcanChina
-        | OAuthProviderKind::OpenVulcanGlobal
-        | OAuthProviderKind::OpenDesign
-        | OAuthProviderKind::OpencodeConsole
-        | OAuthProviderKind::KimiCodingPlan => {
-            return Err(String::from(
-                "This authorization flow must be constructed by its dedicated runtime.",
-            ));
-        }
-    };
+    let (client_id, client_secret, project_id, authorization_endpoint, token_url, scopes) =
+        match provider_kind {
+            OAuthProviderKind::OpenAiCodex => (
+                String::from(OPENAI_CODEX_CLIENT_ID),
+                None,
+                None,
+                OPENAI_CODEX_AUTHORIZATION_URL,
+                OPENAI_CODEX_TOKEN_URL,
+                BTreeSet::from([
+                    String::from("openid"),
+                    String::from("email"),
+                    String::from("profile"),
+                    String::from("offline_access"),
+                ]),
+            ),
+            OAuthProviderKind::GoogleCodeAssist => (
+                required_client_id(client.client_id)?,
+                normalized_optional_secret(client.client_secret)?,
+                None,
+                GOOGLE_AUTHORIZATION_URL,
+                GOOGLE_TOKEN_URL,
+                BTreeSet::from([
+                    String::from("openid"),
+                    String::from("email"),
+                    String::from("https://www.googleapis.com/auth/cloud-platform"),
+                ]),
+            ),
+            OAuthProviderKind::GoogleGemini => (
+                required_client_id(client.client_id)?,
+                normalized_optional_secret(client.client_secret)?,
+                Some(required_google_project_id(client.project_id)?),
+                GOOGLE_AUTHORIZATION_URL,
+                GOOGLE_TOKEN_URL,
+                BTreeSet::from([
+                    String::from("openid"),
+                    String::from("email"),
+                    String::from("https://www.googleapis.com/auth/cloud-platform"),
+                    String::from("https://www.googleapis.com/auth/generative-language.retriever"),
+                ]),
+            ),
+            OAuthProviderKind::MiniMaxGlobalTokenPlan
+            | OAuthProviderKind::MiniMaxChinaTokenPlan => {
+                return Err(String::from(
+                    "MiniMax Device Flow must be constructed by its dedicated runtime.",
+                ));
+            }
+            OAuthProviderKind::OpenVulcanChina
+            | OAuthProviderKind::OpenVulcanGlobal
+            | OAuthProviderKind::OpenDesign
+            | OAuthProviderKind::OpencodeConsole
+            | OAuthProviderKind::KimiCodingPlan => {
+                return Err(String::from(
+                    "This authorization flow must be constructed by its dedicated runtime.",
+                ));
+            }
+        };
     let mut authorization_url = Url::parse(authorization_endpoint)
         .map_err(|error| format!("Invalid OAuth authorization endpoint: {error}"))?;
     {
@@ -2727,7 +2671,6 @@ fn build_oauth_flow(
                     .append_pair("access_type", "offline")
                     .append_pair("prompt", "consent");
             }
-            OAuthProviderKind::ClaudeCode => {}
             OAuthProviderKind::MiniMaxGlobalTokenPlan
             | OAuthProviderKind::MiniMaxChinaTokenPlan => {
                 return Err(String::from(
@@ -2756,7 +2699,6 @@ fn build_oauth_flow(
         state,
         verifier,
         scopes,
-        token_body_kind: body_kind,
     })
 }
 
@@ -2951,40 +2893,23 @@ async fn exchange_authorization_code(
     flow: &OAuthFlow,
     code: &str,
 ) -> Result<CredentialSecretMaterial, String> {
-    let response = match flow.token_body_kind {
-        OAuthTokenBodyKind::Form => {
-            let mut form = BTreeMap::from([
-                ("grant_type", String::from("authorization_code")),
-                ("client_id", flow.client_id.clone()),
-                ("code", code.to_string()),
-                ("redirect_uri", flow.redirect_uri.clone()),
-                ("code_verifier", flow.verifier.clone()),
-            ]);
-            if let Some(secret) = &flow.client_secret {
-                form.insert("client_secret", secret.clone());
-            }
-            client
-                .post(flow.token_url.as_str())
-                .form(&form)
-                .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
-                .send()
-                .await
+    let response = {
+        let mut form = BTreeMap::from([
+            ("grant_type", String::from("authorization_code")),
+            ("client_id", flow.client_id.clone()),
+            ("code", code.to_string()),
+            ("redirect_uri", flow.redirect_uri.clone()),
+            ("code_verifier", flow.verifier.clone()),
+        ]);
+        if let Some(secret) = &flow.client_secret {
+            form.insert("client_secret", secret.clone());
         }
-        OAuthTokenBodyKind::JsonWithState => {
-            client
-                .post(flow.token_url.as_str())
-                .json(&serde_json::json!({
-                    "grant_type": "authorization_code",
-                    "client_id": flow.client_id,
-                    "code": code,
-                    "redirect_uri": flow.redirect_uri,
-                    "code_verifier": flow.verifier,
-                    "state": flow.state,
-                }))
-                .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
-                .send()
-                .await
-        }
+        client
+            .post(flow.token_url.as_str())
+            .form(&form)
+            .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
+            .send()
+            .await
     }
     .map_err(|error| format!("OAuth token exchange request failed: {error}"))?;
     let status = response.status();
@@ -3049,7 +2974,6 @@ async fn exchange_authorization_code(
             id_token: token.id_token,
             account_id: codex_identity.map(|claims| claims.authentication.chatgpt_account_id),
         },
-        OAuthProviderKind::ClaudeCode => CredentialSecretMaterial::ClaudeCodeOAuth { tokens },
         OAuthProviderKind::GoogleCodeAssist => {
             let project_id =
                 load_google_code_assist_project(client, tokens.access_token.as_str()).await?;
@@ -3157,9 +3081,9 @@ async fn load_google_code_assist_project(
 ///
 /// # Parameters
 /// 参数
-/// The endpoint, body kind, client identity, and current token set are fixed by the
+/// The endpoint, client identity, and current token set are fixed by the
 /// selected credential material; `client_secret` is supplied only by user-owned Google clients.
-/// 端点、正文类别、客户端身份与当前 Token 集由所选凭据材料固定；
+/// 端点、客户端身份与当前 Token 集由所选凭据材料固定；
 /// `client_secret` 仅由用户自有 Google 客户端提供。
 ///
 /// # Returns
@@ -3169,40 +3093,25 @@ async fn load_google_code_assist_project(
 async fn refresh_oauth_token(
     client: &Client,
     token_url: &str,
-    body_kind: OAuthTokenBodyKind,
     client_id: &str,
     client_secret: Option<&str>,
     tokens: &OAuthTokenSet,
 ) -> Result<OAuthTokenResponse, String> {
-    let response = match body_kind {
-        OAuthTokenBodyKind::Form => {
-            let mut form = BTreeMap::from([
-                ("grant_type", String::from("refresh_token")),
-                ("client_id", client_id.to_string()),
-                ("refresh_token", tokens.refresh_token.clone()),
-            ]);
-            if let Some(client_secret) = client_secret {
-                form.insert("client_secret", client_secret.to_string());
-            }
-            client
-                .post(token_url)
-                .form(&form)
-                .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
-                .send()
-                .await
+    let response = {
+        let mut form = BTreeMap::from([
+            ("grant_type", String::from("refresh_token")),
+            ("client_id", client_id.to_string()),
+            ("refresh_token", tokens.refresh_token.clone()),
+        ]);
+        if let Some(client_secret) = client_secret {
+            form.insert("client_secret", client_secret.to_string());
         }
-        OAuthTokenBodyKind::JsonWithState => {
-            client
-                .post(token_url)
-                .json(&serde_json::json!({
-                    "grant_type": "refresh_token",
-                    "client_id": client_id,
-                    "refresh_token": tokens.refresh_token,
-                }))
-                .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
-                .send()
-                .await
-        }
+        client
+            .post(token_url)
+            .form(&form)
+            .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
+            .send()
+            .await
     }
     .map_err(|error| format!("OAuth token refresh request failed: {error}"))?;
     let status = response.status();
@@ -3791,7 +3700,7 @@ mod tests {
     #[test]
     fn credential_authorization_bindings_are_profile_scoped() {
         let commandcode = CredentialAuthorization::RegisteredOauth {
-            provider: OAuthProviderKind::ClaudeCode,
+            provider: OAuthProviderKind::OpenAiCodex,
         };
         let first =
             credential_authorization_binding("commandcode", "provider-api", "login", &commandcode)
@@ -3818,7 +3727,7 @@ mod tests {
                 "provider-api",
                 "login",
                 &CredentialAuthorization::RegisteredOauth {
-                    provider: OAuthProviderKind::OpenAiCodex,
+                    provider: OAuthProviderKind::GoogleGemini,
                 },
             )
             .expect("declaration-scoped authorization binding")

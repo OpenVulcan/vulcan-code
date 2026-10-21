@@ -930,7 +930,6 @@ function protocolDisplayName(protocolId: string): string {
   const labels: Record<string, string> = {
     "anthropic-messages.v1": "Anthropic",
     "anthropic-messages-video.v1": "Anthropic + Video",
-    "claude-code-messages.v1": "Claude Code",
     "openai-chat-completions.v1": "OpenAI Chat",
     "openai-codex-responses.v1": "Codex Responses",
     "openai-responses.v1": "OpenAI Responses",

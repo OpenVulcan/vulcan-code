@@ -130,13 +130,6 @@ pub enum CredentialSecretMaterial {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account_id: Option<String>,
     },
-    /// Renewable Claude Code account authorization.
-    /// 可续期 Claude Code 账号授权。
-    ClaudeCodeOAuth {
-        /// Shared OAuth token set.
-        /// 共享 OAuth Token 集合。
-        tokens: OAuthTokenSet,
-    },
     /// Renewable Google account authorization.
     /// 可续期 Google 账号授权。
     GoogleOAuth {
@@ -418,7 +411,6 @@ impl CredentialSecretEnvelope {
             | CredentialSecretMaterial::StaticBearer { .. } => CredentialMode::Token,
             CredentialSecretMaterial::OpenAiCodexOAuth { .. }
             | CredentialSecretMaterial::OpencodeConsoleOAuth { .. }
-            | CredentialSecretMaterial::ClaudeCodeOAuth { .. }
             | CredentialSecretMaterial::GoogleOAuth { .. }
             | CredentialSecretMaterial::MiniMaxOAuth { .. }
             | CredentialSecretMaterial::KimiCodingPlanOAuth { .. }
@@ -441,7 +433,6 @@ impl CredentialSecretEnvelope {
             self.material,
             CredentialSecretMaterial::OpenAiCodexOAuth { .. }
                 | CredentialSecretMaterial::OpencodeConsoleOAuth { .. }
-                | CredentialSecretMaterial::ClaudeCodeOAuth { .. }
                 | CredentialSecretMaterial::GoogleOAuth { .. }
                 | CredentialSecretMaterial::MiniMaxOAuth { .. }
                 | CredentialSecretMaterial::KimiCodingPlanOAuth { .. }
@@ -517,8 +508,7 @@ impl CredentialSecretEnvelope {
                     None,
                     None,
                 ),
-                CredentialSecretMaterial::OpencodeConsoleOAuth { tokens, .. }
-                | CredentialSecretMaterial::ClaudeCodeOAuth { tokens } => (
+                CredentialSecretMaterial::OpencodeConsoleOAuth { tokens, .. } => (
                     CredentialExecutionSecretKind::Bearer,
                     tokens.access_token.clone(),
                     None,
@@ -633,7 +623,6 @@ impl CredentialSecretEnvelope {
             } => *expires_at_unix_ms,
             CredentialSecretMaterial::OpenAiCodexOAuth { tokens, .. }
             | CredentialSecretMaterial::OpencodeConsoleOAuth { tokens, .. }
-            | CredentialSecretMaterial::ClaudeCodeOAuth { tokens }
             | CredentialSecretMaterial::GoogleOAuth { tokens, .. }
             | CredentialSecretMaterial::MiniMaxOAuth { tokens, .. }
             | CredentialSecretMaterial::KimiCodingPlanOAuth { tokens, .. } => {
@@ -720,8 +709,7 @@ impl CredentialSecretEnvelope {
             CredentialSecretMaterial::StaticBearer { access_token } => {
                 validate_non_empty_secret("static bearer token", access_token)
             }
-            CredentialSecretMaterial::OpenAiCodexOAuth { tokens, .. }
-            | CredentialSecretMaterial::ClaudeCodeOAuth { tokens } => tokens.validate(),
+            CredentialSecretMaterial::OpenAiCodexOAuth { tokens, .. } => tokens.validate(),
             CredentialSecretMaterial::GoogleOAuth {
                 tokens,
                 client_id,
@@ -1026,9 +1014,12 @@ mod tests {
             account_subject: None,
             email: None,
         };
-        let oauth =
-            CredentialSecretEnvelope::new(CredentialSecretMaterial::ClaudeCodeOAuth { tokens })
-                .expect("OAuth material should validate");
+        let oauth = CredentialSecretEnvelope::new(CredentialSecretMaterial::OpenAiCodexOAuth {
+            tokens,
+            id_token: None,
+            account_id: None,
+        })
+        .expect("OAuth material should validate");
         assert!(!oauth.requires_refresh(5_000, 1_000));
         assert!(oauth.requires_refresh(9_000, 1_000));
         let api_key = CredentialSecretEnvelope::new_api_key(String::from("key"))

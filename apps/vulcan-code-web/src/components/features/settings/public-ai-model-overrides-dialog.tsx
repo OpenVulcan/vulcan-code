@@ -444,8 +444,6 @@ function protocolDisplayName(protocolId: string | null): string {
       return "Anthropic Messages"
     case "anthropic-messages-video.v1":
       return "Anthropic Messages + Video"
-    case "claude-code-messages.v1":
-      return "Claude Code Messages"
     case "openai-chat-completions.v1":
       return "OpenAI Chat Completions"
     case "openai-codex-responses.v1":

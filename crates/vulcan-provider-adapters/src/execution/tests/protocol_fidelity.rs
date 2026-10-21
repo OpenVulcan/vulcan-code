@@ -15,9 +15,9 @@ use vulcan_ai_contract::{
 use vulcan_llm_core::UpstreamProtocol;
 use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
-    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry,
+    GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
+    GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry,
 };
 
 /// Verifies one declared Lite model projects only at the native Codex egress boundary.
@@ -181,12 +181,6 @@ fn apply_patch_standard_function_survives_production_protocol_projection() {
         ),
         (
             ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-            "/tools/0/input_schema",
-            "/messages/1/content/0/input",
-            "/messages/2/content/0/tool_use_id",
-        ),
-        (
-            CLAUDE_CODE_MESSAGES_PROFILE_ID,
             "/tools/0/input_schema",
             "/messages/1/content/0/input",
             "/messages/2/content/0/tool_use_id",
@@ -371,7 +365,6 @@ fn protocol_roles_preserve_instruction_and_tool_identity_across_switches() {
         OPENAI_CHAT_PROFILE_ID,
         ANTHROPIC_MESSAGES_PROFILE_ID,
         ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-        CLAUDE_CODE_MESSAGES_PROFILE_ID,
         GEMINI_GENERATE_CONTENT_PROFILE_ID,
         GEMINI_INTERACTIONS_PROFILE_ID,
         GOOGLE_CODE_ASSIST_PROFILE_ID,

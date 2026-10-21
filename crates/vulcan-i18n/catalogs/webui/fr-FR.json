@@ -3285,7 +3285,7 @@
   "settings.providerDescription.commandcode": "Relais de modèles tiers avec protocoles compatibles OpenAI et Anthropic, découverte dynamique et consultation de l’utilisation du compte.",
   "settings.providerDescription.tavily": "Services de recherche web et d’extraction de contenu conçus pour les applications d’IA.",
   "settings.providerDescription.openai": "Modèles officiels OpenAI et services de compte Codex.",
-  "settings.providerDescription.anthropic": "Modèles officiels Claude d’Anthropic et services de compte Claude Code.",
+  "settings.providerDescription.anthropic": "Modèles officiels Claude d’Anthropic via l’API Claude.",
   "settings.providerDescription.google": "API officielle Google Gemini et services Code Assist.",
   "settings.providerDescription.agentspace": "Modèles AgentSpace compatibles OpenAI Responses/Codex avec génération d’images GPT Image 2.",
   "settings.providerDescription.tokenrhythm": "Relais de modèles tiers avec catalogue statique, inférence compatible OpenAI Chat et génération d’images.",

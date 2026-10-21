@@ -13,7 +13,6 @@ export type OAuthProviderKind =
   | "open_vulcan_china"
   | "open_vulcan_global"
   | "open_ai_codex"
-  | "claude_code"
   | "google_code_assist"
   | "google_gemini"
   | "mini_max_global_token_plan"

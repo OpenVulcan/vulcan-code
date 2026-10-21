@@ -37,10 +37,10 @@ use vulcan_ai_contract::{
 };
 use vulcan_hooks::{HookContext, HookScope};
 use vulcan_llm_core::{
-    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, COHERE_CHAT_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
-    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, COHERE_CHAT_PROFILE_ID,
+    GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
+    GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID,
 };
 use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
 use vulcan_provider_adapters::{
@@ -4810,9 +4810,7 @@ fn structured_output_policy_for_protocol(
     }
     if matches!(
         protocol_id,
-        ANTHROPIC_MESSAGES_PROFILE_ID
-            | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-            | CLAUDE_CODE_MESSAGES_PROFILE_ID
+        ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
     ) {
         return policy.clone();
     }
@@ -4905,9 +4903,7 @@ fn model_route_supports_structured_output(
 ) -> bool {
     let provider_requirement = if matches!(
         protocol_id,
-        ANTHROPIC_MESSAGES_PROFILE_ID
-            | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-            | CLAUDE_CODE_MESSAGES_PROFILE_ID
+        ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
     ) {
         requested
     } else if matches!(

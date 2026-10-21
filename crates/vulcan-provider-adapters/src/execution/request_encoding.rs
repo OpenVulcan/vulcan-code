@@ -20,11 +20,10 @@ use vulcan_ai_contract::{
     ReasoningEffort, StructuredOutputPolicy, ToolInputFormat,
 };
 use vulcan_llm_core::{
-    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, COHERE_CHAT_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
-    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
-    gemini_replay_signature_payload, wrap_openai_reasoning_signature,
+    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, COHERE_CHAT_PROFILE_ID,
+    GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
+    GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID, gemini_replay_signature_payload, wrap_openai_reasoning_signature,
 };
 use vulcan_llm_core::{
     AnthropicReasoningMode, EncodedWireRequest, ProviderRouteContext, UpstreamProtocol,
@@ -1529,9 +1528,7 @@ fn validate_structured_output_projection(
         }
         StructuredOutputPolicy::JsonSchema { schema, .. } => {
             let (projected_type, projected_schema, expected_type) = match protocol_id {
-                ANTHROPIC_MESSAGES_PROFILE_ID
-                | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-                | CLAUDE_CODE_MESSAGES_PROFILE_ID => (
+                ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => (
                     encoded
                         .body
                         .pointer("/output_config/format/type")

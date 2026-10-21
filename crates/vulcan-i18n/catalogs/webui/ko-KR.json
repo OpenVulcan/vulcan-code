@@ -3285,7 +3285,7 @@
   "settings.providerDescription.commandcode": "OpenAI 및 Anthropic 호환 프로토콜, 동적 모델 검색, 계정 사용량 조회를 제공하는 서드파티 모델 릴레이.",
   "settings.providerDescription.tavily": "AI 애플리케이션을 위해 설계된 웹 검색 및 콘텐츠 추출 서비스.",
   "settings.providerDescription.openai": "OpenAI 공식 모델 및 Codex 계정 서비스.",
-  "settings.providerDescription.anthropic": "Anthropic 공식 Claude 모델 및 Claude Code 계정 서비스.",
+  "settings.providerDescription.anthropic": "Claude API로 Anthropic 공식 Claude 모델을 사용합니다.",
   "settings.providerDescription.google": "Google 공식 Gemini API 및 Code Assist 서비스.",
   "settings.providerDescription.agentspace": "AgentSpace OpenAI Responses/Codex 호환 모델과 GPT Image 2 이미지 생성.",
   "settings.providerDescription.tokenrhythm": "정적 카탈로그, OpenAI Chat 호환 추론, 이미지 생성을 제공하는 서드파티 모델 릴레이.",

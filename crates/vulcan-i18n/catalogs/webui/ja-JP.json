@@ -3285,7 +3285,7 @@
   "settings.providerDescription.commandcode": "OpenAI および Anthropic 互換プロトコル、動的なモデル検出、アカウント使用量照会を備えたサードパーティ製モデルリレー。",
   "settings.providerDescription.tavily": "AI アプリケーション向けに設計されたウェブ検索とコンテンツ抽出サービス。",
   "settings.providerDescription.openai": "OpenAI 公式モデルと Codex アカウントサービス。",
-  "settings.providerDescription.anthropic": "Anthropic 公式 Claude モデルと Claude Code アカウントサービス。",
+  "settings.providerDescription.anthropic": "Claude API を通じて Anthropic 公式の Claude モデルを利用します。",
   "settings.providerDescription.google": "Google 公式 Gemini API と Code Assist サービス。",
   "settings.providerDescription.agentspace": "AgentSpace の OpenAI Responses/Codex 互換モデルと GPT Image 2 画像生成。",
   "settings.providerDescription.tokenrhythm": "静的カタログ、OpenAI Chat 互換推論、画像生成を備えたサードパーティ製モデルリレー。",

@@ -197,8 +197,7 @@ pub fn protocol_profile_supports_attachment_kind(
         | vulcan_llm_core::GOOGLE_CODE_ASSIST_PROFILE_ID => true,
         vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID
         | vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
-        | vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
-        | vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID => {
+        | vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID => {
             matches!(kind, ConversationAttachmentKind::Image)
         }
         vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
@@ -271,7 +270,6 @@ pub fn protocol_profile_supports_structured_output(
             | vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
             | vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
             | vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-            | vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID
             | vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID
             | vulcan_llm_core::GEMINI_INTERACTIONS_PROFILE_ID
             | vulcan_llm_core::GOOGLE_CODE_ASSIST_PROFILE_ID
@@ -286,7 +284,6 @@ pub fn protocol_profile_supports_structured_output(
         protocol_profile_id,
         vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
             | vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-            | vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID
     ) {
         return capability == StructuredOutputCapability::JsonSchema;
     }
@@ -616,10 +613,10 @@ mod tests {
         ));
     }
 
-    /// Verifies registered Gemini and Claude Code media encoders participate in attachment admission.
-    /// 验证已注册的 Gemini 与 Claude Code 媒体编码器参与附件准入。
+    /// Verifies registered Gemini media encoders participate in attachment admission.
+    /// 验证已注册的 Gemini 媒体编码器参与附件准入。
     #[test]
-    fn attachment_support_includes_registered_gemini_and_claude_code_encoders() {
+    fn attachment_support_includes_registered_gemini_encoders() {
         for protocol_profile_id in [
             vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
             vulcan_llm_core::GEMINI_INTERACTIONS_PROFILE_ID,
@@ -636,14 +633,6 @@ mod tests {
                 ));
             }
         }
-        assert!(protocol_profile_supports_attachment_kind(
-            vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID,
-            ConversationAttachmentKind::Image,
-        ));
-        assert!(!protocol_profile_supports_attachment_kind(
-            vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID,
-            ConversationAttachmentKind::Video,
-        ));
     }
 
     /// Rejects every attachment for an unregistered protocol profile.

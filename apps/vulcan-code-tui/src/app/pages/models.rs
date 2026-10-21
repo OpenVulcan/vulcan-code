@@ -443,7 +443,6 @@ fn protocol_name(protocol: &str) -> String {
     match protocol {
         "anthropic-messages.v1" => "Anthropic",
         "anthropic-messages-video.v1" => "Anthropic + Video",
-        "claude-code-messages.v1" => "Claude Code",
         "openai-chat-completions.v1" => "OpenAI Chat",
         "openai-codex-responses.v1" => "Codex Responses",
         "openai-responses.v1" => "OpenAI Responses",

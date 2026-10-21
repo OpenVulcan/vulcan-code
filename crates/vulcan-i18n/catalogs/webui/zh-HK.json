@@ -3285,7 +3285,7 @@
   "settings.providerDescription.commandcode": "提供 OpenAI 與 Anthropic 相容協議、動態模型目錄與帳戶用量查詢的第三方模型中轉服務。",
   "settings.providerDescription.tavily": "專為 AI 應用設計的網頁搜尋與內容擷取服務。",
   "settings.providerDescription.openai": "OpenAI 官方模型與 Codex 帳戶服務。",
-  "settings.providerDescription.anthropic": "Anthropic 官方 Claude 模型與 Claude Code 帳戶服務。",
+  "settings.providerDescription.anthropic": "透過 Claude API 使用 Anthropic 官方 Claude 模型。",
   "settings.providerDescription.google": "Google 官方 Gemini API 與 Code Assist 服務。",
   "settings.providerDescription.agentspace": "AgentSpace OpenAI Responses/Codex 相容模型與 GPT Image 2 圖片生成服務。",
   "settings.providerDescription.tokenrhythm": "提供靜態模型目錄、OpenAI Chat 相容推論與圖片生成能力的第三方模型中轉服務。",

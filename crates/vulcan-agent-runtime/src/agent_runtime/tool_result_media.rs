@@ -129,8 +129,9 @@ pub(crate) fn project_tool_result_content(
             project_openai_responses_content(&envelope)
         }
         vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
-        | vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-        | vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID => project_anthropic_content(&envelope),
+        | vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
+            project_anthropic_content(&envelope)
+        }
         _ => Err(format!(
             "Tool result image blocks are unsupported by protocol profile `{protocol_profile_id}`; use an OpenAI Responses or Anthropic Messages route."
         )),

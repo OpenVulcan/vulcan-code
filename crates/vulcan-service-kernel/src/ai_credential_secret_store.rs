@@ -276,10 +276,6 @@ fn credential_record_from_envelope(
             record.id_token = id_token.clone();
             record.account_id = account_id.clone();
         }
-        CredentialSecretMaterial::ClaudeCodeOAuth { tokens } => {
-            record.material_kind = String::from("claude_code_oauth");
-            apply_oauth_tokens(&mut record, tokens)?;
-        }
         CredentialSecretMaterial::GoogleOAuth {
             tokens,
             client_id,
@@ -437,9 +433,6 @@ fn credential_envelope_from_record(
             tokens: oauth_tokens_from_record(&record)?,
             id_token: record.id_token.clone(),
             account_id: record.account_id.clone(),
-        },
-        ("claude_code_oauth", None) => CredentialSecretMaterial::ClaudeCodeOAuth {
-            tokens: oauth_tokens_from_record(&record)?,
         },
         ("google_oauth", None) => CredentialSecretMaterial::GoogleOAuth {
             tokens: oauth_tokens_from_record(&record)?,
@@ -791,7 +784,9 @@ mod tests {
     /// 验证 OAuth Scope 保持确定性的非 JSON 字段。
     #[test]
     fn oauth_scope_field_is_canonical_and_non_json() {
-        let secret = CredentialSecretEnvelope::new(CredentialSecretMaterial::ClaudeCodeOAuth {
+        let secret = CredentialSecretEnvelope::new(CredentialSecretMaterial::OpenAiCodexOAuth {
+            id_token: None,
+            account_id: None,
             tokens: OAuthTokenSet {
                 access_token: String::from("access"),
                 refresh_token: String::from("refresh"),
@@ -802,10 +797,10 @@ mod tests {
                 email: None,
             },
         })
-        .expect("Claude fixture should be valid");
+        .expect("OAuth fixture should be valid");
 
-        let record = credential_record_from_envelope("secret-claude", &secret)
-            .expect("Claude fixture should map to relational fields");
+        let record = credential_record_from_envelope("secret-oauth", &secret)
+            .expect("OAuth fixture should map to relational fields");
 
         assert_eq!(record.scope_text, "alpha zeta");
         assert!(
@@ -846,10 +841,6 @@ mod tests {
                 account_id: Some(String::from("account-id")),
             })
             .expect("OpenAI fixture should be valid"),
-            CredentialSecretEnvelope::new(CredentialSecretMaterial::ClaudeCodeOAuth {
-                tokens: oauth_tokens(),
-            })
-            .expect("Claude fixture should be valid"),
             CredentialSecretEnvelope::new(CredentialSecretMaterial::GoogleOAuth {
                 tokens: oauth_tokens(),
                 client_id: String::from("client-id"),

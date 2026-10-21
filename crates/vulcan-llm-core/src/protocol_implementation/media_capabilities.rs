@@ -61,9 +61,7 @@ pub fn protocol_profile_supports_media_source(
                     )
             }
         },
-        ANTHROPIC_MESSAGES_PROFILE_ID
-        | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-        | CLAUDE_CODE_MESSAGES_PROFILE_ID => {
+        ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
             // The standard `source.type = file` shape is registered for images only.
             // 标准 `source.type = file` 结构仅为图片注册。
             if source == ResourceSourceKind::ProviderFileId && kind != ResourceKind::Image {

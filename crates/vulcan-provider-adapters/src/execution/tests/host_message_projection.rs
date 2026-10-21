@@ -11,9 +11,9 @@ use vulcan_ai_contract::{
 };
 use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
-    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry,
+    GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
+    GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry,
 };
 
 /// Stable top content used to prove dynamic events never move into the fixed prefix.
@@ -178,9 +178,7 @@ fn fixed_top_text<'a>(profile: &str, body: &'a Value) -> &'a str {
     let pointer = match profile {
         OPENAI_CHAT_PROFILE_ID => "/messages/0/content",
         OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => "/instructions",
-        ANTHROPIC_MESSAGES_PROFILE_ID
-        | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-        | CLAUDE_CODE_MESSAGES_PROFILE_ID => "/system",
+        ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => "/system",
         GEMINI_GENERATE_CONTENT_PROFILE_ID => "/systemInstruction/parts/0/text",
         GEMINI_INTERACTIONS_PROFILE_ID => "/system_instruction",
         GOOGLE_CODE_ASSIST_PROFILE_ID => "/request/systemInstruction/parts/0/text",
@@ -224,9 +222,7 @@ fn assert_legal_route_output(profile: &str, body: &Value) {
                 item["type"] == "function_call_output" && item["call_id"] == "call-1"
             }));
         }
-        ANTHROPIC_MESSAGES_PROFILE_ID
-        | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-        | CLAUDE_CODE_MESSAGES_PROFILE_ID => {
+        ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
             let messages = body["messages"].as_array().expect("Anthropic messages");
             assert!(
                 messages.iter().all(|message| {
@@ -303,7 +299,6 @@ fn production_host_user_envelopes_preserve_top_prefix_and_tool_pairs() {
         OPENAI_CODEX_RESPONSES_PROFILE_ID,
         ANTHROPIC_MESSAGES_PROFILE_ID,
         ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-        CLAUDE_CODE_MESSAGES_PROFILE_ID,
         GEMINI_GENERATE_CONTENT_PROFILE_ID,
         GEMINI_INTERACTIONS_PROFILE_ID,
         GOOGLE_CODE_ASSIST_PROFILE_ID,

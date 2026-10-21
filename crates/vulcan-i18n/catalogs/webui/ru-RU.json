@@ -3285,7 +3285,7 @@
   "settings.providerDescription.commandcode": "Сторонний ретранслятор моделей с протоколами, совместимыми с OpenAI и Anthropic, динамическим обнаружением и запросом использования аккаунта.",
   "settings.providerDescription.tavily": "Сервисы веб-поиска и извлечения контента для ИИ-приложений.",
   "settings.providerDescription.openai": "Официальные модели OpenAI и сервисы аккаунта Codex.",
-  "settings.providerDescription.anthropic": "Официальные модели Claude от Anthropic и сервисы аккаунта Claude Code.",
+  "settings.providerDescription.anthropic": "Официальные модели Claude от Anthropic через Claude API.",
   "settings.providerDescription.google": "Официальный API Google Gemini и сервисы Code Assist.",
   "settings.providerDescription.agentspace": "Модели AgentSpace, совместимые с OpenAI Responses/Codex, и генерация изображений GPT Image 2.",
   "settings.providerDescription.tokenrhythm": "Сторонний ретранслятор моделей со статическим каталогом, инференсом, совместимым с OpenAI Chat, и генерацией изображений.",

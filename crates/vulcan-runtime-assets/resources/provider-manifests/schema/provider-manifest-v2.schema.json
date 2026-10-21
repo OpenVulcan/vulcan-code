@@ -244,7 +244,6 @@
                         "provider": {
                           "enum": [
                             "open_ai_codex",
-                            "claude_code",
                             "google_code_assist",
                             "google_gemini",
                             "mini_max_global_token_plan",

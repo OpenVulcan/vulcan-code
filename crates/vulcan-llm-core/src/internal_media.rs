@@ -2,12 +2,12 @@
 //! 私有强类型媒体封装的精确目标投影。
 
 use crate::{
-    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, EncodedWireRequest, GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, INTERNAL_RESOURCE_PART_TYPE,
-    InternalResponsesRequest, LlmCoreError, OPENAI_CHAT_PROFILE_ID,
-    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProviderRouteContext,
-    UpstreamProtocol, converted_protocol_headers, gemini_generate_content_path,
+    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, EncodedWireRequest,
+    GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
+    GOOGLE_CODE_ASSIST_PROFILE_ID, INTERNAL_RESOURCE_PART_TYPE, InternalResponsesRequest,
+    LlmCoreError, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID, ProviderRouteContext, UpstreamProtocol,
+    converted_protocol_headers, gemini_generate_content_path,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -62,9 +62,7 @@ impl<'a> InternalMediaProjector<'a> {
             UpstreamProtocol::OpenAiChatCompletions => profile_id == OPENAI_CHAT_PROFILE_ID,
             UpstreamProtocol::AnthropicMessages => matches!(
                 profile_id,
-                ANTHROPIC_MESSAGES_PROFILE_ID
-                    | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-                    | CLAUDE_CODE_MESSAGES_PROFILE_ID
+                ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
             ),
             UpstreamProtocol::GeminiGenerateContent => {
                 profile_id == GEMINI_GENERATE_CONTENT_PROFILE_ID
@@ -123,9 +121,7 @@ impl<'a> InternalMediaProjector<'a> {
             OPENAI_CHAT_PROFILE_ID => {
                 crate::openai::encode_chat_resource(resource).map_err(protocol_error)
             }
-            ANTHROPIC_MESSAGES_PROFILE_ID
-            | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-            | CLAUDE_CODE_MESSAGES_PROFILE_ID => {
+            ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
                 // Only the standard image file source is registered; documents and videos keep
                 // rejecting provider file ids because no Anthropic route consumes them yet.
                 // 仅注册了标准图片文件来源；文档与视频仍拒绝供应商文件 ID，因为尚无 Anthropic
@@ -417,9 +413,9 @@ pub fn project_internal_request_for_provider(
         OPENAI_CODEX_RESPONSES_PROFILE_ID => String::from("/responses"),
         OPENAI_RESPONSES_PROFILE_ID => String::from("/v1/responses"),
         OPENAI_CHAT_PROFILE_ID => String::from("/v1/chat/completions"),
-        ANTHROPIC_MESSAGES_PROFILE_ID
-        | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-        | CLAUDE_CODE_MESSAGES_PROFILE_ID => String::from("/v1/messages"),
+        ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
+            String::from("/v1/messages")
+        }
         GEMINI_GENERATE_CONTENT_PROFILE_ID => gemini_generate_content_path(&model),
         GEMINI_INTERACTIONS_PROFILE_ID => String::from("/interactions"),
         GOOGLE_CODE_ASSIST_PROFILE_ID => String::from("/v1internal:streamGenerateContent?alt=sse"),

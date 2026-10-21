@@ -175,7 +175,6 @@ impl ProtocolRegistry {
         let mut registry = Self::default();
         registry.register(Arc::new(crate::AnthropicMessagesProfile))?;
         registry.register(Arc::new(crate::AnthropicMessagesVideoProfile))?;
-        registry.register(Arc::new(crate::ClaudeCodeMessagesProfile))?;
         registry.register(Arc::new(crate::OpenAiChatProfile))?;
         registry.register(Arc::new(crate::OpenAiResponsesProfile))?;
         registry.register(Arc::new(crate::OpenAiCodexResponsesProfile))?;
