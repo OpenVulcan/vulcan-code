@@ -236,7 +236,9 @@ scripts/build-inputs.lock.json 是内建 sg、rg 和 protoc 的版本、各平�
 
 ## 类 Unix 完整发行目录切换
 
-全部平台的分发 Rust 包与二进制名称以 `scripts/shipped-rust-packages.json` 为唯一清单。PowerShell 的构建及第三方声明入口、Unix 的 Cargo 包选择与发布校验共用该清单。Unix 必须把 Core、终端宿主、判定宿主与 TUI 的本轮成功制品全部带入暂存目录；缺失或重复制品直接失败，不能借用旧 `output/bin` 文件补齐。`node --test scripts/unix-distribution.test.mjs scripts/directory-publication.test.mjs` 在隔离目录验证 debug/release 完整发布、旧 TUI 掩盖缺失制品的拒绝，以及切换失败时保留旧发行物；该测试不替代真实 Rust、Electron 和应用运行验收。
+全部平台的分发 Rust 包与二进制名称以 `scripts/shipped-rust-packages.json` 为唯一清单。PowerShell 的构建及第三方声明入口、Unix 的 Cargo 包选择与发布校验共用该清单。带 `workspace` 字段的条目（代码模式宿主 `native/code-mode-host`）位于独立 Cargo 工作区，不进入根工作区的 `-p` 选择，由 `scripts/code-mode-host-build.mjs` 构建，但仍属于必需的发布清单。Unix 必须把 Core、终端宿主、判定宿主、TUI 与代码模式宿主的本轮成功制品全部带入暂存目录；缺失或重复制品直接失败，不能借用旧 `output/bin` 文件补齐。`node --test scripts/unix-distribution.test.mjs scripts/directory-publication.test.mjs` 在隔离目录验证 debug/release 完整发布、旧 TUI 或旧代码模式宿主掩盖缺失制品的拒绝，以及切换失败时保留旧发行物；该测试不替代真实 Rust、Electron 和应用运行验收。
+
+第三方声明由根工作区的 cargo-about 输出、独立工作区新增 crate 的附录，以及 `scripts/rust-notice-supplements/` 下人工维护的补充声明依次组成。补充声明覆盖 Cargo 元数据无法描述的原生代码，目前是代码模式宿主静态链接的 V8 引擎及其内含组件；`v8` crate 升级时必须按新 V8 版本的 DEPS 固定修订重新取得各组件许可证原文并更新该文件。范围检查只作用于源自 Cargo 的区段。
 
 Unix 构建在执行 Cargo 前，调用锁定 Electron npm 包自带的 `install.js` 核验运行时版本、路径标记及可执行文件。`node_modules` 存在不表示 Electron 运行时已下载；缺失时仍由官方安装器按该 npm 包内置校验和准备运行时，下载或解压失败立即终止，不跳过验证、不使用其他版本。网络受限时可以经其他机器取得同版本官方归档，完整摘要核验后填充该安装器的缓存，再由原安装器完成解压；不手写 `path.txt` 冒充安装成功。
 

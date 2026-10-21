@@ -101,9 +101,18 @@ function Assert-RustThirdPartyNoticeScope {
     # 工作区扫描也会看到非分发成员；仅由它们或开发依赖边引入的 crate 不得出现。
     # 构建依赖边与 about.toml 一致保持允许；cargo-about 逐边过滤目标平台，因此允许集合覆盖全部目标，以保持为生成输出的超集。
     $TreeArguments = @('cargo', 'tree', '--locked', '-e', 'normal,build', '--target', 'all', '--prefix', 'none', '--format', '{p}') + @(Get-ShippedRustPackageArguments)
-    $TreeOutput = & $RtkPath @TreeArguments
+    $TreeOutput = @(& $RtkPath @TreeArguments)
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
+    }
+    # Packages built in their own Cargo workspace add that workspace's graph to the shipped set.
+    # 在独立 Cargo 工作区构建的包把该工作区的依赖图加入分发集合。
+    foreach ($WorkspacePackage in $ShippedRustWorkspacePackages) {
+        $WorkspaceTreeArguments = @('cargo', 'tree', '--locked', '-e', 'normal,build', '--target', 'all', '--prefix', 'none', '--format', '{p}', '--manifest-path', (Join-Path $ProjectDir "$($WorkspacePackage.workspace)/Cargo.toml"), '-p', $WorkspacePackage.package)
+        $TreeOutput += @(& $RtkPath @WorkspaceTreeArguments)
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
     }
 
     # ShippedCrates stores `name@version` keys reachable from shipped packages through normal and build edges.
@@ -114,7 +123,7 @@ function Assert-RustThirdPartyNoticeScope {
             [void]$ShippedCrates.Add("$($Matches[1])@$($Matches[2])")
         }
     }
-    foreach ($PackageName in $ShippedRustPackages) {
+    foreach ($PackageName in @($ShippedRustPackages) + @($ShippedRustWorkspacePackages | ForEach-Object { $_.package })) {
         if (-not ($ShippedCrates | Where-Object { $_.StartsWith("$PackageName@") })) {
             throw "cargo tree output does not list shipped package $PackageName; the scope check cannot run."
         }
@@ -135,6 +144,52 @@ function Assert-RustThirdPartyNoticeScope {
     if ($OutsideCrates.Count -gt 0) {
         throw "Rust third-party notices include crates outside the shipped binaries' dependency graph: $($OutsideCrates -join ', '). Mark non-shipped workspace members ``publish = false`` or update scripts/shipped-rust-packages.json."
     }
+}
+
+# Get-RustThirdPartyNoticeWorkspaceAppendix renders the crates that only separately built workspaces ship,
+# in the same section shape as about.hbs so one index covers the whole document.
+# Get-RustThirdPartyNoticeWorkspaceAppendix 渲染只由独立构建工作区分发的 crate，区段形状与 about.hbs 相同，
+# 使同一份索引覆盖整份文档。
+function Get-RustThirdPartyNoticeWorkspaceAppendix {
+    param(
+        # ListedCrates holds `name@version` keys already listed; crates added here are recorded in it.
+        # ListedCrates 保存已列出的 `name@version` 键；此处新增的 crate 会记入其中。
+        [Parameter(Mandatory = $true)][System.Collections.Generic.HashSet[string]]$ListedCrates,
+        # RtkPath is the repository command proxy used for Cargo execution.
+        # RtkPath 是 Cargo 执行所用的仓库命令代理。
+        [Parameter(Mandatory = $true)][string]$RtkPath
+    )
+
+    $Appendix = [System.Text.StringBuilder]::new()
+    foreach ($Workspace in @($ShippedRustWorkspacePackages | ForEach-Object { $_.workspace } | Sort-Object -Unique)) {
+        # WorkspaceJsonFile keeps cargo-about's raw license data under the ignored build directory.
+        # WorkspaceJsonFile 把 cargo-about 的原始许可证数据保存在忽略的构建目录下。
+        $WorkspaceJsonFile = Join-Path $VerificationLicenseResourcesRoot "$($Workspace -replace '[\\/]', '-').about.json"
+        if (-not (Test-Path -LiteralPath $VerificationLicenseResourcesRoot)) {
+            New-Item -ItemType Directory -Path $VerificationLicenseResourcesRoot -Force | Out-Null
+        }
+        & $RtkPath cargo about generate --format json --workspace --manifest-path (Join-Path $ProjectDir "$Workspace/Cargo.toml") --config $CargoAboutConfigFile --output-file $WorkspaceJsonFile --locked --fail
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
+        $WorkspaceLicenses = ([System.IO.File]::ReadAllText($WorkspaceJsonFile) | ConvertFrom-Json -Depth 64).licenses
+        $Packages = @($ShippedRustWorkspacePackages | Where-Object { $_.workspace -eq $Workspace } | ForEach-Object { "``$($_.package)``" }) -join ', '
+        [void]$Appendix.Append("`n## ``$Workspace`` Workspace`n`n")
+        [void]$Appendix.Append("Crates that $Packages ships beyond those listed above.`n")
+        [void]$Appendix.Append("$Packages 在上文所列之外分发的 crate。`n")
+        foreach ($License in $WorkspaceLicenses) {
+            $NewUsers = @($License.used_by | Where-Object { -not $ListedCrates.Contains("$($_.crate.name)@$($_.crate.version)") })
+            if ($NewUsers.Count -eq 0) { continue }
+            [void]$Appendix.Append("`n### $($License.name)`n`nUsed by:`n")
+            foreach ($User in $NewUsers) {
+                [void]$ListedCrates.Add("$($User.crate.name)@$($User.crate.version)")
+                $Source = if ($User.crate.repository) { $User.crate.repository } else { "https://crates.io/crates/$($User.crate.name)" }
+                [void]$Appendix.Append("- $($User.crate.name) $($User.crate.version) - $Source`n")
+            }
+            [void]$Appendix.Append("`n``````text`n$($License.text)`n```````n")
+        }
+    }
+    return $Appendix.ToString()
 }
 
 # Invoke-GenerateRustThirdPartyNotices generates the Markdown notice file and its lightweight section index.
@@ -185,6 +240,29 @@ function Invoke-GenerateRustThirdPartyNotices {
         [System.Text.UTF8Encoding]::new($false)
     )
 
+    # ListedCrates starts from the root workspace sections so separately built workspaces add only new crates.
+    # ListedCrates 从根工作区区段开始，使独立构建的工作区只追加新的 crate。
+    $ListedCrates = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($License in (Get-RustThirdPartyNoticeSectionIndex -MarkdownPath $GeneratedThirdPartyNoticesFile).licenses) {
+        foreach ($Section in $License.sections) {
+            foreach ($Dependency in $Section.dependencies) { [void]$ListedCrates.Add("$($Dependency.name)@$($Dependency.version)") }
+        }
+    }
+    $WorkspaceAppendix = Get-RustThirdPartyNoticeWorkspaceAppendix -ListedCrates $ListedCrates -RtkPath $RtkCommand.Source
+    $CrateMarkdown = ((($NormalizedMarkdown + $WorkspaceAppendix) -replace "`r`n", "`n") -replace "`r", "`n") -replace '(?m)[ \t]+$', ''
+    [System.IO.File]::WriteAllText($GeneratedThirdPartyNoticesFile, $CrateMarkdown, [System.Text.UTF8Encoding]::new($false))
+    # CrateIndex covers only Cargo-derived sections; the scope check never sees the hand-maintained supplements.
+    # CrateIndex 只覆盖源自 Cargo 的区段；范围检查不会看到人工维护的补充声明。
+    $CrateIndex = Get-RustThirdPartyNoticeSectionIndex -MarkdownPath $GeneratedThirdPartyNoticesFile
+
+    # Supplements cover native code that Cargo metadata cannot describe, such as the statically linked V8 engine.
+    # 补充声明覆盖 Cargo 元数据无法描述的原生代码，例如静态链接的 V8 引擎。
+    $SupplementMarkdown = foreach ($Supplement in @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot "rust-notice-supplements") -Filter "*.md" | Sort-Object Name)) {
+        "`n" + [System.IO.File]::ReadAllText($Supplement.FullName)
+    }
+    $NoticeMarkdown = ((($CrateMarkdown + ($SupplementMarkdown -join '')) -replace "`r`n", "`n") -replace "`r", "`n") -replace '(?m)[ \t]+$', ''
+    [System.IO.File]::WriteAllText($GeneratedThirdPartyNoticesFile, $NoticeMarkdown, [System.Text.UTF8Encoding]::new($false))
+
     # SectionIndex stores the deterministic lazy-loading index derived from the generated Markdown.
     # SectionIndex 保存从生成 Markdown 派生的确定性懒加载索引。
     $SectionIndex = Get-RustThirdPartyNoticeSectionIndex -MarkdownPath $GeneratedThirdPartyNoticesFile
@@ -200,7 +278,7 @@ function Invoke-GenerateRustThirdPartyNotices {
     if ($SectionIndex.licenses.Count -eq 0) {
         throw "Generated Rust third-party notice index does not contain any license sections."
     }
-    Assert-RustThirdPartyNoticeScope -SectionIndex $SectionIndex -RtkPath $RtkCommand.Source
+    Assert-RustThirdPartyNoticeScope -SectionIndex $CrateIndex -RtkPath $RtkCommand.Source
 
     if ($CheckOnly) {
         if (-not (Test-Path -LiteralPath $SourceThirdPartyNoticesFile)) {
