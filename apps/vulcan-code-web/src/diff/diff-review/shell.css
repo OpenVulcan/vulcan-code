@@ -15,14 +15,6 @@
   padding: calc(var(--vk-u) * 3);
 }
 
-/* A readable line names the wait so the shimmer below is never mistaken for an empty panel. */
-/* 可读的一行说明正在等待，避免下方的微光被误认为空白面板。 */
-.diff-review-loading {
-  margin: 0 0 calc(var(--vk-u) * 2);
-  color: var(--vk-ink-2);
-  font-size: var(--vk-fs-sm);
-}
-
 /* The review's actions float over the bottom edge of the diff: the shown file's actions first, then the */
 /* more menu for the whole repository. */
 /* 审核操作浮于 diff 底边：先是当前文件的操作，再是整库操作的更多菜单。 */

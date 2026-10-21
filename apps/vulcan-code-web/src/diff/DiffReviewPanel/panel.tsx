@@ -482,12 +482,12 @@ export function DiffReviewPanel(props: {
   }, [backendSearchHydrationRequests, onLoadFileDetail]);
 
   if (!snapshot) {
-    // The host is still reading the diff: show where it will appear rather than an empty verdict.
-    // 宿主仍在读取 diff：展示其将出现的位置，而不是空结论。
+    // The host is still reading the diff: the streaming silhouette fills the panel from the top in place of a
+    // loading sentence; the label stays for assistive technology only.
+    // 宿主仍在读取 diff：流式轮廓自顶部填满面板以代替加载文字；标签只供辅助技术读取。
     if (props.loading) {
-      return <section className="diff-review-panel empty">
-        <p className="diff-review-loading" role="status">{t("diff.loading")}</p>
-        <StreamPlaceholder className="vk-stream-inset" count={6} decorative />
+      return <section className="diff-review-panel">
+        <StreamPlaceholder className="vk-stream-inset" fill label={t("diff.loading")} shape="rows" />
       </section>;
     }
     return <DiffReviewEmptyPanel body={props.emptyBody ?? t("diff.emptyBody")} refreshBusy={refreshBusy} title={props.emptyTitle ?? t("diff.cleanTitle")} onRefresh={props.onRefresh ? handleRefreshClick : undefined} />;
