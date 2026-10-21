@@ -30,6 +30,18 @@ import { useI18n } from "@/i18n";
 import type { LuaSkillSummary, LuaSkillToolSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
+// SKILL_SOURCE_TYPE_NAMES spells install source kinds the way their owners write them; the kinds are protocol
+// identifiers and proper names, so they are the same in every language.
+// SKILL_SOURCE_TYPE_NAMES 按来源方自己的写法拼写安装来源类型；这些类型是协议标识与专有名称，因此各语言相同。
+const SKILL_SOURCE_TYPE_NAMES: Readonly<Record<string, string>> = { github: "GitHub", url: "URL" };
+
+// skillSourceTypeLabel names a recorded install source kind, or returns null when none was recorded.
+// skillSourceTypeLabel 给出已记录安装来源类型的名称；未记录时返回 null。
+function skillSourceTypeLabel(sourceType: string | null | undefined): string | null {
+  const kind = sourceType?.trim();
+  return kind ? SKILL_SOURCE_TYPE_NAMES[kind.toLowerCase()] ?? kind : null;
+}
+
 // hasLuaSkillConfigOptions determines whether one catalog row exposes actual package configuration options.
 // hasLuaSkillConfigOptions 判断单个目录行是否暴露实际技能包配置选项。
 //
@@ -76,7 +88,7 @@ export function LuaSkillCard(props: {
   const source = props.skill.sourceLocator ?? t("skills.source.unknown");
   // sourceTypeLabel is the normalized installation source badge.
   // sourceTypeLabel 是规范化后的安装来源标签。
-  const sourceTypeLabel = (props.skill.sourceType ?? "source").toUpperCase();
+  const sourceTypeLabel = skillSourceTypeLabel(props.skill.sourceType);
   // explicitToolCount counts tools registered directly with the provider.
   // explicitToolCount 统计直接注册到 Provider 的工具。
   const explicitToolCount = props.skill.tools.filter((tool) => tool.registrationState === "explicit").length;
@@ -111,7 +123,7 @@ export function LuaSkillCard(props: {
             {props.skill.displayName}
           </button>
           <div className="agent-definition-row-badges">
-            <Badge variant="outline">{sourceTypeLabel}</Badge>
+            {sourceTypeLabel ? <Badge variant="outline">{sourceTypeLabel}</Badge> : null}
             <Badge variant="secondary">v{props.skill.version}</Badge>
             <Badge variant="outline">{props.skill.rootName === "ROOT" ? t("skills.label.system") : props.skill.rootName}</Badge>
             <Badge variant="outline">{t("skills.label.explicit")} {explicitToolCount}</Badge>
@@ -199,7 +211,7 @@ export function LuaSkillDetailDialog(props: {
 }) {
   const { t } = useI18n();
   const skill = props.skill;
-  const source = skill?.sourceLocator ? `${skill.sourceType ?? "source"} · ${skill.sourceLocator}` : t("skills.source.unknown");
+  const source = skill?.sourceLocator ? [skillSourceTypeLabel(skill.sourceType), skill.sourceLocator].filter(Boolean).join(" · ") : t("skills.source.unknown");
   return (
     <Dialog open={props.open && skill !== null} onOpenChange={props.onOpenChange}>
       <DialogContent className="lua-skill-detail-dialog" size="md" scrollMode="body-scroll">
