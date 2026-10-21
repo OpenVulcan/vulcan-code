@@ -43,14 +43,33 @@ pub(crate) fn load_webui_workspace_diff_snapshot(
 
     // Normalize the optional request before combining it with Git selector sources.
     // 先标准化可选请求，再与 Git 选择器来源组合。
-    let current_branch = load_webui_current_git_branch(&repository_root)?;
-    let current_branch_unpushed_commits =
-        load_webui_current_branch_unpushed_commit_count(&repository_root)?;
-    let default_branch = load_webui_default_git_branch(&repository_root)?;
-    let branches = load_webui_git_branches(&repository_root, current_branch.as_deref())?;
-    // Load only current-branch commits that have not reached the relevant remote view.
-    // 仅加载当前分支中尚未进入相关远端视图的提交。
-    let recent_commits = load_webui_unpushed_commits(&repository_root)?;
+    // The branch and commit queries are independent Git processes, so they run side by side.
+    // 分支与提交查询是互不依赖的 Git 进程，因此并行执行。
+    let root = repository_root.as_path();
+    let (branch_facts, current_branch_unpushed_commits, default_branch, recent_commits) =
+        std::thread::scope(|scope| {
+            let branch_facts = scope.spawn(|| {
+                let current_branch = load_webui_current_git_branch(root)?;
+                let branches = load_webui_git_branches(root, current_branch.as_deref())?;
+                Ok::<_, String>((current_branch, branches))
+            });
+            let unpushed_count =
+                scope.spawn(|| load_webui_current_branch_unpushed_commit_count(root));
+            let default_branch = scope.spawn(|| load_webui_default_git_branch(root));
+            // Load only current-branch commits that have not reached the relevant remote view.
+            // 仅加载当前分支中尚未进入相关远端视图的提交。
+            let recent_commits = scope.spawn(|| load_webui_unpushed_commits(root));
+            (
+                joined(branch_facts),
+                joined(unpushed_count),
+                joined(default_branch),
+                joined(recent_commits),
+            )
+        });
+    let (current_branch, branches) = branch_facts?;
+    let current_branch_unpushed_commits = current_branch_unpushed_commits?;
+    let default_branch = default_branch?;
+    let recent_commits = recent_commits?;
     let selection =
         webui_workspace_diff_selection(request, current_branch, default_branch, recent_commits);
     let loaded_diff = load_webui_selected_workspace_unified_diff(
@@ -141,4 +160,12 @@ fn empty_webui_diff_snapshot(
         branches: Vec::new(),
         recent_commits: Vec::new(),
     }
+}
+
+/// Joins one scoped Git query thread, re-raising its panic.
+/// 汇合一个作用域 Git 查询线程，并重新抛出其 panic。
+fn joined<R>(handle: std::thread::ScopedJoinHandle<'_, R>) -> R {
+    handle
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }

@@ -7,6 +7,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use super::command::map_webui_git_parallel;
 use super::diff::{resolve_webui_git_repository_root, resolve_webui_workspace_path_from_text};
 use super::model::{WebuiGitRepositoryCatalog, WebuiGitRepositorySummary};
 use crate::normalized_workspace_path_text_from_path;
@@ -51,8 +52,20 @@ pub(crate) fn discover_webui_git_repository_catalog(
         ));
     }
 
+    let mut markers = Vec::new();
+    collect_git_repository_candidates(&project_root, &project_root, 0, &mut markers)?;
+    // Only directories with a `.git` marker reach Git, and they are confirmed side by side.
+    // 只有带 `.git` 标记的目录才交给 Git，并且并行确认。
+    let confirmed = map_webui_git_parallel(&markers, |marker| {
+        resolve_webui_git_repository_root(marker)
+            .map(|root| root.as_deref() == Some(marker.as_path()))
+    });
     let mut candidates = Vec::new();
-    collect_git_repository_candidates(&project_root, &project_root, 0, &mut candidates)?;
+    for (marker, confirmed) in markers.into_iter().zip(confirmed) {
+        if confirmed? {
+            candidates.push(marker);
+        }
+    }
     candidates.sort_by_key(|candidate| repository_key_for_root(&project_root, candidate));
     if let Some(root_index) = candidates
         .iter()
@@ -200,9 +213,9 @@ fn collect_git_repository_candidates(
     depth: usize,
     candidates: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
-    if git_marker_exists(current)?
-        && resolve_webui_git_repository_root(current)?.as_deref() == Some(current)
-    {
+    // Repository confirmation needs a Git process, so the walk only records marker directories.
+    // 仓库确认需要 Git 进程，因此遍历只记录带标记的目录。
+    if git_marker_exists(current)? {
         candidates.push(current.to_path_buf());
     }
     if depth >= WEBUI_GIT_DISCOVERY_MAX_DEPTH {

@@ -5,6 +5,7 @@ use std::{
     io::Write,
     path::Path,
     process::{Command, Stdio},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 use vulcan_host_tools::{
     output_decode::decode_shell_output_bytes, process_creation::new_background_std_command,
@@ -210,5 +211,73 @@ pub(crate) fn format_webui_git_error(label: &str, output: &std::process::Output)
         format!("{label} failed with status {}", output.status)
     } else {
         format!("{label} failed with status {}: {stderr}", output.status)
+    }
+}
+
+/// Upper bound on Git processes one WebUI request runs at the same time.
+/// 单个 WebUI 请求同时运行的 Git 进程上限。
+const WEBUI_GIT_PARALLEL_PROCESSES: usize = 8;
+
+/// Runs `task` over `items` on up to `WEBUI_GIT_PARALLEL_PROCESSES` scoped threads and returns the
+/// results in input order. Each Git process costs about a hundred milliseconds to start on Windows,
+/// so independent queries run side by side instead of one after another.
+/// 在最多 `WEBUI_GIT_PARALLEL_PROCESSES` 个作用域线程上对 `items` 运行 `task`，按输入顺序返回结果。
+/// Windows 上每个 Git 进程启动约需百毫秒，因此互不依赖的查询并行执行而非逐个串行。
+pub(crate) fn map_webui_git_parallel<T: Sync, R: Send>(
+    items: &[T],
+    task: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
+    let workers = items.len().min(WEBUI_GIT_PARALLEL_PROCESSES);
+    if workers <= 1 {
+        return items.iter().map(task).collect();
+    }
+    let next = AtomicUsize::new(0);
+    let (next, task) = (&next, &task);
+    let mut indexed: Vec<(usize, R)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(move || {
+                    let mut done = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = items.get(index) else {
+                            break done;
+                        };
+                        done.push((index, task(item)));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    });
+    indexed.sort_by_key(|(index, _)| *index);
+    indexed.into_iter().map(|(_, result)| result).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_webui_git_parallel;
+
+    // Results keep input order however the workers interleave.
+    // 无论工作线程如何交错，结果都保持输入顺序。
+    #[test]
+    fn parallel_map_keeps_input_order() {
+        let items: Vec<u64> = (0..40).collect();
+        let doubled = map_webui_git_parallel(&items, |item| {
+            std::thread::sleep(std::time::Duration::from_millis(40 - item));
+            item * 2
+        });
+        assert_eq!(
+            doubled,
+            items.iter().map(|item| item * 2).collect::<Vec<_>>()
+        );
+        assert!(map_webui_git_parallel(&[] as &[u64], |item| *item).is_empty());
     }
 }
