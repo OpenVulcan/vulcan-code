@@ -749,6 +749,7 @@ fn render_help(app: &App, scroll: &mut usize, area: Rect, buf: &mut Buffer) {
     lines.push(("Ctrl+F".into(), tr!("tui.history.title")));
     lines.push(("F2".into(), tr!("tui.area.switch")));
     lines.push(("/ · n · N".into(), tr!("conversation.find.label")));
+    lines.push(("/".into(), tr!("sidebar.searchTree")));
     lines.push(("Tab".into(), tr!("tui.help.focus")));
     lines.push(("Alt+1..6".into(), tr!("workspaceContext.switchTabs")));
     lines.push(("Ctrl+C".into(), tr!("tui.help.interrupt")));

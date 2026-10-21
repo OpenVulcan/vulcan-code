@@ -145,6 +145,17 @@ pub enum SidebarRow {
     Conversation(ConversationId),
 }
 
+/// Sidebar search, as the WebUI sidebar's search field: a project whose name matches lists all its
+/// conversations, otherwise only conversations whose title matches are listed.
+/// 侧栏搜索，对应 WebUI 侧栏的搜索框：名称匹配的项目列出其全部会话，否则只列出标题匹配的会话。
+#[derive(Debug, Clone, Default)]
+pub struct SidebarFilter {
+    pub query: String,
+    /// Whether keys type into the query.
+    /// 按键是否输入查询。
+    pub editing: bool,
+}
+
 impl SidebarRow {
     /// Headers of fixed sections cannot hold the cursor.
     /// 固定分区的标题不能持有光标。
@@ -711,6 +722,9 @@ pub struct App {
     /// The composer's `@` path mention list.
     /// 输入框的 `@` 路径提及列表。
     pub path_mention_state: path_mention::PathMentionState,
+    /// Sidebar search, while open.
+    /// 打开期间的侧栏搜索。
+    pub sidebar_filter: Option<SidebarFilter>,
 }
 
 impl App {
@@ -814,6 +828,7 @@ impl App {
             clipboard: selection::Clipboard::default(),
             transcript_find: None,
             path_mention_state: Default::default(),
+            sidebar_filter: None,
         }
     }
 
@@ -1872,18 +1887,40 @@ impl App {
     /// Lists pinned-first projects with their conversations, then unlinked conversations.
     /// 先列出置顶项目及其会话，再列出未绑定项目的会话。
     pub fn sidebar_rows(&self) -> Vec<SidebarRow> {
+        // A search keeps matching projects open and drops projects with neither a name nor a
+        // conversation match.
+        // 搜索时保持匹配项目展开，并去掉名称与会话均不匹配的项目。
+        let query = self
+            .sidebar_filter
+            .as_ref()
+            .map(|filter| filter.query.trim().to_lowercase())
+            .filter(|query| !query.is_empty());
+        let matches = |text: &str| {
+            query
+                .as_ref()
+                .is_none_or(|query| text.to_lowercase().contains(query))
+        };
         let mut rows = Vec::new();
         let mut projects: Vec<&Project> = self.projects.iter().collect();
         projects.sort_by_key(|p| !p.pinned);
         for project in projects {
+            let name_matches = matches(&project.name);
+            let conversations: Vec<&ConversationSummary> = self
+                .conversations
+                .iter()
+                .filter(|c| c.project_id.as_ref() == Some(&project.id))
+                .filter(|c| name_matches || matches(&c.title))
+                .collect();
+            if !name_matches && conversations.is_empty() {
+                continue;
+            }
             rows.push(SidebarRow::Project(project.id.clone()));
-            if self.collapsed_projects.contains(&project.id) {
+            if query.is_none() && self.collapsed_projects.contains(&project.id) {
                 continue;
             }
             rows.extend(
-                self.conversations
-                    .iter()
-                    .filter(|c| c.project_id.as_ref() == Some(&project.id))
+                conversations
+                    .into_iter()
                     .map(|c| SidebarRow::Conversation(c.id.clone())),
             );
         }
@@ -1894,6 +1931,7 @@ impl App {
                 c.project_id
                     .as_ref()
                     .is_none_or(|id| !self.projects.iter().any(|p| &p.id == id))
+                    && matches(&c.title)
             })
             .map(|c| SidebarRow::Conversation(c.id.clone()))
             .collect();

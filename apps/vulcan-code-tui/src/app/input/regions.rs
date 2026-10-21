@@ -215,13 +215,49 @@ pub(super) fn mark_seq(app: &mut App, seq: u64) {
 
 // ---- Sidebar ----
 
+/// Typing into the sidebar search: each change puts the cursor on the first listed row, Enter or
+/// Down leaves the field for the list and Esc closes the search.
+/// 在侧栏搜索中输入：每次变化都把光标放到首个列出的行，Enter 或 Down 离开搜索框进入列表，Esc 关闭搜索。
+fn on_sidebar_filter_key(app: &mut App, key: KeyEvent) {
+    let Some(filter) = app.sidebar_filter.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc => app.sidebar_filter = None,
+        KeyCode::Enter | KeyCode::Down => filter.editing = false,
+        KeyCode::Backspace => {
+            filter.query.pop();
+        }
+        _ => match super::typed(&key) {
+            Some(ch) => filter.query.push(ch),
+            None => return,
+        },
+    }
+    app.sidebar_cursor = app.sidebar_rows().into_iter().find(SidebarRow::selectable);
+    app.sidebar_free_scroll = false;
+}
+
 pub(super) fn on_sidebar_key(app: &mut App, key: KeyEvent) {
+    if app.sidebar_filter.as_ref().is_some_and(|f| f.editing) {
+        on_sidebar_filter_key(app, key);
+        return;
+    }
     let rows: Vec<SidebarRow> = app
         .sidebar_rows()
         .into_iter()
         .filter(SidebarRow::selectable)
         .collect();
     match key.code {
+        KeyCode::Char('/') => {
+            app.sidebar_filter
+                .get_or_insert_with(Default::default)
+                .editing = true;
+            return;
+        }
+        KeyCode::Esc if app.sidebar_filter.is_some() => {
+            app.sidebar_filter = None;
+            return;
+        }
         KeyCode::Char('a') => return action::perform(app, UiAction::AddProject),
         KeyCode::Esc => return app.set_area(app.area),
         _ => {}

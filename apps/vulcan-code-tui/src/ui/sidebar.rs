@@ -13,7 +13,7 @@ use super::text::{spinner, truncate, width_of};
 use super::theme::mix;
 use crate::app::action::UiAction;
 use crate::app::hit::{ScrollTarget, Target};
-use crate::app::{App, Focus, SidebarMode, SidebarRow};
+use crate::app::{App, Focus, SidebarFilter, SidebarMode, SidebarRow};
 use crate::tr;
 
 /// Rows above the list: two buttons and a rule.
@@ -89,12 +89,19 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         buf,
     );
 
-    let list = Rect {
+    let mut list = Rect {
         x: inner.x,
         y: inner.y + HEADER_ROWS,
         width: inner.width,
         height: inner.height - HEADER_ROWS,
     };
+    // An open search takes the first list row.
+    // 打开的搜索占用列表首行。
+    if let Some(filter) = app.sidebar_filter.clone() {
+        search_row(app, &filter, Rect { height: 1, ..list }, buf);
+        list.y += 1;
+        list.height -= 1;
+    }
     app.hits.sidebar_height = list.height;
     app.hits.add_scroll(list, ScrollTarget::Sidebar);
     if app.projects.is_empty() && app.conversations.is_empty() {
@@ -114,6 +121,15 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 
     let rows = app.sidebar_rows();
+    if rows.is_empty() {
+        buf.set_string(
+            list.x + 1,
+            list.y,
+            truncate(&tr!("sidebar.noMatches"), width - 2),
+            theme.muted_text(),
+        );
+        return;
+    }
     let height = list.height as usize;
     let max_scroll = rows.len().saturating_sub(height);
     let cursor_index = app
@@ -331,6 +347,7 @@ fn rule_buttons(app: &App, area: Rect, buf: &mut Buffer) {
         .iter()
         .any(|p| !app.collapsed_projects.contains(&p.id));
     let buttons = [
+        (" / ", UiAction::SearchSidebar),
         (
             if any_open { " ⊟ " } else { " ⊞ " },
             UiAction::FoldAllProjects,
@@ -358,6 +375,36 @@ fn rule_buttons(app: &App, area: Rect, buf: &mut Buffer) {
             Target::Do(action),
         );
     }
+}
+
+/// The sidebar search field: the query, or what it searches while empty, and the key that closes it.
+/// 侧栏搜索框：查询文本（为空时显示搜索范围）及关闭它的按键。
+fn search_row(app: &App, filter: &SidebarFilter, area: Rect, buf: &mut Buffer) {
+    let theme = &app.theme;
+    buf.set_style(area, Style::new().fg(theme.sidebar_fg).bg(theme.popover));
+    let hint = " Esc ";
+    let room = (area.width as usize).saturating_sub(width_of(hint) + 4);
+    let query = if filter.query.is_empty() {
+        Span::styled(
+            truncate(&tr!("sidebar.searchTree"), room),
+            Style::new().fg(theme.muted_fg),
+        )
+    } else {
+        Span::raw(truncate(&filter.query, room))
+    };
+    Line::from(vec![
+        Span::styled(" / ", theme.primary_text()),
+        query,
+        Span::styled(if filter.editing { "▏" } else { "" }, theme.primary_text()),
+    ])
+    .render(area, buf);
+    buf.set_string(
+        area.right().saturating_sub(width_of(hint) as u16),
+        area.y,
+        hint,
+        Style::new().fg(theme.faint_fg(theme.popover)),
+    );
+    app.hits.add(area, Target::Do(UiAction::SearchSidebar));
 }
 
 /// Width of the collapsed sidebar, its right border included.

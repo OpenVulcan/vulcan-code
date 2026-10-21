@@ -1519,3 +1519,65 @@ fn composer_path_mention_steps_into_folders_and_writes_paths() {
     h.settle();
     assert_eq!(h.app.composer_text(), "see @src/main.rs @Cargo.toml ");
 }
+
+/// "/" in the sidebar searches it like the WebUI sidebar: a matching project lists all its
+/// conversations, otherwise only matching titles remain; the cursor follows the first match, Enter
+/// leaves the field for the list and Esc restores the full list.
+/// 侧栏中按 "/" 与 WebUI 侧栏一样搜索：匹配的项目列出全部会话，否则只保留标题匹配的会话；光标跟随首个
+/// 匹配，Enter 离开搜索框进入列表，Esc 恢复完整列表。
+#[test]
+fn sidebar_search_filters_projects_and_conversations() {
+    use crate::app::SidebarRow;
+    let _locale = i18n::lock_locale("en-US");
+    let mut h = Harness::connected();
+    let full = h.app.sidebar_rows();
+    h.app.focus = crate::app::Focus::Sidebar;
+    input::handle_event(&mut h.app, key(KeyCode::Char('/'), KeyModifiers::NONE));
+    type_text(&mut h.app, "git");
+    h.frame();
+    assert_eq!(
+        h.app.sidebar_rows(),
+        [
+            SidebarRow::Project("p-tui".into()),
+            SidebarRow::Conversation("c-git".into())
+        ]
+    );
+    assert_eq!(
+        h.app.sidebar_cursor,
+        Some(SidebarRow::Project("p-tui".into()))
+    );
+    assert!(
+        buffer_text(h.wide.backend().buffer()).contains("/ git"),
+        "the query is shown above the list"
+    );
+
+    for _ in 0..3 {
+        input::handle_event(&mut h.app, key(KeyCode::Backspace, KeyModifiers::NONE));
+    }
+    type_text(&mut h.app, "VULCAN-CODE");
+    h.frame();
+    let rows = h.app.sidebar_rows();
+    assert!(
+        rows.contains(&SidebarRow::Conversation("c-provider".into()))
+            && rows.contains(&SidebarRow::Conversation("c-tui".into())),
+        "a project name match lists all its conversations"
+    );
+    assert!(!rows.contains(&SidebarRow::Project("p-lua".into())));
+
+    type_text(&mut h.app, "zzz");
+    h.frame();
+    assert!(h.app.sidebar_rows().is_empty());
+    assert!(buffer_text(h.wide.backend().buffer()).contains(&i18n::text("sidebar.noMatches")));
+
+    input::handle_event(&mut h.app, key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(!h.app.sidebar_filter.as_ref().unwrap().editing);
+    input::handle_event(&mut h.app, key(KeyCode::Esc, KeyModifiers::NONE));
+    h.frame();
+    assert!(h.app.sidebar_filter.is_none());
+    assert_eq!(h.app.sidebar_rows(), full);
+
+    click(&mut h.app, "the sidebar search button", |t| {
+        matches!(t, Target::Do(UiAction::SearchSidebar))
+    });
+    assert!(h.app.sidebar_filter.as_ref().is_some_and(|f| f.editing));
+}

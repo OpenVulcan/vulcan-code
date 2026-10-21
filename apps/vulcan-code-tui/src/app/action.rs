@@ -383,6 +383,9 @@ pub enum UiAction {
     /// Folds every project when any is open, else unfolds them all.
     /// 有任何项目展开时折叠全部，否则全部展开。
     FoldAllProjects,
+    /// Focuses the sidebar and types into its search.
+    /// 聚焦侧栏并输入其搜索。
+    SearchSidebar,
     /// Previews a collapsed paste; `None` picks the one next to the cursor, else the latest.
     /// 预览折叠的粘贴；`None` 选择光标旁的粘贴，否则选择最近一次。
     PastePreview(Option<usize>),
@@ -693,6 +696,12 @@ pub fn perform(app: &mut App, action: UiAction) {
             app.focus = Focus::Sidebar;
         }
         UiAction::FoldAllProjects => fold_all_projects(app),
+        UiAction::SearchSidebar => {
+            app.focus = Focus::Sidebar;
+            app.sidebar_filter
+                .get_or_insert_with(Default::default)
+                .editing = true;
+        }
         UiAction::PastePreview(index) => {
             let index = index.or_else(|| app.paste_near_cursor());
             if let Some(sheet) = index.and_then(|i| paste_sheet(app, i)) {
