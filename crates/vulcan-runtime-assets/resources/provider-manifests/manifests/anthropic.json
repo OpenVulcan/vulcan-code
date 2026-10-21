@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "anthropic",
-  "revision": 10,
-  "published_at": "2026-10-21T11:39:31Z",
+  "revision": 11,
+  "published_at": "2026-10-21T12:18:42Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -10,7 +10,12 @@
     ],
     "required_execution_primitives": [],
     "required_upload_primitives": [],
-    "required_transformers": []
+    "required_transformers": [
+      "copy_request_field",
+      "delete_if_equals",
+      "enum_map",
+      "remove_if_empty"
+    ]
   },
   "display": {
     "name": "Anthropic",
@@ -111,13 +116,16 @@
           "provider_default_behavior": "host-managed prompt cache injection is not available",
           "supports_managed_explicit": false
         },
-        "evidence_revision": "anthropic-effort-docs-2026-07-28"
+        "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
         "service_entry_ids": [
           "public-api"
         ]
-      }
+      },
+      "request_profile_refs": [
+        "anthropic.adaptive-effort.v1"
+      ]
     },
     {
       "rule_id": "reasoning-claude-opus-4-7",
@@ -145,13 +153,16 @@
           "provider_default_behavior": "host-managed prompt cache injection is not available",
           "supports_managed_explicit": false
         },
-        "evidence_revision": "anthropic-effort-docs-2026-07-28"
+        "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
         "service_entry_ids": [
           "public-api"
         ]
-      }
+      },
+      "request_profile_refs": [
+        "anthropic.adaptive-effort.v1"
+      ]
     },
     {
       "rule_id": "reasoning-claude-sonnet-5",
@@ -179,13 +190,16 @@
           "provider_default_behavior": "host-managed prompt cache injection is not available",
           "supports_managed_explicit": false
         },
-        "evidence_revision": "anthropic-effort-docs-2026-07-28"
+        "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
         "service_entry_ids": [
           "public-api"
         ]
-      }
+      },
+      "request_profile_refs": [
+        "anthropic.default-adaptive-effort.v1"
+      ]
     },
     {
       "rule_id": "reasoning-claude-opus-5",
@@ -213,13 +227,53 @@
           "provider_default_behavior": "host-managed prompt cache injection is not available",
           "supports_managed_explicit": false
         },
-        "evidence_revision": "anthropic-effort-docs-2026-07-28"
+        "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
         "service_entry_ids": [
           "public-api"
         ]
-      }
+      },
+      "request_profile_refs": [
+        "anthropic.default-adaptive-effort.v1"
+      ]
+    },
+    {
+      "rule_id": "reasoning-claude-haiku-5",
+      "matcher": {
+        "kind": "prefix",
+        "value": "claude-haiku-5"
+      },
+      "supported_protocols": [
+        "anthropic-messages.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "anthropic-thinking-docs-2026-10-21"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      },
+      "request_profile_refs": [
+        "anthropic.default-adaptive-effort.v1"
+      ]
     },
     {
       "rule_id": "reasoning-claude-fable-5",
@@ -247,13 +301,16 @@
           "provider_default_behavior": "host-managed prompt cache injection is not available",
           "supports_managed_explicit": false
         },
-        "evidence_revision": "anthropic-effort-docs-2026-07-28"
+        "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
         "service_entry_ids": [
           "public-api"
         ]
-      }
+      },
+      "request_profile_refs": [
+        "anthropic.default-adaptive-effort.v1"
+      ]
     },
     {
       "rule_id": "reasoning-claude-mythos-5",
@@ -281,13 +338,16 @@
           "provider_default_behavior": "host-managed prompt cache injection is not available",
           "supports_managed_explicit": false
         },
-        "evidence_revision": "anthropic-effort-docs-2026-07-28"
+        "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
         "service_entry_ids": [
           "public-api"
         ]
-      }
+      },
+      "request_profile_refs": [
+        "anthropic.default-adaptive-effort.v1"
+      ]
     },
     {
       "rule_id": "reasoning-claude-opus-4-6",
@@ -314,13 +374,16 @@
           "provider_default_behavior": "host-managed prompt cache injection is not available",
           "supports_managed_explicit": false
         },
-        "evidence_revision": "anthropic-effort-docs-2026-07-28"
+        "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
         "service_entry_ids": [
           "public-api"
         ]
-      }
+      },
+      "request_profile_refs": [
+        "anthropic.adaptive-effort.v1"
+      ]
     },
     {
       "rule_id": "reasoning-claude-sonnet-4-6",
@@ -347,13 +410,16 @@
           "provider_default_behavior": "host-managed prompt cache injection is not available",
           "supports_managed_explicit": false
         },
-        "evidence_revision": "anthropic-effort-docs-2026-07-28"
+        "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
         "service_entry_ids": [
           "public-api"
         ]
-      }
+      },
+      "request_profile_refs": [
+        "anthropic.adaptive-effort.v1"
+      ]
     },
     {
       "rule_id": "reasoning-claude-opus-4-5",
@@ -389,7 +455,129 @@
     }
   ],
   "usage_profiles": [],
-  "request_profiles": [],
+  "request_profiles": [
+    {
+      "profile_id": "anthropic.adaptive-effort.v1",
+      "description": "Adaptive thinking with summarized display and exact effort for models whose thinking is off by default",
+      "payload": {
+        "profile_id": "anthropic.adaptive-effort.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/thinking",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "none": {
+                "type": "disabled"
+              },
+              "low": {
+                "type": "adaptive",
+                "display": "summarized"
+              },
+              "medium": {
+                "type": "adaptive",
+                "display": "summarized"
+              },
+              "high": {
+                "type": "adaptive",
+                "display": "summarized"
+              },
+              "xhigh": {
+                "type": "adaptive",
+                "display": "summarized"
+              },
+              "max": {
+                "type": "adaptive",
+                "display": "summarized"
+              }
+            },
+            "unmatched": "error",
+            "default": null
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/output_config/effort",
+            "field": "reasoning_effort"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/output_config/effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "none"
+          },
+          {
+            "op": "remove_if_empty",
+            "path": "/output_config"
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "anthropic.default-adaptive-effort.v1",
+      "description": "Adaptive thinking with summarized display and exact effort for models whose adaptive thinking is on by default",
+      "payload": {
+        "profile_id": "anthropic.default-adaptive-effort.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/thinking",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "none": {
+                "type": "disabled"
+              },
+              "low": {
+                "type": "adaptive",
+                "display": "summarized"
+              },
+              "medium": {
+                "type": "adaptive",
+                "display": "summarized"
+              },
+              "high": {
+                "type": "adaptive",
+                "display": "summarized"
+              },
+              "xhigh": {
+                "type": "adaptive",
+                "display": "summarized"
+              },
+              "max": {
+                "type": "adaptive",
+                "display": "summarized"
+              }
+            },
+            "unmatched": "error",
+            "default": {
+              "type": "adaptive",
+              "display": "summarized"
+            }
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/output_config/effort",
+            "field": "reasoning_effort"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/output_config/effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "none"
+          },
+          {
+            "op": "remove_if_empty",
+            "path": "/output_config"
+          }
+        ]
+      }
+    }
+  ],
   "response_profiles": [],
   "upload_channels": [],
   "operations": [],
@@ -404,6 +592,10 @@
       {
         "url": "https://docs.anthropic.com/en/docs/build-with-claude/vision",
         "note": "Current Claude models accept JPEG, PNG, GIF and WebP image blocks on the Messages API; image input is declared provider-wide."
+      },
+      {
+        "url": "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "note": "Per-model thinking configuration: Opus 4.6+, Sonnet 4.6 and every 5.x model use adaptive thinking; manual budget_tokens returns 400 from Opus 4.7 onward; display defaults to omitted, so summarized is requested explicitly. Effort levels per model follow the effort page."
       }
     ]
   }

@@ -339,6 +339,85 @@ fn opencode_credentials_share_model_protocols_and_native_parameter_projection() 
     }
 }
 
+/// Verifies official Claude models that reject manual budgets receive adaptive thinking and effort.
+/// 验证拒绝手动预算的官方 Claude 模型收到自适应思考与强度字段。
+/// No parameters; checks opt-in and default-on adaptive families and the manual-budget fallback.
+/// 无参数；检查需显式开启与默认开启的自适应家族，以及手动预算回退。
+#[test]
+fn anthropic_official_models_project_their_declared_thinking_mode() {
+    use vulcan_ai_contract::ReasoningEffort;
+    // manifest is the signed official Anthropic authority used by runtime selection.
+    // manifest 是运行时选择使用的已签名官方 Anthropic 权威。
+    let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
+    let manifest = manifests
+        .get("anthropic")
+        .expect("Anthropic manifest must exist");
+    let client = crate::execution::ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().unwrap()),
+    );
+    let adaptive = serde_json::json!({"type":"adaptive","display":"summarized"});
+    for (model_id, effort, expected_thinking, expected_effort) in [
+        (
+            "claude-haiku-5-5",
+            Some(ReasoningEffort::High),
+            Some(adaptive.clone()),
+            Some("high"),
+        ),
+        // Default-on models keep their thinking text visible even without an explicit effort.
+        // 默认开启的模型在未显式选择强度时也保持思考文本可见。
+        ("claude-opus-5-5", None, Some(adaptive.clone()), None),
+        (
+            "claude-opus-4-7",
+            Some(ReasoningEffort::XHigh),
+            Some(adaptive.clone()),
+            Some("xhigh"),
+        ),
+        // Opt-in models stay on their provider default when no effort is selected.
+        // 需显式开启的模型在未选择强度时保持供应商默认。
+        ("claude-sonnet-4-6", None, None, None),
+        (
+            "claude-opus-4-5",
+            Some(ReasoningEffort::High),
+            Some(serde_json::json!({"type":"enabled","budget_tokens":8192})),
+            None,
+        ),
+    ] {
+        let mut route = crate::execution::test_support::bundled_manifest_route(
+            "anthropic",
+            "public-api",
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+        );
+        route.request_projection_profiles =
+            crate::runtime::selection::profiles::resolve_request_projection_chain(
+                manifest,
+                "public-api",
+                Some("api-key"),
+                model_id,
+                Vec::new(),
+            )
+            .unwrap();
+        let mut request = crate::execution::test_support::minimal_request();
+        request.model_id = model_id.to_string();
+        request.reasoning_effort = effort;
+        request.output_token_limit = Some(32768);
+        let encoded = client.encode_request(&route, &request).unwrap();
+        assert_eq!(
+            encoded.body.get("thinking"),
+            expected_thinking.as_ref(),
+            "{model_id}"
+        );
+        assert_eq!(
+            encoded
+                .body
+                .pointer("/output_config/effort")
+                .and_then(serde_json::Value::as_str),
+            expected_effort,
+            "{model_id}"
+        );
+    }
+}
+
 /// Verifies APIKEY.FAN routes a credential-only connection through its signed model binding.
 /// 验证 APIKEY.FAN 会通过已签名模型绑定路由仅含凭据身份的连接。
 #[test]
