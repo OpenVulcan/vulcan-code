@@ -37,6 +37,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         provider_id_override: Some(String::from("provider")),
         model_id_override: Some(String::from("model")),
         connection_id_override: None,
+        subagent_model_grants: None,
         provider_route_lease_identity: None,
         provider_tool_selections_override: Default::default(),
         provider_tool_media_understanding_selections_override: Default::default(),
@@ -2433,4 +2434,118 @@ async fn orchestration_info_reports_the_session_route_as_session_model() {
         result.model_output["session_model"]["selector"],
         "openrouter/vendor/session-model"
     );
+}
+
+/// Builds one allowlist entry for subagent model tests.
+/// 为子代理模型测试构建一条白名单条目。
+fn test_grant(
+    provider_id: &str,
+    model_id: &str,
+    note: &str,
+) -> crate::provider_config::SubagentModelGrant {
+    crate::provider_config::SubagentModelGrant {
+        provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        note: note.to_string(),
+    }
+}
+
+/// Builds a context whose session runs `session_model` and whose system allowlist is `system`.
+/// 构建会话运行 `session_model`、系统白名单为 `system` 的上下文。
+fn allowlist_test_context(
+    session_model: &str,
+    system: Vec<crate::provider_config::SubagentModelGrant>,
+    session: Option<Vec<crate::provider_config::SubagentModelGrant>>,
+) -> TaskExecutionRuntimeContext {
+    let provider_config = ProviderConfigurationFile {
+        subagent_models: system,
+        ..ProviderConfigurationFile::default()
+    };
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
+        &provider_config,
+    );
+    let mut request = test_parent_execution_request(Uuid::new_v4());
+    request.provider_id_override = Some(String::from("openrouter"));
+    request.model_id_override = Some(session_model.to_string());
+    request.subagent_model_grants = session;
+    TaskExecutionRuntimeContext::new(provider_config, Arc::new(foundation), None, request)
+}
+
+/// Builds the explicit `spawn_agent.model` snapshot for `selector`.
+/// 为 `selector` 构建显式 `spawn_agent.model` 快照。
+fn explicit_model(provider_id: &str, model_id: &str) -> ProviderModelSnapshot {
+    ProviderModelSnapshot {
+        provider_id: Some(provider_id.to_string()),
+        model_id: Some(model_id.to_string()),
+        ..ProviderModelSnapshot::default()
+    }
+}
+
+/// Verifies the model list holds only the session model and available allowlisted models with notes.
+/// 验证模型清单只含会话模型与可用的白名单模型，并附带备注。
+#[test]
+fn orchestration_models_list_only_the_session_model_and_granted_models() {
+    // Only openrouter/openai/gpt-5.6-sol is an enabled catalog model in the test foundation.
+    // 测试基础架构中只有 openrouter/openai/gpt-5.6-sol 是已启用的目录模型。
+    let granted = allowlist_test_context(
+        "vendor/unlisted",
+        vec![
+            test_grant("openrouter", "openai/gpt-5.6-sol", "Use for quick reviews."),
+            test_grant("openrouter", "vendor/disabled", "Not enabled."),
+        ],
+        None,
+    );
+    let rows =
+        super::super::invocation_methods::agent_orchestration_info_models(&granted, None).unwrap();
+    assert_eq!(rows.len(), 1, "unavailable models must not be listed");
+    assert_eq!(rows[0]["selector"], "openrouter/openai/gpt-5.6-sol");
+    assert_eq!(rows[0]["note"], "Use for quick reviews.");
+    assert_eq!(rows[0]["is_session_model"], false);
+
+    // With no grants, the session model is the only listed model.
+    // 没有授权时，会话模型是唯一列出的模型。
+    let session_only = allowlist_test_context("openai/gpt-5.6-sol", Vec::new(), None);
+    let rows =
+        super::super::invocation_methods::agent_orchestration_info_models(&session_only, None)
+            .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["is_session_model"], true);
+
+    // A session allowlist replaces the system list, even when empty.
+    // 会话白名单替代系统清单，即使为空。
+    let session_override = allowlist_test_context(
+        "vendor/unlisted",
+        vec![test_grant("openrouter", "openai/gpt-5.6-sol", "")],
+        Some(Vec::new()),
+    );
+    assert!(
+        super::super::invocation_methods::agent_orchestration_info_models(&session_override, None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Verifies spawns accept the session model and granted models and reject the rest with guidance.
+/// 验证派生接受会话模型与已授权模型，拒绝其余模型并给出指引。
+#[test]
+fn spawn_models_outside_the_allowlist_are_rejected() {
+    let context = allowlist_test_context(
+        "vendor/session-model",
+        vec![test_grant("openrouter", "openai/gpt-5.6-sol", "")],
+        None,
+    );
+    validate_spawn_model_is_granted(
+        &context,
+        &explicit_model("openrouter", "vendor/session-model"),
+    )
+    .expect("the session model is always granted");
+    validate_spawn_model_is_granted(
+        &context,
+        &explicit_model("openrouter", "openai/gpt-5.6-sol"),
+    )
+    .expect("allowlisted models are granted");
+    let error =
+        validate_spawn_model_is_granted(&context, &explicit_model("openrouter", "vendor/other"))
+            .expect_err("models outside the allowlist are rejected");
+    assert!(error.contains("openrouter/vendor/other"), "{error}");
 }

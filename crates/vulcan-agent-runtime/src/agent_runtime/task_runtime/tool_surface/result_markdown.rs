@@ -199,14 +199,23 @@ fn orchestration(model: &Value) -> Result<String, String> {
     let models = array(model, "models")?;
     if !models.is_empty() {
         text.push_str(
-            "\n## Available model selectors\n\nPass a selector verbatim to `spawn_agent.model`.\n",
+            "\n## Available model selectors\n\nPass a selector verbatim to `spawn_agent.model`. Only these models are enabled for subagents; follow the user's note when choosing one. Any other model must first be added by the user to the subagent model allowlist.\n",
         );
         for row in models {
             text.push_str(&format!(
-                "- {} — {}\n",
+                "- {} — {}",
                 code(row, "selector")?,
                 code(row, "model_name")?
             ));
+            if required(row, "is_session_model")?.as_bool() == Some(true) {
+                text.push_str(" (session model)");
+            }
+            match optional_text(row, "note")? {
+                Some(note) if !note.is_empty() => {
+                    text.push_str(&format!("\n  User note: {}\n", note.replace('\n', " ")))
+                }
+                _ => text.push('\n'),
+            }
         }
     }
     let modes = array(model, "modes")?;

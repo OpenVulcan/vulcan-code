@@ -43,7 +43,7 @@ pub(crate) fn set_session_permission_mode_v1(
 /// Resolves the writable handle of one active regular session while holding its lifecycle
 /// transition, so access changes serialize with archive and delete.
 /// 在持有生命周期转换的同时解析一个活动普通会话的可写句柄，使授权修改与归档、删除串行。
-async fn session_access_writer(
+pub(crate) async fn session_access_writer(
     state: &SharedServiceBridgeState,
     raw_session_id: &str,
 ) -> Result<

@@ -1489,18 +1489,21 @@ fn subagent_definition_model_selection(
     }))
 }
 
-/// Builds selectable model rows from the current provider configuration.
-/// 从当前供应商配置构建可选模型行。
+/// Builds the model rows the agent may pass to `spawn_agent.model`.
+/// 构建代理可传给 `spawn_agent.model` 的模型行。
 ///
 /// # Parameters
 /// 参数
-/// `session_config` is the current provider configuration snapshot.
-/// `session_config` 是当前供应商配置快照。
+/// `model_context` carries the session route and allowlist; `agent_fixed_model` marks a focused
+/// profile's fixed model.
+/// `model_context` 携带会话路由与白名单；`agent_fixed_model` 标记聚焦配置的固定模型。
 ///
 /// # Returns
 /// 返回值
-/// Model rows whose selector can be passed to spawn_agent.model.
-/// 可传给 spawn_agent.model 的模型行。
+/// The session model first, then the allowlisted models in the user's order, each only while it is
+/// an enabled conversation model on an enabled account, with the user's note.
+/// 先是会话模型，再按用户顺序列出白名单模型；每个模型仅在为已启用账号上的已启用会话模型时列出，
+/// 并附带用户备注。
 pub(super) fn agent_orchestration_info_models(
     model_context: &TaskExecutionRuntimeContext,
     agent_fixed_model: Option<&(String, String)>,
@@ -1515,52 +1518,68 @@ pub(super) fn agent_orchestration_info_models(
     // Only selectors that spawn_agent accepts are listed: enabled conversation models on enabled accounts.
     // 只列出 spawn_agent 接受的选择器：已启用账号上已启用的会话模型。
     let available_selectors = runtime.available_model_selectors(&configuration)?;
-    let session_selector = agent_orchestration_session_route(model_context, &configuration)
-        .map(|(provider_id, model_id, _)| format!("{provider_id}/{model_id}"));
+    let session_route = agent_orchestration_session_route(model_context, &configuration);
     let fixed_selector =
         agent_fixed_model.map(|(provider_id, model_id)| format!("{provider_id}/{model_id}"));
-    let mut rows = BTreeMap::<String, Value>::new();
-    let mut account_counts = BTreeMap::<String, usize>::new();
-    for connection in configuration.connection_graph.connections.values() {
-        if !configuration.connection_is_enabled(connection.id.as_str())
-            || configuration.connection_is_pending_validation(connection.id.as_str())
-        {
-            continue;
-        }
-        let Some(catalog) = catalogs.get(connection.id.as_str()) else {
-            continue;
-        };
-        let provider_display_name = providers
-            .provider(connection.provider_id.as_str())
-            .map(|provider| provider.display_name.clone())
-            .unwrap_or_else(|| connection.provider_id.clone());
-        for model in &catalog.models {
-            let selector = format!("{}/{}", connection.provider_id, model.id);
-            if !available_selectors.contains(&selector) {
-                continue;
-            }
-            *account_counts.entry(selector.clone()).or_default() += 1;
-            rows.entry(selector.clone()).or_insert_with(|| {
-                json!({
-                    "provider_id": connection.provider_id,
-                    "provider_name": provider_display_name,
-                    "model_id": model.id,
-                    "model_name": model.display_name,
-                    "selector": selector,
-                    "is_session_model": session_selector.as_deref() == Some(selector.as_str()),
-                    "is_agent_fixed_model": fixed_selector.as_deref() == Some(selector.as_str()),
-                })
-            });
+    // The session model is always granted; the allowlist adds models with the user's notes.
+    // 会话模型始终获准；白名单在其之外追加带用户备注的模型。
+    let mut wanted: Vec<(String, String, String, bool)> = Vec::new();
+    if let Some((provider_id, model_id, _)) = session_route {
+        wanted.push((provider_id, model_id, String::new(), true));
+    }
+    for grant in effective_subagent_model_grants(model_context) {
+        if !wanted.iter().any(|(provider_id, model_id, _, _)| {
+            *provider_id == grant.provider_id && *model_id == grant.model_id
+        }) {
+            wanted.push((
+                grant.provider_id.clone(),
+                grant.model_id.clone(),
+                grant.note.clone(),
+                false,
+            ));
         }
     }
-    Ok(rows
-        .into_iter()
-        .map(|(selector, mut row)| {
-            row["account_count"] =
-                json!(account_counts.get(selector.as_str()).copied().unwrap_or(0));
-            row
-        })
-        .collect())
+    let mut rows = Vec::new();
+    for (provider_id, model_id, note, is_session_model) in wanted {
+        let selector = format!("{provider_id}/{model_id}");
+        if !available_selectors.contains(&selector) {
+            continue;
+        }
+        let mut model_name = None;
+        let mut account_count = 0usize;
+        for connection in configuration.connection_graph.connections.values() {
+            if connection.provider_id != provider_id
+                || !configuration.connection_is_enabled(connection.id.as_str())
+                || configuration.connection_is_pending_validation(connection.id.as_str())
+            {
+                continue;
+            }
+            let Some(model) = catalogs
+                .get(connection.id.as_str())
+                .and_then(|catalog| catalog.models.iter().find(|model| model.id == model_id))
+            else {
+                continue;
+            };
+            account_count += 1;
+            model_name.get_or_insert_with(|| model.display_name.clone());
+        }
+        let provider_name = providers
+            .provider(provider_id.as_str())
+            .map(|provider| provider.display_name.clone())
+            .unwrap_or_else(|| provider_id.clone());
+        rows.push(json!({
+            "provider_id": provider_id,
+            "provider_name": provider_name,
+            "model_name": model_name.unwrap_or_else(|| model_id.clone()),
+            "model_id": model_id,
+            "selector": selector,
+            "note": note,
+            "is_session_model": is_session_model,
+            "is_agent_fixed_model": fixed_selector.as_deref() == Some(selector.as_str()),
+            "account_count": account_count,
+        }));
+    }
+    Ok(rows)
 }
 
 /// Builds the current session model row when it is available.
@@ -1611,7 +1630,7 @@ fn agent_orchestration_session_model(
 /// `(provider_id, model_id, connection_id)` from the request's frozen session selection, or the
 /// global active model only when the request names none.
 /// 来自请求冻结会话选择的 `(provider_id, model_id, connection_id)`；仅当请求未指定时回退到全局激活模型。
-fn agent_orchestration_session_route(
+pub(super) fn agent_orchestration_session_route(
     model_context: &TaskExecutionRuntimeContext,
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
 ) -> Option<(String, String, Option<String>)> {

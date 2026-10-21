@@ -140,6 +140,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_review_rules_system_default",
     "service_project_review_rules",
     "service_save_project_review_rules",
+    "service_subagent_models",
+    "service_save_subagent_models",
+    "service_session_subagent_models",
+    "service_save_session_subagent_models",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -923,6 +927,30 @@ pub(super) async fn dispatch(
         "service_review_rules_system_default" => {
             rpc_json_result(permission_judge::service_review_rules_system_default(state))
         }
+        "service_subagent_models" => {
+            rpc_json_result(crate::subagent_models::service_subagent_models(state))
+        }
+        "service_save_subagent_models" => rpc_json_result(
+            crate::subagent_models::service_save_subagent_models(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_session_subagent_models" => rpc_json_result(
+            crate::subagent_models::service_session_subagent_models(
+                state,
+                rpc_required_param(params, "sessionId")?,
+            )
+            .await,
+        ),
+        "service_save_session_subagent_models" => rpc_json_result(
+            crate::subagent_models::service_save_session_subagent_models(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
         "service_save_review_rules_system_default" => rpc_json_result(
             permission_judge::service_save_review_rules_system_default(
                 state,

@@ -111,6 +111,17 @@ async fn prepare_child_execution_request(
             request
         }
     };
+    // Restored children spawn under the root session's allowlist, never a wider one.
+    // 恢复的子代理按根会话白名单派生，绝不放宽。
+    let root_session_id = crate::parse_session_id(&profile.root_session_id)
+        .ok_or_else(|| String::from("Child execution profile has an invalid root session."))?;
+    let root_handle = crate::session_goal_lifecycle::session_v1_handle_from_state(
+        &invocation.state,
+        root_session_id,
+    )
+    .await?;
+    request.subagent_model_grants =
+        crate::subagent_models::session_subagent_model_grants(root_handle.as_ref())?;
     request.controller_runtime = Some(invocation.controller_runtime.clone());
     request.media_resource_runtime = Some(
         crate::session_media_resources_v1::session_v1_media_resource_runtime(&invocation.state)?,
@@ -212,6 +223,7 @@ fn build_child_base_request(
         provider_tool_enabled_capabilities_override: None,
         provider_extension_target_sets_override: None,
         subagent_prompt_context: None,
+        subagent_model_grants: None,
         session_storage_directory: Some(locator.session_directory()),
         session_title: title,
         workspace_path: locator

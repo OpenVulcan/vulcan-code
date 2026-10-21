@@ -286,6 +286,12 @@ async fn run_task_with_shared_runtime_context_inner(
                 error
             }
         })?;
+        // Only new spawns check the allowlist; existing children keep their model after it changes.
+        // 只有新派生检查白名单；白名单变化后已有子代理保留其模型。
+        if lifecycle_binding.is_some() {
+            validate_spawn_model_is_granted(&context, &request.invocation_config.provider_model)
+                .map_err(task_execution_prestart_rejected_error)?;
+        }
     }
     let fixed_parent_controller_config = request
         .controller_config

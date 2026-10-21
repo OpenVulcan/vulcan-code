@@ -162,6 +162,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedPermissionJudgeConfiguration::is_default"
     )]
     pub permission_judge: PersistedPermissionJudgeConfiguration,
+    /// System default models that subagents may run besides the session's own model.
+    /// 子代理在会话自身模型之外可使用模型的系统默认清单。
+    #[serde(
+        default,
+        rename = "subagentModels",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub subagent_models: Vec<SubagentModelGrant>,
 }
 
 /// Versioned standalone public AI connection configuration.

@@ -1743,6 +1743,7 @@ fn build_prompt_compaction_launch_request(
         provider_id_override: model_target.map(|target| target.provider_id.clone()),
         model_id_override: model_target.map(|target| target.model_id.clone()),
         connection_id_override: model_target.map(|target| target.connection_id.clone()),
+        subagent_model_grants: None,
         provider_route_lease_identity: model_target
             .map(|target| target.provider_route_lease_identity.clone()),
         provider_tool_selections_override: launch_context.provider_tool_selections_override.clone(),

@@ -1079,6 +1079,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
+        subagent_model_grants: None,
         provider_route_lease_identity: None,
         provider_tool_selections_override: Default::default(),
         provider_tool_media_understanding_selections_override: Default::default(),

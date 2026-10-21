@@ -466,6 +466,64 @@ pub(super) fn validate_explicit_spawn_model_selector(
     ))
 }
 
+/// Returns the models subagents may run besides the session model: the session's own allowlist
+/// when it has one, otherwise the system default list.
+/// 返回子代理在会话模型之外可使用的模型：会话有自己的白名单时使用之，否则使用系统默认清单。
+pub(super) fn effective_subagent_model_grants(
+    context: &TaskExecutionRuntimeContext,
+) -> &[crate::provider_config::SubagentModelGrant] {
+    context
+        .request_template
+        .subagent_model_grants
+        .as_deref()
+        .unwrap_or(&context.config.subagent_models)
+}
+
+/// Rejects a new spawn whose explicit model is neither the session model nor on the allowlist.
+/// 拒绝显式模型既不是会话模型、也不在白名单中的新派生。
+///
+/// # Parameters
+/// 参数
+/// `context` carries the session route and allowlist; `provider_model` is the spawn's explicit model.
+/// `context` 携带会话路由与白名单；`provider_model` 是派生的显式模型。
+///
+/// # Returns
+/// 返回值
+/// An English error telling the agent to ask the user to enable the model when it is not granted.
+/// 模型未获授权时返回英文错误，指引代理请用户开启该模型。
+pub(super) fn validate_spawn_model_is_granted(
+    context: &TaskExecutionRuntimeContext,
+    provider_model: &ProviderModelSnapshot,
+) -> Result<(), String> {
+    let Some((provider_id, model_id)) =
+        provider_model_selector_from_snapshot(provider_model, &context.config)
+    else {
+        return Ok(());
+    };
+    let runtime = context
+        .foundation
+        .public_ai_runtime()
+        .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
+    let configuration = runtime.configuration_snapshot()?;
+    let session_route =
+        super::invocation_methods::agent_orchestration_session_route(context, &configuration);
+    let is_session_model =
+        session_route
+            .as_ref()
+            .is_some_and(|(session_provider, session_model, _)| {
+                *session_provider == provider_id && *session_model == model_id
+            });
+    let granted = effective_subagent_model_grants(context)
+        .iter()
+        .any(|grant| grant.provider_id == provider_id && grant.model_id == model_id);
+    if is_session_model || granted {
+        return Ok(());
+    }
+    Err(format!(
+        "model `{provider_id}/{model_id}` is not enabled for subagents in this session. Subagents may only run the session model and the models the user added to the subagent model allowlist. Do not retry with this model: tell the user that `{provider_id}/{model_id}` must first be added to the subagent model allowlist (system settings or this session's subagent model setting), or omit `model` to run the child on the session model."
+    ))
+}
+
 /// Clears unavailable profile-level fixed model overrides so execution falls back to the session model.
 /// 清除不可用的配置级固定模型覆盖，使执行回退到会话模型。
 ///
