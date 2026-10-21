@@ -37,6 +37,7 @@ members = [
     "crates/vulcan-file-ownership",
     "crates/vulcan-markdown-memory",
     "crates/vulcan-mcp-runtime",
+    "crates/vulcan-mcp-service",
     "crates/vulcan-plugin-runtime",
     "crates/vulcan-tools-manager",
     "crates/vulcan-core",
@@ -96,6 +97,7 @@ vulcan-terminal-host-protocol = { path = "crates/vulcan-terminal-host-protocol" 
 vulcan-code-mode = { path = "crates/vulcan-code-mode" }
 vulcan-code-mode-protocol = { path = "crates/vulcan-code-mode-protocol" }
 vulcan-permission-judge = { path = "crates/vulcan-permission-judge" }
+vulcan-mcp-service = { path = "crates/vulcan-mcp-service" }
 vulcan-workbench-model = { path = "crates/vulcan-workbench-model" }
 vulcan-workspace-store = { path = "crates/vulcan-workspace-store" }
 vulcan-runtime-assets = { path = "crates/vulcan-runtime-assets" }
