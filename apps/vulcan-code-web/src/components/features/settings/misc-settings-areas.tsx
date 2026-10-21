@@ -27,6 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/ui-kit/primitives/textarea"
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
 import { formatMessage, pickBilingualText, useI18n } from "@/i18n"
+import { formatConversationRelativeTime, formatConversationUpdatedAt } from "@/components/project/project-sidebar-time"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import type { AnswerMode } from "@/service/answer-mode"
 import type {
@@ -365,7 +366,8 @@ export function ArchivedRestoreSettingsArea(props: {
   // 活动项目摘要。
   projects: ProjectSummary[]
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
+  const nowMs = Date.now()
   const archivedConversations = props.conversations
   const [selectedConversationIds, setSelectedConversationIds] = React.useState<Set<string>>(new Set())
   const [currentPage, setCurrentPage] = React.useState(1)
@@ -459,7 +461,7 @@ export function ArchivedRestoreSettingsArea(props: {
         onCheckedChange={(checked) => toggleConversationSelection(conversation.id, checked === true)} />,
       title: conversation.title,
       project: <span className="vk-faint">{projectName(conversation)}</span>,
-      updated: <span className="vk-faint">{conversation.lastUpdatedLabel ?? "—"}</span>,
+      updated: <span className="vk-faint" title={formatConversationUpdatedAt(conversation, locale) ?? undefined}>{formatConversationRelativeTime(conversation, nowMs, locale) || "—"}</span>,
       actions: <div className="vk-form-acts">
         <Button aria-label={formatMessage(t("settings.misc.restoreConversation"), { title: conversation.title })} disabled={operation !== "idle"}
           onClick={() => void runArchivedConversationAction("restore", [conversation.id])} size="icon-sm" title={t("settings.misc.restore")} variant="ghost"><RotateCcw /></Button>
