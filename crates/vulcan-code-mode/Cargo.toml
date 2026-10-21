@@ -1,0 +1,41 @@
+[package]
+name = "vulcan-code-mode"
+description = "Service-side code-mode client that drives vulcan-code-mode-host over gRPC, vendored from OpenAI Codex."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license = "MIT AND Apache-2.0"
+
+[lib]
+doctest = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# Vendored from openai/codex: mirror the upstream clippy policy instead of the Vulcan workspace
+# lints, whose `missing_docs` requirement the upstream sources do not follow.
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+expect_used = "deny"
+unwrap_used = "deny"
+
+[dependencies]
+futures.workspace = true
+prost.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tonic.workspace = true
+tower = { workspace = true, features = ["util"] }
+tracing.workspace = true
+uuid.workspace = true
+vulcan-code-mode-protocol.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

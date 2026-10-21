@@ -1,0 +1,68 @@
+# Standalone workspace for the vendored code-mode host process and its V8 runtime.
+# 内置代码模式宿主进程及其 V8 运行时的独立工作区。
+#
+# The sandbox-enabled V8 archives (published by OpenAI Codex, see .cargo/config.toml here) embed
+# Chromium's allocator shim and must be linked with the static C runtime. The root workspace links
+# the dynamic C runtime (`CL=/MD`) and unifies LuaJIT and other C dependencies through
+# workspace-hack, so this host cannot share its target directory, lockfile or feature graph. The
+# service talks to the host only through gRPC over stdio, using `vulcan-code-mode` and
+# `vulcan-code-mode-protocol` from the root workspace.
+# 启用沙盒的 V8 预编译库（由 OpenAI Codex 发布，见本目录 .cargo/config.toml）内嵌 Chromium 分配器
+# 垫片，必须以静态 C 运行时链接。根工作区使用动态 C 运行时（`CL=/MD`），并通过 workspace-hack
+# 统一 LuaJIT 等 C 依赖，因此该宿主不能共用其目标目录、锁文件或特性图。服务只通过 stdio 上的 gRPC
+# 与宿主通信，使用根工作区中的 `vulcan-code-mode` 与 `vulcan-code-mode-protocol`。
+#
+# Always run cargo from this directory (or through make), never with --manifest-path from the
+# repository root: Cargo reads .cargo/config.toml from the current directory, and without it the
+# host links the dynamic C runtime and fails with duplicate malloc/free symbols.
+# 始终在本目录下（或通过 make）运行 cargo，不要在仓库根目录用 --manifest-path：Cargo 从当前目录读取
+# .cargo/config.toml，缺少它时宿主会链接动态 C 运行时并以 malloc/free 符号重复失败。
+[workspace]
+members = [
+    "vulcan-code-mode-host",
+    "vulcan-code-mode-runtime",
+]
+resolver = "3"
+
+# The application version lives only in the root Cargo.toml; the host is never versioned or
+# published on its own.
+# 应用版本只存在于根 Cargo.toml；宿主从不独立版本化或发布。
+[workspace.package]
+authors = ["OpenVulcan"]
+edition = "2024"
+license = "MIT AND Apache-2.0"
+publish = false
+rust-version = "1.97.1"
+version = "0.0.0"
+
+# Versions follow the root workspace where both declare the same crate; v8 and deno_core_icudata
+# are pinned exactly as upstream Codex.
+# 与根工作区共有的 crate 沿用根工作区版本；v8 与 deno_core_icudata 按上游 Codex 精确固定。
+[workspace.dependencies]
+vulcan-code-mode = { path = "../../crates/vulcan-code-mode" }
+vulcan-code-mode-protocol = { path = "../../crates/vulcan-code-mode-protocol" }
+vulcan-code-mode-runtime = { path = "vulcan-code-mode-runtime" }
+anyhow = "1.0.104"
+axum = { version = "0.8.9", default-features = false }
+base64 = "0.23.1"
+clap = { version = "4", features = ["derive"] }
+deno_core_icudata = "0.78.0"
+futures = "0.3"
+pretty_assertions = "1.4.1"
+prost = "0.14.4"
+serde_json = "1.0.151"
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "rt", "sync", "time"] }
+tokio-stream = "0.1.19"
+tokio-util = { version = "0.7.19", features = ["io"] }
+tonic = { version = "0.14.6", default-features = false, features = ["transport", "codegen"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+uuid = { version = "1.24.1", features = ["v4"] }
+v8 = "=152.2.0"
+
+# Third-party crates keep only line tables in development builds, matching the root workspace.
+# 第三方 crate 在开发构建中只保留行表，与根工作区一致。
+[profile.dev.package."*"]
+debug = "line-tables-only"
+opt-level = 2
