@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { prerender } from "react-dom/static";
+import { WorkspaceFileOpenContext } from "@/components/workspace/workspace-file-open-request";
 import { describe, expect, it, vi } from "vitest";
 import {
   AnswerCodeSnapshotsProvider,
@@ -146,5 +149,40 @@ describe("ui-code excerpts", () => {
     expect(await message({ pending: true })).toBe("answerComponents.code.pending");
     expect(await message({ pending: false, snapshots: [] })).toBe("answerComponents.code.notCaptured");
     expect(await message(null)).toBe("answerComponents.code.notCaptured");
+  });
+});
+
+describe("file references inside the workbench", () => {
+  it("show the file at its lines in the files panel instead of linking", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const open = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const state: AnswerCodeSnapshotState = {
+      pending: false,
+      snapshots: [{ location: "src/a.rs:10-12", result: { status: "captured", text: "a\nb\nc" } }],
+    };
+    await act(async () => root.render(
+      <WorkspaceFileOpenContext.Provider value={open}>
+        <AnswerCodeSnapshotsProvider value={state}>
+          <MarkdownMessage content={"```ui-findings\nhigh | Range read | src/read.ts:373\n```\n\n```ui-code\nsrc/a.rs:10-12\n```"} eager />
+        </AnswerCodeSnapshotsProvider>
+      </WorkspaceFileOpenContext.Provider>,
+    ));
+    // The deferred component chunk can take seconds to transform under a loaded parallel run.
+    // 在高负载的并行运行中，延迟组件分块的转换可能耗时数秒。
+    for (const deadline = Date.now() + 5000; Date.now() < deadline && !host.querySelector(".vk-a-code-title button");) {
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    }
+    const finding = host.querySelector<HTMLElement>("code.vk-a-path[role='button']");
+    expect(finding, "the finding location is a control").not.toBeNull();
+    expect(host.querySelector("a.vk-a-path")).toBeNull();
+    await act(async () => finding?.click());
+    expect(open).toHaveBeenLastCalledWith("src/read.ts", { start: 373, end: 373 });
+    await act(async () => host.querySelector<HTMLButtonElement>(".vk-a-code-title button")?.click());
+    expect(open).toHaveBeenLastCalledWith("src/a.rs", { start: 10, end: 12 });
+    await act(async () => root.unmount());
+    host.remove();
   });
 });

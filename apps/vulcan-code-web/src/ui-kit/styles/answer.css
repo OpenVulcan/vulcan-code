@@ -291,6 +291,9 @@ button.vk-a-gallery-media:focus-visible { outline: 2px solid var(--vk-signal); o
 .vk-a-code-title { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; overflow: hidden; white-space: nowrap; }
 .vk-a-code-title a { color: var(--vk-ink); text-decoration: none; }
 .vk-a-code-title a:hover { color: var(--vk-signal); text-decoration: underline; }
+.vk-a-code-title button { padding: 0; border: 0; background: transparent; color: var(--vk-ink); font: inherit; cursor: pointer; }
+.vk-a-code-title button:hover { color: var(--vk-signal); text-decoration: underline; }
+.vk-a-code-title button:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
 .vk-a-code-range { color: var(--vk-ink-3); font-variant-numeric: tabular-nums; }
 .vk-a-code-note { min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-family: var(--vk-font-ui); text-overflow: ellipsis; }
 .vk-md .vk-a-code-missing p { margin: 0; padding: var(--vk-u) calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 3); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }

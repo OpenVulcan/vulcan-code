@@ -47,7 +47,15 @@ function AnswerCodeExcerptView({ excerpt, host }: { excerpt: AnswerCodeExcerpt; 
   const header = (
     <span className="vk-a-code-title" title={text === null ? excerpt.path : `${excerpt.path} · ${t("answerComponents.code.snapshot")}`}>
       <FileTypeIcon icon={icon} />
-      {href ? <a href={href} rel="noreferrer" target="_blank">{name}</a> : <span>{name}</span>}
+      {host.openFile ? (
+        <button
+          onClick={() => host.openFile?.(excerpt.path, { start: excerpt.startLine, end: lastLine })}
+          title={t("workspaceFiles.showInFilesPanel")}
+          type="button"
+        >
+          {name}
+        </button>
+      ) : href ? <a href={href} rel="noreferrer" target="_blank">{name}</a> : <span>{name}</span>}
       <span className="vk-a-code-range">{range}</span>
       {excerpt.note ? <span className="vk-a-code-note">{excerpt.note}</span> : null}
     </span>

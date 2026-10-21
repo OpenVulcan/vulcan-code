@@ -5,6 +5,7 @@ import { MediaPathContextMenu } from "@/components/media/media-path-context-menu
 import { formatMessage, useI18n } from "@/i18n";
 import "@/ui-kit/styles/answer.css";
 import type { AnswerCodeSnapshotState } from "@/components/conversation/conversation-markdown";
+import { parseFilePathMention, type WorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
 import { AnswerChartView, formatChartNumber } from "./answer-chart";
 import { AnswerCodeView } from "./answer-code";
 import { parseAnswerComponent, type AnswerComponent, type AnswerSeverity, type AnswerTonedText, type AnswerTreeNode } from "./answer-component-model";
@@ -33,6 +34,10 @@ export interface AnswerComponentHost extends AnswerCopyHost {
   /** Link target for a workspace file reference such as `src/a.rs:42`, or null.
    * 工作区文件引用（如 `src/a.rs:42`）的链接目标；否则为 null。 */
   fileHref: (location: string) => string | null;
+  /** Shows a workspace file, at its lines, in the files panel; absent outside the workbench, where file
+   *  references stay links.
+   *  在文件面板中显示工作区文件及其行；工作台之外不存在，此时文件引用保持为链接。 */
+  openFile?: WorkspaceFileOpener;
   /** Answer-time `ui-code` captures of the enclosing reply, or null outside a reply.
    * 所在回答的回答当时 `ui-code` 抓取结果；回答之外为 null。 */
   codeSnapshots: AnswerCodeSnapshotState | null;
@@ -351,6 +356,24 @@ function LineDelta({ added, removed }: { added: number; removed: number }) {
 // A workspace file reference shown as a path chip; it links only when the host can resolve it.
 // 以路径标签显示的工作区文件引用；仅当宿主可解析时才成为链接。
 function FileLink({ host, location }: { host: AnswerComponentHost; location: string }) {
+  const { t } = useI18n();
+  const mention = host.openFile ? parseFilePathMention(location) : null;
+  if (mention && host.openFile) {
+    const open = host.openFile;
+    const show = () => open(mention.path, mention.lines);
+    return (
+      <code
+        className="vk-a-path vk-md-path"
+        onClick={show}
+        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); show(); } }}
+        role="button"
+        tabIndex={0}
+        title={t("workspaceFiles.showInFilesPanel")}
+      >
+        {location}
+      </code>
+    );
+  }
   const href = host.fileHref(location);
   return href
     ? <a className="vk-a-path" href={href} rel="noreferrer" target="_blank">{location}</a>

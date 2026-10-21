@@ -565,6 +565,9 @@ function MarkdownPreBlock(props: {
   // codeSnapshots are the reply's `ui-code` captures, read by excerpts at any nesting depth.
   // codeSnapshots 是回答的 `ui-code` 抓取结果，任意嵌套深度的摘录都会读取。
   const codeSnapshots = React.useContext(AnswerCodeSnapshotsContext);
+  // openFile lets component file references show the file in the files panel inside the workbench.
+  // openFile 使组件中的文件引用在工作台内于文件面板中显示该文件。
+  const openFile = useWorkspaceFileOpener();
   // host lends nested Markdown, media, file links, captured code and the clipboard to the component.
   // host 为组件提供嵌套 Markdown、媒体、文件链接、抓取的代码与剪贴板。
   const host = React.useMemo<AnswerComponentHost>(() => ({
@@ -579,6 +582,7 @@ function MarkdownPreBlock(props: {
     ),
     mediaSource: (path) => answerMediaSource(path, props.workspacePath),
     fileHref: (location) => answerFileHref(location, props.workspacePath),
+    openFile: openFile ?? undefined,
     codeSnapshots,
     renderCode: (excerpt) => (
       <CodeBlockFigure
@@ -592,7 +596,7 @@ function MarkdownPreBlock(props: {
     ),
     copy: copyMarkdownCode,
     onOpenMedia: props.onOpenMedia,
-  }), [codeSnapshots, props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
+  }), [codeSnapshots, openFile, props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
   if (fence) {
     // The fence keeps its code presentation until the deferred renderer arrives, and for good when it is invalid.
     // 延迟渲染器到达前围栏保持代码展示；语法无效时始终如此。
