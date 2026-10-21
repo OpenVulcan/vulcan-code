@@ -1,13 +1,12 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "anthropic",
-  "revision": 9,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 10,
+  "published_at": "2026-10-21T11:39:31Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
-      "anthropic-messages.v1",
-      "claude-code-messages.v1"
+      "anthropic-messages.v1"
     ],
     "required_execution_primitives": [],
     "required_upload_primitives": [],
@@ -64,53 +63,6 @@
           "verified": true
         }
       ]
-    },
-    {
-      "service_entry_id": "claude-code-subscription",
-      "display_name": "Claude Code Subscription",
-      "kind": "conversation",
-      "base_url": "https://api.anthropic.com",
-      "credential_profiles": [
-        {
-          "credential_profile_id": "claude-code-oauth",
-          "display_name": "Claude Code Login",
-          "credential_mode": "auth",
-          "authorization": {
-            "kind": "registered_oauth",
-            "provider": "claude_code"
-          },
-          "billing_kind": "provider_managed",
-          "account_usage_query": "unsupported",
-          "default_usage_scopes": [
-            "interactive_agent"
-          ]
-        }
-      ],
-      "default_authentication": "bearer_authorization",
-      "request_headers": {
-        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14",
-        "anthropic-version": "2023-06-01"
-      },
-      "request_projector": "direct",
-      "model_catalog": {
-        "source_policy": "manifest_and_discovery",
-        "discovery_kind": "anthropic"
-      },
-      "model_defaults_override": {
-        "supported_protocols": ["claude-code-messages.v1"],
-        "selected_protocol": "claude-code-messages.v1"
-      },
-      "protocol_routes": [
-        {
-          "protocol_profile_id": "claude-code-messages.v1",
-          "endpoint_path": "/v1/messages?beta=true",
-          "usage_profile_refs": [],
-          "request_profile_refs": [],
-          "response_profile_refs": [],
-          "provider_request_id_headers": [],
-          "verified": true
-        }
-      ]
     }
   ],
   "model_defaults": {
@@ -118,14 +70,14 @@
     "catalog_membership_policy": "declared_and_discovery",
     "unknown_model_policy": "default_binding_allowed",
     "supported_protocols": [
-      "anthropic-messages.v1",
-      "claude-code-messages.v1"
+      "anthropic-messages.v1"
     ],
     "selected_protocol": "anthropic-messages.v1",
     "capabilities": {
       "operations": ["conversation_respond"],
+      "input_resources": ["image"],
       "structured_output": "json_schema",
-      "evidence_revision": "anthropic.default-capabilities.v2"
+      "evidence_revision": "anthropic.default-capabilities.v3"
     },
     "default_usage_profile_refs": [],
     "default_request_profile_refs": [],
@@ -144,7 +96,6 @@
       ],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": [],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -179,7 +130,6 @@
       ],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": [],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -214,7 +164,6 @@
       ],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": [],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -249,7 +198,6 @@
       ],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": [],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -284,7 +232,6 @@
       ],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": [],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -319,7 +266,6 @@
       ],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": [],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -354,7 +300,6 @@
       ],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": [],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -388,7 +333,6 @@
       ],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": [],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -422,7 +366,6 @@
       ],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": [],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -457,6 +400,10 @@
       {
         "url": "builtin:vulcan.reasoning-catalog.2026-08-06",
         "note": "Legacy reasoning effort rules migrated into manifest model rules; evidence follows the legacy reasoning catalog."
+      },
+      {
+        "url": "https://docs.anthropic.com/en/docs/build-with-claude/vision",
+        "note": "Current Claude models accept JPEG, PNG, GIF and WebP image blocks on the Messages API; image input is declared provider-wide."
       }
     ]
   }

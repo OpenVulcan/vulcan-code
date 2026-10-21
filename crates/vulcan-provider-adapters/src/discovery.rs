@@ -1925,7 +1925,7 @@ mod tests {
         assert!(
             capabilities
                 .evidence_revision
-                .contains("anthropic.default-capabilities.v2+discovery:")
+                .contains("anthropic.default-capabilities.v3+discovery:")
         );
     }
 
