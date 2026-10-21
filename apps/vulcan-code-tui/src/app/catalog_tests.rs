@@ -723,3 +723,53 @@ fn catalogs_use_real_categories_and_effective_skill_counts() {
         "catalog filters must not write to the backend"
     );
 }
+
+/// Hub results install by exact skill identity through `official_hub` and page with the same query.
+/// Hub 结果按准确技能身份经 `official_hub` 安装，并以相同查询翻页。
+/// Parameters: none. Returns after checking the actions rendered on the real LuaSkills page.
+/// 参数：无。检查真实 LuaSkills 页面渲染的动作后返回。
+#[test]
+fn hub_results_install_through_official_hub_and_page_with_the_same_query() {
+    let (mut app, _, fixture) = fixture_app();
+    // Fixture page with a continuation cursor.
+    // 带续页游标的夹具页面。
+    let mut page = fixture["loads"]["service_search_luaskills_hub"].clone();
+    page["nextCursor"] = json!("24");
+    app.apply(BackendEvent::Slot {
+        slot: Slot::LuaSkillsHub,
+        call: crate::service_api::skills_actions::search_luaskills_hub("weather", None),
+        value: page,
+    });
+    // Every service call reachable from the rendered page.
+    // 渲染页面可触达的全部服务调用。
+    let calls: Vec<ServiceCall> = rows(&app, PageId::LuaSkills)
+        .into_iter()
+        .flat_map(|row| match row.kind {
+            RowKind::Item { id, actions, .. } if id == "hub:demo-weather" => actions
+                .into_iter()
+                .filter_map(|action| action.action)
+                .collect(),
+            RowKind::Button { action, .. } => vec![action],
+            _ => Vec::new(),
+        })
+        .filter_map(|action| match action {
+            UiAction::Send(Command::Call(call)) => Some(call),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.method == "service_install_luaskill"
+                && call.param("/source") == "demo-weather"
+                && call.param("/sourceType") == "official_hub"
+                && call.param("/skillId").is_null())
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.method == "service_search_luaskills_hub"
+                && call.param("/query") == "weather"
+                && call.param("/cursor") == "24")
+    );
+}

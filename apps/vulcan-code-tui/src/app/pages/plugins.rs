@@ -10,6 +10,78 @@ fn install_lua(request: Value) -> ServiceCall {
     skills::install_luaskill(&s(&request, "/skillId"), &s(&request, "/source"), "github")
 }
 
+/// Builds the first-page LuaSkills Hub search mirrored from the WebUI install dialog.
+/// 构建镜像 WebUI 安装弹窗的 LuaSkills Hub 首页搜索。
+fn search_hub(request: Value) -> ServiceCall {
+    skills::search_luaskills_hub(&s(&request, "/query"), None)
+}
+
+/// Lists the loaded Hub page; each skill installs through the `official_hub` source.
+/// 列出已载入的 Hub 页面；每个技能通过 `official_hub` 来源安装。
+fn hub_results(app: &App, rows: &mut Vec<Row>) {
+    if !app.slots.loaded(Slot::LuaSkillsHub) {
+        return;
+    }
+    // Page.
+    // 当前 Hub 结果页。
+    let page = app.slots.value(Slot::LuaSkillsHub);
+    rows.push(info(
+        tr!("tui.field.hubResults"),
+        s(page, "/hubBaseUrl"),
+        Tone::Muted,
+    ));
+    for skill in a(page, "/items") {
+        // Exact Hub skill identity.
+        // 准确的 Hub 技能身份。
+        let id = s(skill, "/skillId");
+        let mut lines = vec![
+            [
+                s(skill, "/skillId"),
+                s(skill, "/publisher"),
+                s(skill, "/license"),
+            ]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · "),
+        ];
+        if !s(skill, "/summary").is_empty() {
+            lines.push(s(skill, "/summary"));
+        }
+        rows.push(
+            item(
+                &format!("hub:{id}"),
+                s(skill, "/displayName"),
+                s(skill, "/latestVersion"),
+            )
+            .lines(lines)
+            .actions(vec![action(
+                tr!("tui.field.install"),
+                call(skills::install_luaskill("", &id, "official_hub")),
+                Tone::Accent,
+            )]),
+        );
+    }
+    if a(page, "/items").is_empty() {
+        rows.push(info(tr!("tui.field.hubEmpty"), String::new(), Tone::Muted));
+    }
+    // The next page reuses the exact query of the request that produced this page.
+    // 下一页沿用产生本页的请求的准确查询。
+    let cursor = s(page, "/nextCursor");
+    if let Some(previous) = app.slots.loader(Slot::LuaSkillsHub)
+        && !cursor.is_empty()
+    {
+        rows.push(button(
+            tr!("tui.field.hubNextPage"),
+            call(skills::search_luaskills_hub(
+                &s(&previous.params, "/query"),
+                Some(&cursor),
+            )),
+            Tone::Normal,
+        ));
+    }
+}
+
 /// Lists real package ownership, lifecycle actions and per-tool registration modes.
 /// 显示真实包归属、生命周期动作与逐工具注册模式。
 pub(super) fn lua_skills(app: &App) -> Vec<Row> {
@@ -36,7 +108,17 @@ pub(super) fn lua_skills(app: &App) -> Vec<Row> {
             ),
             Tone::Accent,
         ),
+        button(
+            tr!("tui.field.hubSearch"),
+            form(
+                json!({"query":""}),
+                vec![field(tr!("tui.field.hubQuery"), "/query", false, true)],
+                search_hub,
+            ),
+            Tone::Normal,
+        ),
     ];
+    hub_results(app, &mut rows);
     for progress in ["/operationProgress", "/managedRuntimeProgress"] {
         if v(catalog, progress).is_object() {
             rows.push(

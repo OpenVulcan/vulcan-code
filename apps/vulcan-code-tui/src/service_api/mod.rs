@@ -79,6 +79,9 @@ pub enum Slot {
     /// `loadWorkbenchSnapshot`; mutations returning a workbench snapshot refresh it directly.
     /// 返回工作台快照的变更会直接刷新它。
     Workbench,
+    /// `searchLuaSkillsHub`
+    /// 当前一页 LuaSkills Hub 搜索结果。
+    LuaSkillsHub,
     /// `loadPublicAiSettings`
     /// 公开 AI 设置快照。
     PublicAiSettings,

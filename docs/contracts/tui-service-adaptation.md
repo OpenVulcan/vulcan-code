@@ -292,6 +292,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `skills_actions::retry_luaskills_managed_runtimes` | retryLuaSkillsManagedRuntimes | `service_retry_luaskills_managed_runtimes` |
 | `skills_actions::save_luaskills_runtime_settings` | saveLuaSkillsRuntimeSettings | `service_save_luaskills_runtime_settings` |
 | `skills_actions::install_luaskill` | installLuaSkill | `service_install_luaskill` |
+| `skills_actions::search_luaskills_hub` | searchLuaSkillsHub | `service_search_luaskills_hub` |
 | `skills_actions::update_luaskill` | updateLuaSkill | `service_update_luaskill` |
 | `skills_actions::set_luaskill_enabled` | setLuaSkillEnabled | `service_set_luaskill_enabled` |
 | `skills_actions::uninstall_luaskill` | uninstallLuaSkill | `service_uninstall_luaskill` |

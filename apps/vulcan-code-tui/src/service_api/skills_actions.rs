@@ -84,6 +84,29 @@ pub fn install_luaskill(skill_id: &str, source: &str, source_type: &str) -> Serv
     )
 }
 
+/// Builds the request for `service_search_luaskills_hub`.
+/// 构建 `service_search_luaskills_hub` 的请求。
+/// `query` is the search text; empty lists the Hub's default ranking.
+/// `query` 为搜索文本；为空时列出 Hub 默认排序。
+/// `cursor` continues a previous page, `None` starts over.
+/// `cursor` 继续上一页，`None` 表示重新开始。
+/// Returns an unexecuted ServiceCall whose page replaces the Hub result slot.
+/// 返回尚未执行的 ServiceCall，其结果页替换 Hub 结果槽位。
+pub fn search_luaskills_hub(query: &str, cursor: Option<&str>) -> ServiceCall {
+    // Search text sent as null when blank, as the WebUI does.
+    // 空白时以 null 发送的搜索文本，与 WebUI 一致。
+    let query = query.trim();
+    ServiceCall::load(
+        "search_luaskills_hub",
+        "service_search_luaskills_hub",
+        json!({
+            "query": (!query.is_empty()).then_some(query),
+            "cursor": cursor,
+        }),
+        Slot::LuaSkillsHub,
+    )
+}
+
 /// Builds the request for `service_update_luaskill`.
 /// 构建 `service_update_luaskill` 的请求。
 /// `skill_id` is the LuaSkills catalog identity.

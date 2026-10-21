@@ -1057,6 +1057,24 @@
         "resultAvailable": true
       }
     ],
+    "service_search_luaskills_hub": {
+      "hubBaseUrl": "https://hub.example",
+      "items": [
+        {
+          "skillId": "demo-weather",
+          "publisher": "Demo Publisher",
+          "displayName": "Demo Weather",
+          "summary": "Synthetic Hub listing",
+          "repositoryUrl": "",
+          "homepageUrl": "",
+          "license": "MIT",
+          "tags": ["demo"],
+          "latestVersion": "1.0.0",
+          "updatedAt": "2026-10-01T00:00:00Z"
+        }
+      ],
+      "nextCursor": null
+    },
     "service_mcp_oauth_status": {
       "serverId": "demo-mcp",
       "authStatus": "not_authenticated",
