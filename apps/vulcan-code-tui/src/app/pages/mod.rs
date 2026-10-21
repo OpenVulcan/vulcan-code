@@ -23,6 +23,7 @@ mod project_permission_judge;
 mod review_rules;
 mod settings;
 mod setup_guide;
+mod subagent_models;
 mod unattended;
 
 use std::collections::HashSet;
@@ -177,7 +178,7 @@ impl Area {
                 ),
                 (
                     Some(tr!("settings.group.models")),
-                    vec![Providers, Credentials, Models, Capabilities],
+                    vec![Providers, Credentials, Models, Capabilities, SubagentModels],
                 ),
                 (Some(tr!("settings.group.data")), vec![Archived]),
                 (Some(tr!("settings.group.about")), vec![Diagnostics, About]),
@@ -219,6 +220,9 @@ pub enum PageId {
     Credentials,
     Models,
     Capabilities,
+    /// Models subagents may use: the system list and the selected session's own list.
+    /// 子代理可使用的模型：系统清单与所选会话的自有清单。
+    SubagentModels,
     Mcp,
     Archived,
     Diagnostics,
@@ -306,6 +310,7 @@ impl PageId {
             PageId::Credentials => tr!("tui.settings.credentials"),
             PageId::Models => tr!("tui.settings.modelList"),
             PageId::Capabilities => tr!("settings.aiCapabilities"),
+            PageId::SubagentModels => tr!("settings.subagentModels"),
             PageId::Mcp => tr!("tui.settings.mcp"),
             PageId::Archived => tr!("settings.misc.archivedConversations"),
             PageId::Diagnostics => tr!("settings.diagnostics"),
@@ -451,6 +456,20 @@ impl PageId {
                 calls.push(api::permission_judge::load_review_rules_system_default());
                 if let Some(project) = &app.judge_policy_project {
                     calls.push(api::permission_judge::load_project_review_rules(project));
+                }
+                calls.push(api::review_prompt::load_review_prompt_system_default());
+                if let Some(conversation) = subagent_models::saved_conversation(app) {
+                    calls.push(api::review_prompt::load_session_review_prompt(
+                        &conversation.id,
+                    ));
+                }
+            }
+            Self::SubagentModels => {
+                calls.push(api::subagent_models::load_subagent_models());
+                if let Some(conversation) = subagent_models::saved_conversation(app) {
+                    calls.push(api::subagent_models::load_session_subagent_models(
+                        &conversation.id,
+                    ));
                 }
             }
             Self::PermissionJudge => calls.extend([
@@ -1094,6 +1113,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::Credentials => settings::credentials(app),
         PageId::Models => models::models(app),
         PageId::Capabilities => settings::capabilities(app),
+        PageId::SubagentModels => subagent_models::rows(app),
         PageId::Mcp => settings::mcp(app),
         PageId::Archived => settings::archived(app),
         PageId::Diagnostics => settings::diagnostics(app),

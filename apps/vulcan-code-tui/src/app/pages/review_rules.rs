@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::service_api::permission_judge as judge;
+use crate::service_api::review_prompt;
 
 /// Rule groups in the order the reviewer applies them; also the field names of the rules object.
 /// 按复核器应用顺序排列的规则分组；同时是规则对象的字段名。
@@ -109,9 +110,9 @@ fn all_empty(rules: &Value) -> bool {
         .all(|group| s(rules, &format!("/{group}")).is_empty())
 }
 
-/// Builds the review rules page.
-/// 构建复核规则页。
-pub(super) fn rows(app: &App) -> Vec<Row> {
+/// Builds the review rules sections.
+/// 构建复核规则区段。
+fn rules_rows(app: &App) -> Vec<Row> {
     let mut rows = vec![
         section(tr!("settings.permissionJudge.reviewRules.systemTitle")),
         note(
@@ -182,9 +183,147 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     rows
 }
 
+/// Saves the system default review prompt without surrounding whitespace.
+/// 保存去除首尾空白的系统默认复核提示词。
+fn save_system_prompt(_: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    Some(review_prompt::save_review_prompt_system_default(
+        value.as_str().trim(),
+    ))
+}
+
+/// Saves the session's own review prompt; `ctx` carries `{ sessionId }`.
+/// 保存会话自有复核提示词；`ctx` 携带 `{ sessionId }`。
+fn save_session_prompt(ctx: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    Some(review_prompt::save_session_review_prompt(
+        v(ctx, "/sessionId").as_str()?,
+        Some(value.as_str().trim()),
+    ))
+}
+
+/// Turns the session's own prompt on, starting from the system default, or off to follow it.
+/// 开启会话自有提示词（以系统默认值为起点），或关闭以跟随系统默认值。
+fn set_session_custom(snapshot: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    let session = v(snapshot, "/sessionId").as_str()?;
+    let system = s(snapshot, "/systemPrompt");
+    Some(review_prompt::save_session_review_prompt(
+        session,
+        value.as_bool().then_some(system.as_str()),
+    ))
+}
+
+/// Builds the additional review prompt sections: the system default, then the selected saved
+/// session's own prompt, mirroring the WebUI settings section and the composer dialog.
+/// 构建附加复核提示词区段：系统默认值，然后是所选已保存会话的自有提示词，镜像 WebUI 设置区段与
+/// 输入区对话框。
+fn prompt_rows(app: &App) -> Vec<Row> {
+    let mut rows = vec![
+        section(tr!("settings.permissionJudge.reviewPrompt.systemTitle")),
+        note(
+            tr!("settings.permissionJudge.reviewPrompt.systemHint"),
+            Tone::Muted,
+        ),
+    ];
+    let system = app.slots.value(Slot::ReviewPromptSystemDefault);
+    if !system.is_null() {
+        rows.push(
+            text(
+                tr!("settings.permissionJudge.reviewPrompt.prompt"),
+                s(system, "/prompt"),
+                Edit::Call(Setter::Build {
+                    ctx: Value::Null,
+                    build: save_system_prompt,
+                }),
+            )
+            .detail(tr!("permissionMode.reviewPrompt.placeholder")),
+        );
+    }
+    rows.push(section(tr!("permissionMode.reviewPrompt.title")));
+    rows.push(note(tr!("permissionMode.reviewPrompt.body"), Tone::Muted));
+    let Some(conversation) = super::subagent_models::saved_conversation(app) else {
+        rows.push(note(
+            tr!("permissionMode.unattended.draftHint"),
+            Tone::Muted,
+        ));
+        return rows;
+    };
+    rows.push(info(
+        tr!("knowledge.composer.label"),
+        conversation.title.clone(),
+        Tone::Normal,
+    ));
+    // A snapshot of another session is a stale read and is not shown.
+    // 其他会话的快照是过期读取，不予显示。
+    let snapshot = app.slots.value(Slot::SessionReviewPrompt);
+    if v(snapshot, "/sessionId").as_str() != Some(conversation.id.as_str()) {
+        rows.push(note(tr!("tui.page.loading"), Tone::Muted));
+        return rows;
+    }
+    let own = v(snapshot, "/prompt");
+    rows.push(toggle(
+        tr!("permissionMode.reviewPrompt.sourceSession"),
+        !own.is_null(),
+        Edit::Call(Setter::Build {
+            ctx: snapshot.clone(),
+            build: set_session_custom,
+        }),
+    ));
+    if own.is_null() {
+        rows.push(note(
+            tr!("permissionMode.reviewPrompt.sourceSystem"),
+            Tone::Muted,
+        ));
+    } else {
+        rows.push(
+            text(
+                tr!("permissionMode.reviewPrompt.label"),
+                s(snapshot, "/prompt"),
+                Edit::Call(Setter::Build {
+                    ctx: json!({ "sessionId": conversation.id }),
+                    build: save_session_prompt,
+                }),
+            )
+            .detail(tr!("permissionMode.reviewPrompt.placeholder")),
+        );
+    }
+    rows
+}
+
+/// Builds the review rules page: the rules, then the additional review prompt.
+/// 构建复核规则页：先是规则，然后是附加复核提示词。
+pub(super) fn rows(app: &App) -> Vec<Row> {
+    let mut rows = rules_rows(app);
+    rows.extend(prompt_rows(app));
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The system prompt saves trimmed text; the session switch copies the system default or
+    // follows it again, and the session text saves to its own session.
+    // 系统提示词保存去除首尾空白的文本；会话开关复制系统默认值或恢复跟随，会话文本保存到其会话。
+    #[test]
+    fn review_prompt_edits_name_their_owner() {
+        let system = save_system_prompt(&Value::Null, &SettingValue::Text(" p ".into())).unwrap();
+        assert_eq!(system.method, "service_save_review_prompt_system_default");
+        assert_eq!(system.param("/request/prompt"), &json!("p"));
+
+        let snapshot = json!({ "sessionId": "s1", "prompt": null, "systemPrompt": "sys" });
+        let on = set_session_custom(&snapshot, &SettingValue::Bool(true)).unwrap();
+        assert_eq!(on.method, "service_save_session_review_prompt");
+        assert_eq!(on.param("/request/prompt"), &json!("sys"));
+        let off = set_session_custom(&snapshot, &SettingValue::Bool(false)).unwrap();
+        assert_eq!(off.param("/request/prompt"), &Value::Null);
+
+        let own = save_session_prompt(
+            &json!({ "sessionId": "s1" }),
+            &SettingValue::Text(" o ".into()),
+        )
+        .unwrap();
+        assert_eq!(own.param("/request/sessionId"), &json!("s1"));
+        assert_eq!(own.param("/request/prompt"), &json!("o"));
+    }
 
     // Editing one group sends the complete trimmed rules; the project switch copies or follows the system.
     // 编辑一个分组会发送完整且去除首尾空白的规则；项目开关复制或跟随系统规则。

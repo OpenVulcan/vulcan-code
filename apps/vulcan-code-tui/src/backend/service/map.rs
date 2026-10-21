@@ -160,6 +160,8 @@ pub fn models(providers: &[api::ProviderSummary]) -> (Vec<ModelInfo>, Option<Str
                     model.name.clone()
                 },
                 provider: label.clone(),
+                provider_id: provider_id.clone(),
+                model_id: model.id.clone(),
                 context_window: model.context_limit.unwrap_or(0) as u64,
                 id: key,
             });

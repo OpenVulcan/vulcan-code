@@ -576,6 +576,13 @@ impl FakeService {
                 "service_system_prompt_settings" => {
                     return self.system_prompt_snapshot(required(&call.params, "/projectId")?);
                 }
+                // The demo keeps one session document and reports it for the requested session.
+                // 演示只保留一份会话文档，并按所请求的会话报告。
+                "service_session_subagent_models" | "service_session_review_prompt" => {
+                    let mut snapshot = self.loads[call.method].clone();
+                    snapshot["sessionId"] = required(&call.params, "/sessionId")?.clone();
+                    return Ok(snapshot);
+                }
                 "service_project_unattended_default" | "service_project_review_rules" => {
                     let mut policy = self.loads[call.method].clone();
                     policy["projectId"] = required(&call.params, "/projectId")?.clone();
@@ -960,6 +967,32 @@ impl FakeService {
                 let rules = required(params, "/request/rules")?.clone();
                 self.loads["service_review_rules_system_default"]["rules"] = rules.clone();
                 self.loads["service_project_review_rules"]["systemRules"] = rules;
+            }
+            "service_save_subagent_models" => {
+                // The demo keeps one system list; a session that follows it shows the new list.
+                // 演示保留一份系统清单；跟随它的会话显示新清单。
+                let models = required(params, "/request/models")?.clone();
+                self.loads["service_subagent_models"]["models"] = models.clone();
+                self.loads["service_session_subagent_models"]["systemModels"] = models;
+            }
+            "service_save_session_subagent_models" => {
+                // The demo keeps one session list; null follows the system list.
+                // 演示保留一份会话清单；null 表示跟随系统清单。
+                self.loads["service_session_subagent_models"]["models"] =
+                    required(params, "/request/models")?.clone();
+            }
+            "service_save_review_prompt_system_default" => {
+                // The demo keeps one system prompt; a session that follows it shows the new text.
+                // 演示保留一份系统提示词；跟随它的会话显示新文本。
+                let prompt = required(params, "/request/prompt")?.clone();
+                self.loads["service_review_prompt_system_default"]["prompt"] = prompt.clone();
+                self.loads["service_session_review_prompt"]["systemPrompt"] = prompt;
+            }
+            "service_save_session_review_prompt" => {
+                // The demo keeps one session prompt; null follows the system default.
+                // 演示保留一份会话提示词；null 表示跟随系统默认值。
+                self.loads["service_session_review_prompt"]["prompt"] =
+                    required(params, "/request/prompt")?.clone();
             }
             "service_save_project_review_rules" => {
                 // The demo keeps one project rule set; null follows the system rules.

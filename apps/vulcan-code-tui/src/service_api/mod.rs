@@ -24,9 +24,11 @@ pub mod memory_actions;
 pub mod permission_judge;
 pub mod permission_mode;
 pub mod project_actions;
+pub mod review_prompt;
 pub mod setter;
 pub mod settings_actions;
 pub mod skills_actions;
+pub mod subagent_models;
 pub mod workbench_snapshot;
 
 use std::borrow::Cow;
@@ -239,6 +241,18 @@ pub enum Slot {
     /// `loadProjectReviewRules` of the project chosen on the review rules page.
     /// 复核规则页所选项目的 `loadProjectReviewRules`。
     ProjectReviewRules,
+    /// `loadReviewPromptSystemDefault` of the review rules page.
+    /// 复核规则页的 `loadReviewPromptSystemDefault`。
+    ReviewPromptSystemDefault,
+    /// `loadSessionReviewPrompt` of the selected saved session.
+    /// 所选已保存会话的 `loadSessionReviewPrompt`。
+    SessionReviewPrompt,
+    /// `loadSubagentModels` of the subagent models page.
+    /// 子代理模型页的 `loadSubagentModels`。
+    SubagentModels,
+    /// `loadSessionSubagentModels` of the selected saved session.
+    /// 所选已保存会话的 `loadSessionSubagentModels`。
+    SessionSubagentModels,
     /// `loadWorkspaceFileDirectory` of the folder the composer's `@` path mention lists.
     /// 输入框 `@` 路径提及所列文件夹的 `loadWorkspaceFileDirectory`。
     PathMentionDirectory,

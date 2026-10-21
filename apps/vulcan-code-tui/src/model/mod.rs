@@ -139,6 +139,12 @@ pub struct ModelInfo {
     pub id: String,
     pub label: String,
     pub provider: String,
+    /// Stable provider identifier, as model allowlists name it.
+    /// 稳定 Provider 标识，与模型白名单的命名一致。
+    pub provider_id: String,
+    /// Provider-scoped model identifier.
+    /// Provider 范围内的模型标识。
+    pub model_id: String,
     pub context_window: u64,
 }
 

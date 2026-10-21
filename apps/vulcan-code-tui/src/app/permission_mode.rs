@@ -84,6 +84,15 @@ pub fn open(app: &mut App) {
         app.overlay = Some(picker(items));
         return;
     }
+    // The review prompt is edited on the review rules page, which shows the session's own prompt.
+    // 复核附加提示词在复核规则页编辑，该页显示会话自有提示词。
+    items.push(PickerItem {
+        label: tr!("permissionMode.reviewPrompt.menu"),
+        detail: tr!("permissionMode.reviewPrompt.menuHint"),
+        hint: String::new(),
+        current: false,
+        action: PickerAction::Page(PageId::ReviewRules),
+    });
     let on = matches!(unattended, Unattended::On(_));
     items.push(PickerItem {
         label: if on {

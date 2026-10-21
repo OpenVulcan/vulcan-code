@@ -61,6 +61,7 @@ HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响
 hydration 的 `session_config.unattended`，只在当前为自动审批时出现，草稿不可用；关闭时先读取分层预填值再打开
 文本输入框，确认后才发送，开启时直接编辑当前策略或关闭，显示只在服务回执确认后改变；切换模式的回执携带
 写入后的 `unattended`。
+自动审批下选择器还提供“复核附加提示词”入口，跳转到复核规则页编辑当前会话的提示词。
 选择器中的自动审批读取工作台的 `permissionJudgeBackend`：未配置时说明原因并只跳转到权限判定页面，不改写
 判定设置。
 
@@ -73,11 +74,12 @@ hydration 的 `session_config.unattended`，只在当前为自动审批时出现
 | 初始化引导 | 第一步权限判定：本机（设备、模型就地切换与登记，需使用中模型才能确认）、云端（复用云端判定路由区块与提供方入口，需已保存路由才能确认）、暂不启用；只有确认按钮写入设置，离开页面不写入；登记后不自动切换，由用户在列表中切换 | PermissionJudgeSettings、PermissionJudgeStatus、PublicAiSettings |
 | 权限策略 | 仅在判定启用时列出；按项目选择显示使用中判定模型的类别，每个类别可选默认或模型声明的档位，修改立即保存完整选择映射；保留的旧类别选择只注明不编辑 | ProjectPermissionJudgePolicy |
 | 无人值守默认值 | 系统默认拒绝策略编辑；按项目选择（与权限策略页共用项目选择）切换“使用项目策略”，开启时以系统文本为起点并可编辑，关闭时显示所跟随的系统文本 | UnattendedSystemDefault、ProjectUnattendedDefault |
-| 复核规则 | 系统规则的拒绝、问我、放行三组文本各一行，编辑任一组即保存完整规则；按项目选择（与权限策略页共用项目选择）切换“使用项目规则”，开启时以系统规则为起点并可编辑，关闭时说明跟随系统规则 | ReviewRulesSystemDefault、ProjectReviewRules |
+| 复核规则 | 系统规则的拒绝、问我、放行三组文本各一行，编辑任一组即保存完整规则；按项目选择（与权限策略页共用项目选择）切换“使用项目规则”，开启时以系统规则为起点并可编辑，关闭时说明跟随系统规则；其后是默认复核附加提示词（一行文本）与所选已保存会话的附加提示词：切换“本会话自定义”，开启时以系统文本为起点并可编辑，关闭时跟随系统默认，草稿说明尚不可用；会话快照的 `sessionId` 与当前选择不符时视为加载中 | ReviewRulesSystemDefault、ProjectReviewRules、ReviewPromptSystemDefault、SessionReviewPrompt |
 | 提供方 | 服务条目及凭据配置查看 | PublicAiSettings |
 | 凭据 | 添加、启用、同步、设默认、移除；默认移除时原子选择同提供方替代连接 | PublicAiSettings |
 | 模型 | 镜像 WebUI 模型清单：供应商分组与优先级、仅列有可用账号的模型、搜索及用途/输出筛选；每个模型的对话使用、多模态理解、内部使用与签名扩展开关；接入路由与账号详情；失效准入关闭及受阻路由诊断 | PublicAiSettings |
 | AI 能力 | 选择服务公开的能力目标、启用能力；供应商异步任务列表与取消，仍有未终结任务时每 5 秒重读 | PublicAiSettings、ProviderTasks |
+| 子代理模型 | 系统清单与所选已保存会话清单：每个条目可编辑备注、上移、下移、移除，“添加模型”从可用模型中选择（已列出的不重复添加），满额时说明；会话切换“本会话”时以系统清单为起点，关闭时跟随系统清单；草稿与专职会话说明不可用；每次修改保存完整清单 | SubagentModels、SessionSubagentModels |
 | MCP | stdio/http/sse 配置表单（含 OAuth 开关）、移除、运行态与能力检查；启用 OAuth 或等待授权的服务器可登录、打开授权页、手动完成、取消与退出，流程进行中每 2 秒重读 | Workbench.mcpServers、McpRuntime、McpCapabilities、McpOAuth |
 | 已归档会话 | 恢复与删除 | Workbench.archivedConversations |
 | 诊断 | 重试配置、完整请求追踪和会话错误独立记录开关、打开及清理追踪目录、模块与日志 | Workbench |
@@ -259,6 +261,14 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `permission_judge::save_review_rules_system_default` | saveReviewRulesSystemDefault | `service_save_review_rules_system_default` |
 | `permission_judge::load_project_review_rules` | loadProjectReviewRules | `service_project_review_rules` |
 | `permission_judge::save_project_review_rules` | saveProjectReviewRules | `service_save_project_review_rules` |
+| `review_prompt::load_review_prompt_system_default` | loadReviewPromptSystemDefault | `service_review_prompt_system_default` |
+| `review_prompt::save_review_prompt_system_default` | saveReviewPromptSystemDefault | `service_save_review_prompt_system_default` |
+| `review_prompt::load_session_review_prompt` | loadSessionReviewPrompt | `service_session_review_prompt` |
+| `review_prompt::save_session_review_prompt` | saveSessionReviewPrompt | `service_save_session_review_prompt` |
+| `subagent_models::load_subagent_models` | loadSubagentModels | `service_subagent_models` |
+| `subagent_models::save_subagent_models` | saveSubagentModels | `service_save_subagent_models` |
+| `subagent_models::load_session_subagent_models` | loadSessionSubagentModels | `service_session_subagent_models` |
+| `subagent_models::save_session_subagent_models` | saveSessionSubagentModels | `service_save_session_subagent_models` |
 | `settings_actions::save_public_ai_provider_tool_selection` | savePublicAiProviderToolSelection | `service_save_public_ai_provider_tool_selection` |
 | `settings_actions::save_public_ai_provider_tool_capability_enabled` | savePublicAiProviderToolCapabilityEnabled | `service_save_public_ai_provider_tool_capability_enabled` |
 | `settings_actions::list_provider_tasks` | listProviderTasks | `service_list_provider_tasks` |

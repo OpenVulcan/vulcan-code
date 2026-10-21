@@ -380,5 +380,6 @@
   "tui.transcript.moreLines": "… 还有 {count} 行",
   "tui.transcript.revealed": "全部展开",
   "tui.turn.abandoned": "本轮已放弃",
-  "tui.web.mock": "模拟模式：WebUI 将在 {url} 打开"
+  "tui.web.mock": "模拟模式：WebUI 将在 {url} 打开",
+  "tui.session.dedicatedNoSubagents": "专职会话不启动子代理。"
 }

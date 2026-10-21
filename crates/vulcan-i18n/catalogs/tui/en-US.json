@@ -383,5 +383,6 @@
   "tui.web.mock": "Mock mode: WebUI would open at {url}",
   "tui.knowledge.sessionUnavailable": "Select a saved conversation with a project to manage its enabled libraries.",
   "tui.knowledge.invalidResponse": "The knowledge service returned invalid library settings. Reload before editing.",
-  "tui.knowledge.sessionFrozen": "This dedicated assistant's knowledge selection was fixed at creation. The current effective selection is read-only."
+  "tui.knowledge.sessionFrozen": "This dedicated assistant's knowledge selection was fixed at creation. The current effective selection is read-only.",
+  "tui.session.dedicatedNoSubagents": "Dedicated sessions do not start subagents."
 }

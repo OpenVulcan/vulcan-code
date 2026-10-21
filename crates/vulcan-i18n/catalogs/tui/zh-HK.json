@@ -380,5 +380,6 @@
   "tui.transcript.moreLines": "… 還有 {count} 行",
   "tui.transcript.revealed": "全部展開",
   "tui.turn.abandoned": "本輪已放棄",
-  "tui.web.mock": "模擬模式：WebUI 將在 {url} 打開"
+  "tui.web.mock": "模擬模式：WebUI 將在 {url} 打開",
+  "tui.session.dedicatedNoSubagents": "專職對話不啟動子代理。"
 }

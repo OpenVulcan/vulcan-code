@@ -1594,6 +1594,40 @@
       },
       "maxChars": 4000
     },
+    "service_review_prompt_system_default": {
+      "prompt": "Ask me before anything touches the release branch.",
+      "maxChars": 4000
+    },
+    "service_session_review_prompt": {
+      "sessionId": "",
+      "prompt": null,
+      "systemPrompt": "Ask me before anything touches the release branch.",
+      "maxChars": 4000
+    },
+    "service_subagent_models": {
+      "models": [
+        {
+          "providerId": "anthropic",
+          "modelId": "claude-sonnet-5-5",
+          "note": "Wide searches and gathering material; do not change code."
+        }
+      ],
+      "maxNoteChars": 400,
+      "maxModels": 16
+    },
+    "service_session_subagent_models": {
+      "sessionId": "",
+      "models": null,
+      "systemModels": [
+        {
+          "providerId": "anthropic",
+          "modelId": "claude-sonnet-5-5",
+          "note": "Wide searches and gathering material; do not change code."
+        }
+      ],
+      "maxNoteChars": 400,
+      "maxModels": 16
+    },
     "service_project_permission_judge_policy": {
       "projectId": "",
       "options": [

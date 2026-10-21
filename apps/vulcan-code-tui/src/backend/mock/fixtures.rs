@@ -69,6 +69,8 @@ pub fn models() -> Vec<ModelInfo> {
         id: id.into(),
         label: label.into(),
         provider: provider.into(),
+        provider_id: provider.to_lowercase(),
+        model_id: id.into(),
         context_window: window,
     };
     vec![
