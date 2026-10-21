@@ -116,15 +116,27 @@ fn render_nav(app: &mut App, area: Rect, buf: &mut Buffer) {
         )),
         None,
     ));
-    for line in wrap(
+    // The description keeps three lines; a longer one ends its third line with an ellipsis.
+    // 说明最多保留三行；更长时在第三行末尾加省略号。
+    let mut description = wrap(
         &[Span::styled(app.area.description(), theme.muted_text())],
         width,
         &[],
         &[],
-    )
-    .into_iter()
-    .take(3)
-    {
+    );
+    if description.len() > 3 {
+        description.truncate(3);
+        let last: String = description[2]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        description[2] = Line::from(Span::styled(
+            truncate(&format!("{}…", last.trim_end()), width),
+            theme.muted_text(),
+        ));
+    }
+    for line in description {
         lines.push((line, None));
     }
     lines.push((Line::default(), None));
