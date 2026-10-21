@@ -1651,6 +1651,7 @@
   "workspaceFiles.fileActions": "檔案操作",
   "workspaceFiles.copyPath": "複製路徑",
   "workspaceFiles.copyRelativePath": "複製相對路徑",
+  "workspaceFiles.mentionInMessage": "在訊息中引用",
   "workspaceFiles.copyFileContent": "複製檔案內容",
   "workspaceFiles.filterFiles": "篩選檔案",
   "workspaceFiles.switchFile": "切換檔案",

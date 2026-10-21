@@ -1,6 +1,6 @@
 import React from "react";
 import "@/ui-kit/styles/features/workspace-files.css";
-import { ChevronsUpDown, Copy, FileText, Folder, FolderX, Info, ListFilter, MoreHorizontal, X } from "lucide-react";
+import { AtSign, ChevronsUpDown, Copy, FileText, Folder, FolderX, Info, ListFilter, MoreHorizontal, X } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import {
   activeWorkbenchSurfaceId,
@@ -9,6 +9,7 @@ import {
   type WorkspaceReviewDraftConversation,
 } from "@/diff/workspace-review-model";
 import { WorkspaceFileTree, type WorkspaceFileTreeNode } from "@/components/workspace/workspace-file-tree";
+import { requestComposerCommand } from "@/components/composer/composer-external-commands";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { PageNotice } from "@/components/page/page-feedback";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
@@ -761,9 +762,10 @@ function WorkspaceFilesFilterMenu(props: {
   );
 }
 
-// WorkspaceFileActionsMenu holds what can be done with the open file: copy its path, its path inside the
-// project, or its content when it is code.
-// WorkspaceFileActionsMenu 收纳对已打开文件的操作：复制其路径、项目内路径，或在其为代码时复制内容。
+// WorkspaceFileActionsMenu holds what can be done with the open file: mention it in the draft the way the
+// composer's @ list does, copy its path, its path inside the project, or its content when it is code.
+// WorkspaceFileActionsMenu 收纳对已打开文件的操作：以输入区 @ 列表的方式在草稿中引用它、复制其路径、项目内路径，
+// 或在其为代码时复制内容。
 function WorkspaceFileActionsMenu(props: {
   // The open file.
   // 已打开的文件。
@@ -797,6 +799,10 @@ function WorkspaceFileActionsMenu(props: {
         </IconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => requestComposerCommand({ kind: "insert", text: `@${props.entry.relativePath.replace(/\\/gu, "/")} ` })}>
+          <AtSign size={14} />
+          {t("workspaceFiles.mentionInMessage")}
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => void copyPath(props.entry.path)}>
           <Copy size={14} />
           {t("workspaceFiles.copyPath")}

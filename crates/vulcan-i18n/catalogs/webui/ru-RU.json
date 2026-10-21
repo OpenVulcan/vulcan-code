@@ -1651,6 +1651,7 @@
   "workspaceFiles.fileActions": "Действия с файлом",
   "workspaceFiles.copyPath": "Копировать путь",
   "workspaceFiles.copyRelativePath": "Копировать относительный путь",
+  "workspaceFiles.mentionInMessage": "Упомянуть в сообщении",
   "workspaceFiles.copyFileContent": "Копировать содержимое файла",
   "workspaceFiles.filterFiles": "Фильтр файлов",
   "workspaceFiles.switchFile": "Сменить файл",
