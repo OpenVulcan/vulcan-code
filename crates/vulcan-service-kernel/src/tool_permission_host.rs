@@ -62,21 +62,7 @@ impl ToolPermissionHost for KernelToolPermissionHost {
     /// 子代理会话跟随其根用户会话（包括其无人值守模式），因此子会话的权限绝不会超过用户控制的会话，
     /// 也不会询问不在场的用户；根会话缺失时失败即关闭。
     fn access(&self, session_id: SessionId) -> Result<AccessConfig, String> {
-        let (own_access, root) = self.read(session_id, |document| {
-            (
-                document.metadata.mode.access.clone(),
-                document
-                    .metadata
-                    .child_execution_profile
-                    .as_ref()
-                    .map(|profile| profile.root_session_id.clone()),
-            )
-        })?;
-        let Some(root) = root else {
-            return Ok(own_access);
-        };
-        let root_id = SessionId::parse_str(&root)
-            .map_err(|error| format!("invalid root session `{root}`: {error}"))?;
+        let root_id = self.root_of(session_id)?;
         self.read(root_id, |document| document.metadata.mode.access.clone())
     }
 
@@ -115,7 +101,13 @@ impl ToolPermissionHost for KernelToolPermissionHost {
             .state
             .upgrade()
             .ok_or_else(|| String::from("The service is shutting down."))?;
-        crate::permission_judge::review_call(&state, call).await
+        // Child sessions read their root session's own prompt, like its access.
+        // 子会话像读取访问设置一样读取其根会话的自有提示词。
+        let root_id = self.root_of(call.session_id)?;
+        let handle =
+            crate::session_goal_lifecycle::registered_session_v1_handle(&self.registry, root_id)?;
+        let session_prompt = crate::permission_judge::session_review_prompt(handle.as_ref())?;
+        crate::permission_judge::review_call(&state, call, session_prompt).await
     }
 
     fn record(&self, record: PermissionRecord) {
@@ -126,6 +118,23 @@ impl ToolPermissionHost for KernelToolPermissionHost {
 }
 
 impl KernelToolPermissionHost {
+    /// Returns the root user session of a child agent session, or the session itself.
+    /// 返回子代理会话的根用户会话；非子会话返回其自身。
+    fn root_of(&self, session_id: SessionId) -> Result<SessionId, String> {
+        let root = self.read(session_id, |document| {
+            document
+                .metadata
+                .child_execution_profile
+                .as_ref()
+                .map(|profile| profile.root_session_id.clone())
+        })?;
+        match root {
+            Some(root) => SessionId::parse_str(&root)
+                .map_err(|error| format!("invalid root session `{root}`: {error}")),
+            None => Ok(session_id),
+        }
+    }
+
     /// Reads one value from a registered session document.
     /// 从已注册会话文档读取一个值。
     fn read<T>(

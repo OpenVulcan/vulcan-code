@@ -69,10 +69,13 @@ struct ReviewAnswer {
 }
 
 /// Reviews one escalated call; `Ok(None)` when no reviewer route is configured.
-/// 复核一次升级调用；未配置复核路由时返回 `Ok(None)`。
+/// `session_prompt` is the calling session's own review prompt; `None` follows the system default.
+/// 复核一次升级调用；未配置复核路由时返回 `Ok(None)`。`session_prompt` 是调用会话的自有复核
+/// 提示词；`None` 表示跟随系统默认值。
 pub(crate) async fn review_call(
     state: &SharedServiceBridgeState,
     call: ReviewCall,
+    session_prompt: Option<String>,
 ) -> Result<Option<LlmReview>, String> {
     let (port, may_allow_blocked) = {
         let guard = state
@@ -101,7 +104,20 @@ pub(crate) async fn review_call(
     let policy = project_policy(state, call.workspace_root.as_deref()).await;
     let (_, settings) = read_state(state)?;
     let rules = effective_review_rules(call.workspace_root.as_deref(), &settings.review_rules)?;
-    let request = review_request(&call, &policy, &rules, &reply_language(state));
+    // The additional prompt is for reviews while the user is present; unattended sessions have
+    // their deny policy instead.
+    // 附加提示词用于用户在场时的复核；无人值守会话改用其拒绝策略。
+    let prompt = call
+        .unattended
+        .is_none()
+        .then(|| session_prompt.unwrap_or(settings.review_prompt));
+    let request = review_request(
+        &call,
+        &policy,
+        &rules,
+        prompt.as_deref(),
+        &reply_language(state),
+    );
     let context = HostAiCallContext::new(request.request_id.clone())
         .with_deadline(Some(unix_ms_after(REVIEW_TIMEOUT)));
     let result = tokio::time::timeout(REVIEW_TIMEOUT, async {
@@ -227,13 +243,16 @@ fn reply_language(state: &SharedServiceBridgeState) -> String {
         )
 }
 
-/// Builds the restricted request for one call; `rules` are the user's review rules and
-/// `language` names the language of the reason.
-/// 为一次调用构建受限请求；`rules` 是用户的复核规则，`language` 指定理由使用的语言。
+/// Builds the restricted request for one call; `rules` are the user's review rules, `prompt` is
+/// the user's additional prompt for an attended review and `language` names the language of the
+/// reason.
+/// 为一次调用构建受限请求；`rules` 是用户的复核规则，`prompt` 是用户在场复核时的附加提示词，
+/// `language` 指定理由使用的语言。
 fn review_request(
     call: &ReviewCall,
     policy: &[String],
     rules: &ReviewRules,
+    prompt: Option<&str>,
     language: &str,
 ) -> ResponsesExecutionRequest {
     ResponsesExecutionRequest {
@@ -253,7 +272,7 @@ fn review_request(
             AiMessage {
                 role: MessageRole::User,
                 content: vec![ContentItem::Text {
-                    text: render_review_input(call, policy, rules, language),
+                    text: render_review_input(call, policy, rules, prompt, language),
                 }],
                 provider_context_items: Vec::new(),
             },
@@ -291,6 +310,7 @@ fn render_review_input(
     call: &ReviewCall,
     policy: &[String],
     rules: &ReviewRules,
+    prompt: Option<&str>,
     language: &str,
 ) -> String {
     let project = call
@@ -328,7 +348,14 @@ fn render_review_input(
                 "<attendance>\nunattended\n</attendance>\n\n<deny_policy>\n{deny_policy}\n</deny_policy>"
             )
         }
-        None => String::from("<attendance>\nattended\n</attendance>"),
+        None => {
+            let prompt = prompt
+                .filter(|prompt| !prompt.trim().is_empty())
+                .unwrap_or("(none)");
+            format!(
+                "<attendance>\nattended\n</attendance>\n\n<review_prompt>\n{prompt}\n</review_prompt>"
+            )
+        }
     };
     let rule = |text: &str| {
         if text.is_empty() {
@@ -410,6 +437,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use vulcan_agent_runtime::agent_runtime::tool_permission::{HighRiskCategory, JudgeLabel};
+    use vulcan_agent_runtime::model::SessionId;
 
     #[test]
     fn answers_decode_to_verdicts_and_reject_unknown_shapes() {
@@ -435,6 +463,7 @@ mod tests {
     #[test]
     fn request_carries_the_call_as_data_and_satisfies_its_schema() {
         let call = ReviewCall {
+            session_id: SessionId::new_v4(),
             workspace_root: Some(PathBuf::from("/work/app")),
             tool_name: String::from("shell_command"),
             arguments: String::from(r#"{"command":"rm -rf build"}"#),
@@ -454,6 +483,7 @@ mod tests {
             &call,
             &[String::from("writes = allow")],
             &rules,
+            Some("ask before touching the network"),
             "zh-TW (繁體中文)",
         );
         assert_eq!(
@@ -473,6 +503,7 @@ mod tests {
             "<project_policy>",
             "<signals>",
             "<ask>\npushes to any remote\n</ask>",
+            "<review_prompt>\nask before touching the network\n</review_prompt>",
             "<allow>\n(none)\n</allow>",
             "<reply_language>\nzh-TW (繁體中文)\n</reply_language>",
         ] {
@@ -494,6 +525,7 @@ mod tests {
     #[test]
     fn unattended_request_carries_the_deny_policy_and_drops_ask_user() {
         let call = ReviewCall {
+            session_id: SessionId::new_v4(),
             workspace_root: None,
             tool_name: String::from("shell_command"),
             arguments: String::from(r#"{"command":"git push"}"#),
@@ -504,12 +536,19 @@ mod tests {
             intent: Some(String::from("publish the release branch")),
             unattended: Some(String::from("never push to remote")),
         };
-        let request = review_request(&call, &[], &ReviewRules::default(), "en-US (English)");
+        let request = review_request(
+            &call,
+            &[],
+            &ReviewRules::default(),
+            Some("ask before touching the network"),
+            "en-US (English)",
+        );
         let ContentItem::Text { text } = &request.messages[1].content[0] else {
             panic!("the user turn must be text");
         };
         assert!(text.contains("<attendance>\nunattended\n</attendance>"));
         assert!(text.contains("<deny_policy>\nnever push to remote\n</deny_policy>"));
+        assert!(!text.contains("<review_prompt>"));
         assert!(text.contains("declared_intent: publish the release branch"));
         let StructuredOutputPolicy::JsonSchema { schema, .. } = &request.structured_output else {
             panic!("the reviewer must request a JSON Schema answer");

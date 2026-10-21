@@ -25,7 +25,7 @@ mod provider_api_trace;
 mod provider_usage;
 mod resource_catalog;
 mod session_index_v1;
-mod session_subagent_models;
+mod session_sidecars;
 mod session_usage;
 mod session_v1;
 mod session_v1_store;
@@ -65,7 +65,10 @@ pub use resource_catalog::{
     resolve_project_resource_source,
 };
 pub use session_index_v1::SESSION_ASSISTANT_NAME_MAX_CHARS;
-pub use session_subagent_models::{load_session_subagent_models, save_session_subagent_models};
+pub use session_sidecars::{
+    load_session_review_prompt, load_session_subagent_models, save_session_review_prompt,
+    save_session_subagent_models,
+};
 pub use session_usage::{load_session_lifetime_usage, save_session_lifetime_usage};
 #[cfg(feature = "test-support")]
 pub use session_v1_store::create_session_v1_storage_fixture;

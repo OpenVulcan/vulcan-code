@@ -32,3 +32,5 @@ The signals are hints, not decisions. `judge` is an automated classifier's label
 - `allow` the calls you would otherwise allow, and also calls you would only have sent to the user because they reach outside the project or change shared state, when the user request and the agent's reason clearly call for them and they are reversible.
 - `deny` everything else, including anything uncertain, irreversible, or not covered by the user request. Categories the project policy sets to `confirm` or `review` are denied.
 - `<deny_policy>` is written by the user, not the agent: it lists what must never run while they are away. Deny every call it covers, whatever the agent's reason says.
+
+When `<attendance>` is `attended`, `<review_prompt>` follows it. It is written by the user in settings, not by the agent: additional guidance on how they want calls reviewed while they are present; `(none)` means there is none. Follow it when you choose between `allow`, `ask_user`, and `deny`, after the deny and ask groups of `<review_rules>` and the project policy, which it cannot loosen.

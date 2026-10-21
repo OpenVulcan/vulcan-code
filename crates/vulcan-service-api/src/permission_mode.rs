@@ -201,3 +201,59 @@ pub struct ProjectReviewRulesSaveRequest {
     /// 项目规则；`None` 使项目恢复采用系统默认值。
     pub rules: Option<ReviewRules>,
 }
+
+/// System default additional prompt the permission reviewer reads while a user is present.
+/// 用户在场时权限复核器读取的系统默认附加提示词。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewPromptSystemDefaultSnapshot {
+    /// Saved system default; empty means none.
+    /// 已保存的系统默认值；为空表示没有。
+    pub prompt: String,
+    /// Longest accepted prompt, in Unicode scalar values.
+    /// 允许的最长提示词（按 Unicode 标量值计）。
+    pub max_chars: usize,
+}
+
+/// Saves the system default additional review prompt.
+/// 保存系统默认附加复核提示词。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewPromptSystemDefaultSaveRequest {
+    /// New system default; empty means none.
+    /// 新的系统默认值；为空表示没有。
+    pub prompt: String,
+}
+
+/// One session's additional review prompt next to the system default it follows otherwise.
+/// 一个会话的附加复核提示词，以及它在未设置时跟随的系统默认值。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionReviewPromptSnapshot {
+    /// Exact session identity.
+    /// 精确会话标识。
+    pub session_id: String,
+    /// The session's own prompt; absent means the session follows the system default, and an
+    /// empty text means this session uses none.
+    /// 会话自有提示词；缺省表示跟随系统默认值，空文本表示本会话不使用提示词。
+    pub prompt: Option<String>,
+    /// System default the session follows while it keeps no prompt of its own.
+    /// 会话没有自有提示词时跟随的系统默认值。
+    pub system_prompt: String,
+    /// Longest accepted prompt, in Unicode scalar values.
+    /// 允许的最长提示词（按 Unicode 标量值计）。
+    pub max_chars: usize,
+}
+
+/// Saves one session's additional review prompt.
+/// 保存一个会话的附加复核提示词。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionReviewPromptSaveRequest {
+    /// Exact existing regular session.
+    /// 精确的已有普通会话。
+    pub session_id: String,
+    /// The session's own prompt; `None` returns the session to the system default.
+    /// 会话自有提示词；`None` 使会话恢复跟随系统默认值。
+    pub prompt: Option<String>,
+}

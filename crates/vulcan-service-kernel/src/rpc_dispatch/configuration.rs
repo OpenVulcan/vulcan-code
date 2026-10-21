@@ -134,6 +134,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_project_permission_judge_policy",
     "service_unattended_system_default",
     "service_save_unattended_system_default",
+    "service_review_prompt_system_default",
+    "service_save_review_prompt_system_default",
+    "service_session_review_prompt",
+    "service_save_session_review_prompt",
     "service_project_unattended_default",
     "service_save_project_unattended_default",
     "service_review_rules_system_default",
@@ -907,6 +911,30 @@ pub(super) async fn dispatch(
         }
         "service_save_unattended_system_default" => rpc_json_result(
             permission_judge::service_save_unattended_system_default(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_review_prompt_system_default" => rpc_json_result(
+            permission_judge::service_review_prompt_system_default(state),
+        ),
+        "service_save_review_prompt_system_default" => rpc_json_result(
+            permission_judge::service_save_review_prompt_system_default(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_session_review_prompt" => rpc_json_result(
+            permission_judge::service_session_review_prompt(
+                state,
+                rpc_required_param(params, "sessionId")?,
+            )
+            .await,
+        ),
+        "service_save_session_review_prompt" => rpc_json_result(
+            permission_judge::service_save_session_review_prompt(
                 state,
                 rpc_required_param(params, "request")?,
             )

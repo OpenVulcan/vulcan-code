@@ -5,6 +5,7 @@ mod cloud;
 mod environment;
 mod records;
 mod review;
+mod review_prompt;
 mod review_rules;
 mod services;
 mod unattended;
@@ -18,6 +19,10 @@ use vulcan_service_api::{PermissionJudgeCudaInstall, PermissionJudgeModelDownloa
 pub(crate) use cloud::PERMISSION_JUDGE_CONSUMER_PROFILE_ID;
 pub(crate) use review::{
     PERMISSION_REVIEW_CONSUMER_PROFILE_ID, PERMISSION_REVIEW_PURPOSE_ID, review_call,
+};
+pub(crate) use review_prompt::{
+    service_review_prompt_system_default, service_save_review_prompt_system_default,
+    service_save_session_review_prompt, service_session_review_prompt, session_review_prompt,
 };
 pub(crate) use review_rules::{
     service_project_review_rules, service_review_rules_system_default,

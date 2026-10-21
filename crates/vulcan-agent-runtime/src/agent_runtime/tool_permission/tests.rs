@@ -979,6 +979,7 @@ async fn reviewer_decides_within_the_judge_and_high_risk_boundary() {
     assert_eq!(
         clearing.reviewed.lock().unwrap().clone(),
         vec![ReviewCall {
+            session_id: SessionId::nil(),
             workspace_root: Some(root.clone()),
             tool_name: String::from(SHELL_COMMAND_TOOL_ID),
             arguments: String::from(r#"{"command":"cargo build"}"#),

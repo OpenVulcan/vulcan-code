@@ -93,6 +93,11 @@ pub struct PersistedPermissionJudgeConfiguration {
     /// 确认的文本。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub unattended_deny_policy: String,
+    /// System default additional prompt the reviewer reads while a user is present; empty means
+    /// none. A session may keep its own text instead.
+    /// 用户在场时复核器读取的系统默认附加提示词；为空表示没有。会话可以改用自己的文本。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub review_prompt: String,
     /// System default rules the permission reviewer applies; projects may replace them.
     /// 权限复核器应用的系统默认规则；项目可以替换它们。
     #[serde(default, skip_serializing_if = "ReviewRules::is_empty")]

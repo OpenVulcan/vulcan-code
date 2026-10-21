@@ -21,6 +21,11 @@ pub enum JudgeBackend {
 /// 单条复核规则文本的最大字符数；设置服务拒绝更长的文本。
 pub const MAX_REVIEW_RULE_CHARS: usize = 4_000;
 
+/// Most characters of the additional prompt the reviewer reads while a user is present; the
+/// settings services refuse longer text.
+/// 用户在场时复核器读取的附加提示词的最大字符数；设置服务拒绝更长的文本。
+pub const MAX_REVIEW_PROMPT_CHARS: usize = 4_000;
+
 /// Longest wait a permission approval may be given before it is denied, in seconds.
 /// 权限审批在被拒绝前可设定的最长等待时间（秒）。
 pub const MAX_APPROVAL_TIMEOUT_SECONDS: u32 = 3_600;

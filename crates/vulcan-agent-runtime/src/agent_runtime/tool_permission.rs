@@ -289,6 +289,9 @@ pub struct PermissionTexts<'a> {
 /// 复核 LLM 所读取的一次升级调用。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewCall {
+    /// Session that makes the call; the host reads its review prompt.
+    /// 发起调用的会话；宿主读取其复核提示词。
+    pub session_id: SessionId,
     /// Workspace the call runs in; its project policy choices apply.
     /// 调用运行的工作区；适用其项目策略选择。
     pub workspace_root: Option<PathBuf>,
@@ -1112,6 +1115,7 @@ async fn decide_escalated(
     let attended = unattended.is_none();
     let (review, review_elapsed) = if mode == PermissionMode::AutoApprove {
         let call = ReviewCall {
+            session_id,
             workspace_root: workspace_root.map(Path::to_path_buf),
             tool_name: definition.descriptor.id.clone(),
             arguments: arguments.to_string(),
