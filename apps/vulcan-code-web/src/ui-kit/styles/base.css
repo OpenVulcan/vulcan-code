@@ -228,16 +228,6 @@ button, input:where([type="button"], [type="reset"], [type="submit"]), ::file-se
   border-width: 0 1px 1px 0;
 }
 
-/* Ember line: the flame shows that AI is working. */
-.vk-ember-line {
-  position: absolute;
-  inset: -1px -1px auto;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--vk-ember) 30%, var(--vk-ember-2) 50%, var(--vk-ember) 70%, transparent);
-  background-size: 200% 100%;
-  animation: vk-ember-sweep 1.6s linear infinite;
-}
-
 .vk-dot {
   display: inline-block;
   width: 0.5rem;
@@ -253,11 +243,6 @@ button, input:where([type="button"], [type="reset"], [type="submit"]), ::file-se
 .vk-dot[data-tone="info"] { background: var(--vk-info); }
 .vk-dot[data-tone="ember"] { background: var(--vk-ember); box-shadow: 0 0 0 3px var(--vk-ember-soft); }
 .vk-dot[data-live] { animation: vk-pulse 2s var(--vk-ease) infinite; }
-
-@keyframes vk-ember-sweep {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
-}
 
 @keyframes vk-pulse {
   0%, 100% { opacity: 1; }

@@ -138,7 +138,6 @@
 .vk-form-w-auto { width: auto; max-width: 18rem; }
 .vk-form-num { text-align: right; font-variant-numeric: tabular-nums; }
 .vk-form-break { overflow-wrap: anywhere; }
-.vk-form-nowrap { white-space: nowrap; }
 .vk-form-wrap { display: inline-flex; }
 .vk-form-end { align-self: flex-end; }
 .vk-form-after { margin-top: calc(var(--vk-u) * 2); }
