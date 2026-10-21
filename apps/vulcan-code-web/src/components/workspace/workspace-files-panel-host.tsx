@@ -14,6 +14,7 @@ import { pathMentionText } from "@/components/composer/composer-panel/use-compos
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { PageNotice } from "@/components/page/page-feedback";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
+import { ContextMenuItem } from "@/ui-kit/primitives/context-menu";
 import "@/ui-kit/styles/features/file-bar.css";
 import {
   WorkspaceFilePreview,
@@ -576,6 +577,7 @@ export function WorkspaceFilesPanelHost(props: {
       fileKey={(entry) => entry.path}
       fileTitle={(entry) => entry.relativePath || entry.name}
       fileDragText={(entry) => pathMentionText(entry.relativePath, false)}
+      fileContextMenu={(entry) => workspaceFileActions(entry, props.onCopyText, copyFileContent, t).map((action) => <ContextMenuItem disabled={action.disabled} key={action.key} onSelect={action.run}>{action.icon}{action.label}</ContextMenuItem>)}
       filter={filterText}
       footer={<WorkspaceFileTreeFooter filters={filters} />}
       loadingDirectoryLabel={t("workspaceFiles.loading")}
@@ -781,19 +783,6 @@ function WorkspaceFileActionsMenu(props: {
   onCopyFileContent: (entry: WorkspaceFileEntrySummary) => void;
 }) {
   const { t } = useI18n();
-  // copyPath observes the host result before completing a menu clipboard action.
-  // copyPath 在菜单剪贴板动作完成前检查宿主执行结果。
-  // Parameters: path is the chosen absolute or relative path string. Returns a promise after copy or error feedback.
-  // 参数：path 是所选绝对或相对路径字符串。返回在复制或错误反馈后结束的 Promise。
-  // Parameters: path is the exact requested clipboard text; returns after the host result is observed, exposing a failed copy instead of claiming success.
-  // 参数：path 是精确请求的剪贴板文本；在观察宿主结果后返回，复制失败时暴露错误而非声称成功。
-  const copyPath = async (path: string): Promise<void> => {
-    try {
-      await props.onCopyText(path);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  };
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -802,28 +791,38 @@ function WorkspaceFileActionsMenu(props: {
         </IconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => requestComposerCommand({ kind: "insert", text: pathMentionText(props.entry.relativePath, false) })}>
-          <AtSign size={14} />
-          {t("workspaceFiles.mentionInMessage")}
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => void copyPath(props.entry.path)}>
-          <Copy size={14} />
-          {t("workspaceFiles.copyPath")}
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => void copyPath(props.entry.relativePath)}>
-          <Copy size={14} />
-          {t("workspaceFiles.copyRelativePath")}
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={props.entry.kind !== "code"}
-          onClick={() => props.onCopyFileContent(props.entry)}
-        >
-          <FileText size={14} />
-          {t("workspaceFiles.copyFileContent")}
-        </DropdownMenuItem>
+        {workspaceFileActions(props.entry, props.onCopyText, props.onCopyFileContent, t).map((action) => (
+          <DropdownMenuItem disabled={action.disabled} key={action.key} onClick={action.run}>{action.icon}{action.label}</DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+// workspaceFileActions lists what can be done with one file, shared by the open file's menu and the tree rows'
+// right-click menu.
+// workspaceFileActions 列出对单个文件可执行的操作，供已打开文件的菜单与目录树行的右键菜单共用。
+function workspaceFileActions(
+  entry: WorkspaceFileEntrySummary,
+  onCopyText: (text: string) => void | Promise<void>,
+  onCopyFileContent: (entry: WorkspaceFileEntrySummary) => void,
+  t: (key: TranslationKey) => string,
+): Array<{ key: string; icon: React.ReactNode; label: string; disabled?: boolean; run: () => void }> {
+  // copyPath observes the host result, exposing a failed copy instead of claiming success.
+  // copyPath 检查宿主执行结果，复制失败时暴露错误而非声称成功。
+  const copyPath = (path: string) => {
+    void Promise.resolve().then(() => onCopyText(path)).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : String(error));
+    });
+  };
+  return [
+    { key: "mention", icon: <AtSign size={14} />, label: t("workspaceFiles.mentionInMessage"),
+      run: () => requestComposerCommand({ kind: "insert", text: pathMentionText(entry.relativePath, false) }) },
+    { key: "path", icon: <Copy size={14} />, label: t("workspaceFiles.copyPath"), run: () => copyPath(entry.path) },
+    { key: "relative", icon: <Copy size={14} />, label: t("workspaceFiles.copyRelativePath"), run: () => copyPath(entry.relativePath) },
+    { key: "content", icon: <FileText size={14} />, label: t("workspaceFiles.copyFileContent"), disabled: entry.kind !== "code",
+      run: () => onCopyFileContent(entry) },
+  ];
 }
 
 // emptyWorkspaceFileTree creates the shared drawer root used before data has loaded.

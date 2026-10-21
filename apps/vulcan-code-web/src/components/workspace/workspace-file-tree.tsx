@@ -2,6 +2,7 @@ import React from "react";
 import { ChevronDown, ChevronRight, Folder, FolderOpen, ListCollapse, ListTree, Search } from "lucide-react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { IconButton } from "@/ui-kit/primitives/button";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/ui-kit/primitives/context-menu";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { useI18n } from "@/i18n";
 
@@ -82,6 +83,9 @@ export function WorkspaceFileTree<RowFile>(props: {
   // Text a file row carries when dragged, such as its mention for the composer; rows are not draggable without it.
   // 文件行被拖动时携带的文本（例如供输入区使用的提及）；未提供时行不可拖动。
   fileDragText?: (file: RowFile) => string;
+  // Items of a file row's right-click menu; rows have no menu without it.
+  // 文件行右键菜单的条目；未提供时行没有菜单。
+  fileContextMenu?: (file: RowFile) => React.ReactNode;
   // Called when a file row is chosen.
   // 选择文件行时调用。
   onSelectFile: (file: RowFile) => void;
@@ -168,6 +172,7 @@ export function WorkspaceFileTree<RowFile>(props: {
             fileKey={props.fileKey}
             fileTitle={props.fileTitle}
             fileDragText={props.fileDragText}
+            fileContextMenu={props.fileContextMenu}
             key={node.path}
             loadingDirectoryLabel={props.loadingDirectoryLabel}
             loadingDirectoryPaths={props.loadingDirectoryPaths}
@@ -220,6 +225,7 @@ function WorkspaceFileTreeRow<RowFile>(props: {
   fileKey: (file: RowFile) => string;
   fileTitle?: (file: RowFile, node: WorkspaceFileTreeNode<RowFile>) => string;
   fileDragText?: (file: RowFile) => string;
+  fileContextMenu?: (file: RowFile) => React.ReactNode;
 }) {
   const { t } = useI18n();
   const { node } = props;
@@ -253,7 +259,7 @@ function WorkspaceFileTreeRow<RowFile>(props: {
   }
   const file = node.file;
   const isActive = props.fileKey(file) === props.activeFileKey;
-  return (
+  const row = (
     <button
       aria-current={isActive ? "true" : undefined}
       className="vk-ftree-row"
@@ -272,6 +278,13 @@ function WorkspaceFileTreeRow<RowFile>(props: {
       <FileTypeIcon icon={resolveFileTypeIcon(node.name)} />
       <span>{node.name}</span>
     </button>
+  );
+  if (!props.fileContextMenu) return row;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent>{props.fileContextMenu(file)}</ContextMenuContent>
+    </ContextMenu>
   );
 }
 
