@@ -110,6 +110,11 @@
 .workspace-file-preview-code-row[data-focus] { background: color-mix(in srgb, var(--vk-ember) 10%, transparent); }
 .workspace-file-preview-code-row[data-focus] > .workspace-file-preview-code-gutter { color: var(--vk-ember-ink); box-shadow: inset 2px 0 0 var(--vk-ember); }
 
+/* Wrapped previews fold long lines into the panel width; a folded line keeps its number on its first row. */
+/* 折行预览将长行折入面板宽度；被折行的行在其首行保留行号。 */
+.workspace-file-preview-code-lines[data-wrap-lines] .workspace-file-preview-code-row { min-width: 0; }
+.workspace-file-preview-code-lines[data-wrap-lines] .workspace-file-preview-code-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .workspace-file-preview-code-gutter {
   position: sticky;
   left: 0;

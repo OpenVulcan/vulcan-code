@@ -1669,6 +1669,7 @@
   "workspaceFiles.gotoLineLabel": "줄로 이동",
   "workspaceFiles.gotoLine": "Enter: {line}번째 줄",
   "workspaceFiles.gotoLineEmpty": "줄 번호 입력",
+  "workspaceFiles.wrapLines": "긴 줄 자동 줄바꿈",
   "workspaceFiles.openPathOutside": "이 파일은 프로젝트 밖에 있습니다",
   "workspaceFiles.openPathMissing": "프로젝트 트리에 이 파일이 없습니다. 삭제되었거나 파일 필터로 숨겨졌을 수 있습니다",
   "workspaceFiles.mentionInMessage": "메시지에서 언급",

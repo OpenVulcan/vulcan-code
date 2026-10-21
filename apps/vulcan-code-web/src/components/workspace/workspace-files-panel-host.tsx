@@ -1,6 +1,6 @@
 import React from "react";
 import "@/ui-kit/styles/features/workspace-files.css";
-import { ChevronsUpDown, FileText, Folder, FolderX, Info, ListFilter, MoreHorizontal, X } from "lucide-react";
+import { ChevronsUpDown, FileText, Folder, FolderX, Info, ListFilter, MoreHorizontal, WrapText, X } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import {
   activeWorkbenchSurfaceId,
@@ -20,6 +20,7 @@ import {
   workspaceFilePreviewErrorMessage,
 } from "@/components/workspace/workspace-files-preview";
 import { useWorkspaceFileOpenRequests } from "@/components/workspace/workspace-file-open-request";
+import { useWorkspaceFileWrapLines } from "@/components/workspace/workspace-file-wrap-lines";
 import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
 import { useWorkspaceFilesRefresh, WorkspaceFilesRefreshButton } from "@/components/workspace/workspace-files-panel-refresh";
 import { workspacePathActions, type WorkspacePathAction } from "@/components/workspace/workspace-path-actions";
@@ -600,7 +601,7 @@ export function WorkspaceFilesPanelHost(props: {
           path={selectedEntry?.relativePath || selectedEntry?.name || selectedPath}
           pickerOpen={pickerOpen}
           tree={renderTree(true)}
-          truncated={Boolean(preview?.truncated)}
+          preview={preview}
           onClose={closePreviewAndShowTree}
           onPickerOpenChange={setPickerOpen}
         />
@@ -661,9 +662,10 @@ function WorkspaceOpenFileBar(props: {
   // Project path of the open file.
   // 已打开文件的项目路径。
   path: string;
-  // Whether the preview shows only the start of the file.
-  // 预览是否只展示文件开头部分。
-  truncated: boolean;
+  // The open file's loaded preview: it says whether only the start is shown and whether it is code, which
+  // can wrap its lines.
+  // 已打开文件的已加载预览：说明是否只展示开头部分，以及是否为可折行的代码。
+  preview: WorkspaceFileReadResponse | null;
   pickerOpen: boolean;
   onPickerOpenChange: (open: boolean) => void;
   // The project tree shown inside the picker.
@@ -676,6 +678,10 @@ function WorkspaceOpenFileBar(props: {
 }) {
   const { t } = useI18n();
   const [dir, name] = splitWorkspaceRelativePath(props.path);
+  const [wrapLines, toggleWrapLines] = useWorkspaceFileWrapLines();
+  // Markdown previews render as a document that already wraps.
+  // Markdown 预览渲染为本身已折行的文档。
+  const canWrap = props.preview?.kind === "code" && !/\.md$/i.test(props.preview.path);
   return (
     <div className="vk-filebar">
       <Popover onOpenChange={props.onPickerOpenChange} open={props.pickerOpen}>
@@ -685,13 +691,25 @@ function WorkspaceOpenFileBar(props: {
             <strong>{name}</strong>
             {dir ? <small>{dir}</small> : null}
           </span>
-          {props.truncated ? <span className="vk-badge" data-tone="warn">{t("workspaceFilePreview.truncated")}</span> : null}
+          {props.preview?.truncated ? <span className="vk-badge" data-tone="warn">{t("workspaceFilePreview.truncated")}</span> : null}
           <ChevronsUpDown aria-hidden="true" className="vk-faint" size={13} />
         </PopoverTrigger>
         <PopoverContent align="start" className="vk-filemenu" sideOffset={2}>
           {props.tree}
         </PopoverContent>
       </Popover>
+      {canWrap ? (
+        <IconButton
+          aria-label={t("workspaceFiles.wrapLines")}
+          aria-pressed={wrapLines}
+          data-active={wrapLines ? "" : undefined}
+          onClick={toggleWrapLines}
+          size="sm"
+          title={t("workspaceFiles.wrapLines")}
+        >
+          <WrapText size={14} />
+        </IconButton>
+      ) : null}
       {props.actions}
       <IconButton aria-label={t("workspaceFiles.closeFile")} onClick={props.onClose} size="sm" title={t("workspaceFiles.closeFile")}>
         <X size={14} />

@@ -9,6 +9,7 @@
 .vk-filepick-name { display: flex; flex: 1 1 auto; align-items: baseline; gap: calc(var(--vk-u) * 2); min-width: 0; overflow: hidden; white-space: nowrap; }
 .vk-filepick-name > strong { flex: none; max-width: 100%; overflow: hidden; font-size: var(--vk-fs-sm); font-weight: 600; text-overflow: ellipsis; }
 .vk-filepick-name > small { min-width: 0; overflow: hidden; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); text-overflow: ellipsis; direction: rtl; text-align: left; }
+.vk-filebar > .vk-btn[data-active] { color: var(--vk-ember); }
 .vk-filebar-pos { flex: none; padding: 0 calc(var(--vk-u) * 1); color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
 
 .vk-file-kind { display: inline-grid; flex: none; place-items: center; width: 1.1rem; height: 1.1rem; background: var(--vk-sunken); color: var(--vk-ink-2); font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs, 0.68rem); font-weight: 700; }

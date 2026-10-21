@@ -1669,6 +1669,7 @@
   "workspaceFiles.gotoLineLabel": "Перейти к строке",
   "workspaceFiles.gotoLine": "Enter: строка {line}",
   "workspaceFiles.gotoLineEmpty": "Номер строки",
+  "workspaceFiles.wrapLines": "Переносить длинные строки",
   "workspaceFiles.openPathOutside": "Этот файл находится вне проекта",
   "workspaceFiles.openPathMissing": "Файла нет в дереве проекта: возможно, он удалён или скрыт фильтрами файлов",
   "workspaceFiles.mentionInMessage": "Упомянуть в сообщении",

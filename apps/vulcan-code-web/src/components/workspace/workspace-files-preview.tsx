@@ -26,6 +26,7 @@ import {
 } from "@/components/workspace/workspace-file-open-request";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceFileEntrySummary, WorkspaceFileReadResponse } from "@/types";
+import { useWorkspaceFileWrapLines } from "@/components/workspace/workspace-file-wrap-lines";
 
 // workspaceFilePreviewMaxHighlightRows caps Shiki preview work inside the right rail.
 // workspaceFilePreviewMaxHighlightRows 限制右侧栏内 Shiki 预览工作量。
@@ -214,6 +215,9 @@ function WorkspaceHighlightedCodePreview(props: {
   // language stores the Shiki language inferred by the review highlighter.
   // language 保存审核高亮器推断出的 Shiki 语言。
   const language = React.useMemo(() => diffLanguageForFile(diffFile), [diffFile]);
+  // wrapLines folds long lines into the panel width, as chosen from the file bar.
+  // wrapLines 按文件栏中的选择将长行折入面板宽度。
+  const [wrapLines] = useWorkspaceFileWrapLines();
   // highlightSupported stores whether the inferred language is handled by the review worker.
   // highlightSupported 保存审核 Worker 是否支持推断语言。
   const highlightSupported = useHighlightLanguage(language);
@@ -293,7 +297,7 @@ function WorkspaceHighlightedCodePreview(props: {
   return (
     <>
       {/* Focusable so a click in the code gives Ctrl+F to this file's find bar. 可获得焦点，使点击代码后 Ctrl+F 交给本文件的查找栏。 */}
-      <div className="workspace-file-preview-code-lines" onMouseDown={selectFromGutter} ref={linesRef} tabIndex={0}>{rows}</div>
+      <div className="workspace-file-preview-code-lines" data-wrap-lines={wrapLines ? "" : undefined} onMouseDown={selectFromGutter} ref={linesRef} tabIndex={0}>{rows}</div>
       <ConversationSelectionQuote onQuote={quoteSelection} scrollRef={linesRef} timelineRef={linesRef} />
       <ConversationFindBar highlight="vk-file-find" key={props.preview.path} label="workspaceFiles.find" onGotoLine={goToLine} onReveal={revealMatch} scoped scrollRef={linesRef} />
     </>

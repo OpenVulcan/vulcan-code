@@ -1669,6 +1669,7 @@
   "workspaceFiles.gotoLineLabel": "Gehe zu Zeile",
   "workspaceFiles.gotoLine": "Enter: Zeile {line}",
   "workspaceFiles.gotoLineEmpty": "Zeilennummer",
+  "workspaceFiles.wrapLines": "Lange Zeilen umbrechen",
   "workspaceFiles.openPathOutside": "Diese Datei liegt außerhalb des Projekts",
   "workspaceFiles.openPathMissing": "Die Datei ist nicht im Projektbaum; sie wurde möglicherweise gelöscht oder durch die Dateifilter ausgeblendet",
   "workspaceFiles.mentionInMessage": "In Nachricht erwähnen",
