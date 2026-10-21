@@ -3,7 +3,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { I18nProvider } from "@/i18n";
+import { I18nProvider, readLocaleMessage } from "@/i18n";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { ConversationSessionTodolistPanel, type ConversationSessionReviewRepository } from "./session-todolist-panel";
 
@@ -176,5 +176,19 @@ describe("foldable multi-repository Git panel", () => {
     expect(host.querySelector(".vk-stools-manage")).toBeNull();
     expect(host.querySelector<HTMLButtonElement>("[data-row=changes]")!.disabled).toBe(false);
     expect(host.querySelector<HTMLButtonElement>("[data-row=commit]")!.disabled).toBe(true);
+  });
+  it("pulls the exact repository from the commit split menu even when nothing waits to be committed", async () => {
+    // pull records the routed repository key and busy label; no backend Git command runs.
+    // pull 记录路由的仓库键与忙碌标签；不执行后端 Git 命令。
+    const pull = vi.fn().mockResolvedValue({ summary: "", updated: false });
+    await renderPanel({ onPullRepository: pull, reviewRepositories: [{ ...repositories[0], summary: { ...repositories[0].summary!,
+      changedFiles: 0, additions: 0, deletions: 0, unstagedChangedFiles: 0, unstagedAdditions: 0, unstagedDeletions: 0 } }] });
+    const arrow = host.querySelector<HTMLButtonElement>(".vk-stools-split [data-part=menu]")!;
+    expect(host.querySelector<HTMLButtonElement>("[data-row=commit]")!.disabled).toBe(true);
+    expect(arrow.disabled).toBe(false);
+    await act(async () => arrow.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((entry) => entry.textContent === readLocaleMessage("zh-CN", "gitCommitDialog.pull"))!;
+    await act(async () => item.click());
+    expect(pull).toHaveBeenCalledExactlyOnceWith(".", readLocaleMessage("zh-CN", "gitCommitDialog.pulling"));
   });
 });

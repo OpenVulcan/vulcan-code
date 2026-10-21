@@ -204,6 +204,14 @@ button.vk-stools-item:disabled { cursor: not-allowed; opacity: 0.5; }
 .vk-stools-item[data-row="changes"] { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 .vk-stools-item[data-row="changes"] > small { font-weight: 400; font-variant-numeric: tabular-nums; }
 .vk-stools-actions { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 1) calc(var(--vk-u) * 0.5); }
+/* Split commit button: the arrow joins the main part with a hairline instead of a gap. */
+/* 分割提交按钮：箭头以细线与主体相接，而不是留出间距。 */
+.vk-stools-split { display: inline-flex; }
+.vk-stools-split > .vk-btn[data-part="menu"] {
+  padding: 0 calc(var(--vk-u) * 1);
+  margin-left: -1px;
+  border-left-color: color-mix(in srgb, currentColor 35%, transparent);
+}
 .vk-stools-item .vk-btn[data-action="stop"]:hover:not(:disabled) { color: var(--vk-bad); }
 /* A live terminal's mark breathes; settled ones hold their tone. */
 /* 运行中的终端标记缓慢呼吸；已结束的保持其色调。 */

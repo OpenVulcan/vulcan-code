@@ -432,6 +432,39 @@ export async function runGitCommitAction(request: {
   return serviceClient.request<GitCommitActionResponse>("service_run_git_commit_action", { request });
 }
 
+// GitPullActionResponse describes a completed fast-forward pull of the current branch.
+// GitPullActionResponse 描述当前分支一次已完成的快进拉取。
+export interface GitPullActionResponse {
+  // Human-readable operation summary.
+  // 面向用户的操作摘要。
+  summary: string;
+  // Whether HEAD moved; false means the branch was already up to date.
+  // HEAD 是否移动；为 false 表示分支已是最新。
+  updated: boolean;
+  // Current branch after the pull.
+  // 拉取后的当前分支。
+  branchName?: string | null;
+  // Short hash of HEAD after the pull.
+  // 拉取后 HEAD 的短哈希。
+  commitHash?: string | null;
+  // Commit message subject of HEAD after the pull.
+  // 拉取后 HEAD 的提交信息标题。
+  commitMessage?: string | null;
+}
+
+// runGitPullAction asks the backend to fast-forward the current branch from its upstream.
+// runGitPullAction 请求后端从上游快进当前分支。
+export async function runGitPullAction(request: {
+  conversationId: string;
+  workspacePath: string;
+  repositoryKey?: string | null;
+}): Promise<GitPullActionResponse | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<GitPullActionResponse>("service_run_git_pull_action", { request });
+}
+
 // saveSessionGoal persists a user-authored goal for the current conversation.
 // saveSessionGoal 为当前会话持久化用户编写的目标。
 export async function saveSessionGoal(

@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardList,
+  CloudDownload,
   CloudUpload,
   FileDiff,
   FolderGit2,
@@ -37,7 +38,9 @@ import {
   generateGitCommitMessage,
   runGitCommitAction,
   type GitCommitActionResponse,
+  type GitPullActionResponse,
 } from "@/service/conversation-actions-service";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
 import { Button, IconButton } from "@/ui-kit/primitives/button";
 import { Checkbox } from "@/ui-kit/primitives/checkbox";
 import {
@@ -239,6 +242,9 @@ export function ConversationSessionTodolistPanel(props: {
   // Opens the workspace review panel focused on uncommitted changes.
   // 打开工作区审核面板并聚焦未提交变更。
   onOpenReviewChanges: (repositoryKey?: string) => void;
+  // Pulls one repository (null for the selected one) while showing busyLabel; absent hides the pull choice.
+  // 拉取单个仓库（null 表示当前选中仓库），期间显示 busyLabel；缺省时隐藏拉取选项。
+  onPullRepository?: (repositoryKey: string | null, busyLabel: string) => Promise<GitPullActionResponse | null>;
   // Selects the repository whose commit dialog is currently active.
   // 选择当前提交弹窗对应的仓库。
   onSelectReviewRepository?: (repositoryKey: string) => void;
@@ -565,6 +571,9 @@ export function ConversationSessionTodolistPanel(props: {
             ? (expanded) => setReviewRepositoryExpanded(repository.repositoryKey, expanded)
             : undefined}
           onOpenReviewChanges={() => props.onOpenReviewChanges(repository.repositoryKey)}
+          onPull={props.onPullRepository
+            ? (busyLabel) => props.onPullRepository!(repository.repositoryKey, busyLabel)
+            : undefined}
         />
       ))}
       {!props.reviewRepositories?.length && props.reviewSummary ? (
@@ -575,6 +584,7 @@ export function ConversationSessionTodolistPanel(props: {
           reviewSummary={props.reviewSummary}
           onCommitDialogOpenChange={props.onCommitDialogOpenChange}
           onOpenReviewChanges={() => props.onOpenReviewChanges()}
+          onPull={props.onPullRepository ? (busyLabel) => props.onPullRepository!(null, busyLabel) : undefined}
         />
       ) : null}
       {hasTerminalSessions ? (
@@ -726,6 +736,9 @@ function ConversationSessionReviewSection(props: {
   // Opens or closes the shared Git commit dialog.
   // 打开或关闭共享 Git 提交弹窗。
   onCommitDialogOpenChange: (open: boolean) => void;
+  // Pulls this repository while showing busyLabel; absent hides the split menu.
+  // 拉取该仓库，期间显示 busyLabel；缺省时隐藏分割菜单。
+  onPull?: (busyLabel: string) => Promise<GitPullActionResponse | null>;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -741,9 +754,24 @@ function ConversationSessionReviewSection(props: {
   const reviewSectionExpanded = !foldable || props.expanded !== false;
   // commitTriggerDisabled disables the entry while Git is busy or no commit/push action is possible.
   // commitTriggerDisabled 在 Git 忙碌或没有可提交/可推送内容时禁用入口。
-  const commitTriggerDisabled = props.loading || Boolean(props.error)
-    || Boolean(props.commitBusyState)
-    || !hasGitCommitOrPushContent;
+  const gitActionBlocked = props.loading || Boolean(props.error) || Boolean(props.commitBusyState);
+  const commitTriggerDisabled = gitActionBlocked || !hasGitCommitOrPushContent;
+  // runPull fetches upstream commits even when nothing is waiting to be committed or pushed.
+  // runPull 即使没有待提交或待推送的内容也会拉取上游提交。
+  const runPull = async () => {
+    if (!props.onPull) return;
+    try {
+      const response = await props.onPull(t("gitCommitDialog.pulling"));
+      if (!response) return;
+      toast.success(t(response.updated ? "gitCommitDialog.pullDone" : "gitCommitDialog.pullUpToDate"), {
+        description: response.updated && response.commitHash
+          ? [`# ${response.commitHash}`, response.commitMessage].filter(Boolean).join("\n")
+          : undefined,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  };
   const repositoryName = props.repositoryName ?? t("gitCommitDialog.toolsTitle");
   // The path is only a tooltip: it is noise for the primary repository and the name already identifies nested ones.
   // 路径仅作为提示：对主仓库是噪声，嵌套仓库的名称已足以识别。
@@ -826,18 +854,46 @@ function ConversationSessionReviewSection(props: {
             {conversationSessionReviewDelta(props.reviewSummary)}
           </button>
           <div className="vk-stools-actions">
-            <Button
-              aria-expanded={props.commitDialogOpen}
-              data-row="commit"
-              disabled={commitTriggerDisabled}
-              onClick={() => props.onCommitDialogOpenChange(true)}
-              size="sm"
-              type="button"
-              variant="primary"
-            >
-              {props.commitBusyState ? <LoaderCircle className="vk-spin" /> : <GitCommitHorizontal />}
-              {props.commitBusyState?.label ?? t("gitCommitDialog.open")}
-            </Button>
+            {/* The main part opens commit or push; the arrow lists the other Git actions, which stay reachable */}
+            {/* when nothing is waiting to be committed. */}
+            {/* 主体打开提交或推送；箭头列出其他 Git 操作，即使没有待提交内容也可使用。 */}
+            <span className="vk-stools-split">
+              <Button
+                aria-expanded={props.commitDialogOpen}
+                data-row="commit"
+                disabled={commitTriggerDisabled}
+                onClick={() => props.onCommitDialogOpenChange(true)}
+                size="sm"
+                type="button"
+                variant="primary"
+              >
+                {props.commitBusyState ? <LoaderCircle className="vk-spin" /> : <GitCommitHorizontal />}
+                {props.commitBusyState?.label ?? t("gitCommitDialog.open")}
+              </Button>
+              {props.onPull ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      aria-label={t("gitCommitDialog.moreActions")}
+                      data-part="menu"
+                      disabled={gitActionBlocked}
+                      size="sm"
+                      title={t("gitCommitDialog.moreActions")}
+                      type="button"
+                      variant="primary"
+                    >
+                      <ChevronDown />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" sideOffset={4}>
+                    <DropdownMenuItem onSelect={() => void runPull()}>
+                      <CloudDownload size={14} />
+                      <span>{t("gitCommitDialog.pull")}</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
+            </span>
             {props.gitBranchActions ? (
               <ConversationSessionGitGraphButton actions={props.gitBranchActions} repositoryKey={props.repositoryKey ?? null} />
             ) : null}

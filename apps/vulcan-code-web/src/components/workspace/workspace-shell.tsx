@@ -299,6 +299,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     sessionGitCommitActionVisible,
     refreshProjectGitSummary,
     refreshSelectedGitRepositorySummary,
+    pullGitRepository,
     commitBranchPrefix,
     sessionGitBranchActions,
     handleToggleReviewMonitoring,
@@ -933,6 +934,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           terminalSessions={sessionTerminalSessions}
           todolist={null}
           onCommitDialogOpenChange={handleGitCommitDialogOpenChange}
+          onPullRepository={pullGitRepository}
           onExpandedChange={handleSessionToolExpandedChange}
           onOpenReviewChanges={reviewFocus.openReviewChanges}
           onSelectReviewRepository={handleSelectReviewRepository}

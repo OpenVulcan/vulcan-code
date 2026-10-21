@@ -22,6 +22,7 @@ import {
   setWorkspaceGitMonitoring,
   switchWorkspaceGitBranch,
 } from "@/service/workbench-snapshot-service";
+import { runGitPullAction, type GitPullActionResponse } from "@/service/conversation-actions-service";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
 import type { ConversationSummary, ProjectSummary, WorkbenchSnapshot, WorkspaceGitChangedEvent } from "@/types";
 
@@ -122,6 +123,10 @@ export interface WorkspaceGitState {
   // Refreshes only the repository captured by the commit dialog.
   // 只刷新提交弹窗捕获的目标仓库。
   refreshSelectedGitRepositorySummary: () => Promise<void>;
+  // Fast-forwards one repository (null for the selected one) from its upstream while showing busyLabel on its
+  // triggers, then refreshes that repository; errors are rethrown to the caller.
+  // 从上游快进单个仓库（null 表示当前选中仓库），期间在其入口显示 busyLabel，随后刷新该仓库；错误抛回调用方。
+  pullGitRepository: (repositoryKey: string | null, busyLabel: string) => Promise<GitPullActionResponse | null>;
   // Prefix shared by commit and branch-creation recommendations.
   // 提交与新建分支推荐共用的前缀。
   commitBranchPrefix: string;
@@ -543,6 +548,36 @@ export function useWorkspaceGitState(options: WorkspaceGitStateOptions): Workspa
     selectedChatProject?.path,
   ]);
 
+  // pullGitRepository fast-forwards one repository and refreshes only that node.
+  // pullGitRepository 快进单个仓库并只刷新该节点。
+  const pullGitRepository = React.useCallback(async (repositoryKey: string | null, busyLabel: string) => {
+    const targetRepositoryKey = repositoryKey ?? selectedGitRepositoryForActions;
+    if (!hasSelectedChatConversation || !selectedChatProject?.path || !selectedConversationId || !targetRepositoryKey) {
+      return null;
+    }
+    const workspacePath = selectedChatProject.path;
+    updateGitCommitBusyState(targetRepositoryKey, { label: busyLabel });
+    try {
+      const response = await runGitPullAction({
+        conversationId: selectedConversationId,
+        workspacePath,
+        repositoryKey: targetRepositoryKey,
+      });
+      await refreshProjectGitSummary(workspacePath, selectedChatProject.id ?? null, selectedConversationId, targetRepositoryKey);
+      return response;
+    } finally {
+      updateGitCommitBusyState(targetRepositoryKey, null);
+    }
+  }, [
+    hasSelectedChatConversation,
+    refreshProjectGitSummary,
+    selectedChatProject?.id,
+    selectedChatProject?.path,
+    selectedConversationId,
+    selectedGitRepositoryForActions,
+    updateGitCommitBusyState,
+  ]);
+
   // commitBranchPrefix is the configured prefix shared by commit and branch-creation recommendations.
   // commitBranchPrefix 是提交与新建分支推荐共用的已配置前缀。
   const commitBranchPrefix = configuredBranchPrefix ?? "vulcan/";
@@ -769,6 +804,7 @@ export function useWorkspaceGitState(options: WorkspaceGitStateOptions): Workspa
     sessionGitCommitActionVisible,
     refreshProjectGitSummary,
     refreshSelectedGitRepositorySummary,
+    pullGitRepository,
     commitBranchPrefix,
     sessionGitBranchActions,
     handleToggleReviewMonitoring,
