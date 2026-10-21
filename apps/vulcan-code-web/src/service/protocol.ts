@@ -22,6 +22,10 @@ export interface ServiceRequestOptions {
   // signal aborts the underlying request when the caller no longer needs it.
   // signal 在调用方不再需要结果时中止底层请求。
   signal?: AbortSignal;
+  // keepalive lets the request finish after the page unloads, for a write made while leaving; transports that
+  // cannot keep it alive send it normally.
+  // keepalive 让请求在页面卸载后仍能完成，用于离开页面时的写入；无法保活的传输按普通请求发送。
+  keepalive?: boolean;
 }
 
 // ServiceErrorPayload describes a normalized service error.

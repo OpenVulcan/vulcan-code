@@ -1,4 +1,5 @@
 import type { ServiceClient } from "@/service/client";
+import type { ServiceRequestOptions } from "@/service/protocol";
 import { parseComposerPromptSource } from "@/service/composer-attachment-reference";
 import {
   parseSessionResourceSummaryV1,
@@ -33,6 +34,7 @@ export interface SessionDraftRpcV1 {
     sessionId: string,
     text: string,
     attachments: readonly ComposerAttachmentSummary[],
+    options?: ServiceRequestOptions,
   ): Promise<SessionDraftV1>;
 }
 
@@ -66,13 +68,14 @@ export class ServiceSessionDraftClientV1 implements SessionDraftRpcV1 {
     sessionId: string,
     text: string,
     attachments: readonly ComposerAttachmentSummary[],
+    options?: ServiceRequestOptions,
   ): Promise<SessionDraftV1> {
     validateSessionId(sessionId);
     const payload = await this.service.request<unknown>("service_set_session_draft_v1", {
       sessionId,
       text,
       attachments,
-    });
+    }, options);
     return parseSessionDraftV1(payload, sessionId, this.resources);
   }
 }
@@ -118,7 +121,7 @@ export const sessionDraftClientV1: SessionDraftRpcV1 = (() => {
   const pick = (): SessionDraftRpcV1 => (hasServiceRuntime() ? service : preview);
   return {
     read: (sessionId) => pick().read(sessionId),
-    write: (sessionId, text, attachments) => pick().write(sessionId, text, attachments),
+    write: (sessionId, text, attachments, options) => pick().write(sessionId, text, attachments, options),
   };
 })();
 

@@ -180,6 +180,32 @@ describe("SessionDraftWriteCoordinatorV1", () => {
     }
   });
 
+  it("writes a waiting draft at once and keeps it alive when the page goes away", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: Array<{ text: string; keepalive: boolean | undefined }> = [];
+      const client: SessionDraftRpcV1 = {
+        read: async () => ({ sessionId: "unused", text: "", attachments: [] }),
+        write: async (sessionId, text, attachments, options) => {
+          calls.push({ text, keepalive: options?.keepalive });
+          return { sessionId, text, attachments: [...attachments] };
+        },
+      };
+      const coordinator = new SessionDraftWriteCoordinatorV1(client, 500);
+      coordinator.enqueue("session-a", "a", [], true);
+      await vi.advanceTimersByTimeAsync(10);
+      coordinator.enqueue("session-a", "ab", [], true);
+      coordinator.writeAllNow();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toEqual([{ text: "a", keepalive: undefined }, { text: "ab", keepalive: true }]);
+      coordinator.enqueue("session-a", "abc", []);
+      await coordinator.flush("session-a");
+      expect(calls.at(-1)).toEqual({ text: "abc", keepalive: undefined });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects new writes after disposal", () => {
     const client: SessionDraftRpcV1 = {
       read: async () => ({ sessionId: "unused", text: "", attachments: [] }),

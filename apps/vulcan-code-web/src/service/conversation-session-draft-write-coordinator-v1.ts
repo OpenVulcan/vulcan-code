@@ -41,6 +41,10 @@ interface SessionDraftWriteEntryV1 {
    * 正在等待的 flush 数量；只要存在，写入就不等待间隔。
    */
   flushes: number;
+  /** Whether the next write is made while the page is going away and must outlive it.
+   * 下一次写入是否发生在页面离开时，必须在页面卸载后仍能完成。
+   */
+  leaving: boolean;
 }
 
 /** Coalesces typing bursts while preserving one serialized writer per materialized session: the first change
@@ -127,12 +131,16 @@ export class SessionDraftWriteCoordinatorV1 {
     }
   }
 
-  /** Starts every waiting write now, for a page that is going away.
-   * 立即开始所有等待中的写入，用于即将离开的页面。
+  /** Starts every waiting write now, as requests that outlive the page, for a page that is going away.
+   * 立即开始所有等待中的写入，并作为可在页面卸载后完成的请求，用于即将离开的页面。
    */
   writeAllNow(): void {
     for (const entry of this.entries.values()) {
+      if (entry.pending === null) {
+        continue;
+      }
       entry.lastWriteAt = Number.NEGATIVE_INFINITY;
+      entry.leaving = true;
       entry.wake?.();
     }
   }
@@ -152,6 +160,7 @@ export class SessionDraftWriteCoordinatorV1 {
       lastWriteAt: Number.NEGATIVE_INFINITY,
       wake: null,
       flushes: 0,
+      leaving: false,
     };
     this.entries.set(sessionId, created);
     return created;
@@ -181,10 +190,14 @@ export class SessionDraftWriteCoordinatorV1 {
           }
         }
         const pending = entry.pending;
+        const keepalive = entry.leaving;
         entry.pending = null;
+        entry.leaving = false;
         entry.lastWriteAt = performance.now();
         try {
-          await this.client.write(pending.sessionId, pending.text, pending.attachments);
+          await (keepalive
+            ? this.client.write(pending.sessionId, pending.text, pending.attachments, { keepalive })
+            : this.client.write(pending.sessionId, pending.text, pending.attachments));
           entry.lastError = null;
         } catch (error) {
           entry.lastError = error;

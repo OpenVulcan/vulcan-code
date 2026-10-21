@@ -41,6 +41,10 @@ export {
   type BrowserServiceConnectionStatus,
 } from "@/service/browser-service-discovery";
 
+// KEEPALIVE_BODY_LIMIT_BYTES is the request body quota browsers grant keepalive fetches.
+// KEEPALIVE_BODY_LIMIT_BYTES 是浏览器为 keepalive fetch 提供的请求体配额。
+const KEEPALIVE_BODY_LIMIT_BYTES = 64 * 1024;
+
 // BrowserServiceRpcResponse describes the local service HTTP RPC response envelope.
 // BrowserServiceRpcResponse 描述本地服务 HTTP RPC 响应信封。
 interface BrowserServiceRpcResponse<T = unknown> {
@@ -303,11 +307,15 @@ export class BrowserServiceTransport implements ServiceTransport {
     if (token) {
       headers["x-vulcan-service-token"] = token;
     }
+    const body = JSON.stringify({ method, params: params ?? null });
     return fetch(`${baseUrl}/rpc`, {
       method: "POST",
       headers,
       signal: options?.signal,
-      body: JSON.stringify({ method, params: params ?? null }),
+      // Browsers reject a keepalive body above their quota, so a larger one is sent as a normal request.
+      // 浏览器拒绝超出配额的 keepalive 请求体，因此更大的请求体按普通请求发送。
+      keepalive: options?.keepalive === true && new TextEncoder().encode(body).byteLength <= KEEPALIVE_BODY_LIMIT_BYTES,
+      body,
     });
   }
 
