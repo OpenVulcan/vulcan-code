@@ -41,6 +41,15 @@ export function splitPathMention(query: string): { directory: string; prefix: st
     : { directory: query.slice(0, slash).replace(/\\/gu, "/"), prefix: query.slice(slash + 1) };
 }
 
+// pathMentionText writes the mention of one workspace entry: @ and its relative path with forward slashes, then
+// a slash for a folder, so its contents can be listed next, or a space for a file. Everything that mentions a
+// project path in the draft writes it this way.
+// pathMentionText 写出单个工作区条目的提及：@ 加上使用正斜杠的相对路径，文件夹之后接斜杠以便继续列出其内容，
+// 文件之后接空格。所有在草稿中提及项目路径的地方都以此方式书写。
+export function pathMentionText(relativePath: string, isDirectory: boolean): string {
+  return `@${relativePath.replace(/\\/gu, "/")}${isDirectory ? "/" : " "}`;
+}
+
 // pathMentionSuggestions lists the folder's entries whose name starts with the typed text, then those that only
 // contain it, folders first in each group.
 // pathMentionSuggestions 列出名称以已输入文本开头的条目，再列出仅包含该文本的条目，每组中文件夹在前。
@@ -127,8 +136,7 @@ export function useComposerPathMention(options: {
 
   const accept = React.useCallback((entry: WorkspaceFileEntrySummary) => {
     if (!mention) return;
-    const path = entry.relativePath.replace(/\\/gu, "/");
-    const replacement = `@${path}${entry.isDirectory ? "/" : " "}`;
+    const replacement = pathMentionText(entry.relativePath, entry.isDirectory);
     const next = input.slice(0, mention.start) + replacement + input.slice(mention.end).replace(/^\s/u, entry.isDirectory ? "$&" : "");
     const position = mention.start + replacement.length;
     setInput(next);

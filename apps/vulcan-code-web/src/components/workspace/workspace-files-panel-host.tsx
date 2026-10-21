@@ -10,6 +10,7 @@ import {
 } from "@/diff/workspace-review-model";
 import { WorkspaceFileTree, type WorkspaceFileTreeNode } from "@/components/workspace/workspace-file-tree";
 import { requestComposerCommand } from "@/components/composer/composer-external-commands";
+import { pathMentionText } from "@/components/composer/composer-panel/use-composer-path-mention";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { PageNotice } from "@/components/page/page-feedback";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
@@ -570,6 +571,7 @@ export function WorkspaceFilesPanelHost(props: {
       extraFilterActions={<WorkspaceFilesFilterMenu filters={filters} onFilterChange={updateFilter} />}
       fileKey={(entry) => entry.path}
       fileTitle={(entry) => entry.relativePath || entry.name}
+      fileDragText={(entry) => pathMentionText(entry.relativePath, false)}
       filter={filterText}
       footer={<WorkspaceFileTreeFooter filters={filters} />}
       loadingDirectoryLabel={t("workspaceFiles.loading")}
@@ -579,10 +581,7 @@ export function WorkspaceFilesPanelHost(props: {
       onDirectoryOpenStateChange={handleDirectoryOpenStateChange}
       onFilterChange={setFilterText}
       onOpenDirectoryPathsChange={handleOpenDirectoryPathsChange}
-      onSelectFile={(entry) => {
-        setPickerOpen(false);
-        void selectFile(entry);
-      }}
+      onSelectFile={(entry) => { setPickerOpen(false); void selectFile(entry); }}
     />
   );
 
@@ -799,7 +798,7 @@ function WorkspaceFileActionsMenu(props: {
         </IconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => requestComposerCommand({ kind: "insert", text: `@${props.entry.relativePath.replace(/\\/gu, "/")} ` })}>
+        <DropdownMenuItem onClick={() => requestComposerCommand({ kind: "insert", text: pathMentionText(props.entry.relativePath, false) })}>
           <AtSign size={14} />
           {t("workspaceFiles.mentionInMessage")}
         </DropdownMenuItem>

@@ -47,6 +47,20 @@ describe("workspace file controls", () => {
     await act(async () => row.click());
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("file");
   });
+  it("lets a file row be dragged carrying its owner's text, and only when the owner gives one", async () => {
+    await act(async () => root.render(<WorkspaceFileTree tree={tree} activeFileKey={null} filter=""
+      onFilterChange={vi.fn()} onSelectFile={vi.fn()} fileKey={(file) => file} />));
+    expect(host.querySelector('.vk-ftree-row[data-kind="file"]')!.hasAttribute("draggable")).toBe(false);
+    await act(async () => root.render(<WorkspaceFileTree tree={tree} activeFileKey={null} filter=""
+      onFilterChange={vi.fn()} onSelectFile={vi.fn()} fileKey={(file) => file} fileDragText={(file) => `@${file} `} />));
+    const row = host.querySelector<HTMLButtonElement>('.vk-ftree-row[data-kind="file"]')!;
+    expect(row.draggable).toBe(true);
+    const setData = vi.fn();
+    const dragStart = new Event("dragstart", { bubbles: true });
+    Object.defineProperty(dragStart, "dataTransfer", { value: { setData, effectAllowed: "all" } });
+    await act(async () => { row.dispatchEvent(dragStart); });
+    expect(setData).toHaveBeenCalledExactlyOnceWith("text/plain", "@file ");
+  });
   it("revokes directory and preview response ownership after unmount", async () => {
     let ownership!: WorkspaceFilesRequestOwnership;
     // Owner exposes the real hook while never making a filesystem request.

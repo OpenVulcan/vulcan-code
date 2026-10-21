@@ -79,6 +79,9 @@ export function WorkspaceFileTree<RowFile>(props: {
   // Resolves the tooltip title for a file row.
   // 解析文件行的提示标题。
   fileTitle?: (file: RowFile, node: WorkspaceFileTreeNode<RowFile>) => string;
+  // Text a file row carries when dragged, such as its mention for the composer; rows are not draggable without it.
+  // 文件行被拖动时携带的文本（例如供输入区使用的提及）；未提供时行不可拖动。
+  fileDragText?: (file: RowFile) => string;
   // Called when a file row is chosen.
   // 选择文件行时调用。
   onSelectFile: (file: RowFile) => void;
@@ -157,6 +160,7 @@ export function WorkspaceFileTree<RowFile>(props: {
             depth={0}
             fileKey={props.fileKey}
             fileTitle={props.fileTitle}
+            fileDragText={props.fileDragText}
             key={node.path}
             loadingDirectoryLabel={props.loadingDirectoryLabel}
             loadingDirectoryPaths={props.loadingDirectoryPaths}
@@ -185,6 +189,7 @@ function WorkspaceFileTreeRow<RowFile>(props: {
   onSelectFile: (file: RowFile) => void;
   fileKey: (file: RowFile) => string;
   fileTitle?: (file: RowFile, node: WorkspaceFileTreeNode<RowFile>) => string;
+  fileDragText?: (file: RowFile) => string;
 }) {
   const { t } = useI18n();
   const { node } = props;
@@ -222,7 +227,12 @@ function WorkspaceFileTreeRow<RowFile>(props: {
       aria-current={isActive ? "true" : undefined}
       className="vk-ftree-row"
       data-kind="file"
+      draggable={props.fileDragText ? true : undefined}
       onClick={() => props.onSelectFile(file)}
+      onDragStart={props.fileDragText ? (event) => {
+        event.dataTransfer.setData("text/plain", props.fileDragText!(file));
+        event.dataTransfer.effectAllowed = "copy";
+      } : undefined}
       style={depthStyle}
       title={props.fileTitle?.(file, node) ?? node.name}
       type="button"

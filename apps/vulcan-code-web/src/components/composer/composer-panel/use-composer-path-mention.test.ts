@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { WorkspaceFileEntrySummary } from "@/types";
-import { PATH_MENTION_LIMIT, pathMentionAt, pathMentionSuggestions, splitPathMention } from "./use-composer-path-mention";
+import { PATH_MENTION_LIMIT, pathMentionAt, pathMentionSuggestions, pathMentionText, splitPathMention } from "./use-composer-path-mention";
 
 it("finds the @ word around the caret only when the @ starts the word", () => {
   expect(pathMentionAt("see @src/ma now", 11)).toEqual({ start: 4, end: 11, query: "src/ma" });
@@ -14,6 +14,11 @@ it("splits the typed folder from the name being typed, with either slash", () =>
   expect(splitPathMention("ma")).toEqual({ directory: "", prefix: "ma" });
   expect(splitPathMention("src/components/Bu")).toEqual({ directory: "src/components", prefix: "Bu" });
   expect(splitPathMention("src\\lib\\")).toEqual({ directory: "src/lib", prefix: "" });
+});
+
+it("writes a mention with forward slashes, a slash after a folder and a space after a file", () => {
+  expect(pathMentionText("src\\lib", true)).toBe("@src/lib/");
+  expect(pathMentionText("src\\main.ts", false)).toBe("@src/main.ts ");
 });
 
 // entry builds one listing row with the fields the suggestions read.
