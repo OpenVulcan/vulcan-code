@@ -1,6 +1,7 @@
 import React from "react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { useI18n } from "@/i18n";
+import { relativeToWorkspace } from "@/components/workspace/workspace-path-actions";
 import type { WorkspaceFileDirectoryListing, WorkspaceFileEntrySummary } from "@/types";
 
 // WORKSPACE_FILE_OPEN_EVENT tells the mounted files panel that a file open request is waiting for it.
@@ -99,15 +100,9 @@ export interface WorkspaceFileTarget {
 export function resolveWorkspaceFileTarget(workspacePath: string, path: string): WorkspaceFileTarget | null {
   const separator = workspacePath.includes("\\") ? "\\" : "/";
   const root = workspacePath.replace(/[\\/]+$/, "");
-  const requested = path.trim().replace(/\\/g, "/");
-  let relative = requested;
-  if (/^(?:[A-Za-z]:)?\//.test(requested)) {
-    const prefix = `${root.replace(/\\/g, "/")}/`;
-    const caseless = /^[A-Za-z]:/.test(prefix);
-    const inside = caseless ? requested.toLowerCase().startsWith(prefix.toLowerCase()) : requested.startsWith(prefix);
-    if (!inside) return null;
-    relative = requested.slice(prefix.length);
-  }
+  const requested = path.trim();
+  const relative = /^(?:[A-Za-z]:)?[\\/]/.test(requested) ? relativeToWorkspace(workspacePath, requested) : requested.replace(/\\/g, "/");
+  if (relative === null) return null;
   const segments = relative.split("/").filter((segment) => segment !== "" && segment !== ".");
   const name = segments.pop();
   if (!name || name === ".." || segments.includes("..")) return null;

@@ -118,7 +118,7 @@ function ToolRequestMark(props: { request: ToolRequest; state: ToolCardState }) 
 // ToolFileAction 在文件面板中显示卡片的文件；它位于标题触发器旁边，从不嵌入其中。
 function ToolFileAction(props: { path: string; lines: WorkspaceFileLines | null; open: WorkspaceFileOpener }) {
   const { t } = useI18n();
-  const label = t("toolCard.openInFiles");
+  const label = t("workspaceFiles.showInFilesPanel");
   return (
     <IconButton aria-label={label} className="vk-tool-file" onClick={() => props.open(props.path, props.lines)} size="xs" title={label} type="button">
       <FileSearch2 aria-hidden="true" />

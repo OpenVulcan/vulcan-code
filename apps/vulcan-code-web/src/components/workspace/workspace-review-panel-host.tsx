@@ -1,4 +1,5 @@
 import React from "react";
+import { FileSearch2 } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { DiffReviewPanel } from "@/diff/diff-review-panel";
 import {
@@ -29,6 +30,7 @@ import type {
 } from "@/diff/types";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { relativeToWorkspace, workspacePathActions, type WorkspacePathAction } from "@/components/workspace/workspace-path-actions";
+import { useWorkspaceFileOpener, type WorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
 import { copyText } from "@/components/workspace/workbench-layout/types";
 import { diffRevealRelativePath } from "@/diff/DiffReviewPanel/search";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
@@ -167,6 +169,7 @@ export function WorkspaceReviewPanelHost(props: {
   // t translates the review panel shell labels.
   // t 翻译审核面板外壳标签。
   const { t } = useI18n();
+  const openFile = useWorkspaceFileOpener();
   // activeSurfaceId stores the conversation or subagent surface currently represented by the panel.
   // activeSurfaceId 保存当前面板代表的会话或子代理界面标识。
   const activeSurfaceId = activeWorkbenchSurfaceId(props.workbench, props.selectedConversationId);
@@ -821,7 +824,7 @@ export function WorkspaceReviewPanelHost(props: {
       snapshot={activeReviewSnapshot}
       onLoadFileDetail={activeWorkspaceReviewSnapshot ? handleLoadWorkspaceDiffFileDetail : undefined}
       onSearchWorkspaceDiff={activeWorkspaceReviewSnapshot ? handleSearchWorkspaceDiff : undefined}
-      onCopyRaw={props.onCopyRawDiff} fileActions={(file, absolutePath) => reviewFileActions(file, absolutePath, workspacePath, t)}
+      onCopyRaw={props.onCopyRawDiff} fileActions={(file, absolutePath) => reviewFileActions(file, absolutePath, workspacePath, t, openFile)}
       gitCommitActionBusy={props.gitCommitActionBusy}
       gitCommitActionDisabled={props.gitCommitActionDisabled}
       gitCommitActionLabel={props.gitCommitActionLabel}
@@ -838,11 +841,18 @@ export function WorkspaceReviewPanelHost(props: {
 // The relative path is project-relative when the file lies in the project, else repository-relative.
 // reviewFileActions 为单个变更文件提供共享路径操作；已删除的文件只能复制路径。
 // 文件位于项目内时相对路径相对项目，否则相对仓库。
-function reviewFileActions(file: DiffFile, absolutePath: string | null, workspacePath: string | null, t: (key: TranslationKey) => string): WorkspacePathAction[] {
+// A file inside the project also offers to show its whole current text in the files panel.
+// 项目内的文件还可在文件面板中显示其完整的当前文本。
+function reviewFileActions(file: DiffFile, absolutePath: string | null, workspacePath: string | null, t: (key: TranslationKey) => string,
+  openFile: WorkspaceFileOpener | null): WorkspacePathAction[] {
   if (!absolutePath) return [];
-  const relativePath = relativeToWorkspace(workspacePath, absolutePath) ?? diffRevealRelativePath(file) ?? absolutePath;
+  const projectPath = relativeToWorkspace(workspacePath, absolutePath);
+  const relativePath = projectPath ?? diffRevealRelativePath(file) ?? absolutePath;
   const actions = workspacePathActions({ path: absolutePath, relativePath, isDirectory: false }, copyText, t);
-  return file.status === "deleted" ? actions.filter((action) => action.key === "path" || action.key === "relative") : actions;
+  if (file.status === "deleted") return actions.filter((action) => action.key === "path" || action.key === "relative");
+  return openFile && projectPath !== null
+    ? [{ key: "files", icon: <FileSearch2 size={14} />, label: t("workspaceFiles.showInFilesPanel"), run: () => openFile(absolutePath) }, ...actions]
+    : actions;
 }
 
 // workspaceReviewPanelCacheKey builds a project-level cache key for right-panel Git review state.
