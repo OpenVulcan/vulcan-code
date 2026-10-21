@@ -10,8 +10,8 @@ use super::decimal::{normalized_unsigned_decimal_digits, subtract_non_negative_d
 use serde::Deserialize;
 use vulcan_ai_contract::{AccountUsageAvailability, AccountUsageSnapshot, AccountUsageWindow};
 
-/// Queries Kimi Coding Plan membership and rolling usage with the verified CLI identity.
-/// 使用已验证 CLI 身份查询 Kimi Coding Plan 会员与滚动用量。
+/// Queries Kimi Coding Plan membership and rolling usage with VulcanCode's device identity.
+/// 使用 VulcanCode 设备身份查询 Kimi Coding Plan 会员与滚动用量。
 pub(in crate::client) async fn query_kimi_coding_plan(
     http: &reqwest::Client,
     secret: &str,
@@ -23,18 +23,7 @@ pub(in crate::client) async fn query_kimi_coding_plan(
     let response = http
         .get(url)
         .bearer_auth(secret)
-        .header("user-agent", "KimiCLI/1.10.6")
-        .header("x-msh-platform", "kimi_cli")
-        .header("x-msh-version", "1.10.6")
-        .header("x-msh-device-name", kimi_device_name())
-        .header(
-            "x-msh-device-model",
-            format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
-        )
-        .header(
-            "x-msh-device-id",
-            device_id.unwrap_or("cli-proxy-api-device"),
-        )
+        .headers(crate::execution::coding_device_identity_headers(device_id)?)
         .timeout(PROVIDER_METADATA_REQUEST_TIMEOUT)
         .send()
         .await
@@ -247,14 +236,6 @@ fn kimi_unnamed_limit_metric(window: Option<&KimiUsageWindow>, index: usize) -> 
     } else {
         fallback()
     }
-}
-
-/// Resolves the exact current device name used in Kimi metadata headers.
-/// 解析 Kimi 元数据请求头使用的精确当前设备名称。
-fn kimi_device_name() -> String {
-    std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| String::from("unknown"))
 }
 
 /// Accepts Kimi's exact number-or-string decimal representation.

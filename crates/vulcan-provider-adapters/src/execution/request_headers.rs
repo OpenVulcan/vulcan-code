@@ -9,11 +9,8 @@ use crate::{
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::BTreeMap;
-use vulcan_llm_core::CODEX_RESPONSES_USER_AGENT;
-
-/// Stable VulcanCode user agent used by every non-Codex provider protocol.
-/// 所有非 Codex 供应商协议使用的稳定 VulcanCode 用户代理。
-pub(crate) const VULCAN_CODE_USER_AGENT: &str = "vulcan-code/0.1";
+pub(crate) use vulcan_llm_core::VULCAN_CODE_USER_AGENT;
+use vulcan_llm_core::{VULCAN_CODE_CLIENT_NAME, VULCAN_CODE_VERSION};
 
 /// Host-owned marker that selects the Responses Lite wire contract.
 /// 由宿主持有、用于选择 Responses Lite 线路契约的标记。
@@ -278,17 +275,11 @@ pub(crate) fn execution_headers(
             })?,
         );
     }
-    // User-Agent is a frozen protocol identity boundary. Only native Codex reproduces the
-    // adopted Codex client value; every other protocol identifies VulcanCode itself.
-    // User-Agent 是冻结的协议身份边界。仅原生 Codex 复现已采纳的 Codex 客户端值；
-    // 其他所有协议都使用 VulcanCode 自身身份。
+    // Every protocol identifies VulcanCode itself; no route borrows another client's identity.
+    // 所有协议都使用 VulcanCode 自身身份，任何路由都不借用其他客户端身份。
     headers.insert(
         reqwest::header::USER_AGENT,
-        HeaderValue::from_static(if route_uses_native_codex_responses(route) {
-            CODEX_RESPONSES_USER_AGENT
-        } else {
-            VULCAN_CODE_USER_AGENT
-        }),
+        HeaderValue::from_static(VULCAN_CODE_USER_AGENT),
     );
     // Lite is an exact frozen native-model behavior. The host emits its selector after all
     // provider declarations have been validated so no manifest or profile may spoof it.
@@ -357,8 +348,8 @@ fn inject_session_header(
     Ok(())
 }
 
-/// Inserts the registered Kimi Coding device identity shared by conversation, tool, and upload requests.
-/// 插入由会话、工具与上传请求共用的已注册 Kimi Coding 设备身份。
+/// Inserts the Kimi Coding device identity shared by conversation, tool, and upload requests.
+/// 插入由会话、工具与上传请求共用的 Kimi Coding 设备身份。
 ///
 /// # Parameters
 /// 参数
@@ -373,32 +364,55 @@ pub(crate) fn insert_coding_device_identity_headers(
     headers: &mut HeaderMap,
     secret: &CredentialExecutionSecret,
 ) -> Result<(), String> {
-    // deviceName and deviceModel reproduce the established Coding-device identity contract.
-    // deviceName 与 deviceModel 复现既有 Coding 设备身份契约。
+    headers.extend(coding_device_identity_headers(secret.provider_device_id())?);
+    Ok(())
+}
+
+/// Builds VulcanCode's own Kimi Coding device identity for authorization, usage, and execution.
+/// 为授权、用量与执行构建 VulcanCode 自身的 Kimi Coding 设备身份。
+///
+/// # Parameters
+/// 参数
+/// `device_id` is the frozen provider device id; `None` sends the shared VulcanCode placeholder.
+/// `device_id` 是冻结的供应商设备标识；为 `None` 时发送共享的 VulcanCode 占位值。
+///
+/// # Returns
+/// 返回值
+/// The complete identity header set, or a controlled validation error.
+/// 完整身份请求头集合，或受控校验错误。
+pub(crate) fn coding_device_identity_headers(device_id: Option<&str>) -> Result<HeaderMap, String> {
     let device_name = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| String::from("unknown"));
-    let device_model = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+    let device_model = coding_device_model();
+    let mut headers = HeaderMap::new();
     for (name, value) in [
-        ("user-agent", "CLIProxyAPI/dev"),
-        ("x-msh-platform", "CLIProxyAPI"),
-        ("x-msh-version", "dev"),
+        ("user-agent", VULCAN_CODE_USER_AGENT),
+        ("x-msh-platform", VULCAN_CODE_CLIENT_NAME),
+        ("x-msh-version", VULCAN_CODE_VERSION),
         ("x-msh-device-name", device_name.as_str()),
         ("x-msh-device-model", device_model.as_str()),
-        (
-            "x-msh-device-id",
-            secret
-                .provider_device_id()
-                .unwrap_or("cli-proxy-api-device"),
-        ),
+        ("x-msh-device-id", device_id.unwrap_or("vulcan-code-device")),
     ] {
         headers.insert(
             HeaderName::from_static(name),
             HeaderValue::from_str(value)
-                .map_err(|_| String::from("Coding-device execution identity is invalid."))?,
+                .map_err(|_| String::from("Coding-device identity is invalid."))?,
         );
     }
-    Ok(())
+    Ok(headers)
+}
+
+/// Returns the provider-facing operating-system label and architecture of this device.
+/// 返回本设备面向供应商的操作系统标签与架构。
+pub(crate) fn coding_device_model() -> String {
+    let operating_system = match std::env::consts::OS {
+        "darwin" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    };
+    format!("{operating_system} {}", std::env::consts::ARCH)
 }
 
 /// Copies validated HTTP headers into the secret-safe WebSocket handshake container.

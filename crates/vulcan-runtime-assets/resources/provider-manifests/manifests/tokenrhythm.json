@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "tokenrhythm",
-  "revision": 6,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 7,
+  "published_at": "2026-10-21T12:34:56Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -52,8 +52,8 @@
       ],
       "default_authentication": "bearer_authorization",
       "request_headers": {
-        "http-referer": "https://opensquilla.ai",
-        "x-title": "OpenSquilla"
+        "http-referer": "https://code.openvulcan.com",
+        "x-title": "Vulcan Code"
       },
       "request_projector": "compatible",
       "model_catalog": {

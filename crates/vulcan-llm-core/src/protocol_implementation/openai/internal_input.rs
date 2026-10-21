@@ -242,16 +242,16 @@ pub(super) fn encode_request_envelope(
         project_responses_reasoning_output(request.reasoning_output, &mut body["reasoning"])?;
     }
     project_responses_request_controls(request, &mut body)?;
-    // Codex identity is retained as baseline metadata and replaced for other target transports.
-    // Codex 身份作为基线元数据保留，其他目标传输会替换它。
+    // VulcanCode's identity is retained as baseline metadata and replaced for other target transports.
+    // VulcanCode 身份作为基线元数据保留，其他目标传输会替换它。
     let mut headers = std::collections::BTreeMap::from([
         (
             String::from("originator"),
-            String::from(CODEX_RESPONSES_ORIGINATOR),
+            String::from(crate::VULCAN_CODE_CLIENT_NAME),
         ),
         (
             String::from("user-agent"),
-            String::from(CODEX_RESPONSES_USER_AGENT),
+            String::from(crate::VULCAN_CODE_USER_AGENT),
         ),
     ]);
     if let Some(cache_scope_id) = request.cache_scope_id.as_deref() {

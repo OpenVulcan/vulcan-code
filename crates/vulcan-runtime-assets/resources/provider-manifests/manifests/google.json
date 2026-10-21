@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "google",
-"revision": 10,
-"published_at": "2026-10-19T07:42:22Z",
+  "revision": 11,
+  "published_at": "2026-10-21T12:34:56Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -138,9 +138,7 @@
         }
       ],
       "default_authentication": "google_code_assist_bearer",
-      "request_headers": {
-        "user-agent": "vulcan-code/0.1"
-      },
+      "request_headers": {},
       "request_projector": "compatible",
       "model_catalog": {
         "source_policy": "manifest_and_discovery",

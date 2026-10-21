@@ -42,13 +42,6 @@ pub const OPENAI_RESPONSES_PROFILE_ID: &str = "openai-responses.v1";
 /// 稳定的 OpenAI Codex 订阅 Responses Profile 标识。
 pub const OPENAI_CODEX_RESPONSES_PROFILE_ID: &str = "openai-codex-responses.v1";
 
-/// Official Codex client originator used by the adopted Responses transport.
-/// 已采纳 Responses 传输所使用的官方 Codex 客户端来源标识。
-const CODEX_RESPONSES_ORIGINATOR: &str = "codex_cli_rs";
-/// Frozen user agent copied exactly from the adopted upstream Codex client.
-/// 从已采纳的上游 Codex 客户端精确复制的冻结用户代理。
-pub const CODEX_RESPONSES_USER_AGENT: &str = "codex_cli_rs/0.144.1 (Windows 11; x86_64)";
-
 /// Normalizes an OpenAI-compatible usage object through the same projector used by streaming responses.
 /// 通过与流式响应相同的投影器规范化 OpenAI 兼容用量对象。
 ///
@@ -1537,11 +1530,11 @@ mod tests {
         );
         assert_eq!(
             encoded.headers.get("originator").map(String::as_str),
-            Some("codex_cli_rs")
+            Some(crate::VULCAN_CODE_CLIENT_NAME)
         );
         assert_eq!(
             encoded.headers.get("user-agent").map(String::as_str),
-            Some("codex_cli_rs/0.144.1 (Windows 11; x86_64)")
+            Some(crate::VULCAN_CODE_USER_AGENT)
         );
         assert!(
             encoded.body["input"]

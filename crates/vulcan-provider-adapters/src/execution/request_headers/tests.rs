@@ -384,13 +384,13 @@ fn native_codex_protocol_owns_exact_codex_user_agent() {
         headers
             .get(reqwest::header::USER_AGENT)
             .and_then(|value| value.to_str().ok()),
-        Some(CODEX_RESPONSES_USER_AGENT)
+        Some(VULCAN_CODE_USER_AGENT)
     );
     assert_eq!(
         headers
             .get("originator")
             .and_then(|value| value.to_str().ok()),
-        Some("codex_cli_rs")
+        Some(vulcan_llm_core::VULCAN_CODE_CLIENT_NAME)
     );
     assert!(!headers.contains_key(CODEX_RESPONSES_LITE_HEADER_NAME));
 
@@ -430,4 +430,20 @@ fn native_codex_protocol_owns_exact_codex_user_agent() {
         String::from("false"),
     );
     assert!(execution_headers(&spoofed_route, &encoded.headers, &secret, None).is_err());
+}
+
+/// Verifies Kimi receives the provider-observed operating-system label.
+/// 验证 Kimi 收到供应商已验证的操作系统标签。
+#[test]
+fn kimi_device_model_uses_provider_operating_system_label() {
+    let expected_operating_system = match std::env::consts::OS {
+        "darwin" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    };
+    assert_eq!(
+        coding_device_model(),
+        format!("{expected_operating_system} {}", std::env::consts::ARCH)
+    );
 }

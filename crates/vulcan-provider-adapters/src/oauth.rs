@@ -6,10 +6,7 @@ use crate::{
     CredentialSecretEnvelope, CredentialSecretMaterial, MiniMaxRegion, OAuthTokenSet,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use reqwest::{
-    Client, Url,
-    header::{HeaderMap, HeaderValue},
-};
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
@@ -861,7 +858,9 @@ impl OAuthAuthorizationRuntime {
             .client
             .post(KIMI_DEVICE_AUTHORIZATION_URL)
             .form(&[("client_id", KIMI_CODING_CLIENT_ID)])
-            .headers(kimi_device_headers(device_id.as_str())?)
+            .headers(crate::execution::coding_device_identity_headers(Some(
+                device_id.as_str(),
+            ))?)
             .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
             .send()
             .await
@@ -1419,7 +1418,9 @@ async fn poll_kimi_device_flow(
                 ("device_code", flow.device_code.as_str()),
                 ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ])
-            .headers(kimi_device_headers(flow.device_id.as_str())?)
+            .headers(crate::execution::coding_device_identity_headers(Some(
+                flow.device_id.as_str(),
+            ))?)
             .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
             .send()
             .await
@@ -1523,7 +1524,9 @@ async fn refresh_kimi_oauth_token(
             ("refresh_token", tokens.refresh_token.as_str()),
             ("grant_type", "refresh_token"),
         ])
-        .headers(kimi_device_headers(device_id)?)
+        .headers(crate::execution::coding_device_identity_headers(Some(
+            device_id,
+        ))?)
         .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
         .send()
         .await
@@ -1587,42 +1590,6 @@ fn kimi_token_expiration(issued_at_unix_ms: u64, expires_in: f64) -> Result<u64,
     issued_at_unix_ms
         .checked_add(lifetime_ms as u64)
         .ok_or_else(|| String::from("Kimi OAuth token expiration overflowed."))
-}
-
-/// Builds Kimi's verified device identity headers.
-/// 构建 Kimi 已验证的设备身份请求头。
-fn kimi_device_headers(device_id: &str) -> Result<HeaderMap, String> {
-    let mut headers = HeaderMap::new();
-    let hostname = std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| String::from("unknown"));
-    let device_model = kimi_device_model();
-    for (name, value) in [
-        ("x-msh-platform", "CLIProxyAPI"),
-        ("x-msh-version", "dev"),
-        ("x-msh-device-name", hostname.as_str()),
-        ("x-msh-device-model", device_model.as_str()),
-        ("x-msh-device-id", device_id),
-    ] {
-        headers.insert(
-            reqwest::header::HeaderName::from_static(name),
-            HeaderValue::from_str(value)
-                .map_err(|_| String::from("Kimi OAuth device identity is invalid."))?,
-        );
-    }
-    Ok(headers)
-}
-
-/// Preserves the operating-system labels accepted by Kimi's device flow.
-/// 保留 Kimi 设备授权流程接受的操作系统标签。
-fn kimi_device_model() -> String {
-    let operating_system = match std::env::consts::OS {
-        "darwin" => "macOS",
-        "windows" => "Windows",
-        "linux" => "Linux",
-        other => other,
-    };
-    format!("{operating_system} {}", std::env::consts::ARCH)
 }
 
 /// Accepts credential-free standard-port HTTPS URLs on the Kimi main domain or its subdomains.
@@ -3034,10 +3001,10 @@ async fn load_google_code_assist_project(
         .post(GOOGLE_CODE_ASSIST_LOAD_URL)
         .bearer_auth(access_token)
         .header("accept", "*/*")
-        .header("user-agent", "vulcan-code/0.1")
+        .header("user-agent", crate::execution::VULCAN_CODE_USER_AGENT)
         .json(&serde_json::json!({
             "metadata": {
-                "ideType": "ANTIGRAVITY"
+                "ideType": "IDE_UNSPECIFIED"
             }
         }))
         .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
@@ -3353,7 +3320,7 @@ mod tests {
         OAuthTransactionSnapshot, abort_and_remove_expired_transactions, browser_authorization_url,
         browser_callback_url, build_kimi_credential_material, build_minimax_credential_material,
         build_oauth_flow, build_pkce_challenge, build_pkce_verifier,
-        credential_authorization_binding, extract_browser_callback_material, kimi_device_model,
+        credential_authorization_binding, extract_browser_callback_material,
         merge_refreshed_token_set, parse_callback_request, read_browser_callback_request,
         receive_browser_callback_credential, unix_millis, validate_callback_state,
         validate_kimi_verification_uri, validate_minimax_verification_uri,
@@ -3846,22 +3813,6 @@ mod tests {
             validate_kimi_verification_uri("https://user:secret@auth.kimi.com/device").is_err()
         );
         assert!(validate_kimi_verification_uri("https://auth.kimi.com:444/device").is_err());
-    }
-
-    /// Verifies Kimi receives the provider-observed operating-system label.
-    /// 验证 Kimi 收到供应商已验证的操作系统标签。
-    #[test]
-    fn kimi_device_model_uses_provider_operating_system_label() {
-        let expected_operating_system = match std::env::consts::OS {
-            "darwin" => "macOS",
-            "windows" => "Windows",
-            "linux" => "Linux",
-            other => other,
-        };
-        assert_eq!(
-            kimi_device_model(),
-            format!("{expected_operating_system} {}", std::env::consts::ARCH)
-        );
     }
 
     /// Verifies providers may rotate only the access token during refresh.

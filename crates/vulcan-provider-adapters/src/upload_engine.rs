@@ -2622,7 +2622,7 @@ mod tests {
             headers
                 .get("x-msh-platform")
                 .and_then(|value| value.to_str().ok()),
-            Some("CLIProxyAPI")
+            Some(vulcan_llm_core::VULCAN_CODE_CLIENT_NAME)
         );
     }
 
