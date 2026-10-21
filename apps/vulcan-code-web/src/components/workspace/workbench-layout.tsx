@@ -902,10 +902,10 @@ export function WorkbenchLayout(props: {
       projectName: conversation.projectId ? projectNames.get(conversation.projectId) ?? null : null,
     }));
   }, [workbenchState.conversations, workbenchState.projects]);
-  // activityRail is shared by the workspace and settings shells so navigation stays put across areas.
-  // activityRail 由工作台与设置外壳共用，使导航在区域切换时保持不动。
-  const activityRail = (
-    <>
+  // commandPalette is mounted with the workbench itself, not with the rail: narrow windows show the rail only in
+  // a drawer, and Ctrl+K must work there too.
+  // commandPalette 随工作台本身挂载，而不是随轨道挂载：窄窗口只在抽屉中显示轨道，Ctrl+K 在那里也必须可用。
+  const commandPalette = (
     <CommandPalette
       areas={railEntries}
       conversations={paletteConversations}
@@ -920,6 +920,10 @@ export function WorkbenchLayout(props: {
       open={commandPaletteOpen}
       slashCommands={workbenchState.composerSlashCommands ?? []}
     />
+  );
+  // activityRail is shared by the workspace and settings shells so navigation stays put across areas.
+  // activityRail 由工作台与设置外壳共用，使导航在区域切换时保持不动。
+  const activityRail = (
     <ActivityRail
       entries={railEntries}
       onOpenCommandPalette={() => setCommandPaletteOpen(true)}
@@ -954,7 +958,6 @@ export function WorkbenchLayout(props: {
       titlebarDragRegion={windowDragRegionEnabled}
       onTitlebarDoubleClick={handleTitlebarDoubleClick}
     />
-    </>
   );
 
   React.useEffect(() => {
@@ -1208,6 +1211,7 @@ export function WorkbenchLayout(props: {
           </React.Suspense>
         </div>
       ) : null}
+      {commandPalette}
       <PermissionJudgeEntryContext.Provider value={permissionJudgeEntry}>
       <AssistantDockContext.Provider value={assistantDock}>
       <main className="vk-workbench-main">
