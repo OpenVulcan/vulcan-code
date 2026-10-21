@@ -8,6 +8,7 @@ import {
   GitCommitHorizontal,
   Info,
   Palette,
+  Plug,
   SwatchBook,
   ScrollText,
   ServerCog,
@@ -126,8 +127,8 @@ export function settingsSubAreas(t: ReturnType<typeof useI18n>["t"]): SettingsSu
   return settingsSubAreaGroups(t).flatMap((group) => group.items);
 }
 
-// settingsSubAreaGroups returns the two-level settings tree: four groups, at most five pages each.
-// settingsSubAreaGroups 返回两级设置树：4 个分组，每组最多 5 个页面。
+// settingsSubAreaGroups returns the two-level settings tree: five groups, at most five pages each.
+// settingsSubAreaGroups 返回两级设置树：5 个分组，每组最多 5 个页面。
 export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): SettingsSubAreaGroup[] {
   return [
     {
@@ -150,6 +151,14 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
         { id: "openvulcan-account", label: t("settings.openvulcanAccount"), icon: <VulcanSymbol className="vk-nav-symbol" />, description: t("settings.openvulcanAccount.description") },
         { id: "model-providers", label: t("settings.modelProviders"), icon: <ServerCog size={16} />, description: t("settings.modelProviders.description") },
         { id: "subagent-models", label: t("settings.subagentModels"), icon: <Bot size={16} />, description: t("settings.subagentModels.description") },
+      ],
+    },
+    {
+      id: "connections",
+      label: t("settings.group.connections"),
+      icon: <Plug size={16} />,
+      items: [
+        { id: "mcp-service", label: t("settings.mcpService"), icon: <Plug size={16} />, description: t("settings.mcpService.description") },
       ],
     },
     {

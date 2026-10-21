@@ -1,0 +1,83 @@
+/* MCP service page: endpoint address, client editor blocks with dependent permission checks, and the */
+/* once-only token panel with copyable setup snippets. Loaded only with the settings page. */
+/* MCP 服务页：端点地址、带依赖权限勾选的客户端编辑区块，以及只展示一次的令牌面板与可复制的配置片段。 */
+/* 仅随设置页加载。 */
+.vk-mcp-endpoint { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1); min-width: 0; }
+.vk-mcp-endpoint > code,
+.vk-mcp-secret > code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-sm);
+  color: var(--vk-ink);
+}
+.vk-mcp-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+
+.vk-mcp-form { display: grid; gap: calc(var(--vk-u) * 4); }
+.vk-mcp-block { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-mcp-block-title { font-size: var(--vk-fs-md); font-weight: 600; color: var(--vk-ink); }
+.vk-mcp-note { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+
+.vk-mcp-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--vk-u) * 3);
+  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-raised);
+}
+.vk-mcp-switch-row > span { display: grid; gap: calc(var(--vk-u) * 0.5); min-width: 0; }
+.vk-mcp-switch-row small { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+
+.vk-mcp-check {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(var(--vk-u) * 2);
+  font-size: var(--vk-fs-sm);
+  color: var(--vk-ink);
+  cursor: pointer;
+}
+.vk-mcp-check > span { display: grid; gap: 2px; min-width: 0; }
+.vk-mcp-check small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
+/* Permissions that need read access sit one step in, under the read toggle they depend on. */
+/* 依赖读取权限的项缩进一级，位于其所依赖的读取开关之下。 */
+.vk-mcp-check[data-depends] { padding-inline-start: calc(var(--vk-u) * 6); }
+
+.vk-mcp-checklist {
+  display: grid;
+  gap: calc(var(--vk-u) * 2);
+  max-height: 16rem;
+  overflow: auto;
+  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-sunken);
+}
+.vk-mcp-checklist[data-mcp-stale-targets] { border-color: color-mix(in srgb, var(--vk-warn) 45%, var(--vk-line-soft)); }
+
+.vk-mcp-secret {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-ember) 40%, var(--vk-line-soft));
+  background: var(--vk-ember-soft);
+}
+.vk-mcp-secret > svg { flex: none; color: var(--vk-ember); }
+.vk-mcp-secret > code { flex: 1; }
+
+.vk-mcp-snippet { position: relative; min-width: 0; }
+.vk-mcp-snippet > pre {
+  margin: 0;
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 10) calc(var(--vk-u) * 3) calc(var(--vk-u) * 3);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-xs);
+  line-height: var(--vk-lh-ui);
+  color: var(--vk-ink);
+  background: var(--vk-code-bg);
+  border: var(--vk-bw) solid var(--vk-line-soft);
+}
+.vk-mcp-snippet > button { position: absolute; top: calc(var(--vk-u) * 1.5); inset-inline-end: calc(var(--vk-u) * 1.5); }

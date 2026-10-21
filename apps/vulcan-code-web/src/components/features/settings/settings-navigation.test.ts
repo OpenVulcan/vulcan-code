@@ -7,14 +7,16 @@ import { normalizeSettingsSubArea, settingsSubAreaGroups } from "./settings-navi
 const testTranslator = ((key: string) => key) as Parameters<typeof settingsSubAreaGroups>[0];
 
 describe("settingsSubAreaGroups", () => {
-  // Keeps the navigation to four groups of at most five pages each; MCP servers live under plugin management.
-  // 保证导航为 4 个分组且每组最多 5 项；MCP 服务器位于插件管理下。
-  it("keeps four groups with at most five pages each", () => {
+  // Keeps the navigation to five groups of at most five pages each. MCP servers that Vulcan Code connects to live
+  // under plugin management; the connections group holds the MCP service other tools connect to.
+  // 保证导航为 5 个分组且每组最多 5 项。Vulcan Code 连接的 MCP 服务器位于插件管理下；外部连接分组承载供其他工具连接的 MCP 服务。
+  it("keeps five groups with at most five pages each", () => {
     const groups = settingsSubAreaGroups(testTranslator);
 
     expect(groups.map((group) => group.id)).toEqual([
       "general",
       "models",
+      "connections",
       "data",
       "about",
     ]);

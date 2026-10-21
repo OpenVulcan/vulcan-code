@@ -39,7 +39,8 @@ export type SettingsSubAreaId =
   | "prompt-composer"
   | "about-licenses"
   | "archived-restore"
-  | "subagent-models";
+  | "subagent-models"
+  | "mcp-service";
 
 // StartupStepSnapshot describes one startup step displayed by the startup panel.
 // StartupStepSnapshot 描述启动面板展示的单个启动步骤。
