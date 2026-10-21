@@ -370,9 +370,13 @@ pub fn status_bar(app: &App, area: Rect, buf: &mut Buffer, show_usage: bool) {
         );
     }
 
+    // The buttons keep only 20 columns for the left side, so a long focus name is shortened with
+    // an ellipsis instead of being cut mid-word at the edge.
+    // 按钮只为左侧保留 20 列，因此过长的焦点名称以省略号缩短，而不是在边缘处从词中截断。
+    let left_room = x.saturating_sub(area.x + 1) as usize;
     let mut left = vec![
         Span::styled(
-            format!(" {focus_name} "),
+            format!(" {} ", truncate(&focus_name, left_room.saturating_sub(2))),
             Style::new()
                 .fg(theme.primary_fg)
                 .bg(theme.primary)
@@ -387,7 +391,7 @@ pub fn status_bar(app: &App, area: Rect, buf: &mut Buffer, show_usage: bool) {
         ));
     } else {
         let used: usize = left.iter().map(|s| width_of(&s.content)).sum();
-        let room = (x.saturating_sub(area.x + 1) as usize).saturating_sub(used + 1);
+        let room = left_room.saturating_sub(used + 1);
         left.push(Span::styled(
             truncate(&focus_hint(app), room),
             Style::new().fg(mix(theme.muted_fg, bg, 0.85)),
@@ -395,7 +399,7 @@ pub fn status_bar(app: &App, area: Rect, buf: &mut Buffer, show_usage: bool) {
     }
     Line::from(left).render(
         Rect {
-            width: x.saturating_sub(area.x + 1),
+            width: left_room as u16,
             ..area
         },
         buf,
