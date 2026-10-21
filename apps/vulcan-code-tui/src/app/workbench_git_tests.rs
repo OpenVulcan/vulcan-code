@@ -427,3 +427,46 @@ fn repository_choice_holds_against_earlier_snapshots() {
         Some("app")
     );
 }
+
+/// A changed file is mentioned by its project path, joining a nested repository's folder.
+/// 变更文件按项目路径引用，嵌套仓库会拼接其目录。
+#[test]
+fn changed_files_are_mentioned_by_project_path() {
+    let (mut app, _) = isolated_app();
+    let file = GitFile {
+        path: "src/a.rs".into(),
+        status: GitFileStatus::Modified,
+        staged: false,
+        additions: 1,
+        deletions: 0,
+    };
+    let mut snapshot = git(
+        vec![
+            repository(".", true, true),
+            repository("vendor/lib", false, true),
+        ],
+        Some("."),
+    );
+    if let BackendEvent::Git(git) = &mut snapshot {
+        git.files.push(file.clone());
+    }
+    app.apply(snapshot.clone());
+    assert_eq!(
+        app.git.project_relative_path(&file).as_deref(),
+        Some("src/a.rs")
+    );
+    if let BackendEvent::Git(git) = &mut snapshot {
+        git.selected = Some("vendor/lib".into());
+    }
+    app.apply(snapshot);
+    assert_eq!(
+        app.git.project_relative_path(&file).as_deref(),
+        Some("vendor/lib/src/a.rs")
+    );
+    action::perform(
+        &mut app,
+        action::UiAction::MentionPath("vendor/lib/src/a.rs".into()),
+    );
+    assert_eq!(app.composer_text(), "@vendor/lib/src/a.rs ");
+    assert_eq!(app.focus, Focus::Composer);
+}

@@ -260,7 +260,7 @@
   "tui.hint.composer": "Enter 傳送 · Alt/Ctrl+Enter 或 \\+Enter 換行 · Alt+V 貼上內容 · / 命令 · Tab 焦點 · Ctrl+P 命令面板",
   "tui.hint.nav": "↑↓ 頁面 · Enter 開啟 · / 搜尋 · Esc 返回對話",
   "tui.hint.page": "↑↓ 行 · Enter/Space 修改 · ←→ 調整 · / 搜尋 · Esc 返回",
-  "tui.hint.panel": "←→ 標籤 · ↑↓ 檔案 · Enter diff · s 暫存 · c 提交 · b 分支 · p 推送",
+  "tui.hint.panel": "←→ 標籤 · ↑↓ 檔案 · Enter diff · s 暫存 · c 提交 · b 分支 · p 推送 · @ 引用 · y 複製路徑",
   "tui.hint.sidebar": "↑↓ 對話 · Enter 開啟 · n 新建 · z 全部摺疊 · Ctrl+B 窄欄 · Esc 返回",
   "tui.hint.transcript": "↑↓ 選擇 · Enter 摺疊 · PgUp/PgDn 滾動 · End 最新 · Esc 返回",
   "tui.history.all": "全部",

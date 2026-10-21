@@ -325,6 +325,21 @@ pub(super) fn on_panel_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Char('b') => execute(app, AppCommand::SwitchBranch, None),
                 KeyCode::Char('p') => execute(app, AppCommand::Push, None),
                 KeyCode::Char('r') => app.backend.send(Command::LoadWorkspaceDiffSnapshot),
+                KeyCode::Char('@') | KeyCode::Char('y') => {
+                    let path = app
+                        .git
+                        .ordered_files()
+                        .get(app.git.cursor)
+                        .and_then(|file| app.git.project_relative_path(file));
+                    if let Some(path) = path {
+                        let action = if key.code == KeyCode::Char('@') {
+                            UiAction::MentionPath(path)
+                        } else {
+                            UiAction::CopyText(path)
+                        };
+                        action::perform(app, action);
+                    }
+                }
                 KeyCode::Char('g') => {
                     if let Some(key) = app.git.next_repository() {
                         action::perform(app, UiAction::SelectGitRepository(key));

@@ -260,7 +260,7 @@
   "tui.hint.composer": "Enter send · Alt/Ctrl+Enter or \\+Enter new line · Alt+V paste · / commands · Tab focus · Ctrl+P palette",
   "tui.hint.nav": "↑↓ page · Enter open · / search · Esc chat",
   "tui.hint.page": "↑↓ row · Enter/Space change · ←→ adjust · / search · Esc back",
-  "tui.hint.panel": "←→ tab · ↑↓ file · Enter diff · s stage · c commit · b branch · p push",
+  "tui.hint.panel": "←→ tab · ↑↓ file · Enter diff · s stage · c commit · b branch · p push · @ mention · y copy path",
   "tui.hint.sidebar": "↑↓ conversation · Enter open · n new · z fold all · Ctrl+B rail · Esc back",
   "tui.hint.transcript": "↑↓ select · Enter fold · PgUp/PgDn scroll · End latest · Esc back",
   "tui.history.all": "All",

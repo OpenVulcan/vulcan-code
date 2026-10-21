@@ -343,6 +343,9 @@ pub enum UiAction {
     /// Puts text on the terminal clipboard.
     /// 将文本放入终端剪贴板。
     CopyText(String),
+    /// Inserts an `@path` mention of a project file at the composer cursor and focuses it.
+    /// 在输入框光标处插入项目文件的 `@path` 引用并聚焦输入框。
+    MentionPath(String),
     OpenHistory,
     OpenLanguagePicker,
     OpenDiff(usize),
@@ -604,6 +607,13 @@ pub fn perform(app: &mut App, action: UiAction) {
         UiAction::CopyText(text) => {
             app.clipboard.copy(text);
             app.toast(NoticeSeverity::Info, tr!("markdown.copied"));
+        }
+        UiAction::MentionPath(path) => {
+            // The same form as the WebUI `pathMentionText`: forward slashes and a closing space.
+            // 与 WebUI `pathMentionText` 相同的形式：正斜杠并以空格结尾。
+            app.composer
+                .insert_str(format!("@{} ", path.replace('\\', "/")));
+            app.focus = Focus::Composer;
         }
         UiAction::Inspect(seq) => {
             let back = match app.overlay.take() {

@@ -404,9 +404,9 @@ fn chip_row(
     }
 }
 
-/// Git action buttons: diff / stage toggle / stage all on the first row; commit, branch and push on
-/// the second.
-/// Git 操作按钮：第一行为 diff / 切换暂存 / 全部暂存；第二行为提交、分支与推送。
+/// Git action buttons: diff / stage toggle / stage all, then mention and copy path, on the first row;
+/// commit, branch and push on the second.
+/// Git 操作按钮：第一行为 diff / 切换暂存 / 全部暂存，其后为引用与复制路径；第二行为提交、分支与推送。
 fn git_buttons(app: &App, area: Rect, buf: &mut Buffer) {
     let theme = &app.theme;
     let bg = theme.sidebar;
@@ -439,6 +439,26 @@ fn git_buttons(app: &App, area: Rect, buf: &mut Buffer) {
             };
             (label, normal, UiAction::StageAll(!all_staged))
         }),
+        has_file
+            .then(|| app.git.project_relative_path(files[cursor]))
+            .flatten()
+            .map(|path| {
+                (
+                    format!("@ {}", tr!("workspaceFiles.mentionInMessage")),
+                    normal,
+                    UiAction::MentionPath(path),
+                )
+            }),
+        has_file
+            .then(|| app.git.project_relative_path(files[cursor]))
+            .flatten()
+            .map(|path| {
+                (
+                    format!("y {}", tr!("workspaceFiles.copyRelativePath")),
+                    normal,
+                    UiAction::CopyText(path),
+                )
+            }),
     ]
     .into_iter()
     .flatten()

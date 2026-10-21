@@ -440,6 +440,19 @@ impl GitView {
         })
     }
 
+    /// Path of `file` from the project root: the displayed repository's folder joined with the
+    /// repository path, or none during selection.
+    /// `file` 相对项目根目录的路径：显示仓库的目录与仓库内路径拼接；选择切换期间返回空。
+    pub fn project_relative_path(&self, file: &GitFile) -> Option<String> {
+        let snapshot = self.repository()?;
+        let selected = snapshot.selected.as_ref()?;
+        let repository = snapshot.repositories.iter().find(|r| &r.key == selected)?;
+        Some(match repository.relative_path.trim_matches('/') {
+            "" | "." => file.path.clone(),
+            folder => format!("{folder}/{}", file.path),
+        })
+    }
+
     /// Files in panel order: staged first, then unstaged.
     /// 面板顺序的文件：先暂存区，再未暂存。
     pub fn ordered_files(&self) -> Vec<&GitFile> {
