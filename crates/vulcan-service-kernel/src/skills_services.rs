@@ -1561,6 +1561,29 @@ pub(crate) async fn service_install_luaskill(
     .await
 }
 
+/// Searches the LuaSkills Hub that `official_hub` installs resolve against.
+/// 搜索 `official_hub` 安装所解析的 LuaSkills Hub。
+///
+/// The search is a read-only network call, so it does not take the LuaSkills
+/// management lock and never changes the installed catalog.
+/// 搜索是只读网络调用，因此不获取 LuaSkills 管理锁，也绝不改变已安装目录。
+pub(crate) async fn service_search_luaskills_hub(
+    state: SharedServiceBridgeState,
+    query: Option<String>,
+    cursor: Option<String>,
+) -> Result<vulcan_service_runtime::luaskills_hub::LuaSkillsHubSearchPage, String> {
+    let handle = service_luaskills_handle(&state)?;
+    tokio::task::spawn_blocking(move || {
+        vulcan_service_runtime::luaskills_hub::search_official_hub(
+            &handle,
+            query.as_deref().unwrap_or_default(),
+            cursor.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("LuaSkills Hub search task failed: {error}"))?
+}
+
 /// Updates one managed LuaSkill package and refreshes the WebUI snapshot.
 /// 更新单个受管 LuaSkill 包并刷新 WebUI 快照。
 pub(crate) async fn service_update_luaskill(

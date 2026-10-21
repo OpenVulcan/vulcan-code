@@ -4,6 +4,7 @@
 pub mod judge_cuda_runtime;
 pub mod judge_model_download;
 pub mod luaskills_bridge;
+pub mod luaskills_hub;
 pub mod managed_runtime_bootstrap;
 mod managed_runtime_installer;
 pub mod mcp_bridge;

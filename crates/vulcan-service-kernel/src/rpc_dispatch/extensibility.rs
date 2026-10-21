@@ -29,6 +29,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_luaskills_runtime_settings",
     "service_retry_luaskills_managed_runtimes",
     "service_install_luaskill",
+    "service_search_luaskills_hub",
     "service_update_luaskill",
     "service_luaskill_operation_progress",
     "service_set_luaskill_enabled",
@@ -245,6 +246,14 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "skillId")?,
                 rpc_required_param(params, "source")?,
                 rpc_required_param(params, "sourceType")?,
+            )
+            .await,
+        ),
+        "service_search_luaskills_hub" => rpc_json_result(
+            service_search_luaskills_hub(
+                state,
+                rpc_optional_param(params, "query")?,
+                rpc_optional_param(params, "cursor")?,
             )
             .await,
         ),
