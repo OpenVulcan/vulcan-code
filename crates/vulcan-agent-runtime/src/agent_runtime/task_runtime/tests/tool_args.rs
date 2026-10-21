@@ -419,3 +419,20 @@ fn provider_model_selector_splits_into_snapshot_fields() {
     assert_eq!(provider_id, "openrouter");
     assert_eq!(model_id, "openai/gpt-4.1");
 }
+
+/// A spawn selector whose model id contains `/` keeps its provider through snapshot resolution.
+/// 模型标识包含 `/` 的派生选择器在快照解析中保留其供应商。
+#[test]
+fn provider_model_snapshot_keeps_slashed_model_ids_with_their_provider() {
+    let mut args = test_task_args("inspect", None);
+    args.model = Some(String::from("commandcode/deepseek/deepseek-v4.1-flash"));
+    let snapshot = provider_model_snapshot_from_args(&args);
+
+    assert_eq!(
+        provider_model_selector_from_snapshot(&snapshot, &ProviderConfigurationFile::default()),
+        Some((
+            String::from("commandcode"),
+            String::from("deepseek/deepseek-v4.1-flash")
+        ))
+    );
+}

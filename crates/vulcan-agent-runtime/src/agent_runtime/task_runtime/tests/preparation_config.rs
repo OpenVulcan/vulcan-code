@@ -1165,9 +1165,11 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
         &build_test_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
-    resolved_config.effective_config.provider_model.provider_id = None;
+    // The explicit provider owns a model id that itself contains `/`.
+    // 显式供应商持有本身包含 `/` 的模型标识。
+    resolved_config.effective_config.provider_model.provider_id = Some(String::from("openrouter"));
     resolved_config.effective_config.provider_model.model_id =
-        Some(String::from("openrouter/openai/gpt-5.6-sol"));
+        Some(String::from("openai/gpt-5.6-sol"));
 
     let (_, child_request) =
         build_task_runtime_preparation_request(&context, &invocation, &resolved_config)

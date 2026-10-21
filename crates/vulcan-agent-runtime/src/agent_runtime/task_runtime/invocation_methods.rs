@@ -1512,6 +1512,9 @@ pub(super) fn agent_orchestration_info_models(
     let configuration = runtime.configuration_snapshot()?;
     let providers = runtime.effective_providers(&configuration)?;
     let catalogs = runtime.catalog_snapshot()?;
+    // Only selectors that spawn_agent accepts are listed: enabled conversation models on enabled accounts.
+    // 只列出 spawn_agent 接受的选择器：已启用账号上已启用的会话模型。
+    let available_selectors = runtime.available_model_selectors(&configuration)?;
     let session_selector = configuration
         .active
         .as_ref()
@@ -1521,6 +1524,11 @@ pub(super) fn agent_orchestration_info_models(
     let mut rows = BTreeMap::<String, Value>::new();
     let mut account_counts = BTreeMap::<String, usize>::new();
     for connection in configuration.connection_graph.connections.values() {
+        if !configuration.connection_is_enabled(connection.id.as_str())
+            || configuration.connection_is_pending_validation(connection.id.as_str())
+        {
+            continue;
+        }
         let Some(catalog) = catalogs.get(connection.id.as_str()) else {
             continue;
         };
@@ -1530,6 +1538,9 @@ pub(super) fn agent_orchestration_info_models(
             .unwrap_or_else(|| connection.provider_id.clone());
         for model in &catalog.models {
             let selector = format!("{}/{}", connection.provider_id, model.id);
+            if !available_selectors.contains(&selector) {
+                continue;
+            }
             *account_counts.entry(selector.clone()).or_default() += 1;
             rows.entry(selector.clone()).or_insert_with(|| {
                 json!({

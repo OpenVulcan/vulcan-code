@@ -363,14 +363,16 @@ pub(super) fn provider_model_selector_from_snapshot(
     if model_id.is_empty() {
         return None;
     }
-    if let Ok((provider_id, model_id)) = split_provider_model_selector(model_id) {
-        return Some((provider_id, model_id));
-    }
-    let provider_id = snapshot
+    // An explicit provider owns the whole model id, which may itself contain `/`.
+    // 显式供应商持有完整模型标识，模型标识本身可能包含 `/`。
+    if let Some(provider_id) = snapshot
         .provider_id
         .as_deref()
-        .and_then(|value| normalize_optional_task_label(Some(value)))?;
-    Some((provider_id, model_id.to_string()))
+        .and_then(|value| normalize_optional_task_label(Some(value)))
+    {
+        return Some((provider_id, model_id.to_string()));
+    }
+    split_provider_model_selector(model_id).ok()
 }
 
 /// Returns whether a provider/model pair is currently selectable for execution.

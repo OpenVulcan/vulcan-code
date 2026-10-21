@@ -264,11 +264,10 @@ async fn native_compaction_uses_host_history_and_preserves_execution_identity_bo
             &build_test_controller_config("Base prompt"),
             &invocation.invocation_config,
         );
-        // Task policy uses qualified selectors, including the provider prefix before a model's own slash.
-        // 任务策略使用限定选择器，模型自身带斜杠时也必须在其前保留供应商前缀。
+        // An explicit provider owns the whole model id, including the model's own slash.
+        // 显式供应商持有完整模型标识，包括模型自身的斜杠。
         resolved.effective_config.provider_model.provider_id = Some("openrouter".into());
-        resolved.effective_config.provider_model.model_id =
-            Some("openrouter/openai/gpt-5.6-sol".into());
+        resolved.effective_config.provider_model.model_id = Some("openai/gpt-5.6-sol".into());
         // Ordinary preparation still converts the supplied execution snapshot.
         // 普通准备仍转换传入的执行快照。
         let (_, ordinary) =

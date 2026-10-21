@@ -276,7 +276,16 @@ async fn run_task_with_shared_runtime_context_inner(
             &context.config,
             context.foundation.as_ref(),
             &request.invocation_config.provider_model,
-        )?;
+        )
+        .map_err(|error| {
+            // A new spawn has no child document yet, so a rejected selector must not keep its name.
+            // 新派生尚无子文档，因此被拒绝的选择器不得继续占用名称。
+            if lifecycle_binding.is_some() {
+                task_execution_prestart_rejected_error(error)
+            } else {
+                error
+            }
+        })?;
     }
     let fixed_parent_controller_config = request
         .controller_config
