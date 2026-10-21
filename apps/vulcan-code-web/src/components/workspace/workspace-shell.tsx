@@ -43,6 +43,7 @@ import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import { LocalBrowserCloseDialog } from "@/components/features/browser/local-browser-close-dialog";
 import { readConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import { resolveConversationLinkTarget } from "@/components/conversation/conversation-link-navigation";
+import { requestWorkspaceFileOpen, WorkspaceFileOpenContext } from "@/components/workspace/workspace-file-open-request";
 import {
   type WorkspaceContextTabKind,
 } from "@/components/workspace/workspace-context-panel";
@@ -69,6 +70,7 @@ import {
   activateWorkspaceContextTab,
   closeWorkspaceContextTab,
   emptyWorkspaceContextTabState,
+  focusWorkspaceFilesTab,
   normalizeWorkspaceContextTabState,
   openWorkspaceContextTab,
   openWorkspaceSubagentContextTab,
@@ -452,6 +454,15 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       state: activateWorkspaceContextTab(current.state, tabId),
     }));
   }, []);
+  // openWorkspaceFile shows a project file in a files tab of the open right panel; transcript cards reach it through
+  // WorkspaceFileOpenContext.
+  // openWorkspaceFile 在展开的右侧面板的文件页签中显示项目文件；转录卡片通过 WorkspaceFileOpenContext 调用它。
+  const openWorkspaceFile = React.useCallback((path: string) => {
+    const next = focusWorkspaceFilesTab(contextTabState, t);
+    setContextTabStateEntry((current) => ({ ...current, state: next }));
+    if (next.activeTabId) requestWorkspaceFileOpen(next.activeTabId, path);
+    openRightContextPanel();
+  }, [contextTabState, openRightContextPanel, t]);
   // updateFileContextTabTitle updates one file tab title after selection changes.
   // updateFileContextTabTitle 在文件选择变化后更新单个文件页签标题。
   const updateFileContextTabTitle = React.useCallback((tabId: string, title: string) => {
@@ -938,135 +949,137 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   };
 
   return (
-    <div className="vk-shell-frame" ref={shellRef}>
-      {featureArea ? (
-        <WorkspaceFeaturePanel
-          navigation={featureNavigation}
-          nested={props.mainView === "skills" || props.mainView === "memory"}
-          rail={props.rail}
-          title={t(featureArea.label)}
-          titlebarDragRegion={props.titlebarDragRegion}
-          onTitlebarDoubleClick={props.onTitlebarDoubleClick}
-        />
-      ) : <ProjectSidebar
-        activeProjectId={sidebarActiveProjectId}
-        projects={props.workbench.projects}
-        conversations={props.workbench.conversations}
-        expandedProjectIds={props.workbench.expandedProjectIds}
-        projectTree={props.workbench.projectTree}
-        pinnedConversationIds={props.pinnedConversationIds}
-        selectedConversationId={sidebarNavigationTargetId ?? props.selectedConversationId}
-        onConversationMenuAction={props.onConversationMenuAction}
-        onCreateConversation={props.onCreateConversation}
-        onCreateDedicatedConversation={props.onCreateDedicatedConversation}
-        onCreateProject={props.onCreateProject}
-        rail={props.rail}
-        titlebarDragRegion={props.titlebarDragRegion}
-        onTitlebarDoubleClick={props.onTitlebarDoubleClick}
-        onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
-        onProjectMenuAction={props.onProjectMenuAction}
-        onProjectGroupAction={props.onProjectGroupAction}
-        onSelectProject={props.onSelectProject}
-        onSelectConversation={props.onSelectConversation}
-      />}
-      <SidebarInset>
-        <TurnChangeReviewActionsContext.Provider value={reviewFocus.turnChangeReviewActions}>
-        <WorkspaceResizableBody
-          aiBrowserAvailable={aiBrowserAvailable}
-          localBrowserAvailable={localBrowserAvailable}
-          conversationNavigationPhase={props.mainView === "chat" ? props.conversationNavigation?.phase ?? null : null}
-          conversationNavigationShowLoading={props.mainView === "chat" && props.conversationNavigation?.showLoading === true}
-          rightPanelFloating={hasSelectedChatConversation && rightPanelFloating}
-          rightPanelOpen={effectiveRightPanelOpen}
-          contextPanelActiveTabId={contextTabState.activeTabId}
-          contextPanelTabs={contextTabState.tabs}
-          reviewFocusRequest={reviewFocusRequest}
-          startup={props.startup}
-          workbench={props.workbench}
-          selectedDraftConversation={routeDraftConversation}
-          selectedConversation={props.selectedConversation}
-          isSelectedConversationPinned={props.selectedConversation ? props.pinnedConversationIds.has(props.selectedConversation.id) : false}
-          selectedConversationId={props.selectedConversationId}
-          headerActions={pageDescriptor.headerActions}
-          chromeActions={props.chromeActions}
-          titlebarDragRegion={props.titlebarDragRegion}
-          onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+    <WorkspaceFileOpenContext.Provider value={hasSelectedChatConversation ? openWorkspaceFile : null}>
+      <div className="vk-shell-frame" ref={shellRef}>
+        {featureArea ? (
+          <WorkspaceFeaturePanel
+            navigation={featureNavigation}
+            nested={props.mainView === "skills" || props.mainView === "memory"}
+            rail={props.rail}
+            title={t(featureArea.label)}
+            titlebarDragRegion={props.titlebarDragRegion}
+            onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+          />
+        ) : <ProjectSidebar
+          activeProjectId={sidebarActiveProjectId}
+          projects={props.workbench.projects}
+          conversations={props.workbench.conversations}
+          expandedProjectIds={props.workbench.expandedProjectIds}
+          projectTree={props.workbench.projectTree}
+          pinnedConversationIds={props.pinnedConversationIds}
+          selectedConversationId={sidebarNavigationTargetId ?? props.selectedConversationId}
           onConversationMenuAction={props.onConversationMenuAction}
-          headerDetail={pageDescriptor.detail}
-          headerTitle={pageDescriptor.title}
-          headerRightActions={pageDescriptor.headerRightActions}
-          toolPanels={pageDescriptor.toolPanels}
-          onToggleLeftPanel={handleLeftPanelToggle}
-          onToggleRightPanel={handleRightPanelToggle}
-          onActivateContextTab={activateContextTab}
-          onCloseContextTab={closeContextTab}
-          onFileContextTabTitleChange={updateFileContextTabTitle}
-          onOpenContextTab={openContextTab}
-          onConversationLinkClickCapture={props.mainView === "chat" ? openConversationLinkInLocalBrowser : undefined}
-          onOpenSubagentPanel={handleOpenSubagentPanel}
-          onStopSubagentTask={props.onStopSubagentTask}
-          onCloseSubagentTask={props.onCloseSubagentTask}
-          onStopCommandSession={props.onStopCommandSession}
-          onCopyRawDiff={props.onCopyText}
-          onCopyText={props.onCopyText}
-          resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-          loadWorkspaceDiffFileDetail={props.onLoadWorkspaceDiffFileDetail}
-          loadWorkspaceDiffSearch={props.onLoadWorkspaceDiffSearch}
-          loadWorkspaceDiffSnapshot={props.onLoadWorkspaceDiffSnapshot}
-          loadWorkspaceFileDirectory={props.onLoadWorkspaceFileDirectory}
-          loadWorkspaceFilePreview={props.onLoadWorkspaceFilePreview}
-          runWorkspaceGitFileAction={props.onRunWorkspaceGitFileAction}
-          onWorkspaceDiffSnapshotLoaded={recordWorkspaceDiffSnapshotForProject}
-          onWorkspaceGitStateChanged={refreshProjectGitSummary}
-          onSelectGitRepository={setSelectedGitRepositoryKey}
-          onRunVmmAction={props.memoryActions.onRunVmmAction}
-          onOpenMemorySettings={props.onOpenMemory}
-          onTrace={props.onTrace}
-          gitCommitActionBusy={Boolean(gitCommitBusyState)}
-          gitCommitActionDisabled={!sessionGitCommitActionAvailable}
-          gitCommitActionLabel={gitCommitBusyState?.label ?? t("gitCommitDialog.open")}
-          onOpenGitCommitAction={sessionGitCommitActionVisible ? handleOpenGitCommitDialog : undefined}
-        >
-          {/* Embedded feature imports share recovery with settings, leaving the project navigation mounted. */}
-          {/* 内嵌功能导入与设置共用恢复界面，保持项目导航挂载。 */}
-          {props.mainView === "chat" ? pageDescriptor.content : (
-            <FeatureLoadBoundary regionKey={`${props.mainView}:${props.mainView === "memory" ? props.activeMemorySubArea : props.mainView === "skills" ? props.activeSkillSubArea : ""}`}>
-              {pageDescriptor.content}
-            </FeatureLoadBoundary>
-          )}
-        </WorkspaceResizableBody>
-        {props.footer ? (
-          <div className="vk-status-frame">
-            {props.footer}
-          </div>
+          onCreateConversation={props.onCreateConversation}
+          onCreateDedicatedConversation={props.onCreateDedicatedConversation}
+          onCreateProject={props.onCreateProject}
+          rail={props.rail}
+          titlebarDragRegion={props.titlebarDragRegion}
+          onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+          onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
+          onProjectMenuAction={props.onProjectMenuAction}
+          onProjectGroupAction={props.onProjectGroupAction}
+          onSelectProject={props.onSelectProject}
+          onSelectConversation={props.onSelectConversation}
+        />}
+        <SidebarInset>
+          <TurnChangeReviewActionsContext.Provider value={reviewFocus.turnChangeReviewActions}>
+          <WorkspaceResizableBody
+            aiBrowserAvailable={aiBrowserAvailable}
+            localBrowserAvailable={localBrowserAvailable}
+            conversationNavigationPhase={props.mainView === "chat" ? props.conversationNavigation?.phase ?? null : null}
+            conversationNavigationShowLoading={props.mainView === "chat" && props.conversationNavigation?.showLoading === true}
+            rightPanelFloating={hasSelectedChatConversation && rightPanelFloating}
+            rightPanelOpen={effectiveRightPanelOpen}
+            contextPanelActiveTabId={contextTabState.activeTabId}
+            contextPanelTabs={contextTabState.tabs}
+            reviewFocusRequest={reviewFocusRequest}
+            startup={props.startup}
+            workbench={props.workbench}
+            selectedDraftConversation={routeDraftConversation}
+            selectedConversation={props.selectedConversation}
+            isSelectedConversationPinned={props.selectedConversation ? props.pinnedConversationIds.has(props.selectedConversation.id) : false}
+            selectedConversationId={props.selectedConversationId}
+            headerActions={pageDescriptor.headerActions}
+            chromeActions={props.chromeActions}
+            titlebarDragRegion={props.titlebarDragRegion}
+            onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+            onConversationMenuAction={props.onConversationMenuAction}
+            headerDetail={pageDescriptor.detail}
+            headerTitle={pageDescriptor.title}
+            headerRightActions={pageDescriptor.headerRightActions}
+            toolPanels={pageDescriptor.toolPanels}
+            onToggleLeftPanel={handleLeftPanelToggle}
+            onToggleRightPanel={handleRightPanelToggle}
+            onActivateContextTab={activateContextTab}
+            onCloseContextTab={closeContextTab}
+            onFileContextTabTitleChange={updateFileContextTabTitle}
+            onOpenContextTab={openContextTab}
+            onConversationLinkClickCapture={props.mainView === "chat" ? openConversationLinkInLocalBrowser : undefined}
+            onOpenSubagentPanel={handleOpenSubagentPanel}
+            onStopSubagentTask={props.onStopSubagentTask}
+            onCloseSubagentTask={props.onCloseSubagentTask}
+            onStopCommandSession={props.onStopCommandSession}
+            onCopyRawDiff={props.onCopyText}
+            onCopyText={props.onCopyText}
+            resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+            loadWorkspaceDiffFileDetail={props.onLoadWorkspaceDiffFileDetail}
+            loadWorkspaceDiffSearch={props.onLoadWorkspaceDiffSearch}
+            loadWorkspaceDiffSnapshot={props.onLoadWorkspaceDiffSnapshot}
+            loadWorkspaceFileDirectory={props.onLoadWorkspaceFileDirectory}
+            loadWorkspaceFilePreview={props.onLoadWorkspaceFilePreview}
+            runWorkspaceGitFileAction={props.onRunWorkspaceGitFileAction}
+            onWorkspaceDiffSnapshotLoaded={recordWorkspaceDiffSnapshotForProject}
+            onWorkspaceGitStateChanged={refreshProjectGitSummary}
+            onSelectGitRepository={setSelectedGitRepositoryKey}
+            onRunVmmAction={props.memoryActions.onRunVmmAction}
+            onOpenMemorySettings={props.onOpenMemory}
+            onTrace={props.onTrace}
+            gitCommitActionBusy={Boolean(gitCommitBusyState)}
+            gitCommitActionDisabled={!sessionGitCommitActionAvailable}
+            gitCommitActionLabel={gitCommitBusyState?.label ?? t("gitCommitDialog.open")}
+            onOpenGitCommitAction={sessionGitCommitActionVisible ? handleOpenGitCommitDialog : undefined}
+          >
+            {/* Embedded feature imports share recovery with settings, leaving the project navigation mounted. */}
+            {/* 内嵌功能导入与设置共用恢复界面，保持项目导航挂载。 */}
+            {props.mainView === "chat" ? pageDescriptor.content : (
+              <FeatureLoadBoundary regionKey={`${props.mainView}:${props.mainView === "memory" ? props.activeMemorySubArea : props.mainView === "skills" ? props.activeSkillSubArea : ""}`}>
+                {pageDescriptor.content}
+              </FeatureLoadBoundary>
+            )}
+          </WorkspaceResizableBody>
+          {props.footer ? (
+            <div className="vk-status-frame">
+              {props.footer}
+            </div>
+          ) : null}
+          </TurnChangeReviewActionsContext.Provider>
+        </SidebarInset>
+        {browserCloseRequest && browserCloseRequest.cacheKey === contextTabCacheKey
+          && browserCloseRequest.owner === props.selectedConversationId ? <LocalBrowserCloseDialog
+            key={`${browserCloseRequest.cacheKey}:${browserCloseRequest.tabId}`}
+            ownerSessionId={browserCloseRequest.owner}
+            onCancel={() => setBrowserCloseRequest(null)}
+            onClosed={() => {
+              setContextTabStateEntry((current) => current.cacheKey === browserCloseRequest.cacheKey
+                ? { ...current, state: closeWorkspaceContextTab(current.state, browserCloseRequest.tabId) } : current);
+              setBrowserCloseRequest(null);
+            }}
+          /> : null}
+        {sessionGitCommitActionVisible && activeSessionReviewSummary ? (
+          <ConversationSessionCommitDialog
+            busyState={activeGitCommitBusyState}
+            commitBranchPrefix={commitBranchPrefix}
+            conversationId={props.selectedConversationId}
+            open={gitCommitDialogOpen}
+            repositoryKey={activeGitCommitRepositoryForActions}
+            reviewSummary={activeSessionReviewSummary}
+            workspacePath={selectedChatProject?.path ?? null}
+            onBusyStateChange={updateGitCommitBusyState}
+            onOpenChange={handleGitCommitDialogOpenChange}
+            onRefreshReviewSummary={refreshSelectedGitRepositorySummary}
+          />
         ) : null}
-        </TurnChangeReviewActionsContext.Provider>
-      </SidebarInset>
-      {browserCloseRequest && browserCloseRequest.cacheKey === contextTabCacheKey
-        && browserCloseRequest.owner === props.selectedConversationId ? <LocalBrowserCloseDialog
-          key={`${browserCloseRequest.cacheKey}:${browserCloseRequest.tabId}`}
-          ownerSessionId={browserCloseRequest.owner}
-          onCancel={() => setBrowserCloseRequest(null)}
-          onClosed={() => {
-            setContextTabStateEntry((current) => current.cacheKey === browserCloseRequest.cacheKey
-              ? { ...current, state: closeWorkspaceContextTab(current.state, browserCloseRequest.tabId) } : current);
-            setBrowserCloseRequest(null);
-          }}
-        /> : null}
-      {sessionGitCommitActionVisible && activeSessionReviewSummary ? (
-        <ConversationSessionCommitDialog
-          busyState={activeGitCommitBusyState}
-          commitBranchPrefix={commitBranchPrefix}
-          conversationId={props.selectedConversationId}
-          open={gitCommitDialogOpen}
-          repositoryKey={activeGitCommitRepositoryForActions}
-          reviewSummary={activeSessionReviewSummary}
-          workspacePath={selectedChatProject?.path ?? null}
-          onBusyStateChange={updateGitCommitBusyState}
-          onOpenChange={handleGitCommitDialogOpenChange}
-          onRefreshReviewSummary={refreshSelectedGitRepositorySummary}
-        />
-      ) : null}
-    </div>
+      </div>
+    </WorkspaceFileOpenContext.Provider>
   );
 }

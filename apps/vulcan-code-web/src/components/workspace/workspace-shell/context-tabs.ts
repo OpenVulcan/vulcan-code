@@ -216,6 +216,24 @@ export function activateWorkspaceContextTab(
   return current.tabs.some((tab) => tab.id === tabId) ? { ...current, activeTabId: tabId } : current;
 }
 
+// focusWorkspaceFilesTab makes a files tab active for showing a requested file: the active one when it is a files
+// tab, else the first opened files tab, else a new one.
+// focusWorkspaceFilesTab 激活一个文件页签以显示请求的文件：当前活动页签是文件页签时用它，否则用第一个已打开的文件页签，
+// 都没有时新建一个。
+export function focusWorkspaceFilesTab(
+  // Current tab state.
+  // 当前页签状态。
+  state: WorkspaceContextTabState,
+  // Translation helper for a new tab's default title.
+  // 新页签默认标题的翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): WorkspaceContextTabState {
+  const current = normalizeWorkspaceContextTabState(state);
+  if (current.tabs.some((tab) => tab.id === current.activeTabId && tab.kind === "files")) return current;
+  const existing = current.tabs.find((tab) => tab.kind === "files");
+  return existing ? { ...current, activeTabId: existing.id } : openWorkspaceContextTab(current, "files", t);
+}
+
 // renameWorkspaceFileContextTab updates a file tab title from its selected file.
 // renameWorkspaceFileContextTab 根据选中文件更新文件页签标题。
 export function renameWorkspaceFileContextTab(

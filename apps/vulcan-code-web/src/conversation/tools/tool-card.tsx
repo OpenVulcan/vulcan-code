@@ -3,9 +3,11 @@
 // 唯一的工具卡框架：一行紧凑标题（家族图块、动作、目标、事实、状态）加仅在展开时挂载的正文，
 // 使长转录中的每张收起卡片都保持轻量。
 import * as React from "react";
-import { Check, ChevronRight, CircleSlash, Hourglass, X, type LucideIcon } from "lucide-react";
+import { Check, ChevronRight, CircleSlash, FileSearch2, Hourglass, X, type LucideIcon } from "lucide-react";
+import { useWorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { formatBytes } from "@/lib/display-format";
+import { IconButton } from "@/ui-kit/primitives/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/ui-kit/primitives/collapsible";
 import { Spinner } from "@/ui-kit/primitives/spinner";
 import type { ToolCall, ToolCardState } from "./tool-call";
@@ -86,6 +88,9 @@ export interface ToolFrameProps extends Pick<ToolCardProps, "family" | "open" | 
   // Untruncated target for the native tooltip.
   // 原生提示使用的未截断目标。
   targetTitle?: string;
+  // Project file the target names; the head then offers to show it in the files panel where one exists.
+  // 目标指名的项目文件；存在文件面板时标题行提供在其中显示该文件的操作。
+  filePath?: string | null;
   // Right-aligned facts such as line counts, diffstat, exit code or duration.
   // 右对齐事实，例如行数、差异统计、退出码或耗时。
   meta?: React.ReactNode;
@@ -106,12 +111,40 @@ function ToolRequestMark(props: { request: ToolRequest; state: ToolCardState }) 
   return <span className="vk-tool-request" data-phase={props.request.phase}>{t(key).replace("{size}", size)}</span>;
 }
 
+// ToolFileAction shows the card's file in the files panel; it sits beside the head trigger, never inside it.
+// ToolFileAction 在文件面板中显示卡片的文件；它位于标题触发器旁边，从不嵌入其中。
+function ToolFileAction(props: { path: string; open: (path: string) => void }) {
+  const { t } = useI18n();
+  const label = t("toolCard.openInFiles");
+  return (
+    <IconButton aria-label={label} className="vk-tool-file" onClick={() => props.open(props.path)} size="xs" title={label} type="button">
+      <FileSearch2 aria-hidden="true" />
+    </IconButton>
+  );
+}
+
 /** Renders the shared tool card frame.
  * 渲染共享工具卡框架。 */
 export function ToolFrame(props: ToolFrameProps) {
+  const openFile = useWorkspaceFileOpener();
   const expandable = props.children !== undefined && props.children !== null && props.children !== false;
   const open = expandable && props.open;
   const Icon = props.icon;
+  const head = (
+    <CollapsibleTrigger className="vk-tool-head" title={props.targetTitle}>
+      <span className="vk-tool-icon"><Icon aria-hidden="true" /></span>
+      <span className="vk-tool-title">
+        <b>{props.verb}</b>
+        {props.target ? <code>{props.target}</code> : null}
+      </span>
+      <span className="vk-tool-meta">
+        {props.meta}
+        {props.call?.request ? <ToolRequestMark request={props.call.request} state={props.state} /> : null}
+      </span>
+      <ToolStateMark state={props.state} />
+      {expandable ? <ChevronRight aria-hidden="true" className="vk-tool-chev" /> : <span />}
+    </CollapsibleTrigger>
+  );
   return (
     <Collapsible
       className="vk-tool"
@@ -123,19 +156,9 @@ export function ToolFrame(props: ToolFrameProps) {
       onOpenChange={props.onOpenChange}
       open={open}
     >
-      <CollapsibleTrigger className="vk-tool-head" title={props.targetTitle}>
-        <span className="vk-tool-icon"><Icon aria-hidden="true" /></span>
-        <span className="vk-tool-title">
-          <b>{props.verb}</b>
-          {props.target ? <code>{props.target}</code> : null}
-        </span>
-        <span className="vk-tool-meta">
-          {props.meta}
-          {props.call?.request ? <ToolRequestMark request={props.call.request} state={props.state} /> : null}
-        </span>
-        <ToolStateMark state={props.state} />
-        {expandable ? <ChevronRight aria-hidden="true" className="vk-tool-chev" /> : <span />}
-      </CollapsibleTrigger>
+      {openFile && props.filePath
+        ? <div className="vk-tool-row">{head}<ToolFileAction open={openFile} path={props.filePath} /></div>
+        : head}
       {expandable ? <CollapsibleContent className="vk-tool-body">{props.children}</CollapsibleContent> : null}
     </Collapsible>
   );

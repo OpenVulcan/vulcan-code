@@ -19,6 +19,7 @@ import {
   WorkspaceFilePreview,
   workspaceFilePreviewErrorMessage,
 } from "@/components/workspace/workspace-files-preview";
+import { useWorkspaceFileOpenRequests } from "@/components/workspace/workspace-file-open-request";
 import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
 import { useWorkspaceFilesRefresh, WorkspaceFilesRefreshButton } from "@/components/workspace/workspace-files-panel-refresh";
 import { workspacePathActions, type WorkspacePathAction } from "@/components/workspace/workspace-path-actions";
@@ -526,15 +527,15 @@ export function WorkspaceFilesPanelHost(props: {
 
   // updateFilter toggles one backend file tree filter field.
   // updateFilter 切换单个后端文件树过滤字段。
-  const updateFilter = React.useCallback((key: keyof WorkspaceFileFilterOptions, value: boolean) => {
-    setFilters((current) => {
-      // next stores the updated global filter preference.
-      // next 保存更新后的全局过滤偏好。
-      const next = { ...current, [key]: value };
-      persistWorkspaceFileFilters(next);
-      return next;
-    });
-  }, []);
+  const updateFilter = React.useCallback((key: keyof WorkspaceFileFilterOptions, value: boolean) => setFilters((current) => {
+    const next = { ...current, [key]: value };
+    persistWorkspaceFileFilters(next);
+    return next;
+  }), []);
+  // Files named elsewhere in the workbench (for example a tool card's path) open here through this tab's requests.
+  // 工作台其他位置指名的文件（例如工具卡路径）通过本页签的请求在此打开。
+  useWorkspaceFileOpenRequests({ tabId: props.instanceId, workspacePath, ready: hydratedRequestScopeKey === requestScopeKey, select: selectFile,
+    load: (directory) => props.loadWorkspaceFileDirectory(workspacePath ?? "", workspaceProjectId, props.selectedConversationId, directory, listingFilters) });
   // closePreviewAndShowTree closes the open file and returns the panel to the project tree.
   // closePreviewAndShowTree 关闭已打开文件，使面板回到项目目录树。
   const closePreviewAndShowTree = React.useCallback(() => {

@@ -40,6 +40,7 @@ export function MediaReadCard(props: ToolCardProps) {
       {...props}
       icon={FileImage}
       state={call.state}
+      filePath={call.isError ? null : path}
       target={name}
       targetTitle={path}
       verb={t("toolCard.media.read")}
@@ -72,6 +73,7 @@ export function FileReadCard(props: ToolCardProps) {
         ? <span>{t("toolCard.file.empty")}</span>
         : lines.length > 0 ? <span>{t("toolCard.lines").replace("{count}", String(lines.length))}{total !== null && total > lines.length ? ` / ${total}` : ""}</span> : null}
       state={call.state}
+      filePath={call.isError ? null : path}
       target={<>{path}{rangeLabel ? <small>{rangeLabel}</small> : null}</>}
       targetTitle={path}
       verb={t("toolCard.file.read")}
@@ -180,6 +182,7 @@ export function FileChangeCard(props: ToolCardProps) {
           : previewStat.removed === null ? <span>{t("toolCard.lines").replace("{count}", String(previewStat.added))}</span>
             : <DiffStat added={previewStat.added} removed={previewStat.removed} />}
       state={call.state}
+      filePath={single && single.change !== "delete" ? fileDisplayPath(single) : null}
       target={target}
       targetTitle={target}
       verb={verb}

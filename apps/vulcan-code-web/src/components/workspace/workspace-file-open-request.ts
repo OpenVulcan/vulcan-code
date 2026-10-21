@@ -1,0 +1,127 @@
+import React from "react";
+import { toast } from "@/ui-kit/primitives/toast";
+import { useI18n } from "@/i18n";
+import type { WorkspaceFileDirectoryListing, WorkspaceFileEntrySummary } from "@/types";
+
+// WORKSPACE_FILE_OPEN_EVENT tells the mounted files panel that a file open request is waiting for it.
+// WORKSPACE_FILE_OPEN_EVENT 通知已挂载的文件面板有一个开文件请求在等待它。
+const WORKSPACE_FILE_OPEN_EVENT = "vulcan:workspace-file-open";
+
+// WorkspaceFileOpenRequest names the files tab that should show `path`.
+// WorkspaceFileOpenRequest 指明应显示 `path` 的文件页签。
+type WorkspaceFileOpenRequest = { tabId: string; path: string };
+
+// pendingFileOpen holds the latest request until the files panel of that tab takes it; the tab may still be mounting.
+// pendingFileOpen 保存最近一次请求，直到对应页签的文件面板取走；该页签可能仍在挂载。
+let pendingFileOpen: WorkspaceFileOpenRequest | null = null;
+
+// WorkspaceFileOpenContext carries the workbench's "show this file in the files panel" action to transcript
+// cards; null where no files panel exists, so cards offer no such action there.
+// WorkspaceFileOpenContext 将工作台的「在文件面板中显示该文件」动作传给转录卡片；没有文件面板的地方为 null，
+// 卡片因此不提供该动作。
+export const WorkspaceFileOpenContext = React.createContext<((path: string) => void) | null>(null);
+
+// useWorkspaceFileOpener returns the action that shows a project file in the files panel, or null.
+// useWorkspaceFileOpener 返回在文件面板中显示项目文件的动作，没有时返回 null。
+export function useWorkspaceFileOpener(): ((path: string) => void) | null {
+  return React.useContext(WorkspaceFileOpenContext);
+}
+
+// requestWorkspaceFileOpen asks the files panel of tab `tabId` to open `path`, now or once it mounts.
+// requestWorkspaceFileOpen 请求 `tabId` 页签的文件面板立即或在挂载后打开 `path`。
+export function requestWorkspaceFileOpen(tabId: string, path: string): void {
+  pendingFileOpen = { tabId, path };
+  window.dispatchEvent(new CustomEvent(WORKSPACE_FILE_OPEN_EVENT));
+}
+
+// WorkspaceFileTarget is a requested file split into its listing directory (null for the project root) and name.
+// WorkspaceFileTarget 是拆分为所在列表目录（项目根为 null）与文件名的请求文件。
+export interface WorkspaceFileTarget {
+  // Absolute directory path in the workspace's own separator style, or null for the root.
+  // 使用工作区自身分隔符风格的绝对目录路径；根目录为 null。
+  directory: string | null;
+  // File name inside that directory.
+  // 该目录中的文件名。
+  name: string;
+}
+
+// resolveWorkspaceFileTarget places an absolute or project-relative path inside workspacePath. Returns null for a
+// path outside the project, one that climbs with "..", or one that names the root itself. Drive-letter roots
+// compare without case, as Windows paths do.
+// resolveWorkspaceFileTarget 将绝对路径或项目相对路径定位到 workspacePath 中。项目之外、含 ".." 或指向根目录本身的路径
+// 返回 null。带盘符的根目录按 Windows 路径的习惯不区分大小写比较。
+export function resolveWorkspaceFileTarget(workspacePath: string, path: string): WorkspaceFileTarget | null {
+  const separator = workspacePath.includes("\\") ? "\\" : "/";
+  const root = workspacePath.replace(/[\\/]+$/, "");
+  const requested = path.trim().replace(/\\/g, "/");
+  let relative = requested;
+  if (/^(?:[A-Za-z]:)?\//.test(requested)) {
+    const prefix = `${root.replace(/\\/g, "/")}/`;
+    const caseless = /^[A-Za-z]:/.test(prefix);
+    const inside = caseless ? requested.toLowerCase().startsWith(prefix.toLowerCase()) : requested.startsWith(prefix);
+    if (!inside) return null;
+    relative = requested.slice(prefix.length);
+  }
+  const segments = relative.split("/").filter((segment) => segment !== "" && segment !== ".");
+  const name = segments.pop();
+  if (!name || name === ".." || segments.includes("..")) return null;
+  return { directory: segments.length > 0 ? [root, ...segments].join(separator) : null, name };
+}
+
+// findRequestedFileEntry picks the file named `name` from a listing, preferring an exact match over one that
+// differs only in case.
+// findRequestedFileEntry 从目录列表中选出名为 `name` 的文件，精确匹配优先于仅大小写不同的匹配。
+export function findRequestedFileEntry(listing: WorkspaceFileDirectoryListing, name: string): WorkspaceFileEntrySummary | null {
+  const files = listing.entries.filter((entry) => !entry.isDirectory);
+  return files.find((entry) => entry.name === name)
+    ?? files.find((entry) => entry.name.toLowerCase() === name.toLowerCase()) ?? null;
+}
+
+// useWorkspaceFileOpenRequests lets one files panel take requests addressed to its tab while `ready`: it lists the
+// file's directory with `load` and hands the entry to `select`; a path outside the project, or one the listing
+// does not show (deleted, or hidden by the panel's filters), is reported instead.
+// useWorkspaceFileOpenRequests 让单个文件面板在 `ready` 时接收发给其页签的请求：用 `load` 列出文件所在目录并将条目交给
+// `select`；项目之外或目录列表中不存在（已删除或被面板过滤规则隐藏）的路径改为提示。
+export function useWorkspaceFileOpenRequests(args: {
+  // Tab id this panel serves.
+  // 当前面板服务的页签标识。
+  tabId: string;
+  // Project root, or null when the conversation has none.
+  // 项目根目录；会话没有项目时为 null。
+  workspacePath: string | null;
+  // Whether the panel's state belongs to its current route and filters.
+  // 面板状态是否属于当前路由与过滤器。
+  ready: boolean;
+  // Lists one directory (null for the root) with the panel's filters.
+  // 按面板过滤器列出单个目录（根目录为 null）。
+  load: (directory: string | null) => Promise<WorkspaceFileDirectoryListing>;
+  // Opens one file entry in the panel.
+  // 在面板中打开单个文件条目。
+  select: (entry: WorkspaceFileEntrySummary) => unknown;
+}): void {
+  const { t } = useI18n();
+  const latest = React.useRef(args);
+  latest.current = args;
+  const take = React.useCallback(() => {
+    const request = pendingFileOpen;
+    const { load, select, tabId, workspacePath } = latest.current;
+    if (!request || request.tabId !== tabId || !workspacePath) return;
+    pendingFileOpen = null;
+    const target = resolveWorkspaceFileTarget(workspacePath, request.path);
+    if (!target) {
+      toast.info(t("workspaceFiles.openPathOutside"));
+      return;
+    }
+    void load(target.directory).then((listing) => {
+      const entry = findRequestedFileEntry(listing, target.name);
+      if (entry) void select(entry);
+      else toast.info(t("workspaceFiles.openPathMissing"));
+    }, (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
+  }, [t]);
+  React.useEffect(() => {
+    if (!args.ready) return;
+    take();
+    window.addEventListener(WORKSPACE_FILE_OPEN_EVENT, take);
+    return () => window.removeEventListener(WORKSPACE_FILE_OPEN_EVENT, take);
+  }, [args.ready, take]);
+}

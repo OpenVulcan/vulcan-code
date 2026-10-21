@@ -544,6 +544,14 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tool-head:disabled { cursor: default; opacity: 1; }
 .vk-tool-head:disabled:hover { background: transparent; }
 .vk-tool-head:focus-visible { outline-offset: -2px; }
+/* A head with a file action: the action sits beside the trigger and shows on hover or focus. 带文件操作的标题行：操作位于触发器旁，悬停或聚焦时显示。 */
+.vk-tool-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.vk-tool-row:hover { background: var(--vk-hover); }
+.vk-tool-row > .vk-tool-head:hover { background: transparent; }
+.vk-tool-file { margin-right: calc(var(--vk-u) * 1.5); opacity: 0; }
+.vk-tool-row:hover > .vk-tool-file,
+.vk-tool-file:focus-visible { opacity: 1; }
+@media (hover: none) { .vk-tool-file { opacity: 1; } }
 .vk-tool-state { display: grid; place-items: center; width: 1.1rem; height: 1.1rem; color: var(--vk-tone); }
 .vk-tool-state > .lucide { width: 0.9rem; height: 0.9rem; }
 .vk-tool-icon { display: grid; place-items: center; width: calc(var(--vk-u) * 5.5); height: calc(var(--vk-u) * 5.5); background: color-mix(in srgb, var(--vk-fam) 14%, transparent); color: var(--vk-fam); }
