@@ -283,7 +283,10 @@ fn knowledge_embedding_contract_is_explicit_and_catalog_refresh_stable() {
     capabilities.tasks.clear();
     assert!(settings::embedding_task(&capabilities, false).is_err());
     capabilities.distance_metric = DistanceMetric::Unknown;
-    assert!(settings::embedding_metric(&capabilities).is_err());
+    assert_eq!(
+        settings::embedding_metric(&capabilities).unwrap(),
+        KnowledgeVectorMetric::Cosine
+    );
     // A catalog-only generation change preserves the exact physical embedding contract.
     // 仅目录代次变化保留精确真实嵌入契约。
     let (_, capabilities, _, _) = fixture();

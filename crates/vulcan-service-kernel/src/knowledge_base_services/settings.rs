@@ -51,17 +51,20 @@ pub(super) fn embedding_contract(
     )
 }
 
-/// Freezes the model-declared distance in `capabilities`; returns no guessed metric for Unknown.
-/// 冻结 `capabilities` 中模型声明的距离；Unknown 不返回推测度量。
+/// Freezes the distance the library searches with: the model-declared distance in
+/// `capabilities`, or cosine when the model declares none. Cosine ignores vector length, so it
+/// ranks correctly whether or not the provider normalizes its vectors; it is the library's own
+/// choice, not a claim about the model.
+/// 冻结库检索使用的距离：`capabilities` 中模型声明的距离；模型未声明时使用余弦。余弦与向量长度
+/// 无关，无论供应商是否归一化向量都能正确排序；这是库自身的选择，而非对模型的断言。
 pub(super) fn embedding_metric(
     capabilities: &EmbeddingCapabilities,
 ) -> Result<KnowledgeVectorMetric, String> {
-    match capabilities.distance_metric {
-        DistanceMetric::Euclidean => Ok(KnowledgeVectorMetric::Euclidean),
-        DistanceMetric::Cosine => Ok(KnowledgeVectorMetric::Cosine),
-        DistanceMetric::DotProduct => Ok(KnowledgeVectorMetric::DotProduct),
-        DistanceMetric::Unknown => Err("ERR_KNOWLEDGE_DISTANCE_METRIC_UNDECLARED: the selected model must declare its vector distance".into()),
-    }
+    Ok(match capabilities.distance_metric {
+        DistanceMetric::Euclidean => KnowledgeVectorMetric::Euclidean,
+        DistanceMetric::Cosine | DistanceMetric::Unknown => KnowledgeVectorMetric::Cosine,
+        DistanceMetric::DotProduct => KnowledgeVectorMetric::DotProduct,
+    })
 }
 
 /// Selects the explicitly declared query/document task, or its declared provider default.

@@ -32,7 +32,6 @@ export function knowledgeEmbeddingCandidates(candidates: PublicAiInternalInferen
     return candidate.enabled && candidate.route.operation === "embedding_create"
       && candidate.route.usage_scope === "internal_background"
       && capability.output_kinds.includes("dense") && capability.encodings.includes("float")
-      && ["cosine", "euclidean", "dot_product"].includes(capability.distance_metric)
       && (capability.tasks.includes("query") || capability.tasks.includes("provider_default"))
       && (capability.tasks.includes("document") || capability.tasks.includes("provider_default"))
       && capability.maximum_inputs !== 0;

@@ -82,12 +82,21 @@ describe("knowledge internal model pool", () => {
     for (const batch of ["0", "1.5", "NaN", "4294967296"]) expect(knowledgeSettingsFromDraft("vector", candidate, "768", batch)).toBeNull();
   });
 
-  it("does not admit unsupported declared metrics, tasks or encodings", () => {
+  it("admits models that declare no distance metric", () => {
+    // The service searches such libraries with cosine, so an undeclared metric does not hide the model.
+    // 服务对这类库使用余弦检索，因此未声明距离不会隐藏模型。
+    const base = candidateFixture("embedding_create", "internal_background", true);
+    if (base.capabilities.embedding === undefined) throw new Error("Synthetic embedding capability missing");
+    const undeclared = { ...base, capabilities: { ...base.capabilities, embedding: { ...base.capabilities.embedding, distance_metric: "unknown" } } };
+    expect(knowledgeEmbeddingCandidates([undeclared])).toHaveLength(1);
+  });
+
+  it("does not admit unsupported tasks or encodings", () => {
     // A copy changes only a verified capability member for each admission probe.
     // 每个准入探测的副本仅更改已验证能力成员。
     const base = candidateFixture("embedding_create", "internal_background", true);
     if (base.capabilities.embedding === undefined) throw new Error("Synthetic embedding capability missing");
-    for (const patch of [{ distance_metric: "unknown" }, { tasks: ["query"] }, { encodings: [] }, { output_kinds: [] }, { maximum_inputs: 0 }]) {
+    for (const patch of [{ tasks: ["query"] }, { encodings: [] }, { output_kinds: [] }, { maximum_inputs: 0 }]) {
       expect(knowledgeEmbeddingCandidates([{ ...base, capabilities: { ...base.capabilities, embedding: { ...base.capabilities.embedding, ...patch } } }])).toEqual([]);
     }
   });
