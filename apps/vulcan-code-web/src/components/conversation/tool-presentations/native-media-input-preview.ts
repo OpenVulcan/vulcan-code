@@ -11,21 +11,6 @@ export function nativeMediaInputPreview(value: unknown): string | undefined {
     ? result.text : "The media read result has an invalid format and cannot be displayed.";
 }
 
-/** Returns only the readable resource filename from canonical `value`, or undefined when no valid native receipt exists.
- * 仅从规范`value`返回可读资源文件名；不存在有效原生回执时返回undefined。
- */
-export function nativeMediaInputFileName(value: unknown): string | undefined {
-  // ResourceReference.file_name is emitted by the native reader for inline and uploaded media alike.
-  // 原生读取器对内联及上传媒体都产出ResourceReference.file_name。
-  const envelope = nativeMediaInputEnvelope(value);
-  if (envelope?.$vulcan_native_media_input !== 1 || typeof envelope.text !== "string") return undefined;
-  // A missing or malformed resource never supplies a speculative filename.
-  // 缺少或畸形资源绝不提供猜测的文件名。
-  const resource = envelope.resource;
-  if (resource === null || typeof resource !== "object" || Array.isArray(resource)) return undefined;
-  return "file_name" in resource && typeof resource.file_name === "string" ? resource.file_name : undefined;
-}
-
 /** Decodes host-marked `value` once; returns its exact envelope or undefined for unrelated output.
  * 对宿主标记的`value`解码一次；返回精确信封，无关输出返回undefined。
  */
