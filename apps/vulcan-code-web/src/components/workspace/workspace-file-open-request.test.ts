@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findRequestedFileEntry, parseFilePathMention, resolveWorkspaceFileTarget } from "./workspace-file-open-request";
+import { findRequestedFileEntry, markdownLinkFileTarget, parseFilePathMention, resolveWorkspaceFileTarget } from "./workspace-file-open-request";
 import { emptyWorkspaceContextTabState, focusWorkspaceFilesTab, openWorkspaceContextTab } from "./workspace-shell/context-tabs";
 import type { WorkspaceFileDirectoryListing, WorkspaceFileEntrySummary } from "@/types";
 
@@ -25,6 +25,26 @@ describe("resolveWorkspaceFileTarget", () => {
     expect(resolveWorkspaceFileTarget("/home/u/repo", "/Home/u/repo/x.ts")).toBeNull();
     expect(resolveWorkspaceFileTarget("D:\\work\\repo", "src/../../secret.txt")).toBeNull();
     expect(resolveWorkspaceFileTarget("D:\\work\\repo", "D:\\work\\repo")).toBeNull();
+  });
+});
+
+describe("markdownLinkFileTarget", () => {
+  it("reads project files with their lines from paths, line suffixes, fragments and file URLs", () => {
+    expect(markdownLinkFileTarget("crates/a/src/lib.rs")).toEqual({ path: "crates/a/src/lib.rs", lines: null });
+    expect(markdownLinkFileTarget("src/app.ts:12-20")).toEqual({ path: "src/app.ts", lines: { start: 12, end: 20 } });
+    expect(markdownLinkFileTarget("src/app.ts#L12-L20")).toEqual({ path: "src/app.ts", lines: { start: 12, end: 20 } });
+    expect(markdownLinkFileTarget("make.ps1:3-5")).toEqual({ path: "make.ps1", lines: { start: 3, end: 5 } });
+    expect(markdownLinkFileTarget("./make.ps1:3")).toEqual({ path: "make.ps1", lines: { start: 3, end: 3 } });
+    expect(markdownLinkFileTarget("src/my%20notes.md")).toBeNull();
+    expect(markdownLinkFileTarget("file:///D:/repo/a.ts")).toEqual({ path: "D:/repo/a.ts", lines: null });
+  });
+
+  it("leaves web links, in-page anchors and folders as ordinary links", () => {
+    expect(markdownLinkFileTarget("https://example.com/a.ts")).toBeNull();
+    expect(markdownLinkFileTarget("mailto:a@example.com")).toBeNull();
+    expect(markdownLinkFileTarget("#usage")).toBeNull();
+    expect(markdownLinkFileTarget("//example.com/a.ts")).toBeNull();
+    expect(markdownLinkFileTarget("src/components/")).toBeNull();
   });
 });
 

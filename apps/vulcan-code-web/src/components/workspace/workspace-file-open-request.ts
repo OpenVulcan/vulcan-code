@@ -162,7 +162,38 @@ export function parseFilePathMention(text: string): { path: string; lines: Works
   return { path: match[1], lines: start !== null && end !== null && start > 0 && end >= start ? { start, end } : null };
 }
 
-// findRequestedFileEntry picks the file named `name` from a listing, preferring an exact match over one that
+// TOP_LEVEL_FILE_LINE_LINK matches a link to a file in the project root with a line suffix, such as "make.ps1:3-5",
+// whose name before the colon reads like a URL scheme.
+// TOP_LEVEL_FILE_LINE_LINK 匹配带行后缀的项目根目录文件链接（如 "make.ps1:3-5"），其冒号前的名称看起来像 URL 协议。
+export const TOP_LEVEL_FILE_LINE_LINK = /^[^:/\\?#]+:\d+(?:[-–]\d+)?(?:[?#].*)?$/;
+
+// markdownLinkFileTarget reads the file a Markdown link points at: a relative path, an absolute local path or a
+// file: URL, with lines given as ":12", ":12-20" or a "#L12-L20" fragment. Web and other scheme links, in-page
+// anchors and folder links (ending in a slash) are not files.
+// markdownLinkFileTarget 读取 Markdown 链接指向的文件：相对路径、本地绝对路径或 file: URL，行可写作 ":12"、
+// ":12-20" 或 "#L12-L20" 片段。网页及其他协议链接、页内锚点与以斜杠结尾的文件夹链接不是文件。
+export function markdownLinkFileTarget(href: string): { path: string; lines: WorkspaceFileLines | null } | null {
+  let target: string;
+  try {
+    target = decodeURI(href.trim());
+  } catch {
+    return null;
+  }
+  if (/^file:/i.test(target)) target = target.replace(/^file:\/*/i, "/").replace(/^\/([A-Za-z]:[\\/])/, "$1");
+  else if (!/^[A-Za-z]:[\\/]/.test(target) && !TOP_LEVEL_FILE_LINE_LINK.test(target) && /^[a-z][a-z0-9+.-]*:/i.test(target)) return null;
+  if (target === "" || target.startsWith("#") || target.startsWith("//")) return null;
+  const fragment = /#L(\d+)(?:-L?(\d+))?$/i.exec(target);
+  const bare = target.replace(/[?#].*$/, "");
+  const suffix = /:(\d+)(?:[-–](\d+))?$/.exec(bare);
+  const path = (suffix ? bare.slice(0, suffix.index) : bare).replace(/^\.\//, "");
+  if (path === "" || /[\\/]$/.test(path) || /[\s*?"<>|]/.test(path)) return null;
+  const range = suffix ?? fragment;
+  const start = range ? Number(range[1]) : 0;
+  const end = range?.[2] ? Number(range[2]) : start;
+  return { path, lines: start > 0 && end >= start ? { start, end } : null };
+}
+
+// findRequestedFileEntry picks the file named \`name\` from a listing, preferring an exact match over one that
 // differs only in case.
 // findRequestedFileEntry 从目录列表中选出名为 `name` 的文件，精确匹配优先于仅大小写不同的匹配。
 export function findRequestedFileEntry(listing: WorkspaceFileDirectoryListing, name: string): WorkspaceFileEntrySummary | null {

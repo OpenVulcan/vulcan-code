@@ -30,6 +30,10 @@
 .vk-md strong { font-weight: 600; }
 .vk-md a { color: var(--vk-signal); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--vk-signal) 40%, transparent); text-underline-offset: 0.18em; }
 .vk-md a:hover { text-decoration-color: currentColor; }
+/* A link to a project file is a button that reads as a link. */
+.vk-md-file-link { display: inline; padding: 0; border: 0; background: transparent; color: var(--vk-signal); font: inherit; text-align: inherit; cursor: pointer; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--vk-signal) 40%, transparent); text-underline-offset: 0.18em; }
+.vk-md-file-link:hover { text-decoration-color: currentColor; }
+.vk-md-file-link:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
 /* Inline-block keeps long wrapped links in the text flow. */
 .vk-md-link-icon { display: inline-block; width: 0.9em; height: 0.9em; margin-inline-end: 0.25em; vertical-align: -0.12em; opacity: 0.75; }
 .vk-md blockquote { padding-left: calc(var(--vk-u) * 3); border-left: 2px solid var(--vk-line-strong); color: var(--vk-ink-2); }

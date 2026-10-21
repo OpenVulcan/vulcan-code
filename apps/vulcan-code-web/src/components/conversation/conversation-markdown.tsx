@@ -3,7 +3,7 @@ import { runConversationControlAction } from "./conversation-control-feedback";
 import ReactMarkdown, { defaultUrlTransform, type UrlTransform, type ExtraProps } from "react-markdown";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { Check, Copy, Globe, Text, TextWrap } from "lucide-react";
+import { Check, Copy, FileText, Globe, Text, TextWrap } from "lucide-react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { MermaidDiagram } from "@/components/conversation/conversation-mermaid";
 import { SvgPreview } from "@/components/conversation/conversation-svg-preview";
@@ -27,7 +27,9 @@ import {
 } from "@/diff/diff-shiki-shared";
 import { useI18n } from "@/i18n";
 import {
+  markdownLinkFileTarget,
   parseFilePathMention,
+  TOP_LEVEL_FILE_LINE_LINK,
   useWorkspaceFileOpener,
   type WorkspaceFileLines,
   type WorkspaceFileOpener,
@@ -97,9 +99,24 @@ function rehypeInlineMath() {
   return (tree: MarkdownHastNode) => visit(tree);
 }
 
+// rehypeRootFileLinks makes links to project-root files with lines, such as "make.ps1:3-5", relative ("./make.ps1:3-5"),
+// so sanitization does not drop them as unknown schemes. It runs before sanitization.
+// rehypeRootFileLinks 将带行的项目根目录文件链接（如 "make.ps1:3-5"）改为相对地址（"./make.ps1:3-5"），使清理不会把它们
+// 当作未知协议丢弃。它在清理之前运行。
+function rehypeRootFileLinks() {
+  const visit = (node: MarkdownHastNode) => {
+    const href = node.properties?.href;
+    if (node.tagName === "a" && typeof href === "string" && TOP_LEVEL_FILE_LINE_LINK.test(href)) {
+      node.properties = { ...node.properties, href: `./${href}` };
+    }
+    node.children?.forEach(visit);
+  };
+  return (tree: MarkdownHastNode) => visit(tree);
+}
+
 // markdownSanitizers stores the HTML sanitization pipeline for untrusted transcript content.
 // markdownSanitizers 保存用于不可信转录内容的 HTML 清理管线。
-const markdownSanitizers: NonNullable<React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]> = [[rehypeSanitize, {
+const markdownSanitizers: NonNullable<React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]> = [rehypeRootFileLinks, [rehypeSanitize, {
   ...defaultSchema,
   protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "file"] },
 }], rehypeInlineMath];
@@ -309,11 +326,17 @@ function MarkdownContentRenderer(props: {
   // openFile 在文件面板中显示行内文件路径；工作台之外为 null，路径保持为普通代码。
   const openFile = useWorkspaceFileOpener();
   const components = React.useMemo(() => ({
-    a: ({ children, href }: { children?: React.ReactNode; href?: string }) => (
-      <a href={href} rel="noreferrer" target="_blank">
-        {href ? <Globe aria-hidden="true" className="vk-md-link-icon" /> : null}{children}
-      </a>
-    ),
+    a: ({ children, href }: { children?: React.ReactNode; href?: string }) => {
+      // Links to project files show the file in the files panel instead of opening a browser tab.
+      // 指向项目文件的链接在文件面板中显示该文件，而不是打开浏览器标签页。
+      const file = openFile && href ? markdownLinkFileTarget(href) : null;
+      if (file && openFile) return <MarkdownFileLink lines={file.lines} open={openFile} path={file.path}>{children}</MarkdownFileLink>;
+      return (
+        <a href={href} rel="noreferrer" target="_blank">
+          {href ? <Globe aria-hidden="true" className="vk-md-link-icon" /> : null}{children}
+        </a>
+      );
+    },
     code: ({ children, className, node }: { children?: React.ReactNode; className?: string } & ExtraProps) => {
       if (node?.properties?.dataMath === "inline" && typeof children === "string") {
         // The source stays visible as code until KaTeX arrives.
@@ -416,6 +439,25 @@ function MarkdownFilePath(props: { text: string; path: string; lines: WorkspaceF
     >
       {props.text}
     </code>
+  );
+}
+
+// MarkdownFileLink renders a Markdown link to a project file as a control styled like a link that shows the file,
+// at its lines, in the files panel; its tooltip names the file. A button, so no click can open the relative address
+// as a broken browser tab.
+// MarkdownFileLink 将指向项目文件的 Markdown 链接渲染为链接样式的控件，在文件面板中显示该文件（及其行）；其提示指明
+// 该文件。使用按钮，任何点击都不会把相对地址作为失效的浏览器标签页打开。
+function MarkdownFileLink(props: { children?: React.ReactNode; path: string; lines: WorkspaceFileLines | null; open: WorkspaceFileOpener }) {
+  const { t } = useI18n();
+  return (
+    <button
+      className="vk-md-file-link"
+      onClick={() => props.open(props.path, props.lines)}
+      title={props.path + " · " + t("workspaceFiles.showInFilesPanel")}
+      type="button"
+    >
+      <FileText aria-hidden="true" className="vk-md-link-icon" />{props.children}
+    </button>
   );
 }
 
