@@ -1,5 +1,5 @@
 import React from "react";
-import { RotateCcw, Settings2 } from "lucide-react";
+import { Bot, RotateCcw, Settings2 } from "lucide-react";
 
 import { errorMessage } from "@/lib/display-format";
 import { formatMessage, useI18n } from "@/i18n";
@@ -9,7 +9,7 @@ import { Button } from "@/ui-kit/primitives/button";
 import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
 import { toast } from "@/ui-kit/primitives/toast";
 
-import { SessionSettingsRow } from "./composer-session-settings-parts";
+import { SessionSettingsGroup, SessionSettingsRow } from "./composer-session-settings-parts";
 
 // ComposerSubagentModelsBlock is the session's quick allowlist setting: follow the system list or keep its own,
 // with editing in a dialog and a one-click return to the system default.
@@ -54,24 +54,31 @@ export function ComposerSubagentModelsBlock(props: { conversationId: string | nu
       ? formatMessage(t(custom ? "subagentModels.session.customSummary" : "subagentModels.session.followSummary"), { count: effective.length })
       : t("subagentModels.loading"));
   return (
-    <div className="vk-ss-block" data-ss-section="subagents">
-      <SessionSettingsRow description={description} title={t("subagentModels.session.title")}>
+    <SessionSettingsGroup
+      action={snapshot ? (
+        <Button className="vk-ss-sub-action" onClick={props.onEdit} size="xs" type="button" variant="ghost">
+          <Settings2 size={13} />{t("subagentModels.session.edit")}
+        </Button>
+      ) : undefined}
+      count={snapshot ? effective.length : undefined}
+      icon={<Bot size={14} />}
+      section="subagents"
+      title={t("subagentModels.session.title")}
+    >
+      <SessionSettingsRow description={description}>
         <SegmentedControl aria-busy={saving} aria-label={t("subagentModels.session.title")} disabled={!snapshot || saving}
           onValueChange={(value) => void apply(value === "custom")} value={custom ? "custom" : "inherit"}>
           <SegmentedControlItem value="inherit">{t("subagentModels.session.follow")}</SegmentedControlItem>
           <SegmentedControlItem value="custom">{t("subagentModels.session.custom")}</SegmentedControlItem>
         </SegmentedControl>
       </SessionSettingsRow>
-      {snapshot ? (
+      {custom ? (
         <div className="vk-ss-actions">
-          <Button onClick={props.onEdit} size="xs" type="button" variant="ghost"><Settings2 size={13} />{t("subagentModels.session.edit")}</Button>
-          {custom ? (
-            <Button disabled={saving} onClick={() => void apply(false)} size="xs" type="button" variant="ghost">
-              <RotateCcw size={13} />{t("subagentModels.session.restore")}
-            </Button>
-          ) : null}
+          <Button disabled={saving} onClick={() => void apply(false)} size="xs" type="button" variant="ghost">
+            <RotateCcw size={13} />{t("subagentModels.session.restore")}
+          </Button>
         </div>
       ) : null}
-    </div>
+    </SessionSettingsGroup>
   );
 }

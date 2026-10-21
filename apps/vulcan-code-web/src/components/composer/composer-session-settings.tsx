@@ -1,5 +1,5 @@
 import React from "react";
-import { Monitor, Settings, Settings2, SlidersHorizontal, X } from "lucide-react";
+import { Monitor, PenLine, Settings, Settings2, Shapes, SlidersHorizontal, X } from "lucide-react";
 
 import "@/ui-kit/styles/features/session-settings.css";
 import { setConversationToolCollapseOverride, useToolCollapsePreference } from "@/components/conversation/tool-collapse-preferences";
@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import type { ComposerAttachmentMenuProps } from "./composer-attachment-controls";
 import { ComposerKnowledgeControl } from "./composer-knowledge-control";
-import { SessionSettingsRow } from "./composer-session-settings-parts";
+import { SessionSettingsGroup, SessionSettingsRow } from "./composer-session-settings-parts";
 import { ComposerSubagentModelsBlock } from "./composer-subagent-models";
 import type { ComposerSettingsSection } from "./composer-settings-request";
 import { useDedicatedComposer } from "./dedicated/dedicated-session-controls";
@@ -139,16 +139,16 @@ export function ComposerSettingsMenu(props: ComposerAttachmentMenuProps) {
                 projectId={props.projectId}
               />
               {props.vmmAvailable || props.onOpenMemorySettings ? (
-                <div className="vk-ss-block" data-ss-section="memory">
-                  <div className="vk-ss-sub">
-                    <MemoryBrainIcon size={14} />
-                    <span>{t("composer.vmmMemory")}</span>
-                    {props.onOpenMemorySettings ? (
-                      <Button className="vk-ss-sub-action" onClick={props.onOpenMemorySettings} size="xs" type="button" variant="ghost">
-                        <Settings2 size={13} />{t("memory.workspace.settings")}
-                      </Button>
-                    ) : null}
-                  </div>
+                <SessionSettingsGroup
+                  action={props.onOpenMemorySettings ? (
+                    <Button className="vk-ss-sub-action" onClick={props.onOpenMemorySettings} size="xs" type="button" variant="ghost">
+                      <Settings2 size={13} />{t("memory.workspace.settings")}
+                    </Button>
+                  ) : undefined}
+                  icon={<MemoryBrainIcon size={14} />}
+                  section="memory"
+                  title={t("composer.vmmMemory")}
+                >
                   {props.vmmStatus ? <p className="vk-ss-note">{t(`memory.workspace.${props.vmmStatus}`)}</p> : null}
                   {props.vmmAvailable ? <>
                     <VmmPolicyRow label={t("composer.vmm.precheckInjection")} onChange={props.onVmmPolicyChange} policy="precheck"
@@ -156,7 +156,7 @@ export function ComposerSettingsMenu(props: ComposerAttachmentMenuProps) {
                     <VmmPolicyRow label={t("composer.vmm.memoryWriteback")} onChange={props.onVmmPolicyChange} policy="writeback"
                       selectedMode={props.sessionVmmPolicy?.memoryWritebackMode ?? "inherit"} />
                   </> : null}
-                </div>
+                </SessionSettingsGroup>
               ) : null}
               <ComposerSubagentModelsBlock conversationId={props.conversationId} onEdit={() => {
                 setOpen(false);
@@ -196,14 +196,13 @@ function OutputStyleRow(props: {
   const selectedEntry = props.catalog.entries.find((entry) => entry.id === selectedId);
   const pending = Boolean(props.conversationId && props.sessionOutputStyle?.pendingActivation);
   return (
+    <SessionSettingsGroup icon={<PenLine size={14} />} section="style" title={t("composer.outputStyle.menuTitle")}>
     <SessionSettingsRow
       description={pending
         ? t("composer.outputStyle.savedPending")
         : selectedEntry
           ? formatMessage(t("composer.outputStyle.promptCharacters"), { count: selectedEntry.promptCharCount.toLocaleString(locale) })
           : formatMessage(t("composer.outputStyle.useSystemSetting"), { label: globalLabel })}
-      section="style"
-      title={t("composer.outputStyle.menuTitle")}
     >
       <Select onValueChange={(value) => props.onChange(value === "inherit" ? null : value.slice("style:".length))}
         value={selectedId === null ? "inherit" : `style:${selectedId}`}>
@@ -216,6 +215,7 @@ function OutputStyleRow(props: {
         </SelectContent>
       </Select>
     </SessionSettingsRow>
+    </SessionSettingsGroup>
   );
 }
 
@@ -225,10 +225,9 @@ function AnswerModeRow(props: { controller: ComposerAnswerModeController }) {
   const { t } = useI18n();
   const { mode, saving, available, awaitingRequest, select } = props.controller;
   return (
+    <SessionSettingsGroup icon={<Shapes size={14} />} section="answer" title={t("answerMode.label")}>
     <SessionSettingsRow
       description={awaitingRequest ? t("answerMode.pending") : t(mode === "interactive" ? "answerMode.interactiveHint" : "answerMode.standardHint")}
-      section="answer"
-      title={t("answerMode.label")}
     >
       <SegmentedControl aria-busy={saving} aria-label={t("answerMode.label")} disabled={!available || saving}
         onValueChange={(value) => select(value as "standard" | "interactive")} value={mode ?? ""}>
@@ -236,6 +235,7 @@ function AnswerModeRow(props: { controller: ComposerAnswerModeController }) {
         <SegmentedControlItem value="interactive">{t("answerMode.interactive")}</SegmentedControlItem>
       </SegmentedControl>
     </SessionSettingsRow>
+    </SessionSettingsGroup>
   );
 }
 

@@ -21,8 +21,13 @@
 .vk-ss-row > button[data-slot="select-trigger"] { max-width: 11rem; }
 .vk-ss-row:focus-within > div:first-child > strong { color: var(--vk-ember); }
 
+/* Every session item is a block opened by its heading line; consecutive blocks are divided by a rule, and the */
+/* block's rows, checks and notes share one inset under the heading. */
+/* 每个会话设置项都是以标题行开头的块；相邻块以分隔线划分，块内的设置行、勾选行与说明在标题下共用同一缩进。 */
 .vk-ss-block { display: grid; gap: 2px; padding-top: calc(var(--vk-u) * 1.5); }
-.vk-ss-sub { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-height: calc(var(--vk-u) * 7); font-size: var(--vk-fs-md); font-weight: 500; }
+.vk-ss-sec > .vk-ss-block + .vk-ss-block { margin-top: calc(var(--vk-u) * 1.5); padding-top: calc(var(--vk-u) * 2.5); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-ss-block > .vk-ss-row { padding-left: calc(var(--vk-u) * 1.5); }
+.vk-ss-sub { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-height: calc(var(--vk-u) * 7); font-size: var(--vk-fs-md); font-weight: 600; }
 .vk-ss-sub > svg { flex: none; color: var(--vk-ink-3); }
 .vk-ss-count { padding: 0 calc(var(--vk-u) * 1.5); color: var(--vk-ember); background: color-mix(in srgb, var(--vk-ember) 12%, transparent); font-size: var(--vk-fs-xs); }
 .vk-ss-sub > .vk-ss-sub-action { margin-left: auto; }
