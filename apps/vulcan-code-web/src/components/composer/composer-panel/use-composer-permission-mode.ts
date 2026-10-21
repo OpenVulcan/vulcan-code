@@ -158,6 +158,9 @@ export function useComposerPermissionMode(options: PermissionModeComposerOptions
   }, [options.sessionId]);
   return {
     mode, saving, available: mode !== null, select, flush,
+    // sessionId names the materialized session; null for a draft.
+    // sessionId 指明已物化的会话；草稿为 null。
+    sessionId: options.sessionId,
     unattended: {
       value: unattended,
       available: options.sessionId !== null && authority !== null,

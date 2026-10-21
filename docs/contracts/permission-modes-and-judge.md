@@ -23,6 +23,10 @@
 - **复核规则只是复核材料。** 用户在设置中写的自然语言复核规则（拒绝 / 问我 / 放行）只以 `<review_rules>`
   区段进入复核 LLM 输入，不改变确定性规则、高风险或判定拦截约束、项目类别档位与无人值守拒绝策略；项目配置
   读取失败时复核报错，不退回系统规则。长度上限只在 `MAX_REVIEW_RULE_CHARS` 定义。
+- **复核附加提示词只用于用户在场的复核。** 用户写给复核器的附加提示词只在未开启无人值守的复核中以
+  `<review_prompt>` 区段进入复核 LLM 输入，排在复核规则的拒绝 / 问我分组与项目策略之后，不能放宽它们；
+  无人值守复核只读拒绝策略。会话自有文本读取失败时复核报错，不退回系统默认。长度上限只在
+  `MAX_REVIEW_PROMPT_CHARS` 定义。
 - **审批等待到期即拒绝。** 系统级 `approvalTimeoutSeconds` 大于 0 时，用户审批等待该秒数后按拒绝处理
   （判定记录结果 `approval_expired`），绝不按放行处理；0 表示一直等到回答。上限只在
   `MAX_APPROVAL_TIMEOUT_SECONDS` 定义，截止时间由服务掌握，客户端倒计时只是显示。
@@ -147,6 +151,11 @@
   `{ allow, ask, deny }` 文本，保存时去除首尾空白，超出上限拒绝保存。复核时按调用所在工作区取有效规则，
   按拒绝 → 问我（无人值守时为拒绝）→ 放行的顺序应用；放行规则可覆盖“超出项目或改动共享状态即询问”的默认
   指引，但不覆盖项目策略中设为 `confirm` 或 `review` 的类别。保存后下一次复核即生效。
+- **复核附加提示词**：系统默认保存在用户全局判定设置的 `review_prompt`（空串不写出；
+  `service_review_prompt_system_default` / `service_save_review_prompt_system_default`）；会话可在会话目录
+  旁置文件 `review-prompt.json`（`{ version: 1, prompt }`，未知字段或其他版本即报错）保存自有文本，文件缺失表示
+  跟随系统默认（`service_session_review_prompt` / `service_save_session_review_prompt`，`prompt: null` 删除
+  文件恢复跟随）。子会话按根会话读取。保存时去除首尾空白，超出上限拒绝保存；下一次复核即读取。
 - **审批等待**：`approvalTimeoutSeconds` 随判定设置保存（保存请求必须携带，任何保存都不能因遗漏而改变它），
   快照同时发布上限 `maxApprovalTimeoutSeconds`。宿主读取该值传给 `QuestionRuntime::request_approval`；挂起的
   审批以 `deadlineUnixMs` 投影给客户端。到期时经持久回复路径写入拒绝，先到的用户回答优先；拒绝文本
@@ -194,6 +203,8 @@
   项目默认分开编辑，项目可切换“使用项目策略”，关闭时显示所跟随的系统文本。
 - 复核规则：WebUI 位于权限判定设置页复核路由区段的“复核规则”子页面，TUI 为设置区的同名页面；系统规则与
   项目规则分开编辑，每组一个文本框；项目可切换“使用项目规则”，开启时以系统规则为起点，关闭时说明跟随系统规则。
+- 复核附加提示词：会话文本位于输入区权限菜单“自动审批设置”子菜单的“复核附加提示词”（草稿不可用），对话框
+  注明跟随系统默认或本会话自定义，可恢复跟随；系统默认位于“复核规则”子页面末尾的同名区段。
 - 审批等待：WebUI 为权限判定设置页“审批请求”区段的秒数输入（失去焦点或回车时保存，超出范围恢复已保存值），
   TUI 为权限判定页同名区段的数值行。
 - “权限判定”设置页：总览依次为配置状态与后端选择、所选后端的设置（本机为使用中模型、设备、CUDA 摘要与运行
@@ -222,6 +233,7 @@
 | 无人值守、连续拒绝记忆与代理理由 | `tool_permission.rs` 中的 `PermissionMemory`、`UNATTENDED_REVIEWED_REPEATS`；`tooling/native/declare_intent.rs` |
 | 无人值守默认值服务 | `crates/vulcan-service-kernel/src/permission_judge/unattended.rs` |
 | 复核规则服务与有效规则 | `crates/vulcan-service-kernel/src/permission_judge/review_rules.rs`；类型与上限在 `crates/vulcan-permission-judge/src/system.rs` |
+| 复核附加提示词服务 | `crates/vulcan-service-kernel/src/permission_judge/review_prompt.rs`；会话旁置文件在 `crates/vulcan-workspace-store/src/workspace_store/session_sidecars.rs` |
 | 审批等待与到期拒绝 | `crates/vulcan-agent-runtime/src/agent_runtime/question_runtime/approval.rs`、`tool_permission.rs` 中的 `APPROVAL_EXPIRED_DENIAL` |
 | 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs` |
 | 判定记录存储、筛选、标记与导出 | `crates/vulcan-service-kernel/src/permission_judge/records.rs` |

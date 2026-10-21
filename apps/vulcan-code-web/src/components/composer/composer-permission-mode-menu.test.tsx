@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client"
 import { expect, it, vi } from "vitest"
 import { I18nProvider } from "@/i18n"
 import { loadProjectPermissionJudgePolicy, saveProjectPermissionJudgePolicy } from "@/service/permission-judge-service"
+import { loadSessionReviewPrompt, saveSessionReviewPrompt } from "@/service/review-prompt-service"
 import type { ProjectPermissionJudgePolicySnapshot } from "@/types"
 import type { PermissionMode, UnattendedConfig } from "@/service/permission-mode"
 import type { JudgeBackend } from "@/types/permission-judge"
@@ -16,6 +17,12 @@ vi.mock("@/service/permission-judge-service", () => ({
 }))
 const loadPolicy = vi.mocked(loadProjectPermissionJudgePolicy)
 const savePolicy = vi.mocked(saveProjectPermissionJudgePolicy)
+vi.mock("@/service/review-prompt-service", () => ({
+  loadSessionReviewPrompt: vi.fn(),
+  saveSessionReviewPrompt: vi.fn(),
+}))
+const loadReviewPrompt = vi.mocked(loadSessionReviewPrompt)
+const saveReviewPrompt = vi.mocked(saveSessionReviewPrompt)
 
 // React's concurrent test environment explicitly supports act for this isolated DOM harness.
 // 为独立 DOM 测试明确启用 React 并发测试环境的 act 支持。
@@ -51,7 +58,7 @@ async function openPermissionMenu(judgeBackend: JudgeBackend | null, mode: Permi
   await act(async () => root.render(<I18nProvider initialLocale="en-US">
     <PermissionJudgeEntryContext.Provider value={{ backend: judgeBackend, openSettings: openJudge, openGuide: () => {} }}>
       <ComposerPermissionModeControl controller={{
-        mode, saving: false, available: true, select, flush: async () => true,
+        mode, saving: false, available: true, select, flush: async () => true, sessionId: "session-a",
         unattended: { value: unattended, available: true, saving: false, apply, loadDefault },
       }} projectId={projectId} />
     </PermissionJudgeEntryContext.Provider>
@@ -257,4 +264,43 @@ it("edits or turns off an active unattended mode", async () => {
     await act(async () => document.querySelector<HTMLButtonElement>("[data-unattended-disable]")!.click())
     expect(apply).toHaveBeenCalledExactlyOnceWith(null)
   } finally { await cleanup() }
+})
+
+// Verifies the review prompt dialog prefills the followed system default and saves the session's own text,
+// and that a session with its own text can follow the system default again.
+// 验证复核提示词对话框预填所跟随的系统默认值并保存会话自有文本，且拥有自有文本的会话可以恢复跟随系统默认值。
+it("edits the session review prompt or returns it to the system default", async () => {
+  const snapshot = (prompt: string | null) => ({ sessionId: "session-a", prompt, systemPrompt: "system text", maxChars: 4000 })
+  loadReviewPrompt.mockResolvedValueOnce(snapshot(null))
+  saveReviewPrompt.mockResolvedValueOnce(snapshot("own text"))
+  const { cleanup } = await openPermissionMenu("local", "auto_approve")
+  try {
+    await openAutoSettings()
+    await act(async () => document.querySelector<HTMLElement>("[data-review-prompt-entry]")!.click())
+    const field = document.querySelector<HTMLTextAreaElement>("[data-review-prompt-text]")!
+    expect(loadReviewPrompt).toHaveBeenCalledExactlyOnceWith("session-a")
+    expect(field.value).toBe("system text")
+    expect(document.querySelector<HTMLElement>("[data-review-prompt-source]")?.dataset.reviewPromptSource).toBe("system")
+    expect(document.querySelector("[data-review-prompt-follow]")).toBeNull()
+    expect(document.querySelector<HTMLButtonElement>("[data-review-prompt-save]")!.disabled).toBe(true)
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!
+      setter.call(field, " own text ")
+      field.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-review-prompt-save]")!.click())
+    expect(saveReviewPrompt).toHaveBeenCalledExactlyOnceWith("session-a", "own text")
+  } finally { await cleanup() }
+
+  loadReviewPrompt.mockResolvedValueOnce(snapshot("own text"))
+  saveReviewPrompt.mockResolvedValueOnce(snapshot(null))
+  const reopened = await openPermissionMenu("local", "auto_approve")
+  try {
+    await openAutoSettings()
+    await act(async () => document.querySelector<HTMLElement>("[data-review-prompt-entry]")!.click())
+    expect(document.querySelector<HTMLTextAreaElement>("[data-review-prompt-text]")!.value).toBe("own text")
+    expect(document.querySelector<HTMLElement>("[data-review-prompt-source]")?.dataset.reviewPromptSource).toBe("session")
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-review-prompt-follow]")!.click())
+    expect(saveReviewPrompt).toHaveBeenLastCalledWith("session-a", null)
+  } finally { await reopened.cleanup() }
 })

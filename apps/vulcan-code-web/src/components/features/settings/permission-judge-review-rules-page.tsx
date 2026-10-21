@@ -14,6 +14,7 @@ import {
   saveProjectReviewRules,
   saveReviewRulesSystemDefault,
 } from "@/service/permission-judge-service";
+import { ReviewPromptSystemSection } from "./permission-judge-review-prompt-section";
 import type { ProjectReviewRulesSnapshot, ProjectSummary, ReviewRules, ReviewRulesSystemDefaultSnapshot } from "@/types";
 import "@/ui-kit/styles/features/settings-forms.css"
 
@@ -62,6 +63,7 @@ export function PermissionJudgeReviewRulesPage(props: { projects: readonly Proje
   return <>
     <SystemRulesSection />
     <ProjectRulesSection projects={props.projects} />
+    <ReviewPromptSystemSection />
   </>;
 }
 

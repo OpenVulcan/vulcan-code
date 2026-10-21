@@ -1,5 +1,5 @@
 import React from "react";
-import { Bot, ChevronDown, CircleAlert, Hand, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Bot, ChevronDown, CircleAlert, Hand, MessageSquareText, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useI18n } from "@/i18n";
 import type { PermissionMode } from "@/service/permission-mode";
 import {
@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/ui-kit/primitives/dropdown-menu";
 import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";
+import { ComposerReviewPromptDialog } from "./composer-review-prompt-dialog";
 import { ComposerUnattendedDialog } from "./composer-unattended-dialog";
 import { PermissionJudgeEntryContext } from "./permission-judge-entry-context";
 import { useDedicatedComposer } from "@/components/composer/dedicated/dedicated-session-controls";
@@ -126,6 +127,9 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
   // editingUnattended holds the unattended dialog open.
   // editingUnattended 控制无人值守对话框开启。
   const [editingUnattended, setEditingUnattended] = React.useState(false);
+  // editingReviewPrompt holds the session review prompt dialog open.
+  // editingReviewPrompt 控制会话复核提示词对话框开启。
+  const [editingReviewPrompt, setEditingReviewPrompt] = React.useState(false);
   const unattended = props.controller.unattended;
   const unattendedOn = unattended.value !== null;
   const current = PERMISSION_MODE_OPTIONS.find((option) => option.value === mode) ?? null;
@@ -225,6 +229,17 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
                     </>
                   ) : null}
                   <DropdownMenuItem
+                    data-review-prompt-entry=""
+                    disabled={props.controller.sessionId === null}
+                    onSelect={() => setEditingReviewPrompt(true)}
+                  >
+                    <span className="vk-pick-icon"><MessageSquareText size={14} /></span>
+                    <span className="vk-menu-label">
+                      <span>{t("permissionMode.reviewPrompt.menu")}</span>
+                      <small>{t(props.controller.sessionId === null ? "permissionMode.unattended.draftHint" : "permissionMode.reviewPrompt.menuHint")}</small>
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
                     data-unattended-entry={unattendedOn ? "on" : "off"}
                     disabled={!unattended.available || unattended.saving}
                     onSelect={() => setEditingUnattended(true)}
@@ -242,6 +257,7 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
         </DropdownMenuContent>
       </DropdownMenu>
       <ComposerUnattendedDialog open={editingUnattended} onOpenChange={setEditingUnattended} controller={unattended} />
+      <ComposerReviewPromptDialog open={editingReviewPrompt} onOpenChange={setEditingReviewPrompt} sessionId={props.controller.sessionId} />
       <AlertDialog open={confirmingFullAccess} onOpenChange={setConfirmingFullAccess}>
         <AlertDialogContent>
           <AlertDialogHeader>
