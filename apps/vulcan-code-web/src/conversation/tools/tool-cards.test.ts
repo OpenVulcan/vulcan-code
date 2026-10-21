@@ -6,7 +6,7 @@ import type { PersistentChangeSetFile } from "@/service/conversation-event-windo
 import { askAnswers, askQuestions } from "./cards/ask-card";
 import { commandOutputFromText } from "./cards/command-card";
 import { documentBody } from "./cards/document-card";
-import { listEntries, readLines, requestPreviewStat } from "./cards/file-cards";
+import { listEntries, readLines, requestPreviewStat, statFacts } from "./cards/file-cards";
 import { toolNameParts } from "./cards/generic-card";
 import { knowledgeEdits } from "./cards/knowledge-write-card";
 import { codeLines, luaSessionBody } from "./cards/lua-card";
@@ -115,6 +115,14 @@ describe("output parsing", () => {
       { directory: true, path: "src", size: null },
       { directory: false, path: "src/a.ts", size: 120 },
     ]);
+  });
+
+  it("reads padded and long-delimited code spans the runtime writes around paths and facts", () => {
+    expect(listEntries("- ` D:/repo/a.ts ` · file · 3 bytes\n- `` odd`name `` · file")).toEqual([
+      { directory: false, path: "D:/repo/a.ts", size: 3 },
+      { directory: false, path: "odd`name", size: null },
+    ]);
+    expect(statFacts("Type: file\nEncoding: ` utf-8 `\n").map((fact) => fact.value)).toEqual(["file", "utf-8"]);
   });
 
   it("joins stdout and stderr sections without the command header", () => {

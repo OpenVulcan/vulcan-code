@@ -4,6 +4,7 @@
 import * as React from "react";
 import { File, FileDiff, FileImage, FileMinus, FilePlus, FileSearch, FileText, Folder, FolderTree, type LucideIcon } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { useWorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
 import type { PersistentChangeSetFile } from "@/service/conversation-event-window-store";
 import { ToolFrame, type ToolCardProps } from "../tool-card";
 import type { RequestPreview } from "../tool-request";
@@ -104,6 +105,8 @@ export function FileInspectCard(props: ToolCardProps) {
   const entries = action === "list" && call.modelOutput ? listEntries(call.modelOutput) : [];
   const facts = action === "stat" && call.modelOutput ? statFacts(call.modelOutput) : [];
   const truncated = action === "list" && call.modelOutput?.includes("\nTruncated.") === true;
+  const openFile = useWorkspaceFileOpener();
+  const showLabel = t("workspaceFiles.showInFilesPanel");
   return (
     <ToolFrame
       {...props}
@@ -111,6 +114,7 @@ export function FileInspectCard(props: ToolCardProps) {
       meta={action === "list" && call.modelOutput && !call.isError
         ? <span>{t("toolCard.file.entries").replace("{count}", String(entries.length))}{truncated ? ` · ${t("toolCard.file.truncated")}` : ""}</span>
         : null}
+      filePath={facts.find((fact) => fact.key === "Type")?.value === "file" ? path : null}
       state={call.state}
       target={path}
       targetTitle={path}
@@ -121,7 +125,9 @@ export function FileInspectCard(props: ToolCardProps) {
           {entries.map((entry) => (
             <div data-dir={entry.directory ? "" : undefined} key={entry.path}>
               {entry.directory ? <Folder aria-hidden="true" /> : <File aria-hidden="true" />}
-              <span>{entry.path}</span>
+              {openFile && !entry.directory
+                ? <button className="vk-tree-open" onClick={() => openFile(entry.path)} title={showLabel} type="button">{entry.path}</button>
+                : <span>{entry.path}</span>}
               {entry.size !== null ? <small>{formatBytes(entry.size)}</small> : null}
             </div>
           ))}
@@ -267,13 +273,21 @@ interface ListEntry {
   size: number | null;
 }
 
-// listEntries parses the "- `path` · kind · N bytes" lines of the stable list output.
-// listEntries 解析稳定列表输出中的 "- `path` · kind · N bytes" 行。
+// codeSpanText returns the text of a Markdown code span body as CommonMark reads it: one space is dropped from each
+// end when both ends have one, which is how the runtime pads spans that could otherwise touch their backticks.
+// codeSpanText 按 CommonMark 的读法返回行内代码正文：两端都有空格时各去掉一个；运行时以此填充可能紧贴反引号的内容。
+function codeSpanText(body: string): string {
+  return body.length > 2 && body.startsWith(" ") && body.endsWith(" ") ? body.slice(1, -1) : body;
+}
+
+// listEntries parses the "- `path` · kind · N bytes" lines of the stable list output; the path span may use any
+// backtick run as its delimiter.
+// listEntries 解析稳定列表输出中的 "- `path` · kind · N bytes" 行；路径的行内代码可用任意长度的反引号分隔。
 export function listEntries(output: string): ListEntry[] {
   const entries: ListEntry[] = [];
   for (const line of output.split(/\r?\n/)) {
-    const match = /^- `(.+)` · (\w+)(?: · (\d+) bytes)?$/.exec(line);
-    if (match) entries.push({ directory: match[2] === "directory", path: match[1], size: match[3] ? Number(match[3]) : null });
+    const match = /^- (`+)(.+?)\1 · (\w+)(?: · (\d+) bytes)?$/.exec(line);
+    if (match) entries.push({ directory: match[3] === "directory", path: codeSpanText(match[2]), size: match[4] ? Number(match[4]) : null });
   }
   return entries;
 }
@@ -298,7 +312,8 @@ export function statFacts(output: string): Array<{ key: string; label: Translati
   for (const [key, label] of STAT_FACTS) {
     const match = new RegExp(`^${key.replace(/[()]/g, "\\$&")}: (.+)$`, "m").exec(output);
     if (!match) continue;
-    let value = match[1].replace(/^`(.*)`$/, "$1");
+    const span = /^(`+)(.*)\1$/.exec(match[1]);
+    let value = span ? codeSpanText(span[2]) : match[1];
     if (key === "Size") value = formatBytes(Number(value.replace(/ bytes$/, "")));
     if (key === "Modified (Unix ms)") value = new Date(Number(value)).toLocaleString();
     facts.push({ key, label, value });
