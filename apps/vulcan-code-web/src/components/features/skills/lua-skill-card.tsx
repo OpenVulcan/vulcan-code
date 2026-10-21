@@ -33,7 +33,7 @@ import type { SkillActionProps } from "./skill-area-types";
 // SKILL_SOURCE_TYPE_NAMES spells install source kinds the way their owners write them; the kinds are protocol
 // identifiers and proper names, so they are the same in every language.
 // SKILL_SOURCE_TYPE_NAMES 按来源方自己的写法拼写安装来源类型；这些类型是协议标识与专有名称，因此各语言相同。
-const SKILL_SOURCE_TYPE_NAMES: Readonly<Record<string, string>> = { github: "GitHub", url: "URL" };
+const SKILL_SOURCE_TYPE_NAMES: Readonly<Record<string, string>> = { github: "GitHub", officialhub: "LuaSkills Hub", url: "URL" };
 
 // skillSourceTypeLabel names a recorded install source kind, or returns null when none was recorded.
 // skillSourceTypeLabel 给出已记录安装来源类型的名称；未记录时返回 null。

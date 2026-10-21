@@ -350,6 +350,128 @@
   font-size: var(--vk-fs-sm);
 }
 
+.lua-skill-hub-picker {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.lua-skill-hub-search {
+  position: relative;
+  display: grid;
+  min-width: 0;
+}
+
+.lua-skill-hub-search svg {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  color: var(--vk-ink-3);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.lua-skill-install-field .lua-skill-hub-search input {
+  padding-left: 30px;
+}
+
+.lua-skill-hub-results {
+  min-width: 0;
+  max-height: 280px;
+  display: grid;
+  align-content: start;
+  overflow-y: auto;
+  border: 1px solid var(--vk-line);
+  background: var(--vk-ground);
+}
+
+.lua-skill-hub-result {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 0;
+  border-bottom: 1px solid var(--vk-line-soft);
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--vk-ink);
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lua-skill-hub-result:not([aria-selected="true"]):hover:not(:disabled) {
+  background: var(--vk-hover);
+}
+
+.lua-skill-hub-result:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--vk-signal);
+}
+
+.lua-skill-hub-result[aria-selected="true"] {
+  border-left-color: var(--vk-ember);
+  background: var(--vk-ember-soft);
+}
+
+.lua-skill-hub-result-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--vk-fs-sm);
+}
+
+.lua-skill-hub-result-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lua-skill-hub-result-title code,
+.lua-skill-hub-result-meta {
+  color: var(--vk-ink-2);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-xs);
+}
+
+.lua-skill-hub-result-meta,
+.lua-skill-hub-result-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lua-skill-hub-result-summary {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+}
+
+.lua-skill-hub-status {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.lua-skill-hub-footer {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--vk-ink-3);
+  font-size: var(--vk-fs-xs);
+}
+
+.lua-skill-hub-footer > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-skill-page-body > .skill-warning-list {
   max-height: 96px;
   min-height: 0;

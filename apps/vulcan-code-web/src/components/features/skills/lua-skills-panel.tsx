@@ -21,6 +21,7 @@ import {
 } from "@/components/features/skills/lua-skill-card";
 import { LuaSkillConfigDialog } from "@/components/features/skills/lua-skill-config-dialog";
 import { LuaSkillUpdateProgressDialog, type LuaSkillUpdateRequest } from "./lua-skill-update-progress-dialog";
+import { LuaSkillHubPicker } from "./lua-skill-hub-picker";
 import { formatMessage, useI18n } from "@/i18n";
 import type { LuaSkillSummary, LuaSkillsOperationProgressSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
@@ -435,6 +436,10 @@ export function LuaSkillsPanel(props: {
   );
 }
 
+// LuaSkillInstallSourceType lists the install source kinds the host boundary accepts.
+// LuaSkillInstallSourceType 列出宿主边界接受的安装来源类型。
+type LuaSkillInstallSourceType = "official_hub" | "github";
+
 // LuaSkillInstallDialog renders the standalone LuaSkills install form.
 // LuaSkillInstallDialog 渲染独立的 LuaSkills 安装表单。
 export function LuaSkillInstallDialog(props: {
@@ -458,14 +463,12 @@ export function LuaSkillInstallDialog(props: {
   // sourceType stores the selected install source kind.
   // sourceType 保存当前选择的安装来源类型。
   //
-  // GitHub is the only selectable kind: upstream source policy rejects
-  // `SkillInstallSourceType::Url` unconditionally for install and update alike, so the
-  // host boundary rejects it too and offering it here would present a choice that can
-  // never succeed.
-  // 只有 GitHub 可选：上游来源策略对安装与更新都无条件拒绝
-  // `SkillInstallSourceType::Url`，因此宿主边界同样拒绝它，在此提供该选项只会呈现一个永远
-  // 不可能成功的选择。
-  const [sourceType, setSourceType] = React.useState<"github">("github");
+  // The reviewed LuaSkills Hub is the default kind and GitHub the alternative. URL is never
+  // offered: upstream source policy rejects `SkillInstallSourceType::Url` unconditionally for
+  // install and update alike, so the host boundary rejects it too.
+  // 默认来源为经审核的 LuaSkills Hub，GitHub 为备选。URL 从不提供：上游来源策略对安装与更新
+  // 都无条件拒绝 `SkillInstallSourceType::Url`，因此宿主边界同样拒绝它。
+  const [sourceType, setSourceType] = React.useState<LuaSkillInstallSourceType>("official_hub");
   // source stores the install source locator.
   // source 保存安装来源定位值。
   const [source, setSource] = React.useState("");
@@ -478,7 +481,7 @@ export function LuaSkillInstallDialog(props: {
 
   React.useEffect(() => {
     if (props.open) {
-      setSourceType("github");
+      setSourceType("official_hub");
       setSource("");
       setInstallError("");
       installingRef.current = false;
@@ -517,25 +520,34 @@ export function LuaSkillInstallDialog(props: {
         <form id={installFormId} className="lua-skill-install-form vk-dialog-body" onSubmit={submitInstall}>
           <label className="lua-skill-install-field">
             <span>{t("skills.lua.sourceType")}</span>
-            <Select disabled={installing} value={sourceType} onValueChange={(value) => setSourceType(value as "github")}>
+            <Select
+              disabled={installing}
+              value={sourceType}
+              onValueChange={(value) => { setSourceType(value as LuaSkillInstallSourceType); setSource(""); setInstallError(""); }}
+            >
               <SelectTrigger className="vk-fill">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="official_hub">{t("skills.lua.sourceHub")}</SelectItem>
                 <SelectItem value="github">GitHub</SelectItem>
               </SelectContent>
             </Select>
           </label>
-          <label className="lua-skill-install-field">
-            <span>{t("skills.lua.installSource")}</span>
-            <input
-              autoFocus
-              disabled={installing}
-              placeholder={t("skills.lua.placeholderGithub")}
-              value={source}
-              onChange={(event) => setSource(event.target.value)}
-            />
-          </label>
+          {sourceType === "official_hub" ? (
+            <LuaSkillHubPicker disabled={installing} selectedSkillId={source} onSelect={setSource} />
+          ) : (
+            <label className="lua-skill-install-field">
+              <span>{t("skills.lua.installSource")}</span>
+              <input
+                autoFocus
+                disabled={installing}
+                placeholder={t("skills.lua.placeholderGithub")}
+                value={source}
+                onChange={(event) => setSource(event.target.value)}
+              />
+            </label>
+          )}
           {installError ? <PageNotice details={installError} detailsLabel={t("skills.lua.errorDetails")} tone="error">
             {t("skills.lua.skillInstallationFailedCheck")}
           </PageNotice> : null}

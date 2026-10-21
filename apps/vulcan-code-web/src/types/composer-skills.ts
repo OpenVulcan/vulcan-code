@@ -1252,6 +1252,55 @@ export interface LuaSkillsCatalogUpdate {
   plugins: PluginSummary[];
 }
 
+// LuaSkillsHubSkill describes one installable skill listed by the LuaSkills Hub.
+// LuaSkillsHubSkill 描述 LuaSkills Hub 列出的一个可安装技能。
+export interface LuaSkillsHubSkill {
+  // Flat skill identifier accepted by the `official_hub` install source.
+  // `official_hub` 安装来源接受的扁平技能标识。
+  skillId: string;
+  // Publisher display name.
+  // 发布者显示名称。
+  publisher: string;
+  // Human-readable skill name.
+  // 人类可读的技能名称。
+  displayName: string;
+  // One-line skill summary.
+  // 单行技能摘要。
+  summary: string;
+  // Source repository URL, empty when unpublished.
+  // 源码仓库地址，未公开时为空。
+  repositoryUrl: string;
+  // Project homepage URL, empty when unpublished.
+  // 项目主页地址，未公开时为空。
+  homepageUrl: string;
+  // SPDX license expression declared by the publisher.
+  // 发布者声明的 SPDX 许可证表达式。
+  license: string;
+  // Search tags.
+  // 搜索标签。
+  tags: string[];
+  // Latest installable version.
+  // 最新可安装版本。
+  latestVersion: string;
+  // RFC 3339 time of the latest catalog change.
+  // 最近一次目录变更的 RFC 3339 时间。
+  updatedAt: string;
+}
+
+// LuaSkillsHubSearchPage carries one page of LuaSkills Hub search results.
+// LuaSkillsHubSearchPage 携带一页 LuaSkills Hub 搜索结果。
+export interface LuaSkillsHubSearchPage {
+  // Hub base URL that answered the search.
+  // 响应本次搜索的 Hub 基础地址。
+  hubBaseUrl: string;
+  // Skills on this page in Hub ranking order.
+  // 按 Hub 排序的本页技能。
+  items: LuaSkillsHubSkill[];
+  // Cursor of the next page, null on the last page.
+  // 下一页游标，最后一页为 null。
+  nextCursor: string | null;
+}
+
 // AgentSkillRecordSummary describes one source-aware prompt Agent Skill record.
 // AgentSkillRecordSummary 描述单个来源感知提示词 Agent Skill 记录。
 export interface AgentSkillRecordSummary {

@@ -639,6 +639,7 @@ export function LuaSkillsSettingsPanel(props: {
             />
             <TextSettingField
               label={t("skills.luaSettings.skillHubBaseUrl")}
+              hint={t("skills.luaSettings.skillHubBaseUrlHint")}
               value={draft.network.officialSkillHubBaseUrl ?? ""}
               onChange={(value) => updateNetworkText("officialSkillHubBaseUrl", value)}
             />
@@ -827,6 +828,9 @@ function TextSettingField(props: {
   // Localized field label.
   // 本地化字段标签。
   label: string
+  // Optional localized explanation shown under the input.
+  // 可选的本地化说明，显示在输入框下方。
+  hint?: string
   // Current text value.
   // 当前文本值。
   value: string
@@ -842,6 +846,7 @@ function TextSettingField(props: {
         value={props.value}
         onChange={(event) => props.onChange(event.currentTarget.value)}
       />
+      {props.hint ? <small className="vk-field-hint">{props.hint}</small> : null}
     </label>
   )
 }

@@ -4,6 +4,7 @@ import type {
   AgentSkillCategorySaveRequest,
   AgentSkillSaveRequest,
   LuaSkillsCatalogUpdate,
+  LuaSkillsHubSearchPage,
   LuaSkillConfigDeleteRequest,
   LuaSkillConfigDeleteResult,
   LuaSkillConfigDescriptor,
@@ -287,6 +288,15 @@ export async function installLuaSkill(skillId: string, source: string, sourceTyp
     }));
   }
   return serviceClient.request<LuaSkillsCatalogUpdate>("service_install_luaskill", { skillId: skillId.trim() || null, source, sourceType });
+}
+
+// searchLuaSkillsHub lists installable skills from the Hub that `official_hub` installs resolve against.
+// searchLuaSkillsHub 列出 `official_hub` 安装所解析的 Hub 中的可安装技能。
+export async function searchLuaSkillsHub(query: string, cursor: string | null): Promise<LuaSkillsHubSearchPage> {
+  if (!hasServiceRuntime()) {
+    return { hubBaseUrl: "", items: [], nextCursor: null };
+  }
+  return serviceClient.request<LuaSkillsHubSearchPage>("service_search_luaskills_hub", { query: query.trim() || null, cursor });
 }
 
 // updateLuaSkill updates one managed Lua Skill package.
