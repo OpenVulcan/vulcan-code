@@ -266,8 +266,14 @@ export function ComposerSlashCommandPanel(props: {
   onHighlight: (index: number) => void;
 }) {
   const { t } = useI18n();
+  const listRef = React.useRef<HTMLDivElement | null>(null);
+  // The highlighted row stays in view while the arrows move past the panel's visible rows.
+  // 方向键移过面板可见行时，高亮行保持在视野内。
+  React.useLayoutEffect(() => {
+    listRef.current?.children[props.highlightedIndex]?.scrollIntoView?.({ block: "nearest" });
+  }, [props.highlightedIndex]);
   return (
-    <div className="vk-slash" id={props.id} role="listbox" aria-label={t("composer.slash.panel")}>
+    <div className="vk-slash" id={props.id} ref={listRef} role="listbox" aria-label={t("composer.slash.panel")}>
       {props.commands.map((command, index) => {
         const descriptionKey = composerSlashCommandDescriptionKey(command);
         return (
