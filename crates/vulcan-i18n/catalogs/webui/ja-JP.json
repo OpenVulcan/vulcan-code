@@ -6055,5 +6055,11 @@
   "settings.permissionJudge.reviewPrompt.loadFailed": "レビュープロンプトを読み込めませんでした。",
   "conversation.collaboration.resultIssue.stopped": "タスクは完了前に停止されたため、依頼元のセッションは最終回答を受け取っていません。",
   "conversation.collaboration.resultIssue.abandoned": "タスクは最終回答なしで放棄されました。",
-  "conversation.collaboration.resultIssue.revoked": "依頼元のセッションの権限が取り消されたため、この結果は表示されていません。"
+  "conversation.collaboration.resultIssue.revoked": "依頼元のセッションの権限が取り消されたため、この結果は表示されていません。",
+  "toolCard.memory.count": "記憶 {count} 件",
+  "toolCard.memory.id": "記憶 #{id}",
+  "toolCard.memory.relevance": "関連度 {score}",
+  "toolCard.memory.previous": "前の記憶",
+  "toolCard.memory.next": "次の記憶",
+  "toolCard.memory.none": "返すのに十分な関連度の記憶はありませんでした。"
 }

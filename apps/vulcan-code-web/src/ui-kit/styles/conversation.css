@@ -591,6 +591,10 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tool-error { margin: 0; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); color: var(--vk-bad); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 .vk-tool-result { padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); min-width: 0; }
 .vk-tool-result[data-error] { color: var(--vk-bad); }
+.vk-memory-page-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3) 0; font-size: var(--vk-fs-sm); }
+.vk-memory-page-id { flex: none; color: var(--vk-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.vk-memory-page-query { min-width: 0; overflow: hidden; color: var(--vk-ink-3); text-overflow: ellipsis; white-space: nowrap; }
+.vk-memory-pager { display: flex; flex: none; align-items: center; gap: 2px; margin-left: auto; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
 .vk-tool-result :is(h1, h2) { margin: calc(var(--vk-u) * 2) 0 calc(var(--vk-u) * 1.5); font-size: var(--vk-fs-lg); }
 .vk-tool-result :is(h3, h4, h5, h6) { margin: calc(var(--vk-u) * 2) 0 calc(var(--vk-u) * 1); font-size: var(--vk-fs-md); }
 .vk-tool-result :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }

@@ -9,6 +9,7 @@ import { FileChangeCard, FileInspectCard, FileReadCard, MediaReadCard } from "./
 import { DocumentCard, documentToolSpec } from "./cards/document-card";
 import { GenericToolCard } from "./cards/generic-card";
 import { KnowledgeWriteCard } from "./cards/knowledge-write-card";
+import { MemorySearchCard } from "./cards/memory-search-card";
 import { LUA_TOOLS, LuaCard } from "./cards/lua-card";
 import { GoalCard, PlanCard, TodoCard } from "./cards/plan-cards";
 import { ProviderCard, providerToolSpec } from "./cards/provider-card";
@@ -61,6 +62,7 @@ export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   if (call.name === "ask") return { Card: AskCard, family: "agent" };
   if (agentToolSpec(call)) return { Card: AgentCard, family: "agent" };
   if (call.name === "knowledge_write") return { Card: KnowledgeWriteCard, family: "edit" };
+  if (call.name === "vmm_memory_search") return { Card: MemorySearchCard, family: "search" };
   const provider = providerToolSpec(call);
   if (provider) return { Card: ProviderCard, family: provider.family };
   const document = documentToolSpec(call);

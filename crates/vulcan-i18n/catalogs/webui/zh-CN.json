@@ -6055,5 +6055,11 @@
   "settings.permissionJudge.reviewPrompt.loadFailed": "无法读取复核提示词。",
   "conversation.collaboration.resultIssue.stopped": "任务在完成前被停止，请求方会话未收到最终回答。",
   "conversation.collaboration.resultIssue.abandoned": "任务被放弃，没有最终回答。",
-  "conversation.collaboration.resultIssue.revoked": "请求方会话的授权已撤销，因此未向其展示此结果。"
+  "conversation.collaboration.resultIssue.revoked": "请求方会话的授权已撤销，因此未向其展示此结果。",
+  "toolCard.memory.count": "{count} 条记忆",
+  "toolCard.memory.id": "记忆 #{id}",
+  "toolCard.memory.relevance": "相关度 {score}",
+  "toolCard.memory.previous": "上一条记忆",
+  "toolCard.memory.next": "下一条记忆",
+  "toolCard.memory.none": "没有相关度足够的记忆可返回。"
 }

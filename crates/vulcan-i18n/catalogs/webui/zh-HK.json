@@ -6055,5 +6055,11 @@
   "settings.permissionJudge.reviewPrompt.loadFailed": "無法讀取覆核提示詞。",
   "conversation.collaboration.resultIssue.stopped": "任務在完成前被停止，請求方會話未收到最終回答。",
   "conversation.collaboration.resultIssue.abandoned": "任務被放棄，沒有最終回答。",
-  "conversation.collaboration.resultIssue.revoked": "請求方會話的授權已撤銷，因此未向其顯示此結果。"
+  "conversation.collaboration.resultIssue.revoked": "請求方會話的授權已撤銷，因此未向其顯示此結果。",
+  "toolCard.memory.count": "{count} 條記憶",
+  "toolCard.memory.id": "記憶 #{id}",
+  "toolCard.memory.relevance": "相關度 {score}",
+  "toolCard.memory.previous": "上一條記憶",
+  "toolCard.memory.next": "下一條記憶",
+  "toolCard.memory.none": "沒有相關度足夠的記憶可返回。"
 }

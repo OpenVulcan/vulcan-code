@@ -6055,5 +6055,11 @@
   "settings.permissionJudge.reviewPrompt.loadFailed": "Impossible de lire les consignes de revue.",
   "conversation.collaboration.resultIssue.stopped": "La tâche a été arrêtée avant la fin ; la session demandeuse n'a donc reçu aucune réponse finale.",
   "conversation.collaboration.resultIssue.abandoned": "La tâche a été abandonnée sans réponse finale.",
-  "conversation.collaboration.resultIssue.revoked": "L'accès de la session demandeuse a été révoqué ; ce résultat ne lui a donc pas été montré."
+  "conversation.collaboration.resultIssue.revoked": "L'accès de la session demandeuse a été révoqué ; ce résultat ne lui a donc pas été montré.",
+  "toolCard.memory.count": "{count} souvenirs",
+  "toolCard.memory.id": "Souvenir n° {id}",
+  "toolCard.memory.relevance": "Pertinence {score}",
+  "toolCard.memory.previous": "Souvenir précédent",
+  "toolCard.memory.next": "Souvenir suivant",
+  "toolCard.memory.none": "Aucun souvenir n'était assez pertinent pour être renvoyé."
 }

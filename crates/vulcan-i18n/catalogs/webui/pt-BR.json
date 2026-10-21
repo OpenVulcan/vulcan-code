@@ -6055,5 +6055,11 @@
   "settings.permissionJudge.reviewPrompt.loadFailed": "Não foi possível ler as instruções de revisão.",
   "conversation.collaboration.resultIssue.stopped": "A tarefa foi interrompida antes de terminar, então a sessão solicitante não recebeu uma resposta final.",
   "conversation.collaboration.resultIssue.abandoned": "A tarefa foi abandonada sem resposta final.",
-  "conversation.collaboration.resultIssue.revoked": "O acesso da sessão solicitante foi revogado, então este resultado não foi mostrado a ela."
+  "conversation.collaboration.resultIssue.revoked": "O acesso da sessão solicitante foi revogado, então este resultado não foi mostrado a ela.",
+  "toolCard.memory.count": "{count} memórias",
+  "toolCard.memory.id": "Memória #{id}",
+  "toolCard.memory.relevance": "Relevância {score}",
+  "toolCard.memory.previous": "Memória anterior",
+  "toolCard.memory.next": "Próxima memória",
+  "toolCard.memory.none": "Nenhuma memória foi relevante o bastante para ser retornada."
 }

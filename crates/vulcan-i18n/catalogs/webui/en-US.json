@@ -6055,5 +6055,11 @@
   "settings.permissionJudge.reviewPrompt.loadFailed": "Could not read the review prompt.",
   "conversation.collaboration.resultIssue.stopped": "The task was stopped before it finished, so the requesting session received no final answer.",
   "conversation.collaboration.resultIssue.abandoned": "The task was abandoned without a final answer.",
-  "conversation.collaboration.resultIssue.revoked": "The requesting session's access was revoked, so this result was not shown to it."
+  "conversation.collaboration.resultIssue.revoked": "The requesting session's access was revoked, so this result was not shown to it.",
+  "toolCard.memory.count": "{count} memories",
+  "toolCard.memory.id": "Memory #{id}",
+  "toolCard.memory.relevance": "Relevance {score}",
+  "toolCard.memory.previous": "Previous memory",
+  "toolCard.memory.next": "Next memory",
+  "toolCard.memory.none": "No memory was relevant enough to return."
 }

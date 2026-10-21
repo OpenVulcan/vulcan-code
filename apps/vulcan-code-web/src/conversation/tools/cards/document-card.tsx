@@ -120,7 +120,6 @@ const DOCUMENT_TOOLS: Readonly<Record<string, DocumentToolSpec>> = {
     target: (input) => (textOf(input.path) ?? "").split(/\r?\n/).map((path) => path.trim()).filter(Boolean).join(" · "),
     verb: "toolCard.doc.markdownMenu",
   },
-  vmm_memory_search: { family: "search", icon: Brain, target: joined("queries"), verb: "toolCard.doc.memorySearch" },
   vmm_turn_details: { family: "read", icon: Brain, target: joined("turnIds"), verb: "toolCard.doc.memoryTurns" },
   vmm_memory_write: { family: "edit", icon: Brain, target: firstAbstract, verb: "toolCard.doc.memoryWrite" },
   vmm_memory_delete: { family: "edit", icon: Brain, target: joined("memoryIds"), verb: "toolCard.doc.memoryDelete" },
