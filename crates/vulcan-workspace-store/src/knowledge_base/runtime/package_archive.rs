@@ -185,10 +185,13 @@ pub(super) fn prepare_knowledge_package(
     let mut seen = BTreeSet::new();
     for index in 0..archive.len() {
         let entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let Ok(name) = entry.name() else {
+            return Err("ERR_KNOWLEDGE_PACKAGE_ENTRY_INVALID".into());
+        };
         if entry.is_dir()
             || entry.enclosed_name().is_none()
-            || !PACKAGE_ENTRIES.contains(&entry.name())
-            || !seen.insert(entry.name().to_string())
+            || !PACKAGE_ENTRIES.contains(&name.as_ref())
+            || !seen.insert(name.into_owned())
             || entry
                 .unix_mode()
                 .is_some_and(|mode| !matches!(mode & 0o170000, 0 | 0o100000))

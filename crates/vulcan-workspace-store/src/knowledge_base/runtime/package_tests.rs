@@ -17,7 +17,10 @@ fn jsonl(path: &Path) -> Vec<u8> {
         zip::ZipArchive::new(std::fs::File::open(path).expect("archive")).expect("zip");
     // Only two current-format entries may exist.
     // 仅允许存在两条当前格式条目。
-    let names: BTreeSet<_> = archive.file_names().map(str::to_string).collect();
+    let names: BTreeSet<_> = archive
+        .file_names()
+        .map(|name| name.expect("entry name").into_owned())
+        .collect();
     assert_eq!(
         names,
         BTreeSet::from([MANIFEST_ENTRY.to_string(), CONTENT_ENTRY.to_string()])

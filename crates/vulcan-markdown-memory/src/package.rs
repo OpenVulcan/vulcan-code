@@ -1132,7 +1132,10 @@ fn read_package(archive: &Path) -> Result<Package, MemoryError> {
         let mut entry = zip
             .by_index(index)
             .map_err(|error| invalid(&error.to_string()))?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|error| invalid(&error.to_string()))?
+            .into_owned();
         if entry.is_dir() || entry.enclosed_name().is_none() || entry.size() > MAX_FILE_BYTES as u64
         {
             return Err(invalid(&format!("entry `{name}` is not allowed")));

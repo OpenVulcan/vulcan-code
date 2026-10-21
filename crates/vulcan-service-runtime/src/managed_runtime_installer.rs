@@ -1289,9 +1289,12 @@ fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(), String> {
         })?;
         // relative is the sanitized archive member path.
         // relative 是经过清理的归档成员路径。
-        let relative = entry
-            .enclosed_name()
-            .ok_or_else(|| format!("ZIP entry {} escapes extraction root", entry.name()))?;
+        let relative = entry.enclosed_name().ok_or_else(|| {
+            format!(
+                "ZIP entry {} escapes extraction root",
+                String::from_utf8_lossy(entry.name_raw())
+            )
+        })?;
         // output_path is guaranteed to remain beneath destination.
         // output_path 保证始终位于目标目录下。
         let output_path = destination.join(relative);
