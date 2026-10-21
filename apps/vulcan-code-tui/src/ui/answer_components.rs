@@ -389,7 +389,9 @@ fn rows_markdown(
 }
 
 /// Rewrite one closed row or graph component into transcript Markdown, or `None` when invalid.
+/// Text after a row component's name is its heading, as in the WebUI.
 /// 将一个已闭合的行组件或图组件改写为会话记录 Markdown；无效时返回 `None`。
+/// 行组件名称后的文本作为其标题，与 WebUI 一致。
 fn component_markdown(
     name: &str,
     args: &str,
@@ -397,14 +399,16 @@ fn component_markdown(
     width: usize,
     theme: &Theme,
 ) -> Option<String> {
-    if !matches!(
+    let takes_args = matches!(
         name,
         "chart" | "flow" | "sequence" | "er" | "math" | "decision"
-    ) && !args.is_empty()
-    {
-        return None;
-    }
-    match name {
+    );
+    let heading = if takes_args || args.is_empty() {
+        String::new()
+    } else {
+        format!("**{args}**\n\n")
+    };
+    let body = match name {
         "kv" => rows_markdown(lines, 2, 2, |cell| {
             Some(format!("- **{}**: {}\n", cell[0], cell[1]))
         }),
@@ -482,7 +486,8 @@ fn component_markdown(
         "math" => math(args, lines),
         "decision" => decision(args, lines),
         _ => None,
-    }
+    }?;
+    Some(heading + &body)
 }
 
 /// `label | value [| maximum [| unit]] [| tone]` as a bullet with an optional ten-cell meter.

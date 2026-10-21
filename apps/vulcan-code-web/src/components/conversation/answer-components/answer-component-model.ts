@@ -172,9 +172,13 @@ export type AnswerSequenceStep =
   | { kind: "note"; first: number; last: number; text: string }
   | { kind: "message"; from: number; to: number; dashed: boolean; text: string; mark?: AnswerMark };
 
-// Every renderable component.
-// 所有可渲染组件。
-export type AnswerComponent =
+// Every renderable component; row components may carry a heading written after their name.
+// 所有可渲染组件；行组件可携带写在名称之后的标题。
+export type AnswerComponent = AnswerComponentBody & { heading?: string };
+
+// Every renderable component without its heading.
+// 不含标题的所有可渲染组件。
+export type AnswerComponentBody =
   | { kind: "kv"; rows: { label: string; value: string }[] }
   | { kind: "metrics"; rows: AnswerMetric[] }
   | { kind: "findings"; rows: { severity: AnswerSeverity; text: string; location?: string }[] }
@@ -218,36 +222,38 @@ export function parseAnswerComponent(language: string, meta: string, body: strin
   if (!body.trim()) return null;
   switch (language) {
     case "ui-kv":
-      return noArgs(args, () => mapRows(body, 2, 2, ([label, value]) => ({ label, value }), (rows) => ({ kind: "kv", rows })));
+      return titled(args, () => mapRows(body, 2, 2, ([label, value]) => ({ label, value }), (rows) => ({ kind: "kv", rows })));
     case "ui-metrics":
-      return noArgs(args, () => mapRows(body, 2, 5, metric, (rows) => ({ kind: "metrics", rows })));
+      return titled(args, () => mapRows(body, 2, 5, metric, (rows) => ({ kind: "metrics", rows })));
     case "ui-findings":
-      return noArgs(args, () => mapRows(body, 2, 3, ([severity, text, location]) => (
+      return titled(args, () => mapRows(body, 2, 3, ([severity, text, location]) => (
         SEVERITIES.has(severity) ? { severity: severity as AnswerSeverity, text, location } : null
       ), (rows) => ({ kind: "findings", rows })));
     case "ui-compare":
-      return noArgs(args, () => compare(body));
+      return titled(args, () => compare(body));
     case "ui-checklist":
-      return noArgs(args, () => mapRows(body, 2, 3, ([status, item, note]) => (
+      return titled(args, () => mapRows(body, 2, 3, ([status, item, note]) => (
         STATUSES.has(status) ? { status: status as AnswerStatus, item, note } : null
       ), (items) => ({ kind: "checklist", items })));
     case "ui-steps":
-      return noArgs(args, () => mapRows(body, 2, 3, ([status, title, text]) => (
+      return titled(args, () => mapRows(body, 2, 3, ([status, title, text]) => (
         STEP_STATUSES.has(status) ? { status: status as AnswerStepStatus, title, text } : null
       ), (steps) => ({ kind: "steps", steps })));
     case "ui-timeline":
-      return noArgs(args, () => mapRows(body, 2, 3, ([time, title, text]) => ({ time, title, text }), (rows) => ({ kind: "timeline", rows })));
+      return titled(args, () => mapRows(body, 2, 3, ([time, title, text]) => ({ time, title, text }), (rows) => ({ kind: "timeline", rows })));
     case "ui-cards":
-      return noArgs(args, () => mapRows(body, 2, 3, ([title, text, tag]) => ({ title, text, tag: tag === undefined ? undefined : toned(tag) }),
+      return titled(args, () => mapRows(body, 2, 3, ([title, text, tag]) => ({ title, text, tag: tag === undefined ? undefined : toned(tag) }),
         (cards) => ({ kind: "cards", cards })));
     case "ui-files":
-      return noArgs(args, () => files(body));
+      return titled(args, () => files(body));
     case "ui-code":
-      return noArgs(args, () => code(body));
+      // Code snapshots are captured by the backend for the bare `ui-code` info string only.
+      // 代码快照仅由后端按不带参数的 `ui-code` 信息串抓取。
+      return args ? null : code(body);
     case "ui-gallery":
-      return noArgs(args, () => mapRows(body, 1, 2, ([path, caption]) => ({ path, caption }), (items) => ({ kind: "gallery", items })));
+      return titled(args, () => mapRows(body, 1, 2, ([path, caption]) => ({ path, caption }), (items) => ({ kind: "gallery", items })));
     case "ui-tree":
-      return noArgs(args, () => tree(body));
+      return titled(args, () => tree(body));
     case "ui-chart":
       return chart(args, body);
     case "ui-flow":
@@ -269,16 +275,17 @@ export function parseAnswerComponent(language: string, meta: string, body: strin
       return args ? { kind: "details", title: args, body } : null;
     case "ui-tabs":
     case "ui-columns":
-      return noArgs(args, () => sections(language === "ui-tabs" ? "tabs" : "columns", body));
+      return titled(args, () => sections(language === "ui-tabs" ? "tabs" : "columns", body));
     default:
       return null;
   }
 }
 
-// Run `parse` only when the fence carries no arguments.
-// 仅当围栏不带参数时运行 `parse`。
-function noArgs(args: string, parse: () => AnswerComponent | null): AnswerComponent | null {
-  return args ? null : parse();
+// Run `parse` for a row component; models often write a title after the name, which becomes its heading.
+// 运行行组件的 `parse`；模型常在名称后写标题，该文本作为其标题显示。
+function titled(args: string, parse: () => AnswerComponent | null): AnswerComponent | null {
+  const component = parse();
+  return component && args ? { ...component, heading: args } : component;
 }
 
 // Split one row into trimmed cells; outer pipes are optional.

@@ -722,6 +722,12 @@ A[Plan] --> B[Build]";
         let invalid = joined("```ui-checklist\nmaybe | marker-item\n```");
         assert!(invalid.contains("ui-checklist"));
 
+        // Text after a row component's name is its heading.
+        // 行组件名称后的文本作为其标题。
+        let headed = joined("```ui-kv heading-marker\nkey-marker | value\n```");
+        assert!(headed.contains("heading-marker") && headed.contains("key-marker"));
+        assert!(!headed.contains("ui-kv"));
+
         let nested = "````ui-callout warning Title-marker\nbody\n```ui-kv\nkey-marker | value\n```\ntail-marker\n````\nafter";
         let rendered = joined(nested);
         assert!(rendered.contains("Title-marker") && rendered.contains("key-marker"));

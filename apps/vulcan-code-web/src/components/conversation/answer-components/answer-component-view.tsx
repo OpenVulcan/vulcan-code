@@ -81,7 +81,10 @@ export function AnswerFenceView({ language, meta, body, host, fallback }: {
   // replyKey identifies the fence in the conversation's reply store; the same fence shares one reply.
   // replyKey 在会话回复存储中标识该围栏；相同围栏共用一条回复。
   const replyKey = `${language} ${meta}\n${body}`;
-  const view = <AnswerComponentView component={component} host={host} replyKey={replyKey} />;
+  const rendered = <AnswerComponentView component={component} host={host} replyKey={replyKey} />;
+  const view = component.heading
+    ? <div className="vk-a-titled"><strong className="vk-a-heading">{component.heading}</strong>{rendered}</div>
+    : rendered;
   if (!store || component.kind === "decision") return view;
   // subject names the component in the reply by its fence name and first line.
   // subject 在回复中以围栏名称与首行指明该组件。

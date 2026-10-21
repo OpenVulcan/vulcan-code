@@ -10,12 +10,18 @@ function parse(info: string, body: string): AnswerComponent | null {
 }
 
 describe("parseAnswerComponent", () => {
-  it("rejects unknown names, blank bodies and arguments on row components", () => {
+  it("rejects unknown names and blank bodies", () => {
     expect(parse("ui-unknown", "a | b")).toBeNull();
     expect(parse("ui-kv", "  \n ")).toBeNull();
-    expect(parse("ui-kv extra", "a | b")).toBeNull();
     expect(parse("ui-callout", "body")).toBeNull();
     expect(parse("ui-details", "body")).toBeNull();
+  });
+
+  it("reads text after a row component name as its heading", () => {
+    expect(parse("ui-kv Round trip", "a | b")).toEqual({ kind: "kv", heading: "Round trip", rows: [{ label: "a", value: "b" }] });
+    expect(parse("ui-kv", "a | b")).not.toHaveProperty("heading");
+    expect(parse("ui-checklist Checks", "ok | item")?.heading).toBe("Checks");
+    expect(parse("ui-kv Round trip", "a | b | c")).toBeNull();
   });
 
   it("rejects rows with empty cells, wrong cell counts or unknown status words", () => {
