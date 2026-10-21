@@ -18,7 +18,7 @@ import { MediaPathContextMenu } from "@/components/media/media-path-context-menu
 import { requestComposerCommand } from "@/components/composer/composer-external-commands";
 import { ConversationFindBar } from "@/components/conversation/conversation-find-bar";
 import { ConversationSelectionQuote } from "@/components/conversation/conversation-selection-quote";
-import { codeQuoteMarkdown, previewSelectionLines } from "@/components/workspace/workspace-file-preview-quote";
+import { codeQuoteMarkdown, previewSelectionLines, selectPreviewLines } from "@/components/workspace/workspace-file-preview-quote";
 import {
   consumeWorkspaceFileLineReveal,
   peekWorkspaceFileLineReveal,
@@ -265,6 +265,20 @@ function WorkspaceHighlightedCodePreview(props: {
     const code = diffFile.hunks[0].lines.slice(span.start - 1, span.end).map((line) => line.content).join("\n");
     requestComposerCommand({ kind: "insert", text: codeQuoteMarkdown(props.preview.relativePath || props.preview.path, span, code, language) });
   };
+  // selectFromGutter selects a line when its number is clicked, or the lines from the last clicked number with Shift,
+  // so whole lines can be quoted or copied without dragging.
+  // selectFromGutter 在点击行号时选中该行，按住 Shift 时选中自上次点击的行号起的各行，无需拖动即可引用或复制整行。
+  const gutterAnchor = React.useRef<number | null>(null);
+  const selectFromGutter = (event: React.MouseEvent<HTMLDivElement>) => {
+    const container = linesRef.current;
+    const line = Number((event.target as Element).closest(".workspace-file-preview-code-gutter")?.parentElement?.getAttribute("data-line"));
+    if (event.button !== 0 || !line || !container) return;
+    event.preventDefault();
+    container.focus({ preventScroll: true });
+    const anchor = event.shiftKey && gutterAnchor.current && gutterAnchor.current <= lineCount ? gutterAnchor.current : line;
+    if (!event.shiftKey) gutterAnchor.current = line;
+    selectPreviewLines(container, anchor, line);
+  };
   // revealMatch centres a find match vertically and brings it out from under the sticky gutter or past the right edge.
   // revealMatch 将查找匹配垂直居中，并在其被吸附行号栏遮住或超出右缘时横向滚入视野。
   const revealMatch = React.useCallback((range: Range) => {
@@ -279,7 +293,7 @@ function WorkspaceHighlightedCodePreview(props: {
   return (
     <>
       {/* Focusable so a click in the code gives Ctrl+F to this file's find bar. 可获得焦点，使点击代码后 Ctrl+F 交给本文件的查找栏。 */}
-      <div className="workspace-file-preview-code-lines" ref={linesRef} tabIndex={0}>{rows}</div>
+      <div className="workspace-file-preview-code-lines" onMouseDown={selectFromGutter} ref={linesRef} tabIndex={0}>{rows}</div>
       <ConversationSelectionQuote onQuote={quoteSelection} scrollRef={linesRef} timelineRef={linesRef} />
       <ConversationFindBar highlight="vk-file-find" key={props.preview.path} label="workspaceFiles.find" onGotoLine={goToLine} onReveal={revealMatch} scoped scrollRef={linesRef} />
     </>

@@ -119,6 +119,7 @@
   color: var(--vk-ink-2);
   text-align: right;
   user-select: none;
+  cursor: pointer;
 }
 
 .workspace-file-preview-code-content {

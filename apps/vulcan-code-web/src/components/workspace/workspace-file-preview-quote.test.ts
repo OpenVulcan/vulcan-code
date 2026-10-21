@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it } from "vitest";
-import { codeQuoteMarkdown, previewSelectionLines } from "./workspace-file-preview-quote";
+import { codeQuoteMarkdown, previewSelectionLines, selectPreviewLines } from "./workspace-file-preview-quote";
 
 // previewRows builds numbered preview rows shaped like the code preview's, one per source line.
 // previewRows 构建与代码预览形状一致的带行号预览行，每个源码行一行。
@@ -54,4 +54,12 @@ it("writes the path with forward slashes, the line span and a fence longer than 
   const quoted = codeQuoteMarkdown("README.md", { start: 2, end: 5 }, "```js\nx\n```", null);
   expect(quoted.split("\n").slice(0, 2)).toEqual(["@README.md:2-5", "````"]);
   expect(quoted.endsWith("\n````\n\n")).toBe(true);
+});
+
+it("selects whole source lines in either order, which map back to the same line span", () => {
+  const container = previewRows(["alpha", "beta", "gamma", "delta"]);
+  selectPreviewLines(container, 3, 2);
+  const selection = document.getSelection()!;
+  expect(selection.toString()).toMatch(/^beta.*gamma$/);
+  expect(previewSelectionLines(container, selection.getRangeAt(0))).toEqual({ start: 2, end: 3 });
 });

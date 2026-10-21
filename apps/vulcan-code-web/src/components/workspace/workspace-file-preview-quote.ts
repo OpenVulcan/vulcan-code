@@ -33,6 +33,20 @@ export function previewSelectionLines(rows: Element, range: Range): { start: num
   return start ? { start, end } : null;
 }
 
+// selectPreviewLines selects the source text of lines `from` through `to` (in either order) in the numbered rows.
+// selectPreviewLines 在带行号的各行中选中第 `from` 至 `to` 行（顺序不限）的源码文本。
+export function selectPreviewLines(rows: Element, from: number, to: number): void {
+  const first = rows.querySelector(`[data-line="${Math.min(from, to)}"] ${PREVIEW_CODE_CONTENT_SELECTOR}`);
+  const last = rows.querySelector(`[data-line="${Math.max(from, to)}"] ${PREVIEW_CODE_CONTENT_SELECTOR}`);
+  const selection = rows.ownerDocument.getSelection();
+  if (!first || !last || !selection) return;
+  const range = rows.ownerDocument.createRange();
+  range.setStart(first, 0);
+  range.setEnd(last, last.childNodes.length);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 // codeQuoteMarkdown writes source lines as `@path:start-end` over a fenced block in the file's language, with
 // a fence longer than any backtick run inside the code, and leaves an empty line for the user's own note.
 // codeQuoteMarkdown 将源码行写为 `@path:start-end` 加上按文件语言标注的围栏代码块，围栏长于代码中任何反引号串，
