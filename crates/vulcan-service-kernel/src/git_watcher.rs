@@ -129,11 +129,7 @@ fn shared_webui_git_watcher(
                 group_webui_git_watch_events(&event_targets, &mut ignore_matchers, &event.paths);
             for ((project_id, workspace_path), repository_keys) in grouped {
                 event_emitter.emit(ServiceEvent::WorkspaceGitChanged(Box::new(
-                    WorkspaceGitChangedEvent {
-                        project_id,
-                        workspace_path: workspace_path.to_string_lossy().into_owned(),
-                        repository_keys: repository_keys.into_iter().collect(),
-                    },
+                    workspace_git_changed_event(project_id, &workspace_path, repository_keys),
                 )));
             }
         }
@@ -194,6 +190,32 @@ impl WebuiGitWatcherManager {
                 .register_path(repository_root.clone(), true);
             registrations.insert(repository_root.clone(), registration);
         }
+    }
+}
+
+/// Builds the change notification for one watched workspace.
+/// 为一个被监听的工作区构建变更通知。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` is the canonical path the watcher keys targets by; on Windows it carries the `\\?\`
+/// prefix, which clients never use, so the event names the workspace in host path form instead.
+/// `workspace_path` 是监听器用作目标键的规范路径；在 Windows 上它带有客户端从不使用的 `\\?\` 前缀，
+/// 因此事件改用宿主路径形式指明工作区。
+///
+/// # Returns
+/// 返回值
+/// The event that WebUI and TUI clients match against the workspace path they opened.
+/// 返回 WebUI 与 TUI 客户端用其打开的工作区路径进行匹配的事件。
+fn workspace_git_changed_event(
+    project_id: Option<String>,
+    workspace_path: &Path,
+    repository_keys: BTreeSet<String>,
+) -> WorkspaceGitChangedEvent {
+    WorkspaceGitChangedEvent {
+        project_id,
+        workspace_path: vulcan_runtime_assets::native_host_path_text_from_path(workspace_path),
+        repository_keys: repository_keys.into_iter().collect(),
     }
 }
 
@@ -303,6 +325,19 @@ fn group_webui_git_watch_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the event names a canonical Windows workspace without the verbatim prefix clients never use.
+    /// 验证事件指明规范化的 Windows 工作区时不带客户端从不使用的 verbatim 前缀。
+    #[test]
+    fn change_event_names_the_workspace_in_host_path_form() {
+        let event = workspace_git_changed_event(
+            Some(String::from("project")),
+            Path::new(r"\\?\D:\openvulcan\vulcan-code"),
+            BTreeSet::from([String::from(".")]),
+        );
+        assert_eq!(event.workspace_path, r"D:\openvulcan\vulcan-code");
+        assert_eq!(event.repository_keys, vec![String::from(".")]);
+    }
 
     /// Verifies nested repository paths notify both matching independent targets.
     /// 验证嵌套仓库路径会通知所有匹配的独立目标。
