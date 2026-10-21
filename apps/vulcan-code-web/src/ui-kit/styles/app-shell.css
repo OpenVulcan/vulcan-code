@@ -98,6 +98,20 @@
 }
 /* A collapsed panel leaves layout, the accessibility tree and the desktop drag hit area. */
 .vk-shell .vk-sidebar[data-collapsible="offcanvas"] { flex-basis: 0; width: 0; border-right-width: 0; visibility: hidden; }
+/* Below the brand row the panel content sits in a slightly lighter well whose faint top and left edges
+ * wrap it in the rail and the logo row; the well paints behind the content inside the panel's stacking context. */
+.vk-shell .vk-sidebar::before,
+.vk-shell-drawer > .vk-sidebar::before {
+  content: "";
+  position: absolute;
+  inset: var(--vk-titlebar-h) 0 0 0;
+  z-index: -1;
+  border-top: var(--vk-bw) solid color-mix(in srgb, var(--vk-line) 70%, transparent);
+  border-left: var(--vk-bw) solid color-mix(in srgb, var(--vk-line) 70%, transparent);
+  background: color-mix(in srgb, var(--vk-ground-2) 45%, var(--vk-ground));
+  pointer-events: none;
+}
+.vk-shell-drawer > .vk-sidebar { position: relative; z-index: 0; }
 .vk-sidebar > .vk-sidebar-head { flex: none; }
 .vk-sidebar-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3); }
 .vk-sidebar > .vk-sidebar-foot { flex: none; }
