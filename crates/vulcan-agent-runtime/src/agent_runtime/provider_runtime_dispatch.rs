@@ -365,6 +365,11 @@ pub(crate) fn execute_provider_prompt_stream(
         let code_mode = match crate::agent_runtime::code_mode::resolve_code_mode_activation(
             public_execution.route.tool_mode,
             transport_request.session_id,
+            public_execution
+                .route
+                .protocol_route
+                .protocol_profile_id
+                .as_str(),
         ) {
             Ok(code_mode) => code_mode,
             Err(error) => {

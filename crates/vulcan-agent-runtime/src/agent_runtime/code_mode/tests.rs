@@ -58,12 +58,12 @@ fn demo_tools() -> (VulcanToolsManager, Vec<ResolvedToolDefinition>) {
 fn offline_turn(tool_mode: ToolMode, resolved: &[ResolvedToolDefinition]) -> CodeModeTurn {
     let activation = CodeModeActivation {
         tool_mode,
-        slot: Arc::new(CodeModeSessionSlot {
-            provider: Arc::new(ProcessOwnedCodeModeSessionProvider::with_host_program(
-                PathBuf::from("missing-code-mode-host"),
+        media: false,
+        slot: Arc::new(CodeModeSessionSlot::new(Arc::new(
+            ProcessOwnedCodeModeSessionProvider::with_host_program(PathBuf::from(
+                "missing-code-mode-host",
             )),
-            session: tokio::sync::OnceCell::new(),
-        }),
+        ))),
     };
     CodeModeTurn::new(activation, resolved, &[String::from("secret")])
 }
@@ -127,6 +127,36 @@ fn code_mode_keeps_direct_tools_without_name_collisions() {
     assert!(!turn.is_code_mode_only());
 }
 
+/// Requests outside the turn list the route's tools: direct routes keep the resolved tools and
+/// `code_mode_only` routes list only `exec` and `wait`.
+/// 回合之外的请求列出路由的工具：直接路由保留已解析工具，`code_mode_only` 路由只列出
+/// `exec` 与 `wait`。
+#[test]
+fn route_tool_list_follows_the_frozen_tool_mode() {
+    let (_, resolved) = demo_tools();
+    let session_id = Uuid::new_v4();
+    let profile = vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID;
+
+    let direct =
+        route_provider_tool_definitions(ToolMode::Direct, session_id, profile, &resolved, &[])
+            .expect("direct routes need no host");
+    assert_eq!(names(&direct), ["echo", "secret", WAIT_TOOL_NAME]);
+
+    if host_provider().is_err() {
+        return;
+    }
+    let code_mode_only = route_provider_tool_definitions(
+        ToolMode::CodeModeOnly,
+        session_id,
+        profile,
+        &resolved,
+        &[String::from("secret")],
+    )
+    .expect("host resolves");
+    release_code_mode_session(session_id);
+    assert_eq!(names(&code_mode_only), [PUBLIC_TOOL_NAME, WAIT_TOOL_NAME]);
+}
+
 /// Only the two Responses profiles receive `exec` as freeform JavaScript.
 /// 只有两个 Responses Profile 以自由文本 JavaScript 接收 `exec`。
 #[test]
@@ -156,6 +186,8 @@ fn runtime_output_reports_status_and_truncates_to_budget() {
         },
         None,
         Duration::from_millis(1200),
+        Vec::new(),
+        false,
     );
     let yielded = yielded.model_output.as_str().expect("text output");
     assert!(yielded.starts_with("Script running with cell ID 7\n"));
@@ -173,12 +205,64 @@ fn runtime_output_reports_status_and_truncates_to_budget() {
         },
         Some(100),
         Duration::ZERO,
+        Vec::new(),
+        false,
     );
     let failed = failed.model_output.as_str().expect("text output");
     assert!(failed.starts_with("Script failed\n"));
     assert!(failed.contains("truncated"));
     assert!(failed.ends_with("Script error:\nboom"));
     assert!(failed.len() < 1_000);
+}
+
+/// Notifications lead the output, and images become native media only on routes that carry them.
+/// 通知位于输出之前；只有承载图片的路由才把图片保留为原生媒体。
+#[test]
+fn runtime_output_carries_notifications_and_native_images() {
+    let observation = || RuntimeResponse::Result {
+        cell_id: CellId::new(String::from("9")),
+        content_items: vec![
+            FunctionCallOutputContentItem::InputText {
+                text: String::from("before"),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: String::from("data:image/png;base64,iVBORw0KGgo="),
+                detail: None,
+            },
+        ],
+        error_text: None,
+        result_buffered_for: Duration::ZERO,
+        code_mode_host_duration: None,
+    };
+
+    let media = render_runtime_response(
+        observation(),
+        None,
+        Duration::ZERO,
+        vec![String::from("halfway")],
+        true,
+    );
+    let content = media.model_output["content"]
+        .as_array()
+        .expect("media output is ordered content");
+    let header = content[0]["text"].as_str().expect("header text");
+    assert!(header.contains("Notifications:\nhalfway\n"));
+    assert!(header.ends_with("Output:\n"));
+    assert_eq!(content[1]["text"], "before");
+    assert_eq!(content[2]["type"], "image");
+    assert_eq!(content[2]["mimeType"], "image/png");
+    assert!(
+        crate::agent_runtime::tool_result_media::canonicalize_tool_model_output(
+            media.model_output.clone()
+        )
+        .is_ok(),
+        "the bridge must accept the media content"
+    );
+
+    let text = render_runtime_response(observation(), None, Duration::ZERO, Vec::new(), false);
+    let text = text.model_output.as_str().expect("text output");
+    assert!(text.contains("[Image output omitted"));
+    assert!(!text.contains("iVBORw0KGgo="));
 }
 
 /// Builds one `exec` request with its durable identity installed on the bridge.
@@ -230,7 +314,11 @@ fn exec_round_trips_nested_tools_through_the_host() {
         .expect("runtime builds");
     runtime.block_on(async {
         let session_id = Uuid::new_v4();
-        let activation = resolve_code_mode_activation(ToolMode::CodeModeOnly, session_id)
+        let activation = resolve_code_mode_activation(
+            ToolMode::CodeModeOnly,
+            session_id,
+            vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,
+        )
             .expect("host resolves")
             .expect("code mode is active");
         let (manager, resolved) = demo_tools();
@@ -267,6 +355,51 @@ fn exec_round_trips_nested_tools_through_the_host() {
         let direct = code_mode_request(&bridge, "echo", json!({ "value": "x" }), 3);
         let output = bridge.execute_tool(&direct).await.expect("call is answered");
         assert!(output.model_output.contains("only available inside `exec`"));
+
+        // This cell yields, then calls a tool after the run that started it has ended.
+        // 此单元先让出，然后在启动它的运行结束后调用工具。
+        let yielding = code_mode_request(
+            &bridge,
+            PUBLIC_TOOL_NAME,
+            json!({ "code": "yield_control();\nawait new Promise((resolve) => setTimeout(resolve, 200));\nnotify(\"halfway\");\nconst result = await tools.echo({ value: \"later\" });\ntext(JSON.stringify(result));" }),
+            4,
+        );
+        let output = bridge.execute_tool(&yielding).await.expect("exec runs");
+        let cell_id = output
+            .model_output
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix("Script running with cell ID "))
+            .unwrap_or_else(|| panic!("the cell must yield: {}", output.model_output))
+            .to_owned();
+        drop(bridge);
+        drop(turn);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // A later run of the same session resumes the cell; its nested call runs under `wait`.
+        // 同一会话的后续运行恢复该单元；其嵌套调用在 `wait` 下运行。
+        let activation = resolve_code_mode_activation(
+            ToolMode::CodeModeOnly,
+            session_id,
+            vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,
+        )
+        .expect("host resolves")
+        .expect("code mode is active");
+        let (manager, resolved) = demo_tools();
+        let turn = Arc::new(CodeModeTurn::new(
+            activation,
+            &resolved,
+            &[String::from("secret")],
+        ));
+        let bridge =
+            VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &resolved, session_id, "Build")
+                .with_code_mode(Some(Arc::clone(&turn)));
+        let resumed = code_mode_request(&bridge, WAIT_TOOL_NAME, json!({ "cell_id": cell_id }), 5);
+        let output = bridge.execute_tool(&resumed).await.expect("wait runs");
+        assert!(output.model_output.contains("Script completed"), "{}", output.model_output);
+        assert!(output.model_output.contains("Notifications:\nhalfway\n"), "{}", output.model_output);
+        assert!(output.model_output.contains("\"value\":\"later\""), "{}", output.model_output);
+        assert!(output.model_output.contains("call-5/"), "{}", output.model_output);
 
         drop(bridge);
         drop(turn);

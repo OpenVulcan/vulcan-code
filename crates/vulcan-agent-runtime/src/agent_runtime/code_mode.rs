@@ -16,29 +16,29 @@
 //! 提交 c419fd01a70dd1d05356da443ac44328bda2e6f4），以 Apache-2.0 授权；见
 //! `crates/vulcan-code-mode/LICENSE-APACHE` 及其 `NOTICE.md`。
 
+mod dispatch;
 mod output;
 
-use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
-use crate::agent_runtime::tool_permission::PermissionTexts;
+use crate::agent_runtime::provider_protocol_tool_definition::{
+    ProviderToolDefinition, resolved_tool_definition_to_provider_tool_definition,
+};
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
+use dispatch::{ActiveDispatcher, CellChannel, CellDelegate};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::Instant;
-use tokio_util::sync::CancellationToken;
 use vulcan_code_mode::{
-    CellId, CodeModeNestedToolCall, CodeModeSession, CodeModeSessionDelegate,
-    CodeModeSessionProvider, CodeModeToolKind, DEFAULT_EXEC_YIELD_TIME_MS,
+    CellId, CodeModeSession, CodeModeSessionProvider, CodeModeToolKind, DEFAULT_EXEC_YIELD_TIME_MS,
     DEFAULT_INPUT_SCHEMA_MAX_BYTES, DEFAULT_WAIT_YIELD_TIME_MS, DeferredToolDiscovery,
-    ExecuteRequest, ImageDetailVisibility, NotificationFuture, PUBLIC_TOOL_NAME,
-    ProcessOwnedCodeModeSessionProvider, RuntimeResponse, ToolDefinition as CodeModeToolDefinition,
-    ToolInvocationFuture, ToolName as CodeModeToolName, WAIT_TOOL_NAME, WaitOutcome, WaitRequest,
-    augment_tool_definition, build_exec_tool_description, build_wait_tool_description,
-    parse_exec_source,
+    ExecuteRequest, ImageDetailVisibility, PUBLIC_TOOL_NAME, ProcessOwnedCodeModeSessionProvider,
+    RuntimeResponse, ToolDefinition as CodeModeToolDefinition, ToolName as CodeModeToolName,
+    WAIT_TOOL_NAME, WaitOutcome, WaitRequest, augment_tool_definition, build_exec_tool_description,
+    build_wait_tool_description, parse_exec_source,
 };
 use vulcan_core::types::ToolInvocationRequest as CoreToolInvocationRequest;
 use vulcan_host_tools::native_host_binary::resolve_native_host_binary_in_cargo_target;
@@ -143,9 +143,22 @@ pub(crate) struct CodeModeSessionSlot {
     /// Session created on the first `exec`; values stored by `store()` live here.
     /// 首次 `exec` 时创建的会话；`store()` 保存的值存在于此。
     session: tokio::sync::OnceCell<Arc<dyn CodeModeSession>>,
+    /// Dispatch channels of cells not yet observed in a final state; they outlive runs.
+    /// 尚未在终态被观察到的单元分派通道；它们可跨越多次运行。
+    cells: Mutex<HashMap<CellId, Arc<CellChannel>>>,
 }
 
 impl CodeModeSessionSlot {
+    /// Creates the slot of one controller session.
+    /// 创建一个控制器会话的槽位。
+    fn new(provider: Arc<ProcessOwnedCodeModeSessionProvider>) -> Self {
+        Self {
+            provider,
+            session: tokio::sync::OnceCell::new(),
+            cells: Mutex::new(HashMap::new()),
+        }
+    }
+
     /// Returns the live session, starting it on first use.
     /// 返回活动会话，首次使用时启动。
     async fn session(&self) -> Result<Arc<dyn CodeModeSession>, String> {
@@ -153,6 +166,44 @@ impl CodeModeSessionSlot {
             .get_or_try_init(|| self.provider.create_session())
             .await
             .map(Arc::clone)
+    }
+
+    /// Returns the dispatch channel of one live cell.
+    /// 返回一个活动单元的分派通道。
+    fn cell(&self, cell_id: &CellId) -> Option<Arc<CellChannel>> {
+        self.cells
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(cell_id)
+            .cloned()
+    }
+
+    /// Records the dispatch channel of one started cell.
+    /// 记录一个已启动单元的分派通道。
+    fn register_cell(&self, cell_id: CellId, channel: Arc<CellChannel>) {
+        self.cells
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(cell_id, channel);
+    }
+
+    /// Takes the cell's pending notifications and forgets the cell once it reached a final state.
+    /// 取出单元待交付的通知，并在单元到达终态后将其遗忘。
+    fn observe(&self, response: &RuntimeResponse) -> Vec<String> {
+        let (cell_id, closed) = match response {
+            RuntimeResponse::Yielded { cell_id, .. } => (cell_id, false),
+            RuntimeResponse::Terminated { cell_id, .. }
+            | RuntimeResponse::Result { cell_id, .. } => (cell_id, true),
+        };
+        let mut cells = self.cells.lock().unwrap_or_else(PoisonError::into_inner);
+        let channel = if closed {
+            cells.remove(cell_id)
+        } else {
+            cells.get(cell_id).cloned()
+        };
+        channel
+            .map(|channel| channel.take_notifications())
+            .unwrap_or_default()
     }
 }
 
@@ -163,6 +214,9 @@ pub(crate) struct CodeModeActivation {
     /// Effective non-direct tool mode.
     /// 生效的非直接工具模式。
     tool_mode: ToolMode,
+    /// Whether the frozen protocol carries tool-result images natively.
+    /// 冻结协议是否原生承载工具结果图片。
+    media: bool,
     /// Session slot of the controller session.
     /// 控制器会话的会话槽位。
     slot: Arc<CodeModeSessionSlot>,
@@ -174,8 +228,10 @@ pub(crate) struct CodeModeActivation {
 /// # Parameters / 参数
 /// - `tool_mode`: Mode frozen into the execution route.
 /// - `session_id`: Controller session that owns the JavaScript session.
+/// - `protocol_profile_id`: Frozen protocol; it decides whether images reach the model.
 /// - `tool_mode`：冻结进执行路由的模式。
 /// - `session_id`：持有 JavaScript 会话的控制器会话。
+/// - `protocol_profile_id`：冻结协议；决定图片能否交给模型。
 ///
 /// # Returns / 返回值
 /// `None` for direct tools, including `code_mode` when the host is unavailable (logged once);
@@ -185,6 +241,7 @@ pub(crate) struct CodeModeActivation {
 pub(crate) fn resolve_code_mode_activation(
     tool_mode: ToolMode,
     session_id: SessionId,
+    protocol_profile_id: &str,
 ) -> Result<Option<CodeModeActivation>, String> {
     if tool_mode.is_direct() {
         return Ok(None);
@@ -208,14 +265,58 @@ pub(crate) fn resolve_code_mode_activation(
         .map_err(|_| String::from("The code-mode session registry is unavailable."))?;
     let slot = sessions
         .entry(session_id)
-        .or_insert_with(|| {
-            Arc::new(CodeModeSessionSlot {
-                provider,
-                session: tokio::sync::OnceCell::new(),
-            })
-        })
+        .or_insert_with(|| Arc::new(CodeModeSessionSlot::new(provider)))
         .clone();
-    Ok(Some(CodeModeActivation { tool_mode, slot }))
+    Ok(Some(CodeModeActivation {
+        tool_mode,
+        media: crate::agent_runtime::tool_result_media::protocol_projects_tool_result_media(
+            protocol_profile_id,
+        ),
+        slot,
+    }))
+}
+
+/// Builds the provider-visible tool list one frozen route exposes, without starting the host.
+/// 构建一条冻结路由暴露的 Provider 可见工具列表，不启动宿主。
+///
+/// Requests outside the ordinary turn, such as remote compaction and the request preview, use
+/// this so they carry the same `exec` and `wait` surface as the turn itself.
+/// 普通回合之外的请求（如远端压缩与请求预览）使用此函数，使其携带与回合本身相同的
+/// `exec` 与 `wait` 工具面。
+///
+/// # Parameters / 参数
+/// - `tool_mode`: Mode frozen into the execution route.
+/// - `session_id`: Controller session that owns the JavaScript session.
+/// - `protocol_profile_id`: Frozen protocol of the route.
+/// - `resolved_tools`: Tools resolved for the run.
+/// - `rejected_tool_ids`: Tools the run rejects.
+/// - `tool_mode`：冻结进执行路由的模式。
+/// - `session_id`：持有 JavaScript 会话的控制器会话。
+/// - `protocol_profile_id`：路由的冻结协议。
+/// - `resolved_tools`：本次运行解析出的工具。
+/// - `rejected_tool_ids`：本次运行拒绝的工具。
+///
+/// # Returns / 返回值
+/// The same list an ordinary turn sends, or the error that turn would fail with.
+/// 与普通回合发送的相同列表，或该回合将失败时的错误。
+pub(crate) fn route_provider_tool_definitions(
+    tool_mode: ToolMode,
+    session_id: SessionId,
+    protocol_profile_id: &str,
+    resolved_tools: &[ResolvedToolDefinition],
+    rejected_tool_ids: &[String],
+) -> Result<Vec<ProviderToolDefinition>, String> {
+    let direct = resolved_tools
+        .iter()
+        .map(resolved_tool_definition_to_provider_tool_definition)
+        .collect::<Vec<_>>();
+    Ok(
+        match resolve_code_mode_activation(tool_mode, session_id, protocol_profile_id)? {
+            Some(activation) => CodeModeTurn::new(activation, resolved_tools, rejected_tool_ids)
+                .provider_tool_definitions(direct),
+            None => direct,
+        },
+    )
 }
 
 /// Releases the JavaScript session of one controller session and its stored values.
@@ -255,10 +356,14 @@ pub(crate) struct CodeModeTurn {
     /// Model-facing `exec` description.
     /// 面向模型的 `exec` 说明。
     exec_description: String,
-    /// Cells that yielded during this run and must not outlive it.
-    /// 本次运行中已让出、不得超出本次运行存活的单元。
-    live_cells: Mutex<HashSet<CellId>>,
+    /// Whether the route carries tool-result images natively.
+    /// 路由是否原生承载工具结果图片。
+    media: bool,
 }
+
+/// Vulcan-specific behavior appended to the upstream `exec` description.
+/// 追加到上游 `exec` 说明之后的 Vulcan 专属行为。
+const VULCAN_CELL_LIFECYCLE_NOTE: &str = "- In this host, a yielded cell keeps running across turns until it finishes, is terminated, or the session ends. Its nested tool calls pause until `exec` or `wait` observes that cell, and `notify(...)` text is delivered with the next `exec` or `wait` result for that cell.";
 
 impl CodeModeTurn {
     /// Builds the run surface from the resolved host tools.
@@ -295,7 +400,7 @@ impl CodeModeTurn {
         described.sort_by(|left, right| left.name.cmp(&right.name));
         described.dedup_by(|left, right| left.name == right.name);
         let code_mode_only = activation.tool_mode == ToolMode::CodeModeOnly;
-        let exec_description = build_exec_tool_description(
+        let mut exec_description = build_exec_tool_description(
             &described,
             &[],
             &BTreeMap::new(),
@@ -305,6 +410,8 @@ impl CodeModeTurn {
             DeferredToolDiscovery::Catalog,
             None,
         );
+        exec_description.push('\n');
+        exec_description.push_str(VULCAN_CELL_LIFECYCLE_NOTE);
         let nested_tool_ids = described
             .iter()
             .map(|tool| tool.name.clone())
@@ -324,7 +431,7 @@ impl CodeModeTurn {
             enabled_tools,
             nested_tool_ids: Arc::new(nested_tool_ids),
             exec_description,
-            live_cells: Mutex::new(HashSet::new()),
+            media: activation.media,
         }
     }
 
@@ -435,8 +542,24 @@ impl CodeModeTurn {
         if request.tool_name == PUBLIC_TOOL_NAME {
             self.execute(bridge, request, context).await
         } else {
-            self.wait(request).await
+            self.wait(bridge, request, context).await
         }
+    }
+
+    /// Builds the dispatcher that runs nested calls under one observing call's identity.
+    /// 构建在一次观察调用的身份下运行嵌套调用的分派器。
+    fn dispatcher(
+        &self,
+        bridge: &VulcanManagedToolRuntimeBridge,
+        request: &CoreToolInvocationRequest,
+        context: VulcanToolInvocationContext,
+    ) -> ActiveDispatcher {
+        ActiveDispatcher::new(
+            bridge.without_code_mode(),
+            Arc::clone(&self.nested_tool_ids),
+            context,
+            request.user_request.text().map(str::to_owned),
+        )
     }
 
     /// Starts one JavaScript cell and returns its first observation.
@@ -456,14 +579,9 @@ impl CodeModeTurn {
             })?;
         let parsed = parse_exec_source(source)?;
         let started_at = Instant::now();
-        let delegate = Arc::new(NestedToolDelegate {
-            bridge: bridge.without_code_mode(),
-            nested_tool_ids: Arc::clone(&self.nested_tool_ids),
-            context,
-            user_request: request.user_request.text().map(str::to_owned),
-            serial: tokio::sync::Mutex::new(()),
-        });
         let session = self.slot.session().await?;
+        let channel = CellChannel::new();
+        let lease = channel.observe(self.dispatcher(bridge, request, context));
         let started = session
             .execute(
                 ExecuteRequest {
@@ -473,24 +591,23 @@ impl CodeModeTurn {
                     yield_time_ms: Some(parsed.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS)),
                     max_output_tokens: parsed.max_output_tokens,
                 },
-                delegate,
+                Arc::new(CellDelegate::new(Arc::clone(&channel))),
                 None,
             )
             .await?;
-        let response = started.initial_response().await?;
-        self.track_cell(&response);
-        Ok(output::render_runtime_response(
-            response,
-            parsed.max_output_tokens,
-            started_at.elapsed(),
-        ))
+        self.slot.register_cell(started.cell_id.clone(), channel);
+        let response = started.initial_response().await;
+        lease.finish().await;
+        Ok(self.render(response?, parsed.max_output_tokens, started_at))
     }
 
     /// Resumes or terminates one yielded cell.
     /// 恢复或终止一个已让出的单元。
     async fn wait(
         &self,
+        bridge: &VulcanManagedToolRuntimeBridge,
         request: &CoreToolInvocationRequest,
+        context: VulcanToolInvocationContext,
     ) -> Result<VulcanToolInvocationResult, String> {
         let arguments = serde_json::from_value::<WaitArguments>(request.arguments.clone())
             .map_err(|error| format!("Invalid `{WAIT_TOOL_NAME}` arguments: {error}"))?;
@@ -498,9 +615,15 @@ impl CodeModeTurn {
         let cell_id = CellId::new(arguments.cell_id);
         let session = self.slot.session().await?;
         let outcome = if arguments.terminate {
-            session.terminate(cell_id).await?
+            session.terminate(cell_id).await
         } else {
-            session
+            // This call observes the cell, so its pending nested calls run under this identity.
+            // 本次调用观察该单元，因此其等待中的嵌套调用在本身份下运行。
+            let lease = self
+                .slot
+                .cell(&cell_id)
+                .map(|channel| channel.observe(self.dispatcher(bridge, request, context)));
+            let outcome = session
                 .wait(
                     WaitRequest {
                         cell_id,
@@ -510,60 +633,34 @@ impl CodeModeTurn {
                     },
                     None,
                 )
-                .await?
+                .await;
+            if let Some(lease) = lease {
+                lease.finish().await;
+            }
+            outcome
         };
-        let response = match outcome {
+        let response = match outcome? {
             WaitOutcome::LiveCell(response) | WaitOutcome::MissingCell(response) => response,
         };
-        self.track_cell(&response);
-        Ok(output::render_runtime_response(
+        Ok(self.render(response, arguments.max_tokens, started_at))
+    }
+
+    /// Renders one observation together with the cell's pending notifications.
+    /// 将一次观察结果与单元待交付的通知一起渲染。
+    fn render(
+        &self,
+        response: RuntimeResponse,
+        max_output_tokens: Option<usize>,
+        started_at: Instant,
+    ) -> VulcanToolInvocationResult {
+        let notifications = self.slot.observe(&response);
+        output::render_runtime_response(
             response,
-            arguments.max_tokens,
+            max_output_tokens,
             started_at.elapsed(),
-        ))
-    }
-
-    /// Records whether one observed cell is still running after this call.
-    /// 记录一个被观察的单元在本次调用后是否仍在运行。
-    fn track_cell(&self, response: &RuntimeResponse) {
-        let Ok(mut live_cells) = self.live_cells.lock() else {
-            return;
-        };
-        match response {
-            RuntimeResponse::Yielded { cell_id, .. } => {
-                live_cells.insert(cell_id.clone());
-            }
-            RuntimeResponse::Terminated { cell_id, .. }
-            | RuntimeResponse::Result { cell_id, .. } => {
-                live_cells.remove(cell_id);
-            }
-        }
-    }
-}
-
-impl Drop for CodeModeTurn {
-    /// Terminates cells still running when the run ends so no nested call outlives it.
-    /// 运行结束时终止仍在运行的单元，确保嵌套调用不会超出本次运行。
-    fn drop(&mut self) {
-        let live_cells = match self.live_cells.get_mut() {
-            Ok(live_cells) => std::mem::take(live_cells),
-            Err(_) => return,
-        };
-        if live_cells.is_empty() {
-            return;
-        }
-        let Some(session) = self.slot.session.get().cloned() else {
-            return;
-        };
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                for cell_id in live_cells {
-                    if let Err(error) = session.terminate(cell_id.clone()).await {
-                        eprintln!("Failed to terminate code-mode cell {cell_id}: {error}");
-                    }
-                }
-            });
-        }
+            notifications,
+            self.media,
+        )
     }
 }
 
@@ -587,108 +684,6 @@ struct WaitArguments {
     /// 是否停止单元而不是等待。
     #[serde(default)]
     terminate: bool,
-}
-
-/// Routes nested JavaScript tool calls back into the ordinary host bridge.
-/// 将嵌套 JavaScript 工具调用路由回普通宿主桥接层。
-struct NestedToolDelegate {
-    /// Bridge without code mode, so a nested call can never re-enter `exec`.
-    /// 不含代码模式的桥接层，嵌套调用永远无法重新进入 `exec`。
-    bridge: VulcanManagedToolRuntimeBridge,
-    /// Tool identifiers JavaScript may call.
-    /// JavaScript 可以调用的工具标识。
-    nested_tool_ids: Arc<BTreeSet<String>>,
-    /// Durable identity of the `exec` call that started the cell.
-    /// 启动该单元的 `exec` 调用的可靠身份。
-    context: VulcanToolInvocationContext,
-    /// Latest user request, given to the permission pipeline.
-    /// 交给权限管线的最近用户请求。
-    user_request: Option<String>,
-    /// Serializes nested calls: they share the `exec` identity, so approvals must not overlap.
-    /// 串行化嵌套调用：它们共享 `exec` 身份，因此审批不得重叠。
-    serial: tokio::sync::Mutex<()>,
-}
-
-impl NestedToolDelegate {
-    /// Admits and runs one nested call.
-    /// 放行并运行一次嵌套调用。
-    async fn run(&self, invocation: CodeModeNestedToolCall) -> Result<Value, String> {
-        let tool_id = invocation.tool_name.name;
-        if !self.nested_tool_ids.contains(&tool_id) {
-            return Err(format!(
-                "Tool `{tool_id}` is not available inside `{PUBLIC_TOOL_NAME}`."
-            ));
-        }
-        // Every Vulcan tool is a JSON function, so nested input is always an argument object.
-        // 每个 Vulcan 工具都是 JSON 函数，因此嵌套输入始终是参数对象。
-        let arguments = match invocation.input {
-            None => json!({}),
-            Some(Value::Object(arguments)) => Value::Object(arguments),
-            Some(_) => {
-                return Err(format!(
-                    "Tool `{tool_id}` expects a JSON object for its arguments."
-                ));
-            }
-        };
-        let definition = self
-            .bridge
-            .resolved_definition(&tool_id)
-            .ok_or_else(|| format!("Tool `{tool_id}` is not registered for this run."))?;
-        let raw_arguments = serde_json::to_string(&arguments).ok();
-        let mut context = self.context.clone();
-        context.controller_tool_call_id = format!(
-            "{}/{}",
-            self.context.controller_tool_call_id, invocation.runtime_tool_call_id
-        );
-        let _serial = self.serial.lock().await;
-        let result = self
-            .bridge
-            .invoke_definition(
-                definition,
-                arguments,
-                PermissionTexts {
-                    raw_arguments: raw_arguments.as_deref(),
-                    user_request: self.user_request.as_deref(),
-                },
-                context,
-            )
-            .await?;
-        // Host credentials are redacted once from the final `exec` output by the bridge.
-        // 宿主凭据由桥接层从最终 `exec` 输出中统一移除。
-        Ok(result.model_output)
-    }
-}
-
-impl CodeModeSessionDelegate for NestedToolDelegate {
-    fn invoke_tool<'a>(
-        &'a self,
-        invocation: CodeModeNestedToolCall,
-        cancellation_token: CancellationToken,
-    ) -> ToolInvocationFuture<'a> {
-        Box::pin(async move {
-            tokio::select! {
-                _ = cancellation_token.cancelled() => {
-                    Err(String::from("The nested tool call was cancelled."))
-                }
-                result = self.run(invocation) => result,
-            }
-        })
-    }
-
-    fn notify<'a>(
-        &'a self,
-        _call_id: String,
-        _cell_id: CellId,
-        _text: String,
-        _cancellation_token: CancellationToken,
-    ) -> NotificationFuture<'a> {
-        // Interim notifications have no Vulcan transcript slot yet; the final output still
-        // carries every `text()` item.
-        // 中间通知暂无 Vulcan 转录位置；最终输出仍包含每个 `text()` 项。
-        Box::pin(async { Ok(()) })
-    }
-
-    fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
 #[cfg(test)]
