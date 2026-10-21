@@ -266,6 +266,54 @@ async fn native_spawn_unclaimed_rejection_preserves_prestart_cleanup() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
+/// A preparation rejection already projected as failed still frees the name for a retry.
+/// 已投影为失败的准备拒绝仍会释放名称以供重试。
+/// Parameters: none. Returns: none; mirrors the startup guard marking failure before the backend returns.
+/// 参数：无。返回值：无；模拟启动守卫在后端返回前标记失败。
+#[tokio::test]
+async fn native_spawn_failed_preparation_frees_the_agent_name() {
+    let runtime = Arc::new(TaskRuntime::new());
+    let parent = Uuid::new_v4();
+    // The backend reaches the runtime weakly, as the real startup guard owns its own handle.
+    // 后端以弱引用访问运行时，真实启动守卫持有自己的句柄。
+    let weak_runtime = Arc::downgrade(&runtime);
+    let _backend = runtime
+        .install_backend(
+            parent,
+            Arc::new(move |request: TaskExecutionRequest| {
+                let runtime = weak_runtime.upgrade().expect("runtime should be alive");
+                Box::pin(async move {
+                    let reason = String::from("Model rejected session reasoning.");
+                    runtime
+                        .mark_existing_startup_failure(&request, &reason)
+                        .expect("startup failure should project");
+                    Err(task_execution_prestart_rejected_error(reason))
+                })
+            }),
+        )
+        .unwrap();
+    let candidate =
+        build_spawn_agent_tool_candidate(runtime.clone(), Some(Arc::new(RejectingHost)));
+    for _ in 0..2 {
+        let error = (candidate.invoke)(
+            json!({"task_name":"retry-failed", "message":"inspect"}),
+            context(parent),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("rejected session reasoning"));
+        assert!(!error.contains("already exists"));
+        assert!(runtime.sessions.read().unwrap().is_empty());
+        assert!(
+            runtime
+                .subagent_registry_snapshot()
+                .unwrap()
+                .list_all()
+                .is_empty()
+        );
+    }
+}
+
 /// Cancelling before backend claim must release the original transient binding.
 /// 在后端认领前取消时必须释放原始临时绑定。
 #[tokio::test]

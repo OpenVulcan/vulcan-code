@@ -703,7 +703,13 @@ impl TaskRuntime {
                 "The task execution transaction is locked and cannot discard the pre-start child agent.",
             )
         })?;
-        let created_status = status_name_for_task_session_status(TaskSessionStatus::Created);
+        // The startup guard may already have projected this exact attempt as failed.
+        // 启动守卫可能已将这次精确尝试投影为失败。
+        let discardable_status = |status: &str| {
+            [TaskSessionStatus::Created, TaskSessionStatus::Failed]
+                .into_iter()
+                .find(|candidate| status == status_name_for_task_session_status(*candidate))
+        };
         let removed_record = {
             let mut sessions = self.sessions.write().map_err(|_| {
                 String::from(
@@ -714,7 +720,7 @@ impl TaskRuntime {
                 record.public_task_id == invocation.public_task_id
                     && record.origin_session_id == invocation.root_session_id
                     && record.parent_task_id == invocation.parent_task_id
-                    && record.last_status == created_status
+                    && discardable_status(&record.last_status).is_some()
                     && record.execution_id.as_deref() == Some(invocation.execution_id.as_str())
             });
             if should_remove {
@@ -724,6 +730,9 @@ impl TaskRuntime {
             }
         };
         if let Some(record) = removed_record {
+            let registry_status = subagent_status_from_task_session_status(
+                discardable_status(&record.last_status).unwrap_or(TaskSessionStatus::Created),
+            );
             let parent_session_id =
                 SessionNodeId::from(record.parent_task_id.unwrap_or(record.origin_session_id));
             let registry_removal = match self.subagent_registry.write() {
@@ -731,7 +740,7 @@ impl TaskRuntime {
                     parent_session_id,
                     &record.public_task_id,
                     SessionNodeId::from(record.task_id),
-                    SubagentStatus::Created,
+                    registry_status,
                 ),
                 Err(_) => {
                     self.sessions

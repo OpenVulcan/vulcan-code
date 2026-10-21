@@ -325,22 +325,31 @@ async fn run_task_with_shared_runtime_context_inner(
     // Initial creation and resumption resolve once, records parent ownership first and installs the host sink before UI projection.
     // 初始创建与续跑只解析一次，先记录父归属，并在界面投影之前安装宿主接收器。
     let initial_preparation = if let Some(binding) = &lifecycle_binding {
-        detached_stream_startup_guard.observe(
-            context
-                .request_template
-                .native_agent_collaboration_runtime
-                .as_ref()
-                .ok_or_else(|| {
-                    String::from("Durable child admission requires a profile capture host.")
-                }),
-        )?;
-        let prepared = detached_stream_startup_guard.observe(
-            runtime_launch::prepare_task_runtime_execution(&context, &request, &resolved_config),
-        )?;
+        detached_stream_startup_guard
+            .observe(
+                context
+                    .request_template
+                    .native_agent_collaboration_runtime
+                    .as_ref()
+                    .ok_or_else(|| {
+                        String::from("Durable child admission requires a profile capture host.")
+                    }),
+            )
+            .map_err(task_execution_prestart_rejected_error)?;
+        // No child document exists yet, so a rejected preparation must not keep the agent name.
+        // 子文档尚不存在，因此被拒绝的准备不得继续占用智能体名称。
+        let prepared = detached_stream_startup_guard
+            .observe(runtime_launch::prepare_task_runtime_execution(
+                &context,
+                &request,
+                &resolved_config,
+            ))
+            .map_err(task_execution_prestart_rejected_error)?;
         let creation = detached_stream_startup_guard
             .observe(prepared.creation.as_ref().ok_or_else(|| {
                 String::from("Child admission requires captured creation settings.")
-            }))?
+            }))
+            .map_err(task_execution_prestart_rejected_error)?
             .clone();
         detached_stream_startup_guard.observe(
             binding

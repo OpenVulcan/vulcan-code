@@ -315,6 +315,14 @@ pub(super) fn task_execution_record_owner_conflict_error(
     )
 }
 
+/// Marks a child-creation failure that happened before the host created the child document.
+/// 标记发生在宿主创建子文档之前的子代理创建失败。
+/// `reason` is the visible failure; returns it with the internal pre-start marker.
+/// `reason` 是对外可见的失败；返回带内部启动前标记的同一文本。
+pub(super) fn task_execution_prestart_rejected_error(reason: String) -> String {
+    format!("{TASK_EXECUTION_PRESTART_CANCELLED_PREFIX} {reason}")
+}
+
 /// Returns whether one backend error represents a pre-start cancellation that must not be persisted as a failed child agent.
 /// 返回某条后端错误是否表示不应持久化为失败子代理的启动前取消。
 pub(super) fn task_execution_error_is_prestart_cancelled(error: &str) -> bool {
