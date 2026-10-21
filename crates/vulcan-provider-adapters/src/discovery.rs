@@ -832,9 +832,12 @@ pub fn parse_openai_codex_model_catalog(
         parse_discovery_json::<OpenAiCodexModelList>(body, "OpenAI Codex model list")?;
     // Codex lists only picker-visible models, ordered by the account catalog's priority.
     // Codex 只列出选择器可见的模型，并按账号目录的优先级排序。
-    response
-        .models
-        .retain(|model| model.visibility.as_deref().is_none_or(|value| value == "list"));
+    response.models.retain(|model| {
+        model
+            .visibility
+            .as_deref()
+            .is_none_or(|value| value == "list")
+    });
     response
         .models
         .sort_by_key(|model| model.priority.unwrap_or(i64::MAX));
