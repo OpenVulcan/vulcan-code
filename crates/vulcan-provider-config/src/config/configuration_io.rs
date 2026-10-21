@@ -170,6 +170,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub subagent_models: Vec<SubagentModelGrant>,
+    /// MCP service switch and the external AI clients allowed to call it.
+    /// MCP 服务开关以及允许调用它的外部 AI 客户端。
+    #[serde(
+        default,
+        rename = "mcpService",
+        skip_serializing_if = "PersistedMcpServiceConfiguration::is_default"
+    )]
+    pub mcp_service: PersistedMcpServiceConfiguration,
 }
 
 /// Versioned standalone public AI connection configuration.

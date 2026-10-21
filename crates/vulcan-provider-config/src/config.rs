@@ -14,6 +14,9 @@ pub use configuration_io::*;
 mod git_commit;
 pub use git_commit::*;
 
+mod mcp_service;
+pub use mcp_service::*;
+
 mod permission_judge;
 pub use permission_judge::*;
 
