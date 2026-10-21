@@ -226,11 +226,19 @@ function WorkspaceHighlightedCodePreview(props: {
   // reveal is the request, if any, to show lines of this exact preview; a reloaded preview no longer has one.
   // reveal 是显示本次预览指定行的请求（如有）；重新加载的预览不再带有该请求。
   const reveal = React.useMemo(() => peekWorkspaceFileLineReveal(props.preview.path), [props.preview]);
+  // gotoLine is the line the reader went to with Ctrl+G in this exact preview; it replaces the requested lines.
+  // gotoLine 是读者在本次预览中通过 Ctrl+G 跳到的行；它取代请求定位的行。
+  const [gotoLine, setGotoLine] = React.useState<{ preview: WorkspaceFileReadResponse; line: number } | null>(null);
+  const focusLine = gotoLine?.preview === props.preview ? gotoLine.line : null;
+  const focus = React.useMemo(
+    () => (focusLine ? { start: focusLine, end: focusLine } : reveal?.lines ?? null),
+    [focusLine, reveal],
+  );
   // rows stores rendered preview line nodes.
   // rows 保存已渲染的预览行节点。
   const rows = React.useMemo(
-    () => workspaceHighlightedCodeRows(diffFile.hunks[0].lines, language, highlightRevision, highlightEnabled, reveal?.lines ?? null),
-    [diffFile, highlightEnabled, highlightRevision, language, reveal],
+    () => workspaceHighlightedCodeRows(diffFile.hunks[0].lines, language, highlightRevision, highlightEnabled, focus),
+    [diffFile, focus, highlightEnabled, highlightRevision, language],
   );
   const linesRef = React.useRef<HTMLDivElement | null>(null);
   React.useEffect(() => {
@@ -238,6 +246,14 @@ function WorkspaceHighlightedCodePreview(props: {
     consumeWorkspaceFileLineReveal(reveal.id);
     linesRef.current?.querySelector(`[data-line="${reveal.lines.start}"]`)?.scrollIntoView({ block: "center" });
   }, [reveal]);
+  // goToLine marks and centres a line, clamped to the file; focus returns to the code afterwards.
+  // goToLine 标记并居中某一行（限制在文件范围内）；之后焦点回到代码区。
+  const lineCount = diffFile.hunks[0].lines.length;
+  const goToLine = React.useCallback((line: number) => {
+    const target = Math.min(Math.max(line, 1), lineCount);
+    setGotoLine({ line: target, preview: props.preview });
+    linesRef.current?.querySelector(`[data-line="${target}"]`)?.scrollIntoView({ block: "center" });
+  }, [lineCount, props.preview]);
   // quoteSelection reads the live selection, which the quote action keeps while it is pressed.
   // quoteSelection 读取实时选区；按下引用操作时选区会被保留。
   const quoteSelection = () => {
@@ -265,7 +281,7 @@ function WorkspaceHighlightedCodePreview(props: {
       {/* Focusable so a click in the code gives Ctrl+F to this file's find bar. 可获得焦点，使点击代码后 Ctrl+F 交给本文件的查找栏。 */}
       <div className="workspace-file-preview-code-lines" ref={linesRef} tabIndex={0}>{rows}</div>
       <ConversationSelectionQuote onQuote={quoteSelection} scrollRef={linesRef} timelineRef={linesRef} />
-      <ConversationFindBar highlight="vk-file-find" key={props.preview.path} label="workspaceFiles.find" onReveal={revealMatch} scoped scrollRef={linesRef} />
+      <ConversationFindBar highlight="vk-file-find" key={props.preview.path} label="workspaceFiles.find" onGotoLine={goToLine} onReveal={revealMatch} scoped scrollRef={linesRef} />
     </>
   );
 }

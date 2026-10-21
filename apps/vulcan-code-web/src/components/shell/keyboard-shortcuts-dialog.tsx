@@ -43,6 +43,13 @@ const SHORTCUT_GROUPS: readonly { title: TranslationKey; rows: readonly Shortcut
     ],
   },
   {
+    title: "palette.shortcuts.filePreview",
+    rows: [
+      { combos: [["Ctrl", "F"]], label: "workspaceFiles.find" },
+      { combos: [["Ctrl", "G"]], label: "workspaceFiles.gotoLineLabel" },
+    ],
+  },
+  {
     title: "palette.shortcuts.lists",
     rows: [
       { combos: [["↑"], ["↓"], ["Home"], ["End"]], label: "palette.shortcuts.move" },

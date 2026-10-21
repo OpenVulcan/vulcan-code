@@ -25,6 +25,8 @@ const CONVERSATION_FIND_DELAY_MS = 150;
 // ConversationFindBar 搜索当前会话的转录。Ctrl+F（Cmd+F）打开或回到它，Enter 与 Shift+Enter 在匹配之间移动，
 // Escape 关闭并归还焦点。拥有独立搜索的视图（如文件预览）以 data-find-scope 标记根元素并在其中渲染限定范围的查找栏：
 // 在该根元素内按下的 Ctrl+F 只属于那个查找栏。
+// A bar given onGotoLine also opens on Ctrl+G (Cmd+G) with ":" typed: ":42" and Enter goes to line 42.
+// 提供 onGotoLine 的查找栏也会在 Ctrl+G（Cmd+G）时打开并预填 ":"：输入 ":42" 后按 Enter 跳到第 42 行。
 export function ConversationFindBar(props: {
   // scrollRef is the transcript scrollport the search covers.
   // scrollRef 是搜索覆盖的转录滚动视口。
@@ -41,6 +43,9 @@ export function ConversationFindBar(props: {
   // highlight is the CSS highlight name of the matches (see CONVERSATION_FIND_HIGHLIGHT).
   // highlight 是匹配项的 CSS 高亮名称（见 CONVERSATION_FIND_HIGHLIGHT）。
   highlight?: string;
+  // onGotoLine goes to a line number typed after ":"; without it the bar only searches.
+  // onGotoLine 跳到 ":" 后输入的行号；未提供时查找栏只做搜索。
+  onGotoLine?: (line: number) => void;
 }) {
   const { t } = useI18n();
   const { scrollRef, onReveal, scoped = false, highlight = CONVERSATION_FIND_HIGHLIGHT } = props;
@@ -60,10 +65,18 @@ export function ConversationFindBar(props: {
   const returnFocus = React.useRef<HTMLElement | null>(null);
   const openRef = React.useRef(open);
   openRef.current = open;
+  // focusRequest asks the rendered input to take focus: Ctrl+F selects its text, Ctrl+G puts the caret after ":".
+  // focusRequest 请求渲染后的输入框获得焦点：Ctrl+F 选中其文本，Ctrl+G 将光标置于 ":" 之后。
+  const [focusRequest, setFocusRequest] = React.useState<{ caretAtEnd: boolean } | null>(null);
+  const canGotoLine = Boolean(props.onGotoLine);
+  // lineQuery is the query when it asks for a line (":" and digits) rather than text.
+  // lineQuery 表示查询请求的是行号（":" 加数字）而不是文本。
+  const lineQuery = canGotoLine && /^:\d*$/.test(query.trim());
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.key.toLowerCase() !== "f" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+      const key = event.key.toLowerCase();
+      if (event.defaultPrevented || !(key === "f" || (key === "g" && canGotoLine)) || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
       const port = scrollRef.current;
       if (!port?.isConnected || (typeof port.checkVisibility === "function" && !port.checkVisibility())) return;
       const target = event.target instanceof Element ? event.target : null;
@@ -78,38 +91,39 @@ export function ConversationFindBar(props: {
       if (!openRef.current) {
         returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         const selected = window.getSelection()?.toString().trim() ?? "";
-        if (selected && !selected.includes("\n") && selected.length <= 200) setQuery(selected);
+        if (key === "f" && selected && !selected.includes("\n") && selected.length <= 200) setQuery(selected);
         setOpen(true);
       }
-      const input = inputRef.current;
-      input?.focus();
-      input?.select();
+      if (key === "g") setQuery(":");
+      setFocusRequest({ caretAtEnd: key === "g" });
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [scoped, scrollRef]);
+  }, [canGotoLine, scoped, scrollRef]);
 
-  // The opened bar takes focus once its input exists.
-  // 查找栏打开后，在输入框出现时获得焦点。
+  // The bar takes focus once its input exists and holds the text the shortcut put there.
+  // 查找栏在输入框出现并含有快捷键填入的文本后获得焦点。
   React.useLayoutEffect(() => {
-    if (!open) return;
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, [open]);
+    const input = inputRef.current;
+    if (!open || !focusRequest || !input) return;
+    input.focus();
+    if (focusRequest.caretAtEnd) input.setSelectionRange(input.value.length, input.value.length);
+    else input.select();
+  }, [focusRequest, open]);
 
   // search runs the query again; a fresh query starts at the first match at or below the top of the view, while a
   // re-run after the transcript changed stays on the same match number.
   // search 重新执行查询；新查询从视图顶部及以下的首个匹配开始，转录变化后的重跑则停留在相同的匹配序号。
   const search = React.useCallback((fresh: boolean) => {
     const port = scrollRef.current;
-    const ranges = port ? findTextRanges(port, query) : [];
+    const ranges = port && !lineQuery ? findTextRanges(port, query) : [];
     setResult((previous) => {
       if (!fresh) return { ranges, current: ranges.length === 0 ? -1 : Math.min(Math.max(previous.current, 0), ranges.length - 1) };
       const top = port?.getBoundingClientRect().top ?? 0;
       const firstInView = ranges.findIndex((range) => range.getBoundingClientRect().bottom >= top);
       return { ranges, current: ranges.length === 0 ? -1 : Math.max(firstInView, 0) };
     });
-  }, [query, scrollRef]);
+  }, [lineQuery, query, scrollRef]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -184,7 +198,10 @@ export function ConversationFindBar(props: {
   if (!open) return null;
   const total = result.ranges.length;
   const totalLabel = total >= CONVERSATION_FIND_MATCH_LIMIT ? `${CONVERSATION_FIND_MATCH_LIMIT}+` : String(total);
-  const status = !query.trim()
+  const lineNumber = lineQuery ? Number(query.trim().slice(1)) : 0;
+  const status = lineQuery
+    ? lineNumber > 0 ? formatMessage(t("workspaceFiles.gotoLine"), { line: String(lineNumber) }) : t("workspaceFiles.gotoLineEmpty")
+    : !query.trim()
     ? ""
     : total === 0
       ? t("conversation.find.none")
@@ -201,7 +218,11 @@ export function ConversationFindBar(props: {
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.nativeEvent.isComposing) {
               event.preventDefault();
-              step(event.shiftKey ? -1 : 1);
+              if (!lineQuery) step(event.shiftKey ? -1 : 1);
+              else if (lineNumber > 0) {
+                props.onGotoLine?.(lineNumber);
+                close();
+              }
             } else if (event.key === "Escape") {
               event.preventDefault();
               close();
