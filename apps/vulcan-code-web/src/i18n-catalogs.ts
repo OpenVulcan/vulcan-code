@@ -66,7 +66,7 @@ if (hotState) hotState.catalogState = catalogState
 // registerLocaleCatalog 发布静态打包或下载的目录，并通知其消费者。
 // Parameters: locale identifies the language; catalog is its successfully loaded text. Returns nothing.
 // 参数：locale 标识语言；catalog 是成功加载的文案。无返回值。
-export function registerLocaleCatalog(locale: LocaleCode, catalog: LocaleCatalog): void {
+function registerLocaleCatalog(locale: LocaleCode, catalog: LocaleCatalog): void {
   if (catalogState.loaded[locale] === catalog) return
   catalogState.loaded[locale] = catalog
   catalogState.revision += 1

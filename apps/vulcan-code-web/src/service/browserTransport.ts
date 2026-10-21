@@ -10,8 +10,7 @@ import type {
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
-import enUSTranslations from "@catalogs/webui/en-US.json";
-import { formatMessage, translateActive, type TranslationKey } from "@/i18n";
+import { formatMessage, isLoadedTranslationKey, translateActive } from "@/i18n";
 import type { ConversationEventLiveDeltaV1 } from "@/service/conversation-event-window-client";
 import {
   DEDICATED_PROMPT_DRAFT_PROGRESS_TOPIC,
@@ -93,10 +92,10 @@ export interface BrowserServiceLocalizedMessage {
 // The catalog text in the active language, or `message` when this build does not know the key.
 // 返回当前语言的目录文案；本构建不认识该键时返回 `message`。
 export function renderServiceErrorMessage(message: string, localized?: BrowserServiceLocalizedMessage): string {
-  if (!localized || !Object.hasOwn(enUSTranslations, localized.key)) {
+  if (!localized || !isLoadedTranslationKey(localized.key)) {
     return message;
   }
-  return formatMessage(translateActive(localized.key as TranslationKey), localized.params ?? {});
+  return formatMessage(translateActive(localized.key), localized.params ?? {});
 }
 
 // BrowserServiceRpcError preserves the server code for control flow and the message for display.

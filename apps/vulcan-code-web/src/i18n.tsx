@@ -1,12 +1,11 @@
 import * as React from "react"
 import { UiTextProvider } from "@/ui-kit/primitives/ui-text"
 import {
-  ensureLocaleCatalog, loadedLocaleCatalog, registerLocaleCatalog,
+  ensureLocaleCatalog, loadedLocaleCatalog,
   localeCatalogRevision, subscribeLocaleCatalogs,
 } from "@/i18n-catalogs"
 import { DEFAULT_LOCALE, normalizeLocaleCode, resolveAppLocale, type LocaleCode } from "@/i18n-locales"
 import type { TranslationKey } from "@/i18n-messages"
-import enUSTranslations from "@catalogs/webui/en-US.json"
 
 export type { LocaleCode, TranslationKey } from "@/i18n-messages"
 export { normalizeLocaleCode, pickBilingualText, resolveAppLocale, SUPPORTED_LOCALES } from "@/i18n-locales"
@@ -15,10 +14,24 @@ export { normalizeLocaleCode, pickBilingualText, resolveAppLocale, SUPPORTED_LOC
 // Translate 以当前语言解析一个稳定文本键；React 之外的辅助函数以参数形式接收它。
 export type Translate = (key: TranslationKey) => string
 
-// The English catalog is the only statically bundled language: it fills every key another catalog lacks
-// and renders while a different language downloads. Every other language loads on demand.
-// 英文目录是唯一静态打包的语言：它补全其他目录缺少的每个键，并在其他语言下载期间渲染。其余语言按需加载。
-registerLocaleCatalog(DEFAULT_LOCALE, enUSTranslations)
+// Every language, English included, loads on demand: each catalog covers every key at compile time, and the
+// boot gate downloads the display language (English only if that fails) before the workbench mounts.
+// 包括英文在内的每种语言都按需加载：每个目录在编译期覆盖全部键，启动门在工作台挂载前下载显示语言（仅在失败时下载英文）。
+
+// ensureDisplayCatalog downloads one language and falls back to English when it cannot be loaded.
+// ensureDisplayCatalog 下载一种语言，无法加载时回退为英文。
+// Parameter: locale is the language about to be shown. Resolves once some catalog can be read; rejects only
+// when English cannot be loaded either.
+// 参数：locale 是即将展示的语言。有目录可读时完成；仅在英文也无法加载时拒绝。
+export async function ensureDisplayCatalog(locale: LocaleCode): Promise<void> {
+  try {
+    await ensureLocaleCatalog(locale)
+  } catch (error) {
+    if (locale === DEFAULT_LOCALE) throw error
+    console.error(`Locale catalog could not be loaded, showing English: ${locale}`, error)
+    await ensureLocaleCatalog(DEFAULT_LOCALE)
+  }
+}
 
 // I18nContextValue exposes the active language and translation helpers.
 // I18nContextValue 暴露当前语言与翻译辅助函数。
@@ -63,10 +76,20 @@ if (hotState) hotState.context = I18nContext
 //
 // # Returns
 // 返回值
-// The localized label; English is used while the language is still downloading or lacks the key.
-// 返回本地化文案；该语言仍在下载或缺少该键时使用英文。
+// The localized label; English while the language is not loaded, and the key itself before any catalog is.
+// 返回本地化文案；该语言未加载时使用英文，任何目录加载前返回键本身。
 export function readLocaleMessage(locale: LocaleCode, key: TranslationKey): string {
-  return loadedLocaleCatalog(locale)?.[key] ?? enUSTranslations[key]
+  return loadedLocaleCatalog(locale)?.[key] ?? loadedLocaleCatalog(DEFAULT_LOCALE)?.[key] ?? key
+}
+
+// isLoadedTranslationKey reports whether a key received from elsewhere, such as the service, names a message
+// this build can show now.
+// isLoadedTranslationKey 报告从别处（例如服务）收到的键是否指向本构建此刻可展示的文案。
+// Parameter: key is the untrusted key. Returns false before any catalog is loaded.
+// 参数：key 是不受信任的键。任何目录加载前返回 false。
+export function isLoadedTranslationKey(key: string): key is TranslationKey {
+  const catalog = loadedLocaleCatalog(activeLocale ?? resolveAppLocale(null)) ?? loadedLocaleCatalog(DEFAULT_LOCALE)
+  return catalog !== undefined && Object.hasOwn(catalog, key)
 }
 
 // activeLocale mirrors the mounted provider's language for modules that run outside React.
@@ -149,12 +172,13 @@ function I18nProvider(props: {
     }
   }, [props.initialLocale, setLocale])
   React.useEffect(() => {
-    // The initial language may not be preloaded (for example after a failed download); render English until it arrives.
-    // 初始语言可能未预加载（例如下载失败后）；在其到达前以英文渲染。
+    // The initial language may not be preloaded (for example after a failed download); English stands in until it
+    // arrives, or for good when it cannot be loaded.
+    // 初始语言可能未预加载（例如下载失败后）；在其到达前由英文代替，无法加载时一直使用英文。
     if (loadedLocaleCatalog(locale)) {
       return
     }
-    void ensureLocaleCatalog(locale).catch((error: unknown) => {
+    void ensureDisplayCatalog(locale).catch((error: unknown) => {
       console.error(`Initial locale catalog could not be loaded: ${locale}`, error)
     })
   }, [locale])
