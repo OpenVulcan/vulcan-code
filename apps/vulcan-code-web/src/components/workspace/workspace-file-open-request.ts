@@ -109,6 +109,25 @@ export function resolveWorkspaceFileTarget(workspacePath: string, path: string):
   return { directory: segments.length > 0 ? [root, ...segments].join(separator) : null, name };
 }
 
+// FILE_PATH_MENTION matches inline text naming a file by path: at least one folder separator, a file name with a
+// letter-led extension, and an optional ":line" or ":start-end" suffix. URLs, spaces and wildcards do not match.
+// FILE_PATH_MENTION 匹配以路径指名文件的行内文本：至少一个目录分隔符、扩展名以字母开头的文件名，以及可选的
+// ":行" 或 ":起-止" 后缀。URL、空格与通配符不匹配。
+const FILE_PATH_MENTION = /^((?:[A-Za-z]:)?[^\s:*?"<>|]*[\\/][^\s:*?"<>|\\/]+\.[A-Za-z][A-Za-z0-9]{0,9})(?::(\d+)(?:[-–](\d+))?)?$/;
+
+// parseFilePathMention reads a path, and any line range, from inline text such as `src/app.ts:12-20`.
+// Returns null for text that does not look like a file path, including text with surrounding whitespace or a line
+// break, as fenced code always ends with one.
+// parseFilePathMention 从行内文本（例如 `src/app.ts:12-20`）读取路径及可能的行范围；不像文件路径时返回 null，
+// 包括带首尾空白或换行的文本（围栏代码总以换行结尾）。
+export function parseFilePathMention(text: string): { path: string; lines: WorkspaceFileLines | null } | null {
+  const match = FILE_PATH_MENTION.exec(text);
+  if (!match) return null;
+  const start = match[2] ? Number(match[2]) : null;
+  const end = match[3] ? Number(match[3]) : start;
+  return { path: match[1], lines: start !== null && end !== null && start > 0 && end >= start ? { start, end } : null };
+}
+
 // findRequestedFileEntry picks the file named `name` from a listing, preferring an exact match over one that
 // differs only in case.
 // findRequestedFileEntry 从目录列表中选出名为 `name` 的文件，精确匹配优先于仅大小写不同的匹配。

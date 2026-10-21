@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findRequestedFileEntry, resolveWorkspaceFileTarget } from "./workspace-file-open-request";
+import { findRequestedFileEntry, parseFilePathMention, resolveWorkspaceFileTarget } from "./workspace-file-open-request";
 import { emptyWorkspaceContextTabState, focusWorkspaceFilesTab, openWorkspaceContextTab } from "./workspace-shell/context-tabs";
 import type { WorkspaceFileDirectoryListing, WorkspaceFileEntrySummary } from "@/types";
 
@@ -25,6 +25,22 @@ describe("resolveWorkspaceFileTarget", () => {
     expect(resolveWorkspaceFileTarget("/home/u/repo", "/Home/u/repo/x.ts")).toBeNull();
     expect(resolveWorkspaceFileTarget("D:\\work\\repo", "src/../../secret.txt")).toBeNull();
     expect(resolveWorkspaceFileTarget("D:\\work\\repo", "D:\\work\\repo")).toBeNull();
+  });
+});
+
+describe("parseFilePathMention", () => {
+  it("reads folder paths with an extension and an optional line or line range", () => {
+    expect(parseFilePathMention("src/app.ts")).toEqual({ path: "src/app.ts", lines: null });
+    expect(parseFilePathMention("src/app.ts:12")).toEqual({ path: "src/app.ts", lines: { start: 12, end: 12 } });
+    expect(parseFilePathMention("crates/a/lib.rs:4-9")).toEqual({ path: "crates/a/lib.rs", lines: { start: 4, end: 9 } });
+    expect(parseFilePathMention("D:\\repo\\main.rs:3")).toEqual({ path: "D:\\repo\\main.rs", lines: { start: 3, end: 3 } });
+    expect(parseFilePathMention("src/app.ts:9-4")).toEqual({ path: "src/app.ts", lines: null });
+  });
+
+  it("leaves non-path code alone: bare names, members, URLs, commands, globs and fenced text", () => {
+    for (const text of ["README.md", "obj.method", "https://x.dev/a.js", "npm run build", "src/*.ts", "src/app", "v1.2/3.4", "src/app.ts\n"]) {
+      expect(parseFilePathMention(text)).toBeNull();
+    }
   });
 });
 

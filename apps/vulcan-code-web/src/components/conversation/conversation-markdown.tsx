@@ -26,6 +26,12 @@ import {
   tokenSpansToHtml,
 } from "@/diff/diff-shiki-shared";
 import { useI18n } from "@/i18n";
+import {
+  parseFilePathMention,
+  useWorkspaceFileOpener,
+  type WorkspaceFileLines,
+  type WorkspaceFileOpener,
+} from "@/components/workspace/workspace-file-open-request";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 import { IconButton } from "@/ui-kit/primitives/button";
 
@@ -299,6 +305,9 @@ function MarkdownContentRenderer(props: {
   // 最终确定的 Mermaid 与 SVG 围栏代码是否应渲染为图表。
   renderDiagrams: boolean;
 }) {
+  // openFile shows inline file paths in the files panel; null outside the workbench, where paths stay plain code.
+  // openFile 在文件面板中显示行内文件路径；工作台之外为 null，路径保持为普通代码。
+  const openFile = useWorkspaceFileOpener();
   const components = React.useMemo(() => ({
     a: ({ children, href }: { children?: React.ReactNode; href?: string }) => (
       <a href={href} rel="noreferrer" target="_blank">
@@ -316,6 +325,8 @@ function MarkdownContentRenderer(props: {
         );
       }
       const inline = !className;
+      const mention = inline && openFile && typeof children === "string" ? parseFilePathMention(children) : null;
+      if (mention && openFile) return <MarkdownFilePath lines={mention.lines} open={openFile} path={mention.path} text={children as string} />;
       return inline ? <code className="vk-md-code">{children}</code> : <code className={className}>{children}</code>;
     },
     img: ({ alt, src, title }: { alt?: string; src?: string; title?: string }) => {
@@ -372,7 +383,7 @@ function MarkdownContentRenderer(props: {
     th: ({ children, node, style }: { children?: React.ReactNode; style?: React.CSSProperties } & ExtraProps) => (
       <MarkdownTableCell node={node} style={style} tag="th">{children}</MarkdownTableCell>
     ),
-  }), [props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
+  }), [openFile, props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
   return (
     <MarkdownSourceContext.Provider value={props.content}>
       <ReactMarkdown
@@ -384,6 +395,27 @@ function MarkdownContentRenderer(props: {
         {props.content}
       </ReactMarkdown>
     </MarkdownSourceContext.Provider>
+  );
+}
+
+// MarkdownFilePath renders inline code that names a file as a control showing that file, at its lines, in the files
+// panel. It stays a code element so selection and copying treat it as text.
+// MarkdownFilePath 将指名文件的行内代码渲染为在文件面板中显示该文件（及其行）的控件。它仍是 code 元素，
+// 选择与复制仍按文本处理。
+function MarkdownFilePath(props: { text: string; path: string; lines: WorkspaceFileLines | null; open: WorkspaceFileOpener }) {
+  const { t } = useI18n();
+  const open = () => props.open(props.path, props.lines);
+  return (
+    <code
+      className="vk-md-code vk-md-path"
+      onClick={open}
+      onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } }}
+      role="button"
+      tabIndex={0}
+      title={t("workspaceFiles.showInFilesPanel")}
+    >
+      {props.text}
+    </code>
   );
 }
 

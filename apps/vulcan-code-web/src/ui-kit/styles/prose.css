@@ -39,6 +39,9 @@
 .vk-md-image img { display: block; width: 100%; max-width: 100%; height: auto; }
 .vk-md-image:focus-visible { outline: 2px solid var(--vk-signal); outline-offset: 2px; }
 .vk-md-code { padding: 0.06em 0.36em; border: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-code-bg); color: var(--vk-ink); font-family: var(--vk-font-mono); font-size: 0.87em; }
+/* Inline code naming a project file opens it in the files panel. 指名项目文件的行内代码可在文件面板中打开。 */
+.vk-md-path { cursor: pointer; text-decoration: underline dotted color-mix(in srgb, var(--vk-ink-3) 70%, transparent); text-underline-offset: 3px; }
+.vk-md-path:hover { border-color: var(--vk-line-strong); color: var(--vk-ember-ink); text-decoration-color: currentColor; }
 /* Streaming: blocks re-parse independently; an oversized open tail shows as raw text until it closes. */
 .vk-md-stream { min-width: 0; }
 .vk-md-raw { margin: 0; overflow-x: auto; color: inherit; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
