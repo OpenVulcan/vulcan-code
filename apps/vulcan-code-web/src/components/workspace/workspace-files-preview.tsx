@@ -15,6 +15,9 @@ import type { DiffFile, DiffLine } from "@/diff/types";
 import { Button } from "@/ui-kit/primitives/button";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
+import { requestComposerCommand } from "@/components/composer/composer-external-commands";
+import { ConversationSelectionQuote } from "@/components/conversation/conversation-selection-quote";
+import { codeQuoteMarkdown, previewSelectionLines } from "@/components/workspace/workspace-file-preview-quote";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceFileEntrySummary, WorkspaceFileReadResponse } from "@/types";
 
@@ -180,8 +183,9 @@ function WorkspaceMediaPermissionPrompt(props: {
   );
 }
 
-// WorkspaceHighlightedCodePreview renders a read-only code preview through the review Shiki pipeline.
-// WorkspaceHighlightedCodePreview 通过审核 Shiki 管线渲染只读代码预览。
+// WorkspaceHighlightedCodePreview renders a read-only code preview through the review Shiki pipeline. Selected
+// lines can be quoted into the composer under the file's path and line range.
+// WorkspaceHighlightedCodePreview 通过审核 Shiki 管线渲染只读代码预览。选中的行可连同文件路径与行范围引用到输入区。
 function WorkspaceHighlightedCodePreview(props: {
   // Loaded code preview response.
   // 已加载的代码预览响应。
@@ -208,7 +212,24 @@ function WorkspaceHighlightedCodePreview(props: {
     () => workspaceHighlightedCodeRows(diffFile.hunks[0].lines, language, highlightRevision, highlightEnabled),
     [diffFile, highlightEnabled, highlightRevision, language],
   );
-  return <div className="workspace-file-preview-code-lines">{rows}</div>;
+  const linesRef = React.useRef<HTMLDivElement | null>(null);
+  // quoteSelection reads the live selection, which the quote action keeps while it is pressed.
+  // quoteSelection 读取实时选区；按下引用操作时选区会被保留。
+  const quoteSelection = () => {
+    const selection = window.getSelection();
+    const container = linesRef.current;
+    if (!selection || selection.rangeCount === 0 || !container) return;
+    const span = previewSelectionLines(container, selection.getRangeAt(0));
+    if (!span) return;
+    const code = diffFile.hunks[0].lines.slice(span.start - 1, span.end).map((line) => line.content).join("\n");
+    requestComposerCommand({ kind: "insert", text: codeQuoteMarkdown(props.preview.relativePath || props.preview.path, span, code, language) });
+  };
+  return (
+    <>
+      <div className="workspace-file-preview-code-lines" ref={linesRef}>{rows}</div>
+      <ConversationSelectionQuote onQuote={quoteSelection} scrollRef={linesRef} timelineRef={linesRef} />
+    </>
+  );
 }
 
 // workspacePreviewDiffFile builds a synthetic context-only diff file for code preview highlighting.
@@ -286,7 +307,7 @@ function workspaceHighlightedCodeRows(
       : null;
     const html = highlightedSpans ? tokenSpansToHtml(highlightedSpans) : escapeHtml(line.content);
     rows[index] = (
-      <div className="workspace-file-preview-code-row" key={index}>
+      <div className="workspace-file-preview-code-row" data-line={index + 1} key={index}>
         <span className="workspace-file-preview-code-gutter">{index + 1}</span>
         <span
           className="workspace-file-preview-code-content"
