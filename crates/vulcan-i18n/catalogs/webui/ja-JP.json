@@ -5466,6 +5466,8 @@
   "projectMenu.openTerminal": "ターミナルで開く",
   "composer.contextUsage.cacheHitRate": "キャッシュヒット率",
   "composer.contextUsage.noData": "データなし",
+  "pluginHost.chart.empty": "グラフデータがありません",
+  "pluginHost.activity.empty": "アクティビティはありません",
   "composer.contextUsage.usedPercent": "コンテキスト使用率 {percent}%",
   "composer.contextUsage.totalRequests": "総リクエスト数",
   "composer.contextUsage.averageFirstToken": "平均初回トークン",

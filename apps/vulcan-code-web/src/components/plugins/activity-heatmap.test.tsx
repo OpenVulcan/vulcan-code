@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
+import { I18nProvider } from "@/i18n";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { ActivityHeatmap, type ActivityHeatmapCell } from "./plugin-host-components";
 
@@ -22,7 +23,7 @@ it.each([7, 30, 90, 365])("renders the complete %i-day range without annual offs
   const container = document.createElement("div"); document.body.appendChild(container);
   const root = createRoot(container);
   try {
-    await act(async () => root.render(<TooltipProvider><ActivityHeatmap cells={cells} ariaLabel="Real selected range" /></TooltipProvider>));
+    await act(async () => root.render(<I18nProvider initialLocale="en-US"><TooltipProvider><ActivityHeatmap cells={cells} ariaLabel="Real selected range" /></TooltipProvider></I18nProvider>));
     const content = container.querySelector<HTMLElement>(".plugin-activity-heatmap-content")!;
     const buttons = [...content.querySelectorAll('[role="gridcell"]')];
     expect(buttons.map((cell) => cell.getAttribute("aria-label"))).toEqual(cells.map((cell) => cell.label));

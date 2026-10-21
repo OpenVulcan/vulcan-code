@@ -336,8 +336,9 @@ export function ActivityHeatmapLegend(props: ActivityHeatmapLegendProps) {
 // Parameters: props contains the ordered real range and localized labels. Returns: every supplied day exactly once.
 // 参数：props 包含有序真实范围与本地化名称。返回值：每个提供的日期恰好出现一次。
 export function ActivityHeatmap(props: ActivityHeatmapProps) {
+  const { t } = useI18n();
   if (props.cells.length === 0) {
-    return <PageEmptyState title={props.emptyLabel ?? "No activity"} />;
+    return <PageEmptyState title={props.emptyLabel ?? t("pluginHost.activity.empty")} />;
   }
   // firstDate is the exact local calendar date represented by the first cell.
   // firstDate 是首个单元表示的精确本地自然日。
@@ -496,7 +497,7 @@ function niceAxisMaximum(maximum: number, intervals: number): number {
 // TimeSeriesLineChart renders host-native lines without loading a chart runtime.
 // TimeSeriesLineChart 在不加载图表运行时的前提下渲染宿主原生折线。
 export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   // axisFormat keeps y-axis labels short; exact values stay in the point tooltips.
   // axisFormat 保持纵轴标签简短；精确数值保留在数据点提示中。
   const axisFormat = React.useMemo(() => new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }), [locale]);
@@ -504,7 +505,7 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
   // visibleSeries 排除空输入，同时保留全零数据集。
   const visibleSeries = props.series.filter((item) => item.points.length > 0);
   if (visibleSeries.length === 0) {
-    return <PageEmptyState title={props.emptyLabel ?? "No chart data"} />;
+    return <PageEmptyState title={props.emptyLabel ?? t("pluginHost.chart.empty")} />;
   }
   // pointCount is the maximum aligned x-axis length.
   // pointCount 是最大的对齐横轴长度。

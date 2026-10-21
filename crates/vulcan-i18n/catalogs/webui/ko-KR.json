@@ -5466,6 +5466,8 @@
   "projectMenu.openTerminal": "터미널에서 열기",
   "composer.contextUsage.cacheHitRate": "캐시 적중률",
   "composer.contextUsage.noData": "데이터 없음",
+  "pluginHost.chart.empty": "차트 데이터가 없습니다",
+  "pluginHost.activity.empty": "활동이 없습니다",
   "composer.contextUsage.usedPercent": "컨텍스트 {percent}% 사용",
   "composer.contextUsage.totalRequests": "총 요청",
   "composer.contextUsage.averageFirstToken": "평균 첫 토큰",

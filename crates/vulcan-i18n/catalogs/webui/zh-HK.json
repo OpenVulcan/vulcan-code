@@ -5466,6 +5466,8 @@
   "projectMenu.openTerminal": "在終端機中開啟",
   "composer.contextUsage.cacheHitRate": "快取命中率",
   "composer.contextUsage.noData": "暫無資料",
+  "pluginHost.chart.empty": "暫無圖表資料",
+  "pluginHost.activity.empty": "暫無活動",
   "composer.contextUsage.usedPercent": "上下文已使用 {percent}%",
   "composer.contextUsage.totalRequests": "總請求",
   "composer.contextUsage.averageFirstToken": "平均首 Token",

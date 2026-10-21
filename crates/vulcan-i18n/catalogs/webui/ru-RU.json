@@ -5466,6 +5466,8 @@
   "projectMenu.openTerminal": "Открыть в терминале",
   "composer.contextUsage.cacheHitRate": "Доля попаданий в кэш",
   "composer.contextUsage.noData": "Нет данных",
+  "pluginHost.chart.empty": "Нет данных для графика",
+  "pluginHost.activity.empty": "Нет активности",
   "composer.contextUsage.usedPercent": "Использовано контекста: {percent}%",
   "composer.contextUsage.totalRequests": "Всего запросов",
   "composer.contextUsage.averageFirstToken": "Средн. первый токен",

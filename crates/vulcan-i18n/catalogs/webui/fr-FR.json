@@ -5466,6 +5466,8 @@
   "projectMenu.openTerminal": "Ouvrir dans le terminal",
   "composer.contextUsage.cacheHitRate": "Taux de réussite du cache",
   "composer.contextUsage.noData": "Aucune donnée",
+  "pluginHost.chart.empty": "Aucune donnée de graphique",
+  "pluginHost.activity.empty": "Aucune activité",
   "composer.contextUsage.usedPercent": "Contexte utilisé : {percent} %",
   "composer.contextUsage.totalRequests": "Requêtes au total",
   "composer.contextUsage.averageFirstToken": "Premier token moy.",

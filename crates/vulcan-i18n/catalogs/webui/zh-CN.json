@@ -5466,6 +5466,8 @@
   "projectMenu.openTerminal": "在终端中打开",
   "composer.contextUsage.cacheHitRate": "缓存命中率",
   "composer.contextUsage.noData": "暂无数据",
+  "pluginHost.chart.empty": "暂无图表数据",
+  "pluginHost.activity.empty": "暂无活动",
   "composer.contextUsage.usedPercent": "上下文已使用 {percent}%",
   "composer.contextUsage.totalRequests": "总请求",
   "composer.contextUsage.averageFirstToken": "平均首 Token",
