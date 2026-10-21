@@ -8,21 +8,28 @@ import type { WorkspaceFileLines } from "@/components/workspace/workspace-file-o
 // TerminalPathPiece 是普通输出文本或其中找到的文件位置。
 export type TerminalPathPiece = string | { text: string; path: string; lines: WorkspaceFileLines | null };
 
-// TERMINAL_PATH matches a path with at least one folder and a file extension, optionally followed by a line
-// (":12", ":12:5" or "(12,5)"). It must not continue a word, path or URL ("https://x.dev/a.js" never matches).
-// TERMINAL_PATH 匹配至少含一层目录且带扩展名的路径，其后可带行号（":12"、":12:5" 或 "(12,5)"）。
-// 它不能接在单词、路径或 URL 之后（"https://x.dev/a.js" 永不匹配）。
-const TERMINAL_PATH = /(?<![\w.@~/\\:-])((?:[A-Za-z]:[\\/]|\/)?(?:[\w.@~-]+[\\/])+[\w.@~-]*\.[A-Za-z][A-Za-z0-9]{0,9})(?![\w\\/])(?::(\d+)(?::\d+)?|\((\d+)(?:,\d+)?\))?/g;
+// PATH_LOCATION matches a path with at least one folder and a file extension, optionally followed by a line
+// (":12", ":12:5", "(12,5)") or a line range (":12-20"). TERMINAL_PATH must not continue a word, path or URL
+// ("https://x.dev/a.js" never matches); MENTION_PATH also takes the "@" that a composer mention or quote puts first.
+// PATH_LOCATION 匹配至少含一层目录且带扩展名的路径，其后可带行号（":12"、":12:5"、"(12,5)"）或行范围（":12-20"）。
+// TERMINAL_PATH 不能接在单词、路径或 URL 之后（"https://x.dev/a.js" 永不匹配）；MENTION_PATH 另外接受输入区提及或
+// 引用置于开头的 "@"。
+const PATH_LOCATION = String.raw`((?:[A-Za-z]:[\\/]|\/)?(?:[\w.@~-]+[\\/])+[\w.@~-]*\.[A-Za-z][A-Za-z0-9]{0,9})(?![\w\\/])(?::(\d+)(?:-(\d+)|:\d+)?|\((\d+)(?:,\d+)?\))?`;
+const PATH_START = String.raw`(?<![\w.@~/\\:-])`;
+const TERMINAL_PATH = new RegExp(`${PATH_START}${PATH_LOCATION}`, "g");
+const MENTION_PATH = new RegExp(`${PATH_START}@?${PATH_LOCATION}`, "g");
 
-// splitTerminalPaths cuts text into plain pieces and file locations.
-// splitTerminalPaths 将文本切分为普通片段与文件位置。
-export function splitTerminalPaths(text: string): TerminalPathPiece[] {
+// splitTerminalPaths cuts text into plain pieces and file locations; with `mentions` it also accepts "@path" as
+// prompts write it.
+// splitTerminalPaths 将文本切分为普通片段与文件位置；`mentions` 为真时另接受提示词中的 "@path" 写法。
+export function splitTerminalPaths(text: string, mentions = false): TerminalPathPiece[] {
   const pieces: TerminalPathPiece[] = [];
   let cursor = 0;
-  for (const match of text.matchAll(TERMINAL_PATH)) {
-    const line = Number(match[2] ?? match[3] ?? 0);
+  for (const match of text.matchAll(mentions ? MENTION_PATH : TERMINAL_PATH)) {
+    const start = Number(match[2] ?? match[4] ?? 0);
+    const end = Math.max(start, Number(match[3] ?? 0));
     if (match.index > cursor) pieces.push(text.slice(cursor, match.index));
-    pieces.push({ text: match[0], path: match[1], lines: line > 0 ? { start: line, end: line } : null });
+    pieces.push({ text: match[0], path: match[1], lines: start > 0 ? { start, end } : null });
     cursor = match.index + match[0].length;
   }
   if (cursor < text.length) pieces.push(text.slice(cursor));

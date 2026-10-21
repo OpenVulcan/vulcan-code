@@ -100,10 +100,12 @@ export function TerminalView(props: { prompt?: string; text: string; emptyText: 
   );
 }
 
-// TerminalPathText renders one run of output with the file locations in it as buttons that open them.
-// TerminalPathText 渲染一段输出，其中的文件位置显示为可打开对应文件的按钮。
-function TerminalPathText(props: { text: string; cwd?: string | null; openFile: WorkspaceFileOpener; title: string }) {
-  return splitTerminalPaths(props.text).map((piece, index) => typeof piece === "string" ? piece : (
+// TerminalPathText renders one run of text with the file locations in it as buttons that open them; `mentions`
+// also links "@path" as prompts write it.
+// TerminalPathText 渲染一段文本，其中的文件位置显示为可打开对应文件的按钮；`mentions` 时另链接提示词中的 "@path"。
+export function TerminalPathText(props: { text: string; cwd?: string | null; openFile: WorkspaceFileOpener; title: string; mentions?: boolean }) {
+  const pieces = React.useMemo(() => splitTerminalPaths(props.text, props.mentions), [props.mentions, props.text]);
+  return pieces.map((piece, index) => typeof piece === "string" ? piece : (
     <button className="vk-path-open" key={index} onClick={() => props.openFile(terminalPathFrom(props.cwd, piece.path), piece.lines)} title={props.title} type="button">
       {piece.text}
     </button>

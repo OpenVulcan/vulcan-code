@@ -20,6 +20,18 @@ describe("splitTerminalPaths", () => {
   });
 });
 
+describe("splitTerminalPaths with mentions", () => {
+  it("reads line ranges, and takes the leading @ of prompt mentions only when asked", () => {
+    expect(found("see crates/a/lib.rs:60-64")).toEqual([{ text: "crates/a/lib.rs:60-64", path: "crates/a/lib.rs", lines: { start: 60, end: 64 } }]);
+    const mentioned = splitTerminalPaths("@src/a.ts:5-8 and @docs/b.md", true).filter((piece) => typeof piece !== "string");
+    expect(mentioned).toEqual([
+      { text: "@src/a.ts:5-8", path: "src/a.ts", lines: { start: 5, end: 8 } },
+      { text: "@docs/b.md", path: "docs/b.md", lines: null },
+    ]);
+    expect(found("@scope/pkg/index.js")[0]).toMatchObject({ path: "@scope/pkg/index.js" });
+  });
+});
+
 describe("terminalPathFrom", () => {
   it("places relative paths under an absolute working directory in its separator style", () => {
     expect(terminalPathFrom("D:\\repo\\apps\\web", "src/a.ts")).toBe("D:\\repo\\apps\\web\\src/a.ts");

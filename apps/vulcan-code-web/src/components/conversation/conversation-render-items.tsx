@@ -54,6 +54,8 @@ import type {
   ConversationMessage,
 } from "@/types";
 import { useI18n } from "@/i18n";
+import { useWorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
+import { TerminalPathText } from "@/conversation/tools/views/terminal-view";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { PageNotice } from "@/components/page/page-feedback";
 
@@ -696,6 +698,9 @@ function ConversationRenderItemContent(props: ConversationRenderItemViewProps) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
+  // openFile shows a file the prompt mentions ("@path:12-20") in the files panel, where the workbench has one.
+  // openFile 在工作台提供文件面板时，于其中显示提示词提及的文件（"@path:12-20"）。
+  const openFile = useWorkspaceFileOpener();
   const userBody = React.useMemo(
     () => stripUserPromptHeading(props.item.userMessage?.body ?? ""),
     [props.item.userMessage?.body],
@@ -795,7 +800,7 @@ function ConversationRenderItemContent(props: ConversationRenderItemViewProps) {
               expanded={userPromptCollapseExpanded}
             >
               <p className="vk-prompt-text" ref={userPromptTextRef}>
-                {userBody}
+                {openFile ? <TerminalPathText mentions openFile={openFile} text={userBody} title={t("workspaceFiles.showInFilesPanel")} /> : userBody}
               </p>
             </ConversationMeasuredCollapse>
           ) : null}
