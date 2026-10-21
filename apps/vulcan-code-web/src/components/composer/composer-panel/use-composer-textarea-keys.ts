@@ -46,7 +46,9 @@ export function useComposerTextareaKeys(options: {
   textareaListbox: Pick<React.AriaAttributes, "aria-autocomplete" | "aria-controls" | "aria-activedescendant">;
 } {
   const { input, setInput, textareaRef } = options;
-  const recallPrompt = usePromptRecall({ scope: options.recallScope, slotKey: options.slotKey, input, setInput, textareaRef });
+  const recallPrompt = usePromptRecall({
+    scope: options.recallScope, conversationId: options.conversationId, slotKey: options.slotKey, input, setInput, textareaRef,
+  });
   const pathMention = useComposerPathMention({
     input,
     setInput,

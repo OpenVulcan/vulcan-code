@@ -35,6 +35,21 @@ export interface ConversationPromptNavigatorEntry {
   running: boolean;
 }
 
+// transcriptRecallPrompts lists the prompts the ordered rendered Turns start with, as the edit action restores
+// them, oldest first; Turns without prompt text are skipped.
+// transcriptRecallPrompts 按从旧到新列出有序已渲染 Turn 开头的提示词（与编辑操作恢复的文本一致）；没有提示词文本的
+// Turn 被跳过。
+export function transcriptRecallPrompts(turns: readonly ConversationTurnProjection[]): string[] {
+  const prompts: string[] = [];
+  for (const turn of turns) {
+    const first = turn.items[0];
+    if (!first || first.kind !== "item" || first.item.role !== "user") continue;
+    const prompt = stripUserPromptHeading(first.item.userMessage?.body ?? "");
+    if (prompt) prompts.push(prompt);
+  }
+  return prompts;
+}
+
 // projectConversationPromptNavigatorEntries derives navigator entries from the ordered rendered Turns.
 // projectConversationPromptNavigatorEntries 从有序已渲染 Turn 派生导航条目。
 // Parameters: turns is the exact ordered Turn projection rendered by the transcript.

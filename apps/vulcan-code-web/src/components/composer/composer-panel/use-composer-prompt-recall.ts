@@ -1,10 +1,12 @@
 import React from "react";
 
 // Prompt recall: ArrowUp in an empty composer brings back prompts sent earlier in the same project during this
-// app session, newest first, and ArrowDown walks forward again until the empty draft returns. History lives only
-// in memory, so a reload starts it over and nothing about it is persisted.
-// 提示词召回：在空输入区按 ArrowUp 依次（从新到旧）取回本次应用运行期间同一项目中发送过的提示词，ArrowDown
-// 再向新的方向回走，直到回到空草稿。历史只保存在内存中，重新加载即重新开始，不做任何持久化。
+// app session, newest first, then the open session's older prompts as its transcript shows them, and ArrowDown
+// walks forward again until the empty draft returns. Nothing is persisted: the in-memory history starts over on
+// reload, while the transcript part comes back with the transcript.
+// 提示词召回：在空输入区按 ArrowUp 依次（从新到旧）取回本次应用运行期间同一项目中发送过的提示词，随后是当前会话
+// 转录中更早的提示词，ArrowDown 再向新的方向回走，直到回到空草稿。不做任何持久化：内存历史在重新加载后重新开始，
+// 转录部分随转录一同恢复。
 
 // PROMPT_HISTORY_LIMIT bounds the prompts kept per project.
 // PROMPT_HISTORY_LIMIT 限制每个项目保留的提示词数量。
@@ -33,6 +35,30 @@ export function sentPrompts(scope: string): readonly string[] {
 // clearSentPrompts 清空全部历史；测试用它从已知状态开始。
 export function clearSentPrompts(): void {
   histories.clear();
+  transcriptPrompts.clear();
+}
+
+// transcriptPrompts maps a session to the prompts its shown transcript starts turns with, oldest first.
+// transcriptPrompts 将会话映射到其已显示转录中各回合开头的提示词，按从旧到新排列。
+const transcriptPrompts = new Map<string, readonly string[]>();
+
+// publishTranscriptPrompts records the prompts a session's transcript shows, as the edit action would restore
+// them; an empty list forgets the session.
+// publishTranscriptPrompts 记录会话转录显示的提示词（与编辑操作恢复的文本一致）；空列表即忘记该会话。
+export function publishTranscriptPrompts(conversationId: string, prompts: readonly string[]): void {
+  if (prompts.length === 0) transcriptPrompts.delete(conversationId);
+  else transcriptPrompts.set(conversationId, prompts);
+}
+
+// recallEntries returns what recall walks, oldest first: the session's transcript prompts, then the project's
+// in-memory history, each prompt once at its newest place.
+// recallEntries 返回召回所浏览的条目（从旧到新）：会话转录提示词，然后是项目内存历史；每条提示词只在其最新位置出现一次。
+export function recallEntries(scope: string, conversationId: string | null): readonly string[] {
+  const transcript = conversationId ? transcriptPrompts.get(conversationId) ?? [] : [];
+  const history = sentPrompts(scope);
+  if (transcript.length === 0) return history;
+  const all = [...transcript, ...history];
+  return all.filter((prompt, index) => prompt.trim() !== "" && all.indexOf(prompt, index + 1) < 0);
 }
 
 // usePromptRecall returns a keydown handler that reports whether it consumed the key.
@@ -41,6 +67,9 @@ export function usePromptRecall(options: {
   // scope names the project whose history is walked.
   // scope 指定被浏览历史所属的项目。
   scope: string;
+  // conversationId is the open session, whose transcript prompts recall continues into.
+  // conversationId 是当前打开的会话，召回会继续进入其转录提示词。
+  conversationId: string | null;
   // slotKey changes when the composer switches drafts, which ends any recall in progress.
   // slotKey 在输入区切换草稿时改变，随之结束进行中的召回。
   slotKey: string;
@@ -63,7 +92,7 @@ export function usePromptRecall(options: {
   return React.useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return false;
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return false;
-    const { input, scope, setInput, textareaRef } = latest.current;
+    const { conversationId, input, scope, setInput, textareaRef } = latest.current;
     const recalling = position.current !== null && input === shown.current;
     if (!recalling) {
       position.current = null;
@@ -75,7 +104,7 @@ export function usePromptRecall(options: {
     // 方向键仍在行间移动光标；只有首行或末行才交给召回。
     if (event.key === "ArrowUp" && input.slice(0, target.selectionStart).includes("\n")) return false;
     if (event.key === "ArrowDown" && input.slice(target.selectionEnd).includes("\n")) return false;
-    const entries = sentPrompts(scope);
+    const entries = recallEntries(scope, conversationId);
     const next = event.key === "ArrowUp" ? (position.current ?? -1) + 1 : (position.current ?? 0) - 1;
     if (next >= entries.length) return false;
     event.preventDefault();

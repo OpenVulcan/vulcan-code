@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { clearSentPrompts, recordSentPrompt, sentPrompts, usePromptRecall } from "./use-composer-prompt-recall";
+import { clearSentPrompts, publishTranscriptPrompts, recallEntries, recordSentPrompt, sentPrompts, usePromptRecall } from "./use-composer-prompt-recall";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -16,10 +16,10 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 
 // Harness is a controlled textarea wired the way the composer wires it.
 // Harness 是按输入区方式接线的受控文本框。
-function Harness(props: { scope: string; initial?: string }) {
+function Harness(props: { scope: string; initial?: string; conversationId?: string }) {
   const [input, setInput] = React.useState(props.initial ?? "");
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
-  const recall = usePromptRecall({ scope: props.scope, slotKey: "slot", input, setInput, textareaRef });
+  const recall = usePromptRecall({ scope: props.scope, conversationId: props.conversationId ?? null, slotKey: "slot", input, setInput, textareaRef });
   return <textarea ref={textareaRef} value={input} onChange={(event) => setInput(event.currentTarget.value)} onKeyDown={(event) => { recall(event); }} />;
 }
 
@@ -77,3 +77,18 @@ it("keeps one copy of a repeated prompt at the newest place", () => {
   expect(sentPrompts("p1")).toEqual(["other", "again"]);
 });
 
+
+it("continues into the open session's transcript prompts after this run's history", async () => {
+  publishTranscriptPrompts("s1", ["older", "shared"]);
+  recordSentPrompt("p1", "shared");
+  recordSentPrompt("p1", "newest");
+  expect(recallEntries("p1", "s1")).toEqual(["older", "shared", "newest"]);
+  expect(recallEntries("p1", null)).toEqual(["shared", "newest"]);
+  await act(async () => root.render(<Harness conversationId="s1" scope="p1" />));
+  await press("ArrowUp");
+  await press("ArrowUp");
+  await press("ArrowUp");
+  expect(value()).toBe("older");
+  publishTranscriptPrompts("s1", []);
+  expect(recallEntries("p1", "s1")).toEqual(["shared", "newest"]);
+});

@@ -60,11 +60,23 @@ import { ConversationScrollTail } from "@/components/conversation/conversation-c
 import {
   CONVERSATION_PROMPT_NAVIGATOR_MIN_ENTRIES,
   createConversationPromptNavigatorProjector,
+  transcriptRecallPrompts,
 } from "@/components/conversation/conversation-prompt-navigator-model";
+import { publishTranscriptPrompts } from "@/components/composer/composer-panel/use-composer-prompt-recall";
 import {
   ConversationTimelineProjectionStore,
   type ConversationTurnProjection,
 } from "@/components/conversation/conversation-timeline-projection-store";
+
+// usePublishedRecallPrompts publishes the prompts of one session's transcript for composer recall.
+// usePublishedRecallPrompts 发布一个会话转录中的提示词，供输入区召回使用。
+// Parameters: conversationId is the session, or null when this surface is not its transcript; turns are the rendered Turns.
+// 参数：conversationId 是会话；当前界面不是其转录时为 null。turns 是已渲染的 Turn。
+function usePublishedRecallPrompts(conversationId: string | null, turns: readonly ConversationTurnProjection[]): void {
+  React.useEffect(() => {
+    if (conversationId) publishTranscriptPrompts(conversationId, transcriptRecallPrompts(turns));
+  }, [conversationId, turns]);
+}
 
 // ConversationWorkspace renders the conversation transcript surface.
 // ConversationWorkspace 渲染会话转录展示面。
@@ -313,6 +325,9 @@ export function ConversationWorkspace(props: {
     () => promptNavigatorEnabled ? promptNavigatorProjector(turnGroups) : [],
     [promptNavigatorEnabled, promptNavigatorProjector, turnGroups],
   );
+  // The surface with the prompt rail is the session's own transcript, so its prompts feed composer recall.
+  // 带提示词轨道的界面就是会话自身的转录，因此其提示词供输入区召回使用。
+  usePublishedRecallPrompts(promptNavigatorEnabled ? props.conversation?.id ?? null : null, turnGroups);
   // timelineProjectionLocaleRef forces complete row replacement only when localized projection content changes.
   // timelineProjectionLocaleRef 仅在本地化投影内容变化时强制完整替换行。
   const timelineProjectionLocaleRef = React.useRef(locale);
