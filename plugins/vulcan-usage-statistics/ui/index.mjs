@@ -470,7 +470,7 @@ export function createPluginPanel(sdk) {
     let position = 0;
     return Array.from(groups.entries()).map(([id, group]) => ({
       id,
-      label: id === "other" ? text("other", "Other") : group.label,
+      label: id === "other" ? text("other", "Other models") : group.label,
       color: colorForSeries(id, id === "other" ? 0 : position++),
       points: dates.map((date) => ({ key: date, value: group.values.get(date) ?? 0 })),
     }));

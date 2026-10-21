@@ -191,6 +191,7 @@ messages:
   trend.title: 日別 Token 使用量
   trend.range: 過去30日間
   trend.aria: モデル別の日別 Token 使用量折れ線グラフ
+  other: その他のモデル
   trend.empty: この範囲には傾向データがありません
   daily.title: モデル使用量
   daily.empty: この期間には使用量がありません

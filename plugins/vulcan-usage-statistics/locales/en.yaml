@@ -191,6 +191,7 @@ messages:
   trend.title: Daily token usage
   trend.range: Last 30 days
   trend.aria: Daily token usage line chart grouped by model
+  other: Other models
   trend.empty: No trend data in this range
   daily.title: Model usage
   daily.empty: No usage in this range

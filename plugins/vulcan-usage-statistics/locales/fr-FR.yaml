@@ -191,6 +191,7 @@ messages:
   trend.title: Utilisation quotidienne des tokens
   trend.range: 30 derniers jours
   trend.aria: Courbe quotidienne des tokens regroupée par modèle
+  other: Autres modèles
   trend.empty: Aucune tendance dans cette période
   daily.title: Utilisation des modèles
   daily.empty: Aucune utilisation dans cette période
