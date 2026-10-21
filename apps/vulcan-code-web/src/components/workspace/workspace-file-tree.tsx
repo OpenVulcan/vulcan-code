@@ -86,6 +86,9 @@ export function WorkspaceFileTree<RowFile>(props: {
   // Items of a file row's right-click menu; rows have no menu without it.
   // 文件行右键菜单的条目；未提供时行没有菜单。
   fileContextMenu?: (file: RowFile) => React.ReactNode;
+  // Items of a folder row's right-click menu by folder path; rows have no menu without it or when it returns null.
+  // 目录行右键菜单的条目（按目录路径）；未提供或返回 null 时行没有菜单。
+  directoryContextMenu?: (path: string) => React.ReactNode;
   // Called when a file row is chosen.
   // 选择文件行时调用。
   onSelectFile: (file: RowFile) => void;
@@ -173,6 +176,7 @@ export function WorkspaceFileTree<RowFile>(props: {
             fileTitle={props.fileTitle}
             fileDragText={props.fileDragText}
             fileContextMenu={props.fileContextMenu}
+            directoryContextMenu={props.directoryContextMenu}
             key={node.path}
             loadingDirectoryLabel={props.loadingDirectoryLabel}
             loadingDirectoryPaths={props.loadingDirectoryPaths}
@@ -226,6 +230,7 @@ function WorkspaceFileTreeRow<RowFile>(props: {
   fileTitle?: (file: RowFile, node: WorkspaceFileTreeNode<RowFile>) => string;
   fileDragText?: (file: RowFile) => string;
   fileContextMenu?: (file: RowFile) => React.ReactNode;
+  directoryContextMenu?: (path: string) => React.ReactNode;
 }) {
   const { t } = useI18n();
   const { node } = props;
@@ -235,7 +240,7 @@ function WorkspaceFileTreeRow<RowFile>(props: {
     const isLoading = Boolean(props.loadingDirectoryPaths?.has(node.path));
     return (
       <>
-        <button
+        {withContextMenu(<button
           aria-busy={isLoading}
           aria-expanded={isOpen}
           className="vk-ftree-row"
@@ -249,7 +254,7 @@ function WorkspaceFileTreeRow<RowFile>(props: {
           {isOpen ? <ChevronDown aria-hidden="true" size={13} /> : <ChevronRight aria-hidden="true" size={13} />}
           {isOpen ? <FolderOpen aria-hidden="true" size={14} /> : <Folder aria-hidden="true" size={14} />}
           <span>{node.name}</span>
-        </button>
+        </button>, props.directoryContextMenu?.(node.path))}
         {isOpen ? node.children.map((child) => <WorkspaceFileTreeRow {...props} depth={props.depth + 1} key={child.path} node={child} />) : null}
         {isOpen && isLoading ? (
           <StreamPlaceholder className="vk-ftree-loading" count={2} label={props.loadingDirectoryLabel ?? t("workspaceFiles.loading")} />
@@ -279,11 +284,17 @@ function WorkspaceFileTreeRow<RowFile>(props: {
       <span>{node.name}</span>
     </button>
   );
-  if (!props.fileContextMenu) return row;
+  return withContextMenu(row, props.fileContextMenu?.(file));
+}
+
+// withContextMenu gives a row a right-click menu holding `items`, or returns the row alone without items.
+// withContextMenu 为行加上包含 `items` 的右键菜单；没有条目时原样返回该行。
+function withContextMenu(row: React.ReactElement, items: React.ReactNode): React.ReactElement {
+  if (items === null || items === undefined) return row;
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-      <ContextMenuContent>{props.fileContextMenu(file)}</ContextMenuContent>
+      <ContextMenuContent>{items}</ContextMenuContent>
     </ContextMenu>
   );
 }

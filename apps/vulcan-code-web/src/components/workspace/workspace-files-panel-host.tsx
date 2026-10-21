@@ -578,7 +578,7 @@ export function WorkspaceFilesPanelHost(props: {
       fileKey={(entry) => entry.path}
       fileTitle={(entry) => entry.relativePath || entry.name}
       fileDragText={(entry) => pathMentionText(entry.relativePath, false)}
-      fileContextMenu={(entry) => workspaceFileActions(entry, props.onCopyText, copyFileContent, t).map((action) => <ContextMenuItem disabled={action.disabled} key={action.key} onSelect={action.run}>{action.icon}{action.label}</ContextMenuItem>)}
+      fileContextMenu={(entry) => workspaceActionMenuItems(workspaceFileActions(entry, props.onCopyText, copyFileContent, t))} directoryContextMenu={(path) => { const entry = findLoadedWorkspaceEntry(directories, path); return entry ? workspaceActionMenuItems(workspaceFileActions(entry, props.onCopyText, copyFileContent, t)) : null; }}
       filter={filterText}
       footer={<WorkspaceFileTreeFooter filters={filters} />}
       loadingDirectoryLabel={t("workspaceFiles.loading")}
@@ -818,16 +818,32 @@ function workspaceFileActions(
   };
   return [
     { key: "mention", icon: <AtSign size={14} />, label: t("workspaceFiles.mentionInMessage"),
-      run: () => requestComposerCommand({ kind: "insert", text: pathMentionText(entry.relativePath, false) }) },
+      run: () => requestComposerCommand({ kind: "insert", text: pathMentionText(entry.relativePath, entry.isDirectory) }) },
     { key: "path", icon: <Copy size={14} />, label: t("workspaceFiles.copyPath"), run: () => copyPath(entry.path) },
     { key: "relative", icon: <Copy size={14} />, label: t("workspaceFiles.copyRelativePath"), run: () => copyPath(entry.relativePath) },
-    { key: "content", icon: <FileText size={14} />, label: t("workspaceFiles.copyFileContent"), disabled: entry.kind !== "code",
-      run: () => onCopyFileContent(entry) },
+    ...(entry.isDirectory ? [] : [{ key: "content", icon: <FileText size={14} />, label: t("workspaceFiles.copyFileContent"), disabled: entry.kind !== "code",
+      run: () => onCopyFileContent(entry) }]),
     { key: "reveal", icon: <FolderOpen size={14} />, label: t("workspaceFiles.revealInFolder"),
       run: () => void openProjectDirectoryPath(entry.path).catch((error: unknown) => {
         toast.error(error instanceof Error ? error.message : String(error));
       }) },
   ];
+}
+
+// workspaceActionMenuItems renders file or folder actions as right-click menu items.
+// workspaceActionMenuItems 将文件或目录操作渲染为右键菜单项。
+function workspaceActionMenuItems(actions: ReturnType<typeof workspaceFileActions>): React.ReactNode {
+  return actions.map((action) => <ContextMenuItem disabled={action.disabled} key={action.key} onSelect={action.run}>{action.icon}{action.label}</ContextMenuItem>);
+}
+
+// findLoadedWorkspaceEntry finds the loaded listing entry for one absolute path, or null before its parent loads.
+// findLoadedWorkspaceEntry 查找某个绝对路径对应的已加载列表条目；父目录尚未加载时返回 null。
+function findLoadedWorkspaceEntry(directories: Map<string, WorkspaceFileDirectoryListing>, path: string): WorkspaceFileEntrySummary | null {
+  for (const listing of directories.values()) {
+    const entry = listing.entries.find((candidate) => candidate.path === path);
+    if (entry) return entry;
+  }
+  return null;
 }
 
 // emptyWorkspaceFileTree creates the shared drawer root used before data has loaded.

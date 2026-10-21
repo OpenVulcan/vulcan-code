@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceFileTree, type WorkspaceFileTreeNode } from "./workspace-file-tree";
 import { WorkspaceFilePreview } from "./workspace-files-preview";
+import { ContextMenuItem } from "@/ui-kit/primitives/context-menu";
 import { useWorkspaceFilesRequestOwnership, type WorkspaceFilesRequestOwnership } from "./workspace-files-panel-request-ownership";
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("@/components/conversation/conversation-markdown", () => ({ MarkdownMessage: () => null,
@@ -79,6 +80,16 @@ describe("workspace file controls", () => {
     Object.defineProperty(dragStart, "dataTransfer", { value: { setData, effectAllowed: "all" } });
     await act(async () => { row.dispatchEvent(dragStart); });
     expect(setData).toHaveBeenCalledExactlyOnceWith("text/plain", "@file ");
+  });
+  it("gives a folder row a right-click menu only when the owner supplies items for its path", async () => {
+    const menu = vi.fn((path: string) => path === "root/a" ? <ContextMenuItem>{`menu ${path}`}</ContextMenuItem> : null);
+    await act(async () => root.render(<WorkspaceFileTree tree={tree} activeFileKey={null} filter=""
+      onFilterChange={vi.fn()} onSelectFile={vi.fn()} fileKey={(file) => file} directoryContextMenu={menu} />));
+    const dirs = host.querySelectorAll<HTMLButtonElement>('.vk-ftree-row[data-kind="dir"]');
+    expect(dirs[0].getAttribute("data-slot")).toBe("context-menu-trigger");
+    expect(dirs[1].hasAttribute("data-slot")).toBe(false);
+    await act(async () => { dirs[0].dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 })); });
+    expect([...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["menu root/a"]);
   });
   it("revokes directory and preview response ownership after unmount", async () => {
     let ownership!: WorkspaceFilesRequestOwnership;
