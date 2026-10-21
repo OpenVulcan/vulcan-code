@@ -1669,7 +1669,6 @@
   "workspaceFiles.gotoLineLabel": "跳到行",
   "workspaceFiles.gotoLine": "Enter：第 {line} 行",
   "workspaceFiles.gotoLineEmpty": "輸入行號",
-  "workspaceFiles.wrapLines": "長行自動換行",
   "workspaceFiles.openPathOutside": "該檔案不在專案目錄中",
   "workspaceFiles.openPathMissing": "專案目錄樹中沒有該檔案，可能已被刪除或被檔案篩選規則隱藏",
   "workspaceFiles.mentionInMessage": "在訊息中引用",

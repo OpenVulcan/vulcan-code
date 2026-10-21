@@ -700,12 +700,12 @@ function WorkspaceOpenFileBar(props: {
       </Popover>
       {canWrap ? (
         <IconButton
-          aria-label={t("workspaceFiles.wrapLines")}
+          aria-label={t("diff.pref.wrap")}
           aria-pressed={wrapLines}
           data-active={wrapLines ? "" : undefined}
           onClick={toggleWrapLines}
           size="sm"
-          title={t("workspaceFiles.wrapLines")}
+          title={t("diff.pref.wrap")}
         >
           <WrapText size={14} />
         </IconButton>

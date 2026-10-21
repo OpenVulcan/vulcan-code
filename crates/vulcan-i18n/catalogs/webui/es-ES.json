@@ -1669,7 +1669,6 @@
   "workspaceFiles.gotoLineLabel": "Ir a la línea",
   "workspaceFiles.gotoLine": "Intro: línea {line}",
   "workspaceFiles.gotoLineEmpty": "Número de línea",
-  "workspaceFiles.wrapLines": "Ajustar líneas largas",
   "workspaceFiles.openPathOutside": "Este archivo está fuera del proyecto",
   "workspaceFiles.openPathMissing": "El archivo no está en el árbol del proyecto; puede que se haya eliminado o que los filtros de archivos lo oculten",
   "workspaceFiles.mentionInMessage": "Mencionar en el mensaje",

@@ -1669,7 +1669,6 @@
   "workspaceFiles.gotoLineLabel": "行へ移動",
   "workspaceFiles.gotoLine": "Enter: {line} 行目",
   "workspaceFiles.gotoLineEmpty": "行番号を入力",
-  "workspaceFiles.wrapLines": "長い行を折り返す",
   "workspaceFiles.openPathOutside": "このファイルはプロジェクトの外にあります",
   "workspaceFiles.openPathMissing": "プロジェクトツリーにこのファイルがありません。削除されたか、ファイルフィルターで非表示になっている可能性があります",
   "workspaceFiles.mentionInMessage": "メッセージで参照",
