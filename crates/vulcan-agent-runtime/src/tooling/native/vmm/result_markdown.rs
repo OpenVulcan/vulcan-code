@@ -34,62 +34,49 @@ pub(super) fn search(response: &SearchMemoryEventsResponse) -> String {
     output
 }
 
-/// Renders one hit without inventing evidence unavailable from an external backend.
-/// 渲染一条命中，不编造外部后端未提供的证据。
-/// Takes an exact hit; returns provenance, evidence and readable memory content.
-/// 接收准确命中，返回来源、证据和可读记忆内容。
+/// Renders one hit as identity, relevance, provenance and readable content only.
+/// 只把一条命中渲染为身份、相关度、来源与可读内容。
+/// Retrieval-stage evidence stays in the service response; the model only needs what it can act on.
+/// 检索阶段证据保留在服务响应中；模型只需要可据以行动的信息。
 pub(super) fn memory_hit(hit: &MemorySearchHit) -> String {
+    // The heading line is the format the WebUI memory card pages by; keep it in sync with that parser.
+    // 标题行是 WebUI 记忆卡分页所依据的格式；须与该解析器保持一致。
+    let mut output = format!("\n### Memory {}", hit.memory_id);
+    if let Some(relevance) = reranked_relevance(hit) {
+        output.push_str(&format!(" · relevance {relevance:.2}"));
+    }
+    output.push('\n');
     // Zero source-turn IDs explicitly mean the memory cannot be expanded through turn details.
     // 来源轮次为零明确表示无法通过轮次详情展开该记忆。
-    let mut output = format!("\n### Memory {}\n", hit.memory_id);
+    let mut facts = Vec::new();
     if hit.source_turn_id != 0 {
-        output.push_str(&format!("\nSource turn: {}\n", hit.source_turn_id));
+        facts.push(format!("Source turn: {}", hit.source_turn_id));
     }
     for (label, value) in [
         ("Category", &hit.category),
         ("Created", &hit.created_datetime),
     ] {
         if !value.is_empty() {
-            output.push_str(&format!("- {label}: {}\n", inline_code(value)));
+            facts.push(format!("{label}: {}", inline_code(value)));
         }
     }
-    section(&mut output, "Summary", &hit.abstract_text);
+    if !facts.is_empty() {
+        output.push_str(&format!("\n{}\n", facts.join(" · ")));
+    }
+    if !hit.abstract_text.is_empty() {
+        output.push_str(&format!("\n{}\n", hit.abstract_text));
+    }
     section(&mut output, "Details preview", &hit.details_preview);
-    if let Some(evidence) = &hit.retrieval {
-        output.push_str(&format!(
-            "\n#### Retrieval evidence\n- Creation source: {}\n- Observed retrieval: {} ({})\n- Score: {}\n- Total support/rebuttal: {}/{}\n",
-            inline_code(&evidence.source_kind), inline_code(&evidence.origin_label),
-            inline_code(&evidence.origin), evidence.final_score,
-            evidence.support_count, evidence.rebuttal_count,
-        ));
-        if !evidence.origin_explanation.is_empty() {
-            output.push_str(&format!("- Explanation: {}\n", evidence.origin_explanation));
-        }
-        output.push_str(if evidence.context_observed {
-            "- Context evidence evaluated: yes\n"
-        } else {
-            "- Context evidence evaluated: no (not evidence of absence)\n"
-        });
-        if !evidence.matched_context_values.is_empty() {
-            output.push_str(&format!(
-                "- Matched contexts: {}\n",
-                evidence
-                    .matched_context_values
-                    .iter()
-                    .map(|value| inline_code(value))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        output.push_str(&format!(
-            "- Matched support/rebuttal: {}/{}\n",
-            evidence.matched_context_support_count, evidence.matched_context_rebuttal_count
-        ));
-        if let Some(delta) = evidence.matched_context_score_delta {
-            output.push_str(&format!("- Context score adjustment: {delta}\n"));
-        }
-    }
     output
+}
+
+/// Returns the score only when a rerank model judged the hit; rank-derived scores carry no relevance.
+/// 仅当重排模型评判过该命中时返回评分；按名次得出的评分不含相关度。
+fn reranked_relevance(hit: &MemorySearchHit) -> Option<f64> {
+    hit.retrieval
+        .as_ref()
+        .filter(|evidence| evidence.origin.contains("rerank"))
+        .map(|evidence| evidence.final_score)
 }
 
 /// Renders canonical dialogue and independent analysis without dropping distinct content.
@@ -197,39 +184,48 @@ fn id_list(output: &mut String, label: &str, ids: &[u64]) {
 mod tests {
     use super::*;
 
-    /// Confirms native evidence survives while missing external evidence stays absent.
-    /// 确认原生证据保留，外部缺失证据仍保持缺失。
+    /// Confirms a hit keeps its identity, reranked relevance and content but no stage evidence.
+    /// 确认命中保留身份、重排相关度与内容，但不含阶段证据。
     #[test]
-    fn preserves_observed_evidence_and_source_navigation() {
-        // Distinct totals and matched counts catch accidental conflation of evidence scopes.
-        // 不同的总数和匹配计数可检测证据范围混淆。
-        let hit = MemorySearchHit {
-            memory_id: 7, source_turn_id: 2, abstract_text: "Unique summary".into(),
-            retrieval: Some(serde_json::from_value(serde_json::json!({
-                "source_kind": "direct", "origin": "lexical_rerank", "origin_label": "Lexical + Rerank",
+    fn renders_relevance_heading_without_stage_evidence() {
+        let evidence =
+            |origin: &str| {
+                Some(serde_json::from_value(serde_json::json!({
+                "source_kind": "direct", "origin": origin, "origin_label": "Lexical + Rerank",
                 "origin_explanation": "Both recorded stages executed.", "final_score": 0.875,
                 "context_observed": true, "support_count": 9, "rebuttal_count": 5,
-                "matched_context_values": ["fruit=西瓜"], "matched_context_support_count": 2,
+                "matched_context_values": ["fruit=melon"], "matched_context_support_count": 2,
                 "matched_context_rebuttal_count": 1, "matched_context_score_delta": -0.01
-            })).expect("closed evidence contract")),
+            })).expect("closed evidence contract"))
+            };
+        let hit = MemorySearchHit {
+            memory_id: 7,
+            source_turn_id: 2,
+            abstract_text: "Unique summary".into(),
+            retrieval: evidence("lexical_rerank"),
             ..Default::default()
         };
-        // The body must carry each required semantic distinction exactly.
-        // 正文必须准确携带每项必要的语义区别。
         let body = memory_hit(&hit);
-        for expected in [
-            "Source turn: 2",
-            "9/5",
-            "2/1",
-            "-0.01",
-            "fruit=西瓜",
-            "lexical_rerank",
-            "0.875",
-        ] {
-            assert!(body.contains(expected), "missing evidence: {expected}");
-        }
+        assert!(
+            body.starts_with("\n### Memory 7 · relevance 0.88\n"),
+            "{body}"
+        );
+        assert!(body.contains("Source turn: 2"));
         assert_eq!(body.matches("Unique summary").count(), 1);
-        assert!(!memory_hit(&MemorySearchHit::default()).contains("Retrieval evidence"));
+        for evidence_only in ["lexical_rerank", "9/5", "fruit=melon", "-0.01"] {
+            assert!(
+                !body.contains(evidence_only),
+                "stage evidence leaked: {evidence_only}"
+            );
+        }
+        // Rank-only scores and missing evidence leave the heading without a relevance.
+        // 仅有名次评分或缺失证据时，标题不带相关度。
+        let rank_only = MemorySearchHit {
+            memory_id: 3,
+            retrieval: evidence("lexical_search"),
+            ..Default::default()
+        };
+        assert!(memory_hit(&rank_only).starts_with("\n### Memory 3\n"));
         assert!(!memory_hit(&MemorySearchHit::default()).contains("Source turn"));
     }
 
