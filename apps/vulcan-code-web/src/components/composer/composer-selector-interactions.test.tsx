@@ -130,6 +130,10 @@ it("classifies reasoning options into a left-to-right scale or one explained fix
   expect(describeReasoningSelection(options("future"), "future", translate as never))
     .toEqual({ kind: "fixed", tone: "level", label: "raw-future" });
   expect(describeReasoningSelection([], "", translate as never)).toEqual({ kind: "fixed", tone: "unavailable", label: null });
+  for (const unset of ["", "off"]) {
+    expect(describeReasoningSelection(options("none", "low", "high"), unset, translate as never, "low"))
+      .toEqual({ kind: "scale", index: 1, label: "composer.reasoning.level.low" });
+  }
 });
 
 it("opens on the reasoning pane, returns there after a model choice and restores the model default", async () => {

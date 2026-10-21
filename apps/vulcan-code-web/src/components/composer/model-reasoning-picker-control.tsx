@@ -97,14 +97,16 @@ export function reasoningLevelLabel(value: string, fallback: string, t: (key: Tr
 
 // describeReasoningSelection classifies options into an adjustable scale or one fixed state.
 // describeReasoningSelection 将选项归类为可调刻度或单一固定状态。
-// Parameters: options are the backend-declared levels in canonical order, value is the current effort.
-// 参数：options 为后端按规范顺序声明的档位，value 为当前档位。
+// Parameters: options are the backend-declared levels in canonical order, value is the current effort and
+// defaultValue the model's default level.
+// 参数：options 为后端按规范顺序声明的档位，value 为当前档位，defaultValue 为模型默认档位。
 // Returns: the view the picker renders for this model.
 // 返回值：选择器为该模型渲染的视图。
 export function describeReasoningSelection(
   options: ComposerSelectOption[],
   value: string,
   t: (key: TranslationKey) => string,
+  defaultValue: string | null = null,
 ): ReasoningSelectionView {
   if (options.length === 0) {
     return { kind: "fixed", tone: "unavailable", label: null };
@@ -122,7 +124,11 @@ export function describeReasoningSelection(
             : "level";
     return { kind: "fixed", tone, label: reasoningLevelLabel(only.value, only.label, t) };
   }
-  const index = options.findIndex((option) => option.value === value);
+  // An unset level ("" or the provider-default "off") runs at the model's default level, which the backend
+  // stores at the next request boundary, so the scale shows that level rather than nothing.
+  // 未设置的档位（"" 或供应商默认 "off"）按模型默认档位运行，后端会在下一请求边界存入该档位，因此刻度显示该档位而非空白。
+  const unset = value === "" || value === "off";
+  const index = options.findIndex((option) => option.value === (unset && defaultValue ? defaultValue : value));
   const current = options[index];
   return {
     kind: "scale",
@@ -223,7 +229,7 @@ export function ModelReasoningPickerControl(props: {
   ), [props.providers, t]);
   const selectedChoice = resolveModelPickerDisplayedChoice(choices, props.value);
   const modelLabel = selectedChoice?.modelName ?? props.fallbackLabel;
-  const reasoning = describeReasoningSelection(props.reasoningOptions, props.reasoningEffort, t);
+  const reasoning = describeReasoningSelection(props.reasoningOptions, props.reasoningEffort, t, props.defaultReasoningEffort);
   // unavailable closes the popover when there is neither a model to switch nor a level to adjust.
   // unavailable 在既无模型可切换、也无档位可调整时关闭浮层。
   const unavailable = Boolean(props.disabled) || (choices.length === 0 && props.reasoningOptions.length === 0);
@@ -554,12 +560,16 @@ function ReasoningScale(props: {
   // previewIndex 在拖动期间跟随指针；null 表示显示已提交值。
   const [previewIndex, setPreviewIndex] = React.useState<number | null>(null);
   const lastIndex = props.options.length - 1;
-  const currentIndex = props.options.findIndex((option) => option.value === props.value);
-  const shownIndex = previewIndex ?? currentIndex;
-  const shownOption = props.options[shownIndex];
   const defaultIndex = props.defaultValue
     ? props.options.findIndex((option) => option.value === props.defaultValue)
     : -1;
+  // An unset level runs at the model default, so the rail rests there (see describeReasoningSelection).
+  // 未设置的档位按模型默认运行，因此滑轨停在默认处（见 describeReasoningSelection）。
+  const currentIndex = props.value === "" || props.value === "off"
+    ? defaultIndex
+    : props.options.findIndex((option) => option.value === props.value);
+  const shownIndex = previewIndex ?? currentIndex;
+  const shownOption = props.options[shownIndex];
   const defaultOption = props.options[defaultIndex];
   const labelOf = (option: ComposerSelectOption) => reasoningLevelLabel(option.value, option.label, t);
   const title = shownOption
