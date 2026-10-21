@@ -1480,6 +1480,9 @@ fn resolve_named_skill_root(
 fn parse_skill_install_source_type(source_type: &str) -> Result<SkillInstallSourceType, String> {
     match source_type.trim().to_ascii_lowercase().as_str() {
         "github" => Ok(SkillInstallSourceType::Github),
+        // The source is the Hub skill id; the engine resolves it against the effective Hub.
+        // 来源为 Hub 技能标识；引擎按生效 Hub 解析。
+        "official_hub" => Ok(SkillInstallSourceType::OfficialHub),
         // Upstream rejects `SkillInstallSourceType::Url` unconditionally by source policy
         // (`skill/manager.rs`: "public URL skill install is disabled by source policy"),
         // for install and for update alike. Accepting it here would only defer that
@@ -1496,7 +1499,7 @@ fn parse_skill_install_source_type(source_type: &str) -> Result<SkillInstallSour
         // learns that its value is unknown, not what to send instead.
         // 点名支持集使拼写错误可恢复：否则调用方只知道自己的取值未知，而不知道该改发什么。
         other => Err(format!(
-            "Unsupported LuaSkills install source type: {other}; supported: github."
+            "Unsupported LuaSkills install source type: {other}; supported: github, official_hub."
         )),
     }
 }
@@ -1605,8 +1608,11 @@ fn build_host_options(
     host_options.allow_network_download = runtime_settings.network.allow_downloads;
     host_options.github_base_url = runtime_settings.network.github_base_url.clone();
     host_options.github_api_base_url = runtime_settings.network.github_api_base_url.clone();
-    host_options.official_skill_hub_base_url =
-        runtime_settings.network.official_skill_hub_base_url.clone();
+    host_options.official_skill_hub_base_url = Some(
+        runtime_settings
+            .network
+            .effective_official_skill_hub_base_url(),
+    );
     host_options.enable_private_url_skill_install =
         runtime_settings.network.enable_private_url_skill_install;
     host_options.private_skill_source_allowlist = runtime_settings
@@ -1987,18 +1993,23 @@ fn url_install_source_is_refused_at_the_host_boundary() {
     // GitHub 保持被接受，且解析保持大小写不敏感与裁剪。
     assert!(parse_skill_install_source_type(" GitHub ").is_ok());
     assert!(parse_skill_install_source_type("GITHUB").is_ok());
+    // The official Hub maps onto its own source type, never onto GitHub.
+    // 官方 Hub 映射到自身来源类型，绝不映射到 GitHub。
+    assert!(matches!(
+        parse_skill_install_source_type(" official_hub "),
+        Ok(SkillInstallSourceType::OfficialHub)
+    ));
     // Source types upstream supports but the host does not implement stay unknown
     // rather than being silently mapped onto GitHub.
     // 上游支持但宿主未实现的来源类型保持未知，而不是被静默映射到 GitHub。
-    for unimplemented in ["official_hub", "private_url_manifest"] {
-        let unknown = parse_skill_install_source_type(unimplemented)
-            .expect_err("an unimplemented source type must not be accepted");
-        assert!(unknown.contains(unimplemented), "{unknown}");
-        // Naming the supported set keeps a typo recoverable: the caller learns what to
-        // send instead of only that its own value is unknown.
-        // 点名支持集使拼写错误可恢复：调用方得知该改发什么，而不只是自己的取值未知。
-        assert!(unknown.contains("github"), "{unknown}");
-    }
+    let unknown = parse_skill_install_source_type("private_url_manifest")
+        .expect_err("an unimplemented source type must not be accepted");
+    assert!(unknown.contains("private_url_manifest"), "{unknown}");
+    // Naming the supported set keeps a typo recoverable: the caller learns what to
+    // send instead of only that its own value is unknown.
+    // 点名支持集使拼写错误可恢复：调用方得知该改发什么，而不只是自己的取值未知。
+    assert!(unknown.contains("github"), "{unknown}");
+    assert!(unknown.contains("official_hub"), "{unknown}");
 }
 
 /// Verifies a ROOT bootstrap declaring the disabled `url` source type fails with a host message.

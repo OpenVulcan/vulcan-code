@@ -16,6 +16,13 @@ pub const LUASKILLS_RUNTIME_SETTINGS_FILE_NAME: &str = "luaskills-runtime-settin
 /// LuaSkills 运行时设置文档的当前 schema 版本。
 pub const LUASKILLS_RUNTIME_SETTINGS_SCHEMA_VERSION: u32 = 1;
 
+/// Official LuaSkills Hub used when the user has not chosen another Hub.
+/// 用户未选择其他 Hub 时使用的 LuaSkills 官方 Hub。
+///
+/// The default lives only in memory so an unset field keeps following future defaults.
+/// 默认值只存在于内存中，使未设置的字段持续跟随将来的默认值。
+pub const DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL: &str = "https://hub.luaskills.com";
+
 /// Pool sizing and idle-retirement settings for one Lua VM pool.
 /// 单个 Lua VM 池的容量与空闲回收设置。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
@@ -120,6 +127,13 @@ pub struct LuaSkillsNetworkSettings {
 }
 
 impl LuaSkillsNetworkSettings {
+    /// Return the Hub base URL the engine uses: the user's override, otherwise the official Hub.
+    /// 返回引擎使用的 Hub 基址：用户覆盖值，否则为官方 Hub。
+    pub fn effective_official_skill_hub_base_url(&self) -> String {
+        normalized_optional_text(self.official_skill_hub_base_url.as_deref())
+            .unwrap_or_else(|| DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL.to_string())
+    }
+
     /// Normalize optional endpoints and deduplicate the private source allowlist.
     /// 规范化可选端点并去重私有来源允许列表。
     ///
@@ -625,6 +639,28 @@ mod tests {
         assert_eq!(
             load_runtime_settings(root.path()).expect("reload settings"),
             replaced
+        );
+    }
+
+    /// Verify an unset Hub follows the in-memory default while a saved override wins.
+    /// 验证未设置的 Hub 跟随内存默认值，而已保存的覆盖值优先。
+    #[test]
+    fn official_hub_defaults_only_in_memory() {
+        let mut network = LuaSkillsRuntimeSettings::default().network;
+        assert_eq!(network.official_skill_hub_base_url, None);
+        assert_eq!(
+            network.effective_official_skill_hub_base_url(),
+            DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL
+        );
+        network.official_skill_hub_base_url = Some("  ".to_string());
+        assert_eq!(
+            network.effective_official_skill_hub_base_url(),
+            DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL
+        );
+        network.official_skill_hub_base_url = Some(" https://hub.example.test ".to_string());
+        assert_eq!(
+            network.effective_official_skill_hub_base_url(),
+            "https://hub.example.test"
         );
     }
 
