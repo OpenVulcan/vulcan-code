@@ -32,8 +32,10 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         execution_agent_id: Some(String::from("main")),
         agent_prompt_snapshot: None,
         dedicated_session: None,
-        provider_id_override: None,
-        model_id_override: None,
+        // Running parents carry their active route, matching the controller config fixture.
+        // 运行中的父请求携带其当前路由，与控制器配置夹具一致。
+        provider_id_override: Some(String::from("provider")),
+        model_id_override: Some(String::from("model")),
         connection_id_override: None,
         provider_route_lease_identity: None,
         provider_tool_selections_override: Default::default(),
@@ -1109,17 +1111,17 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+    // The cataloged child target does not offer the parent's Ultra level.
+    // 目录中的子目标不提供父级的 Ultra 档位。
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
         &provider_config,
-        &AgentProfileCatalog::default(),
-        None,
-        None,
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
     // A restored parent has its own captured ceiling; initial delegation must capture the new child's tools.
     // 恢复父代理具有自己的捕获权限上限；首次委派必须捕获新子代理的工具。
     parent_request.captured_child_tool_admission = Some(BTreeMap::new());
     parent_request.connection_id_override = Some(String::from("parent-connection"));
+    parent_request.reasoning_effort = ReasoningEffortLevel::Ultra;
     // A child launched while the parent turn runs a manual Continue must not inherit that action.
     // 父回合执行手动 Continue 期间启动的子代理不得继承该动作。
     parent_request.continuation_action_id =
@@ -1163,9 +1165,9 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
         &build_test_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
-    resolved_config.effective_config.provider_model.provider_id =
-        Some(String::from("custom:proxy"));
-    resolved_config.effective_config.provider_model.model_id = Some(String::from("gpt-5.6-luna"));
+    resolved_config.effective_config.provider_model.provider_id = None;
+    resolved_config.effective_config.provider_model.model_id =
+        Some(String::from("openrouter/openai/gpt-5.6-sol"));
 
     let (_, child_request) =
         build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
@@ -1173,12 +1175,15 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
 
     assert_eq!(
         child_request.provider_id_override.as_deref(),
-        Some("custom:proxy")
+        Some("openrouter")
     );
     assert_eq!(
         child_request.model_id_override.as_deref(),
-        Some("gpt-5.6-luna")
+        Some("openai/gpt-5.6-sol")
     );
+    // The inherited level is replaced by the target model's own default instead of being rejected later.
+    // 继承档位被替换为目标模型自身默认值，而不是在之后被拒绝。
+    assert_ne!(child_request.reasoning_effort, ReasoningEffortLevel::Ultra);
     assert_eq!(child_request.connection_id_override, None);
     assert_eq!(child_request.provider_route_lease_identity, None);
     assert!(child_request.captured_child_tool_admission.is_none());

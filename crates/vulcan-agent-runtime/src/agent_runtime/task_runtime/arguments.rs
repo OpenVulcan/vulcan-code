@@ -401,6 +401,37 @@ pub(super) fn provider_model_selector_is_available(
     runtime.model_is_available(&configuration, provider_id, model_id)
 }
 
+/// Resolves the inherited reasoning preference against a child's overridden model.
+/// 针对子代理覆盖后的模型解析继承的思考偏好。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` and `model_id` identify the child's exact target; `inherited` is the parent level.
+/// `provider_id` 与 `model_id` 标识子代理的精确目标；`inherited` 是父级档位。
+///
+/// # Returns
+/// 返回值
+/// The inherited level when the target supports it, otherwise the target model's default level.
+/// 目标支持时返回继承档位，否则返回目标模型的默认档位。
+pub(super) fn resolve_child_model_reasoning_effort(
+    foundation: &RuntimeFoundation,
+    provider_id: &str,
+    model_id: &str,
+    inherited: crate::provider_config::ReasoningEffortLevel,
+) -> Result<crate::provider_config::ReasoningEffortLevel, String> {
+    let runtime = foundation
+        .public_ai_runtime()
+        .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
+    let configuration = runtime.configuration_snapshot()?;
+    let selection = runtime.resolve_model_selection(&configuration, provider_id, model_id)?;
+    Ok(
+        crate::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
+            &selection.model.capabilities,
+            Some(inherited),
+        ),
+    )
+}
+
 /// Validates an explicit model override selected by a spawn_agent call.
 /// 校验 spawn_agent 调用显式选择的模型覆盖。
 ///
