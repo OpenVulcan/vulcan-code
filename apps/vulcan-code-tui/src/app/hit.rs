@@ -54,6 +54,9 @@ pub enum Target {
     HistoryItem(usize),
     HistoryFilter(HistoryFilter),
     SlashItem(usize),
+    /// One entry of the composer's `@` path list.
+    /// 输入框 `@` 路径列表中的一项。
+    PathMentionItem(usize),
     /// Performs an action directly (buttons).
     /// 直接执行一个动作（按钮）。
     Do(UiAction),

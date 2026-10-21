@@ -299,6 +299,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `skills_actions::delete_subagent_definition` | deleteSubagentDefinition | `service_delete_subagent_definition` |
 | `skills_actions::restore_subagent_definition_default` | restoreSubagentDefinitionDefault | `service_restore_subagent_definition_default` |
 | `workbench_snapshot::load_workbench_snapshot` | loadWorkbenchSnapshot | `workbench.snapshot` |
+| `workbench_snapshot::load_workspace_file_directory` | loadWorkspaceFileDirectory | `workspace.files.list` |
 
 
 工作台聊天、项目和 Git 命令保留类型化变体，其 RPC 函数同样来自 WebUI：

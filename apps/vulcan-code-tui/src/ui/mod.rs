@@ -216,6 +216,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     if let Some(composer_area) = composer_area {
         composer::render_slash_popup(app, composer_area, buf);
+        composer::render_path_mention_popup(app, composer_area, buf);
     }
     if app.overlay.is_some() {
         // Clicks outside the dialog close it; the dialog registers its own targets on top.

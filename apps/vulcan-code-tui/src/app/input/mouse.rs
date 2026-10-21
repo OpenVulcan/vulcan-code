@@ -314,6 +314,10 @@ fn left_click(app: &mut App, target: Target, at: Position, double: bool) {
                 run_slash(app, command);
             }
         }
+        Target::PathMentionItem(index) => {
+            app.focus = Focus::Composer;
+            app.accept_path_mention(index);
+        }
         Target::Do(action) => action::perform(app, action),
     }
 }

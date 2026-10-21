@@ -174,8 +174,16 @@ fn on_key(app: &mut App, key: KeyEvent) {
         return;
     }
     let tab = matches!(key.code, KeyCode::Tab | KeyCode::BackTab);
-    if tab && !(app.focus == Focus::Composer && key.code == KeyCode::Tab && complete_slash(app)) {
-        cycle_focus(app, key.code == KeyCode::BackTab);
+    if tab {
+        // In the composer Tab first completes an `@` path or a slash command; the completed key
+        // is used up rather than typed.
+        // 在输入框中 Tab 先补全 `@` 路径或斜杠命令；完成补全的按键即被用掉，不再输入。
+        let completed = app.focus == Focus::Composer
+            && key.code == KeyCode::Tab
+            && (app.accept_path_mention(app.path_mention_state.highlighted) || complete_slash(app));
+        if !completed {
+            cycle_focus(app, key.code == KeyCode::BackTab);
+        }
         return;
     }
     match app.focus {
@@ -279,6 +287,9 @@ fn on_composer_key(app: &mut App, key: KeyEvent) {
         action::perform(app, UiAction::PastePreview(None));
         return;
     }
+    if on_path_mention_key(app, &key) {
+        return;
+    }
     match key.code {
         KeyCode::Enter if char_before_cursor(app) == Some('\\') => {
             app.composer.delete_char();
@@ -304,6 +315,24 @@ fn on_composer_key(app: &mut App, key: KeyEvent) {
             app.forget_unused_pastes();
         }
     }
+    app.sync_path_mention();
+}
+
+/// While the `@` path list is open, Up/Down move its highlight, Enter takes the highlighted
+/// entry and Esc closes the list; returns whether the key was used.
+/// `@` 路径列表打开时，Up/Down 移动高亮、Enter 采用高亮项、Esc 关闭列表；返回按键是否已被使用。
+fn on_path_mention_key(app: &mut App, key: &KeyEvent) -> bool {
+    if !key.modifiers.is_empty() || app.path_mention_suggestions().is_empty() {
+        return false;
+    }
+    match key.code {
+        KeyCode::Up => app.step_path_mention(-1),
+        KeyCode::Down => app.step_path_mention(1),
+        KeyCode::Enter => return app.accept_path_mention(app.path_mention_state.highlighted),
+        KeyCode::Esc => app.dismiss_path_mention(),
+        _ => return false,
+    }
+    true
 }
 
 fn char_before_cursor(app: &App) -> Option<char> {

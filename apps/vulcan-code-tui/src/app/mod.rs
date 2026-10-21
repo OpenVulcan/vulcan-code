@@ -30,6 +30,7 @@ mod model_list_tests;
 pub mod notice;
 pub mod overlay;
 pub mod pages;
+pub mod path_mention;
 pub mod permission_mode;
 #[cfg(test)]
 mod plugin_settings_tests;
@@ -707,6 +708,9 @@ pub struct App {
     /// Find in the open conversation's transcript, while open.
     /// 打开期间的当前会话记录查找。
     pub transcript_find: Option<find::TranscriptFind>,
+    /// The composer's `@` path mention list.
+    /// 输入框的 `@` 路径提及列表。
+    pub path_mention_state: path_mention::PathMentionState,
 }
 
 impl App {
@@ -809,6 +813,7 @@ impl App {
             last_click: None,
             clipboard: selection::Clipboard::default(),
             transcript_find: None,
+            path_mention_state: Default::default(),
         }
     }
 
@@ -1543,6 +1548,9 @@ impl App {
                 };
                 let was_running = running_jobs(self);
                 self.slot_errors.remove(&slot);
+                if slot == crate::service_api::Slot::PathMentionDirectory {
+                    self.path_mention_loaded(Some(&call));
+                }
                 self.slots.set(slot, call, value);
                 let still_running = running_jobs(self);
                 if was_running
@@ -1607,6 +1615,9 @@ impl App {
                 if !self.slot_is_current(slot, &call) {
                     return;
                 }
+                if slot == crate::service_api::Slot::PathMentionDirectory {
+                    self.path_mention_loaded(None);
+                }
                 self.slots.clear(slot);
                 self.slot_errors.insert(slot, message);
                 self.live_poll_due.remove(&slot);
@@ -1640,6 +1651,7 @@ impl App {
     ) -> bool {
         use crate::service_api::Slot;
         match slot {
+            Slot::PathMentionDirectory => self.path_mention_listing_is_current(call),
             Slot::KnowledgeWords | Slot::KnowledgeBindings | Slot::KnowledgeIntegrity => {
                 call.param("/libraryId").as_str() == self.library.as_deref()
             }

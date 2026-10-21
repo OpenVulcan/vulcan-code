@@ -431,3 +431,82 @@ pub fn render_queued(app: &App, area: Rect, buf: &mut Buffer) {
         );
     }
 }
+
+/// Rows the `@` path list shows at once; the window follows the highlight.
+/// `@` 路径列表一次显示的行数；窗口跟随高亮移动。
+const PATH_MENTION_ROWS: usize = 8;
+
+/// The `@` path list above the composer: the folder's entries matching the typed name, folders
+/// marked with a trailing slash; returns nothing while there is nothing to offer.
+/// 输入框上方的 `@` 路径列表：文件夹中与已输入名称匹配的条目，文件夹以结尾斜杠标出；无可提供内容时不显示。
+pub fn render_path_mention_popup(app: &App, composer: Rect, buf: &mut Buffer) {
+    let suggestions = app.path_mention_suggestions();
+    if suggestions.is_empty() {
+        return;
+    }
+    let theme = &app.theme;
+    let highlighted = app
+        .path_mention_state
+        .highlighted
+        .min(suggestions.len() - 1);
+    let first = (highlighted + 1).saturating_sub(PATH_MENTION_ROWS);
+    let rows = suggestions.len().min(PATH_MENTION_ROWS) as u16;
+    let area = Rect {
+        x: composer.x + 1,
+        y: composer.y.saturating_sub(rows + 2),
+        width: composer.width.min(64),
+        height: rows + 2,
+    };
+    super::text::clear_area(area, buf);
+    let position = format!(" {}/{} · Tab ", highlighted + 1, suggestions.len());
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(theme.border))
+        .style(Style::new().bg(theme.popover))
+        .title(Span::styled(
+            format!(" {} ", tr!("composer.mention.panel")),
+            theme.muted_text(),
+        ))
+        .title_bottom(Line::from(Span::styled(position, theme.muted_text())).right_aligned());
+    let inner = block.inner(area);
+    block.render(area, buf);
+    app.hits.add(area, Target::Inert);
+    for (row, entry) in suggestions
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(rows as usize)
+    {
+        let rect = Rect {
+            y: inner.y + (row - first) as u16,
+            height: 1,
+            ..inner
+        };
+        let name = if entry.is_directory {
+            format!(" {}/", entry.name)
+        } else {
+            format!(" {}", entry.name)
+        };
+        let style = if entry.is_directory {
+            theme.primary_text()
+        } else {
+            theme.base().bg(theme.popover)
+        };
+        Line::from(Span::styled(
+            truncate(&name, inner.width as usize),
+            if row == highlighted {
+                style.add_modifier(Modifier::BOLD)
+            } else {
+                style
+            },
+        ))
+        .style(if row == highlighted {
+            Style::new().bg(theme.selection_bg())
+        } else {
+            Style::new()
+        })
+        .render(rect, buf);
+        app.hits.add(rect, Target::PathMentionItem(row));
+    }
+}

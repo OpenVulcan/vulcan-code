@@ -239,6 +239,9 @@ pub enum Slot {
     /// `loadProjectReviewRules` of the project chosen on the review rules page.
     /// 复核规则页所选项目的 `loadProjectReviewRules`。
     ProjectReviewRules,
+    /// `loadWorkspaceFileDirectory` of the folder the composer's `@` path mention lists.
+    /// 输入框 `@` 路径提及所列文件夹的 `loadWorkspaceFileDirectory`。
+    PathMentionDirectory,
 }
 
 impl Slot {

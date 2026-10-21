@@ -1463,3 +1463,59 @@ fn transcript_find_reveals_steps_and_closes() {
     input::handle_event(&mut h.app, key(KeyCode::Esc, KeyModifiers::NONE));
     assert!(h.app.transcript_find.is_none());
 }
+
+/// "@" at the start of a word lists the project's files a folder at a time: Tab or Enter takes
+/// the highlighted entry, a folder lists its contents next, a file ends the mention with a space,
+/// a click takes the clicked entry and Esc closes the list.
+/// 词首的 "@" 逐级列出项目文件：Tab 或 Enter 采用高亮项，文件夹随后列出其内容，文件以空格结束提及，
+/// 点击采用所点项，Esc 关闭列表。
+#[test]
+fn composer_path_mention_steps_into_folders_and_writes_paths() {
+    let _locale = i18n::lock_locale("en-US");
+    let mut h = Harness::connected();
+    assert!(
+        h.app.conversation().is_some_and(|c| c.project_id.is_some()),
+        "the open demo conversation belongs to a project"
+    );
+    h.app.focus = crate::app::Focus::Composer;
+    let names = |app: &App| {
+        app.path_mention_suggestions()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect::<Vec<_>>()
+    };
+    type_text(&mut h.app, "see @");
+    h.settle();
+    assert_eq!(names(&h.app), ["src", "Cargo.toml", "README.md"]);
+    assert!(
+        h.app
+            .hits
+            .find(|t| matches!(t, Target::PathMentionItem(2)))
+            .is_some()
+    );
+
+    input::handle_event(&mut h.app, key(KeyCode::Tab, KeyModifiers::NONE));
+    h.settle();
+    assert_eq!(h.app.composer_text(), "see @src/");
+    assert_eq!(names(&h.app), ["app", "main.rs"]);
+    input::handle_event(&mut h.app, key(KeyCode::Down, KeyModifiers::NONE));
+    input::handle_event(&mut h.app, key(KeyCode::Enter, KeyModifiers::NONE));
+    h.settle();
+    assert_eq!(h.app.composer_text(), "see @src/main.rs ");
+    assert!(names(&h.app).is_empty());
+
+    type_text(&mut h.app, "@RE");
+    h.settle();
+    assert_eq!(names(&h.app), ["README.md"]);
+    input::handle_event(&mut h.app, key(KeyCode::Esc, KeyModifiers::NONE));
+    h.frame();
+    assert!(names(&h.app).is_empty(), "Esc closes the list");
+    input::handle_event(&mut h.app, key(KeyCode::Backspace, KeyModifiers::NONE));
+    input::handle_event(&mut h.app, key(KeyCode::Backspace, KeyModifiers::NONE));
+    h.settle();
+    click(&mut h.app, "the second root entry", |t| {
+        matches!(t, Target::PathMentionItem(1))
+    });
+    h.settle();
+    assert_eq!(h.app.composer_text(), "see @src/main.rs @Cargo.toml ");
+}

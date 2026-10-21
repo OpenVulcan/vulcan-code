@@ -62,6 +62,38 @@ pub struct FakeService {
 
 /// Gets a required request value and reports malformed input explicitly.
 /// 获取必需请求值，并明确报告格式错误的输入。
+/// A small fixed project tree for the composer's `@` path list: the root, `src` and `src/app`.
+/// 供输入框 `@` 路径列表使用的小型固定项目树：根目录、`src` 与 `src/app`。
+fn demo_workspace_listing(params: &Value) -> Result<Value, String> {
+    let root = string(params, "/workspacePath")?;
+    let directory = params["directoryPath"].as_str().unwrap_or("");
+    let names: &[(&str, bool)] = match directory {
+        "" => &[("src", true), ("Cargo.toml", false), ("README.md", false)],
+        "src" => &[("app", true), ("main.rs", false)],
+        "src/app" => &[("mod.rs", false)],
+        _ => &[],
+    };
+    let entries: Vec<Value> = names
+        .iter()
+        .map(|(name, is_directory)| {
+            let relative = if directory.is_empty() {
+                (*name).to_string()
+            } else {
+                format!("{directory}/{name}")
+            };
+            json!({"name":name,"path":format!("{root}/{relative}"),"relativePath":relative,
+                "kind":if *is_directory {"directory"} else {"code"},"isDirectory":is_directory,
+                "extension":null,"mimeType":null,"sizeBytes":null,"modifiedAt":null,
+                "hidden":false,"hasChildren":is_directory})
+        })
+        .collect();
+    Ok(
+        json!({"workspacePath":root,"path":format!("{root}/{directory}"),"relativePath":directory,
+        "parentPath":null,"entryCount":entries.len(),"entries":entries,"truncated":false,"notice":null,
+        "filters":params["filters"].clone()}),
+    )
+}
+
 fn required<'a>(value: &'a Value, pointer: &str) -> Result<&'a Value, String> {
     value
         .pointer(pointer)
@@ -561,6 +593,7 @@ impl FakeService {
                     overview["hostProjectId"] = call.param("/request/projectId").clone();
                     return Ok(overview);
                 }
+                "workspace.files.list" => return demo_workspace_listing(&call.params),
                 "service_mcp_oauth_status" => {
                     let mut status = self.loads["service_mcp_oauth_status"].clone();
                     status["serverId"] = required(&call.params, "/serverId")?.clone();
