@@ -20,6 +20,7 @@ import {
   mountedDiffFiles,
 } from "../diff-render-index";
 import "../diffReview.css";
+import { useDiffChangeNavigation } from "./change-navigation";
 import { DiffFileBar, diffFilesInFolderOrder } from "./file-bar";
 import { DiffReviewFloatingGitActions } from "./floating-git-actions";
 import { initialDiffRenderPreferences, initialDiffViewMode, persistDiffDisplayPreferences } from "./preferences";
@@ -190,6 +191,7 @@ export function DiffReviewPanel(props: {
     () => (selectedDiffSnapshot ? buildDiffFileVirtualLayout(selectedDiffSnapshot, selectedCollapsedFileKeys, viewMode) : EMPTY_DIFF_FILE_VIRTUAL_LAYOUT),
     [selectedCollapsedFileKeys, selectedDiffSnapshot, viewMode],
   );
+  const changes = useDiffChangeNavigation(fileListRef, virtualLayout, selectedDiffFile);
   const renderedFileCount = renderedSnapshot?.files.length ?? 0;
   // refreshBusy merges parent loading and the local refresh lock for button state.
   // refreshBusy 合并父级加载态与本地刷新锁，用于按钮状态。
@@ -496,10 +498,15 @@ export function DiffReviewPanel(props: {
   return (
     <section
       className={`diff-review-panel${shouldShowGitFileActions ? " has-floating-actions" : ""}`}
-      // Alt+Up and Alt+Down walk the changed files without leaving the keyboard.
-      // Alt+上与 Alt+下 无需离开键盘即可逐个切换变更文件。
+      // Alt+Up and Alt+Down walk the changed files, and with Shift the changes inside the shown file.
+      // Alt+上与 Alt+下 逐个切换变更文件，加 Shift 则在当前文件的各处变更间移动。
       onKeyDown={(event) => {
-        if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown") || !selectedDiffFile) return;
+        if (!event.altKey || event.ctrlKey || event.metaKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown") || !selectedDiffFile) return;
+        if (event.shiftKey) {
+          event.preventDefault();
+          changes.step(event.key === "ArrowDown" ? 1 : -1);
+          return;
+        }
         const at = orderedFiles.indexOf(selectedDiffFile);
         const next = orderedFiles[at + (event.key === "ArrowDown" ? 1 : -1)];
         if (next) {
@@ -538,7 +545,7 @@ export function DiffReviewPanel(props: {
         viewMode={viewMode}
       />
       {renderedSnapshot && selectedDiffFile ? (
-        <DiffFileBar activeKey={selectedDiffFile.key} files={orderedFiles} onSelect={handleSelectFile} actions={props.fileActions?.(selectedDiffFile, diffAbsoluteFilePath(renderedSnapshot?.repositoryRoot, selectedDiffFile))} />
+        <DiffFileBar activeKey={selectedDiffFile.key} changeCount={changes.count} files={orderedFiles} onChangeStep={changes.step} onSelect={handleSelectFile} actions={props.fileActions?.(selectedDiffFile, diffAbsoluteFilePath(renderedSnapshot?.repositoryRoot, selectedDiffFile))} />
       ) : null}
       <div className={`diff-review-body${selectedDiffFile ? " has-selection" : " directory-only"}`}>
         <div

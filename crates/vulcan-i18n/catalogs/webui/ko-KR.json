@@ -853,6 +853,8 @@
   "diffFile.pick": "파일 전환",
   "diffFile.prev": "이전 파일",
   "diffFile.next": "다음 파일",
+  "diffFile.prevChange": "이전 변경",
+  "diffFile.nextChange": "다음 변경",
   "diffFile.filter": "변경된 파일 필터",
   "diffFile.tree": "폴더별로 묶기",
   "diffFile.list": "평면 목록",

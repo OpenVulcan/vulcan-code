@@ -52,6 +52,12 @@
   box-shadow: inset 0 0 0 2px var(--vk-warn);
 }
 
+/* The change the last step landed on, marked at its first line so a step to a change already in view still shows. */
+/* 上一次步进到达的变更，在其首行标记，使步进到已在视野内的变更时仍有反馈。 */
+.diff-plain-rendered-window [data-change-focus] {
+  box-shadow: inset 2px 0 0 var(--vk-ember);
+}
+
 .diff-render-placeholder {
   min-width: 100%;
   contain: strict;

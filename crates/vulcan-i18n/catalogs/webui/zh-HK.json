@@ -853,6 +853,8 @@
   "diffFile.pick": "切換檔案",
   "diffFile.prev": "上一個檔案",
   "diffFile.next": "下一個檔案",
+  "diffFile.prevChange": "上一處修改",
+  "diffFile.nextChange": "下一處修改",
   "diffFile.filter": "篩選變更檔案",
   "diffFile.tree": "按資料夾分組",
   "diffFile.list": "平鋪清單",

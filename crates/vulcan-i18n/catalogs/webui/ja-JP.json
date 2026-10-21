@@ -853,6 +853,8 @@
   "diffFile.pick": "ファイルを切り替え",
   "diffFile.prev": "前のファイル",
   "diffFile.next": "次のファイル",
+  "diffFile.prevChange": "前の変更",
+  "diffFile.nextChange": "次の変更",
   "diffFile.filter": "変更ファイルを絞り込み",
   "diffFile.tree": "フォルダーごとに表示",
   "diffFile.list": "フラットな一覧",

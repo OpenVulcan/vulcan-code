@@ -853,6 +853,8 @@
   "diffFile.pick": "Switch file",
   "diffFile.prev": "Previous file",
   "diffFile.next": "Next file",
+  "diffFile.prevChange": "Previous change",
+  "diffFile.nextChange": "Next change",
   "diffFile.filter": "Filter changed files",
   "diffFile.tree": "Group by folder",
   "diffFile.list": "Flat list",

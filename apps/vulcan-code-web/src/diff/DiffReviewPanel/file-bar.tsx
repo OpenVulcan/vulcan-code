@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronDown, ChevronUp, ChevronsUpDown, FolderOpen, FolderTree, Info, List, MoreHorizontal, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, ChevronsUpDown, FolderOpen, FolderTree, Info, List, MoreHorizontal, Search } from "lucide-react";
 import "@/ui-kit/styles/features/file-bar.css";
 import { IconButton } from "@/ui-kit/primitives/button";
 import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
@@ -19,8 +19,10 @@ const DIFF_FILE_KIND: Record<DiffFile["status"], string> = { added: "A", deleted
 type DiffFileMenuView = "tree" | "list";
 
 // DiffFileBar names the one file the review shows and moves between files: its picker opens a menu of every
-// changed file grouped by folder or as a flat list, and the step buttons walk the files in order.
-// DiffFileBar 标明审核当前展示的单个文件并在文件间移动：选择器打开按目录分组或平铺的全部变更文件菜单，步进按钮按顺序逐个切换。
+// changed file grouped by folder or as a flat list, the step buttons walk the files in order and the change
+// buttons walk the changes inside the shown file.
+// DiffFileBar 标明审核当前展示的单个文件并在文件间移动：选择器打开按目录分组或平铺的全部变更文件菜单，步进按钮按顺序逐个切换，
+// 变更按钮在当前文件的各处变更间移动。
 export function DiffFileBar(props: {
   // Every changed file of the review, in folder order (see diffFilesInFolderOrder).
   // 审核中的全部变更文件，按目录顺序排列（见 diffFilesInFolderOrder）。
@@ -31,6 +33,12 @@ export function DiffFileBar(props: {
   // Shows another file.
   // 展示另一个文件。
   onSelect: (file: DiffFile) => void;
+  // Changes found in the shown file's loaded lines; none disables the change buttons.
+  // 当前文件已加载行中的变更数；为 0 时禁用变更按钮。
+  changeCount: number;
+  // Shows the next (1) or previous (-1) change, wrapping at either end.
+  // 展示下一处（1）或上一处（-1）变更，两端循环。
+  onChangeStep: (direction: 1 | -1) => void;
   // Actions for the shown file, offered in a menu after the step buttons; none hides the menu.
   // 当前文件的操作，在步进按钮之后以菜单提供；为空时隐藏菜单。
   actions?: readonly WorkspacePathAction[];
@@ -138,6 +146,12 @@ export function DiffFileBar(props: {
       </IconButton>
       <IconButton aria-label={t("diffFile.next")} disabled={index >= props.files.length - 1} onClick={() => props.onSelect(props.files[index + 1])} size="sm" title={`${t("diffFile.next")}  Alt ↓`}>
         <ChevronDown size={14} />
+      </IconButton>
+      <IconButton aria-label={t("diffFile.prevChange")} disabled={!props.changeCount} onClick={() => props.onChangeStep(-1)} size="sm" title={`${t("diffFile.prevChange")}  Alt Shift ↑`}>
+        <ArrowUp size={14} />
+      </IconButton>
+      <IconButton aria-label={t("diffFile.nextChange")} disabled={!props.changeCount} onClick={() => props.onChangeStep(1)} size="sm" title={`${t("diffFile.nextChange")}  Alt Shift ↓`}>
+        <ArrowDown size={14} />
       </IconButton>
       {props.actions?.length ? (
         <DropdownMenu>
