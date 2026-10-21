@@ -123,6 +123,14 @@ if ($CargoBuildResult.ExitCode -ne 0) {
     exit $CargoBuildResult.ExitCode
 }
 
+# The code-mode host links V8 with the static C runtime, so it builds in its own Cargo workspace.
+# 代码模式宿主以静态 C 运行时链接 V8，因此在独立的 Cargo 工作区中构建。
+Write-Host "==> Building code-mode host $BuildProfileName..."
+# BuiltCodeModeHostPath is the only stdout line of the host build helper.
+# BuiltCodeModeHostPath 是宿主构建辅助脚本唯一的标准输出行。
+$BuiltCodeModeHostPath = (& node (Join-Path $PSScriptRoot 'code-mode-host-build.mjs') $BuildProfileName | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 # BinaryFileName stores the platform-specific Tauri shell binary name.
 # BinaryFileName 保存平台相关的 Tauri 桌面壳二进制名称。
 $BinaryFileName = "vulcan-code-service"
@@ -155,6 +163,13 @@ if ($IsWindowsPlatform) {
 # BuiltJudgeHostPath stores the judge worker built for the shell's Cargo profile.
 # BuiltJudgeHostPath 保存与桌面壳 Cargo profile 一致的判定 worker 制品路径。
 $BuiltJudgeHostPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-judge-host' -and $_.target.kind -contains 'bin' }).executable
+
+# CodeModeHostFileName stores the platform-specific isolated code-mode host name.
+# CodeModeHostFileName 保存平台相关的隔离代码模式宿主名称。
+$CodeModeHostFileName = "vulcan-code-mode-host"
+if ($IsWindowsPlatform) {
+    $CodeModeHostFileName = "vulcan-code-mode-host.exe"
+}
 
 # TuiFileName stores the platform-specific terminal client binary name.
 # TuiFileName 保存平台相关的终端客户端二进制名称。
@@ -189,6 +204,10 @@ $OutputTerminalHostPath = Join-Path $OutputBinDir $TerminalHostFileName
 # OutputJudgeHostPath 保存复制到桌面壳旁边的隔离判定 worker 路径。
 $OutputJudgeHostPath = Join-Path $OutputBinDir $JudgeHostFileName
 
+# OutputCodeModeHostPath stores the isolated code-mode host beside the shell binary.
+# OutputCodeModeHostPath 保存复制到桌面壳旁边的隔离代码模式宿主路径。
+$OutputCodeModeHostPath = Join-Path $OutputBinDir $CodeModeHostFileName
+
 # OutputTuiPath stores the terminal client the tray opens, beside the shell binary.
 # OutputTuiPath 保存托盘打开的终端客户端路径，位于桌面壳旁边。
 $OutputTuiPath = Join-Path $OutputBinDir $TuiFileName
@@ -201,6 +220,9 @@ if (-not (Test-Path -LiteralPath $BuiltTerminalHostPath)) {
 }
 if (-not (Test-Path -LiteralPath $BuiltJudgeHostPath)) {
     throw "Built judge host was not found: $BuiltJudgeHostPath"
+}
+if (-not (Test-Path -LiteralPath $BuiltCodeModeHostPath)) {
+    throw "Built code-mode host was not found: $BuiltCodeModeHostPath"
 }
 if (-not (Test-Path -LiteralPath $BuiltTuiPath)) {
     throw "Built terminal client was not found: $BuiltTuiPath"
@@ -225,6 +247,7 @@ if (Test-Path -LiteralPath $ObsoleteWindowsConsoleHelperPath) {
 Copy-Item -LiteralPath $BuiltBinaryPath -Destination $OutputBinaryPath -Force -ErrorAction Stop
 Copy-Item -LiteralPath $BuiltTerminalHostPath -Destination $OutputTerminalHostPath -Force -ErrorAction Stop
 Copy-Item -LiteralPath $BuiltJudgeHostPath -Destination $OutputJudgeHostPath -Force -ErrorAction Stop
+Copy-Item -LiteralPath $BuiltCodeModeHostPath -Destination $OutputCodeModeHostPath -Force -ErrorAction Stop
 Copy-Item -LiteralPath $BuiltTuiPath -Destination $OutputTuiPath -Force -ErrorAction Stop
 & node (Join-Path $PSScriptRoot 'desktop-runtime.mjs') package $BuildProfileName
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

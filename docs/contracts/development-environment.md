@@ -151,6 +151,23 @@ cargo hakari verify
 
 `workspace-hack` 只能合并兼容的同版本依赖特性；不同主版本或无法安全统一的依赖仍会保留为多个版本。它不能替代 Cargo.lock，也不会把语义上不同的依赖强行改成同一版本。当前生成平台覆盖 Windows x86_64、Linux x86_64、Linux ARM64、macOS x86_64 与 macOS ARM64。
 
+`vulcan-code-mode` 与 `vulcan-code-mode-protocol` 列在 `.config/hakari.toml` 的 `[final-excludes]` 中，不依赖 `workspace-hack`：它们同时被下述独立宿主工作区构建，依赖 `workspace-hack` 会把根工作区的动态 CRT C 依赖（例如 LuaJIT）带入静态 CRT 链接。
+
+## 代码模式宿主独立工作区
+
+代码模式宿主 `vulcan-code-mode-host` 及其 V8 运行时搬运自 OpenAI Codex，位于独立 Cargo 工作区 `native/code-mode-host/`，拥有自己的 `Cargo.toml`、`Cargo.lock`、`.cargo/config.toml`、`.config/nextest.toml`、`clippy.toml` 与目标目录 `target/code-mode-host/`；根工作区通过 `exclude` 排除它。原因：
+
+- 运行时需要启用 `v8_enable_sandbox` 的 V8。denoland/rusty_v8 不发布 Windows 的此类预编译库，OpenAI Codex 在 `rusty-v8-v<版本>` 发布标签下发布全套，宿主工作区的 `RUSTY_V8_MIRROR` 指向该地址，失败时直接报错。
+- 该预编译库内嵌替换 `malloc`/`free` 的分配器垫片，必须以静态 C 运行时（`+crt-static`，C 源码 `/MT`）链接；根工作区使用 `CL=/MD`，混用时出现 `malloc`/`free` 重复定义。
+
+Cargo 只从当前目录读取 `.cargo/config.toml`，因此宿主工作区的 cargo 命令必须在 `native/code-mode-host/` 内执行，不能在仓库根目录用 `--manifest-path`。`make check` 与 `make test` 已包含该工作区；打包由 `scripts/code-mode-host-build.mjs <debug|release>` 构建宿主并输出可执行文件路径，`scripts/build_tauri.ps1` 将其复制到发行物 `bin/`。
+
+Windows 下目标目录与 Cargo 注册表位于不同盘符时，v8 构建脚本要创建 `<target>/<profile>/gn_root` 符号链接，没有开发者模式或管理员权限会失败。`scripts/prepare-v8-build-root.mjs` 预先创建无需权限的目录联接，上述入口都会先执行它；手工在宿主工作区运行 cargo 前也应先执行：
+
+```bash
+node scripts/prepare-v8-build-root.mjs
+```
+
 ## 默认资源限制
 
 正式服务日志的归属、轮转和过滤规则见 [服务诊断日志](service-diagnostics.md)。被忽略测试的分类、离线串行门禁、并发代码压力复现及外部验收前置条件见 [显式测试入口](explicit-test-gates.md)。
