@@ -105,7 +105,7 @@ export function usePublishedWorkspaceFileOpener(): WorkspaceFileOpener | null {
   return React.useSyncExternalStore((listener) => {
     publishedOpenerListeners.add(listener);
     return () => { publishedOpenerListeners.delete(listener); };
-  }, () => publishedOpener);
+  }, () => publishedOpener, () => null);
 }
 
 // requestWorkspaceFileOpen asks the files panel of tab `tabId` to open `path` at `lines`, now or once it mounts.
