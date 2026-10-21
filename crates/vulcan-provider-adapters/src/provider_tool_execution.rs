@@ -3584,7 +3584,8 @@ fn insert_authentication_header(
 ) -> Result<(), String> {
     let (name, value) = match projection {
         AuthenticationProjection::BearerAuthorization
-        | AuthenticationProjection::CodingDeviceBearer => (
+        | AuthenticationProjection::CodingDeviceBearer
+        | AuthenticationProjection::OpenAiCodexBearer => (
             reqwest::header::AUTHORIZATION,
             format!("Bearer {}", secret.expose_value()),
         ),
@@ -3603,6 +3604,15 @@ fn insert_authentication_header(
     headers.insert(name, value);
     if projection == AuthenticationProjection::CodingDeviceBearer {
         crate::execution::insert_coding_device_identity_headers(headers, secret)?;
+    }
+    if projection == AuthenticationProjection::OpenAiCodexBearer {
+        let account_id = secret.account_id().ok_or_else(|| {
+            String::from("Codex credential does not contain an account identity.")
+        })?;
+        let account_id = HeaderValue::from_str(account_id).map_err(|_| {
+            String::from("Codex account identity contains invalid header characters.")
+        })?;
+        headers.insert(HeaderName::from_static("chatgpt-account-id"), account_id);
     }
     Ok(())
 }
@@ -4225,6 +4235,63 @@ mod tests {
                 .get("x-msh-platform")
                 .and_then(|value| value.to_str().ok()),
             Some(vulcan_llm_core::VULCAN_CODE_CLIENT_NAME)
+        );
+    }
+
+    /// Verifies Codex subscription tools send the account identity beside bearer authorization.
+    /// 验证 Codex 订阅工具会在 Bearer 鉴权旁发送账号身份。
+    #[test]
+    fn codex_authentication_includes_account_identity() {
+        // secret models one Codex OAuth credential with and without its account identity.
+        // secret 模拟一个带有及缺少账号身份的 Codex OAuth 凭据。
+        let secret = |account_id: Option<&str>| {
+            crate::CredentialSecretEnvelope::new(
+                crate::CredentialSecretMaterial::OpenAiCodexOAuth {
+                    tokens: crate::OAuthTokenSet {
+                        access_token: String::from("test-access-token"),
+                        refresh_token: String::from("test-refresh-token"),
+                        issued_at_unix_ms: 1,
+                        expires_at_unix_ms: 2,
+                        scopes: Default::default(),
+                        account_subject: None,
+                        email: None,
+                    },
+                    id_token: None,
+                    account_id: account_id.map(String::from),
+                },
+            )
+            .expect("Codex OAuth credential should validate")
+            .execution_secret()
+            .expect("Codex OAuth execution secret should resolve")
+        };
+        let mut headers = HeaderMap::new();
+
+        insert_authentication_header(
+            &mut headers,
+            AuthenticationProjection::OpenAiCodexBearer,
+            &secret(Some("account-id")),
+        )
+        .expect("Codex tool authentication should project");
+
+        assert_eq!(
+            headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-access-token")
+        );
+        assert_eq!(
+            headers
+                .get("chatgpt-account-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("account-id")
+        );
+        assert!(
+            insert_authentication_header(
+                &mut HeaderMap::new(),
+                AuthenticationProjection::OpenAiCodexBearer,
+                &secret(None),
+            )
+            .is_err()
         );
     }
 

@@ -1,0 +1,139 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "openai-codex-gpt-image-generate",
+  "base_manifest": "openai.json",
+  "production_target_refs": [
+    "openai::codex-subscription.gpt-image-2.generate"
+  ],
+  "tool_target": {
+    "target_id": "codex-subscription.fixture-openai-codex-gpt-image-generate",
+    "description": "Codex subscription GPT Image 2 synchronous generation using the Codex ImagesClient contract.",
+    "service_entry_id": "codex-subscription",
+    "credential_profile_ids": [
+      "codex-oauth"
+    ],
+    "upstream_target_id": "gpt-image-2",
+    "display_name": "Codex Subscription GPT Image 2 Fixture",
+    "tool_id": "fixture_openai_codex_gpt_image_generate",
+    "capability": "image_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "background": {
+          "type": "string",
+          "enum": [
+            "transparent",
+            "opaque",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        "model": {
+          "type": "string",
+          "const": "gpt-image-2",
+          "default": "gpt-image-2"
+        },
+        "quality": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        "size": {
+          "type": "string",
+          "default": "auto"
+        }
+      },
+      "required": [
+        "prompt"
+      ]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": [
+        "image/png"
+      ],
+      "resource_decoders": [
+        {
+          "source_path": "/data/0/b64_json",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "max_bytes": 104857600,
+          "output_id_prefix": "image"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/openai-codex-gpt-image-generate",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.openai-codex-gpt-image-generate",
+    "operation": "image_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [
+      "image"
+    ],
+    "tool_target_refs": [
+      "codex-subscription.fixture-openai-codex-gpt-image-generate"
+    ],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "required_upload_primitives": [],
+  "arguments": {
+    "prompt": "draw a blue mountain",
+    "background": "auto",
+    "model": "gpt-image-2",
+    "quality": "auto",
+    "size": "auto"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/openai-codex-gpt-image-generate",
+      "expected_json_body": {
+        "prompt": "draw a blue mountain",
+        "background": "auto",
+        "model": "gpt-image-2",
+        "quality": "auto",
+        "size": "auto"
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "created": 1778236800,
+        "data": [
+          {
+            "b64_json": "iVBORw0KGgo="
+          }
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

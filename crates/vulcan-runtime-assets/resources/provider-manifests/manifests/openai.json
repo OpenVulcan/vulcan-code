@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 13,
-  "published_at": "2026-10-21T13:35:39Z",
+  "revision": 14,
+  "published_at": "2026-10-21T14:29:21Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -10,7 +10,7 @@
       "openai-responses.v1",
       "openai-codex-responses.v1"
     ],
-    "required_execution_primitives": [],
+    "required_execution_primitives": ["http_json_sync"],
     "required_upload_primitives": [],
     "required_transformers": []
   },
@@ -574,14 +574,79 @@
   "request_profiles": [],
   "response_profiles": [],
   "upload_channels": [],
-  "operations": [],
-  "tool_targets": [],
+  "operations": [
+    {
+      "operation_id": "codex-subscription.gpt-image-2.generate",
+      "operation": "image_generate",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": ["image"],
+      "tool_target_refs": ["codex-subscription.gpt-image-2.generate"],
+      "request_profile_refs": [],
+      "response_profile_refs": [],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 300000,
+      "idempotent": false
+    }
+  ],
+  "tool_targets": [
+    {
+      "target_id": "codex-subscription.gpt-image-2.generate",
+      "description": "Generate an image with GPT Image 2 through the Codex subscription using the Codex ImagesClient request contract.",
+      "service_entry_id": "codex-subscription",
+      "credential_profile_ids": ["codex-oauth"],
+      "upstream_target_id": "gpt-image-2",
+      "display_name": "GPT Image 2 Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "prompt": {"type": "string", "minLength": 1, "description": "Complete image generation instruction."},
+          "background": {"type": "string", "enum": ["transparent", "opaque", "auto"], "default": "auto"},
+          "model": {"type": "string", "const": "gpt-image-2", "default": "gpt-image-2"},
+          "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "default": "auto"},
+          "size": {"type": "string", "default": "auto"}
+        },
+        "required": ["prompt"]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": ["image/png"],
+        "resource_decoders": [
+          {
+            "source_path": "/data/0/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "open_ai_codex_bearer",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    }
+  ],
   "provenance": {
     "status": "verified",
     "sources": [
       {
         "url": "builtin:vulcan.reasoning-catalog.2026-08-06",
         "note": "Legacy reasoning effort rules migrated into manifest model rules; evidence follows the legacy reasoning catalog."
+      },
+      {
+        "url": "https://chatgpt.com/backend-api/codex/images/generations",
+        "note": "Codex subscription image generation follows the openai/codex ImagesClient request and response contract (codex-rs/codex-api/src/endpoint/images.rs, model gpt-image-2)."
       }
     ]
   }
