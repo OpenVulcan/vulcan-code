@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 使用 jsdom 验证分支切换浮层、新建分支弹窗与 Git 图谱分页。
-import React, { act } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";

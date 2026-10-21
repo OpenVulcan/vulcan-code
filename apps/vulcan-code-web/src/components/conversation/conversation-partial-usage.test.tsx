@@ -1,7 +1,6 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { I18nProvider } from "@/i18n";
 import { kimiPartialUsageEvents } from "@/service/__fixtures__/kimi-partial-usage";
 import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { TurnStatsTooltipCard } from "./conversation-turn-stats-card";

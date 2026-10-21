@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import React, { act } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useComposerDraftSessionSettings, type ComposerDraftSessionSettingsController } from "./use-composer-draft-session-settings";

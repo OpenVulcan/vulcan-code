@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
-import type { PublicAiInferenceRoute } from "@/types";
 import {
   loadPublicAiSessionProviderToolSelections,
   loadPublicAiSettings,
@@ -8,7 +7,6 @@ import {
   resetPublicAiMediaDeliveryPolicy,
   savePublicAiMediaDeliveryPolicy,
   savePublicAiSessionProviderToolSelections,
-  savePublicAiInferenceRoute,
   savePublicAiConnectionEnabled,
 } from "./settings-actions-service";
 

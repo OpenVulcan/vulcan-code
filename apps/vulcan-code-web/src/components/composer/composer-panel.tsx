@@ -245,7 +245,7 @@ export function ComposerPanel(props: {
 }) {
   // t translates stable composer labels while model names remain provider data.
   // t 翻译稳定输入区标签，模型名称仍保留为 provider 数据。
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
   // composerMediaPlayer stores an attachment preview opened from the composer strip.
   // composerMediaPlayer 保存从输入区附件条打开的附件预览。
   const [composerMediaPlayer, setComposerMediaPlayer] = React.useState<GeneratedMediaAttachment | null>(null);

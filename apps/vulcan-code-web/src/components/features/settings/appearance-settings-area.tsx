@@ -1,4 +1,3 @@
-import React from "react";
 import { PageBody, PageRow, PageSection } from "@/components/page";
 import { APPEARANCE_THEME_ICONS, useChooseAppearance } from "@/components/shell/app-chrome";
 import { type TranslationKey, useI18n } from "@/i18n";

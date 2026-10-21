@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import React from "react";
 import { prerender } from "react-dom/static";
 import { describe, expect, it, vi } from "vitest";
 import {

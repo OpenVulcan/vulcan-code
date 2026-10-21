@@ -1,7 +1,5 @@
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type {
-  ConversationEventBody,
-  ConversationEventSummary,
   PersistentChangeSet,
   PersistentChangeSetFile,
   PersistentChangeSetHunk,

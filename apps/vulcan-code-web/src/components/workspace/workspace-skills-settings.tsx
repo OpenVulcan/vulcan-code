@@ -7,7 +7,6 @@ import {
   Plug,
   Puzzle,
   Route,
-  ScanSearch,
   Settings,
   Wrench,
 } from "lucide-react";

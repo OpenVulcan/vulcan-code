@@ -2,7 +2,6 @@ import { ThinkingPreview } from "./thinking-preview";
 import React from "react";
 import {
   Bot,
-  ChevronDown,
   ChevronRight,
   FileDiff,
   ScrollText,
@@ -13,7 +12,6 @@ import {
   TooltipTrigger,
 } from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { cx } from "@/ui-kit/behavior/core";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import {
   ConversationMeasuredCollapse,

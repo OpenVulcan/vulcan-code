@@ -12,7 +12,6 @@ import {
   Copy,
   Pencil,
   Split,
-  Workflow,
 } from "lucide-react";
 
 import {
@@ -57,7 +56,6 @@ import type {
 import { useI18n } from "@/i18n";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { PageNotice } from "@/components/page/page-feedback";
-import { cx } from "@/ui-kit/behavior/core";
 
 import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 import { DedicatedUserMessageMarks } from "./dedicated-transcript-memory";

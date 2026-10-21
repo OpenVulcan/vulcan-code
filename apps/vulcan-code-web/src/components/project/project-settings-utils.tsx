@@ -1,4 +1,4 @@
-import { BookMarked, Bot, BrainCircuit, Database, FolderCog, Network, ShieldCheck, ShieldQuestion } from "lucide-react";
+import { BookMarked, Bot, BrainCircuit, Database, FolderCog, ShieldCheck, ShieldQuestion } from "lucide-react";
 import type { TranslationKey } from "@/i18n";
 import type { ProjectSummary, WorkbenchSnapshot } from "@/types";
 import type {

@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 
-import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { encodeBase64UrlUtf8 } from "@/resources/localMedia";

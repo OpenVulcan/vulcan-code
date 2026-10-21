@@ -1,28 +1,20 @@
 import React from "react";
 import { createPortal } from "react-dom";
 import { ComposerSettingsHostContext } from "./composer-settings-host";
-import { setConversationToolCollapseOverride, useToolCollapsePreference } from "@/components/conversation/tool-collapse-preferences";
-import { setConversationThinkingPopupOverride, useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
 import { composerAttachmentMedia } from "./composer-attachment-media";
 import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
-import { MemoryBrainIcon } from "@/components/shell/memory-brain-icon";
 import { composerAttachmentIdentity } from "@/service/composer-attachment-reference";
 import {
   CircleAlert,
   FileText,
   Image as ImageIcon,
-  LayoutPanelTop,
   ListChecks,
   Music2,
   Paperclip,
-  Palette,
   Plus,
   RotateCcw,
-  Settings,
-  Sparkles,
   Target,
   Video,
-  Workflow,
   X,
 } from "lucide-react";
 
@@ -33,8 +25,6 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -46,10 +36,9 @@ import {
   TooltipTrigger,
 } from "@/ui-kit/primitives/tooltip";
 import {
-  THINKING_DISPLAY_MODE_OPTIONS,
   type ThinkingDisplayMode,
 } from "@/components/conversation/thinking-display";
-import { formatMessage, pickBilingualText, useI18n, type TranslationKey } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentPreparationSummary,

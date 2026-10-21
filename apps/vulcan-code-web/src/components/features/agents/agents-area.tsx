@@ -12,7 +12,6 @@ import { FilterChip, FilterChipGroup, SegmentedControl, SegmentedControlItem } f
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group"
 import { PageEmptyState, PageToolbar } from "@/components/page"
 import { Input } from "@/ui-kit/primitives/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { Switch } from "@/ui-kit/primitives/switch"
 import { Textarea } from "@/ui-kit/primitives/textarea"
 import {
@@ -1804,7 +1803,7 @@ function localizedMetadataText(
     return exact
   }
   const language = locale.split("-")[0]
-  const prefixEntry = Object.entries(locales).find(([localeKey, metadata]) => (
+  const prefixEntry = Object.entries(locales).find(([localeKey]) => (
     localeKey === language || localeKey.startsWith(`${language}-`)
   ))
   const prefixValue = prefixEntry?.[1]?.[field]?.trim()
