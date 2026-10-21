@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 33,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 34,
+  "published_at": "2026-10-21T05:38:41Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -506,6 +506,28 @@
           "dependent_required": [],
           "conflicts": [],
           "evidence_revision": "minimax-compatible-text-api-2026-07-28"
+        },
+        {
+          "id": "minimax.reasoning_split",
+          "display_name": "Separate reasoning",
+          "description": "Returns MiniMax thinking in the OpenAI-compatible reasoning_content field instead of inline <think> tags.",
+          "schema": {
+            "type": "boolean"
+          },
+          "default": {
+            "type": "explicit_value",
+            "value": {
+              "type": "boolean",
+              "value": true
+            }
+          },
+          "protocol_ids": [
+            "openai-chat-completions.v1"
+          ],
+          "model_ids": [],
+          "dependent_required": [],
+          "conflicts": [],
+          "evidence_revision": "minimax-openai-reasoning-split-m3-2026-10-21"
         }
       ]
     },
