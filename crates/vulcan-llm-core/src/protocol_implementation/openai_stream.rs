@@ -240,7 +240,12 @@ impl OpenAiChatStreamDecoder {
         let reasoning = reasoning_content
             .or(mirrored_reasoning)
             .or(detail_reasoning);
-        if let Some(reasoning) = reasoning {
+        // An empty reasoning field, which relays send on every chunk of a turn that did not
+        // think, is no reasoning: opening an item for it would record a reasoned turn whose text
+        // a declared replay contract then rejects as lost.
+        // 空推理字段（中转在未思考回合的每个分片都会发送）不是推理：为它开启推理项会记录一个
+        // 「已推理」回合，其文本随后会被已声明的回放契约当作丢失而拒绝。
+        if let Some(reasoning) = reasoning.filter(|reasoning| !reasoning.is_empty()) {
             let item_id = format!("openai:{}:reasoning", self.execution_id);
             if !self.reasoning_open {
                 self.reasoning_open = true;
@@ -248,12 +253,10 @@ impl OpenAiChatStreamDecoder {
                     item_id: item_id.clone(),
                 });
             }
-            if !reasoning.is_empty() {
-                events.push(AiStreamEvent::ReasoningDelta {
-                    item_id,
-                    delta: reasoning,
-                });
-            }
+            events.push(AiStreamEvent::ReasoningDelta {
+                item_id,
+                delta: reasoning,
+            });
         }
         for (item_id, text) in summaries {
             events.push(AiStreamEvent::ReasoningSummaryUpdated { item_id, text });
@@ -2381,6 +2384,30 @@ mod tests {
                 argument_encoding,
             },
             strict: false,
+        }
+    }
+
+    /// Verifies empty reasoning fields on a turn that did not think open no reasoning item.
+    /// 验证未思考回合中的空推理字段不会开启推理项。
+    #[test]
+    fn chat_empty_reasoning_fields_open_no_reasoning_item() {
+        for reasoning_field in [json!({"reasoning_content":""}), json!({"reasoning":""})] {
+            let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
+                String::from("empty-reasoning"),
+                BTreeSet::new(),
+            );
+            let mut delta = reasoning_field;
+            delta["content"] = json!("t");
+            let events = decoder
+                .push_sse(None, &json!({"choices":[{"delta":delta}]}).to_string())
+                .expect("a chunk with an empty reasoning field must decode");
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event,
+                    AiStreamEvent::ReasoningStarted { .. } | AiStreamEvent::ReasoningDelta { .. }
+                )),
+                "an empty reasoning field must not open a reasoning item: {events:?}"
+            );
         }
     }
 
