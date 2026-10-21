@@ -13,7 +13,6 @@ mod prompt;
 mod resources;
 mod retention_policy;
 mod retrieval_origin;
-mod search_relevance;
 mod turn_details;
 
 pub(crate) use client::NativeVmmClient;

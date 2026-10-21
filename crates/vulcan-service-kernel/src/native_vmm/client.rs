@@ -14,7 +14,6 @@ mod real_model_acceptance_tests;
 mod session_admission;
 use super::analysis_queue::{recycled_analysis_turn, select_ordered_due_analysis_jobs};
 use super::profile_bundle::NativeProfileBundleFormat;
-use super::search_relevance::relevant_search_hits;
 use super::turn_details::resolve_turn_details;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -1432,8 +1431,9 @@ impl VmmClient for NativeVmmClient {
                 Ok(MemorySearchGroupResult {
                     query_index: group.query_index,
                     query: group.query,
-                    hits: relevant_search_hits(&group.hits)
-                        .into_iter()
+                    hits: group
+                        .hits
+                        .iter()
                         .map(memory_search_hit)
                         .collect::<Result<Vec<_>, _>>()?,
                 })
