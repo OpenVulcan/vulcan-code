@@ -338,13 +338,13 @@ Context7 的 `lcurl.safe` 只接收 URL、请求头、超时、TLS 校验选项�
 
 | 入口 | 位置 | 修复后行为 |
 | --- | --- | --- |
-| 安装/更新 RPC | `parse_skill_install_source_type` | 拒绝 `url`，消息点名 `github` |
-| WebUI 安装对话框 | `lua-skills-panel.tsx` 来源类型下拉 | 移除 `URL` 选项，仅保留 GitHub |
+| 安装/更新 RPC | `parse_skill_install_source_type` | 拒绝 `url`，消息点名 `github` 与 `official_hub` |
+| WebUI 安装对话框 | `lua-skills-panel.tsx` 来源类型下拉 | 移除 `URL` 选项，只提供 LuaSkills Hub（默认）与 GitHub |
 | ROOT 引导技能配置 | `RootSkillBootstrapSourceType::into_runtime_source_type` | 返回 `Result`，拒绝并带上技能标识 |
 
 第三处刻意**保留该变体可反序列化**：直接删除变体会让既有配置在解析期变成一条不可读的 serde `unknown variant` 错误，修复原因就无从报告。
 
-`official_hub` 与 `private_url_manifest` 是**上游支持但宿主未实现**的来源类型，必须保持「未知类型」错误，**不得静默映射到 `github`**。
+`official_hub` 已由宿主实现（见 13.6）。`private_url_manifest` 仍是**上游支持但宿主未实现**的来源类型，必须保持「未知类型」错误，**不得静默映射到 `github` 或 `official_hub`**。
 
 ### 13.3 `PrivateUrlManifest` 的三项前置条件
 
@@ -358,7 +358,7 @@ Vulcan 的**配置侧已齐备**：`enable_private_url_skill_install` 与 `priva
 
 ### 13.4 本地 HTTP 验收与生产来源边界
 
-Vulcan 生产入口仍只接受 `github` 来源，并继续拒绝用户 `url` 来源；本地验收通过**测试专用的 GitHub API 与站点基址**把同一生产 `install_luaskill` / `update_luaskill` → Service Runtime → `LuaEngine` 路径指向回环 HTTP 服务。该做法不新增生产来源类型，也不放宽 `PrivateUrlManifest` 的 System 权威面约束。
+本节验收针对 `github` 来源；生产入口另接受 13.6 的 `official_hub`，并继续拒绝用户 `url` 来源。本地验收通过**测试专用的 GitHub API 与站点基址**把同一生产 `install_luaskill` / `update_luaskill` → Service Runtime → `LuaEngine` 路径指向回环 HTTP 服务。该做法不新增生产来源类型，也不放宽 `PrivateUrlManifest` 的 System 权威面约束。
 
 `production_install_and_update_use_local_github_routes_safely` 已从最终磁盘和请求计数验证：
 
@@ -372,6 +372,14 @@ Vulcan 生产入口仍只接受 `github` 来源，并继续拒绝用户 `url` �
 ### 13.5 可达验收结论
 
 本地回环 HTTP 的安装、更新、缓存、离线与失败回滚验收针对当时的本地源码 HEAD 完成。该历史结论不表示生产 WebUI/RPC 已支持任意 URL；当前候选与提交锁的实际来源边界见第 1 节。
+
+### 13.6 `official_hub` 来源与 LuaSkills Hub 搜索
+
+- **来源值**：`official_hub` 的 `source` 是 Hub 扁平技能标识（如 `weather`），由 LuaSkills 引擎经 `{Hub}/api/v1/skills/{id}/resolve?version=latest` 解析下载地址；宿主不自行下载或校验压缩包。
+- **Hub 基础地址只有一处定义**：`vulcan-luaskills-config` 的 `DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL`（`https://hub.luaskills.com`）。`LuaSkillsNetworkSettings::effective_official_skill_hub_base_url` 在用户未填写 `official_skill_hub_base_url` 时只在内存中返回该默认值，**不回写**用户配置；引擎宿主选项与搜索客户端都使用这一结果。中国大陆用户可在设置中显式填写 `https://hub.luaskills.cn`（只读镜像），宿主不按地区自动切换，也不默认改写 GitHub 镜像地址。
+- **只读元数据管理器**（`build_skill_manager_for_root`）刻意不设置 Hub 地址，它不执行安装。
+- **搜索 RPC**：`service_search_luaskills_hub`（参数 `query`、`cursor`，均可选）→ `luaskills_hub::search_official_hub`，访问运行中引擎构建时所用的同一 Hub 的 `GET /api/v1/skills/search`。搜索不获取 LuaSkills 管理锁；查询长度、游标格式、响应大小、超时与重定向（禁止）都在 `luaskills_hub.rs` 内定义唯一边界。保存新的 Hub 地址后需重启 LuaSkills 运行时，搜索才会切换到新地址。
+- **界面**：WebUI 安装对话框默认来源为 LuaSkills Hub，搜索选择后按技能标识安装；TUI 在 LuaSkills 页提供搜索表单、逐项安装与下一页按钮，镜像同一 RPC。
 
 ## 14. 可延后项的结论与后续入口
 
