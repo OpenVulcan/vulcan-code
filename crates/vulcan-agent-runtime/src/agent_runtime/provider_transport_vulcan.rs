@@ -1,6 +1,7 @@
 //! Vulcan public-contract adapter state and host execution entry points.
 //! Vulcan 公共契约适配器状态与宿主执行入口。
 
+use crate::agent_runtime::code_mode::CodeModeActivation;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport_entry_inputs::{
@@ -73,8 +74,9 @@ pub(crate) fn resolved_public_output_token_limit(model_limit: Option<u64>) -> u6
 /// # Parameters
 /// 参数
 /// `request` owns host controller inputs and `resolved` freezes the account, protocol, model,
-/// secret, cache, and model-parameter route.
-/// `request` 持有宿主控制器输入，`resolved` 冻结账号、协议、模型、秘密、缓存与模型参数路由。
+/// secret, cache, and model-parameter route; `code_mode` is the run's resolved code-mode surface.
+/// `request` 持有宿主控制器输入，`resolved` 冻结账号、协议、模型、秘密、缓存与模型参数路由；
+/// `code_mode` 是本次运行已解析的代码模式工具面。
 ///
 /// # Returns
 /// 返回值
@@ -84,6 +86,7 @@ pub(crate) fn execute_vulcan_public_stream(
     request: ProviderTransportExecutionRequest,
     resolved: ResolvedPublicAiExecution,
     reasoning_effort: Option<ReasoningEffort>,
+    code_mode: Option<CodeModeActivation>,
 ) -> ProviderDeltaStream {
     // Share the same resolved execution with V1 preparation instead of reconstructing a second route or policy.
     // 与V1准备共享同一已解析执行，不重建第二条路线或策略。
@@ -103,7 +106,7 @@ pub(crate) fn execute_vulcan_public_stream(
         locked_baseline,
         core_snapshot,
         prompt_intervention,
-    } = prepare_provider_transport_stream_launch(request);
+    } = prepare_provider_transport_stream_launch(request, code_mode);
     execute_host_controlled_stream_with_prepared_inputs(
         runtime_inputs,
         core_snapshot,

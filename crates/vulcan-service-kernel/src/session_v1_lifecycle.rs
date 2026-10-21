@@ -1245,6 +1245,9 @@ pub(crate) async fn archive_session_lifecycle_v1(
     )
     .await?;
     registry.unregister_lifecycle_session(session_id)?;
+    // Archived sessions leave the live runtime, so their JavaScript code-mode values are dropped.
+    // 归档会话离开活动运行时，因此丢弃其 JavaScript 代码模式值。
+    vulcan_agent_runtime::agent_runtime::release_code_mode_session(session_id);
     Ok(())
 }
 

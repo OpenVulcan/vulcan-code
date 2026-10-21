@@ -358,11 +358,26 @@ pub(crate) fn execute_provider_prompt_stream(
                     return;
                 }
             };
+        // Code mode follows the frozen route: `code_mode` falls back to direct tools when the host
+        // is unavailable, while `code_mode_only` fails closed before any provider request.
+        // 代码模式遵循冻结路由：宿主不可用时 `code_mode` 回退为直接工具，`code_mode_only`
+        // 在任何 Provider 请求之前失败关闭。
+        let code_mode = match crate::agent_runtime::code_mode::resolve_code_mode_activation(
+            public_execution.route.tool_mode,
+            transport_request.session_id,
+        ) {
+            Ok(code_mode) => code_mode,
+            Err(error) => {
+                yield Err(diagnose_provider_failure(error, diagnostic_context.as_str()));
+                return;
+            }
+        };
         let mut provider_stream =
             crate::agent_runtime::provider_transport_vulcan::execute_vulcan_public_stream(
                 transport_request,
                 public_execution,
                 reasoning_effort,
+                code_mode,
             );
         while let Some(delta) = provider_stream.next().await {
             yield delta.map_err(|error| {

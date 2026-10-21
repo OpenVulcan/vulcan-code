@@ -1063,6 +1063,9 @@ impl OpenAiResponsesStreamDecoder {
                 FreeformToolArgumentEncoding::ApplyPatchObject => {
                     serde_json::json!({"patch": state.custom_text})
                 }
+                FreeformToolArgumentEncoding::CodeModeSourceObject => {
+                    serde_json::json!({"code": state.custom_text})
+                }
             }),
         };
         match arguments {

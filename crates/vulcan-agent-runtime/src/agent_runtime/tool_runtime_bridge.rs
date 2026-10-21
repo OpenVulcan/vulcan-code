@@ -1,6 +1,7 @@
 //! Shared host-managed tool runtime bridge for the host executor and `vulcan-core` controller.
 //! 供宿主执行器与 `vulcan-core` 控制器共享的宿主管理工具运行时桥接层。
 
+use crate::agent_runtime::code_mode::CodeModeTurn;
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::tool_permission::{
     PermissionTexts, ToolPermissionHost, ToolPermissionVerdict, admit_tool_call,
@@ -54,6 +55,9 @@ pub struct VulcanManagedToolRuntimeBridge {
     /// Permission host consulted before every dispatch; `None` when no policy is configured.
     /// 每次调度前咨询的权限宿主；未配置策略时为 `None`。
     permission_host: Option<Arc<dyn ToolPermissionHost>>,
+    /// Code-mode surface owning `exec` and `wait`; `None` for direct tools.
+    /// 拥有 `exec` 与 `wait` 的代码模式工具面；直接工具时为 `None`。
+    code_mode: Option<Arc<CodeModeTurn>>,
 }
 
 /// Metadata key used to connect one runtime-event projection to its tool-execution barrier.
@@ -187,7 +191,29 @@ impl VulcanManagedToolRuntimeBridge {
             execution_mode: execution_mode.into(),
             prepared_invocation_identities: Arc::new(Mutex::new(HashMap::new())),
             permission_host: None,
+            code_mode: None,
         }
+    }
+
+    /// Installs the code-mode surface that owns `exec` and `wait` for this run.
+    /// 安装本次运行中拥有 `exec` 与 `wait` 的代码模式工具面。
+    pub(crate) fn with_code_mode(mut self, code_mode: Option<Arc<CodeModeTurn>>) -> Self {
+        self.code_mode = code_mode;
+        self
+    }
+
+    /// Returns a copy that dispatches only resolved tools, used for calls nested in `exec`.
+    /// 返回只调度已解析工具的副本，用于嵌套在 `exec` 中的调用。
+    pub(crate) fn without_code_mode(&self) -> Self {
+        let mut bridge = self.clone();
+        bridge.code_mode = None;
+        bridge
+    }
+
+    /// Returns the resolved definition registered under one exact tool identifier.
+    /// 返回以一个精确工具标识注册的已解析定义。
+    pub(crate) fn resolved_definition(&self, tool_id: &str) -> Option<&ResolvedToolDefinition> {
+        self.definitions_by_id.get(tool_id)
     }
 
     /// Installs the permission host that admits or denies each call before dispatch.
@@ -377,6 +403,11 @@ impl VulcanManagedToolRuntimeBridge {
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<String, String> {
+        if let Some(code_mode) = self.code_mode.as_ref()
+            && code_mode.owns_tool(&request.tool_name)
+        {
+            return code_mode_tool_binding_fingerprint(&request.tool_name);
+        }
         match self.definitions_by_id.get(&request.tool_name) {
             Some(definition) => resolved_tool_binding_fingerprint(definition),
             None => unregistered_tool_binding_fingerprint(&request.tool_name),
@@ -405,6 +436,17 @@ pub(crate) fn resolved_tool_binding_fingerprint(
         },
         "parameters_schema": definition.parameters_schema,
         "plan_policy": format!("{:?}", definition.plan_policy),
+    });
+    stable_tool_binding_fingerprint(&binding)
+}
+
+/// Computes a stable fingerprint for one host-owned code-mode tool binding.
+/// 为一个宿主自有代码模式工具绑定计算稳定指纹。
+fn code_mode_tool_binding_fingerprint(tool_name: &str) -> Result<String, String> {
+    let binding = json!({
+        "schema_version": 1,
+        "binding_state": "code_mode",
+        "tool_name": tool_name,
     });
     stable_tool_binding_fingerprint(&binding)
 }
@@ -1169,15 +1211,6 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
         request: &CoreToolInvocationRequest,
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
         let identity = self.take_prepared_invocation_identity(request)?;
-        let Some(definition) = self.definitions_by_id.get(&request.tool_name) else {
-            return self.redact_sensitive_tool_result(build_tool_failure_invocation_result(
-                request,
-                format!(
-                    "Tool `{}` is not registered in the resolved definition set.",
-                    request.tool_name
-                ),
-            ));
-        };
         let context = VulcanToolInvocationContext {
             turn_id: identity.turn_id,
             session_id: self.session_id.to_string(),
@@ -1190,6 +1223,34 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             tool_seq: identity.tool_seq,
             controller_tool_call_id: request.tool_call_id.clone(),
             provider_tool_call_id: Some(request.tool_call_id.clone()),
+        };
+        if let Some(code_mode) = self.code_mode.as_ref() {
+            if code_mode.owns_tool(&request.tool_name) {
+                return self.redact_sensitive_tool_result(
+                    match code_mode.invoke(self, request, context).await {
+                        Ok(result) => canonicalize_tool_invocation_result(request, result),
+                        Err(message) => build_tool_failure_invocation_result(request, message),
+                    },
+                );
+            }
+            if code_mode.is_code_mode_only() {
+                return self.redact_sensitive_tool_result(build_tool_failure_invocation_result(
+                    request,
+                    format!(
+                        "Tool `{}` is only available inside `exec` for this model.",
+                        request.tool_name
+                    ),
+                ));
+            }
+        }
+        let Some(definition) = self.definitions_by_id.get(&request.tool_name) else {
+            return self.redact_sensitive_tool_result(build_tool_failure_invocation_result(
+                request,
+                format!(
+                    "Tool `{}` is not registered in the resolved definition set.",
+                    request.tool_name
+                ),
+            ));
         };
         let result = match self
             .invoke_definition(

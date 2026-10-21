@@ -266,7 +266,11 @@ fn build_request_context_breakdown(
         // toolUnits 测量精确投影后的 Schema，并包含其稳定来源元数据。
         let tool_units = serialized_character_units(tool)?;
         match tool.source_kind.as_str() {
-            "native" | "vulcan_managed" | "vulcan_plugin" | "ai_host_binding" => {
+            "native"
+            | "vulcan_managed"
+            | "vulcan_plugin"
+            | "ai_host_binding"
+            | crate::agent_runtime::code_mode::CODE_MODE_TOOL_SOURCE_KIND => {
                 breakdown.system_tool_units =
                     breakdown.system_tool_units.saturating_add(tool_units);
             }
