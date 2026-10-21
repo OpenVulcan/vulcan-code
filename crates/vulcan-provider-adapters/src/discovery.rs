@@ -828,7 +828,16 @@ pub fn parse_openai_codex_model_catalog(
     generation: u64,
     body: &str,
 ) -> Result<ConnectionModelCatalog, String> {
-    let response = parse_discovery_json::<OpenAiCodexModelList>(body, "OpenAI Codex model list")?;
+    let mut response =
+        parse_discovery_json::<OpenAiCodexModelList>(body, "OpenAI Codex model list")?;
+    // Codex lists only picker-visible models, ordered by the account catalog's priority.
+    // Codex 只列出选择器可见的模型，并按账号目录的优先级排序。
+    response
+        .models
+        .retain(|model| model.visibility.as_deref().is_none_or(|value| value == "list"));
+    response
+        .models
+        .sort_by_key(|model| model.priority.unwrap_or(i64::MAX));
     let models = response
         .models
         .into_iter()
@@ -1605,6 +1614,14 @@ struct OpenAiCodexModelEntry {
     /// Codex 账号目录返回的精确推理档位。
     #[serde(default)]
     supported_reasoning_levels: Vec<OpenAiCodexReasoningLevel>,
+    /// Picker visibility; Codex shows only `list` models and keeps `hide` ones internal.
+    /// 选择器可见性；Codex 只显示 `list` 模型，`hide` 模型仅供内部使用。
+    #[serde(default)]
+    visibility: Option<String>,
+    /// Picker order; lower values come first.
+    /// 选择器排序；数值越小越靠前。
+    #[serde(default)]
+    priority: Option<i64>,
     /// Remaining provider fields are not interpreted as public capabilities.
     /// 其余供应商字段不解释为公共能力。
     #[serde(flatten)]
@@ -2306,10 +2323,11 @@ mod tests {
         let catalog = parse_openai_codex_model_catalog(
             "connection",
             3,
-            r#"{"models":[{"slug":"gpt-codex","display_name":"GPT Codex","context_window":200000,"visibility":"list","supported_reasoning_levels":[{"effort":"none"},{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"},{"effort":"ultra"},{"effort":"future"}]}]}"#,
+            r#"{"models":[{"slug":"codex-auto-review","visibility":"hide","priority":1},{"slug":"gpt-codex","display_name":"GPT Codex","context_window":200000,"visibility":"list","priority":2,"supported_reasoning_levels":[{"effort":"none"},{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"},{"effort":"ultra"},{"effort":"future"}]}]}"#,
         )
         .expect("Codex model response should parse");
         assert_eq!(catalog.generation, 3);
+        assert_eq!(catalog.models.len(), 1);
         assert_eq!(catalog.models[0].id, "gpt-codex");
         assert_eq!(catalog.models[0].display_name, "GPT Codex");
         assert_eq!(catalog.models[0].capabilities.context_limit, Some(200000));
