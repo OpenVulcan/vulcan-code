@@ -36,6 +36,13 @@ const SHORTCUT_GROUPS: readonly { title: TranslationKey; rows: readonly Shortcut
     ],
   },
   {
+    title: "palette.shortcuts.review",
+    rows: [
+      { combos: [["Alt", "↑"], ["Alt", "↓"]], label: "palette.shortcuts.reviewFileStep" },
+      { combos: [["Alt", "Shift", "↑"], ["Alt", "Shift", "↓"]], label: "palette.shortcuts.reviewChangeStep" },
+    ],
+  },
+  {
     title: "palette.shortcuts.lists",
     rows: [
       { combos: [["↑"], ["↓"], ["Home"], ["End"]], label: "palette.shortcuts.move" },
