@@ -46,6 +46,7 @@ import {
   isMergeableToolBlock,
 } from "@/components/conversation/conversation-classifiers";
 import { useI18n } from "@/i18n";
+import { normalizeToolDisplayState } from "./conversation-tool-metadata";
 import type {
   ConversationBlock,
   ConversationBlockKind,
@@ -380,7 +381,7 @@ function SpecialConversationBlock(props: {
             body: props.block.body,
             metadata: [
               [t("conversation.metadata.type"), blockTitle(props.block.kind, props.block.toolName, t)],
-              ...(props.block.status ? [[t("conversation.metadata.status"), props.block.status] as [string, string]] : []),
+              ...(props.block.status ? [[t("conversation.metadata.status"), blockStatusLabel(props.block.status, t)] as [string, string]] : []),
               ...(props.block.toolName ? [[t("conversation.metadata.tool"), props.block.toolName] as [string, string]] : []),
             ],
           });
@@ -393,7 +394,7 @@ function SpecialConversationBlock(props: {
         <strong>{displayTitle}</strong>
         <span>{props.block.summary}</span>
       </div>
-      {props.block.status ? <StatusPill status={props.block.status} label={props.block.status} /> : null}
+      {props.block.status ? <StatusPill status={blockStatusTone(props.block.status)} label={blockStatusLabel(props.block.status, t)} /> : null}
       {canOpen ? <Maximize2 aria-hidden="true" className="vk-note-open" /> : null}
     </button>
   );
@@ -427,6 +428,25 @@ function planArtifactsMatch(
 // detailEligibleBlockKinds lists block types that should open a dedicated detail modal.
 // detailEligibleBlockKinds 列出应打开专用详情弹窗的块类型。
 const detailEligibleBlockKinds = new Set<ConversationBlockKind>(["tool-call", "tool-result", "command", "diff", "notice"]);
+
+// blockStatusLabel names a known block status in the UI language; other statuses are shown as recorded.
+// blockStatusLabel 以界面语言命名已知的块状态；其他状态按记录原样显示。
+function blockStatusLabel(status: string, t: ReturnType<typeof useI18n>["t"]): string {
+  switch (normalizeToolDisplayState(status)) {
+    case "completed": return t("conversation.block.status.completed");
+    case "failed": return t("conversation.block.status.failed");
+    case "running": return t("conversation.block.status.running");
+    case "stopped": return t("conversation.block.status.stopped");
+    default: return status;
+  }
+}
+
+// blockStatusTone maps a block status onto the status pill tones.
+// blockStatusTone 将块状态映射到状态徽标色调。
+function blockStatusTone(status: string): string {
+  const state = normalizeToolDisplayState(status);
+  return state === "completed" ? "ready" : state === "failed" ? "error" : state ?? status;
+}
 
 // blockIcon returns the icon component used by one special transcript block.
 // blockIcon 返回单个特殊转录块使用的图标组件。
