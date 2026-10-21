@@ -485,7 +485,10 @@ export function DiffReviewPanel(props: {
     // The host is still reading the diff: show where it will appear rather than an empty verdict.
     // 宿主仍在读取 diff：展示其将出现的位置，而不是空结论。
     if (props.loading) {
-      return <section className="diff-review-panel empty"><StreamPlaceholder className="vk-stream-inset" count={6} label={t("diff.loading")} /></section>;
+      return <section className="diff-review-panel empty">
+        <p className="diff-review-loading" role="status">{t("diff.loading")}</p>
+        <StreamPlaceholder className="vk-stream-inset" count={6} decorative />
+      </section>;
     }
     return <DiffReviewEmptyPanel body={props.emptyBody ?? t("diff.emptyBody")} refreshBusy={refreshBusy} title={props.emptyTitle ?? t("diff.cleanTitle")} onRefresh={props.onRefresh ? handleRefreshClick : undefined} />;
   }

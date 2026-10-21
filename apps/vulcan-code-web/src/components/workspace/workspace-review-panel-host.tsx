@@ -25,7 +25,6 @@ import type {
   WorkspaceDiffSearchRequest,
   WorkspaceDiffSearchResponse,
   WorkspaceDiffSnapshotResponse,
-  WorkspaceGitRepositorySummary,
   WorkspaceReviewFocusRequest,
 } from "@/diff/types";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -34,7 +33,7 @@ import { useWorkspaceFileOpener, type WorkspaceFileOpener } from "@/components/w
 import { copyText } from "@/components/workspace/workbench-layout/types";
 import { diffRevealRelativePath } from "@/diff/DiffReviewPanel/search";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
-import { loadWorkspaceGitCatalog } from "@/service/workbench-snapshot-service";
+import { useWorkspaceGitCatalog } from "@/components/workspace/use-workspace-git-catalog";
 import { useConversationReviewSnapshots } from "@/components/workspace/use-conversation-review-snapshots";
 import { useWorkspaceReviewRequestOwnership } from "@/components/workspace/workspace-review-panel-request-ownership";
 import type { WorkbenchSnapshot } from "@/types";
@@ -191,12 +190,6 @@ export function WorkspaceReviewPanelHost(props: {
     () => workspaceReviewPanelCacheKey(workspacePath),
     [workspacePath],
   );
-  // gitRepositories stores repositories available to the right-panel selector.
-  // gitRepositories 保存右侧面板选择器可用的仓库。
-  const [gitRepositories, setGitRepositories] = React.useState<WorkspaceGitRepositorySummary[]>([]);
-  // gitRepositoryCatalogError stores discovery or monitoring-setting errors.
-  // gitRepositoryCatalogError 保存发现或监听设置错误。
-  const [gitRepositoryCatalogError, setGitRepositoryCatalogError] = React.useState<string | null>(null);
   // requestOwnership binds all review async writers to the committed project-level cache route.
   // requestOwnership 将全部审核异步写入者绑定到已提交的项目级缓存路由。
   const requestOwnership = useWorkspaceReviewRequestOwnership(reviewPanelCacheKey);
@@ -297,49 +290,13 @@ export function WorkspaceReviewPanelHost(props: {
     setWorkspaceGitActionPending(false);
   }, [reviewPanelCacheKey]);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    if (!workspacePath) {
-      setGitRepositories([]);
-      setGitRepositoryCatalogError(null);
-      return undefined;
-    }
-    void loadWorkspaceGitCatalog(workspacePath, workspaceProjectId, props.selectedConversationId)
-      .then((catalog) => {
-        if (!cancelled) {
-          setGitRepositories(catalog.repositories);
-          setDiffReviewSelection((current) => {
-            const enabledRepositories = catalog.repositories.filter((repository) => repository.monitoringEnabled);
-            const currentRepository = current.repositoryKey
-              ? enabledRepositories.find((repository) => repository.repositoryKey === current.repositoryKey)
-              : null;
-            if (currentRepository) {
-              return current;
-            }
-            if (enabledRepositories.length === 0) {
-              return { ...current, repositoryKey: null };
-            }
-            const primaryRepository = enabledRepositories.find((repository) => repository.isPrimary)
-              ?? enabledRepositories[0];
-            return { ...current, repositoryKey: primaryRepository.repositoryKey };
-          });
-          setGitRepositoryCatalogError(null);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setGitRepositoryCatalogError(error instanceof Error ? error.message : String(error));
-          setGitRepositories([]);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [props.reviewFocusRequest.sequence, props.selectedConversationId, workspacePath, workspaceProjectId]);
+  const gitCatalog = useWorkspaceGitCatalog(
+    workspacePath, workspaceProjectId, props.selectedConversationId, props.reviewFocusRequest.sequence, setDiffReviewSelection,
+  );
 
   const enabledGitRepositories = React.useMemo(
-    () => gitRepositories.filter((repository) => repository.monitoringEnabled),
-    [gitRepositories],
+    () => gitCatalog.repositories.filter((repository) => repository.monitoringEnabled),
+    [gitCatalog.repositories],
   );
 
   React.useLayoutEffect(() => {
@@ -813,12 +770,12 @@ export function WorkspaceReviewPanelHost(props: {
 
   // reviewLoadError is a failure to read the changes, which must not read as "nothing to review".
   // reviewLoadError 是读取修改失败，不能显示为“没有可审核的修改”。
-  const reviewLoadError = lastTurnMode ? null : workspaceReviewError ?? gitRepositoryCatalogError;
+  const reviewLoadError = lastTurnMode ? null : workspaceReviewError ?? gitCatalog.error;
   return (
     <DiffReviewPanel
       emptyBody={lastTurnMode ? t("workspaceReview.lastTurnEmpty") : reviewLoadError ?? undefined}
       emptyTitle={reviewLoadError ? t("workspaceReview.loadFailedTitle") : undefined}
-      loading={workspaceReviewLoading}
+      loading={workspaceReviewLoading || (gitCatalog.loading && !activeReviewSnapshot)}
       selection={diffReviewSelection}
       repositories={enabledGitRepositories}
       snapshot={activeReviewSnapshot}
