@@ -45,18 +45,18 @@ use crate::webui_prompt_lifecycle::user_root_dispatch_authority_from_v1_handle;
 
 use super::{
     ExistingSubmissionAdmissionAuthorization, HostRuntimeHandle, MaterializedPromptSession,
-    PromptSessionMaterializationKind, SharedServiceBridgeState, active_kernel_session_ids,
-    capture_preserved_workspace_run_state, capture_webui_prompt_preparation_generation,
-    capture_webui_prompt_preparation_workspace, composer_attachment_draft_scope,
-    composer_attachment_summary_to_core, composer_attachment_summary_to_provider_core,
-    composer_attachment_workspace_path_from_snapshot, current_unix_millis_text,
-    current_unix_millis_value, defer_attachment_delivery_to_v1, emit_pending_prompts_changed_delta,
-    emit_service_event_with_trace, enqueue_webui_pending_prompt_from_submission,
-    ensure_session_terminal_settlement_settled, hydrate_retained_submission_session_if_needed,
-    load_workspace_for_submission, mark_webui_prompt_preparation_failed,
-    mark_webui_prompt_snapshot_preparing, materialize_prompt_session,
-    owning_project_id_for_session, parse_prompt_session_target, parse_session_id,
-    persist_initial_submission_goal, preserve_active_session_run_state,
+    PromptSessionMaterializationKind, SharedServiceBridgeState, SubmissionActivation,
+    active_kernel_session_ids, capture_preserved_workspace_run_state,
+    capture_webui_prompt_preparation_generation, capture_webui_prompt_preparation_workspace,
+    composer_attachment_draft_scope, composer_attachment_summary_to_core,
+    composer_attachment_summary_to_provider_core, composer_attachment_workspace_path_from_snapshot,
+    current_unix_millis_text, current_unix_millis_value, defer_attachment_delivery_to_v1,
+    emit_pending_prompts_changed_delta, emit_service_event_with_trace,
+    enqueue_webui_pending_prompt_from_submission, ensure_session_terminal_settlement_settled,
+    hydrate_retained_submission_session_if_needed, load_workspace_for_submission,
+    mark_webui_prompt_preparation_failed, mark_webui_prompt_snapshot_preparing,
+    materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
+    parse_session_id, persist_initial_submission_goal, preserve_active_session_run_state,
     provider_tool_capability_key, queued_dispatch_authority_for_client_action,
     refresh_exact_vmm_hook_session_projection, resolve_composer_attachment_summary_for_workspace,
     retain_slow_submission_diagnostic, retained_submission_snapshot_has_session_context,
@@ -2035,6 +2035,7 @@ async fn service_continue_conversation_with_submission(
         ExistingSessionHydrationPolicy::TrustRetainedSnapshot,
         ConversationSubmissionMode::Continuation,
         Some(dispatch_guard),
+        SubmissionActivation::Foreground,
     )
     .await?;
     if let Err(error) = handle
@@ -2101,6 +2102,7 @@ pub(super) async fn service_submit_conversation_prompt_rpc(
         None,
         ExistingSessionHydrationPolicy::HydrateIfEmpty,
         ConversationSubmissionMode::UserPrompt,
+        SubmissionActivation::Foreground,
     )
     .await
 }
@@ -2125,6 +2127,7 @@ pub(super) async fn service_submit_conversation_prompt(
     preauthorized_turn_admission: Option<ExistingSubmissionAdmissionAuthorization>,
     existing_session_hydration_policy: ExistingSessionHydrationPolicy,
     submission_mode: ConversationSubmissionMode,
+    activation: SubmissionActivation,
 ) -> Result<SubmitConversationPromptAck, String> {
     service_start_conversation_execution(
         app,
@@ -2144,6 +2147,7 @@ pub(super) async fn service_submit_conversation_prompt(
         existing_session_hydration_policy,
         submission_mode,
         None,
+        activation,
     )
     .await
 }
@@ -2473,6 +2477,7 @@ async fn service_start_conversation_execution(
     existing_session_hydration_policy: ExistingSessionHydrationPolicy,
     submission_mode: ConversationSubmissionMode,
     continuation_dispatch_guard: Option<ContinuationDispatchGuard>,
+    activation: SubmissionActivation,
 ) -> Result<SubmitConversationPromptAck, String> {
     // Measures the whole submit RPC body from service entry to final response.
     // 衡量提交 RPC 主体从服务入口到最终返回的整体耗时。
@@ -2931,7 +2936,7 @@ async fn service_start_conversation_execution(
     } else {
         project_id.as_deref()
     };
-    let materialized_session = materialize_prompt_session(
+    let mut materialized_session = materialize_prompt_session(
         &mut workspace_snapshot,
         materialization_project_id,
         submission_target,
@@ -2941,6 +2946,7 @@ async fn service_start_conversation_execution(
             &prompt
         },
     )?;
+    materialized_session.activation = activation;
     project_admission.validate_materialized_session(&materialized_session)?;
     // Dedicated choices are validated before the root publication that installs them.
     // 专职选择在安装它们的根发布之前完成校验。

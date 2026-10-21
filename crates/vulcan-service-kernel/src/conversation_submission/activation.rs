@@ -10,11 +10,11 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use crate::{
     MaterializedPromptSession, PromptSessionMaterializationKind, SharedServiceBridgeState,
-    emit_service_event_with_trace, emit_workbench_event, ensure_webui_session_runtime_entry,
-    is_active_session_run_phase, pending_question_snapshots_from_agent_runtime,
-    refresh_conversation_attention_summary, restore_webui_runtime_controls_for_session,
-    session_plan_mode_summary_from_runtime_state, session_summary_project_id_owned,
-    subagent_navigation_snapshot_for_parent_from_cached_state,
+    SubmissionActivation, emit_service_event_with_trace, emit_workbench_event,
+    ensure_webui_session_runtime_entry, is_active_session_run_phase,
+    pending_question_snapshots_from_agent_runtime, refresh_conversation_attention_summary,
+    restore_webui_runtime_controls_for_session, session_plan_mode_summary_from_runtime_state,
+    session_summary_project_id_owned, subagent_navigation_snapshot_for_parent_from_cached_state,
     sync_workbench_runtime_control_fields_locked, workspace_session_summary_for_session,
     workspace_session_summary_for_session_mut,
 };
@@ -123,7 +123,9 @@ pub(crate) fn commit_created_submission_workspace_slice(
         .insert(session_id, runtime_state);
     workspace.session_run_phases.insert(session_id, run_phase);
     workspace.hydrated_session_ids.insert(session_id);
-    workspace.selected_session = session_id;
+    if materialized_session.activation == SubmissionActivation::Foreground {
+        workspace.selected_session = session_id;
+    }
     Ok(())
 }
 
@@ -189,7 +191,9 @@ pub(crate) fn commit_existing_submission_workspace_slice(
     } else {
         workspace.hydrated_session_ids.remove(&session_id);
     }
-    workspace.selected_session = session_id;
+    if materialized_session.activation == SubmissionActivation::Foreground {
+        workspace.selected_session = session_id;
+    }
     Ok(())
 }
 
@@ -311,7 +315,12 @@ pub(crate) fn commit_materialized_submission_activation(
         // revision 是同时写入保留工作台与发送信封的精确代际。
         let revision = guard.workbench_generation;
         guard.workbench.revision = revision;
-        guard.workbench.selected_conversation_id = Some(conversation.id.clone());
+        // A background submission leaves the user's selected conversation untouched.
+        // 后台提交保持用户当前选中的会话不变。
+        let foreground = materialized_session.activation == SubmissionActivation::Foreground;
+        if foreground {
+            guard.workbench.selected_conversation_id = Some(conversation.id.clone());
+        }
         if let Some(existing) = guard
             .workbench
             .conversations
@@ -325,7 +334,7 @@ pub(crate) fn commit_materialized_submission_activation(
                 .conversations
                 .insert(0, conversation.clone());
         }
-        if materialized_session.kind == PromptSessionMaterializationKind::Created {
+        if materialized_session.kind == PromptSessionMaterializationKind::Created && foreground {
             // A draft-to-session handoff changes both navigation identity and session-scoped model controls.
             // 草稿到会话的交接会同时改变导航身份与会话级模型控制项。
             let selected_runtime_state = guard
@@ -350,14 +359,15 @@ pub(crate) fn commit_materialized_submission_activation(
             // 完整快照让会话选中与模型投影在 WebUI 中原子生效。
             (revision, None, Some(guard.workbench.clone()), None)
         } else {
-            // Existing-session activation changes only the conversation summary and remains a compact delta.
-            // 已有会话激活只改变会话摘要，继续使用紧凑增量。
+            // Existing-session and background activation change only the conversation summary and
+            // remain a compact delta.
+            // 已有会话激活与后台激活只改变会话摘要，继续使用紧凑增量。
             let event = WorkbenchDeltaEnvelope {
                 generation: revision,
                 delta: WorkbenchDelta::ConversationSummaryChanged(
                     ConversationSummaryChangedDelta {
                         conversation,
-                        selected_conversation_id: Some(session_id.to_string()),
+                        selected_conversation_id: foreground.then(|| session_id.to_string()),
                     },
                 ),
             };

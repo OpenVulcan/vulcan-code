@@ -119,6 +119,97 @@ fn created_session_activation_emits_one_full_workbench_snapshot() {
     );
 }
 
+/// Verifies a background submission creates its conversation without moving the user's selection.
+/// 验证后台提交会创建会话，但不会移动用户当前的选中状态。
+#[test]
+fn background_created_session_activation_keeps_the_selected_conversation() {
+    let historical_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(historical_session_id);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace snapshot")
+        .task_projects
+        .push(TaskProjectSummary::new(
+            "project-a",
+            "Project A",
+            "D:/project-a",
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        ));
+    let selected_before = service_state.workbench.selected_conversation_id.clone();
+    let workspace_selected_before = service_state
+        .workspace_snapshot
+        .as_ref()
+        .expect("test workspace snapshot")
+        .selected_session;
+    let mut workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_ref()
+        .expect("test workspace snapshot")
+        .clone();
+    let mut materialized_session = materialize_prompt_session(
+        &mut workspace_snapshot,
+        Some("project-a"),
+        PromptSessionTarget::Create,
+        "Background conversation",
+    )
+    .expect("created conversation should materialize");
+    materialized_session.activation = crate::SubmissionActivation::Background;
+    prepare_materialized_submission_session(&mut workspace_snapshot, &materialized_session)
+        .expect("created conversation runtime state should initialize");
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+    commit_created_submission_workspace_slice(&state, &workspace_snapshot, &materialized_session)
+        .expect("created conversation slice should commit");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let app = ServiceEventEmitter::new(vec![Arc::new(CapturingActivationEventSink {
+        events: Arc::clone(&events),
+    })]);
+
+    commit_materialized_submission_activation(
+        &app,
+        &state,
+        &workspace_snapshot,
+        &materialized_session,
+    )
+    .expect("background activation should succeed");
+
+    let guard = state.lock().expect("service state lock");
+    assert_eq!(guard.workbench.selected_conversation_id, selected_before);
+    assert_eq!(
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .expect("live workspace snapshot")
+            .selected_session,
+        workspace_selected_before
+    );
+    assert!(
+        guard
+            .workbench
+            .conversations
+            .iter()
+            .any(|conversation| conversation.id == materialized_session.session_id.to_string())
+    );
+    drop(guard);
+    let captured = events.lock().expect("activation event buffer should lock");
+    assert!(
+        captured.iter().all(|event| match event {
+            ServiceEvent::Workbench(_) => false,
+            ServiceEvent::WorkbenchDelta(envelope) => !matches!(
+                &envelope.delta,
+                WorkbenchDelta::ConversationSummaryChanged(delta)
+                    if delta.selected_conversation_id.is_some()
+            ),
+            _ => true,
+        }),
+        "a background activation must not publish a selection change"
+    );
+}
+
 /// Verifies existing-session activation initializes runtime state and clears its own navigation round.
 /// 验证已有会话激活会初始化运行态并清理自身导航轮次。
 ///
@@ -169,6 +260,7 @@ fn existing_session_activation_commits_summary_and_own_navigation_cleanup() {
         project_id: Some(String::from("project-a")),
         session_title: String::from("父会话"),
         workspace_path: String::new(),
+        activation: crate::SubmissionActivation::Foreground,
         kind: PromptSessionMaterializationKind::Existing,
     };
     // emitted_events records the summary delta followed by the exact navigation cleanup delta.
@@ -304,6 +396,7 @@ fn existing_session_activation_preserves_other_parent_panel() {
         project_id: Some(String::from("project-a")),
         session_title: String::from("父会话"),
         workspace_path: String::new(),
+        activation: crate::SubmissionActivation::Foreground,
         kind: PromptSessionMaterializationKind::Existing,
     };
 

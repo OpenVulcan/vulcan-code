@@ -267,6 +267,7 @@ fn stale_submission_admission_cannot_start_or_release_replacement() {
         project_id: Some(String::from("project-a")),
         session_title: String::from("父会话"),
         workspace_path: String::new(),
+        activation: crate::SubmissionActivation::Foreground,
         kind: PromptSessionMaterializationKind::Existing,
     };
     // stale_reservation_id is the original owner token retained outside shared state.
@@ -440,6 +441,7 @@ fn exact_project_admission_rejects_cross_project_materialization() {
         project_id: Some(String::from("project-b")),
         session_title: String::from("跨项目会话"),
         workspace_path: String::from("D:/project-b"),
+        activation: crate::SubmissionActivation::Foreground,
         kind: PromptSessionMaterializationKind::Created,
     };
 
@@ -670,6 +672,7 @@ fn existing_submission_commit_moves_runtime_state_without_transcript_projection(
         project_id: Some(String::from("project-a")),
         session_title: String::from("父会话"),
         workspace_path: String::from("D:/project-a"),
+        activation: crate::SubmissionActivation::Foreground,
         kind: PromptSessionMaterializationKind::Existing,
     };
 

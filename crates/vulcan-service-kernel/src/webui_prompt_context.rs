@@ -15,6 +15,18 @@ pub(crate) enum PromptSessionMaterializationKind {
     Created,
 }
 
+/// Whether an accepted submission also becomes the user's selected conversation.
+/// 已接纳的提交是否同时成为用户当前选中的会话。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubmissionActivation {
+    /// The submitting client is the user's view, so selection and composer controls follow it.
+    /// 提交方就是用户视图，因此选中状态与输入区控件随之切换。
+    Foreground,
+    /// An external client submitted, so the user's selection and composer controls stay put.
+    /// 外部客户端提交，因此用户的选中状态与输入区控件保持不变。
+    Background,
+}
+
 /// Explicit conversation target selected before submission performs asynchronous work.
 /// 提交执行异步工作前选择的显式会话目标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +107,9 @@ pub(crate) struct MaterializedPromptSession {
     /// Whether materialization selected an existing session or created a new one.
     /// 物化阶段选择已有会话还是创建新会话。
     pub(crate) kind: PromptSessionMaterializationKind,
+    /// Whether committing the submission also selects the session for the user.
+    /// 提交落定时是否同时为用户选中该会话。
+    pub(crate) activation: SubmissionActivation,
 }
 
 /// Resolves or creates the session that should receive the submitted prompt.
@@ -152,6 +167,7 @@ pub(crate) fn materialize_prompt_session(
             session_title,
             workspace_path,
             kind: PromptSessionMaterializationKind::Existing,
+            activation: SubmissionActivation::Foreground,
         });
     }
 
@@ -207,6 +223,7 @@ pub(crate) fn materialize_prompt_session(
         session_title,
         workspace_path,
         kind: PromptSessionMaterializationKind::Created,
+        activation: SubmissionActivation::Foreground,
     })
 }
 
