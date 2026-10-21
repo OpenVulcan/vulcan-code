@@ -320,6 +320,10 @@ export interface PublicAiCustomModelRequestProjection {
 // PublicAiToolSchemaProjectionMode 选择 Provider 可见的函数工具 Schema 契约。
 export type PublicAiToolSchemaProjectionMode = "lightweight" | "passthrough" | "strict";
 
+// PublicAiToolMode selects direct tools or the JavaScript code-mode tool surface.
+// PublicAiToolMode 选择直接工具或 JavaScript 代码模式工具面。
+export type PublicAiToolMode = "direct" | "code_mode" | "code_mode_only";
+
 // PublicAiStructuredOutputCapability identifies one model's strongest stable JSON-output contract.
 // PublicAiStructuredOutputCapability 标识一个模型最强的稳定 JSON 输出契约。
 export type PublicAiStructuredOutputCapability = "json_object" | "json_schema" | "unsupported";
@@ -346,6 +350,7 @@ export interface PublicAiCustomModelDefinition {
   capabilities: PublicAiModelCapabilities;
   request_projection: PublicAiCustomModelRequestProjection;
   tool_schema_projection: PublicAiToolSchemaProjectionMode;
+  tool_mode: PublicAiToolMode;
   // system_binding scopes a user-added system model to one verified entry and protocol.
   // system_binding 将用户新增系统模型限制到一个已验证入口和协议。
   system_binding?: { service_entry_id: string; protocol_profile_id: string };
@@ -726,7 +731,6 @@ export interface PublicAiConnectionCatalog {
 // PublicAiCodexModelBehavior 承载后端冻结的精确封闭模型行为。
 export interface PublicAiCodexModelBehavior {
   wire_dialect: "standard" | "lite";
-  tool_mode: "direct" | "code_mode" | "code_mode_only";
   apply_patch_tool_type: "function" | "freeform";
   shell_type: "shell_command" | "unified_exec";
   web_search_tool_type: "text" | "text_and_image";

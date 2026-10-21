@@ -840,7 +840,6 @@ function codexBehaviorSummary(
 ): string {
   return [
     behavior.wire_dialect,
-    behavior.tool_mode,
     behavior.apply_patch_tool_type,
     behavior.shell_type,
     behavior.multi_agent_version,

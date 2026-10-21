@@ -126,6 +126,7 @@ function modelFromDraft(
       reasoning: {}, model_parameter_paths: {}, defaults: {}, overrides: {}, delete: [],
     },
     tool_schema_projection: previous?.tool_schema_projection ?? "lightweight",
+    tool_mode: "direct",
     system_binding: {
       service_entry_id: draft.serviceEntryId,
       protocol_profile_id: draft.protocolProfileId,

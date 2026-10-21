@@ -791,7 +791,6 @@ fn access_sheet(entry: &Entry<'_>, internal: Option<Vec<String>>) -> UiAction {
 fn codex_behavior(record: &Value) -> String {
     [
         "wire_dialect",
-        "tool_mode",
         "apply_patch_tool_type",
         "shell_type",
         "multi_agent_version",

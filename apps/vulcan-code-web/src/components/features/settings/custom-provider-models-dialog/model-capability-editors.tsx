@@ -19,7 +19,7 @@ import { Textarea } from "@/ui-kit/primitives/textarea"
 import { useI18n } from "@/i18n"
 import { formatTokenCount } from "@/lib/usage-format"
 import { loadPublicAiSettings, savePublicAiCustomModelConnectionAvailability, savePublicAiModelCapabilityOverrides, validatePublicAiCustomModel } from "@/service/settings-actions-service"
-import type { PublicAiCustomModelDefinition, PublicAiModelCapabilityOverrides, PublicAiResourceKind, PublicAiSettingsSnapshot, PublicAiToolSchemaProjectionMode } from "@/types"
+import type { PublicAiCustomModelDefinition, PublicAiModelCapabilityOverrides, PublicAiResourceKind, PublicAiSettingsSnapshot, PublicAiToolMode, PublicAiToolSchemaProjectionMode } from "@/types"
 import { errorMessage } from "@/lib/display-format"
 import { EMPTY_PROJECTION, DISCOVERY_STATE_LABEL_KEYS } from "./model-dialog-constants"
 import "@/ui-kit/styles/features/provider-models.css"
@@ -508,6 +508,24 @@ export function AdvancedModelEditor(props: {
                 </SelectContent>
               </Select>
               <span className="vk-field-hint">{t("settings.customModels.toolSchemaProjectionHint")}</span>
+            </label>
+            <label className="vk-field">
+              {t("settings.customModels.toolMode")}
+              <Select
+                onValueChange={(value) => props.onUpdate((current) => ({
+                  ...current,
+                  tool_mode: value as PublicAiToolMode,
+                }))}
+                value={model.tool_mode}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="direct">{t("settings.customModels.toolModeDirect")}</SelectItem>
+                  <SelectItem value="code_mode">{t("settings.customModels.toolModeCodeMode")}</SelectItem>
+                  <SelectItem value="code_mode_only">{t("settings.customModels.toolModeCodeModeOnly")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="vk-field-hint">{t("settings.customModels.toolModeHint")}</span>
             </label>
             <label className="vk-field">{t("settings.customModels.parameters")}<Textarea className="vk-form-code" onChange={(event) => props.setParameterText(event.target.value)} spellCheck={false} value={props.parameterText} /></label>
             <label className="vk-field">{t("settings.customModels.projection")}<Textarea className="vk-form-code" data-size="lg" onChange={(event) => props.setProjectionText(event.target.value)} spellCheck={false} value={props.projectionText} /></label>
