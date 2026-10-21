@@ -530,7 +530,14 @@ fn provider_item_tool_identity(item: &Value) -> Option<&str> {
 /// 把一个已持久化 Responses 项映射到它所重放的助手片段（若确实重放片段）。
 fn provider_item_assistant_segment(item: &Value) -> Option<ReplayAssistantSegment> {
     match item.get("type").and_then(Value::as_str)? {
-        "reasoning" => Some(ReplayAssistantSegment::Reasoning),
+        // Only full reasoning content becomes canonical reasoning; an encrypted-only or
+        // summary-only item is replayed as an opaque continuation that canonical content never declares.
+        // 只有完整推理正文会成为规范推理；仅加密或仅摘要的项作为不透明延续重放，规范内容从不声明它。
+        "reasoning" => item
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| !content.is_empty())
+            .then_some(ReplayAssistantSegment::Reasoning),
         "message" => {
             (!responses_message_text(item).is_empty()).then_some(ReplayAssistantSegment::Text)
         }
@@ -1006,6 +1013,38 @@ mod tests {
             project_provider_replay(&envelope, &deepseek_responses_route()),
             ProviderReplayProjection::Unusable(ProviderReplayUnusable::CoverageMismatch { .. })
         ));
+    }
+
+    /// Verifies encrypted-only and summary-only reasoning replays without declaring canonical reasoning.
+    /// 验证仅加密与仅摘要的推理项在规范内容不声明推理时仍可重放。
+    #[test]
+    fn provider_replay_projection_replays_opaque_reasoning_without_canonical_reasoning() {
+        // The decoder records no canonical reasoning for these items, only the tool call.
+        // 解码器不为这些项记录规范推理，只记录工具调用。
+        for reasoning in [
+            json!({"type": "reasoning", "content": [], "summary": [], "encrypted_content": "opaque"}),
+            json!({
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "plan"}],
+                "encrypted_content": "opaque"
+            }),
+        ] {
+            let items = vec![
+                reasoning,
+                json!({
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "read_file",
+                    "arguments": "{}"
+                }),
+            ];
+            let envelope = projection_envelope(vec![projection_tool_call("call-1")], items.clone());
+
+            assert_eq!(
+                project_provider_replay(&envelope, &deepseek_responses_route()),
+                ProviderReplayProjection::ProviderItems(items)
+            );
+        }
     }
 
     /// Verifies a canonical tool call without any provider item identity is rejected before dispatch.
