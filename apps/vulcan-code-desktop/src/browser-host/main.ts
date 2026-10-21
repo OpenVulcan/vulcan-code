@@ -20,7 +20,6 @@ import {
   BROWSER_HOST_PROTOCOL_VERSION,
   ControlFrameDecoder,
   encodeControlFrame,
-  type BrowserHostCdpEndpoint,
   type BrowserHostCoreHello,
   type BrowserHostEvent,
   type BrowserHostHandshake,
@@ -62,10 +61,6 @@ const BROWSER_HOST_MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
 /** Bounded wait for the runtime debugging endpoint to appear. */
 /** 等待运行时调试端点出现的有限时长。 */
 const BROWSER_HOST_CDP_DISCOVERY_TIMEOUT_MS = 15_000;
-
-/** Bounded wait before closing the host page after the control channel ends. */
-/** 控制通道结束后关闭宿主页面的有限等待。 */
-const BROWSER_HOST_CONTROL_EOF_CLOSE_TIMEOUT_MS = 5_000;
 
 /** Bound on the graceful quit that lets Chromium finish writing profile state. */
 /** 允许 Chromium 完成画像状态写入的优雅退出时限。 */
