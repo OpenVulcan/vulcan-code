@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SessionDraftWriteCoordinatorV1 } from "@/service/conversation-session-draft-write-coordinator-v1";
 import type { SessionDraftRpcV1 } from "@/service/conversation-session-drafts-v1";
 import type { ComposerAttachmentSummary } from "@/types";
@@ -127,6 +127,57 @@ describe("SessionDraftWriteCoordinatorV1", () => {
     shouldFail = false;
     coordinator.enqueue("session-a", "draft", []);
     await expect(coordinator.flush("session-a")).resolves.toBeUndefined();
+  });
+
+  it("writes the first keystroke at once and the rest of a typing burst as one later write", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const client: SessionDraftRpcV1 = {
+        read: async () => ({ sessionId: "unused", text: "", attachments: [] }),
+        write: async (sessionId, text, attachments) => {
+          calls.push(text);
+          return { sessionId, text, attachments: [...attachments] };
+        },
+      };
+      const coordinator = new SessionDraftWriteCoordinatorV1(client, 500);
+      coordinator.enqueue("session-a", "h", [], true);
+      for (const text of ["he", "hel", "hell", "hello"]) {
+        await vi.advanceTimersByTimeAsync(50);
+        coordinator.enqueue("session-a", text, [], true);
+      }
+      expect(calls).toEqual(["h"]);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(calls).toEqual(["h", "hello"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never holds back a change that is not typing, nor a flush", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const client: SessionDraftRpcV1 = {
+        read: async () => ({ sessionId: "unused", text: "", attachments: [] }),
+        write: async (sessionId, text, attachments) => {
+          calls.push(text);
+          return { sessionId, text, attachments: [...attachments] };
+        },
+      };
+      const coordinator = new SessionDraftWriteCoordinatorV1(client, 500);
+      coordinator.enqueue("session-a", "a", [], true);
+      await vi.advanceTimersByTimeAsync(10);
+      coordinator.enqueue("session-a", "ab", [], true);
+      coordinator.enqueue("session-a", "ab + file", [attachment("file.txt")]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toEqual(["a", "ab + file"]);
+      coordinator.enqueue("session-a", "ab + file!", [attachment("file.txt")], true);
+      await coordinator.flush("session-a");
+      expect(calls).toEqual(["a", "ab + file", "ab + file!"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects new writes after disposal", () => {

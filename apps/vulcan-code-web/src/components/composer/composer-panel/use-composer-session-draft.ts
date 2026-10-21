@@ -162,6 +162,9 @@ export interface UseComposerSessionDraftState extends Omit<UseComposerAttachment
  * 进程级串行 writer，为每个已物化会话保留唯一写入顺序权威。
  */
 const sessionDraftWriteCoordinatorV1 = new SessionDraftWriteCoordinatorV1(sessionDraftClientV1);
+// A page that is going away writes any draft still waiting for the coalescing interval.
+// 即将离开的页面会写入仍在等待合并间隔的草稿。
+if (typeof window !== "undefined") window.addEventListener("pagehide", () => sessionDraftWriteCoordinatorV1.writeAllNow());
 
 /** Creates a detached attachment array for refs, state, and transport ownership.
  * 为 ref、状态与传输所有权创建脱离引用的附件数组。
@@ -206,9 +209,12 @@ function persistDraftOwner(
   owner: ComposerDraftOwnerV1,
   input: string,
   attachments: readonly ComposerAttachmentSummary[],
+  // typing lets the service write wait for the coalescing interval.
+  // typing 允许服务写入等待合并间隔。
+  typing = false,
 ): void {
   if (owner.sessionId) {
-    sessionDraftWriteCoordinatorV1.enqueue(owner.sessionId, input, attachments);
+    sessionDraftWriteCoordinatorV1.enqueue(owner.sessionId, input, attachments, typing);
     return;
   }
   writeComposerSessionMemoryDraft(owner.draftSlotKey, input, cloneAttachments(attachments));
@@ -392,6 +398,9 @@ export function useComposerSessionDraft(
     hydrate();
   }, [draftKey, invalidatePendingAttachmentStaging, options.conversationId, setAttachments, t]);
 
+  // persistedAttachmentsRef is the attachment list the last persisted edit carried.
+  // persistedAttachmentsRef 是上一次持久化编辑所携带的附件列表。
+  const persistedAttachmentsRef = React.useRef(attachments);
   React.useEffect(() => {
     if (!ownerInitializedRef.current) {
       return;
@@ -414,7 +423,11 @@ export function useComposerSessionDraft(
         return;
       }
     }
-    persistDraftOwner(owner, draftInput, attachments);
+    // Text edited with the same attachments is typing and may be coalesced; an attachment change is written at once.
+    // 附件不变时的文本编辑属于输入，可被合并；附件变化立即写入。
+    const typing = persistedAttachmentsRef.current === attachments;
+    persistedAttachmentsRef.current = attachments;
+    persistDraftOwner(owner, draftInput, attachments, typing);
   }, [attachments, draftInput]);
 
   React.useEffect(() => () => {
