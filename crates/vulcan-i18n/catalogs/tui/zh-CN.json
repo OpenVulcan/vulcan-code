@@ -272,7 +272,7 @@
   "tui.history.replies": "回复",
   "tui.history.search": "输入以搜索会话",
   "tui.history.short": "历史",
-  "tui.history.stats": "回合：{tokens} tokens，{tools} 个工具",
+  "tui.history.stats": "回合：{tokens} Token，{tools} 个工具",
   "tui.history.thinking": "思考",
   "tui.history.title": "会话历史",
   "tui.history.toolGroup": "{count} 次工具调用",
