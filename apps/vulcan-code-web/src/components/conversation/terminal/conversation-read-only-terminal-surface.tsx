@@ -6,6 +6,8 @@ import type { TerminalSessionViewModel } from "@/components/conversation/convers
 import { acquireVisibleTerminalDisplayListener } from "@/components/terminal/terminal-display-listener";
 import { TerminalViewport } from "@/components/terminal/terminal-viewport";
 import { FloatingWindowHead } from "@/components/workspace/floating-window-head";
+import { usePublishedWorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
+import { terminalPathFrom } from "@/conversation/tools/views/terminal-paths";
 import { useTerminalDisplayConnectionState } from "@/components/terminal/use-terminal-display-connection-epoch";
 import {
   ProjectFloatingLayer,
@@ -60,6 +62,10 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
   // liveSummary follows only the currently visible display subscription.
   // liveSummary 仅跟随当前可见显示订阅。
   const [liveSummary, setLiveSummary] = React.useState<CommandSessionSummary | null>(props.summary);
+  // openFile shows a printed file location in the files panel, resolved against the session's working directory.
+  // openFile 在文件面板中显示输出的文件位置，以会话工作目录解析。
+  const openFile = usePublishedWorkspaceFileOpener();
+  const cwd = liveSummary?.cwd ?? props.summary?.cwd;
   // chunks retains a bounded ordered visible delivery queue for the stable xterm instance.
   // chunks 为稳定 xterm 实例保留有界有序的可见交付队列。
   const [chunks, setChunks] = React.useState<TerminalDisplayChunk[]>([]);
@@ -240,6 +246,7 @@ export function ConversationReadOnlyTerminalSurface(props: ConversationReadOnlyT
             onChunksRendered={(lastRenderedSeq) => {
               setChunks((current) => retainRenderedTerminalCursor(current, lastRenderedSeq));
             }}
+            onOpenPath={openFile ? (path, lines) => openFile(terminalPathFrom(cwd, path), lines) : undefined}
             readOnly
             screenFrameSeq={screenBaseline?.seq}
             screenText={screenBaseline?.text}
