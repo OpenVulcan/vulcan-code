@@ -45,6 +45,18 @@ export function fileLineCounts(file: PersistentChangeSetFile): { added: number; 
   return { added: 0, removed: 0 };
 }
 
+// fileFirstEditLines returns the after-change lines of a file's first edit hunk: its inserted lines, or for a pure
+// deletion the line now standing where the text was removed. Null for a file without edit hunks.
+// fileFirstEditLines 返回文件第一个编辑 hunk 在变更后的行：其插入的行；纯删除时为被删文本处现在所在的行。
+// 没有编辑 hunk 的文件返回 null。
+export function fileFirstEditLines(file: PersistentChangeSetFile): { start: number; end: number } | null {
+  const hunk = file.hunks[0];
+  if (!hunk) return null;
+  const first = hunk.inserted[0]?.line ?? hunk.deleted[0]?.line;
+  if (first === undefined) return null;
+  return { start: first, end: hunk.inserted.at(-1)?.line ?? first };
+}
+
 // fileDiffRows returns the rows to draw for one file.
 // fileDiffRows 返回一个文件需要绘制的行。
 export function fileDiffRows(file: PersistentChangeSetFile): DiffRow[] {

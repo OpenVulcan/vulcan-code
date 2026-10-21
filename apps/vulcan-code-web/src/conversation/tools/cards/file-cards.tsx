@@ -8,7 +8,7 @@ import type { PersistentChangeSetFile } from "@/service/conversation-event-windo
 import { ToolFrame, type ToolCardProps } from "../tool-card";
 import type { RequestPreview } from "../tool-request";
 import { numberOf, objectOf, textOf } from "../tool-call";
-import { fileDisplayPath, fileLineCounts } from "../views/change-set";
+import { fileDisplayPath, fileFirstEditLines, fileLineCounts } from "../views/change-set";
 import { CodeView, type CodeLine } from "../views/code-view";
 import { DiffStat, DiffView, PlainDiffView } from "../views/diff-view";
 import { ErrorNote } from "../views/result-views";
@@ -183,6 +183,7 @@ export function FileChangeCard(props: ToolCardProps) {
           : previewStat.removed === null ? <span>{t("toolCard.lines").replace("{count}", String(previewStat.added))}</span>
             : <DiffStat added={previewStat.added} removed={previewStat.removed} />}
       state={call.state}
+      fileLines={single ? fileFirstEditLines(single) : null}
       filePath={single && single.change !== "delete" ? fileDisplayPath(single) : null}
       target={target}
       targetTitle={target}

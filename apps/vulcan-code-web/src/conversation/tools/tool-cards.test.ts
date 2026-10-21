@@ -16,7 +16,7 @@ import { formatToolDuration, readToolCall, toolCardState } from "./tool-call";
 import { resolveToolCard, toolCallFamily } from "./tool-call-card";
 import { readRequestPreview, requestToolCall } from "./tool-request";
 import { summarizeToolSequence, toolSequenceEntry } from "./tool-sequence";
-import { fileDiffRows, fileLineCounts } from "./views/change-set";
+import { fileDiffRows, fileFirstEditLines, fileLineCounts } from "./views/change-set";
 import { parseTerminalText } from "./views/terminal-view";
 
 // toolEvent builds a minimal completed tool-call event for routing checks.
@@ -91,6 +91,13 @@ describe("change-set rows", () => {
     expect(rows.find((row) => row.text === "c")).toMatchObject({ newLine: 4, oldLine: 3 });
     expect(rows.find((row) => row.text === "x")).toMatchObject({ newLine: 10, oldLine: 9 });
     expect(fileLineCounts(file)).toEqual({ added: 3, removed: 2 });
+    expect(fileFirstEditLines(file)).toEqual({ start: 2, end: 3 });
+  });
+
+  it("locates a pure deletion at the line now in its place and nothing for files without hunks", () => {
+    const deletion: PersistentChangeSetFile = { change: "modify", hunks: [{ after: "", before: "", deleted: [{ content: "z", line: 7 }], inserted: [] }], path: "a.txt" };
+    expect(fileFirstEditLines(deletion)).toEqual({ start: 7, end: 7 });
+    expect(fileFirstEditLines({ change: "create", hunks: [], path: "b.txt" })).toBeNull();
   });
 });
 
