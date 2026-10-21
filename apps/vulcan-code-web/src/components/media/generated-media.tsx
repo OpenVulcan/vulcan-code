@@ -65,6 +65,9 @@ function GeneratedMediaInlineCard(props: {
     props.attachment.previewLocalPath ?? props.attachment.localPath,
     props.attachment.mimeType,
   );
+  // mediaSource plays the original file; hooks run on every render, so it is resolved before the kind branches.
+  // mediaSource 播放原始文件；钩子须在每次渲染执行，因此在按类型分支之前解析。
+  const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
   const MediaIcon = generatedMediaIcon(props.attachment.kind);
   if (props.attachment.kind === "image") {
     return (
@@ -77,7 +80,6 @@ function GeneratedMediaInlineCard(props: {
     );
   }
   if (props.attachment.kind === "video") {
-    const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
     return (
       <MediaPathContextMenu locator={props.attachment.localPath}>
       <button
@@ -105,7 +107,6 @@ function GeneratedMediaInlineCard(props: {
     );
   }
   if (props.attachment.kind === "audio") {
-    const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
     return (
       <MediaPathContextMenu locator={props.attachment.localPath}>
         <div className="generated-media-card audio">
