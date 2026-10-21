@@ -7,30 +7,76 @@ import type { WorkspaceFileDirectoryListing, WorkspaceFileEntrySummary } from "@
 // WORKSPACE_FILE_OPEN_EVENT 通知已挂载的文件面板有一个开文件请求在等待它。
 const WORKSPACE_FILE_OPEN_EVENT = "vulcan:workspace-file-open";
 
-// WorkspaceFileOpenRequest names the files tab that should show `path`.
-// WorkspaceFileOpenRequest 指明应显示 `path` 的文件页签。
-type WorkspaceFileOpenRequest = { tabId: string; path: string };
+// WorkspaceFileLines is an inclusive, one-based line range of a file.
+// WorkspaceFileLines 是文件中包含两端、从 1 开始的行范围。
+export interface WorkspaceFileLines {
+  // First line.
+  // 首行。
+  start: number;
+  // Last line.
+  // 末行。
+  end: number;
+}
+
+// WorkspaceFileOpenRequest names the files tab that should show `path`, and optionally the lines to bring into view.
+// WorkspaceFileOpenRequest 指明应显示 `path` 的文件页签，以及可选的需要滚动到视野内的行。
+type WorkspaceFileOpenRequest = { tabId: string; path: string; lines: WorkspaceFileLines | null };
+
+// WorkspaceFileOpener shows a project file, optionally at some lines, in the files panel.
+// WorkspaceFileOpener 在文件面板中显示项目文件，可选定位到指定行。
+export type WorkspaceFileOpener = (path: string, lines?: WorkspaceFileLines | null) => void;
 
 // pendingFileOpen holds the latest request until the files panel of that tab takes it; the tab may still be mounting.
 // pendingFileOpen 保存最近一次请求，直到对应页签的文件面板取走；该页签可能仍在挂载。
 let pendingFileOpen: WorkspaceFileOpenRequest | null = null;
 
+// WorkspaceFileLineReveal is one request to bring lines of an absolute file path into view; id tells requests apart.
+// WorkspaceFileLineReveal 是一次将某绝对路径文件的行滚动到视野内的请求；id 用于区分请求。
+export interface WorkspaceFileLineReveal {
+  // Request identity.
+  // 请求标识。
+  id: number;
+  // Absolute file path.
+  // 文件绝对路径。
+  path: string;
+  // Lines to show.
+  // 需要显示的行。
+  lines: WorkspaceFileLines;
+}
+
+// pendingLineReveal holds the reveal the next preview of its file should apply; lastLineRevealId numbers them.
+// pendingLineReveal 保存其文件下一次预览应应用的定位请求；lastLineRevealId 为其编号。
+let pendingLineReveal: WorkspaceFileLineReveal | null = null;
+let lastLineRevealId = 0;
+
+// peekWorkspaceFileLineReveal returns the waiting reveal for `path` without taking it, so rendering stays pure.
+// peekWorkspaceFileLineReveal 返回 `path` 等待中的定位请求但不取走，使渲染保持纯粹。
+export function peekWorkspaceFileLineReveal(path: string): WorkspaceFileLineReveal | null {
+  return pendingLineReveal?.path === path ? pendingLineReveal : null;
+}
+
+// consumeWorkspaceFileLineReveal drops reveal `id` once a preview has applied it; a newer reveal stays.
+// consumeWorkspaceFileLineReveal 在预览应用后丢弃定位请求 `id`；更新的请求保持不变。
+export function consumeWorkspaceFileLineReveal(id: number): void {
+  if (pendingLineReveal?.id === id) pendingLineReveal = null;
+}
+
 // WorkspaceFileOpenContext carries the workbench's "show this file in the files panel" action to transcript
 // cards; null where no files panel exists, so cards offer no such action there.
 // WorkspaceFileOpenContext 将工作台的「在文件面板中显示该文件」动作传给转录卡片；没有文件面板的地方为 null，
 // 卡片因此不提供该动作。
-export const WorkspaceFileOpenContext = React.createContext<((path: string) => void) | null>(null);
+export const WorkspaceFileOpenContext = React.createContext<WorkspaceFileOpener | null>(null);
 
 // useWorkspaceFileOpener returns the action that shows a project file in the files panel, or null.
 // useWorkspaceFileOpener 返回在文件面板中显示项目文件的动作，没有时返回 null。
-export function useWorkspaceFileOpener(): ((path: string) => void) | null {
+export function useWorkspaceFileOpener(): WorkspaceFileOpener | null {
   return React.useContext(WorkspaceFileOpenContext);
 }
 
-// requestWorkspaceFileOpen asks the files panel of tab `tabId` to open `path`, now or once it mounts.
-// requestWorkspaceFileOpen 请求 `tabId` 页签的文件面板立即或在挂载后打开 `path`。
-export function requestWorkspaceFileOpen(tabId: string, path: string): void {
-  pendingFileOpen = { tabId, path };
+// requestWorkspaceFileOpen asks the files panel of tab `tabId` to open `path` at `lines`, now or once it mounts.
+// requestWorkspaceFileOpen 请求 `tabId` 页签的文件面板立即或在挂载后打开 `path` 并定位到 `lines`。
+export function requestWorkspaceFileOpen(tabId: string, path: string, lines: WorkspaceFileLines | null = null): void {
+  pendingFileOpen = { tabId, path, lines };
   window.dispatchEvent(new CustomEvent(WORKSPACE_FILE_OPEN_EVENT));
 }
 
@@ -114,8 +160,10 @@ export function useWorkspaceFileOpenRequests(args: {
     }
     void load(target.directory).then((listing) => {
       const entry = findRequestedFileEntry(listing, target.name);
-      if (entry) void select(entry);
-      else toast.info(t("workspaceFiles.openPathMissing"));
+      if (entry) {
+        pendingLineReveal = request.lines ? { id: ++lastLineRevealId, path: entry.path, lines: request.lines } : null;
+        void select(entry);
+      } else toast.info(t("workspaceFiles.openPathMissing"));
     }, (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
   }, [t]);
   React.useEffect(() => {

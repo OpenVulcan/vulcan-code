@@ -106,6 +106,10 @@
   padding-right: 12px;
 }
 
+/* Lines a file open request asked to show (for example a tool card's read range). 开文件请求要求显示的行（例如工具卡的读取范围）。 */
+.workspace-file-preview-code-row[data-focus] { background: color-mix(in srgb, var(--vk-ember) 10%, transparent); }
+.workspace-file-preview-code-row[data-focus] > .workspace-file-preview-code-gutter { color: var(--vk-ember-ink); box-shadow: inset 2px 0 0 var(--vk-ember); }
+
 .workspace-file-preview-code-gutter {
   position: sticky;
   left: 0;

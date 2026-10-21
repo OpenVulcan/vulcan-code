@@ -18,6 +18,11 @@ import { MediaPathContextMenu } from "@/components/media/media-path-context-menu
 import { requestComposerCommand } from "@/components/composer/composer-external-commands";
 import { ConversationSelectionQuote } from "@/components/conversation/conversation-selection-quote";
 import { codeQuoteMarkdown, previewSelectionLines } from "@/components/workspace/workspace-file-preview-quote";
+import {
+  consumeWorkspaceFileLineReveal,
+  peekWorkspaceFileLineReveal,
+  type WorkspaceFileLines,
+} from "@/components/workspace/workspace-file-open-request";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceFileEntrySummary, WorkspaceFileReadResponse } from "@/types";
 
@@ -206,13 +211,21 @@ function WorkspaceHighlightedCodePreview(props: {
   // highlightRevision requests and tracks Shiki token readiness for the synthetic file.
   // highlightRevision 请求并跟踪合成文件的 Shiki token 就绪状态。
   const highlightRevision = useHighlightedDiffFileRevision(diffFile, language, highlightEnabled);
+  // reveal is the request, if any, to show lines of this exact preview; a reloaded preview no longer has one.
+  // reveal 是显示本次预览指定行的请求（如有）；重新加载的预览不再带有该请求。
+  const reveal = React.useMemo(() => peekWorkspaceFileLineReveal(props.preview.path), [props.preview]);
   // rows stores rendered preview line nodes.
   // rows 保存已渲染的预览行节点。
   const rows = React.useMemo(
-    () => workspaceHighlightedCodeRows(diffFile.hunks[0].lines, language, highlightRevision, highlightEnabled),
-    [diffFile, highlightEnabled, highlightRevision, language],
+    () => workspaceHighlightedCodeRows(diffFile.hunks[0].lines, language, highlightRevision, highlightEnabled, reveal?.lines ?? null),
+    [diffFile, highlightEnabled, highlightRevision, language, reveal],
   );
   const linesRef = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    if (!reveal) return;
+    consumeWorkspaceFileLineReveal(reveal.id);
+    linesRef.current?.querySelector(`[data-line="${reveal.lines.start}"]`)?.scrollIntoView({ block: "center" });
+  }, [reveal]);
   // quoteSelection reads the live selection, which the quote action keeps while it is pressed.
   // quoteSelection 读取实时选区；按下引用操作时选区会被保留。
   const quoteSelection = () => {
@@ -298,6 +311,9 @@ function workspaceHighlightedCodeRows(
   // Whether highlighted rendering should be attempted.
   // 是否应尝试高亮渲染。
   highlightEnabled: boolean,
+  // Lines a file open request asked to show, marked on their rows.
+  // 开文件请求要求显示的行，在对应行上标记。
+  focus: WorkspaceFileLines | null,
 ): React.ReactNode[] {
   const rows: React.ReactNode[] = new Array(lines.length);
   for (let index = 0; index < lines.length; index += 1) {
@@ -307,7 +323,7 @@ function workspaceHighlightedCodeRows(
       : null;
     const html = highlightedSpans ? tokenSpansToHtml(highlightedSpans) : escapeHtml(line.content);
     rows[index] = (
-      <div className="workspace-file-preview-code-row" data-line={index + 1} key={index}>
+      <div className="workspace-file-preview-code-row" data-focus={focus && index + 1 >= focus.start && index + 1 <= focus.end ? "" : undefined} data-line={index + 1} key={index}>
         <span className="workspace-file-preview-code-gutter">{index + 1}</span>
         <span
           className="workspace-file-preview-code-content"

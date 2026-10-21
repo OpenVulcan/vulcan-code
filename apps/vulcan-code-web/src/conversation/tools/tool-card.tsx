@@ -4,7 +4,7 @@
 // 使长转录中的每张收起卡片都保持轻量。
 import * as React from "react";
 import { Check, ChevronRight, CircleSlash, FileSearch2, Hourglass, X, type LucideIcon } from "lucide-react";
-import { useWorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
+import { useWorkspaceFileOpener, type WorkspaceFileLines, type WorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { formatBytes } from "@/lib/display-format";
 import { IconButton } from "@/ui-kit/primitives/button";
@@ -91,6 +91,9 @@ export interface ToolFrameProps extends Pick<ToolCardProps, "family" | "open" | 
   // Project file the target names; the head then offers to show it in the files panel where one exists.
   // 目标指名的项目文件；存在文件面板时标题行提供在其中显示该文件的操作。
   filePath?: string | null;
+  // Lines of filePath the card is about, brought into view when the file is shown.
+  // 卡片涉及的 filePath 行，显示文件时滚动到视野内。
+  fileLines?: WorkspaceFileLines | null;
   // Right-aligned facts such as line counts, diffstat, exit code or duration.
   // 右对齐事实，例如行数、差异统计、退出码或耗时。
   meta?: React.ReactNode;
@@ -113,11 +116,11 @@ function ToolRequestMark(props: { request: ToolRequest; state: ToolCardState }) 
 
 // ToolFileAction shows the card's file in the files panel; it sits beside the head trigger, never inside it.
 // ToolFileAction 在文件面板中显示卡片的文件；它位于标题触发器旁边，从不嵌入其中。
-function ToolFileAction(props: { path: string; open: (path: string) => void }) {
+function ToolFileAction(props: { path: string; lines: WorkspaceFileLines | null; open: WorkspaceFileOpener }) {
   const { t } = useI18n();
   const label = t("toolCard.openInFiles");
   return (
-    <IconButton aria-label={label} className="vk-tool-file" onClick={() => props.open(props.path)} size="xs" title={label} type="button">
+    <IconButton aria-label={label} className="vk-tool-file" onClick={() => props.open(props.path, props.lines)} size="xs" title={label} type="button">
       <FileSearch2 aria-hidden="true" />
     </IconButton>
   );
@@ -157,7 +160,7 @@ export function ToolFrame(props: ToolFrameProps) {
       open={open}
     >
       {openFile && props.filePath
-        ? <div className="vk-tool-row">{head}<ToolFileAction open={openFile} path={props.filePath} /></div>
+        ? <div className="vk-tool-row">{head}<ToolFileAction lines={props.fileLines ?? null} open={openFile} path={props.filePath} /></div>
         : head}
       {expandable ? <CollapsibleContent className="vk-tool-body">{props.children}</CollapsibleContent> : null}
     </Collapsible>

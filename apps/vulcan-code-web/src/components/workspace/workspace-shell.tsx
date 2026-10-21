@@ -43,7 +43,7 @@ import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import { LocalBrowserCloseDialog } from "@/components/features/browser/local-browser-close-dialog";
 import { readConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import { resolveConversationLinkTarget } from "@/components/conversation/conversation-link-navigation";
-import { requestWorkspaceFileOpen, WorkspaceFileOpenContext } from "@/components/workspace/workspace-file-open-request";
+import { requestWorkspaceFileOpen, WorkspaceFileOpenContext, type WorkspaceFileLines } from "@/components/workspace/workspace-file-open-request";
 import {
   type WorkspaceContextTabKind,
 } from "@/components/workspace/workspace-context-panel";
@@ -457,10 +457,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // openWorkspaceFile shows a project file in a files tab of the open right panel; transcript cards reach it through
   // WorkspaceFileOpenContext.
   // openWorkspaceFile 在展开的右侧面板的文件页签中显示项目文件；转录卡片通过 WorkspaceFileOpenContext 调用它。
-  const openWorkspaceFile = React.useCallback((path: string) => {
+  const openWorkspaceFile = React.useCallback((path: string, lines?: WorkspaceFileLines | null) => {
     const next = focusWorkspaceFilesTab(contextTabState, t);
     setContextTabStateEntry((current) => ({ ...current, state: next }));
-    if (next.activeTabId) requestWorkspaceFileOpen(next.activeTabId, path);
+    if (next.activeTabId) requestWorkspaceFileOpen(next.activeTabId, path, lines);
     openRightContextPanel();
   }, [contextTabState, openRightContextPanel, t]);
   // updateFileContextTabTitle updates one file tab title after selection changes.

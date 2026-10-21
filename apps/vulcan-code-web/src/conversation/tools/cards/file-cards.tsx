@@ -73,6 +73,7 @@ export function FileReadCard(props: ToolCardProps) {
         ? <span>{t("toolCard.file.empty")}</span>
         : lines.length > 0 ? <span>{t("toolCard.lines").replace("{count}", String(lines.length))}{total !== null && total > lines.length ? ` / ${total}` : ""}</span> : null}
       state={call.state}
+      fileLines={start !== null && end !== null && end >= start ? { start, end } : null}
       filePath={call.isError ? null : path}
       target={<>{path}{rangeLabel ? <small>{rangeLabel}</small> : null}</>}
       targetTitle={path}
