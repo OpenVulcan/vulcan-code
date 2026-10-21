@@ -660,6 +660,7 @@ pub fn open_diff(app: &mut App, index: usize) {
     app.overlay = Some(Overlay::Diff(DiffView {
         file_index: index.min(app.git.ordered_files().len() - 1),
         scroll: 0,
+        max_scroll: 0,
     }));
     app.request_visible_diff();
 }
@@ -678,6 +679,50 @@ pub fn diff_step(app: &mut App, delta: isize) {
     view.scroll = 0;
     app.git.cursor = view.file_index;
     app.request_visible_diff();
+}
+
+/// DIFF_CHANGE_CONTEXT_ROWS is how many rows a change step leaves above the change it shows.
+/// DIFF_CHANGE_CONTEXT_ROWS 是变更步进在所显示变更上方保留的行数。
+const DIFF_CHANGE_CONTEXT_ROWS: usize = 2;
+
+/// Scrolls the diff viewer to the next (`1`) or previous (`-1`) change of the shown file, wrapping at either end.
+/// 将差异查看器滚动到当前文件的下一处（`1`）或上一处（`-1`）变更，两端循环。
+pub fn diff_change_step(app: &mut App, direction: isize) {
+    let Some(Overlay::Diff(view)) = &app.overlay else {
+        return;
+    };
+    let files = app.git.ordered_files();
+    let Some(diff) = files
+        .get(view.file_index)
+        .and_then(|file| app.git.diff_key(file))
+        .and_then(|key| app.git.diffs.get(&key))
+    else {
+        return;
+    };
+    let (scroll, max_scroll) = (view.scroll, view.max_scroll);
+    let mut targets: Vec<usize> = diff
+        .change_rows()
+        .into_iter()
+        .map(|row| row.saturating_sub(DIFF_CHANGE_CONTEXT_ROWS).min(max_scroll))
+        .collect();
+    targets.dedup();
+    let target = if direction > 0 {
+        targets
+            .iter()
+            .copied()
+            .find(|&top| top > scroll)
+            .or(targets.first().copied())
+    } else {
+        targets
+            .iter()
+            .rev()
+            .copied()
+            .find(|&top| top < scroll)
+            .or(targets.last().copied())
+    };
+    if let (Some(target), Some(Overlay::Diff(view))) = (target, &mut app.overlay) {
+        view.scroll = target;
+    }
 }
 
 pub fn open_commit(app: &mut App) {

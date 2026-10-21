@@ -300,7 +300,7 @@ fn render_diff(app: &App, view: &mut DiffView, area: Rect, buf: &mut Buffer) {
         view.file_index + 1,
         files.len()
     );
-    let footer = "j/k · PgUp/PgDn · Tab/n · s · c · Esc".to_string();
+    let footer = "j/k · PgUp/PgDn · Tab/n · [/] · s · c · Esc".to_string();
     let inner = modal(app, rect, frame(theme, title, footer), buf);
     if inner.height < 3 {
         return;
@@ -405,45 +405,56 @@ fn render_diff(app: &App, view: &mut DiffView, area: Rect, buf: &mut Buffer) {
     };
     let mut lines: Vec<Line> = Vec::new();
     let gutter_style = Style::new().fg(theme.faint_fg(theme.popover));
-    for hunk in &diff.hunks {
+    for row in diff.view_rows() {
+        let line = match row {
+            DiffViewRow::Header(header) => {
+                lines.push(
+                    Line::from(Span::styled(
+                        header.to_string(),
+                        Style::new().fg(theme.info),
+                    ))
+                    .style(Style::new().bg(mix(
+                        theme.info,
+                        theme.popover,
+                        0.08,
+                    ))),
+                );
+                continue;
+            }
+            DiffViewRow::Gap => {
+                lines.push(Line::default());
+                continue;
+            }
+            DiffViewRow::Line(line) => line,
+        };
+        let number = |n: Option<u32>| {
+            n.map(|n| format!("{n:>4}"))
+                .unwrap_or_else(|| "    ".into())
+        };
+        let (sign, bg, fg) = match line.kind {
+            DiffLineKind::Add => ("+", theme.diff_add_bg(), theme.success),
+            DiffLineKind::Delete => ("-", theme.diff_del_bg(), theme.danger),
+            DiffLineKind::Context => (" ", theme.popover, theme.muted_fg),
+        };
+        let text_style = if line.kind == DiffLineKind::Context {
+            theme.base().bg(theme.popover)
+        } else {
+            Style::new().fg(theme.fg)
+        };
         lines.push(
-            Line::from(Span::styled(
-                hunk.header.clone(),
-                Style::new().fg(theme.info),
-            ))
-            .style(Style::new().bg(mix(theme.info, theme.popover, 0.08))),
+            Line::from(vec![
+                Span::styled(
+                    format!("{} {} ", number(line.old_no), number(line.new_no)),
+                    gutter_style,
+                ),
+                Span::styled(
+                    format!("{sign} "),
+                    Style::new().fg(fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(line.text.replace('\t', "    "), text_style),
+            ])
+            .style(Style::new().bg(bg)),
         );
-        for line in &hunk.lines {
-            let number = |n: Option<u32>| {
-                n.map(|n| format!("{n:>4}"))
-                    .unwrap_or_else(|| "    ".into())
-            };
-            let (sign, bg, fg) = match line.kind {
-                DiffLineKind::Add => ("+", theme.diff_add_bg(), theme.success),
-                DiffLineKind::Delete => ("-", theme.diff_del_bg(), theme.danger),
-                DiffLineKind::Context => (" ", theme.popover, theme.muted_fg),
-            };
-            let text_style = if line.kind == DiffLineKind::Context {
-                theme.base().bg(theme.popover)
-            } else {
-                Style::new().fg(theme.fg)
-            };
-            lines.push(
-                Line::from(vec![
-                    Span::styled(
-                        format!("{} {} ", number(line.old_no), number(line.new_no)),
-                        gutter_style,
-                    ),
-                    Span::styled(
-                        format!("{sign} "),
-                        Style::new().fg(fg).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(line.text.replace('\t', "    "), text_style),
-                ])
-                .style(Style::new().bg(bg)),
-            );
-        }
-        lines.push(Line::default());
     }
     if diff.hunks.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -452,7 +463,8 @@ fn render_diff(app: &App, view: &mut DiffView, area: Rect, buf: &mut Buffer) {
         )));
     }
     let height = body.height as usize;
-    view.scroll = view.scroll.min(lines.len().saturating_sub(height));
+    view.max_scroll = lines.len().saturating_sub(height);
+    view.scroll = view.scroll.min(view.max_scroll);
     for (row, line) in lines.iter().skip(view.scroll).take(height).enumerate() {
         line.render(
             Rect {

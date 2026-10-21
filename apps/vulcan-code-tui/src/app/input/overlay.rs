@@ -4,7 +4,8 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{
-    alt, ctrl, diff_step, generate_commit_message, open_commit, submit_commit, toggle_stage, typed,
+    alt, ctrl, diff_change_step, diff_step, generate_commit_message, open_commit, submit_commit,
+    toggle_stage, typed,
 };
 use crate::app::action::{self, UiAction};
 use crate::app::overlay::{CommitField, HistoryFilter, Overlay};
@@ -278,6 +279,8 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent) {
             KeyCode::Home => view.scroll = 0,
             KeyCode::Tab | KeyCode::Char('n') | KeyCode::Right => diff_step(app, 1),
             KeyCode::BackTab | KeyCode::Char('N') | KeyCode::Left => diff_step(app, -1),
+            KeyCode::Char(']') => diff_change_step(app, 1),
+            KeyCode::Char('[') => diff_change_step(app, -1),
             KeyCode::Char('s') | KeyCode::Char(' ') => {
                 let index = view.file_index;
                 toggle_stage(app, index);

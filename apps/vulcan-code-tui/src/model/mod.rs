@@ -563,6 +563,43 @@ pub struct FileDiff {
     pub hunks: Vec<DiffHunk>,
 }
 
+/// One row of the diff viewer, in the order it draws them.
+/// 差异查看器中的一行，按其绘制顺序排列。
+#[derive(Debug, Clone, Copy)]
+pub enum DiffViewRow<'a> {
+    Header(&'a str),
+    Line(&'a DiffLine),
+    Gap,
+}
+
+impl FileDiff {
+    /// The rows the diff viewer draws: each hunk is its header, its lines and one blank row.
+    /// 差异查看器绘制的行：每个片段依次为片段头、各行与一个空行。
+    pub fn view_rows(&self) -> impl Iterator<Item = DiffViewRow<'_>> {
+        self.hunks.iter().flat_map(|hunk| {
+            std::iter::once(DiffViewRow::Header(hunk.header.as_str()))
+                .chain(hunk.lines.iter().map(DiffViewRow::Line))
+                .chain(std::iter::once(DiffViewRow::Gap))
+        })
+    }
+
+    /// The view row where each change starts: a change is a run of added or deleted lines.
+    /// 每处变更起始的视图行：变更是连续的新增或删除行。
+    pub fn change_rows(&self) -> Vec<usize> {
+        let mut rows = Vec::new();
+        let mut in_run = false;
+        for (row, view_row) in self.view_rows().enumerate() {
+            let changed =
+                matches!(view_row, DiffViewRow::Line(line) if line.kind != DiffLineKind::Context);
+            if changed && !in_run {
+                rows.push(row);
+            }
+            in_run = changed;
+        }
+        rows
+    }
+}
+
 /// Immutable identity of one diff view, shared by its request, response and cache entry.
 /// 单个差异视图的不可变身份，由请求、响应和缓存条目共用。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

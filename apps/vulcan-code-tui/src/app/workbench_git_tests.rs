@@ -246,6 +246,73 @@ fn failed_diff_shows_and_retries() {
     ));
 }
 
+/// `]` and `[` move the diff viewer between changes, wrapping at either end and stopping where the view ends.
+/// `]` 与 `[` 让差异查看器在各处变更间移动，两端循环，并停在视图允许的最远处。
+#[test]
+fn diff_change_steps_walk_changes_and_wrap() {
+    let line = |kind| DiffLine {
+        kind,
+        old_no: None,
+        new_no: None,
+        text: String::new(),
+    };
+    use DiffLineKind::{Add, Context, Delete};
+    let diff = FileDiff {
+        hunks: vec![
+            DiffHunk {
+                header: "@@".into(),
+                lines: [
+                    Context, Delete, Add, Context, Context, Context, Context, Add,
+                ]
+                .map(line)
+                .into(),
+            },
+            DiffHunk {
+                header: "@@".into(),
+                lines: [Context, Delete].map(line).into(),
+            },
+        ],
+    };
+    // Rows: header 0, lines 1–8, gap 9, header 10, lines 11–12, gap 13.
+    // 行：片段头 0，行 1–8，空行 9，片段头 10，行 11–12，空行 13。
+    assert_eq!(diff.change_rows(), vec![2, 8, 12]);
+
+    let (mut app, _commands) = isolated_app();
+    let mut snapshot = git(vec![repository(".", true, true)], Some("."));
+    if let BackendEvent::Git(git) = &mut snapshot {
+        git.files.push(GitFile {
+            path: "a.rs".into(),
+            status: GitFileStatus::Modified,
+            staged: false,
+            additions: 2,
+            deletions: 2,
+        });
+    }
+    app.apply(snapshot);
+    let key = app.git.diff_key(app.git.ordered_files()[0]).unwrap();
+    input::open_diff(&mut app, 0);
+    app.apply(BackendEvent::GitDiff { key, diff });
+    let scroll = |app: &App| match &app.overlay {
+        Some(Overlay::Diff(view)) => view.scroll,
+        _ => panic!("the diff viewer must stay open"),
+    };
+    if let Some(Overlay::Diff(view)) = &mut app.overlay {
+        view.max_scroll = 8;
+    }
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        input::diff_change_step(&mut app, 1);
+        seen.push(scroll(&app));
+    }
+    // Each change keeps two rows above it; the last one is limited by the view and the fourth step wraps.
+    // 每处变更上方保留两行；最后一处受视图限制，第四次步进循环到开头。
+    assert_eq!(seen, vec![6, 8, 0, 6]);
+    input::diff_change_step(&mut app, -1);
+    assert_eq!(scroll(&app), 0);
+    input::diff_change_step(&mut app, -1);
+    assert_eq!(scroll(&app), 8);
+}
+
 /// Staged and unstaged rows keep distinct requests and caches; results from another owner are ignored.
 /// 暂存与未暂存行保持独立请求及缓存；其他归属的结果被丢弃。
 #[test]

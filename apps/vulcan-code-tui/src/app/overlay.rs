@@ -165,6 +165,9 @@ pub struct CommitDialog {
 pub struct DiffView {
     pub file_index: usize,
     pub scroll: usize,
+    /// Largest scroll the last frame allowed for the shown diff, so change steps can tell when to wrap.
+    /// 上一帧对当前差异允许的最大滚动值，供变更步进判断何时循环。
+    pub max_scroll: usize,
 }
 
 #[derive(Debug, Clone)]
