@@ -6,6 +6,7 @@ import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { toast } from "@/ui-kit/primitives/toast";
 
 import { useI18n, type TranslationKey } from "@/i18n";
+import type { WorkspacePathAction } from "@/components/workspace/workspace-path-actions";
 import { openProjectDirectoryPath } from "@/service/project-actions-service";
 import { DiffFileCard, useDiffScrollState } from "../diff-file-card";
 import { DiffPanelToolbar } from "../diff-review-toolbar";
@@ -78,6 +79,9 @@ export function DiffReviewPanel(props: {
   // Optional copy action receiving raw diff text.
   // 接收原始 diff 文本的可选复制动作。
   onCopyRaw?: (rawDiff: string) => void | Promise<void>;
+  // Optional actions for the shown file, given its local path when the repository root is known.
+  // 当前文件的可选操作；已知仓库根目录时传入其本地路径。
+  fileActions?: (file: DiffFile, absolutePath: string | null) => WorkspacePathAction[];
   // Optional lazy detail loader for partial summaries and hunk context expansion.
   // 用于局部摘要与 hunk 上下文展开的可选懒加载详情函数。
   onLoadFileDetail?: DiffFileDetailLoader;
@@ -534,7 +538,7 @@ export function DiffReviewPanel(props: {
         viewMode={viewMode}
       />
       {renderedSnapshot && selectedDiffFile ? (
-        <DiffFileBar activeKey={selectedDiffFile.key} files={orderedFiles} onSelect={handleSelectFile} />
+        <DiffFileBar activeKey={selectedDiffFile.key} files={orderedFiles} onSelect={handleSelectFile} actions={props.fileActions?.(selectedDiffFile, diffAbsoluteFilePath(renderedSnapshot?.repositoryRoot, selectedDiffFile))} />
       ) : null}
       <div className={`diff-review-body${selectedDiffFile ? " has-selection" : " directory-only"}`}>
         <div

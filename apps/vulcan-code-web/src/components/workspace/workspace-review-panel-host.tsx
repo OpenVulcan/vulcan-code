@@ -28,6 +28,9 @@ import type {
   WorkspaceReviewFocusRequest,
 } from "@/diff/types";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { relativeToWorkspace, workspacePathActions, type WorkspacePathAction } from "@/components/workspace/workspace-path-actions";
+import { copyText } from "@/components/workspace/workbench-layout/types";
+import { diffRevealRelativePath } from "@/diff/DiffReviewPanel/search";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import { loadWorkspaceGitCatalog } from "@/service/workbench-snapshot-service";
 import { useConversationReviewSnapshots } from "@/components/workspace/use-conversation-review-snapshots";
@@ -818,7 +821,7 @@ export function WorkspaceReviewPanelHost(props: {
       snapshot={activeReviewSnapshot}
       onLoadFileDetail={activeWorkspaceReviewSnapshot ? handleLoadWorkspaceDiffFileDetail : undefined}
       onSearchWorkspaceDiff={activeWorkspaceReviewSnapshot ? handleSearchWorkspaceDiff : undefined}
-      onCopyRaw={props.onCopyRawDiff}
+      onCopyRaw={props.onCopyRawDiff} fileActions={(file, absolutePath) => reviewFileActions(file, absolutePath, workspacePath, t)}
       gitCommitActionBusy={props.gitCommitActionBusy}
       gitCommitActionDisabled={props.gitCommitActionDisabled}
       gitCommitActionLabel={props.gitCommitActionLabel}
@@ -829,6 +832,17 @@ export function WorkspaceReviewPanelHost(props: {
       onSelectionChange={handleDiffReviewSelectionChange}
     />
   );
+}
+
+// reviewFileActions offers the shared path actions for one changed file; a deleted file can only have its path copied.
+// The relative path is project-relative when the file lies in the project, else repository-relative.
+// reviewFileActions 为单个变更文件提供共享路径操作；已删除的文件只能复制路径。
+// 文件位于项目内时相对路径相对项目，否则相对仓库。
+function reviewFileActions(file: DiffFile, absolutePath: string | null, workspacePath: string | null, t: (key: TranslationKey) => string): WorkspacePathAction[] {
+  if (!absolutePath) return [];
+  const relativePath = relativeToWorkspace(workspacePath, absolutePath) ?? diffRevealRelativePath(file) ?? absolutePath;
+  const actions = workspacePathActions({ path: absolutePath, relativePath, isDirectory: false }, copyText, t);
+  return file.status === "deleted" ? actions.filter((action) => action.key === "path" || action.key === "relative") : actions;
 }
 
 // workspaceReviewPanelCacheKey builds a project-level cache key for right-panel Git review state.

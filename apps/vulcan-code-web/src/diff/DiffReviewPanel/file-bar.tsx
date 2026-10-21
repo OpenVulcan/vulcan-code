@@ -1,9 +1,11 @@
 import React from "react";
-import { ChevronDown, ChevronUp, ChevronsUpDown, FolderOpen, FolderTree, Info, List, Search } from "lucide-react";
+import { ChevronDown, ChevronUp, ChevronsUpDown, FolderOpen, FolderTree, Info, List, MoreHorizontal, Search } from "lucide-react";
 import "@/ui-kit/styles/features/file-bar.css";
 import { IconButton } from "@/ui-kit/primitives/button";
 import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
+import type { WorkspacePathAction } from "@/components/workspace/workspace-path-actions";
 import { formatMessage, useI18n } from "@/i18n";
 import type { DiffFile } from "../types";
 import { diffRevealRelativePath } from "./search";
@@ -29,6 +31,9 @@ export function DiffFileBar(props: {
   // Shows another file.
   // 展示另一个文件。
   onSelect: (file: DiffFile) => void;
+  // Actions for the shown file, offered in a menu after the step buttons; none hides the menu.
+  // 当前文件的操作，在步进按钮之后以菜单提供；为空时隐藏菜单。
+  actions?: readonly WorkspacePathAction[];
 }) {
   const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
@@ -134,6 +139,20 @@ export function DiffFileBar(props: {
       <IconButton aria-label={t("diffFile.next")} disabled={index >= props.files.length - 1} onClick={() => props.onSelect(props.files[index + 1])} size="sm" title={`${t("diffFile.next")}  Alt ↓`}>
         <ChevronDown size={14} />
       </IconButton>
+      {props.actions?.length ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <IconButton aria-label={t("workspaceFiles.fileActions")} size="sm" title={t("workspaceFiles.fileActions")}>
+              <MoreHorizontal size={14} />
+            </IconButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {props.actions.map((action) => (
+              <DropdownMenuItem disabled={action.disabled} key={action.key} onClick={action.run}>{action.icon}{action.label}</DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
     </div>
   );
 }

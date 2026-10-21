@@ -1,8 +1,7 @@
 import React from "react";
 import "@/ui-kit/styles/features/workspace-files.css";
-import { AtSign, ChevronsUpDown, Copy, FileText, Folder, FolderOpen, FolderX, Info, ListFilter, MoreHorizontal, X } from "lucide-react";
+import { ChevronsUpDown, FileText, Folder, FolderX, Info, ListFilter, MoreHorizontal, X } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
-import { openProjectDirectoryPath } from "@/service/project-actions-service";
 import {
   activeWorkbenchSurfaceId,
   selectedConversationProjectId,
@@ -10,7 +9,6 @@ import {
   type WorkspaceReviewDraftConversation,
 } from "@/diff/workspace-review-model";
 import { WorkspaceFileTree, type WorkspaceFileTreeNode } from "@/components/workspace/workspace-file-tree";
-import { requestComposerCommand } from "@/components/composer/composer-external-commands";
 import { pathMentionText } from "@/components/composer/composer-panel/use-composer-path-mention";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { PageNotice } from "@/components/page/page-feedback";
@@ -23,6 +21,7 @@ import {
 } from "@/components/workspace/workspace-files-preview";
 import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
 import { useWorkspaceFilesRefresh, WorkspaceFilesRefreshButton } from "@/components/workspace/workspace-files-panel-refresh";
+import { workspacePathActions, type WorkspacePathAction } from "@/components/workspace/workspace-path-actions";
 import { Button, IconButton } from "@/ui-kit/primitives/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
 import {
@@ -808,26 +807,14 @@ function workspaceFileActions(
   onCopyText: (text: string) => void | Promise<void>,
   onCopyFileContent: (entry: WorkspaceFileEntrySummary) => void,
   t: (key: TranslationKey) => string,
-): Array<{ key: string; icon: React.ReactNode; label: string; disabled?: boolean; run: () => void }> {
-  // copyPath observes the host result, exposing a failed copy instead of claiming success.
-  // copyPath 检查宿主执行结果，复制失败时暴露错误而非声称成功。
-  const copyPath = (path: string) => {
-    void Promise.resolve().then(() => onCopyText(path)).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : String(error));
-    });
-  };
-  return [
-    { key: "mention", icon: <AtSign size={14} />, label: t("workspaceFiles.mentionInMessage"),
-      run: () => requestComposerCommand({ kind: "insert", text: pathMentionText(entry.relativePath, entry.isDirectory) }) },
-    { key: "path", icon: <Copy size={14} />, label: t("workspaceFiles.copyPath"), run: () => copyPath(entry.path) },
-    { key: "relative", icon: <Copy size={14} />, label: t("workspaceFiles.copyRelativePath"), run: () => copyPath(entry.relativePath) },
-    ...(entry.isDirectory ? [] : [{ key: "content", icon: <FileText size={14} />, label: t("workspaceFiles.copyFileContent"), disabled: entry.kind !== "code",
-      run: () => onCopyFileContent(entry) }]),
-    { key: "reveal", icon: <FolderOpen size={14} />, label: t("workspaceFiles.revealInFolder"),
-      run: () => void openProjectDirectoryPath(entry.path).catch((error: unknown) => {
-        toast.error(error instanceof Error ? error.message : String(error));
-      }) },
-  ];
+): WorkspacePathAction[] {
+  const actions = workspacePathActions(entry, onCopyText, t);
+  if (entry.isDirectory) return actions;
+  // A file adds its content copy before the system-folder entry.
+  // 文件在系统文件夹项之前加入内容复制。
+  actions.splice(actions.length - 1, 0, { key: "content", icon: <FileText size={14} />, label: t("workspaceFiles.copyFileContent"),
+    disabled: entry.kind !== "code", run: () => onCopyFileContent(entry) });
+  return actions;
 }
 
 // workspaceActionMenuItems renders file or folder actions as right-click menu items.
