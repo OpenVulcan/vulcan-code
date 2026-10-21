@@ -38,6 +38,25 @@ describe("workspace file controls", () => {
     expect(onOpen.mock.calls).toEqual([["root/a", true], ["root/a/b", true]]);
     expect(host.querySelectorAll('.vk-ftree-row[data-kind="dir"][aria-expanded="true"]')).toHaveLength(2);
   });
+  it("opens, enters, leaves and closes folders with the Right and Left keys", async () => {
+    const closed = new Set<string>();
+    await act(async () => root.render(<WorkspaceFileTree tree={tree} activeFileKey={null} filter="" defaultOpenDirectoryPaths={closed}
+      onFilterChange={vi.fn()} onSelectFile={vi.fn()} fileKey={(file) => file} />));
+    const row = (name: string) => [...host.querySelectorAll<HTMLButtonElement>(".vk-ftree-row")].find((item) => item.textContent === name)!;
+    const press = async (key: string) => act(async () => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    });
+    row("a").focus();
+
+    await press("ArrowRight");
+    expect(row("a").getAttribute("aria-expanded")).toBe("true");
+    await press("ArrowRight");
+    expect(document.activeElement).toBe(row("b"));
+    await press("ArrowLeft");
+    expect(document.activeElement).toBe(row("a"));
+    await press("ArrowLeft");
+    expect(row("a").getAttribute("aria-expanded")).toBe("false");
+  });
   it("marks the open file and hands a chosen file to the owner", async () => {
     const onSelect = vi.fn();
     await act(async () => root.render(<WorkspaceFileTree tree={tree} activeFileKey="file" filter=""

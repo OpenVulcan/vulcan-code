@@ -117,14 +117,21 @@ export function WorkspaceFileTree<RowFile>(props: {
     for (const path of openDirectoryPaths) props.onDirectoryOpenStateChange?.(path, false);
     setOpen(new Set<string>());
   };
-  // moveFocus walks the visible rows with the arrow keys, starting from the filter field.
-  // moveFocus 用方向键在可见行间移动，从筛选框开始。
+  // moveFocus walks the visible rows with the arrow keys, starting from the filter field. On a row, Right opens a
+  // folder or steps into it and Left closes it or steps out to the parent folder, as in other trees.
+  // moveFocus 用方向键在可见行间移动，从筛选框开始。在行上时，Right 展开目录或进入其中，Left 折叠目录或回到父目录，
+  // 与常见目录树一致。
   const moveFocus = (event: React.KeyboardEvent, from: Element | null) => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const rows = Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>(".vk-ftree-row") ?? []);
+    const at = from ? rows.indexOf(from as HTMLButtonElement) : -1;
+    if ((event.key === "ArrowRight" || event.key === "ArrowLeft") && at >= 0) {
+      event.preventDefault();
+      stepAcrossLevels(rows, at, event.key === "ArrowRight");
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     if (!rows.length) return;
     event.preventDefault();
-    const at = from ? rows.indexOf(from as HTMLButtonElement) : -1;
     const next = event.key === "ArrowDown" ? Math.min(rows.length - 1, at + 1) : Math.max(0, at - 1);
     rows[at < 0 && event.key === "ArrowUp" ? rows.length - 1 : next]?.focus();
   };
@@ -176,6 +183,29 @@ export function WorkspaceFileTree<RowFile>(props: {
   );
 }
 
+// stepAcrossLevels applies Right (inward) or Left (outward) to the row at `at`.
+// stepAcrossLevels 对 `at` 处的行执行 Right（向内）或 Left（向外）。
+function stepAcrossLevels(rows: HTMLButtonElement[], at: number, inward: boolean): void {
+  const row = rows[at];
+  const depth = Number(row.dataset.depth ?? 0);
+  const expanded = row.getAttribute("aria-expanded");
+  if (inward) {
+    if (expanded === "false") row.click();
+    else if (expanded === "true" && Number(rows[at + 1]?.dataset.depth ?? -1) > depth) rows[at + 1].focus();
+    return;
+  }
+  if (expanded === "true") {
+    row.click();
+    return;
+  }
+  for (let index = at - 1; index >= 0; index -= 1) {
+    if (Number(rows[index].dataset.depth ?? 0) < depth) {
+      rows[index].focus();
+      return;
+    }
+  }
+}
+
 // WorkspaceFileTreeRow renders one folder with its open children, or one file.
 // WorkspaceFileTreeRow 渲染一个目录及其展开的子项，或一个文件。
 function WorkspaceFileTreeRow<RowFile>(props: {
@@ -203,6 +233,7 @@ function WorkspaceFileTreeRow<RowFile>(props: {
           aria-busy={isLoading}
           aria-expanded={isOpen}
           className="vk-ftree-row"
+          data-depth={props.depth}
           data-kind="dir"
           onClick={() => props.onToggleDirectory(node.path)}
           style={depthStyle}
@@ -226,6 +257,7 @@ function WorkspaceFileTreeRow<RowFile>(props: {
     <button
       aria-current={isActive ? "true" : undefined}
       className="vk-ftree-row"
+      data-depth={props.depth}
       data-kind="file"
       draggable={props.fileDragText ? true : undefined}
       onClick={() => props.onSelectFile(file)}
