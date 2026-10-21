@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use super::answer_components::CodeSnapshots;
 use super::brand;
+use super::code_mode::{code_mode_output, code_mode_subject, is_code_mode_call};
 use super::markdown;
 use super::text::{compact_count, compact_duration, shimmer, spinner, truncate, width_of, wrap};
 use super::theme::{Theme, mix};
@@ -681,7 +682,12 @@ fn tools(ctx: &Ctx, group: &[&ConversationEvent]) -> Vec<Line<'static>> {
             Span::raw(" ".to_string()),
         ];
         spans.push(Span::styled(name.to_string(), theme.strong()));
-        let subject = tool_subject(input);
+        let code_mode = is_code_mode_call(name, input);
+        let subject = if code_mode {
+            code_mode_subject(input)
+        } else {
+            tool_subject(input)
+        };
         let tail = duration.map(compact_duration).unwrap_or_default();
         let budget = ctx
             .width
@@ -718,8 +724,14 @@ fn tools(ctx: &Ctx, group: &[&ConversationEvent]) -> Vec<Line<'static>> {
         }
         let show_output = ctx.session.reveal
             || matches!(status, ToolCallStatus::Failed | ToolCallStatus::WaitingUser)
-            || name == "shell_command";
+            || name == "shell_command"
+            || code_mode;
         if show_output && let Some(output) = output {
+            let output = if code_mode {
+                code_mode_output(output)
+            } else {
+                output.to_string()
+            };
             let bar = Span::styled("      │ ".to_string(), Style::new().fg(theme.border));
             let color = if status == ToolCallStatus::Failed {
                 theme.danger
