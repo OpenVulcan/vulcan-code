@@ -22,5 +22,5 @@
 
 /* Matches are tinted; the current one is stronger and underlined, so colour is not the only signal. */
 /* 匹配项着色；当前匹配颜色更深并带下划线，使颜色不是唯一信号。 */
-::highlight(vk-find) { background-color: color-mix(in srgb, var(--vk-warn) 30%, transparent); color: var(--vk-ink); }
-::highlight(vk-find-current) { background-color: color-mix(in srgb, var(--vk-ember) 55%, transparent); color: var(--vk-ink); text-decoration: underline 2px; }
+::highlight(vk-find), ::highlight(vk-file-find) { background-color: color-mix(in srgb, var(--vk-warn) 30%, transparent); color: var(--vk-ink); }
+::highlight(vk-find-current), ::highlight(vk-file-find-current) { background-color: color-mix(in srgb, var(--vk-ember) 55%, transparent); color: var(--vk-ink); text-decoration: underline 2px; }

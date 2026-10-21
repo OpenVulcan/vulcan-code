@@ -1664,6 +1664,7 @@
   "workspaceFiles.copyPath": "複製路徑",
   "workspaceFiles.copyRelativePath": "複製相對路徑",
   "workspaceFiles.showInFilesPanel": "在檔案面板中顯示",
+  "workspaceFiles.find": "在檔案中尋找",
   "workspaceFiles.openPathOutside": "該檔案不在專案目錄中",
   "workspaceFiles.openPathMissing": "專案目錄樹中沒有該檔案，可能已被刪除或被檔案過濾規則隱藏",
   "workspaceFiles.mentionInMessage": "在訊息中引用",

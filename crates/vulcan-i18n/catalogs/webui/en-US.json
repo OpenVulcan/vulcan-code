@@ -1664,6 +1664,7 @@
   "workspaceFiles.copyPath": "Copy path",
   "workspaceFiles.copyRelativePath": "Copy relative path",
   "workspaceFiles.showInFilesPanel": "Show in files panel",
+  "workspaceFiles.find": "Find in file",
   "workspaceFiles.openPathOutside": "This file is outside the project",
   "workspaceFiles.openPathMissing": "The file is not in the project tree; it may have been deleted or hidden by the file filters",
   "workspaceFiles.mentionInMessage": "Mention in message",

@@ -1664,6 +1664,7 @@
   "workspaceFiles.copyPath": "Копировать путь",
   "workspaceFiles.copyRelativePath": "Копировать относительный путь",
   "workspaceFiles.showInFilesPanel": "Показать на панели файлов",
+  "workspaceFiles.find": "Найти в файле",
   "workspaceFiles.openPathOutside": "Этот файл находится вне проекта",
   "workspaceFiles.openPathMissing": "Файла нет в дереве проекта: возможно, он удалён или скрыт фильтрами файлов",
   "workspaceFiles.mentionInMessage": "Упомянуть в сообщении",

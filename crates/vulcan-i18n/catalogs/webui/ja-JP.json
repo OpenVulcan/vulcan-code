@@ -1664,6 +1664,7 @@
   "workspaceFiles.copyPath": "パスをコピー",
   "workspaceFiles.copyRelativePath": "相対パスをコピー",
   "workspaceFiles.showInFilesPanel": "ファイルパネルで表示",
+  "workspaceFiles.find": "ファイル内を検索",
   "workspaceFiles.openPathOutside": "このファイルはプロジェクトの外にあります",
   "workspaceFiles.openPathMissing": "プロジェクトツリーにこのファイルがありません。削除されたか、ファイルフィルターで非表示になっている可能性があります",
   "workspaceFiles.mentionInMessage": "メッセージで参照",

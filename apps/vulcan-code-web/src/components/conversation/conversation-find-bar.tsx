@@ -1,12 +1,13 @@
 import React from "react";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 
-import { formatMessage, useI18n } from "@/i18n";
+import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import { IconButton } from "@/ui-kit/primitives/button";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/ui-kit/primitives/input-group";
 import "@/ui-kit/styles/features/conversation-find.css";
 
 import {
+  CONVERSATION_FIND_HIGHLIGHT,
   CONVERSATION_FIND_MATCH_LIMIT,
   clearConversationFind,
   findTextRanges,
@@ -18,9 +19,12 @@ import {
 const CONVERSATION_FIND_DELAY_MS = 150;
 
 // ConversationFindBar searches the open conversation's transcript. Ctrl+F (Cmd+F) opens it or returns to it,
-// Enter and Shift+Enter step through the matches, and Escape closes it and gives focus back.
+// Enter and Shift+Enter step through the matches, and Escape closes it and gives focus back. A view with its own
+// search (such as a file preview) marks its root with data-find-scope and renders a scoped bar inside it: Ctrl+F
+// pressed in that root belongs to that bar alone.
 // ConversationFindBar 搜索当前会话的转录。Ctrl+F（Cmd+F）打开或回到它，Enter 与 Shift+Enter 在匹配之间移动，
-// Escape 关闭并归还焦点。
+// Escape 关闭并归还焦点。拥有独立搜索的视图（如文件预览）以 data-find-scope 标记根元素并在其中渲染限定范围的查找栏：
+// 在该根元素内按下的 Ctrl+F 只属于那个查找栏。
 export function ConversationFindBar(props: {
   // scrollRef is the transcript scrollport the search covers.
   // scrollRef 是搜索覆盖的转录滚动视口。
@@ -28,9 +32,19 @@ export function ConversationFindBar(props: {
   // onReveal scrolls a match into view through the transcript's scroll owner.
   // onReveal 通过转录的滚动所有者将匹配滚动到可见位置。
   onReveal: (range: Range) => void;
+  // scoped bars answer Ctrl+F only from inside the data-find-scope root around scrollRef.
+  // scoped 查找栏只响应在 scrollRef 外围 data-find-scope 根元素内按下的 Ctrl+F。
+  scoped?: boolean;
+  // label names what is searched; it defaults to the conversation.
+  // label 说明搜索的对象；默认为会话。
+  label?: TranslationKey;
+  // highlight is the CSS highlight name of the matches (see CONVERSATION_FIND_HIGHLIGHT).
+  // highlight 是匹配项的 CSS 高亮名称（见 CONVERSATION_FIND_HIGHLIGHT）。
+  highlight?: string;
 }) {
   const { t } = useI18n();
-  const { scrollRef, onReveal } = props;
+  const { scrollRef, onReveal, scoped = false, highlight = CONVERSATION_FIND_HIGHLIGHT } = props;
+  const label = t(props.label ?? "conversation.find.label");
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
   // result holds the matches of the last search and the one the reader is on.
@@ -56,8 +70,10 @@ export function ConversationFindBar(props: {
       // Dialogs and other text fields keep Ctrl+F; the composer and the transcript hand it to the bar.
       // 对话框与其他文本字段保留 Ctrl+F；输入区与转录将其交给查找栏。
       if (target?.closest("[role='dialog'], [role='alertdialog']")) return;
+      const scope = target?.closest("[data-find-scope]") ?? null;
+      if (scoped ? !scope?.contains(port) : scope && !scope.contains(port)) return;
       const chat = port.closest(".vk-chat");
-      if (target?.closest("input, textarea, select, [contenteditable='true']") && !chat?.contains(target)) return;
+      if (!scoped && target?.closest("input, textarea, select, [contenteditable='true']") && !chat?.contains(target)) return;
       event.preventDefault();
       if (!openRef.current) {
         returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -71,7 +87,7 @@ export function ConversationFindBar(props: {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [scrollRef]);
+  }, [scoped, scrollRef]);
 
   // The opened bar takes focus once its input exists.
   // 查找栏打开后，在输入框出现时获得焦点。
@@ -120,15 +136,15 @@ export function ConversationFindBar(props: {
 
   React.useEffect(() => {
     if (!open) return;
-    paintConversationFind(result.ranges, result.current);
-  }, [open, result]);
+    paintConversationFind(result.ranges, result.current, highlight);
+  }, [highlight, open, result]);
 
   // The highlights belong to the open bar only.
   // 高亮只属于打开的查找栏。
   React.useEffect(() => {
-    if (!open) clearConversationFind();
-    return clearConversationFind;
-  }, [open]);
+    if (!open) clearConversationFind(highlight);
+    return () => clearConversationFind(highlight);
+  }, [highlight, open]);
 
   // step moves to the next or previous match, wrapping at either end, and brings it into view.
   // step 移动到下一个或上一个匹配，在两端循环，并将其滚动到可见位置。
@@ -174,13 +190,13 @@ export function ConversationFindBar(props: {
       ? t("conversation.find.none")
       : formatMessage(t("conversation.find.count"), { current: String(result.current + 1), total: totalLabel });
   return (
-    <div aria-label={t("conversation.find.label")} className="vk-find-bar" role="search">
+    <div aria-label={label} className="vk-find-bar" role="search">
       <InputGroup>
         <InputGroupAddon>
           <Search aria-hidden="true" />
         </InputGroupAddon>
         <InputGroupInput
-          aria-label={t("conversation.find.label")}
+          aria-label={label}
           onChange={(event) => setQuery(event.currentTarget.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.nativeEvent.isComposing) {
@@ -191,7 +207,7 @@ export function ConversationFindBar(props: {
               close();
             }
           }}
-          placeholder={t("conversation.find.label")}
+          placeholder={label}
           ref={inputRef}
           spellCheck={false}
           value={query}

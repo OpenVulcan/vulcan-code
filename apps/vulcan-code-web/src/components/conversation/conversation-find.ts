@@ -8,10 +8,12 @@
 // CONVERSATION_FIND_MATCH_LIMIT 限制单次搜索的匹配数，使长转录上的单字母查询仍然开销低。
 export const CONVERSATION_FIND_MATCH_LIMIT = 1000;
 
-// CONVERSATION_FIND_HIGHLIGHT names the highlight for every match; the current match also gets the _CURRENT one.
-// CONVERSATION_FIND_HIGHLIGHT 是所有匹配使用的高亮名称；当前匹配另外使用 _CURRENT 高亮。
+// CONVERSATION_FIND_HIGHLIGHT names the transcript's highlight for every match; the current match also gets the
+// same name with "-current" appended. Other searchable views pass their own name so open bars never repaint
+// each other's matches.
+// CONVERSATION_FIND_HIGHLIGHT 是转录所有匹配使用的高亮名称；当前匹配另外使用追加 "-current" 的同名高亮。
+// 其他可搜索视图传入各自的名称，使同时打开的查找栏不会互相覆盖匹配高亮。
 export const CONVERSATION_FIND_HIGHLIGHT = "vk-find";
-export const CONVERSATION_FIND_HIGHLIGHT_CURRENT = "vk-find-current";
 
 // TextSpan is one searchable text node and where its text starts in the joined transcript text.
 // TextSpan 是一个可搜索文本节点及其文本在拼接后转录文本中的起始位置。
@@ -77,20 +79,21 @@ export function findTextRanges(root: Element, query: string): Range[] {
   return ranges;
 }
 
-// paintConversationFind marks every match and the current one; it does nothing where the highlight API is missing.
-// paintConversationFind 标记所有匹配与当前匹配；不支持高亮 API 时不做任何事。
-export function paintConversationFind(ranges: readonly Range[], current: number): void {
+// paintConversationFind marks every match and the current one under the given highlight name; it does nothing
+// where the highlight API is missing.
+// paintConversationFind 以给定高亮名称标记所有匹配与当前匹配；不支持高亮 API 时不做任何事。
+export function paintConversationFind(ranges: readonly Range[], current: number, name = CONVERSATION_FIND_HIGHLIGHT): void {
   if (typeof CSS === "undefined" || !("highlights" in CSS) || typeof Highlight === "undefined") return;
-  CSS.highlights.set(CONVERSATION_FIND_HIGHLIGHT, new Highlight(...ranges));
+  CSS.highlights.set(name, new Highlight(...ranges));
   const active = ranges[current];
-  if (active) CSS.highlights.set(CONVERSATION_FIND_HIGHLIGHT_CURRENT, new Highlight(active));
-  else CSS.highlights.delete(CONVERSATION_FIND_HIGHLIGHT_CURRENT);
+  if (active) CSS.highlights.set(`${name}-current`, new Highlight(active));
+  else CSS.highlights.delete(`${name}-current`);
 }
 
-// clearConversationFind removes both highlights.
-// clearConversationFind 移除两种高亮。
-export function clearConversationFind(): void {
+// clearConversationFind removes both highlights of the given name.
+// clearConversationFind 移除给定名称的两种高亮。
+export function clearConversationFind(name = CONVERSATION_FIND_HIGHLIGHT): void {
   if (typeof CSS === "undefined" || !("highlights" in CSS)) return;
-  CSS.highlights.delete(CONVERSATION_FIND_HIGHLIGHT);
-  CSS.highlights.delete(CONVERSATION_FIND_HIGHLIGHT_CURRENT);
+  CSS.highlights.delete(name);
+  CSS.highlights.delete(`${name}-current`);
 }

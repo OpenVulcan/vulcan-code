@@ -1664,6 +1664,7 @@
   "workspaceFiles.copyPath": "复制路径",
   "workspaceFiles.copyRelativePath": "复制相对路径",
   "workspaceFiles.showInFilesPanel": "在文件面板中显示",
+  "workspaceFiles.find": "在文件中查找",
   "workspaceFiles.openPathOutside": "该文件不在项目目录中",
   "workspaceFiles.openPathMissing": "项目目录树中没有该文件，可能已被删除或被文件过滤规则隐藏",
   "workspaceFiles.mentionInMessage": "在消息中引用",

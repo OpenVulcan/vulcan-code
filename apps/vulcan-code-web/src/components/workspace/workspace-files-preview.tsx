@@ -16,6 +16,7 @@ import { Button } from "@/ui-kit/primitives/button";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
 import { requestComposerCommand } from "@/components/composer/composer-external-commands";
+import { ConversationFindBar } from "@/components/conversation/conversation-find-bar";
 import { ConversationSelectionQuote } from "@/components/conversation/conversation-selection-quote";
 import { codeQuoteMarkdown, previewSelectionLines } from "@/components/workspace/workspace-file-preview-quote";
 import {
@@ -139,7 +140,7 @@ export function WorkspaceFilePreview(props: {
     );
   }
   return (
-    <div className="workspace-file-preview code">
+    <div className="workspace-file-preview code" data-find-scope="">
       <WorkspaceHighlightedCodePreview preview={props.preview} />
     </div>
   );
@@ -237,10 +238,23 @@ function WorkspaceHighlightedCodePreview(props: {
     const code = diffFile.hunks[0].lines.slice(span.start - 1, span.end).map((line) => line.content).join("\n");
     requestComposerCommand({ kind: "insert", text: codeQuoteMarkdown(props.preview.relativePath || props.preview.path, span, code, language) });
   };
+  // revealMatch centres a find match vertically and brings it out from under the sticky gutter or past the right edge.
+  // revealMatch 将查找匹配垂直居中，并在其被吸附行号栏遮住或超出右缘时横向滚入视野。
+  const revealMatch = React.useCallback((range: Range) => {
+    const port = linesRef.current;
+    if (!port) return;
+    const box = range.getBoundingClientRect();
+    const view = port.getBoundingClientRect();
+    const gutter = port.querySelector(".workspace-file-preview-code-gutter")?.getBoundingClientRect().width ?? 0;
+    port.scrollTop += box.top + box.height / 2 - (view.top + view.height / 2);
+    if (box.left < view.left + gutter || box.right > view.right) port.scrollLeft += box.left - view.left - gutter - view.width / 4;
+  }, []);
   return (
     <>
-      <div className="workspace-file-preview-code-lines" ref={linesRef}>{rows}</div>
+      {/* Focusable so a click in the code gives Ctrl+F to this file's find bar. 可获得焦点，使点击代码后 Ctrl+F 交给本文件的查找栏。 */}
+      <div className="workspace-file-preview-code-lines" ref={linesRef} tabIndex={0}>{rows}</div>
       <ConversationSelectionQuote onQuote={quoteSelection} scrollRef={linesRef} timelineRef={linesRef} />
+      <ConversationFindBar highlight="vk-file-find" key={props.preview.path} label="workspaceFiles.find" onReveal={revealMatch} scoped scrollRef={linesRef} />
     </>
   );
 }
@@ -324,7 +338,7 @@ function workspaceHighlightedCodeRows(
     const html = highlightedSpans ? tokenSpansToHtml(highlightedSpans) : escapeHtml(line.content);
     rows[index] = (
       <div className="workspace-file-preview-code-row" data-focus={focus && index + 1 >= focus.start && index + 1 <= focus.end ? "" : undefined} data-line={index + 1} key={index}>
-        <span className="workspace-file-preview-code-gutter">{index + 1}</span>
+        <span className="workspace-file-preview-code-gutter" data-find-skip="">{index + 1}</span>
         <span
           className="workspace-file-preview-code-content"
           dangerouslySetInnerHTML={{ __html: html || " " }}
