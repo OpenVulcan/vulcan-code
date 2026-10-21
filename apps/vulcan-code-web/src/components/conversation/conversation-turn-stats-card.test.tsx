@@ -1,6 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { readLocaleMessage } from "@/i18n";
 
 import { TurnStatsTooltipCard } from "./conversation-turn-stats-card";
 
@@ -197,7 +198,7 @@ describe("turn statistics hover card", () => {
       />,
     );
 
-    expect(markup).toContain("子代理统计");
+    expect(markup).toContain(readLocaleMessage("zh-CN", "conversation.turnStats.subagentUsage"));
     expect(markup).not.toContain("data-turn-stats-subagent");
   });
 

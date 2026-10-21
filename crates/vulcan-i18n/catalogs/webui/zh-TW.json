@@ -4976,7 +4976,7 @@
   "agents.displaySource": "顯示來源",
   "agents.overrideTarget": "覆寫目標",
   "agents.capabilityDiagnostics": "能力診斷",
-  "agents.diagnostics.disabled": "此智能體已停用，不會暴露給模型，spawn_agent 也無法解析它。",
+  "agents.diagnostics.disabled": "此代理已停用，不會暴露給模型，spawn_agent 也無法解析它。",
   "agents.diagnostics.unrestricted": "未宣告額外限制；最終能力仍由系統策略、LuaSkills 狀態、MCP 連線和執行時工具快照決定。",
   "agents.diagnostics.policyDeclared": "已宣告能力策略；最終可見能力還會經過系統策略、LuaSkills 狀態和 MCP 連線過濾。",
   "agents.diagnostics.allowedTools": "設定允許 {count} 個工具；不存在或被系統停用的工具不會進入最終工具集。",

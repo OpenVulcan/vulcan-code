@@ -21,7 +21,7 @@
   "apps/vulcan-code-web/src/components/conversation/conversation-prompt-navigator.test.tsx": 7,
   "apps/vulcan-code-web/src/components/conversation/conversation-system-error-card.test.tsx": 10,
   "apps/vulcan-code-web/src/components/conversation/conversation-transcript-parser.test.ts": 5,
-  "apps/vulcan-code-web/src/components/conversation/conversation-turn-stats-card.test.tsx": 17,
+  "apps/vulcan-code-web/src/components/conversation/conversation-turn-stats-card.test.tsx": 16,
   "apps/vulcan-code-web/src/components/conversation/session-review-repositories.test.tsx": 3,
   "apps/vulcan-code-web/src/components/conversation/session-todolist-panel.test.tsx": 2,
   "apps/vulcan-code-web/src/components/conversation/session-todolist-panel/git-branch-controls.test.tsx": 2,
