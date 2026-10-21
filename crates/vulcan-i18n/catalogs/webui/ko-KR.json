@@ -804,6 +804,7 @@
   "palette.shortcuts.lists": "목록 및 페이지",
   "palette.shortcuts.send": "보내기",
   "palette.shortcuts.newline": "줄 바꿈",
+  "palette.shortcuts.stop": "실행 중인 턴 중지(입력 내용이 없을 때)",
   "palette.shortcuts.recall": "이전에 보낸 프롬프트 불러오기",
   "palette.shortcuts.slash": "슬래시 명령 열기",
   "palette.shortcuts.mention": "프로젝트 파일 경로 삽입",

@@ -804,6 +804,7 @@
   "palette.shortcuts.lists": "Списки и страницы",
   "palette.shortcuts.send": "Отправить",
   "palette.shortcuts.newline": "Новая строка",
+  "palette.shortcuts.stop": "Остановить текущий ход (если ничего не введено)",
   "palette.shortcuts.recall": "Вернуть ранее отправленные запросы",
   "palette.shortcuts.slash": "Открыть слэш-команды",
   "palette.shortcuts.mention": "Вставить путь к файлу проекта",

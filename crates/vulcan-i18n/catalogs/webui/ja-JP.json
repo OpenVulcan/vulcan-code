@@ -804,6 +804,7 @@
   "palette.shortcuts.lists": "リストとページ",
   "palette.shortcuts.send": "送信",
   "palette.shortcuts.newline": "改行",
+  "palette.shortcuts.stop": "実行中のターンを停止（未入力時）",
   "palette.shortcuts.recall": "以前送信したプロンプトを呼び出す",
   "palette.shortcuts.slash": "スラッシュコマンドを開く",
   "palette.shortcuts.mention": "プロジェクトのファイルパスを挿入",

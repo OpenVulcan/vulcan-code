@@ -804,6 +804,7 @@
   "palette.shortcuts.lists": "列表与页面",
   "palette.shortcuts.send": "发送",
   "palette.shortcuts.newline": "换行",
+  "palette.shortcuts.stop": "停止运行中的回合（输入区为空时）",
   "palette.shortcuts.recall": "取回之前发送的提示词",
   "palette.shortcuts.slash": "打开斜线命令",
   "palette.shortcuts.mention": "插入项目文件路径",

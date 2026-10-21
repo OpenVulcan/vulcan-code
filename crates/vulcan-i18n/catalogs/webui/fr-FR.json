@@ -804,6 +804,7 @@
   "palette.shortcuts.lists": "Listes et pages",
   "palette.shortcuts.send": "Envoyer",
   "palette.shortcuts.newline": "Nouvelle ligne",
+  "palette.shortcuts.stop": "Arrêter le tour en cours (sans rien saisir)",
   "palette.shortcuts.recall": "Rappeler les prompts précédents",
   "palette.shortcuts.slash": "Ouvrir les commandes slash",
   "palette.shortcuts.mention": "Insérer le chemin d’un fichier du projet",
