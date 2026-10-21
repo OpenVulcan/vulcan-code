@@ -131,6 +131,45 @@ pub(crate) struct GitCommitActionResponse {
     pub(crate) commit_message: Option<String>,
 }
 
+/// Git pull request sent by the session tools commit menu.
+/// 会话工具提交菜单发送的 Git 拉取请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitPullActionRequest {
+    /// Conversation id that owns the pull action.
+    /// 拥有本次拉取动作的会话标识。
+    pub(crate) conversation_id: String,
+    /// Workspace path used to resolve the Git repository.
+    /// 用于解析 Git 仓库的工作区路径。
+    pub(crate) workspace_path: String,
+    /// Stable project-relative repository key; `.` selects the project root repository.
+    /// 稳定的项目相对仓库键；`.` 表示选择项目根仓库。
+    #[serde(default)]
+    pub(crate) repository_key: Option<String>,
+}
+
+/// Git pull response returned to the session tools commit menu.
+/// 返回给会话工具提交菜单的 Git 拉取响应。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitPullActionResponse {
+    /// Human-readable operation summary.
+    /// 面向用户的操作摘要。
+    pub(crate) summary: String,
+    /// Whether HEAD moved; false means the branch was already up to date.
+    /// HEAD 是否移动；为 false 表示分支已是最新。
+    pub(crate) updated: bool,
+    /// Current branch name after the pull.
+    /// 拉取完成后的当前分支名称。
+    pub(crate) branch_name: Option<String>,
+    /// Short hash of HEAD after the pull.
+    /// 拉取后 HEAD 的短哈希。
+    pub(crate) commit_hash: Option<String>,
+    /// Commit message subject of HEAD after the pull.
+    /// 拉取后 HEAD 的提交信息标题。
+    pub(crate) commit_message: Option<String>,
+}
+
 /// WebUI workspace Git diff snapshot returned by the service bridge.
 /// 服务桥接层返回给 WebUI 的工作区 Git diff 快照。
 #[derive(Debug, Clone, Serialize)]

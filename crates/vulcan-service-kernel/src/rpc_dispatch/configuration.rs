@@ -105,6 +105,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_default_command_shell",
     "service_generate_git_commit_message",
     "service_run_git_commit_action",
+    "service_run_git_pull_action",
     "service_save_mcp_server_configuration",
     "service_mcp_runtime_snapshot",
     "service_mcp_server_capabilities",
@@ -747,6 +748,9 @@ pub(super) async fn dispatch(
         ),
         "service_run_git_commit_action" => rpc_json_result(
             service_run_git_commit_action(state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_run_git_pull_action" => rpc_json_result(
+            service_run_git_pull_action(state, rpc_required_param(params, "request")?).await,
         ),
         "service_save_mcp_server_configuration" => rpc_json_result(
             service_save_mcp_server_configuration(

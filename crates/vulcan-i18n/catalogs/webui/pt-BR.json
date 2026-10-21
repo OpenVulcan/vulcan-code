@@ -6069,5 +6069,12 @@
   "conversation.memoryRecall.memories": "Memórias injetadas",
   "conversation.memoryRecall.memory": "Memória {id}",
   "conversation.memoryRecall.noMatchDetail": "A memória de longo prazo foi pesquisada para esta mensagem; nenhuma memória relevante foi encontrada.",
-  "conversation.memoryRecall.failedDetail": "A recuperação de memória para esta mensagem falhou; isso não significa que não exista memória relevante."
+  "conversation.memoryRecall.failedDetail": "A recuperação de memória para esta mensagem falhou; isso não significa que não exista memória relevante.",
+  "gitCommitDialog.pull": "Pull",
+  "gitCommitDialog.pulling": "Fazendo pull",
+  "gitCommitDialog.pullDone": "Git pull concluído.",
+  "gitCommitDialog.pullUpToDate": "A branch atual já está atualizada.",
+  "gitCommitDialog.moreActions": "Mais ações do Git",
+  "serviceError.gitPull.detachedHead": "O HEAD está desanexado, então não há branch para puxar.",
+  "serviceError.gitPull.noUpstream": "A branch `{branch}` não tem branch upstream para puxar."
 }

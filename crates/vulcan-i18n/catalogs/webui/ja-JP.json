@@ -6069,5 +6069,12 @@
   "conversation.memoryRecall.memories": "注入されたメモリ",
   "conversation.memoryRecall.memory": "メモリ {id}",
   "conversation.memoryRecall.noMatchDetail": "このメッセージについて長期メモリを検索しましたが、関連するメモリは見つかりませんでした。",
-  "conversation.memoryRecall.failedDetail": "このメッセージのメモリ検索に失敗しました。関連するメモリが存在しないという意味ではありません。"
+  "conversation.memoryRecall.failedDetail": "このメッセージのメモリ検索に失敗しました。関連するメモリが存在しないという意味ではありません。",
+  "gitCommitDialog.pull": "プル",
+  "gitCommitDialog.pulling": "プル中",
+  "gitCommitDialog.pullDone": "Git のプルが完了しました。",
+  "gitCommitDialog.pullUpToDate": "現在のブランチは最新です。",
+  "gitCommitDialog.moreActions": "その他の Git 操作",
+  "serviceError.gitPull.detachedHead": "HEAD が切り離されているため、プルするブランチがありません。",
+  "serviceError.gitPull.noUpstream": "ブランチ `{branch}` には上流ブランチがないため、プルできません。"
 }

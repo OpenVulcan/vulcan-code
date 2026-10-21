@@ -6069,5 +6069,12 @@
   "conversation.memoryRecall.memories": "주입된 메모리",
   "conversation.memoryRecall.memory": "메모리 {id}",
   "conversation.memoryRecall.noMatchDetail": "이 메시지에 대해 장기 메모리를 검색했지만 관련 메모리를 찾지 못했습니다.",
-  "conversation.memoryRecall.failedDetail": "이 메시지의 메모리 검색에 실패했습니다. 관련 메모리가 없다는 뜻은 아닙니다."
+  "conversation.memoryRecall.failedDetail": "이 메시지의 메모리 검색에 실패했습니다. 관련 메모리가 없다는 뜻은 아닙니다.",
+  "gitCommitDialog.pull": "풀",
+  "gitCommitDialog.pulling": "풀 중",
+  "gitCommitDialog.pullDone": "Git 풀이 완료되었습니다.",
+  "gitCommitDialog.pullUpToDate": "현재 브랜치가 이미 최신입니다.",
+  "gitCommitDialog.moreActions": "기타 Git 작업",
+  "serviceError.gitPull.detachedHead": "HEAD가 분리되어 있어 풀할 브랜치가 없습니다.",
+  "serviceError.gitPull.noUpstream": "브랜치 `{branch}`에 업스트림 브랜치가 없어 풀할 수 없습니다."
 }

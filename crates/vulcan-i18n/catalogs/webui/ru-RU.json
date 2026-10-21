@@ -6069,5 +6069,12 @@
   "conversation.memoryRecall.memories": "Внедрённые воспоминания",
   "conversation.memoryRecall.memory": "Воспоминание {id}",
   "conversation.memoryRecall.noMatchDetail": "Для этого сообщения выполнен поиск в долговременной памяти; релевантных воспоминаний не найдено.",
-  "conversation.memoryRecall.failedDetail": "Не удалось извлечь воспоминания для этого сообщения; это не значит, что релевантных воспоминаний нет."
+  "conversation.memoryRecall.failedDetail": "Не удалось извлечь воспоминания для этого сообщения; это не значит, что релевантных воспоминаний нет.",
+  "gitCommitDialog.pull": "Получить",
+  "gitCommitDialog.pulling": "Получение",
+  "gitCommitDialog.pullDone": "Git pull завершён.",
+  "gitCommitDialog.pullUpToDate": "Текущая ветка уже актуальна.",
+  "gitCommitDialog.moreActions": "Другие действия Git",
+  "serviceError.gitPull.detachedHead": "HEAD отсоединён, поэтому нет ветки для получения изменений.",
+  "serviceError.gitPull.noUpstream": "У ветки `{branch}` нет вышестоящей ветки для получения изменений."
 }

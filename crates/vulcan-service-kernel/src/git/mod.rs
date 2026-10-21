@@ -10,6 +10,7 @@ mod diff;
 mod diff_text;
 mod history;
 mod model;
+mod pull_action;
 mod repository;
 mod search;
 mod selection;
@@ -42,6 +43,7 @@ pub(super) use model::{
     WebuiWorkspaceDiffSearchRequest, WebuiWorkspaceDiffSearchResponse, WebuiWorkspaceDiffSnapshot,
     WebuiWorkspaceGitFileActionRequest, WebuiWorkspaceGitFileActionResult,
 };
+pub(super) use pull_action::service_run_git_pull_action;
 pub(super) use repository::{
     discover_webui_git_repository_catalog,
     resolve_webui_repository_root_from_workspace_text_with_key,

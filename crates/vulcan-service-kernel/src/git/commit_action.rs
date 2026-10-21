@@ -151,7 +151,7 @@ pub(crate) async fn service_run_git_commit_action(
 /// 参数：label 是稳定错误标签，output 是已完成的 Git 进程输出。
 /// Returns: `Ok(())` on success, or the formatted Git error on failure.
 /// 返回：成功时返回 `Ok(())`，失败时返回格式化后的 Git 错误。
-fn ensure_git_commit_action_command_succeeded(
+pub(super) fn ensure_git_commit_action_command_succeeded(
     label: &str,
     output: std::process::Output,
 ) -> Result<(), String> {
@@ -163,7 +163,7 @@ fn ensure_git_commit_action_command_succeeded(
 
 /// Validates that a Git commit action is attached to a known session.
 /// 校验 Git 提交动作附着在已知会话上。
-fn validate_git_commit_action_session_exists(
+pub(super) fn validate_git_commit_action_session_exists(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Result<(), WebuiServiceRpcError> {

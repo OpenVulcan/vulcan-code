@@ -289,7 +289,7 @@ use git::{
     load_webui_workspace_diff_file_detail, load_webui_workspace_diff_search,
     load_webui_workspace_diff_snapshot, resolve_webui_repository_root_from_workspace_text_with_key,
     run_webui_workspace_git_file_action, service_generate_git_commit_message,
-    service_run_git_commit_action, service_save_git_commit_settings,
+    service_run_git_commit_action, service_run_git_pull_action, service_save_git_commit_settings,
 };
 use git_diff_services::*;
 use host_tools_settings::{

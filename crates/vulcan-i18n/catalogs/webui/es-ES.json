@@ -6069,5 +6069,12 @@
   "conversation.memoryRecall.memories": "Memorias inyectadas",
   "conversation.memoryRecall.memory": "Memoria {id}",
   "conversation.memoryRecall.noMatchDetail": "Se buscó en la memoria a largo plazo para este mensaje; no se encontró ninguna memoria relevante.",
-  "conversation.memoryRecall.failedDetail": "Falló la recuperación de memoria para este mensaje; esto no significa que no exista memoria relevante."
+  "conversation.memoryRecall.failedDetail": "Falló la recuperación de memoria para este mensaje; esto no significa que no exista memoria relevante.",
+  "gitCommitDialog.pull": "Pull",
+  "gitCommitDialog.pulling": "Haciendo pull",
+  "gitCommitDialog.pullDone": "Git pull completado.",
+  "gitCommitDialog.pullUpToDate": "La rama actual ya está al día.",
+  "gitCommitDialog.moreActions": "Más acciones de Git",
+  "serviceError.gitPull.detachedHead": "HEAD está desacoplado, así que no hay ninguna rama de la que traer cambios.",
+  "serviceError.gitPull.noUpstream": "La rama `{branch}` no tiene una rama upstream de la que traer cambios."
 }

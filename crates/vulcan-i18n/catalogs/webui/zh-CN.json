@@ -6069,5 +6069,12 @@
   "conversation.memoryRecall.memories": "注入的记忆",
   "conversation.memoryRecall.memory": "记忆 {id}",
   "conversation.memoryRecall.noMatchDetail": "已针对此消息检索长期记忆，未找到相关记忆。",
-  "conversation.memoryRecall.failedDetail": "此消息的记忆检索失败，这并不代表没有相关记忆。"
+  "conversation.memoryRecall.failedDetail": "此消息的记忆检索失败，这并不代表没有相关记忆。",
+  "gitCommitDialog.pull": "拉取",
+  "gitCommitDialog.pulling": "正在拉取",
+  "gitCommitDialog.pullDone": "Git 拉取已完成。",
+  "gitCommitDialog.pullUpToDate": "当前分支已是最新。",
+  "gitCommitDialog.moreActions": "更多 Git 操作",
+  "serviceError.gitPull.detachedHead": "当前处于 detached HEAD，没有可拉取的分支。",
+  "serviceError.gitPull.noUpstream": "分支 `{branch}` 没有上游分支，无法拉取。"
 }

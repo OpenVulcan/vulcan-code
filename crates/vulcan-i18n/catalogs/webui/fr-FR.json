@@ -6069,5 +6069,12 @@
   "conversation.memoryRecall.memories": "Souvenirs injectés",
   "conversation.memoryRecall.memory": "Souvenir {id}",
   "conversation.memoryRecall.noMatchDetail": "La mémoire à long terme a été consultée pour ce message ; aucun souvenir pertinent n'a été trouvé.",
-  "conversation.memoryRecall.failedDetail": "La récupération de la mémoire pour ce message a échoué ; cela ne signifie pas qu'aucun souvenir pertinent n'existe."
+  "conversation.memoryRecall.failedDetail": "La récupération de la mémoire pour ce message a échoué ; cela ne signifie pas qu'aucun souvenir pertinent n'existe.",
+  "gitCommitDialog.pull": "Pull",
+  "gitCommitDialog.pulling": "Pull en cours",
+  "gitCommitDialog.pullDone": "Git pull terminé.",
+  "gitCommitDialog.pullUpToDate": "La branche actuelle est déjà à jour.",
+  "gitCommitDialog.moreActions": "Autres actions Git",
+  "serviceError.gitPull.detachedHead": "HEAD est détachée : il n’y a aucune branche à tirer.",
+  "serviceError.gitPull.noUpstream": "La branche `{branch}` n’a pas de branche amont à tirer."
 }

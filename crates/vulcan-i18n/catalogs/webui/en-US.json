@@ -6069,5 +6069,12 @@
   "conversation.memoryRecall.memories": "Injected memories",
   "conversation.memoryRecall.memory": "Memory {id}",
   "conversation.memoryRecall.noMatchDetail": "Long-term memory was searched for this message; no relevant memory was found.",
-  "conversation.memoryRecall.failedDetail": "Memory retrieval for this message failed; this does not mean no relevant memory exists."
+  "conversation.memoryRecall.failedDetail": "Memory retrieval for this message failed; this does not mean no relevant memory exists.",
+  "gitCommitDialog.pull": "Pull",
+  "gitCommitDialog.pulling": "Pulling",
+  "gitCommitDialog.pullDone": "Git pull completed.",
+  "gitCommitDialog.pullUpToDate": "The current branch is already up to date.",
+  "gitCommitDialog.moreActions": "More Git actions",
+  "serviceError.gitPull.detachedHead": "HEAD is detached, so there is no branch to pull.",
+  "serviceError.gitPull.noUpstream": "Branch `{branch}` has no upstream branch to pull from."
 }
