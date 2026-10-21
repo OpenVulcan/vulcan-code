@@ -405,6 +405,7 @@ pub(super) fn on_panel_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Char('c') => open_commit(app),
                 KeyCode::Char('b') => execute(app, AppCommand::SwitchBranch, None),
                 KeyCode::Char('p') => execute(app, AppCommand::Push, None),
+                KeyCode::Char('l') => execute(app, AppCommand::Pull, None),
                 KeyCode::Char('r') => app.backend.send(Command::LoadWorkspaceDiffSnapshot),
                 KeyCode::Char('@') | KeyCode::Char('y') => {
                     let path = app

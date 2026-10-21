@@ -684,4 +684,31 @@ impl Worker {
             },
         );
     }
+
+    /// Fast-forwards the selected repository's current branch from its upstream.
+    /// 从上游快进所选仓库的当前分支。
+    pub(super) fn git_pull(&mut self) {
+        let request = json!({
+            "conversationId": self.selected_real(),
+            "workspacePath": self.git.workspace,
+            "repositoryKey": self.git.repository_key,
+        });
+        self.emit(BackendEvent::GitBusy(Some(GitBusy::Pulling)));
+        self.spawn_call(
+            "service_run_git_pull_action",
+            json!({ "request": request }),
+            |worker, result| {
+                worker.emit(BackendEvent::GitBusy(None));
+                match result {
+                    Ok(value) => {
+                        worker.emit(BackendEvent::GitNotice(GitNotice::Pulled {
+                            updated: bool_at(&value, "updated"),
+                        }));
+                        worker.git_reload_selected();
+                    }
+                    Err(error) => worker.failed(error),
+                }
+            },
+        );
+    }
 }

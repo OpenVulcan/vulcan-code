@@ -27,6 +27,7 @@ pub enum AppCommand {
     Commit,
     SwitchBranch,
     Push,
+    Pull,
     OpenWeb,
     Help,
     Quit,
@@ -48,7 +49,7 @@ pub enum AppCommand {
 }
 
 impl AppCommand {
-    pub const ALL: [AppCommand; 30] = [
+    pub const ALL: [AppCommand; 31] = [
         AppCommand::NewConversation,
         AppCommand::AddProject,
         AppCommand::Attach,
@@ -63,6 +64,7 @@ impl AppCommand {
         AppCommand::Commit,
         AppCommand::SwitchBranch,
         AppCommand::Push,
+        AppCommand::Pull,
         AppCommand::ToggleSidebar,
         AppCommand::TogglePanel,
         AppCommand::ThinkingPlacement,
@@ -101,6 +103,7 @@ impl AppCommand {
             AppCommand::Commit => "commit",
             AppCommand::SwitchBranch => "branch",
             AppCommand::Push => "push",
+            AppCommand::Pull => "pull",
             AppCommand::OpenWeb => "web",
             AppCommand::Help => "help",
             AppCommand::Quit => "quit",
@@ -162,6 +165,7 @@ impl AppCommand {
             AppCommand::Commit => tr!("gitCommitDialog.open"),
             AppCommand::SwitchBranch => tr!("gitBranchMenu.label"),
             AppCommand::Push => tr!("gitCommitDialog.push"),
+            AppCommand::Pull => tr!("gitCommitDialog.pull"),
             AppCommand::OpenWeb => tr!("tui.command.openWeb"),
             AppCommand::Help => tr!("tui.help.title"),
             AppCommand::Quit => tr!("tui.command.quit"),

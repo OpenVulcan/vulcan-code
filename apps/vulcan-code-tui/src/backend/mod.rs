@@ -110,6 +110,9 @@ pub enum Command {
         include_unstaged: bool,
         push: bool,
     },
+    /// `runGitPullAction`; fast-forward only.
+    /// 仅快进。
+    RunGitPullAction,
     /// `browseProjectDirectories`; `None` starts at the service's default directory.
     /// `None` 从服务的默认目录开始。
     BrowseProjectDirectories { path: Option<String> },
@@ -390,6 +393,11 @@ pub enum BackendEvent {
 pub enum GitNotice {
     Committed,
     Pushed,
+    /// `updated` is false when the branch was already up to date.
+    /// 分支已是最新时 `updated` 为 false。
+    Pulled {
+        updated: bool,
+    },
     Switched(String),
     Created(String),
 }
@@ -436,6 +444,7 @@ pub enum Notice {
 pub enum GitBusy {
     Committing,
     Pushing,
+    Pulling,
     Generating,
 }
 

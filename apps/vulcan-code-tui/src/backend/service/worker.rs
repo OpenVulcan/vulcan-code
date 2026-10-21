@@ -1731,6 +1731,7 @@ impl Worker {
                 include_unstaged,
                 push,
             } => self.git_commit(message, new_branch, include_unstaged, push),
+            Command::RunGitPullAction => self.git_pull(),
             // The attachment picker reads the local disk: the service runs on this machine and
             // attachments are staged from local bytes.
             // 附件选择器读取本地磁盘：服务运行在本机，附件以本地字节暂存。

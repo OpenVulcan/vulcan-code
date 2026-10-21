@@ -196,6 +196,7 @@ enum Timer {
         push: bool,
     },
     FinishPush,
+    FinishPull,
 }
 
 struct World {
@@ -1010,6 +1011,14 @@ impl World {
                 self.emit(BackendEvent::GitBusy(None));
                 self.emit(BackendEvent::GitNotice(GitNotice::Pushed));
             }
+            // The mock remote never gains commits, so a pull always finds the branch up to date.
+            // 模拟远端不会产生新提交，因此拉取总是发现分支已是最新。
+            Timer::FinishPull => {
+                self.emit(BackendEvent::GitBusy(None));
+                self.emit(BackendEvent::GitNotice(GitNotice::Pulled {
+                    updated: false,
+                }));
+            }
         }
     }
 
@@ -1282,6 +1291,11 @@ impl World {
                     self.after(Duration::from_millis(500)),
                     Timer::CommitMessage(chunks),
                 ));
+            }
+            Command::RunGitPullAction => {
+                self.emit(BackendEvent::GitBusy(Some(GitBusy::Pulling)));
+                self.timers
+                    .push((self.after(Duration::from_millis(900)), Timer::FinishPull));
             }
             Command::RunGitCommitAction { message, push, .. } if message.is_empty() && push => {
                 self.emit(BackendEvent::GitBusy(Some(GitBusy::Pushing)));

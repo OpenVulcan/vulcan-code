@@ -535,7 +535,9 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
         }
         AppCommand::OpenDiff => open_diff(app, app.git.cursor),
         AppCommand::Commit => open_commit(app),
-        AppCommand::SwitchBranch | AppCommand::Push if app.git.repository().is_none() => {
+        AppCommand::SwitchBranch | AppCommand::Push | AppCommand::Pull
+            if app.git.repository().is_none() =>
+        {
             app.toast(NoticeSeverity::Info, tr!("gitRepository.unavailable"));
         }
         AppCommand::SwitchBranch => {
@@ -556,6 +558,9 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
             include_unstaged: false,
             push: true,
         }),
+        // `runGitPullAction`: fast-forwards the current branch from its upstream.
+        // 从上游快进当前分支。
+        AppCommand::Pull => app.backend.send(Command::RunGitPullAction),
         AppCommand::OpenWeb => {
             let url = app.base_url.clone();
             if app.backend.is_mock {

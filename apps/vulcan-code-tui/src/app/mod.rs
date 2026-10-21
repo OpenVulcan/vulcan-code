@@ -1455,6 +1455,8 @@ impl App {
                 let message = match notice {
                     GitNotice::Committed => tr!("gitCommitDialog.actionDone"),
                     GitNotice::Pushed => tr!("gitCommitDialog.pushDone"),
+                    GitNotice::Pulled { updated: true } => tr!("gitCommitDialog.pullDone"),
+                    GitNotice::Pulled { updated: false } => tr!("gitCommitDialog.pullUpToDate"),
                     GitNotice::Switched(name) => tr!("gitBranchMenu.switched", name = name),
                     GitNotice::Created(name) => tr!("gitBranchCreate.created", name = name),
                 };

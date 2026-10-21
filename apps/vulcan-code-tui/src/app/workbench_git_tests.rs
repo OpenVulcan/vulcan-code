@@ -537,3 +537,28 @@ fn changed_files_are_mentioned_by_project_path() {
     assert_eq!(app.composer_text(), "@vendor/lib/src/a.rs ");
     assert_eq!(app.focus, Focus::Composer);
 }
+
+/// Pull needs a repository, then sends one pull request; its notice reports whether the branch moved.
+/// 拉取需要仓库，随后发送一次拉取请求；其提示说明分支是否移动。
+#[test]
+fn pull_requires_a_repository_and_reports_its_outcome() {
+    let (mut app, commands) = isolated_app();
+    input::execute(&mut app, commands::AppCommand::Pull, None);
+    assert!(commands.try_recv().is_err());
+    app.apply(git(vec![repository(".", true, true)], Some(".")));
+    input::execute(&mut app, commands::AppCommand::Pull, None);
+    assert!(matches!(commands.try_recv(), Ok(Command::RunGitPullAction)));
+    app.apply(BackendEvent::GitNotice(GitNotice::Pulled {
+        updated: false,
+    }));
+    app.apply(BackendEvent::GitNotice(GitNotice::Pulled { updated: true }));
+    let toasts: Vec<_> = app
+        .toasts
+        .iter()
+        .map(|notice| notice.spec.message.clone())
+        .collect();
+    assert!(toasts.ends_with(&[
+        tr!("gitCommitDialog.pullUpToDate"),
+        tr!("gitCommitDialog.pullDone")
+    ]));
+}

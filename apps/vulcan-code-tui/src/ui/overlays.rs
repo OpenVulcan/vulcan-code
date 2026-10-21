@@ -687,6 +687,7 @@ fn render_commit(app: &App, dialog: &mut CommitDialog, area: Rect, buf: &mut Buf
             GitBusy::Generating => tr!("gitCommitDialog.generatingCommitMessage"),
             GitBusy::Committing => tr!("gitCommitDialog.committing"),
             GitBusy::Pushing => tr!("gitCommitDialog.pushingDetailed"),
+            GitBusy::Pulling => tr!("gitCommitDialog.pulling"),
         };
         buf.set_string(
             x,

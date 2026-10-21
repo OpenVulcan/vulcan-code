@@ -479,6 +479,11 @@ fn git_buttons(app: &App, area: Rect, buf: &mut Buffer) {
             normal,
             UiAction::App(AppCommand::Push),
         ),
+        (
+            format!("↓ {}", tr!("gitCommitDialog.pull")),
+            normal,
+            UiAction::App(AppCommand::Pull),
+        ),
     ];
     // Each row stays on one line; buttons without room fold into its overflow menu.
     // 每行保持单行；放不下的按钮收进该行的溢出菜单。
@@ -629,6 +634,7 @@ fn changes(app: &App, width: usize, focused: bool) -> Vec<Row> {
         let label = match busy {
             GitBusy::Committing => tr!("gitCommitDialog.committing"),
             GitBusy::Pushing => tr!("gitCommitDialog.pushingDetailed"),
+            GitBusy::Pulling => tr!("gitCommitDialog.pulling"),
             GitBusy::Generating => tr!("gitCommitDialog.generatingCommitMessage"),
         };
         out.push(Row::new(Line::from(Span::styled(
