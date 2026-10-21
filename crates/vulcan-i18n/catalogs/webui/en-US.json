@@ -1645,6 +1645,7 @@
   "workspaceFiles.loading": "Loading.",
   "workspaceFiles.loadingTree": "Loading file tree.",
   "workspaceFiles.filterRules": "File filter rules",
+  "workspaceFiles.refresh": "Refresh files",
   "workspaceFiles.hiddenRules": "Hidden rules",
   "workspaceFiles.ignoreHiddenFiles": "Ignore hidden files",
   "workspaceFiles.ignoreDotNames": "Ignore dot-prefixed names",

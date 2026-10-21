@@ -1645,6 +1645,7 @@
   "workspaceFiles.loading": "Загрузка.",
   "workspaceFiles.loadingTree": "Загрузка дерева файлов.",
   "workspaceFiles.filterRules": "Правила фильтрации файлов",
+  "workspaceFiles.refresh": "Обновить файлы",
   "workspaceFiles.hiddenRules": "Правила скрытия",
   "workspaceFiles.ignoreHiddenFiles": "Игнорировать скрытые файлы",
   "workspaceFiles.ignoreDotNames": "Игнорировать имена, начинающиеся с точки",

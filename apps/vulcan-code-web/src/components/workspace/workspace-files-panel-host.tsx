@@ -20,6 +20,7 @@ import {
   workspaceFilePreviewErrorMessage,
 } from "@/components/workspace/workspace-files-preview";
 import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
+import { useWorkspaceFilesRefresh, WorkspaceFilesRefreshButton } from "@/components/workspace/workspace-files-panel-refresh";
 import { Button, IconButton } from "@/ui-kit/primitives/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
 import {
@@ -247,8 +248,8 @@ export function WorkspaceFilesPanelHost(props: {
     setPreviewLoading(false);
   }, [requestScopeKey]);
 
-  // loadDirectory fetches one directory and merges it into the directory cache.
-  // loadDirectory 获取单个目录并合并到目录缓存。
+  // loadDirectory fetches one directory, merges it into the directory cache and resolves with it when it applied.
+  // loadDirectory 获取单个目录并合并到目录缓存，生效时解析为该目录列表。
   const loadDirectory = React.useCallback(async (directoryPath: string | null) => {
     if (!workspacePath) {
       return;
@@ -285,6 +286,7 @@ export function WorkspaceFilesPanelHost(props: {
       if (listing.notice) {
         toast.info(listing.notice);
       }
+      return listing;
     } catch (error) {
       if (requestOwnership.ownsDirectoryRequest(loadingKey, ownedRequest)) {
         setPanelError({ directoryPath, message: error instanceof Error ? error.message : String(error) });
@@ -379,9 +381,10 @@ export function WorkspaceFilesPanelHost(props: {
   );
   // handleOpenDirectoryPathsChange mirrors the shared drawer expansion state into panel cache state.
   // handleOpenDirectoryPathsChange 将共享抽屉展开状态同步到面板缓存状态。
-  const handleOpenDirectoryPathsChange = React.useCallback((paths: ReadonlySet<string>) => {
-    setExpandedPaths(new Set(paths));
-  }, []);
+  const handleOpenDirectoryPathsChange = React.useCallback((paths: ReadonlySet<string>) => setExpandedPaths(new Set(paths)), []);
+  // treeRefresh reloads the loaded tree on demand and after the project's runs or Git changes.
+  // treeRefresh 按需以及在项目运行结束或 Git 变化后重新加载已加载的目录树。
+  const treeRefresh = useWorkspaceFilesRefresh({ workspacePath, projectId: workspaceProjectId, enabled: hydratedRequestScopeKey === requestScopeKey, directories, loadDirectory, setDirectories });
   // handleDirectoryOpenStateChange lazily loads children when the shared drawer opens a directory.
   // handleDirectoryOpenStateChange 在共享抽屉展开目录时懒加载子项。
   const handleDirectoryOpenStateChange = React.useCallback((path: string, open: boolean) => {
@@ -568,7 +571,7 @@ export function WorkspaceFilesPanelHost(props: {
       activeFileKey={selectedPath}
       autoFocusFilter={inPicker}
       emptyLabel={rootListing ? t("workspaceFiles.noMatchedFiles") : t("workspaceFiles.noDisplayableFiles")}
-      extraFilterActions={<WorkspaceFilesFilterMenu filters={filters} onFilterChange={updateFilter} />}
+      extraFilterActions={<><WorkspaceFilesRefreshButton onRefresh={treeRefresh.refresh} refreshing={treeRefresh.refreshing} /><WorkspaceFilesFilterMenu filters={filters} onFilterChange={updateFilter} /></>}
       fileKey={(entry) => entry.path}
       fileTitle={(entry) => entry.relativePath || entry.name}
       fileDragText={(entry) => pathMentionText(entry.relativePath, false)}

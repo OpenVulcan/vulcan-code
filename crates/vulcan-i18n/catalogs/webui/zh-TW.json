@@ -1645,6 +1645,7 @@
   "workspaceFiles.loading": "正在載入。",
   "workspaceFiles.loadingTree": "正在載入檔案樹。",
   "workspaceFiles.filterRules": "檔案篩選規則",
+  "workspaceFiles.refresh": "重新整理檔案",
   "workspaceFiles.hiddenRules": "隱藏規則",
   "workspaceFiles.ignoreHiddenFiles": "忽略隱藏檔案",
   "workspaceFiles.ignoreDotNames": "忽略以點開頭的名稱",

@@ -1645,6 +1645,7 @@
   "workspaceFiles.loading": "読み込んでいます。",
   "workspaceFiles.loadingTree": "ファイルツリーを読み込んでいます。",
   "workspaceFiles.filterRules": "ファイルの絞り込みルール",
+  "workspaceFiles.refresh": "ファイルを更新",
   "workspaceFiles.hiddenRules": "非表示ルール",
   "workspaceFiles.ignoreHiddenFiles": "隠しファイルを無視",
   "workspaceFiles.ignoreDotNames": "ドットで始まる名前を無視",

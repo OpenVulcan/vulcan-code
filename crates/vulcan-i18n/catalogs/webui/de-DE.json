@@ -1645,6 +1645,7 @@
   "workspaceFiles.loading": "Wird geladen.",
   "workspaceFiles.loadingTree": "Dateibaum wird geladen.",
   "workspaceFiles.filterRules": "Dateifilterregeln",
+  "workspaceFiles.refresh": "Dateien aktualisieren",
   "workspaceFiles.hiddenRules": "Ausblenderegeln",
   "workspaceFiles.ignoreHiddenFiles": "Versteckte Dateien ignorieren",
   "workspaceFiles.ignoreDotNames": "Namen mit führendem Punkt ignorieren",

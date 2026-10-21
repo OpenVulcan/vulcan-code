@@ -1645,6 +1645,7 @@
   "workspaceFiles.loading": "正在加载。",
   "workspaceFiles.loadingTree": "正在加载文件树。",
   "workspaceFiles.filterRules": "文件过滤规则",
+  "workspaceFiles.refresh": "刷新文件",
   "workspaceFiles.hiddenRules": "隐藏规则",
   "workspaceFiles.ignoreHiddenFiles": "忽略隐藏文件",
   "workspaceFiles.ignoreDotNames": "忽略点开头名称",

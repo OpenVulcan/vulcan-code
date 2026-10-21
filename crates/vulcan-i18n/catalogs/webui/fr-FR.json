@@ -1645,6 +1645,7 @@
   "workspaceFiles.loading": "Chargement.",
   "workspaceFiles.loadingTree": "Chargement de l’arborescence des fichiers.",
   "workspaceFiles.filterRules": "Règles de filtrage des fichiers",
+  "workspaceFiles.refresh": "Actualiser les fichiers",
   "workspaceFiles.hiddenRules": "Règles de masquage",
   "workspaceFiles.ignoreHiddenFiles": "Ignorer les fichiers cachés",
   "workspaceFiles.ignoreDotNames": "Ignorer les noms commençant par un point",
