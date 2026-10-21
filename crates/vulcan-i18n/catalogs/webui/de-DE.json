@@ -6060,5 +6060,14 @@
   "toolCard.memory.id": "Erinnerung #{id}",
   "toolCard.memory.previous": "Vorherige Erinnerung",
   "toolCard.memory.next": "Nächste Erinnerung",
-  "toolCard.memory.none": "Keine passenden Erinnerungen gefunden."
+  "toolCard.memory.none": "Keine passenden Erinnerungen gefunden.",
+  "conversation.memoryRecall.title": "Kontextinjektion (Gedächtnis)",
+  "conversation.memoryRecall.matched": "{count} Erinnerungen injiziert",
+  "conversation.memoryRecall.noMatch": "Keine relevante Erinnerung gefunden",
+  "conversation.memoryRecall.failed": "Gedächtnisabruf fehlgeschlagen",
+  "conversation.memoryRecall.queries": "Suchbegriffe",
+  "conversation.memoryRecall.memories": "Injizierte Erinnerungen",
+  "conversation.memoryRecall.memory": "Erinnerung {id}",
+  "conversation.memoryRecall.noMatchDetail": "Das Langzeitgedächtnis wurde für diese Nachricht durchsucht; keine relevante Erinnerung gefunden.",
+  "conversation.memoryRecall.failedDetail": "Der Gedächtnisabruf für diese Nachricht ist fehlgeschlagen; das bedeutet nicht, dass keine relevante Erinnerung existiert."
 }

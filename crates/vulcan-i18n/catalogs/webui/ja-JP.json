@@ -6060,5 +6060,14 @@
   "toolCard.memory.id": "記憶 #{id}",
   "toolCard.memory.previous": "前の記憶",
   "toolCard.memory.next": "次の記憶",
-  "toolCard.memory.none": "一致する記憶はありませんでした。"
+  "toolCard.memory.none": "一致する記憶はありませんでした。",
+  "conversation.memoryRecall.title": "コンテキスト注入（メモリ）",
+  "conversation.memoryRecall.matched": "{count} 件のメモリを注入",
+  "conversation.memoryRecall.noMatch": "関連するメモリは見つかりませんでした",
+  "conversation.memoryRecall.failed": "メモリの検索に失敗しました",
+  "conversation.memoryRecall.queries": "検索語",
+  "conversation.memoryRecall.memories": "注入されたメモリ",
+  "conversation.memoryRecall.memory": "メモリ {id}",
+  "conversation.memoryRecall.noMatchDetail": "このメッセージについて長期メモリを検索しましたが、関連するメモリは見つかりませんでした。",
+  "conversation.memoryRecall.failedDetail": "このメッセージのメモリ検索に失敗しました。関連するメモリが存在しないという意味ではありません。"
 }

@@ -6060,5 +6060,14 @@
   "toolCard.memory.id": "記憶 #{id}",
   "toolCard.memory.previous": "上一條記憶",
   "toolCard.memory.next": "下一條記憶",
-  "toolCard.memory.none": "沒有找到符合的記憶。"
+  "toolCard.memory.none": "沒有找到符合的記憶。",
+  "conversation.memoryRecall.title": "上下文注入（記憶）",
+  "conversation.memoryRecall.matched": "已注入 {count} 條記憶",
+  "conversation.memoryRecall.noMatch": "找不到相關記憶",
+  "conversation.memoryRecall.failed": "記憶檢索失敗",
+  "conversation.memoryRecall.queries": "檢索詞",
+  "conversation.memoryRecall.memories": "注入的記憶",
+  "conversation.memoryRecall.memory": "記憶 {id}",
+  "conversation.memoryRecall.noMatchDetail": "已就此訊息檢索長期記憶，找不到相關記憶。",
+  "conversation.memoryRecall.failedDetail": "此訊息的記憶檢索失敗，這並不代表沒有相關記憶。"
 }

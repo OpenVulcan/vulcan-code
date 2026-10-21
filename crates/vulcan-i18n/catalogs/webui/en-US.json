@@ -6060,5 +6060,14 @@
   "toolCard.memory.id": "Memory #{id}",
   "toolCard.memory.previous": "Previous memory",
   "toolCard.memory.next": "Next memory",
-  "toolCard.memory.none": "No memories matched."
+  "toolCard.memory.none": "No memories matched.",
+  "conversation.memoryRecall.title": "Context injection (memory)",
+  "conversation.memoryRecall.matched": "{count} memories injected",
+  "conversation.memoryRecall.noMatch": "No relevant memory found",
+  "conversation.memoryRecall.failed": "Memory retrieval failed",
+  "conversation.memoryRecall.queries": "Search queries",
+  "conversation.memoryRecall.memories": "Injected memories",
+  "conversation.memoryRecall.memory": "Memory {id}",
+  "conversation.memoryRecall.noMatchDetail": "Long-term memory was searched for this message; no relevant memory was found.",
+  "conversation.memoryRecall.failedDetail": "Memory retrieval for this message failed; this does not mean no relevant memory exists."
 }

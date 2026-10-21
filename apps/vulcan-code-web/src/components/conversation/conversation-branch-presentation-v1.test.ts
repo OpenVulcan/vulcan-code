@@ -96,6 +96,25 @@ describe("V1 branch request configuration presentation", () => {
     expect(message.body).not.toContain("goal_resumed");
     expect(parseConversationBlocks(message)[0]?.kind).toBe("notice");
   });
+  // A memory recall becomes one work-process notice carrying its queries, memories and failure state.
+  // 记忆召回成为一条工作过程提示，携带检索词、记忆与失败状态。
+  it("routes memory recall records into notice blocks", () => {
+    const t = (key: keyof typeof zhCNTranslations) => zhCNTranslations[key];
+    const recall = (event: Extract<ConversationEventSummary["event"], { kind: "memory_recall" }>) =>
+      projectConversationBranchPresentationV1("session-request-config", [{
+        seq: 1, turn_id: 1, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only", event,
+      }], EMPTY_RESOURCES, t).messages[0]!;
+    const matched = recall({ kind: "memory_recall", outcome: "matched", queries: ["deploy `steps`"], memories: [{ memory_id: 7, text: "Use blue-green deploys." }] });
+    const [block] = parseConversationBlocks(matched);
+    expect(block?.kind).toBe("notice");
+    expect(block?.title).toBe(t("conversation.memoryRecall.title"));
+    expect(block?.status).toBe("completed");
+    expect(matched.body).toContain("`` deploy `steps` ``");
+    expect(matched.body).toContain("Use blue-green deploys.");
+    const failed = recall({ kind: "memory_recall", outcome: "failed" });
+    expect(parseConversationBlocks(failed)[0]?.status).toBe("failed");
+    expect(failed.body).toBe(t("conversation.memoryRecall.failedDetail"));
+  });
   // Parameters: none. Returns: none; tests the actual branch adapter's initial suppression and display-name fields.
   // 参数：无。返回值：无；测试真实分支适配器对首次提示的抑制以及展示名称字段。
   it("projects configured names and omits initial route notices in the branch UI", () => {

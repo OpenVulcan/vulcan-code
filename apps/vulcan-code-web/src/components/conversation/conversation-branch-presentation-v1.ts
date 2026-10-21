@@ -487,6 +487,8 @@ function conversationMessagesForV1Event(
       }];
     case "display_note":
       return [displayNoteMessage(base, summary, summary.event, rootInput, apiStatsByCall, t)];
+    case "memory_recall":
+      return [memoryRecallMessage(base, summary, summary.event, rootInput, t)];
     case "request_config_changed": {
       // changeKind is derived from exact persisted fields, never from a display label.
       // changeKind 从精确持久化字段派生，绝不依赖展示文案。
@@ -888,6 +890,58 @@ function displayNoteMessage(
       status: event.severity,
     },
   };
+}
+
+// memoryRecallMessage shows what long-term memory recall gave the turn as one work-process notice.
+// memoryRecallMessage 把长期记忆召回为回合提供的内容显示为一条工作过程提示。
+// The detail body repeats the queries and memory text exactly as the model received them.
+// 详情正文原样列出检索词与模型收到的记忆正文。
+function memoryRecallMessage(
+  base: Pick<ConversationMessage, "id" | "conversationId" | "createdAt" | "metadata">,
+  summary: ConversationEventSummary,
+  event: Extract<ConversationEventBody, { kind: "memory_recall" }>,
+  rootInput: V1RootInputPresentationMetadata | undefined,
+  t: Translation,
+): ConversationMessage {
+  const memories = event.memories ?? [];
+  const queries = event.queries ?? [];
+  const headline = event.outcome === "matched"
+    ? t("conversation.memoryRecall.matched").replace("{count}", String(memories.length))
+    : event.outcome === "no_match" ? t("conversation.memoryRecall.noMatch") : t("conversation.memoryRecall.failed");
+  const sections: string[] = [];
+  if (event.outcome === "no_match") sections.push(t("conversation.memoryRecall.noMatchDetail"));
+  if (event.outcome === "failed") sections.push(t("conversation.memoryRecall.failedDetail"));
+  if (queries.length > 0) {
+    sections.push(`**${t("conversation.memoryRecall.queries")}**\n\n${queries.map((query) => `- ${markdownCodeSpan(query)}`).join("\n")}`);
+  }
+  if (memories.length > 0) {
+    sections.push(`**${t("conversation.memoryRecall.memories")}**`);
+    for (const memory of memories) {
+      sections.push(`#### ${t("conversation.memoryRecall.memory").replace("{id}", String(memory.memory_id))}\n\n${memory.text}`);
+    }
+  }
+  return {
+    ...base,
+    role: "assistant",
+    recordKind: "display-note",
+    title: t("conversation.memoryRecall.title"),
+    body: sections.join("\n\n"),
+    metadata: {
+      ...presentationMetadata(summary, rootInput),
+      notice_kind: "memory_recall",
+      summary: headline,
+      status: event.outcome === "failed" ? "failed" : "completed",
+    },
+  };
+}
+
+// markdownCodeSpan wraps text in a code span whose fence outlasts any backtick run inside it.
+// markdownCodeSpan 用长于内部任何反引号串的围栏把文本包为行内代码。
+function markdownCodeSpan(text: string): string {
+  const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(longestRun + 1);
+  const padding = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  return `${fence}${padding}${text}${padding}${fence}`;
 }
 
 // displayNoteTitle localizes host-owned notice kinds and keeps producer detail for the rest.

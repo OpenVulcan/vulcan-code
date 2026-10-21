@@ -6060,5 +6060,14 @@
   "toolCard.memory.id": "Souvenir n° {id}",
   "toolCard.memory.previous": "Souvenir précédent",
   "toolCard.memory.next": "Souvenir suivant",
-  "toolCard.memory.none": "Aucun souvenir correspondant."
+  "toolCard.memory.none": "Aucun souvenir correspondant.",
+  "conversation.memoryRecall.title": "Injection de contexte (mémoire)",
+  "conversation.memoryRecall.matched": "{count} souvenirs injectés",
+  "conversation.memoryRecall.noMatch": "Aucun souvenir pertinent trouvé",
+  "conversation.memoryRecall.failed": "Échec de la récupération de la mémoire",
+  "conversation.memoryRecall.queries": "Termes de recherche",
+  "conversation.memoryRecall.memories": "Souvenirs injectés",
+  "conversation.memoryRecall.memory": "Souvenir {id}",
+  "conversation.memoryRecall.noMatchDetail": "La mémoire à long terme a été consultée pour ce message ; aucun souvenir pertinent n'a été trouvé.",
+  "conversation.memoryRecall.failedDetail": "La récupération de la mémoire pour ce message a échoué ; cela ne signifie pas qu'aucun souvenir pertinent n'existe."
 }

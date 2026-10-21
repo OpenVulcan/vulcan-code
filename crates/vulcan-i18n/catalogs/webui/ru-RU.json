@@ -6060,5 +6060,14 @@
   "toolCard.memory.id": "Воспоминание #{id}",
   "toolCard.memory.previous": "Предыдущее воспоминание",
   "toolCard.memory.next": "Следующее воспоминание",
-  "toolCard.memory.none": "Подходящих воспоминаний не найдено."
+  "toolCard.memory.none": "Подходящих воспоминаний не найдено.",
+  "conversation.memoryRecall.title": "Внедрение контекста (память)",
+  "conversation.memoryRecall.matched": "Внедрено воспоминаний: {count}",
+  "conversation.memoryRecall.noMatch": "Релевантных воспоминаний не найдено",
+  "conversation.memoryRecall.failed": "Не удалось извлечь воспоминания",
+  "conversation.memoryRecall.queries": "Поисковые запросы",
+  "conversation.memoryRecall.memories": "Внедрённые воспоминания",
+  "conversation.memoryRecall.memory": "Воспоминание {id}",
+  "conversation.memoryRecall.noMatchDetail": "Для этого сообщения выполнен поиск в долговременной памяти; релевантных воспоминаний не найдено.",
+  "conversation.memoryRecall.failedDetail": "Не удалось извлечь воспоминания для этого сообщения; это не значит, что релевантных воспоминаний нет."
 }

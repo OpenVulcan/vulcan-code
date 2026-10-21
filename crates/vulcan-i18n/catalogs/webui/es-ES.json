@@ -6060,5 +6060,14 @@
   "toolCard.memory.id": "Recuerdo #{id}",
   "toolCard.memory.previous": "Recuerdo anterior",
   "toolCard.memory.next": "Recuerdo siguiente",
-  "toolCard.memory.none": "No se encontraron recuerdos coincidentes."
+  "toolCard.memory.none": "No se encontraron recuerdos coincidentes.",
+  "conversation.memoryRecall.title": "Inyección de contexto (memoria)",
+  "conversation.memoryRecall.matched": "{count} memorias inyectadas",
+  "conversation.memoryRecall.noMatch": "No se encontró ninguna memoria relevante",
+  "conversation.memoryRecall.failed": "Falló la recuperación de memoria",
+  "conversation.memoryRecall.queries": "Términos de búsqueda",
+  "conversation.memoryRecall.memories": "Memorias inyectadas",
+  "conversation.memoryRecall.memory": "Memoria {id}",
+  "conversation.memoryRecall.noMatchDetail": "Se buscó en la memoria a largo plazo para este mensaje; no se encontró ninguna memoria relevante.",
+  "conversation.memoryRecall.failedDetail": "Falló la recuperación de memoria para este mensaje; esto no significa que no exista memoria relevante."
 }

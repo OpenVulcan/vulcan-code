@@ -1085,6 +1085,14 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
       retry_limit?: number;
     }
   | {
+      /** UI-only record of the long-term memory recall that ran for one user message.
+       * 针对一条用户消息执行的长期记忆召回的仅 UI 记录。 */
+      kind: "memory_recall";
+      outcome: "matched" | "no_match" | "failed";
+      queries?: string[];
+      memories?: { memory_id: number; text: string }[];
+    }
+  | {
       kind: "request_config_changed";
       previous: ActiveRequestConfig;
       current: ActiveRequestConfig;
@@ -2211,6 +2219,10 @@ function eventIdentity(summary: ConversationEventSummary): EventIdentity {
       return JSON.stringify([event.kind, event.child_session_id, event.child_segment_generation, event.child_root_action_id, event.child_task_id, event.source_assistant_text_seq, event.child_turn_stats_seq]);
     case "display_note":
       return `${event.kind}:${event.notice_kind}:${event.reason_code}:${event.api_call_id ?? "none"}`;
+    case "memory_recall":
+      // The host records at most one recall per turn.
+      // 宿主每个回合最多记录一次召回。
+      return `${event.kind}:${summary.turn_id ?? "none"}`;
     case "request_config_changed":
       return event.kind;
     case "execution_control":

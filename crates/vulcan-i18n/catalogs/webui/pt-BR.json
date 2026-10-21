@@ -6060,5 +6060,14 @@
   "toolCard.memory.id": "Memória #{id}",
   "toolCard.memory.previous": "Memória anterior",
   "toolCard.memory.next": "Próxima memória",
-  "toolCard.memory.none": "Nenhuma memória correspondente encontrada."
+  "toolCard.memory.none": "Nenhuma memória correspondente encontrada.",
+  "conversation.memoryRecall.title": "Injeção de contexto (memória)",
+  "conversation.memoryRecall.matched": "{count} memórias injetadas",
+  "conversation.memoryRecall.noMatch": "Nenhuma memória relevante encontrada",
+  "conversation.memoryRecall.failed": "Falha na recuperação de memória",
+  "conversation.memoryRecall.queries": "Termos de busca",
+  "conversation.memoryRecall.memories": "Memórias injetadas",
+  "conversation.memoryRecall.memory": "Memória {id}",
+  "conversation.memoryRecall.noMatchDetail": "A memória de longo prazo foi pesquisada para esta mensagem; nenhuma memória relevante foi encontrada.",
+  "conversation.memoryRecall.failedDetail": "A recuperação de memória para esta mensagem falhou; isso não significa que não exista memória relevante."
 }

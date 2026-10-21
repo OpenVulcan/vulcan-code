@@ -6060,5 +6060,14 @@
   "toolCard.memory.id": "기억 #{id}",
   "toolCard.memory.previous": "이전 기억",
   "toolCard.memory.next": "다음 기억",
-  "toolCard.memory.none": "일치하는 기억이 없습니다."
+  "toolCard.memory.none": "일치하는 기억이 없습니다.",
+  "conversation.memoryRecall.title": "컨텍스트 주입(메모리)",
+  "conversation.memoryRecall.matched": "메모리 {count}개 주입됨",
+  "conversation.memoryRecall.noMatch": "관련 메모리를 찾지 못했습니다",
+  "conversation.memoryRecall.failed": "메모리 검색 실패",
+  "conversation.memoryRecall.queries": "검색어",
+  "conversation.memoryRecall.memories": "주입된 메모리",
+  "conversation.memoryRecall.memory": "메모리 {id}",
+  "conversation.memoryRecall.noMatchDetail": "이 메시지에 대해 장기 메모리를 검색했지만 관련 메모리를 찾지 못했습니다.",
+  "conversation.memoryRecall.failedDetail": "이 메시지의 메모리 검색에 실패했습니다. 관련 메모리가 없다는 뜻은 아닙니다."
 }

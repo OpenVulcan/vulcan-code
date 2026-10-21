@@ -610,6 +610,15 @@ pub fn event(summary: &ConversationEventSummary) -> Option<ConversationEvent> {
             severity: note.severity,
             message: display_note_message(note),
         },
+        CoreEvent::MemoryRecall(recall) => EventBody::DisplayNote {
+            severity: match recall.outcome {
+                core::MemoryRecallOutcome::Failed => NoticeSeverity::Warning,
+                core::MemoryRecallOutcome::Matched | core::MemoryRecallOutcome::NoMatch => {
+                    NoticeSeverity::Info
+                }
+            },
+            message: memory_recall_message(recall),
+        },
         CoreEvent::TurnStats(stats) => EventBody::TurnStats {
             outcome: stats.outcome,
             duration_ms: stats.duration_ms.map_or(0, millis),
@@ -640,6 +649,33 @@ fn display_note_message(note: &core::DisplayNoteEvent) -> String {
             .clone()
             .unwrap_or_else(|| note.reason_code.clone()),
     }
+}
+
+/// One-line memory recall note mirroring the WebUI work-process item: title, outcome and queries.
+/// 镜像 WebUI 工作过程条目的单行记忆召回通知：标题、结果与检索词。
+fn memory_recall_message(recall: &core::MemoryRecallEvent) -> String {
+    let outcome = match recall.outcome {
+        core::MemoryRecallOutcome::Matched => {
+            crate::tr!(
+                "conversation.memoryRecall.matched",
+                count = recall.memories.len()
+            )
+        }
+        core::MemoryRecallOutcome::NoMatch => crate::tr!("conversation.memoryRecall.noMatch"),
+        core::MemoryRecallOutcome::Failed => crate::tr!("conversation.memoryRecall.failed"),
+    };
+    let mut message = format!(
+        "{} · {outcome}",
+        crate::tr!("conversation.memoryRecall.title")
+    );
+    if !recall.queries.is_empty() {
+        message.push_str(&format!(
+            " · {}: {}",
+            crate::tr!("conversation.memoryRecall.queries"),
+            recall.queries.join(" · ")
+        ));
+    }
+    message
 }
 
 // ---- Git ----
@@ -902,6 +938,28 @@ mod tests {
         }))
         .expect("turn boundary summary matches the shared DTO");
         assert!(super::event(&boundary).is_none());
+    }
+
+    /// A memory recall record becomes a note carrying its queries; a failed recall warns.
+    /// 记忆召回记录成为携带检索词的通知；失败的召回以警告呈现。
+    #[test]
+    fn maps_memory_recall_to_a_note() {
+        let recall = |outcome: &str| {
+            let summary: ConversationEventSummary = serde_json::from_value(json!({
+                "seq": 3, "turn_id": 2, "created_at_ms": 1, "updated_at_ms": 1, "event_revision": 1,
+                "visibility": "ui_only",
+                "event": {"kind": "memory_recall", "outcome": outcome, "queries": ["deploy steps"]}
+            }))
+            .expect("memory recall summary matches the shared DTO");
+            match event(&summary).expect("memory recall is shown").body {
+                EventBody::DisplayNote { severity, message } => (severity, message),
+                _ => panic!("expected a note"),
+            }
+        };
+        let (severity, message) = recall("no_match");
+        assert_eq!(severity, NoticeSeverity::Info);
+        assert!(message.contains("deploy steps"));
+        assert_eq!(recall("failed").0, NoticeSeverity::Warning);
     }
 
     /// Unified diffs parse into numbered hunks without their file headers.
