@@ -172,6 +172,7 @@
   background: var(--vk-panel);
   animation: vcn-fade-in var(--vk-t-med) var(--vk-ease);
 }
-.context-basics-tabs > section.vk-form-prefs,
-.context-basics-tabs > section > :is(.context-basics-section, .vk-form-prefs) { max-width: none; }
+/* Inside a tab panel every form block spans the panel, so rows line up with the disclosures beside them. */
+/* 分页面板内的每个表单块都铺满面板，使各行与旁边的折叠区对齐。 */
+.context-basics-tabs :is(.context-basics-section, .vk-form-prefs) { max-width: none; }
 .context-basics-tabs .context-basics-rows { max-width: none; }
