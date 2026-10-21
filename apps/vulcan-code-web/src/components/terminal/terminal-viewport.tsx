@@ -3,6 +3,7 @@ import { useI18n } from "@/i18n";
 
 import type { TerminalDisplayChunk } from "@/types";
 import type { TerminalPathOpener } from "./terminal-path-links";
+import { useTerminalPathOpener } from "./use-terminal-path-opener";
 
 // TerminalViewportProps defines the generic xterm renderer without project or session ownership.
 // TerminalViewportProps 定义不包含项目或会话归属的通用 xterm 渲染器。
@@ -49,8 +50,11 @@ export interface TerminalViewportProps {
   // Called after xterm accepts every newly delivered chunk through one sequence.
   // xterm 接受截至某一序号的全部新交付分片后调用。
   onChunksRendered?: (lastRenderedSeq: number) => void;
-  // Opens a file location the output printed when it is Ctrl/Cmd+clicked; without it no locations are links.
-  // 按 Ctrl/Cmd+点击输出中的文件位置时打开它；未提供时文件位置不成为链接。
+  // Makes printed file locations Ctrl/Cmd+click links that open in the files panel, resolved against cwd.
+  // 使输出中的文件位置成为 Ctrl/Cmd+点击链接，以 cwd 解析后在文件面板中打开。
+  filePaths?: { cwd?: string | null };
+  // Opens a Ctrl/Cmd+clicked file location; TerminalViewport derives it from filePaths.
+  // 打开被 Ctrl/Cmd+点击的文件位置；TerminalViewport 由 filePaths 推导。
   onOpenPath?: TerminalPathOpener;
 }
 
@@ -66,10 +70,11 @@ const LazyTerminalViewportRuntime = React.lazy(() => import("./terminal-viewport
 // 参数：props 提供类型化视口合同；返回带可访问加载占位的懒加载模拟器。
 export function TerminalViewport(props: TerminalViewportProps) {
   const { t } = useI18n();
+  const openPath = useTerminalPathOpener(props.filePaths?.cwd);
   return (
     <React.Suspense fallback={<div className="vk-term-viewport" data-loading="" role="status"
       aria-label={t("workspaceAudit.viewportLoading")} data-loading-label={t("workspaceAudit.viewportLoading")} />}>
-      <LazyTerminalViewportRuntime {...props} />
+      <LazyTerminalViewportRuntime {...props} onOpenPath={props.filePaths ? openPath : undefined} />
     </React.Suspense>
   );
 }

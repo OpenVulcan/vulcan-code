@@ -53,6 +53,16 @@ export interface ProjectFloatingLayerControls {
   toggleMaximized: () => void;
 }
 
+// ProjectFloatingLayerControlsContext gives the window commands to the surface body as well as its title bar.
+// ProjectFloatingLayerControlsContext 将窗口命令同时提供给表面主体及其标题栏。
+const ProjectFloatingLayerControlsContext = React.createContext<ProjectFloatingLayerControls | null>(null);
+
+// useProjectFloatingLayerControls returns the commands of the floating window around the caller, or null outside one.
+// useProjectFloatingLayerControls 返回调用方所在浮动窗口的命令；不在浮动窗口内时返回 null。
+export function useProjectFloatingLayerControls(): ProjectFloatingLayerControls | null {
+  return React.useContext(ProjectFloatingLayerControlsContext);
+}
+
 // ProjectFloatingLayerProps defines a project-scoped movable container without terminal business logic.
 // ProjectFloatingLayerProps 定义不包含终端业务逻辑的项目级可移动容器。
 export interface ProjectFloatingLayerProps {
@@ -710,10 +720,10 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
 
   // headerControls is the exact window-command surface passed to terminal-owned title content.
   // headerControls 是传给终端业务标题内容的精确窗口命令界面。
-  const headerControls: ProjectFloatingLayerControls = {
+  const headerControls = React.useMemo<ProjectFloatingLayerControls>(() => ({
     maximized: windowState.maximized,
     toggleMaximized,
-  };
+  }), [toggleMaximized, windowState.maximized]);
   // renderedHeader resolves a static title or a command-aware title renderer.
   // renderedHeader 解析静态标题或可感知窗口命令的标题渲染器。
   const renderedHeader = typeof props.header === "function" ? props.header(headerControls) : props.header;
@@ -752,7 +762,9 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
           >
             {renderedHeader}
           </div>
-          <div className="vk-float-win-body">{props.children}</div>
+          <div className="vk-float-win-body">
+            <ProjectFloatingLayerControlsContext.Provider value={headerControls}>{props.children}</ProjectFloatingLayerControlsContext.Provider>
+          </div>
         </section>
       ) : null}
     </div>
