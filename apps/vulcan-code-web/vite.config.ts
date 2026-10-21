@@ -41,6 +41,10 @@ export default defineConfig(({ mode }) => {
       // manifest exposes the actual static import graph for the first-workbench budget.
       // manifest 暴露真实静态导入图，供首屏工作台资源预算核算。
       manifest: true,
+      // Provider artwork stays as separate files: inlined, the small icons added about 45 KB of base64 to the
+      // workbench chunk, while each settings or model-picker row needs only the few it shows.
+      // 供应商图标保持为独立文件：若内联，这些小图标会向工作台分块加入约 45 KB 的 base64，而设置或模型选择行只需显示其中少数几个。
+      assetsInlineLimit: (file) => (file.replaceAll("\\", "/").includes("/assets/provider-icons/") ? false : undefined),
       rollupOptions: {
         output: {
           // Each locale catalog gets its own chunk and cache identity. Only the English fallback is a
