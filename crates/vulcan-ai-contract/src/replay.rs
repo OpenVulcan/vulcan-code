@@ -459,6 +459,9 @@ enum ReplayAssistantSegment {
     /// Model reasoning segment.
     /// 模型推理片段。
     Reasoning,
+    /// Encrypted-only or summary-only provider reasoning that canonical content may or may not declare.
+    /// 仅加密或仅摘要的供应商推理，规范内容可能声明也可能不声明它。
+    OpaqueReasoning,
     /// Assistant-visible text segment.
     /// 助手可见正文片段。
     Text,
@@ -530,14 +533,20 @@ fn provider_item_tool_identity(item: &Value) -> Option<&str> {
 /// 把一个已持久化 Responses 项映射到它所重放的助手片段（若确实重放片段）。
 fn provider_item_assistant_segment(item: &Value) -> Option<ReplayAssistantSegment> {
     match item.get("type").and_then(Value::as_str)? {
-        // Only full reasoning content becomes canonical reasoning; an encrypted-only or
-        // summary-only item is replayed as an opaque continuation that canonical content never declares.
-        // 只有完整推理正文会成为规范推理；仅加密或仅摘要的项作为不透明延续重放，规范内容从不声明它。
-        "reasoning" => item
-            .get("content")
-            .and_then(Value::as_array)
-            .is_some_and(|content| !content.is_empty())
-            .then_some(ReplayAssistantSegment::Reasoning),
+        // Full reasoning content always becomes canonical reasoning; an encrypted-only or
+        // summary-only item is an opaque continuation that canonical content may omit.
+        // 完整推理正文必然成为规范推理；仅加密或仅摘要的项是规范内容可以省略的不透明延续。
+        "reasoning" => Some(
+            if item
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|content| !content.is_empty())
+            {
+                ReplayAssistantSegment::Reasoning
+            } else {
+                ReplayAssistantSegment::OpaqueReasoning
+            },
+        ),
         "message" => {
             (!responses_message_text(item).is_empty()).then_some(ReplayAssistantSegment::Text)
         }
@@ -559,6 +568,29 @@ fn canonical_assistant_segment(item: &ContentItem) -> Option<ReplayAssistantSegm
         ContentItem::Resource { .. }
         | ContentItem::ToolResult { .. }
         | ContentItem::Citation { .. } => None,
+    }
+}
+
+/// Returns whether provider segments align with canonical segments in order.
+/// 返回供应商片段是否按序与规范片段对齐。
+/// Each opaque reasoning segment matches one canonical reasoning segment or none; all others match exactly.
+/// 每个不透明推理片段匹配一个规范推理片段或不匹配任何片段；其他片段必须精确匹配。
+fn provider_segments_cover(
+    provider: &[ReplayAssistantSegment],
+    canonical: &[ReplayAssistantSegment],
+) -> bool {
+    match (provider.split_first(), canonical.split_first()) {
+        (None, None) => true,
+        (Some((ReplayAssistantSegment::OpaqueReasoning, provider_rest)), _) => {
+            (canonical.first() == Some(&ReplayAssistantSegment::Reasoning)
+                && provider_segments_cover(provider_rest, &canonical[1..]))
+                || provider_segments_cover(provider_rest, canonical)
+        }
+        (Some((provider_head, provider_rest)), Some((canonical_head, canonical_rest))) => {
+            provider_head == canonical_head
+                && provider_segments_cover(provider_rest, canonical_rest)
+        }
+        _ => false,
     }
 }
 
@@ -587,7 +619,7 @@ fn verify_provider_item_coverage(items: &[Value], content: &[ContentItem]) -> Re
         .filter_map(canonical_assistant_segment)
         .filter(|segment| !matches!(segment, ReplayAssistantSegment::ToolCall(_)))
         .collect();
-    if ordered != canonical_ordered {
+    if !provider_segments_cover(&ordered, &canonical_ordered) {
         return Err(format!(
             "provider items replay {ordered:?} but canonical content declares {canonical_ordered:?}"
         ));
