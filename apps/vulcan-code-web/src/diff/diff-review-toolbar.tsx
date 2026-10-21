@@ -10,6 +10,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -42,6 +44,12 @@ const DIFF_REVIEW_MODE_LABEL_KEYS: Record<DiffReviewMode, TranslationKey> = {
   last_turn: "diff.mode.lastTurn",
 };
 
+// DIFF_TOOLBAR_COMPACT_WIDTH_PX is the toolbar width below which the view, search, commit and refresh controls
+// leave the first row for the more menu, so the repository and source pickers keep readable labels.
+// DIFF_TOOLBAR_COMPACT_WIDTH_PX 是工具栏宽度阈值，低于该值时视图、搜索、提交与刷新控件离开第一行进入更多菜单，
+// 使仓库与来源选择器保持可读标签。
+export const DIFF_TOOLBAR_COMPACT_WIDTH_PX = 440;
+
 // BranchSelectorOption stores one deduplicated branch menu option.
 // BranchSelectorOption 保存单个去重后的分支菜单选项。
 interface BranchSelectorOption {
@@ -59,8 +67,10 @@ interface BranchSelectorOption {
 // DiffPanelToolbar says what the review compares and how it is shown. The first row picks the repository and
 // the source of the changes (unstaged, staged, a commit, a branch or the last turn) with their totals, then
 // the view, search, commit, refresh and display options; branch comparison and search each add a row below.
+// On a narrow toolbar the view, search, commit and refresh controls move into the more menu.
 // DiffPanelToolbar 说明审核比较的内容与展示方式。第一行选择仓库与变更来源（未暂存、已暂存、提交、分支或上一轮）及其合计，
 // 然后是视图、搜索、提交、刷新与显示选项；分支对比与搜索各自在下方增加一行。
+// 工具栏较窄时，视图、搜索、提交与刷新控件收进更多菜单。
 export function DiffPanelToolbar(props: {
   // Parsed diff snapshot to render.
   // 要渲染的已解析 diff 快照。
@@ -138,6 +148,20 @@ export function DiffPanelToolbar(props: {
   const { t } = useI18n();
   const [searchOpen, setSearchOpen] = React.useState(false);
   const searchTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const moreTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const headerRef = React.useRef<HTMLElement | null>(null);
+  const [compact, setCompact] = React.useState(false);
+  React.useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    const measure = () => setCompact(header.clientWidth > 0 && header.clientWidth < DIFF_TOOLBAR_COMPACT_WIDTH_PX);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+  const commitActionDisabled = Boolean(props.gitCommitActionBusy || props.gitCommitActionDisabled);
   const selectedCommit = selectedDiffCommit(props.snapshot.recentCommits ?? [], props.selection.commitHash ?? props.snapshot.selectedCommitHash);
   const selectedRepositoryKey = props.selection.repositoryKey
     ?? props.repositories?.find((repository) => repository.isPrimary)?.repositoryKey
@@ -145,12 +169,14 @@ export function DiffPanelToolbar(props: {
   const baseBranch = props.selection.baseBranch ?? props.snapshot.selectedBaseBranch ?? props.snapshot.currentBranch ?? "";
   const compareBranch = props.selection.compareBranch ?? props.snapshot.selectedCompareBranch ?? props.snapshot.defaultBranch ?? "";
   const titleText = props.selection.mode === "commit" && selectedCommit ? selectedCommit.subject : null;
+  // Escape returns focus to whichever control opened search: the search button, or the more menu when compact.
+  // Escape 将焦点还给打开搜索的控件：搜索按钮，或紧凑时的更多菜单。
   const closeSearch = () => {
     setSearchOpen(false);
-    searchTriggerRef.current?.focus();
+    (searchTriggerRef.current ?? moreTriggerRef.current)?.focus();
   };
   return (
-    <header className="vk-diffbar">
+    <header className="vk-diffbar" data-compact={compact ? "" : undefined} ref={headerRef}>
       <div className="vk-diffbar-row">
         {props.repositories && props.repositories.length > 1 ? (
           <DropdownMenu>
@@ -192,6 +218,7 @@ export function DiffPanelToolbar(props: {
           <span className="vk-del">−{props.snapshot.stats.deletions}</span>
         </span>
         <div className="vk-diffbar-acts">
+          {compact ? null : <>
           <SegmentedControl aria-label={t("diff.view.label")} onValueChange={(value) => props.onViewModeChange(value === "split" ? "split" : "unified")} value={props.viewMode}>
             <SegmentedControlItem aria-label={t("diff.view.unified")} title={t("diff.view.unified")} value="unified"><Rows3 size={13} /></SegmentedControlItem>
             <SegmentedControlItem aria-label={t("diff.view.split")} title={t("diff.view.split")} value="split"><Columns2 size={13} /></SegmentedControlItem>
@@ -212,7 +239,7 @@ export function DiffPanelToolbar(props: {
           {props.onOpenGitCommitAction ? (
             <IconButton
               aria-label={props.gitCommitActionLabel}
-              disabled={Boolean(props.gitCommitActionBusy || props.gitCommitActionDisabled)}
+              disabled={commitActionDisabled}
               onClick={props.onOpenGitCommitAction}
               size="sm"
               title={props.gitCommitActionLabel}
@@ -225,11 +252,23 @@ export function DiffPanelToolbar(props: {
               <RefreshCw className={props.loading ? "vk-spin" : undefined} size={14} />
             </IconButton>
           ) : null}
+          </>}
           <DiffMoreMenu
             preferences={props.renderPreferences}
             rawDiff={props.snapshot.rawDiff}
+            triggerRef={moreTriggerRef}
             onCopyRaw={props.onCopyRaw}
             onPreferencesChange={props.onRenderPreferencesChange}
+            folded={compact ? {
+              viewMode: props.viewMode,
+              onViewModeChange: props.onViewModeChange,
+              onOpenSearch: props.onSearchQueryChange ? () => setSearchOpen(true) : undefined,
+              gitCommitActionLabel: props.gitCommitActionLabel,
+              gitCommitActionDisabled: commitActionDisabled,
+              onOpenGitCommitAction: props.onOpenGitCommitAction,
+              loading: Boolean(props.loading),
+              onRefresh: props.onRefresh,
+            } : undefined}
           />
         </div>
       </div>
@@ -266,9 +305,32 @@ export function DiffPanelToolbar(props: {
   );
 }
 
-// DiffMoreMenu holds copying the raw diff and the display options, each shown as on or off.
-// DiffMoreMenu 收纳复制原始 diff 与各项显示选项，每项以开或关呈现。
+// DiffMoreFoldedActions carries the first-row controls that a narrow toolbar folds into the more menu.
+// DiffMoreFoldedActions 承载窄工具栏收进更多菜单的第一行控件。
+interface DiffMoreFoldedActions {
+  viewMode: DiffViewMode;
+  onViewModeChange: (viewMode: DiffViewMode) => void;
+  // Opens the search row; absent when search is unavailable.
+  // 打开搜索行；搜索不可用时缺省。
+  onOpenSearch?: () => void;
+  gitCommitActionLabel?: string;
+  gitCommitActionDisabled: boolean;
+  onOpenGitCommitAction?: () => void;
+  loading: boolean;
+  onRefresh?: () => void | Promise<void>;
+}
+
+// DiffMoreMenu holds copying the raw diff and the display options, each shown as on or off; on a narrow toolbar
+// it also lists the view, search, commit and refresh controls folded out of the first row.
+// DiffMoreMenu 收纳复制原始 diff 与各项显示选项，每项以开或关呈现；工具栏较窄时还列出从第一行收进来的视图、搜索、
+// 提交与刷新控件。
 function DiffMoreMenu(props: {
+  // Controls folded out of a narrow first row; absent when the row shows them itself.
+  // 从较窄第一行收进来的控件；第一行自行展示时缺省。
+  folded?: DiffMoreFoldedActions;
+  // Receives the menu trigger so closing search can return focus to it.
+  // 接收菜单触发器，便于关闭搜索时将焦点还给它。
+  triggerRef?: React.Ref<HTMLButtonElement>;
   // Current target-compatible rendering preferences.
   // 当前目标兼容渲染偏好。
   preferences: DiffRenderPreferences;
@@ -301,14 +363,70 @@ function DiffMoreMenu(props: {
     }
   }, [props]);
   const set = (patch: Partial<DiffRenderPreferences>) => props.onPreferencesChange({ ...props.preferences, ...patch });
+  // Opening search from the menu hands focus to the search field instead of back to the menu trigger.
+  // 从菜单打开搜索时把焦点交给搜索框，而不是还给菜单触发器。
+  const searchChosenRef = React.useRef(false);
+  const folded = props.folded;
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+      <DropdownMenuTrigger asChild ref={props.triggerRef}>
         <IconButton aria-label={t("diff.moreActions")} size="sm" title={t("diff.moreActions")}>
           <MoreHorizontal size={14} />
         </IconButton>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="vk-diffbar-menu" sideOffset={4}>
+      <DropdownMenuContent
+        align="end"
+        className="vk-diffbar-menu"
+        onCloseAutoFocus={(event) => {
+          if (!searchChosenRef.current) return;
+          searchChosenRef.current = false;
+          event.preventDefault();
+        }}
+        sideOffset={4}
+      >
+        {folded ? (
+          <>
+            <DropdownMenuLabel>{t("diff.view.label")}</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              onValueChange={(value) => folded.onViewModeChange(value === "split" ? "split" : "unified")}
+              value={folded.viewMode}
+            >
+              <DropdownMenuRadioItem value="unified">
+                <Rows3 size={13} />
+                <span>{t("diff.view.unified")}</span>
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="split">
+                <Columns2 size={13} />
+                <span>{t("diff.view.split")}</span>
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            {folded.onOpenSearch ? (
+              <DropdownMenuItem
+                onSelect={() => {
+                  searchChosenRef.current = true;
+                  folded.onOpenSearch?.();
+                }}
+              >
+                <Search size={13} />
+                <span>{t("diff.search.label")}</span>
+              </DropdownMenuItem>
+            ) : null}
+            {folded.onOpenGitCommitAction ? (
+              <DropdownMenuItem disabled={folded.gitCommitActionDisabled} onSelect={() => folded.onOpenGitCommitAction?.()}>
+                <GitCommitHorizontal size={13} />
+                <span>{folded.gitCommitActionLabel}</span>
+              </DropdownMenuItem>
+            ) : null}
+            {folded.onRefresh ? (
+              <DropdownMenuItem disabled={folded.loading} onSelect={() => void folded.onRefresh?.()}>
+                <RefreshCw size={13} />
+                <span>{t("diff.refresh")}</span>
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
         {props.onCopyRaw ? (
           <>
             <DropdownMenuItem disabled={copying} onSelect={() => void copyRawDiff()}>

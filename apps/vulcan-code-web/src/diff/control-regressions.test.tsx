@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { toast } from "@/ui-kit/primitives/toast";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
-import { DiffPanelToolbar } from "./diff-review-toolbar";
+import { DIFF_TOOLBAR_COMPACT_WIDTH_PX, DiffPanelToolbar } from "./diff-review-toolbar";
 import { DiffReviewFloatingGitActions } from "./DiffReviewPanel/floating-git-actions";
 import { DiffFileCard } from "./diff-file-card";
 import { parseUnifiedDiff } from "./parseDiff";
@@ -75,6 +75,31 @@ it("restores search focus on Escape and does not route button Enter to the next 
   await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })));
   expect(document.activeElement).toBe(trigger);
   expect(document.querySelector('[aria-label="Search diff"]')).toBeNull();
+});
+
+it("folds the view, search, commit and refresh controls into the more menu on a narrow toolbar", async () => {
+  const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(DIFF_TOOLBAR_COMPACT_WIDTH_PX - 1);
+  try {
+    const viewMode = vi.fn(); const refresh = vi.fn(); const commit = vi.fn();
+    await render(<DiffPanelToolbar snapshot={snapshot} selection={{ mode: "unstaged" }} viewMode="unified" renderPreferences={preferences}
+      onViewModeChange={viewMode} onRenderPreferencesChange={vi.fn()} onSearchQueryChange={vi.fn()} onRefresh={refresh}
+      gitCommitActionLabel="Commit or push" onOpenGitCommitAction={commit} />);
+    expect(document.querySelector('[aria-label="Open diff search"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Refresh diff"]')).toBeNull();
+    const openMenu = async () => act(async () => document.querySelector<HTMLButtonElement>('[title="More diff actions"]')!.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+    const item = (role: string, text: string) => [...document.querySelectorAll<HTMLElement>(`[role="${role}"]`)].find((entry) => entry.textContent === text)!;
+    await openMenu();
+    await act(async () => item("menuitemradio", "Split view").click());
+    expect(viewMode).toHaveBeenCalledWith("split");
+    await openMenu(); await act(async () => item("menuitem", "Refresh diff").click());
+    expect(refresh).toHaveBeenCalledOnce();
+    await openMenu(); await act(async () => item("menuitem", "Commit or push").click());
+    expect(commit).toHaveBeenCalledOnce();
+    await openMenu(); await act(async () => item("menuitem", "Search diff").click());
+    expect(document.querySelector('input[aria-label="Search diff"]')).not.toBeNull();
+  } finally {
+    width.mockRestore();
+  }
 });
 
 it("locks floating Git actions until rejection and then permits retry", async () => {
