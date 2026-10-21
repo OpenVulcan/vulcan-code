@@ -6058,8 +6058,7 @@
   "conversation.collaboration.resultIssue.revoked": "Доступ запросившей сессии отозван, поэтому этот результат ей не показан.",
   "toolCard.memory.count": "Воспоминаний: {count}",
   "toolCard.memory.id": "Воспоминание #{id}",
-  "toolCard.memory.relevance": "Релевантность {score}",
   "toolCard.memory.previous": "Предыдущее воспоминание",
   "toolCard.memory.next": "Следующее воспоминание",
-  "toolCard.memory.none": "Ни одно воспоминание не оказалось достаточно релевантным."
+  "toolCard.memory.none": "Подходящих воспоминаний не найдено."
 }

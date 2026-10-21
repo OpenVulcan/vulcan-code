@@ -6058,8 +6058,7 @@
   "conversation.collaboration.resultIssue.revoked": "O acesso da sessão solicitante foi revogado, então este resultado não foi mostrado a ela.",
   "toolCard.memory.count": "{count} memórias",
   "toolCard.memory.id": "Memória #{id}",
-  "toolCard.memory.relevance": "Relevância {score}",
   "toolCard.memory.previous": "Memória anterior",
   "toolCard.memory.next": "Próxima memória",
-  "toolCard.memory.none": "Nenhuma memória foi relevante o bastante para ser retornada."
+  "toolCard.memory.none": "Nenhuma memória correspondente encontrada."
 }

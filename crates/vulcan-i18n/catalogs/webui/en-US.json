@@ -6058,8 +6058,7 @@
   "conversation.collaboration.resultIssue.revoked": "The requesting session's access was revoked, so this result was not shown to it.",
   "toolCard.memory.count": "{count} memories",
   "toolCard.memory.id": "Memory #{id}",
-  "toolCard.memory.relevance": "Relevance {score}",
   "toolCard.memory.previous": "Previous memory",
   "toolCard.memory.next": "Next memory",
-  "toolCard.memory.none": "No memory was relevant enough to return."
+  "toolCard.memory.none": "No memories matched."
 }

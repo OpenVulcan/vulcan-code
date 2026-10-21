@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { memorySearchPages } from "@/conversation/tools/cards/memory-search-card";
 
-// RESULT mirrors the VMM result renderer: query groups, memory headings with optional relevance, then bodies.
-// RESULT 镜像 VMM 结果渲染器：查询分组、可选相关度的记忆标题及其正文。
+// RESULT mirrors the VMM result renderer: query groups, memory headings in rank order, then bodies.
+// RESULT 镜像 VMM 结果渲染器：查询分组、按排名排列的记忆标题及其正文。
 const RESULT = [
   "# Memory search",
   "",
   "## Query 1: `deploy steps`",
   "",
-  "### Memory 7 · relevance 0.93",
+  "### Memory 7",
   "",
   "Source turn: 2 · Category: `fact`",
   "",
@@ -27,13 +27,13 @@ const RESULT = [
 ].join("\r\n");
 
 describe("memorySearchPages", () => {
-  // Every memory becomes one page carrying its own query, id, relevance and body.
-  // 每条记忆成为一页，携带其查询、标识、相关度与正文。
-  it("splits memories into pages with their query and relevance", () => {
+  // Every memory becomes one page carrying its own query, id and body.
+  // 每条记忆成为一页，携带其查询、标识与正文。
+  it("splits memories into pages with their query", () => {
     const pages = memorySearchPages(RESULT);
-    expect(pages.map((page) => [page.query, page.memoryId, page.relevance])).toEqual([
-      ["deploy steps", "7", 0.93],
-      ["colors", "12", null],
+    expect(pages.map((page) => [page.query, page.memoryId])).toEqual([
+      ["deploy steps", "7"],
+      ["colors", "12"],
     ]);
     expect(pages[0].body).toContain("First summary");
     expect(pages[0].body).not.toContain("Query 2");

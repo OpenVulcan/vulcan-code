@@ -6058,8 +6058,7 @@
   "conversation.collaboration.resultIssue.revoked": "L'accès de la session demandeuse a été révoqué ; ce résultat ne lui a donc pas été montré.",
   "toolCard.memory.count": "{count} souvenirs",
   "toolCard.memory.id": "Souvenir n° {id}",
-  "toolCard.memory.relevance": "Pertinence {score}",
   "toolCard.memory.previous": "Souvenir précédent",
   "toolCard.memory.next": "Souvenir suivant",
-  "toolCard.memory.none": "Aucun souvenir n'était assez pertinent pour être renvoyé."
+  "toolCard.memory.none": "Aucun souvenir correspondant."
 }

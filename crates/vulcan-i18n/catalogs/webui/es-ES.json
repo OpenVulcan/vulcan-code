@@ -6058,8 +6058,7 @@
   "conversation.collaboration.resultIssue.revoked": "Se revocó el acceso de la sesión solicitante, por lo que no se le mostró este resultado.",
   "toolCard.memory.count": "{count} recuerdos",
   "toolCard.memory.id": "Recuerdo #{id}",
-  "toolCard.memory.relevance": "Relevancia {score}",
   "toolCard.memory.previous": "Recuerdo anterior",
   "toolCard.memory.next": "Recuerdo siguiente",
-  "toolCard.memory.none": "Ningún recuerdo fue lo bastante relevante para devolverlo."
+  "toolCard.memory.none": "No se encontraron recuerdos coincidentes."
 }

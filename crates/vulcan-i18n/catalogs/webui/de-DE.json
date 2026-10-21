@@ -6058,8 +6058,7 @@
   "conversation.collaboration.resultIssue.revoked": "Der Zugriff der anfragenden Sitzung wurde widerrufen, daher wurde ihr dieses Ergebnis nicht angezeigt.",
   "toolCard.memory.count": "{count} Erinnerungen",
   "toolCard.memory.id": "Erinnerung #{id}",
-  "toolCard.memory.relevance": "Relevanz {score}",
   "toolCard.memory.previous": "Vorherige Erinnerung",
   "toolCard.memory.next": "Nächste Erinnerung",
-  "toolCard.memory.none": "Keine Erinnerung war relevant genug, um zurückgegeben zu werden."
+  "toolCard.memory.none": "Keine passenden Erinnerungen gefunden."
 }

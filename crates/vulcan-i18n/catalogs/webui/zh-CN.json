@@ -6058,8 +6058,7 @@
   "conversation.collaboration.resultIssue.revoked": "请求方会话的授权已撤销，因此未向其展示此结果。",
   "toolCard.memory.count": "{count} 条记忆",
   "toolCard.memory.id": "记忆 #{id}",
-  "toolCard.memory.relevance": "相关度 {score}",
   "toolCard.memory.previous": "上一条记忆",
   "toolCard.memory.next": "下一条记忆",
-  "toolCard.memory.none": "没有相关度足够的记忆可返回。"
+  "toolCard.memory.none": "没有找到匹配的记忆。"
 }

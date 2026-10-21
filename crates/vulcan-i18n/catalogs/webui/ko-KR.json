@@ -6058,8 +6058,7 @@
   "conversation.collaboration.resultIssue.revoked": "요청한 세션의 권한이 취소되어 이 결과가 표시되지 않았습니다.",
   "toolCard.memory.count": "기억 {count}개",
   "toolCard.memory.id": "기억 #{id}",
-  "toolCard.memory.relevance": "관련도 {score}",
   "toolCard.memory.previous": "이전 기억",
   "toolCard.memory.next": "다음 기억",
-  "toolCard.memory.none": "반환할 만큼 관련도가 높은 기억이 없습니다."
+  "toolCard.memory.none": "일치하는 기억이 없습니다."
 }
