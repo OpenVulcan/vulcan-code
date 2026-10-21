@@ -1,10 +1,13 @@
-/* Conversation find bar: floats over the transcript's top right corner, clear of the scrollbar. */
-/* 会话查找栏：浮在转录区右上角，避开滚动条。 */
+/* Conversation find bar: floats over the transcript's top right corner, clear of the scrollbar. It shares that
+ * corner with the session tools slot (z-index 30 in session-tools.css) and stays above it while open, so its
+ * step and close buttons are never covered, as they were on narrow windows. */
+/* 会话查找栏：浮在转录区右上角，避开滚动条。它与会话工具槽位（session-tools.css 中 z-index 30）共用该角落，
+ * 打开期间位于其上方，使跳转与关闭按钮不会被遮挡（此前窄窗口下即被遮挡）。 */
 .vk-find-bar {
   position: absolute;
   top: calc(var(--vk-u) * 2);
   right: calc(var(--vk-u) * 5);
-  z-index: 5;
+  z-index: 31;
   display: flex;
   align-items: center;
   gap: calc(var(--vk-u) * 0.5);
