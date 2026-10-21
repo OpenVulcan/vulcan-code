@@ -2,5 +2,6 @@
   { "package": "vulcan-code-service", "binary": "vulcan-code-service" },
   { "package": "vulcan-terminal-host", "binary": "vulcan-terminal-host" },
   { "package": "vulcan-judge-host", "binary": "vulcan-judge-host" },
-  { "package": "vulcan-code-tui", "binary": "vulcan-tui" }
+  { "package": "vulcan-code-tui", "binary": "vulcan-tui" },
+  { "package": "vulcan-code-mode-host", "binary": "vulcan-code-mode-host", "workspace": "native/code-mode-host" }
 ]

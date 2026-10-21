@@ -131,6 +131,13 @@ fi
 BuiltJudgeHostPath="$CargoTargetDir/$ProfileName/vulcan-judge-host$ExecutableSuffix"
 BuiltTuiPath="$CargoTargetDir/$ProfileName/vulcan-tui$ExecutableSuffix"
 
+# The code-mode host links V8 with the static C runtime, so it builds in its own Cargo workspace.
+# 代码模式宿主以静态 C 运行时链接 V8，因此在独立的 Cargo 工作区中构建。
+echo "==> Building code-mode host $ProfileName..."
+# BuiltCodeModeHostPath is the only stdout line of the host build helper.
+# BuiltCodeModeHostPath 是宿主构建辅助脚本唯一的标准输出行。
+BuiltCodeModeHostPath=$(node "$ProjectDir/scripts/code-mode-host-build.mjs" "$ProfileName")
+
 # OutputBinDir stores runtime executables beneath the selected distribution root.
 # OutputBinDir 保存选定发行根目录下的运行时可执行文件。
 OutputBinDir="$OutputRootDir/bin"
@@ -153,7 +160,7 @@ if [ ! -f "$BuiltTerminalHostPath" ]; then
 fi
 # RequiredBinaryPath checks the current build before packaging can observe any stale output files.
 # RequiredBinaryPath 在打包读取任何旧发行文件之前，检查本轮构建制品。
-for RequiredBinaryPath in "$BuiltJudgeHostPath" "$BuiltTuiPath"; do
+for RequiredBinaryPath in "$BuiltJudgeHostPath" "$BuiltTuiPath" "$BuiltCodeModeHostPath"; do
     if [ ! -f "$RequiredBinaryPath" ]; then
         echo "Built distribution binary was not found: $RequiredBinaryPath" >&2
         exit 1
@@ -167,4 +174,4 @@ if [ "$Release" = "0" ]; then
 fi
 # Stage and validate a complete generation before switching the published directory.
 # 切换正式目录之前，暂存并验证完整一代。
-node "$ProjectDir/scripts/publish-distribution.mjs" "$ProfileName" "$BuiltBinaryPath" "$BuiltTerminalHostPath" "$BuiltJudgeHostPath" "$BuiltTuiPath"
+node "$ProjectDir/scripts/publish-distribution.mjs" "$ProfileName" "$BuiltBinaryPath" "$BuiltTerminalHostPath" "$BuiltJudgeHostPath" "$BuiltTuiPath" "$BuiltCodeModeHostPath"

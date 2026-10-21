@@ -14,9 +14,15 @@ export function shippedBinaryNames(platform = process.platform) {
   return shippedRustPackages.map(item => item.binary + (platform === 'win32' ? '.exe' : ''));
 }
 
+// rootWorkspacePackages lists the packages the root Cargo workspace builds; an item with a `workspace`
+// lives in its own Cargo workspace (such as the code-mode host) and is built by that workspace's helper.
+// rootWorkspacePackages 列出根 Cargo 工作区构建的包；带 `workspace` 的项位于独立 Cargo 工作区
+// （如代码模式宿主），由该工作区的辅助脚本构建。
+export const rootWorkspacePackages = shippedRustPackages.filter(item => item.workspace === undefined);
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv[2] !== 'cargo-args' || process.argv.length !== 3) {
     throw new Error('Usage: shipped-rust-packages cargo-args');
   }
-  process.stdout.write(shippedRustPackages.flatMap(item => ['-p', item.package]).join(' '));
+  process.stdout.write(rootWorkspacePackages.flatMap(item => ['-p', item.package]).join(' '));
 }

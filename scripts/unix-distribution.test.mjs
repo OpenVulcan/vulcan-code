@@ -25,12 +25,28 @@ if (args[0] === 'metadata') {
   const profile = args.includes('--release') ? 'release' : 'debug';
   fs.mkdirSync(path.join(target, profile), { recursive: true });
   for (const item of inventory) {
+    if (item.workspace !== undefined) continue;
     const selected = args.some((arg, index) => arg === '-p' && args[index + 1] === item.package);
     if (selected && item.binary !== process.env.VULCAN_OMIT_ARTIFACT) {
       fs.writeFileSync(path.join(target, profile, item.binary), 'new:' + item.package);
     }
   }
 }
+`;
+
+// hostBuildFixture stands in for the code-mode host workspace build: it prints the built path, or fails
+// without one when the artifact is omitted.
+// hostBuildFixture 代替代码模式宿主工作区构建：输出构建路径；省略制品时失败且不输出路径。
+const hostBuildFixture = `
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+const profile = process.argv[2];
+if (profile !== 'debug' && profile !== 'release') process.exit(93);
+if (process.env.VULCAN_OMIT_ARTIFACT === 'vulcan-code-mode-host') process.exit(1);
+const directory = path.join(process.env.VULCAN_FIXTURE_ROOT, 'host artifacts', profile);
+mkdirSync(directory, { recursive: true });
+writeFileSync(path.join(directory, 'vulcan-code-mode-host'), 'new:vulcan-code-mode-host');
+console.log(path.join(directory, 'vulcan-code-mode-host'));
 `;
 
 // runtimeFixture verifies the Rust inventory at the packaging boundary without Electron or a real Core process.
@@ -69,9 +85,10 @@ for (const scenario of [
   { profile: 'debug', omit: '' },
   { profile: 'release', omit: '' },
   { profile: 'debug', omit: 'vulcan-tui' },
+  { profile: 'release', omit: 'vulcan-code-mode-host' },
   { profile: 'debug', omit: '', electronFailure: true },
 ]) {
-  test(`Unix ${scenario.profile} publication ${scenario.electronFailure ? 'stops before Cargo when Electron preparation fails' : scenario.omit ? 'rejects missing TUI despite stale output' : 'includes every shipped executable'}`,
+  test(`Unix ${scenario.profile} publication ${scenario.electronFailure ? 'stops before Cargo when Electron preparation fails' : scenario.omit ? `rejects missing ${scenario.omit} despite stale output` : 'includes every shipped executable'}`,
     { skip: process.platform !== 'linux' && process.platform !== 'darwin' }, async t => {
       // root owns all artifacts; sourceScripts selects only the real entry points under test.
       // root 拥有全部制品；sourceScripts 仅选择被测真实入口。
@@ -86,6 +103,7 @@ for (const scenario of [
         await copyFile(path.join(sourceScripts, script), path.join(root, 'scripts', script));
       }
       await writeFile(path.join(root, 'scripts/desktop-runtime.mjs'), runtimeFixture);
+      await writeFile(path.join(root, 'scripts/code-mode-host-build.mjs'), hostBuildFixture);
       await writeFile(path.join(root, 'apps/vulcan-code-desktop/node_modules/electron/install.js'),
         'process.exit(process.env.VULCAN_FAIL_ELECTRON === "1" ? 23 : 0);\n');
       await writeFile(path.join(root, 'fake-bin/cargo'), '#!' + process.execPath + '\n' + cargoFixture, { mode: 0o755 });
