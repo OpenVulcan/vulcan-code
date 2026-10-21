@@ -1661,6 +1661,7 @@
   "workspaceFiles.copyRelativePath": "Copier le chemin relatif",
   "workspaceFiles.mentionInMessage": "Mentionner dans le message",
   "workspaceFiles.copyFileContent": "Copier le contenu du fichier",
+  "workspaceFiles.revealInFolder": "Afficher dans le dossier",
   "workspaceFiles.filterFiles": "Filtrer les fichiers",
   "workspaceFiles.switchFile": "Changer de fichier",
   "workspaceFiles.closeFile": "Fermer le fichier",

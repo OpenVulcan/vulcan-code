@@ -1,7 +1,8 @@
 import React from "react";
 import "@/ui-kit/styles/features/workspace-files.css";
-import { AtSign, ChevronsUpDown, Copy, FileText, Folder, FolderX, Info, ListFilter, MoreHorizontal, X } from "lucide-react";
+import { AtSign, ChevronsUpDown, Copy, FileText, Folder, FolderOpen, FolderX, Info, ListFilter, MoreHorizontal, X } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
+import { openProjectDirectoryPath } from "@/service/project-actions-service";
 import {
   activeWorkbenchSurfaceId,
   selectedConversationProjectId,
@@ -822,6 +823,10 @@ function workspaceFileActions(
     { key: "relative", icon: <Copy size={14} />, label: t("workspaceFiles.copyRelativePath"), run: () => copyPath(entry.relativePath) },
     { key: "content", icon: <FileText size={14} />, label: t("workspaceFiles.copyFileContent"), disabled: entry.kind !== "code",
       run: () => onCopyFileContent(entry) },
+    { key: "reveal", icon: <FolderOpen size={14} />, label: t("workspaceFiles.revealInFolder"),
+      run: () => void openProjectDirectoryPath(entry.path).catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : String(error));
+      }) },
   ];
 }
 

@@ -1661,6 +1661,7 @@
   "workspaceFiles.copyRelativePath": "相対パスをコピー",
   "workspaceFiles.mentionInMessage": "メッセージで参照",
   "workspaceFiles.copyFileContent": "ファイルの内容をコピー",
+  "workspaceFiles.revealInFolder": "フォルダーで表示",
   "workspaceFiles.filterFiles": "ファイルを絞り込む",
   "workspaceFiles.switchFile": "ファイルを切り替え",
   "workspaceFiles.closeFile": "ファイルを閉じる",

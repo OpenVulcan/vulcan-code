@@ -1661,6 +1661,7 @@
   "workspaceFiles.copyRelativePath": "复制相对路径",
   "workspaceFiles.mentionInMessage": "在消息中引用",
   "workspaceFiles.copyFileContent": "复制文件内容",
+  "workspaceFiles.revealInFolder": "在文件夹中显示",
   "workspaceFiles.filterFiles": "筛选文件",
   "workspaceFiles.switchFile": "切换文件",
   "workspaceFiles.closeFile": "关闭文件",

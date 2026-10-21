@@ -1661,6 +1661,7 @@
   "workspaceFiles.copyRelativePath": "상대 경로 복사",
   "workspaceFiles.mentionInMessage": "메시지에서 언급",
   "workspaceFiles.copyFileContent": "파일 내용 복사",
+  "workspaceFiles.revealInFolder": "폴더에서 보기",
   "workspaceFiles.filterFiles": "파일 필터",
   "workspaceFiles.switchFile": "파일 전환",
   "workspaceFiles.closeFile": "파일 닫기",
