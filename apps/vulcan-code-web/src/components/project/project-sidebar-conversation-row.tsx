@@ -68,7 +68,7 @@ export function ConversationTreeRow(props: {
   const resetArchiveConfirming = React.useCallback(() => setArchiveConfirming(false), []);
   const variant = props.variant ?? "tree";
   const state = conversationRowState(props.conversation, props.isSelected);
-  const stateLabel = conversationStateLabel(state, props.conversation, t);
+  const stateLabel = conversationStateLabel(state, t);
   // Dedicated sessions carry a kind mark so they read apart from ordinary conversations.
   // 专职会话带有种类标记，以便与普通对话区分。
   const dedicated = props.conversation.dedicated === true;
@@ -169,22 +169,25 @@ function conversationRowState(conversation: ConversationSummary, isSelected: boo
   if (attention === "ask") return "ask";
   if (attention === "plan_confirm") return "plan";
   if (conversation.status.toLowerCase() === "running") return "running";
-  if ((conversation.unread || attention) && !isSelected) return "unread";
+  // Unread attention only mirrors the unread flag, which alone decides; other attention kinds still mark the row.
+  // 未读关注只是未读标志的镜像，由标志单独决定；其他关注类型仍会标记该行。
+  if ((conversation.unread || (attention !== null && attention !== "unread")) && !isSelected) return "unread";
   return null;
 }
 
 // conversationStateLabel names the signalled state for tooltips, assistive technology and the flow meta line.
 // conversationStateLabel 为提示、辅助技术与会话流元信息行命名所展示的状态。
+// Labels always come from the catalog; attention labels from the service are English diagnostics.
+// 标签始终来自目录；服务返回的关注标签是英文诊断文本。
 function conversationStateLabel(
   state: ConversationRowState,
-  conversation: ConversationSummary,
   t: ReturnType<typeof useI18n>["t"],
 ): string | null {
   switch (state) {
     case "ask": return t("conversationRow.askAttention");
     case "plan": return t("conversationRow.planAttention");
     case "running": return t("conversationRow.running");
-    case "unread": return conversation.attention?.label ?? t("conversationRow.unread");
+    case "unread": return t("conversationRow.unread");
     default: return null;
   }
 }

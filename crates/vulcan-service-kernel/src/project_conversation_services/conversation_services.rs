@@ -523,6 +523,15 @@ pub(crate) async fn service_mark_conversation_read(
             .filter(|conversation| conversation.id == conversation_id)
         {
             conversation.unread = false;
+            // Unread attention mirrors the flag; leaving it would keep the dot in later retained snapshots.
+            // 未读关注是该标志的镜像；保留它会使后续保留快照中的圆点持续存在。
+            if conversation
+                .attention
+                .as_ref()
+                .is_some_and(|attention| attention.kind == "unread")
+            {
+                conversation.attention = None;
+            }
         }
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench.revision = guard.workbench_generation;
