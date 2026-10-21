@@ -284,8 +284,8 @@ mod tests {
             "@ inside a word is no mention"
         );
         assert_eq!(
-            mention_at(0, "错 @文", 4).map(|m| m.query),
-            Some("文".into())
+            mention_at(0, "é @ü", 4).map(|m| m.query),
+            Some("ü".into())
         );
         assert_eq!(split_query(r"src\app\ma"), ("src/app".into(), "ma"));
         assert_eq!(split_query("ma"), (String::new(), "ma"));
