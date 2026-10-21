@@ -194,18 +194,6 @@
   padding: 0;
 }
 
-.diff-hunk {
-  width: 100%;
-  min-width: 100%;
-  max-width: none;
-  overflow: visible;
-  border-top: 1px solid var(--vk-line);
-}
-
-.diff-hunk:first-child {
-  border-top: 0;
-}
-
 /* A file header's added and removed line counts. */
 /* 文件头部的新增与删除行数。 */
 .diff-file-meta {
