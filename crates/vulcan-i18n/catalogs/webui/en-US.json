@@ -5450,6 +5450,8 @@
   "composer.outputStyle.promptCharacters": "{count} prompt characters",
   "composer.outputStyle.savedPending": "Saved. Applies in a new session or after context compaction.",
   "workspace.dialogs.unableToLoadThe": "Unable to load the folder picker",
+  "workspace.contextPanel.fault": "This panel could not be shown.",
+  "workspace.contextPanel.faultHint": "Reload this tab or switch to another one; the session and other panels are unaffected.",
   "workspace.lifecycle.archiveNotConverged": "The archive was committed, but local lifecycle state did not converge. Refresh and try again.",
   "workspace.lifecycle.archiveNoSnapshot": "The archive did not return an authoritative workbench snapshot. Refresh and check the session state.",
   "workspace.lifecycle.batchArchiveNotConverged": "The batch archive was committed, but local lifecycle state did not converge. Refresh and try again.",

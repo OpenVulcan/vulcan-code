@@ -5450,6 +5450,8 @@
   "composer.outputStyle.promptCharacters": "{count} Prompt-Zeichen",
   "composer.outputStyle.savedPending": "Gespeichert. Gilt in einer neuen Sitzung oder nach der Kontextkomprimierung.",
   "workspace.dialogs.unableToLoadThe": "Ordnerauswahl konnte nicht geladen werden",
+  "workspace.contextPanel.fault": "Dieser Bereich kann nicht angezeigt werden.",
+  "workspace.contextPanel.faultHint": "Laden Sie diesen Tab neu oder wechseln Sie zu einem anderen; die Sitzung und andere Bereiche sind nicht betroffen.",
   "workspace.lifecycle.archiveNotConverged": "Die Archivierung wurde übernommen, aber der lokale Lebenszyklusstatus hat nicht konvergiert. Aktualisieren Sie und versuchen Sie es erneut.",
   "workspace.lifecycle.archiveNoSnapshot": "Die Archivierung hat keinen maßgeblichen Workbench-Snapshot zurückgegeben. Aktualisieren Sie und prüfen Sie den Sitzungsstatus.",
   "workspace.lifecycle.batchArchiveNotConverged": "Die Sammelarchivierung wurde übernommen, aber der lokale Lebenszyklusstatus hat nicht konvergiert. Aktualisieren Sie und versuchen Sie es erneut.",

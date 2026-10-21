@@ -17,6 +17,8 @@ import {
 } from "lucide-react";
 import type { ConversationScrollSnapshot } from "@/components/conversation/chat-area-scroll";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
+import { RenderErrorBoundary } from "@/app/render-error-boundary";
+import { PageNotice } from "@/components/page/page-feedback";
 import { Button } from "@/ui-kit/primitives/button";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
@@ -388,12 +390,14 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
             }}
             onOpenTab={props.onOpenContextTab}
           />
-          <WorkspaceContextTabContent
-            activeTab={activeTab}
-            props={props}
-            subagentExpandedStates={subagentExpandedStates}
-            subagentScrollSnapshots={subagentScrollSnapshots}
-          />
+          <WorkspaceContextTabBoundary resetKey={`${activeTab.id}:${props.selectedConversationId ?? ""}`}>
+            <WorkspaceContextTabContent
+              activeTab={activeTab}
+              props={props}
+              subagentExpandedStates={subagentExpandedStates}
+              subagentScrollSnapshots={subagentScrollSnapshots}
+            />
+          </WorkspaceContextTabBoundary>
         </>
       ) : (
         <WorkspaceContextLauncher
@@ -403,6 +407,36 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
         />
       )}
     </aside>
+  );
+}
+
+// WorkspaceContextTabBoundary keeps a failure inside one context tab: the tab shows what went wrong and can be
+// retried, while the tab bar, the conversation and the rest of the workbench keep working. Switching tab or
+// session clears the failure.
+// WorkspaceContextTabBoundary 将失败限制在单个上下文页签内：该页签说明出错原因并可重试，页签栏、会话与工作台其余部分照常可用。
+// 切换页签或会话会清除该失败。
+export function WorkspaceContextTabBoundary(props: { resetKey: string; children: React.ReactNode }) {
+  const { t } = useI18n();
+  // attempt remounts the tab content for an explicit retry.
+  // attempt 在明确重试时重新挂载页签内容。
+  const [attempt, setAttempt] = React.useState(0);
+  return (
+    <RenderErrorBoundary key={attempt} resetKey={props.resetKey} fallback={(error) => (
+      <div className="vk-panel-body" data-fill="">
+        <PageNotice
+          actions={<Button onClick={() => setAttempt((value) => value + 1)} size="sm" variant="outline">{t("toolPresentation.output.retryLoad")}</Button>}
+          className="vk-region-fault"
+          details={error.message}
+          detailsLabel={t("features.shell.errorDetails")}
+          title={t("workspace.contextPanel.fault")}
+          tone="error"
+        >
+          {t("workspace.contextPanel.faultHint")}
+        </PageNotice>
+      </div>
+    )}>
+      {props.children}
+    </RenderErrorBoundary>
   );
 }
 

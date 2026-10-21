@@ -5450,6 +5450,8 @@
   "composer.outputStyle.promptCharacters": "{count} 字符提示词",
   "composer.outputStyle.savedPending": "已保存，在新会话或上下文压缩后生效。",
   "workspace.dialogs.unableToLoadThe": "目录选择器加载失败",
+  "workspace.contextPanel.fault": "此面板暂时无法显示。",
+  "workspace.contextPanel.faultHint": "可重新加载此页签，或切换到其他页签；会话和其他面板不受影响。",
   "workspace.lifecycle.archiveNotConverged": "归档已提交，但本地生命周期状态未能收敛，请重试刷新。",
   "workspace.lifecycle.archiveNoSnapshot": "归档未返回权威工作台快照，请刷新后检查会话状态。",
   "workspace.lifecycle.batchArchiveNotConverged": "批量归档已提交，但本地生命周期状态未能收敛，请重试刷新。",

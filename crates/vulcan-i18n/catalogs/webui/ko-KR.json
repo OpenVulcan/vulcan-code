@@ -5450,6 +5450,8 @@
   "composer.outputStyle.promptCharacters": "프롬프트 {count}자",
   "composer.outputStyle.savedPending": "저장했습니다. 새 세션 또는 컨텍스트 압축 후에 적용됩니다.",
   "workspace.dialogs.unableToLoadThe": "폴더 선택기를 불러올 수 없습니다",
+  "workspace.contextPanel.fault": "이 패널을 표시할 수 없습니다.",
+  "workspace.contextPanel.faultHint": "이 탭을 다시 불러오거나 다른 탭으로 전환하세요. 세션과 다른 패널은 영향을 받지 않습니다.",
   "workspace.lifecycle.archiveNotConverged": "보관은 커밋되었지만 로컬 수명 주기 상태가 수렴하지 않았습니다. 새로 고친 후 다시 시도하세요.",
   "workspace.lifecycle.archiveNoSnapshot": "보관 후 권위 있는 워크벤치 스냅샷이 반환되지 않았습니다. 새로 고친 후 세션 상태를 확인하세요.",
   "workspace.lifecycle.batchArchiveNotConverged": "일괄 보관은 커밋되었지만 로컬 수명 주기 상태가 수렴하지 않았습니다. 새로 고친 후 다시 시도하세요.",

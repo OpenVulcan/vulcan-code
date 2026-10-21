@@ -5450,6 +5450,8 @@
   "composer.outputStyle.promptCharacters": "{count} caractères de prompt",
   "composer.outputStyle.savedPending": "Enregistré. S’applique dans une nouvelle session ou après le compactage du contexte.",
   "workspace.dialogs.unableToLoadThe": "Impossible de charger le sélecteur de dossier",
+  "workspace.contextPanel.fault": "Ce panneau ne peut pas être affiché.",
+  "workspace.contextPanel.faultHint": "Rechargez cet onglet ou passez à un autre ; la session et les autres panneaux ne sont pas affectés.",
   "workspace.lifecycle.archiveNotConverged": "L’archivage a été validé, mais l’état local du cycle de vie n’a pas convergé. Actualisez et réessayez.",
   "workspace.lifecycle.archiveNoSnapshot": "L’archivage n’a renvoyé aucun instantané de l’espace de travail faisant autorité. Actualisez et vérifiez l’état de la session.",
   "workspace.lifecycle.batchArchiveNotConverged": "L’archivage groupé a été validé, mais l’état local du cycle de vie n’a pas convergé. Actualisez et réessayez.",

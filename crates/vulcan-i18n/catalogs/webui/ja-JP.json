@@ -5450,6 +5450,8 @@
   "composer.outputStyle.promptCharacters": "プロンプト {count} 文字",
   "composer.outputStyle.savedPending": "保存しました。新しいセッション、またはコンテキストのコンパクション後に適用されます。",
   "workspace.dialogs.unableToLoadThe": "フォルダー選択画面を読み込めません",
+  "workspace.contextPanel.fault": "このパネルを表示できません。",
+  "workspace.contextPanel.faultHint": "このタブを再読み込みするか、別のタブに切り替えてください。セッションと他のパネルには影響しません。",
   "workspace.lifecycle.archiveNotConverged": "アーカイブは確定しましたが、ローカルのライフサイクル状態が収束しませんでした。更新して再試行してください。",
   "workspace.lifecycle.archiveNoSnapshot": "アーカイブで正式なワークベンチのスナップショットが返されませんでした。更新してセッションの状態を確認してください。",
   "workspace.lifecycle.batchArchiveNotConverged": "一括アーカイブは確定しましたが、ローカルのライフサイクル状態が収束しませんでした。更新して再試行してください。",

@@ -5450,6 +5450,8 @@
   "composer.outputStyle.promptCharacters": "{count} caracteres de prompt",
   "composer.outputStyle.savedPending": "Guardado. Se aplica en una nueva sesión o tras la compactación del contexto.",
   "workspace.dialogs.unableToLoadThe": "No se pudo cargar el selector de carpetas",
+  "workspace.contextPanel.fault": "No se puede mostrar este panel.",
+  "workspace.contextPanel.faultHint": "Recarga esta pestaña o cambia a otra; la sesión y los demás paneles no se ven afectados.",
   "workspace.lifecycle.archiveNotConverged": "El archivado se confirmó, pero el estado local del ciclo de vida no convergió. Actualiza e inténtalo de nuevo.",
   "workspace.lifecycle.archiveNoSnapshot": "El archivado no devolvió una instantánea autoritativa del espacio de trabajo. Actualiza y comprueba el estado de la sesión.",
   "workspace.lifecycle.batchArchiveNotConverged": "El archivado por lotes se confirmó, pero el estado local del ciclo de vida no convergió. Actualiza e inténtalo de nuevo.",

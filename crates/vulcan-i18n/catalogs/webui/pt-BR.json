@@ -5450,6 +5450,8 @@
   "composer.outputStyle.promptCharacters": "{count} caracteres de prompt",
   "composer.outputStyle.savedPending": "Salvo. Aplica-se em uma nova sessão ou após a compactação do contexto.",
   "workspace.dialogs.unableToLoadThe": "Não foi possível carregar o seletor de pastas",
+  "workspace.contextPanel.fault": "Não foi possível mostrar este painel.",
+  "workspace.contextPanel.faultHint": "Recarregue esta aba ou mude para outra; a sessão e os outros painéis não são afetados.",
   "workspace.lifecycle.archiveNotConverged": "O arquivamento foi confirmado, mas o estado local do ciclo de vida não convergiu. Atualize e tente novamente.",
   "workspace.lifecycle.archiveNoSnapshot": "O arquivamento não retornou um snapshot oficial do workbench. Atualize e verifique o estado da sessão.",
   "workspace.lifecycle.batchArchiveNotConverged": "O arquivamento em lote foi confirmado, mas o estado local do ciclo de vida não convergiu. Atualize e tente novamente.",

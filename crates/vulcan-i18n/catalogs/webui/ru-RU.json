@@ -5450,6 +5450,8 @@
   "composer.outputStyle.promptCharacters": "Символов в промпте: {count}",
   "composer.outputStyle.savedPending": "Сохранено. Применяется в новом сеансе или после уплотнения контекста.",
   "workspace.dialogs.unableToLoadThe": "Не удалось загрузить выбор папки",
+  "workspace.contextPanel.fault": "Не удалось показать эту панель.",
+  "workspace.contextPanel.faultHint": "Перезагрузите эту вкладку или переключитесь на другую; сеанс и другие панели не затронуты.",
   "workspace.lifecycle.archiveNotConverged": "Архивирование зафиксировано, но локальное состояние жизненного цикла не сошлось. Обновите и повторите попытку.",
   "workspace.lifecycle.archiveNoSnapshot": "Архивирование не вернуло достоверный снимок рабочей области. Обновите и проверьте состояние сеанса.",
   "workspace.lifecycle.batchArchiveNotConverged": "Пакетное архивирование зафиксировано, но локальное состояние жизненного цикла не сошлось. Обновите и повторите попытку.",

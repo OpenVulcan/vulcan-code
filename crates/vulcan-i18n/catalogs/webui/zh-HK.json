@@ -5450,6 +5450,8 @@
   "composer.outputStyle.promptCharacters": "{count} 字元提示詞",
   "composer.outputStyle.savedPending": "已儲存，於新工作階段或上下文整理後生效。",
   "workspace.dialogs.unableToLoadThe": "資料夾選擇器載入失敗",
+  "workspace.contextPanel.fault": "此面板暫時無法顯示。",
+  "workspace.contextPanel.faultHint": "可重新載入此分頁，或切換到其他分頁；對話和其他面板不受影響。",
   "workspace.lifecycle.archiveNotConverged": "封存已送出，但本機生命週期狀態未能收斂，請重新整理後重試。",
   "workspace.lifecycle.archiveNoSnapshot": "封存未傳回權威工作台快照，請重新整理後檢查工作階段狀態。",
   "workspace.lifecycle.batchArchiveNotConverged": "批次封存已送出，但本機生命週期狀態未能收斂，請重新整理後重試。",
