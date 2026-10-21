@@ -6052,5 +6052,8 @@
   "settings.permissionJudge.reviewPrompt.prompt": "Hinweise",
   "settings.permissionJudge.reviewPrompt.saved": "Gespeichert.",
   "settings.permissionJudge.reviewPrompt.saveFailed": "Die Prüfhinweise konnten nicht gespeichert werden.",
-  "settings.permissionJudge.reviewPrompt.loadFailed": "Die Prüfhinweise konnten nicht gelesen werden."
+  "settings.permissionJudge.reviewPrompt.loadFailed": "Die Prüfhinweise konnten nicht gelesen werden.",
+  "conversation.collaboration.resultIssue.stopped": "Die Aufgabe wurde vor dem Abschluss gestoppt, daher hat die anfragende Sitzung keine endgültige Antwort erhalten.",
+  "conversation.collaboration.resultIssue.abandoned": "Die Aufgabe wurde ohne endgültige Antwort aufgegeben.",
+  "conversation.collaboration.resultIssue.revoked": "Der Zugriff der anfragenden Sitzung wurde widerrufen, daher wurde ihr dieses Ergebnis nicht angezeigt."
 }

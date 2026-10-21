@@ -184,8 +184,15 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
     ? afterState.kind === "outbound_task_message" ? "sent" : afterState.kind === "inbound_task_message" ? "received"
       : afterState.kind === "task_result" && !isFailedTaskDelivery ? "reply" : null
     : null;
+  // An executing-side result card only remains when something went wrong, so its body explains what.
+  // 执行侧结果卡只在出现异常时保留，因此其正文说明异常原因。
+  const resultIssue = afterState.kind !== "task_result" || isFailedTaskDelivery ? null
+    : resultProgress?.kind === "task_result_projection" && resultProgress.projection.disclosure === "authorization_revoked"
+      ? t("conversation.collaboration.resultIssue.revoked")
+      : afterState.result.terminal?.outcome === "stopped" ? t("conversation.collaboration.resultIssue.stopped")
+      : afterState.result.terminal?.outcome === "abandoned" ? t("conversation.collaboration.resultIssue.abandoned") : null;
   const body = isAnswer ? answer?.body ?? null
-    : event.event_kind === "child_task_non_success_projected" ? null : collaborationBody(afterState);
+    : resultIssue ?? (event.event_kind === "child_task_non_success_projected" ? null : collaborationBody(afterState));
   // Cancellation diagnostics belong to their own event, never the original question or answer body. Task results
   // never repeat the original task: its sending tool card or received message card is in the same conversation.
   // 撤销诊断属于自身事件，绝不混入原问题或答案正文。任务结果不重复原任务：其发送工具卡片或收到的消息卡片位于同一会话。
@@ -199,6 +206,7 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
       eventKind="collaboration" collaborationEventKind={event.event_kind}
       cardKind={isTaskResult ? "task-result" : isNotification ? "notification" : isTaskMessage ? "task-message" : "interaction"}
       title={title} status={status} incoming={incoming}
+      expandable={Boolean(body || secondaryBody || (afterState.kind === "question" && !isAnswer))}
       titlePrefix={messageDirection === "sent" ? t("conversation.collaboration.message.sentPrefix")
         : messageDirection === "reply" ? t("conversation.collaboration.message.replyPrefix")
         : messageDirection === "received" ? t("conversation.collaboration.message.receivedPrefix") : undefined}
@@ -279,6 +287,9 @@ function CollaborationToolCard(props: React.PropsWithChildren<{
   // Timestamp stays visible even when excess body lines are collapsed.
   // 超出正文行收起时仍显示时间。
   footer?: React.ReactNode;
+  // A card with nothing to show beyond its heading has no toggle and no body.
+  // 标题之外没有内容的卡片不提供切换按钮，也没有正文。
+  expandable?: boolean;
 }>) {
   // Expansion follows the same session-scoped memory and viewport measurement as tool calls.
   // 展开状态遵循与工具调用一致的会话记忆与视口测量。
@@ -295,12 +306,12 @@ function CollaborationToolCard(props: React.PropsWithChildren<{
           {props.titleSuffix ? <span className="vk-collab-title">{props.titleSuffix}</span> : null}
         </span>
         {props.status ? <span className="vk-collab-badge">{props.status}</span> : null}
-        {!props.incoming ? <button type="button" className="vk-collab-toggle" aria-label={props.title}
+        {!props.incoming && props.expandable !== false ? <button type="button" className="vk-collab-toggle" aria-label={props.title}
           aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
           <ChevronDown size={14} aria-hidden="true" />
         </button> : null}
       </div>
-      {props.incoming ? <IncomingCollaborationBubble id={props.id} footer={props.footer}>{props.children}</IncomingCollaborationBubble> : (
+      {props.incoming ? <IncomingCollaborationBubble id={props.id} footer={props.footer}>{props.children}</IncomingCollaborationBubble> : props.expandable === false ? null : (
         <ConversationMeasuredCollapse collapseId={props.id} expanded={expanded}>
           <div className="vk-collab-body">{props.children}{props.footer}</div>
         </ConversationMeasuredCollapse>
@@ -416,11 +427,12 @@ function collaborationBody(afterState: CollaborationAfterState): string | null {
       return afterState.acceptance.disclosure === "authorization_revoked"
         ? null
         : afterState.acceptance.result.terminal?.final_assistant?.source_text.text ?? null;
+    // The executing session already shows its own final answer right above the result card.
+    // 执行会话已在结果卡上方显示自身的最终回答。
     case "task_result_acknowledgement":
     case "task_result_projection":
-      return null;
     case "task_result":
-      return afterState.result.terminal?.final_assistant?.source_text.text ?? null;
+      return null;
     case "outbound_task_message":
       return afterState.record.message.body;
     case "inbound_task_message":

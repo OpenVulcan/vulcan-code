@@ -6052,5 +6052,8 @@
   "settings.permissionJudge.reviewPrompt.prompt": "プロンプト",
   "settings.permissionJudge.reviewPrompt.saved": "保存しました。",
   "settings.permissionJudge.reviewPrompt.saveFailed": "レビュープロンプトを保存できませんでした。",
-  "settings.permissionJudge.reviewPrompt.loadFailed": "レビュープロンプトを読み込めませんでした。"
+  "settings.permissionJudge.reviewPrompt.loadFailed": "レビュープロンプトを読み込めませんでした。",
+  "conversation.collaboration.resultIssue.stopped": "タスクは完了前に停止されたため、依頼元のセッションは最終回答を受け取っていません。",
+  "conversation.collaboration.resultIssue.abandoned": "タスクは最終回答なしで放棄されました。",
+  "conversation.collaboration.resultIssue.revoked": "依頼元のセッションの権限が取り消されたため、この結果は表示されていません。"
 }

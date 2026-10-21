@@ -186,8 +186,15 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     // Deliveries and notifications whose sending tool card is loaded show their status on that card.
     // 发送它们的工具卡已加载时，投递与通知在该卡上显示状态。
     const claimed: CollaborationReceiptClaims = { deliveryIds: new Set(), notificationIds: new Set() };
+    // Results whose disclosure to the requester was revoked stay visible on the executing side.
+    // 向请求方披露已被撤销的结果在执行侧保持可见。
+    const revokedResultIds = new Set<string>();
     for (const summary of events) {
       if (summary.event.kind === "tool_call") claimCollaborationReceipt(summary.event, claimed);
+      if (summary.event.kind === "collaboration" && summary.event.after_state.kind === "task_result_projection"
+        && summary.event.after_state.projection.disclosure === "authorization_revoked") {
+        revokedResultIds.add(summary.event.after_state.projection.delivery_id);
+      }
       if (summary.event.kind === "collaboration" && summary.event.event_kind === "question_created"
         && summary.event.after_state.kind === "question") {
         visibleQuestionIds.add(summary.event.after_state.question.question_id);
@@ -225,6 +232,7 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
       if (summary.event.kind === "collaboration") {
         const state = summary.event.after_state;
         if (sendingCardShowsCollaboration(state, claimed)) continue;
+        if (executingResultIsSettled(state, revokedResultIds)) continue;
         const deliveryId = collaborationTaskMessageId(state);
         const notificationId = collaborationNotificationId(state);
         const mergeId = deliveryId !== null ? `task-message:${deliveryId}`
@@ -307,6 +315,14 @@ function sendingCardShowsCollaboration(state: CollaborationAfterState, claimed: 
     case "outbound_notification": return claimed.notificationIds.has(state.notification.notification_id);
     default: return false;
   }
+}
+
+/** Returns whether the executing session's own result record needs no card: the task completed and its answer is
+ * already shown directly above. Stopped, abandoned, undelivered or revoked results keep their card.
+ * 返回执行会话自身的结果记录是否无需卡片：任务已完成且回答已显示在正上方。停止、放弃、未送达或已撤销的结果保留卡片。 */
+function executingResultIsSettled(state: CollaborationAfterState, revokedResultIds: ReadonlySet<string>): boolean {
+  return state.kind === "task_result" && state.result.terminal?.outcome === "completed"
+    && !revokedResultIds.has(state.result.effect.delivery_id);
 }
 
 /** Returns whether a completed ask receipt already has its exact outbound question card in this window.

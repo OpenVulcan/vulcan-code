@@ -10,7 +10,7 @@
   "apps/vulcan-code-web/src/components/composer/composer-panel/goal-strip.test.tsx": 4,
   "apps/vulcan-code-web/src/components/composer/composer-panel/use-composer-goal-controller.test.tsx": 3,
   "apps/vulcan-code-web/src/components/conversation/conversation-branch-presentation-v1.test.ts": 2,
-  "apps/vulcan-code-web/src/components/conversation/conversation-branch-workspace-v1.test.tsx": 48,
+  "apps/vulcan-code-web/src/components/conversation/conversation-branch-workspace-v1.test.tsx": 46,
   "apps/vulcan-code-web/src/components/conversation/conversation-continue-control.test.tsx": 2,
   "apps/vulcan-code-web/src/components/conversation/conversation-control-interactions.test.tsx": 9,
   "apps/vulcan-code-web/src/components/conversation/conversation-markdown.test.tsx": 5,

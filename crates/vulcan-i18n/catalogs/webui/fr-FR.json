@@ -6052,5 +6052,8 @@
   "settings.permissionJudge.reviewPrompt.prompt": "Consignes",
   "settings.permissionJudge.reviewPrompt.saved": "Enregistré.",
   "settings.permissionJudge.reviewPrompt.saveFailed": "Impossible d’enregistrer les consignes de revue.",
-  "settings.permissionJudge.reviewPrompt.loadFailed": "Impossible de lire les consignes de revue."
+  "settings.permissionJudge.reviewPrompt.loadFailed": "Impossible de lire les consignes de revue.",
+  "conversation.collaboration.resultIssue.stopped": "La tâche a été arrêtée avant la fin ; la session demandeuse n'a donc reçu aucune réponse finale.",
+  "conversation.collaboration.resultIssue.abandoned": "La tâche a été abandonnée sans réponse finale.",
+  "conversation.collaboration.resultIssue.revoked": "L'accès de la session demandeuse a été révoqué ; ce résultat ne lui a donc pas été montré."
 }

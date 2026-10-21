@@ -6052,5 +6052,8 @@
   "settings.permissionJudge.reviewPrompt.prompt": "프롬프트",
   "settings.permissionJudge.reviewPrompt.saved": "저장했습니다.",
   "settings.permissionJudge.reviewPrompt.saveFailed": "검토 프롬프트를 저장할 수 없습니다.",
-  "settings.permissionJudge.reviewPrompt.loadFailed": "검토 프롬프트를 읽을 수 없습니다."
+  "settings.permissionJudge.reviewPrompt.loadFailed": "검토 프롬프트를 읽을 수 없습니다.",
+  "conversation.collaboration.resultIssue.stopped": "작업이 완료되기 전에 중지되어 요청한 세션은 최종 답변을 받지 못했습니다.",
+  "conversation.collaboration.resultIssue.abandoned": "작업이 최종 답변 없이 포기되었습니다.",
+  "conversation.collaboration.resultIssue.revoked": "요청한 세션의 권한이 취소되어 이 결과가 표시되지 않았습니다."
 }

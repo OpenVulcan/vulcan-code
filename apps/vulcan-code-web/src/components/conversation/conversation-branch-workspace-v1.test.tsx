@@ -815,8 +815,9 @@ describe("ConversationBranchWorkspaceV1", () => {
   });
 
   it("attaches result receipts to their exact card", () => {
-    // Distinct deliveries may have identical text; only the first receives progress receipts.
-    // 不同投递可以正文相同；此处只有首条收到进度回执。
+    // Distinct deliveries may have identical text; only the first receives progress receipts. A stopped result keeps
+    // its card on the executing side, so the receipts have an owner to update.
+    // 不同投递可以正文相同；此处只有首条收到进度回执。停止的结果在执行侧保留卡片，回执才有所属卡片可更新。
     const result: CollaborationTaskResult = {
       acceptance: { message: { operation_id: "send", delivery_id: "result-one", kind: "task_start", body: "任务",
         source: { session_id: "source", root_session_id: "source", project_id: "p", segment_generation: 1 },
@@ -824,7 +825,7 @@ describe("ConversationBranchWorkspaceV1", () => {
         operation_id: "accept", target_revision: 2, event_seq: 2, accepted_at_ms: 2 },
       effect: { delivery_id: "result-one", operation_id: "claim", target_revision: 3, event_seq: 3, occurred_at_ms: 3,
         outcome: { kind: "claimed", execution_id: "execution", turn_id: 2, input_id: 2, input_seq: 4 } },
-      terminal: { turn_id: 2, turn_start_seq: 3, turn_stats_seq: 9, outcome: "completed", completed_at_ms: 9,
+      terminal: { turn_id: 2, turn_start_seq: 3, turn_stats_seq: 9, outcome: "stopped", completed_at_ms: 9,
         final_assistant: { api_call_id: 2, api_stats_seq: 7, source_text: { event_seq: 6, text: "相同结果正文" } } },
       operation_id: "result", target_revision: 6, event_seq: 10, recorded_at_ms: 9,
     };
@@ -855,10 +856,11 @@ describe("ConversationBranchWorkspaceV1", () => {
       container.innerHTML = markup;
       expect(container.querySelectorAll(".vk-collab")).toHaveLength(2);
       expect(container.querySelector('[data-seq="1"] .vk-collab-badge')?.textContent)
-        .toBe(length === 2 ? "已完成" : length === 3 ? "已完成 · 已送达" : "已完成 · 已加入上下文");
-      expect(container.querySelector('[data-seq="2"] .vk-collab-badge')?.textContent).toBe("已完成");
-      expect(container.querySelector('[data-seq="1"]')?.textContent).toContain("相同结果正文");
-      expect(container.querySelector('[data-seq="2"]')?.textContent).toContain("相同结果正文");
+        .toBe(length === 2 ? "已停止" : length === 3 ? "已停止 · 已送达" : "已停止 · 已加入上下文");
+      expect(container.querySelector('[data-seq="2"] .vk-collab-badge')?.textContent).toBe("已停止");
+      // The executing session shows its final answer above the card, so the card carries status only.
+      // 执行会话已在卡片上方显示最终回答，因此卡片只承载状态。
+      expect(markup).not.toContain("相同结果正文");
       expect(markup).not.toContain("任务回执已");
       expect(markup).not.toContain("已投影");
     }
@@ -869,10 +871,27 @@ describe("ConversationBranchWorkspaceV1", () => {
     const presentation = projectConversationBranchPresentationV1("session-branch-v1", resultHistory, emptyResourceCatalog(), (key) => key);
     expect(presentation.messages.map((message) => message.recordKind)).toEqual(["agent-interaction", "turn-stats"]);
     const resultMarkup = renderWorkspace(resultHistory);
-    expect(resultMarkup.indexOf("相同结果正文")).toBeGreaterThanOrEqual(0);
+    expect(resultMarkup).toContain('data-collaboration-card-kind="task-result"');
     // Moving the display anchor never rewrites the result's durable sequence identity.
     // 移动展示锚点绝不改写结果的可靠序列身份。
     expect(presentation.messages.find((message) => message.agentInteraction)?.agentInteraction?.seq).toBe(2);
+
+    // A completed result needs no card on the executing side: its answer is already shown above.
+    // 已完成的结果在执行侧无需卡片：其回答已显示在上方。
+    const completed = (seq: number, deliveryId: string) => {
+      const summary = resultEvent(seq, deliveryId);
+      if (summary.event.kind !== "collaboration" || summary.event.after_state.kind !== "task_result") throw new Error("result fixture");
+      const state = summary.event.after_state;
+      return { ...summary, event: { ...summary.event, after_state: { ...state,
+        result: { ...state.result, terminal: { ...state.result.terminal!, outcome: "completed" as const } } } } };
+    };
+    expect(renderWorkspace([completed(1, "result-one")])).not.toContain("vk-collab");
+    // A revoked disclosure keeps the card so the user can see why the requester has no result.
+    // 披露已撤销时保留卡片，使用户能看到请求方为何没有结果。
+    const revoked = eventSummary(2, { kind: "collaboration", version: 1, operation_id: "revoke", event_kind: "task_result_projected",
+      after_state: { kind: "task_result_projection", projection: { delivery_id: "result-one", acceptance_seq: 20, turn_id: 1,
+        disclosure: "authorization_revoked", inputs: [], operation_id: "revoke", event_seq: 2, receiver_revision: 10, projected_at_ms: 12 } } }, "host_only");
+    expect(renderWorkspace([completed(1, "result-one"), revoked])).toContain('data-collaboration-card-kind="task-result"');
   });
 
   it("updates historical question status after settlement without offering cancellation", () => {

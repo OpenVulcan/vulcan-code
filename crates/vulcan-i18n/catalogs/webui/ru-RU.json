@@ -6052,5 +6052,8 @@
   "settings.permissionJudge.reviewPrompt.prompt": "Указания",
   "settings.permissionJudge.reviewPrompt.saved": "Сохранено.",
   "settings.permissionJudge.reviewPrompt.saveFailed": "Не удалось сохранить указания для проверки.",
-  "settings.permissionJudge.reviewPrompt.loadFailed": "Не удалось прочитать указания для проверки."
+  "settings.permissionJudge.reviewPrompt.loadFailed": "Не удалось прочитать указания для проверки.",
+  "conversation.collaboration.resultIssue.stopped": "Задача была остановлена до завершения, поэтому запросившая сессия не получила окончательный ответ.",
+  "conversation.collaboration.resultIssue.abandoned": "Задача прекращена без окончательного ответа.",
+  "conversation.collaboration.resultIssue.revoked": "Доступ запросившей сессии отозван, поэтому этот результат ей не показан."
 }

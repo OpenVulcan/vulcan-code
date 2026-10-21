@@ -6052,5 +6052,8 @@
   "settings.permissionJudge.reviewPrompt.prompt": "提示词",
   "settings.permissionJudge.reviewPrompt.saved": "已保存。",
   "settings.permissionJudge.reviewPrompt.saveFailed": "无法保存复核提示词。",
-  "settings.permissionJudge.reviewPrompt.loadFailed": "无法读取复核提示词。"
+  "settings.permissionJudge.reviewPrompt.loadFailed": "无法读取复核提示词。",
+  "conversation.collaboration.resultIssue.stopped": "任务在完成前被停止，请求方会话未收到最终回答。",
+  "conversation.collaboration.resultIssue.abandoned": "任务被放弃，没有最终回答。",
+  "conversation.collaboration.resultIssue.revoked": "请求方会话的授权已撤销，因此未向其展示此结果。"
 }

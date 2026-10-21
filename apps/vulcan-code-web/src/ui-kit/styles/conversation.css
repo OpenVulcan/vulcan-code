@@ -430,16 +430,18 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-collab[data-incoming] { justify-items: end; gap: calc(var(--vk-u) * 1); }
 .vk-collab[data-incoming] > .vk-collab-head { max-width: var(--vk-prompt-w); min-height: calc(var(--vk-u) * 6); padding-right: 0; font-size: var(--vk-fs-xs); }
 .vk-collab-icon { flex: none; width: 0.9rem; height: 0.9rem; color: var(--vk-fam); }
-.vk-collab-heading { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: baseline; gap: 0 calc(var(--vk-u) * 1); min-width: 0; }
+/* The heading stays on one line: long session names (often a task's first sentence) shrink to an ellipsis and keep
+ * their full text in the tooltip. 标题保持单行：过长的会话名称（常为任务首句）收缩为省略号，完整文本保留在提示中。 */
+.vk-collab-heading { display: flex; flex: 1 1 auto; align-items: baseline; gap: 0 calc(var(--vk-u) * 1); min-width: 0; }
 .vk-collab[data-incoming] .vk-collab-heading { flex: 0 1 auto; }
-.vk-collab-title { color: var(--vk-ink-2); font-weight: 500; }
+.vk-collab-title { flex: none; color: var(--vk-ink-2); font-weight: 500; white-space: nowrap; }
 .vk-collab-who { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 1px; min-width: 0; max-width: 100%; padding: 0; border: 0; background: none; color: var(--vk-ink); font: inherit; font-weight: 600; cursor: pointer; }
 .vk-collab-who > span[aria-hidden] { color: var(--vk-ink-3); font-weight: 400; }
 .vk-collab-who > svg { flex: none; width: 0.75rem; height: 0.75rem; color: var(--vk-fam); }
 .vk-collab-who:disabled { cursor: default; }
 .vk-collab-who:not(:disabled):hover .vk-collab-name { text-decoration: underline; text-underline-offset: 3px; }
 .vk-collab-who:focus-visible { outline-offset: 2px; }
-.vk-collab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-collab-name { min-width: 0; max-width: 24em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vk-collab-badge { display: inline-flex; flex: none; align-items: center; height: 1.38rem; padding: 0 calc(var(--vk-u) * 1.5); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-sunken); color: var(--vk-ink-2); font-size: var(--vk-fs-xs); white-space: nowrap; }
 /* The whole head is the toggle's hit area, painted underneath: the icon, heading and badge sit above its hover
  * fill and let presses fall through to it, while the participant button stays pressable on its own.

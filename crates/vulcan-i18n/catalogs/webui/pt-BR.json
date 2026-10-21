@@ -6052,5 +6052,8 @@
   "settings.permissionJudge.reviewPrompt.prompt": "Instruções",
   "settings.permissionJudge.reviewPrompt.saved": "Salvo.",
   "settings.permissionJudge.reviewPrompt.saveFailed": "Não foi possível salvar as instruções de revisão.",
-  "settings.permissionJudge.reviewPrompt.loadFailed": "Não foi possível ler as instruções de revisão."
+  "settings.permissionJudge.reviewPrompt.loadFailed": "Não foi possível ler as instruções de revisão.",
+  "conversation.collaboration.resultIssue.stopped": "A tarefa foi interrompida antes de terminar, então a sessão solicitante não recebeu uma resposta final.",
+  "conversation.collaboration.resultIssue.abandoned": "A tarefa foi abandonada sem resposta final.",
+  "conversation.collaboration.resultIssue.revoked": "O acesso da sessão solicitante foi revogado, então este resultado não foi mostrado a ela."
 }

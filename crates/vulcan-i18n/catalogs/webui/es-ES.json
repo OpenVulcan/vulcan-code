@@ -6052,5 +6052,8 @@
   "settings.permissionJudge.reviewPrompt.prompt": "Indicaciones",
   "settings.permissionJudge.reviewPrompt.saved": "Guardado.",
   "settings.permissionJudge.reviewPrompt.saveFailed": "No se pudieron guardar las indicaciones de revisión.",
-  "settings.permissionJudge.reviewPrompt.loadFailed": "No se pudieron leer las indicaciones de revisión."
+  "settings.permissionJudge.reviewPrompt.loadFailed": "No se pudieron leer las indicaciones de revisión.",
+  "conversation.collaboration.resultIssue.stopped": "La tarea se detuvo antes de terminar, por lo que la sesión solicitante no recibió una respuesta final.",
+  "conversation.collaboration.resultIssue.abandoned": "La tarea se abandonó sin respuesta final.",
+  "conversation.collaboration.resultIssue.revoked": "Se revocó el acceso de la sesión solicitante, por lo que no se le mostró este resultado."
 }

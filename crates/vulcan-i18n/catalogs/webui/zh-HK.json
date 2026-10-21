@@ -6052,5 +6052,8 @@
   "settings.permissionJudge.reviewPrompt.prompt": "提示詞",
   "settings.permissionJudge.reviewPrompt.saved": "已儲存。",
   "settings.permissionJudge.reviewPrompt.saveFailed": "無法儲存覆核提示詞。",
-  "settings.permissionJudge.reviewPrompt.loadFailed": "無法讀取覆核提示詞。"
+  "settings.permissionJudge.reviewPrompt.loadFailed": "無法讀取覆核提示詞。",
+  "conversation.collaboration.resultIssue.stopped": "任務在完成前被停止，請求方會話未收到最終回答。",
+  "conversation.collaboration.resultIssue.abandoned": "任務被放棄，沒有最終回答。",
+  "conversation.collaboration.resultIssue.revoked": "請求方會話的授權已撤銷，因此未向其顯示此結果。"
 }

@@ -6052,5 +6052,8 @@
   "settings.permissionJudge.reviewPrompt.prompt": "Prompt",
   "settings.permissionJudge.reviewPrompt.saved": "Saved.",
   "settings.permissionJudge.reviewPrompt.saveFailed": "Could not save the review prompt.",
-  "settings.permissionJudge.reviewPrompt.loadFailed": "Could not read the review prompt."
+  "settings.permissionJudge.reviewPrompt.loadFailed": "Could not read the review prompt.",
+  "conversation.collaboration.resultIssue.stopped": "The task was stopped before it finished, so the requesting session received no final answer.",
+  "conversation.collaboration.resultIssue.abandoned": "The task was abandoned without a final answer.",
+  "conversation.collaboration.resultIssue.revoked": "The requesting session's access was revoked, so this result was not shown to it."
 }
