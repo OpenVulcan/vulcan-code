@@ -6,6 +6,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use super::{execute, open_commit, open_diff, stage_all, toggle_stage, typed};
 use crate::app::action::{self, AskStep, UiAction};
 use crate::app::commands::AppCommand;
+use crate::app::find::{FindJump, TranscriptFind};
 use crate::app::pages::Area;
 use crate::app::{App, Focus, PanelTab, SidebarRow, insight, menus};
 use crate::backend::Command;
@@ -14,8 +15,30 @@ use crate::model::*;
 // ---- Transcript ----
 
 pub(super) fn on_transcript_key(app: &mut App, key: KeyEvent) {
+    if app
+        .transcript_find
+        .as_ref()
+        .is_some_and(|find| find.editing)
+    {
+        on_find_key(app, key);
+        return;
+    }
     let page = app.hits.transcript.height.saturating_sub(2).max(1) as isize;
+    let finding = app.transcript_find.is_some();
     match key.code {
+        KeyCode::Char('/') => TranscriptFind::edit(&mut app.transcript_find),
+        KeyCode::Char(ch @ ('n' | 'N')) if finding => {
+            if let Some(find) = app.transcript_find.as_mut() {
+                // Presses faster than the frame rate add up instead of replacing each other.
+                // 快于帧率的连续按键累加，而不是相互覆盖。
+                let step = if ch == 'n' { 1 } else { -1 };
+                find.jump = Some(match find.jump {
+                    Some(FindJump::Step(pending)) => FindJump::Step(pending + step),
+                    _ => FindJump::Step(step),
+                });
+            }
+        }
+        KeyCode::Esc if finding => app.transcript_find = None,
         KeyCode::Up | KeyCode::Char('k') => select_relative(app, -1),
         KeyCode::Down | KeyCode::Char('j') => select_relative(app, 1),
         KeyCode::PageUp => scroll_transcript(app, page),
@@ -46,6 +69,28 @@ pub(super) fn on_transcript_key(app: &mut App, key: KeyEvent) {
             if let Some(ch) = typed(&key) {
                 app.focus = Focus::Composer;
                 app.composer.insert_char(ch);
+            }
+        }
+    }
+}
+
+/// Keys while typing a find query: text edits it, Enter keeps it and lets n/N step, Esc closes.
+/// 输入查找查询时的按键：文本编辑查询，Enter 保留查询并交由 n/N 移动，Esc 关闭查找。
+fn on_find_key(app: &mut App, key: KeyEvent) {
+    let Some(find) = app.transcript_find.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc => app.transcript_find = None,
+        KeyCode::Enter => find.editing = false,
+        KeyCode::Backspace => {
+            find.query.pop();
+            find.jump = Some(FindJump::Restart);
+        }
+        _ => {
+            if let Some(ch) = typed(&key) {
+                find.query.push(ch);
+                find.jump = Some(FindJump::Restart);
             }
         }
     }

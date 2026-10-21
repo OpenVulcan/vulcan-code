@@ -1397,3 +1397,69 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
     input::handle_event(&mut h.app, key(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(replies(&observer), vec![("stop".into(), None)]);
 }
+
+/// "/" in the transcript finds text in the laid-out lines: the first match below the view top is
+/// brought into view and highlighted, n/N step and wrap, and Esc closes the search.
+/// 在会话记录中按 "/" 于排版行中查找文本：视图顶部以下的首个匹配被滚入视图并高亮，n/N 移动并循环，
+/// Esc 关闭查找。
+#[test]
+fn transcript_find_reveals_steps_and_closes() {
+    let _locale = i18n::lock_locale("en-US");
+    let mut h = Harness::connected();
+    let reply: String = (1..=90)
+        .map(|n| {
+            if n % 30 == 0 {
+                format!("Needle {n}\n\n")
+            } else {
+                format!("hay {n}\n\n")
+            }
+        })
+        .collect();
+    push_reply(&mut h, reply);
+    h.app.focus = crate::app::Focus::Transcript;
+    let visible = |app: &App, line: usize| {
+        let top = app.hits.transcript_top;
+        (top..top + app.hits.transcript.height as usize - 1).contains(&line)
+    };
+    h.app.session_mut().expect("session").scroll_from_bottom = usize::MAX / 2;
+    h.frame();
+
+    input::handle_event(&mut h.app, key(KeyCode::Char('/'), KeyModifiers::NONE));
+    type_text(&mut h.app, "needle");
+    input::handle_event(&mut h.app, key(KeyCode::Enter, KeyModifiers::NONE));
+    h.frame();
+    let find = h.app.transcript_find.as_ref().expect("find stays open");
+    assert!(!find.editing);
+    assert_eq!(find.matches.len(), 3);
+    let first = find.matches[find.current];
+    assert_eq!(find.current, 0);
+    assert!(visible(&h.app, first.line));
+    let content = h.app.hits.transcript_content;
+    let row = content.y + (first.line - h.app.hits.transcript_top) as u16;
+    let cell = &h.wide.backend().buffer()[(content.x + first.from as u16, row)];
+    assert_eq!(
+        cell.bg, h.app.theme.primary,
+        "the current match is highlighted"
+    );
+
+    input::handle_event(&mut h.app, key(KeyCode::Char('n'), KeyModifiers::NONE));
+    h.frame();
+    let find = h.app.transcript_find.as_ref().unwrap();
+    assert_eq!(find.current, 1);
+    assert!(visible(&h.app, find.matches[1].line));
+    input::handle_event(&mut h.app, key(KeyCode::Char('N'), KeyModifiers::SHIFT));
+    input::handle_event(&mut h.app, key(KeyCode::Char('N'), KeyModifiers::SHIFT));
+    h.frame();
+    assert_eq!(
+        h.app.transcript_find.as_ref().unwrap().current,
+        2,
+        "stepping back wraps"
+    );
+    assert!(
+        h.app.composer_is_empty(),
+        "find keys never reach the composer"
+    );
+
+    input::handle_event(&mut h.app, key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(h.app.transcript_find.is_none());
+}

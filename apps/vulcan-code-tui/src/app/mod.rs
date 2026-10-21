@@ -14,6 +14,7 @@ pub mod ask;
 mod catalog_tests;
 pub mod commands;
 pub mod composer;
+pub mod find;
 pub mod form;
 pub mod history;
 pub mod hit;
@@ -703,6 +704,9 @@ pub struct App {
     /// Transcript text selection and the copy waiting for the terminal clipboard.
     /// 会话记录文本选择，以及等待写入终端剪贴板的复制内容。
     pub clipboard: selection::Clipboard,
+    /// Find in the open conversation's transcript, while open.
+    /// 打开期间的当前会话记录查找。
+    pub transcript_find: Option<find::TranscriptFind>,
 }
 
 impl App {
@@ -804,6 +808,7 @@ impl App {
             attachments: Vec::new(),
             last_click: None,
             clipboard: selection::Clipboard::default(),
+            transcript_find: None,
         }
     }
 

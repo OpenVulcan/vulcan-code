@@ -164,8 +164,16 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     let total = layout.lines.len();
     let height = area.height as usize;
     let selected = session.selected;
-    let scroll = session.scroll_from_bottom.min(total.saturating_sub(height));
+    let mut scroll = session.scroll_from_bottom.min(total.saturating_sub(height));
+    if let Some(find) = app.transcript_find.as_mut()
+        && let Some(line) =
+            find.update(&layout.lines, total.saturating_sub(height + scroll), height)
+    {
+        let top = line.saturating_sub(height / 2);
+        scroll = total.saturating_sub(height + top);
+    }
     let top = total.saturating_sub(height + scroll);
+    let found = app.transcript_find.as_ref();
     let selected_range = selected
         .and_then(|seq| layout.items.iter().find(|(s, _, _)| *s == seq))
         .map(|(_, start, len)| *start..*start + *len);
@@ -191,6 +199,28 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
             },
             buf,
         );
+        if let Some(find) = found {
+            for (number, hit) in find
+                .matches
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.line == index)
+            {
+                let style = if number == find.current {
+                    highlight
+                } else {
+                    Style::new().fg(theme.fg).bg(theme.accent)
+                };
+                let to = hit.to.min(content_width);
+                let cells = Rect {
+                    x: content.x + hit.from as u16,
+                    y,
+                    width: to.saturating_sub(hit.from) as u16,
+                    height: 1,
+                };
+                buf.set_style(cells, style);
+            }
+        }
         let columns = dragged.and_then(|selection| selection.columns(index, line.width()));
         if let Some((from, to)) = columns {
             let to = to.min(content_width);
@@ -215,6 +245,9 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
             );
         }
     }
+    if let Some(find) = found {
+        find_bar(&theme, find, area, buf);
+    }
     let items = layout.items;
     app.hits.transcript_top = top;
     app.hits.transcript_items = items;
@@ -223,6 +256,64 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     app.hits.transcript_text = layout.lines;
     if let Some(session) = app.session_mut() {
         session.scroll_from_bottom = scroll;
+    }
+}
+
+/// Draws the find line over the bottom row: the query (with a caret while typing) and the match count.
+/// 在底行绘制查找行：查询（输入时带光标）与匹配计数。
+fn find_bar(theme: &Theme, find: &crate::app::find::TranscriptFind, area: Rect, buf: &mut Buffer) {
+    if area.height == 0 {
+        return;
+    }
+    let row = Rect {
+        y: area.bottom() - 1,
+        height: 1,
+        ..area
+    };
+    buf.set_style(row, Style::new().fg(theme.fg).bg(theme.popover));
+    for x in row.left()..row.right() {
+        buf[(x, row.y)].set_symbol(" ");
+    }
+    let status = if find.query.is_empty() {
+        String::new()
+    } else if find.matches.is_empty() {
+        tr!("conversation.find.none")
+    } else {
+        tr!(
+            "conversation.find.count",
+            current = find.current + 1,
+            total = find.matches.len()
+        )
+    };
+    let right = format!("{status}  n/N · Esc ");
+    let room = (area.width as usize).saturating_sub(width_of(&right) + 1);
+    let query = if find.query.is_empty() && find.editing {
+        Span::styled(
+            tr!("conversation.find.label"),
+            Style::new().fg(theme.muted_fg),
+        )
+    } else {
+        Span::raw(find.query.clone())
+    };
+    let left = Line::from(vec![
+        Span::styled(" / ", theme.primary_text()),
+        query,
+        Span::styled(if find.editing { "▏" } else { "" }, theme.primary_text()),
+    ]);
+    left.render(
+        Rect {
+            width: room as u16,
+            ..row
+        },
+        buf,
+    );
+    if room > 0 {
+        buf.set_string(
+            row.right().saturating_sub(width_of(&right) as u16),
+            row.y,
+            right,
+            Style::new().fg(theme.muted_fg).bg(theme.popover),
+        );
     }
 }
 
