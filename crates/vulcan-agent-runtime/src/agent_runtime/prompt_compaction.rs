@@ -2,11 +2,11 @@
 //! 共享提示词式上下文压缩运行时。
 
 use crate::agent_profile::AgentProfileCatalog;
+use crate::agent_runtime::code_mode::route_provider_tool_definitions;
 use crate::agent_runtime::execution_models::{
     ExecutionAgentPromptSnapshot, ExecutionSubagentPromptContext,
 };
 use crate::agent_runtime::execution_preparation::prepare_execution_with_tool_snapshot;
-use crate::agent_runtime::provider_protocol_tool_definition::resolved_tool_definition_to_provider_tool_definition;
 use crate::agent_runtime::provider_reasoning::public_reasoning_effort_from_level;
 use crate::agent_runtime::provider_runtime_context::build_runtime_prompt_layers_for_agent;
 use crate::agent_runtime::provider_transport_vulcan::{
@@ -810,14 +810,21 @@ async fn try_remote_responses_compaction(
         &tooling_preparation.preparation.model_blueprint,
         &prepared_execution,
     )?;
-    // providerTools retains the canonical host definitions before route-specific schema normalization.
-    // providerTools 在路由专属 Schema 正规化前保留规范宿主定义。
-    let provider_tools: Vec<_> = tooling_preparation
-        .tool_snapshot
-        .resolved_tool_definitions
-        .iter()
-        .map(resolved_tool_definition_to_provider_tool_definition)
-        .collect();
+    // providerTools retains the canonical host definitions before route-specific schema normalization;
+    // code-mode routes carry the same `exec` and `wait` surface as the ordinary turn.
+    // providerTools 在路由专属 Schema 正规化前保留规范宿主定义；代码模式路由携带与普通回合
+    // 相同的 `exec` 与 `wait` 工具面。
+    let provider_tools = route_provider_tool_definitions(
+        prepared_execution.route.tool_mode,
+        session_id,
+        prepared_execution
+            .route
+            .protocol_route
+            .protocol_profile_id
+            .as_str(),
+        &tooling_preparation.tool_snapshot.resolved_tool_definitions,
+        &tooling_request.tool_request_rejection_tool_ids,
+    )?;
     if let Some(events) = durable_events {
         // The session path builds an unprepared candidate; its unique owner materializes media and releases the wire request.
         // 会话路径构建未准备候选；由唯一所有者物化媒体并放行线路请求。
