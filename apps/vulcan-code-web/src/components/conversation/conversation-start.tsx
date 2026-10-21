@@ -1,7 +1,7 @@
 import { Brain, GitBranch, GitCompare, History, Library } from "lucide-react";
 import { formatMessage, useI18n } from "@/i18n";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
-import { formatConversationRelativeTime } from "@/components/project/project-sidebar-time";
+import { formatConversationRelativeTime, formatConversationUpdatedAt } from "@/components/project/project-sidebar-time";
 import type { ConversationSummary } from "@/types";
 
 // START_RECENT_LIMIT caps the recent-session list under the start composer.
@@ -113,6 +113,7 @@ export function ConversationStartFooter(props: {
               className="vk-start-session"
               key={conversation.id}
               onClick={() => props.onSelectConversation(conversation.id)}
+              title={[conversation.title, formatConversationUpdatedAt(conversation, locale)].filter(Boolean).join("\n")}
               type="button"
             >
               <span>{conversation.title}</span>
