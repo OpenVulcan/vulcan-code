@@ -31,7 +31,7 @@ beforeEach(() => {
     capabilities: [], thinkingDisplayMode: "popup_only", planModeEnabled: false,
     sessionVmmPolicy: { precheckMode: "enabled", memoryWritebackMode: "disabled" }, vmmAvailable: true, vmmStatus: "not_ready",
     onOpenMemorySettings: vi.fn(), onPick: vi.fn(), onThinkingDisplayModeChange: vi.fn(), onPlanModeChange: vi.fn(),
-    onVmmPolicyChange: vi.fn(), onOpenGoal: vi.fn(), projectId: "synthetic", conversationId: null, onOpenKnowledge: vi.fn(),
+    onVmmPolicyChange: vi.fn(), onOpenGoal: vi.fn(), projectId: "synthetic", conversationId: null, providers: [], onOpenKnowledge: vi.fn(),
     outputStyleCatalog: { defaultId: "balanced", selectedId: "balanced", entries: [
       { id: "balanced", labelZh: "平衡结构", labelEn: "Balanced", constraintLevel: "balanced", promptCharCount: 815, isDefault: true },
       { id: "structured", labelZh: "严格结构", labelEn: "Structured", constraintLevel: "strong", promptCharCount: 2464, isDefault: false },

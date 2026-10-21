@@ -1,0 +1,152 @@
+/* Subagent model allowlist editor: a pinned session-model card that can never be removed, then one numbered card */
+/* per granted model with its note, then the add bar. Cards carry an ember edge while they are being edited. */
+/* 子代理模型白名单编辑器：首先是不可移除的会话模型置顶卡片，其后每个授权模型一张带编号与说明的卡片，最后是添加栏。 */
+/* 正在编辑的卡片带有余烬色边线。 */
+.vk-sam { display: grid; gap: calc(var(--vk-u) * 2); }
+
+.vk-sam-anchor {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: calc(var(--vk-u) * 3);
+  align-items: start;
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3.5);
+  border: var(--vk-bw) solid color-mix(in srgb, var(--vk-ember) 35%, var(--vk-line-soft));
+  background:
+    linear-gradient(100deg, color-mix(in srgb, var(--vk-ember) 10%, transparent), transparent 62%),
+    var(--vk-raised);
+  overflow: hidden;
+}
+.vk-sam-anchor::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--vk-ember);
+}
+.vk-sam-glyph {
+  display: grid;
+  place-items: center;
+  width: calc(var(--vk-u) * 9);
+  height: calc(var(--vk-u) * 9);
+  color: var(--vk-ember);
+  background: var(--vk-ember-soft);
+}
+.vk-sam-glyph > svg { width: 17px; height: 17px; }
+.vk-sam-anchor-text { display: grid; gap: calc(var(--vk-u) * 1); min-width: 0; }
+.vk-sam-anchor-head { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-sam-anchor-head > strong { font-size: var(--vk-fs-md); font-weight: 600; }
+.vk-sam-anchor-text > p { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+.vk-sam-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: calc(var(--vk-u) * 5);
+  padding: 0 calc(var(--vk-u) * 1.5);
+  font-family: var(--vk-label-font);
+  font-size: var(--vk-fs-2xs);
+  letter-spacing: var(--vk-label-track);
+  text-transform: var(--vk-label-case);
+  color: var(--vk-ember-ink);
+  background: color-mix(in srgb, var(--vk-ember) 16%, transparent);
+}
+.vk-sam-tag[data-tone="warn"] { color: var(--vk-warn); background: color-mix(in srgb, var(--vk-warn) 14%, transparent); }
+.vk-sam-tag > svg { width: 11px; height: 11px; }
+
+.vk-sam-list { display: grid; gap: calc(var(--vk-u) * 1.5); margin: 0; padding: 0; list-style: none; }
+.vk-sam-card {
+  position: relative;
+  display: grid;
+  gap: calc(var(--vk-u) * 2);
+  padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3) calc(var(--vk-u) * 3) calc(var(--vk-u) * 3.5);
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-panel);
+  transition: border-color var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease);
+  animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
+}
+.vk-sam-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px auto -1px -1px;
+  width: 2px;
+  background: transparent;
+  transition: background-color var(--vk-t-fast) var(--vk-ease);
+}
+.vk-sam-card:hover { border-color: var(--vk-line); }
+.vk-sam-card:focus-within { border-color: color-mix(in srgb, var(--vk-ember) 45%, var(--vk-line)); background: var(--vk-raised); }
+.vk-sam-card:focus-within::before { background: var(--vk-ember); }
+.vk-sam-card[data-unavailable] { border-style: dashed; }
+
+.vk-sam-card-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2.5); min-width: 0; }
+.vk-sam-index {
+  flex: none;
+  min-width: calc(var(--vk-u) * 5);
+  color: var(--vk-ink-3);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.vk-sam-card:focus-within .vk-sam-index { color: var(--vk-ember); }
+.vk-sam-icon { flex: none; }
+.vk-sam-name { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; }
+.vk-sam-name > strong { overflow: hidden; font-size: var(--vk-fs-md); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vk-sam-name > small {
+  overflow: hidden;
+  color: var(--vk-ink-3);
+  font-size: var(--vk-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vk-sam-name code { font-family: var(--vk-font-mono); font-size: var(--vk-fs-2xs); }
+.vk-sam-tools { display: flex; flex: none; align-items: center; gap: 2px; opacity: 0.55; transition: opacity var(--vk-t-fast) var(--vk-ease); }
+.vk-sam-card:is(:hover, :focus-within) .vk-sam-tools { opacity: 1; }
+
+.vk-sam-note { display: grid; gap: calc(var(--vk-u) * 1); padding-left: calc(var(--vk-u) * 7.5); }
+.vk-sam-note > textarea { min-height: calc(var(--vk-u) * 15); resize: vertical; }
+.vk-sam-note-foot { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-sam-note-foot > span:first-child { flex: 1 1 auto; min-width: 0; }
+.vk-sam-count { flex: none; font-family: var(--vk-font-mono); font-variant-numeric: tabular-nums; }
+.vk-sam-count[data-tone="warn"] { color: var(--vk-warn); }
+.vk-sam-count[data-tone="bad"] { color: var(--vk-bad); font-weight: 600; }
+
+
+.vk-sam-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2);
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-sunken);
+}
+.vk-sam-add > svg { flex: none; width: 15px; height: 15px; color: var(--vk-ember); }
+.vk-sam-add > .vk-pick { border-color: var(--vk-line); background: var(--vk-panel); }
+.vk-sam-add-hint { flex: 1 1 12rem; min-width: 0; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: var(--vk-lh-ui); }
+.vk-sam-add-limit { flex: none; color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+
+/* The session dialog stacks the scope switch above the same editor and keeps the list scrolling inside the dialog. */
+/* 会话对话框在同一编辑器上方放置范围切换，并让列表在对话框内滚动。 */
+.vk-sam-dialog-body { display: grid; gap: calc(var(--vk-u) * 3); min-height: 0; }
+.vk-sam-follow {
+  display: grid;
+  gap: calc(var(--vk-u) * 1.5);
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3.5);
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  line-height: var(--vk-lh-ui);
+}
+.vk-sam-follow > ul { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 1.5); margin: 0; padding: 0; list-style: none; }
+.vk-sam-follow li {
+  padding: 2px calc(var(--vk-u) * 2);
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-panel);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-xs);
+}
+
+@media (max-width: 640px) {
+  .vk-sam-note { padding-left: 0; }
+  .vk-sam-tools { opacity: 1; }
+}

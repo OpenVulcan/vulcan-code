@@ -45,6 +45,7 @@ import type {
   ComposerAttachmentSummary,
   MediaUploadProgressChangedDelta,
   OutputStyleCatalogSummary,
+  ProviderSummary,
   SessionOutputStyleSummary,
   SessionVmmPolicySummary,
 } from "@/types";
@@ -107,6 +108,12 @@ export type ComposerAttachmentMenuProps = {
   // Conversation identifier whose knowledge selection is edited.
   // 要编辑知识库选择的会话标识符。
   conversationId: string | null;
+  // Providers carrying the enabled model rows, for the subagent model allowlist editor.
+  // 携带已启用模型行的 Provider 列表，用于子代理模型白名单编辑器。
+  providers: ProviderSummary[];
+  // Display name of the model the session currently runs.
+  // 会话当前所用模型的显示名称。
+  sessionModelLabel?: string;
   // Opens the project knowledge-library management surface.
   // 打开项目知识库管理界面。
   onOpenKnowledge: () => void;

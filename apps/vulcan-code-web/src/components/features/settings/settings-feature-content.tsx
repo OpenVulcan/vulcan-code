@@ -22,6 +22,7 @@ import { SettingsPage } from "@/components/features/settings/settings-layout";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
 import { AppearanceSettingsArea } from "@/components/features/settings/appearance-settings-area";
 import { PermissionJudgeSettingsArea } from "@/components/features/settings/permission-judge-settings-area";
+import { SubagentModelsSettingsArea } from "@/components/features/subagent-models/subagent-models-settings-area";
 import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
 import { ConversationLinkSettingsSection } from "./conversation-link-settings";
@@ -65,7 +66,7 @@ export interface SettingsFeatureContentProps {
 
 // READABLE_SETTINGS_PAGES are preference pages that read as one centred column; work surfaces fill the pane.
 // READABLE_SETTINGS_PAGES 是以居中单列阅读的偏好类页面；工作界面铺满面板。
-const READABLE_SETTINGS_PAGES: ReadonlySet<SettingsSubAreaId> = new Set(["context-basics", "appearance", "notifications", "git-commit", "permission-judge", "about-licenses"]);
+const READABLE_SETTINGS_PAGES: ReadonlySet<SettingsSubAreaId> = new Set(["context-basics", "appearance", "notifications", "git-commit", "permission-judge", "subagent-models", "about-licenses"]);
 
 // SettingsFeatureContent frames every settings page; the feature header shows its title and navigation stays in the sidebar.
 // SettingsFeatureContent 包裹每个设置页面；功能页头显示其标题，导航保留在侧栏。
@@ -121,6 +122,9 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
   }
   if (props.activeSettingsSubArea === "git-commit") {
     return <GitCommitSettingsArea actions={props.actions} workbench={props.workbench} />;
+  }
+  if (props.activeSettingsSubArea === "subagent-models") {
+    return <SubagentModelsSettingsArea providers={props.workbench.providers} />;
   }
   if (props.activeSettingsSubArea === "permission-judge") {
     return <PermissionJudgeSettingsArea projects={props.workbench.projects} />;

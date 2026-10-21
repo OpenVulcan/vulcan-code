@@ -16,9 +16,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { ComposerAttachmentMenuProps } from "./composer-attachment-controls";
 import { ComposerKnowledgeControl } from "./composer-knowledge-control";
 import { SessionSettingsRow } from "./composer-session-settings-parts";
+import { ComposerSubagentModelsBlock } from "./composer-subagent-models";
 import type { ComposerSettingsSection } from "./composer-settings-request";
 import { useDedicatedComposer } from "./dedicated/dedicated-session-controls";
 import type { ComposerAnswerModeController } from "./composer-panel/use-composer-answer-mode";
+
+// LazySubagentModelsSessionDialog loads the allowlist editor and its styles only when a session edits its list.
+// LazySubagentModelsSessionDialog 只在会话编辑其清单时加载白名单编辑器及其样式。
+const LazySubagentModelsSessionDialog = React.lazy(() => import("@/components/features/subagent-models/subagent-models-session-dialog"));
 
 // ComposerSettingsMenu is the session settings panel opened from the status bar. Display settings at the top apply at once
 // and stay on this machine; the settings below them belong to this session and are saved with it.
@@ -40,6 +45,9 @@ export function ComposerSettingsMenu(props: ComposerAttachmentMenuProps) {
   // slash 指令可打开本面板并定位到某个区块；关闭面板即清除该请求。
   const [open, setOpen] = React.useState(false);
   const [requestedSection, setRequestedSection] = React.useState<ComposerSettingsSection | null>(null);
+  // The allowlist dialog outlives the panel, which closes when the dialog opens.
+  // 白名单对话框的生命周期长于面板；对话框打开时面板关闭。
+  const [subagentDialogOpen, setSubagentDialogOpen] = React.useState(false);
   const body = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     if (props.settingsRequest) {
@@ -71,7 +79,7 @@ export function ComposerSettingsMenu(props: ComposerAttachmentMenuProps) {
   const scope = toolCollapse.scope;
   const thinkingValue = thinkingPreference.override === undefined ? "inherit" : thinkingPreference.override ? "popup_only" : "inline_output";
   const collapseValue = toolCollapse.override === undefined ? "inherit" : toolCollapse.override ? "enabled" : "disabled";
-  return (
+  return (<>
     <Popover open={open} onOpenChange={(next) => {
       setOpen(next);
       if (!next) setRequestedSection(null);
@@ -150,12 +158,22 @@ export function ComposerSettingsMenu(props: ComposerAttachmentMenuProps) {
                   </> : null}
                 </div>
               ) : null}
+              <ComposerSubagentModelsBlock conversationId={props.conversationId} onEdit={() => {
+                setOpen(false);
+                setSubagentDialogOpen(true);
+              }} />
             </section>
           )}
         </div>
       </PopoverContent>
     </Popover>
-  );
+    {subagentDialogOpen && props.conversationId ? (
+      <React.Suspense fallback={null}>
+        <LazySubagentModelsSessionDialog conversationId={props.conversationId} onClose={() => setSubagentDialogOpen(false)}
+          providers={props.providers} sessionModelLabel={props.sessionModelLabel} />
+      </React.Suspense>
+    ) : null}
+  </>);
 }
 
 // OutputStyleRow chooses the prompt style for this session, or follows the global choice.

@@ -39,7 +39,7 @@ it.each([false, true])("keeps settings reachable when policy editing is %s", asy
   try {
     await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><ComposerSettingsMenu
       answerMode={{ mode: "standard", saving: false, awaitingRequest: false, available: true, select: () => {}, flush: async () => true }}
-      capabilities={[]} thinkingDisplayMode="popup_only" planModeEnabled={false}
+      capabilities={[]} providers={[]} thinkingDisplayMode="popup_only" planModeEnabled={false}
       sessionVmmPolicy={null} vmmAvailable={enabled} vmmStatus={enabled ? "not_ready" : "disabled"}
       onOpenMemorySettings={navigate} onPick={() => {}} onThinkingDisplayModeChange={() => {}}
       onPlanModeChange={() => {}} onVmmPolicyChange={changePolicy} onOpenGoal={() => {}}

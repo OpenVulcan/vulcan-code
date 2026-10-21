@@ -903,6 +903,8 @@ export function ComposerPanel(props: {
               answerMode={answerMode}
               capabilities={enabledAttachmentCapabilities}
               conversationId={props.conversationId}
+              providers={props.providers}
+              sessionModelLabel={activeModelChoice?.modelName}
               draftOutputStyleId={draftSessionSettings.outputStyleId}
               onOutputStyleChange={handleOutputStyleChange}
               outputStyleCatalog={props.outputStyleCatalog}
