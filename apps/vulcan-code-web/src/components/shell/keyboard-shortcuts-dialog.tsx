@@ -19,6 +19,7 @@ const SHORTCUT_GROUPS: readonly { title: TranslationKey; rows: readonly Shortcut
       { combos: [["Ctrl", "Shift", "O"]], label: "palette.newConversation" },
       { combos: [["Ctrl", "M"]], label: "palette.switchModel" },
       { combos: [["Ctrl", "B"]], label: "sidebar.toggle" },
+      { combos: [["Alt", "↑"], ["Alt", "↓"]], label: "palette.shortcuts.sessionStep" },
       { combos: [["Ctrl", "F"]], label: "conversation.find.label" },
       { combos: [["Ctrl", "+"], ["Ctrl", "-"], ["Ctrl", "0"]], label: "appChrome.text" },
     ],

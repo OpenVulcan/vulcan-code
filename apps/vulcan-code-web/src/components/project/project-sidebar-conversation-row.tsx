@@ -92,6 +92,7 @@ export function ConversationTreeRow(props: {
         <button
           aria-current={props.isSelected ? "true" : undefined}
           className="vk-tree-session"
+          data-conversation-id={props.conversation.id}
           data-pinned={props.compactPinned ? "" : undefined}
           data-state={state ?? undefined}
           data-variant={variant}

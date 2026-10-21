@@ -38,7 +38,7 @@ import { SortableProjectRow } from "./project-sidebar-project-row";
 import type { SortableRowBinding } from "./project-sidebar-sortable";
 import { ProjectIcon } from "./project-icons";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
-import { handleSessionTreeKey, SESSION_TREE_ROW_SELECTOR } from "./session-tree-keys";
+import { handleSessionStepKey, handleSessionTreeKey, SESSION_TREE_ROW_SELECTOR } from "./session-tree-keys";
 import { setSidebarFlow, useSidebarFlow, type SidebarFlow } from "./sidebar-flow";
 
 export type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
@@ -155,6 +155,16 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
   // currentProject is the project the session flow lists and the new-session actions target.
   // currentProject 是会话流所列出的项目，也是新建会话操作的目标。
   const currentProject = resolveCurrentProject(props);
+  // listRef is the shown list that Alt+Up and Alt+Down step through.
+  // listRef 是 Alt+上/下键逐个经过的已显示列表。
+  const listRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (listRef.current) handleSessionStepKey(event, listRef.current);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
   return (
     <div className="vk-nav-flow" data-flow={flow}>
       <div className="vk-nav-tools">
@@ -231,7 +241,7 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
           </div>
         ) : null}
       </div>
-      <div className="vk-nav-list" onKeyDown={(event) => { handleSessionTreeKey(event); }}>
+      <div className="vk-nav-list" onKeyDown={(event) => { handleSessionTreeKey(event); }} ref={listRef}>
         {props.projects.length === 0 ? (
           <NoProjectsEntry onCreateProject={() => navigate(props.onCreateProject)()} />
         ) : flow === "session" && currentProject ? (

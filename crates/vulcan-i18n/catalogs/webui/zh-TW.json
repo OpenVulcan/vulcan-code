@@ -811,6 +811,7 @@
   "palette.shortcuts.tree": "展開或收合樹狀列",
   "palette.shortcuts.tabs": "切換頁面分頁",
   "palette.shortcuts.close": "關閉對話框或選單",
+  "palette.shortcuts.sessionStep": "開啟清單中的上一個或下一個對話",
   "palette.actions": "操作",
   "palette.conversations": "對話",
   "palette.recent": "最近對話",

@@ -27,3 +27,33 @@ export function handleSessionTreeKey(
   if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return false;
   return moveInList(event, event.currentTarget, SESSION_TREE_ROW_SELECTOR);
 }
+
+// handleSessionStepKey opens the previous or next listed session on Alt+Up or Alt+Down from anywhere on the page,
+// in the order the list shows them. A session listed twice (pinned and in its project) counts once, where it first
+// appears. Keys that already belong to something else (a dialog, a select or combobox, a key another list
+// instance took) are left alone. Returns whether the key was used.
+// handleSessionStepKey 在页面任意位置按 Alt+上/下键时，按列表显示顺序打开上一个或下一个会话。出现两次的会话（置顶
+// 与所属项目中）只按首次出现的位置计算。已属于其他用途的按键（对话框、下拉选择或组合框、已被另一个列表实例处理的
+// 按键）不作处理。返回该按键是否被使用。
+export function handleSessionStepKey(
+  event: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "isComposing" | "defaultPrevented" | "target" | "preventDefault">,
+  list: HTMLElement,
+): boolean {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing || event.defaultPrevented) return false;
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return false;
+  if (event.target instanceof Element && event.target.closest("[role=dialog], select, [role=combobox]")) return false;
+  const seen = new Set<string>();
+  const rows = [...list.querySelectorAll<HTMLElement>("[data-conversation-id]")].filter((row) => {
+    const id = row.dataset.conversationId!;
+    return seen.has(id) ? false : (seen.add(id), true);
+  });
+  const current = rows.findIndex((row) => row.getAttribute("aria-current") === "true");
+  const next = current < 0
+    ? rows[event.key === "ArrowDown" ? 0 : rows.length - 1]
+    : rows[current + (event.key === "ArrowDown" ? 1 : -1)];
+  if (!next) return false;
+  event.preventDefault();
+  next.click();
+  next.scrollIntoView({ block: "nearest" });
+  return true;
+}

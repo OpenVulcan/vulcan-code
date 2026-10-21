@@ -811,6 +811,7 @@
   "palette.shortcuts.tree": "Expand or collapse a tree row",
   "palette.shortcuts.tabs": "Switch page tabs",
   "palette.shortcuts.close": "Close a dialog or menu",
+  "palette.shortcuts.sessionStep": "Open the previous or next session in the list",
   "palette.actions": "Actions",
   "palette.conversations": "Conversations",
   "palette.recent": "Recent conversations",

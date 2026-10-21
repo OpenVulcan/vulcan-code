@@ -811,6 +811,7 @@
   "palette.shortcuts.tree": "Expandir o contraer una fila del árbol",
   "palette.shortcuts.tabs": "Cambiar de pestaña de página",
   "palette.shortcuts.close": "Cerrar un diálogo o menú",
+  "palette.shortcuts.sessionStep": "Abrir la conversación anterior o siguiente de la lista",
   "palette.actions": "Acciones",
   "palette.conversations": "Conversaciones",
   "palette.recent": "Conversaciones recientes",

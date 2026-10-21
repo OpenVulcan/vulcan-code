@@ -811,6 +811,7 @@
   "palette.shortcuts.tree": "Baumzeile auf- oder zuklappen",
   "palette.shortcuts.tabs": "Seitentabs wechseln",
   "palette.shortcuts.close": "Dialog oder Menü schließen",
+  "palette.shortcuts.sessionStep": "Vorherige oder nächste Unterhaltung der Liste öffnen",
   "palette.actions": "Aktionen",
   "palette.conversations": "Unterhaltungen",
   "palette.recent": "Letzte Unterhaltungen",
