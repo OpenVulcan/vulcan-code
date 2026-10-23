@@ -111,7 +111,8 @@ impl ProviderExecutionClient {
                     })
             };
             if let Some(existing) = existing {
-                let session = existing.lock().await;
+                let mut session = existing.lock().await;
+                session.service_idle_frames().await;
                 if session.replacement_required() {
                     request_without_nonpersistent_responses_continuation(route, request)
                 } else {
@@ -225,6 +226,7 @@ impl ProviderExecutionClient {
                 }
             };
             let mut session = session_handle.lock().await;
+            session.service_idle_frames().await;
             if session.replacement_required() {
                 let _ = session.close().await;
                 *session = match ResponsesWebsocketSession::connect(config).await {
@@ -274,8 +276,18 @@ impl ProviderExecutionClient {
                 .await
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             }
+            // A reused socket can die silently between requests; failing before its first frame
+            // retires only that socket so the retry reconnects instead of leaving WebSocket.
+            // 复用的 Socket 可能在请求间静默失效；在首帧前失败只让该 Socket 退役，
+            // 使重试重新建立连接，而不是离开 WebSocket。
+            let connection_reused = session.served_response();
             if let Err(error) = session.begin_response(encoded.body, None).await {
-                client.disable_responses_websocket(websocket_key.as_str());
+                retire_failed_responses_websocket(
+                    &client,
+                    &mut session,
+                    websocket_key.as_str(),
+                    connection_reused,
+                );
                 let failure = trace_provider_transport_failure(
                     execution_id.as_str(),
                     "responses_websocket",
@@ -323,14 +335,21 @@ impl ProviderExecutionClient {
             let mut semantic_output_observed = false;
             let mut stream_state = AiStreamStateMachine::default();
             let mut terminal_observed = false;
+            let mut frame_observed = false;
             loop {
                 let mut frame = match session.next_frame().await {
                     Ok(Some(frame)) => {
+                        frame_observed = true;
                         wire_response_capture.observe_websocket_frame(frame.raw.clone());
                         frame
                     }
                     Ok(None) => {
-                        client.disable_responses_websocket(websocket_key.as_str());
+                        retire_failed_responses_websocket(
+                            &client,
+                            &mut session,
+                            websocket_key.as_str(),
+                            connection_reused && !frame_observed,
+                        );
                         let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
                             "responses_websocket",
@@ -348,7 +367,12 @@ impl ProviderExecutionClient {
                         if let Some(raw_frame) = session.take_last_raw_frame() {
                             wire_response_capture.observe_websocket_frame(raw_frame);
                         }
-                        client.disable_responses_websocket(websocket_key.as_str());
+                        retire_failed_responses_websocket(
+                            &client,
+                            &mut session,
+                            websocket_key.as_str(),
+                            connection_reused && !frame_observed,
+                        );
                         let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
                             "responses_websocket",
@@ -673,6 +697,27 @@ impl ProviderExecutionClient {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         insert_bounded_responses_websocket_breaker(&mut breakers, key, Instant::now());
+    }
+}
+
+/// Retires a socket after a transport failure, keeping WebSocket for stale reused connections.
+/// 在传输失败后让 Socket 退役；对失效的复用连接保留 WebSocket。
+///
+/// # Parameters
+/// 参数
+/// `stale_reuse` is true only when a socket that already served a request failed before
+/// delivering any frame; every other failure activates the sticky HTTP breaker as before.
+/// `stale_reuse` 仅在已服务过请求的 Socket 于交付任何帧之前失败时为真；其他失败照旧
+/// 激活粘性 HTTP 熔断器。
+fn retire_failed_responses_websocket(
+    client: &ProviderExecutionClient,
+    session: &mut ResponsesWebsocketSession,
+    websocket_key: &str,
+    stale_reuse: bool,
+) {
+    session.abandon_response();
+    if !stale_reuse {
+        client.disable_responses_websocket(websocket_key);
     }
 }
 

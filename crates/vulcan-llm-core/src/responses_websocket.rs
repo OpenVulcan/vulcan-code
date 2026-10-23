@@ -1,7 +1,7 @@
 //! OpenAI Responses WebSocket session transport adapted from the Codex connection model.
 //! 基于 Codex 连接模型适配的 OpenAI Responses WebSocket 会话传输。
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -103,6 +103,9 @@ pub struct ResponsesWebsocketSession {
     /// Most recent application frame retained when local validation returns an error.
     /// 当本地校验返回错误时保留的最近一条应用帧。
     last_raw_frame: Option<ResponsesWebsocketRawFrame>,
+    /// Whether this connection already delivered a terminal event, so the next request reuses it.
+    /// 此连接是否已交付过终态事件，即下一次请求属于连接复用。
+    served_response: bool,
 }
 
 impl ResponsesWebsocketSession {
@@ -150,6 +153,7 @@ impl ResponsesWebsocketSession {
             previous_response_id: None,
             replace_before_next_request: false,
             last_raw_frame: None,
+            served_response: false,
         })
     }
 
@@ -159,6 +163,47 @@ impl ResponsesWebsocketSession {
         self.replace_before_next_request
             || self.connected_at.elapsed() >= self.config.max_connection_age
             || matches!(self.connection.get_ref(), MaybeTlsStream::Plain(stream) if stream.peer_addr().is_err())
+    }
+
+    /// Reports whether this connection already delivered a terminal event to an earlier request.
+    /// 报告此连接是否已向更早的请求交付过终态事件。
+    pub fn served_response(&self) -> bool {
+        self.served_response
+    }
+
+    /// Services frames that arrived while no response was in flight.
+    /// 处理在没有处理中响应期间到达的帧。
+    ///
+    /// Nothing reads an idle socket between requests, so a provider close, a reset, or an
+    /// unanswered ping is only observable here; any of them retires the socket before reuse.
+    /// 请求之间没有任何读取者，供应商关闭、连接重置或未应答的 Ping 只能在此处观察到；
+    /// 任一情况都会让该 Socket 在复用前退役。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value; replacement state is updated synchronously.
+    /// 不返回值；同步更新换代状态。
+    pub async fn service_idle_frames(&mut self) {
+        if self.in_flight || self.replace_before_next_request {
+            return;
+        }
+        // Each poll is non-blocking: an idle socket without pending input yields nothing.
+        // 每次轮询都不阻塞：没有待读输入的空闲 Socket 不产生任何结果。
+        while let Some(message) = self.connection.next().now_or_never() {
+            match message {
+                Some(Ok(Message::Ping(payload))) => {
+                    if self.connection.send(Message::Pong(payload)).await.is_err() {
+                        self.abandon_response();
+                        return;
+                    }
+                }
+                Some(Ok(Message::Pong(_))) => {}
+                _ => {
+                    self.abandon_response();
+                    return;
+                }
+            }
+        }
     }
 
     /// Reports whether one response currently owns this connection.
@@ -301,6 +346,7 @@ impl ResponsesWebsocketSession {
                         .pointer("/error/code")
                         .or_else(|| value.pointer("/response/error/code"))
                         .and_then(Value::as_str);
+                    self.served_response |= completed || failed;
                     if completed {
                         self.previous_response_id = value
                             .pointer("/response/id")
@@ -719,5 +765,52 @@ mod tests {
             assert_eq!(session.replacement_required(), replacement_required);
             server.await.expect("server should finish");
         }
+    }
+    /// Verifies a provider close between requests retires the idle socket before reuse.
+    /// 验证请求之间的供应商关闭会让空闲 Socket 在复用前退役。
+    #[tokio::test]
+    async fn idle_socket_closed_between_requests_requires_replacement() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("address should resolve");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("client should connect");
+            let mut websocket = accept_async(stream).await.expect("upgrade should succeed");
+            let _ = websocket.next().await;
+            websocket
+                .send(Message::Text(
+                    json!({"type":"response.completed","response":{"id":"response-1"}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .expect("completion should send");
+            websocket.close(None).await.expect("idle close should send");
+        });
+        let mut session =
+            ResponsesWebsocketSession::connect(test_config(format!("ws://{address}/v1/responses")))
+                .await
+                .expect("session should connect");
+        session
+            .begin_response(json!({"model":"gpt-5","input":[]}), None)
+            .await
+            .expect("request should send");
+        session
+            .next_frame()
+            .await
+            .expect("frame should read")
+            .expect("completion should exist");
+        assert!(session.served_response());
+        server.await.expect("server should finish");
+        // The close frame reaches the idle socket asynchronously, so poll within a bounded window.
+        // 关闭帧异步到达空闲 Socket，因此在有界时间窗口内轮询。
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !session.replacement_required() && Instant::now() < deadline {
+            session.service_idle_frames().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(session.replacement_required());
+        assert_eq!(session.previous_response_id(), None);
     }
 }
