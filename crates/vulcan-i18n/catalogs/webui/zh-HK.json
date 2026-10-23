@@ -6213,5 +6213,6 @@
   "conversation.contextInjection.upsert": "已向 AI 傳送指令",
   "conversation.contextInjection.remove": "已撤回指令",
   "conversation.contextInjection.mixed": "已更新 AI 指令",
-  "conversation.contextInjection.content": "AI 收到的原文"
+  "conversation.contextInjection.previous": "上一類",
+  "conversation.contextInjection.next": "下一類"
 }

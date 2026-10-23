@@ -33,6 +33,15 @@ import { goalNoticeTitle } from "./conversation-goal-notice";
 import { dedicatedMemoryNoticeTitle, isDedicatedMemoryNoticeKind } from "@/components/conversation/conversation-dedicated-notice";
 import { parseSystemProviderError } from "./conversation-system-error-card";
 import { nativeMediaInputPreview } from "./tool-presentations/native-media-input-preview";
+import {
+  contextInjectionCategoryLabel,
+  contextInjectionEntryMarkdown,
+  contextInjectionOperationLabel,
+  contextInjectionPages,
+  readContextInjectionEntries,
+  type ContextInjectionCategory,
+  type ContextInjectionEntry,
+} from "./conversation-context-injection";
 
 // V1RootInputPresentationMetadata stores the exact generation anchor used by restored edit and fork actions.
 // V1RootInputPresentationMetadata 保存恢复后的编辑与分叉操作使用的精确 generation 锚点。
@@ -947,11 +956,6 @@ function memoryRecallMessage(
   };
 }
 
-// ContextInjectionCategory names the user-facing family of one injected prompt.
-// ContextInjectionCategory 表示一条注入提示词面向用户的类别。
-type ContextInjectionCategory =
-  | "goal" | "plan" | "tools" | "permission" | "model" | "answer" | "guidance" | "base" | "injection" | "other";
-
 // contextInjectionCategory maps a backend context key to its card category; unknown keys stay visible as other.
 // contextInjectionCategory 将后端上下文键映射为卡片类别；未知键仍以“其他”显示。
 function contextInjectionCategory(contextKey: string): ContextInjectionCategory {
@@ -1017,15 +1021,6 @@ function contextInjectionMessage(
   }], t);
 }
 
-// ContextInjectionEntry is one injected prompt shown inside a context-injection card.
-// ContextInjectionEntry 是上下文注入卡片中显示的一条注入提示词。
-interface ContextInjectionEntry {
-  context_key: string;
-  category: ContextInjectionCategory;
-  operation: SystemContextBody["operation"];
-  content: string;
-}
-
 // contextInjectionNotice builds one card for one or more consecutive injections: the title names each
 // category once, in order, and the detail lists every exact text the model received.
 // contextInjectionNotice 为一条或多条连续注入构建一张卡片：标题按顺序列出各类别（各一次），
@@ -1035,26 +1030,22 @@ function contextInjectionNotice(
   entries: readonly ContextInjectionEntry[],
   t: Translation,
 ): ConversationMessage {
-  const categories = [...new Set(entries.map((entry) => entry.category))];
+  const pages = contextInjectionPages(entries);
+  const categories = pages.map((page) => page.category);
   const operations = new Set(entries.map((entry) => entry.operation));
-  const operationLabel = (operation: ContextInjectionEntry["operation"]) => t(operation === "remove"
-    ? "conversation.contextInjection.remove"
-    : "conversation.contextInjection.upsert");
-  const sections = entries.map((entry) => {
-    const longestRun = Math.max(0, ...(entry.content.match(/`{3,}/g) ?? []).map((run) => run.length));
-    const fence = "`".repeat(Math.max(3, longestRun + 1));
-    return `**${t(`conversation.contextInjection.category.${entry.category}`)}** · ${operationLabel(entry.operation)}`
-      + `\n\n${fence}text\n${entry.content}\n${fence}`;
-  });
+  const sections = pages.flatMap((page) => [
+    `### ${contextInjectionCategoryLabel(page.category, t)}`,
+    ...page.entries.map((entry) => contextInjectionEntryMarkdown(entry, t)),
+  ]);
   return {
     ...base,
     role: "assistant",
     recordKind: "display-note",
     title: t("conversation.contextInjection.title").replace(
       "{category}",
-      categories.map((category) => t(`conversation.contextInjection.category.${category}`)).join("/"),
+      categories.map((category) => contextInjectionCategoryLabel(category, t)).join("/"),
     ),
-    body: [`**${t("conversation.contextInjection.content")}**`, ...sections].join("\n\n"),
+    body: sections.join("\n\n"),
     metadata: {
       ...(base.metadata as Record<string, unknown> | undefined),
       notice_kind: "context_injection",
@@ -1062,7 +1053,7 @@ function contextInjectionNotice(
       context_categories: categories,
       summary: operations.size > 1
         ? t("conversation.contextInjection.mixed")
-        : operationLabel(entries[0]!.operation),
+        : contextInjectionOperationLabel(entries[0]!.operation, t),
       status: "completed",
     },
   };
@@ -1075,18 +1066,17 @@ function mergeConsecutiveContextInjections(
   messages: readonly ConversationMessage[],
   t: Translation,
 ): ConversationMessage[] {
-  const entriesOf = (message: ConversationMessage) => (
-    message.metadata as { notice_kind?: unknown; context_entries?: ContextInjectionEntry[] } | undefined
-  );
   const merged: ConversationMessage[] = [];
   let run: ConversationMessage[] = [];
   const flush = () => {
     if (run.length === 1) merged.push(run[0]!);
-    if (run.length > 1) merged.push(contextInjectionNotice(run[0]!, run.flatMap((message) => entriesOf(message)?.context_entries ?? []), t));
+    if (run.length > 1) {
+      merged.push(contextInjectionNotice(run[0]!, run.flatMap((message) => readContextInjectionEntries(message.metadata) ?? []), t));
+    }
     run = [];
   };
   for (const message of messages) {
-    if (entriesOf(message)?.notice_kind === "context_injection") {
+    if (readContextInjectionEntries(message.metadata)) {
       run.push(message);
       continue;
     }

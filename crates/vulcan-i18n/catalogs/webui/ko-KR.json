@@ -6213,5 +6213,6 @@
   "conversation.contextInjection.upsert": "AI에 지시를 보냈습니다",
   "conversation.contextInjection.remove": "지시를 철회했습니다",
   "conversation.contextInjection.mixed": "AI 지시를 업데이트했습니다",
-  "conversation.contextInjection.content": "AI가 받은 원문"
+  "conversation.contextInjection.previous": "이전 분류",
+  "conversation.contextInjection.next": "다음 분류"
 }

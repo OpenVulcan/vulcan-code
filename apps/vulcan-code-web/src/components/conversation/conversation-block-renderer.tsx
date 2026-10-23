@@ -28,6 +28,7 @@ import {
   TurnStatsBlock,
 } from "@/components/conversation/conversation-blocks";
 import { ToolExecutionBlock } from "@/components/conversation/conversation-tool-execution";
+import { ConversationNoticeCard } from "./conversation-notice-card";
 import {
   PlanArtifactBlock,
   type PlanArtifactActionPayload,
@@ -366,26 +367,34 @@ function SpecialConversationBlock(props: {
   }
 
   const Icon = blockIcon(props.block.kind);
-  const canOpen = detailEligibleBlockKinds.has(props.block.kind);
   const displayTitle = localizedConversationBlockTitle(props.block, t);
+  // Only a diff fence from an answer opens the review dialog; every tool and runtime card opens in place.
+  // 只有回答中的 diff 围栏打开审阅弹窗；所有工具与运行时卡片都就地展开。
+  if (props.block.kind !== "diff") {
+    return (
+      <ConversationNoticeCard
+        block={props.block}
+        expandedIds={props.expandedToolPresentationIds}
+        icon={Icon}
+        onExpandedChange={props.onToolPresentationExpandedChange}
+        title={displayTitle}
+      />
+    );
+  }
   return (
     <button
       className="vk-note"
       data-block-kind={props.block.kind}
-      disabled={!canOpen}
       onClick={() => {
-        if (canOpen) {
-          props.onOpenDetail({
-            title: displayTitle,
-            kind: props.block.kind,
-            body: props.block.body,
-            metadata: [
-              [t("conversation.metadata.type"), blockTitle(props.block.kind, props.block.toolName, t)],
-              ...(props.block.status ? [[t("conversation.metadata.status"), blockStatusLabel(props.block.status, t)] as [string, string]] : []),
-              ...(props.block.toolName ? [[t("conversation.metadata.tool"), props.block.toolName] as [string, string]] : []),
-            ],
-          });
-        }
+        props.onOpenDetail({
+          title: displayTitle,
+          kind: props.block.kind,
+          body: props.block.body,
+          metadata: [
+            [t("conversation.metadata.type"), blockTitle(props.block.kind, props.block.toolName, t)],
+            ...(props.block.status ? [[t("conversation.metadata.status"), blockStatusLabel(props.block.status, t)] as [string, string]] : []),
+          ],
+        });
       }}
       type="button"
     >
@@ -395,7 +404,7 @@ function SpecialConversationBlock(props: {
         <span>{props.block.summary}</span>
       </div>
       {props.block.status ? <StatusPill status={blockStatusTone(props.block.status)} label={blockStatusLabel(props.block.status, t)} /> : null}
-      {canOpen ? <Maximize2 aria-hidden="true" className="vk-note-open" /> : null}
+      <Maximize2 aria-hidden="true" className="vk-note-open" />
     </button>
   );
 }
@@ -424,10 +433,6 @@ function planArtifactsMatch(
   }
   return artifact.name === pendingArtifact.name && artifact.content.trim() === pendingArtifact.content.trim();
 }
-
-// detailEligibleBlockKinds lists block types that should open a dedicated detail modal.
-// detailEligibleBlockKinds 列出应打开专用详情弹窗的块类型。
-const detailEligibleBlockKinds = new Set<ConversationBlockKind>(["tool-call", "tool-result", "command", "diff", "notice"]);
 
 // blockStatusLabel names a known block status in the UI language; other statuses are shown as recorded.
 // blockStatusLabel 以界面语言命名已知的块状态；其他状态按记录原样显示。

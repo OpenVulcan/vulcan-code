@@ -6213,5 +6213,6 @@
   "conversation.contextInjection.upsert": "Instructions sent to the AI",
   "conversation.contextInjection.remove": "Instructions withdrawn",
   "conversation.contextInjection.mixed": "Instructions updated",
-  "conversation.contextInjection.content": "Text the AI received"
+  "conversation.contextInjection.previous": "Previous category",
+  "conversation.contextInjection.next": "Next category"
 }
