@@ -18,7 +18,8 @@ use vulcan_ai_contract::{
     RerankTruncation, ResourceKind, StructuredOutputCapability,
 };
 use vulcan_llm_core::{
-    ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+    ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID,
 };
 
 /// Stable public parameter identifier for sampling temperature.
@@ -28,6 +29,10 @@ pub const SAMPLING_TEMPERATURE_PARAMETER_ID: &str = "sampling.temperature";
 /// Stable provider-neutral parameter identifier for a direct reasoning-token budget.
 /// 直接推理 Token 预算的稳定供应商无关参数标识。
 pub const REASONING_MAX_TOKENS_PARAMETER_ID: &str = "reasoning.max_tokens";
+
+/// Codex subscription service-tier parameter; its values are the tiers the account catalog lists.
+/// Codex 订阅服务档位参数；取值为账号目录列出的档位。
+pub const CODEX_SERVICE_TIER_PARAMETER_ID: &str = "codex.service_tier";
 
 /// MiniMax reasoning-split parameter identifier the bundled manifest declares, named for tests.
 /// 内置清单声明的 MiniMax 思考拆分参数标识，供测试引用。
@@ -845,8 +850,10 @@ pub fn parse_openai_codex_model_catalog(
         .models
         .into_iter()
         .map(|model| ConnectionModel {
-            display_name: model.display_name.unwrap_or_else(|| model.slug.clone()),
-            id: model.slug,
+            display_name: model
+                .display_name
+                .clone()
+                .unwrap_or_else(|| model.slug.clone()),
             capabilities: ModelCapabilities {
                 operations: vec![AiOperation::ConversationRespond],
                 context_limit: model.context_window.or(model.max_context_window),
@@ -861,9 +868,11 @@ pub fn parse_openai_codex_model_catalog(
                         .iter()
                         .map(|level| level.effort.as_str()),
                 ),
+                model_parameters: codex_service_tier_parameter(&model).into_iter().collect(),
                 evidence_revision: String::from("openai.codex.models.v1"),
                 ..ModelCapabilities::default()
             },
+            id: model.slug,
             capability_evidence: ModelCapabilityEvidence::default(),
             protocol_variants: BTreeMap::new(),
             resolved_protocol_binding: None,
@@ -875,6 +884,43 @@ pub fn parse_openai_codex_model_catalog(
         generation,
         page_count: 1,
         discovery_schema_revision: String::from("openai.codex.models.v1"),
+    })
+}
+
+/// Registers the service-tier choice for one Codex model when its account catalog lists tiers.
+/// 当 Codex 账号目录为模型列出服务档位时，为其注册服务档位选择。
+///
+/// # Parameters
+/// 参数
+/// `model` is one picker-visible catalog entry.
+/// `model` 是一项选择器可见的目录条目。
+///
+/// # Returns
+/// 返回值
+/// `None` when the plan offers no tier beyond the default, so no control is shown.
+/// 套餐未提供默认以外的档位时返回 `None`，从而不显示控件。
+fn codex_service_tier_parameter(model: &OpenAiCodexModelEntry) -> Option<ModelParameterDefinition> {
+    // Codex omits the field for the default tier, so `default` is never a selectable value.
+    // Codex 对默认档位省略该字段，因此 `default` 永远不是可选值。
+    let mut values = Vec::new();
+    for tier in &model.service_tiers {
+        if tier.id != "default" && !values.contains(&tier.id) {
+            values.push(tier.id.clone());
+        }
+    }
+    (!values.is_empty()).then(|| ModelParameterDefinition {
+        id: String::from(CODEX_SERVICE_TIER_PARAMETER_ID),
+        display_name: String::from("Service tier"),
+        description: String::from(
+            "Requests a faster Codex processing tier that the subscription plan offers for this model; it uses plan credits faster.",
+        ),
+        schema: ModelParameterSchema::Enum { values },
+        default: ModelParameterDefault::ProviderDefault {},
+        protocol_ids: vec![String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)],
+        model_ids: vec![model.slug.clone()],
+        dependent_required: Vec::new(),
+        conflicts: Vec::new(),
+        evidence_revision: String::from("openai.codex.models.v1"),
     })
 }
 
@@ -1625,6 +1671,10 @@ struct OpenAiCodexModelEntry {
     /// 选择器排序；数值越小越靠前。
     #[serde(default)]
     priority: Option<i64>,
+    /// Processing tiers the account plan offers for this model, such as `priority` (Fast).
+    /// 账号套餐为此模型提供的处理档位，例如 `priority`（Fast）。
+    #[serde(default)]
+    service_tiers: Vec<OpenAiCodexServiceTier>,
     /// Remaining provider fields are not interpreted as public capabilities.
     /// 其余供应商字段不解释为公共能力。
     #[serde(flatten)]
@@ -1638,6 +1688,15 @@ struct OpenAiCodexReasoningLevel {
     /// Stable upstream effort label.
     /// 稳定的上游推理强度标签。
     effort: String,
+}
+
+/// One Codex service-tier declaration; labels come from the language catalogs, not upstream text.
+/// 一项 Codex 服务档位声明；标签来自语言目录，而非上游文本。
+#[derive(Deserialize)]
+struct OpenAiCodexServiceTier {
+    /// Exact request value for the `service_tier` field.
+    /// `service_tier` 字段的精确请求值。
+    id: String,
 }
 
 /// Parsed Anthropic page shared with the HTTP pagination client.
@@ -2346,6 +2405,37 @@ mod tests {
                 ReasoningEffort::Ultra,
             ]
         );
+        assert!(catalog.models[0].capabilities.model_parameters.is_empty());
+    }
+
+    /// Verifies Codex plan tiers become one per-model choice limited to the listed request values.
+    /// 验证 Codex 套餐档位成为一项按模型的选择，且仅限所列请求值。
+    #[test]
+    fn codex_discovery_registers_listed_service_tiers() {
+        let catalog = parse_openai_codex_model_catalog(
+            "connection",
+            1,
+            r#"{"models":[{"slug":"gpt-codex","visibility":"list","service_tiers":[{"id":"default","name":"Standard","description":"Default"},{"id":"priority","name":"Fast","description":"1.5x speed"},{"id":"ultrafast","name":"Ultrafast","description":"2x speed"}]}]}"#,
+        )
+        .expect("Codex model response should parse");
+        let parameters = &catalog.models[0].capabilities.model_parameters;
+        assert_eq!(parameters.len(), 1);
+        let tier = &parameters[0];
+        assert_eq!(tier.id, CODEX_SERVICE_TIER_PARAMETER_ID);
+        assert_eq!(
+            tier.schema,
+            ModelParameterSchema::Enum {
+                values: vec![String::from("priority"), String::from("ultrafast")]
+            }
+        );
+        assert_eq!(tier.default, ModelParameterDefault::ProviderDefault {});
+        assert_eq!(tier.model_ids, vec![String::from("gpt-codex")]);
+        assert_eq!(
+            tier.protocol_ids,
+            vec![String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)]
+        );
+        tier.validate_definition()
+            .expect("registered tier parameter should be a valid definition");
     }
 
     /// Verifies Code Assist discovery maps only returned identity and token limits.

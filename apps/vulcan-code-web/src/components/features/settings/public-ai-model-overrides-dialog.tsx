@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from "@/ui-kit/primitives/select"
 import { Separator } from "@/ui-kit/primitives/separator"
-import { useI18n, formatMessage, translateActive } from "@/i18n"
+import { useI18n, formatMessage, translateActive, type Translate, type TranslationKey } from "@/i18n"
 import { savePublicAiModelOverrides } from "@/service/settings-actions-service"
 import type {
   PublicAiModel,
@@ -455,6 +455,52 @@ function protocolDisplayName(protocolId: string | null): string {
   }
 }
 
+// CODEX_SERVICE_TIER_PARAMETER_ID is the Codex discovery parameter for plan speed tiers.
+// CODEX_SERVICE_TIER_PARAMETER_ID 是 Codex 发现注册的套餐速度档位参数。
+const CODEX_SERVICE_TIER_PARAMETER_ID = "codex.service_tier"
+
+// CODEX_SERVICE_TIER_LABELS names the request values Codex uses for each speed tier.
+// CODEX_SERVICE_TIER_LABELS 为 Codex 各速度档位的请求值命名。
+const CODEX_SERVICE_TIER_LABELS: Readonly<Record<string, TranslationKey>> = {
+  priority: "settings.modelOverrides.codexServiceTier.priority",
+  ultrafast: "settings.modelOverrides.codexServiceTier.ultrafast",
+  flex: "settings.modelOverrides.codexServiceTier.flex",
+}
+
+// ModelParameterPresentation is the user-visible copy for one registered parameter control.
+// ModelParameterPresentation 是一个已注册参数控件的用户可见文案。
+interface ModelParameterPresentation {
+  label: string
+  description: string
+  defaultLabel: string
+  valueLabel: (value: string) => string
+}
+
+// modelParameterPresentation uses catalog copy for known parameters and registered text otherwise.
+// modelParameterPresentation 对已知参数使用目录文案，其余使用注册文本。
+function modelParameterPresentation(
+  definition: PublicAiModel["capabilities"]["model_parameters"][number],
+  t: Translate,
+): ModelParameterPresentation {
+  if (definition.id === CODEX_SERVICE_TIER_PARAMETER_ID) {
+    return {
+      label: t("settings.modelOverrides.codexServiceTier.label"),
+      description: t("settings.modelOverrides.codexServiceTier.description"),
+      defaultLabel: t("settings.modelOverrides.codexServiceTier.standard"),
+      valueLabel: (value) => {
+        const key = CODEX_SERVICE_TIER_LABELS[value]
+        return key ? t(key) : value
+      },
+    }
+  }
+  return {
+    label: definition.display_name,
+    description: definition.description,
+    defaultLabel: t("settings.modelOverrides.providerDefault"),
+    valueLabel: (value) => value,
+  }
+}
+
 // ModelParameterField renders one scalar control exactly from the registered schema.
 // ModelParameterField 严格根据已注册 Schema 渲染一个标量控件。
 // Parameters: props supplies a registered parameter schema and value; returns the appropriate boolean, enum or scalar input.
@@ -473,6 +519,7 @@ function ModelParameterField(props: {
   const { t } = useI18n()
   const fieldId = React.useId()
   const schema = props.definition.schema
+  const presentation = modelParameterPresentation(props.definition, t)
   if (schema.type === "boolean") {
     const selectedValue = props.value === "true"
       ? "enabled"
@@ -481,7 +528,7 @@ function ModelParameterField(props: {
         : props.value ? "unavailable" : "provider-default"
     return (
       <div className="vk-form-stack">
-        <Label htmlFor={fieldId}>{props.definition.display_name}</Label>
+        <Label htmlFor={fieldId}>{presentation.label}</Label>
         <Select
           onValueChange={(value) => {
             props.onChange(value === "enabled" ? "true" : value === "disabled" ? "false" : "")
@@ -498,7 +545,7 @@ function ModelParameterField(props: {
             <SelectItem value="disabled">{t("settings.modelOverrides.disabled")}</SelectItem>
           </SelectContent>
         </Select>
-        <p className="vk-form-note">{props.definition.description}</p>
+        <p className="vk-form-note">{presentation.description}</p>
       </div>
     )
   }
@@ -507,7 +554,7 @@ function ModelParameterField(props: {
     const selectedIndex = values.indexOf(props.value)
     return (
       <div className="vk-form-stack">
-        <Label htmlFor={fieldId}>{props.definition.display_name}</Label>
+        <Label htmlFor={fieldId}>{presentation.label}</Label>
         <Select
           onValueChange={(value) => {
             if (value === "provider-default") {
@@ -520,24 +567,24 @@ function ModelParameterField(props: {
           value={selectedIndex >= 0 ? `option-${selectedIndex}` : props.value ? "unavailable" : "provider-default"}
         >
           <SelectTrigger id={fieldId}>
-            <SelectValue placeholder={t("settings.modelOverrides.providerDefault")} />
+            <SelectValue placeholder={presentation.defaultLabel} />
           </SelectTrigger>
           <SelectContent>
             {selectedIndex < 0 && props.value && <SelectItem value="unavailable" disabled>{t("settings.modelExperience.invalidValue")}: {props.value}</SelectItem>}
-            <SelectItem value="provider-default">{t("settings.modelOverrides.providerDefault")}</SelectItem>
+            <SelectItem value="provider-default">{presentation.defaultLabel}</SelectItem>
             {values.map((value, index) => (
-              <SelectItem key={`${index}/${value}`} value={`option-${index}`}>{value}</SelectItem>
+              <SelectItem key={`${index}/${value}`} value={`option-${index}`}>{presentation.valueLabel(value)}</SelectItem>
             ))}
           </SelectContent>
         </Select>
-        <p className="vk-form-note">{props.definition.description}</p>
+        <p className="vk-form-note">{presentation.description}</p>
       </div>
     )
   }
   const supported = ["integer", "decimal", "string"].includes(schema.type)
   return (
     <div className="vk-form-stack">
-      <Label htmlFor={fieldId}>{props.definition.display_name}</Label>
+      <Label htmlFor={fieldId}>{presentation.label}</Label>
       <Input
         disabled={!supported}
         id={fieldId}
@@ -549,7 +596,7 @@ function ModelParameterField(props: {
         type="text"
         value={props.value}
       />
-      <p className="vk-form-note">{props.definition.description}</p>
+      <p className="vk-form-note">{presentation.description}</p>
     </div>
   )
 }

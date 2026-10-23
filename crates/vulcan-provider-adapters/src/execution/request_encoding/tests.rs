@@ -1900,3 +1900,32 @@ fn deepseek_conversation_images_upload_only_on_file_id_capable_routes() {
             .is_none()
     );
 }
+
+/// Verifies the Codex route sends a selected plan tier as `service_tier` and omits it otherwise.
+/// 验证 Codex 路由把已选套餐档位作为 `service_tier` 发送，未选择时省略。
+#[test]
+fn codex_route_projects_selected_service_tier() {
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+    let route = bundled_manifest_route(
+        "openai",
+        "codex-subscription",
+        OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    );
+    let standard = client
+        .encode_request(&route, &minimal_request())
+        .expect("standard Codex request should encode");
+    assert!(standard.body.get("service_tier").is_none());
+
+    let mut fast = minimal_request();
+    fast.model_parameters.insert(
+        String::from(crate::CODEX_SERVICE_TIER_PARAMETER_ID),
+        ModelParameterValue::String(String::from("priority")),
+    );
+    let encoded = client
+        .encode_request(&route, &fast)
+        .expect("Codex request with a plan tier should encode");
+    assert_eq!(encoded.body["service_tier"], json!("priority"));
+}
