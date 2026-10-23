@@ -25,6 +25,12 @@ use vulcan_ai_contract::ModelCapabilities;
 /// 单次凭据作用域远程模型目录允许接受的最大分页数。
 const MODEL_DISCOVERY_MAX_PAGES: u32 = 1_024;
 
+/// Codex client version declared to the account model catalog, which hides models whose
+/// `minimal_client_version` is newer; it must cover every model the bundled Manifest describes.
+/// 向账号模型目录声明的 Codex 客户端版本；目录会隐藏 `minimal_client_version` 更新的模型，
+/// 因此它必须覆盖内置 Manifest 描述的全部模型。
+const OPENAI_CODEX_DISCOVERY_CLIENT_VERSION: &str = "0.155.0";
+
 /// Reports whether one signed Manifest authorizes a protocol variant for an exact model scope.
 /// 报告一份签名 Manifest 是否为精确模型作用域授权一个协议变体。
 ///
@@ -183,8 +189,9 @@ impl HttpProviderMetadataClient {
                     .map_err(ModelDiscoveryError::invalid_response)?
             }
             ModelDiscoveryKind::OpenAiCodex => {
-                let url =
-                    protocol_route.model_discovery_url(entry, "/models?client_version=0.144.1");
+                let path =
+                    format!("/models?client_version={OPENAI_CODEX_DISCOVERY_CLIENT_VERSION}");
+                let url = protocol_route.model_discovery_url(entry, path.as_str());
                 let body = send_metadata_get_with_authentication(
                     &self.http,
                     entry,

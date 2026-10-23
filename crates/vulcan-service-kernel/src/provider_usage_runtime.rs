@@ -106,7 +106,8 @@ fn account_usage_snapshot_kind(query: AccountUsageQueryKind) -> &'static str {
     match query {
         AccountUsageQueryKind::MiniMaxTokenPlan
         | AccountUsageQueryKind::KimiCodingPlan
-        | AccountUsageQueryKind::OpencodeGo => "token_plan",
+        | AccountUsageQueryKind::OpencodeGo
+        | AccountUsageQueryKind::OpenAiCodexUsage => "token_plan",
         AccountUsageQueryKind::OpenRouterCredits
         | AccountUsageQueryKind::OpenVulcan
         | AccountUsageQueryKind::TavilyCredits

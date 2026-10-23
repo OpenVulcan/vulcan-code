@@ -766,6 +766,12 @@ rtk git diff --check
 - CommandCode 用量窗口必须按稳定 ID 映射本地化标签，并复用 Kimi 的“套餐/余额 + 额度窗口”结构；美元额度统一按货币精度展示，不能把上游高精度小数直接暴露给用户。
 - 会话账号选择器必须把 `command_code_usage` 识别为额度窗口能力，使已刷新账号在会话区域显示剩余值；设置页和会话区必须消费同一份规范化用量快照，不能分别实现供应商专属结构。
 
+### 11.4 OpenAI Codex 订阅
+
+- 用量原语 `open_ai_codex_usage` 以 Codex 登录凭据（Bearer + `chatgpt-account-id`）请求固定入口 `https://chatgpt.com/backend-api/wham/usage`；响应形状以上游 `codex-rs/codex-backend-openapi-models` 的 `RateLimitStatusPayload` 为准。
+- 上游只报告整数 `used_percent`，不公开额度本身；窗口只填 `remaining_percent`、`duration_seconds`（`limit_window_seconds`）与 `resets_at`（`reset_at`，Unix 秒），不得臆造 `used`/`total`。主限额桶窗口 ID 为 `codex:primary`/`codex:secondary`，`additional_rate_limits` 为 `<metered_feature>:primary|secondary` 并以 `limit_name` 作为 `bucket_name`；界面按时长派生周期标签。
+- 模型发现声明的 `client_version` 由 `OPENAI_CODEX_DISCOVERY_CLIENT_VERSION` 唯一定义；账号目录会隐藏 `minimal_client_version` 更高的模型，新增 Codex 模型规则时必须确认该常量不低于其要求。
+
 ## 十二、五轮连续审核要求
 
 系统供应商、协议路由或模型扩展发生较大变更时，完成实现后执行连续五轮聚焦审核。任一轮发现问题，

@@ -1,6 +1,7 @@
 //! Registered account-usage primitives and their common observation clock.
 //! 已注册账号用量原语及其共用观测时钟。
 
+mod codex;
 mod command_code;
 mod decimal;
 mod deepseek;
@@ -11,6 +12,7 @@ mod opencode;
 mod openrouter;
 mod tavily;
 
+pub(super) use codex::query_openai_codex_usage;
 pub(super) use command_code::query_command_code_usage;
 pub(super) use deepseek::query_deepseek_balance;
 pub(super) use kimi::query_kimi_coding_plan;

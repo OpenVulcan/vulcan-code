@@ -38,7 +38,8 @@ pub(super) fn account_usage_secret_reference<'a>(
         | crate::AccountUsageQueryKind::DeepSeekBalance
         | crate::AccountUsageQueryKind::KimiCodingPlan
         | crate::AccountUsageQueryKind::OpenDesignWallet
-        | crate::AccountUsageQueryKind::CommandCodeUsage => {
+        | crate::AccountUsageQueryKind::CommandCodeUsage
+        | crate::AccountUsageQueryKind::OpenAiCodexUsage => {
             Ok(connection.secret_reference.as_str())
         }
     }
@@ -276,6 +277,7 @@ impl PublicAiRuntime {
                 crate::AccountUsageQueryKind::KimiCodingPlan => true,
                 crate::AccountUsageQueryKind::CommandCodeUsage => true,
                 crate::AccountUsageQueryKind::OpenDesignWallet => true,
+                crate::AccountUsageQueryKind::OpenAiCodexUsage => true,
                 crate::AccountUsageQueryKind::OpenRouterCredits => {
                     connection.management_secret_reference.is_some()
                 }

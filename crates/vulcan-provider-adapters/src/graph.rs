@@ -820,6 +820,9 @@ pub enum AccountUsageQueryKind {
     /// OpenDesign Design Plan windows and separate wallet balance using its account-control credential.
     /// 使用账户控制凭据查询 OpenDesign Design Plan 窗口及独立钱包余额。
     OpenDesignWallet,
+    /// OpenAI Codex subscription rate-limit windows and credits from the ChatGPT backend.
+    /// 来自 ChatGPT 后端的 OpenAI Codex 订阅限额窗口与 Credits。
+    OpenAiCodexUsage,
 }
 
 impl AccountUsageQueryKind {
@@ -2172,6 +2175,7 @@ mod tests {
         assert!(AccountUsageQueryKind::OpenRouterCredits.requires_management_credential());
         assert!(!AccountUsageQueryKind::MiniMaxTokenPlan.requires_management_credential());
         assert!(!AccountUsageQueryKind::CommandCodeUsage.requires_management_credential());
+        assert!(!AccountUsageQueryKind::OpenAiCodexUsage.requires_management_credential());
         assert!(!AccountUsageQueryKind::Unsupported.requires_management_credential());
     }
 }
