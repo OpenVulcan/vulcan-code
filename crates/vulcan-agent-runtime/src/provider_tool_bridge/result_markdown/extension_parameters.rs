@@ -17,10 +17,11 @@ pub(in crate::provider_tool_bridge) fn model(
     profile: &ProviderToolExtensionProfile,
     schema: &Value,
 ) -> Result<String, String> {
+    // The display name stays plain text so the labeled `model` value is the only code span to copy.
+    // 展示名保持纯文本，使带标签的 `model` 值成为唯一可复制的代码片段。
     let mut output = format!(
-        "## {} — {}\n\n{}\n",
+        "## {name}\n\n`model` (copy verbatim, including the provider prefix): {}\n\n{}\n",
         inline_code(id),
-        inline_code(name),
         profile.summary
     );
     for (title, items) in [

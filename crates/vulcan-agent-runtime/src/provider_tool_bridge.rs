@@ -544,7 +544,10 @@ fn build_model_extension_executor_candidate(
             let media_resource_runtime = media_resource_runtime.clone();
             Box::pin(async move {
                 let owner_session_id = Some(context.session_id.clone());
-                let (model, provider_arguments) = parse_model_extension_invocation(arguments)?;
+                let (model, provider_arguments) = parse_model_extension_invocation(arguments)
+                    .map_err(|error| {
+                        model_extension_recovery_error(error, catalog.as_ref(), capability)
+                    })?;
                 let selected = catalog
                     .get(&capability)
                     .and_then(|targets| {
@@ -554,8 +557,10 @@ fn build_model_extension_executor_candidate(
                     })
                     .cloned()
                     .ok_or_else(|| {
-                        format!(
-                            "Model `{model}` is not currently enabled for `{tool_id}`. Call `{MODEL_EXTENSION_PARAMETERS_TOOL_ID}` again before retrying."
+                        model_extension_recovery_error(
+                            format!("Model `{model}` is not currently enabled for `{tool_id}`."),
+                            catalog.as_ref(),
+                            capability,
                         )
                     })?;
                 if selected.manifest_source_layer == ManifestSourceLayer::Custom {
@@ -818,6 +823,42 @@ fn render_model_extension_parameters(
             models.join("\n\n")
         )),
     ))
+}
+
+/// Appends the current parameters of one capability to an executor model-selection error.
+/// 将一项能力的当前参数附加到执行工具的模型选择错误。
+///
+/// # Parameters
+/// 参数
+/// `error` is the rejection reason, `catalog` the frozen selected catalog and `capability` the
+/// executor capability.
+/// `error` 是拒绝原因，`catalog` 是冻结的已选目录，`capability` 是执行工具能力。
+///
+/// # Returns
+/// 返回值
+/// The reason followed by the same Markdown the lookup tool returns, so one retry can succeed
+/// without a separate lookup call.
+/// 返回原因及与查询工具相同的 Markdown，使一次重试即可成功而无需另行查询。
+fn model_extension_recovery_error(
+    error: String,
+    catalog: &BTreeMap<ProviderToolCapabilityKind, Vec<AvailableProviderToolTarget>>,
+    capability: ProviderToolCapabilityKind,
+) -> String {
+    let lookup = render_model_extension_parameters(
+        catalog,
+        json!({ "capability": model_extension_tool_id(capability) }),
+    );
+    match lookup {
+        Ok(result) => match result.model_output.as_str() {
+            Some(parameters) => format!(
+                "{error} The current `{MODEL_EXTENSION_PARAMETERS_TOOL_ID}` result follows; retry with one listed `model` copied verbatim and matching `args`.
+
+{parameters}"
+            ),
+            None => error,
+        },
+        Err(lookup_error) => format!("{error} Parameter lookup also failed: {lookup_error}"),
+    }
 }
 
 /// Parses one stable executor invocation without accepting ambiguous fallback fields.
@@ -1657,9 +1698,10 @@ mod tests {
         MODEL_EXTENSION_CAPABILITIES, ProviderTaskCancellationOnDrop,
         apply_session_provider_tool_selections, build_selected_model_extension_catalog,
         download_provider_resource_to_temp, model_extension_executor_schema,
-        model_extension_parameters_schema, model_extension_tool_id,
-        provider_resource_redirect_allowed, render_model_extension_parameters,
-        render_provider_resource_result, render_provider_tool_result, stage_provider_resources,
+        model_extension_parameters_schema, model_extension_recovery_error, model_extension_tool_id,
+        parse_model_extension_invocation, provider_resource_redirect_allowed,
+        render_model_extension_parameters, render_provider_resource_result,
+        render_provider_tool_result, stage_provider_resources,
         validate_enabled_media_understanding_backends,
     };
     use serde_json::json;
@@ -1896,6 +1938,38 @@ mod tests {
             assert!(!markdown.contains("evidence_refs"));
             assert!(result.host_result.is_none());
         }
+    }
+
+    /// A rejected executor model carries the callable ids and schema needed for one retry.
+    /// 被拒绝的执行模型携带一次重试所需的可调用标识与 Schema。
+    #[test]
+    fn rejected_executor_model_returns_current_parameters() {
+        let capability = ProviderToolCapabilityKind::ImageGenerate;
+        let target = available_extension_target(
+            "minimax",
+            "image-01",
+            "cn.image-01",
+            "minimax-account",
+            ManifestSourceLayer::Bundled,
+            capability,
+        );
+        let expected_schema = serde_json::to_string_pretty(&target.target.contract.input_schema)
+            .expect("fixture schema serializes");
+        let catalog = BTreeMap::from([(capability, vec![target])]);
+        let rejection = parse_model_extension_invocation(json!({
+            "model": "image-01",
+            "args": {}
+        }))
+        .expect_err("a bare model name is rejected");
+
+        let error = model_extension_recovery_error(rejection, &catalog, capability);
+
+        assert!(
+            error.contains(&vulcan_tools_manager::result_markdown::inline_code(
+                "minimax/image-01"
+            ))
+        );
+        assert!(error.contains(&expected_schema));
     }
 
     /// A normally returned provider failure cannot arm owner-wide sibling cancellation.
