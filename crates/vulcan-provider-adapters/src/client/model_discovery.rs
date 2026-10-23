@@ -26,10 +26,13 @@ use vulcan_ai_contract::ModelCapabilities;
 const MODEL_DISCOVERY_MAX_PAGES: u32 = 1_024;
 
 /// Codex client version declared to the account model catalog, which hides models whose
-/// `minimal_client_version` is newer; it must cover every model the bundled Manifest describes.
-/// 向账号模型目录声明的 Codex 客户端版本；目录会隐藏 `minimal_client_version` 更新的模型，
-/// 因此它必须覆盖内置 Manifest 描述的全部模型。
-const OPENAI_CODEX_DISCOVERY_CLIENT_VERSION: &str = "0.155.0";
+/// server-side minimum is newer. The bundled upstream `minimal_client_version` understates that
+/// minimum (GPT-6.1 Sol lists 0.153.0 yet is hidden at 0.155.0 and listed at 0.160.0), so this tracks the released
+/// official client instead.
+/// 向账号模型目录声明的 Codex 客户端版本；目录会隐藏服务端最低版本更新的模型。上游内置的
+/// `minimal_client_version` 低于实际要求（GPT-6.1 Sol 标注 0.153.0，0.155.0 仍隐藏，0.160.0 才列出），
+/// 因此跟随已发布的官方客户端版本。
+const OPENAI_CODEX_DISCOVERY_CLIENT_VERSION: &str = "0.163.0";
 
 /// Reports whether one signed Manifest authorizes a protocol variant for an exact model scope.
 /// 报告一份签名 Manifest 是否为精确模型作用域授权一个协议变体。

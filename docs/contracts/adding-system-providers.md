@@ -770,7 +770,7 @@ rtk git diff --check
 
 - 用量原语 `open_ai_codex_usage` 以 Codex 登录凭据（Bearer + `chatgpt-account-id`）请求固定入口 `https://chatgpt.com/backend-api/wham/usage`；响应形状以上游 `codex-rs/codex-backend-openapi-models` 的 `RateLimitStatusPayload` 为准。
 - 上游只报告整数 `used_percent`，不公开额度本身；窗口只填 `remaining_percent`、`duration_seconds`（`limit_window_seconds`）与 `resets_at`（`reset_at`，Unix 秒），不得臆造 `used`/`total`。主限额桶窗口 ID 为 `codex:primary`/`codex:secondary`，`additional_rate_limits` 为 `<metered_feature>:primary|secondary` 并以 `limit_name` 作为 `bucket_name`；界面按时长派生周期标签。
-- 模型发现声明的 `client_version` 由 `OPENAI_CODEX_DISCOVERY_CLIENT_VERSION` 唯一定义；账号目录会隐藏 `minimal_client_version` 更高的模型，新增 Codex 模型规则时必须确认该常量不低于其要求。
+- 模型发现声明的 `client_version` 由 `OPENAI_CODEX_DISCOVERY_CLIENT_VERSION` 唯一定义；账号目录会隐藏 `minimal_client_version` 更高的模型，服务端实际最低版本可能高于上游 `models.json` 的标注（GPT-6.1 Sol 标注 0.153.0，2026-10-23 实测 0.155.0 仍隐藏、0.160.0 起返回），因此该常量跟随本机已发布官方客户端（`~/.codex/models_cache.json` 的 `client_version`）。
 
 ## 十二、五轮连续审核要求
 
