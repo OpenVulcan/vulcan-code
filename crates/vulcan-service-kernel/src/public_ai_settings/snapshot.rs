@@ -199,6 +199,13 @@ pub(crate) struct PublicAiSettingsSnapshot {
     /// 按生成类能力选择的原生模型扩展目标集合。
     provider_extension_target_sets:
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
+    /// Exposure mode and fixed single-mode target per extension capability; missing means
+    /// single mode without a model.
+    /// 每项扩展能力的暴露模式及单模型固定目标；缺失表示未选模型的单模型模式。
+    provider_extension_modes: BTreeMap<
+        ProviderToolCapabilityKind,
+        vulcan_provider_adapters::ProviderExtensionModeSelection,
+    >,
     /// Exact internal inference routes available through current memory catalogs.
     /// 当前内存目录可用的精确内部推理路由。
     internal_inference_candidates: Vec<PublicAiInternalInferenceCandidate>,
@@ -871,6 +878,7 @@ pub(super) fn build_public_ai_settings_snapshot(
             .provider_tool_enabled_capabilities
             .clone(),
         provider_extension_target_sets: configuration.provider_extension_target_sets.clone(),
+        provider_extension_modes: configuration.provider_extension_modes.clone(),
         internal_inference_candidates,
         inference_profiles: configuration.inference_profiles.clone(),
         inference_route_diagnostics,

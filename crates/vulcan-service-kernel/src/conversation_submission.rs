@@ -203,6 +203,12 @@ struct SubmissionProviderToolSettings {
         vulcan_provider_adapters::ProviderToolCapabilityKind,
         std::collections::BTreeSet<vulcan_provider_adapters::ProviderToolTargetSelection>,
     >,
+    /// Extension modes chosen in the draft; a missing capability is single mode without a model.
+    /// 草稿中选择的扩展模式；缺失的能力表示未选模型的单模型模式。
+    extension_modes: BTreeMap<
+        vulcan_provider_adapters::ProviderToolCapabilityKind,
+        vulcan_provider_adapters::ProviderExtensionModeSelection,
+    >,
     /// Exact session-owned provider-tool or replacement-model route per media capability.
     /// 当前会话为每项媒体能力持有的精确供应商工具或替代模型路由。
     #[serde(default)]
@@ -414,6 +420,9 @@ async fn apply_submission_session_settings(
     let media_understanding_selections = provider_tool_settings
         .map(|settings| &settings.media_understanding_selections)
         .unwrap_or(&configuration.media_understanding_selections);
+    let provider_extension_modes = provider_tool_settings
+        .map(|settings| &settings.extension_modes)
+        .unwrap_or(&configuration.provider_extension_modes);
     if !preserve_existing_provider_tools {
         crate::public_ai_settings::validate_provider_tool_session_settings(
             runtime,
@@ -422,6 +431,7 @@ async fn apply_submission_session_settings(
             provider_tool_selections,
             media_understanding_selections,
             provider_extension_target_sets,
+            provider_extension_modes,
         )?;
     }
     let knowledge_selection_v1 = if let Some(selection) =
@@ -500,6 +510,7 @@ async fn apply_submission_session_settings(
                 provider_tool_selections,
                 media_understanding_selections,
                 provider_extension_target_sets,
+                provider_extension_modes,
                 has_explicit_provider_tool_settings,
             )
         };
@@ -575,6 +586,10 @@ async fn apply_submission_session_settings(
                 )
             })
             .collect();
+        runtime_state.provider_extension_modes =
+            crate::public_ai_settings::session_provider_extension_modes_to_runtime(
+                provider_extension_modes,
+            );
         runtime_state.provider_tool_settings_initialized = true;
         runtime_state.provider_tool_selections_overridden = has_explicit_provider_tool_settings;
     }

@@ -11,13 +11,13 @@ mod request_overrides;
 pub use creation::{ChildCreationIntent, ChildCreationOrigin};
 pub use preparation::ChildExecutionPreparation;
 pub use request_overrides::{
-    ChildExecutionRequestOverrides, ChildKnowledgeAccess, ChildMediaUnderstandingSelection,
-    ChildOutputStyleSnapshot,
+    ChildExecutionRequestOverrides, ChildExtensionModeSelection, ChildKnowledgeAccess,
+    ChildMediaUnderstandingSelection, ChildOutputStyleSnapshot,
 };
 
-/// Exact child profile format; version 2 removes per-session knowledge retrieval policies.
-/// 精确子执行配置格式；版本 2 删除会话级知识检索策略。
-pub const CHILD_EXECUTION_PROFILE_VERSION: u32 = 2;
+/// Exact child profile format; version 3 captures model-extension modes.
+/// 精确子执行配置格式；版本 3 捕获模型扩展模式。
+pub const CHILD_EXECUTION_PROFILE_VERSION: u32 = 3;
 
 /// Captures resolved child configuration without serializing executable runtime handles.
 /// 捕获已解析子配置，不序列化可执行运行时句柄。

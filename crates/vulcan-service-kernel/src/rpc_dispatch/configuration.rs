@@ -93,6 +93,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_multimodal_understanding_candidate",
     "service_save_public_ai_media_understanding_selection",
     "service_save_public_ai_provider_extension_target_set",
+    "service_save_public_ai_provider_extension_mode",
     "service_test_public_ai_provider_tool",
     "service_list_provider_tasks",
     "service_cancel_provider_task",
@@ -681,6 +682,14 @@ pub(super) async fn dispatch(
         ),
         "service_save_public_ai_provider_extension_target_set" => rpc_json_result(
             service_save_public_ai_provider_extension_target_set(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_provider_extension_mode" => rpc_json_result(
+            service_save_public_ai_provider_extension_mode(
                 app,
                 state,
                 rpc_required_param(params, "request")?,

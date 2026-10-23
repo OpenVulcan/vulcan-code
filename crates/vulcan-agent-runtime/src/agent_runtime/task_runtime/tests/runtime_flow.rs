@@ -55,6 +55,7 @@ fn build_task_start_test_runtime_context(
             provider_tool_media_understanding_selections_override: Default::default(),
             provider_tool_enabled_capabilities_override: Default::default(),
             provider_extension_target_sets_override: None,
+            provider_extension_modes_override: None,
             subagent_prompt_context: None,
             session_title: String::from("Parent session"),
             workspace_path: String::from("D:\\openvulcan\\test-project"),

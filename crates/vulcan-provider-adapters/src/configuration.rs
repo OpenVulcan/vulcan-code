@@ -4,8 +4,8 @@
 use crate::{
     CustomModelDefinition, CustomModelRequestProjection, CustomModelTemplateDecision,
     CustomProviderModelDefaults, PersistedConnectionGraph, ProviderDescriptor,
-    ProviderToolCapabilityKind, ProviderToolTargetSelection, SecondaryRouteSelection,
-    validate_custom_provider_reasoning_settings,
+    ProviderExtensionModeSelection, ProviderToolCapabilityKind, ProviderToolTargetSelection,
+    SecondaryRouteSelection, validate_custom_provider_reasoning_settings,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -907,6 +907,12 @@ pub struct PersistedAiConfiguration {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_extension_target_sets:
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
+    /// Exposure mode and fixed single-mode target per extension capability; missing means
+    /// single mode without a model.
+    /// 每项扩展能力的暴露模式及单模型固定目标；缺失表示未选模型的单模型模式。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_extension_modes:
+        BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>,
 }
 
 /// Returns the default thirty-minute account-usage refresh interval.
@@ -982,6 +988,7 @@ impl Default for PersistedAiConfiguration {
             media_understanding_selections: BTreeMap::new(),
             media_understanding_backend_options: BTreeMap::new(),
             provider_extension_target_sets: BTreeMap::new(),
+            provider_extension_modes: BTreeMap::new(),
         }
     }
 }
@@ -1155,6 +1162,14 @@ impl PersistedAiConfiguration {
                 });
                 !selections.is_empty()
             });
+        projection.provider_extension_modes.retain(|_, selection| {
+            if selection.single_target.as_ref().is_some_and(|target| {
+                removed_connection_ids.contains(target.connection_id.as_str())
+            }) {
+                selection.single_target = None;
+            }
+            !selection.is_default()
+        });
         for connection_id in &removed_connection_ids {
             let connection_model_prefix = format!("{}:{connection_id}:", connection_id.len());
             projection

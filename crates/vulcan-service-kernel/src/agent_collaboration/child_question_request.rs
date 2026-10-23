@@ -222,6 +222,7 @@ fn build_child_base_request(
         provider_tool_media_understanding_selections_override: None,
         provider_tool_enabled_capabilities_override: None,
         provider_extension_target_sets_override: None,
+        provider_extension_modes_override: None,
         subagent_prompt_context: None,
         subagent_model_grants: None,
         session_storage_directory: Some(locator.session_directory()),

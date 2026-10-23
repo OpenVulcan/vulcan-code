@@ -23,9 +23,9 @@ use tokio::io::AsyncWriteExt;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_provider_adapters::{
     AvailableProviderToolTarget, ManifestSourceLayer, MediaUnderstandingBackendSelection,
-    PersistedAiConfiguration, ProviderToolCapabilityKind, ProviderToolExecutionResult,
-    ProviderToolNormalizedOutput, ProviderToolResourceDownloadPolicy, ProviderToolTargetSelection,
-    PublicAiRuntime,
+    PersistedAiConfiguration, ProviderExtensionMode, ProviderExtensionModeSelection,
+    ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolNormalizedOutput,
+    ProviderToolResourceDownloadPolicy, ProviderToolTargetSelection, PublicAiRuntime,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
@@ -56,21 +56,16 @@ pub(crate) const GENERATED_ATTACHMENTS_HOST_RESULT_KIND: &str = "generated_attac
 
 /// Stable model-extension capabilities exposed independently from selected targets.
 /// 独立于已选目标稳定暴露的模型扩展能力。
-const MODEL_EXTENSION_CAPABILITIES: [ProviderToolCapabilityKind; 9] = [
-    ProviderToolCapabilityKind::ImageGenerate,
-    ProviderToolCapabilityKind::ImageEdit,
-    ProviderToolCapabilityKind::VideoGenerate,
-    ProviderToolCapabilityKind::VideoEdit,
-    ProviderToolCapabilityKind::VideoExtend,
-    ProviderToolCapabilityKind::SpeechSynthesize,
-    ProviderToolCapabilityKind::SpeechTranscribe,
-    ProviderToolCapabilityKind::MusicGenerate,
-    ProviderToolCapabilityKind::MusicCover,
-];
+const MODEL_EXTENSION_CAPABILITIES: [ProviderToolCapabilityKind; 9] =
+    ProviderToolCapabilityKind::MODEL_EXTENSIONS;
 
 /// Stable model-facing lookup tool identifier.
 /// 稳定的面向模型查询工具标识。
 const MODEL_EXTENSION_PARAMETERS_TOOL_ID: &str = "get_model_extension_parameters";
+
+/// Model-facing guidance shared by every extension executor that accepts media sources.
+/// 每个接受媒体来源的扩展执行工具共享的面向模型指引。
+const MODEL_EXTENSION_MEDIA_SOURCE_GUIDANCE: &str = "Declared media-source fields can use a canonical project-resource://ID, an owned attachment://ID from this conversation, or a readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. The host resolves only declared media bindings and applies independent extension size limits; an oversized or unsupported file returns an explicit error, not an address-only understanding result.";
 
 /// Marks owned asynchronous provider work for cancellation when one tool future is dropped.
 /// 当工具 Future 被丢弃时，为其拥有的异步供应商任务记录取消意图。
@@ -167,8 +162,11 @@ impl Drop for ProviderTaskCancellationOnDrop {
 ///
 /// # Returns
 /// 返回值
-/// Direct target-native tools plus one lookup tool and nine stable extension executors.
-/// 返回目标原生直连工具、一个查询工具与九个稳定扩展执行工具。
+/// Direct target-native tools; multi-mode extension capabilities add one lookup tool and their
+/// stable executors, while each single-mode capability with an available model adds one tool
+/// carrying that model's exact schema.
+/// 返回目标原生直连工具；多模型模式的扩展能力追加一个查询工具及其稳定执行工具，单模型模式中
+/// 已选可用模型的每项能力追加一个携带该模型精确 Schema 的工具。
 pub(crate) fn build_provider_tool_candidates(
     runtime: Arc<PublicAiRuntime>,
     mut configuration: PersistedAiConfiguration,
@@ -183,6 +181,9 @@ pub(crate) fn build_provider_tool_candidates(
     session_extension_target_sets: &Option<
         BTreeMap<String, BTreeSet<vulcan_workbench_model::SessionProviderToolTargetSelection>>,
     >,
+    session_extension_modes: &Option<
+        BTreeMap<String, vulcan_workbench_model::SessionProviderExtensionModeSelection>,
+    >,
     session_media_understanding_selections: &Option<
         BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingSelection>,
     >,
@@ -195,6 +196,7 @@ pub(crate) fn build_provider_tool_candidates(
         session_selections,
         session_enabled_capabilities,
         session_extension_target_sets,
+        session_extension_modes,
         session_media_understanding_selections,
     )?;
     // Native input replaces external understanding only in this turn's configuration copy.
@@ -323,20 +325,247 @@ pub(crate) fn build_provider_tool_candidates(
         &configuration,
         &available,
     )?);
-    candidates.push(build_model_extension_parameters_candidate(Arc::clone(
-        &extension_catalog,
-    )));
+    // The lookup tool exists only for capabilities that still choose among several models.
+    // 查询工具只服务于仍需在多个模型间选择的能力。
+    if !extension_catalog.is_empty() {
+        candidates.push(build_model_extension_parameters_candidate(Arc::clone(
+            &extension_catalog,
+        )));
+    }
     for capability in MODEL_EXTENSION_CAPABILITIES {
-        candidates.push(build_model_extension_executor_candidate(
-            Arc::clone(&runtime),
-            configuration.clone(),
-            workspace_root.clone(),
-            Arc::clone(&extension_catalog),
-            capability,
-            media_resource_runtime.clone(),
-        ));
+        if extension_catalog.contains_key(&capability) {
+            candidates.push(build_model_extension_executor_candidate(
+                Arc::clone(&runtime),
+                configuration.clone(),
+                workspace_root.clone(),
+                Arc::clone(&extension_catalog),
+                capability,
+                media_resource_runtime.clone(),
+            ));
+        } else if let Some(target) =
+            single_model_extension_target(&configuration, &available, capability)?
+        {
+            candidates.push(build_fixed_model_extension_candidate(
+                Arc::clone(&runtime),
+                configuration.clone(),
+                workspace_root.clone(),
+                target,
+                capability,
+                media_resource_runtime.clone(),
+            )?);
+        }
     }
     Ok(candidates)
+}
+
+/// Returns the exposure mode configured for one extension capability; missing means single.
+/// 返回一项扩展能力配置的暴露模式；缺失即单模型模式。
+fn model_extension_mode(
+    configuration: &PersistedAiConfiguration,
+    capability: ProviderToolCapabilityKind,
+) -> ProviderExtensionMode {
+    configuration
+        .provider_extension_modes
+        .get(&capability)
+        .map(|selection| selection.mode)
+        .unwrap_or_default()
+}
+
+/// Resolves the fixed model of one single-mode extension capability.
+/// 解析一项单模型模式扩展能力的固定模型。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns modes, `available` is the frozen credential-eligible target snapshot and
+/// `capability` is one extension capability.
+/// `configuration` 持有模式，`available` 是冻结的凭据合格目标快照，`capability` 是一项扩展能力。
+///
+/// # Returns
+/// 返回值
+/// The available reviewed system target, `None` when the capability is in multi mode, has no
+/// model, or keeps a stale or custom selection, or an error for a target without a profile.
+/// 返回可用的已审核系统目标；能力处于多模型模式、未选模型或保留过期或自定义选择时返回
+/// `None`；目标缺少说明时返回错误。
+fn single_model_extension_target(
+    configuration: &PersistedAiConfiguration,
+    available: &[AvailableProviderToolTarget],
+    capability: ProviderToolCapabilityKind,
+) -> Result<Option<AvailableProviderToolTarget>, String> {
+    let Some(selection) = configuration
+        .provider_extension_modes
+        .get(&capability)
+        .filter(|selection| selection.mode == ProviderExtensionMode::Single)
+        .and_then(|selection| selection.single_target.as_ref())
+    else {
+        return Ok(None);
+    };
+    // Stale selections stay visible in settings diagnostics without blocking the conversation.
+    // 过期选择保留给设置诊断，不阻塞会话。
+    let Some(target) = available.iter().find(|candidate| {
+        candidate.connection_id == selection.connection_id
+            && candidate.target.target_id == selection.target_id
+            && candidate.target.contract.capability == capability
+    }) else {
+        return Ok(None);
+    };
+    if target.manifest_source_layer == ManifestSourceLayer::Custom {
+        return Ok(None);
+    }
+    if target.target.contract.extension_profile.is_none() {
+        return Err(format!(
+            "Native model-extension target `{}` has no reviewed extension profile.",
+            target.target.target_id
+        ));
+    }
+    Ok(Some(target.clone()))
+}
+
+/// Builds the AI-visible schema of one fixed model from its exact provider-native schema.
+/// 从精确供应商原生 Schema 构建一个固定模型的 AI 可见 Schema。
+///
+/// # Parameters
+/// 参数
+/// `input_schema` is the target's exact frozen argument schema.
+/// `input_schema` 是目标精确冻结的参数 Schema。
+///
+/// # Returns
+/// 返回值
+/// The same schema without optional top-level properties pinned to one constant default, such as
+/// the upstream model name; execution validates against the full schema and materializes them.
+/// 返回去掉仅能取单一常量默认值的可选顶层属性（如上游模型名）后的同一 Schema；执行时按完整
+/// Schema 校验并物化这些属性。
+fn fixed_model_extension_schema(input_schema: &Value) -> Value {
+    let mut schema = input_schema.clone();
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|names| -> BTreeSet<String> {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        properties.retain(|name, property| {
+            required.contains(name)
+                || property.get("const").is_none()
+                || property.get("default") != property.get("const")
+        });
+    }
+    schema
+}
+
+/// Builds the one tool of a single-mode extension capability bound to its fixed model.
+/// 构建单模型模式扩展能力绑定固定模型的唯一工具。
+///
+/// # Parameters
+/// 参数
+/// Runtime, configuration, workspace and the resolved target are frozen into the invocation;
+/// `capability` names the stable tool.
+/// 运行时、配置、工作区与已解析目标冻结进调用；`capability` 决定稳定工具名。
+///
+/// # Returns
+/// 返回值
+/// One executor whose schema is the fixed model's own arguments, without any model field.
+/// 返回一个以固定模型自身参数为 Schema、不含模型字段的执行工具。
+fn build_fixed_model_extension_candidate(
+    runtime: Arc<PublicAiRuntime>,
+    configuration: PersistedAiConfiguration,
+    workspace_root: Option<PathBuf>,
+    target: AvailableProviderToolTarget,
+    capability: ProviderToolCapabilityKind,
+    media_resource_runtime: Option<Arc<dyn crate::media_resource_runtime::MediaResourceRuntime>>,
+) -> Result<VulcanToolCandidate, String> {
+    let tool_id = model_extension_tool_id(capability);
+    let profile = target
+        .target
+        .contract
+        .extension_profile
+        .as_ref()
+        .ok_or_else(|| {
+            format!(
+                "Native model-extension target `{}` has no reviewed extension profile.",
+                target.target.target_id
+            )
+        })?;
+    let description = format!(
+        "Executes the `{tool_id}` model extension with the fixed model {} (`{}`). Pass arguments exactly as this tool's schema declares; the model is already chosen, so there is no model argument.\n\n{}\n{MODEL_EXTENSION_MEDIA_SOURCE_GUIDANCE}",
+        target.target.display_name,
+        provider_tool_public_model_id(&target),
+        result_markdown::extension_parameters::profile(profile),
+    );
+    let parameters_schema = fixed_model_extension_schema(&target.target.contract.input_schema);
+    let selection = ProviderToolTargetSelection {
+        connection_id: target.connection_id.clone(),
+        target_id: target.target.target_id.clone(),
+    };
+    Ok(VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor::new(
+            tool_id,
+            tool_id,
+            description,
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::AiHostBinding,
+                "ai_host_binding",
+                tool_id,
+            ),
+        ),
+        parameters_schema,
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
+        invoke: Arc::new(move |arguments, context| {
+            let runtime = Arc::clone(&runtime);
+            let configuration = configuration.clone();
+            let workspace_root = workspace_root.clone();
+            let selection = selection.clone();
+            let media_resource_runtime = media_resource_runtime.clone();
+            Box::pin(async move {
+                if !arguments.is_object() {
+                    return Err(format!(
+                        "`{tool_id}` arguments must be a JSON object matching its schema."
+                    ));
+                }
+                let owner_session_id = Some(context.session_id.clone());
+                let mut cancellation_guard = ProviderTaskCancellationOnDrop::new(
+                    Arc::clone(&runtime),
+                    owner_session_id.clone(),
+                );
+                let source_resolver =
+                    crate::media_resource_runtime::SessionProviderToolMediaSourceResolver {
+                        runtime: media_resource_runtime.as_deref(),
+                        workspace_root: workspace_root.as_deref(),
+                        session_id: &context.session_id,
+                    };
+                let execution_result = runtime
+                    .execute_provider_tool_target_with_media_sources(
+                        &configuration,
+                        capability,
+                        &selection,
+                        arguments,
+                        owner_session_id,
+                        vulcan_provider_adapters::ProviderToolResourceContext {
+                            workspace_root: workspace_root.as_deref(),
+                            media_sources: &[],
+                            source_resolver: Some(&source_resolver),
+                        },
+                    )
+                    .await;
+                // Disarm before propagating so the drop guard cannot cancel sibling tools.
+                // 传播前先解除守卫，避免析构守卫取消兄弟工具。
+                let result = cancellation_guard.complete(execution_result)?;
+                render_provider_tool_result(
+                    workspace_root.as_deref(),
+                    context.session_id.as_str(),
+                    result,
+                )
+                .await
+            })
+        }),
+    })
 }
 
 /// Validates that every enabled fixed media facade has one exact effective backend route.
@@ -385,18 +614,31 @@ fn validate_enabled_media_understanding_backends(
 ///
 /// # Returns
 /// 返回值
-/// System-manifest targets keyed by extension capability, with duplicate public ids rejected.
-/// 返回按扩展能力索引的系统 Manifest 目标，并拒绝重复公开标识。
+/// System-manifest targets keyed by every multi-mode extension capability, possibly empty, with
+/// duplicate public ids rejected.
+/// 返回按每项多模型模式扩展能力索引（可能为空）的系统 Manifest 目标，并拒绝重复公开标识。
 fn build_selected_model_extension_catalog(
     configuration: &PersistedAiConfiguration,
     available: &[AvailableProviderToolTarget],
 ) -> Result<BTreeMap<ProviderToolCapabilityKind, Vec<AvailableProviderToolTarget>>, String> {
     let mut catalog = BTreeMap::new();
+    if let Some(capability) = configuration
+        .provider_extension_modes
+        .keys()
+        .find(|capability| !capability.is_model_extension())
+    {
+        return Err(format!(
+            "Provider tool capability `{capability:?}` has no model-extension mode."
+        ));
+    }
     for (capability, selections) in &configuration.provider_extension_target_sets {
         if !capability.is_model_extension() {
             return Err(format!(
                 "Provider tool capability `{capability:?}` cannot use the model-extension store."
             ));
+        }
+        if model_extension_mode(configuration, *capability) != ProviderExtensionMode::Multi {
+            continue;
         }
         let mut public_model_ids = BTreeSet::new();
         let mut selected_targets = Vec::new();
@@ -477,7 +719,7 @@ fn build_model_extension_parameters_candidate(
             MODEL_EXTENSION_PARAMETERS_TOOL_ID,
             MODEL_EXTENSION_PARAMETERS_TOOL_ID,
             String::from(
-                "MUST be called before any model-extension tool. Returns the currently enabled native models, reviewed capabilities, constraints, and exact args schema for one extension capability. Never invent a model id or model-specific argument.",
+                "MUST be called before any model-extension tool that takes `model` and `args`. Returns the currently enabled native models, reviewed capabilities, constraints, and exact args schema for one extension capability. Never invent a model id or model-specific argument.",
             ),
             None,
             VulcanToolOrigin::new(
@@ -486,7 +728,7 @@ fn build_model_extension_parameters_candidate(
                 MODEL_EXTENSION_PARAMETERS_TOOL_ID,
             ),
         ),
-        parameters_schema: model_extension_parameters_schema(),
+        parameters_schema: model_extension_parameters_schema(catalog.keys().copied()),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
         request_streaming: None,
@@ -661,35 +903,35 @@ fn model_extension_tool_id(capability: ProviderToolCapabilityKind) -> &'static s
 /// 返回要求调用前先查询参数的面向模型说明。
 fn model_extension_tool_description(capability: ProviderToolCapabilityKind) -> String {
     format!(
-        "Executes the `{}` model extension. You MUST call `{MODEL_EXTENSION_PARAMETERS_TOOL_ID}` for this capability immediately before use, then pass one returned model id and args conforming exactly to that model's schema. Never guess or reuse stale model-specific arguments. Declared media-source fields can use a canonical project-resource://ID, an owned attachment://ID from this conversation, or a readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. The host resolves only declared media bindings and applies independent extension size limits; an oversized or unsupported file returns an explicit error, not an address-only understanding result.",
+        "Executes the `{}` model extension. You MUST call `{MODEL_EXTENSION_PARAMETERS_TOOL_ID}` for this capability immediately before use, then pass one returned model id and args conforming exactly to that model's schema. Never guess or reuse stale model-specific arguments. {MODEL_EXTENSION_MEDIA_SOURCE_GUIDANCE}",
         model_extension_tool_id(capability)
     )
 }
 
-/// Returns the invariant JSON Schema for model-extension parameter discovery.
-/// 返回模型扩展参数查询工具的不变 JSON Schema。
+/// Returns the JSON Schema for model-extension parameter discovery.
+/// 返回模型扩展参数查询工具的 JSON Schema。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` are the multi-mode extension capabilities of this execution.
+/// `capabilities` 是本次执行处于多模型模式的扩展能力。
 ///
 /// # Returns
 /// 返回值
 /// One strict object schema independent from selected providers and models.
 /// 返回一份独立于已选供应商与模型的严格对象 Schema。
-fn model_extension_parameters_schema() -> Value {
+fn model_extension_parameters_schema(
+    capabilities: impl Iterator<Item = ProviderToolCapabilityKind>,
+) -> Value {
+    let capabilities = capabilities
+        .map(model_extension_tool_id)
+        .collect::<Vec<_>>();
     json!({
         "type": "object",
         "properties": {
             "capability": {
                 "type": "string",
-                "enum": [
-                    "image_generate",
-                    "image_edit",
-                    "video_generate",
-                    "video_edit",
-                    "video_extend",
-                    "speech_synthesize",
-                    "speech_transcribe",
-                    "music_generate",
-                    "music_cover"
-                ],
+                "enum": capabilities,
                 "description": "Exact model-extension capability to inspect."
             },
             "model": {
@@ -767,6 +1009,11 @@ fn render_model_extension_parameters(
     if !capability.is_model_extension() {
         return Err(format!(
             "Capability `{capability_name}` is not a registered model extension."
+        ));
+    }
+    if !catalog.contains_key(&capability) {
+        return Err(format!(
+            "Capability `{capability_name}` is not in multi-model mode in this session; when its tool is available it takes the fixed model's own arguments directly."
         ));
     }
     let requested_model = object
@@ -923,6 +1170,9 @@ fn apply_session_provider_tool_selections(
     session_extension_target_sets: &Option<
         BTreeMap<String, BTreeSet<vulcan_workbench_model::SessionProviderToolTargetSelection>>,
     >,
+    session_extension_modes: &Option<
+        BTreeMap<String, vulcan_workbench_model::SessionProviderExtensionModeSelection>,
+    >,
     session_media_understanding_selections: &Option<
         BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingSelection>,
     >,
@@ -1045,6 +1295,41 @@ fn apply_session_provider_tool_selections(
                     })
                     .collect();
                 Ok((capability, selections))
+            })
+            .collect::<Result<_, String>>()?;
+    }
+    if let Some(session_extension_modes) = session_extension_modes {
+        configuration.provider_extension_modes = session_extension_modes
+            .iter()
+            .map(|(capability, selection)| {
+                let capability: ProviderToolCapabilityKind =
+                    serde_json::from_value(Value::String(capability.clone())).map_err(|error| {
+                        format!(
+                            "Session model-extension capability `{capability}` is invalid: {error}"
+                        )
+                    })?;
+                if !capability.is_model_extension() {
+                    return Err(format!(
+                        "Session capability `{capability:?}` has no model-extension mode."
+                    ));
+                }
+                let selection = ProviderExtensionModeSelection {
+                    mode: match selection.mode {
+                        vulcan_workbench_model::SessionProviderExtensionMode::Single => {
+                            ProviderExtensionMode::Single
+                        }
+                        vulcan_workbench_model::SessionProviderExtensionMode::Multi => {
+                            ProviderExtensionMode::Multi
+                        }
+                    },
+                    single_target: selection.single_target.as_ref().map(|target| {
+                        ProviderToolTargetSelection {
+                            connection_id: target.connection_id.clone(),
+                            target_id: target.target_id.clone(),
+                        }
+                    }),
+                };
+                Ok((capability, selection))
             })
             .collect::<Result<_, String>>()?;
     }
@@ -1697,11 +1982,12 @@ mod tests {
     use super::{
         MODEL_EXTENSION_CAPABILITIES, ProviderTaskCancellationOnDrop,
         apply_session_provider_tool_selections, build_selected_model_extension_catalog,
-        download_provider_resource_to_temp, model_extension_executor_schema,
-        model_extension_parameters_schema, model_extension_recovery_error, model_extension_tool_id,
-        parse_model_extension_invocation, provider_resource_redirect_allowed,
-        render_model_extension_parameters, render_provider_resource_result,
-        render_provider_tool_result, stage_provider_resources,
+        download_provider_resource_to_temp, fixed_model_extension_schema,
+        model_extension_executor_schema, model_extension_parameters_schema,
+        model_extension_recovery_error, model_extension_tool_id, parse_model_extension_invocation,
+        provider_resource_redirect_allowed, render_model_extension_parameters,
+        render_provider_resource_result, render_provider_tool_result,
+        single_model_extension_target, stage_provider_resources,
         validate_enabled_media_understanding_backends,
     };
     use serde_json::json;
@@ -1710,12 +1996,12 @@ mod tests {
     use vulcan_ai_contract::ReasoningEffort;
     use vulcan_core::types::ConversationAttachmentKind;
     use vulcan_provider_adapters::{
-        AvailableProviderToolTarget, ManifestSourceLayer, ProviderToolCapabilityKind,
-        ProviderToolCompositeOutput, ProviderToolEmbeddingOutput, ProviderToolEmbeddingVector,
-        ProviderToolExecutionResult, ProviderToolGeneratedResource, ProviderToolNormalizedOutput,
-        ProviderToolRerankOutput, ProviderToolRerankResult, ProviderToolResourceDownloadPolicy,
-        ProviderToolResourceEncoding, ProviderToolTarget, ProviderToolTargetSelection,
-        PublicAiRuntime,
+        AvailableProviderToolTarget, ManifestSourceLayer, ProviderExtensionMode,
+        ProviderExtensionModeSelection, ProviderToolCapabilityKind, ProviderToolCompositeOutput,
+        ProviderToolEmbeddingOutput, ProviderToolEmbeddingVector, ProviderToolExecutionResult,
+        ProviderToolGeneratedResource, ProviderToolNormalizedOutput, ProviderToolRerankOutput,
+        ProviderToolRerankResult, ProviderToolResourceDownloadPolicy, ProviderToolResourceEncoding,
+        ProviderToolTarget, ProviderToolTargetSelection, PublicAiRuntime,
     };
 
     /// Builds one minimal model-extension target for bridge catalog tests.
@@ -1824,7 +2110,7 @@ mod tests {
             })
         );
         assert_eq!(
-            model_extension_parameters_schema()["required"],
+            model_extension_parameters_schema(std::iter::empty())["required"],
             json!(["capability"])
         );
     }
@@ -1856,6 +2142,13 @@ mod tests {
         // configuration owns one native, one custom, and one stale selection.
         // configuration 持有一条原生、一条自定义与一条过期选择。
         let mut configuration = vulcan_provider_adapters::PersistedAiConfiguration::default();
+        configuration.provider_extension_modes.insert(
+            ProviderToolCapabilityKind::ImageGenerate,
+            ProviderExtensionModeSelection {
+                mode: ProviderExtensionMode::Multi,
+                single_target: None,
+            },
+        );
         configuration.provider_extension_target_sets.insert(
             ProviderToolCapabilityKind::ImageGenerate,
             BTreeSet::from([
@@ -1885,6 +2178,120 @@ mod tests {
             .expect("native image capability should remain");
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].target.provider_id, "native");
+    }
+
+    /// Single mode keeps a capability out of the lookup catalog and resolves only its own
+    /// available native target; multi mode never resolves a fixed target.
+    /// 单模型模式使能力不进入查询目录，且只解析其自身可用的原生目标；多模型模式从不解析固定目标。
+    #[test]
+    fn single_mode_resolves_one_fixed_native_target() {
+        let capability = ProviderToolCapabilityKind::ImageGenerate;
+        let native = available_extension_target(
+            "native",
+            "image-model",
+            "native-image",
+            "native-account",
+            ManifestSourceLayer::Bundled,
+            capability,
+        );
+        let custom = available_extension_target(
+            "custom",
+            "image-model",
+            "custom-image",
+            "custom-account",
+            ManifestSourceLayer::Custom,
+            capability,
+        );
+        let available = [native, custom];
+        let selection = |connection_id: &str, target_id: &str| ProviderToolTargetSelection {
+            connection_id: connection_id.to_string(),
+            target_id: target_id.to_string(),
+        };
+        let mut configuration = vulcan_provider_adapters::PersistedAiConfiguration::default();
+        // The multi-model list is kept but ignored while the capability is single.
+        // 能力处于单模型模式时，多模型列表保留但被忽略。
+        configuration.provider_extension_target_sets.insert(
+            capability,
+            BTreeSet::from([selection("native-account", "native-image")]),
+        );
+        assert!(
+            single_model_extension_target(&configuration, &available, capability)
+                .unwrap()
+                .is_none()
+        );
+        for (connection_id, target_id, expected) in [
+            ("native-account", "native-image", true),
+            ("custom-account", "custom-image", false),
+            ("stale-account", "stale-image", false),
+        ] {
+            configuration.provider_extension_modes.insert(
+                capability,
+                ProviderExtensionModeSelection {
+                    mode: ProviderExtensionMode::Single,
+                    single_target: Some(selection(connection_id, target_id)),
+                },
+            );
+            let resolved =
+                single_model_extension_target(&configuration, &available, capability).unwrap();
+            assert_eq!(resolved.is_some(), expected, "{target_id}");
+            assert!(
+                build_selected_model_extension_catalog(&configuration, &available)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        configuration
+            .provider_extension_modes
+            .get_mut(&capability)
+            .unwrap()
+            .mode = ProviderExtensionMode::Multi;
+        assert!(
+            single_model_extension_target(&configuration, &available, capability)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            build_selected_model_extension_catalog(&configuration, &available)
+                .unwrap()
+                .get(&capability)
+                .map(Vec::len),
+            Some(1)
+        );
+        // A capability outside multi-model mode is rejected by the lookup tool.
+        // 不处于多模型模式的能力会被查询工具拒绝。
+        assert!(
+            render_model_extension_parameters(
+                &BTreeMap::new(),
+                json!({ "capability": "image_generate" })
+            )
+            .is_err()
+        );
+    }
+
+    /// The fixed-model schema hides only optional properties pinned to one constant default.
+    /// 固定模型 Schema 只隐藏被固定为单一常量默认值的可选属性。
+    #[test]
+    fn fixed_model_schema_hides_only_pinned_optional_constants() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "const": "image-01", "default": "image-01"},
+                "variant": {"type": "string", "const": "pro", "default": "pro"},
+                "quality": {"type": "string", "const": "high"},
+                "size": {"type": "string", "default": "1024x1024"},
+                "prompt": {"type": "string"}
+            },
+            "required": ["prompt", "variant"],
+            "additionalProperties": false
+        });
+        let fixed = fixed_model_extension_schema(&schema);
+        let properties = fixed["properties"].as_object().unwrap();
+        assert!(!properties.contains_key("model"));
+        for kept in ["variant", "quality", "size", "prompt"] {
+            assert!(properties.contains_key(kept), "{kept}");
+        }
+        assert_eq!(fixed["required"], schema["required"]);
+        assert_eq!(fixed["additionalProperties"], json!(false));
     }
 
     /// Speech and video discovery expose only their canonical callable model identifiers.
@@ -2008,6 +2415,7 @@ mod tests {
             &Some(Default::default()),
             &None,
             &None,
+            &None,
         )
         .expect("apply explicit empty override");
 
@@ -2027,6 +2435,7 @@ mod tests {
             &mut configuration,
             &Some(Default::default()),
             &Some(BTreeSet::from([String::from("video_understand")])),
+            &None,
             &None,
             &None,
         )
@@ -2068,6 +2477,7 @@ mod tests {
             &mut configuration,
             &Some(Default::default()),
             &Some(BTreeSet::from([String::from("video_understand")])),
+            &None,
             &None,
             &Some(media_selections),
         )
@@ -2137,6 +2547,7 @@ mod tests {
             &Some(enabled_capabilities),
             &None,
             &None,
+            &None,
         )
         .expect_err("legacy session media target must fail closed");
 
@@ -2167,6 +2578,7 @@ mod tests {
             &None,
             &None,
             &Some(Default::default()),
+            &None,
             &None,
         )
         .expect("apply explicit empty extension override");

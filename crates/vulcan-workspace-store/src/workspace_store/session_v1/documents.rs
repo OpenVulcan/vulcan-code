@@ -98,6 +98,25 @@ pub(crate) fn read_metadata_for_provider_tool_rebuild(
             format!("parse rebuild metadata: {error}"),
         )
     })?;
+    // A rebuild after the first prepared request is a mid-session tool change like any save; an
+    // unreadable previous subtree cannot prove the tools stayed the same.
+    // 首次准备请求之后的重建与普通保存一样属于会话中途修改；无法读取的旧子树不能证明工具未变。
+    let request_prepared = raw
+        .pointer("/config/answer_mode/prepared")
+        .is_some_and(|prepared| !prepared.is_null());
+    let selection = match raw
+        .pointer("/config/selection/provider_tools")
+        .cloned()
+        .map(serde_json::from_value::<vulcan_session_core::v1::config::ProviderToolSelectionConfig>)
+    {
+        Some(Ok(previous)) => selection
+            .clone()
+            .marked_against(&previous, request_prepared),
+        _ => vulcan_session_core::v1::config::ProviderToolSelectionConfig {
+            changed_mid_session: request_prepared,
+            ..selection.clone()
+        },
+    };
     let selections = raw
         .pointer_mut("/config/selection")
         .and_then(serde_json::Value::as_object_mut)
@@ -110,7 +129,7 @@ pub(crate) fn read_metadata_for_provider_tool_rebuild(
         })?;
     selections.insert(
         "provider_tools".to_owned(),
-        serde_json::to_value(selection).map_err(|error| {
+        serde_json::to_value(&selection).map_err(|error| {
             SessionV1Error::corrupt(
                 ErrorCode::MetadataCorrupt,
                 path,

@@ -266,6 +266,15 @@ pub struct ExecutionPreparationRequest {
             std::collections::BTreeSet<vulcan_workbench_model::SessionProviderToolTargetSelection>,
         >,
     >,
+    /// Optional session extension modes; a capability missing from Some(map) is single mode
+    /// without a model, and None follows the system configuration.
+    /// 可选会话扩展模式；Some(映射) 中缺失的能力表示未选模型的单模型模式，None 跟随系统配置。
+    pub provider_extension_modes_override: Option<
+        std::collections::BTreeMap<
+            String,
+            vulcan_workbench_model::SessionProviderExtensionModeSelection,
+        >,
+    >,
     /// Optional child-agent prompt context routed through the shared prompt composer.
     /// 通过共享提示词组合器路由的可选子智能体提示词上下文。
     pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,

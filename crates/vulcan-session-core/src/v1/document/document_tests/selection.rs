@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::v1::config::{
+    ProviderExtensionModeConfig, ProviderExtensionModeKind,
     ProviderMediaUnderstandingReasoningEffort, ProviderMediaUnderstandingRouteConfig,
 };
 
@@ -424,6 +425,12 @@ fn provider_tool_selection_is_atomic_idempotent_and_strict() -> Result<(), Domai
                 target_id: "image-a".to_string(),
             }],
         }],
+        extension_modes: vec![ProviderExtensionModeConfig {
+            capability: "image_generation".to_string(),
+            mode: ProviderExtensionModeKind::Multi,
+            single_target: None,
+        }],
+        changed_mid_session: false,
     };
 
     assert!(doc.set_provider_tool_selection(selection.clone(), T0 + 1)?);
@@ -439,6 +446,16 @@ fn provider_tool_selection_is_atomic_idempotent_and_strict() -> Result<(), Domai
         doc.set_provider_tool_selection(invalid, T0 + 3),
         Err(DomainError::InvalidSelectionConfiguration {
             field: "provider_tools.enabled_capabilities.order"
+        })
+    ));
+    assert_eq!(doc, before_invalid);
+
+    let mut default_mode_entry = selection.clone();
+    default_mode_entry.extension_modes[0].mode = ProviderExtensionModeKind::Single;
+    assert!(matches!(
+        doc.set_provider_tool_selection(default_mode_entry, T0 + 3),
+        Err(DomainError::InvalidSelectionConfiguration {
+            field: "provider_tools.extension_modes.default_entry"
         })
     ));
     assert_eq!(doc, before_invalid);
@@ -548,6 +565,8 @@ fn session_selection_bundle_is_single_revision_idempotent_and_failure_atomic()
             }],
             media_understanding_selections: Vec::new(),
             extension_target_sets: Vec::new(),
+            extension_modes: Vec::new(),
+            changed_mid_session: false,
         },
         knowledge_libraries: KnowledgeLibrarySelectionConfig {
             mode: KnowledgeLibrarySelectionMode::Explicit,
@@ -686,5 +705,75 @@ fn api_request_selection_validation_is_symmetric_and_atomic() -> Result<(), Doma
             field: "active.provider"
         })
     ));
+    Ok(())
+}
+
+/// Tool changes before the first prepared request stay silent; later changes mark the session
+/// permanently, even when the user restores the original tools.
+/// 首次准备请求之前的工具修改保持静默；之后的修改永久标记会话，即使用户恢复原始工具。
+#[test]
+fn provider_tool_changes_after_first_request_mark_session() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    let original = ProviderToolSelectionConfig {
+        initialized: true,
+        ..Default::default()
+    };
+    let mut fixed = original.clone();
+    fixed.extension_modes = vec![ProviderExtensionModeConfig {
+        capability: "image_generate".to_string(),
+        mode: ProviderExtensionModeKind::Single,
+        single_target: Some(ProviderToolTargetConfig {
+            connection_id: "connection-a".to_string(),
+            target_id: "image-a".to_string(),
+        }),
+    }];
+    assert!(doc.set_provider_tool_selection(fixed.clone(), T0 + 1)?);
+    assert!(
+        !doc.metadata
+            .config
+            .selection
+            .provider_tools
+            .changed_mid_session
+    );
+    assert!(doc.set_provider_tool_selection(original.clone(), T0 + 2)?);
+    assert!(
+        !doc.metadata
+            .config
+            .selection
+            .provider_tools
+            .changed_mid_session
+    );
+
+    doc.submit_root_input_fixture("hello", Vec::new(), T0 + 3)?;
+    doc.synchronize_context_with_answer_mode(Vec::new(), "on", "off", T0 + 4)?;
+    // Re-saving identical tools after the first request is not a change.
+    // 首次请求后重新保存相同工具不算修改。
+    assert!(!doc.set_provider_tool_selection(original.clone(), T0 + 5)?);
+    assert!(
+        !doc.metadata
+            .config
+            .selection
+            .provider_tools
+            .changed_mid_session
+    );
+
+    assert!(doc.set_provider_tool_selection(fixed, T0 + 6)?);
+    assert!(
+        doc.metadata
+            .config
+            .selection
+            .provider_tools
+            .changed_mid_session
+    );
+    // Restoring the original tools keeps the marker because earlier requests saw other tools.
+    // 恢复原始工具仍保留标记，因为此前的请求已看到过其他工具。
+    assert!(doc.set_provider_tool_selection(original, T0 + 7)?);
+    assert!(
+        doc.metadata
+            .config
+            .selection
+            .provider_tools
+            .changed_mid_session
+    );
     Ok(())
 }

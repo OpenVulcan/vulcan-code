@@ -256,6 +256,19 @@ impl SessionV1StorageLocator {
         Ok(metadata)
     }
 
+    /// Reports whether this session has prepared at least one provider request, from metadata only.
+    /// 仅从 metadata 报告此会话是否已准备过至少一次供应商请求。
+    /// Tool changes after that point break the conversation's context and are announced to the model.
+    /// 此后修改工具会打破会话上下文，并会通知模型。
+    pub fn read_provider_requests_started(&self) -> Result<bool, SessionV1StoreError> {
+        Ok(self
+            .read_configuration_metadata()?
+            .config
+            .answer_mode
+            .prepared
+            .is_some())
+    }
+
     /// Reads the exact active and pending request configuration from metadata only.
     /// 仅从 metadata 读取精确的活动及待生效请求配置。
     /// Returns both request states without replaying Turns, repairing history, or writing files.
@@ -326,6 +339,10 @@ impl SessionV1StorageLocator {
         // Read within the exclusive gate, never overwrite a metadata snapshot captured earlier.
         // 在独占门控内读取，绝不覆盖此前捕获的旧元数据快照。
         let mut metadata = self.read_configuration_metadata()?;
+        let selection = selection.marked_against(
+            &metadata.config.selection.provider_tools,
+            metadata.config.answer_mode.prepared.is_some(),
+        );
         if metadata.config.selection.provider_tools == selection {
             return Ok(false);
         }

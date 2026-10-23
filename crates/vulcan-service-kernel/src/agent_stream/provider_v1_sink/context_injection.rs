@@ -19,6 +19,10 @@ pub(super) const MODEL_SELECTION_CONTEXT_KEY: &str = "dynamic.model_selection";
 /// 描述工具闸门所执行会话权限模式的稳定生产者。
 pub(super) const PERMISSION_MODE_CONTEXT_KEY: &str = "dynamic.permission_mode";
 
+/// Stable producer describing provider tools after the user changed them mid-session.
+/// 描述用户在会话中途修改后的供应商工具的稳定生产者。
+pub(super) const PROVIDER_TOOLS_CONTEXT_KEY: &str = "dynamic.provider_tools";
+
 /// Render the interactive answer mode prompt with the unique Core component limits.
 /// 使用唯一的 Core 组件上限渲染互动回答模式提示词。
 /// No input; returns one trimmed producer body without independently defined limits.
@@ -147,6 +151,93 @@ fn permission_mode_input(
     )
 }
 
+/// Builds the provider-tool notice from the session's own persisted tool selection.
+/// 根据会话自身持久化的工具选择构建供应商工具通知。
+/// Nothing is said until the user changes tools after the first request; from then on the notice
+/// states the complete current configuration, so several changes combine into one stable text.
+/// 首次请求后用户修改工具之前不发送任何内容；此后通知陈述完整当前配置，多次修改合并为一份稳定正文。
+fn provider_tools_input(
+    document: &vulcan_session_core::v1::document::SessionDocument,
+) -> DynamicContextInput {
+    use vulcan_session_core::v1::config::ProviderExtensionModeKind;
+    let tools = &document.metadata.config.selection.provider_tools;
+    let body = tools.changed_mid_session.then(|| {
+        let mut lines = Vec::new();
+        let direct = tools
+            .enabled_capabilities
+            .iter()
+            .map(|capability| {
+                tools
+                    .selections
+                    .iter()
+                    .find(|selection| &selection.capability == capability)
+                    .map(|selection| format!("{capability} (`{}`)", selection.target.target_id))
+                    .unwrap_or_else(|| capability.clone())
+            })
+            .collect::<Vec<_>>();
+        lines.push(if direct.is_empty() {
+            String::from("- Search, extraction and media-understanding tools: none enabled.")
+        } else {
+            format!(
+                "- Search, extraction and media-understanding tools enabled: {}.",
+                direct.join(", ")
+            )
+        });
+        for capability in vulcan_provider_adapters::ProviderToolCapabilityKind::MODEL_EXTENSIONS {
+            let capability = serde_json::to_value(capability)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_default();
+            let mode = tools
+                .extension_modes
+                .iter()
+                .find(|entry| entry.capability == capability);
+            let line = match mode {
+                Some(entry) if entry.mode == ProviderExtensionModeKind::Multi => {
+                    let targets = tools
+                        .extension_target_sets
+                        .iter()
+                        .find(|set| set.capability == capability)
+                        .map(|set| {
+                            set.targets
+                                .iter()
+                                .map(|target| format!("`{}`", target.target_id))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if targets.is_empty() {
+                        format!("- {capability}: unavailable.")
+                    } else {
+                        format!(
+                            "- {capability}: multi-model mode choosing among {}; call get_model_extension_parameters first, then pass `model` and `args`.",
+                            targets.join(", ")
+                        )
+                    }
+                }
+                Some(entry) => match &entry.single_target {
+                    Some(target) => format!(
+                        "- {capability}: fixed model `{}`; call the tool directly with the arguments in its schema, without a model argument.",
+                        target.target_id
+                    ),
+                    None => format!("- {capability}: unavailable."),
+                },
+                None => format!("- {capability}: unavailable."),
+            };
+            lines.push(line);
+        }
+        format!(
+            "Provider tool update: the user changed this session's provider tools after the conversation started. Earlier tool calls in this conversation may have used tools, models or arguments that no longer apply; follow only the current tool definitions. A tool shown as unavailable is not registered. Current configuration:\n{}\nContinue the existing task without acknowledging this context update.",
+            lines.join("\n")
+        )
+    });
+    DynamicContextInput::new(
+        PROVIDER_TOOLS_CONTEXT_KEY,
+        body,
+        SystemContextScope::Session,
+        None,
+    )
+}
+
 /// Publishes business producer changes; compaction has no authority to withdraw or replace them.
 /// 发布业务生产者变化；压缩没有撤下或替换这些生产者的权限。
 /// Uses the exact handle and request facts; returns only after the durable mutation succeeds.
@@ -177,6 +268,7 @@ pub(super) fn synchronize_request_dynamic_context(
             )?);
             inputs.push(model_selection_input(document, &facts.request));
             inputs.push(permission_mode_input(document));
+            inputs.push(provider_tools_input(document));
             // Freeze the answer mode under the same lock as its request-context publication.
             // 在请求上下文发布的同一把锁内冻结回答模式。
             document

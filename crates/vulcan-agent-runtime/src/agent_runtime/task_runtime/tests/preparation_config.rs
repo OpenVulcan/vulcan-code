@@ -43,6 +43,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         provider_tool_media_understanding_selections_override: Default::default(),
         provider_tool_enabled_capabilities_override: Default::default(),
         provider_extension_target_sets_override: None,
+        provider_extension_modes_override: None,
         subagent_prompt_context: None,
         session_title: String::from("Parent session"),
         workspace_path: String::from("D:\\openvulcan\\test-project"),
@@ -593,8 +594,24 @@ fn child_request_overrides_roundtrip_through_question_restoration() {
         Some(BTreeSet::from(["web_search".into()]));
     original.provider_extension_target_sets_override = Some(BTreeMap::from([(
         "web_search".into(),
-        BTreeSet::from([target]),
+        BTreeSet::from([target.clone()]),
     )]));
+    original.provider_extension_modes_override = Some(BTreeMap::from([
+        (
+            "image_generate".into(),
+            vulcan_workbench_model::SessionProviderExtensionModeSelection {
+                mode: vulcan_workbench_model::SessionProviderExtensionMode::Single,
+                single_target: Some(target),
+            },
+        ),
+        (
+            "video_generate".into(),
+            vulcan_workbench_model::SessionProviderExtensionModeSelection {
+                mode: vulcan_workbench_model::SessionProviderExtensionMode::Multi,
+                single_target: None,
+            },
+        ),
+    ]));
     original.session_vmm.precheck_enabled = Some(false);
     original.session_vmm.memory_writeback_enabled = Some(true);
     original.output_style_snapshot = Some(vulcan_prompt_composer::PromptOutputStyleSnapshot::new(
@@ -645,6 +662,10 @@ fn child_request_overrides_roundtrip_through_question_restoration() {
     assert_eq!(
         restored.provider_extension_target_sets_override,
         original.provider_extension_target_sets_override
+    );
+    assert_eq!(
+        restored.provider_extension_modes_override,
+        original.provider_extension_modes_override
     );
     assert_eq!(restored.session_vmm, original.session_vmm);
     assert_eq!(restored.project_vmm.enabled, Some(false));
@@ -713,15 +734,16 @@ fn child_request_overrides_knowledge_capture_is_exact() {
 /// 每个可选请求映射独立于其他选择保留显式空值。
 #[test]
 fn child_request_overrides_preserve_all_empty_and_inherited_combinations() {
-    for mask in 0_u8..16 {
-        // All sixteen optional boundaries are intentional request contracts.
-        // 十六种可选边界均是明确请求契约。
+    for mask in 0_u8..32 {
+        // All thirty-two optional boundaries are intentional request contracts.
+        // 三十二种可选边界均是明确请求契约。
         let mut request = test_parent_execution_request(Uuid::new_v4());
         request.provider_tool_selections_override = (mask & 1 != 0).then(BTreeMap::new);
         request.provider_tool_media_understanding_selections_override =
             (mask & 2 != 0).then(BTreeMap::new);
         request.provider_tool_enabled_capabilities_override = (mask & 4 != 0).then(BTreeSet::new);
         request.provider_extension_target_sets_override = (mask & 8 != 0).then(BTreeMap::new);
+        request.provider_extension_modes_override = (mask & 16 != 0).then(BTreeMap::new);
         // Capture before replacing all template fields with their opposite optional state.
         // 在将全部模板字段替换为相反可选状态之前捕获。
         let captured = capture_child_request_overrides(&request).unwrap();
@@ -730,6 +752,7 @@ fn child_request_overrides_preserve_all_empty_and_inherited_combinations() {
             (mask & 2 == 0).then(BTreeMap::new);
         request.provider_tool_enabled_capabilities_override = (mask & 4 == 0).then(BTreeSet::new);
         request.provider_extension_target_sets_override = (mask & 8 == 0).then(BTreeMap::new);
+        request.provider_extension_modes_override = (mask & 16 == 0).then(BTreeMap::new);
         restore_child_request_overrides(&mut request, &captured);
         assert_eq!(capture_child_request_overrides(&request).unwrap(), captured);
     }

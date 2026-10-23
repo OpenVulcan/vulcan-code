@@ -1,7 +1,7 @@
 use super::DomainError;
 use crate::v1::config::{
-    ProviderMediaUnderstandingModelTargetConfig, ProviderMediaUnderstandingReasoningEffort,
-    ProviderToolTargetConfig, VmmSessionPolicyConfig,
+    ProviderExtensionModeKind, ProviderMediaUnderstandingModelTargetConfig,
+    ProviderMediaUnderstandingReasoningEffort, ProviderToolTargetConfig, VmmSessionPolicyConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,6 +23,9 @@ pub struct ChildExecutionRequestOverrides {
     /// Optional extension target sets preserving stable connection and target identities.
     /// 可选扩展目标集合，保留稳定连接与目标身份。
     pub extension_target_sets: Option<BTreeMap<String, BTreeSet<ProviderToolTargetConfig>>>,
+    /// Optional extension modes; a capability missing from Some(map) is single mode without a model.
+    /// 可选扩展模式；Some(映射) 中缺失的能力表示未选模型的单模型模式。
+    pub extension_modes: Option<BTreeMap<String, ChildExtensionModeSelection>>,
     /// Session-level memory behavior only; transport and credentials belong to the live host.
     /// 仅包含会话级记忆行为；传输和凭据归当前宿主持有。
     pub session_vmm: VmmSessionPolicyConfig,
@@ -32,6 +35,20 @@ pub struct ChildExecutionRequestOverrides {
     /// Original knowledge access ceiling, to intersect with current project authorization.
     /// 原知识访问上限，须与当前项目授权取交集。
     pub knowledge_access: Option<ChildKnowledgeAccess>,
+}
+
+/// One captured extension capability mode with its fixed single-mode target.
+/// 一项已捕获的扩展能力模式及其单模型固定目标。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildExtensionModeSelection {
+    /// Exposure mode for this capability.
+    /// 当前能力的暴露模式。
+    pub mode: ProviderExtensionModeKind,
+    /// Fixed target used while the mode is single.
+    /// 单模型模式下使用的固定目标。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub single_target: Option<ProviderToolTargetConfig>,
 }
 
 /// Non-executable output-style snapshot without a process-specific fingerprint.
@@ -141,6 +158,14 @@ impl ChildExecutionRequestOverrides {
             for (capability, targets) in sets {
                 validate_names(&[capability])?;
                 for target in targets {
+                    validate_names(&[&target.connection_id, &target.target_id])?;
+                }
+            }
+        }
+        if let Some(modes) = &self.extension_modes {
+            for (capability, selection) in modes {
+                validate_names(&[capability])?;
+                if let Some(target) = &selection.single_target {
                     validate_names(&[&target.connection_id, &target.target_id])?;
                 }
             }

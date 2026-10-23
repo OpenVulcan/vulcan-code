@@ -986,6 +986,8 @@ mod tests {
                                 ],
                             },
                         ],
+                        extension_modes: Vec::new(),
+                        changed_mid_session: false,
                     },
                     6,
                 )

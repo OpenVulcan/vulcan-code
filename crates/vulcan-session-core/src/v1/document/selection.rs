@@ -5,10 +5,11 @@ use super::persistence::DirtyFile;
 use super::{SessionDocument, ensure_api_request_field, validate_timestamp};
 use crate::v1::config::{
     ActiveRequestConfig, KnowledgeLibrarySelectionConfig, KnowledgeLibrarySelectionMode,
-    MetadataDocument, PendingRequestConfig, ProviderExtensionTargetSetConfig,
-    ProviderMediaUnderstandingMode, ProviderMediaUnderstandingRouteConfig,
-    ProviderMediaUnderstandingSelection, ProviderToolCapabilitySelection,
-    ProviderToolSelectionConfig, ProviderToolTargetConfig, VmmSessionPolicyConfig,
+    MetadataDocument, PendingRequestConfig, ProviderExtensionModeConfig, ProviderExtensionModeKind,
+    ProviderExtensionTargetSetConfig, ProviderMediaUnderstandingMode,
+    ProviderMediaUnderstandingRouteConfig, ProviderMediaUnderstandingSelection,
+    ProviderToolCapabilitySelection, ProviderToolSelectionConfig, ProviderToolTargetConfig,
+    VmmSessionPolicyConfig,
 };
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
@@ -191,6 +192,39 @@ fn validate_provider_extension_target_sets(
     Ok(())
 }
 
+/// Validates one canonically ordered list of non-default extension modes.
+/// 校验一份按规范排序的非默认扩展模式列表。
+fn validate_provider_extension_modes(
+    modes: &[ProviderExtensionModeConfig],
+) -> Result<(), DomainError> {
+    for mode in modes {
+        validate_required_selection_component(
+            "provider_tools.extension_modes.capability",
+            &mode.capability,
+        )?;
+        match (&mode.mode, &mode.single_target) {
+            // The implicit default is never stored, so every entry carries information.
+            // 隐式默认值从不保存，因此每个条目都携带信息。
+            (ProviderExtensionModeKind::Single, None) => {
+                return Err(DomainError::InvalidSelectionConfiguration {
+                    field: "provider_tools.extension_modes.default_entry",
+                });
+            }
+            (_, Some(target)) => validate_provider_tool_target_config(target)?,
+            (ProviderExtensionModeKind::Multi, None) => {}
+        }
+    }
+    if modes
+        .windows(2)
+        .any(|pair| pair[0].capability >= pair[1].capability)
+    {
+        return Err(DomainError::InvalidSelectionConfiguration {
+            field: "provider_tools.extension_modes.order",
+        });
+    }
+    Ok(())
+}
+
 /// Validates the complete session-owned Provider tool selection at commit and reload boundaries.
 /// 在提交与重载边界校验当前会话持有的完整 Provider 工具选择。
 pub(in crate::v1) fn validate_provider_tool_selection_config(
@@ -215,7 +249,8 @@ pub(in crate::v1) fn validate_provider_tool_selection_config(
     }
     validate_provider_tool_capability_selections(&config.selections)?;
     validate_provider_media_understanding_selections(&config.media_understanding_selections)?;
-    validate_provider_extension_target_sets(&config.extension_target_sets)
+    validate_provider_extension_target_sets(&config.extension_target_sets)?;
+    validate_provider_extension_modes(&config.extension_modes)
 }
 
 /// Validates one complete knowledge-library selection at commit and reload boundaries.
@@ -570,6 +605,10 @@ impl SessionDocument {
         now_ms: i64,
     ) -> Result<bool, DomainError> {
         validate_timestamp("updated_at_ms", now_ms)?;
+        let config = config.marked_against(
+            &self.metadata.config.selection.provider_tools,
+            self.metadata.config.answer_mode.prepared.is_some(),
+        );
         validate_provider_tool_selection_config(&config)?;
         if self.metadata.config.selection.provider_tools == config {
             return Ok(false);

@@ -595,6 +595,7 @@ fn build_git_commit_summary_execution_request(
         provider_tool_media_understanding_selections_override: Default::default(),
         provider_tool_enabled_capabilities_override: Default::default(),
         provider_extension_target_sets_override: Default::default(),
+        provider_extension_modes_override: Default::default(),
         subagent_model_grants: None,
         subagent_prompt_context: None,
         session_storage_directory: None,

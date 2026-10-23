@@ -999,6 +999,8 @@ fn apply_session_provider_tool_cache_snapshot_to_compaction(
     );
     context.provider_extension_target_sets_override =
         Some(runtime_state.provider_extension_target_sets.clone());
+    context.provider_extension_modes_override =
+        Some(runtime_state.provider_extension_modes.clone());
     Ok(())
 }
 

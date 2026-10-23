@@ -1377,6 +1377,9 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         provider_extension_target_sets_override: runtime_state
             .provider_tool_settings_initialized
             .then(|| runtime_state.provider_extension_target_sets.clone()),
+        provider_extension_modes_override: runtime_state
+            .provider_tool_settings_initialized
+            .then(|| runtime_state.provider_extension_modes.clone()),
         subagent_prompt_context: None,
         session_storage_directory: None,
         session_title: input.start.session_title,

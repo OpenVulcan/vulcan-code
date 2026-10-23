@@ -141,6 +141,10 @@ pub struct PromptCompactionLaunchContext {
     /// 从来源回合捕获的可选模型扩展目标集合。
     pub provider_extension_target_sets_override:
         Option<BTreeMap<String, BTreeSet<SessionProviderToolTargetSelection>>>,
+    /// Optional model-extension modes captured from the source turn.
+    /// 从来源回合捕获的可选模型扩展模式。
+    pub provider_extension_modes_override:
+        Option<BTreeMap<String, vulcan_workbench_model::SessionProviderExtensionModeSelection>>,
     /// Optional child-agent prompt context captured by the source turn.
     /// 来源回合捕获的可选子代理提示词上下文。
     pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,
@@ -202,6 +206,7 @@ impl Default for PromptCompactionLaunchContext {
             provider_tool_media_understanding_selections_override: None,
             provider_tool_enabled_capabilities_override: None,
             provider_extension_target_sets_override: None,
+            provider_extension_modes_override: None,
             subagent_prompt_context: None,
             session_storage_directory: None,
             output_style_snapshot: None,
@@ -251,6 +256,7 @@ impl PromptCompactionLaunchContext {
             provider_extension_target_sets_override: request
                 .provider_extension_target_sets_override
                 .clone(),
+            provider_extension_modes_override: request.provider_extension_modes_override.clone(),
             subagent_prompt_context: request.subagent_prompt_context.clone(),
             session_storage_directory: request.session_storage_directory.clone(),
             output_style_snapshot: request.output_style_snapshot.clone(),
@@ -1756,6 +1762,7 @@ fn build_prompt_compaction_launch_request(
         provider_extension_target_sets_override: launch_context
             .provider_extension_target_sets_override
             .clone(),
+        provider_extension_modes_override: launch_context.provider_extension_modes_override.clone(),
         subagent_prompt_context: launch_context.subagent_prompt_context.clone(),
         session_storage_directory: launch_context.session_storage_directory.clone(),
         session_title: session_title.to_string(),

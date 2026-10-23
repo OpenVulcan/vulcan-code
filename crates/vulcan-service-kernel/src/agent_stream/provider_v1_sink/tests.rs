@@ -4,6 +4,7 @@ mod host_guidance;
 mod model_selection;
 mod native_media;
 mod permission_mode;
+mod provider_tools;
 mod remote_checkpoint;
 use super::*;
 

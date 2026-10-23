@@ -97,6 +97,24 @@ impl SessionProviderToolConfiguration {
         )
     }
 
+    /// Reports whether the session has prepared a provider request, so tool changes break context.
+    /// 报告会话是否已准备过供应商请求，即修改工具是否会打破上下文。
+    pub(crate) fn requests_started(&self) -> Result<bool, String> {
+        self.registry.with_configuration_access(
+            self.session_id,
+            |handle| {
+                handle
+                    .read(|document| document.metadata.config.answer_mode.prepared.is_some())
+                    .map_err(|error| format!("Failed to read the session request state: {error}"))
+            },
+            || {
+                self.locator
+                    .read_provider_requests_started()
+                    .map_err(|error| format!("Failed to read the session request state: {error}"))
+            },
+        )
+    }
+
     /// Saves `selection` at `now_ms`; returns whether the persisted configuration changed.
     /// 在 `now_ms` 保存 `selection`；返回持久化配置是否变化。
     /// Resident mutations share the existing writer; cold writes reserve the physical load slot.
@@ -209,6 +227,31 @@ pub(crate) fn apply_provider_tool_selection_v1(
                         },
                     )
                     .collect(),
+            )
+        })
+        .collect();
+    runtime_state.provider_extension_modes = selection
+        .extension_modes
+        .iter()
+        .map(|entry| {
+            (
+                entry.capability.clone(),
+                vulcan_workbench_model::SessionProviderExtensionModeSelection {
+                    mode: match entry.mode {
+                        vulcan_session_core::v1::config::ProviderExtensionModeKind::Single => {
+                            vulcan_workbench_model::SessionProviderExtensionMode::Single
+                        }
+                        vulcan_session_core::v1::config::ProviderExtensionModeKind::Multi => {
+                            vulcan_workbench_model::SessionProviderExtensionMode::Multi
+                        }
+                    },
+                    single_target: entry.single_target.as_ref().map(|target| {
+                        vulcan_workbench_model::SessionProviderToolTargetSelection {
+                            connection_id: target.connection_id.clone(),
+                            target_id: target.target_id.clone(),
+                        }
+                    }),
+                },
             )
         })
         .collect();
@@ -1472,6 +1515,8 @@ mod tests {
                 },
             ],
             extension_target_sets: Vec::new(),
+            extension_modes: Vec::new(),
+            changed_mid_session: false,
         };
 
         assert!(
@@ -1525,6 +1570,8 @@ mod tests {
                 selections: Vec::new(),
                 media_understanding_selections: Vec::new(),
                 extension_target_sets: Vec::new(),
+                extension_modes: Vec::new(),
+                changed_mid_session: false,
             },
             knowledge_libraries: KnowledgeLibrarySelectionConfig {
                 mode: vulcan_session_core::v1::config::KnowledgeLibrarySelectionMode::Explicit,

@@ -20,10 +20,27 @@ pub(in crate::provider_tool_bridge) fn model(
     // The display name stays plain text so the labeled `model` value is the only code span to copy.
     // 展示名保持纯文本，使带标签的 `model` 值成为唯一可复制的代码片段。
     let mut output = format!(
-        "## {name}\n\n`model` (copy verbatim, including the provider prefix): {}\n\n{}\n",
+        "## {name}\n\n`model` (copy verbatim, including the provider prefix): {}\n\n{}",
         inline_code(id),
-        profile.summary
+        self::profile(profile)
     );
+    // Schemas are executable calling contracts; no subset or guessed prose may replace them.
+    // Schema 是可执行调用契约，不能用子集或猜测性说明替换。
+    let schema = serde_json::to_string_pretty(schema)
+        .map_err(|error| format!("Failed to encode model argument schema: {error}"))?;
+    output.push_str(&format!(
+        "\nExact `args_schema`:\n\n{}",
+        fenced_code(&schema)
+    ));
+    Ok(output)
+}
+
+/// Renders the reviewed profile of one model without its identity or argument schema.
+/// 渲染单个模型的已审核说明，不含身份及参数 Schema。
+/// The input is the typed profile; returns Markdown ending with a newline.
+/// 输入为强类型说明；返回以换行结尾的 Markdown。
+pub(in crate::provider_tool_bridge) fn profile(profile: &ProviderToolExtensionProfile) -> String {
+    let mut output = format!("{}\n", profile.summary);
     for (title, items) in [
         ("Characteristics", &profile.characteristics),
         ("Input modes", &profile.input_modes),
@@ -92,15 +109,7 @@ pub(in crate::provider_tool_bridge) fn model(
         list(&mut output, "Sample rates (Hz)", &policy.sample_rates_hz);
         list(&mut output, "Channel counts", &policy.channel_counts);
     }
-    // Schemas are executable calling contracts; no subset or guessed prose may replace them.
-    // Schema 是可执行调用契约，不能用子集或猜测性说明替换。
-    let schema = serde_json::to_string_pretty(schema)
-        .map_err(|error| format!("Failed to encode model argument schema: {error}"))?;
-    output.push_str(&format!(
-        "\nExact `args_schema`:\n\n{}",
-        fenced_code(&schema)
-    ));
-    Ok(output)
+    output
 }
 
 /// Appends a nonempty list of exact scalar policy values to shared Markdown.

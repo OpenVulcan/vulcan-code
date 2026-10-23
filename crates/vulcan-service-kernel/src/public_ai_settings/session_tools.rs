@@ -5,15 +5,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::ResourceKind;
 use vulcan_provider_adapters::{
-    MediaUnderstandingBackendSelection, PersistedAiConfiguration, ProviderToolCapabilityKind,
-    ProviderToolTargetSelection, PublicAiRuntime,
+    MediaUnderstandingBackendSelection, PersistedAiConfiguration, ProviderExtensionMode,
+    ProviderExtensionModeSelection, ProviderToolCapabilityKind, ProviderToolTargetSelection,
+    PublicAiRuntime,
 };
 use vulcan_service_api::ServiceEventEmitter;
 use vulcan_session_core::v1::config::{
-    ProviderExtensionTargetSetConfig, ProviderMediaUnderstandingMode,
-    ProviderMediaUnderstandingModelTargetConfig, ProviderMediaUnderstandingRouteConfig,
-    ProviderMediaUnderstandingSelection, ProviderToolCapabilitySelection,
-    ProviderToolSelectionConfig, ProviderToolTargetConfig,
+    ProviderExtensionModeConfig, ProviderExtensionModeKind, ProviderExtensionTargetSetConfig,
+    ProviderMediaUnderstandingMode, ProviderMediaUnderstandingModelTargetConfig,
+    ProviderMediaUnderstandingRouteConfig, ProviderMediaUnderstandingSelection,
+    ProviderToolCapabilitySelection, ProviderToolSelectionConfig, ProviderToolTargetConfig,
 };
 
 use super::{
@@ -21,7 +22,7 @@ use super::{
         build_media_understanding_model_candidates, media_understanding_resource_kind,
         model_route_supports_media_understanding,
     },
-    provider_tools::validate_provider_extension_target_sets,
+    provider_tools::{validate_provider_extension_modes, validate_provider_extension_target_sets},
     public_ai_runtime_and_configuration,
     publication::{
         PublicAiWorkspaceReconciliation,
@@ -61,6 +62,9 @@ pub(crate) struct PublicAiSessionProviderToolSettingsSnapshot {
     /// 当前会话选择的精确原生模型扩展目标集合。
     extension_target_sets:
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
+    /// Non-default extension modes of this session; a missing capability is single mode without a model.
+    /// 当前会话的非默认扩展模式；缺失的能力表示未选模型的单模型模式。
+    extension_modes: BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>,
     /// Exact session-owned route for each retained media-understanding capability.
     /// 当前会话为每项保留的媒体理解能力持有的精确路由。
     media_understanding_selections:
@@ -68,6 +72,9 @@ pub(crate) struct PublicAiSessionProviderToolSettingsSnapshot {
     /// Invalid retained choices that require explicit user confirmation.
     /// 需要用户显式确认的无效保留选择。
     conflicts: Vec<PublicAiSessionProviderToolConflict>,
+    /// Whether the session already prepared a provider request, so a tool change breaks context.
+    /// 会话是否已准备过供应商请求，即修改工具会打破上下文。
+    requests_started: bool,
 }
 
 /// Replaces the complete provider tool configuration for one session.
@@ -88,6 +95,9 @@ pub(crate) struct PublicAiSessionProviderToolSelectionsSaveRequest {
     /// 当前会话保留的完整原生模型扩展目标集合。
     extension_target_sets:
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
+    /// Complete extension modes; a missing capability is single mode without a model.
+    /// 完整扩展模式；缺失的能力表示未选模型的单模型模式。
+    extension_modes: BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>,
     /// Exact session-owned provider-tool or replacement-model route per media capability.
     /// 当前会话为每项媒体能力持有的精确供应商工具或替代模型路由。
     #[serde(default)]
@@ -142,6 +152,7 @@ pub(crate) fn provider_tool_selection_config_from_parts_v1(
         ProviderToolCapabilityKind,
         BTreeSet<ProviderToolTargetSelection>,
     >,
+    extension_modes: &BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>,
     overridden: bool,
 ) -> ProviderToolSelectionConfig {
     // config owns the final string-keyed persistence representation before Core validation.
@@ -216,6 +227,24 @@ pub(crate) fn provider_tool_selection_config_from_parts_v1(
                 },
             )
             .collect(),
+        extension_modes: extension_modes
+            .iter()
+            .filter(|(_, selection)| !selection.is_default())
+            .map(|(capability, selection)| ProviderExtensionModeConfig {
+                capability: provider_tool_capability_key(*capability),
+                mode: match selection.mode {
+                    ProviderExtensionMode::Single => ProviderExtensionModeKind::Single,
+                    ProviderExtensionMode::Multi => ProviderExtensionModeKind::Multi,
+                },
+                single_target: selection
+                    .single_target
+                    .as_ref()
+                    .map(provider_tool_target_config_v1),
+            })
+            .collect(),
+        // The marker is carried from stored state by the domain write, never by a browser snapshot.
+        // 该标记由领域写入从已存状态带入，绝不来自浏览器快照。
+        changed_mid_session: false,
     };
     // Enum Ord follows declaration order, while the V1 contract orders final serialized keys.
     // 枚举 Ord 遵循声明顺序，而 V1 契约按最终序列化键排序。
@@ -231,6 +260,9 @@ pub(crate) fn provider_tool_selection_config_from_parts_v1(
     }
     config
         .extension_target_sets
+        .sort_by(|left, right| left.capability.cmp(&right.capability));
+    config
+        .extension_modes
         .sort_by(|left, right| left.capability.cmp(&right.capability));
     config
 }
@@ -256,6 +288,7 @@ fn provider_tool_selection_config_v1(
         &snapshot.selections,
         &snapshot.media_understanding_selections,
         &snapshot.extension_target_sets,
+        &snapshot.extension_modes,
         overridden,
     )
 }
@@ -288,9 +321,14 @@ pub(crate) async fn service_public_ai_session_provider_tool_selections(
     )
     .await?;
     let persisted = access.read()?;
+    let requests_started = access.requests_started()?;
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
-    let (snapshot, planned) =
-        resolved_session_provider_tool_settings(runtime.as_ref(), &configuration, &persisted)?;
+    let (snapshot, planned) = resolved_session_provider_tool_settings(
+        runtime.as_ref(),
+        &configuration,
+        &persisted,
+        requests_started,
+    )?;
     // Compare only capability fields, leaving execution, goals and model selection untouched.
     // 仅比较能力字段，不触碰执行、目标及模型选择。
     let requires_publication = {
@@ -311,6 +349,7 @@ pub(crate) async fn service_public_ai_session_provider_tool_selections(
                         != planned.media_understanding_selections
                     || current.provider_extension_target_sets
                         != planned.provider_extension_target_sets
+                    || current.provider_extension_modes != planned.provider_extension_modes
                     || current.provider_tool_settings_initialized
                         != planned.provider_tool_settings_initialized
                     || current.provider_tool_selections_overridden
@@ -351,6 +390,7 @@ fn resolved_session_provider_tool_settings(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     persisted: &vulcan_session_core::v1::config::ProviderToolSelectionConfig,
+    requests_started: bool,
 ) -> Result<
     (
         PublicAiSessionProviderToolSettingsSnapshot,
@@ -365,6 +405,7 @@ fn resolved_session_provider_tool_settings(
         selections,
         media_understanding_selections,
         extension_target_sets,
+        extension_modes,
         _,
     ) = reconcile_session_provider_tool_settings(&mut planned, configuration)?;
     let conflicts = provider_tool_session_conflicts(
@@ -374,6 +415,7 @@ fn resolved_session_provider_tool_settings(
         &selections,
         &media_understanding_selections,
         &extension_target_sets,
+        &extension_modes,
     )?;
     Ok((
         PublicAiSessionProviderToolSettingsSnapshot {
@@ -381,7 +423,9 @@ fn resolved_session_provider_tool_settings(
             selections,
             media_understanding_selections,
             extension_target_sets,
+            extension_modes,
             conflicts,
+            requests_started,
         },
         planned,
     ))
@@ -433,10 +477,13 @@ pub(crate) async fn service_rebuild_public_ai_session_provider_tool_selections(
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
     // Explicit rebuild replaces the addon only; reading the corrupt old addon would defeat recovery.
     // 显式重建仅替换附加项；先读取损坏的旧附加项会让恢复无法执行。
+    // Request state lives in the same metadata, so it is not read here either; callers reload.
+    // 请求状态位于同一元数据中，因此这里同样不读取；调用方会重新加载。
     let (snapshot, _) = resolved_session_provider_tool_settings(
         runtime.as_ref(),
         &configuration,
         &Default::default(),
+        false,
     )?;
     let selection = provider_tool_selection_config_v1(&snapshot, false);
     let now_ms = crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
@@ -489,6 +536,7 @@ fn reconcile_session_provider_tool_settings(
         BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
         BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendSelection>,
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
+        BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>,
         bool,
     ),
     String,
@@ -542,6 +590,8 @@ fn reconcile_session_provider_tool_settings(
                 )
             })
             .collect();
+        runtime_state.provider_extension_modes =
+            session_provider_extension_modes_to_runtime(&configuration.provider_extension_modes);
         runtime_state.provider_tool_selections_overridden = false;
         runtime_state.provider_tool_settings_initialized = true;
         state_changed = true;
@@ -579,11 +629,13 @@ fn reconcile_session_provider_tool_settings(
     let media_understanding_selections =
         session_media_understanding_selections_from_runtime(runtime_state)?;
     let extension_target_sets = session_provider_extension_target_sets_from_runtime(runtime_state)?;
+    let extension_modes = session_provider_extension_modes_from_runtime(runtime_state)?;
     Ok((
         enabled_capabilities,
         selections,
         media_understanding_selections,
         extension_target_sets,
+        extension_modes,
         state_changed,
     ))
 }
@@ -640,6 +692,7 @@ pub(crate) async fn service_save_public_ai_session_provider_tool_selections(
         &request.selections,
         &request.media_understanding_selections,
         &request.extension_target_sets,
+        &request.extension_modes,
     )?;
     // snapshot is complete before any browser-visible or authoritative workspace assignment.
     // snapshot 在任何浏览器可见或权威工作区赋值前保持完整。
@@ -648,7 +701,9 @@ pub(crate) async fn service_save_public_ai_session_provider_tool_selections(
         selections: request.selections,
         media_understanding_selections: request.media_understanding_selections,
         extension_target_sets: request.extension_target_sets,
+        extension_modes: request.extension_modes,
         conflicts: Vec::new(),
+        requests_started: access.requests_started()?,
     };
     let selection = provider_tool_selection_config_v1(&snapshot, true);
     let provider_tools_updated_at_ms =
@@ -699,6 +754,7 @@ pub(crate) fn validate_provider_tool_session_settings(
         ProviderToolCapabilityKind,
         BTreeSet<ProviderToolTargetSelection>,
     >,
+    extension_modes: &BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>,
 ) -> Result<(), String> {
     let conflicts = provider_tool_session_conflicts(
         runtime,
@@ -707,6 +763,7 @@ pub(crate) fn validate_provider_tool_session_settings(
         selections,
         media_understanding_selections,
         extension_target_sets,
+        extension_modes,
     )?;
     if conflicts.is_empty() {
         return Ok(());
@@ -746,6 +803,7 @@ fn provider_tool_session_conflicts(
         ProviderToolCapabilityKind,
         BTreeSet<ProviderToolTargetSelection>,
     >,
+    extension_modes: &BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>,
 ) -> Result<Vec<PublicAiSessionProviderToolConflict>, String> {
     // settingsCatalog supplies the exact conversation routes needed to validate session-selected media backends.
     // settingsCatalog 提供校验会话选定媒体后端所需的精确会话路由。
@@ -866,6 +924,17 @@ fn provider_tool_session_conflicts(
                 .copied()
                 .unwrap_or(ProviderToolCapabilityKind::ImageGenerate),
             kind: String::from("invalid_extension_target_set"),
+            message: error,
+        });
+    }
+    if let Err(error) = validate_provider_extension_modes(runtime, configuration, extension_modes) {
+        conflicts.push(PublicAiSessionProviderToolConflict {
+            capability: extension_modes
+                .keys()
+                .next()
+                .copied()
+                .unwrap_or(ProviderToolCapabilityKind::ImageGenerate),
+            kind: String::from("invalid_extension_mode"),
             message: error,
         });
     }
@@ -1058,6 +1127,92 @@ fn session_provider_extension_target_sets_from_runtime(
                 })
                 .collect();
             Ok((capability, selections))
+        })
+        .collect()
+}
+
+/// Converts provider-contract extension modes into the session projection shape.
+/// 把供应商契约扩展模式转换为会话投影形状。
+///
+/// # Parameters
+/// 参数
+/// `modes` supplies typed capabilities with their mode and fixed single-mode target.
+/// `modes` 提供类型化能力及其模式与单模型固定目标。
+///
+/// # Returns
+/// 返回值
+/// Returns the non-default modes keyed by their canonical serialized capability names.
+/// 返回按规范序列化能力名称建键的非默认模式。
+pub(crate) fn session_provider_extension_modes_to_runtime(
+    modes: &BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>,
+) -> BTreeMap<String, vulcan_workbench_model::SessionProviderExtensionModeSelection> {
+    modes
+        .iter()
+        .filter(|(_, selection)| !selection.is_default())
+        .map(|(capability, selection)| {
+            (
+                provider_tool_capability_key(*capability),
+                vulcan_workbench_model::SessionProviderExtensionModeSelection {
+                    mode: match selection.mode {
+                        ProviderExtensionMode::Single => {
+                            vulcan_workbench_model::SessionProviderExtensionMode::Single
+                        }
+                        ProviderExtensionMode::Multi => {
+                            vulcan_workbench_model::SessionProviderExtensionMode::Multi
+                        }
+                    },
+                    single_target: selection
+                        .single_target
+                        .as_ref()
+                        .map(session_provider_tool_selection_from_contract),
+                },
+            )
+        })
+        .collect()
+}
+
+/// Converts session extension modes into the provider contract.
+/// 把会话扩展模式转换为供应商契约。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns canonical string-keyed extension modes.
+/// `runtime_state` 持有规范字符串键的扩展模式。
+///
+/// # Returns
+/// 返回值
+/// Returns typed modes, or an explicit invalid capability-key error.
+/// 返回类型化模式，或显式非法能力键错误。
+pub(crate) fn session_provider_extension_modes_from_runtime(
+    runtime_state: &vulcan_workbench_model::SessionRuntimeStateEntry,
+) -> Result<BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>, String> {
+    runtime_state
+        .provider_extension_modes
+        .iter()
+        .map(|(capability, selection)| {
+            let capability = serde_json::from_value(serde_json::Value::String(capability.clone()))
+                .map_err(|error| {
+                    format!("Session model-extension capability `{capability}` is invalid: {error}")
+                })?;
+            Ok((
+                capability,
+                ProviderExtensionModeSelection {
+                    mode: match selection.mode {
+                        vulcan_workbench_model::SessionProviderExtensionMode::Single => {
+                            ProviderExtensionMode::Single
+                        }
+                        vulcan_workbench_model::SessionProviderExtensionMode::Multi => {
+                            ProviderExtensionMode::Multi
+                        }
+                    },
+                    single_target: selection.single_target.as_ref().map(|target| {
+                        ProviderToolTargetSelection {
+                            connection_id: target.connection_id.clone(),
+                            target_id: target.target_id.clone(),
+                        }
+                    }),
+                },
+            ))
         })
         .collect()
 }

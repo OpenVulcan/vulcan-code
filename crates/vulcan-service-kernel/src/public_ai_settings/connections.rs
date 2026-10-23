@@ -1990,6 +1990,18 @@ pub(super) fn remove_connection_from_configuration(
     configuration
         .provider_extension_target_sets
         .retain(|_, selections| !selections.is_empty());
+    configuration
+        .provider_extension_modes
+        .retain(|_, selection| {
+            if selection
+                .single_target
+                .as_ref()
+                .is_some_and(|target| target.connection_id == connection_id)
+            {
+                selection.single_target = None;
+            }
+            !selection.is_default()
+        });
     Ok(())
 }
 

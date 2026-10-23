@@ -224,7 +224,7 @@ pub(super) use provider_tasks::{service_cancel_provider_task, service_list_provi
 )]
 pub(super) use provider_tools::{
     PublicAiMediaUnderstandingSelectionSaveRequest,
-    PublicAiMultimodalUnderstandingCandidateSaveRequest,
+    PublicAiMultimodalUnderstandingCandidateSaveRequest, PublicAiProviderExtensionModeSaveRequest,
     PublicAiProviderExtensionTargetSetSaveRequest,
     PublicAiProviderToolCapabilityEnabledSaveRequest, PublicAiProviderToolSelectionSaveRequest,
     PublicAiProviderToolTestRequest,
@@ -232,6 +232,7 @@ pub(super) use provider_tools::{
 pub(super) use provider_tools::{
     service_save_public_ai_media_understanding_selection,
     service_save_public_ai_multimodal_understanding_candidate,
+    service_save_public_ai_provider_extension_mode,
     service_save_public_ai_provider_extension_target_set,
     service_save_public_ai_provider_tool_capability_enabled,
     service_save_public_ai_provider_tool_selection, service_test_public_ai_provider_tool,
@@ -257,7 +258,8 @@ pub(super) use session_tools::{
 pub(crate) use session_tools::{
     provider_tool_capability_key, provider_tool_selection_config_from_parts_v1,
     public_ai_session_media_understanding_bridge_kinds,
-    session_media_understanding_selections_to_runtime, validate_provider_tool_session_settings,
+    session_media_understanding_selections_to_runtime, session_provider_extension_modes_to_runtime,
+    validate_provider_tool_session_settings,
 };
 pub(super) use session_tools::{
     service_public_ai_session_provider_tool_selections,

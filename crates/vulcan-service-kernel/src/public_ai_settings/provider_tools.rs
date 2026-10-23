@@ -5,8 +5,8 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_provider_adapters::{
     AvailableProviderToolTarget, ManifestSourceLayer, MediaUnderstandingBackendSelection,
-    PersistedAiConfiguration, ProviderToolCapabilityKind, ProviderToolExecutionResult,
-    ProviderToolTargetSelection, PublicAiRuntime,
+    PersistedAiConfiguration, ProviderExtensionModeSelection, ProviderToolCapabilityKind,
+    ProviderToolExecutionResult, ProviderToolTargetSelection, PublicAiRuntime,
 };
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -75,6 +75,19 @@ pub(crate) struct PublicAiProviderExtensionTargetSetSaveRequest {
     /// Complete replacement set of exact native targets.
     /// 精确原生目标的完整替换集合。
     selections: BTreeSet<ProviderToolTargetSelection>,
+}
+
+/// Replaces the exposure mode and fixed single-mode target of one model-extension capability.
+/// 替换一项模型扩展能力的暴露模式及单模型固定目标。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PublicAiProviderExtensionModeSaveRequest {
+    /// Exact generative model-extension capability.
+    /// 精确生成类模型扩展能力。
+    capability: ProviderToolCapabilityKind,
+    /// Complete replacement mode selection.
+    /// 完整替换的模式选择。
+    selection: ProviderExtensionModeSelection,
 }
 
 /// Executes one exact search or extraction target for settings diagnostics.
@@ -438,6 +451,54 @@ pub(crate) async fn service_save_public_ai_provider_extension_target_set(
     Ok(snapshot)
 }
 
+/// Saves the exposure mode and fixed single-mode target for one model-extension capability.
+/// 保存一项模型扩展能力的暴露模式及单模型固定目标。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes settings; `state` owns runtime/configuration; `request` replaces one capability's mode.
+/// `app` 发布设置；`state` 持有运行时与配置；`request` 替换一项能力的模式。
+///
+/// # Returns
+/// 返回值
+/// Returns the rebuilt snapshot after validating the fixed target and publishing, or an explicit failure.
+/// 校验固定目标并发布后返回重建快照，或返回显式失败。
+pub(crate) async fn service_save_public_ai_provider_extension_mode(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiProviderExtensionModeSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    validate_provider_extension_modes(
+        runtime.as_ref(),
+        &current_configuration,
+        &BTreeMap::from([(request.capability, request.selection.clone())]),
+    )?;
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_without_session_model_reconciliation_in_transaction(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &current_configuration,
+        "Failed to save the public AI model extension mode",
+        |configuration| {
+            if request.selection.is_default() {
+                configuration
+                    .provider_extension_modes
+                    .remove(&request.capability);
+            } else {
+                configuration
+                    .provider_extension_modes
+                    .insert(request.capability, request.selection.clone());
+            }
+            Ok(())
+        },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
+}
+
 /// Runs one real search or extraction diagnostic through the selected row without changing defaults.
 /// 通过所选行运行一次真实搜索或网页抓取诊断且不修改默认项。
 ///
@@ -734,6 +795,48 @@ pub(super) fn validate_provider_extension_target_sets(
         }
     }
     Ok(())
+}
+
+/// Validates extension mode selections against one frozen runtime inventory.
+/// 针对一份冻结运行时目录校验扩展模式选择。
+///
+/// # Parameters
+/// 参数
+/// `runtime` supplies the current target inventory; `configuration` fixes its generation; `modes`
+/// contains the exact mode selections to store.
+/// `runtime` 提供当前目标目录；`configuration` 固定其代际；`modes` 包含待保存的精确模式选择。
+///
+/// # Returns
+/// 返回值
+/// Returns success only for model-extension capabilities whose fixed target is an available
+/// reviewed native target, or an explicit failure.
+/// 仅当能力为模型扩展且固定目标是可用的已审查原生目标时返回成功，否则返回显式失败。
+pub(super) fn validate_provider_extension_modes(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    modes: &BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>,
+) -> Result<(), String> {
+    // A fixed target is validated exactly like a one-element multi-model set.
+    // 固定目标按单元素多模型集合的同一规则校验。
+    let fixed_targets = modes
+        .iter()
+        .map(|(capability, selection)| {
+            if !capability.is_model_extension() {
+                return Err(format!(
+                    "Provider tool capability `{capability:?}` has no model-extension mode."
+                ));
+            }
+            Ok((
+                *capability,
+                selection
+                    .single_target
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
+    validate_provider_extension_target_sets(runtime, configuration, &fixed_targets)
 }
 
 #[cfg(test)]

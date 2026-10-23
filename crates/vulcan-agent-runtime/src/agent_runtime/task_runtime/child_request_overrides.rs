@@ -1,13 +1,15 @@
 use super::*;
 use vulcan_session_core::v1::child_execution::{
-    ChildExecutionRequestOverrides, ChildKnowledgeAccess, ChildMediaUnderstandingSelection,
-    ChildOutputStyleSnapshot,
+    ChildExecutionRequestOverrides, ChildExtensionModeSelection, ChildKnowledgeAccess,
+    ChildMediaUnderstandingSelection, ChildOutputStyleSnapshot,
 };
 use vulcan_session_core::v1::config::{
-    ProviderMediaUnderstandingModelTargetConfig, ProviderToolTargetConfig, VmmSessionPolicyConfig,
+    ProviderExtensionModeKind, ProviderMediaUnderstandingModelTargetConfig,
+    ProviderToolTargetConfig, VmmSessionPolicyConfig,
 };
 use vulcan_workbench_model::{
     SessionMediaUnderstandingModelSelection, SessionMediaUnderstandingSelection,
+    SessionProviderExtensionMode, SessionProviderExtensionModeSelection,
     SessionProviderToolTargetSelection,
 };
 
@@ -62,6 +64,30 @@ pub(super) fn capture_child_request_overrides(
                         (
                             capability.clone(),
                             targets.iter().map(capture_target).collect(),
+                        )
+                    })
+                    .collect()
+            }),
+        extension_modes: request
+            .provider_extension_modes_override
+            .as_ref()
+            .map(|modes| {
+                modes
+                    .iter()
+                    .map(|(capability, selection)| {
+                        (
+                            capability.clone(),
+                            ChildExtensionModeSelection {
+                                mode: match selection.mode {
+                                    SessionProviderExtensionMode::Single => {
+                                        ProviderExtensionModeKind::Single
+                                    }
+                                    SessionProviderExtensionMode::Multi => {
+                                        ProviderExtensionModeKind::Multi
+                                    }
+                                },
+                                single_target: selection.single_target.as_ref().map(capture_target),
+                            },
                         )
                     })
                     .collect()
@@ -150,6 +176,25 @@ pub(super) fn restore_child_request_overrides(
                 })
                 .collect()
         });
+    request.provider_extension_modes_override = captured.extension_modes.as_ref().map(|modes| {
+        modes
+            .iter()
+            .map(|(capability, selection)| {
+                (
+                    capability.clone(),
+                    SessionProviderExtensionModeSelection {
+                        mode: match selection.mode {
+                            ProviderExtensionModeKind::Single => {
+                                SessionProviderExtensionMode::Single
+                            }
+                            ProviderExtensionModeKind::Multi => SessionProviderExtensionMode::Multi,
+                        },
+                        single_target: selection.single_target.as_ref().map(restore_target),
+                    },
+                )
+            })
+            .collect()
+    });
     request.session_vmm = vulcan_vmm::VmmConfigLayer {
         precheck_enabled: captured.session_vmm.precheck_enabled,
         memory_writeback_enabled: captured.session_vmm.memory_writeback_enabled,

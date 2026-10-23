@@ -24,7 +24,7 @@ pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 /// migrating it; per-version migrations become mandatory from V0.2 (AGENTS.md section 1 rule 12).
 /// 当前元数据模式版本。发布前版本（V0.1.x）拒绝其他任何版本而不迁移；自 V0.2 起才必须提供逐版本迁移
 /// （AGENTS.md 第一节第 12 条）。
-pub const METADATA_SCHEMA_VERSION: u32 = 8;
+pub const METADATA_SCHEMA_VERSION: u32 = 9;
 
 /// Maximum number of Unicode scalar values accepted in one Goal objective.
 /// 一个 Goal 目标内容允许的 Unicode 标量值最大数量。
@@ -429,6 +429,39 @@ pub struct ProviderExtensionTargetSetConfig {
     pub targets: Vec<ProviderToolTargetConfig>,
 }
 
+/// Exposure mode of one native model-extension capability.
+/// 一项原生模型扩展能力的暴露模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderExtensionModeKind {
+    /// One fixed model registered with its exact schema.
+    /// 以精确 Schema 注册的一个固定模型。
+    Single,
+    /// Several models discovered through the parameter lookup tool.
+    /// 通过参数查询工具发现的多个模型。
+    Multi,
+}
+
+/// One native model-extension capability's mode and fixed single-mode target.
+/// 一项原生模型扩展能力的模式及单模型固定目标。
+///
+/// A capability without an entry is in single mode without a model.
+/// 没有条目的能力处于未选模型的单模型模式。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderExtensionModeConfig {
+    /// Stable semantic extension capability key.
+    /// 稳定的语义扩展能力键。
+    pub capability: String,
+    /// Exposure mode for this capability.
+    /// 当前能力的暴露模式。
+    pub mode: ProviderExtensionModeKind,
+    /// Fixed target used while the mode is single.
+    /// 单模型模式下使用的固定目标。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub single_target: Option<ProviderToolTargetConfig>,
+}
+
 /// Complete provider-tool selection owned by one session.
 /// 一个会话持有的完整供应商工具选择。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -458,6 +491,15 @@ pub struct ProviderToolSelectionConfig {
     /// 按规范顺序排列的原生扩展目标集合。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extension_target_sets: Vec<ProviderExtensionTargetSetConfig>,
+    /// Non-default extension modes in canonical capability order.
+    /// 按规范能力顺序排列的非默认扩展模式。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extension_modes: Vec<ProviderExtensionModeConfig>,
+    /// Whether the selection changed after this session's first provider request, so the model
+    /// must be told about the current tool configuration.
+    /// 选择是否在会话首次 Provider 请求之后被修改，因而需要告知模型当前工具配置。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub changed_mid_session: bool,
 }
 
 impl ProviderToolSelectionConfig {
@@ -478,6 +520,33 @@ impl ProviderToolSelectionConfig {
             && self.selections.is_empty()
             && self.media_understanding_selections.is_empty()
             && self.extension_target_sets.is_empty()
+            && self.extension_modes.is_empty()
+            && !self.changed_mid_session
+    }
+
+    /// Carries the mid-session change marker from `previous` into this replacement.
+    /// 将 `previous` 的会话中途修改标记带入当前替换值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `previous` is the stored selection being replaced; `request_prepared` reports whether the
+    /// session already prepared a Provider request.
+    /// `previous` 是被替换的已存选择；`request_prepared` 表示会话是否已准备过 Provider 请求。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The replacement, marked once a request was prepared and the tool choices differ; the
+    /// marker never clears, so the model keeps receiving the current tool configuration.
+    /// 返回替换值：已准备请求且工具选择不同时打上标记；标记永不清除，使模型持续获得当前工具配置。
+    pub fn marked_against(mut self, previous: &Self, request_prepared: bool) -> Self {
+        let tools_changed = self.enabled_capabilities != previous.enabled_capabilities
+            || self.selections != previous.selections
+            || self.media_understanding_selections != previous.media_understanding_selections
+            || self.extension_target_sets != previous.extension_target_sets
+            || self.extension_modes != previous.extension_modes;
+        self.changed_mid_session =
+            previous.changed_mid_session || (request_prepared && tools_changed);
+        self
     }
 }
 

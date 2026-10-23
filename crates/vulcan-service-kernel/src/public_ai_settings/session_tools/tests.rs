@@ -16,9 +16,13 @@ fn capability_metadata_defaults_become_session_owned_after_materialization() {
     configuration
         .provider_tool_enabled_capabilities
         .insert(ProviderToolCapabilityKind::WebSearch);
-    let (defaults, _) =
-        resolved_session_provider_tool_settings(&runtime, &configuration, &Default::default())
-            .unwrap();
+    let (defaults, _) = resolved_session_provider_tool_settings(
+        &runtime,
+        &configuration,
+        &Default::default(),
+        false,
+    )
+    .unwrap();
     assert_eq!(
         defaults.enabled_capabilities,
         BTreeSet::from([ProviderToolCapabilityKind::WebSearch])
@@ -26,14 +30,16 @@ fn capability_metadata_defaults_become_session_owned_after_materialization() {
     let inherited = provider_tool_selection_config_v1(&defaults, false);
     configuration.provider_tool_enabled_capabilities.clear();
     let (retained_default, _) =
-        resolved_session_provider_tool_settings(&runtime, &configuration, &inherited).unwrap();
+        resolved_session_provider_tool_settings(&runtime, &configuration, &inherited, false)
+            .unwrap();
     assert_eq!(
         retained_default.enabled_capabilities,
         defaults.enabled_capabilities
     );
     let overridden = provider_tool_selection_config_v1(&defaults, true);
     let (retained, _) =
-        resolved_session_provider_tool_settings(&runtime, &configuration, &overridden).unwrap();
+        resolved_session_provider_tool_settings(&runtime, &configuration, &overridden, false)
+            .unwrap();
     assert_eq!(retained.enabled_capabilities, defaults.enabled_capabilities);
 }
 
@@ -47,6 +53,7 @@ fn session_provider_tool_settings_reject_missing_selection() {
         &runtime,
         &configuration,
         &BTreeSet::from([ProviderToolCapabilityKind::WebSearch]),
+        &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -145,6 +152,7 @@ fn provider_tool_selection_v1_orders_final_persisted_keys() {
         &selections,
         &media_selections,
         &extension_targets,
+        &BTreeMap::new(),
         true,
     );
 
@@ -215,6 +223,7 @@ fn session_media_understanding_settings_reject_missing_backend() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &BTreeMap::new(),
     )
     .expect("media conflict analysis");
 
@@ -246,6 +255,7 @@ fn session_media_understanding_rejects_unavailable_exact_route() {
                 },
             },
         )]),
+        &BTreeMap::new(),
         &BTreeMap::new(),
     )
     .expect_err("unavailable exact media route must be rejected");
@@ -290,6 +300,7 @@ fn session_provider_tool_settings_reconciliation_is_idempotent() {
         selections,
         media_understanding_selections,
         extension_target_sets,
+        _extension_modes,
         first_changed,
     ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
         .expect("uninitialized session settings should reconcile");
@@ -316,6 +327,7 @@ fn session_provider_tool_settings_reconciliation_is_idempotent() {
         _selections,
         _media_understanding_selections,
         _extension_target_sets,
+        _extension_modes,
         second_changed,
     ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
         .expect("initialized session settings should remain readable");
@@ -359,6 +371,7 @@ fn session_media_direct_targets_are_removed_from_overridden_sessions() {
         selections,
         _media_understanding_selections,
         _extension_target_sets,
+        _extension_modes,
         changed,
     ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
         .expect("legacy media targets should be normalized");
@@ -403,6 +416,7 @@ fn session_exact_media_route_is_materialized_with_session_defaults() {
         _selections,
         media_understanding_selections,
         _extension_target_sets,
+        _extension_modes,
         changed,
     ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
         .expect("session defaults should materialize");

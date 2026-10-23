@@ -391,6 +391,10 @@ pub struct SessionRuntimeStateEntry {
     /// 按扩展能力索引的会话级原生模型扩展目标集合。
     pub provider_extension_target_sets:
         BTreeMap<String, BTreeSet<SessionProviderToolTargetSelection>>,
+    /// Session exposure mode and fixed single-mode target keyed by extension capability; a
+    /// missing entry means single mode without a model.
+    /// 按扩展能力索引的会话暴露模式及单模型固定目标；缺失条目表示未选模型的单模型模式。
+    pub provider_extension_modes: BTreeMap<String, SessionProviderExtensionModeSelection>,
     /// Whether provider tool defaults have been materialized into this session.
     /// 供应商工具默认值是否已经物化到当前会话。
     pub provider_tool_settings_initialized: bool,
@@ -478,6 +482,43 @@ pub struct SessionRuntimeStateEntry {
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,
+}
+
+/// Selects how one model-extension capability exposes its models in a session.
+/// 选择一项模型扩展能力在会话中暴露模型的方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionProviderExtensionMode {
+    /// One fixed model registered with its exact schema; the default.
+    /// 一个以精确 Schema 注册的固定模型；默认值。
+    #[default]
+    Single,
+    /// Several selected models discovered through the parameter lookup tool.
+    /// 通过参数查询工具发现的多个已选模型。
+    Multi,
+}
+
+/// Stores one session extension capability's mode and fixed single-mode target.
+/// 保存会话中一项扩展能力的模式及单模型固定目标。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionProviderExtensionModeSelection {
+    /// Exposure mode for this capability.
+    /// 当前能力的暴露模式。
+    #[serde(default)]
+    pub mode: SessionProviderExtensionMode,
+    /// Fixed target used while the mode is single.
+    /// 单模型模式下使用的固定目标。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub single_target: Option<SessionProviderToolTargetSelection>,
+}
+
+impl SessionProviderExtensionModeSelection {
+    /// Reports whether this selection equals the implicit default and needs no stored entry.
+    /// 判断该选择是否等于隐式默认值，从而无需保存条目。
+    pub fn is_default(&self) -> bool {
+        self.mode == SessionProviderExtensionMode::Single && self.single_target.is_none()
+    }
 }
 
 /// Identifies one exact provider tool target selected for a session.
