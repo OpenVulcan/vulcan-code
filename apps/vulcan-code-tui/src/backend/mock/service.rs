@@ -875,6 +875,11 @@ impl FakeService {
                     [string(params, "/request/capability")?] =
                     required(params, "/request/selections")?.clone()
             }
+            "service_save_public_ai_provider_extension_mode" => {
+                self.loads["service_public_ai_settings_snapshot"]["providerExtensionModes"]
+                    [string(params, "/request/capability")?] =
+                    required(params, "/request/selection")?.clone()
+            }
             "service_save_public_ai_provider_tool_selection" => {
                 self.loads["service_public_ai_settings_snapshot"]["providerToolSelections"]
                     [string(params, "/request/capability")?] =

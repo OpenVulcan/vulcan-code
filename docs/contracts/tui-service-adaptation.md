@@ -235,6 +235,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `settings_actions::save_public_ai_internal_model_enabled` | savePublicAiInternalModelEnabled | `service_save_public_ai_internal_model_enabled` |
 | `settings_actions::save_public_ai_multimodal_understanding_candidate` | savePublicAiMultimodalUnderstandingCandidate | `service_save_public_ai_multimodal_understanding_candidate` |
 | `settings_actions::save_public_ai_provider_extension_target_set` | savePublicAiProviderExtensionTargetSet | `service_save_public_ai_provider_extension_target_set` |
+| `settings_actions::save_public_ai_provider_extension_mode` | savePublicAiProviderExtensionMode | `service_save_public_ai_provider_extension_mode` |
 | `settings_actions::save_public_ai_inference_route` | savePublicAiInferenceRoute | `service_save_public_ai_inference_route` |
 | `settings_actions::test_public_ai_inference_route` | testPublicAiInferenceRoute | `service_test_public_ai_inference_route` |
 | `permission_judge::load_permission_judge_settings` | loadPermissionJudgeSettings | `service_permission_judge_settings` |

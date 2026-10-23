@@ -509,13 +509,30 @@ fn selects(selection: &Value, targets: &[&Value]) -> bool {
     })
 }
 
-/// Saved extension selections of one capability.
-/// 某能力已保存的扩展选择。
-fn extension_set<'a>(ai: &'a Value, capability: &str) -> &'a [Value] {
+/// Whether one capability uses a single fixed model, the default when no mode is saved.
+/// 某能力是否使用单个固定模型；未保存模式时即为默认值。
+fn extension_single(ai: &Value, capability: &str) -> bool {
+    s(
+        v(ai, "/providerExtensionModes"),
+        &format!("/{capability}/mode"),
+    ) != "multi"
+}
+
+/// Extension selections of one capability's current mode: the fixed model or the saved set.
+/// 某能力当前模式下的扩展选择：固定模型或已保存集合。
+fn extension_set(ai: &Value, capability: &str) -> Vec<Value> {
+    if extension_single(ai, capability) {
+        return v(ai, "/providerExtensionModes")
+            .get(capability)
+            .and_then(|mode| mode.get("single_target"))
+            .cloned()
+            .into_iter()
+            .collect();
+    }
     v(ai, "/providerExtensionTargetSets")
         .get(capability)
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
+        .cloned()
         .unwrap_or_default()
 }
 
@@ -664,8 +681,8 @@ fn cells(ai: &Value, provider: &Value, entry: &Entry<'_>) -> Vec<RowAction> {
             .iter()
             .find(|target| !v(target, "/target/contract/extension_profile").is_null());
         let action = (available.is_some() || selected).then(|| {
-            // The rest of the capability's complete target set is kept as is.
-            // 该能力完整目标集合中的其余选择保持不变。
+            // The rest of the current mode's selections is kept as is.
+            // 当前模式下的其余选择保持不变。
             let mut retained: Vec<Value> = selections
                 .iter()
                 .filter(|selection| !selects(selection, &targets))
@@ -675,7 +692,17 @@ fn cells(ai: &Value, provider: &Value, entry: &Entry<'_>) -> Vec<RowAction> {
                 retained.push(json!({"connection_id":v(target,"/connectionId"),
                     "target_id":v(target,"/target/target_id")}));
             }
-            let save = settings::save_public_ai_provider_extension_target_set(capability, retained);
+            // Single mode keeps the latest choice as its one fixed model, like the WebUI.
+            // 单模型模式与 WebUI 一致，只把最近一次选择保留为唯一固定模型。
+            let save = if extension_single(ai, capability) {
+                let mut selection = json!({ "mode": "single" });
+                if let Some(latest) = retained.pop() {
+                    selection["single_target"] = latest;
+                }
+                settings::save_public_ai_provider_extension_mode(capability, selection)
+            } else {
+                settings::save_public_ai_provider_extension_target_set(capability, retained)
+            };
             // Checking a model also admits its capability when that is still off.
             // 勾选模型时，若其能力仍关闭，则一并启用该能力。
             if !selected && !has(a(ai, "/providerToolEnabledCapabilities"), capability) {

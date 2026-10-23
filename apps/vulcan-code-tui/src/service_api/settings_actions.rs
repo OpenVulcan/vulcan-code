@@ -342,6 +342,23 @@ pub fn save_public_ai_provider_extension_target_set(
     )
 }
 
+/// Builds the request for `service_save_public_ai_provider_extension_mode`, which sets one
+/// capability's system default mode and the fixed model of single mode.
+/// 构建 `service_save_public_ai_provider_extension_mode` 的请求，设置一项能力的系统默认模式及
+/// 单模型模式下的固定模型。
+/// `selection` is `{mode, single_target?}`; single mode without a model is the default.
+/// `selection` 为 `{mode, single_target?}`；未选模型的单模型模式即默认值。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_public_ai_provider_extension_mode(capability: &str, selection: Value) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_public_ai_provider_extension_mode",
+        "service_save_public_ai_provider_extension_mode",
+        json!({ "request": { "capability": capability, "selection": selection } }),
+        PUBLIC_AI,
+    )
+}
+
 /// `route` is a `PublicAiInferenceRoute` (`null` clears the route).
 /// `route` 为 `PublicAiInferenceRoute`（`null` 表示清除路由）。
 /// Builds the request for `service_save_public_ai_inference_route`.

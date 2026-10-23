@@ -148,6 +148,7 @@ fn model_filters_follow_usage_output_and_search() {
     app.model_usage = "internal".into();
     assert!(ids(&app).is_empty());
     let (mut app, _) = fixture_app(|snapshot| {
+        snapshot["providerExtensionModes"]["image_generate"] = json!({"mode":"multi"});
         snapshot["providerExtensionTargetSets"]["image_generate"] =
             json!([{"connection_id":"demo-media-connection","target_id":"demo-image-generate"}]);
         snapshot["providerToolEnabledCapabilities"] = json!(["image_generate"]);
@@ -234,12 +235,43 @@ fn model_switches_send_the_webui_writes() {
     assert_eq!(call.param("/request/enabled"), false);
 }
 
+/// In the default single mode, selecting a model replaces the one fixed model and leaves the
+/// multi-model set untouched.
+/// 默认单模型模式下，选中模型会替换唯一固定模型，且不改动多模型集合。
+#[test]
+fn single_mode_extension_switch_saves_the_fixed_model() {
+    let (mut app, commands) = fixture_app(|snapshot| {
+        snapshot["providerExtensionModes"]["image_generate"] = json!({"mode":"single",
+            "single_target":{"connection_id":"other-connection","target_id":"other-target"}});
+        snapshot["providerExtensionTargetSets"]["image_generate"] =
+            json!([{"connection_id":"kept-connection","target_id":"kept-target"}]);
+    });
+    app.model_provider = "demo-media".into();
+    let enabled = chips(&app, "model:demo-media/demo-image-1")
+        .into_iter()
+        .filter(|chip| chip.switch.is_some())
+        .find_map(|chip| chip.action)
+        .expect("image generation switch");
+    let call = sent(&mut app, &commands, enabled);
+    assert_eq!(
+        call.method,
+        "service_save_public_ai_provider_extension_mode"
+    );
+    assert_eq!(call.param("/request/capability"), "image_generate");
+    assert_eq!(
+        call.param("/request/selection"),
+        &json!({"mode":"single",
+            "single_target":{"connection_id":"demo-media-connection","target_id":"demo-image-generate"}})
+    );
+}
+
 /// Selecting an extension saves the capability's full target set, then admits the capability;
 /// a target without a reviewed extension profile cannot be selected.
 /// 选中扩展会保存该能力的完整目标集合，随后准入该能力；没有已审核扩展资料的目标不可选中。
 #[test]
 fn extension_switch_saves_the_target_set_then_admits_the_capability() {
     let (mut app, commands) = fixture_app(|snapshot| {
+        snapshot["providerExtensionModes"]["image_generate"] = json!({"mode":"multi"});
         snapshot["providerExtensionTargetSets"]["image_generate"] =
             json!([{"connection_id":"other-connection","target_id":"other-target"}]);
     });
