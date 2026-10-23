@@ -72,3 +72,42 @@ it("sorts with the handle while expansion and new conversation remain independen
     expect(select).toHaveBeenCalledOnce();
   } finally { await act(async () => root.unmount()); container.remove(); geometry.mockRestore(); }
 });
+
+// A quick press that crosses the activation distance and releases before React renders must not leave
+// the tree in sorting mode, which hides every row's hover actions.
+// 越过激活距离并在 React 渲染前松开的快速按压，不得让树停留在排序状态并隐藏所有行的悬停操作。
+it("leaves sorting mode after a drag that ends before its first render", async () => {
+  setSidebarFlow("code");
+  const geometry = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => (
+    { x: 0, y: 0, top: 0, left: 0, bottom: 40, right: 240, width: 240, height: 40, toJSON: () => ({}) }
+  ));
+  const noop = () => undefined;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><SidebarProvider defaultOpen><ProjectSidebar
+      projects={[{ id: "a", name: "Project A", path: "D:/a" }]}
+      conversations={[]} expandedProjectIds={[]} pinnedConversationIds={new Set()} selectedConversationId={null} activeProjectId={null} rail={null}
+      onConversationMenuAction={noop} onCreateConversation={noop} onCreateProject={noop} onExpandedProjectIdsChange={noop}
+      onProjectMenuAction={noop} onProjectGroupAction={async () => undefined} onSelectConversation={noop} onSelectProject={noop}
+    /></SidebarProvider></I18nProvider>));
+    const handle = container.querySelector<HTMLButtonElement>(".vk-tree-grip")!;
+    // pointer sends one bubbling primary pointer-typed event; jsdom lacks PointerEvent.
+    // pointer 发送一条冒泡的主指针类型事件；jsdom 没有 PointerEvent。
+    const pointer = (target: EventTarget, type: string, clientY: number) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: 10, clientY });
+      Object.defineProperty(event, "isPrimary", { value: true });
+      target.dispatchEvent(event);
+    };
+    // Press, move past the activation distance and release inside one batch, before any render commits.
+    // 在同一批次内按下、越过激活距离并松开，任何渲染都尚未提交。
+    await act(async () => {
+      pointer(handle, "pointerdown", 10);
+      pointer(document, "pointermove", 30);
+      pointer(document, "pointerup", 30);
+    });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
+    expect(container.querySelector(".vk-project-tree")!.hasAttribute("data-sorting")).toBe(false);
+  } finally { await act(async () => root.unmount()); container.remove(); geometry.mockRestore(); }
+});

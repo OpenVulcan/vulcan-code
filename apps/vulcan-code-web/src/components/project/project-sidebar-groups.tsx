@@ -5,6 +5,7 @@ import {
   KeyboardSensor,
   PointerSensor,
   pointerWithin,
+  useDndContext,
   useSensor,
   useSensors,
   type CollisionDetection,
@@ -355,7 +356,6 @@ export function ProjectTreeSection(props: {
   }, [collapsed, layout, regularIds]);
 
   const handleDragEnd = (event: DragEndEvent) => {
-    props.onSortingChange(false);
     if (!event.over || props.filtering) return;
     const activeId = String(event.active.id);
     const overId = String(event.over.id);
@@ -439,11 +439,10 @@ export function ProjectTreeSection(props: {
   return (
     <DndContext
       collisionDetection={collisionDetection}
-      onDragCancel={() => props.onSortingChange(false)}
       onDragEnd={handleDragEnd}
-      onDragStart={() => props.onSortingChange(true)}
       sensors={sensors}
     >
+      <DragActivityReporter onSortingChange={props.onSortingChange} />
       {shownPinned.length > 0 ? (
         <section className="vk-tree-pins">
           <div className="vk-tree-head">
@@ -719,4 +718,21 @@ function ProjectGroupNameDialog(props: {
       </DialogContent>
     </Dialog>
   );
+}
+
+// DragActivityReporter mirrors whether dnd-kit holds an active drag to the tree's hover-pause flag.
+// DragActivityReporter 将 dnd-kit 是否持有进行中的拖动同步到树的悬停暂停标记。
+// It reads the context state instead of onDragStart/onDragEnd: dnd-kit skips both end callbacks when a
+// drag ends before its first render commits (a quick press that moves past the activation distance),
+// which left the flag set and hid every row's hover actions until reload.
+// 它读取上下文状态而非 onDragStart/onDragEnd：拖动在首次渲染提交前结束时（越过激活距离的快速按压），
+// dnd-kit 不调用任何结束回调，曾使标记保持开启并隐藏所有行的悬停操作直到重新加载。
+function DragActivityReporter(props: { onSortingChange: (sorting: boolean) => void }) {
+  const dragging = useDndContext().active !== null;
+  const { onSortingChange } = props;
+  React.useEffect(() => {
+    onSortingChange(dragging);
+  }, [dragging, onSortingChange]);
+  React.useEffect(() => () => onSortingChange(false), [onSortingChange]);
+  return null;
 }
