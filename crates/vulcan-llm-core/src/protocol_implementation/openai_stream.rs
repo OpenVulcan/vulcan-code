@@ -39,6 +39,9 @@ struct OpenAiToolState {
     /// Accumulated exact custom-tool text.
     /// 累积的精确自定义工具正文。
     custom_text: String,
+    /// Whether the output item opened with a non-empty input snapshot, which deltas cannot extend.
+    /// 输出项是否以非空输入快照开启；增量不能在其后续接。
+    custom_snapshot_opened: bool,
     /// Whether the public start event was emitted.
     /// 是否已经发送公共开始事件。
     started: bool,
@@ -819,6 +822,11 @@ impl OpenAiResponsesStreamDecoder {
         let item_id = provider_item_id
             .clone()
             .unwrap_or_else(|| format!("responses:{}:tool:{index}", self.execution_id));
+        let custom_text = item
+            .get("input")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         self.tools.insert(
             index,
             OpenAiToolState {
@@ -835,11 +843,8 @@ impl OpenAiResponsesStreamDecoder {
                         .to_string()
                 },
                 input_format,
-                custom_text: item
-                    .get("input")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
+                custom_snapshot_opened: !custom_text.is_empty(),
+                custom_text,
                 started: true,
                 terminal: false,
                 arguments_done_seen: false,
@@ -962,7 +967,9 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI Responses custom-tool index `{index}` emitted input after completion."
             )));
         }
-        if !state.custom_text.is_empty() {
+        // Only an opening snapshot excludes deltas; text accumulated from earlier deltas does not.
+        // 只有开启时的快照排斥增量；由先前增量累积的正文不受影响。
+        if state.custom_snapshot_opened {
             return Err(ProtocolConversionError::new(
                 "OpenAI Responses custom-tool input delta followed a non-empty initial input snapshot.",
             ));
@@ -3217,6 +3224,58 @@ mod tests {
             AiStreamEvent::ToolCallCompleted { call, .. }
                 if call.name == "apply_patch" && call.arguments == json!({"patch": complete_patch})
         )));
+    }
+
+    /// Verifies custom input may span many deltas while an opening snapshot still excludes them.
+    /// 验证自定义输入可跨越多个增量，而开启快照仍排斥增量。
+    #[test]
+    fn responses_custom_tool_input_accepts_many_deltas_but_not_after_opening_snapshot() {
+        let exec_tool = freeform_tool("exec", FreeformToolArgumentEncoding::CodeModeSourceObject);
+        let delta = |text: &str| {
+            json!({
+                "type": "response.custom_tool_call_input.delta",
+                "output_index": 0,
+                "item_id": "item",
+                "call_id": "call",
+                "delta": text,
+            })
+            .to_string()
+        };
+        let mut decoder = OpenAiResponsesStreamDecoder::with_registered_tools(
+            String::from("execution"),
+            std::slice::from_ref(&exec_tool),
+        );
+        decoder
+            .push_sse(
+                Some("response.output_item.added"),
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","id":"item","call_id":"call","name":"exec","input":""}}"#,
+            )
+            .expect("custom tool should start");
+        for fragment in ["const a = 1;\n", "const b = 2;\n", "text(a + b);"] {
+            decoder
+                .push_sse(
+                    Some("response.custom_tool_call_input.delta"),
+                    delta(fragment).as_str(),
+                )
+                .expect("every streamed custom input delta should decode");
+        }
+
+        let mut decoder = OpenAiResponsesStreamDecoder::with_registered_tools(
+            String::from("execution"),
+            &[exec_tool],
+        );
+        decoder
+            .push_sse(
+                Some("response.output_item.added"),
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","id":"item","call_id":"call","name":"exec","input":"text(1);"}}"#,
+            )
+            .expect("custom tool with an opening snapshot should start");
+        decoder
+            .push_sse(
+                Some("response.custom_tool_call_input.delta"),
+                delta("text(2);").as_str(),
+            )
+            .expect_err("a delta must not extend an opening input snapshot");
     }
 
     /// Verifies standard function deltas produce the exact Apply Patch JSON object without custom wrapping.
