@@ -869,6 +869,36 @@
                                              ]
                    },
                    {
+                       "key":  "gpt-6-sol",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  272000,
+                       "input_modalities":  [
+                                                "file",
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "gpt-6.1-sol",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  272000,
+                       "input_modalities":  [
+                                                "file",
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "gpt-image-2",
                        "aliases":  [
                                        "openai: gpt image 2"
