@@ -64,6 +64,10 @@ type ApiStatsBody = Extract<ConversationEventBody, { kind: "api_stats" }>;
 // ToolCallBody 收窄一条规范 V1 工具事件。
 type ToolCallBody = Extract<ConversationEventBody, { kind: "tool_call" }>;
 
+// SystemContextBody narrows one canonical V1 system prompt injection event.
+// SystemContextBody 收窄一条规范 V1 系统提示词注入事件。
+type SystemContextBody = Extract<ConversationEventBody, { kind: "system_context" }>;
+
 // UserInputBody narrows one canonical V1 user input event.
 // UserInputBody 收窄一条规范 V1 用户输入事件。
 type UserInputBody = Extract<ConversationEventBody, { kind: "user_input" }>;
@@ -189,7 +193,11 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     // Results whose disclosure to the requester was revoked stay visible on the executing side.
     // 向请求方披露已被撤销的结果在执行侧保持可见。
     const revokedResultIds = new Set<string>();
+    // Turns whose memory recall already has its own card do not repeat the injected memory text.
+    // 已有记忆召回卡的回合不再重复显示注入的记忆正文。
+    const memoryRecallTurns = new Set<number>();
     for (const summary of events) {
+      if (summary.event.kind === "memory_recall" && summary.turn_id !== null) memoryRecallTurns.add(summary.turn_id);
       if (summary.event.kind === "tool_call") claimCollaborationReceipt(summary.event, claimed);
       if (summary.event.kind === "collaboration" && summary.event.after_state.kind === "task_result_projection"
         && summary.event.after_state.projection.disclosure === "authorization_revoked") {
@@ -229,6 +237,7 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
       // Filter before consulting the event cache so pagination and live question arrival remain reversible.
       // 读取事件缓存前过滤，使分页及实时问题到达后的显示切换保持可逆。
       if (summary.event.kind === "tool_call" && questionCardReplacesToolReceipt(summary.event, visibleQuestionIds)) continue;
+      if (summary.event.kind === "system_context" && contextInjectionIsHidden(summary, summary.event, memoryRecallTurns)) continue;
       if (summary.event.kind === "collaboration") {
         const state = summary.event.after_state;
         if (sendingCardShowsCollaboration(state, claimed)) continue;
@@ -489,6 +498,8 @@ function conversationMessagesForV1Event(
       return [displayNoteMessage(base, summary, summary.event, rootInput, apiStatsByCall, t)];
     case "memory_recall":
       return [memoryRecallMessage(base, summary, summary.event, rootInput, t)];
+    case "system_context":
+      return [contextInjectionMessage(base, summary, summary.event, rootInput, t)];
     case "request_config_changed": {
       // changeKind is derived from exact persisted fields, never from a display label.
       // changeKind 从精确持久化字段派生，绝不依赖展示文案。
@@ -541,7 +552,6 @@ function conversationMessagesForV1Event(
         agentInteraction: { ...summary, event: summary.event },
       }];
     case "queued_input_resolution":
-    case "system_context":
     case "api_started":
     case "turn_boundary":
     case "execution_control":
@@ -931,6 +941,91 @@ function memoryRecallMessage(
       notice_kind: "memory_recall",
       summary: headline,
       status: event.outcome === "failed" ? "failed" : "completed",
+    },
+  };
+}
+
+// ContextInjectionCategory names the user-facing family of one injected prompt.
+// ContextInjectionCategory 表示一条注入提示词面向用户的类别。
+type ContextInjectionCategory =
+  | "goal" | "plan" | "tools" | "permission" | "model" | "answer" | "guidance" | "base" | "injection" | "other";
+
+// contextInjectionCategory maps a backend context key to its card category; unknown keys stay visible as other.
+// contextInjectionCategory 将后端上下文键映射为卡片类别；未知键仍以“其他”显示。
+function contextInjectionCategory(contextKey: string): ContextInjectionCategory {
+  switch (contextKey) {
+    case "goal_state":
+    case "goal_continuation":
+      return "goal";
+    case "plan_mode":
+      return "plan";
+    case "dynamic.provider_tools":
+    case "dynamic.tool_guidance":
+      return "tools";
+    case "dynamic.permission_mode":
+      return "permission";
+    case "dynamic.model_selection":
+      return "model";
+    case "dynamic.html_answers":
+      return "answer";
+    case "dynamic.host_message_guidance":
+      return "guidance";
+    case "dynamic.system":
+    case "dynamic.developer":
+    case "dynamic.runtime_context":
+      return "base";
+    case "injection.persistent":
+    case "injection.transient":
+      return "injection";
+  }
+  if (contextKey.startsWith("continuation_guidance/")) return "guidance";
+  return "other";
+}
+
+// contextInjectionIsHidden drops only automatic turn-end expirations and memory text already shown by the
+// memory recall card; every other upsert or removal stays visible.
+// contextInjectionIsHidden 只隐藏回合结束时的自动失效，以及记忆召回卡已经显示的记忆正文；其余写入或移除都保持可见。
+function contextInjectionIsHidden(
+  summary: ConversationEventSummary,
+  event: SystemContextBody,
+  memoryRecallTurns: ReadonlySet<number>,
+): boolean {
+  if (event.operation === "remove" && event.scope === "turn") return true;
+  return event.context_key === "injection.transient"
+    && summary.turn_id !== null
+    && memoryRecallTurns.has(summary.turn_id);
+}
+
+// contextInjectionMessage shows one prompt injection as a categorized notice whose detail is the exact
+// English text the model received, so no instruction reaches the model without the user seeing it.
+// contextInjectionMessage 把一条提示词注入显示为分类提示，详情是模型收到的英文原文，
+// 使任何指令都不会在用户不知情时到达模型。
+function contextInjectionMessage(
+  base: Pick<ConversationMessage, "id" | "conversationId" | "createdAt" | "metadata">,
+  summary: ConversationEventSummary,
+  event: SystemContextBody,
+  rootInput: V1RootInputPresentationMetadata | undefined,
+  t: Translation,
+): ConversationMessage {
+  const category = contextInjectionCategory(event.context_key);
+  const longestRun = Math.max(0, ...(event.content.match(/`{3,}/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return {
+    ...base,
+    role: "assistant",
+    recordKind: "display-note",
+    title: t("conversation.contextInjection.title")
+      .replace("{category}", t(`conversation.contextInjection.category.${category}`)),
+    body: `**${t("conversation.contextInjection.content")}**\n\n${fence}text\n${event.content}\n${fence}`,
+    metadata: {
+      ...presentationMetadata(summary, rootInput),
+      notice_kind: "context_injection",
+      context_key: event.context_key,
+      context_category: category,
+      summary: t(event.operation === "remove"
+        ? "conversation.contextInjection.remove"
+        : "conversation.contextInjection.upsert"),
+      status: "completed",
     },
   };
 }

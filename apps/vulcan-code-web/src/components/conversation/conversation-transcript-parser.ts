@@ -164,6 +164,7 @@ function structuredMessageBlockKind(message: ConversationMessage): ConversationB
       || noticeKind === "model_switch"
       || noticeKind === "reasoning_effort_switch"
       || noticeKind === "memory_recall"
+      || noticeKind === "context_injection"
       || isDedicatedMemoryNoticeKind(noticeKind)
     ) return "notice";
     if (isSubagentFeedbackMetadata(message.metadata)) return "tool-result";

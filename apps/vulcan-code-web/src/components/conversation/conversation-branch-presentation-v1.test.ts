@@ -115,6 +115,37 @@ describe("V1 branch request configuration presentation", () => {
     expect(parseConversationBlocks(failed)[0]?.status).toBe("failed");
     expect(failed.body).toBe(t("conversation.memoryRecall.failedDetail"));
   });
+  // Prompt injections become categorized notices carrying the exact model text; automatic turn-end
+  // expiry and memory text already shown by the recall card stay hidden.
+  // 提示词注入成为带模型原文的分类提示；回合结束的自动失效与召回卡已显示的记忆正文保持隐藏。
+  it("routes prompt injections into categorized notice blocks", () => {
+    type SystemContext = Extract<ConversationEventSummary["event"], { kind: "system_context" }>;
+    const context = (seq: number, turn: number, event: Partial<SystemContext>): ConversationEventSummary => ({
+      seq, turn_id: turn, created_at_ms: seq, updated_at_ms: seq, event_revision: 1, visibility: "provider",
+      event: { kind: "system_context", context_key: "plan_mode", operation: "upsert", scope: "session",
+        content: "Plan mode is active. Do not edit files.", ...event },
+    });
+    const presentation = projectConversationBranchPresentationV1("session-context", [
+      context(1, 1, {}),
+      context(2, 1, { context_key: "dynamic.provider_tools", content: "Model extensions changed: image_generate uses ```fixed```." }),
+      context(3, 1, { context_key: "continuation_guidance/a", operation: "remove", scope: "turn", content: "expired" }),
+      { seq: 4, turn_id: 2, created_at_ms: 4, updated_at_ms: 4, event_revision: 1, visibility: "ui_only",
+        event: { kind: "memory_recall", outcome: "matched", memories: [{ memory_id: 1, text: "Remembered." }] } },
+      context(5, 2, { context_key: "injection.transient", scope: "turn", content: "Remembered." }),
+      context(6, 2, { operation: "remove", content: "Plan mode ended." }),
+    ], EMPTY_RESOURCES, (key) => key);
+    const meta = (message: (typeof presentation.messages)[number]) => message.metadata as Record<string, unknown> | undefined;
+    const notices = presentation.messages.filter((message) => meta(message)?.notice_kind === "context_injection");
+    expect(notices.map((message) => meta(message)?.context_category)).toEqual(["plan", "tools", "plan"]);
+    expect(notices.map((message) => meta(message)?.summary)).toEqual([
+      "conversation.contextInjection.upsert", "conversation.contextInjection.upsert", "conversation.contextInjection.remove",
+    ]);
+    const [block] = parseConversationBlocks(notices[1]!);
+    expect(block?.kind).toBe("notice");
+    // The fence outlasts backtick runs inside the content, so the exact text stays one code block.
+    // 围栏长于正文中的反引号串，使原文保持为一个代码块。
+    expect(notices[1]!.body).toContain("````text\nModel extensions changed: image_generate uses ```fixed```.\n````");
+  });
   // Parameters: none. Returns: none; tests the actual branch adapter's initial suppression and display-name fields.
   // 参数：无。返回值：无；测试真实分支适配器对首次提示的抑制以及展示名称字段。
   it("projects configured names and omits initial route notices in the branch UI", () => {
