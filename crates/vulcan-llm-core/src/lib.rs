@@ -35,9 +35,9 @@ pub use responses_to_gemini::{
     responses_to_gemini_generate_content, responses_to_gemini_interactions,
 };
 pub use responses_websocket::{
-    DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE, RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE,
-    ResponsesWebsocketConfig, ResponsesWebsocketFrame, ResponsesWebsocketRawFrame,
-    ResponsesWebsocketSession,
+    DEFAULT_RESPONSES_WEBSOCKET_HEARTBEAT_INTERVAL, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE,
+    RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE, ResponsesWebsocketConfig, ResponsesWebsocketFrame,
+    ResponsesWebsocketRawFrame, ResponsesWebsocketSession,
 };
 pub use usage::{
     UsageAccumulator, UsageDerivation, UsageExtractionProfile, UsageField, UsageFieldBinding,
@@ -262,6 +262,9 @@ pub struct LlmCoreError {
     /// WebSocket close code when the peer supplied a close frame.
     /// 对端提供关闭帧时的 WebSocket 关闭码。
     pub websocket_close_code: Option<u16>,
+    /// HTTP status of a WebSocket handshake the peer answered without upgrading.
+    /// 对端未升级而直接应答 WebSocket 握手时的 HTTP 状态码。
+    pub websocket_handshake_status: Option<u16>,
 }
 
 impl LlmCoreError {
@@ -271,6 +274,7 @@ impl LlmCoreError {
         Self {
             message: message.into(),
             websocket_close_code: None,
+            websocket_handshake_status: None,
         }
     }
 
@@ -278,6 +282,13 @@ impl LlmCoreError {
     /// 附加一个对端提供的精确 WebSocket 关闭码。
     pub fn with_websocket_close_code(mut self, close_code: u16) -> Self {
         self.websocket_close_code = Some(close_code);
+        self
+    }
+
+    /// Attaches the HTTP status of a WebSocket handshake the peer refused to upgrade.
+    /// 附加对端拒绝升级的 WebSocket 握手的 HTTP 状态码。
+    pub fn with_websocket_handshake_status(mut self, status: u16) -> Self {
+        self.websocket_handshake_status = Some(status);
         self
     }
 }

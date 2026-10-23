@@ -1,7 +1,6 @@
 //! OpenAI Responses WebSocket session transport adapted from the Codex connection model.
 //! 基于 Codex 连接模型适配的 OpenAI Responses WebSocket 会话传输。
 
-use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -9,8 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
     tungstenite::{
@@ -26,16 +26,45 @@ use crate::LlmCoreError;
 /// 默认最大生命周期，在供应商六十分钟限制前为长响应留出余量。
 pub const DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE: Duration = Duration::from_secs(55 * 60);
 
-/// Concrete provider socket split between the session writer and its background reader.
-/// 在会话写入端与后台读取器之间拆分的具体供应商 Socket。
+/// Default client heartbeat period; a ping still unanswered one period later retires the socket.
+/// 默认客户端心跳周期；一个周期后仍未应答的 Ping 会让 Socket 退役。
+///
+/// Proxies and NAT devices drop silent connections (a cached socket died after 83 seconds
+/// idle), so pinging well inside that window keeps the path alive and exposes dead sockets.
+/// 代理与 NAT 设备会丢弃静默连接（曾观察到缓存 Socket 空闲 83 秒后失效），因此在该窗口内
+/// 定期 Ping 既能保活路径，也能暴露已失效的 Socket。
+pub const DEFAULT_RESPONSES_WEBSOCKET_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+
+/// Pending writes the session may queue for its socket pump.
+/// 会话可为其 Socket 泵排队的待写入数量。
+const SOCKET_COMMAND_CAPACITY: usize = 8;
+
+/// Concrete provider socket owned by the background pump.
+/// 由后台泵持有的具体供应商 Socket。
 type ProviderSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-/// One application frame or the terminal read failure forwarded by the background reader.
-/// 后台读取器转发的一条应用帧或终止性读取失败。
+/// One application frame or the terminal socket failure forwarded by the background pump.
+/// 后台泵转发的一条应用帧或终止性 Socket 失败。
 type ReaderItem = Result<Message, String>;
 
-/// Connection health shared between the session and its background reader.
-/// 会话与其后台读取器共享的连接健康状态。
+/// One write the session asks the background pump to perform.
+/// 会话请求后台泵执行的一次写入。
+enum SocketCommand {
+    /// Sends one application message and reports the outcome.
+    /// 发送一条应用消息并报告结果。
+    Send {
+        message: Message,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Starts the close handshake and stops the pump.
+    /// 发起关闭握手并停止泵。
+    Close {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+}
+
+/// Connection health shared between the session and its background pump.
+/// 会话与其后台泵共享的连接健康状态。
 #[derive(Default)]
 struct ReaderState {
     /// Whether one response currently owns the connection.
@@ -69,6 +98,9 @@ pub struct ResponsesWebsocketConfig {
     /// Maximum connection lifetime before proactive replacement.
     /// 主动换代前的最大连接生命周期。
     pub max_connection_age: Duration,
+    /// Client ping period; a ping still unanswered one period later retires the socket.
+    /// 客户端 Ping 周期；一个周期后仍未应答的 Ping 会让 Socket 退役。
+    pub heartbeat_interval: Duration,
     /// Maximum accepted UTF-8 JSON frame size.
     /// 可接受的 UTF-8 JSON 帧最大尺寸。
     pub max_frame_bytes: usize,
@@ -110,17 +142,17 @@ pub struct ResponsesWebsocketSession {
     /// Immutable handshake and transport limits.
     /// 不可变握手与传输限制。
     config: ResponsesWebsocketConfig,
-    /// Write half of the provider connection.
-    /// 供应商连接的写入端。
-    sink: SplitSink<ProviderSocket, Message>,
-    /// Frames forwarded by the background reader, which keeps reading while the socket is idle.
-    /// 后台读取器转发的帧；Socket 空闲时读取器仍持续读取。
+    /// Writes queued for the background pump, which alone owns the provider socket.
+    /// 为后台泵排队的写入；只有该泵持有供应商 Socket。
+    commands: mpsc::Sender<SocketCommand>,
+    /// Frames forwarded by the background pump, which keeps reading while the socket is idle.
+    /// 后台泵转发的帧；Socket 空闲时泵仍持续读取。
     frames: mpsc::UnboundedReceiver<ReaderItem>,
-    /// Background reader task, aborted when the session is dropped.
-    /// 后台读取任务，会话丢弃时中止。
-    reader: JoinHandle<()>,
-    /// Health shared with the background reader.
-    /// 与后台读取器共享的健康状态。
+    /// Background pump task, aborted when the session is dropped.
+    /// 后台泵任务，会话丢弃时中止。
+    pump: JoinHandle<()>,
+    /// Health shared with the background pump.
+    /// 与后台泵共享的健康状态。
     state: Arc<ReaderState>,
     /// Connection establishment time used for proactive replacement.
     /// 用于主动换代的连接建立时间。
@@ -138,7 +170,7 @@ pub struct ResponsesWebsocketSession {
 
 impl Drop for ResponsesWebsocketSession {
     fn drop(&mut self) {
-        self.reader.abort();
+        self.pump.abort();
     }
 }
 
@@ -177,17 +209,34 @@ impl ResponsesWebsocketSession {
             .await
             .map_err(|_| LlmCoreError::new("Responses WebSocket handshake timed out."))?
             .map_err(|error| {
-                LlmCoreError::new(format!("Responses WebSocket handshake failed: {error}"))
+                let status = match &error {
+                    tokio_tungstenite::tungstenite::Error::Http(response) => {
+                        Some(response.status().as_u16())
+                    }
+                    _ => None,
+                };
+                let failure =
+                    LlmCoreError::new(format!("Responses WebSocket handshake failed: {error}"));
+                match status {
+                    Some(status) => failure.with_websocket_handshake_status(status),
+                    None => failure,
+                }
             })?;
-        let (sink, stream) = connection.split();
+        let (commands, command_receiver) = mpsc::channel(SOCKET_COMMAND_CAPACITY);
         let (sender, frames) = mpsc::unbounded_channel();
         let state = Arc::new(ReaderState::default());
-        let reader = tokio::spawn(read_provider_frames(stream, sender, Arc::clone(&state)));
+        let pump = tokio::spawn(pump_provider_socket(
+            connection,
+            command_receiver,
+            sender,
+            Arc::clone(&state),
+            config.heartbeat_interval,
+        ));
         Ok(Self {
             config,
-            sink,
+            commands,
             frames,
-            reader,
+            pump,
             state,
             connected_at: Instant::now(),
             previous_response_id: None,
@@ -199,9 +248,10 @@ impl ResponsesWebsocketSession {
     /// Reports whether this connection must be replaced before another request.
     /// 报告当前连接是否必须在下一次请求前换代。
     ///
-    /// The background reader marks a socket that closed, failed, or sent data while idle, and any
-    /// frame left over from an earlier response also disqualifies reuse.
-    /// 后台读取器会标记已关闭、失败或在空闲时发送数据的 Socket；更早响应遗留的帧同样禁止复用。
+    /// The background pump marks a socket that closed, failed, missed a heartbeat, or sent data
+    /// while idle, and any frame left over from an earlier response also disqualifies reuse.
+    /// 后台泵会标记已关闭、失败、心跳未应答或在空闲时发送数据的 Socket；更早响应遗留的帧
+    /// 同样禁止复用。
     pub fn replacement_required(&self) -> bool {
         self.replace_before_next_request
             || self.connected_at.elapsed() >= self.config.max_connection_age
@@ -288,7 +338,18 @@ impl ResponsesWebsocketSession {
         // Ownership is claimed before sending so the reader never treats the reply as idle data.
         // 在发送前声明占用，使读取器绝不会把回复视为空闲数据。
         self.set_in_flight(true);
-        if let Err(error) = self.sink.send(Message::Text(payload.into())).await {
+        let (reply, outcome) = oneshot::channel();
+        let command = SocketCommand::Send {
+            message: Message::Text(payload.into()),
+            reply,
+        };
+        let sent = match self.commands.send(command).await {
+            Ok(()) => outcome
+                .await
+                .unwrap_or_else(|_| Err(String::from("connection closed"))),
+            Err(_) => Err(String::from("connection closed")),
+        };
+        if let Err(error) = sent {
             self.set_in_flight(false);
             return Err(LlmCoreError::new(format!(
                 "Responses WebSocket send failed: {error}"
@@ -380,8 +441,8 @@ impl ResponsesWebsocketSession {
                         failed,
                     }));
                 }
-                // The reader consumes control frames; Tungstenite answers pings while reading.
-                // 读取器消费控制帧；Tungstenite 在读取时自动应答 Ping。
+                // The pump consumes control frames; Tungstenite answers pings while reading.
+                // 泵消费控制帧；Tungstenite 在读取时自动应答 Ping。
                 Message::Ping(_) | Message::Pong(_) => {}
                 Message::Close(frame) => {
                     self.last_raw_frame = Some(ResponsesWebsocketRawFrame {
@@ -438,50 +499,98 @@ impl ResponsesWebsocketSession {
     /// 关闭活动连接并清除全部延续状态。
     pub async fn close(&mut self) -> Result<(), LlmCoreError> {
         self.abandon_response();
-        self.reader.abort();
-        self.sink.close().await.map_err(|error| {
+        let (reply, outcome) = oneshot::channel();
+        let closed = match self.commands.send(SocketCommand::Close { reply }).await {
+            Ok(()) => outcome.await.unwrap_or(Ok(())),
+            Err(_) => Ok(()),
+        };
+        self.pump.abort();
+        closed.map_err(|error| {
             LlmCoreError::new(format!("Responses WebSocket close failed: {error}"))
         })
     }
 }
 
-/// Reads one provider socket for its whole lifetime, as the opencode session transport does.
-/// 在整个生命周期内持续读取一个供应商 Socket，与 opencode 会话传输一致。
+/// Owns one provider socket for its whole lifetime, as the Codex `WsStream` pump does.
+/// 在整个生命周期内持有一个供应商 Socket，与 Codex `WsStream` 泵一致。
 ///
-/// Reading continuously lets Tungstenite answer pings while the socket is idle and surfaces a
-/// close, reset, or unexpected idle frame immediately instead of on the next request.
-/// 持续读取使 Tungstenite 能在空闲时应答 Ping，并立即暴露关闭、重置或意外的空闲帧，
-/// 而不是等到下一次请求。
+/// Reading continuously lets Tungstenite answer server pings while the socket is idle and
+/// surfaces a close, reset, or unexpected idle frame immediately instead of on the next request.
+/// A client heartbeat keeps proxies from dropping the idle path; a ping still unanswered one
+/// period later is treated as a dead socket.
+/// 持续读取使 Tungstenite 能在空闲时应答服务端 Ping，并立即暴露关闭、重置或意外的空闲帧，
+/// 而不是等到下一次请求。客户端心跳防止代理丢弃空闲路径；一个周期后仍未应答的 Ping 视为
+/// Socket 已失效。
 ///
 /// # Parameters
 /// 参数
-/// `stream` is the socket's read half, `sender` forwards application frames, and `state` is the
-/// health shared with the owning session.
-/// `stream` 是 Socket 读取端，`sender` 转发应用帧，`state` 是与所属会话共享的健康状态。
-async fn read_provider_frames(
-    mut stream: SplitStream<ProviderSocket>,
-    sender: mpsc::UnboundedSender<ReaderItem>,
+/// `socket` is the connected provider socket, `commands` carries session writes, `frames`
+/// forwards application frames, `state` is the health shared with the owning session, and
+/// `heartbeat_interval` is the client ping period.
+/// `socket` 是已连接的供应商 Socket，`commands` 承载会话写入，`frames` 转发应用帧，
+/// `state` 是与所属会话共享的健康状态，`heartbeat_interval` 是客户端 Ping 周期。
+async fn pump_provider_socket(
+    mut socket: ProviderSocket,
+    mut commands: mpsc::Receiver<SocketCommand>,
+    frames: mpsc::UnboundedSender<ReaderItem>,
     state: Arc<ReaderState>,
+    heartbeat_interval: Duration,
 ) {
-    while let Some(message) = stream.next().await {
-        match message {
-            Ok(Message::Ping(_) | Message::Pong(_)) => {}
-            Ok(message) => {
-                if !state.in_flight.load(Ordering::Acquire) {
-                    break;
+    let mut heartbeat = tokio::time::interval_at(
+        tokio::time::Instant::now() + heartbeat_interval,
+        heartbeat_interval,
+    );
+    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut awaiting_pong = false;
+    let failure = loop {
+        tokio::select! {
+            command = commands.recv() => match command {
+                // The session was dropped; nothing remains to report to.
+                // 会话已丢弃，没有可报告的对象。
+                None => return,
+                Some(SocketCommand::Send { message, reply }) => {
+                    let result = socket.send(message).await.map_err(|error| error.to_string());
+                    let failed = result.is_err();
+                    let _ = reply.send(result);
+                    if failed {
+                        break None;
+                    }
                 }
-                if sender.send(Ok(message)).is_err() {
-                    break;
+                Some(SocketCommand::Close { reply }) => {
+                    let result = socket.close(None).await.map_err(|error| error.to_string());
+                    let _ = reply.send(result);
+                    break None;
                 }
-            }
-            Err(error) => {
-                state.poisoned.store(true, Ordering::Release);
-                let _ = sender.send(Err(error.to_string()));
-                return;
+            },
+            message = socket.next() => match message {
+                None => break None,
+                Some(Ok(Message::Ping(_))) => {}
+                Some(Ok(Message::Pong(_))) => awaiting_pong = false,
+                Some(Ok(message)) => {
+                    if !state.in_flight.load(Ordering::Acquire) {
+                        break None;
+                    }
+                    if frames.send(Ok(message)).is_err() {
+                        return;
+                    }
+                }
+                Some(Err(error)) => break Some(error.to_string()),
+            },
+            _ = heartbeat.tick() => {
+                if awaiting_pong {
+                    break Some(String::from("heartbeat ping was not answered"));
+                }
+                if let Err(error) = socket.send(Message::Ping(Vec::new().into())).await {
+                    break Some(error.to_string());
+                }
+                awaiting_pong = true;
             }
         }
-    }
+    };
     state.poisoned.store(true, Ordering::Release);
+    if let Some(error) = failure {
+        let _ = frames.send(Err(error));
+    }
 }
 
 /// Validates bounded transport configuration before any network access.
@@ -523,6 +632,7 @@ mod tests {
             connect_timeout: Duration::from_secs(2),
             idle_timeout: Duration::from_secs(2),
             max_connection_age: Duration::from_secs(60),
+            heartbeat_interval: Duration::from_secs(60),
             max_frame_bytes: 64 * 1024,
         }
     }
@@ -907,5 +1017,78 @@ mod tests {
         let _websocket = server.await.expect("server should finish");
         assert!(!session.replacement_required());
         assert_eq!(session.previous_response_id(), Some("response-1"));
+    }
+
+    /// Starts a server that completes one response and then either keeps reading or goes silent.
+    /// 启动一个完成一次响应后继续读取或保持静默的服务端。
+    async fn heartbeat_test_session(
+        server_keeps_reading: bool,
+    ) -> (ResponsesWebsocketSession, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("address should resolve");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("client should connect");
+            let mut websocket = accept_async(stream).await.expect("upgrade should succeed");
+            let _ = websocket.next().await;
+            websocket
+                .send(Message::Text(
+                    json!({"type":"response.completed","response":{"id":"response-1"}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .expect("completion should send");
+            if server_keeps_reading {
+                // Reading lets the server answer every client ping.
+                // 持续读取使服务端应答每一个客户端 Ping。
+                while websocket.next().await.is_some() {}
+            } else {
+                // A silent peer never reads, so client pings stay unanswered.
+                // 静默对端从不读取，因此客户端 Ping 始终得不到应答。
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                drop(websocket);
+            }
+        });
+        let mut config = test_config(format!("ws://{address}/v1/responses"));
+        config.heartbeat_interval = Duration::from_millis(100);
+        let mut session = ResponsesWebsocketSession::connect(config)
+            .await
+            .expect("session should connect");
+        session
+            .begin_response(json!({"model":"gpt-5","input":[]}), None)
+            .await
+            .expect("request should send");
+        session
+            .next_frame()
+            .await
+            .expect("frame should read")
+            .expect("completion should exist");
+        (session, server)
+    }
+
+    /// Verifies answered heartbeats keep an idle socket reusable.
+    /// 验证得到应答的心跳会让空闲 Socket 保持可复用。
+    #[tokio::test]
+    async fn answered_heartbeats_keep_idle_socket_reusable() {
+        let (session, server) = heartbeat_test_session(true).await;
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!session.replacement_required());
+        drop(session);
+        server.await.expect("server should finish");
+    }
+
+    /// Verifies an unanswered heartbeat retires a silently dead idle socket.
+    /// 验证未得到应答的心跳会让静默失效的空闲 Socket 退役。
+    #[tokio::test]
+    async fn unanswered_heartbeat_retires_silent_socket() {
+        let (session, server) = heartbeat_test_session(false).await;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !session.replacement_required() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(session.replacement_required());
+        server.abort();
     }
 }

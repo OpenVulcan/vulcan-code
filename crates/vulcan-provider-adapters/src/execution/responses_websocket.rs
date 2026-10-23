@@ -36,9 +36,10 @@ use vulcan_ai_contract::{
 };
 use vulcan_llm_core::ProtocolConversionError;
 use vulcan_llm_core::{
-    DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE, EncodedWireRequest, LlmCoreError,
-    RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE, ResponsesWebsocketConfig, ResponsesWebsocketSession,
-    UpstreamProtocol, UsageAccumulator, UsageRecordKind,
+    DEFAULT_RESPONSES_WEBSOCKET_HEARTBEAT_INTERVAL, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE,
+    EncodedWireRequest, LlmCoreError, RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE,
+    ResponsesWebsocketConfig, ResponsesWebsocketSession, UpstreamProtocol, UsageAccumulator,
+    UsageRecordKind,
 };
 
 /// Codex Responses WebSocket protocol revision frozen from the adopted source baseline.
@@ -57,21 +58,22 @@ const RESPONSES_WEBSOCKET_SESSION_MAX_ENTRIES: usize = 256;
 /// 全部根会话合计允许保留的最大 Responses WebSocket 健康记录数量。
 const RESPONSES_WEBSOCKET_HEALTH_MAX_ENTRIES: usize = 4_096;
 
-/// Consecutive mid-response socket losses after which a session stays on HTTP, as in opencode.
-/// 连续发生多少次响应中途 Socket 丢失后会话固定改走 HTTP，与 opencode 一致。
-const RESPONSES_WEBSOCKET_MAX_STREAM_FAILURES: u32 = 5;
+/// Consecutive WebSocket failures after which a session stays on HTTP, matching Codex's
+/// default `stream_max_retries`.
+/// 连续多少次 WebSocket 失败后会话固定改走 HTTP，与 Codex 默认 `stream_max_retries` 一致。
+const RESPONSES_WEBSOCKET_MAX_FAILURES: u32 = 5;
 
-/// WebSocket close code with which the provider asks the client to try again later.
-/// 供应商要求客户端稍后重试时使用的 WebSocket 关闭码。
-const WEBSOCKET_TRY_AGAIN_LATER_CLOSE_CODE: u16 = 1013;
+/// Handshake status with which a server states it does not accept WebSocket at all.
+/// 服务端声明完全不接受 WebSocket 时使用的握手状态码。
+const HTTP_UPGRADE_REQUIRED_STATUS: u16 = 426;
 
 /// Transport health of one session-scoped Responses WebSocket key.
 /// 一个会话作用域 Responses WebSocket 键的传输健康状态。
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ResponsesWebsocketHealth {
-    /// Socket losses since the last response that completed over WebSocket.
-    /// 自上一次经 WebSocket 完成的响应以来的 Socket 丢失次数。
-    consecutive_stream_failures: u32,
+    /// Connect or socket failures since the last response that completed over WebSocket.
+    /// 自上一次经 WebSocket 完成的响应以来的连接或 Socket 失败次数。
+    consecutive_failures: u32,
     /// Whether this key stays on HTTP for the rest of the process lifetime.
     /// 该键是否在进程剩余生命周期内固定使用 HTTP。
     http_fallback: bool,
@@ -85,7 +87,7 @@ impl ResponsesWebsocketHealth {
     /// 创建一条在某一时刻观察到的健康记录。
     fn new(observed_at: Instant) -> Self {
         Self {
-            consecutive_stream_failures: 0,
+            consecutive_failures: 0,
             http_fallback: false,
             last_used_at: observed_at,
         }
@@ -236,6 +238,7 @@ impl ProviderExecutionClient {
                 connect_timeout: Duration::from_millis(transport.response_headers_timeout_ms),
                 idle_timeout: Duration::from_millis(transport.stream_idle_timeout_ms),
                 max_connection_age: DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE,
+                heartbeat_interval: DEFAULT_RESPONSES_WEBSOCKET_HEARTBEAT_INTERVAL,
                 max_frame_bytes: transport.max_frame_bytes,
             };
             let session_handle = match client
@@ -244,7 +247,10 @@ impl ProviderExecutionClient {
             {
                 Ok(session) => session,
                 Err(error) => {
-                    client.disable_responses_websocket(websocket_key.as_str());
+                    client.record_responses_websocket_failure(
+                        websocket_key.as_str(),
+                        error.websocket_handshake_status,
+                    );
                     let failure = trace_provider_transport_failure(
                         execution_id.as_str(),
                         "responses_websocket",
@@ -265,7 +271,10 @@ impl ProviderExecutionClient {
                 *session = match ResponsesWebsocketSession::connect(config).await {
                     Ok(session) => session,
                     Err(error) => {
-                        client.disable_responses_websocket(websocket_key.as_str());
+                        client.record_responses_websocket_failure(
+                        websocket_key.as_str(),
+                        error.websocket_handshake_status,
+                    );
                         let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
                             "responses_websocket",
@@ -314,7 +323,6 @@ impl ProviderExecutionClient {
                     &client,
                     &mut session,
                     websocket_key.as_str(),
-                    error.websocket_close_code,
                 );
                 let failure = trace_provider_transport_failure(
                     execution_id.as_str(),
@@ -374,7 +382,6 @@ impl ProviderExecutionClient {
                             &client,
                             &mut session,
                             websocket_key.as_str(),
-                            None,
                         );
                         let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
@@ -397,7 +404,6 @@ impl ProviderExecutionClient {
                             &client,
                             &mut session,
                             websocket_key.as_str(),
-                            error.websocket_close_code,
                         );
                         let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
@@ -716,27 +722,29 @@ impl ProviderExecutionClient {
         true
     }
 
-    /// Pins one route and root session to HTTP after a connect failure, as in opencode.
-    /// 在建立连接失败后将一条路由与根会话固定为 HTTP，与 opencode 一致。
-    fn disable_responses_websocket(&self, key: &str) {
-        let mut health = self
-            .responses_websocket_health
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        bounded_responses_websocket_health(&mut health, key, Instant::now()).http_fallback = true;
-    }
-
-    /// Counts one socket lost during a response and pins HTTP after repeated consecutive losses.
-    /// 记录一次响应途中丢失的 Socket，连续多次丢失后固定改走 HTTP。
-    fn record_responses_websocket_stream_failure(&self, key: &str) {
+    /// Records one connect or socket failure using Codex's fallback rule.
+    /// 按 Codex 的回退规则记录一次连接或 Socket 失败。
+    ///
+    /// A handshake answered with `426 Upgrade Required` pins HTTP at once; every other failure
+    /// only counts, so the retry reconnects over WebSocket until consecutive failures reach the
+    /// limit.
+    /// 握手被 `426 Upgrade Required` 应答时立即固定为 HTTP；其他失败只计数，重试会重新建立
+    /// WebSocket 连接，直到连续失败达到上限。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `key` is the opaque session key and `handshake_status` is the HTTP status of a refused
+    /// handshake, when one was received.
+    /// `key` 是不透明会话键，`handshake_status` 是被拒绝握手的 HTTP 状态码（若收到）。
+    fn record_responses_websocket_failure(&self, key: &str, handshake_status: Option<u16>) {
         let mut health = self
             .responses_websocket_health
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let record = bounded_responses_websocket_health(&mut health, key, Instant::now());
-        record.consecutive_stream_failures = record.consecutive_stream_failures.saturating_add(1);
-        record.http_fallback |=
-            record.consecutive_stream_failures >= RESPONSES_WEBSOCKET_MAX_STREAM_FAILURES;
+        record.consecutive_failures = record.consecutive_failures.saturating_add(1);
+        record.http_fallback |= handshake_status == Some(HTTP_UPGRADE_REQUIRED_STATUS)
+            || record.consecutive_failures >= RESPONSES_WEBSOCKET_MAX_FAILURES;
     }
 
     /// Clears the consecutive-loss count after one response completes over WebSocket.
@@ -755,27 +763,15 @@ impl ProviderExecutionClient {
 /// Retires a socket after a transport failure and records the loss against its session.
 /// 在传输失败后让 Socket 退役，并为其会话记录这次丢失。
 ///
-/// A provider close asking to try again later pins HTTP at once; any other loss only counts
-/// toward the consecutive-failure limit, so the retry reconnects over WebSocket.
-/// 供应商以“稍后重试”关闭时立即固定为 HTTP；其他丢失只计入连续失败上限，
-/// 因此重试会重新建立 WebSocket 连接。
-///
-/// # Parameters
-/// 参数
-/// `close_code` is the provider close code that ended the response, when one was received.
-/// `close_code` 是结束本次响应的供应商关闭码（若收到）。
+/// Any close code, 1013 included, is an ordinary retryable loss as in Codex.
+/// 与 Codex 一致，任何关闭码（包括 1013）都是普通的可重试丢失。
 fn retire_failed_responses_websocket(
     client: &ProviderExecutionClient,
     session: &mut ResponsesWebsocketSession,
     websocket_key: &str,
-    close_code: Option<u16>,
 ) {
     session.abandon_response();
-    if close_code == Some(WEBSOCKET_TRY_AGAIN_LATER_CLOSE_CODE) {
-        client.disable_responses_websocket(websocket_key);
-    } else {
-        client.record_responses_websocket_stream_failure(websocket_key);
-    }
+    client.record_responses_websocket_failure(websocket_key, None);
 }
 
 /// Selects incremental WebSocket input only when the active socket proves cursor ownership.

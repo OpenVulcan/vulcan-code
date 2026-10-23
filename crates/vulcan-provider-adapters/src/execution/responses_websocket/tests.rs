@@ -7,7 +7,7 @@ use super::super::test_support::{
 use super::*;
 use crate::{ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures, ResponsesWebsocketPolicy};
 use futures_util::{SinkExt, StreamExt};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_tungstenite::{
     accept_async,
@@ -91,31 +91,38 @@ fn responses_websocket_pins_http_only_after_consecutive_stream_failures() {
         reqwest::Client::new(),
         Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
     );
-    for _ in 1..RESPONSES_WEBSOCKET_MAX_STREAM_FAILURES {
-        client.record_responses_websocket_stream_failure("key");
+    for _ in 1..RESPONSES_WEBSOCKET_MAX_FAILURES {
+        client.record_responses_websocket_failure("key", None);
     }
     assert!(!client.responses_websocket_disabled("key"));
     client.record_responses_websocket_success("key");
-    for _ in 1..RESPONSES_WEBSOCKET_MAX_STREAM_FAILURES {
-        client.record_responses_websocket_stream_failure("key");
+    for _ in 1..RESPONSES_WEBSOCKET_MAX_FAILURES {
+        client.record_responses_websocket_failure("key", None);
     }
     assert!(
         !client.responses_websocket_disabled("key"),
         "a completed response must reset the consecutive-loss count"
     );
-    client.record_responses_websocket_stream_failure("key");
+    client.record_responses_websocket_failure("key", None);
     assert!(client.responses_websocket_disabled("key"));
     client.record_responses_websocket_success("key");
     assert!(
         client.responses_websocket_disabled("key"),
         "a pinned HTTP fallback must stay in effect"
     );
+    client.record_responses_websocket_failure("upgrade-refused", Some(426));
+    assert!(
+        client.responses_websocket_disabled("upgrade-refused"),
+        "a 426 handshake must pin HTTP at once"
+    );
+    client.record_responses_websocket_failure("handshake-error", Some(503));
+    assert!(!client.responses_websocket_disabled("handshake-error"));
 }
 
-/// Verifies a socket lost mid-response keeps WebSocket and the retry reconnects.
-/// 验证响应途中丢失的 Socket 保留 WebSocket，重试会重新建立连接。
+/// Verifies a 1013 close mid-response keeps WebSocket and the retry reconnects, as in Codex.
+/// 验证响应途中的 1013 关闭保留 WebSocket，重试会重新建立连接，与 Codex 一致。
 #[tokio::test]
-async fn websocket_mid_response_loss_reconnects_instead_of_falling_back() {
+async fn websocket_1013_close_reconnects_instead_of_falling_back() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -126,6 +133,13 @@ async fn websocket_mid_response_loss_reconnects_instead_of_falling_back() {
             .await
             .expect("WS upgrade should succeed");
         let _ = websocket.next().await.expect("WS request should arrive");
+        websocket
+            .send(Message::Close(Some(CloseFrame {
+                code: CloseCode::Again,
+                reason: "try later".into(),
+            })))
+            .await
+            .expect("1013 close should send");
         drop(websocket);
 
         let (stream, _) = listener.accept().await.expect("WS client should reconnect");
@@ -176,6 +190,7 @@ async fn websocket_mid_response_loss_reconnects_instead_of_falling_back() {
             None => panic!("lost-socket attempt must fail"),
         }
     };
+    assert_eq!(failure.error.websocket_close_code, Some(1013));
     assert!(!failure.error.semantic_output_observed);
     drop(lost);
 
@@ -327,28 +342,31 @@ fn websocket_retry_controls_preserve_code_and_semantic_safety() {
     assert!(failure.error.semantic_output_observed);
 }
 
-/// Verifies a 1013 pre-semantic WS failure activates session-scoped HTTP fallback.
-/// 验证语义输出前的 1013 WS 失败会激活会话作用域 HTTP 回退。
+/// Verifies a handshake refused with 426 activates session-scoped full-history HTTP fallback.
+/// 验证握手被 426 拒绝时会激活会话作用域的完整历史 HTTP 回退。
 #[tokio::test]
-async fn websocket_1013_failure_falls_back_to_full_history_http_attempt() {
+async fn websocket_426_handshake_falls_back_to_full_history_http_attempt() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
     let address = listener.local_addr().expect("address should resolve");
     let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("WS client should connect");
-        let mut websocket = accept_async(stream)
+        let (mut stream, _) = listener.accept().await.expect("WS client should connect");
+        // The upgrade request carries no body, so only its header block is read.
+        let mut upgrade = Vec::new();
+        let mut chunk = [0_u8; 1_024];
+        while !upgrade.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = stream.read(&mut chunk).await.expect("upgrade should read");
+            assert!(read > 0, "upgrade headers must not end early");
+            upgrade.extend_from_slice(&chunk[..read]);
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 426 Upgrade Required\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
             .await
-            .expect("WS upgrade should succeed");
-        let _ = websocket.next().await.expect("WS request should arrive");
-        websocket
-            .send(Message::Close(Some(CloseFrame {
-                code: CloseCode::Again,
-                reason: "try HTTP".into(),
-            })))
-            .await
-            .expect("1013 close should send");
-        drop(websocket);
+            .expect("426 response should send");
+        drop(stream);
 
         let (mut stream, _) = listener.accept().await.expect("HTTP client should connect");
         let request = read_test_http_request(&mut stream).await;
@@ -398,19 +416,13 @@ async fn websocket_1013_failure_falls_back_to_full_history_http_attempt() {
         secret.clone(),
         String::from("execution-ws"),
     );
-    let mut websocket_observed = false;
     let failure = loop {
         match websocket_attempt.next().await {
-            Some(Ok(AiStreamEvent::TransportObserved { transport, .. })) => {
-                websocket_observed |= transport == AiTransportKind::ResponsesWebsocket;
-            }
             Some(Ok(_)) => {}
             Some(Err(failure)) => break failure,
             None => panic!("WS attempt must fail"),
         }
     };
-    assert!(websocket_observed);
-    assert_eq!(failure.error.websocket_close_code, Some(1013));
     assert!(!failure.error.semantic_output_observed);
     drop(websocket_attempt);
 
