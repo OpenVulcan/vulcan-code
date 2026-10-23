@@ -196,8 +196,6 @@ Vulcan Code は数多くの優れたオープンソースプロジェクトの�
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp)：AI ブラウザのドライバーとツール
 - [LuaSkills](https://github.com/LuaSkills/luaskills)：LuaSkills ランタイム
 - [ripgrep](https://github.com/BurntSushi/ripgrep) と [ast-grep](https://github.com/ast-grep/ast-grep)：同梱のテキスト検索・構文木検索ツール
-- [OpenAI Codex](https://github.com/openai/codex) Code Mode：コードモードの JavaScript サンドボックス（V8 ランタイム、ホストプロセス、gRPC プロトコルとクライアント）は Codex（Apache-2.0）から直接取り込み、ローカルの変更はソースに明記し、各 crate の `NOTICE.md`（`crates/vulcan-code-mode*/`、`native/code-mode-host/*/`）に記録しています
-- [rusty_v8](https://github.com/denoland/rusty_v8)：コードモードのサンドボックスが使う V8 エンジンの Rust バインディング
 
 **デスクトップと UI**
 

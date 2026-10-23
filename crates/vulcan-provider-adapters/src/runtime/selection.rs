@@ -655,12 +655,11 @@ impl PublicAiRuntime {
         // Codex behavior is copied from the exact frozen binding and never inferred from a model name.
         // Codex 行为从精确冻结绑定复制，绝不根据模型名称推断。
         route.codex_behavior = protocol_binding.codex_behavior.clone();
-        // toolSchemaProjection and toolMode are resolved only from the active system Manifest or
-        // the exact custom-model advanced settings. Protocol and model-name heuristics are
-        // intentionally absent.
-        // toolSchemaProjection 与 toolMode 只从活动系统 Manifest 或精确自定义模型高级设置解析。
+        // toolSchemaProjection is resolved only from the active system Manifest or the exact
+        // custom-model advanced setting. Protocol and model-name heuristics are intentionally absent.
+        // toolSchemaProjection 只从活动系统 Manifest 或精确自定义模型高级设置解析。
         // 此处刻意不存在协议或模型名猜测。
-        (route.tool_schema_projection, route.tool_mode) = match route.provider.kind {
+        route.tool_schema_projection = match route.provider.kind {
             crate::ProviderKind::System => {
                 let manifest = active_manifest.as_ref().ok_or_else(|| {
                     format!(
@@ -672,16 +671,17 @@ impl PublicAiRuntime {
                     Some(connection.credential_profile_id.as_str()),
                     model_id,
                 ) {
-                    Some(rule) => (rule.tool_schema_projection, rule.tool_mode),
+                    Some(rule) => rule.tool_schema_projection,
                     None => {
-                        let defaults = manifest.model_defaults_for_entry(entry.id.as_str())?;
-                        (defaults.tool_schema_projection, defaults.tool_mode)
+                        manifest
+                            .model_defaults_for_entry(entry.id.as_str())?
+                            .tool_schema_projection
                     }
                 }
             }
             crate::ProviderKind::Custom => configuration
                 .custom_model(provider_id, model_id)
-                .map(|definition| (definition.tool_schema_projection, definition.tool_mode))
+                .map(|definition| definition.tool_schema_projection)
                 .unwrap_or_default(),
         };
         // A matching model rule's inherited profile refs replace the route default chain for

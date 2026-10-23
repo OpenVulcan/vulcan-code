@@ -1,7 +1,6 @@
 //! Shared provider transport entry-input preparation helpers reused by provider-specific stream entrypoints.
 //! 供各 Provider 专用流式入口复用的共享传输入口输入准备辅助模块。
 
-use crate::agent_runtime::code_mode::CodeModeActivation;
 use crate::agent_runtime::provider_transport_request::{
     ProviderRouteIdentity, ProviderTransportExecutionRequest, ProviderTransportTurnStartMode,
 };
@@ -146,7 +145,6 @@ fn prepare_provider_transport_runtime_inputs(
     tool_request_rejection_all_tools: bool,
     tool_request_rejection_tool_ids: Vec<String>,
     route_identity: ProviderRouteIdentity,
-    code_mode: Option<CodeModeActivation>,
 ) -> PreparedProviderTransportRuntimeInputs {
     PreparedProviderTransportRuntimeInputs {
         entry_inputs: prepare_provider_transport_entry_inputs(
@@ -165,8 +163,6 @@ fn prepare_provider_transport_runtime_inputs(
             session_id,
             execution_mode,
             task_runtime,
-            code_mode,
-            &tool_request_rejection_tool_ids,
         ),
         request_budget_guard,
         retry_policy,
@@ -181,7 +177,6 @@ fn prepare_provider_transport_runtime_inputs(
 /// 将一份自有的已路由 Provider 执行请求拆分为共享运行时输入与 Provider 专用启动字段；返回可供具体流式入口使用的数据。
 pub(crate) fn prepare_provider_transport_stream_launch(
     request: ProviderTransportExecutionRequest,
-    code_mode: Option<CodeModeActivation>,
 ) -> PreparedProviderTransportStreamLaunch {
     let ProviderTransportExecutionRequest {
         provider_request_trace_enabled: _,
@@ -231,7 +226,6 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids,
         route_identity,
-        code_mode,
     );
     PreparedProviderTransportStreamLaunch {
         runtime_inputs,

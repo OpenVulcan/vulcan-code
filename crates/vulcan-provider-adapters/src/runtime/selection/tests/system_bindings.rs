@@ -40,7 +40,6 @@ fn system_user_model_binds_without_remote_discovery_or_signed_model_rule() {
                 },
                 request_projection: Default::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
-                tool_mode: crate::ToolMode::Direct,
                 system_binding: Some(crate::SystemManualModelBinding {
                     service_entry_id: String::from("official-api"),
                     protocol_profile_id: String::from(OPENAI_CHAT_PROFILE_ID),

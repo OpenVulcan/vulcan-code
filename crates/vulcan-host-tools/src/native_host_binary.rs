@@ -22,26 +22,6 @@ use std::path::PathBuf;
 /// Returns one existing executable path or a diagnostic listing every checked location.
 /// 返回一个已存在的可执行文件路径，或列出所有检查位置的诊断信息。
 pub fn resolve_native_host_binary(stem: &str, override_variable: &str) -> Result<PathBuf, String> {
-    resolve_native_host_binary_in_cargo_target(stem, override_variable, "target")
-}
-
-/// Resolves one host executable built by a separate Cargo workspace with its own target directory.
-/// 解析一个由独立 Cargo 工作区构建、拥有自有 target 目录的宿主可执行文件。
-///
-/// # Parameters / 参数
-/// - `stem`, `override_variable`: Same as [`resolve_native_host_binary`].
-/// - `cargo_target`: Target directory relative to the repository root, such as `target/code-mode-host`.
-/// - `stem`、`override_variable`：与 [`resolve_native_host_binary`] 相同。
-/// - `cargo_target`：相对仓库根目录的 target 目录，例如 `target/code-mode-host`。
-///
-/// # Returns / 返回值
-/// Returns one existing executable path or a diagnostic listing every checked location.
-/// 返回一个已存在的可执行文件路径，或列出所有检查位置的诊断信息。
-pub fn resolve_native_host_binary_in_cargo_target(
-    stem: &str,
-    override_variable: &str,
-    cargo_target: &str,
-) -> Result<PathBuf, String> {
     if let Ok(explicit_path) = env::var(override_variable) {
         let explicit_path = PathBuf::from(explicit_path);
         if explicit_path.is_file() {
@@ -78,7 +58,7 @@ pub fn resolve_native_host_binary_in_cargo_target(
     let cargo_target = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join(cargo_target)
+        .join("target")
         .join(if cfg!(debug_assertions) {
             "debug"
         } else {

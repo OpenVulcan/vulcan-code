@@ -1,7 +1,6 @@
 //! Structured provider request snapshot builders reused by runtime bootstrap and regression tests.
 //! 供运行时 bootstrap 与回归测试复用的结构化 Provider 请求快照构建模块。
 
-use crate::agent_runtime::code_mode::route_provider_tool_definitions;
 use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionProviderVisibleAgentMessage,
 };
@@ -17,7 +16,6 @@ use vulcan_core::types::{
     ConversationPayload as CoreConversationPayload,
     ProviderPromptLayers as CoreProviderPromptLayers,
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
-    ProviderRequestToolSchema as CoreProviderRequestToolSchema,
 };
 use vulcan_tools_manager::ResolvedToolDefinition;
 
@@ -33,37 +31,10 @@ pub(crate) async fn build_core_provider_request_snapshot(
     resolved_tools: &[ResolvedToolDefinition],
     max_turns_override: Option<usize>,
 ) -> Result<CoreProviderRequestSnapshot, String> {
-    // Code-mode routes preview the same `exec` and `wait` surface the turn sends.
-    // 代码模式路由预览与回合实际发送相同的 `exec` 与 `wait` 工具面。
-    let code_mode = preparation
-        .model_blueprint
-        .frozen_selection
-        .as_ref()
-        .map(|selection| selection.route.tool_mode)
-        .filter(|tool_mode| !tool_mode.is_direct());
-    let tool_schemas = match code_mode {
-        Some(tool_mode) => route_provider_tool_definitions(
-            tool_mode,
-            preparation.session_id,
-            preparation.model_blueprint.protocol_profile_id.as_str(),
-            resolved_tools,
-            &preparation.tool_request_rejection_tool_ids,
-        )?
-        .into_iter()
-        .map(|tool| CoreProviderRequestToolSchema {
-            id: tool.name.clone(),
-            name: tool.name,
-            description: tool.description,
-            source_kind: tool.source_kind,
-            source_label: tool.source_label,
-            parameters_schema: tool.parameters,
-        })
-        .collect::<Vec<_>>(),
-        None => resolved_tools
-            .iter()
-            .map(resolved_tool_definition_to_core_tool_schema)
-            .collect::<Vec<_>>(),
-    };
+    let tool_schemas = resolved_tools
+        .iter()
+        .map(resolved_tool_definition_to_core_tool_schema)
+        .collect::<Vec<_>>();
     let bridge_tool_ids = resolved_tools
         .iter()
         .map(|tool| tool.descriptor.id.clone())

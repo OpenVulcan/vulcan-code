@@ -91,9 +91,6 @@ pub enum FreeformToolArgumentEncoding {
     /// Wraps Apply Patch text in the existing `{"patch": ...}` execution contract.
     /// 按既有 `{"patch": ...}` 执行契约包装 Apply Patch 正文。
     ApplyPatchObject,
-    /// Wraps code-mode JavaScript source in the `{"code": ...}` execution contract.
-    /// 按 `{"code": ...}` 执行契约包装代码模式 JavaScript 源码。
-    CodeModeSourceObject,
 }
 
 /// Describes one tool visible to a model.

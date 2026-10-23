@@ -196,8 +196,6 @@ Vulcan Code는 수많은 훌륭한 오픈소스 프로젝트 위에 만들어졌
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp): AI 브라우저 드라이버와 도구
 - [LuaSkills](https://github.com/LuaSkills/luaskills): LuaSkills 런타임
 - [ripgrep](https://github.com/BurntSushi/ripgrep)와 [ast-grep](https://github.com/ast-grep/ast-grep): 함께 제공되는 텍스트·구문 트리 검색 도구
-- [OpenAI Codex](https://github.com/openai/codex) Code Mode: 코드 모드의 JavaScript 샌드박스(V8 런타임, 호스트 프로세스, gRPC 프로토콜과 클라이언트)는 Codex(Apache-2.0)에서 그대로 가져왔으며, 로컬 변경 사항은 소스에 표시하고 각 crate의 `NOTICE.md`(`crates/vulcan-code-mode*/`, `native/code-mode-host/*/`)에 기록합니다
-- [rusty_v8](https://github.com/denoland/rusty_v8): 코드 모드 샌드박스가 사용하는 V8 엔진 Rust 바인딩
 
 **데스크톱과 UI**
 

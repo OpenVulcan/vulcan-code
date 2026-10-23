@@ -24,7 +24,6 @@ fn online_reconciliation_persists_manual_model_takeover_notice() {
                 capabilities: vulcan_ai_contract::ModelCapabilities::default(),
                 request_projection: Default::default(),
                 tool_schema_projection: Default::default(),
-                tool_mode: Default::default(),
                 system_binding: None,
             },
         )]),

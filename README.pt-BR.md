@@ -196,8 +196,6 @@ O Vulcan Code é construído sobre muitos projetos de código aberto excelentes.
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp): driver e ferramentas do navegador de IA
 - [LuaSkills](https://github.com/LuaSkills/luaskills): runtime do LuaSkills
 - [ripgrep](https://github.com/BurntSushi/ripgrep) e [ast-grep](https://github.com/ast-grep/ast-grep): ferramentas incluídas de busca textual e em árvore sintática
-- [OpenAI Codex](https://github.com/openai/codex) Code Mode: o sandbox JavaScript do modo código (runtime V8, processo hospedeiro, protocolo gRPC e cliente) é incorporado diretamente do Codex (Apache-2.0); as alterações locais estão marcadas no código-fonte e listadas no `NOTICE.md` de cada crate (`crates/vulcan-code-mode*/`, `native/code-mode-host/*/`)
-- [rusty_v8](https://github.com/denoland/rusty_v8): bindings Rust do motor V8 usado pelo sandbox do modo código
 
 **Desktop e interface**
 

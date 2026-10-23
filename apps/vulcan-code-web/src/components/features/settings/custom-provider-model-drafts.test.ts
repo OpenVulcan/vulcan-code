@@ -36,7 +36,6 @@ function modelFixture(id: string): PublicAiCustomModelDefinition {
       delete: [],
     },
     tool_schema_projection: "lightweight",
-    tool_mode: "direct",
   }
 }
 

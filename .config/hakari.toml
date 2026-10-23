@@ -31,11 +31,3 @@ workspace-members = ["vulcan-code-service"]
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true
-
-# The code-mode protocol and client are also built by the standalone code-mode host workspace
-# (native/code-mode-host), which links V8 with the static C runtime; depending on workspace-hack
-# would pull the root workspace's dynamic-CRT C dependencies into that build.
-# 代码模式协议与客户端同时由独立的代码模式宿主工作区（native/code-mode-host）构建，该工作区以静态
-# C 运行时链接 V8；依赖 workspace-hack 会把根工作区的动态 CRT C 依赖带入该构建。
-[final-excludes]
-workspace-members = ["vulcan-code-mode", "vulcan-code-mode-protocol"]

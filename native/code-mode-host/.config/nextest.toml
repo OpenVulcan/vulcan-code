@@ -1,9 +1,0 @@
-# The vendored host tests spawn host processes and bind loopback ports; the whole suite takes about
-# 20 seconds serially, so it runs one test at a time instead of sharing ports across processes.
-# 内置宿主测试会启动宿主进程并绑定回环端口；整套串行约 20 秒，因此逐个运行，避免多个进程争用端口。
-[profile.default]
-test-threads = 1
-
-# `make test` selects the fast profile in every workspace; this suite has no slow tests to skip.
-# `make test` 在每个工作区选择 fast 配置；本测试集没有需要跳过的慢测试。
-[profile.fast]

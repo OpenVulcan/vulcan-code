@@ -9,7 +9,7 @@ use vulcan_ai_contract::{
     StructuredOutputCapability,
 };
 
-use crate::provider_manifest::{ToolMode, ToolSchemaProjectionMode};
+use crate::provider_manifest::ToolSchemaProjectionMode;
 use crate::{
     ModelCapabilityEvidence, PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES,
     PROVIDER_MODEL_IDENTIFIER_MAX_BYTES,
@@ -552,10 +552,6 @@ pub struct CustomModelDefinition {
     /// 在高级设置中选择的 Provider 可见工具 Schema 投影。
     #[serde(default)]
     pub tool_schema_projection: ToolSchemaProjectionMode,
-    /// Tool mode selected in advanced settings; omission means direct tools.
-    /// 在高级设置中选择的工具模式；省略时表示直接工具。
-    #[serde(default)]
-    pub tool_mode: ToolMode,
     /// Explicit route for a user-added system-provider model; absent for custom providers.
     /// 用户新增系统供应商模型的显式路由；自定义供应商不设置。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -762,12 +758,6 @@ pub fn validate_system_manual_model_definition(
     if model.tool_schema_projection != ToolSchemaProjectionMode::Lightweight {
         return Err(format!(
             "System manual model `{}` cannot override the signed tool-schema projection.",
-            model.id
-        ));
-    }
-    if !model.tool_mode.is_direct() {
-        return Err(format!(
-            "System manual model `{}` cannot override the signed tool mode.",
             model.id
         ));
     }
@@ -1133,7 +1123,6 @@ mod tests {
             },
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
-            tool_mode: ToolMode::Direct,
             system_binding: Some(SystemManualModelBinding {
                 service_entry_id: String::from("official-api"),
                 protocol_profile_id: String::from("openai-chat-completions.v1"),
@@ -1202,7 +1191,6 @@ mod tests {
             },
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
-            tool_mode: ToolMode::Direct,
             system_binding: Some(SystemManualModelBinding {
                 service_entry_id: String::from("public-api"),
                 protocol_profile_id: String::from("openai-responses.v1"),
@@ -1314,7 +1302,6 @@ mod tests {
             },
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
-            tool_mode: ToolMode::Direct,
             system_binding: None,
         };
 
@@ -1340,7 +1327,6 @@ mod tests {
             },
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
-            tool_mode: ToolMode::Direct,
             system_binding: None,
         };
 
@@ -1360,7 +1346,6 @@ mod tests {
             capabilities: ModelCapabilities::default(),
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
-            tool_mode: ToolMode::Direct,
             system_binding: None,
         };
         assert!(oversized.validate().is_err());
@@ -1372,7 +1357,6 @@ mod tests {
             capabilities: ModelCapabilities::default(),
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
-            tool_mode: ToolMode::Direct,
             system_binding: None,
         };
         assert!(controlled.validate().is_err());
@@ -1519,7 +1503,6 @@ mod tests {
             },
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
-            tool_mode: ToolMode::Direct,
             system_binding: None,
         };
 

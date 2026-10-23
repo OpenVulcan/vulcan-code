@@ -192,11 +192,6 @@ pub(super) async fn delete_tree(
     // From this boundary onward, cancellation or partial physical failure must never reopen stale writers.
     // 从此边界起，取消或部分物理失败绝不能重新开放过期写入者。
     delete_session_v1(controller, &root_id.to_string()).await?;
-    // Deleted sessions never run again, so their JavaScript code-mode values are dropped too.
-    // 已删除会话不会再次运行，因此一并丢弃其 JavaScript 代码模式值。
-    for id in tree.keys() {
-        vulcan_agent_runtime::agent_runtime::release_code_mode_session(*id);
-    }
     drop(lifecycles);
     Ok(())
 }

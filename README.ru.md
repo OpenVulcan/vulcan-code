@@ -196,8 +196,6 @@ Vulcan Code построен на множестве замечательных 
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp): драйвер и инструменты ИИ-браузера
 - [LuaSkills](https://github.com/LuaSkills/luaskills): среда выполнения LuaSkills
 - [ripgrep](https://github.com/BurntSushi/ripgrep) и [ast-grep](https://github.com/ast-grep/ast-grep): поставляемые инструменты текстового поиска и поиска по синтаксическому дереву
-- [OpenAI Codex](https://github.com/openai/codex) Code Mode: JavaScript-песочница режима кода (среда выполнения V8, хост-процесс, протокол gRPC и клиент) перенесена непосредственно из Codex (Apache-2.0); локальные изменения отмечены в исходном коде и перечислены в `NOTICE.md` каждого crate (`crates/vulcan-code-mode*/`, `native/code-mode-host/*/`)
-- [rusty_v8](https://github.com/denoland/rusty_v8): Rust-привязки движка V8, используемого песочницей режима кода
 
 **Настольное приложение и интерфейс**
 

@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 15,
-  "published_at": "2026-10-23T05:50:12Z",
+  "revision": 16,
+  "published_at": "2026-10-23T07:54:26Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -402,7 +402,6 @@
       "matcher": {"kind": "exact", "value": "gpt-5.6-luna"},
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
-      "tool_mode": "code_mode_only",
       "codex_behavior": {
         "wire_dialect": "lite",
         "apply_patch_tool_type": "freeform",
@@ -445,7 +444,6 @@
       "matcher": {"kind": "exact", "value": "gpt-5.6-terra"},
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
-      "tool_mode": "code_mode_only",
       "codex_behavior": {
         "wire_dialect": "lite",
         "apply_patch_tool_type": "freeform",
@@ -488,7 +486,6 @@
       "matcher": {"kind": "exact", "value": "gpt-5.6-sol"},
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
-      "tool_mode": "code_mode_only",
       "codex_behavior": {
         "wire_dialect": "lite",
         "apply_patch_tool_type": "freeform",
@@ -531,7 +528,6 @@
       "matcher": {"kind": "exact", "value": "gpt-6-astra"},
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
-      "tool_mode": "code_mode_only",
       "codex_behavior": {
         "wire_dialect": "lite",
         "apply_patch_tool_type": "freeform",
@@ -575,7 +571,6 @@
       "matcher": {"kind": "exact", "value": "gpt-6.1-sol"},
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
-      "tool_mode": "code_mode_only",
       "codex_behavior": {
         "wire_dialect": "lite",
         "apply_patch_tool_type": "freeform",
@@ -619,7 +614,6 @@
       "matcher": {"kind": "exact", "value": "gpt-6-sol"},
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
-      "tool_mode": "code_mode_only",
       "codex_behavior": {
         "wire_dialect": "lite",
         "apply_patch_tool_type": "freeform",
@@ -662,7 +656,6 @@
       "matcher": {"kind": "exact", "value": "gpt-6-luna"},
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
-      "tool_mode": "code_mode_only",
       "codex_behavior": {
         "wire_dialect": "lite",
         "apply_patch_tool_type": "freeform",

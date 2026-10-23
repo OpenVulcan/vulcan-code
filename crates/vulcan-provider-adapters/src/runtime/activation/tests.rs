@@ -780,7 +780,6 @@ async fn isolated_custom_provider_connection_is_excluded_from_atomic_activation(
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
-                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         )]),

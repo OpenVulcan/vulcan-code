@@ -34,8 +34,6 @@ pub(super) const NATIVE_MODEL: &str = "codex-compaction-fixture";
 
 /// Stages an isolated direct-tool model declaration in `runtime`; returns after manifest validation.
 /// 在`runtime`暂存隔离的直接工具模型声明；清单校验后返回。
-/// Existing code-mode declarations remain intact and still reject missing JavaScript primitives.
-/// 既有代码模式声明保持完整，仍拒绝缺失 JavaScript 原语的执行。
 pub(super) fn stage_native_fixture_model(runtime: &vulcan_provider_adapters::PublicAiRuntime) {
     // Read the same bundled authority as runtime initialization; never modify the resource on disk.
     // 读取与运行时初始化相同的内置权威；绝不修改磁盘资源。
@@ -58,7 +56,6 @@ pub(super) fn stage_native_fixture_model(runtime: &vulcan_provider_adapters::Pub
     rule["matcher"]["value"] = NATIVE_MODEL.into();
     rule["display_name"] = "Native compaction fixture".into();
     rule["codex_behavior"] = serde_json::json!({ "wire_dialect": "standard" });
-    rule["tool_mode"] = "direct".into();
     manifest["model_rules"].as_array_mut().unwrap().push(rule);
     // Compile and stage through the same validated manifest publication boundary as production.
     // 通过与生产相同的已验证清单发布边界编译并暂存。

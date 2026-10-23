@@ -670,37 +670,6 @@ impl ToolSchemaProjectionMode {
     }
 }
 
-/// Selects how one model route invokes the frozen tool inventory.
-/// 选择单条模型路由调用冻结工具目录的方式。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolMode {
-    /// Exposes the authorized tools directly.
-    /// 直接暴露已授权工具。
-    #[default]
-    Direct,
-    /// Exposes the code-mode tools and falls back to direct tools when the code-mode host is
-    /// unavailable.
-    /// 暴露代码模式工具；代码模式宿主不可用时回退为直接工具。
-    CodeMode,
-    /// Requires the code-mode host and fails closed instead of falling back to direct tools.
-    /// 强制使用代码模式宿主，不可用时直接失败而不回退为直接工具。
-    CodeModeOnly,
-}
-
-impl ToolMode {
-    /// Reports whether this value is the implicit direct-tool default.
-    /// 判断当前值是否为隐含的直接工具默认值。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` only for direct tool exposure.
-    /// 仅直接工具暴露返回 `true`。
-    pub const fn is_direct(&self) -> bool {
-        matches!(self, Self::Direct)
-    }
-}
-
 /// Provider-level default capabilities and model policy.
 /// 供应商级默认能力与模型策略。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -737,10 +706,6 @@ pub struct ModelDefaults {
         skip_serializing_if = "ToolSchemaProjectionMode::is_lightweight"
     )]
     pub tool_schema_projection: ToolSchemaProjectionMode,
-    /// Default tool mode; omission intentionally means direct tools.
-    /// 默认工具模式；省略时明确表示直接工具。
-    #[serde(default, skip_serializing_if = "ToolMode::is_direct")]
-    pub tool_mode: ToolMode,
     /// Default usage-extraction profile references.
     /// 默认 usage 提取 Profile 引用。
     #[serde(default)]
@@ -1089,10 +1054,6 @@ pub struct ModelRule {
     /// 可选工具 Schema 投影覆盖，优先于供应商默认值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_schema_projection: Option<ToolSchemaProjectionMode>,
-    /// Optional tool-mode override inherited over the provider default.
-    /// 可选工具模式覆盖，优先于供应商默认值。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_mode: Option<ToolMode>,
     /// Protocol-scoped capability patches keyed by protocol profile id.
     /// 按协议 Profile 标识索引的协议作用域能力补丁。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

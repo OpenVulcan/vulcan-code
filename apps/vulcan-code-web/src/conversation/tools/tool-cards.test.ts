@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import type { PersistentChangeSetFile } from "@/service/conversation-event-window-store";
 import { askAnswers, askQuestions } from "./cards/ask-card";
-import { CodeModeCard, firstCodeLine, readCodeModeObservation } from "./cards/code-mode-card";
 import { commandOutputFromText } from "./cards/command-card";
 import { documentBody } from "./cards/document-card";
 import { listEntries, readLines, requestPreviewStat, statFacts } from "./cards/file-cards";
@@ -239,44 +238,6 @@ describe("lua, questions and knowledge writes", () => {
     expect(toolCallFamily(toolEvent("knowledge_write", { action: "create", libraryId: "l" }))).toBe("edit");
     expect(toolCallFamily(toolEvent("vmm_memory_search", { queries: ["q"] }))).toBe("search");
     expect(toolCallFamily(toolEvent("runtime_config", { action: "describe" }))).toBe("read");
-  });
-});
-
-describe("code mode", () => {
-  it("routes exec and wait by their argument shape and leaves look-alike tools to the generic card", () => {
-    expect(resolveToolCard(readToolCall(toolEvent("exec", { code: "text(1)" }))).Card).toBe(CodeModeCard);
-    expect(resolveToolCard(readToolCall(toolEvent("wait", { cell_id: "3" }))).Card).toBe(CodeModeCard);
-    expect(toolCallFamily(toolEvent("exec", { code: "text(1)" }))).toBe("run");
-    expect(resolveToolCard(readToolCall(toolEvent("wait", { seconds: 3 }))).Card).not.toBe(CodeModeCard);
-  });
-
-  it("splits status, notifications and printed text, and names scripts past the pragma", () => {
-    expect(readCodeModeObservation("Script running with cell ID 7\nWall time 0.5 seconds\nNotifications:\nhalfway\nstill going\nOutput:\npartial")).toEqual({
-      cellId: "7", images: [], notifications: ["halfway", "still going"], output: "partial", status: "yielded",
-    });
-    expect(readCodeModeObservation("Script failed\nWall time 0.0 seconds\nOutput:\nScript error:\nboom")).toMatchObject({
-      cellId: null, output: "Script error:\nboom", status: "failed",
-    });
-    expect(readCodeModeObservation("Invalid `exec` arguments")).toMatchObject({ output: "Invalid `exec` arguments", status: null });
-    expect(firstCodeLine("// @exec: {\"yield_time_ms\": 100}\n\nconst a = 1;\n")).toBe("const a = 1;");
-  });
-
-  it("separates the images a cell returned from its text", () => {
-    const envelope = JSON.stringify({
-      $vulcan_tool_result_media: 1,
-      content: [
-        { text: "Script completed\nWall time 0.1 seconds\nOutput:\n", type: "text" },
-        { text: "chart ready", type: "text" },
-        { data: "iVBORw0KGgo=", mimeType: "image/png", type: "image" },
-      ],
-    });
-    expect(readCodeModeObservation(envelope)).toEqual({
-      cellId: null,
-      images: [{ data: "iVBORw0KGgo=", mimeType: "image/png" }],
-      notifications: [],
-      output: "chart ready",
-      status: "completed",
-    });
   });
 });
 

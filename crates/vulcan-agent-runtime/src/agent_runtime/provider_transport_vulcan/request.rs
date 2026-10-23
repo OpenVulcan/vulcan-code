@@ -2,10 +2,6 @@
 //! 公共请求组装与冻结的工具及延续信息投影�?
 use super::message_projection::{core_message_text, core_message_to_public};
 use super::{VulcanPublicContractAdapter, provider_failure};
-use crate::agent_runtime::code_mode::{
-    CODE_MODE_EXEC_LARK_GRAMMAR, CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_TOOL_SOURCE_KIND,
-    protocol_accepts_freeform_exec,
-};
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -113,19 +109,6 @@ pub(crate) fn project_public_tool_definitions(
                         definition: APPLY_PATCH_LARK_GRAMMAR.to_string(),
                     },
                     argument_encoding: FreeformToolArgumentEncoding::ApplyPatchObject,
-                }
-            } else if tool.source_kind == CODE_MODE_TOOL_SOURCE_KIND
-                && tool.name == CODE_MODE_EXEC_TOOL_NAME
-                && protocol_accepts_freeform_exec(&route.protocol_route.protocol_profile_id)
-            {
-                // Code-mode exec is raw JavaScript wherever the protocol encodes custom tools.
-                // 协议能编码自定义工具时，代码模式 exec 即为原始 JavaScript。
-                ToolInputFormat::Freeform {
-                    format: FreeformToolFormat::Grammar {
-                        syntax: FreeformToolSyntax::Lark,
-                        definition: CODE_MODE_EXEC_LARK_GRAMMAR.to_string(),
-                    },
-                    argument_encoding: FreeformToolArgumentEncoding::CodeModeSourceObject,
                 }
             } else {
                 ToolInputFormat::JsonSchema

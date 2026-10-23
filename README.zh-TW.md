@@ -196,8 +196,6 @@ Vulcan Code 建立在眾多優秀的開源專案之上，感謝這些專案的�
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp)：AI 瀏覽器的驅動與工具
 - [LuaSkills](https://github.com/LuaSkills/luaskills)：LuaSkills 技能執行環境
 - [ripgrep](https://github.com/BurntSushi/ripgrep) 與 [ast-grep](https://github.com/ast-grep/ast-grep)：隨附的文字與語法樹搜尋工具
-- [OpenAI Codex](https://github.com/openai/codex) Code Mode：程式碼模式的 JavaScript 沙盒（V8 執行環境、宿主程序、gRPC 協定與用戶端）直接移植自 Codex（Apache-2.0），本地改動標註在原始碼中，並記錄在各 crate 的 `NOTICE.md`（`crates/vulcan-code-mode*/`、`native/code-mode-host/*/`）
-- [rusty_v8](https://github.com/denoland/rusty_v8)：程式碼模式沙盒使用的 V8 引擎 Rust 繫結
 
 **桌面端與介面**
 

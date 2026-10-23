@@ -122,42 +122,20 @@ pub(crate) fn project_tool_result_content(
     let Some(envelope) = parse_marked_media_envelope(text)? else {
         return Ok(Value::String(text.to_string()));
     };
-    let project = media_projector(protocol_profile_id).ok_or_else(|| {
-        format!(
-            "Tool result image blocks are unsupported by protocol profile `{protocol_profile_id}`; use an OpenAI Responses or Anthropic Messages route."
-        )
-    })?;
-    project(&envelope)
-}
 
-/// Native projector of tool-result media for one protocol profile.
-/// 一个协议 Profile 的工具结果媒体原生投影器。
-type MediaProjector = fn(&ToolResultMediaEnvelope) -> Result<Value, String>;
-
-/// Returns the native media projector of one protocol profile, if it has one.
-/// 返回一个协议 Profile 的原生媒体投影器（如有）。
-fn media_projector(protocol_profile_id: &str) -> Option<MediaProjector> {
     match protocol_profile_id {
         vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID
         | vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID => {
-            Some(project_openai_responses_content)
+            project_openai_responses_content(&envelope)
         }
         vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
-        | vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => Some(project_anthropic_content),
-        _ => None,
+        | vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
+            project_anthropic_content(&envelope)
+        }
+        _ => Err(format!(
+            "Tool result image blocks are unsupported by protocol profile `{protocol_profile_id}`; use an OpenAI Responses or Anthropic Messages route."
+        )),
     }
-}
-
-/// Returns whether one protocol profile receives tool-result image blocks natively.
-/// 返回一个协议 Profile 是否原生接收工具结果图片块。
-pub(crate) fn protocol_projects_tool_result_media(protocol_profile_id: &str) -> bool {
-    media_projector(protocol_profile_id).is_some()
-}
-
-/// Returns whether one Base64 image payload passes the tool-result media validation.
-/// 返回一份 Base64 图片载荷能否通过工具结果媒体校验。
-pub(crate) fn tool_result_image_is_valid(data: &str, mime_type: &str) -> bool {
-    validate_image_content(data, mime_type).is_ok()
 }
 
 /// Builds a bounded text preview for request budgeting without copying Base64 image bytes into it.

@@ -408,25 +408,6 @@ function toolCardGallery(sessionId: string): ConversationEventHydrationV1Respons
           output: toolOutput("runlua", "4 families\n\n```json\n[\"read\", \"search\", \"edit\", \"run\"]\n```", { kind: "lua_execution", payload: { tool: "runlua", mode: "one_shot", action: "eval", status: "completed", task: "count tool families", elapsedMs: 38 } }),
         },
         {
-          name: "exec",
-          input: { code: "// @exec: {\"yield_time_ms\": 500}\nconst files = await tools.file({ action: \"list\", path: \"src/conversation/tools/cards\" });\nnotify(\"listed cards\");\nyield_control();\nawait new Promise((resolve) => setTimeout(resolve, 2000));\ntext(files.output);" },
-          output: toolOutput("exec", "Script running with cell ID 4\nWall time 0.5 seconds\nNotifications:\nlisted cards\nOutput:\n"),
-          durationMs: 520,
-        },
-        {
-          name: "wait",
-          input: { cell_id: "4" },
-          output: toolOutput("wait", JSON.stringify({
-            $vulcan_tool_result_media: 1,
-            content: [
-              { type: "text", text: "Script completed\nWall time 1.6 seconds\nOutput:\n" },
-              { type: "text", text: "- `agent-card.tsx` · file\n- `code-mode-card.tsx` · file\n- `lua-card.tsx` · file" },
-              { type: "image", data: "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAoCAIAAADBrGu+AAAAYElEQVR4nO3PsQ3AIBAEQUqiREp2ByYlIzDWgZgT4UvslPfwlXTA1wGkB5DedoCn1ekb7wFWDyA9gPQAVn8AAAAAAHA34O97AACA0wG7BQGkgwDSQQDpIIB0EEA66DpABxtjIxGF98SOAAAAAElFTkSuQmCC", mimeType: "image/png" },
-            ],
-          })),
-          durationMs: 1610,
-        },
-        {
           name: "ask",
           input: { questions: [
             { header: "Density", question: "How dense should collapsed tool cards be?", options: [{ label: "One line", description: "" }, { label: "Two lines", description: "" }] },

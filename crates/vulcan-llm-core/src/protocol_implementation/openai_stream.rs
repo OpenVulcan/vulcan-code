@@ -1070,9 +1070,6 @@ impl OpenAiResponsesStreamDecoder {
                 FreeformToolArgumentEncoding::ApplyPatchObject => {
                     serde_json::json!({"patch": state.custom_text})
                 }
-                FreeformToolArgumentEncoding::CodeModeSourceObject => {
-                    serde_json::json!({"code": state.custom_text})
-                }
             }),
         };
         match arguments {
@@ -3230,7 +3227,7 @@ mod tests {
     /// 验证自定义输入可跨越多个增量，而开启快照仍排斥增量。
     #[test]
     fn responses_custom_tool_input_accepts_many_deltas_but_not_after_opening_snapshot() {
-        let exec_tool = freeform_tool("exec", FreeformToolArgumentEncoding::CodeModeSourceObject);
+        let exec_tool = freeform_tool("exec", FreeformToolArgumentEncoding::RawText);
         let delta = |text: &str| {
             json!({
                 "type": "response.custom_tool_call_input.delta",

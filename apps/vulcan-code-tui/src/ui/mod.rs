@@ -29,7 +29,6 @@ mod answer_components;
 mod ask;
 pub mod brand;
 mod chrome;
-mod code_mode;
 mod composer;
 mod dialogs;
 mod history;

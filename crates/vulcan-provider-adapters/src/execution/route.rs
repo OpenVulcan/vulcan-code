@@ -40,9 +40,6 @@ pub struct ProviderExecutionRoute {
     /// Provider-facing tool-schema projection frozen for this exact model route.
     /// 为当前精确模型路由冻结的 Provider 可见工具 Schema 投影。
     pub tool_schema_projection: crate::provider_manifest::ToolSchemaProjectionMode,
-    /// Tool mode frozen for this exact model route.
-    /// 为当前精确模型路由冻结的工具模式。
-    pub tool_mode: crate::provider_manifest::ToolMode,
     /// Optional closed Codex behavior frozen from the model protocol binding.
     /// 从模型协议绑定冻结的可选封闭 Codex 行为。
     pub codex_behavior: Option<crate::provider_manifest::CodexModelBehavior>,
@@ -164,7 +161,6 @@ impl ProviderExecutionRoute {
             secondary_route,
             custom_model_projection: None,
             tool_schema_projection: crate::provider_manifest::ToolSchemaProjectionMode::Lightweight,
-            tool_mode: crate::provider_manifest::ToolMode::Direct,
             codex_behavior: None,
             request_projection_profiles,
             response_projection_profiles,

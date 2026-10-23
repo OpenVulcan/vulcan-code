@@ -41,7 +41,6 @@ sha2.workspace = true
 tempfile.workspace = true
 time = { workspace = true, features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util", "fs"] }
-tokio-util.workspace = true
 uuid.workspace = true
 vulcan-context.workspace = true
 vulcan-ai-contract.workspace = true
@@ -50,9 +49,6 @@ vulcan-context-compaction.workspace = true
 vulcan-context-injection.workspace = true
 vulcan-core.workspace = true
 vulcan-change-set.workspace = true
-# Drives the isolated JavaScript code-mode host for models that call tools through `exec`.
-# 为通过 `exec` 调用工具的模型驱动隔离的 JavaScript 代码模式宿主。
-vulcan-code-mode.workspace = true
 vulcan-session-boundary.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-hooks.workspace = true

@@ -1,7 +1,6 @@
 //! Runtime foundation for provider transport, MCP runtime integration, and host-owned tool orchestration.
 //! 面向 Provider 传输、MCP 运行时集成与宿主自有工具编排的运行时基础模块。
 
-pub(crate) mod code_mode;
 pub mod config;
 pub mod context_injection_runtime;
 pub mod context_request_mode;
@@ -75,7 +74,6 @@ pub mod tool_runtime_bridge;
 pub mod vmm_hooks;
 pub mod vulcan_plugin_hooks;
 
-pub use code_mode::release_code_mode_session;
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
 pub use events::{ExecutionStreamEvent, TransientReasoningStatus, TransientReasoningStatusKind};
 pub use execution_models::{

@@ -191,7 +191,6 @@ async fn custom_manual_only_refresh_performs_no_credential_or_remote_discovery()
                 },
                 request_projection: Default::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
-                tool_mode: crate::ToolMode::Direct,
                 system_binding: None,
             },
         )]),
