@@ -109,7 +109,7 @@ async fn capability_metadata_rpc_does_not_load_turns_or_write_on_read() {
         .clear();
     let request = serde_json::from_value(serde_json::json!({
         "conversationId": session_id.to_string(),
-        "enabledCapabilities": [], "selections": {}, "extensionTargetSets": {},
+        "enabledCapabilities": [], "selections": {}, "extensionTargetSets": {}, "extensionModes": {},
         "mediaUnderstandingSelections": {},
     }))
     .unwrap();
