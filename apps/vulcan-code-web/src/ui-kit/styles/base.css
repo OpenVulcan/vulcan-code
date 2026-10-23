@@ -70,7 +70,16 @@ button, input:where([type="button"], [type="reset"], [type="submit"]), ::file-se
   color: var(--vk-ink);
   -webkit-font-smoothing: antialiased;
   font-feature-settings: "ss01", "cv11";
+  /* Interface digits share one width so counters, timers, token counts and speeds never shift as they change. */
+  /* 界面数字统一等宽，使计数、计时、Token 数与速度在变化时不左右跳动。 */
+  font-variant-numeric: tabular-nums;
 }
+/* Reading text (rendered Markdown, the user's own prompts and the text being typed) keeps proportional digits. */
+/* 阅读文本（渲染后的 Markdown、用户自己的提示词与正在输入的文本）保留比例数字。 */
+:where(.vk-md, .vk-prompt-text) { font-variant-numeric: normal; }
+/* The control reset below re-inherits the font shorthand at class specificity; naming the root scope outranks it. */
+/* 下方控件重置以类选择器优先级重新继承 font 简写；带上根作用域即可胜过它。 */
+:is(.vk-root, .vk-layer) textarea { font-variant-numeric: normal; }
 .vk-root {
   background-color: var(--vk-ground);
   background-image: var(--vk-ambient);
