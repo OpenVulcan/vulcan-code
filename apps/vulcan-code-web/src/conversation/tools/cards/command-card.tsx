@@ -4,7 +4,7 @@
 import { SquareTerminal } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { ToolFrame, type ToolCardProps } from "../tool-card";
-import { formatToolDuration, listOf, numberOf, objectOf, textOf, type ToolCall } from "../tool-call";
+import { listOf, numberOf, objectOf, textOf, type ToolCall } from "../tool-call";
 import { TerminalView } from "../views/terminal-view";
 
 /** Renders one shell_command call.
@@ -17,7 +17,6 @@ export function ShellCommandCard(props: ToolCardProps) {
   const hook = objectOf(run?.hook_transform);
   const effective = textOf(hook?.effective_command);
   const exitCode = numberOf(run?.exit_code) ?? exitCodeFromText(call.modelOutput);
-  const durationMs = numberOf(run?.duration_ms) ?? call.durationMs;
   const output = call.modelOutput ? commandOutputFromText(call.modelOutput) : "";
   const failure = textOf(run?.failure_reason);
   const badges = listOf(hook?.contributions).map(objectOf).filter((item) => textOf(item?.badge));
@@ -31,7 +30,6 @@ export function ShellCommandCard(props: ToolCardProps) {
             <span className="vk-badge" key={index} title={`${textOf(badge?.label) ?? ""}: ${textOf(badge?.value) ?? ""}`}>{textOf(badge?.badge)}</span>
           ))}
           {exitCode !== null && exitCode !== 0 ? <span className="vk-del">{t("toolCard.exitCode").replace("{code}", String(exitCode))}</span> : null}
-          {durationMs !== null && call.state !== "running" ? <span>{formatToolDuration(durationMs)}</span> : null}
         </>
       )}
       state={call.state}

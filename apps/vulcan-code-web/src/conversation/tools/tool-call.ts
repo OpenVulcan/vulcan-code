@@ -128,6 +128,10 @@ export function listOf(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+// SLOW_TOOL_CALL_MS is how long a call must take before its card keeps showing the duration after it ends.
+// SLOW_TOOL_CALL_MS 是调用结束后卡片仍持续显示耗时所需的最短调用时长。
+export const SLOW_TOOL_CALL_MS = 2000;
+
 // formatToolDuration writes a call duration at the precision a reader needs: milliseconds under a second, tenths
 // under a minute, then minutes and seconds.
 // formatToolDuration 按读者所需精度书写调用耗时：一秒内用毫秒，一分钟内精确到十分之一秒，之后用分与秒。

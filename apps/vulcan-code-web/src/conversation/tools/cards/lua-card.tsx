@@ -6,7 +6,7 @@ import * as React from "react";
 import { Braces } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { ToolFrame, type ToolCardProps } from "../tool-card";
-import { formatToolDuration, numberOf, textOf } from "../tool-call";
+import { numberOf, textOf } from "../tool-call";
 import { CodeView, type CodeLine } from "../views/code-view";
 import { ErrorNote, MarkdownResult } from "../views/result-views";
 
@@ -49,7 +49,6 @@ export function LuaCard(props: ToolCardProps) {
   const target = session
     ? textOf(call.input.name) ?? textOf(host.name) ?? textOf(call.input.session_id) ?? textOf(host.sessionId) ?? ""
     : textOf(call.input.task) ?? "";
-  const elapsed = numberOf(host.elapsedMs) ?? call.durationMs;
   const sessionCount = numberOf(host.sessionCount);
   const output = call.modelOutput ?? "";
   const result = session ? luaSessionBody(output) : output;
@@ -60,7 +59,6 @@ export function LuaCard(props: ToolCardProps) {
       meta={(
         <>
           {sessionCount !== null ? <span>{t("toolCard.lua.sessions").replace("{count}", String(sessionCount))}</span> : null}
-          {elapsed !== null && call.state !== "running" ? <span>{formatToolDuration(elapsed)}</span> : null}
         </>
       )}
       state={call.state}

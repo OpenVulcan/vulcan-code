@@ -5,7 +5,7 @@
 import { Wrench } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { ToolFrame, type ToolCardProps } from "../tool-card";
-import { formatToolDuration, type ToolCall } from "../tool-call";
+import type { ToolCall } from "../tool-call";
 import { JsonView } from "../views/json-view";
 import { MarkdownResult } from "../views/result-views";
 
@@ -28,7 +28,6 @@ export function GenericToolCard(props: ToolCardProps) {
       meta={(
         <>
           {server ? <span>{server}</span> : null}
-          {call.durationMs !== null && call.state !== "running" ? <span>{formatToolDuration(call.durationMs)}</span> : null}
         </>
       )}
       state={call.state}

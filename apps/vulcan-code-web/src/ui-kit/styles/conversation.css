@@ -576,6 +576,8 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tool-meta .vk-del { color: var(--vk-diff-del-ink); }
 .vk-tool-request[data-phase] { color: var(--vk-ember-ink); }
 .vk-tool-request[data-phase="receiving"] { animation: vk-pulse 1.6s var(--vk-ease) infinite; }
+.vk-tool-elapsed { font-variant-numeric: tabular-nums; }
+.vk-tool-elapsed[data-live] { color: var(--vk-ember-ink); }
 .vk-tool-chev { width: 0.9rem; height: 0.9rem; color: var(--vk-ink-3); transition: transform var(--vk-t-fast); }
 .vk-tool[data-open] .vk-tool-chev { transform: rotate(90deg); }
 .vk-tool-body { border-top: var(--vk-bw) solid var(--vk-line-soft); min-width: 0; }

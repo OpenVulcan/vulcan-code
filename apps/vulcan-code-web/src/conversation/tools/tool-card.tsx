@@ -10,7 +10,7 @@ import { formatBytes } from "@/lib/display-format";
 import { IconButton } from "@/ui-kit/primitives/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/ui-kit/primitives/collapsible";
 import { Spinner } from "@/ui-kit/primitives/spinner";
-import type { ToolCall, ToolCardState } from "./tool-call";
+import { formatToolDuration, SLOW_TOOL_CALL_MS, type ToolCall, type ToolCardState } from "./tool-call";
 import type { ToolRequest } from "./tool-request";
 
 // ToolFamily groups tools by what they do; it tints the card edge and the sequence strip.
@@ -126,6 +126,25 @@ function ToolFileAction(props: { path: string; lines: WorkspaceFileLines | null;
   );
 }
 
+// ToolElapsed times one call: it ticks while the call is unfinished and, once it ends, stays only for a slow call.
+// ToolElapsed 为单次调用计时：调用未结束时持续走动；结束后只在慢调用上保留。
+function ToolElapsed(props: { call: ToolCall }) {
+  const startedAtMs = props.call.event.started_at_ms;
+  const live = startedAtMs !== undefined && (props.call.state === "running" || props.call.state === "waiting");
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!live) return undefined;
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [live]);
+  if (live) return <span className="vk-tool-elapsed" data-live="">{formatToolDuration(Math.max(0, nowMs - startedAtMs))}</span>;
+  const duration = props.call.durationMs;
+  return duration !== null && duration > SLOW_TOOL_CALL_MS
+    ? <span className="vk-tool-elapsed">{formatToolDuration(duration)}</span>
+    : null;
+}
+
 /** Renders the shared tool card frame.
  * 渲染共享工具卡框架。 */
 export function ToolFrame(props: ToolFrameProps) {
@@ -143,6 +162,7 @@ export function ToolFrame(props: ToolFrameProps) {
       <span className="vk-tool-meta">
         {props.meta}
         {props.call?.request ? <ToolRequestMark request={props.call.request} state={props.state} /> : null}
+        {props.call && !props.call.request ? <ToolElapsed call={props.call} /> : null}
       </span>
       <ToolStateMark state={props.state} />
       {expandable ? <ChevronRight aria-hidden="true" className="vk-tool-chev" /> : <span />}
