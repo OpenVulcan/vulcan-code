@@ -54,7 +54,9 @@ pub(crate) use response_metadata::parse_retry_after_headers;
 pub use responses_compact::{
     ResponsesCompactEvent, ResponsesCompactResult, ResponsesCompactStream,
 };
-use responses_websocket::{ResponsesWebsocketSessionCacheEntry, responses_websocket_cache_key};
+use responses_websocket::{
+    ResponsesWebsocketHealth, ResponsesWebsocketSessionCacheEntry, responses_websocket_cache_key,
+};
 pub use route::ProviderExecutionRoute;
 pub(crate) use route::upstream_protocol_for_profile_id;
 use route::upstream_protocol_for_route;
@@ -78,7 +80,6 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Instant;
 use vulcan_ai_contract::{AiExecutionRequest, AiStreamEvent};
 use vulcan_llm_core::{LlmProtocolRuntime, UpstreamProtocol};
 
@@ -128,9 +129,9 @@ pub struct ProviderExecutionClient {
     /// 按凭据、路由与会话隔离的 Responses WebSocket 连接。
     responses_websocket_sessions:
         Arc<TokioMutex<BTreeMap<String, ResponsesWebsocketSessionCacheEntry>>>,
-    /// Session-scoped WebSocket circuit breakers activated after transport failure.
-    /// 传输失败后激活的会话作用域 WebSocket 熔断器。
-    responses_websocket_breakers: Arc<StdMutex<BTreeMap<String, Instant>>>,
+    /// Session-scoped WebSocket health: consecutive socket losses and pinned HTTP fallback.
+    /// 会话作用域 WebSocket 健康状态：连续 Socket 丢失次数与固定的 HTTP 回退。
+    responses_websocket_health: Arc<StdMutex<BTreeMap<String, ResponsesWebsocketHealth>>>,
 }
 
 impl ProviderExecutionClient {
@@ -156,7 +157,7 @@ impl ProviderExecutionClient {
             prepared_media: Arc::new(StdMutex::new(BTreeMap::new())),
             prepared_media_flights: Arc::new(StdMutex::new(BTreeMap::new())),
             responses_websocket_sessions: Arc::new(TokioMutex::new(BTreeMap::new())),
-            responses_websocket_breakers: Arc::new(StdMutex::new(BTreeMap::new())),
+            responses_websocket_health: Arc::new(StdMutex::new(BTreeMap::new())),
         }
     }
 

@@ -61,34 +61,139 @@ fn responses_websocket_cache_key_is_bounded_and_endpoint_bound() {
     assert_ne!(first, changed);
 }
 
-/// Verifies sticky WebSocket breakers retain a hard LRU bound and refresh existing keys.
-/// 验证粘性 WebSocket 熔断器保持硬性 LRU 上限，并刷新既有键。
+/// Verifies WebSocket health records retain a hard LRU bound and refresh existing keys.
+/// 验证 WebSocket 健康记录保持硬性 LRU 上限，并刷新既有键。
 #[test]
-fn responses_websocket_breakers_are_bounded_and_lru() {
+fn responses_websocket_health_is_bounded_and_lru() {
     let base = Instant::now();
-    let mut breakers = BTreeMap::new();
-    for index in 0..RESPONSES_WEBSOCKET_BREAKER_MAX_ENTRIES {
-        insert_bounded_responses_websocket_breaker(
-            &mut breakers,
+    let mut health = BTreeMap::new();
+    for index in 0..RESPONSES_WEBSOCKET_HEALTH_MAX_ENTRIES {
+        bounded_responses_websocket_health(
+            &mut health,
             format!("key-{index:04}").as_str(),
             base + Duration::from_millis(index as u64),
         );
     }
-    insert_bounded_responses_websocket_breaker(
-        &mut breakers,
-        "key-0000",
-        base + Duration::from_secs(10),
-    );
-    insert_bounded_responses_websocket_breaker(
-        &mut breakers,
-        "key-new",
-        base + Duration::from_secs(11),
-    );
+    bounded_responses_websocket_health(&mut health, "key-0000", base + Duration::from_secs(10));
+    bounded_responses_websocket_health(&mut health, "key-new", base + Duration::from_secs(11));
 
-    assert_eq!(breakers.len(), RESPONSES_WEBSOCKET_BREAKER_MAX_ENTRIES);
-    assert!(breakers.contains_key("key-0000"));
-    assert!(!breakers.contains_key("key-0001"));
-    assert!(breakers.contains_key("key-new"));
+    assert_eq!(health.len(), RESPONSES_WEBSOCKET_HEALTH_MAX_ENTRIES);
+    assert!(health.contains_key("key-0000"));
+    assert!(!health.contains_key("key-0001"));
+    assert!(health.contains_key("key-new"));
+}
+
+/// Verifies only repeated consecutive socket losses pin a session to HTTP.
+/// 验证只有连续多次 Socket 丢失才会把会话固定到 HTTP。
+#[test]
+fn responses_websocket_pins_http_only_after_consecutive_stream_failures() {
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+    for _ in 1..RESPONSES_WEBSOCKET_MAX_STREAM_FAILURES {
+        client.record_responses_websocket_stream_failure("key");
+    }
+    assert!(!client.responses_websocket_disabled("key"));
+    client.record_responses_websocket_success("key");
+    for _ in 1..RESPONSES_WEBSOCKET_MAX_STREAM_FAILURES {
+        client.record_responses_websocket_stream_failure("key");
+    }
+    assert!(
+        !client.responses_websocket_disabled("key"),
+        "a completed response must reset the consecutive-loss count"
+    );
+    client.record_responses_websocket_stream_failure("key");
+    assert!(client.responses_websocket_disabled("key"));
+    client.record_responses_websocket_success("key");
+    assert!(
+        client.responses_websocket_disabled("key"),
+        "a pinned HTTP fallback must stay in effect"
+    );
+}
+
+/// Verifies a socket lost mid-response keeps WebSocket and the retry reconnects.
+/// 验证响应途中丢失的 Socket 保留 WebSocket，重试会重新建立连接。
+#[tokio::test]
+async fn websocket_mid_response_loss_reconnects_instead_of_falling_back() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let address = listener.local_addr().expect("address should resolve");
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("WS client should connect");
+        let mut websocket = accept_async(stream)
+            .await
+            .expect("WS upgrade should succeed");
+        let _ = websocket.next().await.expect("WS request should arrive");
+        drop(websocket);
+
+        let (stream, _) = listener.accept().await.expect("WS client should reconnect");
+        let mut websocket = accept_async(stream)
+            .await
+            .expect("WS upgrade should succeed again");
+        let _ = websocket.next().await.expect("WS retry should arrive");
+        websocket
+            .send(Message::Text(
+                json!({"type":"response.completed","response":{"id":"response-2"}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("retry completion should send");
+        websocket
+    });
+
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+    let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+    route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
+    route.protocol_route.base_url_override = Some(format!("http://{address}"));
+    route.protocol_route.responses_features = Some(ResponsesRouteFeatures {
+        remote_compaction: ResponsesRemoteCompactionPolicy::Disabled,
+        websocket: ResponsesWebsocketPolicy::Verified,
+        recovery: Default::default(),
+    });
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+        .expect("test key should validate")
+        .execution_secret()
+        .expect("test key should resolve");
+    let mut request = request_with_codex_continuation();
+    request.cache_scope_id = Some(String::from("session-lost-socket"));
+
+    let mut lost = client.execute(
+        route.clone(),
+        request.clone(),
+        secret.clone(),
+        String::from("execution-lost"),
+    );
+    let failure = loop {
+        match lost.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(failure)) => break failure,
+            None => panic!("lost-socket attempt must fail"),
+        }
+    };
+    assert!(!failure.error.semantic_output_observed);
+    drop(lost);
+
+    let mut retry = client.execute(route, request, secret, String::from("execution-retry"));
+    let mut websocket_observed = false;
+    let mut completed = false;
+    while let Some(event) = retry.next().await {
+        match event.expect("WebSocket retry should succeed") {
+            AiStreamEvent::TransportObserved { transport, .. } => {
+                websocket_observed |= transport == AiTransportKind::ResponsesWebsocket;
+            }
+            AiStreamEvent::ResponseCompleted => completed = true,
+            _ => {}
+        }
+    }
+    assert!(websocket_observed);
+    assert!(completed);
+    let _websocket = server.await.expect("server should finish");
 }
 
 /// Verifies store=false HTTP never emits a cursor and WS requires exact socket ownership.

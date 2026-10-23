@@ -1,11 +1,16 @@
 //! OpenAI Responses WebSocket session transport adapted from the Codex connection model.
 //! 基于 Codex 连接模型适配的 OpenAI Responses WebSocket 会话传输。
 
-use futures_util::{FutureExt, SinkExt, StreamExt};
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
     tungstenite::{
@@ -17,9 +22,29 @@ use tokio_tungstenite::{
 
 use crate::LlmCoreError;
 
-/// Default maximum lifetime kept below the provider's documented sixty-minute limit.
-/// 默认最大生命周期低于供应商文档规定的六十分钟限制。
-pub const DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE: Duration = Duration::from_secs(59 * 60);
+/// Default maximum lifetime, leaving a long response room before the provider's sixty-minute limit.
+/// 默认最大生命周期，在供应商六十分钟限制前为长响应留出余量。
+pub const DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE: Duration = Duration::from_secs(55 * 60);
+
+/// Concrete provider socket split between the session writer and its background reader.
+/// 在会话写入端与后台读取器之间拆分的具体供应商 Socket。
+type ProviderSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// One application frame or the terminal read failure forwarded by the background reader.
+/// 后台读取器转发的一条应用帧或终止性读取失败。
+type ReaderItem = Result<Message, String>;
+
+/// Connection health shared between the session and its background reader.
+/// 会话与其后台读取器共享的连接健康状态。
+#[derive(Default)]
+struct ReaderState {
+    /// Whether one response currently owns the connection.
+    /// 当前是否有一条响应占用此连接。
+    in_flight: AtomicBool,
+    /// Whether the socket closed, failed, or delivered data while no response owned it.
+    /// Socket 是否已关闭、失败，或在无响应占用时收到数据。
+    poisoned: AtomicBool,
+}
 
 /// Official control error requiring a fresh Responses WebSocket connection.
 /// 要求新建 Responses WebSocket 连接的官方控制错误。
@@ -85,15 +110,21 @@ pub struct ResponsesWebsocketSession {
     /// Immutable handshake and transport limits.
     /// 不可变握手与传输限制。
     config: ResponsesWebsocketConfig,
-    /// Active provider connection.
-    /// 活动供应商连接。
-    connection: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    /// Write half of the provider connection.
+    /// 供应商连接的写入端。
+    sink: SplitSink<ProviderSocket, Message>,
+    /// Frames forwarded by the background reader, which keeps reading while the socket is idle.
+    /// 后台读取器转发的帧；Socket 空闲时读取器仍持续读取。
+    frames: mpsc::UnboundedReceiver<ReaderItem>,
+    /// Background reader task, aborted when the session is dropped.
+    /// 后台读取任务，会话丢弃时中止。
+    reader: JoinHandle<()>,
+    /// Health shared with the background reader.
+    /// 与后台读取器共享的健康状态。
+    state: Arc<ReaderState>,
     /// Connection establishment time used for proactive replacement.
     /// 用于主动换代的连接建立时间。
     connected_at: Instant,
-    /// Whether one response is currently in flight.
-    /// 当前是否有一条响应正在处理中。
-    in_flight: bool,
     /// Most recent response identity cached by this active socket.
     /// 当前活动 Socket 缓存的最新响应标识。
     previous_response_id: Option<String>,
@@ -103,9 +134,12 @@ pub struct ResponsesWebsocketSession {
     /// Most recent application frame retained when local validation returns an error.
     /// 当本地校验返回错误时保留的最近一条应用帧。
     last_raw_frame: Option<ResponsesWebsocketRawFrame>,
-    /// Whether this connection already delivered a terminal event, so the next request reuses it.
-    /// 此连接是否已交付过终态事件，即下一次请求属于连接复用。
-    served_response: bool,
+}
+
+impl Drop for ResponsesWebsocketSession {
+    fn drop(&mut self) {
+        self.reader.abort();
+    }
 }
 
 impl ResponsesWebsocketSession {
@@ -145,71 +179,46 @@ impl ResponsesWebsocketSession {
             .map_err(|error| {
                 LlmCoreError::new(format!("Responses WebSocket handshake failed: {error}"))
             })?;
+        let (sink, stream) = connection.split();
+        let (sender, frames) = mpsc::unbounded_channel();
+        let state = Arc::new(ReaderState::default());
+        let reader = tokio::spawn(read_provider_frames(stream, sender, Arc::clone(&state)));
         Ok(Self {
             config,
-            connection,
+            sink,
+            frames,
+            reader,
+            state,
             connected_at: Instant::now(),
-            in_flight: false,
             previous_response_id: None,
             replace_before_next_request: false,
             last_raw_frame: None,
-            served_response: false,
         })
     }
 
     /// Reports whether this connection must be replaced before another request.
     /// 报告当前连接是否必须在下一次请求前换代。
+    ///
+    /// The background reader marks a socket that closed, failed, or sent data while idle, and any
+    /// frame left over from an earlier response also disqualifies reuse.
+    /// 后台读取器会标记已关闭、失败或在空闲时发送数据的 Socket；更早响应遗留的帧同样禁止复用。
     pub fn replacement_required(&self) -> bool {
         self.replace_before_next_request
             || self.connected_at.elapsed() >= self.config.max_connection_age
-            || matches!(self.connection.get_ref(), MaybeTlsStream::Plain(stream) if stream.peer_addr().is_err())
-    }
-
-    /// Reports whether this connection already delivered a terminal event to an earlier request.
-    /// 报告此连接是否已向更早的请求交付过终态事件。
-    pub fn served_response(&self) -> bool {
-        self.served_response
-    }
-
-    /// Services frames that arrived while no response was in flight.
-    /// 处理在没有处理中响应期间到达的帧。
-    ///
-    /// Nothing reads an idle socket between requests, so a provider close, a reset, or an
-    /// unanswered ping is only observable here; any of them retires the socket before reuse.
-    /// 请求之间没有任何读取者，供应商关闭、连接重置或未应答的 Ping 只能在此处观察到；
-    /// 任一情况都会让该 Socket 在复用前退役。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns no value; replacement state is updated synchronously.
-    /// 不返回值；同步更新换代状态。
-    pub async fn service_idle_frames(&mut self) {
-        if self.in_flight || self.replace_before_next_request {
-            return;
-        }
-        // Each poll is non-blocking: an idle socket without pending input yields nothing.
-        // 每次轮询都不阻塞：没有待读输入的空闲 Socket 不产生任何结果。
-        while let Some(message) = self.connection.next().now_or_never() {
-            match message {
-                Some(Ok(Message::Ping(payload))) => {
-                    if self.connection.send(Message::Pong(payload)).await.is_err() {
-                        self.abandon_response();
-                        return;
-                    }
-                }
-                Some(Ok(Message::Pong(_))) => {}
-                _ => {
-                    self.abandon_response();
-                    return;
-                }
-            }
-        }
+            || self.state.poisoned.load(Ordering::Acquire)
+            || (!self.in_flight() && !self.frames.is_empty())
     }
 
     /// Reports whether one response currently owns this connection.
     /// 报告当前是否有一条响应占用此连接。
     pub fn in_flight(&self) -> bool {
-        self.in_flight
+        self.state.in_flight.load(Ordering::Acquire)
+    }
+
+    /// Records whether one response owns the connection, as seen by the background reader.
+    /// 记录是否有一条响应占用连接，供后台读取器观察。
+    fn set_in_flight(&self, in_flight: bool) {
+        self.state.in_flight.store(in_flight, Ordering::Release);
     }
 
     /// Returns the latest response identity cached by this active socket.
@@ -237,7 +246,7 @@ impl ResponsesWebsocketSession {
     /// Returns no value; in-flight and continuation state are cleared synchronously.
     /// 不返回值；同步清除处理中状态与延续状态。
     pub fn abandon_response(&mut self) {
-        self.in_flight = false;
+        self.set_in_flight(false);
         self.previous_response_id = None;
         self.replace_before_next_request = true;
     }
@@ -254,7 +263,7 @@ impl ResponsesWebsocketSession {
         mut responses_body: Value,
         generate: Option<bool>,
     ) -> Result<(), LlmCoreError> {
-        if self.in_flight {
+        if self.in_flight() {
             return Err(LlmCoreError::new(
                 "Responses WebSocket does not allow multiplexed in-flight responses.",
             ));
@@ -276,13 +285,15 @@ impl ResponsesWebsocketSession {
                 "Responses WebSocket request could not be serialized: {error}"
             ))
         })?;
-        self.connection
-            .send(Message::Text(payload.into()))
-            .await
-            .map_err(|error| {
-                LlmCoreError::new(format!("Responses WebSocket send failed: {error}"))
-            })?;
-        self.in_flight = true;
+        // Ownership is claimed before sending so the reader never treats the reply as idle data.
+        // 在发送前声明占用，使读取器绝不会把回复视为空闲数据。
+        self.set_in_flight(true);
+        if let Err(error) = self.sink.send(Message::Text(payload.into())).await {
+            self.set_in_flight(false);
+            return Err(LlmCoreError::new(format!(
+                "Responses WebSocket send failed: {error}"
+            )));
+        }
         Ok(())
     }
 
@@ -294,24 +305,25 @@ impl ResponsesWebsocketSession {
     /// The next JSON event, `None` after a clean close, or a controlled transport failure.
     /// 返回下一条 JSON 事件；正常关闭后返回 `None`；失败时返回受控传输错误。
     pub async fn next_frame(&mut self) -> Result<Option<ResponsesWebsocketFrame>, LlmCoreError> {
-        if !self.in_flight {
+        if !self.in_flight() {
             return Err(LlmCoreError::new(
                 "Responses WebSocket has no in-flight response.",
             ));
         }
         self.last_raw_frame = None;
         loop {
-            let message = tokio::time::timeout(self.config.idle_timeout, self.connection.next())
+            let message = tokio::time::timeout(self.config.idle_timeout, self.frames.recv())
                 .await
                 .map_err(|_| LlmCoreError::new("Responses WebSocket frame idle timeout."))?;
             let Some(message) = message else {
-                self.in_flight = false;
+                self.set_in_flight(false);
                 self.previous_response_id = None;
                 return Ok(None);
             };
             let message = message.map_err(|error| {
-                self.in_flight = false;
+                self.set_in_flight(false);
                 self.previous_response_id = None;
+                self.replace_before_next_request = true;
                 LlmCoreError::new(format!("Responses WebSocket receive failed: {error}"))
             })?;
             match message {
@@ -322,7 +334,7 @@ impl ResponsesWebsocketSession {
                     };
                     self.last_raw_frame = Some(raw);
                     if text.len() > self.config.max_frame_bytes {
-                        self.in_flight = false;
+                        self.set_in_flight(false);
                         self.previous_response_id = None;
                         return Err(LlmCoreError::new(format!(
                             "Responses WebSocket frame exceeded {} bytes.",
@@ -330,7 +342,7 @@ impl ResponsesWebsocketSession {
                         )));
                     }
                     let value: Value = serde_json::from_str(&text).map_err(|error| {
-                        self.in_flight = false;
+                        self.set_in_flight(false);
                         self.previous_response_id = None;
                         LlmCoreError::new(format!(
                             "Responses WebSocket frame is not valid JSON: {error}"
@@ -346,16 +358,15 @@ impl ResponsesWebsocketSession {
                         .pointer("/error/code")
                         .or_else(|| value.pointer("/response/error/code"))
                         .and_then(Value::as_str);
-                    self.served_response |= completed || failed;
                     if completed {
                         self.previous_response_id = value
                             .pointer("/response/id")
                             .and_then(Value::as_str)
                             .map(str::to_string);
-                        self.in_flight = false;
+                        self.set_in_flight(false);
                     } else if failed {
                         self.previous_response_id = None;
-                        self.in_flight = false;
+                        self.set_in_flight(false);
                         self.replace_before_next_request |=
                             error_code == Some(RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE);
                     }
@@ -369,15 +380,9 @@ impl ResponsesWebsocketSession {
                         failed,
                     }));
                 }
-                Message::Ping(payload) => {
-                    self.connection
-                        .send(Message::Pong(payload))
-                        .await
-                        .map_err(|error| {
-                            LlmCoreError::new(format!("Responses WebSocket pong failed: {error}"))
-                        })?;
-                }
-                Message::Pong(_) => {}
+                // The reader consumes control frames; Tungstenite answers pings while reading.
+                // 读取器消费控制帧；Tungstenite 在读取时自动应答 Ping。
+                Message::Ping(_) | Message::Pong(_) => {}
                 Message::Close(frame) => {
                     self.last_raw_frame = Some(ResponsesWebsocketRawFrame {
                         kind: String::from("close"),
@@ -386,7 +391,7 @@ impl ResponsesWebsocketSession {
                             .map(|frame| frame.reason.as_bytes().to_vec())
                             .unwrap_or_default(),
                     });
-                    self.in_flight = false;
+                    self.set_in_flight(false);
                     self.previous_response_id = None;
                     self.replace_before_next_request = true;
                     let close_code = frame.as_ref().map(|frame| u16::from(frame.code));
@@ -406,7 +411,7 @@ impl ResponsesWebsocketSession {
                         kind: String::from("binary"),
                         payload: payload.to_vec(),
                     });
-                    self.in_flight = false;
+                    self.set_in_flight(false);
                     self.previous_response_id = None;
                     self.replace_before_next_request = true;
                     return Err(LlmCoreError::new(
@@ -418,7 +423,7 @@ impl ResponsesWebsocketSession {
                         kind: String::from("raw"),
                         payload: frame.payload().to_vec(),
                     });
-                    self.in_flight = false;
+                    self.set_in_flight(false);
                     self.previous_response_id = None;
                     self.replace_before_next_request = true;
                     return Err(LlmCoreError::new(
@@ -433,10 +438,50 @@ impl ResponsesWebsocketSession {
     /// 关闭活动连接并清除全部延续状态。
     pub async fn close(&mut self) -> Result<(), LlmCoreError> {
         self.abandon_response();
-        self.connection.close(None).await.map_err(|error| {
+        self.reader.abort();
+        self.sink.close().await.map_err(|error| {
             LlmCoreError::new(format!("Responses WebSocket close failed: {error}"))
         })
     }
+}
+
+/// Reads one provider socket for its whole lifetime, as the opencode session transport does.
+/// 在整个生命周期内持续读取一个供应商 Socket，与 opencode 会话传输一致。
+///
+/// Reading continuously lets Tungstenite answer pings while the socket is idle and surfaces a
+/// close, reset, or unexpected idle frame immediately instead of on the next request.
+/// 持续读取使 Tungstenite 能在空闲时应答 Ping，并立即暴露关闭、重置或意外的空闲帧，
+/// 而不是等到下一次请求。
+///
+/// # Parameters
+/// 参数
+/// `stream` is the socket's read half, `sender` forwards application frames, and `state` is the
+/// health shared with the owning session.
+/// `stream` 是 Socket 读取端，`sender` 转发应用帧，`state` 是与所属会话共享的健康状态。
+async fn read_provider_frames(
+    mut stream: SplitStream<ProviderSocket>,
+    sender: mpsc::UnboundedSender<ReaderItem>,
+    state: Arc<ReaderState>,
+) {
+    while let Some(message) = stream.next().await {
+        match message {
+            Ok(Message::Ping(_) | Message::Pong(_)) => {}
+            Ok(message) => {
+                if !state.in_flight.load(Ordering::Acquire) {
+                    break;
+                }
+                if sender.send(Ok(message)).is_err() {
+                    break;
+                }
+            }
+            Err(error) => {
+                state.poisoned.store(true, Ordering::Release);
+                let _ = sender.send(Err(error.to_string()));
+                return;
+            }
+        }
+    }
+    state.poisoned.store(true, Ordering::Release);
 }
 
 /// Validates bounded transport configuration before any network access.
@@ -745,6 +790,9 @@ mod tests {
                     ))
                     .await
                     .expect("control error should send");
+                // Returning the socket keeps it open, so only the control error decides replacement.
+                // 返回 Socket 使其保持打开，从而只由控制错误决定是否换代。
+                websocket
             });
             let mut session = ResponsesWebsocketSession::connect(test_config(format!(
                 "ws://{address}/v1/responses"
@@ -761,9 +809,9 @@ mod tests {
                 .expect("control frame should read")
                 .expect("control frame should exist");
             assert!(frame.failed);
+            let _websocket = server.await.expect("server should finish");
             assert_eq!(session.previous_response_id(), None);
             assert_eq!(session.replacement_required(), replacement_required);
-            server.await.expect("server should finish");
         }
     }
     /// Verifies a provider close between requests retires the idle socket before reuse.
@@ -801,16 +849,63 @@ mod tests {
             .await
             .expect("frame should read")
             .expect("completion should exist");
-        assert!(session.served_response());
         server.await.expect("server should finish");
-        // The close frame reaches the idle socket asynchronously, so poll within a bounded window.
-        // 关闭帧异步到达空闲 Socket，因此在有界时间窗口内轮询。
+        // The background reader observes the close asynchronously, so poll within a bounded window.
+        // 后台读取器异步观察到关闭，因此在有界时间窗口内轮询。
         let deadline = Instant::now() + Duration::from_secs(2);
         while !session.replacement_required() && Instant::now() < deadline {
-            session.service_idle_frames().await;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(session.replacement_required());
-        assert_eq!(session.previous_response_id(), None);
+    }
+
+    /// Verifies an idle socket answers provider pings and stays reusable.
+    /// 验证空闲 Socket 会应答供应商 Ping 并保持可复用。
+    #[tokio::test]
+    async fn idle_socket_answers_ping_and_stays_reusable() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("address should resolve");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("client should connect");
+            let mut websocket = accept_async(stream).await.expect("upgrade should succeed");
+            let _ = websocket.next().await;
+            websocket
+                .send(Message::Text(
+                    json!({"type":"response.completed","response":{"id":"response-1"}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .expect("completion should send");
+            websocket
+                .send(Message::Ping(b"keepalive".to_vec().into()))
+                .await
+                .expect("idle ping should send");
+            let reply = tokio::time::timeout(Duration::from_secs(2), websocket.next())
+                .await
+                .expect("pong should arrive before the deadline")
+                .expect("socket should stay open")
+                .expect("pong should be readable");
+            assert!(matches!(reply, Message::Pong(payload) if payload.as_ref() == b"keepalive"));
+            websocket
+        });
+        let mut session =
+            ResponsesWebsocketSession::connect(test_config(format!("ws://{address}/v1/responses")))
+                .await
+                .expect("session should connect");
+        session
+            .begin_response(json!({"model":"gpt-5","input":[]}), None)
+            .await
+            .expect("request should send");
+        session
+            .next_frame()
+            .await
+            .expect("frame should read")
+            .expect("completion should exist");
+        let _websocket = server.await.expect("server should finish");
+        assert!(!session.replacement_required());
+        assert_eq!(session.previous_response_id(), Some("response-1"));
     }
 }

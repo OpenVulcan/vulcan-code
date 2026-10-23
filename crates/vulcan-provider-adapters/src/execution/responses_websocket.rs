@@ -53,9 +53,44 @@ const RESPONSES_WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_res
 /// 全部根会话合计允许保留的最大进程内 Responses WebSocket 会话数。
 const RESPONSES_WEBSOCKET_SESSION_MAX_ENTRIES: usize = 256;
 
-/// Maximum sticky Responses WebSocket circuit breakers retained across all roots.
-/// 全部根会话合计允许保留的最大粘性 Responses WebSocket 熔断器数量。
-const RESPONSES_WEBSOCKET_BREAKER_MAX_ENTRIES: usize = 4_096;
+/// Maximum Responses WebSocket health records retained across all roots.
+/// 全部根会话合计允许保留的最大 Responses WebSocket 健康记录数量。
+const RESPONSES_WEBSOCKET_HEALTH_MAX_ENTRIES: usize = 4_096;
+
+/// Consecutive mid-response socket losses after which a session stays on HTTP, as in opencode.
+/// 连续发生多少次响应中途 Socket 丢失后会话固定改走 HTTP，与 opencode 一致。
+const RESPONSES_WEBSOCKET_MAX_STREAM_FAILURES: u32 = 5;
+
+/// WebSocket close code with which the provider asks the client to try again later.
+/// 供应商要求客户端稍后重试时使用的 WebSocket 关闭码。
+const WEBSOCKET_TRY_AGAIN_LATER_CLOSE_CODE: u16 = 1013;
+
+/// Transport health of one session-scoped Responses WebSocket key.
+/// 一个会话作用域 Responses WebSocket 键的传输健康状态。
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ResponsesWebsocketHealth {
+    /// Socket losses since the last response that completed over WebSocket.
+    /// 自上一次经 WebSocket 完成的响应以来的 Socket 丢失次数。
+    consecutive_stream_failures: u32,
+    /// Whether this key stays on HTTP for the rest of the process lifetime.
+    /// 该键是否在进程剩余生命周期内固定使用 HTTP。
+    http_fallback: bool,
+    /// Monotonic timestamp used for deterministic least-recently-used eviction.
+    /// 用于确定性最久未使用淘汰的单调时间戳。
+    last_used_at: Instant,
+}
+
+impl ResponsesWebsocketHealth {
+    /// Creates a healthy record observed at one instant.
+    /// 创建一条在某一时刻观察到的健康记录。
+    fn new(observed_at: Instant) -> Self {
+        Self {
+            consecutive_stream_failures: 0,
+            http_fallback: false,
+            last_used_at: observed_at,
+        }
+    }
+}
 
 /// Stores one shared Responses WebSocket connection and its last cache access.
 /// 保存一个共享 Responses WebSocket 连接及其最近缓存访问时间。
@@ -111,8 +146,7 @@ impl ProviderExecutionClient {
                     })
             };
             if let Some(existing) = existing {
-                let mut session = existing.lock().await;
-                session.service_idle_frames().await;
+                let session = existing.lock().await;
                 if session.replacement_required() {
                     request_without_nonpersistent_responses_continuation(route, request)
                 } else {
@@ -226,7 +260,6 @@ impl ProviderExecutionClient {
                 }
             };
             let mut session = session_handle.lock().await;
-            session.service_idle_frames().await;
             if session.replacement_required() {
                 let _ = session.close().await;
                 *session = match ResponsesWebsocketSession::connect(config).await {
@@ -276,17 +309,12 @@ impl ProviderExecutionClient {
                 .await
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             }
-            // A reused socket can die silently between requests; failing before its first frame
-            // retires only that socket so the retry reconnects instead of leaving WebSocket.
-            // 复用的 Socket 可能在请求间静默失效；在首帧前失败只让该 Socket 退役，
-            // 使重试重新建立连接，而不是离开 WebSocket。
-            let connection_reused = session.served_response();
             if let Err(error) = session.begin_response(encoded.body, None).await {
                 retire_failed_responses_websocket(
                     &client,
                     &mut session,
                     websocket_key.as_str(),
-                    connection_reused,
+                    error.websocket_close_code,
                 );
                 let failure = trace_provider_transport_failure(
                     execution_id.as_str(),
@@ -335,11 +363,9 @@ impl ProviderExecutionClient {
             let mut semantic_output_observed = false;
             let mut stream_state = AiStreamStateMachine::default();
             let mut terminal_observed = false;
-            let mut frame_observed = false;
             loop {
                 let mut frame = match session.next_frame().await {
                     Ok(Some(frame)) => {
-                        frame_observed = true;
                         wire_response_capture.observe_websocket_frame(frame.raw.clone());
                         frame
                     }
@@ -348,7 +374,7 @@ impl ProviderExecutionClient {
                             &client,
                             &mut session,
                             websocket_key.as_str(),
-                            connection_reused && !frame_observed,
+                            None,
                         );
                         let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
@@ -371,7 +397,7 @@ impl ProviderExecutionClient {
                             &client,
                             &mut session,
                             websocket_key.as_str(),
-                            connection_reused && !frame_observed,
+                            error.websocket_close_code,
                         );
                         let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
@@ -605,6 +631,7 @@ impl ProviderExecutionClient {
                 wire_response_capture.observe_failure("protocol_decoder", &failure);
                 Err(failure)?;
             }
+            client.record_responses_websocket_success(websocket_key.as_str());
             emit_provider_transport_trace(
                 execution_id.as_str(),
                 "responses_websocket",
@@ -678,46 +705,76 @@ impl ProviderExecutionClient {
     /// `true` only when this exact cache key has an active process-local breaker.
     /// 仅当该精确缓存键存在活动的进程内熔断器时返回 `true`。
     pub(super) fn responses_websocket_disabled(&self, key: &str) -> bool {
-        let mut breakers = self
-            .responses_websocket_breakers
+        let mut health = self
+            .responses_websocket_health
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(last_used_at) = breakers.get_mut(key) else {
+        let Some(record) = health.get_mut(key).filter(|record| record.http_fallback) else {
             return false;
         };
-        *last_used_at = Instant::now();
+        record.last_used_at = Instant::now();
         true
     }
 
-    /// Activates a sticky circuit breaker for one route and root session.
-    /// 为一条路由与根会话激活粘性熔断器。
+    /// Pins one route and root session to HTTP after a connect failure, as in opencode.
+    /// 在建立连接失败后将一条路由与根会话固定为 HTTP，与 opencode 一致。
     fn disable_responses_websocket(&self, key: &str) {
-        let mut breakers = self
-            .responses_websocket_breakers
+        let mut health = self
+            .responses_websocket_health
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        insert_bounded_responses_websocket_breaker(&mut breakers, key, Instant::now());
+        bounded_responses_websocket_health(&mut health, key, Instant::now()).http_fallback = true;
+    }
+
+    /// Counts one socket lost during a response and pins HTTP after repeated consecutive losses.
+    /// 记录一次响应途中丢失的 Socket，连续多次丢失后固定改走 HTTP。
+    fn record_responses_websocket_stream_failure(&self, key: &str) {
+        let mut health = self
+            .responses_websocket_health
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let record = bounded_responses_websocket_health(&mut health, key, Instant::now());
+        record.consecutive_stream_failures = record.consecutive_stream_failures.saturating_add(1);
+        record.http_fallback |=
+            record.consecutive_stream_failures >= RESPONSES_WEBSOCKET_MAX_STREAM_FAILURES;
+    }
+
+    /// Clears the consecutive-loss count after one response completes over WebSocket.
+    /// 在一次响应经 WebSocket 完成后清除连续丢失计数。
+    fn record_responses_websocket_success(&self, key: &str) {
+        let mut health = self
+            .responses_websocket_health
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if health.get(key).is_some_and(|record| !record.http_fallback) {
+            health.remove(key);
+        }
     }
 }
 
-/// Retires a socket after a transport failure, keeping WebSocket for stale reused connections.
-/// 在传输失败后让 Socket 退役；对失效的复用连接保留 WebSocket。
+/// Retires a socket after a transport failure and records the loss against its session.
+/// 在传输失败后让 Socket 退役，并为其会话记录这次丢失。
+///
+/// A provider close asking to try again later pins HTTP at once; any other loss only counts
+/// toward the consecutive-failure limit, so the retry reconnects over WebSocket.
+/// 供应商以“稍后重试”关闭时立即固定为 HTTP；其他丢失只计入连续失败上限，
+/// 因此重试会重新建立 WebSocket 连接。
 ///
 /// # Parameters
 /// 参数
-/// `stale_reuse` is true only when a socket that already served a request failed before
-/// delivering any frame; every other failure activates the sticky HTTP breaker as before.
-/// `stale_reuse` 仅在已服务过请求的 Socket 于交付任何帧之前失败时为真；其他失败照旧
-/// 激活粘性 HTTP 熔断器。
+/// `close_code` is the provider close code that ended the response, when one was received.
+/// `close_code` 是结束本次响应的供应商关闭码（若收到）。
 fn retire_failed_responses_websocket(
     client: &ProviderExecutionClient,
     session: &mut ResponsesWebsocketSession,
     websocket_key: &str,
-    stale_reuse: bool,
+    close_code: Option<u16>,
 ) {
     session.abandon_response();
-    if !stale_reuse {
+    if close_code == Some(WEBSOCKET_TRY_AGAIN_LATER_CLOSE_CODE) {
         client.disable_responses_websocket(websocket_key);
+    } else {
+        client.record_responses_websocket_stream_failure(websocket_key);
     }
 }
 
@@ -887,36 +944,43 @@ fn oldest_idle_responses_websocket_session_key(
         .map(|(key, _)| key.clone())
 }
 
-/// Inserts one sticky WebSocket breaker while enforcing a deterministic LRU capacity bound.
-/// 在强制确定性 LRU 容量上限的同时插入一个粘性 WebSocket 熔断器。
+/// Returns one WebSocket health record while enforcing a deterministic LRU capacity bound.
+/// 在强制确定性 LRU 容量上限的同时返回一条 WebSocket 健康记录。
 ///
 /// # Parameters
 /// 参数
-/// `breakers` is the mutable process-local breaker table, `key` is the opaque session key, and
+/// `health` is the mutable process-local health table, `key` is the opaque session key, and
 /// `observed_at` is the monotonic access timestamp.
-/// `breakers` 是可变进程内熔断器表，`key` 是不透明会话键，`observed_at` 是单调访问时间。
+/// `health` 是可变进程内健康表，`key` 是不透明会话键，`observed_at` 是单调访问时间。
 ///
 /// # Returns
 /// 返回值
-/// No value; an older breaker is evicted before a new key can exceed the hard limit.
-/// 不返回值；新键超过硬上限前会先淘汰一个更旧的熔断器。
-fn insert_bounded_responses_websocket_breaker(
-    breakers: &mut BTreeMap<String, Instant>,
+/// The existing or newly created record with its access time refreshed; an older record is
+/// evicted before a new key can exceed the hard limit.
+/// 返回已刷新访问时间的既有或新建记录；新键超过硬上限前会先淘汰一条更旧的记录。
+fn bounded_responses_websocket_health<'a>(
+    health: &'a mut BTreeMap<String, ResponsesWebsocketHealth>,
     key: &str,
     observed_at: Instant,
-) {
-    if !breakers.contains_key(key)
-        && breakers.len() >= RESPONSES_WEBSOCKET_BREAKER_MAX_ENTRIES
-        && let Some(oldest_key) = breakers
+) -> &'a mut ResponsesWebsocketHealth {
+    if !health.contains_key(key)
+        && health.len() >= RESPONSES_WEBSOCKET_HEALTH_MAX_ENTRIES
+        && let Some(oldest_key) = health
             .iter()
-            .min_by(|(left_key, left_at), (right_key, right_at)| {
-                left_at.cmp(right_at).then_with(|| left_key.cmp(right_key))
+            .min_by(|(left_key, left), (right_key, right)| {
+                left.last_used_at
+                    .cmp(&right.last_used_at)
+                    .then_with(|| left_key.cmp(right_key))
             })
             .map(|(oldest_key, _)| oldest_key.clone())
     {
-        breakers.remove(oldest_key.as_str());
+        health.remove(oldest_key.as_str());
     }
-    breakers.insert(key.to_string(), observed_at);
+    let record = health
+        .entry(key.to_string())
+        .or_insert_with(|| ResponsesWebsocketHealth::new(observed_at));
+    record.last_used_at = observed_at;
+    record
 }
 
 /// Converts the exact HTTP Responses endpoint to its WebSocket scheme.
