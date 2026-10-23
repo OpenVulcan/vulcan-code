@@ -43,11 +43,12 @@ function toolEvent(status: ToolCallEvent["status"], startedAtMs: number, finishe
 
 // renderCall mounts one frame for the call and returns the timer text, or null when no timer shows.
 // renderCall 为该调用挂载一个框架，并返回计时文本；不显示计时器时返回 null。
-function renderCall(event: ToolCallEvent): () => string | null {
+function renderCall(event: ToolCallEvent, timed?: boolean): () => string | null {
   const call = readToolCall(event);
   act(() => root.render(
     <I18nProvider initialLocale="en-US">
-      <ToolFrame call={call} family="media" icon={Wrench} onOpenChange={() => undefined} open={false} state={call.state} verb="tool" />
+      <ToolFrame call={call} family="media" icon={Wrench} onOpenChange={() => undefined} open={false} state={call.state}
+        timed={timed} verb="tool" />
     </I18nProvider>,
   ));
   return () => host.querySelector(".vk-tool-elapsed")?.textContent ?? null;
@@ -60,6 +61,13 @@ it("ticks while the call runs", () => {
   act(() => vi.advanceTimersByTime(3_500));
   expect(elapsed()).toBe(formatToolDuration(3_500));
   expect(host.querySelector(".vk-tool-elapsed[data-live]")).not.toBeNull();
+});
+
+it("shows no timer while the call waits on the user, or ever on an untimed card", () => {
+  vi.setSystemTime(10_000);
+  expect(renderCall(toolEvent("waiting_user", 0))()).toBeNull();
+  expect(renderCall(toolEvent("running", 0), false)()).toBeNull();
+  expect(renderCall(toolEvent("completed", 0, SLOW_TOOL_CALL_MS + 1_000), false)()).toBeNull();
 });
 
 it("keeps the duration only for a slow finished call", () => {

@@ -97,6 +97,9 @@ export interface ToolFrameProps extends Pick<ToolCardProps, "family" | "open" | 
   // Right-aligned facts such as line counts, diffstat, exit code or duration.
   // 右对齐事实，例如行数、差异统计、退出码或耗时。
   meta?: React.ReactNode;
+  // False for a call whose time is spent waiting on the user, such as ask; such a card shows no timer.
+  // 调用时间耗在等待用户上（如 ask）时为 false；此类卡片不显示计时器。
+  timed?: boolean;
   // Body content; a card without one has a fixed head row.
   // 正文内容；没有正文的卡片只有固定标题行。
   children?: React.ReactNode;
@@ -126,11 +129,12 @@ function ToolFileAction(props: { path: string; lines: WorkspaceFileLines | null;
   );
 }
 
-// ToolElapsed times one call: it ticks while the call is unfinished and, once it ends, stays only for a slow call.
-// ToolElapsed 为单次调用计时：调用未结束时持续走动；结束后只在慢调用上保留。
+// ToolElapsed times one call: it ticks while the call runs, pauses from view while it waits on the user, and once
+// the call ends stays only for a slow call.
+// ToolElapsed 为单次调用计时：调用运行时持续走动，等待用户期间不显示；调用结束后只在慢调用上保留。
 function ToolElapsed(props: { call: ToolCall }) {
   const startedAtMs = props.call.event.started_at_ms;
-  const live = startedAtMs !== undefined && (props.call.state === "running" || props.call.state === "waiting");
+  const live = startedAtMs !== undefined && props.call.state === "running";
   const [nowMs, setNowMs] = React.useState(() => Date.now());
   React.useEffect(() => {
     if (!live) return undefined;
@@ -140,7 +144,7 @@ function ToolElapsed(props: { call: ToolCall }) {
   }, [live]);
   if (live) return <span className="vk-tool-elapsed" data-live="">{formatToolDuration(Math.max(0, nowMs - startedAtMs))}</span>;
   const duration = props.call.durationMs;
-  return duration !== null && duration > SLOW_TOOL_CALL_MS
+  return props.call.state !== "waiting" && duration !== null && duration > SLOW_TOOL_CALL_MS
     ? <span className="vk-tool-elapsed">{formatToolDuration(duration)}</span>
     : null;
 }
@@ -162,7 +166,7 @@ export function ToolFrame(props: ToolFrameProps) {
       <span className="vk-tool-meta">
         {props.meta}
         {props.call?.request ? <ToolRequestMark request={props.call.request} state={props.state} /> : null}
-        {props.call && !props.call.request ? <ToolElapsed call={props.call} /> : null}
+        {props.call && !props.call.request && props.timed !== false ? <ToolElapsed call={props.call} /> : null}
       </span>
       <ToolStateMark state={props.state} />
       {expandable ? <ChevronRight aria-hidden="true" className="vk-tool-chev" /> : <span />}

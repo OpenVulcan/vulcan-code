@@ -77,6 +77,7 @@ export function AskCard(props: ToolCardProps) {
       state={call.state}
       target={target}
       targetTitle={target}
+      timed={false}
       verb={t("toolCard.ask.title")}
     >
       {call.isError ? <ErrorNote text={call.modelOutput} /> : questions.length > 0 ? (
