@@ -76,7 +76,8 @@ export interface PublicAiCredentialProfile {
     | "deep_seek_balance"
     | "kimi_coding_plan"
     | "command_code_usage"
-    | "open_design_wallet";
+    | "open_design_wallet"
+    | "open_ai_codex_usage";
   authentication?: string;
   key_prefix?: string;
 }
@@ -559,7 +560,8 @@ export interface PublicAiConnection {
     | "deep_seek_balance"
     | "kimi_coding_plan"
     | "command_code_usage"
-    | "open_design_wallet";
+    | "open_design_wallet"
+    | "open_ai_codex_usage";
   // Whether usage refresh needs a separate provider-management credential.
   // 用量刷新是否需要独立的供应商管理凭据。
   usage_requires_management_key: boolean;

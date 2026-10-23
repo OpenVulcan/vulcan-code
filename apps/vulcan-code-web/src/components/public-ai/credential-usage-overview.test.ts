@@ -4,6 +4,7 @@ import type { TranslationKey } from "@/i18n"
 import type { PublicAiAccountUsageWindow, PublicAiCredentialProfile } from "@/types"
 
 import {
+  codexUsageWindowLabel,
   commandCodeUsageRows,
   commandCodeUsageWindowLabel,
   formatCurrencyAmount,
@@ -110,6 +111,7 @@ describe("usageCapabilitySupportsQuotaWindows", () => {
     expect(usageCapabilitySupportsQuotaWindows("command_code_usage")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("open_design_wallet")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("opencode_go")).toBe(true)
+    expect(usageCapabilitySupportsQuotaWindows("open_ai_codex_usage")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("open_router_credits")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("deep_seek_balance")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("unsupported")).toBe(false)
@@ -149,6 +151,26 @@ describe("OpenDesign plan presentation", () => {
     expect(usageWindowPercentage({ ...window, remaining: "0" })).toBe(0)
     expect(usageWindowPercentage({ ...window, remaining: window.total })).toBe(100)
     expect(usageWindowPercentage({ ...window, available: false })).toBeNull()
+  })
+})
+
+describe("codexUsageWindowLabel", () => {
+  // Period labels follow the reported duration, and model buckets keep their provider name as a prefix.
+  // 周期标签跟随报告的时长，模型限额桶保留供应商名称作为前缀。
+  it("derives the period from duration metadata and prefixes bucket names", () => {
+    // Translation keys identify formatting behavior without freezing localized wording.
+    // 目录键标识格式行为，不锁定本地化文案。
+    const translation = (key: TranslationKey) => `${key} {count}`
+    const window = kimiUsageWindow("codex:primary")
+    expect(codexUsageWindowLabel({ ...window, duration_seconds: 18000 }, translation))
+      .toBe("composer.accountCard.codexHoursWindow 5")
+    expect(codexUsageWindowLabel({ ...window, duration_seconds: 604800 }, translation))
+      .toBe("composer.accountCard.codexWeeklyWindow {count}")
+    expect(codexUsageWindowLabel({ ...window, duration_seconds: 172800 }, translation))
+      .toBe("composer.accountCard.codexDaysWindow 2")
+    expect(codexUsageWindowLabel({ ...window, duration_seconds: 604800, bucket_name: "Bucket" }, translation))
+      .toBe("Bucket · composer.accountCard.codexWeeklyWindow {count}")
+    expect(codexUsageWindowLabel({ ...window, display_name: "Provider" }, translation)).toBe("Provider")
   })
 })
 

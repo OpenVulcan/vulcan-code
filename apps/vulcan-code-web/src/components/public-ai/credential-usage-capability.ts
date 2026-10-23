@@ -21,6 +21,7 @@ export function usageCapabilitySupportsQuotaWindows(
     || capability === "kimi_coding_plan"
     || capability === "command_code_usage"
     || capability === "open_design_wallet"
+    || capability === "open_ai_codex_usage"
 }
 
 // usageCapabilityRequiresManagementKey returns whether one registered usage primitive needs a separate credential.

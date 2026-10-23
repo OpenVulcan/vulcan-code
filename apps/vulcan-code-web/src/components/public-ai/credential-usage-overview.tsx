@@ -265,6 +265,9 @@ function CredentialUsageSummary(props: {
   if (props.credentialProfile?.account_usage_query === "open_design_wallet") {
     return <OpenDesignUsageSummary windows={props.usage.quota_windows} />
   }
+  if (props.credentialProfile?.account_usage_query === "open_ai_codex_usage") {
+    return <CodexUsageSummary windows={props.usage.quota_windows} />
+  }
   return (
     <div className="vk-usage-windows">
       {props.usage.quota_windows.slice(0, 3).map((window) => (
@@ -349,6 +352,55 @@ function OpenDesignUsageSummary(props: { windows: PublicAiAccountUsageWindow[] }
         <UsageWindowMetric
           key={window.id}
           label={openDesignUsageWindowLabel(window, t)}
+          window={window}
+          showRemainingPercentage
+          showReset
+        />
+      ))}
+    </div>
+  )
+}
+
+// codexUsageWindowLabel names a Codex window by its provider-reported period and optional limit bucket.
+// codexUsageWindowLabel 按供应商报告的周期及可选限额桶命名一个 Codex 窗口。
+// window supplies exact metadata and t resolves catalog keys; returns the period label, prefixed by
+// the bucket name for model-specific limits, or the provider display name when the period is absent.
+// window 提供精确元数据，t 解析目录键；返回周期标签，模型专属限额前置桶名称，周期缺失时返回供应商显示名称。
+export function codexUsageWindowLabel(
+  window: PublicAiAccountUsageWindow,
+  t: (key: TranslationKey) => string,
+): string {
+  const duration = window.duration_seconds
+  const secondsPerHour = 60 * 60
+  const secondsPerDay = 24 * secondsPerHour
+  let period: string | undefined
+  if (duration !== undefined && Number.isSafeInteger(duration) && duration > 0) {
+    if (duration === 7 * secondsPerDay) {
+      period = t("composer.accountCard.codexWeeklyWindow")
+    } else if (duration % secondsPerDay === 0) {
+      period = t("composer.accountCard.codexDaysWindow").replace("{count}", String(duration / secondsPerDay))
+    } else if (duration % secondsPerHour === 0) {
+      period = t("composer.accountCard.codexHoursWindow").replace("{count}", String(duration / secondsPerHour))
+    }
+  }
+  if (!period) {
+    return window.display_name
+  }
+  return window.bucket_name ? `${window.bucket_name} · ${period}` : period
+}
+
+// Renders every Codex window from props.windows as a remaining-percentage bar with its reset countdown.
+// 将 props.windows 中每个 Codex 窗口渲染为带重置倒计时的剩余百分比进度条。
+function CodexUsageSummary(props: { windows: PublicAiAccountUsageWindow[] }) {
+  // t resolves period names from the shared language catalog.
+  // t 从共享语言目录解析周期名称。
+  const { t } = useI18n()
+  return (
+    <div className="vk-usage-windows" data-slot="codex-usage">
+      {props.windows.map((window) => (
+        <UsageWindowMetric
+          key={window.id}
+          label={codexUsageWindowLabel(window, t)}
           window={window}
           showRemainingPercentage
           showReset
