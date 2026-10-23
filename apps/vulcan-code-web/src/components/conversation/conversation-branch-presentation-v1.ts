@@ -286,7 +286,9 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
 
     // Bind drafts to the exact unfinished API and reject already handed-off or terminal identities.
     // 将草稿绑定到精确未结束 API，排除已交接或终态身份。
-    const projectedMessages = appendToolRequestDraftMessages(sessionId, messages, events, requestDrafts);
+    const projectedMessages = appendToolRequestDraftMessages(
+      sessionId, mergeConsecutiveContextInjections(messages, t), events, requestDrafts,
+    );
     return {
       messages: projectedMessages,
       renderItems: projectRenderItems(projectedMessages),
@@ -1007,27 +1009,92 @@ function contextInjectionMessage(
   rootInput: V1RootInputPresentationMetadata | undefined,
   t: Translation,
 ): ConversationMessage {
-  const category = contextInjectionCategory(event.context_key);
-  const longestRun = Math.max(0, ...(event.content.match(/`{3,}/g) ?? []).map((run) => run.length));
-  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return contextInjectionNotice({ ...base, metadata: presentationMetadata(summary, rootInput) }, [{
+    context_key: event.context_key,
+    category: contextInjectionCategory(event.context_key),
+    operation: event.operation,
+    content: event.content,
+  }], t);
+}
+
+// ContextInjectionEntry is one injected prompt shown inside a context-injection card.
+// ContextInjectionEntry 是上下文注入卡片中显示的一条注入提示词。
+interface ContextInjectionEntry {
+  context_key: string;
+  category: ContextInjectionCategory;
+  operation: SystemContextBody["operation"];
+  content: string;
+}
+
+// contextInjectionNotice builds one card for one or more consecutive injections: the title names each
+// category once, in order, and the detail lists every exact text the model received.
+// contextInjectionNotice 为一条或多条连续注入构建一张卡片：标题按顺序列出各类别（各一次），
+// 详情列出模型收到的每段原文。
+function contextInjectionNotice(
+  base: Pick<ConversationMessage, "id" | "conversationId" | "createdAt" | "metadata">,
+  entries: readonly ContextInjectionEntry[],
+  t: Translation,
+): ConversationMessage {
+  const categories = [...new Set(entries.map((entry) => entry.category))];
+  const operations = new Set(entries.map((entry) => entry.operation));
+  const operationLabel = (operation: ContextInjectionEntry["operation"]) => t(operation === "remove"
+    ? "conversation.contextInjection.remove"
+    : "conversation.contextInjection.upsert");
+  const sections = entries.map((entry) => {
+    const longestRun = Math.max(0, ...(entry.content.match(/`{3,}/g) ?? []).map((run) => run.length));
+    const fence = "`".repeat(Math.max(3, longestRun + 1));
+    return `**${t(`conversation.contextInjection.category.${entry.category}`)}** · ${operationLabel(entry.operation)}`
+      + `\n\n${fence}text\n${entry.content}\n${fence}`;
+  });
   return {
     ...base,
     role: "assistant",
     recordKind: "display-note",
-    title: t("conversation.contextInjection.title")
-      .replace("{category}", t(`conversation.contextInjection.category.${category}`)),
-    body: `**${t("conversation.contextInjection.content")}**\n\n${fence}text\n${event.content}\n${fence}`,
+    title: t("conversation.contextInjection.title").replace(
+      "{category}",
+      categories.map((category) => t(`conversation.contextInjection.category.${category}`)).join("/"),
+    ),
+    body: [`**${t("conversation.contextInjection.content")}**`, ...sections].join("\n\n"),
     metadata: {
-      ...presentationMetadata(summary, rootInput),
+      ...(base.metadata as Record<string, unknown> | undefined),
       notice_kind: "context_injection",
-      context_key: event.context_key,
-      context_category: category,
-      summary: t(event.operation === "remove"
-        ? "conversation.contextInjection.remove"
-        : "conversation.contextInjection.upsert"),
+      context_entries: entries,
+      context_categories: categories,
+      summary: operations.size > 1
+        ? t("conversation.contextInjection.mixed")
+        : operationLabel(entries[0]!.operation),
       status: "completed",
     },
   };
+}
+
+// mergeConsecutiveContextInjections folds every run of adjacent injection cards into one card, so a
+// request that injects several prompts shows a single combined notice.
+// mergeConsecutiveContextInjections 把每段相邻的注入卡片合并为一张，使一次注入多段提示词的请求只显示一条合并提示。
+function mergeConsecutiveContextInjections(
+  messages: readonly ConversationMessage[],
+  t: Translation,
+): ConversationMessage[] {
+  const entriesOf = (message: ConversationMessage) => (
+    message.metadata as { notice_kind?: unknown; context_entries?: ContextInjectionEntry[] } | undefined
+  );
+  const merged: ConversationMessage[] = [];
+  let run: ConversationMessage[] = [];
+  const flush = () => {
+    if (run.length === 1) merged.push(run[0]!);
+    if (run.length > 1) merged.push(contextInjectionNotice(run[0]!, run.flatMap((message) => entriesOf(message)?.context_entries ?? []), t));
+    run = [];
+  };
+  for (const message of messages) {
+    if (entriesOf(message)?.notice_kind === "context_injection") {
+      run.push(message);
+      continue;
+    }
+    flush();
+    merged.push(message);
+  }
+  flush();
+  return merged;
 }
 
 // markdownCodeSpan wraps text in a code span whose fence outlasts any backtick run inside it.

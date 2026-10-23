@@ -6212,5 +6212,6 @@
   "conversation.contextInjection.category.other": "autre",
   "conversation.contextInjection.upsert": "Instructions envoyées à l’IA",
   "conversation.contextInjection.remove": "Instructions retirées",
+  "conversation.contextInjection.mixed": "Instructions mises à jour",
   "conversation.contextInjection.content": "Texte reçu par l’IA"
 }

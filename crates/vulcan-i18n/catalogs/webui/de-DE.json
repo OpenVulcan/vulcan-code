@@ -6212,5 +6212,6 @@
   "conversation.contextInjection.category.other": "Sonstiges",
   "conversation.contextInjection.upsert": "Anweisungen an die KI gesendet",
   "conversation.contextInjection.remove": "Anweisungen zurückgezogen",
+  "conversation.contextInjection.mixed": "Anweisungen aktualisiert",
   "conversation.contextInjection.content": "Von der KI empfangener Text"
 }

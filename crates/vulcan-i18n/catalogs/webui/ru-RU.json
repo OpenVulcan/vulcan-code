@@ -6212,5 +6212,6 @@
   "conversation.contextInjection.category.other": "другое",
   "conversation.contextInjection.upsert": "Инструкции отправлены ИИ",
   "conversation.contextInjection.remove": "Инструкции отозваны",
+  "conversation.contextInjection.mixed": "Инструкции обновлены",
   "conversation.contextInjection.content": "Текст, полученный ИИ"
 }

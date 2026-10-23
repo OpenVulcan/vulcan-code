@@ -6212,5 +6212,6 @@
   "conversation.contextInjection.category.other": "その他",
   "conversation.contextInjection.upsert": "AI に指示を送信しました",
   "conversation.contextInjection.remove": "指示を取り消しました",
+  "conversation.contextInjection.mixed": "AI への指示を更新しました",
   "conversation.contextInjection.content": "AI が受け取った原文"
 }

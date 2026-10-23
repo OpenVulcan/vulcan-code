@@ -136,15 +136,18 @@ describe("V1 branch request configuration presentation", () => {
     ], EMPTY_RESOURCES, (key) => key);
     const meta = (message: (typeof presentation.messages)[number]) => message.metadata as Record<string, unknown> | undefined;
     const notices = presentation.messages.filter((message) => meta(message)?.notice_kind === "context_injection");
-    expect(notices.map((message) => meta(message)?.context_category)).toEqual(["plan", "tools", "plan"]);
+    // Adjacent injections merge into one card; the memory recall card separates the later removal.
+    // 相邻注入合并为一张卡片；记忆召回卡把之后的移除分隔开。
+    expect(notices.map((message) => meta(message)?.context_categories)).toEqual([["plan", "tools"], ["plan"]]);
     expect(notices.map((message) => meta(message)?.summary)).toEqual([
-      "conversation.contextInjection.upsert", "conversation.contextInjection.upsert", "conversation.contextInjection.remove",
+      "conversation.contextInjection.upsert", "conversation.contextInjection.remove",
     ]);
-    const [block] = parseConversationBlocks(notices[1]!);
+    expect(notices[0]!.title).toBe("conversation.contextInjection.title");
+    const [block] = parseConversationBlocks(notices[0]!);
     expect(block?.kind).toBe("notice");
     // The fence outlasts backtick runs inside the content, so the exact text stays one code block.
     // 围栏长于正文中的反引号串，使原文保持为一个代码块。
-    expect(notices[1]!.body).toContain("````text\nModel extensions changed: image_generate uses ```fixed```.\n````");
+    expect(notices[0]!.body).toContain("````text\nModel extensions changed: image_generate uses ```fixed```.\n````");
   });
   // Parameters: none. Returns: none; tests the actual branch adapter's initial suppression and display-name fields.
   // 参数：无。返回值：无；测试真实分支适配器对首次提示的抑制以及展示名称字段。
