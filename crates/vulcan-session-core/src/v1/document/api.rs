@@ -2043,6 +2043,7 @@ impl SessionDocument {
                         ToolTerminalErrorKind::Interrupted,
                     ));
                     tool.finished_at_ms = Some(now_ms);
+                    tool.settle_user_wait(now_ms);
                 }
                 _ => unreachable!("active API event kind was validated before mutation"),
             })?;

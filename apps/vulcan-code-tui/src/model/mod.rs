@@ -253,6 +253,9 @@ pub enum EventBody {
         status: ToolCallStatus,
         started_at_ms: Option<u64>,
         finished_at_ms: Option<u64>,
+        /// Milliseconds spent waiting on the user (approvals, Ask answers), excluded from the duration.
+        /// 等待用户（审批、Ask 回答）的毫秒数，不计入耗时。
+        user_wait_ms: u64,
     },
     /// Rendered from `display_note`; the service sends a reason code that the client localizes.
     /// 来自 `display_note`；服务发送原因代码，由客户端本地化。

@@ -252,7 +252,8 @@ pub(super) fn validate_tool_lifecycle_shape(tool: &ToolCallEvent) -> Result<(), 
         // timestamp is mandatory for this explicit shutdown transition.
         // 已可靠 Prepared 的工具可能在主体启动前被中断，因此该显式关闭转换只强制终态时间戳。
         ToolCallStatus::Interrupted => tool.finished_at_ms.is_some(),
-    };
+    } && (tool.user_wait_started_at_ms.is_none()
+        || tool.status == ToolCallStatus::WaitingUser);
     if !valid {
         return Err(DomainError::ImmutableFieldMutation {
             entity: "tool_call",
@@ -447,6 +448,8 @@ impl SessionDocument {
                     status: ToolCallStatus::Prepared,
                     started_at_ms: None,
                     finished_at_ms: None,
+                    user_wait_started_at_ms: None,
+                    user_wait_ms: None,
                     provider_tool_call_id: preparation.provider_tool_call_id,
                     external_refs: Vec::new(),
                     generated_resources: Vec::new(),
@@ -676,6 +679,7 @@ impl SessionDocument {
             ToolCallStatus::Running => {
                 self.update_tool_in_place(api_call_id, tool_call_id, now_ms, |tool| {
                     tool.status = ToolCallStatus::WaitingUser;
+                    tool.user_wait_started_at_ms = Some(now_ms);
                 })?;
                 Ok(true)
             }
@@ -706,6 +710,7 @@ impl SessionDocument {
             ToolCallStatus::WaitingUser => {
                 self.update_tool_in_place(api_call_id, tool_call_id, now_ms, |tool| {
                     tool.status = ToolCallStatus::Running;
+                    tool.settle_user_wait(now_ms);
                 })?;
                 Ok(true)
             }
@@ -978,6 +983,7 @@ impl SessionDocument {
                 tool.changeset = completion.changeset;
                 tool.status = completion.status;
                 tool.finished_at_ms = Some(completion.finished_at_ms);
+                tool.settle_user_wait(completion.finished_at_ms);
                 tool.external_refs = completion.external_refs;
                 tool.generated_resources = completion.generated_resources;
             },
@@ -1038,6 +1044,7 @@ impl SessionDocument {
             tool.output = Some(output);
             tool.status = ToolCallStatus::Cancelled;
             tool.finished_at_ms = Some(now_ms);
+            tool.settle_user_wait(now_ms);
         })?;
         Ok(IdempotentMutation::Committed(ToolCompletionReceipt {
             api_call_id,

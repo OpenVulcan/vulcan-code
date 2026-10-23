@@ -47,8 +47,8 @@ export interface ToolCall {
   // Visual lifecycle.
   // 视觉生命周期。
   state: ToolCardState;
-  // Wall-clock time between start and finish, when both are known.
-  // 开始与结束之间的实际耗时（两者均已知时）。
+  // Execution time between start and finish, without time spent waiting on the user, when both are known.
+  // 开始与结束之间的执行耗时（不含等待用户的时间；两者均已知时）。
   durationMs: number | null;
   // The request while the model is still writing it; null once the call exists.
   // 模型仍在书写时的请求；调用存在后为 null。
@@ -64,7 +64,7 @@ export function readToolCall(event: ToolCallEvent): ToolCall {
   const isError = output?.is_error === true;
   return {
     durationMs: event.started_at_ms !== undefined && event.finished_at_ms !== undefined
-      ? Math.max(0, event.finished_at_ms - event.started_at_ms)
+      ? Math.max(0, event.finished_at_ms - event.started_at_ms - (event.user_wait_ms ?? 0))
       : null,
     event,
     host: host && typeof host.kind === "string" ? { kind: host.kind, payload: hostPayload ?? {} } : null,

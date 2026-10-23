@@ -605,6 +605,7 @@ pub fn event(summary: &ConversationEventSummary) -> Option<ConversationEvent> {
             status: call.status,
             started_at_ms: call.started_at_ms.map(millis),
             finished_at_ms: call.finished_at_ms.map(millis),
+            user_wait_ms: call.user_wait_ms.map(millis).unwrap_or(0),
         },
         CoreEvent::DisplayNote(note) => EventBody::DisplayNote {
             severity: note.severity,

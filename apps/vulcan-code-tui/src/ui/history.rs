@@ -399,6 +399,7 @@ fn event_lines(
             status,
             started_at_ms,
             finished_at_ms,
+            user_wait_ms,
             ..
         } => {
             let (mark, color) = match status {
@@ -411,9 +412,10 @@ fn event_lines(
                 ToolCallStatus::Prepared | ToolCallStatus::Running => ("…", theme.primary),
             };
             let duration = match (started_at_ms, finished_at_ms) {
-                (Some(start), Some(end)) => {
-                    format!("  {}", compact_duration(end.saturating_sub(*start)))
-                }
+                (Some(start), Some(end)) => format!(
+                    "  {}",
+                    compact_duration(end.saturating_sub(*start).saturating_sub(*user_wait_ms))
+                ),
                 _ => String::new(),
             };
             out.push(Line::from(vec![

@@ -993,6 +993,8 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
       status: "prepared" | "running" | "waiting_user" | "completed" | "failed" | "cancelled" | "stopped" | "interrupted";
       started_at_ms?: number;
       finished_at_ms?: number;
+      user_wait_started_at_ms?: number;
+      user_wait_ms?: number;
       request_stream_id: string;
       provider_tool_call_id?: string;
       external_refs?: ExternalResourceRef[];

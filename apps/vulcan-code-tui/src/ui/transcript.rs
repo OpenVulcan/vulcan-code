@@ -569,11 +569,12 @@ fn tool_parts(event: &ConversationEvent) -> Option<ToolParts<'_>> {
             status,
             started_at_ms,
             finished_at_ms,
+            user_wait_ms,
             ..
         } => {
             let duration = started_at_ms
                 .zip(*finished_at_ms)
-                .map(|(s, f)| f.saturating_sub(s));
+                .map(|(s, f)| f.saturating_sub(s).saturating_sub(*user_wait_ms));
             Some((
                 tool_name,
                 input,

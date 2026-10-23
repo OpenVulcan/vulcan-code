@@ -439,6 +439,106 @@ fn tool_progress_transitions_are_idempotent() -> Result<(), DomainError> {
     Ok(())
 }
 
+/// Reads the resident tool-call event of `tool`.
+/// 读取 `tool` 的常驻工具调用事件。
+fn resident_tool(doc: &SessionDocument, tool: ToolCallId) -> ToolCallEvent {
+    let seq = doc.tool_seq_by_id[&tool];
+    match &doc
+        .events()
+        .iter()
+        .find(|event| event.seq() == seq)
+        .expect("tool event is resident")
+        .event
+    {
+        EventBody::ToolCall(call) => call.clone(),
+        _ => panic!("tool seq names a tool-call event"),
+    }
+}
+
+/// Every wait on the user is recorded apart from execution time and survives a reload.
+/// 每次等待用户都与执行时间分开记录，并在重新加载后保留。
+#[test]
+fn user_waits_are_recorded_apart_from_execution_time() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("waits", Vec::new(), T0)?;
+    let api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0,
+    )?;
+    let tool = doc.prepare_tool(
+        api,
+        RequestStreamId::try_new("stream-approval-waits")?,
+        "shell_command",
+        ToolPayload::try_new(serde_json::json!({"command": "ls"}))?,
+        None,
+        T0,
+    )?;
+    let ask = doc.prepare_tool(
+        api,
+        RequestStreamId::try_new("stream-ask-wait")?,
+        "ask",
+        ToolPayload::try_new(serde_json::json!({"question": "continue?"}))?,
+        None,
+        T0,
+    )?;
+    doc.start_prepared_tool(api, tool, T0 + 10)?;
+    doc.start_prepared_tool(api, ask, T0 + 10)?;
+
+    // Two approvals: the open wait carries its start, each finished wait adds to the total.
+    // 两次审批：进行中的等待记录开始时间，每次结束的等待累加到总计。
+    doc.mark_tool_waiting_user(api, tool, T0 + 20)?;
+    let waiting = resident_tool(&doc, tool);
+    assert_eq!(waiting.user_wait_started_at_ms, Some(T0 + 20));
+    assert_eq!(waiting.user_wait_ms, None);
+    doc.resume_waiting_tool(api, tool, T0 + 120)?;
+    doc.mark_tool_waiting_user(api, tool, T0 + 130)?;
+    doc.resume_waiting_tool(api, tool, T0 + 180)?;
+    let resumed = resident_tool(&doc, tool);
+    assert_eq!(resumed.user_wait_started_at_ms, None);
+    assert_eq!(resumed.user_wait_ms, Some(150));
+    doc.finish_tool(
+        api,
+        tool,
+        tool_completion(
+            Some(ToolPayload::try_new(serde_json::json!({"stdout": ""}))?),
+            ToolCallStatus::Completed,
+            T0 + 200,
+        ),
+    )?;
+
+    // An answered Ask ends its wait at the answer time.
+    // 已回答的 Ask 在回答时刻结束等待。
+    doc.mark_tool_waiting_user(api, ask, T0 + 15)?;
+    doc.answer_waiting_tool(
+        api,
+        ask,
+        tool_completion(
+            Some(ToolPayload::try_new(serde_json::json!({"answer": "yes"}))?),
+            ToolCallStatus::Completed,
+            T0 + 515,
+        ),
+    )?;
+
+    let restored = SessionDocument::from_parts(
+        doc.metadata.clone(),
+        initialized_runtime_lock(),
+        Vec::new(),
+        Vec::new(),
+        doc.events().to_vec(),
+    )?;
+    let finished = resident_tool(&restored, tool);
+    assert_eq!(
+        (finished.started_at_ms, finished.finished_at_ms),
+        (Some(T0 + 10), Some(T0 + 200))
+    );
+    assert_eq!(finished.user_wait_ms, Some(150));
+    let answered = resident_tool(&restored, ask);
+    assert_eq!(answered.user_wait_started_at_ms, None);
+    assert_eq!(answered.user_wait_ms, Some(500));
+    Ok(())
+}
+
 /// Every same-seq tool lifecycle failure leaves the complete document unchanged.
 /// 任一同 seq 工具生命周期失败都会保持完整文档不变。
 #[test]

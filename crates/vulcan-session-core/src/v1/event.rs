@@ -839,6 +839,15 @@ pub struct ToolCallEvent {
     /// 工具结束时间(Unix 毫秒)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at_ms: Option<i64>,
+    /// Start of the current wait on the user (permission approval or an Ask answer) in Unix
+    /// milliseconds; present only while the tool is `WaitingUser`.
+    /// 当前等待用户(权限审批或 Ask 回答)的开始时间(Unix 毫秒)；仅在工具处于 `WaitingUser` 时存在。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_wait_started_at_ms: Option<i64>,
+    /// Total milliseconds of finished waits on the user, excluded from the tool's execution time.
+    /// 已结束的等待用户总毫秒数，不计入工具执行时间。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_wait_ms: Option<i64>,
     /// Provider-native tool call id when supplied by the protocol.
     /// 协议提供时的 Provider 原生 tool call id。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -857,6 +866,18 @@ pub struct ToolCallEvent {
     /// 事件上(见顺序规则)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_source: Option<ProviderSource>,
+}
+
+impl ToolCallEvent {
+    /// Ends the current wait on the user at `now_ms` and adds it to `user_wait_ms`; a tool that
+    /// is not waiting is left unchanged.
+    /// 在 `now_ms` 结束当前等待用户并计入 `user_wait_ms`；未在等待的工具保持不变。
+    pub(crate) fn settle_user_wait(&mut self, now_ms: i64) {
+        if let Some(started_at_ms) = self.user_wait_started_at_ms.take() {
+            let waited = now_ms.saturating_sub(started_at_ms).max(0);
+            self.user_wait_ms = Some(self.user_wait_ms.unwrap_or(0).saturating_add(waited));
+        }
+    }
 }
 
 /// Purpose of one physical Provider API call.

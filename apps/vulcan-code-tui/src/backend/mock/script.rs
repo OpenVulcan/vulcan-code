@@ -185,6 +185,7 @@ impl Script {
                     status: ToolCallStatus::Running,
                     started_at_ms: None,
                     finished_at_ms: None,
+                    user_wait_ms: 0,
                 },
             },
         );

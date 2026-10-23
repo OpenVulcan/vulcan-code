@@ -27,7 +27,12 @@ afterEach(() => {
 
 // toolEvent builds a minimal tool-call event with the given lifecycle and timing.
 // toolEvent 以给定生命周期与时间构建一条最小工具调用事件。
-function toolEvent(status: ToolCallEvent["status"], startedAtMs: number, finishedAtMs?: number): ToolCallEvent {
+function toolEvent(
+  status: ToolCallEvent["status"],
+  startedAtMs: number,
+  finishedAtMs?: number,
+  userWaitMs?: number,
+): ToolCallEvent {
   return {
     api_call_id: 1,
     input: {},
@@ -35,6 +40,7 @@ function toolEvent(status: ToolCallEvent["status"], startedAtMs: number, finishe
     request_stream_id: "stream-1",
     started_at_ms: startedAtMs,
     ...(finishedAtMs === undefined ? {} : { finished_at_ms: finishedAtMs }),
+    ...(userWaitMs === undefined ? {} : { user_wait_ms: userWaitMs }),
     status,
     tool_call_id: 1,
     tool_name: "image_generate",
@@ -43,12 +49,11 @@ function toolEvent(status: ToolCallEvent["status"], startedAtMs: number, finishe
 
 // renderCall mounts one frame for the call and returns the timer text, or null when no timer shows.
 // renderCall 为该调用挂载一个框架，并返回计时文本；不显示计时器时返回 null。
-function renderCall(event: ToolCallEvent, timed?: boolean): () => string | null {
+function renderCall(event: ToolCallEvent): () => string | null {
   const call = readToolCall(event);
   act(() => root.render(
     <I18nProvider initialLocale="en-US">
-      <ToolFrame call={call} family="media" icon={Wrench} onOpenChange={() => undefined} open={false} state={call.state}
-        timed={timed} verb="tool" />
+      <ToolFrame call={call} family="media" icon={Wrench} onOpenChange={() => undefined} open={false} state={call.state} verb="tool" />
     </I18nProvider>,
   ));
   return () => host.querySelector(".vk-tool-elapsed")?.textContent ?? null;
@@ -63,11 +68,15 @@ it("ticks while the call runs", () => {
   expect(host.querySelector(".vk-tool-elapsed[data-live]")).not.toBeNull();
 });
 
-it("shows no timer while the call waits on the user, or ever on an untimed card", () => {
+it("hides the timer while the call waits on the user and never counts the wait", () => {
   vi.setSystemTime(10_000);
   expect(renderCall(toolEvent("waiting_user", 0))()).toBeNull();
-  expect(renderCall(toolEvent("running", 0), false)()).toBeNull();
-  expect(renderCall(toolEvent("completed", 0, SLOW_TOOL_CALL_MS + 1_000), false)()).toBeNull();
+  // Approved after 9 s of waiting: the live timer shows the 1 s of execution only.
+  // 等待 9 秒后获批：实时计时只显示 1 秒执行时间。
+  expect(renderCall(toolEvent("running", 0, undefined, 9_000))()).toBe(formatToolDuration(1_000));
+  // An Ask answered after a long wait executed only briefly, so no duration stays.
+  // 长时间等待后才回答的 Ask 执行时间很短，因此不保留耗时。
+  expect(renderCall(toolEvent("completed", 0, 60_000, 59_900))()).toBeNull();
 });
 
 it("keeps the duration only for a slow finished call", () => {
