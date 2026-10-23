@@ -145,7 +145,7 @@ function settingsFixture(): PublicAiSettingsSnapshot {
         },
       },
     },
-    providerExtensionTargetSets: {},
+    providerExtensionModes: {}, providerExtensionTargetSets: {},
     internalInferenceCandidates: [],
     inferenceProfiles: {},
     inferenceRouteDiagnostics: [],
@@ -159,6 +159,7 @@ describe("providerToolSettingsConflicts", () => {
     const legacySettings = {
       enabledCapabilities: [],
       selections: {},
+      extensionModes: {},
       extensionTargetSets: {},
       mediaUnderstandingSelections: {},
     } as unknown as Parameters<typeof providerToolSettingsConflicts>[1];
@@ -175,6 +176,7 @@ describe("providerToolSettingsConflicts", () => {
           target_id: "entry.search-01",
         },
       },
+      extensionModes: {},
       extensionTargetSets: {},
       mediaUnderstandingSelections: {},
     });
@@ -194,6 +196,7 @@ describe("providerToolSettingsConflicts", () => {
           target_id: "entry.search-01",
         },
       },
+      extensionModes: {},
       extensionTargetSets: {},
       mediaUnderstandingSelections: {},
     });
@@ -207,6 +210,7 @@ describe("providerToolSettingsConflicts", () => {
     const conflicts = providerToolSettingsConflicts(settingsFixture(), {
       enabledCapabilities: ["video_understand"],
       selections: {},
+      extensionModes: {},
       extensionTargetSets: {},
       mediaUnderstandingSelections: {
         video_understand: {
@@ -226,6 +230,7 @@ describe("providerToolSettingsConflicts", () => {
     const conflicts = providerToolSettingsConflicts(settingsFixture(), {
       enabledCapabilities: [],
       selections: {},
+      extensionModes: {},
       extensionTargetSets: {},
       mediaUnderstandingSelections: {
         video_understand: {
@@ -253,6 +258,7 @@ describe("providerToolSettingsConflicts", () => {
     const conflicts = providerToolSettingsConflicts(snapshot, {
       enabledCapabilities: ["video_understand"],
       selections: {},
+      extensionModes: {},
       extensionTargetSets: {},
       mediaUnderstandingSelections: {
         video_understand: {
@@ -337,6 +343,7 @@ describe("providerToolSettingsConflicts", () => {
     const conflicts = providerToolSettingsConflicts(snapshot, {
       enabledCapabilities: ["video_understand"],
       selections: {},
+      extensionModes: {},
       extensionTargetSets: {},
       mediaUnderstandingSelections: {
         video_understand: {
@@ -454,6 +461,7 @@ describe("composerCapabilityIsEnabled", () => {
     const settings = {
       enabledCapabilities: ["web_search" as const],
       selections: {},
+      extensionModes: { image_generate: { mode: "multi" as const } },
       extensionTargetSets: {
         image_generate: [{ connection_id: "image-account", target_id: "image-model" }],
       },

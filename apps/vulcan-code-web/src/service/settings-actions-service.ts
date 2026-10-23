@@ -25,6 +25,8 @@ import type {
   PublicAiOperation,
   PublicAiProviderToolCapabilityKind,
   PublicAiMediaUnderstandingBackendSelection,
+  PublicAiProviderExtensionMode,
+  PublicAiProviderExtensionModeSelection,
   PublicAiProviderToolTestResult,
   PublicAiProviderToolTargetSelection,
   PublicAiSessionProviderToolSettings,
@@ -671,6 +673,38 @@ export async function savePublicAiProviderExtensionTargetSet(request: {
   );
 }
 
+// savePublicAiProviderExtensionMode sets one capability's system default mode and fixed model.
+// savePublicAiProviderExtensionMode 设置一项能力的系统默认模式及固定模型。
+// Single mode without a model is the default and clears the stored entry; multi-model lists are kept.
+// 未选模型的单模型模式即默认值并清除已存条目；多模型列表保持不变。
+export async function savePublicAiProviderExtensionMode(request: {
+  capability: PublicAiProviderToolCapabilityKind;
+  selection: PublicAiProviderExtensionModeSelection;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_provider_extension_mode",
+    { request },
+  );
+}
+
+// savePublicAiProviderExtensionChoice writes one model-extension choice into the store of the given mode:
+// single mode keeps only the latest selection as the fixed model, multi mode replaces the whole set.
+// savePublicAiProviderExtensionChoice 将一次模型扩展选择写入指定模式的存储：
+// 单模型模式只把最近一次选择保留为固定模型，多模型模式替换整个集合。
+export async function savePublicAiProviderExtensionChoice(request: {
+  capability: PublicAiProviderToolCapabilityKind;
+  mode: PublicAiProviderExtensionMode;
+  selections: PublicAiProviderToolTargetSelection[];
+}): Promise<PublicAiSettingsSnapshot> {
+  const latest = request.selections[request.selections.length - 1];
+  return request.mode === "single"
+    ? savePublicAiProviderExtensionMode({
+        capability: request.capability,
+        selection: { mode: "single", ...(latest ? { single_target: latest } : {}) },
+      })
+    : savePublicAiProviderExtensionTargetSet({ capability: request.capability, selections: request.selections });
+}
+
 // testPublicAiProviderTool executes one exact settings-row diagnostic without changing defaults.
 // testPublicAiProviderTool 在不修改默认项的情况下执行一个精确设置行诊断。
 export async function testPublicAiProviderTool(request: {
@@ -824,6 +858,9 @@ export async function savePublicAiSessionProviderToolSelections(request: {
   >;
   extensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
+  >;
+  extensionModes: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderExtensionModeSelection>
   >;
   mediaUnderstandingSelections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendSelection>

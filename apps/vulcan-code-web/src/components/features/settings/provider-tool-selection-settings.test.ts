@@ -229,7 +229,7 @@ describe("empty auxiliary capability configuration", () => {
     // The read fixture contains exactly the empty projections consumed by this view.
     // 读取夹具仅包含该视图实际使用的空投影。
     vi.spyOn(settingsService, "loadPublicAiSettings").mockResolvedValue({
-      providerToolTargets: [], providerExtensionTargetSets: {}, providerToolSelections: {},
+      providerToolTargets: [], providerExtensionModes: {}, providerExtensionTargetSets: {}, providerToolSelections: {},
       providerToolEnabledCapabilities: [],
     } as unknown as PublicAiSettingsSnapshot);
     // The mounted tree is isolated from real settings and uses the shared controls.

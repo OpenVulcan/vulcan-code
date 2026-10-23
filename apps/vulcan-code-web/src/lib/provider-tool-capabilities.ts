@@ -1,6 +1,8 @@
 import type {
   PublicAiModelCapabilities,
+  PublicAiProviderExtensionModeSelection,
   PublicAiProviderToolCapabilityKind,
+  PublicAiProviderToolTargetSelection,
   PublicAiResourceKind,
 } from "@/types";
 
@@ -82,4 +84,43 @@ export function modelCapabilitiesSupportMediaUnderstanding(
   }
   return capabilities.operations?.includes("conversation_respond") === true
     && capabilities.input_resources?.includes(requiredResource) === true;
+}
+
+// providerExtensionModeOf returns one capability's mode; a missing entry is single mode with no model.
+// providerExtensionModeOf 返回一项能力的模式；缺失条目即未选模型的单模型模式。
+export function providerExtensionModeOf(
+  modes: Partial<Record<PublicAiProviderToolCapabilityKind, PublicAiProviderExtensionModeSelection>>,
+  capability: PublicAiProviderToolCapabilityKind,
+): PublicAiProviderExtensionModeSelection {
+  return modes[capability] ?? { mode: "single" };
+}
+
+// withProviderExtensionMode returns `modes` with one capability replaced; the default entry is dropped.
+// withProviderExtensionMode 返回替换了一项能力的 `modes`；默认条目会被移除。
+export function withProviderExtensionMode(
+  modes: Partial<Record<PublicAiProviderToolCapabilityKind, PublicAiProviderExtensionModeSelection>>,
+  capability: PublicAiProviderToolCapabilityKind,
+  selection: PublicAiProviderExtensionModeSelection,
+): Partial<Record<PublicAiProviderToolCapabilityKind, PublicAiProviderExtensionModeSelection>> {
+  const next = { ...modes };
+  if (selection.mode === "single" && !selection.single_target) {
+    delete next[capability];
+  } else {
+    next[capability] = selection;
+  }
+  return next;
+}
+
+// providerExtensionActiveSelections lists the models AI can reach for one capability in its mode.
+// providerExtensionActiveSelections 列出一项能力在其当前模式下 AI 可使用的模型。
+// Single mode yields at most its fixed model; multi mode yields the stored multi-model set.
+// 单模型模式最多给出其固定模型；多模型模式给出已存的多模型集合。
+export function providerExtensionActiveSelections(
+  modes: Partial<Record<PublicAiProviderToolCapabilityKind, PublicAiProviderExtensionModeSelection>>,
+  sets: Partial<Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>>,
+  capability: PublicAiProviderToolCapabilityKind,
+): PublicAiProviderToolTargetSelection[] {
+  const selection = providerExtensionModeOf(modes, capability);
+  if (selection.mode === "multi") return sets[capability] ?? [];
+  return selection.single_target ? [selection.single_target] : [];
 }

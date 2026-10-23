@@ -25,6 +25,7 @@ import {
   type PublicAiMediaUnderstandingCapabilityKind,
   composerCapabilityIsEnabled,
   composerCapabilitySummaryDetail,
+  composerExtensionSelections,
   composerProviderToolCapabilities,
   defaultComposerProviderToolSettings,
   isMediaUnderstandingCapability,
@@ -77,9 +78,16 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
     enabledCapabilities: [],
     selections: {},
     extensionTargetSets: {},
+    extensionModes: {},
     mediaUnderstandingSelections: {},
   });
   const [baselineSignature, setBaselineSignature] = React.useState("{}");
+  // requestsStarted means the session already sent a request, so a saved tool change breaks context.
+  // requestsStarted 表示会话已发送过请求，保存的工具修改会打破上下文。
+  const [requestsStarted, setRequestsStarted] = React.useState(false);
+  // contextBreakPending holds a save until the user confirms breaking the conversation context.
+  // contextBreakPending 在用户确认打破会话上下文之前暂缓保存。
+  const [contextBreakPending, setContextBreakPending] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   // loadState binds availability to its owning conversation; stale settings must never be saved to another session.
@@ -112,6 +120,7 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
     mutationPending.current = false;
     setMediaEditModes({});
     setSaving(false);
+    setContextBreakPending(false);
     setLoadState({ conversationId: props.conversationId, status: "loading" });
     setError(null);
     void Promise.all([
@@ -129,6 +138,7 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
               enabledCapabilities: sessionSettings.enabledCapabilities,
               selections: sessionSettings.selections,
               extensionTargetSets: sessionSettings.extensionTargetSets,
+              extensionModes: sessionSettings.extensionModes,
               mediaUnderstandingSelections: sessionSettings.mediaUnderstandingSelections,
             }
           : props.draftSettings
@@ -140,6 +150,7 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
         const initialCapability = orderedProviderToolCapabilities(nextSnapshot)[0] ?? capabilities[0];
         setSnapshot(nextSnapshot);
         setDraft(nextDraft);
+        setRequestsStarted(sessionSettings?.requestsStarted ?? false);
         setBaselineSignature(providerToolSettingsSignature(nextDraft));
         if (!props.conversationId && !props.draftSettings) {
           props.onDraftSettingsChange?.(nextDraft);
@@ -171,9 +182,12 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
         || target.manifestSourceLayer !== "custom"),
   ) ?? [];
   const selectedModels = uniqueProviderToolModels(capabilityTargets);
-  // selectedExtensionTargets is the complete native model set for the selected capability.
-  // selectedExtensionTargets 是当前选中能力的完整原生模型集合。
-  const selectedExtensionTargets = draft.extensionTargetSets[selectedCapability] ?? [];
+  // selectedExtensionTargets is the fixed model or the multi-model set of the selected capability.
+  // selectedExtensionTargets 是当前选中能力的固定模型或多模型集合。
+  const selectedExtensionTargets = composerExtensionSelections(draft, selectedCapability);
+  // selectedExtensionSingle reports whether the selected capability uses one fixed model.
+  // selectedExtensionSingle 报告当前选中能力是否使用一个固定模型。
+  const selectedExtensionSingle = draft.extensionModes[selectedCapability]?.mode !== "multi";
   // unavailableExtensionTargets preserves exact saved identities that cannot appear in a current model card.
   // unavailableExtensionTargets 保留无法出现在当前模型卡片中的准确已存身份。
   const unavailableExtensionTargets = selectedExtensionTargets.filter((selection) => !capabilityTargets.some((target) => (
@@ -269,8 +283,9 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
   const conflicts = localConflicts;
   // enabledCount combines direct enabled capabilities and non-empty extension sets.
   // enabledCount 合并直连已启用能力与非空扩展集合。
-  const enabledCount = draft.enabledCapabilities.length + Object.values(draft.extensionTargetSets)
-    .filter((selections) => selections && selections.length > 0).length;
+  const enabledCount = draft.enabledCapabilities.length + capabilities
+    .filter((capability) => !isDirectProviderToolCapability(capability)
+      && composerExtensionSelections(draft, capability).length > 0).length;
   const hasUnsavedChanges = settingsReady
     && providerToolSettingsSignature(draft) !== baselineSignature;
   // defaultSettings is what "restore defaults" writes into the draft; the action is idle when the draft already matches.
@@ -289,10 +304,18 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
   React.useEffect(() => {
     props.onConflictChange?.(!settingsReady || conflicts.length > 0);
   }, [settingsReady, conflicts.length, props.onConflictChange]);
-  const save = React.useCallback(async () => {
+  // save persists the draft; once requests were sent, the first call asks for confirmation and
+  // `contextBreakConfirmed` carries it out.
+  // save 持久化草稿；已发送过请求时，首次调用先请求确认，由 `contextBreakConfirmed` 执行。
+  const save = React.useCallback(async (contextBreakConfirmed = false) => {
     if (!settingsReady || mutationPending.current || conflicts.length > 0) {
       return;
     }
+    if (props.conversationId && requestsStarted && hasUnsavedChanges && !contextBreakConfirmed) {
+      setContextBreakPending(true);
+      return;
+    }
+    setContextBreakPending(false);
     if (!props.conversationId) {
       props.onDraftSettingsChange?.(draft);
       setBaselineSignature(providerToolSettingsSignature(draft));
@@ -310,6 +333,7 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
         enabledCapabilities: draft.enabledCapabilities,
         selections: draft.selections,
         extensionTargetSets: draft.extensionTargetSets,
+        extensionModes: draft.extensionModes,
         mediaUnderstandingSelections: draft.mediaUnderstandingSelections,
       });
       if (generation !== saveGeneration.current) {
@@ -319,8 +343,10 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
         enabledCapabilities: next.enabledCapabilities,
         selections: next.selections,
         extensionTargetSets: next.extensionTargetSets,
+        extensionModes: next.extensionModes,
         mediaUnderstandingSelections: next.mediaUnderstandingSelections,
       };
+      setRequestsStarted(next.requestsStarted);
       setDraft(nextDraft);
       setBaselineSignature(providerToolSettingsSignature(nextDraft));
       setError(null);
@@ -340,6 +366,8 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
     settingsReady,
     conflicts.length,
     saving,
+    requestsStarted,
+    hasUnsavedChanges,
     props.conversationId,
     props.onDraftSettingsChange,
   ]);
@@ -392,9 +420,9 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
     // directMode controls whether the capability uses one selected route and a switch.
     // directMode 控制当前能力是否使用单路由与开关。
     const directMode = isDirectProviderToolCapability(capability);
-    // extensionSelectionCount reports selected native models for one extension family.
-    // extensionSelectionCount 报告一个扩展能力族已选原生模型数量。
-    const extensionSelectionCount = draft.extensionTargetSets[capability]?.length ?? 0;
+    // extensionSelectionCount reports the native models AI can reach in the capability's mode.
+    // extensionSelectionCount 报告该能力当前模式下 AI 可使用的原生模型数量。
+    const extensionSelectionCount = directMode ? 0 : composerExtensionSelections(draft, capability).length;
     // enabled represents direct activation or a non-empty native extension set.
     // enabled 表示直连启用或非空原生扩展集合。
     const storedEnabled = directMode
@@ -428,7 +456,7 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
     // subtitle names the chosen model when enabled, the chosen share for extensions, or the available count otherwise.
     // subtitle 在启用时给出所选模型，扩展能力给出已选占比，否则给出可用数量。
     const subtitle = enabled
-      ? directMode
+      ? directMode || draft.extensionModes[capability]?.mode !== "multi"
         ? (snapshot ? composerCapabilitySummaryDetail(snapshot, draft, capability, t) : null)
           ?? t("composer.capability.source.targets").replace("{count}", String(targetCount))
         : t("composer.capability.source.targets").replace("{count}", `${extensionSelectionCount}/${targetCount}`)
@@ -459,6 +487,7 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
     capabilityTargets,
     selectedModels,
     selectedExtensionTargets,
+    selectedExtensionSingle,
     unavailableExtensionTargets,
     updateMediaSelection,
     selectedModel,
@@ -480,6 +509,9 @@ export function useComposerCapabilitySettings(props: ComposerCapabilitySettingsO
     conflicts,
     enabledCount,
     hasUnsavedChanges,
+    requestsStarted,
+    contextBreakPending,
+    setContextBreakPending,
     defaultSettings,
     draftMatchesDefaults,
     restoreDefaults,

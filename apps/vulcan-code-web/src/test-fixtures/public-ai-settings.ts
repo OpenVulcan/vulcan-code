@@ -58,7 +58,7 @@ export function publicAiSettingsWithInvalidDefaultFixture(): PublicAiSettingsSna
     catalogStatuses: {}, catalogErrors: {}, modelOverrides: {}, modelOverrideRecords: [], modelAccessRecords: [], providerToolTemplateModels: [],
     connectionModelAccessPolicyRecords: [], customModels: {}, customProviderSystemModelDefaults: { context_limit: 200000, output_limit: 32768,
       input_resources: [], reasoning: "native", reasoning_control: "effort_selection", reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh"] },
-    providerToolTargets: [], providerToolSelections: {}, providerToolEnabledCapabilities: [], providerExtensionTargetSets: {},
+    providerToolTargets: [], providerToolSelections: {}, providerToolEnabledCapabilities: [], providerExtensionModes: {}, providerExtensionTargetSets: {},
     internalInferenceCandidates: [], inferenceProfiles: {}, inferenceRouteDiagnostics: [], internalModelOverrides: {}, modelRouteRecords: [],
   };
   for (let index = 1; index <= 2; index += 1) {

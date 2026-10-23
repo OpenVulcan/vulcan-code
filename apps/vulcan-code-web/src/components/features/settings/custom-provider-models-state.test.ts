@@ -164,7 +164,7 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
     providerToolTargets: [],
     providerToolSelections: {},
     providerToolEnabledCapabilities: [],
-    providerExtensionTargetSets: {},
+    providerExtensionModes: {}, providerExtensionTargetSets: {},
     internalInferenceCandidates: [],
     inferenceProfiles: {},
     inferenceRouteDiagnostics: [],

@@ -145,6 +145,7 @@ describe("session provider-tool settings response compatibility", () => {
       enabledCapabilities: ["image_understand"],
       selections: {},
       extensionTargetSets: {},
+      extensionModes: {},
       mediaUnderstandingSelections: {},
     });
 
@@ -170,6 +171,7 @@ describe("session provider-tool settings response compatibility", () => {
           enabledCapabilities: ["image_understand"],
           selections: {},
           extensionTargetSets: {},
+          extensionModes: {},
           mediaUnderstandingSelections: {},
         },
       },

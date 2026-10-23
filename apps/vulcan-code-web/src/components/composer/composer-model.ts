@@ -8,6 +8,7 @@ import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
   PublicAiMediaUnderstandingBackendSelection,
+  PublicAiProviderExtensionModeSelection,
   PublicAiProviderToolCapabilityKind,
   PublicAiProviderToolTargetSelection,
 } from "@/types";
@@ -27,6 +28,11 @@ export interface ComposerProviderToolSettingsSnapshot {
   // 每项生成类能力保留的原生模型扩展目标集合。
   extensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
+  >;
+  // Non-default extension modes; a missing capability is single mode with no model.
+  // 非默认扩展模式；缺失的能力即未选模型的单模型模式。
+  extensionModes: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderExtensionModeSelection>
   >;
   // Exact session-owned route retained independently for each media-understanding capability.
   // 为每项媒体理解能力独立保留的会话自有精确路由。

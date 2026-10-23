@@ -443,21 +443,21 @@ function settings(): PublicAiSettingsSnapshot {
     modelCapabilityOverrides: {}, modelCapabilityOverrideRecords: [], providerToolTargets: [{ connectionId: "a", connectionDisplayName: "Account A", manifestSourceLayer: "bundled",
       target: { target_id: "image", provider_id: "p", service_entry_id: "entry", credential_profile_ids: ["profile"], upstream_target_id: "image", display_name: "Image model",
         contract: { tool_id: "image_understand", description: "Understand an image.", capability: "image_understand", input_schema: { type: "object" }, output: { kind: "text", source_path: "$.text", normalized_result_path: "$.text" } } } }],
-    providerToolEnabledCapabilities: [], providerToolSelections: {}, mediaUnderstandingSelections: {}, mediaUnderstandingBackendOptions: {}, providerExtensionTargetSets: {},
+    providerToolEnabledCapabilities: [], providerToolSelections: {}, mediaUnderstandingSelections: {}, mediaUnderstandingBackendOptions: {}, providerExtensionModes: {}, providerExtensionTargetSets: {},
     internalInferenceCandidates: [], inferenceProfiles: {}, inferenceRouteDiagnostics: [], internalModelOverrides: {}, contextWindowPolicyOverrides: {}, contextWindowPolicyDefaults: { effective_context_window_percent: 95, auto_compact_percent: 90, auto_compact_token_limit: null, auto_compact_scope: "total", fallback_buffer_tokens: 0 },
   };
 }
 // session constructs a complete session selection, optionally referencing a removed target.
 // session 构造完整会话选择，可指定引用已移除目标。
 function session(target = "image"): ComposerProviderToolSettingsSnapshot {
-  return { enabledCapabilities: ["image_understand"], selections: {}, extensionTargetSets: {},
+  return { enabledCapabilities: ["image_understand"], selections: {}, extensionTargetSets: {}, extensionModes: {},
     mediaUnderstandingSelections: { image_understand: { mode: "provider_tool", selection: { connection_id: "a", target_id: target } } } };
 }
 // openCapabilities supplies synthetic reads and opens the real capability dialog.
 // openCapabilities 提供合成读取并打开真实能力弹窗。
 async function openCapabilities(value = session(), catalog = settings()) {
   vi.mocked(loadPublicAiSettings).mockResolvedValue(catalog);
-  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...value, conflicts: [] });
+  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...value, conflicts: [], requestsStarted: false });
   await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="c" />);
   await click("Capabilities");
 }
@@ -513,7 +513,7 @@ it("releases a pending send block when the composer learns the session is dedica
 
 it("opens the capability dialog from the hover summary footer action", async () => {
   vi.mocked(loadPublicAiSettings).mockResolvedValue(settings());
-  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), conflicts: [] });
+  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), conflicts: [], requestsStarted: false });
   await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="c" />);
   await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="Capabilities"]')!.focus(); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, HOVER_CARD_OPEN_DELAY_MS + 50)); });
@@ -566,7 +566,7 @@ it("blocks duplicate saves and Escape while pending, then keeps the draft on fai
 it("keeps a removed extension category recoverable and saves only the explicit removal", async () => {
   // configured owns a stale extension beside an unrelated valid media route.
   // configured 在无效扩展旁保存一条无关的有效媒体路由。
-  const configured = { ...session(), extensionTargetSets: { image_generate: [{ connection_id: "removed-account", target_id: "removed-model" }] } };
+  const configured = { ...session(), extensionModes: { image_generate: { mode: "multi" as const } }, extensionTargetSets: { image_generate: [{ connection_id: "removed-account", target_id: "removed-model" }] } };
   await openCapabilities(configured);
   await selectCapabilityTab("settings.aiCapabilities.tab.generate");
   // category must remain visible even when the entire extension family has left the catalog.
@@ -577,7 +577,7 @@ it("keeps a removed extension category recoverable and saves only the explicit r
   await act(async () => category!.click());
   await click("composer.capability.removeUnavailable · removed-model");
   expect(document.activeElement).toBe(category);
-  vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...configured, extensionTargetSets: { image_generate: [] }, conflicts: [] });
+  vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...configured, extensionTargetSets: { image_generate: [] }, conflicts: [], requestsStarted: false });
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent === "composer.capability.save")!.click());
   expect(savePublicAiSessionProviderToolSelections).toHaveBeenCalledExactlyOnceWith({
@@ -600,8 +600,8 @@ it("restores the global defaults into the draft and saves them only on explicit 
   expect(restore.disabled).toBe(true);
   // defaults mirrors the empty global configuration of the synthetic catalog.
   // defaults 对应合成目录中为空的全局配置。
-  const defaults = { enabledCapabilities: [], selections: {}, extensionTargetSets: {}, mediaUnderstandingSelections: {} };
-  vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...defaults, conflicts: [] });
+  const defaults = { enabledCapabilities: [], selections: {}, extensionTargetSets: {}, extensionModes: {}, mediaUnderstandingSelections: {} };
+  vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...defaults, conflicts: [], requestsStarted: false });
   await act(async () => button("composer.capability.save").click());
   expect(savePublicAiSessionProviderToolSelections).toHaveBeenCalledExactlyOnceWith({ conversationId: "c", ...defaults });
 });
@@ -624,7 +624,7 @@ it("allows a stale media switch to be explicitly cleared without deleting its sa
   await openCapabilities(configured);
   await click("composer.capability.disableUnavailable");
   expect(document.activeElement).toBe(document.querySelector('.vk-cap-select[aria-pressed="true"]'));
-  vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...configured, enabledCapabilities: [], conflicts: [] });
+  vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...configured, enabledCapabilities: [], conflicts: [], requestsStarted: false });
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent === "composer.capability.save")!.click());
   expect(savePublicAiSessionProviderToolSelections).toHaveBeenCalledExactlyOnceWith({
@@ -640,10 +640,10 @@ it("removes only the unavailable exact account while preserving a selected nativ
     contract: { ...catalog.providerToolTargets[0].target.contract, capability: "image_generate" as const } } };
   catalog.providerToolTargets = [nativeTarget, { ...nativeTarget, connectionId: "custom-account", manifestSourceLayer: "custom" }];
   const retained = { connection_id: "a", target_id: "image" };
-  const configured = { ...session(), enabledCapabilities: [], extensionTargetSets: { image_generate: [retained, { connection_id: "custom-account", target_id: "image" }] } };
+  const configured = { ...session(), enabledCapabilities: [], extensionModes: { image_generate: { mode: "multi" as const } }, extensionTargetSets: { image_generate: [retained, { connection_id: "custom-account", target_id: "image" }] } };
   await openCapabilities(configured, catalog);
   await click("composer.capability.removeUnavailable · image");
-  vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...configured, extensionTargetSets: { image_generate: [retained] }, conflicts: [] });
+  vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...configured, extensionTargetSets: { image_generate: [retained] }, conflicts: [], requestsStarted: false });
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent === "composer.capability.save")!.click());
   expect(savePublicAiSessionProviderToolSelections).toHaveBeenCalledExactlyOnceWith({
@@ -658,9 +658,9 @@ it("does not apply an old conversation's pending save to the newly opened conver
   await act(async () => document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.click());
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent === "composer.capability.save")!.click());
-  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), conflicts: [] });
+  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), conflicts: [], requestsStarted: false });
   await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="new-conversation" />);
-  await act(async () => finish({ ...session(), enabledCapabilities: [], conflicts: [] }));
+  await act(async () => finish({ ...session(), enabledCapabilities: [], conflicts: [], requestsStarted: false }));
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
   expect(document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.checked).toBe(true);
   expect(savePublicAiSessionProviderToolSelections).toHaveBeenCalledTimes(1);
@@ -673,9 +673,9 @@ it("clears stale content during a new conversation read and does not accept a la
   vi.mocked(loadPublicAiSessionProviderToolSelections).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
   await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="old" />);
   await click("Capabilities");
-  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), enabledCapabilities: [], conflicts: [] });
+  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), enabledCapabilities: [], conflicts: [], requestsStarted: false });
   await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="new" />);
-  await act(async () => finish({ ...session("removed"), conflicts: [] }));
+  await act(async () => finish({ ...session("removed"), conflicts: [], requestsStarted: false }));
   expect(document.querySelector<HTMLInputElement>('.vk-cap-row[data-selected] input[type="checkbox"]')!.checked).toBe(false);
   expect(document.querySelector('[aria-invalid="true"]')).toBeNull();
   expect(savePublicAiSessionProviderToolSelections).not.toHaveBeenCalled();
@@ -696,7 +696,7 @@ it("keeps read failures compact and retries reads without overwriting the stored
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent === "composer.capability.retry")!.click());
   expect(document.activeElement?.textContent).toBe("composer.capability.retry");
-  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), conflicts: [] });
+  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), conflicts: [], requestsStarted: false });
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent === "composer.capability.retry")!.click());
   expect(document.querySelector('[role="alert"]')).toBeNull();
@@ -706,7 +706,7 @@ it("keeps read failures compact and retries reads without overwriting the stored
 });
 
 it("keeps keyboard focus on the next unavailable extension after a removal", async () => {
-  const configured = { ...session(), extensionTargetSets: { image_generate: [
+  const configured = { ...session(), extensionModes: { image_generate: { mode: "multi" as const } }, extensionTargetSets: { image_generate: [
     { connection_id: "removed-account-1", target_id: "first" },
     { connection_id: "removed-account-2", target_id: "second" },
   ] } };
@@ -718,10 +718,46 @@ it("keeps keyboard focus on the next unavailable extension after a removal", asy
   expect(document.activeElement?.getAttribute("aria-label")).toBe("composer.capability.removeUnavailable · second");
 });
 
+it("saves one fixed single-mode model only after confirming the context break", async () => {
+  const catalog = settings();
+  // nativeTarget is the only image-generation model, so single mode offers it beside "not selected".
+  // nativeTarget 是唯一的图片生成模型，因此单模型模式把它与“未选择”并列提供。
+  const nativeTarget = { ...catalog.providerToolTargets[0], target: { ...catalog.providerToolTargets[0].target,
+    contract: { ...catalog.providerToolTargets[0].target.contract, capability: "image_generate" as const,
+      extension_profile: { summary: "Generates images." } } } };
+  catalog.providerToolTargets = [nativeTarget];
+  // base enables nothing, so the fixed model is the only unsaved change.
+  // base 不启用任何能力，使固定模型成为唯一未保存修改。
+  const base = { ...session(), enabledCapabilities: [], mediaUnderstandingSelections: {} };
+  vi.mocked(loadPublicAiSettings).mockResolvedValue(catalog);
+  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...base, conflicts: [], requestsStarted: true });
+  await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="c" />);
+  await click("Capabilities");
+  await selectCapabilityTab("settings.aiCapabilities.tab.generate");
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".vk-cap-select")]
+    .find((button) => button.textContent?.includes("settings.providerTools.imageGenerate"))!.click());
+  const radios = () => [...document.querySelectorAll<HTMLInputElement>('.vk-cap-ext-list input[type="radio"]')];
+  expect(radios().map((radio) => radio.checked)).toEqual([true, false]);
+  await act(async () => radios()[1].click());
+  expect(radios().map((radio) => radio.checked)).toEqual([false, true]);
+  const extensionModes = { image_generate: { mode: "single" as const, single_target: { connection_id: "a", target_id: "image" } } };
+  vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...base, extensionModes, conflicts: [], requestsStarted: true });
+  const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")]
+    .find((candidate) => candidate.textContent === label);
+  await act(async () => button("composer.capability.save")!.click());
+  // A started conversation asks first; nothing is saved until the user accepts breaking the context.
+  // 已开始的会话先询问；用户接受打破上下文之前不保存任何内容。
+  expect(savePublicAiSessionProviderToolSelections).not.toHaveBeenCalled();
+  await act(async () => button("composer.capability.contextBreak.confirm")!.click());
+  expect(savePublicAiSessionProviderToolSelections).toHaveBeenCalledExactlyOnceWith({
+    conversationId: "c", ...base, extensionModes,
+  });
+});
+
 it("selects an existing media category with both modes when every backend is empty", async () => {
   const catalog = settings();
   catalog.providerToolTargets = [];
-  await openCapabilities({ enabledCapabilities: [], selections: {}, mediaUnderstandingSelections: {}, extensionTargetSets: {} }, catalog);
+  await openCapabilities({ enabledCapabilities: [], selections: {}, mediaUnderstandingSelections: {}, extensionTargetSets: {}, extensionModes: {} }, catalog);
   expect(document.querySelectorAll('.vk-cap-select[aria-pressed="true"]')).toHaveLength(1);
   expect(document.querySelectorAll('[role="radio"]')).toHaveLength(2);
   expect(document.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="settings.providerTools.model"]')!.disabled).toBe(true);

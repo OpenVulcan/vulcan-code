@@ -43,6 +43,9 @@ export interface ProviderToolExtensionModelCardProps {
   /** Account selector supplied by the owning settings surface.
    * 由所属设置界面提供的账号选择器。 */
   accountControl: ReactNode;
+  /** Radio group name when the owner allows exactly one model; omitted for a multi-select list.
+   * 所属方只允许一个模型时的单选组名；多选列表时省略。 */
+  radioGroup?: string;
 }
 
 /** Renders one model-extension card with stable, full-width information sections.
@@ -84,9 +87,10 @@ export function ProviderToolExtensionModelCard(
           aria-label={props.title}
           checked={props.checked}
           disabled={props.checkboxDisabled}
-          className="vk-check"
+          className={props.radioGroup ? "vk-radio" : "vk-check"}
+          name={props.radioGroup}
           onChange={(event) => props.onCheckedChange(event.currentTarget.checked)}
-          type="checkbox"
+          type={props.radioGroup ? "radio" : "checkbox"}
         />
       </label>
       <div

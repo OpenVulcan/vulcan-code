@@ -26,6 +26,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/ui-kit/primitives/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/ui-kit/primitives/alert-dialog";
 import { HOVER_CARD_CLOSE_DELAY_MS, HOVER_CARD_OPEN_DELAY_MS, HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
 import { groupProviderToolCapabilities } from "@/components/shared/provider-tool-capability-groups";
 import {
@@ -529,7 +539,7 @@ function AiCapabilityControlEditor(props: ComposerAiCapabilityControlProps) {
     selectedCapability, setSelectedCapability, draft, setDraft, saving, error, loadState, setReloadVersion,
     mutationPending, loadStatus, settingsReady, capabilities, conflicts, enabledCount, hasUnsavedChanges,
     defaultSettings, draftMatchesDefaults, restoreDefaults, save, rebuild, summaryItems, describeCapability,
-    selectedDescription,
+    selectedDescription, contextBreakPending, setContextBreakPending,
   } = settings;
   React.useLayoutEffect(() => {
     if (!recoveryFocusPending.current) return;
@@ -779,6 +789,22 @@ function AiCapabilityControlEditor(props: ComposerAiCapabilityControlProps) {
               : t("composer.capability.save")}
           </Button>
         </DialogFooter>
+        {/* Changing tools after the first request breaks context; the user confirms before it is saved. */}
+        {/* 首次请求后修改工具会打破上下文；保存前由用户确认。 */}
+        <AlertDialog open={contextBreakPending} onOpenChange={setContextBreakPending}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("composer.capability.contextBreak.title")}</AlertDialogTitle>
+              <AlertDialogDescription>{t("composer.capability.contextBreak.description")}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("composer.capability.close.keepEditing")}</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void save(true)}>
+                {t("composer.capability.contextBreak.confirm")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   );

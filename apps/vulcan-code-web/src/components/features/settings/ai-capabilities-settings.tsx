@@ -10,7 +10,10 @@ import { Button } from "@/ui-kit/primitives/button";
 import { InlineStreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/ui-kit/primitives/sheet";
 import { useI18n } from "@/i18n";
-import { isModelExtensionCapability } from "@/lib/provider-tool-capabilities";
+import {
+  isModelExtensionCapability,
+  providerExtensionActiveSelections,
+} from "@/lib/provider-tool-capabilities";
 import { cx } from "@/ui-kit/behavior/core";
 import { loadPublicAiSettings } from "@/service/settings-actions-service";
 import type {
@@ -235,9 +238,13 @@ function summarizeCapability(
   t: ReturnType<typeof useI18n>["t"],
 ): AiCapabilitySummary {
   if (isModelExtensionCapability(capability)) {
-    // Generative capabilities are effective exactly when at least one native model is selected.
-    // 生成类能力在至少选中一个原生模型时生效。
-    const selections = snapshot.providerExtensionTargetSets[capability] ?? [];
+    // Generative capabilities are effective exactly when their current mode reaches a native model.
+    // 生成类能力在其当前模式下可用至少一个原生模型时生效。
+    const selections = providerExtensionActiveSelections(
+      snapshot.providerExtensionModes,
+      snapshot.providerExtensionTargetSets,
+      capability,
+    );
     return {
       enabled: selections.length > 0,
       target: selections.length === 0 ? null

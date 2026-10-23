@@ -4,6 +4,7 @@ import {
   isDirectProviderToolCapability,
   isModelExtensionCapability,
   modelCapabilitiesSupportMediaUnderstanding,
+  providerExtensionActiveSelections,
 } from "@/lib/provider-tool-capabilities";
 import { mediaReplacementReasoningEfforts } from "@/lib/reasoning-effort-labels";
 import type {
@@ -28,6 +29,7 @@ export function defaultComposerProviderToolSettings(
     enabledCapabilities: snapshot.providerToolEnabledCapabilities,
     selections: snapshot.providerToolSelections,
     extensionTargetSets: snapshot.providerExtensionTargetSets,
+    extensionModes: snapshot.providerExtensionModes,
     mediaUnderstandingSelections: snapshot.mediaUnderstandingSelections ?? {},
   };
 }
@@ -54,6 +56,14 @@ export function providerToolSettingsSignature(
           ...(selections ?? [])
             .map((selection) => `${selection.connection_id.length}:${selection.connection_id}:${selection.target_id.length}:${selection.target_id}`)
             .sort(),
+        ]),
+      Object.entries(settings.extensionModes)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([capability, selection]) => [
+          capability,
+          selection?.mode ?? "",
+          selection?.single_target?.connection_id ?? "",
+          selection?.single_target?.target_id ?? "",
         ]),
       Object.entries(settings.mediaUnderstandingSelections)
         .sort(([left], [right]) => left.localeCompare(right))
@@ -83,6 +93,7 @@ export function normalizedComposerProviderToolSettings(
 ): ComposerProviderToolSettingsSnapshot {
   return {
     ...settings,
+    extensionModes: settings.extensionModes ?? {},
     mediaUnderstandingSelections: settings.mediaUnderstandingSelections ?? {},
   };
 }
@@ -148,8 +159,8 @@ export function composerProviderToolCapabilities(
     ...orderedProviderToolCapabilities(snapshot),
     "image_understand", "video_understand", "audio_understand",
     ...settings.enabledCapabilities,
-    ...Object.keys(settings.extensionTargetSets).filter((capability) =>
-      isModelExtensionCapability(capability as PublicAiProviderToolCapabilityKind)),
+    ...[...Object.keys(settings.extensionTargetSets), ...Object.keys(settings.extensionModes)]
+      .filter((capability) => isModelExtensionCapability(capability as PublicAiProviderToolCapabilityKind)),
     ...Object.keys(settings.mediaUnderstandingSelections).filter(isMediaUnderstandingCapability),
   ] as PublicAiProviderToolCapabilityKind[]);
 }
@@ -180,7 +191,16 @@ export function composerCapabilityIsEnabled(
 ): boolean {
   return isDirectProviderToolCapability(capability)
     ? settings.enabledCapabilities.includes(capability)
-    : (settings.extensionTargetSets[capability]?.length ?? 0) > 0;
+    : composerExtensionSelections(settings, capability).length > 0;
+}
+
+// composerExtensionSelections lists the models AI can reach for one extension in its session mode.
+// composerExtensionSelections 列出一项扩展在会话模式下 AI 可使用的模型。
+export function composerExtensionSelections(
+  settings: ComposerProviderToolSettingsSnapshot,
+  capability: PublicAiProviderToolCapabilityKind,
+): PublicAiProviderToolTargetSelection[] {
+  return providerExtensionActiveSelections(settings.extensionModes, settings.extensionTargetSets, capability);
 }
 
 // providerToolCapabilitySwitchDisabled blocks saving and unavailable new activation while preserving stale-state recovery.
@@ -286,6 +306,22 @@ export function providerToolSettingsConflicts(
         });
         break;
       }
+    }
+  }
+  for (const [capability, selection] of Object.entries(settings.extensionModes)) {
+    const target = selection?.single_target;
+    if (!target) continue;
+    const key = `${target.connection_id.length}:${target.connection_id}:${target.target_id.length}:${target.target_id}`;
+    const currentTarget = snapshot.providerToolTargets.find((candidate) => (
+      candidate.connectionId === target.connection_id
+      && candidate.target.target_id === target.target_id
+    ));
+    if (current.get(key) !== capability || currentTarget?.manifestSourceLayer === "custom") {
+      conflicts.push({
+        capability: capability as PublicAiProviderToolCapabilityKind,
+        kind: "invalid_extension_mode",
+        message: `The fixed native extension model or account for ${capability} is unavailable.`,
+      });
     }
   }
   return conflicts;
@@ -431,8 +467,11 @@ export function composerCapabilitySummaryDetail(
     ))?.target.display_name ?? null
     : null;
   if (!isDirectProviderToolCapability(capability)) {
-    const count = settings.extensionTargetSets[capability]?.length ?? 0;
-    return count > 0 ? t("composer.capability.source.targets").replace("{count}", String(count)) : null;
+    const selections = composerExtensionSelections(settings, capability);
+    if (settings.extensionModes[capability]?.mode !== "multi") return targetName(selections[0]);
+    return selections.length > 0
+      ? t("composer.capability.source.targets").replace("{count}", String(selections.length))
+      : null;
   }
   if (isMediaUnderstandingCapability(capability)) {
     const media = settings.mediaUnderstandingSelections[capability];

@@ -1047,6 +1047,21 @@ export interface PublicAiProviderToolTargetSelection {
   target_id: string;
 }
 
+// PublicAiProviderExtensionMode chooses how AI reaches one model-extension capability.
+// PublicAiProviderExtensionMode 选择 AI 使用一项模型扩展能力的方式。
+// "single" registers one fixed model with its own schema; "multi" lets AI look up and pick models.
+// "single" 以固定模型自身的 Schema 注册；"multi" 由 AI 查询并选择模型。
+export type PublicAiProviderExtensionMode = "single" | "multi";
+
+// PublicAiProviderExtensionModeSelection is one capability's mode and its fixed single-mode model.
+// PublicAiProviderExtensionModeSelection 是一项能力的模式及其单模型模式下的固定模型。
+// A capability without an entry is single mode with no model, which offers no tool.
+// 没有条目的能力即未选模型的单模型模式，不提供该工具。
+export interface PublicAiProviderExtensionModeSelection {
+  mode: PublicAiProviderExtensionMode;
+  single_target?: PublicAiProviderToolTargetSelection;
+}
+
 // PublicAiMediaUnderstandingBackendSelection chooses one closed backend for one media tool.
 // PublicAiMediaUnderstandingBackendSelection 为一项媒体工具选择一个封闭后端。
 export type PublicAiMediaUnderstandingBackendSelection =
@@ -1107,7 +1122,8 @@ export interface PublicAiSessionProviderToolConflict {
     | "missing_selection"
     | "target_unavailable"
     | "invalid_direct_capability"
-    | "invalid_extension_target_set";
+    | "invalid_extension_target_set"
+    | "invalid_extension_mode";
   message: string;
 }
 
@@ -1121,12 +1137,20 @@ export interface PublicAiSessionProviderToolSettings {
   extensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
   >;
+  // Non-default extension modes of this session.
+  // 当前会话的非默认扩展模式。
+  extensionModes: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderExtensionModeSelection>
+  >;
   // Exact session-owned route for each retained media-understanding capability.
   // 当前会话为每项保留的媒体理解能力持有的精确路由。
   mediaUnderstandingSelections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendSelection>
   >;
   conflicts: PublicAiSessionProviderToolConflict[];
+  // Whether the session already sent a request, so changing tools breaks its context.
+  // 会话是否已发送过请求，即修改工具会打破其上下文。
+  requestsStarted: boolean;
 }
 
 // PublicAiProviderToolSearchResult carries one normalized ranked search item.
@@ -1408,6 +1432,11 @@ export interface PublicAiSettingsSnapshot {
   providerToolEnabledCapabilities: PublicAiProviderToolCapabilityKind[];
   providerExtensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
+  >;
+  // System default extension modes; a missing capability is single mode with no model.
+  // 系统默认扩展模式；缺失的能力即未选模型的单模型模式。
+  providerExtensionModes: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderExtensionModeSelection>
   >;
   internalInferenceCandidates: PublicAiInternalInferenceCandidate[];
   inferenceProfiles: Record<string, PublicAiInferenceProfile>;

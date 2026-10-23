@@ -12,12 +12,18 @@ import {
 import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
+import {
+  ProviderToolExtensionModeControl,
+  ProviderToolExtensionNoModelChoice,
+} from "@/components/shared/provider-tool-extension-mode-control";
+import { withProviderExtensionMode } from "@/lib/provider-tool-capabilities";
 import { useI18n } from "@/i18n";
 import { mediaUnderstandingCapabilityToggleDisabled } from "@/lib/provider-tool-capabilities";
 import { PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS } from "@/lib/reasoning-effort-labels";
 import type {
   PublicAiMediaUnderstandingBackendMode,
   PublicAiProviderToolCapabilityKind,
+  PublicAiProviderToolTargetSelection,
   PublicAiReasoningEffort,
 } from "@/types";
 import {
@@ -390,19 +396,72 @@ export function ComposerCapabilityExtensionList(props: {
   const { extensionRecoveryList, recoveryFocusPending } = props;
   const {
     selectedCapability,
+    draft,
     setDraft,
     saving,
     mutationPending,
     capabilityTargets,
     selectedModels,
     selectedExtensionTargets,
+    selectedExtensionSingle,
     unavailableExtensionTargets,
   } = props.settings;
+  // radioGroup ties the fixed-model cards and the "not selected" choice into one group.
+  // radioGroup 把固定模型卡片与“未选择”选项合为一个单选组。
+  const radioGroup = `session-extension-${selectedCapability}`;
+  // writeChoices stores the cards' choice in the current mode's own store; single mode keeps the
+  // latest choice only and leaves the multi-model set untouched.
+  // writeChoices 将卡片选择写入当前模式自己的存储；单模型模式只保留最近一次选择，且不改动多模型集合。
+  const writeChoices = (selections: PublicAiProviderToolTargetSelection[]): void => {
+    setDraft((current) => {
+      if (current.extensionModes[selectedCapability]?.mode === "multi") {
+        return {
+          ...current,
+          extensionTargetSets: { ...current.extensionTargetSets, [selectedCapability]: selections },
+        };
+      }
+      const latest = selections[selections.length - 1];
+      return {
+        ...current,
+        extensionModes: withProviderExtensionMode(current.extensionModes, selectedCapability, {
+          mode: "single",
+          ...(latest ? { single_target: latest } : {}),
+        }),
+      };
+    });
+  };
+  // currentMode keeps the other mode's stored choice when switching, so switching back restores it.
+  // currentMode 切换时保留另一模式的已存选择，切回即可恢复。
+  const currentMode = draft.extensionModes[selectedCapability];
   return (
     <div className="vk-cap-ext-list" ref={extensionRecoveryList}>
+      <ProviderToolExtensionModeControl
+        disabled={saving}
+        mode={selectedExtensionSingle ? "single" : "multi"}
+        onModeChange={(mode) => {
+          if (mutationPending.current) return;
+          setDraft((current) => ({
+            ...current,
+            extensionModes: withProviderExtensionMode(current.extensionModes, selectedCapability, {
+              ...(currentMode?.single_target ? { single_target: currentMode.single_target } : {}),
+              mode,
+            }),
+          }));
+        }}
+      />
       <p className="vk-cap-note">
-        {t("composer.capability.extensionHint")}
+        {t(selectedExtensionSingle
+          ? "settings.providerTools.extensionSingleHint"
+          : "composer.capability.extensionHint")}
       </p>
+      {selectedExtensionSingle ? (
+        <ProviderToolExtensionNoModelChoice
+          checked={selectedExtensionTargets.length === 0}
+          disabled={saving}
+          onSelect={() => writeChoices([])}
+          radioGroup={radioGroup}
+        />
+      ) : null}
       {unavailableExtensionTargets.map((selection) => (
         <div className="vk-cap-recover"
           key={JSON.stringify([selection.connection_id, selection.target_id])}>
@@ -415,11 +474,8 @@ export function ComposerCapabilityExtensionList(props: {
             onClick={() => {
               if (mutationPending.current) return;
               recoveryFocusPending.current = true;
-              setDraft((current) => ({ ...current, extensionTargetSets: {
-                ...current.extensionTargetSets,
-                [selectedCapability]: (current.extensionTargetSets[selectedCapability] ?? []).filter((saved) =>
-                  saved.connection_id !== selection.connection_id || saved.target_id !== selection.target_id),
-              } }));
+              writeChoices(selectedExtensionTargets.filter((saved) =>
+                saved.connection_id !== selection.connection_id || saved.target_id !== selection.target_id));
             }}>
             {t("composer.capability.removeUnavailable")}
           </Button>
@@ -471,13 +527,7 @@ export function ComposerCapabilityExtensionList(props: {
                     && target.target.target_id === selection.target_id
                   )));
                   retained.push(selectionForTarget(replacement));
-                  setDraft((current) => ({
-                    ...current,
-                    extensionTargetSets: {
-                      ...current.extensionTargetSets,
-                      [selectedCapability]: retained,
-                    },
-                  }));
+                  writeChoices(retained);
                 }}
                 value={selectedExtensionTarget?.connectionId ?? ""}
               >
@@ -516,15 +566,10 @@ export function ComposerCapabilityExtensionList(props: {
               if (checked && selectedExtensionTarget) {
                 retained.push(selectionForTarget(selectedExtensionTarget));
               }
-              setDraft((current) => ({
-                ...current,
-                extensionTargetSets: {
-                  ...current.extensionTargetSets,
-                  [selectedCapability]: retained,
-                },
-              }));
+              writeChoices(retained);
             }}
             providerId={model.target.provider_id}
+            radioGroup={selectedExtensionSingle ? radioGroup : undefined}
             summary={profile?.summary ?? t("composer.capability.extensionProfileMissing")}
             title={model.target.display_name}
           />

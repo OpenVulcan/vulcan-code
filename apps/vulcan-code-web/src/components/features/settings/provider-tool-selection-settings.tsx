@@ -6,6 +6,10 @@ import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { Combobox } from "@/ui-kit/primitives/combobox";
 import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
 import {
+  ProviderToolExtensionModeControl,
+  ProviderToolExtensionNoModelChoice,
+} from "@/components/shared/provider-tool-extension-mode-control";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -18,6 +22,8 @@ import {
   isModelExtensionCapability,
   mediaUnderstandingCapabilityToggleDisabled,
   modelCapabilitiesSupportMediaUnderstanding,
+  providerExtensionActiveSelections,
+  providerExtensionModeOf,
 } from "@/lib/provider-tool-capabilities";
 import {
   mediaReplacementReasoningEfforts,
@@ -27,12 +33,15 @@ import {
 import {
   loadPublicAiSettings,
   savePublicAiMediaUnderstandingSelection,
-  savePublicAiProviderExtensionTargetSet,
+  savePublicAiProviderExtensionChoice,
+  savePublicAiProviderExtensionMode,
   savePublicAiProviderToolCapabilityEnabled,
   savePublicAiProviderToolSelection,
 } from "@/service/settings-actions-service";
 import type {
+  PublicAiProviderExtensionModeSelection,
   PublicAiProviderToolCapabilityKind,
+  PublicAiProviderToolTargetSelection,
   PublicAiMediaUnderstandingBackendOptions,
   PublicAiMediaUnderstandingBackendSelection,
   PublicAiMediaUnderstandingModelCandidate,
@@ -95,9 +104,21 @@ export function ProviderToolSelectionSettingsArea(props: {
   // extensionMode selects stable native multi-model configuration for generative capabilities.
   // extensionMode 为生成类能力选择稳定原生多模型配置。
   const extensionMode = isModelExtensionCapability(props.capability);
-  // extensionSelections is the complete persisted target set for the current capability.
-  // extensionSelections 是当前能力完整的持久化目标集合。
-  const extensionSelections = snapshot?.providerExtensionTargetSets[props.capability] ?? [];
+  // extensionModeSelection is the system default mode; single mode registers one fixed model.
+  // extensionModeSelection 是系统默认模式；单模型模式注册一个固定模型。
+  const extensionModeSelection: PublicAiProviderExtensionModeSelection = snapshot
+    ? providerExtensionModeOf(snapshot.providerExtensionModes, props.capability)
+    : { mode: "single" };
+  const singleExtensionMode = extensionModeSelection.mode === "single";
+  // activeExtensionSelections is what the cards show: the fixed model, or the multi-model set.
+  // activeExtensionSelections 是卡片显示的内容：固定模型或多模型集合。
+  const activeExtensionSelections = snapshot
+    ? providerExtensionActiveSelections(
+        snapshot.providerExtensionModes,
+        snapshot.providerExtensionTargetSets,
+        props.capability,
+      )
+    : [];
   const models = uniqueProviderToolModels(targets);
   // mediaBackendSelection is the one persisted provider-tool or model-replacement mode.
   // mediaBackendSelection 是唯一持久化的供应商工具或模型代替模式。
@@ -134,18 +155,12 @@ export function ProviderToolSelectionSettingsArea(props: {
   )) ?? null;
   const enabled = snapshot?.providerToolEnabledCapabilities.includes(props.capability) ?? false;
 
-  // saveExtensionSelections persists one complete native model-extension target set.
-  // saveExtensionSelections 持久化一份完整原生模型扩展目标集合。
-  const saveExtensionSelections = React.useCallback(async (
-    selections: Array<{ connection_id: string; target_id: string }>,
-  ) => {
+  // persist runs one settings write and adopts the authoritative snapshot it returns.
+  // persist 执行一次设置写入并采用其返回的权威快照。
+  const persist = React.useCallback(async (write: () => Promise<PublicAiSettingsSnapshot>) => {
     setPending(true);
     try {
-      const next = await savePublicAiProviderExtensionTargetSet({
-        capability: props.capability,
-        selections,
-      });
-      setSnapshot(next);
+      setSnapshot(await write());
       setError(null);
       return true;
     } catch (reason) {
@@ -154,31 +169,24 @@ export function ProviderToolSelectionSettingsArea(props: {
     } finally {
       setPending(false);
     }
-  }, [props.capability]);
+  }, []);
+
+  // saveActiveExtensionChoices writes the cards' choice into the store of the current mode.
+  // saveActiveExtensionChoices 将卡片选择写入当前模式对应的存储。
+  const saveActiveExtensionChoices = (selections: PublicAiProviderToolTargetSelection[]) => {
+    void persist(() => savePublicAiProviderExtensionChoice({
+      capability: props.capability,
+      mode: extensionModeSelection.mode,
+      selections,
+    }));
+  };
 
   // saveMediaBackendSelection persists one complete closed media-understanding backend.
   // saveMediaBackendSelection 持久化一个完整封闭的媒体理解后端。
-  const saveMediaBackendSelection = React.useCallback(async (
+  const saveMediaBackendSelection = React.useCallback((
     selection: PublicAiMediaUnderstandingBackendSelection | null,
-  ) => {
-    setPending(true);
-    try {
-      // next is the authoritative snapshot after strict backend validation.
-      // next 是经过严格后端校验后的权威快照。
-      const next = await savePublicAiMediaUnderstandingSelection({
-        capability: props.capability,
-        selection,
-      });
-      setSnapshot(next);
-      setError(null);
-      return true;
-    } catch (reason) {
-      setError(errorMessage(reason));
-      return false;
-    } finally {
-      setPending(false);
-    }
-  }, [props.capability]);
+  ) => persist(() => savePublicAiMediaUnderstandingSelection({ capability: props.capability, selection })),
+  [persist, props.capability]);
 
   // saveSelection persists one exact model-account pair without changing the capability switch.
   // saveSelection 持久化一个精确模型账号组合且不修改能力开关。
@@ -273,8 +281,18 @@ export function ProviderToolSelectionSettingsArea(props: {
           <header className="settings-provider-tool-defaults-header">
             <span>
               <strong>{t("settings.providerTools.systemDefault")}</strong>
-              <small>{t("settings.modelExperience.extensionSelectionHint")}</small>
+              <small>{t(singleExtensionMode
+                ? "settings.providerTools.extensionSingleHint"
+                : "settings.modelExperience.extensionSelectionHint")}</small>
             </span>
+            <ProviderToolExtensionModeControl
+              disabled={pending}
+              mode={extensionModeSelection.mode}
+              onModeChange={(mode) => void persist(() => savePublicAiProviderExtensionMode({
+                capability: props.capability,
+                selection: { ...extensionModeSelection, mode },
+              }))}
+            />
           </header>
           {targets.length === 0 ? (
             <>
@@ -298,6 +316,14 @@ export function ProviderToolSelectionSettingsArea(props: {
             </>
           ) : null}
           <div className="settings-provider-tool-extension-list">
+            {singleExtensionMode ? (
+              <ProviderToolExtensionNoModelChoice
+                checked={!extensionModeSelection.single_target}
+                disabled={pending}
+                onSelect={() => saveActiveExtensionChoices([])}
+                radioGroup={`settings-extension-${props.capability}`}
+              />
+            ) : null}
             {uniqueProviderToolModels(targets).map((model) => {
               // modelTargets contains every configured account for one native extension model.
               // modelTargets 包含一个原生扩展模型的全部已配置账号。
@@ -307,7 +333,7 @@ export function ProviderToolSelectionSettingsArea(props: {
               ));
               // selectedExtension resolves the exact selected account for this model.
               // selectedExtension 解析当前模型精确选中的账号。
-              const selectedExtension = extensionSelections.find((selection) => (
+              const selectedExtension = activeExtensionSelections.find((selection) => (
                 modelTargets.some((target) => (
                   target.connectionId === selection.connection_id
                   && target.target.target_id === selection.target_id
@@ -330,7 +356,7 @@ export function ProviderToolSelectionSettingsArea(props: {
                       onValueChange={(connectionId) => {
                         const replacement = modelTargets.find((target) => target.connectionId === connectionId);
                         if (!replacement) return;
-                        const retained = extensionSelections.filter((selection) => !modelTargets.some((target) => (
+                        const retained = activeExtensionSelections.filter((selection) => !modelTargets.some((target) => (
                           target.connectionId === selection.connection_id
                           && target.target.target_id === selection.target_id
                         )));
@@ -338,7 +364,7 @@ export function ProviderToolSelectionSettingsArea(props: {
                           connection_id: replacement.connectionId,
                           target_id: replacement.target.target_id,
                         });
-                        void saveExtensionSelections(retained);
+                        saveActiveExtensionChoices(retained);
                       }}
                       value={selectedExtensionTarget?.connectionId ?? ""}
                     >
@@ -372,7 +398,7 @@ export function ProviderToolSelectionSettingsArea(props: {
                   )}
                   modelId={model.target.upstream_target_id}
                   onCheckedChange={(checked) => {
-                    const retained = extensionSelections.filter((selection) => !modelTargets.some((target) => (
+                    const retained = activeExtensionSelections.filter((selection) => !modelTargets.some((target) => (
                       target.connectionId === selection.connection_id
                       && target.target.target_id === selection.target_id
                     )));
@@ -382,9 +408,10 @@ export function ProviderToolSelectionSettingsArea(props: {
                         target_id: selectedExtensionTarget.target.target_id,
                       });
                     }
-                    void saveExtensionSelections(retained);
+                    saveActiveExtensionChoices(retained);
                   }}
                   providerId={model.target.provider_id}
+                  radioGroup={singleExtensionMode ? `settings-extension-${props.capability}` : undefined}
                   summary={profile?.summary ?? t("composer.capability.extensionProfileMissing")}
                   title={model.target.display_name}
                 />

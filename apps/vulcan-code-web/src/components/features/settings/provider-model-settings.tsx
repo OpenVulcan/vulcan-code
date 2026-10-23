@@ -19,7 +19,11 @@ import {
 } from "@/components/features/settings/provider-model-routes"
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
-import { isModelExtensionCapability } from "@/lib/provider-tool-capabilities"
+import {
+  isModelExtensionCapability,
+  providerExtensionActiveSelections,
+  providerExtensionModeOf,
+} from "@/lib/provider-tool-capabilities"
 import { PublicAiModelOverridesDialog } from "@/components/features/settings/public-ai-model-overrides-dialog"
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { Badge } from "@/ui-kit/primitives/badge"
@@ -39,7 +43,7 @@ import {
   savePublicAiMultimodalUnderstandingCandidate,
   savePublicAiModelEnabled,
   savePublicAiModelSetEnabled,
-  savePublicAiProviderExtensionTargetSet,
+  savePublicAiProviderExtensionChoice,
   savePublicAiProviderToolCapabilityEnabled,
 } from "@/service/settings-actions-service"
 import type {
@@ -229,7 +233,7 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
       if (usageFilter === "conversation") return row.enabled && rowConversationEligible(row)
       if (usageFilter === "account") return accountEnabled?.has(row.modelId) === true
       if (usageFilter === "internal") return internalStateForModel(snapshot, row.provider.id, row.modelId)?.enabled === true
-        || row.inventory.extensionCapabilities.some((capability) => snapshot.providerToolEnabledCapabilities.includes(capability) && snapshot.providerExtensionTargetSets[capability]?.some((selection) => (
+        || row.inventory.extensionCapabilities.some((capability) => snapshot.providerToolEnabledCapabilities.includes(capability) && providerExtensionActiveSelections(snapshot.providerExtensionModes, snapshot.providerExtensionTargetSets, capability).some((selection) => (
           snapshot.providerToolTargets.some((target) => target.connectionId === selection.connection_id && target.target.target_id === selection.target_id && target.target.provider_id === row.provider.id && target.target.upstream_target_id === row.modelId)
         )) === true)
       return snapshot.multimodalUnderstandingCandidateModels?.some((record) => record.providerId === row.provider.id && record.modelId === row.modelId) === true
@@ -571,9 +575,9 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                     // Matching exact targets preserves the extension's persisted account choice.
                     // 匹配精确目标以保留扩展已持久化的账号选择。
                     const targets = extensionModelTargets(snapshot, provider.id, modelId, capability)
-                    // selections contains the complete saved model set for this extension capability.
-                    // selections 包含此扩展能力已保存的完整模型集合。
-                    const selections = snapshot.providerExtensionTargetSets[capability] ?? []
+                    // selections contains the models of this extension capability's current mode.
+                    // selections 包含此扩展能力当前模式下的模型。
+                    const selections = providerExtensionActiveSelections(snapshot.providerExtensionModes, snapshot.providerExtensionTargetSets, capability)
                     // selectedTarget identifies this model's exact account selection, if present.
                     // selectedTarget 标识此模型已选中的精确账号，如有。
                     const selectedTarget = selections.find((selection) => targets.some((target) => (
@@ -598,7 +602,7 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
                           void run(`extension/${capability}/${modelKey}`, async () => {
                             // next reflects the persisted selection before global capability admission.
                             // next 反映全局能力准入前已经持久化的模型选择。
-                            const next = await savePublicAiProviderExtensionTargetSet({ capability, selections: retained })
+                            const next = await savePublicAiProviderExtensionChoice({ capability, mode: providerExtensionModeOf(snapshot.providerExtensionModes, capability).mode, selections: retained })
                             if (checked && !next.providerToolEnabledCapabilities.includes(capability)) {
                               return savePublicAiProviderToolCapabilityEnabled({ capability, enabled: true })
                             }
