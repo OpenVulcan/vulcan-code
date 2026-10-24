@@ -2,6 +2,7 @@
 //! 权限判定服务：系统设置、模型登记表、本机 worker 与 CUDA 执行库。
 
 mod cloud;
+mod edge;
 mod environment;
 mod records;
 mod review;
@@ -47,6 +48,9 @@ pub(crate) struct PermissionJudgeRuntime {
     /// Latest official model download.
     /// 最近一次官方模型下载。
     model_download: Mutex<Option<PermissionJudgeModelDownload>>,
+    /// Edge endpoints and tokens of the official direct judge.
+    /// 官方直连判定的边缘端点与令牌。
+    edge_access: edge::EdgeAccessCache,
     /// Decision log of the judge and the reviewer.
     /// 判定器与复核器的判定记录。
     records: Arc<records::RecordStore>,

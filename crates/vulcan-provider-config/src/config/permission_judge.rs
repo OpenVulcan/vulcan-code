@@ -79,6 +79,10 @@ pub struct PersistedPermissionJudgeConfiguration {
     /// 上次切换前使用的登记，用于一步回退。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_model_id: Option<String>,
+    /// Official model the direct backend calls, by its edge model id.
+    /// 官方直连后端调用的官方模型，以其边缘模型 id 表示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_model_id: Option<String>,
     /// Lets the review LLM allow calls the judge blocked; off unless the user turns it on.
     /// 允许复核 LLM 放行判定器拦截的调用；用户开启前保持关闭。
     #[serde(default, skip_serializing_if = "is_false")]

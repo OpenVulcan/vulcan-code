@@ -54,7 +54,7 @@ function verified(knownPackageId: string | null, registered = false): Permission
 
 async function mount(onRegister = vi.fn(async () => undefined)) {
   await act(async () => root.render(<PermissionJudgeRegisterForm busy={null}
-    knownPackages={[{ id: "official", displayName: "Official", variants: [] }]} onRegister={onRegister} />));
+    knownPackages={[{ id: "official", displayName: "Official", edgeModelId: null, variants: [] }]} onRegister={onRegister} />));
   return onRegister;
 }
 

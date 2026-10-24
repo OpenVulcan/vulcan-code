@@ -107,6 +107,7 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
     }
     await savePermissionJudgeSettings({
       backend: choice,
+      edgeModelId: snapshot.edgeModelId,
       device: snapshot.device ?? snapshot.recommendedDevice,
       cudaLibraryDirectory: snapshot.cuda.lockedDirectory,
       llmMayAllowBlocked: snapshot.llmMayAllowBlocked,

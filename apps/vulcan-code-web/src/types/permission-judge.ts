@@ -2,11 +2,12 @@
 // `vulcan_service_api::permission_judge`.
 // 权限判定设置、模型登记表、worker 状态与 CUDA 执行库，镜像 `vulcan_service_api::permission_judge`。
 
-// JudgeBackend names where calls are judged: the local model, or the saved cloud decision route.
-// A saved backend is what makes the judge configured and auto-approve available.
-// JudgeBackend 指定判定调用的位置：本机模型，或已保存的云端判定路由。已保存的后端即表示判定器已
-// 配置，自动审批也因此可用。
-export type JudgeBackend = "local" | "cloud";
+// JudgeBackend names where calls are judged: the local model, the saved cloud decision route, or
+// the official model on an OpenVulcan edge endpoint. A saved backend is what makes the judge
+// configured and auto-approve available.
+// JudgeBackend 指定判定调用的位置：本机模型、已保存的云端判定路由，或 OpenVulcan 边缘端点上的官方
+// 模型。已保存的后端即表示判定器已配置，自动审批也因此可用。
+export type JudgeBackend = "local" | "cloud" | "edge";
 
 // JudgeDevice is the execution device of the local model.
 // JudgeDevice 是本机模型的执行设备。
@@ -85,6 +86,9 @@ export interface PermissionJudgeKnownVariant {
 export interface PermissionJudgeKnownPackage {
   id: string;
   displayName: string;
+  // Model id of the official direct backend; null when the family has no direct route.
+  // 官方直连后端的模型 id；该家族没有直连路由时为 null。
+  edgeModelId: string | null;
   variants: PermissionJudgeKnownVariant[];
 }
 
@@ -195,6 +199,9 @@ export interface PermissionJudgeSettingsSnapshot {
   models: PermissionJudgeModelSummary[];
   activeModelId: string | null;
   previousModelId: string | null;
+  // Official model chosen for the direct backend, by its edge model id.
+  // 为官方直连后端选择的官方模型，以其边缘模型 id 表示。
+  edgeModelId: string | null;
   knownPackages: PermissionJudgeKnownPackage[];
   policyOptions: PermissionJudgePolicyOption[];
   activeModelIssue: PermissionJudgeIssue | null;
@@ -210,6 +217,9 @@ export interface PermissionJudgeSettingsSnapshot {
 // PermissionJudgeSettingsSaveRequest 保存系统级选择。
 export interface PermissionJudgeSettingsSaveRequest {
   backend: JudgeBackend | null;
+  // Required with the official direct backend.
+  // 选择官方直连后端时必填。
+  edgeModelId: string | null;
   device: JudgeDevice | null;
   cudaLibraryDirectory: string | null;
   llmMayAllowBlocked: boolean;
@@ -220,8 +230,8 @@ export interface PermissionJudgeSettingsSaveRequest {
 // PermissionJudgeBenchmarkResult is one speed test, kept only on the page that ran it.
 // PermissionJudgeBenchmarkResult 是一次速度测试，只保留在执行它的页面上。
 export interface PermissionJudgeBenchmarkResult {
-  // Device of the local model; null for the cloud judge.
-  // 本机模型的设备；云端判定时为 null。
+  // Device of the local model; null for the cloud and official direct judges.
+  // 本机模型的设备；云端与官方直连判定时为 null。
   device: JudgeDevice | null;
   modelId: string;
   batchSize: number;

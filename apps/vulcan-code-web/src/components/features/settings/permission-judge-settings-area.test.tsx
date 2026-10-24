@@ -44,6 +44,8 @@ vi.mock("@/service/settings-actions-service", () => ({
 }));
 
 const { PermissionJudgeSettingsArea } = await import("./permission-judge-settings-area");
+const { OpenVulcanAccountContext } = await import("@/components/features/account/openvulcan-account-context");
+type OpenVulcanAccountController = import("@/components/features/account/openvulcan-account-context").OpenVulcanAccountController;
 
 let host: HTMLDivElement;
 let root: Root;
@@ -84,7 +86,7 @@ function snapshot(phase: PermissionJudgeWorkerStatus["phase"]): PermissionJudgeS
     approvalTimeoutSeconds: 0,
     maxApprovalTimeoutSeconds: 3600,
     models: [{ id: "model-a", name: "A", path: "D:/models/a", knownPackageId: null, policyVersion: "1", precision: "fp16", totalBytes: 1, registeredAtMs: 1 }],
-    activeModelId: "model-a", previousModelId: null, knownPackages: [], policyOptions: [], activeModelIssue: null,
+    activeModelId: "model-a", previousModelId: null, edgeModelId: null, knownPackages: [], policyOptions: [], activeModelIssue: null,
     cuda: {
       platform: "windows", supported: false, cudaMajor: null, minimumDriverMajor: null, driver: null, driverError: null,
       requiredLibraries: [], onnxruntimeDirectory: null, detectedDirectories: [], lockedDirectory: null,
@@ -126,7 +128,7 @@ it("saves a changed choice at once with every system choice", async () => {
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), llmMayAllowBlocked: true });
   await act(async () => switchByKey("settings.permissionJudge.llmMayAllowBlocked").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false, approvalTimeoutSeconds: 0,
+    backend: "local", edgeModelId: null, device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false, approvalTimeoutSeconds: 0,
   });
 });
 
@@ -142,12 +144,12 @@ it("configures the judge only through the explicit use action", async () => {
   service.savePermissionJudgeSettings.mockResolvedValueOnce({ ...unset, llmMayAllowBlocked: true });
   await act(async () => switchByKey("settings.permissionJudge.llmMayAllowBlocked").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenLastCalledWith({
-    backend: null, device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false, approvalTimeoutSeconds: 0,
+    backend: null, edgeModelId: null, device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false, approvalTimeoutSeconds: 0,
   });
   service.savePermissionJudgeSettings.mockResolvedValueOnce({ ...snapshot("ready"), llmMayAllowBlocked: true });
   await act(async () => buttonByKey("settings.permissionJudge.useBackend")!.click());
   expect(service.savePermissionJudgeSettings).toHaveBeenLastCalledWith({
-    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false, approvalTimeoutSeconds: 0,
+    backend: "local", edgeModelId: null, device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false, approvalTimeoutSeconds: 0,
   });
   expect(host.querySelector("[data-judge-switching]")).toBeNull();
 });
@@ -221,6 +223,51 @@ it("benchmarks a saved cloud judge without the local model", async () => {
   expect(service.benchmarkPermissionJudge).toHaveBeenCalledExactlyOnceWith(1);
 });
 
+// mountEdge renders an enabled local judge with one official package that has a direct route, inside
+// an OpenVulcan account that is signed in or not.
+// mountEdge 渲染已启用的本机判定，带一个具有直连路由的官方模型包，并处于已登录或未登录的
+// OpenVulcan 账户中。
+async function mountEdge(connected: boolean) {
+  const withEdge = {
+    ...snapshot("ready"),
+    knownPackages: [{ id: "risk", displayName: "Risk", edgeModelId: "shell-judge", variants: [] }],
+  };
+  service.loadPermissionJudgeSettings.mockResolvedValue(withEdge);
+  service.loadPermissionJudgeStatus.mockResolvedValue(withEdge.status);
+  const account = {
+    snapshot: { connected, connectionId: connected ? "c1" : null, displayName: connected ? "user" : null, region: null, message: null },
+    initialized: true, open: false, busy: false, waiting: false, error: null,
+    refresh: vi.fn(), setOpen: vi.fn(), login: vi.fn(), logout: vi.fn(),
+  } as unknown as OpenVulcanAccountController;
+  await act(async () => root.render(<OpenVulcanAccountContext.Provider value={account}>
+    <PermissionJudgeSettingsArea />
+  </OpenVulcanAccountContext.Provider>));
+  service.savePermissionJudgeSettings.mockResolvedValue({ ...withEdge, backend: "edge", edgeModelId: "shell-judge" });
+  const edge = host.querySelector<HTMLButtonElement>('[data-slot="segmented-control-item"][value="edge"]')!;
+  await act(async () => edge.click());
+  return account;
+}
+
+// With a signed-in account the official direct judge saves at once with the first official model.
+// 账户已登录时，官方直连判定立即以第一个官方模型保存。
+it("saves the official direct judge with its model once signed in", async () => {
+  await mountEdge(true);
+  expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
+    backend: "edge", edgeModelId: "shell-judge", device: "webgpu", cudaLibraryDirectory: null,
+    llmMayAllowBlocked: false, recordDecisions: false, approvalTimeoutSeconds: 0,
+  });
+});
+
+// Signed out, the switch waits and the sign-in action opens the shared account dialog.
+// 未登录时切换会等待，登录操作打开共享账户弹窗。
+it("waits for a sign-in before switching to the official direct judge", async () => {
+  const account = await mountEdge(false);
+  expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
+  expect(buttonByKey("settings.permissionJudge.switchBackend")?.disabled).toBe(true);
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-judge-edge-sign-in]")!.click());
+  expect(account.setOpen).toHaveBeenCalledExactlyOnceWith(true);
+});
+
 // A backend that was never saved is the local one, so a ready local model can be tested.
 // 从未保存的后端即为本机后端，因此就绪的本机模型可以测速。
 it("tests a ready model before any backend is saved", async () => {
@@ -278,7 +325,7 @@ it("turns the decision log on from its page", async () => {
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), recordDecisions: true });
   await act(async () => switchByKey("settings.permissionJudge.records.enabled").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: true, approvalTimeoutSeconds: 0,
+    backend: "local", edgeModelId: null, device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: true, approvalTimeoutSeconds: 0,
   });
 });
 
@@ -300,7 +347,7 @@ it("saves the approval wait only within its limit", async () => {
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), approvalTimeoutSeconds: 90 });
   await commit("90");
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false, approvalTimeoutSeconds: 90,
+    backend: "local", edgeModelId: null, device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false, approvalTimeoutSeconds: 90,
   });
   expect(input.value).toBe("90");
 });

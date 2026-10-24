@@ -2,7 +2,7 @@
 
 ## 归属
 
-本契约约束会话权限模式、工具调用权限闸门、判定模型（本机或云端）、复核 LLM、用户审批，以及它们的
+本契约约束会话权限模式、工具调用权限闸门、判定模型（本机、云端或官方直连）、复核 LLM、用户审批，以及它们的
 系统级设置、项目级策略和 WebUI/TUI 设置界面。修改下列任一入口时，先读本文，再以当前源码与测试为准。
 
 ## 红线
@@ -34,7 +34,8 @@
   不改变任何确定性规则、判定档位或放行条件；理由长度上限只在 `MAX_PERMISSION_REASON_CHARS` 定义。
 - **模型是系统级，策略是项目级。** 后端、设备、模型登记表与复核路由只存在于用户全局配置；项目配置
   只保存各类别档位，Schema 中没有模型或后端字段，不允许不同项目使用不同模型或后端。
-- **策略文本与权重一致。** 本机模型的策略只来自已登记模型包；云端判定读取随构建发布的副本。类别与
+- **策略文本与权重一致。** 本机模型的策略只来自已登记模型包；云端与官方直连判定读取随构建发布的同一副本，官方直连还拒绝
+  策略版本或检查点与该副本及官方清单不符的回答。类别与
   档位是固定枚举，代理与工具参数不能添加策略文本；未知档位报告为设置问题，不静默改成默认值。
 - **只有显式选择写入设置。** 判定出厂为“未设定”；初始化引导中选择“暂不启用”不写入任何内容。启动或刷新
   不得回写权限模式、判定设置或项目策略（AGENTS 第 5 条）。
@@ -127,8 +128,9 @@
 
 ## 判定设置
 
-- **系统级状态**：没有启用开关；`backend` 为未配置（`null`）、`local` 或 `cloud`，已保存的后端即表示判定器
-  已配置。保存后端前服务端校验其可用（本机须有使用中模型，云端须已选择判定路由），未配置时其他选择照常
+- **系统级状态**：没有启用开关；`backend` 为未配置（`null`）、`local`、`cloud` 或 `edge`，已保存的后端即表示
+  判定器已配置。保存后端前服务端校验其可用（本机须有使用中模型，云端须已选择判定路由，官方直连须选择官方
+  清单中的直连模型且已登录 OpenVulcan 账号），未配置时其他选择照常
   保存。工作台投影 `permissionJudgeBackend` 只供界面决定入口：未配置时自动审批显示为灰色、点击打开设置页，
   并隐藏项目策略；已配置时全部可用。
 - **本机后端**：模型包登记、切换、回退与移除；包内声明策略版本与放行余量，载入时验证。设备探测给出推荐
@@ -141,6 +143,14 @@
   格式、适用设备、下载大小（未发布为 `null`）、是否推荐与本机已有登记。
 - **云端后端**：使用 `permission_judge` 消费者配置档的判定路由（TypeSafe 或 OpenRouter 上的 jev）。放行
   概率门槛只在 `CLOUD_ALLOW_PROBABILITY` 定义，当前值尚未用样本校准；不记录费用。
+- **官方直连后端**（`edge`）：调用官方部署的判定端点，不收费，但判定输入（工具参数文本）离开本机。直连
+  模型来自官方清单（`known-packages.json` 中模型包的 `edge_model_id`，清单格式版本 3），保存在设置的
+  `edge_model_id`。服务以已登录账号向 `POST {认证源}/api/v1/vulcancode/edge-access`（`model_id`、
+  `client_id`）换取端点与短期访问令牌；`404 model_unavailable` 表示当前部署不提供该模型。令牌按模型缓存并
+  绑定账号连接，剩余不足 `ACCESS_REFRESH_AHEAD_MS` 时续期；端点以 `401` 拒绝令牌时续期一次并只重试一次，
+  其他拒绝、超时或格式错误直接交给下一层，从不放行。端点只接受 HTTPS 源（回环地址可用 HTTP），不跟随重定向。
+  端点 `POST /v1/judge` 已在节点应用模型包余量规则，标签原样采用；回答必须回显请求标识、检查点属于该官方
+  模型包、策略版本等于随构建副本、结果数等于输入数，超过 token 上限的结果视为输入超限交给下一层。
 - **复核 LLM**：`permission_review` 配置档、用途 `tool_call_review` 的对话路由；只收到判定层结论标签，
   不收到原始分数。给用户的理由使用界面语言：宿主在 `<reply_language>` 区段写入已保存的界面语言（未保存时为
   系统语言），以代码与本族语名称表示。
@@ -161,7 +171,7 @@
   审批以 `deadlineUnixMs` 投影给客户端。到期时经持久回复路径写入拒绝，先到的用户回答优先；拒绝文本
   `APPROVAL_EXPIRED_DENIAL` 告知代理无人及时回答、不要立即重试同一调用。等待适用于全部用户审批（含仅可查看
   与工作区修改模式的审批），无人值守会话不进入用户审批。
-- **速度测试**：1 条与 10 条两种，用户触发，结果只留在当前界面；云端测试会产生费用，执行前先确认。
+- **速度测试**：1 条与 10 条两种，用户触发，结果只留在当前界面；云端测试会产生费用，执行前先确认；官方直连测试不收费，但发送合成调用到官方端点。
 
 ## 项目策略
 
@@ -179,7 +189,7 @@
 - **记录范围**：只记录判定模型或复核 LLM 参与的决定；模式闸门与确定性规则直接决定的调用不记录。时间为判定
   开始时刻，记录在最终结论（判定放行、复核放行或拒绝、用户放行或拒绝、等待到期拒绝、失败）产生后写入，写入不阻塞调用。
 - **内容**：原样保存工具参数文本（含命令与路径）、工作区、会话、高风险类别、判定标签或错误与耗时、判定输入
-  轨迹（后端、模型、策略版本、类别设置、渲染文本、本机三类分数或云端放行概率、输入令牌数）、复核结论与耗时。
+  轨迹（后端、模型、策略版本、类别设置、渲染文本、本机或官方直连的三类分数、云端放行概率、输入令牌数）、复核结论与耗时。
 - **存储**：只保存在本机用户目录 `<用户 Vulcan 根>/code/judge-records/records.v1.jsonl`，不上传。滚动上限只在
   `permission_judge/records.rs` 的 `RETENTION_RECORDS` 与 `RETENTION_DAYS` 定义，超出时整体压缩重写；文件
   任一行无法解析时整份记录报错且不再写入，直到用户清除（V0.1.x 不做旧格式兼容）。
@@ -209,14 +219,14 @@
 - 审批等待：WebUI 为权限判定设置页“审批请求”区段的秒数输入（失去焦点或回车时保存，超出范围恢复已保存值），
   TUI 为权限判定页同名区段的数值行。
 - “权限判定”设置页：总览依次为配置状态与后端选择、所选后端的设置（本机为使用中模型、设备、CUDA 摘要与运行
-  状态；云端为判定路由）、已配置时的类别授权摘要、复核路由（含“允许 LLM 放行判定器拦截项”）与工具入口；模型管理、官方下载与登记、CUDA
+  状态；云端为判定路由；官方直连为数据离机说明、账号状态与登录入口、直连模型）、已配置时的类别授权摘要、复核路由（含“允许 LLM 放行判定器拦截项”）与工具入口；模型管理、官方下载与登记、CUDA
   环境（组件安装、库文件夹、手动下载）、类别授权（选择项目后编辑类别档位）、诊断（模型状态表、速度测试）和判定记录（筛选、标记、导出、清除）是带返回按钮的子页面。状态按服务发布的
   `pollIntervalMs` 重读，唯一定义为服务内核 `STATUS_POLL_INTERVAL_MS`。每个选择立即保存，但后端只经明确
   操作写入：WebUI 点选已就绪的后端立即写入；尚未设置完成的后端（以及未配置时默认显示的本机后端）暂存并
   提示，就绪后由“使用…”（未配置）或“改用…”（已配置）按钮确认；其他选择保存时沿用已保存的后端，不会顺带
-  配置判定器。TUI 没有暂存状态：未配置时同时显示本机与云端设置，
-  每个已就绪的后端提供“使用…”或“改用…”按钮，未就绪时说明缺少什么。
-- 初始化引导：第一步为权限判定，三选一（本机、云端、暂不启用）；“暂不启用”只关闭引导，不写入。WebUI 在判定未设定时于启动后自动
+  配置判定器。TUI 没有暂存状态：未配置时同时显示本机、云端与官方直连设置，
+  每个已就绪的后端提供“使用…”或“改用…”按钮，未就绪时说明缺少什么；TUI 不提供登录，官方直连由服务端在保存时校验登录。
+- 初始化引导：第一步为权限判定，三选一（本机、云端、暂不启用；官方直连暂只在设置页提供）；“暂不启用”只关闭引导，不写入。WebUI 在判定未设定时于启动后自动
   打开一次（浏览器本地标记），之后可从设置页再次进入；TUI 没有本地持久偏好，只能从 `/setup` 或权限判定
   页进入，不自动弹出。
 - 用户审批复用 Ask 面板，显示命令或路径、权限模式、高风险类别、判定结论与复核理由；设有等待上限时显示
@@ -236,10 +246,11 @@
 | 复核规则服务与有效规则 | `crates/vulcan-service-kernel/src/permission_judge/review_rules.rs`；类型与上限在 `crates/vulcan-permission-judge/src/system.rs` |
 | 复核附加提示词服务 | `crates/vulcan-service-kernel/src/permission_judge/review_prompt.rs`；会话旁置文件在 `crates/vulcan-workspace-store/src/workspace_store/session_sidecars.rs` |
 | 审批等待与到期拒绝 | `crates/vulcan-agent-runtime/src/agent_runtime/question_runtime/approval.rs`、`tool_permission.rs` 中的 `APPROVAL_EXPIRED_DENIAL` |
-| 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs` |
+| 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs`；官方直连令牌缓存与请求在同目录 `edge.rs` |
 | 判定记录存储、筛选、标记与导出 | `crates/vulcan-service-kernel/src/permission_judge/records.rs` |
 | 复核 LLM 请求 | `crates/vulcan-service-kernel/src/permission_judge/review.rs` |
 | 本机 worker、设备与 CUDA | `crates/vulcan-service-kernel/src/permission_judge/{worker,environment}.rs` |
-| 策略、模型包、官方清单、云端副本与门槛 | `crates/vulcan-permission-judge/src/{policy,package,known,cloud,decision}.rs` |
+| 策略、模型包、官方清单、云端副本、直连回答检查与门槛 | `crates/vulcan-permission-judge/src/{policy,package,known,cloud,edge,decision}.rs` |
+| 官方直连访问令牌换取 | `crates/vulcan-provider-adapters/src/client/openvulcan.rs` 中的 `request_openvulcan_edge_access` |
 | WebUI 界面 | `apps/vulcan-code-web/src/components/features/settings/permission-judge-*`、`components/features/onboarding/`、`components/project/project-permission-judge-section.tsx`、`components/composer/` |
 | TUI 界面 | `apps/vulcan-code-tui/src/app/pages/{permission_judge,setup_guide,project_permission_judge,unattended,review_rules}.rs`、`app/permission_mode.rs` |

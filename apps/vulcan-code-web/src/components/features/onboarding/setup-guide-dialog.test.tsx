@@ -60,7 +60,7 @@ function snapshot(activeModelId: string | null, models = activeModelId ? [active
     approvalTimeoutSeconds: 0,
     maxApprovalTimeoutSeconds: 3600,
     models: models.map((id) => ({ id, name: id, path: `D:/models/${id}`, knownPackageId: null, policyVersion: "1", precision: "fp16", totalBytes: 1, registeredAtMs: 1 })),
-    activeModelId, previousModelId: null, knownPackages: [], policyOptions: [], activeModelIssue: null,
+    activeModelId, previousModelId: null, edgeModelId: null, knownPackages: [], policyOptions: [], activeModelIssue: null,
     cuda: {
       platform: "windows", supported: false, cudaMajor: null, minimumDriverMajor: null, driver: null, driverError: null,
       requiredLibraries: [], onnxruntimeDirectory: null, detectedDirectories: [], lockedDirectory: null,
@@ -138,7 +138,7 @@ it("enables the local judge only after a registered model warms up", async () =>
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("model-a"), backend: "local" });
   await act(async () => buttonByKey("setupGuide.local.confirm")!.click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    backend: "local", device: "cpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false, approvalTimeoutSeconds: 0,
+    backend: "local", edgeModelId: null, device: "cpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false, approvalTimeoutSeconds: 0,
   });
 });
 

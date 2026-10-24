@@ -15,8 +15,8 @@ use vulcan_agent_runtime::agent_runtime::tool_permission::{
 use vulcan_permission_judge::protocol::{JudgeDevice, JudgeInput, JudgeOutcome};
 use vulcan_permission_judge::system::MAX_APPROVAL_TIMEOUT_SECONDS;
 use vulcan_permission_judge::{
-    JudgePackage, JudgePolicy, KnownDownload, KnownPackage, ModelFormat, cloud_policy,
-    find_known_package, known_package, known_packages, render_call,
+    EdgeOutcome, JudgePackage, JudgePolicy, KnownDownload, KnownPackage, ModelFormat, cloud_policy,
+    find_edge_package, find_known_package, known_package, known_packages, render_call,
 };
 use vulcan_provider_config::provider_config::{
     JudgeBackend, PersistedPermissionJudgeConfiguration, RegisteredJudgeModel,
@@ -47,6 +47,7 @@ use vulcan_service_runtime::judge_model_download::{
 
 use super::PermissionJudgeRuntime;
 use super::cloud::{self, CloudCall};
+use super::edge;
 use super::environment::{DEVICE_PREFERENCE, JudgeEnvironment, LoadSpec, device_name};
 use crate::runtime_workspace_helpers::workspace_task_project_for_project_id;
 use crate::{
@@ -134,14 +135,28 @@ fn cloud_enabled(settings: &PersistedPermissionJudgeConfiguration) -> bool {
     settings.backend == Some(JudgeBackend::Cloud)
 }
 
-/// Policy of the chosen backend: the cloud policy, or the local model in use; `None` when neither
-/// applies or the local package cannot be opened.
-/// 所选后端的策略：云端策略或使用中本机模型的策略；两者都不适用或本机模型包无法打开时为 `None`。
+/// The official direct model the saved settings run, or `None` when another backend is chosen.
+/// 已保存设置运行的官方直连模型；选择其他后端时为 `None`。
+fn edge_model(settings: &PersistedPermissionJudgeConfiguration) -> Option<&str> {
+    settings
+        .edge_model_id
+        .as_deref()
+        .filter(|_| settings.backend == Some(JudgeBackend::Edge))
+}
+
+/// Policy of the chosen backend: the policy this build ships for the cloud and official direct
+/// judges, or the local model in use; `None` when none applies or the local package cannot be
+/// opened.
+/// 所选后端的策略：本构建为云端与官方直连判定随附的策略，或使用中本机模型的策略；都不适用或本机
+/// 模型包无法打开时为 `None`。
 pub(super) async fn backend_policy(
     runtime: &Arc<PermissionJudgeRuntime>,
     settings: &PersistedPermissionJudgeConfiguration,
 ) -> Result<Option<JudgePolicy>, PermissionJudgeIssue> {
-    if settings.backend == Some(JudgeBackend::Cloud) {
+    if matches!(
+        settings.backend,
+        Some(JudgeBackend::Cloud | JudgeBackend::Edge)
+    ) {
         return Ok(Some(cloud_policy().clone()));
     }
     match settings.active_model() {
@@ -368,11 +383,13 @@ async fn snapshot(
             .collect(),
         active_model_id: settings.active_model_id.clone(),
         previous_model_id: settings.previous_model_id.clone(),
+        edge_model_id: settings.edge_model_id.clone(),
         known_packages: known_packages()
             .iter()
             .map(|package| PermissionJudgeKnownPackage {
                 id: package.id.clone(),
                 display_name: package.display_name.clone(),
+                edge_model_id: package.edge_model_id.clone(),
                 variants: known_variants(
                     package,
                     &settings,
@@ -504,6 +521,24 @@ pub(crate) async fn service_save_permission_judge_settings(
             "Choose a decision model before choosing the cloud judge.",
         ));
     }
+    if request.backend == Some(JudgeBackend::Edge) {
+        let model = request.edge_model_id.as_deref().ok_or_else(|| {
+            String::from("Choose an official model before choosing the official direct judge.")
+        })?;
+        if find_edge_package(model).is_none() {
+            return Err(format!(
+                "`{model}` is not an official direct model of this build."
+            ));
+        }
+        if crate::public_ai_settings::openvulcan_account::signed_in_credential(&state)
+            .await?
+            .is_none()
+        {
+            return Err(String::from(
+                "Sign in to OpenVulcan before choosing the official direct judge.",
+            ));
+        }
+    }
     let environment = blocking(JudgeEnvironment::probe).await?;
     let cuda_library_directory = match &request.cuda_library_directory {
         Some(directory) => {
@@ -548,6 +583,7 @@ pub(crate) async fn service_save_permission_judge_settings(
     }
     let settings = save_settings(&state, |settings| {
         settings.backend = request.backend;
+        settings.edge_model_id = request.edge_model_id;
         settings.device = request.device;
         settings.cuda_library_directory = cuda_library_directory;
         settings.llm_may_allow_blocked = request.llm_may_allow_blocked;
@@ -758,6 +794,23 @@ pub(crate) async fn service_benchmark_permission_judge(
         ));
     }
     let (runtime, settings) = read_state(&state)?;
+    if let Some(model_id) = edge_model(&settings) {
+        let elapsed_ms =
+            edge::time_batch(&state, &runtime.edge_access, model_id, request.batch_size)
+                .await?
+                .as_secs_f64()
+                * 1_000.0;
+        return Ok(PermissionJudgeBenchmarkResult {
+            device: None,
+            model_id: model_id.to_string(),
+            batch_size: request.batch_size,
+            rounds: 1,
+            p50_ms: elapsed_ms,
+            p95_ms: elapsed_ms,
+            per_item_ms: elapsed_ms / f64::from(request.batch_size),
+            items_per_second: f64::from(request.batch_size) * 1_000.0 / elapsed_ms,
+        });
+    }
     if cloud_enabled(&settings) {
         let model_id = cloud::configured_model(&state)?
             .ok_or_else(|| String::from("Choose a decision model for the cloud judge."))?;
@@ -1134,7 +1187,7 @@ pub(crate) async fn judge_call(
         trace: None,
     };
     let (runtime, settings) = read_state(state).map_err(fail)?;
-    if !local_enabled(&settings) && !cloud_enabled(&settings) {
+    if settings.backend.is_none() {
         return Ok(None);
     }
     let raw_arguments = call.raw_arguments.ok_or_else(|| {
@@ -1167,6 +1220,44 @@ pub(crate) async fn judge_call(
         allow_probability: None,
         input_tokens: None,
     };
+    if settings.backend == Some(JudgeBackend::Edge) {
+        let model = edge_model(&settings)
+            .ok_or_else(|| fail(String::from("No official direct model is chosen.")))?;
+        let trace = trace("edge", model.to_string());
+        let input = JudgeInput {
+            settings: trace.settings.clone(),
+            rendered: trace.rendered.clone(),
+        };
+        let judged = edge::judge(state, &runtime.edge_access, model, vec![input])
+            .await
+            .map(|mut outcomes| outcomes.pop());
+        return match judged {
+            Ok(Some(EdgeOutcome::Evaluated {
+                label,
+                logits,
+                input_tokens,
+            })) => Ok(Some(JudgeVerdict {
+                label,
+                trace: JudgeTrace {
+                    logits: Some(logits),
+                    input_tokens: Some(input_tokens),
+                    ..trace
+                },
+            })),
+            Ok(Some(EdgeOutcome::InputTokenLimit)) => Err(JudgeFailure {
+                reason: String::from("The call is too long for the judge model."),
+                trace: Some(trace),
+            }),
+            Ok(None) => Err(JudgeFailure {
+                reason: String::from("The edge judge returned no result."),
+                trace: Some(trace),
+            }),
+            Err(reason) => Err(JudgeFailure {
+                reason,
+                trace: Some(trace),
+            }),
+        };
+    }
     if cloud_enabled(&settings) {
         let model = cloud::configured_model(state)
             .ok()

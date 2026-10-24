@@ -16,6 +16,8 @@ import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i
 import { errorMessage, formatBytes } from "@/lib/display-format";
 import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
 import { PermissionJudgeDownloadsSection } from "@/components/features/settings/permission-judge-downloads-section";
+import { PermissionJudgeEdgeSection, edgePackages } from "@/components/features/settings/permission-judge-edge-section";
+import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 import {
   PermissionJudgeCudaPage, cudaMissingLabels, cudaReadiness,
 } from "@/components/features/settings/permission-judge-cuda-page";
@@ -56,6 +58,15 @@ import "@/ui-kit/styles/features/settings-forms.css"
 const BACKEND_KEYS: Record<JudgeBackend, TranslationKey> = {
   local: "settings.permissionJudge.backend.local",
   cloud: "settings.permissionJudge.backend.cloud",
+  edge: "settings.permissionJudge.backend.edge",
+};
+
+// NEEDS_KEYS explain what a backend still lacks before it can be used.
+// NEEDS_KEYS 说明后端在可用之前仍缺少什么。
+const NEEDS_KEYS: Record<JudgeBackend, TranslationKey> = {
+  local: "settings.permissionJudge.needsModel",
+  cloud: "settings.permissionJudge.needsCloudRoute",
+  edge: "settings.permissionJudge.needsEdgeAccount",
 };
 
 // formatMs renders a duration, or a dash when the reading is absent.
@@ -75,6 +86,7 @@ function formatOptionalBytes(value: number | null | undefined): string {
 // Choices 是界面所示的系统级判定设置；后端为界面上的选择，可能尚未保存。
 interface Choices {
   backend: JudgeBackend;
+  edgeModelId: string | null;
   device: JudgeDevice | null;
   cudaLibraryDirectory: string | null;
   llmMayAllowBlocked: boolean;
@@ -82,12 +94,14 @@ interface Choices {
   approvalTimeoutSeconds: number;
 }
 
-// savedChoices reads the saved choices; an unset backend is local and an unset device follows the
-// recommendation.
-// savedChoices 读取已保存的选择；未设置的后端为本机，未设置的设备跟随推荐值。
+// savedChoices reads the saved choices; an unset backend is local, an unset official direct model is
+// the first one offered and an unset device follows the recommendation.
+// savedChoices 读取已保存的选择；未设置的后端为本机，未设置的官方直连模型为提供的第一个，未设置的
+// 设备跟随推荐值。
 function savedChoices(snapshot: PermissionJudgeSettingsSnapshot): Choices {
   return {
     backend: snapshot.backend ?? "local",
+    edgeModelId: snapshot.edgeModelId ?? edgePackages(snapshot.knownPackages)[0]?.edgeModelId ?? null,
     device: snapshot.device ?? snapshot.recommendedDevice,
     cudaLibraryDirectory: snapshot.cuda.lockedDirectory,
     llmMayAllowBlocked: snapshot.llmMayAllowBlocked,
@@ -126,6 +140,9 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   // openGuide re-enters the setup guide; absent outside the workbench layout.
   // openGuide 重新进入初始化引导；在工作台布局之外为空。
   const openGuide = React.useContext(PermissionJudgeEntryContext)?.openGuide;
+  // signedIn tells whether the OpenVulcan account the official direct judge uses is signed in.
+  // signedIn 表示官方直连判定所用的 OpenVulcan 账户是否已登录。
+  const signedIn = React.useContext(OpenVulcanAccountContext)?.snapshot?.connected === true;
   // snapshot is the last full read; status is refreshed separately by polling.
   // snapshot 是最近一次完整读取；status 由轮询单独刷新。
   const [snapshot, setSnapshot] = React.useState<PermissionJudgeSettingsSnapshot | null>(null);
@@ -232,7 +249,9 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   const choices: Choices = { ...saved, ...held };
   const activeModel = snapshot.models.find((model) => model.id === snapshot.activeModelId) ?? null;
   const local = choices.backend === "local";
-  const ready = (backend: JudgeBackend) => backend === "local" ? activeModel !== null : cloudConfigured;
+  const ready = (backend: JudgeBackend, edgeModelId = choices.edgeModelId) => backend === "local"
+    ? activeModel !== null
+    : backend === "cloud" ? cloudConfigured : signedIn && edgeModelId !== null;
   const configured = snapshot.backend !== null;
 
   // persist saves `change` at once. A backend is saved only when it is chosen explicitly (`change`
@@ -243,10 +262,16 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   const persist = (change: Partial<Choices>, commit = false) => {
     const next = { ...choices, ...change };
     const chosen = commit || change.backend !== undefined;
-    const backend = chosen && ready(next.backend) ? next.backend : snapshot.backend;
-    const remaining: Partial<Choices> = backend === next.backend ? {} : { backend: next.backend };
-    const request = { ...next, backend };
-    if (JSON.stringify(request) === JSON.stringify({ ...saved, backend: snapshot.backend })) {
+    const backend = chosen && ready(next.backend, next.edgeModelId) ? next.backend : snapshot.backend;
+    // The official direct model is saved with its backend; until then it stays held like the backend.
+    // 官方直连模型与其后端一同保存；在此之前与后端一样保持暂存。
+    const edgeModelId = backend === "edge" ? next.edgeModelId : snapshot.edgeModelId;
+    const remaining: Partial<Choices> = {
+      ...(backend === next.backend ? {} : { backend: next.backend }),
+      ...(edgeModelId === next.edgeModelId ? {} : { edgeModelId: next.edgeModelId }),
+    };
+    const request = { ...next, backend, edgeModelId };
+    if (JSON.stringify(request) === JSON.stringify({ ...saved, backend: snapshot.backend, edgeModelId: snapshot.edgeModelId })) {
       setHeld(remaining);
       return;
     }
@@ -307,12 +332,15 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     </>);
   }
   if (view === "diagnostics") {
-    const savedCloud = snapshot.backend === "cloud";
-    const benchmarkReady = savedCloud || (snapshot.backend !== "cloud" && status.worker.phase === "ready");
+    // A remote judge has no local worker; its speed test times real requests.
+    // 远端判定没有本机 worker；其速度测试为真实请求计时。
+    const savedRemote = snapshot.backend === "cloud" || snapshot.backend === "edge";
+    const benchmarkReady = savedRemote || status.worker.phase === "ready";
     return subPage(t("settings.permissionJudge.diagnostics"), <>
-      {snapshot.backend !== "cloud" ? <WorkerStatusSection snapshot={snapshot} status={status} t={t} /> : null}
+      {savedRemote ? null : <WorkerStatusSection snapshot={snapshot} status={status} t={t} />}
       <PageSection layout="rows" title={t("settings.permissionJudge.benchmark")}
-        description={t(savedCloud ? "settings.permissionJudge.benchmarkCloudHint" : "settings.permissionJudge.benchmarkHint")}
+        description={t(snapshot.backend === "cloud" ? "settings.permissionJudge.benchmarkCloudHint"
+          : snapshot.backend === "edge" ? "settings.permissionJudge.benchmarkEdgeHint" : "settings.permissionJudge.benchmarkHint")}
         actions={([1, 10] as const).map((batchSize) => (
           <Button key={batchSize} type="button" variant="outline" size="sm"
             disabled={busy !== null || !benchmarkReady}
@@ -359,7 +387,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     ? formatMessage(t("settings.permissionJudge.switchBackendPending"), { backend: pendingBackend })
     : ready(choices.backend)
       ? formatMessage(t("settings.permissionJudge.readyToUse"), { backend: pendingBackend })
-      : t(local ? "settings.permissionJudge.needsModel" : "settings.permissionJudge.needsCloudRoute");
+      : t(NEEDS_KEYS[choices.backend]);
   const worker = status.worker;
   const phaseTone = worker.phase === "ready" ? "ready" : worker.phase === "failed" ? "error" : worker.phase === "warming" ? "warning" : "pending";
   const cudaMissing = snapshot.cuda.supported ? cudaMissingLabels(t, cudaReadiness(snapshot.cuda)) : [];
@@ -451,7 +479,10 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
       {snapshot.activeModelIssue ? <PageNotice tone="error" details={snapshot.activeModelIssue.detail} detailsLabel={t("settings.errors.showErrorDetails")}>
         {formatMessage(t("settings.permissionJudge.activeModelIssue"), { code: snapshot.activeModelIssue.code })}
       </PageNotice> : null}
-    </PageSection> : <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />}
+    </PageSection> : choices.backend === "cloud"
+      ? <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />
+      : <PermissionJudgeEdgeSection knownPackages={snapshot.knownPackages} edgeModelId={choices.edgeModelId}
+        disabled={busy !== null} t={t} onEdgeModelChange={(edgeModelId) => persist({ edgeModelId })} />}
 
     {configured && snapshot.policyOptions.length > 0 ? <PageSection layout="rows" data-judge-policy-summary=""
       title={t("settings.permissionJudge.policy.title")} description={t("settings.permissionJudge.policy.description")}

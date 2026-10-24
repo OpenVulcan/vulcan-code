@@ -213,6 +213,22 @@ pub(crate) async fn usage_page(
     vulcan_provider_adapters::query_openvulcan_usage_page(&http, entry, &secret, &cursor).await
 }
 
+/// Resolves the signed-in account's credential for a backend-only request, renewing it through the
+/// shared lease; `None` when nobody is signed in. The connection id identifies the account.
+/// 为仅限后端的请求解析已登录账户的凭据，经共享租约续期；无人登录时为 `None`。连接 id 标识该账户。
+pub(crate) async fn signed_in_credential(
+    state: &SharedServiceBridgeState,
+) -> Result<Option<(String, vulcan_provider_adapters::CredentialExecutionSecret)>, String> {
+    let (runtime, configuration) = public_ai_runtime_and_configuration(state)?;
+    let Some(connection) = account_connection(&runtime, &configuration)? else {
+        return Ok(None);
+    };
+    let secret = runtime
+        .resolve_openvulcan_account_credential(&configuration, &connection.id)
+        .await?;
+    Ok(Some((connection.id, secret)))
+}
+
 /// Returns shared account state and renews expiring credentials through the existing single-flight lease.
 /// 返回共享账户状态，并通过既有单飞租约续期即将到期的凭据。
 /// app publishes invalidation and state owns the global runtime; returns public identity and diagnostics without credential material.

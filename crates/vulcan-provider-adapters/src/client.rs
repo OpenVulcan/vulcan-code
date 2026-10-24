@@ -16,8 +16,9 @@ mod minimax_registration;
 mod model_discovery;
 mod openvulcan;
 pub use openvulcan::{
-    OpenVulcanAccountIdentity, OpenVulcanUsagePage, query_openvulcan_identity,
-    query_openvulcan_usage_page,
+    OpenVulcanAccountIdentity, OpenVulcanEdgeAccess, OpenVulcanEdgeAccessError,
+    OpenVulcanUsagePage, query_openvulcan_identity, query_openvulcan_usage_page,
+    request_openvulcan_edge_access,
 };
 mod secondary_routes;
 

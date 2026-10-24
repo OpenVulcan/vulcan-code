@@ -300,9 +300,199 @@ pub(super) async fn query_usage(
     })
 }
 
+/// Longest wait for one edge-access answer.
+/// 一次边缘访问回答的最长等待时间。
+const EDGE_ACCESS_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Largest edge-access answer read; the documented answer is a few hundred bytes.
+/// 读取的最大边缘访问回答；协议规定的回答只有数百字节。
+const EDGE_ACCESS_MAX_RESPONSE_BYTES: usize = 16 * 1024;
+
+/// Edge endpoint and short-lived access token for one model. It has no `Debug` so the token
+/// cannot reach a log.
+/// 一个模型的边缘端点与短期访问令牌。不实现 `Debug`，使令牌无法进入日志。
+pub struct OpenVulcanEdgeAccess {
+    /// Endpoint base URL: an https origin, or http on loopback.
+    /// 端点基础地址：https 源，或回环地址上的 http。
+    pub endpoint: String,
+    /// Bearer token the endpoint accepts for this model, account and installation.
+    /// 端点为该模型、账户与安装接受的 Bearer 令牌。
+    pub access_token: String,
+    /// Token expiry in Unix milliseconds.
+    /// 令牌到期时间（Unix 毫秒）。
+    pub expires_at_unix_ms: u64,
+}
+
+/// Why edge access was not granted.
+/// 未获得边缘访问的原因。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenVulcanEdgeAccessError {
+    /// The deployment offers no edge endpoint for the model.
+    /// 该部署没有为该模型提供边缘端点。
+    ModelUnavailable,
+    /// Any other failure, described for the decision log.
+    /// 其他任何失败，附供判定记录使用的说明。
+    Failed(String),
+}
+
+/// Answer of `POST /api/v1/vulcancode/edge-access`.
+/// `POST /api/v1/vulcancode/edge-access` 的回答。
+#[derive(Deserialize)]
+struct EdgeAccessAnswer {
+    /// Echo of the requested model.
+    /// 请求模型的回显。
+    model_id: String,
+    /// Endpoint base URL.
+    /// 端点基础地址。
+    endpoint: String,
+    /// EdDSA JWT for the endpoint.
+    /// 端点使用的 EdDSA JWT。
+    access_token: String,
+    /// RFC 3339 expiry equal to the token's `exp`.
+    /// 等于令牌 `exp` 的 RFC 3339 到期时间。
+    expires_at: String,
+}
+
+/// Error envelope of the user center.
+/// 用户中心的错误信封。
+#[derive(Deserialize)]
+struct ErrorEnvelope {
+    /// Stable error.
+    /// 稳定错误。
+    error: ErrorBody,
+}
+
+/// Stable error code of the user center.
+/// 用户中心的稳定错误代码。
+#[derive(Deserialize)]
+struct ErrorBody {
+    /// Error code.
+    /// 错误代码。
+    code: String,
+}
+
+/// Returns `endpoint` without a trailing slash when it is an https origin, or an http origin on
+/// loopback; anything carrying a path, query, fragment or user information is refused.
+/// 当 `endpoint` 是 https 源或回环地址上的 http 源时返回去掉末尾斜杠的值；带路径、查询、片段或用户
+/// 信息的地址一律拒绝。
+fn edge_endpoint_origin(endpoint: &str) -> Option<String> {
+    let url = reqwest::Url::parse(endpoint).ok()?;
+    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    let scheme = url.scheme() == "https" || (url.scheme() == "http" && loopback);
+    (scheme
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then(|| url.origin().ascii_serialization())
+}
+
+/// Asks the credential's deployment for an edge endpoint and access token for `model_id`; the
+/// installation's authorization id is the caller id the token carries.
+/// 向凭据所属部署请求 `model_id` 的边缘端点与访问令牌；安装授权 id 作为令牌携带的调用方 id。
+pub async fn request_openvulcan_edge_access(
+    http: &reqwest::Client,
+    secret: &CredentialExecutionSecret,
+    model_id: &str,
+) -> Result<OpenVulcanEdgeAccess, OpenVulcanEdgeAccessError> {
+    let failed = |message: &str| OpenVulcanEdgeAccessError::Failed(String::from(message));
+    let region = secret
+        .openvulcan_region()
+        .ok_or_else(|| failed("Edge access requires a native OpenVulcan account."))?;
+    let client_id = secret
+        .provider_device_id()
+        .ok_or_else(|| failed("The OpenVulcan account has no installation authorization."))?;
+    let url = format!("{}/api/v1/vulcancode/edge-access", region.auth_origin());
+    let authorization = crate::openvulcan::authorization_header(secret, &url)
+        .map_err(OpenVulcanEdgeAccessError::Failed)?;
+    let response = http
+        .post(&url)
+        .timeout(EDGE_ACCESS_REQUEST_TIMEOUT)
+        .header("Authorization", authorization)
+        .json(&serde_json::json!({ "model_id": model_id, "client_id": client_id }))
+        .send()
+        .await
+        .map_err(|_| failed("The OpenVulcan edge access request failed."))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|_| failed("The OpenVulcan edge access answer could not be read."))?;
+    if body.len() > EDGE_ACCESS_MAX_RESPONSE_BYTES {
+        return Err(failed("The OpenVulcan edge access answer is too large."));
+    }
+    if !status.is_success() {
+        let code = serde_json::from_slice::<ErrorEnvelope>(&body)
+            .map(|envelope| envelope.error.code)
+            .unwrap_or_default();
+        if status == reqwest::StatusCode::NOT_FOUND && code == "model_unavailable" {
+            return Err(OpenVulcanEdgeAccessError::ModelUnavailable);
+        }
+        return Err(OpenVulcanEdgeAccessError::Failed(format!(
+            "OpenVulcan refused edge access with HTTP {} `{code}`.",
+            status.as_u16()
+        )));
+    }
+    let answer: EdgeAccessAnswer = serde_json::from_slice(&body)
+        .map_err(|_| failed("The OpenVulcan edge access answer violates its contract."))?;
+    let endpoint = edge_endpoint_origin(&answer.endpoint).ok_or_else(|| {
+        failed("OpenVulcan returned an edge endpoint that is not an https origin.")
+    })?;
+    let expires_at = time::OffsetDateTime::parse(
+        &answer.expires_at,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .map_err(|_| failed("The OpenVulcan edge access answer has an invalid expiry."))?;
+    let expires_at_unix_ms = u64::try_from(expires_at.unix_timestamp_nanos() / 1_000_000)
+        .map_err(|_| failed("The OpenVulcan edge access answer has an invalid expiry."))?;
+    if answer.model_id != model_id || answer.access_token.is_empty() {
+        return Err(failed(
+            "The OpenVulcan edge access answer violates its contract.",
+        ));
+    }
+    Ok(OpenVulcanEdgeAccess {
+        endpoint,
+        access_token: answer.access_token,
+        expires_at_unix_ms,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Endpoints must be bare https origins; plain http is allowed only on loopback.
+    /// 端点必须是纯 https 源；明文 http 只允许在回环地址上使用。
+    #[test]
+    fn edge_endpoints_are_bare_https_or_loopback_origins() {
+        assert_eq!(
+            edge_endpoint_origin("https://shell.example.com/").as_deref(),
+            Some("https://shell.example.com")
+        );
+        assert_eq!(
+            edge_endpoint_origin("https://shell.example.com").as_deref(),
+            Some("https://shell.example.com")
+        );
+        for local in [
+            "http://localhost:8787",
+            "http://127.0.0.1:8787",
+            "http://[::1]:8787",
+        ] {
+            assert_eq!(edge_endpoint_origin(local).as_deref(), Some(local));
+        }
+        for refused in [
+            "http://shell.example.com",
+            "https://shell.example.com/v1",
+            "https://shell.example.com/?x=1",
+            "https://user@shell.example.com",
+            "ftp://shell.example.com",
+            "shell.example.com",
+        ] {
+            assert_eq!(edge_endpoint_origin(refused), None, "{refused}");
+        }
+    }
+
     /// Protects decimal precision past the JavaScript and floating-point safe integer boundary.
     /// 保护超过 JavaScript 和浮点安全整数边界后的十进制精度。
     #[test]

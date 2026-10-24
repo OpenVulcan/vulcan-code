@@ -47,6 +47,9 @@ pub struct PermissionJudgeSettingsSnapshot {
     /// Registration a rollback returns to.
     /// 回退将返回的登记。
     pub previous_model_id: Option<String>,
+    /// Official model chosen for the direct backend, by its edge model id.
+    /// 为官方直连后端选择的官方模型，以其边缘模型 id 表示。
+    pub edge_model_id: Option<String>,
     /// Official packages this build recognizes, with their published formats.
     /// 本构建识别的官方模型包及其已发布格式。
     pub known_packages: Vec<PermissionJudgeKnownPackage>,
@@ -132,6 +135,9 @@ pub struct PermissionJudgeKnownPackage {
     /// Product name shown as is.
     /// 原样显示的产品名称。
     pub display_name: String,
+    /// Model id the official direct backend uses; absent when the family has no direct route.
+    /// 官方直连后端使用的模型 id；该家族没有直连路由时缺省。
+    pub edge_model_id: Option<String>,
     /// Published formats of this family.
     /// 该家族已发布的格式。
     pub variants: Vec<PermissionJudgeKnownVariant>,
@@ -456,11 +462,16 @@ pub struct PermissionJudgeModelDownload {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PermissionJudgeSettingsSaveRequest {
     /// Backend to configure; absent leaves the judge unconfigured. A backend is saved only once it
-    /// is ready: a local model in use, or a chosen cloud decision model.
-    /// 要配置的后端；缺省表示不配置判定器。后端只有在就绪后才能保存：本机有使用中的模型，或云端已
-    /// 选择判定模型。
+    /// is ready: a local model in use, a chosen cloud decision model, or a signed-in OpenVulcan
+    /// account with an official direct model.
+    /// 要配置的后端；缺省表示不配置判定器。后端只有在就绪后才能保存：本机有使用中的模型、云端已
+    /// 选择判定模型，或已登录 OpenVulcan 账户并选择了官方直连模型。
     #[serde(default)]
     pub backend: Option<JudgeBackend>,
+    /// Official model for the direct backend, by its edge model id; required with that backend.
+    /// 官方直连后端使用的官方模型，以其边缘模型 id 表示；选择该后端时必填。
+    #[serde(default)]
+    pub edge_model_id: Option<String>,
     /// Chosen device; absent follows the recommendation.
     /// 所选设备；缺省时跟随推荐。
     #[serde(default)]
@@ -578,8 +589,8 @@ pub struct PermissionJudgeBenchmarkRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionJudgeBenchmarkResult {
-    /// Device the session runs on; absent for the cloud judge.
-    /// 会话运行的设备；云端判定时缺省。
+    /// Device the session runs on; absent for the cloud and official direct judges.
+    /// 会话运行的设备；云端与官方直连判定时缺省。
     pub device: Option<JudgeDevice>,
     /// Registration that was timed.
     /// 被计时的登记。

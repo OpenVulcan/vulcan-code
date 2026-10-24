@@ -15,6 +15,10 @@ pub enum JudgeBackend {
     /// The decision route saved for the permission judge, such as jev on TypeSafe or OpenRouter.
     /// 为权限判定保存的判定路由，例如 TypeSafe 或 OpenRouter 上的 jev。
     Cloud,
+    /// The official model served by an OpenVulcan edge endpoint, reached with the signed-in
+    /// account; same classifier and labels as the local judge.
+    /// 由 OpenVulcan 边缘端点提供的官方模型，使用已登录账户访问；分类器与标签同本机判定器。
+    Edge,
 }
 
 /// Most characters of one review rule text; the settings services refuse longer text.

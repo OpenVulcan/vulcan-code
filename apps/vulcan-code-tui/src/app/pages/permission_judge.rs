@@ -1,8 +1,9 @@
-// Permission judge page: switch and backend, the cloud decision route or the local model status,
-// the LLM review route, speed tests, the model registry and the CUDA runtime, mirroring the WebUI
-// permission judge settings area. Every edit saves at once through the complete save request.
-// 权限判定页：开关与后端、云端判定路由或本机模型状态、LLM 复核路由、速度测试、模型登记表与 CUDA
-// 执行库，镜像 WebUI 权限判定设置区。每次编辑都通过完整保存请求立即保存。
+// Permission judge page: switch and backend, the cloud decision route, the official direct model or
+// the local model status, the LLM review route, speed tests, the model registry and the CUDA
+// runtime, mirroring the WebUI permission judge settings area. Every edit saves at once through the
+// complete save request.
+// 权限判定页：开关与后端、云端判定路由、官方直连模型或本机模型状态、LLM 复核路由、速度测试、模型
+// 登记表与 CUDA 执行库，镜像 WebUI 权限判定设置区。每次编辑都通过完整保存请求立即保存。
 
 use super::*;
 use crate::service_api::{permission_judge as judge, settings_actions as settings};
@@ -22,6 +23,7 @@ pub(super) fn backend_label(code: &str) -> String {
     match code {
         "local" => tr!("settings.permissionJudge.backend.local"),
         "cloud" => tr!("settings.permissionJudge.backend.cloud"),
+        "edge" => tr!("settings.permissionJudge.backend.edge"),
         other => other.to_string(),
     }
 }
@@ -172,6 +174,15 @@ fn optional_bytes(value: &Value) -> String {
     value.as_f64().map_or_else(|| "—".into(), format_bytes)
 }
 
+/// Official packages that have a direct route, in display order.
+/// 具有直连路由的官方模型包，按显示顺序排列。
+fn edge_packages(snapshot: &Value) -> Vec<&Value> {
+    a(snapshot, "/knownPackages")
+        .iter()
+        .filter(|known| v(known, "/edgeModelId").is_string())
+        .collect()
+}
+
 /// The complete save request for the saved choices; an unset backend is local and an unset
 /// device follows the recommendation, as the WebUI draft does.
 /// 已保存选择对应的完整保存请求；未设置的后端为本机，未设置的设备跟随推荐值，与 WebUI 草稿一致。
@@ -184,6 +195,7 @@ fn save_request(snapshot: &Value) -> Value {
     };
     json!({
         "backend": v(snapshot, "/backend"),
+        "edgeModelId": v(snapshot, "/edgeModelId"),
         "device": device,
         "cudaLibraryDirectory": v(snapshot, "/cuda/lockedDirectory"),
         "llmMayAllowBlocked": b(snapshot, "/llmMayAllowBlocked"),
@@ -317,8 +329,18 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     // 已保存的后端决定判定器是否已配置；在此之前同时显示两种设置。
     let saved = v(snapshot, "/backend").as_str();
     let configured = saved.is_some();
-    let local = saved != Some("cloud");
-    let cloud = saved != Some("local");
+    let local = saved.is_none() || saved == Some("local");
+    let cloud = saved.is_none() || saved == Some("cloud");
+    let edge = saved.is_none() || saved == Some("edge");
+    // The official direct model: the saved one, else the first one offered, as in the WebUI.
+    // 官方直连模型：已保存的模型，否则为提供的第一个，与 WebUI 一致。
+    let edge_model = match v(snapshot, "/edgeModelId") {
+        Value::Null => edge_packages(snapshot)
+            .first()
+            .map(|known| v(known, "/edgeModelId").clone())
+            .unwrap_or(Value::Null),
+        model => model.clone(),
+    };
     let active_model = a(snapshot, "/models")
         .iter()
         .find(|model| v(model, "/id") == v(snapshot, "/activeModelId"));
@@ -346,8 +368,10 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         Tone::Muted,
     ));
     // Each other backend is offered only once it is set up, so the judge never points at one
-    // that cannot run.
-    // 其他后端只有在设置完成后才提供，因此判定器不会指向无法运行的后端。
+    // that cannot run. The direct backend needs an OpenVulcan sign-in, which the service checks
+    // when it is saved.
+    // 其他后端只有在设置完成后才提供，因此判定器不会指向无法运行的后端。直连后端需要登录
+    // OpenVulcan，由服务在保存时检查。
     for (backend, ready, missing) in [
         (
             "local",
@@ -359,6 +383,11 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
             !cloud_route.is_null(),
             tr!("settings.permissionJudge.needsCloudRoute"),
         ),
+        (
+            "edge",
+            !edge_model.is_null(),
+            tr!("settings.permissionJudge.edge.noModel"),
+        ),
     ] {
         if saved == Some(backend) {
             continue;
@@ -366,6 +395,9 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         if ready {
             let mut request = base.clone();
             request["backend"] = json!(backend);
+            if backend == "edge" {
+                request["edgeModelId"] = edge_model.clone();
+            }
             let name = backend_label(backend);
             rows.push(button(
                 if configured {
@@ -404,6 +436,9 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     }
     if cloud {
         cloud_rows(&mut rows, ai, cloud_route);
+    }
+    if edge {
+        edge_rows(&mut rows, snapshot, &base, saved == Some("edge"));
     }
     review_rows(&mut rows, ai);
     approval_rows(&mut rows, snapshot, &base);
@@ -585,6 +620,46 @@ fn status_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value) {
     ));
 }
 
+/// The official direct judge: what leaves the machine, the sign-in it needs and, once saved, the
+/// official model it calls.
+/// 官方直连判定：离开本机的数据说明、所需的登录，以及保存后其调用的官方模型。
+fn edge_rows(rows: &mut Vec<Row>, snapshot: &Value, base: &Value, saved: bool) {
+    rows.push(section(tr!("settings.permissionJudge.backend.edge")));
+    rows.push(note(
+        tr!("settings.permissionJudge.edge.description"),
+        Tone::Muted,
+    ));
+    rows.push(note(
+        tr!("settings.permissionJudge.edge.dataNotice"),
+        Tone::Warn,
+    ));
+    rows.push(note(
+        tr!("settings.permissionJudge.edge.signedOut"),
+        Tone::Muted,
+    ));
+    let packages = edge_packages(snapshot);
+    if packages.is_empty() {
+        rows.push(note(
+            tr!("settings.permissionJudge.edge.noModel"),
+            Tone::Muted,
+        ));
+    } else if saved {
+        rows.push(choice(
+            tr!("settings.permissionJudge.edge.model"),
+            packages
+                .iter()
+                .map(|known| (s(known, "/edgeModelId"), s(known, "/displayName")))
+                .collect(),
+            s(base, "/edgeModelId"),
+            dto(
+                base.clone(),
+                "/edgeModelId",
+                judge::save_permission_judge_settings,
+            ),
+        ));
+    }
+}
+
 /// The cloud decision route, what leaves the machine, and a billed connection test.
 /// 云端判定路由、离开本机的数据说明，以及一次计费的连接测试。
 pub(super) fn cloud_rows(rows: &mut Vec<Row>, ai: &Value, saved: &Value) {
@@ -715,13 +790,18 @@ fn benchmark_rows(
 ) {
     // The saved backend decides what the test runs on, as in the WebUI.
     // 与 WebUI 一致，由已保存的后端决定测试对象。
-    let saved_cloud = configured && s(snapshot, "/backend") == "cloud";
-    let ready = saved_cloud
-        || (s(snapshot, "/backend") != "cloud" && s(status, "/worker/phase") == "ready");
+    let backend = s(snapshot, "/backend");
+    let saved_cloud = configured && backend == "cloud";
+    // A remote judge has no local worker; its speed test times real requests.
+    // 远端判定没有本机 worker；其速度测试为真实请求计时。
+    let saved_remote = saved_cloud || (configured && backend == "edge");
+    let ready = saved_remote || s(status, "/worker/phase") == "ready";
     rows.push(section(tr!("settings.permissionJudge.benchmark")));
     rows.push(note(
         if saved_cloud {
             tr!("settings.permissionJudge.benchmarkCloudHint")
+        } else if saved_remote {
+            tr!("settings.permissionJudge.benchmarkEdgeHint")
         } else {
             tr!("settings.permissionJudge.benchmarkHint")
         },
@@ -1821,7 +1901,7 @@ mod tests {
         let base = save_request(&snapshot);
         assert_eq!(
             base,
-            json!({"backend": null, "device": "webgpu", "cudaLibraryDirectory": "D:/cuda",
+            json!({"backend": null, "edgeModelId": null, "device": "webgpu", "cudaLibraryDirectory": "D:/cuda",
                 "llmMayAllowBlocked": true, "recordDecisions": true, "approvalTimeoutSeconds": 90})
         );
         // Other edits never configure the judge as a side effect.

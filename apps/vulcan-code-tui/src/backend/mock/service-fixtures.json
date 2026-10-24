@@ -1127,10 +1127,12 @@
       ],
       "activeModelId": "demo-judge-official",
       "previousModelId": "demo-judge-custom",
+      "edgeModelId": null,
       "knownPackages": [
         {
           "id": "demo-judge",
           "displayName": "Demo Judge",
+          "edgeModelId": "demo-shell-judge",
           "variants": [
             {
               "format": "fp16-mixed",

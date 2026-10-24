@@ -21,7 +21,7 @@ use crate::protocol::JudgeDevice;
 
 /// Schema version of `known-packages.json` this build reads.
 /// 本构建读取的 `known-packages.json` Schema 版本。
-const KNOWN_PACKAGES_SCHEMA_VERSION: u32 = 2;
+const KNOWN_PACKAGES_SCHEMA_VERSION: u32 = 3;
 
 /// Lowest CUDA compute capability with native half-precision arithmetic; older GPUs emulate it
 /// slowly, so they are recommended full precision.
@@ -119,6 +119,10 @@ pub struct KnownPackage {
     /// Digests of the trained checkpoints released under this package.
     /// 以该模型包发布的训练检查点摘要。
     pub checkpoints: Vec<String>,
+    /// Model id an OpenVulcan edge endpoint serves this package under, or `None` when it has no
+    /// official direct route.
+    /// OpenVulcan 边缘端点提供该模型包所用的模型 id；没有官方直连路由时为 `None`。
+    pub edge_model_id: Option<String>,
     /// Formats the package is published in.
     /// 模型包发布的格式。
     pub variants: Vec<KnownVariant>,
@@ -183,9 +187,20 @@ fn is_sha256(text: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// Parses the list and refuses duplicate identifiers, checkpoints or formats, malformed digests and
-/// download locations that are not HTTPS directories.
-/// 解析清单，并拒绝重复的标识、检查点或格式、格式错误的摘要，以及不是 HTTPS 目录的下载位置。
+/// Tells whether `text` is an identifier the edge-access route accepts: 1–64 characters of
+/// `[A-Za-z0-9._:-]`.
+/// 判断 `text` 是否为边缘访问接口接受的标识：1–64 个 `[A-Za-z0-9._:-]` 字符。
+fn is_edge_model_id(text: &str) -> bool {
+    (1..=64).contains(&text.len())
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
+/// Parses the list and refuses duplicate identifiers, checkpoints, edge models or formats,
+/// malformed digests or edge model ids, and download locations that are not HTTPS directories.
+/// 解析清单，并拒绝重复的标识、检查点、边缘模型或格式，格式错误的摘要或边缘模型 id，以及不是 HTTPS
+/// 目录的下载位置。
 fn parse_known_packages(text: &str) -> Result<Vec<KnownPackage>, String> {
     let file: KnownPackagesFile = serde_json::from_str(text).map_err(|error| error.to_string())?;
     if file.schema_version != KNOWN_PACKAGES_SCHEMA_VERSION {
@@ -196,9 +211,18 @@ fn parse_known_packages(text: &str) -> Result<Vec<KnownPackage>, String> {
     }
     let mut ids = std::collections::BTreeSet::new();
     let mut checkpoints = std::collections::BTreeSet::new();
+    let mut edge_models = std::collections::BTreeSet::new();
     for package in &file.packages {
         if package.id.is_empty() || !ids.insert(package.id.as_str()) {
             return Err(format!("package id `{}` is empty or repeated", package.id));
+        }
+        if let Some(model) = &package.edge_model_id
+            && (!is_edge_model_id(model) || !edge_models.insert(model.as_str()))
+        {
+            return Err(format!(
+                "package `{}` edge model `{model}` is malformed or repeated",
+                package.id
+            ));
         }
         if package.display_name.trim().is_empty()
             || package.checkpoints.is_empty()
@@ -266,6 +290,14 @@ pub fn find_known_package(parent_sha256: &str) -> Option<&'static KnownPackage> 
     })
 }
 
+/// The official package an edge endpoint serves under `edge_model_id`.
+/// 边缘端点以 `edge_model_id` 提供的官方模型包。
+pub fn find_edge_package(edge_model_id: &str) -> Option<&'static KnownPackage> {
+    known_packages()
+        .iter()
+        .find(|package| package.edge_model_id.as_deref() == Some(edge_model_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,23 +312,46 @@ mod tests {
             }
         }
         assert_eq!(find_known_package(&"0".repeat(64)), None);
+        for package in known_packages() {
+            if let Some(model) = &package.edge_model_id {
+                assert_eq!(find_edge_package(model), Some(package));
+            }
+        }
+        assert_eq!(find_edge_package("unknown-model"), None);
     }
 
     #[test]
-    fn list_rejects_repeated_checkpoints_and_unknown_fields() {
-        let digest = "a".repeat(64);
+    fn list_rejects_repeated_checkpoints_or_edge_models_and_unknown_fields() {
         let variants = r#"[{"format":"fp32","devices":["cpu"],"download":null}]"#;
-        let repeated = format!(
-            r#"{{"schema_version":2,"packages":[
-                {{"id":"a","display_name":"A","checkpoints":["{digest}"],"variants":{variants}}},
-                {{"id":"b","display_name":"B","checkpoints":["{digest}"],"variants":{variants}}}]}}"#
-        );
-        assert!(parse_known_packages(&repeated).is_err());
-        let extra = format!(
-            r#"{{"schema_version":2,"packages":[
-                {{"id":"a","display_name":"A","checkpoints":["{digest}"],"variants":{variants},"url":"x"}}]}}"#
-        );
-        assert!(parse_known_packages(&extra).is_err());
+        let package = |id: &str, digest: char, edge: &str| {
+            format!(
+                r#"{{"id":"{id}","display_name":"{id}","checkpoints":["{}"],"edge_model_id":{edge},"variants":{variants}}}"#,
+                digest.to_string().repeat(64)
+            )
+        };
+        let list = |packages: &[String]| {
+            format!(
+                r#"{{"schema_version":3,"packages":[{}]}}"#,
+                packages.join(",")
+            )
+        };
+        let distinct = list(&[
+            package("a", 'a', r#""shell-judge""#),
+            package("b", 'b', "null"),
+        ]);
+        let parsed = parse_known_packages(&distinct).unwrap();
+        assert_eq!(parsed[0].edge_model_id.as_deref(), Some("shell-judge"));
+        assert_eq!(parsed[1].edge_model_id, None);
+        for broken in [
+            list(&[package("a", 'a', "null"), package("b", 'a', "null")]),
+            list(&[package("a", 'a', r#""m""#), package("b", 'b', r#""m""#)]),
+            list(&[package("a", 'a', r#""shell judge""#)]),
+            list(&[package("a", 'a', r#""""#)]),
+            distinct.replace(r#""variants""#, r#""url":"x","variants""#),
+            distinct.replace(r#""schema_version":3"#, r#""schema_version":2"#),
+        ] {
+            assert!(parse_known_packages(&broken).is_err(), "{broken}");
+        }
     }
 
     #[test]
@@ -304,8 +359,8 @@ mod tests {
         let digest = "a".repeat(64);
         let list = |download: &str| {
             format!(
-                r#"{{"schema_version":2,"packages":[{{"id":"a","display_name":"A",
-                "checkpoints":["{digest}"],
+                r#"{{"schema_version":3,"packages":[{{"id":"a","display_name":"A",
+                "checkpoints":["{digest}"],"edge_model_id":null,
                 "variants":[{{"format":"fp32","devices":["cpu"],"download":{download}}}]}}]}}"#
             )
         };
@@ -337,6 +392,7 @@ mod tests {
             id: String::from("a"),
             display_name: String::from("A"),
             checkpoints: Vec::new(),
+            edge_model_id: None,
             variants: vec![
                 variant(ModelFormat::Fp16Mixed, &all),
                 variant(ModelFormat::Fp32, &all),
