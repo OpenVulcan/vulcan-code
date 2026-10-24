@@ -798,3 +798,60 @@ async fn session_completed_task_result_revoked_before_receipt_is_redacted() {
                 && !input.text.contains("Business response")))
     );
 }
+
+/// An insertion that lands after the final API terminal keeps the turn open for one continuation.
+/// 落在最后一次 API 终态之后的插入保持回合开放，以续跑一次。
+#[tokio::test]
+async fn late_in_turn_insertion_continues_instead_of_closing() {
+    use crate::session_runtime_registry_v1::SuccessfulTurnSettlement;
+    use vulcan_session_core::v1::document::ClientInputSubmission;
+    use vulcan_session_core::v1::ids::ClientActionId;
+    let (_root, _invocation, target, _context) = message_fixture(false).await;
+    finish_business_response(&target);
+    target
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::InputAccepted,
+            |document| {
+                document
+                    .add_pending_in_turn_input(
+                        ClientInputSubmission::new(
+                            ClientActionId::try_new("late-insert").unwrap(),
+                            "One more thing",
+                            vec![],
+                        ),
+                        10,
+                    )
+                    .map(|result| SessionMutationChange::Changed(result.into_value()))
+            },
+        )
+        .unwrap();
+    let original_turn = target
+        .read(|document| document.active_turn().unwrap().turn_id)
+        .unwrap();
+    let SuccessfulTurnSettlement::PendingInTurn(promoted) =
+        target.complete_successful_turn(11).await.unwrap().value
+    else {
+        panic!("a late insertion must keep the turn open");
+    };
+    assert_eq!(promoted.len(), 1);
+    target
+        .read(|document| {
+            let turn = document.active_turn().unwrap();
+            assert!(!turn.closed);
+            assert_eq!(turn.turn_id, original_turn);
+            assert!(
+                document
+                    .metadata
+                    .input_state
+                    .pending_in_turn_inputs
+                    .is_empty()
+            );
+        })
+        .unwrap();
+    finish_business_response(&target);
+    assert!(matches!(
+        target.complete_successful_turn(13).await.unwrap().value,
+        SuccessfulTurnSettlement::Completed(_)
+    ));
+}

@@ -199,6 +199,9 @@ pub(crate) enum SuccessfulTurnSettlement {
     /// A durable return keeps the logical turn open for one more physical request.
     /// 可靠回流保持逻辑回合开放，以便继续一次物理请求。
     SubagentReturn,
+    /// Inputs inserted after the final API were streamed; the turn stays open for one continuation.
+    /// 最后一次 API 之后插入的输入已写入事件流；回合保持开放以续跑一次。
+    PendingInTurn(Vec<vulcan_session_core::v1::ids::Seq>),
 }
 
 /// Determines which immutable frontier owns instruction filtering for a durable projection.
@@ -2561,6 +2564,14 @@ impl SessionHandle {
                         ));
                     }
                     document.apply_atomic_transition(move |document| {
+                        // An insertion that missed the final API terminal still reaches the model.
+                        // 错过最后一次 API 终态的插入仍须送达模型。
+                        let promoted = document.promote_pending_in_turn_inputs_after_api(now_ms)?;
+                        if !promoted.is_empty() {
+                            return Ok(SessionMutationChange::Changed(
+                                SuccessfulTurnSettlement::PendingInTurn(promoted),
+                            ));
+                        }
                         let transition = document.complete_turn_with_lifetime_usage(
                             expected_turn_id,
                             now_ms,

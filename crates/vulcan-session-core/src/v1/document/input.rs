@@ -1997,6 +1997,113 @@ impl SessionDocument {
         Ok(IdempotentMutation::Committed(input_id))
     }
 
+    /// Streams in-turn inputs that arrived after the final physical API completed.
+    /// 将最后一次物理 API 完成之后到达的过程内输入写入主事件流。
+    ///
+    /// A successful Turn must not close over such inputs: they would sit in metadata, unseen by the
+    /// model. The caller keeps the Turn open and starts one continuation for the returned inputs,
+    /// exactly as when they are promoted at an API terminal.
+    /// 成功回合不得在这类输入未处理时关闭，否则它们只停留在元数据中而模型看不到。调用方保持
+    /// 回合开放，并为返回的输入启动一次续跑，与在 API 终态晋升时完全一致。
+    ///
+    /// # Returns / 返回值
+    /// The ordered seq values of the newly streamed inputs; empty when nothing was pending.
+    /// 新写入输入的有序 seq；没有待处理输入时为空。
+    pub fn promote_pending_in_turn_inputs_after_api(
+        &mut self,
+        now_ms: i64,
+    ) -> Result<Vec<Seq>, DomainError> {
+        validate_timestamp("updated_at_ms", now_ms)?;
+        let pending_inputs = self.metadata.input_state.pending_in_turn_inputs.clone();
+        if pending_inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let turn = self.require_open_turn()?;
+        let turn_id = turn.turn_id;
+        if turn.origin == TurnOrigin::QuestionExecution {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "question_execution.business_inputs",
+            });
+        }
+        if let Some(api) = &self.active_api {
+            return Err(DomainError::TurnCompletionWhileApiActive {
+                turn_id: turn_id.value(),
+                api_call_id: api.api_call_id.value(),
+            });
+        }
+        if pending_inputs
+            .iter()
+            .any(|pending| pending.turn_id != turn_id)
+        {
+            return Err(DomainError::InvalidQueuedInputOrder {
+                field: "pending_input_turn_mismatch",
+            });
+        }
+        let bound_request_config = pending_inputs
+            .iter()
+            .rev()
+            .find_map(|pending| pending.bound_request_config.clone());
+        let promotable: Vec<PendingInTurnInput> = pending_inputs
+            .into_iter()
+            .filter(|pending| !self.input_id_already_streamed(pending.input_id))
+            .collect();
+        for pending in &promotable {
+            validate_user_input(pending.text.clone(), &pending.resource_ids)?;
+            if let Some(parameters) = &pending.parameters {
+                parameters.validate_pending(&pending.resource_ids)?;
+            }
+        }
+        let promotable_count = u64::try_from(promotable.len())
+            .map_err(|_| DomainError::invalid_id("pending_input_count", u64::MAX))?;
+        self.ensure_transition_capacity(
+            promotable_count + u64::from(bound_request_config.is_some()),
+            0,
+        )?;
+        let mut staged_allocator = self.id_allocator;
+        let mut staged_events = Vec::new();
+        let mut staged_metadata = self.metadata.clone();
+        if let Some(request_config) = bound_request_config {
+            self.stage_bound_request_activation(
+                &mut staged_metadata,
+                &mut staged_allocator,
+                &mut staged_events,
+                request_config,
+                Some(turn_id),
+                now_ms,
+            )?;
+        }
+        let mut promoted_input_seqs = Vec::with_capacity(promotable.len());
+        for pending in promotable {
+            promoted_input_seqs.push(self.stage_event(
+                &mut staged_allocator,
+                &mut staged_events,
+                Some(turn_id),
+                EventVisibility::Provider,
+                EventBody::UserInput(UserInputEvent {
+                    parameters: pending.parameters,
+                    client_action_id: pending.client_action_id,
+                    input_id: pending.input_id,
+                    input_source: UserInputSource::PendingInTurn,
+                    text: pending.text,
+                    resource_ids: pending.resource_ids,
+                }),
+                now_ms,
+            )?);
+        }
+        staged_metadata.input_state.pending_in_turn_inputs.clear();
+        let changed_event_seqs: Vec<Seq> =
+            staged_events.iter().map(ConversationEvent::seq).collect();
+        self.id_allocator = staged_allocator;
+        self.metadata = staged_metadata;
+        self.events.extend(staged_events);
+        self.bump_revision(
+            &[DirtyFile::Metadata, DirtyFile::ActiveTail],
+            now_ms,
+            &changed_event_seqs,
+        );
+        Ok(promoted_input_seqs)
+    }
+
     /// Returns whether one input id already appeared in the main stream.
     /// 返回某个输入 id 是否已经出现在主事件流中。
     pub(super) fn input_id_already_streamed(&self, input_id: PendingInputId) -> bool {

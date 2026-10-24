@@ -655,6 +655,11 @@ impl SessionDocument {
             CollaborationDeliveryFailureReason::InvalidBinding
         };
         staged.fail_unapplied_task_steering_for_turn(turn_id, steering_failure, now_ms)?;
+        // Inputs inserted after the last API stay in history, as on an interrupt, instead of
+        // lingering under a closed turn where the next API terminal would reject them.
+        // 最后一次 API 之后插入的输入与中断时一样保留在历史中，而不是滞留在已关闭回合下，
+        // 否则下一次 API 终态会拒绝它们。
+        staged.promote_pending_in_turn_inputs_after_api(now_ms)?;
         let receipt = staged.close_turn_after_question_attempts(outcome, duration_ms, now_ms)?;
         staged.record_task_results_for_turn(turn_id, now_ms)?;
         staged.commit();
@@ -866,6 +871,13 @@ impl SessionDocument {
             });
         }
         self.require_final_assistant(expected_turn_id)?;
+        // Successful completion must first stream late inputs and continue the turn for them.
+        // 成功完成前必须先写入迟到输入，并为其续跑回合。
+        if !self.metadata.input_state.pending_in_turn_inputs.is_empty() {
+            return Err(DomainError::InvalidQueuedInputOrder {
+                field: "pending_input_unstreamed_at_completion",
+            });
+        }
         let turn_start_event = self
             .events
             .iter()
