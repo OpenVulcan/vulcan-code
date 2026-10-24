@@ -315,9 +315,11 @@ async function chromiumPackageInventory(root, current = root, files = []) {
 // 使用锁定驱动启动已复制的浏览器后，写入 Chromium 版本和组件证据。
 // chromiumRoot is the copied browser directory; chromiumExecutable is its exact launch target.
 // chromiumRoot 是已复制的浏览器目录；chromiumExecutable 是其精确启动目标。
+// host names the packaged Node, browser runtime, and Playwright components the host will use.
+// host 指明宿主将使用的打包 Node、浏览器运行时与 Playwright 组件。
 // Returns after the browser has closed and the manifest has been persisted.
 // 浏览器关闭且清单持久化后返回。
-async function writeChromiumPackageManifest(chromiumRoot, chromiumExecutable) {
+async function writeChromiumPackageManifest(chromiumRoot, chromiumExecutable, host) {
   // Windows Chrome for Testing may exit 3 for --version even though Playwright launches it.
   // Windows 上 Chrome for Testing 的 --version 可能返回 3，但 Playwright 仍可正常启动它。
   const requireBrowser = createRequire(path.join(repository, 'plugins/vulcan-browser/node/package.json'));
@@ -332,7 +334,15 @@ async function writeChromiumPackageManifest(chromiumRoot, chromiumExecutable) {
   if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(version)) {
     throw new Error('The packaged Chromium did not report a semantic version.');
   }
+  // Record a video with the packaged Node and runtime in hermetic mode, exactly as the host runs.
+  // 以打包的 Node 与运行时、按宿主的自包含模式录制视频。
+  await execFileAsync(host.nodeExecutable, [path.join(repository, 'scripts/browser-video-check.mjs'), host.runtimeRoot, chromiumExecutable], {
+    windowsHide: true, timeout: 60_000, env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: '0' },
+  });
   const files = await chromiumPackageInventory(output, chromiumRoot);
+  // The inventory also covers the Playwright components, so a relocated release detects their truncation.
+  // 清单同时覆盖 Playwright 组件，使迁移后的发行物能发现其载荷不完整。
+  await chromiumPackageInventory(output, host.componentsRoot, files);
   await writeFile(path.join(chromiumRoot, 'package-manifest.json'), JSON.stringify({
     schemaVersion: 1,
     executable: packageRelativePath(output, chromiumExecutable),
@@ -514,10 +524,17 @@ async function main() {
   // 已准备源码始终包含已适配 Playwright 版本选定的可执行程序。
   let chromiumExecutable;
   if (chromiumSource) {
-    const { sourceRoot, executableRelative } = chromiumSource;
+    const { sourceRoot, executableRelative, componentRoots } = chromiumSource;
     await cp(sourceRoot, path.join(output, 'browser/chromium'), { recursive: true, dereference: true });
     chromiumExecutable = path.posix.join('browser/chromium', ...executableRelative.split(path.sep));
-    await writeChromiumPackageManifest(path.join(output, 'browser/chromium'), entry(chromiumExecutable));
+    // The host runs Playwright in hermetic mode, which reads components from playwright-core/.local-browsers.
+    // 宿主以自包含模式运行 Playwright，从 playwright-core/.local-browsers 读取组件。
+    const componentsRoot = path.join(browserRoot, 'node_modules/playwright-core/.local-browsers');
+    for (const componentRoot of componentRoots) {
+      await cp(componentRoot, path.join(componentsRoot, path.basename(componentRoot)), { recursive: true, dereference: true });
+    }
+    await writeChromiumPackageManifest(path.join(output, 'browser/chromium'), entry(chromiumExecutable),
+      { nodeExecutable: chromiumSource.executable, runtimeRoot: browserRoot, componentsRoot });
   }
   const layout = {
     schemaVersion: runtimeLayoutSchemaVersion, profile,

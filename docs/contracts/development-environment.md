@@ -64,6 +64,8 @@ GNU Make 在 Unix 下通过 `make.sh` 分发构建及运行；直接执行 `pwsh
 
 发行物中 `desktop/runtime/` 仅运行 Electron GUI；`browser/runtime/` 保存 Core 浏览器宿主及驱动，`browser/chromium/` 保存独立 Chromium，宿主由 `dependencies/runtimes/node/` 的受管 Node 启动。运行布局架构为 3，`browserHostExecutable` 与 `desktopExecutable` 分别声明两个程序；`tuiExecutable` 声明与服务同目录发布的终端客户端 `bin/vulcan-tui`，Windows 托盘的“打开终端客户端”只按该条目启动。旧版用户目录下的浏览器下载不会覆盖随包版本，也不会在启动时自动删除。
 
+用户机器获得 Playwright 推荐的完整组件。同步阶段的 `install chromium --no-shell` 在缓存中为当前平台放入 Chromium 及其附带组件（录屏用的 ffmpeg，Windows 上另有 winldd）；打包时 Chromium 进入 `browser/chromium/`，其余组件原样进入 `browser/runtime/node_modules/playwright-core/.local-browsers/`，不在仓库内复述组件清单。浏览器宿主以首个导入的 `chromium-host/playwright-registry.ts` 把 `PLAYWRIGHT_BROWSERS_PATH` 固定为 `0`（Playwright 的自包含模式），因此组件只从随包目录解析，用户自己的 Playwright 缓存或继承的环境变量不能替换它们。打包阶段用受管 Node 与随包运行时按同一模式实际录制一段视频（`scripts/browser-video-check.mjs`），失败即停止；`browser/chromium/package-manifest.json` 的文件清单同时覆盖这些组件，迁移后的发行物可发现载荷不完整。Linux 的系统库、字体与 Xvfb 由发行版包管理器提供，不随包分发：用户执行 `vulcan-code-service --install-browser-dependencies`（必须单独使用），它从宿主入口目录解析随包 playwright-core，运行其 `install-deps chromium`，由 Playwright 按发行版本选择软件包并自行请求 sudo。Windows 与 macOS 无需此步骤，执行时直接报错说明。
+
 首次启用只检查本地依赖，并在使用时发布插件私有执行代次，无须下载。组件缺失或损坏时修复应用安装；开发环境重新执行 `make sync` 和完整构建。Node、Electron 与 Chromium 的上游许可文件随对应目录保留。
 
 首次启动或修改 Electron 壳、运行布局时，先执行 `make build`，再执行 `make run`。仅修改 WebUI 页面时，保留 Vite 与桌面壳运行即可，页面由 Vite 热更新。

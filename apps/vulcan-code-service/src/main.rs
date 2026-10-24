@@ -6,6 +6,7 @@
     windows_subsystem = "windows"
 )]
 
+mod browser_dependencies;
 #[cfg(all(target_os = "windows", debug_assertions, feature = "desktop-tray"))]
 mod debug_console;
 mod desktop_integration;
@@ -42,6 +43,25 @@ fn main() {
             }
         },
         Ok(None) => {}
+        Err(error) => {
+            eprintln!("[vulcan-code-service] {error}");
+            std::process::exit(2);
+        }
+    }
+    // Browser system packages are likewise a one-shot command run before any Core startup.
+    // 浏览器系统软件包同样是一次性命令，在任何 Core 启动之前执行。
+    match browser_dependencies::browser_dependencies_requested(&args) {
+        Ok(true) => match browser_dependencies::install_browser_dependencies() {
+            Ok(summary) => {
+                println!("{summary}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("[vulcan-code-service] {error}");
+                std::process::exit(1);
+            }
+        },
+        Ok(false) => {}
         Err(error) => {
             eprintln!("[vulcan-code-service] {error}");
             std::process::exit(2);
@@ -85,7 +105,8 @@ fn main() {
             eprintln!("[vulcan-code-service] {error}");
             eprintln!(
                 "usage: vulcan-code-service (--gui-launch | --service | --headless | --describe) [--no-debug-console]
-       vulcan-code-service (--install-user-service | --uninstall-user-service)"
+       vulcan-code-service (--install-user-service | --uninstall-user-service)
+       vulcan-code-service --install-browser-dependencies"
             );
             std::process::exit(2);
         }

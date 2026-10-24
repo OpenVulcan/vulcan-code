@@ -1,6 +1,6 @@
 // Prepare the pinned, offline browser component at build time.
 // 在构建时准备锁定版本、可离线使用的浏览器组件。
-import { access, readFile, mkdir } from 'node:fs/promises';
+import { access, readFile, readdir, mkdir } from 'node:fs/promises';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -75,7 +75,15 @@ export async function browserPackageInputs(root) {
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Chromium executable escapes the prepared cache.');
   await access(chromiumExecutable);
   const sourceRoot = path.join(browserCacheRoot, relative.split(path.sep)[0]);
-  return { executable, sourceRoot, executableRelative: path.relative(sourceRoot, chromiumExecutable) };
+  // The cache holds exactly what `install chromium` chose for this platform: besides Chromium that is
+  // ffmpeg for video recording and, on Windows, winldd. Ship every such component rather than restating
+  // Playwright's list; dot entries are its bookkeeping, not components.
+  // 缓存内恰是 `install chromium` 为本平台选定的内容：除 Chromium 外还有录屏用的 ffmpeg，以及
+  // Windows 上的 winldd。随包带上全部组件而不复述 Playwright 的清单；以点开头的条目是其记账信息。
+  const componentRoots = (await readdir(browserCacheRoot, { withFileTypes: true }))
+    .filter(item => item.isDirectory() && !item.name.startsWith('.') && item.name !== path.basename(sourceRoot))
+    .map(item => path.join(browserCacheRoot, item.name));
+  return { executable, sourceRoot, executableRelative: path.relative(sourceRoot, chromiumExecutable), componentRoots };
 }
 
 // Run one build-only process; reject failed exits and preserve upstream diagnostics.

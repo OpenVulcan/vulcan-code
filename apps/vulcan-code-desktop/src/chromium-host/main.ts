@@ -1,5 +1,8 @@
 // Core-owned standalone Chromium host using the existing authenticated control protocol.
 // 使用现有鉴权控制协议的 Core 自有独立 Chromium 宿主。
+// Must stay the first import: it fixes the component registry before playwright-core loads.
+// 必须保持为首个导入：它在 playwright-core 加载前固定组件注册表。
+import './playwright-registry.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
