@@ -50,6 +50,7 @@
         },
         "size": {
           "type": "string",
+          "const": "auto",
           "default": "auto"
         }
       },

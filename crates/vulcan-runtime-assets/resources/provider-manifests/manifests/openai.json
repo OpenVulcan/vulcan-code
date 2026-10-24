@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 17,
-  "published_at": "2026-10-23T08:21:36Z",
+  "revision": 18,
+  "published_at": "2026-10-24T16:46:16Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -747,7 +747,7 @@
           "background": {"type": "string", "enum": ["transparent", "opaque", "auto"], "default": "auto"},
           "model": {"type": "string", "const": "gpt-image-2", "default": "gpt-image-2"},
           "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "default": "auto"},
-          "size": {"type": "string", "default": "auto"}
+          "size": {"type": "string", "const": "auto", "default": "auto"}
         },
         "required": ["prompt"]
       },
@@ -786,6 +786,10 @@
       {
         "url": "https://chatgpt.com/backend-api/codex/images/generations",
         "note": "Codex subscription image generation follows the openai/codex ImagesClient request and response contract (codex-rs/codex-api/src/endpoint/images.rs, model gpt-image-2)."
+      },
+      {
+        "url": "https://github.com/openai/codex/blob/970111f6cb/codex-rs/ext/image-generation/src/tool.rs",
+        "note": "The official client always sends size auto and exposes no size argument; live probes on 2026-10-24 requesting 1024x1024 all returned 1536x1024, so size is pinned to auto (openai/codex#43965 reports the same)."
       }
     ]
   }
