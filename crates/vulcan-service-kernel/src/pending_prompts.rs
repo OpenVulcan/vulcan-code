@@ -9,7 +9,7 @@ use vulcan_service_api::{
     PendingPromptSummary, PendingPromptsChangedDelta, ServiceEvent, ServiceEventEmitter,
     WorkbenchDelta, WorkbenchDeltaEnvelope,
 };
-use vulcan_session_core::v1::config::QueuedInput;
+use vulcan_session_core::v1::config::{ActiveRequestConfig, PendingInTurnInput, QueuedInput};
 use vulcan_workbench_model::{
     PENDING_PROMPT_QUEUE_LIMIT, PendingPromptBusyLaneContext, PendingPromptDispatchContext,
     PendingPromptModelReference, PendingPromptPanelEntry, PendingPromptPanelEntryState,
@@ -480,46 +480,68 @@ pub(super) fn pending_prompt_summaries_from_process_mirror(
         .collect()
 }
 
-/// Rebuilds the non-serializable queue mirror from authoritative V1 queued inputs.
-/// 从权威 V1 排队输入重建不可序列化的队列镜像。
+/// Rebuilds the non-serializable queue mirror from authoritative V1 inputs.
+/// 从权威 V1 输入重建不可序列化的队列镜像。
 ///
-/// `queued_inputs` preserves durable FIFO order and `resolve_attachments` resolves each input's
-/// ordered project resources without consulting legacy runtime state.
+/// `pending_inputs` were inserted into the open turn but are not yet in the conversation; they stay
+/// visible as waiting rows until the model actually receives them. `queued_inputs` preserves durable
+/// FIFO order and `resolve_attachments` resolves each input's ordered project resources without
+/// consulting legacy runtime state.
+/// `pending_inputs` 已插入开放回合但尚未进入会话，在模型真正收到之前一直显示为等待行。
 /// `queued_inputs` 保留可靠 FIFO 顺序，`resolve_attachments` 为每条输入解析有序项目资源且不读取旧运行态。
-pub(super) fn pending_prompt_process_mirror_from_v1_queued_inputs<ResolveAttachments>(
+pub(super) fn pending_prompt_process_mirror_from_v1_inputs<ResolveAttachments>(
+    pending_inputs: &[PendingInTurnInput],
     queued_inputs: &[QueuedInput],
     mut resolve_attachments: ResolveAttachments,
 ) -> Result<PendingPromptProcessMirror, String>
 where
-    ResolveAttachments: FnMut(&QueuedInput) -> Result<Vec<ConversationAttachment>, String>,
+    ResolveAttachments: FnMut(
+        &[vulcan_session_core::v1::ids::ResourceId],
+    ) -> Result<Vec<ConversationAttachment>, String>,
 {
     let mut mirror = PendingPromptProcessMirror::default();
-    for queued_input in queued_inputs {
-        let attachments = resolve_attachments(queued_input)?;
+    let inserted = pending_inputs.iter().map(|input| {
+        (
+            PendingPromptPanelEntryState::Inserted,
+            &input.client_action_id,
+            &input.text,
+            &input.resource_ids,
+            input.bound_request_config.as_ref(),
+            input.created_at_ms,
+        )
+    });
+    let queued = queued_inputs.iter().map(|input| {
+        (
+            PendingPromptPanelEntryState::Ready,
+            &input.client_action_id,
+            &input.text,
+            &input.resource_ids,
+            input.bound_request_config.as_ref(),
+            input.created_at_ms,
+        )
+    });
+    for (state, client_action_id, text, resource_ids, bound_request_config, created_at_ms) in
+        inserted.chain(queued)
+    {
+        let attachments = resolve_attachments(resource_ids)?;
+        let bound_request_config: Option<&ActiveRequestConfig> = bound_request_config;
         // Durable V1 queue entries own the exact route and reasoning snapshot; the process mirror only projects it.
         // 可靠 V1 队列项拥有精确路由与思考级别快照；进程镜像只负责投影。
-        let model_reference = queued_input
-            .bound_request_config
-            .as_ref()
-            .and_then(|config| {
-                Some(PendingPromptModelReference {
-                    connection_id: config.connection_id.clone()?,
-                    provider_id: config.provider.clone()?,
-                    model_id: config.model.clone()?,
-                    provider_label: config.provider.clone()?,
-                    model_name: config.model.clone()?,
-                })
-            });
+        let model_reference = bound_request_config.and_then(|config| {
+            Some(PendingPromptModelReference {
+                connection_id: config.connection_id.clone()?,
+                provider_id: config.provider.clone()?,
+                model_id: config.model.clone()?,
+                provider_label: config.provider.clone()?,
+                model_name: config.model.clone()?,
+            })
+        });
         let runtime_options = PendingPromptRuntimeOptions {
-            reasoning_effort: queued_input
-                .bound_request_config
-                .as_ref()
+            reasoning_effort: bound_request_config
                 .and_then(|config| config.thinking_level.as_deref())
                 .and_then(parse_reasoning_effort)
                 .unwrap_or(ReasoningEffortLevel::Off),
-            temperature: queued_input
-                .bound_request_config
-                .as_ref()
+            temperature: bound_request_config
                 .and_then(|config| config.temperature.map(|value| value as f32)),
             web_search_override: Default::default(),
             web_search_provider_id: None,
@@ -528,15 +550,15 @@ where
             .ui_state
             .pending_prompt_panel_queue
             .push(PendingPromptPanelEntry {
-                id: queued_input.client_action_id.as_str().to_string(),
-                preview: pending_prompt_preview_text(&queued_input.text, &attachments),
-                prompt: queued_input.text.clone(),
+                id: client_action_id.as_str().to_string(),
+                preview: pending_prompt_preview_text(text, &attachments),
+                prompt: text.clone(),
                 hidden_model_guidance: None,
                 attachments,
                 model_reference,
                 runtime_options,
-                state: PendingPromptPanelEntryState::Ready,
-                created_at: queued_input.created_at_ms.to_string(),
+                state,
+                created_at: created_at_ms.to_string(),
             });
     }
     Ok(mirror)
@@ -724,10 +746,23 @@ mod tests {
                 created_at_ms: 1_787_000_000_002,
             },
         ];
-        let mirror =
-            pending_prompt_process_mirror_from_v1_queued_inputs(&queued_inputs, |queued_input| {
-                Ok(queued_input
-                    .resource_ids
+        let inserted = PendingInTurnInput {
+            parameters: None,
+            bound_request_config: None,
+            client_action_id: ClientActionId::try_new("client-action-0")
+                .expect("inserted client action should be valid"),
+            input_id: PendingInputId::try_new(10).expect("inserted input should be valid"),
+            turn_id: vulcan_session_core::v1::ids::TurnId::try_new(9)
+                .expect("turn should be valid"),
+            text: String::from("inserted prompt"),
+            resource_ids: vec![],
+            created_at_ms: 1_787_000_000_003,
+        };
+        let mirror = pending_prompt_process_mirror_from_v1_inputs(
+            &[inserted],
+            &queued_inputs,
+            |resource_ids| {
+                Ok(resource_ids
                     .iter()
                     .map(|resource_id| ConversationAttachment {
                         kind: ConversationAttachmentKind::File,
@@ -743,10 +778,18 @@ mod tests {
                         mime_type: String::from("text/plain"),
                     })
                     .collect())
-            })
-            .expect("V1 queued inputs should rebuild the process mirror");
+            },
+        )
+        .expect("V1 queued inputs should rebuild the process mirror");
 
-        let rows = &mirror.ui_state.pending_prompt_panel_queue;
+        // An inserted input stays listed, waiting, ahead of the ordinary queue.
+        // 已插入的输入保持列出并处于等待状态，排在普通队列之前。
+        let (inserted_rows, rows) = mirror.ui_state.pending_prompt_panel_queue.split_at(1);
+        assert_eq!(inserted_rows[0].id, "client-action-0");
+        assert_eq!(
+            inserted_rows[0].state,
+            PendingPromptPanelEntryState::Inserted
+        );
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, "client-action-1");
         assert_eq!(rows[0].prompt, "first queued prompt");

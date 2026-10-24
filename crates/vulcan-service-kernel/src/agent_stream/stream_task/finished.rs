@@ -394,6 +394,19 @@ pub(super) async fn handle_finished_stream_event(
         ),
     );
 
+    // Inserted rows leave the queue only once their inputs are in the conversation.
+    // 已插入行仅在其输入进入会话后才离开队列。
+    if let Err(error) = crate::webui_turn_chaining::refresh_v1_pending_prompt_panel(
+        app,
+        task_state,
+        controller_runtime,
+        finished_session_id,
+    )
+    .await
+    {
+        tracing::warn!(session_id = %finished_session_id, %error, "Pending queue refresh after stream end failed");
+    }
+
     // notificationClientId is derived only from durable V1 client actions at or before this Turn boundary.
     // notificationClientId 仅从当前回合边界之前或边界上的可靠 V1 客户端动作派生。
     let notification_client_id = turn_completion_receipt.as_ref().and_then(|receipt| {

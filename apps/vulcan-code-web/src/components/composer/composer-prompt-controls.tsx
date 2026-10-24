@@ -71,9 +71,13 @@ export function PendingPromptQueueStrip(props: {
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-  // entryIds is the stable dnd item list derived from the backend queue.
-  // entryIds 是从后端队列派生出的稳定拖拽条目列表。
-  const entryIds = React.useMemo(() => props.entries.map((entry) => entry.id), [props.entries]);
+  // entryIds is the stable dnd item list derived from the backend queue; rows waiting for insertion
+  // already left the reorderable queue.
+  // entryIds 是从后端队列派生出的稳定拖拽条目列表；等待插入的行已离开可重排队列。
+  const entryIds = React.useMemo(
+    () => props.entries.filter((entry) => entry.state !== "inserted").map((entry) => entry.id),
+    [props.entries],
+  );
   // handleDragEnd persists the service-compatible drop target derived from the visual dnd order.
   // handleDragEnd 从可视拖拽顺序推导与服务兼容的落点并持久化。
   const handleDragEnd = React.useCallback((event: DragEndEvent) => {
@@ -179,7 +183,7 @@ function PendingPromptQueueRow(props: {
             <Button
               className="vk-queue-insert"
               data-inserted={props.entry.state === "inserted" ? "" : undefined}
-              aria-label={props.entry.state === "inserted" ? t("pendingPrompt.inserted") : t("pendingPrompt.insert")}
+              aria-label={props.entry.state === "inserted" ? t("pendingPrompt.waiting") : t("pendingPrompt.insert")}
               disabled={Boolean(props.disabled || props.entry.state === "inserted")}
               onClick={() => {
                 props.onTrace?.("pending_prompt.row.insert", {
@@ -193,10 +197,10 @@ function PendingPromptQueueRow(props: {
               variant="ghost"
             >
               <CornerDownRight size={13} />
-              <span>{props.entry.state === "inserted" ? t("pendingPrompt.insertedShort") : t("pendingPrompt.insertShort")}</span>
+              <span>{props.entry.state === "inserted" ? t("pendingPrompt.waitingShort") : t("pendingPrompt.insertShort")}</span>
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="top">{props.entry.state === "inserted" ? t("pendingPrompt.inserted") : t("pendingPrompt.insert")}</TooltipContent>
+          <TooltipContent side="top">{props.entry.state === "inserted" ? t("pendingPrompt.waiting") : t("pendingPrompt.insert")}</TooltipContent>
         </Tooltip>
         {props.entry.state === "inserted" ? null : (
           <>

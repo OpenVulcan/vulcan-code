@@ -182,6 +182,40 @@ pub(super) async fn maybe_start_webui_turn_chain_after_finished(
     started
 }
 
+/// Rebuilds the visible queue from V1 and emits it only when it changed.
+/// 从 V1 重建可见队列，仅在变化时发出。
+///
+/// Inserted rows stay until their inputs reach the conversation, which happens at API terminals
+/// inside the stream; the end of each stream is where the panel catches up.
+/// 已插入行保留到其输入进入会话为止，这发生在流内的 API 终态；每次流结束时面板随之更新。
+pub(crate) async fn refresh_v1_pending_prompt_panel(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &HostRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let handle = session_v1_handle_from_state(state, session_id).await?;
+    let locator = locate_session_v1_storage(controller_runtime, session_id.to_string().as_str())
+        .await
+        .map_err(|error| {
+            format!("Failed to locate the pending queue project of `{session_id}`: {error}")
+        })?;
+    let project_directory = locator.project_directory();
+    let catalog = load_project_resource_catalog(&project_directory).map_err(|error| {
+        format!("Failed to load the pending queue resource catalog of `{session_id}`: {error}")
+    })?;
+    if rebuild_pending_prompt_panel_from_v1(
+        state,
+        session_id,
+        handle.as_ref(),
+        &project_directory,
+        &catalog,
+    )? {
+        emit_pending_prompts_changed_delta(app, state, session_id)?;
+    }
+    Ok(())
+}
+
 /// Starts one exact open queued UserRoot Turn without consulting the legacy pending queue.
 /// 不查询旧待发送队列，启动一个精确开放的排队 UserRoot 回合。
 ///

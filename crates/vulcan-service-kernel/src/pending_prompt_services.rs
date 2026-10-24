@@ -17,7 +17,7 @@ use vulcan_workspace_store::workspace_store::{
 
 use super::pending_prompts::{
     pending_prompt_attachment_staging_scope, pending_prompt_preview_text,
-    pending_prompt_process_mirror_from_v1_queued_inputs,
+    pending_prompt_process_mirror_from_v1_inputs,
 };
 use super::session_goal_lifecycle::{
     conversation_attachments_from_resource_ids, current_v1_goal_unix_millis,
@@ -147,17 +147,26 @@ pub(crate) fn rebuild_pending_prompt_panel_from_v1(
     project_directory: &Path,
     catalog: &ProjectResourceCatalog,
 ) -> Result<bool, String> {
-    let queued_inputs = handle
-        .read(|document| document.metadata.input_state.queued_inputs.clone())
+    let (pending_inputs, queued_inputs) = handle
+        .read(|document| {
+            let input_state = &document.metadata.input_state;
+            (
+                input_state.pending_in_turn_inputs.clone(),
+                input_state.queued_inputs.clone(),
+            )
+        })
         .map_err(|error| format!("Failed to read the V1 pending message queue: {error}"))?;
-    let rebuilt =
-        pending_prompt_process_mirror_from_v1_queued_inputs(&queued_inputs, |queued_input| {
+    let rebuilt = pending_prompt_process_mirror_from_v1_inputs(
+        &pending_inputs,
+        &queued_inputs,
+        |resource_ids| {
             Ok(conversation_attachments_from_resource_ids(
                 project_directory,
                 catalog,
-                &queued_input.resource_ids,
+                resource_ids,
             ))
-        })?;
+        },
+    )?;
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;

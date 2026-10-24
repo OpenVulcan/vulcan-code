@@ -3,6 +3,7 @@ import { conversationSelectionEqual, useSelectedConversationEventWindowSelector 
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { AnswerMode, AnswerModeOwner } from "@/service/answer-mode";
 import type { PermissionModeOwner } from "@/components/composer/composer-panel/use-composer-permission-mode";
+import { useVisiblePendingPrompts } from "@/components/composer/composer-panel/use-visible-pending-prompts";
 import { createPortal } from "react-dom";
 import { ArrowDown } from "lucide-react";
 import { type ModelPickerChoice } from "@/components/composer/model-picker-control";
@@ -272,6 +273,7 @@ export function ComposerDock(props: {
   // answerModeState 在选择转换期间始终绑定精确已加载归属。
   const answerModeState = useSelectedConversationEventWindowSelector(selectAnswerMode, conversationSelectionEqual);
   const permissionModeState = useSelectedConversationEventWindowSelector(selectPermissionMode, conversationSelectionEqual);
+  const visiblePendingPrompts = useVisiblePendingPrompts(props.pendingPrompts);
   const dedicatedMemory = useSelectedConversationEventWindowSelector(selectDedicatedMemory, conversationSelectionEqual);
   // Only the exact selected persisted session may expose its dedicated controls.
   // 只有精确选中的持久会话才能显示其专职控件。
@@ -373,7 +375,7 @@ export function ComposerDock(props: {
         contextCompactionWindowNodes={props.contextCompactionWindowNodes}
         sessionContextCompactionWindowNodeId={props.sessionContextCompactionWindowNodeId}
         slashCommands={props.slashCommands}
-        pendingPrompts={props.pendingPrompts}
+        pendingPrompts={visiblePendingPrompts}
         sessionGoal={props.sessionGoal}
         sessionTodolist={props.sessionTodolist}
         sessionReviewSummary={props.sessionReviewSummary}

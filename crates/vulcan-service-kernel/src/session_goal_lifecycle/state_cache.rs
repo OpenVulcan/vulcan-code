@@ -17,7 +17,7 @@ use vulcan_workbench_model::{
 
 use super::*;
 use crate::pending_prompt_services::reconcile_pending_prompt_attachment_leases;
-use crate::pending_prompts::pending_prompt_process_mirror_from_v1_queued_inputs;
+use crate::pending_prompts::pending_prompt_process_mirror_from_v1_inputs;
 use crate::session_runtime_registry_v1::SessionHandle;
 use crate::session_v1_lifecycle::get_or_load_session_v1;
 use crate::terminal_settlement_service::rebuild_pending_terminal_settlement_owner;
@@ -67,6 +67,9 @@ struct SessionV1RuntimeProjection {
     /// V1 metadata update time rendered for the legacy UI adapter.
     /// 为旧 UI 适配器渲染的 V1 metadata 更新时间。
     updated_at: String,
+    /// Inputs inserted into the open turn and not yet streamed.
+    /// 已插入开放回合但尚未写入事件流的输入。
+    pending_in_turn_inputs: Vec<vulcan_session_core::v1::config::PendingInTurnInput>,
     /// Durable queued inputs in exact FIFO order.
     /// 按精确 FIFO 顺序排列的可靠排队输入。
     queued_inputs: Vec<QueuedInput>,
@@ -109,6 +112,7 @@ fn session_v1_runtime_projection(
             document.metadata.config.active_request.temperature,
         ),
         updated_at: document.metadata.updated_at_ms.to_string(),
+        pending_in_turn_inputs: document.metadata.input_state.pending_in_turn_inputs.clone(),
         queued_inputs: document.metadata.input_state.queued_inputs.clone(),
         provider_tools: document.metadata.config.selection.provider_tools.clone(),
         knowledge_libraries: document
@@ -615,13 +619,14 @@ pub(crate) async fn sync_selected_session_v1_projection_from_store(
             let catalog = load_project_resource_catalog(&project_directory).map_err(|error| {
                 format!("Failed to load the V1 queued resource catalog: {error}")
             })?;
-            pending_prompt_process_mirror_from_v1_queued_inputs(
+            pending_prompt_process_mirror_from_v1_inputs(
+                &projection.pending_in_turn_inputs,
                 &projection.queued_inputs,
-                |queued_input| {
+                |resource_ids| {
                     Ok(conversation_attachments_from_resource_ids(
                         &project_directory,
                         &catalog,
-                        &queued_input.resource_ids,
+                        resource_ids,
                     ))
                 },
             )?
