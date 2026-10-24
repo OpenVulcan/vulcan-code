@@ -39,6 +39,14 @@ const DOWNLOAD_BUFFER_BYTES: usize = 128 * 1024;
 /// 单次安装错误包含的子进程输出上限。
 const MAX_PROCESS_DIAGNOSTIC_BYTES: usize = 8 * 1024;
 
+/// Longest wait for a security scanner to release a freshly run runtime before publishing fails.
+/// 发布失败前，等待安全扫描释放刚运行过的运行时的最长时间。
+const DIRECTORY_RENAME_RETRY_WINDOW: Duration = Duration::from_secs(15);
+
+/// Pause between directory publication attempts while that scanner holds the runtime.
+/// 扫描程序占用运行时期间，两次目录发布尝试之间的间隔。
+const DIRECTORY_RENAME_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+
 /// Immutable native installation request for one managed runtime bootstrap.
 /// 单次受管运行时初始化使用的不可变原生安装请求。
 pub(crate) struct NativeManagedRuntimeInstallRequest<'a> {
@@ -1413,7 +1421,7 @@ pub(crate) fn commit_staging_directory(staging: &Path, target: &Path) -> Result<
     // target_existed 记录提交失败后是否需要回滚。
     let target_existed = target.exists();
     if target_existed {
-        fs::rename(target, &backup).map_err(|error| {
+        rename_directory(target, &backup).map_err(|error| {
             format!(
                 "failed to stage previous runtime {} as {}: {error}",
                 target.display(),
@@ -1421,9 +1429,9 @@ pub(crate) fn commit_staging_directory(staging: &Path, target: &Path) -> Result<
             )
         })?;
     }
-    if let Err(error) = fs::rename(staging, target) {
+    if let Err(error) = rename_directory(staging, target) {
         if target_existed {
-            let _ = fs::rename(&backup, target);
+            let _ = rename_directory(&backup, target);
         }
         return Err(format!(
             "failed to publish runtime {} as {}: {error}",
@@ -1433,6 +1441,30 @@ pub(crate) fn commit_staging_directory(staging: &Path, target: &Path) -> Result<
     }
     remove_path_if_exists(&backup)?;
     Ok(())
+}
+
+/// Renames one runtime directory, waiting out a transient Windows access denial.
+/// 重命名一个运行时目录，并等待 Windows 上暂时性的拒绝访问结束。
+///
+/// Right after an executable inside the directory is first run, Windows security scanners can
+/// still hold it open, which denies renaming its parent for a moment; only that error is retried,
+/// and only until [`DIRECTORY_RENAME_RETRY_WINDOW`] passes. Other platforms try exactly once.
+/// 目录内的可执行文件首次运行后，Windows 安全扫描可能仍打开着它，导致其父目录短暂无法重命名；
+/// 只重试该错误，且至多到 [`DIRECTORY_RENAME_RETRY_WINDOW`] 为止。其他平台只尝试一次。
+fn rename_directory(from: &Path, to: &Path) -> std::io::Result<()> {
+    let deadline = Instant::now() + DIRECTORY_RENAME_RETRY_WINDOW;
+    loop {
+        match fs::rename(from, to) {
+            Err(error)
+                if cfg!(windows)
+                    && error.kind() == std::io::ErrorKind::PermissionDenied
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(DIRECTORY_RENAME_RETRY_INTERVAL);
+            }
+            result => return result,
+        }
+    }
 }
 
 /// Build a deterministic same-volume work directory beside one final target.
@@ -1705,6 +1737,52 @@ mod tests {
         if let Some(parent) = target.parent() {
             let _ = fs::remove_dir_all(parent);
         }
+    }
+
+    /// Verify publication outlasts a scanner-style handle that briefly blocks renaming the staging directory.
+    /// 验证发布能熬过短暂阻止暂存目录重命名的扫描式句柄。
+    #[cfg(windows)]
+    #[test]
+    fn publication_waits_for_a_briefly_held_runtime_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // FILE_SHARE_READ without FILE_SHARE_DELETE is how a scanner's handle blocks the parent rename.
+        // 仅 FILE_SHARE_READ、不含 FILE_SHARE_DELETE，正是扫描句柄阻止父目录重命名的方式。
+        const FILE_SHARE_READ: u32 = 1;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-runtime-publish-retry-test-{}-{nonce}",
+            std::process::id()
+        ));
+        let published = root.join("uv-0.11.28-windows-x64");
+        let staging = sibling_work_path(&published, "installing").expect("staging should resolve");
+        fs::create_dir_all(&staging).expect("staging should be created");
+        let executable = staging.join("uv.exe");
+        fs::write(&executable, b"uv").expect("executable marker should be created");
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&executable)
+            .expect("scanner handle should open");
+        // The fixture is meaningful only if the held handle really denies the rename.
+        // 只有持有的句柄确实拒绝重命名，本夹具才有意义。
+        assert_eq!(
+            fs::rename(&staging, &published).map_err(|error| error.kind()),
+            Err(std::io::ErrorKind::PermissionDenied)
+        );
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(DIRECTORY_RENAME_RETRY_INTERVAL * 3);
+            drop(held);
+        });
+        commit_staging_directory(&staging, &published).expect("runtime should publish");
+        release.join().expect("handle release should finish");
+        assert!(published.join("uv.exe").is_file());
+        assert!(!staging.exists());
+        fs::remove_dir_all(&root).expect("test-owned runtime should be removed");
     }
 
     /// Verify uv's Windows version junction is removed without deleting its interpreter before the atomic rename.
