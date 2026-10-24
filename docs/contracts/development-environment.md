@@ -22,6 +22,23 @@ Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。
 - `make bt`（或 `make bt release`）：完成与 `make build` 相同的全部构建及打包，再启动后台无头 Core、等待发现文档与 `/health` 身份一致且状态为就绪，最后在当前终端进入 TUI。构建或启动失败时不进入 TUI；它不调用桌面或 Vite 的启动入口。
 - TUI 使用 Core 的 `--describe` 所提供的数据目录绑定 `--service-root`，不猜测用户目录或服务端口。既有服务已经就绪时复用；启动中则等待，不竞争启动第二个进程。退出 TUI 不会停止后台 Core。新启动 Core 的诊断文件保存在 `target/core-cli/`，发现文档及其令牌不输出到命令行。
 
+### 注册为用户服务（Linux）
+
+`<发行目录>/bin/vulcan-code-service --install-user-service` 把无头 Core 注册为 systemd 用户单元（Release 为
+`vulcan-code.service`，Debug 为 `vulcan-code-debug.service`，两者数据目录分离），设为随登录会话启动并立即启动，
+等到发现文档就绪后输出 WebUI 地址。`--uninstall-user-service` 停止并取消启用该单元、删除单元文件；未安装时为成功的
+空操作。两个参数都必须单独使用，执行完即退出，不启动服务业务。
+
+- 只能从带有匹配构建模式 `runtime-layout.json` 的完整发行目录注册；单元写入 `$XDG_CONFIG_HOME/systemd/user`
+  （缺省 `~/.config/systemd/user`），`ExecStart` 指向规范化后的可执行文件，并以 `--headless --no-debug-console` 运行。
+- 单元记录安装时终端的 `PATH`，使智能体执行的命令找到与该终端相同的工具；更换工具链后重新安装即可刷新。
+- `Restart=on-failure`：从 WebUI 或信号正常退出（退出码 0）不会被重新拉起，只有故障退出才重启。
+- 安装前若已有其他进程（托盘、`make bt` 拉起的 Core 或终端服务）持有同一数据目录，直接报错，不让单元启动后立即
+  以“已被占用”退出；重新安装会先停止已注册的单元再替换。
+- 默认随登录会话存活；需要注销后继续运行时由用户自行执行 `loginctl enable-linger`，安装命令不修改该系统设置。
+- 服务运行后，`bin/vulcan-tui` 与浏览器访问 WebUI 都直接连接该实例；`make bt` 也会复用它，而不再启动第二个 Core。
+- Windows 与 macOS 暂不支持注册，命令会明确报错。
+
 普通完整构建不承担停止正在运行的发行物这一职责，Unix 下仍需先退出需要替换的发行实例；需要只更新 Core 时使用下述增量重启入口。`make run` 保持启动 Electron 的原意，不等同于纯服务启动。
 
 GNU Make 在 Unix 下通过 `make.sh` 分发构建及运行；直接执行 `pwsh -File make.ps1 build/run/service/br/bt/core-build/core-restart` 时也显式委托同一 Unix 入口，不会执行面向 Windows 的 Core 生命周期脚本。依赖初始化中原本共用的 PowerShell 安装器继续保留。

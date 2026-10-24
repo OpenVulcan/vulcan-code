@@ -18,6 +18,7 @@ mod runtime_layout;
 mod service_runtime;
 #[cfg(feature = "desktop-tray")]
 mod tray;
+mod user_service;
 
 /// Starts the Vulcan Code service process.
 /// 启动 Vulcan Code 服务进程。
@@ -27,6 +28,25 @@ fn main() {
     vulcan_provider_adapters::install_process_rustls_crypto_provider()
         .expect("the process-wide Rustls CryptoProvider must install before service startup");
     let args: Vec<String> = std::env::args().collect();
+    // Service registration is a one-shot management command that never starts the Core itself.
+    // 服务注册是一次性管理命令，本身从不启动 Core。
+    match user_service::user_service_action(&args) {
+        Ok(Some(action)) => match user_service::run_user_service_action(action) {
+            Ok(summary) => {
+                println!("{summary}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("[vulcan-code-service] {error}");
+                std::process::exit(1);
+            }
+        },
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("[vulcan-code-service] {error}");
+            std::process::exit(2);
+        }
+    }
     // describe_requested rejects mixed launch flags before test-root or business initialization.
     // describe_requested 在测试根或业务初始化之前拒绝混用启动参数。
     let describe_requested = match launch::service_describe_requested(&args) {
@@ -64,7 +84,8 @@ fn main() {
         Err(error) => {
             eprintln!("[vulcan-code-service] {error}");
             eprintln!(
-                "usage: vulcan-code-service (--gui-launch | --service | --headless | --describe) [--no-debug-console]"
+                "usage: vulcan-code-service (--gui-launch | --service | --headless | --describe) [--no-debug-console]
+       vulcan-code-service (--install-user-service | --uninstall-user-service)"
             );
             std::process::exit(2);
         }
