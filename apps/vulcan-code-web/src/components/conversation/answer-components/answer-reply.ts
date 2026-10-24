@@ -7,15 +7,54 @@ export type AnswerReplyEntry =
   | { kind: "decision"; question: string; picks: string[]; recommended: string[]; note: string }
   | { kind: "comment"; subject: string; note: string };
 
+/** The composer side of a conversation's replies: `insert` appends text to the draft, `send` appends it and sends
+ * the draft through the composer's own send path.
+ * 会话回复的输入区一侧：`insert` 把文字追加到草稿，`send` 追加后经输入区自身的发送路径发送草稿。 */
+export interface AnswerReplyComposer {
+  insert: (text: string) => void;
+  send: (text: string) => void;
+}
+
 /** Decisions and comments the reader made in one conversation, in the order they were first made. ChatArea owns
- * the store so entries outlive transcript rows that unmount while scrolled away. Nothing is ever sent from here:
- * the composer takes the summarized text into its draft, where the reader edits and sends it.
+ * the store so entries outlive transcript rows that unmount while scrolled away. The store never sends on its own:
+ * only a reader's click hands the summarized text to the connected composer, which inserts it into the draft or
+ * sends the draft through its normal send path.
  * 读者在一个会话中做出的决策与批注，按首次操作的顺序保存。存储由 ChatArea 持有，转录行滚出视口卸载后条目仍然保留。
- * 这里从不发送任何内容：输入区把汇总文本放入草稿，由读者编辑后自行发送。 */
+ * 存储从不自行发送：只有读者点击后，才把汇总文本交给已连接的输入区，由其插入草稿或经正常发送路径发送草稿。 */
 export class AnswerReplyStore {
   private readonly entries = new Map<string, AnswerReplyEntry>();
   private readonly listeners = new Set<() => void>();
   private clears = 0;
+  private composer: AnswerReplyComposer | null = null;
+
+  /** The composer that takes replies, or null while none can (no composer, or its draft is locked).
+   * 接收回复的输入区；没有输入区或其草稿被锁定时为 null。 */
+  readonly connectedComposer = () => this.composer;
+
+  /** Register the composer that takes replies; returns the disconnect. 登记接收回复的输入区；返回断开函数。 */
+  connectComposer(composer: AnswerReplyComposer): () => void {
+    this.composer = composer;
+    this.listeners.forEach((listener) => listener());
+    return () => {
+      if (this.composer !== composer) return;
+      this.composer = null;
+      this.listeners.forEach((listener) => listener());
+    };
+  }
+
+  /** Hand every entry, formatted by `format`, to the composer to insert into the draft or to send, then clear the
+   * store. Returns false and keeps the entries when no composer is connected or nothing is prepared.
+   * 将全部条目经 `format` 格式化后交给输入区插入草稿或直接发送，然后清空存储。没有已连接的输入区或没有条目时
+   * 返回 false 并保留条目。 */
+  deliver(mode: "insert" | "send", format: (entries: AnswerReplyEntry[]) => string): boolean {
+    const composer = this.composer;
+    if (!composer || this.entries.size === 0) return false;
+    const text = format(this.list());
+    this.clear();
+    if (mode === "send") composer.send(text);
+    else composer.insert(text);
+    return true;
+  }
 
   /** Subscribe in the shape `React.useSyncExternalStore` expects. 以 `React.useSyncExternalStore` 期望的形式订阅。 */
   readonly subscribe = (listener: () => void) => {

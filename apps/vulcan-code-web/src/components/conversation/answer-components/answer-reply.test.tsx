@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComposerAnswerReplySlot } from "@/components/composer/composer-panel/answer-reply-slot";
 import { MarkdownMessage } from "../conversation-markdown";
 import { AnswerReplyContext, AnswerReplyStore } from "./answer-reply";
-import { formatAnswerReply } from "./answer-reply-tray";
+import { formatAnswerReply } from "./answer-reply-format";
 
 // Only the text catalog is synthetic; keys stand in for localized labels.
 // 仅文案目录为合成边界；以键代替本地化标签。
@@ -120,7 +120,7 @@ describe("answer replies", () => {
     };
     await act(async () => root.render(
       <AnswerReplyContext.Provider value={store}>
-        <ComposerAnswerReplySlot disabled={false} setDraftInput={setDraftInput} textareaRef={{ current: null }} />
+        <ComposerAnswerReplySlot disabled={false} draftInput={draft} send={() => {}} setDraftInput={setDraftInput} textareaRef={{ current: null }} />
       </AnswerReplyContext.Provider>,
     ));
     expect(host.querySelector(".vk-a-reply-tray")).toBeNull();
@@ -130,6 +130,38 @@ describe("answer replies", () => {
     expect(draft.split("\n")).toEqual(["Earlier text", "", "**answerComponents.reply.comments**", "- ui-kv: a | b", "  > Check"]);
     expect(store.size()).toBe(0);
     expect(host.querySelector(".vk-a-reply-tray")).toBeNull();
+  });
+
+  it("inserts or sends every prepared reply from an answered decision once a composer is connected", async () => {
+    const store = new AnswerReplyStore();
+    const composer = { insert: vi.fn(), send: vi.fn() };
+    await mount(`${DECISION}\n\n${MULTI}`, store, ".vk-a-decision");
+    const actions = (index: number) => host.querySelectorAll(".vk-a-decision")[index].querySelector(".vk-a-decision-actions");
+    await act(async () => options(0)[0].click());
+    expect(actions(0)).toBeNull();
+    const disconnect = await act(async () => store.connectComposer(composer));
+    expect(actions(0)).not.toBeNull();
+    expect(actions(1)).toBeNull();
+    await act(async () => options(1)[1].click());
+    expect(actions(1)?.querySelector("small")?.textContent).toBe("answerComponents.decision.combined");
+    const [insert] = actions(1)!.querySelectorAll<HTMLButtonElement>("button");
+    await act(async () => insert.click());
+    expect(composer.insert).toHaveBeenCalledExactlyOnceWith([
+      "**answerComponents.reply.decisions**",
+      "- Cache lifetime? → 10 minutes (answerComponents.decision.recommended)",
+      "- Also cache? → API responses",
+    ].join("\n"));
+    expect(store.size()).toBe(0);
+    expect(host.querySelector(".vk-a-decision-actions")).toBeNull();
+    await act(async () => options(0)[1].click());
+    await act(async () => actions(0)!.querySelectorAll<HTMLButtonElement>("button")[1].click());
+    expect(composer.send).toHaveBeenCalledExactlyOnceWith("**answerComponents.reply.decisions**\n- Cache lifetime? → 1 hour");
+    expect(store.size()).toBe(0);
+    await act(async () => disconnect());
+    await act(async () => options(0)[0].click());
+    expect(actions(0)).toBeNull();
+    expect(store.deliver("send", () => "unused")).toBe(false);
+    expect(store.size()).toBe(1);
   });
 
   it("formats decisions before comments with notes as quotes", () => {

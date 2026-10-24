@@ -831,7 +831,8 @@ export function ComposerPanel(props: {
           onToggleStatus={() => void handleGoalStatusToggle()}
         />
       ) : null}
-      <ComposerAnswerReplySlot disabled={isPendingPromptEditing} setDraftInput={setDraftInput} textareaRef={composerTextareaRef} />
+      <ComposerAnswerReplySlot disabled={isPendingPromptEditing} draftInput={draftInput} send={handleComposerSend}
+        setDraftInput={setDraftInput} textareaRef={composerTextareaRef} />
       <section
         className="vk-composer" data-drag-over={isAttachmentDragOver ? "" : undefined}
         data-workspace-input-owner="composer"

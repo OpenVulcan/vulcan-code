@@ -1,10 +1,11 @@
 import React from "react";
-import { Check, MessageSquarePlus, X } from "lucide-react";
-import { useI18n } from "@/i18n";
+import { Check, MessageSquarePlus, SendHorizontal, TextCursorInput, X } from "lucide-react";
+import { formatMessage, useI18n } from "@/i18n";
 import type { AnswerComponent } from "./answer-component-model";
 import { AnswerFrameActionContext } from "./answer-frame";
 import { AnswerReplyContext, type AnswerReplyStore } from "./answer-reply";
-import { IconButton } from "@/ui-kit/primitives/button";
+import { Button, IconButton } from "@/ui-kit/primitives/button";
+import { formatAnswerReply } from "./answer-reply-format";
 
 // noStore keeps read-only surfaces on the same hook path as a live reply store.
 // noStore 让只读界面与可用的回复存储走同一条 Hook 路径。
@@ -153,6 +154,29 @@ export function AnswerDecisionView({ decision, replyKey }: { decision: Extract<A
         })}
       </div>
       {live && editor.visible ? <AnswerNote focus={editor.focus} onChange={(text) => save(picks, text)} onClose={editor.hide} value={note} /> : null}
+      {live && state ? <AnswerDecisionActions store={live} /> : null}
     </section>
+  );
+}
+
+/** Actions under an answered decision: insert every prepared reply into the draft, or send them right away. Both
+ * combine all decisions and comments in the store; they are shown only while a composer can take them.
+ * 已作答决策下方的操作：把全部已准备的回复插入草稿，或立即发送。两者都合并存储中的全部决策与批注；仅在有输入区可接收时显示。 */
+function AnswerDecisionActions({ store }: { store: AnswerReplyStore }) {
+  const { t } = useI18n();
+  const composer = React.useSyncExternalStore(store.subscribe, store.connectedComposer);
+  const count = React.useSyncExternalStore(store.subscribe, store.size);
+  if (!composer) return null;
+  const deliver = (mode: "insert" | "send") => store.deliver(mode, (entries) => formatAnswerReply(entries, t));
+  return (
+    <footer className="vk-a-decision-actions">
+      {count > 1 ? <small>{formatMessage(t("answerComponents.decision.combined"), { count: String(count) })}</small> : null}
+      <Button onClick={() => deliver("insert")} size="sm" type="button" variant="outline">
+        <TextCursorInput aria-hidden="true" size={14} />{t("answerComponents.decision.insert")}
+      </Button>
+      <Button onClick={() => deliver("send")} size="sm" type="button">
+        <SendHorizontal aria-hidden="true" size={14} />{t("answerComponents.decision.send")}
+      </Button>
+    </footer>
   );
 }

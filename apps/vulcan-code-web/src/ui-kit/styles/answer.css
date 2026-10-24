@@ -265,6 +265,8 @@ button.vk-a-gallery-media:focus-visible { outline: 2px solid var(--vk-signal); o
 .vk-a-decision-text { display: grid; gap: 1px; min-width: 0; }
 .vk-a-decision-text > span { font-weight: 500; }
 .vk-a-decision-text small { color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-a-decision-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: calc(var(--vk-u) * 2); padding: 0 calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 2.5); }
+.vk-a-decision-actions small { margin-right: auto; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
 
 /* ---------- Reader comments ---------- */
 /* The comment button joins a frame's actions or shows in a hover corner; the note sits under the block. */
