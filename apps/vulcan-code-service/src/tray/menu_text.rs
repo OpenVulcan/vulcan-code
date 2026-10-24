@@ -17,6 +17,7 @@ pub(super) mod keys {
     pub const OPEN_WEBUI: &str = "openWebui";
     /// Opens the terminal client in a new console.
     /// 在新控制台中打开终端客户端。
+    #[cfg(any(windows, test))]
     pub const OPEN_TERMINAL_CLIENT: &str = "openTerminalClient";
     /// Reveals the service log location.
     /// 展示服务日志位置。
@@ -53,6 +54,7 @@ pub(super) mod keys {
     pub const DESKTOP_CLIENT_FAILED: &str = "desktopClientFailed";
     /// Notice that the terminal client could not open; takes `{reason}`.
     /// 终端客户端无法打开的提示；接收 `{reason}`。
+    #[cfg(any(windows, test))]
     pub const TERMINAL_CLIENT_FAILED: &str = "terminalClientFailed";
     /// Notice that the log location could not open; takes `{reason}`.
     /// 日志位置无法打开的提示；接收 `{reason}`。
