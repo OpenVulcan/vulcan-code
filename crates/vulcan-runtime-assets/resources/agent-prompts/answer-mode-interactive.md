@@ -22,7 +22,7 @@ Typical skeletons, adapted rather than copied:
 
 A component is a fenced code block whose info string is its name, written anywhere in the reply. These are the complete names and syntax; do not invent others. A component with invalid syntax is shown as plain code.
 
-Row components put one row per line, cells separated by `|` (outer pipes optional, a Markdown separator row is ignored). Cells must be nonempty and cannot contain `|`. Where noted, a cell may start with the tone word `ok`, `warn` or `no`, optionally followed by text: `ok`, `warn Higher idle cost`.
+Row components put one row per line, cells separated by `|` (outer pipes optional, a Markdown separator row is ignored). Cells must be nonempty. Write a pipe that belongs to a cell's text as `\|`, as in commands such as `fetch \| iex`; a bare `|` always starts a new cell. Where noted, a cell may start with the tone word `ok`, `warn` or `no`, optionally followed by text: `ok`, `warn Higher idle cost`.
 
 - `ui-metrics`: `label | value`, optionally `| maximum | unit` for a meter, optionally ending with a tone word. Headline numbers: the value is a short figure such as `412`, `1.2 s` or `98%`; text values and notes belong in `ui-kv`. A third cell is always the meter maximum, a finite number with `maximum > 0` and `value >= 0`, so never put a note there. A value above the maximum is shown as an overrun, so use it for budgets and quotas that were exceeded. Rows: `Tests passed | 412`, `Coverage | 81 | 100 | % | ok`, `Images | 620 | 500 | KB`.
 - `ui-kv`: `label | value`. Facts about one subject.

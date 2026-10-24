@@ -288,13 +288,35 @@ function titled(args: string, parse: () => AnswerComponent | null): AnswerCompon
   return component && args ? { ...component, heading: args } : component;
 }
 
-// Split one row into trimmed cells; outer pipes are optional.
-// 将一行拆为去空白单元格；外侧竖线可省略。
-export function answerCells(line: string): string[] {
+// Split one row into trimmed cells; outer pipes are optional and `\|` is a literal pipe. `lenient` also keeps
+// pipes inside balanced backtick code and pipes touching text on both sides (`fetch|iex`) as literal.
+// 将一行拆为去空白单元格；外侧竖线可省略，`\|` 为字面竖线。`lenient` 还把成对反引号代码内的竖线，
+// 以及两侧紧贴文字的竖线（`fetch|iex`）视为字面字符。
+export function answerCells(line: string, lenient = false): string[] {
   let text = line.trim();
   if (text.startsWith("|")) text = text.slice(1);
-  if (text.endsWith("|")) text = text.slice(0, -1);
-  return text.split("|").map((cell) => cell.trim());
+  if (text.endsWith("|") && !text.endsWith("\\|")) text = text.slice(0, -1);
+  const codeAware = lenient && (text.match(/`/gu)?.length ?? 0) % 2 === 0;
+  const cells: string[] = [];
+  let cell = "";
+  let inCode = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\\" && text[index + 1] === "|") {
+      cell += "|";
+      index += 1;
+    } else if (char === "`") {
+      if (codeAware) inCode = !inCode;
+      cell += char;
+    } else if (char === "|" && !(inCode || (lenient && /\S/u.test(text[index - 1] ?? " ") && /\S/u.test(text[index + 1] ?? " ")))) {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
 }
 
 // Nonblank lines, skipping a Markdown table delimiter row.
@@ -303,11 +325,17 @@ function dataLines(body: string): string[] {
   return body.split(/\r?\n/u).filter((line) => line.trim() && !(line.includes("-") && /^[\s|:-]+$/u.test(line)));
 }
 
-// Cells of a row with `min..=max` nonempty cells, or null.
-// 含 `min..=max` 个非空单元格的行的单元格；否则为 null。
+// Cells of a row with `min..=max` nonempty cells, or null. A row with too many cells is split again leniently,
+// since models write unescaped pipes inside commands such as `fetch|iex`.
+// 含 `min..=max` 个非空单元格的行的单元格；否则为 null。单元格过多的行会宽松地再拆一次，
+// 因为模型会在 `fetch|iex` 这类命令中写入未转义的竖线。
 function rowCells(line: string, min: number, max: number): string[] | null {
+  const valid = (cells: string[]) => cells.length >= min && cells.length <= max && cells.every(Boolean);
   const cells = answerCells(line);
-  return cells.length >= min && cells.length <= max && cells.every(Boolean) ? cells : null;
+  if (valid(cells)) return cells;
+  if (cells.length <= max) return null;
+  const lenient = answerCells(line, true);
+  return valid(lenient) ? lenient : null;
 }
 
 // Parse rows of `min..=max` nonempty cells (trailing cells optional) and wrap them; null when invalid.

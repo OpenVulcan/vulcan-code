@@ -97,6 +97,21 @@ describe("parseAnswerComponent", () => {
     expect(parse("ui-compare", "Criterion | A | B\nCost | ok")).toBeNull();
   });
 
+  it("keeps escaped, code and word-joined pipes inside a cell", () => {
+    expect(parse("ui-findings", "info | runs fetch\\|iex | src/a.rs")).toMatchObject({
+      kind: "findings", rows: [{ text: "runs fetch|iex", location: "src/a.rs" }],
+    });
+    expect(parse("ui-findings", "info | adversarial (fetch|iex) cases | src/a.rs")).toMatchObject({
+      kind: "findings", rows: [{ text: "adversarial (fetch|iex) cases", location: "src/a.rs" }],
+    });
+    expect(parse("ui-compare", "Criterion | A | B\nExample | `a | b` | Invoke-WebRequest|iex")).toMatchObject({
+      kind: "compare", rows: [{ cells: [{ text: "`a | b`" }, { text: "Invoke-WebRequest|iex" }] }],
+    });
+    // Spaced pipes still separate cells, so a genuinely extra column is rejected.
+    // 带空格的竖线仍然分隔单元格，真正多出的列仍被拒绝。
+    expect(parse("ui-compare", "Criterion | A | B\nCost | ok | no | extra")).toBeNull();
+  });
+
   it("validates chart kinds, series counts and value signs", () => {
     expect(parse("ui-chart bar Weekly", "Week | New | Fixed\nW1 | 3 | 2%")).toMatchObject({
       kind: "chart", chart: { kind: "bar", title: "Weekly", categoryLabel: "Week", series: ["New", "Fixed"], rows: [{ values: [3, 2] }] },

@@ -360,15 +360,78 @@ fn data_rows<'a>(body: &[&'a str]) -> Vec<&'a str> {
         .collect()
 }
 
-/// Split one row at `|` (outer pipes optional) into `min..=max` nonempty trimmed cells.
-/// 按 `|` 拆分一行（外侧竖线可省略），得到 `min..=max` 个非空去空白单元格。
-fn row_cells(line: &str, min: usize, max: usize) -> Option<Vec<&str>> {
+/// Split one row into trimmed cells, as the WebUI does: outer pipes are optional and `\|` stays
+/// inside its cell (Markdown shows it as `|`). `lenient` also keeps pipes inside balanced backtick
+/// code and pipes touching text on both sides (`fetch|iex`) inside their cell.
+/// 与 WebUI 一致地将一行拆为去空白单元格：外侧竖线可省略，`\|` 留在所在单元格（Markdown 显示为
+/// `|`）。`lenient` 还把成对反引号代码内的竖线，以及两侧紧贴文字的竖线（`fetch|iex`）留在单元格内。
+fn answer_cells(line: &str, lenient: bool) -> Vec<&str> {
     let text = line.trim();
     let text = text.strip_prefix('|').unwrap_or(text);
-    let text = text.strip_suffix('|').unwrap_or(text);
-    let cells: Vec<&str> = text.split('|').map(str::trim).collect();
-    (cells.len() >= min && cells.len() <= max && cells.iter().all(|cell| !cell.is_empty()))
-        .then_some(cells)
+    let text = if text.ends_with('|') && !text.ends_with("\\|") {
+        &text[..text.len() - 1]
+    } else {
+        text
+    };
+    let code_aware = lenient && text.matches('`').count() % 2 == 0;
+    let bytes = text.as_bytes();
+    let touching = |index: usize| {
+        index > 0
+            && index + 1 < bytes.len()
+            && !bytes[index - 1].is_ascii_whitespace()
+            && !bytes[index + 1].is_ascii_whitespace()
+    };
+    let mut cells = Vec::new();
+    let mut start = 0;
+    let mut in_code = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' if bytes.get(index + 1) == Some(&b'|') => index += 1,
+            b'`' if code_aware => in_code = !in_code,
+            b'|' if !(in_code || (lenient && touching(index))) => {
+                cells.push(text[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    cells.push(text[start..].trim());
+    cells
+}
+
+/// Split one row into `min..=max` nonempty cells. A row with too many cells is split again
+/// leniently, since models write unescaped pipes inside commands such as `fetch|iex`.
+/// 将一行拆为 `min..=max` 个非空单元格。单元格过多的行会宽松地再拆一次，因为模型会在
+/// `fetch|iex` 这类命令中写入未转义的竖线。
+fn row_cells(line: &str, min: usize, max: usize) -> Option<Vec<&str>> {
+    let valid = |cells: &Vec<&str>| {
+        cells.len() >= min && cells.len() <= max && cells.iter().all(|cell| !cell.is_empty())
+    };
+    let cells = answer_cells(line, false);
+    if valid(&cells) {
+        return Some(cells);
+    }
+    if cells.len() <= max {
+        return None;
+    }
+    Some(answer_cells(line, true)).filter(valid)
+}
+
+/// Escape the pipes a cell keeps as text so a Markdown table row stays intact.
+/// 转义单元格中作为文本保留的竖线，使 Markdown 表格行保持完整。
+fn table_cell(cell: &str) -> String {
+    let mut output = String::with_capacity(cell.len());
+    let mut previous = '\0';
+    for ch in cell.chars() {
+        if ch == '|' && previous != '\\' {
+            output.push('\\');
+        }
+        output.push(ch);
+        previous = ch;
+    }
+    output
 }
 
 /// Convert every row with `row`, failing the whole component when one row is malformed.
@@ -583,9 +646,10 @@ fn compare(lines: &[&str]) -> Option<String> {
         return None;
     }
     let header = row_cells(rows.first()?, 3, usize::MAX)?;
+    let header_cells: Vec<String> = header.iter().map(|cell| table_cell(cell)).collect();
     let mut output = format!(
         "| {} |\n|{}\n",
-        header.join(" | "),
+        header_cells.join(" | "),
         " --- |".repeat(header.len())
     );
     for line in rows.get(1..).filter(|rows| !rows.is_empty())? {
@@ -595,9 +659,9 @@ fn compare(lines: &[&str]) -> Option<String> {
             .enumerate()
             .map(|(index, cell)| {
                 if index == 0 {
-                    (*cell).to_owned()
+                    table_cell(cell)
                 } else {
-                    toned(cell)
+                    table_cell(&toned(cell))
                 }
             })
             .collect();
@@ -1130,4 +1194,29 @@ fn tree(rows: &[&str]) -> String {
     }
     output.push_str("```\n");
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{row_cells, table_cell};
+
+    /// Pipes a cell keeps as text never shift columns; spaced pipes still separate cells.
+    /// 单元格作为文本保留的竖线不会移动列；带空格的竖线仍分隔单元格。
+    #[test]
+    fn rows_keep_escaped_code_and_word_joined_pipes() {
+        assert_eq!(
+            row_cells("info | adversarial (fetch|iex) cases | src/a.rs", 2, 3),
+            Some(vec!["info", "adversarial (fetch|iex) cases", "src/a.rs"])
+        );
+        assert_eq!(
+            row_cells(r"info | runs fetch\|iex | src/a.rs", 2, 3),
+            Some(vec!["info", r"runs fetch\|iex", "src/a.rs"])
+        );
+        assert_eq!(
+            row_cells("Example | `a | b` | Invoke-WebRequest|iex", 3, 3),
+            Some(vec!["Example", "`a | b`", "Invoke-WebRequest|iex"])
+        );
+        assert_eq!(row_cells("Cost | ok | no | extra", 3, 3), None);
+        assert_eq!(table_cell(r"a|b \| c"), r"a\|b \| c");
+    }
 }
