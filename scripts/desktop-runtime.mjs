@@ -200,8 +200,10 @@ async function verifyPackageEntry(name, relative, kind, distributionRoot) {
 }
 
 // Map the runtime layout identity to the managed-runtime platform key used by LuaSkills.
+// Release archives reuse this key as their platform suffix, so it is also the supported release target list.
 // 将运行时布局身份映射为 LuaSkills 使用的受管运行时平台键。
-function managedRuntimePlatformKey(layout) {
+// 发行归档复用该键作为平台后缀，因此它也是受支持的发行目标清单。
+export function managedRuntimePlatformKey(layout) {
   const key = `${layout.platform}-${layout.architecture}`;
   const platformKeys = {
     'win32-x64': 'windows-x64',

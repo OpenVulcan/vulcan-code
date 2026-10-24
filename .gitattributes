@@ -12,3 +12,7 @@
 # Bundled provider manifests are verified by SHA-256 over their exact bytes; keep LF on every platform.
 # 内置供应商清单按精确字节做 SHA-256 校验；在所有平台保持 LF。
 /crates/vulcan-runtime-assets/resources/provider-manifests/**/*.json text eol=lf
+
+# The installer is published byte-for-byte as a release asset and run by sh; CRLF would break it.
+# 安装脚本按原字节作为发行资源发布并由 sh 执行；CRLF 会使其失效。
+/scripts/install.sh text eol=lf

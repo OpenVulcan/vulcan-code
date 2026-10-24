@@ -249,3 +249,13 @@ Unix 构建在执行 Cargo 前，调用锁定 Electron npm 包自带的 `install
 新进程可恢复中断的切换：正式目录缺失时恢复 .previous；新目录无效时将它移到独立 .rejected-* 目录供诊断，再恢复旧版。进程所有权保护拒绝并发发布；确认原进程已退出后可以回收锁。所有权文件缺失、损坏或进程身份仍存活时保守拒绝，需要操作者先核实，不能强行删除正在使用的目录。
 
 目录级故障测试位于 scripts/directory-publication.test.mjs，覆盖准备失败、校验失败、磁盘不足、权限失败、回滚失败和重启恢复。它们不替代各平台真实 Electron、Chromium 与 Core 的打包及启动验收。
+
+## 发行归档与一键安装
+
+发行目标共五个平台键：`windows-x64`、`macos-x64`、`macos-arm64`、`linux-x64`、`linux-arm64`，唯一定义是 `scripts/desktop-runtime.mjs` 的 `managedRuntimePlatformKey`（同时决定受管运行时与归档后缀）。每个平台都在对应原生机器上执行 `make release`，当前不做交叉编译，也没有托管 CI 构建；GitHub Actions 开源前保持停用。
+
+`node scripts/release-package.mjs package [--out <dir>]` 只打包、不编译：按启动时的标准校验当前 release 发行物（布局身份、全部入口及 release 资源），从随包服务 `--describe` 读取版本，生成 `target/release-packages/<版本>/vulcan-code-<版本>-<平台键>.tar.gz`（Windows 为 `.zip`，用系统自带 bsdtar 生成）。归档根即发行目录内容，不再包一层目录；同时复制 `scripts/install.sh` 并重写 `SHA256SUMS`。Linux 还会打印随包二进制要求的 glibc 下限：归档继承构建机的 glibc，正式发行应在最旧的目标发行版上构建。各平台归档汇集到同一目录后，执行 `node scripts/release-package.mjs checksums <dir>` 重建索引；一个目录只允许一个版本，避免安装脚本面对同一平台的两个候选。上传到 GitHub Release 是人工步骤，把该目录全部文件作为资源上传即可。
+
+`install.sh` 是 Linux 与 macOS 的一键安装入口：`curl -fsSL <发行地址>/install.sh | sh`，或 `sh install.sh --from <URL或本地目录>`。它按 `uname` 选择平台（Apple 芯片上的 Rosetta shell 仍安装 arm64），从 `SHA256SUMS` 找到唯一匹配的归档并校验摘要，解压到 `<prefix>/versions/` 后先试运行服务 `--describe`。无法加载（例如 glibc 过旧）或不是 release 构建时立即停止，当前版本不变。通过后切换 `<prefix>/current`，保留当前与上一版本，供升级前启动的 Core 继续使用。默认前缀为 `~/.local/share/vulcan-code`，启动器 `vulcan-code`（桌面）、`vulcan-code-service`、`vulcan-tui` 写入 `~/.local/bin`，只替换本脚本生成的同名文件。若已从本前缀注册 Linux 用户服务，升级后自动重新注册到新版本路径。`--with-browser-dependencies` 会顺带执行 `vulcan-code-service --install-browser-dependencies`。`--uninstall` 移除本前缀、启动器及本前缀注册的用户服务，`~/.vulcan` 下的用户数据始终保留。
+
+`node --test scripts/release-package.test.mjs` 在全部平台验证归档命名、内容、链接与可执行位及索引，zip 格式只在 Windows 上验证。`node --test scripts/install-script.test.mjs` 在类 Unix 上用伪造的 `uname`/`sysctl` 运行真实 `install.sh`，覆盖平台选择、升级保留、摘要篡改、无法加载的构建、用户服务归属、卸载与 HTTP 下载（仅 Linux）。这些测试不替代各平台真实构建产物的安装与启动验收。
