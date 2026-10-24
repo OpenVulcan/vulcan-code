@@ -213,7 +213,7 @@ fn rtk_plugin_clears_isolated_statistics_and_publishes_durable_revisions() {
     .args(["git", "status"])
     .current_dir(&workspace)
     .output()
-    .unwrap();
+    .expect("run the RTK plugin binary; run make deps rtk to fetch it");
     assert!(
         command.status.success(),
         "RTK fixture command failed: {}",

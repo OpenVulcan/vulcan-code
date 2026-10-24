@@ -850,7 +850,7 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
     let expected_binary_directory = repository_root
         .join("plugins/vulcan-rtk/bin/x86_64-pc-windows-msvc")
         .canonicalize()
-        .expect("resolve repository RTK plugin bin directory");
+        .expect("resolve repository RTK plugin bin directory; run make deps rtk to fetch it");
     assert_eq!(resolved_binary_directory, expected_binary_directory);
 }
 
