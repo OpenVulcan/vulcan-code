@@ -114,7 +114,7 @@ make init-system
 
 该命令按固定顺序执行：
 
-0. Linux 首先执行 `scripts/install_linux_system_deps.sh`，检查 GTK3/GLib/GObject/GIO、AppIndicator 或 Ayatana 的 `pkg-config` 元数据，并实际编译链接一个只验证 `libxdo` 开发文件的探针；不会运行探针。缺失时先显示具体探针错误，再通过 Debian/Ubuntu 的 APT 安装脚本中唯一声明的软件包集合，随后复核。已有依赖满足时不请求管理员权限、不运行包管理器；普通账户可复用已缓存或免密的 sudo 授权。需要密码且输入与错误输出均连接终端时，初始化自动执行 `sudo -v` 请求 Linux 账户密码，成功后继续安装；拒绝或取消授权立即停止，不运行 APT 或后续初始化阶段。非交互环境不等待密码，明确要求在交互终端重新运行 `make init-system` 或由管理员准备依赖。只有系统包操作提升权限，Rust 工具与其他项目依赖仍由当前账户安装。其他发行版缺少依赖时要求先通过本机包管理器补齐；非 Linux 宿主跳过此步骤。运行库存在或桌面可以启动，不能替代开发头文件及 `.pc` 元数据。`make.sh` 和直接运行的 `make.ps1 init-system` 共用这个入口。
+0. Linux 首先执行 `scripts/install_linux_system_deps.sh`，检查 GTK3/GLib/GObject/GIO、AppIndicator 或 Ayatana 的 `pkg-config` 元数据，并实际编译链接一个只验证 `libxdo` 开发文件的探针；不会运行探针。同时在 `ldconfig -p` 链接器缓存中查找随包 Chromium 在 glibc 之外直接加载的全部共享库（NSS、NSPR、ALSA、ATK、CUPS、GBM、X11 等），因为打包阶段会实际启动该 Chromium 读取版本，缺库时报 `error while loading shared libraries`。缺失时先显示具体探针错误，再通过 Debian/Ubuntu 的 APT 安装脚本中声明的开发软件包集合与 Chromium 运行库集合，随后复核。Chromium 运行库条目以 `|` 列出候选名，64 位 time_t 改名（如 `libasound2t64`）在前，刷新软件包列表后选用第一个有安装候选版本的名称，以同时覆盖新旧发行版；任一条目无法解析即在安装前停止。已有依赖满足时不请求管理员权限、不运行包管理器；普通账户可复用已缓存或免密的 sudo 授权。需要密码且输入与错误输出均连接终端时，初始化自动执行 `sudo -v` 请求 Linux 账户密码，成功后继续安装；拒绝或取消授权立即停止，不运行 APT 或后续初始化阶段。非交互环境不等待密码，明确要求在交互终端重新运行 `make init-system` 或由管理员准备依赖。只有系统包操作提升权限，Rust 工具与其他项目依赖仍由当前账户安装。其他发行版缺少依赖时要求先通过本机包管理器补齐；非 Linux 宿主跳过此步骤。运行库存在或桌面可以启动，不能替代开发头文件及 `.pc` 元数据。`make.sh` 和直接运行的 `make.ps1 init-system` 共用这个入口。
 1. 以 Cargo 并发度 2 安装缺失的 `cargo-hakari`、`cargo-nextest`、`cargo-deny` 与 `cargo-about`，并将低于仓库最低要求的工具更新到兼容版本。
 2. 安装宿主依赖与内建工具。
 3. 安装 LuaSkills 运行时依赖；原生 VMM 在 VulcanCode 进程内运行，不需要独立运行时安装。
