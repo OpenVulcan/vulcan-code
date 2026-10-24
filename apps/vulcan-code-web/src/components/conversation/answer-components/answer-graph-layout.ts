@@ -77,7 +77,27 @@ export function layoutGraph(nodes: GraphLayoutNode[], edges: GraphLayoutEdge[], 
     return { points: value.points.map((point) => ({ x: point.x, y: point.y })), label };
   });
   const size = graph.graph() as { width?: number; height?: number };
-  return { width: Math.ceil(size.width ?? 0), height: Math.ceil(size.height ?? 0), nodes: placed, edges: routed };
+  return fitEdges({ width: size.width ?? 0, height: size.height ?? 0, nodes: placed, edges: routed });
+}
+
+// dagre sizes the drawing to nodes and edge labels but not to edge points, so an edge routed around
+// the outside can leave it. Grow and shift the drawing until every point keeps the margin; a smooth
+// path stays inside the hull of its points, so the points bound the drawn curve.
+// dagre 只按节点与连线标签确定绘图尺寸，不计连线点，绕外侧的连线可能越界。扩大并平移绘图，使每个点都保留边距；
+// 平滑路径不超出其各点的凸包，因此这些点即可界定所绘曲线。
+function fitEdges(layout: GraphLayout): GraphLayout {
+  const points = layout.edges.flatMap((edge) => edge.points);
+  const left = Math.max(0, GRAPH_MARGIN - Math.min(GRAPH_MARGIN, ...points.map((point) => point.x)));
+  const top = Math.max(0, GRAPH_MARGIN - Math.min(GRAPH_MARGIN, ...points.map((point) => point.y)));
+  const right = Math.max(layout.width, ...points.map((point) => point.x + GRAPH_MARGIN)) + left;
+  const bottom = Math.max(layout.height, ...points.map((point) => point.y + GRAPH_MARGIN)) + top;
+  const shift = (point: GraphPoint): GraphPoint => ({ x: point.x + left, y: point.y + top });
+  return {
+    width: Math.ceil(right),
+    height: Math.ceil(bottom),
+    nodes: new Map([...layout.nodes].map(([id, point]) => [id, shift(point)])),
+    edges: layout.edges.map((edge) => ({ points: edge.points.map(shift), label: edge.label && shift(edge.label) })),
+  };
 }
 
 /** Smooth path through `points` (uniform B-spline, as d3's curveBasis). 穿过 `points` 的平滑路径（均匀 B 样条，同 d3 curveBasis）。 */
