@@ -220,6 +220,30 @@ pub fn service_describe_requested(args: &[String]) -> Result<bool, String> {
     Ok(requested)
 }
 
+/// Reports whether a one-shot management `flag` was requested on its own.
+/// 报告是否单独请求了一次性管理参数 `flag`。
+///
+/// # Parameters
+/// 参数
+/// `args` are the full process arguments including the executable name.
+/// `args` 是包含可执行文件名的完整进程参数。
+///
+/// # Returns
+/// 返回值
+/// `Ok(true)` when the flag is the only argument, `Ok(false)` when absent, or an error when it is
+/// combined with anything else.
+/// 该参数为唯一参数时返回 `Ok(true)`；未出现时返回 `Ok(false)`；与其他参数混用时返回错误。
+pub fn standalone_flag_requested(args: &[String], flag: &str) -> Result<bool, String> {
+    let tail = args.get(1..).unwrap_or_default();
+    if !tail.iter().any(|arg| arg == flag) {
+        return Ok(false);
+    }
+    match tail {
+        [_] => Ok(true),
+        _ => Err(format!("{flag} must be the only argument")),
+    }
+}
+
 /// Returns the isolated test root carried by `--test-root` or `--test-root=value`.
 /// 返回 `--test-root` 或 `--test-root=value` 携带的隔离测试根。
 pub fn test_root_argument_value(arg: &str) -> Option<&str> {
@@ -302,6 +326,26 @@ mod tests {
         let mut args = vec![String::from("vulcan-code-service")];
         args.extend(tail.iter().map(|arg| (*arg).to_string()));
         args
+    }
+
+    /// Verifies a one-shot flag is recognized alone and rejected beside other arguments.
+    /// 验证一次性参数单独使用时被识别，与其他参数混用时被拒绝。
+    #[test]
+    fn one_shot_flag_must_stand_alone() {
+        let flag = "--one-shot";
+        assert_eq!(
+            standalone_flag_requested(&launch_args(&[]), flag),
+            Ok(false)
+        );
+        assert_eq!(
+            standalone_flag_requested(&launch_args(&[ARG_HEADLESS]), flag),
+            Ok(false)
+        );
+        assert_eq!(
+            standalone_flag_requested(&launch_args(&[flag]), flag),
+            Ok(true)
+        );
+        assert!(standalone_flag_requested(&launch_args(&[flag, ARG_HEADLESS]), flag).is_err());
     }
 
     /// Verifies each launch mode parses without a describe conflict.

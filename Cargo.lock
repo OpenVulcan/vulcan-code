@@ -9888,6 +9888,7 @@ dependencies = [
  "vulcan-service-api",
  "vulcan-service-host",
  "vulcan-service-kernel",
+ "vulcan-service-runtime",
  "windows 0.62.2",
  "winresource",
 ]

@@ -14,12 +14,17 @@ mod desktop_integration;
 mod desktop_notifications;
 mod launch;
 mod logging;
+mod managed_runtimes;
 mod native_diagnostics;
 mod runtime_layout;
 mod service_runtime;
 #[cfg(feature = "desktop-tray")]
 mod tray;
 mod user_service;
+
+/// One-shot management command: returns the summary to print, or the failure that exits with status 1.
+/// 一次性管理命令：返回要打印的摘要，或以状态 1 退出的失败信息。
+type OneShotCommand = fn() -> Result<String, String>;
 
 /// Starts the Vulcan Code service process.
 /// 启动 Vulcan Code 服务进程。
@@ -48,23 +53,35 @@ fn main() {
             std::process::exit(2);
         }
     }
-    // Browser system packages are likewise a one-shot command run before any Core startup.
-    // 浏览器系统软件包同样是一次性命令，在任何 Core 启动之前执行。
-    match browser_dependencies::browser_dependencies_requested(&args) {
-        Ok(true) => match browser_dependencies::install_browser_dependencies() {
-            Ok(summary) => {
-                println!("{summary}");
-                return;
-            }
+    // Browser system packages and managed runtimes are likewise one-shot commands run before any Core startup.
+    // 浏览器系统软件包与受管运行时同样是一次性命令，在任何 Core 启动之前执行。
+    let one_shot_commands: [(&str, OneShotCommand); 2] = [
+        (
+            browser_dependencies::ARG_INSTALL_BROWSER_DEPENDENCIES,
+            browser_dependencies::install_browser_dependencies,
+        ),
+        (
+            managed_runtimes::ARG_PREPARE_MANAGED_RUNTIMES,
+            managed_runtimes::prepare_managed_runtimes,
+        ),
+    ];
+    for (flag, command) in one_shot_commands {
+        match launch::standalone_flag_requested(&args, flag) {
+            Ok(true) => match command() {
+                Ok(summary) => {
+                    println!("{summary}");
+                    return;
+                }
+                Err(error) => {
+                    eprintln!("[vulcan-code-service] {error}");
+                    std::process::exit(1);
+                }
+            },
+            Ok(false) => {}
             Err(error) => {
                 eprintln!("[vulcan-code-service] {error}");
-                std::process::exit(1);
+                std::process::exit(2);
             }
-        },
-        Ok(false) => {}
-        Err(error) => {
-            eprintln!("[vulcan-code-service] {error}");
-            std::process::exit(2);
         }
     }
     // describe_requested rejects mixed launch flags before test-root or business initialization.
@@ -106,7 +123,8 @@ fn main() {
             eprintln!(
                 "usage: vulcan-code-service (--gui-launch | --service | --headless | --describe) [--no-debug-console]
        vulcan-code-service (--install-user-service | --uninstall-user-service)
-       vulcan-code-service --install-browser-dependencies"
+       vulcan-code-service --install-browser-dependencies
+       vulcan-code-service --prepare-managed-runtimes"
             );
             std::process::exit(2);
         }

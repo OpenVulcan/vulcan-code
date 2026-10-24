@@ -28,6 +28,7 @@ vulcan-runtime-assets.workspace = true
 vulcan-service-api.workspace = true
 vulcan-service-host.workspace = true
 vulcan-service-kernel.workspace = true
+vulcan-service-runtime.workspace = true
 
 [features]
 default = ["desktop-tray"]

@@ -13,35 +13,6 @@
 /// 安装内置浏览器所需的系统软件包后退出。
 pub const ARG_INSTALL_BROWSER_DEPENDENCIES: &str = "--install-browser-dependencies";
 
-/// Reports whether the browser dependency command was requested on its own.
-/// 报告是否单独请求了浏览器依赖安装命令。
-///
-/// # Parameters
-/// 参数
-/// `args` are the full process arguments including the executable name.
-/// `args` 是包含可执行文件名的完整进程参数。
-///
-/// # Returns
-/// 返回值
-/// `Ok(true)` when the flag is the only argument, `Ok(false)` when absent, or an error when it is
-/// combined with anything else.
-/// 该参数为唯一参数时返回 `Ok(true)`；未出现时返回 `Ok(false)`；与其他参数混用时返回错误。
-pub fn browser_dependencies_requested(args: &[String]) -> Result<bool, String> {
-    let tail = args.get(1..).unwrap_or_default();
-    if !tail
-        .iter()
-        .any(|arg| arg == ARG_INSTALL_BROWSER_DEPENDENCIES)
-    {
-        return Ok(false);
-    }
-    match tail {
-        [_] => Ok(true),
-        _ => Err(format!(
-            "{ARG_INSTALL_BROWSER_DEPENDENCIES} must be the only argument"
-        )),
-    }
-}
-
 /// Installs the packages and returns the summary printed to the operator.
 /// 安装软件包并返回打印给操作者的摘要。
 pub fn install_browser_dependencies() -> Result<String, String> {
@@ -119,41 +90,5 @@ mod linux {
         Ok(String::from(
             "Installed the system packages Playwright recommends for the built-in Chromium.",
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Builds process arguments from one executable name and tail flags.
-    /// 从可执行文件名与尾部参数构建进程参数。
-    fn args(tail: &[&str]) -> Vec<String> {
-        std::iter::once("vulcan-code-service")
-            .chain(tail.iter().copied())
-            .map(String::from)
-            .collect()
-    }
-
-    /// Verifies the flag is recognized alone and rejected beside other arguments.
-    /// 验证该参数单独使用时被识别，与其他参数混用时被拒绝。
-    #[test]
-    fn install_flag_must_stand_alone() {
-        assert_eq!(browser_dependencies_requested(&args(&[])), Ok(false));
-        assert_eq!(
-            browser_dependencies_requested(&args(&["--headless"])),
-            Ok(false)
-        );
-        assert_eq!(
-            browser_dependencies_requested(&args(&[ARG_INSTALL_BROWSER_DEPENDENCIES])),
-            Ok(true)
-        );
-        assert!(
-            browser_dependencies_requested(&args(&[
-                ARG_INSTALL_BROWSER_DEPENDENCIES,
-                "--headless"
-            ]))
-            .is_err()
-        );
     }
 }

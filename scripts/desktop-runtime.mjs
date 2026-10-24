@@ -415,6 +415,9 @@ async function main() {
     for (const relative of ['resources', 'plugins', 'lua_runtime', 'tools']) {
       await verifyPackageEntry(relative, relative, 'directory', output);
     }
+    // A release carries its runtimes; Core's own installer adds any missing one, since a fresh sync never ran Core.
+    // 正式版自带运行时；由 Core 自身的安装器补齐缺失项，因为刚同步的发行物从未运行过 Core。
+    await run(entry(serviceExecutable), ['--prepare-managed-runtimes'], { env: { ...process.env, VULCAN_CODE_OUTPUT_ROOT: output } });
     const runtimeLayout = { platform: process.platform, architecture: process.arch };
     await verifyManagedRuntime(output, runtimeLayout, 'node');
     await verifyManagedRuntime(output, runtimeLayout, 'python');
