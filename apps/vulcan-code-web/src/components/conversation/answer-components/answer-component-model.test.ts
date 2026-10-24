@@ -154,6 +154,21 @@ describe("parseAnswerComponent", () => {
     expect(parse("ui-flow", "A -> ")).toBeNull();
   });
 
+  it("reads a Mermaid node ID as the node it names, keeping call-like labels as text", () => {
+    const flow = parse("ui-flow", "A([Start]) -> B{OK?}\nB -> C[(Orders)]: yes\nB --> D[Retry]\nD -> B");
+    if (flow?.kind !== "flow") throw new Error("expected a flow");
+    expect(flow.nodes.map((node) => [node.label, node.shape])).toEqual([
+      ["Start", "terminal"], ["OK?", "decision"], ["Orders", "store"], ["Retry", "box"],
+    ]);
+    expect(flow.chains.map((chain) => chain.groups)).toEqual([[[0], [1]], [[1], [2]], [[1], [3]], [[3], [1]]]);
+    const calls = parse("ui-flow", "load(config) -> init() -> run");
+    if (calls?.kind !== "flow") throw new Error("expected a flow");
+    expect(calls.nodes.map((node) => node.label)).toEqual(["load(config)", "init()", "run"]);
+    const referenced = parse("ui-flow", "S(Start) -> Work\nWork -> S");
+    if (referenced?.kind !== "flow") throw new Error("expected a flow");
+    expect(referenced.nodes.map((node) => [node.label, node.shape])).toEqual([["Start", "terminal"], ["Work", "box"]]);
+  });
+
   it("orders sequence actors by first use and records direction, notes and phases", () => {
     const sequence = parse("ui-sequence num", "== Login ==\nUser -> API: request\nAPI --> User: token\nnote User, API: cached\n- API -> API: retry");
     expect(sequence).toMatchObject({

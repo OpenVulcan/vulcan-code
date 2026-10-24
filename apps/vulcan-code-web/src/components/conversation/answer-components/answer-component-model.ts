@@ -569,27 +569,38 @@ function flowNode(spec: string): { label: string; shape: AnswerFlowShape } | nul
   return text ? { label: text, shape: "box" } : null;
 }
 
-// `ui-flow [LR]`: one chain per line; nodes keep their first outline unless a later one is explicit.
-// `ui-flow [LR]`：每行一条链；节点保留首个轮廓，除非之后显式指定。
+// Mermaid node outlines, longer openings first, with the closest `ui-flow` outline.
+// Mermaid 节点轮廓（较长的开口在前）及最接近的 `ui-flow` 轮廓。
+const MERMAID_OUTLINES: [string, string, AnswerFlowShape][] = [
+  ["([", "])", "terminal"], ["[[", "]]", "box"], ["((", "))", "terminal"], ["{{", "}}", "box"], ["[/", "/]", "box"],
+  ["[\\", "\\]", "box"], ["[(", ")]", "store"], ["[", "]", "box"], ["(", ")", "terminal"], ["{", "}", "decision"],
+];
+
+// A Mermaid-style node `ID[text]`: an identifier followed directly by an outline with nonempty text. `paren` marks
+// the plain `(` outline, which also reads as a call such as `f(x)`.
+// Mermaid 风格节点 `ID[文本]`：标识后紧跟带非空文本的轮廓。`paren` 标出普通 `(` 轮廓，它也可能是 `f(x)` 这样的调用。
+function mermaidNode(spec: string): { id: string; label: string; shape: AnswerFlowShape; paren: boolean } | null {
+  const match = /^([A-Za-z_][\w-]*)([[({].*)$/u.exec(spec);
+  if (!match) return null;
+  const outline = match[2];
+  for (const [open, close, shape] of MERMAID_OUTLINES) {
+    if (outline.length >= open.length + close.length && outline.startsWith(open) && outline.endsWith(close)) {
+      const label = outline.slice(open.length, outline.length - close.length).trim();
+      return label ? { id: match[1], label, shape, paren: open === "(" } : null;
+    }
+  }
+  return null;
+}
+
+// `ui-flow [LR]`: one chain per line; nodes keep their first outline unless a later one is explicit. Models used to
+// Mermaid write `B{OK?}` and then `B`: such an ID names the node `OK?` throughout the fence. A plain `(` outline counts
+// only when its ID also stands alone, so `f(x)` stays text.
+// `ui-flow [LR]`：每行一条链；节点保留首个轮廓，除非之后显式指定。习惯 Mermaid 的模型会写 `B{OK?}` 再写 `B`：
+// 这样的标识在整个围栏中都指节点 `OK?`。普通 `(` 轮廓只有在其标识也单独出现时才算，因此 `f(x)` 保持为文字。
 function flow(horizontal: boolean, body: string): AnswerComponent | null {
   const lines = dataLines(body);
   if (lines.length === 0 || lines.length > ANSWER_COMPONENT_MAX_ROWS) return null;
-  const nodes: AnswerFlowNode[] = [];
-  const ids = new Map<string, number>();
-  const chains: AnswerFlowChain[] = [];
-  const changed = new Set<number>();
-  const node = (spec: string): number | null => {
-    const parsed = flowNode(spec);
-    if (parsed === null) return null;
-    let id = ids.get(parsed.label);
-    if (id === undefined) {
-      id = nodes.push({ label: parsed.label, shape: "box" }) - 1;
-      ids.set(parsed.label, id);
-    }
-    if (parsed.shape !== "box") nodes[id].shape = parsed.shape;
-    return id;
-  };
-  for (const line of lines) {
+  const parsedLines = lines.map((line) => {
     const { mark, text } = change(line.trim());
     const parts: string[] = [];
     const dashed: boolean[] = [];
@@ -600,22 +611,52 @@ function flow(horizontal: boolean, body: string): AnswerComponent | null {
       dashed.push(dash);
       rest = rest.slice(index + 2);
     }
-    if (parts.length === 0) {
-      const id = node(text);
+    if (parts.length === 0) return { mark, groups: [[text.trim()]], dashed, lone: true };
+    const { head, tail } = labelled(rest);
+    parts.push(head);
+    return { mark, groups: parts.map((part) => part.split("&").map((spec) => spec.trim())), dashed, label: tail, lone: false };
+  });
+  const specs = parsedLines.flatMap((line) => line.groups.flat());
+  const standalone = new Set(specs);
+  const aliases = new Map<string, string>();
+  for (const spec of specs) {
+    const mermaid = mermaidNode(spec);
+    if (mermaid && (!mermaid.paren || standalone.has(mermaid.id))) aliases.set(mermaid.id, mermaid.label);
+  }
+  const nodes: AnswerFlowNode[] = [];
+  const ids = new Map<string, number>();
+  const chains: AnswerFlowChain[] = [];
+  const changed = new Set<number>();
+  const node = (spec: string): number | null => {
+    const mermaid = mermaidNode(spec);
+    const alias = aliases.get(spec);
+    const parsed = mermaid && aliases.has(mermaid.id) ? mermaid
+      : alias !== undefined ? { label: alias, shape: "box" as const }
+        : flowNode(spec);
+    if (parsed === null) return null;
+    let id = ids.get(parsed.label);
+    if (id === undefined) {
+      id = nodes.push({ label: parsed.label, shape: "box" }) - 1;
+      ids.set(parsed.label, id);
+    }
+    if (parsed.shape !== "box") nodes[id].shape = parsed.shape;
+    return id;
+  };
+  for (const { mark, groups: specGroups, dashed, label, lone } of parsedLines) {
+    if (lone) {
+      const id = node(specGroups[0][0]);
       if (id === null) return null;
       if (mark === "chg") changed.add(id);
       chains.push({ groups: [[id]], dashed: [], mark });
       continue;
     }
-    const { head, tail } = labelled(rest);
-    parts.push(head);
     const groups: number[][] = [];
-    for (const part of parts) {
-      const group = part.split("&").map(node);
+    for (const part of specGroups) {
+      const group = part.map(node);
       if (group.some((id) => id === null)) return null;
       groups.push(group as number[]);
     }
-    chains.push({ groups, dashed, label: tail || undefined, mark });
+    chains.push({ groups, dashed, label: label || undefined, mark });
   }
   // Nodes drawn only on added (or only on removed) chains carry that marker; `~ Node` lines mark changes.
   // 仅出现在新增（或仅出现在删除）链上的节点带该标记；`~ 节点` 行标记变更。

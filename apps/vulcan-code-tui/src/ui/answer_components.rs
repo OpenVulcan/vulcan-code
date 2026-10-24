@@ -799,31 +799,155 @@ fn safe(text: &str) -> String {
     text.replace(['"', '|', '\n'], " ")
 }
 
+/// Mermaid node outlines, longer openings first, with the closest outline `ui-flow` draws.
+/// Mermaid 节点轮廓（较长的开口在前）及 `ui-flow` 绘制的最接近轮廓。
+const MERMAID_OUTLINES: [(&str, &str, &str, &str); 10] = [
+    ("([", "])", "([", "])"),
+    ("[[", "]]", "[", "]"),
+    ("((", "))", "([", "])"),
+    ("{{", "}}", "[", "]"),
+    ("[/", "/]", "[", "]"),
+    ("[\\", "\\]", "[", "]"),
+    ("[(", ")]", "[(", ")]"),
+    ("[", "]", "[", "]"),
+    ("(", ")", "([", "])"),
+    ("{", "}", "{", "}"),
+];
+
+/// A Mermaid node outline and its text from `ui-flow`.
+/// `ui-flow` 中的 Mermaid 节点轮廓及其文字。
+struct MermaidNode<'a> {
+    /// Identifier before the outline.
+    /// 轮廓前的标识。
+    id: &'a str,
+    /// Trimmed, nonempty text inside the outline.
+    /// 轮廓内去空白后的非空文字。
+    label: &'a str,
+    /// Opening and closing outline drawn for it.
+    /// 为其绘制的开闭轮廓。
+    open: &'static str,
+    close: &'static str,
+    /// Whether the outline is the plain `(`, which also reads as a call such as `f(x)`.
+    /// 轮廓是否为普通 `(`，它也可能是 `f(x)` 这样的调用。
+    paren: bool,
+}
+
+/// Reads a Mermaid-style node `ID[text]`: an identifier followed directly by an outline with
+/// nonempty text.
+/// 读取 Mermaid 风格节点 `ID[文本]`：标识后紧跟带非空文本的轮廓。
+fn mermaid_node(spec: &str) -> Option<MermaidNode<'_>> {
+    let split = spec.find(['[', '(', '{'])?;
+    let (id, outline) = spec.split_at(split);
+    let mut chars = id.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_')
+        || !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        return None;
+    }
+    MERMAID_OUTLINES
+        .iter()
+        .find_map(|(open, close, drawn_open, drawn_close)| {
+            let label = outline.strip_prefix(open)?.strip_suffix(close)?.trim();
+            Some(MermaidNode {
+                id,
+                label,
+                open: drawn_open,
+                close: drawn_close,
+                paren: *open == "(",
+            })
+        })
+        .filter(|node| !node.label.is_empty())
+}
+
 /// Translate `ui-flow` rows into a Mermaid flowchart; `None` when a line has no recognizable shape.
-/// 将 `ui-flow` 行转换为 Mermaid 流程图；某行无法识别时返回 `None`。
+/// Models used to Mermaid write `B{OK?}` and then `B`: such an ID names the node `OK?` throughout
+/// the fence. A plain `(` outline counts only when its ID also stands alone, so `f(x)` stays text.
+/// 将 `ui-flow` 行转换为 Mermaid 流程图；某行无法识别时返回 `None`。习惯 Mermaid 的模型会写 `B{OK?}`
+/// 再写 `B`：这样的标识在整个围栏中都指节点 `OK?`。普通 `(` 轮廓只有在其标识也单独出现时才算，
+/// 因此 `f(x)` 保持为文字。
 fn flow_mermaid(rows: &[&str], args: &str) -> Option<String> {
     let direction = match args {
         "" => "TD",
         "LR" => "LR",
         _ => return None,
     };
+    struct FlowLine<'a> {
+        marker: Option<char>,
+        groups: Vec<Vec<&'a str>>,
+        dashed: Vec<bool>,
+        text: Option<&'a str>,
+    }
+    let lines = rows
+        .iter()
+        .map(|row| {
+            let (marker, line) = change(row.trim());
+            let mut parts = Vec::new();
+            let mut dashed = Vec::new();
+            let mut rest = line;
+            while let Some(index) = rest.find("->") {
+                let dash = index > 0 && rest.as_bytes()[index - 1] == b'-';
+                parts.push(&rest[..if dash { index - 1 } else { index }]);
+                dashed.push(dash);
+                rest = &rest[index + 2..];
+            }
+            if parts.is_empty() {
+                return FlowLine {
+                    marker,
+                    groups: vec![vec![line.trim()]],
+                    dashed,
+                    text: None,
+                };
+            }
+            let (last, text) = label(rest);
+            parts.push(last);
+            let groups = parts
+                .iter()
+                .map(|part| part.split('&').map(str::trim).collect())
+                .collect();
+            FlowLine {
+                marker,
+                groups,
+                dashed,
+                text,
+            }
+        })
+        .collect::<Vec<_>>();
+    let specs = || {
+        lines
+            .iter()
+            .flat_map(|line| line.groups.iter().flatten().copied())
+    };
+    let standalone = specs().collect::<std::collections::HashSet<_>>();
+    let aliases = specs()
+        .filter_map(mermaid_node)
+        .filter(|node| !node.paren || standalone.contains(node.id))
+        .map(|node| (node.id, node.label))
+        .collect::<HashMap<_, _>>();
     let mut ids: HashMap<String, usize> = HashMap::new();
     let mut nodes: Vec<(String, &'static str, &'static str, bool)> = Vec::new();
     let mut edges = Vec::new();
     let mut changed = Vec::new();
     let mut node = |spec: &str| -> Option<usize> {
-        let spec = spec.trim();
-        let (open, close, text) = [("[(", ")]"), ("{", "}"), ("(", ")"), ("[", "]")]
-            .iter()
-            .find_map(|(open, close)| {
-                let inner = spec.strip_prefix(open)?.strip_suffix(close)?;
-                Some((*open, *close, inner.trim()))
-            })
-            .unwrap_or(("[", "]", spec));
-        let (open, close) = if open == "(" {
-            ("([", "])")
-        } else {
-            (open, close)
+        let (open, close, text) = match (mermaid_node(spec), aliases.get(spec)) {
+            (Some(mermaid), _) if aliases.contains_key(mermaid.id) => {
+                (mermaid.open, mermaid.close, mermaid.label)
+            }
+            (_, Some(label)) => ("[", "]", *label),
+            _ => {
+                let (open, close, text) = [("[(", ")]"), ("{", "}"), ("(", ")"), ("[", "]")]
+                    .iter()
+                    .find_map(|(open, close)| {
+                        let inner = spec.strip_prefix(open)?.strip_suffix(close)?;
+                        Some((*open, *close, inner.trim()))
+                    })
+                    .unwrap_or(("[", "]", spec));
+                if open == "(" {
+                    ("([", "])", text)
+                } else {
+                    (open, close, text)
+                }
+            }
         };
         if text.is_empty() {
             return None;
@@ -838,29 +962,28 @@ fn flow_mermaid(rows: &[&str], args: &str) -> Option<String> {
         }
         Some(id)
     };
-    for row in rows {
-        let (marker, line) = change(row.trim());
-        let mut parts = Vec::new();
-        let mut dashed = Vec::new();
-        let mut rest = line;
-        while let Some(index) = rest.find("->") {
-            let dash = index > 0 && rest.as_bytes()[index - 1] == b'-';
-            parts.push(&rest[..if dash { index - 1 } else { index }]);
-            dashed.push(dash);
-            rest = &rest[index + 2..];
-        }
-        if parts.is_empty() {
-            let id = node(line)?;
+    for FlowLine {
+        marker,
+        groups,
+        dashed,
+        text,
+    } in &lines
+    {
+        let (marker, text) = (*marker, *text);
+        if dashed.is_empty() {
+            let id = node(groups[0][0])?;
             if marker == Some('~') {
                 changed.push(id);
             }
             continue;
         }
-        let (last, text) = label(rest);
-        parts.push(last);
-        let groups = parts
+        let groups = groups
             .iter()
-            .map(|part| part.split('&').map(&mut node).collect::<Option<Vec<_>>>())
+            .map(|part| {
+                part.iter()
+                    .map(|spec| node(spec))
+                    .collect::<Option<Vec<_>>>()
+            })
             .collect::<Option<Vec<_>>>()?;
         for (hop, pair) in groups.windows(2).enumerate() {
             let mut caption = String::new();
@@ -1198,7 +1321,7 @@ fn tree(rows: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{row_cells, table_cell};
+    use super::{flow_mermaid, row_cells, table_cell};
 
     /// Pipes a cell keeps as text never shift columns; spaced pipes still separate cells.
     /// 单元格作为文本保留的竖线不会移动列；带空格的竖线仍分隔单元格。
@@ -1218,5 +1341,25 @@ mod tests {
         );
         assert_eq!(row_cells("Cost | ok | no | extra", 3, 3), None);
         assert_eq!(table_cell(r"a|b \| c"), r"a\|b \| c");
+    }
+
+    /// A Mermaid node ID names the node its outline labels; call-like labels stay text.
+    /// Mermaid 节点标识指向其轮廓所标注的节点；调用形式的标签保持为文字。
+    #[test]
+    fn flow_reads_mermaid_ids_as_the_nodes_they_name() {
+        let source = flow_mermaid(
+            &["A([Start]) -> B{OK?}", "B -> C[(Orders)]: yes", "B --> A"],
+            "",
+        )
+        .expect("a flow");
+        assert_eq!(
+            source,
+            "graph TD\nn0([\"Start\"])\nn1{\"OK?\"}\nn2[(\"Orders\")]\nn0 --> n1\nn1 -->|yes| n2\nn1 -.-> n0\n"
+        );
+        let calls = flow_mermaid(&["load(config) -> init() -> run"], "").expect("a flow");
+        assert!(
+            calls.contains("n0[\"load(config)\"]") && calls.contains("n1[\"init()\"]"),
+            "{calls}"
+        );
     }
 }
