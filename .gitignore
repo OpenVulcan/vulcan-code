@@ -34,6 +34,10 @@ target
 /.claude
 /.vulcan/
 /output
+# Distribution publication keeps the prior generation and any rejected one beside /output.
+# 发行目录发布会在 /output 旁保留上一代及被拒绝的一代。
+/output.previous
+/output.rejected-*
 /temp
 
 # Documentation stays local by default: plans, audits, reviews, and drafts are not shipped.
