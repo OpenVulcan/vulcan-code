@@ -101,10 +101,12 @@ export async function resolveServiceExecutable(explicitPath: string | null): Pro
     }
   }
   if (manifestPath) {
+    // Core owns the schema version and validates this same manifest strictly at startup; a second copy here went stale.
+    // 架构版本由 Core 拥有，并在启动时严格校验同一份清单；此处的副本曾经过期。
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
-      schemaVersion: number; serviceExecutable: string; platform: string; architecture: string;
+      serviceExecutable: string; platform: string; architecture: string;
     };
-    if (manifest.schemaVersion !== 2 || manifest.platform !== process.platform || manifest.architecture !== process.arch) {
+    if (manifest.platform !== process.platform || manifest.architecture !== process.arch) {
       throw new Error('The desktop runtime layout does not match this platform or architecture.');
     }
     const root = path.dirname(path.resolve(manifestPath));
