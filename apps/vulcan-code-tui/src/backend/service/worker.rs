@@ -2376,7 +2376,7 @@ pub(super) fn is_draft(id: &str) -> bool {
 fn draft_row(id: &str, draft: &Draft) -> ConversationSummary {
     ConversationSummary {
         id: id.to_string(),
-        title: crate::i18n::text("sidebar.newConversation"),
+        title: crate::i18n::text("console.newConversation"),
         project_id: draft.project_id.clone(),
         run_phase: RunPhase::Idle,
         last_updated_label: String::new(),
