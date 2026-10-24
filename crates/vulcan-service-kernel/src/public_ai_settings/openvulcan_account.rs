@@ -213,6 +213,22 @@ pub(crate) async fn usage_page(
     vulcan_provider_adapters::query_openvulcan_usage_page(&http, entry, &secret, &cursor).await
 }
 
+/// Reads the signed-in account's official direct judge calls per model, with every model the
+/// deployment enables listed; fails when nobody is signed in or the user center cannot answer.
+/// 读取已登录账户按模型的官方直连判定调用，并列出部署启用的每个模型；无人登录或用户中心无法回答时失败。
+pub(crate) async fn edge_usage(
+    state: SharedServiceBridgeState,
+) -> Result<vulcan_provider_adapters::OpenVulcanEdgeUsage, String> {
+    let (_, secret) = signed_in_credential(&state)
+        .await?
+        .ok_or_else(|| String::from("Sign in to OpenVulcan before reading judge usage."))?;
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| String::from("Failed to create account transport."))?;
+    vulcan_provider_adapters::request_openvulcan_edge_usage(&http, &secret).await
+}
+
 /// Resolves the signed-in account's credential for a backend-only request, renewing it through the
 /// shared lease; `None` when nobody is signed in. The connection id identifies the account.
 /// 为仅限后端的请求解析已登录账户的凭据，经共享租约续期；无人登录时为 `None`。连接 id 标识该账户。

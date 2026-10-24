@@ -543,6 +543,23 @@
   max-height: none;
 }
 
+.openvulcan-page-models-stack {
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+}
+
+/* The judge model table has three text columns before its counts. */
+/* 裁定模型表在计数之前有三列文字。 */
+.openvulcan-judge-models .openvulcan-usage-table th:nth-child(3),
+.openvulcan-judge-models .openvulcan-usage-table td:nth-child(3) {
+  text-align: left;
+}
+
+.openvulcan-judge-models tr[data-judge-model-enabled="false"] td:nth-child(3) {
+  color: var(--vk-ink-3);
+}
+
 @media (max-width: 720px) {
   .openvulcan-usage-totals[data-count="4"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -33,6 +33,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_public_ai_settings_snapshot",
     "service_openvulcan_account",
     "service_openvulcan_usage_page",
+    "service_openvulcan_edge_usage",
     "service_claim_openvulcan_prompt",
     "service_start_openvulcan_login",
     "service_openvulcan_login_status",
@@ -281,6 +282,9 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_openvulcan_edge_usage" => {
+            rpc_json_result(crate::public_ai_settings::openvulcan_account::edge_usage(state).await)
+        }
         "service_openvulcan_account" => rpc_json_result(
             crate::public_ai_settings::openvulcan_account::snapshot(app, state).await,
         ),

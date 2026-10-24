@@ -308,8 +308,8 @@ const EDGE_ACCESS_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::fr
 /// 读取的最大边缘访问回答；协议规定的回答只有数百字节。
 const EDGE_ACCESS_MAX_RESPONSE_BYTES: usize = 16 * 1024;
 
-/// Largest edge model list read; each entry is under a hundred bytes.
-/// 读取的最大边缘模型清单；每个条目不足一百字节。
+/// Largest edge model list or usage answer read; each entry is under two hundred bytes.
+/// 读取的最大边缘模型清单或调用量回答；每个条目不足两百字节。
 const EDGE_MODELS_MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
 /// Tells whether `text` is an identifier the edge routes accept: 1–64 characters of
@@ -362,10 +362,94 @@ pub async fn request_openvulcan_edge_models(
     http: &reqwest::Client,
     secret: &CredentialExecutionSecret,
 ) -> Result<Vec<String>, String> {
+    let body = edge_list_get(http, secret, "edge-models", "edge model list").await?;
+    parse_edge_models(&body)
+}
+
+/// Answer of `GET /api/v1/vulcancode/edge-usage`: the signed-in account's official direct judge
+/// calls per model, with every model the deployment enables listed.
+/// `GET /api/v1/vulcancode/edge-usage` 的回答：已登录账户按模型的官方直连判定调用，并列出部署启用的
+/// 每个模型。
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct OpenVulcanEdgeUsage {
+    /// Window of the totals in hours, ending at the current hour.
+    /// 合计的时间窗（小时），截至当前小时。
+    pub hours: u32,
+    /// One line per model, sorted by id.
+    /// 每个模型一行，按 id 排序。
+    pub models: Vec<OpenVulcanEdgeModelUsage>,
+}
+
+/// One model's line of the edge usage answer.
+/// 边缘调用量回答中一个模型的一行。
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct OpenVulcanEdgeModelUsage {
+    /// Full edge model id.
+    /// 完整的边缘模型 id。
+    pub model_id: String,
+    /// Whether the deployment still serves the model.
+    /// 部署是否仍提供该模型。
+    pub enabled: bool,
+    /// Calls, judged items and failed calls across all of the account's clients.
+    /// 该账户全部客户端的调用次数、判定条数与失败次数。
+    pub requests: u64,
+    /// Judged items over the window.
+    /// 时间窗内的判定条数。
+    pub items: u64,
+    /// Failed calls over the window.
+    /// 时间窗内的失败次数。
+    pub errors: u64,
+    /// RFC 3339 start of the latest hour with calls; absent when the window has none.
+    /// 最近一个有调用的小时的 RFC 3339 起点；时间窗内没有调用时缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_hour: Option<String>,
+}
+
+/// Parses an edge usage answer: a positive window, and valid model ids that appear once in
+/// ascending order.
+/// 解析边缘调用量回答：时间窗为正，模型 id 有效、只出现一次且升序。
+fn parse_edge_usage(body: &[u8]) -> Result<OpenVulcanEdgeUsage, String> {
+    let violates = || String::from("The OpenVulcan edge usage answer violates its contract.");
+    let answer: OpenVulcanEdgeUsage = serde_json::from_slice(body).map_err(|_| violates())?;
+    let ordered = answer
+        .models
+        .windows(2)
+        .all(|pair| pair[0].model_id < pair[1].model_id);
+    if answer.hours == 0
+        || !ordered
+        || answer
+            .models
+            .iter()
+            .any(|model| !is_openvulcan_edge_model_id(&model.model_id))
+    {
+        return Err(violates());
+    }
+    Ok(answer)
+}
+
+/// Reads the signed-in account's official direct judge calls per model.
+/// 读取已登录账户按模型的官方直连判定调用。
+pub async fn request_openvulcan_edge_usage(
+    http: &reqwest::Client,
+    secret: &CredentialExecutionSecret,
+) -> Result<OpenVulcanEdgeUsage, String> {
+    let body = edge_list_get(http, secret, "edge-usage", "edge usage").await?;
+    parse_edge_usage(&body)
+}
+
+/// GETs the user-center edge route `route` with the native credential and returns the bounded
+/// success body; `subject` names the answer in errors.
+/// 以原生凭据 GET 用户中心边缘接口 `route`，返回有界的成功正文；`subject` 在错误中指明该回答。
+async fn edge_list_get(
+    http: &reqwest::Client,
+    secret: &CredentialExecutionSecret,
+    route: &str,
+    subject: &str,
+) -> Result<Vec<u8>, String> {
     let region = secret
         .openvulcan_region()
-        .ok_or_else(|| String::from("Edge models require a native OpenVulcan account."))?;
-    let url = format!("{}/api/v1/vulcancode/edge-models", region.auth_origin());
+        .ok_or_else(|| format!("The OpenVulcan {subject} requires a native account."))?;
+    let url = format!("{}/api/v1/vulcancode/{route}", region.auth_origin());
     let authorization = crate::openvulcan::authorization_header(secret, &url)?;
     let response = http
         .get(&url)
@@ -373,25 +457,25 @@ pub async fn request_openvulcan_edge_models(
         .header("Authorization", authorization)
         .send()
         .await
-        .map_err(|_| String::from("The OpenVulcan edge model list request failed."))?;
+        .map_err(|_| format!("The OpenVulcan {subject} request failed."))?;
     let status = response.status();
     let body = response
         .bytes()
         .await
-        .map_err(|_| String::from("The OpenVulcan edge model list could not be read."))?;
+        .map_err(|_| format!("The OpenVulcan {subject} could not be read."))?;
     if body.len() > EDGE_MODELS_MAX_RESPONSE_BYTES {
-        return Err(String::from("The OpenVulcan edge model list is too large."));
+        return Err(format!("The OpenVulcan {subject} is too large."));
     }
     if !status.is_success() {
         let code = serde_json::from_slice::<ErrorEnvelope>(&body)
             .map(|envelope| envelope.error.code)
             .unwrap_or_default();
         return Err(format!(
-            "OpenVulcan refused to list the official direct models with HTTP {} `{code}`.",
+            "OpenVulcan refused the {subject} with HTTP {} `{code}`.",
             status.as_u16()
         ));
     }
-    parse_edge_models(&body)
+    Ok(body.to_vec())
 }
 
 /// Edge endpoint and short-lived access token for one model. It has no `Debug` so the token
@@ -574,6 +658,39 @@ mod tests {
             serde_json::json!({"models": [{"model_id": "shell judge"}]}),
             serde_json::json!({"models": [{"model_id": "x".repeat(65)}]}),
             serde_json::json!({"models": [{"model_id": "m"}, {"model_id": "m"}]}),
+        ] {
+            assert!(parse(refused.clone()).is_err(), "{refused}");
+        }
+    }
+
+    /// Edge usage answers keep ordered, valid model lines with a positive window and refuse
+    /// anything else.
+    /// 边缘调用量回答保留有序、有效的模型行与正的时间窗，其余一律拒绝。
+    #[test]
+    fn edge_usage_answers_hold_ordered_valid_models() {
+        let parse = |value: serde_json::Value| parse_edge_usage(value.to_string().as_bytes());
+        let line = |model_id: &str| {
+            serde_json::json!({
+                "model_id": model_id, "enabled": true, "requests": 3, "items": 7, "errors": 1,
+                "last_hour": "2026-10-24T08:00:00Z"
+            })
+        };
+        let usage = parse(serde_json::json!({"hours": 720, "models": [
+            line("vulcan-decision-shell-v1-mini-preview"),
+            {"model_id": "vulcan-decision-shell-v1-preview", "enabled": false, "requests": 0, "items": 0, "errors": 0}
+        ]}))
+        .expect("a valid answer parses");
+        assert_eq!(usage.hours, 720);
+        assert_eq!(usage.models[0].items, 7);
+        assert_eq!(usage.models[1].last_hour, None);
+        assert!(parse(serde_json::json!({"hours": 720, "models": []})).is_ok());
+        for refused in [
+            serde_json::json!({"models": []}),
+            serde_json::json!({"hours": 0, "models": []}),
+            serde_json::json!({"hours": 720, "models": [line("b"), line("a")]}),
+            serde_json::json!({"hours": 720, "models": [line("a"), line("a")]}),
+            serde_json::json!({"hours": 720, "models": [line("shell judge")]}),
+            serde_json::json!({"hours": 720, "models": [{"model_id": "a", "enabled": true, "requests": -1, "items": 0, "errors": 0}]}),
         ] {
             assert!(parse(refused.clone()).is_err(), "{refused}");
         }

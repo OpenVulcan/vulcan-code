@@ -111,3 +111,34 @@ export interface OpenVulcanUsagePage {
 export function loadOpenVulcanUsagePage(cursor: string): Promise<OpenVulcanUsagePage> {
   return serviceClient.request("service_openvulcan_usage_page", { cursor });
 }
+
+// OpenVulcanEdgeUsage is the account's official direct judge calls per model, with every model the
+// deployment serves listed, sorted by id.
+// OpenVulcanEdgeUsage 是账户按模型的官方直连判定调用，并列出部署提供的每个模型，按 id 排序。
+export interface OpenVulcanEdgeUsage {
+  // Window of the totals in hours, ending at the current hour.
+  // 合计的时间窗（小时），截至当前小时。
+  hours: number;
+  models: Array<{
+    // Full edge model id.
+    // 完整的边缘模型 id。
+    model_id: string;
+    // Whether the deployment still serves the model.
+    // 部署是否仍提供该模型。
+    enabled: boolean;
+    // Calls, judged items and failed calls across all of the account's clients.
+    // 该账户全部客户端的调用次数、判定条数与失败次数。
+    requests: number;
+    items: number;
+    errors: number;
+    // RFC 3339 start of the latest hour with calls; absent when the window has none.
+    // 最近一个有调用的小时的 RFC 3339 起点；时间窗内没有调用时缺省。
+    last_hour?: string;
+  }>;
+}
+
+// loadOpenVulcanEdgeUsage reads the signed-in account's official direct judge calls per model.
+// loadOpenVulcanEdgeUsage 读取已登录账户按模型的官方直连判定调用。
+export function loadOpenVulcanEdgeUsage(): Promise<OpenVulcanEdgeUsage> {
+  return serviceClient.request("service_openvulcan_edge_usage", {});
+}

@@ -162,6 +162,10 @@
   小写十六进制、策略版本等于随构建副本、结果数等于输入数，超过 token 上限的结果视为输入超限交给下一层。
   检查点不与本地清单比对，只记入判定轨迹（`checkpointSha256`）。官方模型包清单 `known-packages.json`
   只服务本机后端，格式版本为 4，不再含直连字段，旧版本 3 明确拒绝。
+  OpenVulcan 账户页的“模型”分区以“工具裁定模型”类型列出直连模型及本账号的调用：
+  `service_openvulcan_edge_usage`（无参数，未登录时报错）读取 `GET {认证源}/api/v1/vulcancode/edge-usage`，
+  回答 `{ hours, models: [{ model_id, enabled, requests, items, errors, last_hour? }] }` 按 id 升序，含每个
+  启用的模型及时间窗内调用过的已停用模型；合计跨该账号全部安装，由端点上报，没有费用字段。
 - **复核 LLM**：`permission_review` 配置档、用途 `tool_call_review` 的对话路由；只收到判定层结论标签，
   不收到原始分数。给用户的理由使用界面语言：宿主在 `<reply_language>` 区段写入已保存的界面语言（未保存时为
   系统语言），以代码与本族语名称表示。
@@ -264,6 +268,6 @@
 | 复核 LLM 请求 | `crates/vulcan-service-kernel/src/permission_judge/review.rs` |
 | 本机 worker、设备与 CUDA | `crates/vulcan-service-kernel/src/permission_judge/{worker,environment}.rs` |
 | 策略、模型包、官方清单、云端副本、直连回答检查与门槛 | `crates/vulcan-permission-judge/src/{policy,package,known,cloud,edge,decision}.rs` |
-| 官方直连模型清单与访问令牌换取 | `crates/vulcan-provider-adapters/src/client/openvulcan.rs` 中的 `request_openvulcan_edge_models`、`request_openvulcan_edge_access`，标识规则 `is_openvulcan_edge_model_id` |
+| 官方直连模型清单、账号调用量与访问令牌换取 | `crates/vulcan-provider-adapters/src/client/openvulcan.rs` 中的 `request_openvulcan_edge_models`、`request_openvulcan_edge_usage`、`request_openvulcan_edge_access`，标识规则 `is_openvulcan_edge_model_id` |
 | WebUI 界面 | `apps/vulcan-code-web/src/components/features/settings/permission-judge-*`、`components/features/onboarding/`、`components/project/project-permission-judge-section.tsx`、`components/composer/` |
 | TUI 界面 | `apps/vulcan-code-tui/src/app/pages/{permission_judge,setup_guide,project_permission_judge,unattended,review_rules}.rs`、`app/permission_mode.rs` |

@@ -14,6 +14,7 @@ import { loadPublicAiSettings } from "@/service/settings-actions-service";
 import type { PublicAiSettingsSnapshot } from "@/types";
 import { OpenVulcanAccountContext } from "./openvulcan-account-context";
 import { OpenVulcanAccountIssue, OpenVulcanIdentity, OpenVulcanSignIn, signedInAccount } from "./openvulcan-account-parts";
+import { OpenVulcanJudgeModels } from "./openvulcan-judge-models";
 import { OpenVulcanPlanSummary } from "./openvulcan-plan-summary";
 import { OpenVulcanUsageHistory } from "./openvulcan-usage-history";
 import { OpenVulcanUsageStatsPanel } from "./openvulcan-usage-stats-panel";
@@ -72,7 +73,10 @@ export function OpenVulcanAccountArea() {
           </div>
         </PageTabPanel>
         <PageTabPanel active={tab === "models"}>
-          <OpenVulcanModels key={`models:${ready}`} />
+          <div className="openvulcan-page-models-stack">
+            <OpenVulcanJudgeModels key={`judge:${ready}`} />
+            <OpenVulcanModels key={`models:${ready}`} />
+          </div>
         </PageTabPanel>
         <PageTabPanel active={tab === "calls"}>
           <OpenVulcanUsageHistory key={`calls:${ready}`} />
