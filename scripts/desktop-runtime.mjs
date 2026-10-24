@@ -491,10 +491,12 @@ async function main() {
   await cp(path.join(desktop, 'dist/chromium-host'), path.join(browserRoot, 'chromium-host'), {
     recursive: true, filter: source => !source.endsWith('install.js') && !source.endsWith('.test.js'),
   });
-  await mkdir(path.join(browserRoot, 'browser-host'), { recursive: true });
-  for (const name of ['control-discovery.js', 'control-server.js', 'cdp-discovery.js', 'host-protocol.js']) {
-    await cp(path.join(desktop, 'dist/browser-host', name), path.join(browserRoot, 'browser-host', name));
-  }
+  // Copy the whole protocol directory so every module it imports ships (a hand-kept list once missed
+  // the generated constants); only its own entry and tests stay behind.
+  // 复制整个协议目录，使其导入的每个模块都随包发布（手工清单曾漏掉生成的常量）；仅排除其入口与测试。
+  await cp(path.join(desktop, 'dist/browser-host'), path.join(browserRoot, 'browser-host'), {
+    recursive: true, filter: source => !/[\\/]main\.(?:js|d\.ts|js\.map)$/.test(source) && !/\.test\.(?:js|d\.ts|js\.map)$/.test(source),
+  });
   await cp(path.join(repository, 'plugins/vulcan-browser/node/node_modules/playwright-core'), path.join(browserRoot, 'node_modules/playwright-core'), { recursive: true, dereference: true });
   await cp(path.join(desktop, 'node_modules/ws'), path.join(browserRoot, 'node_modules/ws'), { recursive: true, dereference: true });
   await writeFile(path.join(browserRoot, 'package.json'), JSON.stringify({ private: true, type: 'module', browserVersions }));
