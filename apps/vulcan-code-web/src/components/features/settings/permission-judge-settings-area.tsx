@@ -16,7 +16,9 @@ import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i
 import { errorMessage, formatBytes } from "@/lib/display-format";
 import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
 import { PermissionJudgeDownloadsSection } from "@/components/features/settings/permission-judge-downloads-section";
-import { PermissionJudgeEdgeSection, edgePackages } from "@/components/features/settings/permission-judge-edge-section";
+import {
+  PermissionJudgeEdgeSection, edgeModelEnabled, type EdgeModelList,
+} from "@/components/features/settings/permission-judge-edge-section";
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 import {
   PermissionJudgeCudaPage, cudaMissingLabels, cudaReadiness,
@@ -34,6 +36,7 @@ import {
   benchmarkPermissionJudge,
   downloadPermissionJudgeModel,
   installPermissionJudgeCuda,
+  loadPermissionJudgeEdgeModels,
   loadPermissionJudgeSettings,
   loadPermissionJudgeStatus,
   registerPermissionJudgeModel,
@@ -61,8 +64,9 @@ const BACKEND_KEYS: Record<JudgeBackend, TranslationKey> = {
   edge: "settings.permissionJudge.backend.edge",
 };
 
-// NEEDS_KEYS explain what a backend still lacks before it can be used.
-// NEEDS_KEYS 说明后端在可用之前仍缺少什么。
+// NEEDS_KEYS explain what a backend still lacks before it can be used; the direct backend first
+// needs a sign-in, then an official model the server enables.
+// NEEDS_KEYS 说明后端在可用之前仍缺少什么；官方直连后端先需要登录，再需要服务端启用的官方模型。
 const NEEDS_KEYS: Record<JudgeBackend, TranslationKey> = {
   local: "settings.permissionJudge.needsModel",
   cloud: "settings.permissionJudge.needsCloudRoute",
@@ -95,13 +99,13 @@ interface Choices {
 }
 
 // savedChoices reads the saved choices; an unset backend is local, an unset official direct model is
-// the first one offered and an unset device follows the recommendation.
-// savedChoices 读取已保存的选择；未设置的后端为本机，未设置的官方直连模型为提供的第一个，未设置的
+// the first one the server enables and an unset device follows the recommendation.
+// savedChoices 读取已保存的选择；未设置的后端为本机，未设置的官方直连模型为服务端启用的第一个，未设置的
 // 设备跟随推荐值。
-function savedChoices(snapshot: PermissionJudgeSettingsSnapshot): Choices {
+function savedChoices(snapshot: PermissionJudgeSettingsSnapshot, edgeModels: EdgeModelList): Choices {
   return {
     backend: snapshot.backend ?? "local",
-    edgeModelId: snapshot.edgeModelId ?? edgePackages(snapshot.knownPackages)[0]?.edgeModelId ?? null,
+    edgeModelId: snapshot.edgeModelId ?? (edgeModels.phase === "ready" ? edgeModels.models[0] ?? null : null),
     device: snapshot.device ?? snapshot.recommendedDevice,
     cudaLibraryDirectory: snapshot.cuda.lockedDirectory,
     llmMayAllowBlocked: snapshot.llmMayAllowBlocked,
@@ -187,6 +191,31 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
 
   React.useEffect(() => { void reload(); }, [reload]);
 
+  // edgeModels is the official direct model list, read while the direct backend is on screen and
+  // the account is signed in; edgeRead drops answers of superseded reads.
+  // edgeModels 是官方直连模型清单，在界面显示官方直连后端且账户已登录时读取；edgeRead 丢弃已被取代的读取结果。
+  const [edgeModels, setEdgeModels] = React.useState<EdgeModelList>({ phase: "signedOut" });
+  const edgeRead = React.useRef(0);
+  const edgeShown = (held.backend ?? snapshot?.backend ?? "local") === "edge";
+  const loadEdgeModels = React.useCallback(async () => {
+    const read = ++edgeRead.current;
+    setEdgeModels({ phase: "loading" });
+    try {
+      const list = await loadPermissionJudgeEdgeModels();
+      if (read === edgeRead.current) setEdgeModels({ phase: "ready", models: list.models.map((model) => model.modelId) });
+    } catch (cause) {
+      if (read === edgeRead.current) setEdgeModels({ phase: "failed", error: errorMessage(cause) });
+    }
+  }, []);
+  React.useEffect(() => {
+    if (signedIn && edgeShown) {
+      void loadEdgeModels();
+    } else {
+      edgeRead.current += 1;
+      setEdgeModels({ phase: "signedOut" });
+    }
+  }, [signedIn, edgeShown, loadEdgeModels]);
+
   // Poll the live status at the interval it publishes; a finished CUDA installation re-reads detection.
   // 按实时状态发布的间隔轮询；CUDA 安装结束后重新读取探测结果。
   const installRunning = status?.cudaInstall?.running ?? false;
@@ -245,13 +274,17 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     </PageBody>;
   }
 
-  const saved = savedChoices(snapshot);
+  const saved = savedChoices(snapshot, edgeModels);
   const choices: Choices = { ...saved, ...held };
   const activeModel = snapshot.models.find((model) => model.id === snapshot.activeModelId) ?? null;
   const local = choices.backend === "local";
+  // The direct backend is ready with a signed-in account and a model the server enables; the saved
+  // direct model also stays ready, since the service keeps an unchanged choice.
+  // 官方直连后端在账户已登录且模型由服务端启用时就绪；已保存的直连模型同样保持就绪，因为服务会保留未变的选择。
   const ready = (backend: JudgeBackend, edgeModelId = choices.edgeModelId) => backend === "local"
     ? activeModel !== null
-    : backend === "cloud" ? cloudConfigured : signedIn && edgeModelId !== null;
+    : backend === "cloud" ? cloudConfigured : signedIn && (edgeModelEnabled(edgeModels, edgeModelId)
+      || (snapshot.backend === "edge" && edgeModelId !== null && edgeModelId === snapshot.edgeModelId));
   const configured = snapshot.backend !== null;
 
   // persist saves `change` at once. A backend is saved only when it is chosen explicitly (`change`
@@ -387,7 +420,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     ? formatMessage(t("settings.permissionJudge.switchBackendPending"), { backend: pendingBackend })
     : ready(choices.backend)
       ? formatMessage(t("settings.permissionJudge.readyToUse"), { backend: pendingBackend })
-      : t(NEEDS_KEYS[choices.backend]);
+      : t(choices.backend === "edge" && signedIn ? "settings.permissionJudge.needsEdgeModel" : NEEDS_KEYS[choices.backend]);
   const worker = status.worker;
   const phaseTone = worker.phase === "ready" ? "ready" : worker.phase === "failed" ? "error" : worker.phase === "warming" ? "warning" : "pending";
   const cudaMissing = snapshot.cuda.supported ? cudaMissingLabels(t, cudaReadiness(snapshot.cuda)) : [];
@@ -481,8 +514,9 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
       </PageNotice> : null}
     </PageSection> : choices.backend === "cloud"
       ? <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />
-      : <PermissionJudgeEdgeSection knownPackages={snapshot.knownPackages} edgeModelId={choices.edgeModelId}
-        disabled={busy !== null} t={t} onEdgeModelChange={(edgeModelId) => persist({ edgeModelId })} />}
+      : <PermissionJudgeEdgeSection edgeModels={edgeModels} edgeModelId={choices.edgeModelId}
+        disabled={busy !== null} t={t} onEdgeModelChange={(edgeModelId) => persist({ edgeModelId })}
+        onRetry={() => void loadEdgeModels()} />}
 
     {configured && snapshot.policyOptions.length > 0 ? <PageSection layout="rows" data-judge-policy-summary=""
       title={t("settings.permissionJudge.policy.title")} description={t("settings.permissionJudge.policy.description")}

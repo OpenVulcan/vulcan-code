@@ -1132,7 +1132,6 @@
         {
           "id": "demo-judge",
           "displayName": "Demo Judge",
-          "edgeModelId": "demo-shell-judge",
           "variants": [
             {
               "format": "fp16-mixed",
@@ -1719,6 +1718,12 @@
       ],
       "unsupportedOptions": {},
       "issue": null
+    },
+    "service_permission_judge_edge_models": {
+      "models": [
+        { "modelId": "vulcan-decision-shell-v1-flash-preview" },
+        { "modelId": "vulcan-decision-shell-v1-mini-preview" }
+      ]
     },
     "service_permission_judge_status": {
       "pollIntervalMs": 2000,

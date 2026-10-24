@@ -221,6 +221,10 @@ pub enum Slot {
     /// `loadPermissionJudgeStatus`, polled while the permission judge page is open.
     /// 权限判定页打开期间轮询的实时状态。
     PermissionJudgeStatus,
+    /// `loadPermissionJudgeEdgeModels`: the official direct models the signed-in account's
+    /// deployment currently serves.
+    /// 已登录账户所属部署当前提供的官方直连模型。
+    PermissionJudgeEdgeModels,
     /// The latest `benchmarkPermissionJudge` result of this page; never saved.
     /// 本页最近一次 `benchmarkPermissionJudge` 结果；不会持久化。
     PermissionJudgeBenchmark,

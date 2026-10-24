@@ -35,6 +35,20 @@ pub fn load_permission_judge_status() -> ServiceCall {
     )
 }
 
+/// Builds the request for `service_permission_judge_edge_models`, the official direct models the
+/// signed-in account's deployment currently serves.
+/// 构建 `service_permission_judge_edge_models` 的请求，即已登录账户所属部署当前提供的官方直连模型。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_permission_judge_edge_models() -> ServiceCall {
+    ServiceCall::load(
+        "load_permission_judge_edge_models",
+        "service_permission_judge_edge_models",
+        json!({}),
+        Slot::PermissionJudgeEdgeModels,
+    )
+}
+
 /// Builds the request for `service_save_permission_judge_settings`.
 /// 构建 `service_save_permission_judge_settings` 的请求。
 /// `request` is the complete `PermissionJudgeSettingsSaveRequest`.

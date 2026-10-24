@@ -415,6 +415,7 @@ fn trace_of(trace: JudgeTrace) -> PermissionJudgeRecordTrace {
         logits: trace.logits,
         allow_probability: trace.allow_probability,
         input_tokens: trace.input_tokens,
+        checkpoint_sha256: trace.checkpoint_sha256,
     }
 }
 
@@ -465,6 +466,7 @@ mod tests {
                     logits: Some([1.0, 0.0, 0.0]),
                     allow_probability: None,
                     input_tokens: Some(9),
+                    checkpoint_sha256: None,
                 }),
             }),
             review: None,

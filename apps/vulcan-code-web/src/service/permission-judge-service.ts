@@ -7,6 +7,7 @@ import type {
   PermissionJudgeRecordPage,
   PermissionJudgeRecordsRequest,
   PermissionJudgeCudaComponent,
+  PermissionJudgeEdgeModels,
   PermissionJudgeModelFormat,
   PermissionJudgePackageInspection,
   PermissionJudgeSettingsSaveRequest,
@@ -30,6 +31,13 @@ export async function loadPermissionJudgeSettings(): Promise<PermissionJudgeSett
 // loadPermissionJudgeStatus 读取用于轮询的实时 worker 与安装状态。
 export async function loadPermissionJudgeStatus(): Promise<PermissionJudgeStatus> {
   return serviceClient.request<PermissionJudgeStatus>("service_permission_judge_status", {});
+}
+
+// loadPermissionJudgeEdgeModels lists the official direct models the signed-in OpenVulcan account's
+// deployment currently serves; it fails when nobody is signed in.
+// loadPermissionJudgeEdgeModels 列出已登录 OpenVulcan 账户所属部署当前提供的官方直连模型；无人登录时失败。
+export async function loadPermissionJudgeEdgeModels(): Promise<PermissionJudgeEdgeModels> {
+  return serviceClient.request<PermissionJudgeEdgeModels>("service_permission_judge_edge_models", {});
 }
 
 // savePermissionJudgeSettings saves the system-level choices.

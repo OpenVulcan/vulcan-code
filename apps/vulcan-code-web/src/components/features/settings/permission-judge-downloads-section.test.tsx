@@ -29,7 +29,6 @@ afterEach(async () => {
 const packages: PermissionJudgeKnownPackage[] = [{
   id: "risk",
   displayName: "Risk",
-  edgeModelId: null,
   variants: [
     { format: "fp16-mixed", devices: ["cuda", "cpu"], downloadBytes: null, recommended: true, installedModelId: null },
     { format: "fp32", devices: ["cpu"], downloadBytes: 2048, recommended: false, installedModelId: null },

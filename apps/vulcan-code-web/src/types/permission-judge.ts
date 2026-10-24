@@ -86,10 +86,14 @@ export interface PermissionJudgeKnownVariant {
 export interface PermissionJudgeKnownPackage {
   id: string;
   displayName: string;
-  // Model id of the official direct backend; null when the family has no direct route.
-  // 官方直连后端的模型 id；该家族没有直连路由时为 null。
-  edgeModelId: string | null;
   variants: PermissionJudgeKnownVariant[];
+}
+
+// PermissionJudgeEdgeModels lists the official direct models the signed-in account's deployment
+// currently serves, sorted by id; empty when none is enabled.
+// PermissionJudgeEdgeModels 列出已登录账户所属部署当前提供的官方直连模型，按 id 排序；没有启用任何模型时为空。
+export interface PermissionJudgeEdgeModels {
+  models: { modelId: string }[];
 }
 
 // PermissionJudgePolicyOption is one authorization option of the policy in use.
@@ -268,6 +272,9 @@ export interface PermissionJudgeRecordTrace {
   logits: [number, number, number] | null;
   allowProbability: number | null;
   inputTokens: number | null;
+  // Checkpoint digest the official direct endpoint reported; absent for other backends.
+  // 官方直连端点报告的检查点摘要；其他后端缺省。
+  checkpointSha256?: string;
 }
 
 // PermissionJudgeRecord is one decision the judge or the reviewer took part in.

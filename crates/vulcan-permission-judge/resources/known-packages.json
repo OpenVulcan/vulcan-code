@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "packages": [
     {
       "id": "risk-164m",
@@ -7,7 +7,6 @@
       "checkpoints": [
         "7a46ab8306e720a88040fe01435500ed4d106942341c792ad5cb147e4c483851"
       ],
-      "edge_model_id": "vulcan-decision-shell",
       "variants": [
         {
           "format": "fp16-mixed",

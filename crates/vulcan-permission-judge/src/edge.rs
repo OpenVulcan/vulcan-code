@@ -2,17 +2,20 @@
 //! answer must pass.
 //! 官方直连判定：边缘端点 `POST /v1/judge` 的线协议形状及其回答必须通过的检查。
 //!
-//! The edge endpoint runs an official package on a GPU node and applies the package's frozen margin
-//! rule there, so its label stands as is. The client renders the input with the policy this build
-//! ships, the same one the cloud judge reads, and refuses an answer from another checkpoint or
-//! policy.
-//! 边缘端点在 GPU 节点上运行官方模型包，并在节点上应用模型包冻结的余量规则，因此其标签原样采用。
-//! 客户端用本构建随附的策略（与云端判定读取的相同）渲染输入，并拒绝来自其他检查点或策略的回答。
+//! The edge endpoint runs an official model on a GPU node and applies its frozen margin rule there,
+//! so its label stands as is. The operator chooses which models and checkpoints are served, so the
+//! client does not pin a checkpoint: it records the one the node reports. The client renders the
+//! input with the policy this build ships, the same one the cloud judge reads, and refuses an
+//! answer under another policy.
+//! 边缘端点在 GPU 节点上运行官方模型，并在节点上应用其冻结的余量规则，因此其标签原样采用。提供哪些
+//! 模型与检查点由运营方决定，客户端不固定检查点，只记录节点报告的检查点。客户端用本构建随附的策略
+//! （与云端判定读取的相同）渲染输入，并拒绝其他策略下的回答。
 
 use serde::{Deserialize, Serialize};
 
+use crate::JudgeLabel;
+use crate::known::is_sha256;
 use crate::protocol::JudgeInput;
-use crate::{JudgeLabel, KnownPackage};
 
 /// Path of the judge route below an edge endpoint's base URL.
 /// 判定路由在边缘端点基础地址下的路径。
@@ -104,24 +107,34 @@ pub enum EdgeOutcome {
     InputTokenLimit,
 }
 
-/// Checks an answer to a request of `expected` inputs: it must come from a checkpoint of `package`,
-/// use `policy_version`, echo `request_id` and hold one well-formed result per input.
-/// 检查含 `expected` 条输入的请求的回答：它必须来自 `package` 的检查点、使用 `policy_version`、回显
-/// `request_id`，并且每条输入恰有一条格式正确的结果。
+/// A checked edge answer.
+/// 一次已检查的边缘回答。
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeAnswer {
+    /// Digest of the checkpoint the node reported, kept in the decision trace.
+    /// 节点报告的检查点摘要，保存在判定轨迹中。
+    pub checkpoint_sha256: String,
+    /// One outcome per input, in order.
+    /// 每条输入一条结果，按顺序排列。
+    pub outcomes: Vec<EdgeOutcome>,
+}
+
+/// Checks an answer to a request of `expected` inputs: it must echo `request_id`, report a
+/// well-formed checkpoint digest, use `policy_version` and hold one well-formed result per input.
+/// 检查含 `expected` 条输入的请求的回答：它必须回显 `request_id`、报告格式正确的检查点摘要、使用
+/// `policy_version`，并且每条输入恰有一条格式正确的结果。
 pub fn edge_outcomes(
-    package: &KnownPackage,
     policy_version: &str,
     request_id: &str,
     expected: usize,
     response: EdgeJudgeResponse,
-) -> Result<Vec<EdgeOutcome>, String> {
+) -> Result<EdgeAnswer, String> {
     if response.request_id != request_id {
         return Err(String::from("The edge judge answered a different request."));
     }
-    if !package.checkpoints.contains(&response.checkpoint_sha256) {
-        return Err(format!(
-            "The edge judge ran checkpoint `{}`, which is not part of {}.",
-            response.checkpoint_sha256, package.display_name
+    if !is_sha256(&response.checkpoint_sha256) {
+        return Err(String::from(
+            "The edge judge reported a malformed checkpoint digest.",
         ));
     }
     if response.policy_version != policy_version {
@@ -136,7 +149,15 @@ pub fn edge_outcomes(
             response.results.len()
         ));
     }
-    response.results.into_iter().map(edge_result).collect()
+    let outcomes = response
+        .results
+        .into_iter()
+        .map(edge_result)
+        .collect::<Result<_, _>>()?;
+    Ok(EdgeAnswer {
+        checkpoint_sha256: response.checkpoint_sha256,
+        outcomes,
+    })
 }
 
 /// Checks one result: a scored result carries finite logits and its token count, and an unscored
@@ -169,19 +190,9 @@ fn edge_result(result: EdgeJudgeResult) -> Result<EdgeOutcome, String> {
 mod tests {
     use super::*;
 
-    fn package() -> KnownPackage {
-        KnownPackage {
-            id: String::from("a"),
-            display_name: String::from("A"),
-            checkpoints: vec!["a".repeat(64)],
-            edge_model_id: Some(String::from("shell-judge")),
-            variants: Vec::new(),
-        }
-    }
-
     fn response(results: serde_json::Value) -> EdgeJudgeResponse {
         serde_json::from_value(serde_json::json!({
-            "request_id": "r1", "region": "hk", "model": "shell-judge",
+            "request_id": "r1", "region": "hk", "model": "vulcan-decision-shell-v1-mini-preview",
             "checkpoint_sha256": "a".repeat(64), "policy_version": "p1", "results": results
         }))
         .unwrap()
@@ -193,36 +204,63 @@ mod tests {
             {"label": "allow", "logits": [4.0, -2.0, -2.0], "input_tokens": 37, "model_evaluated": true}
         ]));
         assert_eq!(
-            edge_outcomes(&package(), "p1", "r1", 1, scored),
-            Ok(vec![EdgeOutcome::Evaluated {
-                label: JudgeLabel::Allow,
-                logits: [4.0, -2.0, -2.0],
-                input_tokens: 37
-            }])
+            edge_outcomes("p1", "r1", 1, scored),
+            Ok(EdgeAnswer {
+                checkpoint_sha256: "a".repeat(64),
+                outcomes: vec![EdgeOutcome::Evaluated {
+                    label: JudgeLabel::Allow,
+                    logits: [4.0, -2.0, -2.0],
+                    input_tokens: 37
+                }]
+            })
         );
         let over = response(serde_json::json!([
             {"label": "block", "reason_code": "input_token_limit", "model_evaluated": false}
         ]));
         assert_eq!(
-            edge_outcomes(&package(), "p1", "r1", 1, over),
+            edge_outcomes("p1", "r1", 1, over).map(|answer| answer.outcomes),
             Ok(vec![EdgeOutcome::InputTokenLimit])
         );
     }
 
+    // Any well-formed checkpoint is accepted and reported; the client pins none.
+    // 任何格式正确的检查点都被接受并报告；客户端不固定检查点。
     #[test]
-    fn foreign_checkpoints_policies_requests_and_malformed_results_are_refused() {
+    fn any_well_formed_checkpoint_is_accepted_and_reported() {
+        let rotated = EdgeJudgeResponse {
+            checkpoint_sha256: "0123456789abcdef".repeat(4),
+            ..response(serde_json::json!([]))
+        };
+        assert_eq!(
+            edge_outcomes("p1", "r1", 0, rotated).map(|answer| answer.checkpoint_sha256),
+            Ok("0123456789abcdef".repeat(4))
+        );
+    }
+
+    #[test]
+    fn malformed_checkpoints_foreign_policies_requests_and_malformed_results_are_refused() {
         let scored = || {
             response(serde_json::json!([
                 {"label": "allow", "logits": [4.0, -2.0, -2.0], "input_tokens": 37, "model_evaluated": true}
             ]))
         };
-        let foreign = EdgeJudgeResponse {
-            checkpoint_sha256: "b".repeat(64),
-            ..scored()
-        };
-        assert!(edge_outcomes(&package(), "p1", "r1", 1, foreign).is_err());
-        assert!(edge_outcomes(&package(), "p2", "r1", 1, scored()).is_err());
-        assert!(edge_outcomes(&package(), "p1", "r2", 1, scored()).is_err());
+        for checkpoint in [
+            "A".repeat(64),
+            "a".repeat(63),
+            "g".repeat(64),
+            String::new(),
+        ] {
+            let malformed = EdgeJudgeResponse {
+                checkpoint_sha256: checkpoint.clone(),
+                ..scored()
+            };
+            assert!(
+                edge_outcomes("p1", "r1", 1, malformed).is_err(),
+                "{checkpoint}"
+            );
+        }
+        assert!(edge_outcomes("p2", "r1", 1, scored()).is_err());
+        assert!(edge_outcomes("p1", "r2", 1, scored()).is_err());
         for results in [
             serde_json::json!([]),
             serde_json::json!([
@@ -234,7 +272,7 @@ mod tests {
             serde_json::json!([{"label": "block", "reason_code": "other", "model_evaluated": false}]),
         ] {
             assert!(
-                edge_outcomes(&package(), "p1", "r1", 1, response(results.clone())).is_err(),
+                edge_outcomes("p1", "r1", 1, response(results.clone())).is_err(),
                 "{results}"
             );
         }

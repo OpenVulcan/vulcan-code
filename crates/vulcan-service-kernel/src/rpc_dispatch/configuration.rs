@@ -118,6 +118,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_remove_mcp_oauth",
     "service_permission_judge_settings",
     "service_permission_judge_status",
+    "service_permission_judge_edge_models",
     "service_save_permission_judge_settings",
     "service_inspect_permission_judge_package",
     "service_register_permission_judge_model",
@@ -827,6 +828,9 @@ pub(super) async fn dispatch(
         }
         "service_permission_judge_status" => {
             rpc_json_result(permission_judge::service_permission_judge_status(state).await)
+        }
+        "service_permission_judge_edge_models" => {
+            rpc_json_result(permission_judge::service_permission_judge_edge_models(state).await)
         }
         "service_save_permission_judge_settings" => rpc_json_result(
             permission_judge::service_save_permission_judge_settings(

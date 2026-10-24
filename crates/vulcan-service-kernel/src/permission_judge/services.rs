@@ -15,8 +15,8 @@ use vulcan_agent_runtime::agent_runtime::tool_permission::{
 use vulcan_permission_judge::protocol::{JudgeDevice, JudgeInput, JudgeOutcome};
 use vulcan_permission_judge::system::MAX_APPROVAL_TIMEOUT_SECONDS;
 use vulcan_permission_judge::{
-    EdgeOutcome, JudgePackage, JudgePolicy, KnownDownload, KnownPackage, ModelFormat, cloud_policy,
-    find_edge_package, find_known_package, known_package, known_packages, render_call,
+    EdgeAnswer, EdgeOutcome, JudgePackage, JudgePolicy, KnownDownload, KnownPackage, ModelFormat,
+    cloud_policy, find_known_package, known_package, known_packages, render_call,
 };
 use vulcan_provider_config::provider_config::{
     JudgeBackend, PersistedPermissionJudgeConfiguration, RegisteredJudgeModel,
@@ -26,8 +26,9 @@ use vulcan_service_api::{
     PermissionJudgeBenchmarkRequest, PermissionJudgeBenchmarkResult, PermissionJudgeCudaArchive,
     PermissionJudgeCudaComponent, PermissionJudgeCudaDirectory, PermissionJudgeCudaInstall,
     PermissionJudgeCudaInstallRequest, PermissionJudgeCudaSnapshot, PermissionJudgeDeviceSummary,
-    PermissionJudgeIssue, PermissionJudgeKnownPackage, PermissionJudgeKnownVariant,
-    PermissionJudgeLink, PermissionJudgeModelDownload, PermissionJudgeModelDownloadRequest,
+    PermissionJudgeEdgeModel, PermissionJudgeEdgeModels, PermissionJudgeIssue,
+    PermissionJudgeKnownPackage, PermissionJudgeKnownVariant, PermissionJudgeLink,
+    PermissionJudgeModelDownload, PermissionJudgeModelDownloadRequest,
     PermissionJudgeModelRegisterRequest, PermissionJudgeModelRequest, PermissionJudgeModelSummary,
     PermissionJudgeNvidiaDriver, PermissionJudgePackageFacts, PermissionJudgePackageInspectRequest,
     PermissionJudgePackageInspection, PermissionJudgePolicyOption, PermissionJudgeRecord,
@@ -389,7 +390,6 @@ async fn snapshot(
             .map(|package| PermissionJudgeKnownPackage {
                 id: package.id.clone(),
                 display_name: package.display_name.clone(),
-                edge_model_id: package.edge_model_id.clone(),
                 variants: known_variants(
                     package,
                     &settings,
@@ -447,6 +447,21 @@ pub(crate) async fn service_permission_judge_settings(
 ) -> Result<PermissionJudgeSettingsSnapshot, String> {
     let (runtime, settings) = read_state(&state)?;
     snapshot(&runtime, settings).await
+}
+
+/// Lists the official direct models the signed-in OpenVulcan account's deployment currently
+/// serves; fails when nobody is signed in or the user center cannot answer.
+/// 列出已登录 OpenVulcan 账户所属部署当前提供的官方直连模型；无人登录或用户中心无法回答时失败。
+pub(crate) async fn service_permission_judge_edge_models(
+    state: SharedServiceBridgeState,
+) -> Result<PermissionJudgeEdgeModels, String> {
+    Ok(PermissionJudgeEdgeModels {
+        models: edge::list_models(&state)
+            .await?
+            .into_iter()
+            .map(|model_id| PermissionJudgeEdgeModel { model_id })
+            .collect(),
+    })
 }
 
 /// Returns the live status polled while the settings page is open.
@@ -525,17 +540,27 @@ pub(crate) async fn service_save_permission_judge_settings(
         let model = request.edge_model_id.as_deref().ok_or_else(|| {
             String::from("Choose an official model before choosing the official direct judge.")
         })?;
-        if find_edge_package(model).is_none() {
-            return Err(format!(
-                "`{model}` is not an official direct model of this build."
-            ));
-        }
         if crate::public_ai_settings::openvulcan_account::signed_in_credential(&state)
             .await?
             .is_none()
         {
             return Err(String::from(
                 "Sign in to OpenVulcan before choosing the official direct judge.",
+            ));
+        }
+        // Only a new choice is checked against the server's list, so a saved model the operator
+        // has since disabled stays saved while other settings change.
+        // 只有新的选择才对照服务端清单检查，使运营方后来停用的已保存模型在修改其他设置时保持不变。
+        let unchanged = current.backend == Some(JudgeBackend::Edge)
+            && current.edge_model_id.as_deref() == Some(model);
+        if !unchanged
+            && !edge::list_models(&state)
+                .await?
+                .iter()
+                .any(|id| id == model)
+        {
+            return Err(format!(
+                "OpenVulcan does not currently enable the official direct model `{model}`."
             ));
         }
     }
@@ -1219,6 +1244,7 @@ pub(crate) async fn judge_call(
         logits: None,
         allow_probability: None,
         input_tokens: None,
+        checkpoint_sha256: None,
     };
     if settings.backend == Some(JudgeBackend::Edge) {
         let model = edge_model(&settings)
@@ -1230,13 +1256,22 @@ pub(crate) async fn judge_call(
         };
         let judged = edge::judge(state, &runtime.edge_access, model, vec![input])
             .await
-            .map(|mut outcomes| outcomes.pop());
+            .map(|mut answer: EdgeAnswer| {
+                let trace = JudgeTrace {
+                    checkpoint_sha256: Some(answer.checkpoint_sha256),
+                    ..trace.clone()
+                };
+                (answer.outcomes.pop(), trace)
+            });
         return match judged {
-            Ok(Some(EdgeOutcome::Evaluated {
-                label,
-                logits,
-                input_tokens,
-            })) => Ok(Some(JudgeVerdict {
+            Ok((
+                Some(EdgeOutcome::Evaluated {
+                    label,
+                    logits,
+                    input_tokens,
+                }),
+                trace,
+            )) => Ok(Some(JudgeVerdict {
                 label,
                 trace: JudgeTrace {
                     logits: Some(logits),
@@ -1244,11 +1279,11 @@ pub(crate) async fn judge_call(
                     ..trace
                 },
             })),
-            Ok(Some(EdgeOutcome::InputTokenLimit)) => Err(JudgeFailure {
+            Ok((Some(EdgeOutcome::InputTokenLimit), trace)) => Err(JudgeFailure {
                 reason: String::from("The call is too long for the judge model."),
                 trace: Some(trace),
             }),
-            Ok(None) => Err(JudgeFailure {
+            Ok((None, trace)) => Err(JudgeFailure {
                 reason: String::from("The edge judge returned no result."),
                 trace: Some(trace),
             }),

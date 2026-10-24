@@ -15,11 +15,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use vulcan_permission_judge::protocol::JudgeInput;
 use vulcan_permission_judge::{
-    EDGE_JUDGE_PATH, EdgeJudgeRequest, EdgeJudgeResponse, EdgeOutcome, cloud_policy, edge_outcomes,
-    find_edge_package, render_call,
+    EDGE_JUDGE_PATH, EdgeAnswer, EdgeJudgeRequest, EdgeJudgeResponse, cloud_policy, edge_outcomes,
+    render_call,
 };
 use vulcan_provider_adapters::{
     CredentialExecutionSecret, OpenVulcanEdgeAccessError, request_openvulcan_edge_access,
+    request_openvulcan_edge_models,
 };
 
 use crate::public_ai_settings::openvulcan_account::signed_in_credential;
@@ -115,7 +116,7 @@ impl EdgeAccessCache {
             .await
             .map_err(|error| match error {
                 OpenVulcanEdgeAccessError::ModelUnavailable => format!(
-                    "OpenVulcan does not offer the official direct model `{model_id}` in this deployment."
+                    "OpenVulcan does not currently enable the official direct model `{model_id}`."
                 ),
                 OpenVulcanEdgeAccessError::Failed(reason) => reason,
             })?;
@@ -130,6 +131,20 @@ impl EdgeAccessCache {
             },
         );
         Ok(pair)
+    }
+}
+
+/// Trace message for an endpoint that refused the call over the caller's rate limit; the wait it
+/// asks for is named when its `Retry-After` header holds whole seconds.
+/// 端点因调用方超出速率上限而拒绝调用时的轨迹说明；`Retry-After` 头为整数秒时写明所需等待。
+fn rate_limited(retry_after: Option<&str>) -> String {
+    match retry_after.and_then(|value| value.trim().parse::<u64>().ok()) {
+        Some(seconds) => format!(
+            "The official direct judge rate limit for this account and installation was reached; it accepts calls again in {seconds} seconds."
+        ),
+        None => String::from(
+            "The official direct judge rate limit for this account and installation was reached.",
+        ),
     }
 }
 
@@ -151,6 +166,11 @@ async fn send(endpoint: &str, token: &str, request: &EdgeJudgeRequest) -> Result
             }
         })?;
     let status = response.status();
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
     let body = response
         .bytes()
         .await
@@ -160,6 +180,9 @@ async fn send(endpoint: &str, token: &str, request: &EdgeJudgeRequest) -> Result
     }
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Ok(Answer::TokenRejected);
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(rate_limited(retry_after.as_deref()));
     }
     if !status.is_success() {
         // The endpoint's error body is `{ "error": <code>, "message": <text> }`.
@@ -203,16 +226,25 @@ where
     }
 }
 
-/// Judges `inputs` with the official model `model_id`; one checked outcome per input, in order.
-/// 用官方模型 `model_id` 判定 `inputs`；每条输入按顺序得到一条已检查的结果。
+/// Lists the official direct models the signed-in account's deployment currently serves, sorted
+/// by id.
+/// 列出已登录账户所属部署当前提供的官方直连模型，按 id 排序。
+pub(super) async fn list_models(state: &SharedServiceBridgeState) -> Result<Vec<String>, String> {
+    let (_, secret) = signed_in_credential(state)
+        .await?
+        .ok_or_else(|| String::from("Sign in to OpenVulcan to list the official direct models."))?;
+    request_openvulcan_edge_models(http()?, &secret).await
+}
+
+/// Judges `inputs` with the official model `model_id`; one checked outcome per input, in order,
+/// with the checkpoint the node reported.
+/// 用官方模型 `model_id` 判定 `inputs`；每条输入按顺序得到一条已检查的结果，并附节点报告的检查点。
 pub(super) async fn judge(
     state: &SharedServiceBridgeState,
     cache: &EdgeAccessCache,
     model_id: &str,
     inputs: Vec<JudgeInput>,
-) -> Result<Vec<EdgeOutcome>, String> {
-    let package = find_edge_package(model_id)
-        .ok_or_else(|| format!("`{model_id}` is not an official direct model of this build."))?;
+) -> Result<EdgeAnswer, String> {
     let (connection_id, secret) = signed_in_credential(state).await?.ok_or_else(|| {
         String::from("Sign in to OpenVulcan before using the official direct judge.")
     })?;
@@ -227,7 +259,6 @@ pub(super) async fn judge(
     )
     .await?;
     edge_outcomes(
-        package,
         &cloud_policy().version,
         &request.request_id,
         expected,
@@ -315,9 +346,10 @@ mod tests {
                 let request: serde_json::Value =
                     serde_json::from_slice(&buffer[head_end..head_end + length]).unwrap();
                 record.lock().unwrap().push(token.clone());
-                let (status, body) = match token.as_str() {
+                let (status, extra, body) = match token.as_str() {
                     "good" => (
                         "200 OK",
+                        "",
                         serde_json::json!({
                             "request_id": request["request_id"], "region": "hk", "model": "m",
                             "checkpoint_sha256": "a".repeat(64), "policy_version": "p", "results": []
@@ -325,16 +357,23 @@ mod tests {
                     ),
                     "busy" => (
                         "503 Service Unavailable",
+                        "",
                         serde_json::json!({"error": "region_saturated", "message": "busy"}),
+                    ),
+                    "limited" => (
+                        "429 Too Many Requests",
+                        "retry-after: 30\r\n",
+                        serde_json::json!({"error": "rate_limited", "message": "slow down"}),
                     ),
                     _ => (
                         "401 Unauthorized",
+                        "",
                         serde_json::json!({"error": "invalid_access_token", "message": "no"}),
                     ),
                 };
                 let body = body.to_string();
                 let reply = format!(
-                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n{extra}content-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 stream.write_all(reply.as_bytes()).await.unwrap();
@@ -407,5 +446,18 @@ mod tests {
         assert!(result.unwrap_err().contains("region_saturated"));
         assert_eq!(asked, [false]);
         assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    // A rate-limited call is its own refusal, carries the requested wait and is not retried.
+    // 被限速的调用是独立的拒绝，带有所需等待时间且不重试。
+    #[tokio::test]
+    async fn a_rate_limited_call_is_refused_without_a_retry() {
+        let (base, seen) = endpoint().await;
+        let (result, asked) = run(&base, "limited", "good").await;
+        assert_eq!(result.unwrap_err(), rate_limited(Some("30")));
+        assert_eq!(asked, [false]);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert_ne!(rate_limited(Some("30")), rate_limited(None));
+        assert_eq!(rate_limited(Some("soon")), rate_limited(None));
     }
 }

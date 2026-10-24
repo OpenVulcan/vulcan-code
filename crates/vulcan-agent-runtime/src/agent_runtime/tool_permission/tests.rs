@@ -199,6 +199,7 @@ fn trace() -> JudgeTrace {
         logits: Some([1.0, 0.0, 0.0]),
         allow_probability: None,
         input_tokens: Some(8),
+        checkpoint_sha256: None,
     }
 }
 

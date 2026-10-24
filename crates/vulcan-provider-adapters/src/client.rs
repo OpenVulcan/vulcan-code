@@ -17,8 +17,8 @@ mod model_discovery;
 mod openvulcan;
 pub use openvulcan::{
     OpenVulcanAccountIdentity, OpenVulcanEdgeAccess, OpenVulcanEdgeAccessError,
-    OpenVulcanUsagePage, query_openvulcan_identity, query_openvulcan_usage_page,
-    request_openvulcan_edge_access,
+    OpenVulcanUsagePage, is_openvulcan_edge_model_id, query_openvulcan_identity,
+    query_openvulcan_usage_page, request_openvulcan_edge_access, request_openvulcan_edge_models,
 };
 mod secondary_routes;
 

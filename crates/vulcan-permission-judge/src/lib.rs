@@ -21,12 +21,12 @@ pub mod system;
 pub use cloud::{CLOUD_ALLOW_PROBABILITY, cloud_label, cloud_policy, cloud_state};
 pub use decision::{JudgeLabel, NonFiniteLogits, decide};
 pub use edge::{
-    EDGE_JUDGE_PATH, EdgeJudgeRequest, EdgeJudgeResponse, EdgeJudgeResult, EdgeOutcome,
+    EDGE_JUDGE_PATH, EdgeAnswer, EdgeJudgeRequest, EdgeJudgeResponse, EdgeJudgeResult, EdgeOutcome,
     edge_outcomes,
 };
 pub use known::{
     FP16_MIN_CUDA_COMPUTE_CAPABILITY, KnownDownload, KnownPackage, KnownVariant, ModelFormat,
-    find_edge_package, find_known_package, known_package, known_packages,
+    find_known_package, known_package, known_packages,
 };
 pub use package::{
     DigestCache, JudgePackage, ManifestFile, MemoryDigestCache, PackageError, PackageSummary,

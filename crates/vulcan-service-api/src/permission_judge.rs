@@ -135,12 +135,29 @@ pub struct PermissionJudgeKnownPackage {
     /// Product name shown as is.
     /// 原样显示的产品名称。
     pub display_name: String,
-    /// Model id the official direct backend uses; absent when the family has no direct route.
-    /// 官方直连后端使用的模型 id；该家族没有直连路由时缺省。
-    pub edge_model_id: Option<String>,
     /// Published formats of this family.
     /// 该家族已发布的格式。
     pub variants: Vec<PermissionJudgeKnownVariant>,
+}
+
+/// Official direct models the signed-in account's deployment currently serves.
+/// 已登录账户所属部署当前提供的官方直连模型。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeEdgeModels {
+    /// Enabled models sorted by id; empty when none is enabled.
+    /// 按 id 排序的已启用模型；没有启用任何模型时为空。
+    pub models: Vec<PermissionJudgeEdgeModel>,
+}
+
+/// One official direct model.
+/// 一个官方直连模型。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeEdgeModel {
+    /// Full edge model id, shown as is.
+    /// 完整的边缘模型 id，原样显示。
+    pub model_id: String,
 }
 
 /// One published format of an official package family.
@@ -748,11 +765,11 @@ pub struct PermissionJudgeRecordJudge {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PermissionJudgeRecordTrace {
-    /// Judge backend key, `local` or `cloud`.
-    /// 判定后端键，`local` 或 `cloud`。
+    /// Judge backend key, `local`, `cloud` or `edge`.
+    /// 判定后端键，`local`、`cloud` 或 `edge`。
     pub backend: String,
-    /// Local model name or cloud model id.
-    /// 本机模型名称或云端模型标识。
+    /// Local model name, cloud model id or official direct model id.
+    /// 本机模型名称、云端模型标识或官方直连模型标识。
     pub model: String,
     /// Policy version of the model.
     /// 模型的策略版本。
@@ -772,6 +789,10 @@ pub struct PermissionJudgeRecordTrace {
     /// Sequence length the local model read or refused.
     /// 本机模型读取或拒绝的序列长度。
     pub input_tokens: Option<u32>,
+    /// Checkpoint digest the official direct endpoint reported; absent for other backends.
+    /// 官方直连端点报告的检查点摘要；其他后端缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_sha256: Option<String>,
 }
 
 /// Review layer result of one recorded call.

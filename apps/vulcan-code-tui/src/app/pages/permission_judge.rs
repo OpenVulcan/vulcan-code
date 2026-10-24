@@ -174,12 +174,19 @@ fn optional_bytes(value: &Value) -> String {
     value.as_f64().map_or_else(|| "—".into(), format_bytes)
 }
 
-/// Official packages that have a direct route, in display order.
-/// 具有直连路由的官方模型包，按显示顺序排列。
-fn edge_packages(snapshot: &Value) -> Vec<&Value> {
-    a(snapshot, "/knownPackages")
+/// Whether the page shows the official direct section: while no backend is saved, before the
+/// snapshot arrives, or when the direct backend is saved.
+/// 页面是否显示官方直连区块：未保存后端、快照到达之前，或已保存官方直连后端时。
+pub(super) fn shows_edge(snapshot: &Value) -> bool {
+    matches!(v(snapshot, "/backend").as_str(), None | Some("edge"))
+}
+
+/// Official direct models the server currently enables, sorted by id; empty until they load.
+/// 服务端当前启用的官方直连模型，按 id 排序；加载前为空。
+fn edge_models(app: &App) -> Vec<String> {
+    a(app.slots.value(Slot::PermissionJudgeEdgeModels), "/models")
         .iter()
-        .filter(|known| v(known, "/edgeModelId").is_string())
+        .map(|model| s(model, "/modelId"))
         .collect()
 }
 
@@ -331,15 +338,25 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     let configured = saved.is_some();
     let local = saved.is_none() || saved == Some("local");
     let cloud = saved.is_none() || saved == Some("cloud");
-    let edge = saved.is_none() || saved == Some("edge");
-    // The official direct model: the saved one, else the first one offered, as in the WebUI.
-    // 官方直连模型：已保存的模型，否则为提供的第一个，与 WebUI 一致。
+    let edge = shows_edge(snapshot);
+    // The official direct model: the saved one, else the first one the server enables, as in the
+    // WebUI; it can be switched to only while the server enables it.
+    // 官方直连模型：已保存的模型，否则为服务端启用的第一个，与 WebUI 一致；只有服务端启用时才能切换到它。
+    let enabled_models = edge_models(app);
     let edge_model = match v(snapshot, "/edgeModelId") {
-        Value::Null => edge_packages(snapshot)
-            .first()
-            .map(|known| v(known, "/edgeModelId").clone())
-            .unwrap_or(Value::Null),
+        Value::Null => enabled_models.first().map_or(Value::Null, |id| json!(id)),
         model => model.clone(),
+    };
+    let edge_ready = edge_model
+        .as_str()
+        .is_some_and(|id| enabled_models.iter().any(|enabled| enabled == id));
+    let edge_missing = if app
+        .slot_errors
+        .contains_key(&Slot::PermissionJudgeEdgeModels)
+    {
+        tr!("settings.permissionJudge.needsEdgeAccount")
+    } else {
+        tr!("settings.permissionJudge.edge.noModel")
     };
     let active_model = a(snapshot, "/models")
         .iter()
@@ -383,11 +400,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
             !cloud_route.is_null(),
             tr!("settings.permissionJudge.needsCloudRoute"),
         ),
-        (
-            "edge",
-            !edge_model.is_null(),
-            tr!("settings.permissionJudge.edge.noModel"),
-        ),
+        ("edge", edge_ready, edge_missing),
     ] {
         if saved == Some(backend) {
             continue;
@@ -438,7 +451,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         cloud_rows(&mut rows, ai, cloud_route);
     }
     if edge {
-        edge_rows(&mut rows, snapshot, &base, saved == Some("edge"));
+        edge_rows(&mut rows, app, &enabled_models, &base);
     }
     review_rows(&mut rows, ai);
     approval_rows(&mut rows, snapshot, &base);
@@ -620,10 +633,12 @@ fn status_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value) {
     ));
 }
 
-/// The official direct judge: what leaves the machine, the sign-in it needs and, once saved, the
-/// official model it calls.
-/// 官方直连判定：离开本机的数据说明、所需的登录，以及保存后其调用的官方模型。
-fn edge_rows(rows: &mut Vec<Row>, snapshot: &Value, base: &Value, saved: bool) {
+/// The official direct judge: what leaves the machine, the sign-in it needs and the official model
+/// it calls, chosen among the models the server enables. A saved model the server no longer
+/// enables stays listed and is marked unavailable.
+/// 官方直连判定：离开本机的数据说明、所需的登录，以及从服务端启用的模型中选择的官方模型。服务端已不再
+/// 启用的已保存模型仍会列出并标为不可用。
+fn edge_rows(rows: &mut Vec<Row>, app: &App, enabled: &[String], base: &Value) {
     rows.push(section(tr!("settings.permissionJudge.backend.edge")));
     rows.push(note(
         tr!("settings.permissionJudge.edge.description"),
@@ -637,20 +652,53 @@ fn edge_rows(rows: &mut Vec<Row>, snapshot: &Value, base: &Value, saved: bool) {
         tr!("settings.permissionJudge.edge.signedOut"),
         Tone::Muted,
     ));
-    let packages = edge_packages(snapshot);
-    if packages.is_empty() {
+    if app
+        .slot_errors
+        .contains_key(&Slot::PermissionJudgeEdgeModels)
+    {
+        rows.push(note(
+            tr!("settings.permissionJudge.edge.modelsFailed"),
+            Tone::Muted,
+        ));
+        return;
+    }
+    if !app.slots.loaded(Slot::PermissionJudgeEdgeModels) {
+        rows.push(note(
+            tr!("settings.permissionJudge.edge.modelsLoading"),
+            Tone::Muted,
+        ));
+        return;
+    }
+    let saved = s(base, "/edgeModelId");
+    let mut options: Vec<(String, String)> =
+        enabled.iter().map(|id| (id.clone(), id.clone())).collect();
+    if !saved.is_empty() && !enabled.contains(&saved) {
+        rows.push(note(
+            tr!(
+                "settings.permissionJudge.edge.savedUnavailable",
+                model = saved.as_str()
+            ),
+            Tone::Warn,
+        ));
+        options.push((
+            saved.clone(),
+            tr!(
+                "settings.permissionJudge.edge.modelUnavailable",
+                model = saved.as_str()
+            ),
+        ));
+    }
+    if enabled.is_empty() {
         rows.push(note(
             tr!("settings.permissionJudge.edge.noModel"),
             Tone::Muted,
         ));
-    } else if saved {
+    }
+    if !options.is_empty() {
         rows.push(choice(
             tr!("settings.permissionJudge.edge.model"),
-            packages
-                .iter()
-                .map(|known| (s(known, "/edgeModelId"), s(known, "/displayName")))
-                .collect(),
-            s(base, "/edgeModelId"),
+            options,
+            saved,
             dto(
                 base.clone(),
                 "/edgeModelId",

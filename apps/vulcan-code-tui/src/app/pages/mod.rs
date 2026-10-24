@@ -479,14 +479,21 @@ impl PageId {
                     ));
                 }
             }
-            Self::PermissionJudge => calls.extend([
-                settings::load_public_ai_settings(),
-                api::permission_judge::load_permission_judge_settings(),
-                api::permission_judge::load_permission_judge_status(),
-                api::permission_judge::load_permission_judge_records(
-                    permission_judge::records_request(&Value::Null, None),
-                ),
-            ]),
+            Self::PermissionJudge => {
+                calls.extend([
+                    settings::load_public_ai_settings(),
+                    api::permission_judge::load_permission_judge_settings(),
+                    api::permission_judge::load_permission_judge_status(),
+                    api::permission_judge::load_permission_judge_records(
+                        permission_judge::records_request(&Value::Null, None),
+                    ),
+                ]);
+                // The official model list is read only while the direct section is shown.
+                // 只有显示官方直连区块时才读取官方模型清单。
+                if permission_judge::shows_edge(app.slots.value(Slot::PermissionJudgeSettings)) {
+                    calls.push(api::permission_judge::load_permission_judge_edge_models());
+                }
+            }
             Self::SetupGuide => calls.extend([
                 settings::load_public_ai_settings(),
                 api::permission_judge::load_permission_judge_settings(),

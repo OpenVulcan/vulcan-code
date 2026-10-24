@@ -300,13 +300,99 @@ pub(super) async fn query_usage(
     })
 }
 
-/// Longest wait for one edge-access answer.
-/// 一次边缘访问回答的最长等待时间。
+/// Longest wait for one answer of the user center's edge routes (model list and access).
+/// 用户中心边缘接口（模型清单与访问）一次回答的最长等待时间。
 const EDGE_ACCESS_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Largest edge-access answer read; the documented answer is a few hundred bytes.
 /// 读取的最大边缘访问回答；协议规定的回答只有数百字节。
 const EDGE_ACCESS_MAX_RESPONSE_BYTES: usize = 16 * 1024;
+
+/// Largest edge model list read; each entry is under a hundred bytes.
+/// 读取的最大边缘模型清单；每个条目不足一百字节。
+const EDGE_MODELS_MAX_RESPONSE_BYTES: usize = 64 * 1024;
+
+/// Tells whether `text` is an identifier the edge routes accept: 1–64 characters of
+/// `[A-Za-z0-9._:-]`.
+/// 判断 `text` 是否为边缘接口接受的标识：1–64 个 `[A-Za-z0-9._:-]` 字符。
+pub fn is_openvulcan_edge_model_id(text: &str) -> bool {
+    (1..=64).contains(&text.len())
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
+/// Answer of `GET /api/v1/vulcancode/edge-models`.
+/// `GET /api/v1/vulcancode/edge-models` 的回答。
+#[derive(Deserialize)]
+struct EdgeModelsAnswer {
+    /// Models that currently have an enabled edge endpoint.
+    /// 当前有已启用边缘端点的模型。
+    models: Vec<EdgeModelEntry>,
+}
+
+/// One entry of the edge model list.
+/// 边缘模型清单中的一个条目。
+#[derive(Deserialize)]
+struct EdgeModelEntry {
+    /// Full edge model id.
+    /// 完整的边缘模型 id。
+    model_id: String,
+}
+
+/// Parses an edge model list: every id must be a valid edge identifier and appear once. The ids
+/// are returned sorted.
+/// 解析边缘模型清单：每个 id 都必须是有效的边缘标识且只出现一次。返回排序后的 id。
+fn parse_edge_models(body: &[u8]) -> Result<Vec<String>, String> {
+    let violates = || String::from("The OpenVulcan edge model list violates its contract.");
+    let answer: EdgeModelsAnswer = serde_json::from_slice(body).map_err(|_| violates())?;
+    let mut ids = std::collections::BTreeSet::new();
+    for entry in answer.models {
+        if !is_openvulcan_edge_model_id(&entry.model_id) || !ids.insert(entry.model_id) {
+            return Err(violates());
+        }
+    }
+    Ok(ids.into_iter().collect())
+}
+
+/// Lists the official direct models the credential's deployment currently serves, sorted by id;
+/// an empty list means none is enabled.
+/// 列出凭据所属部署当前提供的官方直连模型，按 id 排序；空清单表示没有启用任何模型。
+pub async fn request_openvulcan_edge_models(
+    http: &reqwest::Client,
+    secret: &CredentialExecutionSecret,
+) -> Result<Vec<String>, String> {
+    let region = secret
+        .openvulcan_region()
+        .ok_or_else(|| String::from("Edge models require a native OpenVulcan account."))?;
+    let url = format!("{}/api/v1/vulcancode/edge-models", region.auth_origin());
+    let authorization = crate::openvulcan::authorization_header(secret, &url)?;
+    let response = http
+        .get(&url)
+        .timeout(EDGE_ACCESS_REQUEST_TIMEOUT)
+        .header("Authorization", authorization)
+        .send()
+        .await
+        .map_err(|_| String::from("The OpenVulcan edge model list request failed."))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|_| String::from("The OpenVulcan edge model list could not be read."))?;
+    if body.len() > EDGE_MODELS_MAX_RESPONSE_BYTES {
+        return Err(String::from("The OpenVulcan edge model list is too large."));
+    }
+    if !status.is_success() {
+        let code = serde_json::from_slice::<ErrorEnvelope>(&body)
+            .map(|envelope| envelope.error.code)
+            .unwrap_or_default();
+        return Err(format!(
+            "OpenVulcan refused to list the official direct models with HTTP {} `{code}`.",
+            status.as_u16()
+        ));
+    }
+    parse_edge_models(&body)
+}
 
 /// Edge endpoint and short-lived access token for one model. It has no `Debug` so the token
 /// cannot reach a log.
@@ -397,6 +483,9 @@ pub async fn request_openvulcan_edge_access(
     model_id: &str,
 ) -> Result<OpenVulcanEdgeAccess, OpenVulcanEdgeAccessError> {
     let failed = |message: &str| OpenVulcanEdgeAccessError::Failed(String::from(message));
+    if !is_openvulcan_edge_model_id(model_id) {
+        return Err(failed("The official direct model id is malformed."));
+    }
     let region = secret
         .openvulcan_region()
         .ok_or_else(|| failed("Edge access requires a native OpenVulcan account."))?;
@@ -461,6 +550,34 @@ pub async fn request_openvulcan_edge_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Edge model lists keep valid, distinct ids in sorted order and refuse anything else.
+    /// 边缘模型清单按排序保留有效且不重复的 id，其余一律拒绝。
+    #[test]
+    fn edge_model_lists_hold_distinct_valid_ids() {
+        let parse = |value: serde_json::Value| parse_edge_models(value.to_string().as_bytes());
+        assert_eq!(
+            parse(serde_json::json!({"models": [
+                {"model_id": "vulcan-decision-shell-v1-preview"},
+                {"model_id": "vulcan-decision-shell-v1-mini-preview"}
+            ]})),
+            Ok(vec![
+                String::from("vulcan-decision-shell-v1-mini-preview"),
+                String::from("vulcan-decision-shell-v1-preview"),
+            ])
+        );
+        assert_eq!(parse(serde_json::json!({"models": []})), Ok(Vec::new()));
+        for refused in [
+            serde_json::json!({}),
+            serde_json::json!({"models": [{"id": "m"}]}),
+            serde_json::json!({"models": [{"model_id": ""}]}),
+            serde_json::json!({"models": [{"model_id": "shell judge"}]}),
+            serde_json::json!({"models": [{"model_id": "x".repeat(65)}]}),
+            serde_json::json!({"models": [{"model_id": "m"}, {"model_id": "m"}]}),
+        ] {
+            assert!(parse(refused.clone()).is_err(), "{refused}");
+        }
+    }
 
     /// Endpoints must be bare https origins; plain http is allowed only on loopback.
     /// 端点必须是纯 https 源；明文 http 只允许在回环地址上使用。
