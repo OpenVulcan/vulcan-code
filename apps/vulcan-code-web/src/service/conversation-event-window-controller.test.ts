@@ -587,6 +587,37 @@ describe("V1 conversation event window controller", () => {
     controller.dispose();
   });
 
+  it("session access follows durable acknowledgements so a remount shows the confirmed mode", async () => {
+    const controller = new ConversationEventWindowController(rpcMock({ hydrate: async () => response([]) }));
+    await controller.hydrate(SESSION_ID);
+    const unattended = { permission_mode: "auto_approve" as const, unattended: { deny_policy: "" } };
+    controller.applyLive(liveDelta([], { revision: 2, access: unattended }));
+    expect(controller.snapshot().session_config?.permission_mode).toBe("workspace_write");
+    controller.applyLive(liveDelta([], { revision: 2, durability: "durable", access: unattended }));
+    expect(controller.snapshot().session_config?.permission_mode).toBe("auto_approve");
+    expect(controller.snapshot().session_config?.unattended).toEqual({ deny_policy: "" });
+    controller.applyLive(liveDelta([], { revision: 3 }));
+    controller.applyLive(liveDelta([], {
+      revision: 3, durability: "durable", access: { permission_mode: "auto_approve" },
+    }));
+    expect(controller.snapshot().session_config?.permission_mode).toBe("auto_approve");
+    expect(controller.snapshot().session_config).not.toHaveProperty("unattended");
+    controller.dispose();
+  });
+
+  it("recovers a missed access acknowledgement through metadata-only reconnect", async () => {
+    const controller = new ConversationEventWindowController(rpcMock({
+      hydrate: async () => response([summary(1, userInput(1))]),
+      reconnect: async () => reconnectResponse([], {
+        memory_revision: 3, durable_revision: 3, access: { permission_mode: "auto_approve" },
+      }),
+    }));
+    await controller.hydrate(SESSION_ID);
+    await controller.reconnect();
+    expect(controller.snapshot().session_config?.permission_mode).toBe("auto_approve");
+    controller.dispose();
+  });
+
   it("prepends only an adjacent complete-Turn page and advances its cursor", async () => {
     const page = vi.fn(async () =>
       pageResponse([summary(1, userInput(1)), summary(2, userInput(2))], {

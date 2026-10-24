@@ -13,7 +13,8 @@ use uuid::Uuid;
 #[cfg(test)]
 use vulcan_service_api::ConversationEventPatchDurabilityV1;
 use vulcan_service_api::{
-    ConversationEventLiveDeltaV1, ConversationEventTextAppendV1, ServiceEvent, ServiceEventEmitter,
+    ConversationEventLiveDeltaV1, ConversationEventTextAppendV1, ConversationSessionAccessV1,
+    ServiceEvent, ServiceEventEmitter,
 };
 use vulcan_session_core::v1::collaboration::{
     CollaborationOperationId, CollaborationRunControl, CollaborationRunControlReceipt,
@@ -3930,6 +3931,11 @@ impl SessionHandle {
                 // Use the flushed candidate, never a potentially newer in-memory answer mode.
                 // 使用已落盘候选，绝不使用可能更新的内存回答模式。
                 delta.answer_mode = Some(Box::new(candidate.metadata.config.answer_mode.clone()));
+                // Access travels the same way, so a permission change reaches every open window.
+                // 授权以相同方式下发，使权限修改到达每个打开的窗口。
+                delta.access = Some(Box::new(ConversationSessionAccessV1::from_access(
+                    &candidate.metadata.mode.access,
+                )));
                 self.publish_live_event_delta_best_effort(delta);
             }
             Err(error) => tracing::warn!(

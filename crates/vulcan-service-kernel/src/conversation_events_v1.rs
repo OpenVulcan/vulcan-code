@@ -6,7 +6,7 @@ use vulcan_service_api::{
     ConversationEventPageV1Request, ConversationEventReconnectV1Request,
     ConversationEventReconnectV1Response, ConversationEventRehydrateReasonV1,
     ConversationEventRevisionFrontierV1, ConversationEventWindowV1Response,
-    ConversationSessionConfigV1, ServiceEventEmitter,
+    ConversationSessionAccessV1, ConversationSessionConfigV1, ServiceEventEmitter,
 };
 use vulcan_session_core::v1::config::SessionConfig;
 use vulcan_session_core::v1::event::ConversationEvent;
@@ -276,6 +276,7 @@ pub(crate) async fn service_session_event_reconnect_v1(
         .event_window_state()
         .map_err(|error| format!("failed to read V1 reconnect frontier: {error}"))?;
     let durable_answer_mode = persisted_state.config.answer_mode.clone();
+    let durable_access = ConversationSessionAccessV1::from_access(&persisted_state.access);
     let resident = optional_registered_handle(&registry, session_id)?
         .map(|handle| capture_resident_snapshot(&handle))
         .transpose()?;
@@ -362,6 +363,7 @@ pub(crate) async fn service_session_event_reconnect_v1(
         )
         .map(|mut response| {
             response.answer_mode = Some(durable_answer_mode);
+            response.access = Some(durable_access);
             response
         });
     };
@@ -399,6 +401,7 @@ pub(crate) async fn service_session_event_reconnect_v1(
     )
     .map(|mut response| {
         response.answer_mode = Some(durable_answer_mode);
+        response.access = Some(durable_access);
         response
     })
 }

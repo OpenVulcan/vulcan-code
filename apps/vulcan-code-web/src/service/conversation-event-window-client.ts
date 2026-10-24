@@ -42,6 +42,17 @@ export interface ConversationRequestConfigV1 {
   set_at_ms: number | null;
 }
 
+/** Session access carried by durable edges and reconnects so a permission change reaches every window.
+ * 随可靠边与重连下发的会话授权，使权限修改到达每个窗口。 */
+export interface ConversationSessionAccessV1 {
+  /** Persisted session permission mode.
+   * 持久会话权限模式。 */
+  permission_mode: PermissionMode;
+  /** Unattended mode; absent while it is off.
+   * 无人值守模式；关闭时缺省。 */
+  unattended?: UnattendedConfig;
+}
+
 /** Selected-session configuration whose sole authority is V1 metadata.config.
  * 以 V1 metadata.config 为唯一权威的选中会话配置。 */
 export interface ConversationSessionConfigV1 {

@@ -210,6 +210,32 @@ impl ConversationSessionConfigV1 {
     }
 }
 
+/// Session access read from `metadata.mode.access`, carried on durable edges so a permission change
+/// reaches every open window without a rehydration.
+/// 从 `metadata.mode.access` 读取的会话授权，随可靠边下发，使权限修改无需重新 hydration 即到达所有窗口。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationSessionAccessV1 {
+    /// Session permission mode.
+    /// 会话权限模式。
+    pub permission_mode: PermissionMode,
+    /// Unattended mode; absent while it is off.
+    /// 无人值守模式；关闭时缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattended: Option<UnattendedConfig>,
+}
+
+impl ConversationSessionAccessV1 {
+    /// Projects the access selections of one metadata snapshot.
+    /// 投影一份元数据快照中的授权选择。
+    pub fn from_access(access: &AccessConfig) -> Self {
+        Self {
+            permission_mode: access.permission,
+            unattended: access.unattended.clone(),
+        }
+    }
+}
+
 /// One complete service response shared by hydration and historical paging.
 /// hydration 与历史分页共享的一份完整服务响应。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -383,6 +409,10 @@ pub struct ConversationEventLiveDeltaV1 {
     /// 使用堆指针，使高频内存发送队列条目不预留完整偏好空间。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer_mode: Option<Box<AnswerModePreference>>,
+    /// Exact session access in a successfully published candidate; absent on volatile patches.
+    /// 成功发布候选中的精确会话授权；内存补丁不携带该字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<Box<ConversationSessionAccessV1>>,
     /// Ownership-bound events in ascending seq order. Volatile pushes contain
     /// the exact sparse change set and durable acknowledgements are empty.
     /// 按升序排列的带归属事件。volatile 推送包含精确稀疏变化集，可靠确认为空。
@@ -616,6 +646,7 @@ impl ConversationEventLiveDeltaV1 {
             durability: ConversationEventPatchDurabilityV1::Volatile,
             text_appends: Vec::new(),
             answer_mode: None,
+            access: None,
         })
     }
 
@@ -663,6 +694,7 @@ impl ConversationEventLiveDeltaV1 {
             durability: ConversationEventPatchDurabilityV1::Durable,
             text_appends: Vec::new(),
             answer_mode: None,
+            access: None,
         })
     }
 
@@ -1073,6 +1105,10 @@ pub struct ConversationEventReconnectV1Response {
     /// 从持久元数据读取的回答模式；要求完整加载时缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer_mode: Option<AnswerModePreference>,
+    /// Session access read from the same persisted metadata; absent when a full hydration is required.
+    /// 从同一份持久元数据读取的会话授权；要求完整加载时缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<ConversationSessionAccessV1>,
     /// Complete ownership-bound recovery range, empty when rehydration is required.
     /// 完整的带归属恢复范围；要求重新 hydration 时为空。
     #[serde(flatten)]
@@ -1119,6 +1155,7 @@ impl ConversationEventReconnectV1Response {
             durable_revision,
             disposition: ConversationEventReconnectDispositionV1::Recovery,
             answer_mode: None,
+            access: None,
         })
     }
 
@@ -1147,6 +1184,7 @@ impl ConversationEventReconnectV1Response {
             durable_revision,
             disposition: ConversationEventReconnectDispositionV1::RehydrateRequired(reason),
             answer_mode: None,
+            access: None,
         })
     }
 }

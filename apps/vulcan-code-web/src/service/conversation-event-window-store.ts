@@ -4,6 +4,7 @@
 // 相同事件形态的稀疏 patch。
 import { CLIENT_ACTION_ID_MAX_BYTES } from "@/generated/protocol-limits";
 import type { AnswerModePreference } from "@/service/answer-mode";
+import type { ConversationSessionAccessV1 } from "@/service/conversation-event-window-client";
 
 /** JSON value allowed inside manifest-validated tool payloads.
  * 工具 Manifest 已校验载荷内允许的 JSON 值。 */
@@ -1177,6 +1178,9 @@ export interface ConversationEventLivePatch extends ConversationEventWindowBatch
   /** Confirmed answer mode carried only by durable acknowledgements.
    * 仅可靠确认携带的已确认回答模式。 */
   answer_mode?: AnswerModePreference;
+  /** Confirmed session access carried only by durable acknowledgements.
+   * 仅可靠确认携带的已确认会话授权。 */
+  access?: ConversationSessionAccessV1;
   /** Stable identity of the service process that emitted this edge.
    * 发出该边的服务进程稳定身份。 */
   service_epoch: string;
@@ -1224,6 +1228,9 @@ export interface ConversationEventReconnectPatch extends ConversationEventWindow
   /** Persisted answer mode captured with reconnect storage state.
    * 与重连存储状态共同捕获的持久回答模式。 */
   answer_mode?: AnswerModePreference;
+  /** Persisted session access captured with the same storage state.
+   * 与同一存储状态共同捕获的持久会话授权。 */
+  access?: ConversationSessionAccessV1;
   /** Stable identity of the service process that produced the recovery range.
    * 生成该恢复范围的服务进程稳定身份。 */
   service_epoch: string;

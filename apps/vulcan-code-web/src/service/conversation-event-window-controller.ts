@@ -6,6 +6,7 @@ import type {
   ConversationEventReconnectV1Response,
   ConversationEventWindowRpc,
   ConversationEventWindowV1BaseResponse,
+  ConversationSessionAccessV1,
   ConversationSessionConfigV1,
 } from "@/service/conversation-event-window-client";
 import {
@@ -386,6 +387,7 @@ export class ConversationEventWindowController {
     }
     this.store.applyReconnect(response);
     this.commitAnswerMode(response.answer_mode);
+    this.commitAccess(response.access);
     this.settleToolRequestProgress(response.events, response.session_id);
     this.publishSnapshotIfChanged();
   }
@@ -418,6 +420,7 @@ export class ConversationEventWindowController {
     this.store.applyLive(delta);
     if (delta.durability === "durable") {
       this.commitAnswerMode(delta.answer_mode);
+      this.commitAccess(delta.access);
     }
     this.settleToolRequestProgress(delta.events, delta.session_id);
     this.publishSnapshotIfChanged();
@@ -599,6 +602,7 @@ export class ConversationEventWindowController {
       this.store.applyLive(delta);
       if (delta.durability === "durable") {
         this.commitAnswerMode(delta.answer_mode);
+        this.commitAccess(delta.access);
       }
       this.settleToolRequestProgress(delta.events, delta.session_id);
       if (publishSnapshot) this.publishSnapshotIfChanged();
@@ -732,6 +736,7 @@ export class ConversationEventWindowController {
       try {
         this.store.applyReconnect(response);
         this.commitAnswerMode(response.answer_mode);
+        this.commitAccess(response.access);
       } catch (error) {
         // A reconnect replacement that cannot evolve from local state requires one clean durable baseline.
         // 无法从本地状态演进的重连替换需要重新加载一份干净可靠基线。
@@ -760,6 +765,7 @@ export class ConversationEventWindowController {
           this.store.applyLive(delta);
           if (delta.durability === "durable") {
             this.commitAnswerMode(delta.answer_mode);
+            this.commitAccess(delta.access);
           }
           this.settleToolRequestProgress(delta.events, delta.session_id);
         } catch (error) {
@@ -891,6 +897,20 @@ export class ConversationEventWindowController {
     if (isAnswerModeNewer(mode, this.sessionConfig.answer_mode)) {
       this.sessionConfig = { ...this.sessionConfig, answer_mode: mode };
     }
+  }
+
+  /** Replace the access selections with the confirmed durable ones; edges arrive in revision order.
+   * 以已确认的可靠授权选择替换当前值；可靠边按修订顺序到达。 */
+  private commitAccess(access: ConversationSessionAccessV1 | undefined): void {
+    if (access === undefined || this.sessionConfig === null) return;
+    const config = this.sessionConfig;
+    const unattended = access.unattended;
+    if (config.permission_mode === access.permission_mode
+      && JSON.stringify(config.unattended ?? null) === JSON.stringify(unattended ?? null)) return;
+    const { unattended: _previous, ...rest } = config;
+    this.sessionConfig = unattended === undefined
+      ? { ...rest, permission_mode: access.permission_mode }
+      : { ...rest, permission_mode: access.permission_mode, unattended };
   }
 
   /** Advances only historical pagination fields after an adjacent prepend.

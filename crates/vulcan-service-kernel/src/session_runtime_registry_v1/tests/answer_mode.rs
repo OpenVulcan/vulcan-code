@@ -2,7 +2,7 @@
 //! 回答模式跨失败与成功物理发布的可见性。
 
 use super::*;
-use vulcan_session_core::v1::config::AnswerMode;
+use vulcan_session_core::v1::config::{AnswerMode, PermissionMode};
 
 /// Failed storage emits no confirmed preference; a successful retry publishes the exact candidate.
 /// 存储失败不发送已确认偏好；成功重试发布精确候选。
@@ -50,4 +50,43 @@ fn answer_mode_live_preference_waits_for_actual_durable_publication() {
     assert_eq!(answer_mode.mode, AnswerMode::Interactive);
     assert_eq!(answer_mode.revision, 1);
     assert!(delta.events().is_empty());
+}
+
+/// A permission change publishes the exact session access with its durable confirmation.
+/// 权限修改随可靠确认发布精确的会话授权。
+#[test]
+fn permission_mode_durable_confirmation_carries_session_access() {
+    let recording = Arc::new(RecordingPersistenceBackend::default());
+    let handle = published_handle(recording.clone());
+    let sink = Arc::new(RecordingEventSink::default());
+    handle
+        .install_live_event_emitter(ServiceEventEmitter::new(vec![sink.clone()]))
+        .unwrap();
+    handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.metadata.mode.access.permission = PermissionMode::WorkspaceWrite;
+                assert!(document.set_permission_mode(PermissionMode::AutoApprove, 2)?);
+                Ok(SessionMutationChange::Changed(()))
+            },
+        )
+        .unwrap();
+    let durable_access: Vec<_> = sink
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            ServiceEvent::ConversationEventDeltaV1(delta)
+                if delta.durability == ConversationEventPatchDurabilityV1::Durable =>
+            {
+                delta.access.clone()
+            }
+            _ => None,
+        })
+        .collect();
+    let [access] = durable_access.as_slice() else {
+        panic!("expected one durable confirmation carrying session access");
+    };
+    assert_eq!(access.permission_mode, PermissionMode::AutoApprove);
 }

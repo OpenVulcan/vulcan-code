@@ -86,6 +86,9 @@
 - 子代理会话使用其根会话的模式；读不到模式时拒绝调用。
 - 草稿会话的显式选择随首次提交的 `sessionSettings.permissionMode` 发送并在首个提示边界写入；未选择时
   不发送值。已存在会话通过 `service_set_session_permission_mode` 修改，只影响下一次工具调用。
+- 事件窗口的 `session_config` 是界面显示模式的唯一权威：可靠确认（`durability: durable`）与仅元数据重连都携带
+  写入后的 `access`（`permission_mode`、`unattended`），窗口据此更新。输入区的保存回执只在组件内存中过渡，
+  弹窗或切换导致输入区重新挂载后必须仍显示已保存模式，不得回落到重新加载前的投影。
 
 ## 无人值守模式
 
