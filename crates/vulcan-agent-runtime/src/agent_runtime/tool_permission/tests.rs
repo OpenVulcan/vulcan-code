@@ -70,6 +70,27 @@ fn ambiguous_shell_syntax_and_program_paths_escalate() {
     );
 }
 
+/// Quote tricks that hide a command from read-only matching must not hide it from the high-risk list.
+/// 让命令躲过只读匹配的引号技巧，同样不能让它躲过高风险清单。
+#[test]
+fn high_risk_matching_survives_ambiguous_quoting() {
+    for command in [
+        r#"echo "\"" ; rm -rf /"#,
+        r#"echo \"; rm -rf /; echo \""#,
+        "echo hi # '\nrm -rf / # '",
+        "echo hi <# ' #> ; Remove-Item -Recurse -Force C:\\ ; echo <# ' #>",
+        "echo 'unterminated ; rm -rf /",
+        "r^d /s /q C:\\data",
+    ] {
+        assert!(high_risk_category(command).is_some(), "{command}");
+    }
+    // A commented-out or plainly quoted command stays ordinary.
+    // 被注释掉或普通引号内的命令保持普通。
+    for command in ["ls # rm -rf build", "echo 'rm -rf is dangerous'"] {
+        assert_eq!(high_risk_category(command), None, "{command}");
+    }
+}
+
 /// cmd built-ins remain useful, while bare or extension-qualified external programs escalate.
 /// cmd 内建命令仍然可用，裸外部程序名及带扩展名的程序则升级。
 #[test]

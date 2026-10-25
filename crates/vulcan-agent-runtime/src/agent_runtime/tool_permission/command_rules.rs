@@ -431,7 +431,7 @@ struct CommandScan {
 /// Returns whether every segment of `command` is known read-only under the selected `shell`.
 /// 返回 `command` 的每个片段在所选 `shell` 下是否都是已知只读命令。
 pub fn is_known_read_only(command: &str, shell: HostCommandShell) -> bool {
-    let scan = scan_command(command, Some(shell));
+    let scan = scan_command(command, Some(shell), true);
     if scan.writes_redirection
         || scan.has_substitution
         || scan.ambiguous_quoting
@@ -454,9 +454,25 @@ pub fn high_risk_category(command: &str) -> Option<HighRiskCategory> {
     {
         return Some(HighRiskCategory::DatabaseDrop);
     }
-    let scan = scan_command(command, None);
+    let scan = scan_command(command, None, true);
+    if let Some(category) = segments_high_risk(&scan.segments) {
+        return Some(category);
+    }
+    // Under ambiguous quoting a "quoted" span may be live code, so check again with every quote
+    // character as plain text; this can only add categories, never remove one.
+    // 引号有歧义时，“引号内”的片段可能是实际执行的代码，因此再把所有引号字符视为普通文本检查一次；
+    // 这只会增加类别，绝不会去掉类别。
+    if scan.ambiguous_quoting {
+        return segments_high_risk(&scan_command(command, None, false).segments);
+    }
+    None
+}
+
+/// Returns the first high-risk category among scanned `segments`, following downloads into interpreters.
+/// 返回已扫描 `segments` 中的第一个高风险类别，并识别下载内容送入解释器。
+fn segments_high_risk(segments: &[Vec<String>]) -> Option<HighRiskCategory> {
     let mut previous_downloads = false;
-    for words in &scan.segments {
+    for words in segments {
         let Some(program) = words.first().map(|word| program_name(word)) else {
             continue;
         };
@@ -946,7 +962,9 @@ fn read_only_group_end(chars: &[char], open: usize, shell: HostCommandShell) -> 
 
 /// Splits `command` at unquoted separators and records redirections and substitutions.
 /// 在未加引号的分隔符处切分 `command`，并记录重定向与命令替换。
-fn scan_command(command: &str, shell: Option<HostCommandShell>) -> CommandScan {
+/// With `honor_quotes` false, quote and caret characters are dropped and every separator splits.
+/// `honor_quotes` 为 false 时，引号与 `^` 字符被丢弃，每个分隔符都会切分。
+fn scan_command(command: &str, shell: Option<HostCommandShell>, honor_quotes: bool) -> CommandScan {
     let mut scan = CommandScan {
         segments: Vec::new(),
         writes_redirection: false,
@@ -1005,6 +1023,9 @@ fn scan_command(command: &str, shell: Option<HostCommandShell>) -> CommandScan {
             continue;
         }
         match current {
+            // cmd drops an unquoted `^` and keeps the next character, so `r^d` runs `rd`.
+            // cmd 会去掉未加引号的 `^` 并保留其后字符，因此 `r^d` 运行的是 `rd`。
+            '"' | '\'' | '^' if !honor_quotes => {}
             '"' => quote = Some(current),
             '\'' if shell != Some(HostCommandShell::Cmd) => quote = Some(current),
             '(' if word.is_empty() => {
