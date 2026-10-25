@@ -252,7 +252,13 @@ test('same-version archives reuse identical generations and retain rebuilt prede
   const linkInode = (await lstat(current, { bigint: true })).ino;
   const originalService = await readFile(path.join(originalRoot, 'bin/vulcan-code-service'));
   const originalCalls = await context.calls();
+  // Reinstalling the active archive is also how a user repairs a deleted launcher.
+  // 重装当前归档也是用户修复被删启动器的方式。
+  const launcher = path.join(context.bin, 'vulcan-tui');
+  const launcherText = await readFile(launcher, 'utf8');
+  await rm(launcher);
   assert.equal(context.installFrom(source).status, 0);
+  assert.equal(await readFile(launcher, 'utf8'), launcherText);
   assert.equal((await stat(originalRoot, { bigint: true })).ino, originalInode);
   assert.equal((await lstat(current, { bigint: true })).ino, linkInode);
   assert.deepEqual(await context.calls(), originalCalls);

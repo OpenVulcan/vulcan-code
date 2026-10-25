@@ -226,6 +226,10 @@ fi
 mkdir -p "$Prefix/versions"
 Previous=$(readlink "$Prefix/current" 2>/dev/null || true)
 Target="$Prefix/versions/$Name"
+# Unchanged marks a reinstall of the active archive: generations, the current link, and the user service stay as
+# they are, while launchers are still repaired.
+# Unchanged 表示重装当前归档：代际、current 链接与用户服务保持不变，但仍修复启动器。
+Unchanged=0
 if [ -e "$Target" ] || [ -L "$Target" ]; then
     # Never replace an existing generation, including a digest-prefix collision or an incomplete one.
     # 绝不替换既有代际，包括摘要前缀碰撞或不完整的目录。
@@ -236,13 +240,7 @@ if [ -e "$Target" ] || [ -L "$Target" ]; then
     Desktop=$(layout_entry "$Target" desktopExecutable)
     Tui=$(layout_entry "$Target" tuiExecutable)
     if [ "$Previous" = "versions/$Name" ]; then
-        # Explicit dependency installation still runs; otherwise identical installs leave all entries intact.
-        # 仍执行显式请求的依赖安装；除此之外，相同安装保持全部条目不变。
-        if [ "$Os" = linux ] && [ "$BrowserDependencies" = 1 ]; then
-            "$Target/$Service" --install-browser-dependencies || fail "could not install browser system packages"
-        fi
-        printf 'Already installed %s into %s.\n' "$Name" "$Prefix"
-        exit 0
+        Unchanged=1
     fi
 else
     Staging=$(mktemp -d "$Prefix/versions/.staging.XXXXXX")
@@ -264,12 +262,14 @@ $Description"
     mv "$Staging" "$Target"
     Staging=""
 fi
-ln -sfn "versions/$Name" "$Prefix/current"
+if [ "$Unchanged" = 0 ]; then
+    ln -sfn "versions/$Name" "$Prefix/current"
+fi
 
 # Keep the active and the previously active versions; a Core started before the upgrade may still use the latter.
-# Different archives of one version count as different generations; identical active archives returned above.
+# Different archives of one version count as different generations; reinstalling the active archive prunes nothing.
 # 保留当前与上一个当前代际；升级前启动的 Core 可能仍在使用后者。
-# 同一版本的不同归档属于不同代际；相同的当前归档已经在上方返回。
+# 同一版本的不同归档属于不同代际；重装当前归档不清理任何代际。
 if [ "$Previous" != "versions/$Name" ]; then
     for Entry in "$Prefix/versions"/*; do
         [ -e "$Entry" ] || continue
@@ -298,7 +298,7 @@ write_launcher vulcan-tui "$Tui"
 
 # A unit registered from this prefix still names the old version's real path; re-registering moves it to the new one.
 # 从本前缀注册的单元仍指向旧版本真实路径；重新注册使其切换到新版本。
-if owns_unit; then
+if [ "$Unchanged" = 0 ] && owns_unit; then
     "$Prefix/current/$Service" --install-user-service || fail "installed $Name, but re-registering the user service failed"
 fi
 
@@ -310,7 +310,11 @@ if [ "$Os" = linux ]; then
     fi
 fi
 
-printf 'Installed %s into %s.\n' "$Name" "$Prefix"
+if [ "$Unchanged" = 1 ]; then
+    printf 'Already installed %s into %s; launchers were refreshed.\n' "$Name" "$Prefix"
+else
+    printf 'Installed %s into %s.\n' "$Name" "$Prefix"
+fi
 printf 'Commands: vulcan-code (desktop), vulcan-code-service --headless (WebUI service), vulcan-tui (terminal).\n'
 case ":$PATH:" in
     *":$BinDir:"*) ;;
